@@ -13,6 +13,51 @@
         localStorage.setItem('sop_chat_state', JSON.stringify(state));
     }
 
+    function toggleChatPin() {
+        const widget = document.getElementById('chat-widget');
+        const btn = document.getElementById('chat-pin-btn');
+        if (!widget || !btn) return;
+
+        const pinned = widget.classList.toggle('pinned');
+        btn.classList.toggle('active', pinned);
+        btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+        btn.title = pinned ? 'Disable always-on-top' : 'Enable always-on-top';
+        widget.style.zIndex = pinned ? '2000' : '1000';
+        localStorage.setItem('sop_chat_pinned', pinned ? 'true' : 'false');
+    }
+
+    function applyChatPinState() {
+        const widget = document.getElementById('chat-widget');
+        const btn = document.getElementById('chat-pin-btn');
+        if (!widget || !btn) return;
+
+        const pinned = localStorage.getItem('sop_chat_pinned') === 'true';
+        widget.classList.toggle('pinned', pinned);
+        btn.classList.toggle('active', pinned);
+        btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+        btn.title = pinned ? 'Disable always-on-top' : 'Enable always-on-top';
+        widget.style.zIndex = pinned ? '2000' : '1000';
+    }
+
+    function getChatRuntimeMode() {
+        const saved = localStorage.getItem('sop_chat_runtime');
+        return saved === 'local' ? 'local' : 'hq';
+    }
+
+    function setChatRuntimeMode(mode) {
+        const runtime = mode === 'local' ? 'local' : 'hq';
+        localStorage.setItem('sop_chat_runtime', runtime);
+        const select = document.getElementById('chat-runtime-select');
+        if (select) select.value = runtime;
+        return runtime;
+    }
+
+    function applyChatRuntimeSelection() {
+        const select = document.getElementById('chat-runtime-select');
+        if (!select) return;
+        select.value = getChatRuntimeMode();
+    }
+
     function resetChatPosition(forceDefault) {
         const widget = document.getElementById('chat-widget');
         
@@ -121,6 +166,8 @@
     document.addEventListener('DOMContentLoaded', function() {
         const widget = document.getElementById('chat-widget');
         const header = widget.querySelector('.chat-header');
+        applyChatPinState();
+        applyChatRuntimeSelection();
         let isDragging = false;
         let dragStartX, dragStartY;
 
@@ -677,6 +724,7 @@
                     agent: agent,
                     provider: provider,
                     format: format,
+                    runtime: getChatRuntimeMode(),
                     verbose: true, session_id: currentSessionID, user_id: currentUserID, domain: payloadDomain
                 }),
                 signal: chatAbortController.signal

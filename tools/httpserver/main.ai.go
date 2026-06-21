@@ -452,15 +452,15 @@ func resolveContextAndAgent(ctx context.Context, req *aiChatRequest, sendEvent f
 	if req.Agent == "" {
 		req.Agent = "copilot"
 	}
+	if req.SessionID == "" {
+		req.SessionID = uuid.New().String()
+	}
 	blueprint, exists := loadedAgents[req.Agent]
 	if !exists {
 		msg := fmt.Sprintf("Agent '%s' is not initialized or not found.", req.Agent)
 		log.Info("Response: Agent Not Found", "error", msg)
 		sendEvent("error", msg)
 		return nil, fmt.Errorf("agent not found")
-	}
-	if req.SessionID == "" {
-		req.SessionID = uuid.New().String()
 	}
 	return blueprint, nil
 }
@@ -842,10 +842,16 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 	// ctx is passed in
 
 	// Try to find the file in common locations
+	cwd, _ := os.Getwd()
 	pathsToTry := []string{
 		configPath,
-		filepath.Join("..", "..", configPath),            // From tools/httpserver
-		filepath.Join("..", configPath),                  // From tools
+		filepath.Join(cwd, configPath),
+		filepath.Join(cwd, "..", configPath),
+		filepath.Join(cwd, "..", "..", configPath),
+		filepath.Join(cwd, "..", "..", "..", configPath),
+		filepath.Join("/Volumes/T7/sop-cloud", configPath),
+		filepath.Join("/Volumes/T7/sop", configPath),
+		filepath.Join("/Volumes/T7/sop-public", configPath),
 		filepath.Join("/Users/grecinto/sop", configPath), // Absolute fallback
 	}
 

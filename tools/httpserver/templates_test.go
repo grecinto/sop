@@ -90,3 +90,28 @@ func TestSaveSpaceItemRequiresFullReferenceInTemplate(t *testing.T) {
 		t.Fatalf("expected save flow to require a full reference/path in %s", path)
 	}
 }
+
+func TestChatWidgetSupportsPinnedFloatingMode(t *testing.T) {
+	modalsPath := filepath.Join("templates", "modals.html")
+	modalsData, err := os.ReadFile(modalsPath)
+	if err != nil {
+		t.Fatalf("read chat modal template: %v", err)
+	}
+	modalsContent := string(modalsData)
+	if !strings.Contains(modalsContent, "chat-pin-btn") {
+		t.Fatalf("expected a pin button in %s", modalsPath)
+	}
+
+	scriptsPath := filepath.Join("templates", "scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "toggleChatPin") {
+		t.Fatalf("expected a pin toggle handler in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "sop_chat_pinned") {
+		t.Fatalf("expected pinned state persistence in %s", scriptsPath)
+	}
+}

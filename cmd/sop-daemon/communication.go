@@ -49,8 +49,15 @@ func (r *SessionRegistry) RegisterSession(hostID, subscriptionID string) (*Sessi
 	defer r.mu.Unlock()
 
 	now := time.Now()
+	sessionKey := fmt.Sprintf("%s:%s", hostID, subscriptionID)
+	if sess, ok := r.sessions[sessionKey]; ok {
+		sess.LastSeen = now
+		r.resetIfNeeded(sess, now)
+		return cloneSession(sess), nil
+	}
+
 	sess := &Session{
-		ID:                 fmt.Sprintf("%s-%d", hostID, now.UnixNano()),
+		ID:                 sessionKey,
 		HostID:             hostID,
 		SubscriptionID:     subscriptionID,
 		CreatedAt:          now,
@@ -60,7 +67,7 @@ func (r *SessionRegistry) RegisterSession(hostID, subscriptionID string) (*Sessi
 		RateLimitResetAt:   now.Add(r.policy.Window),
 	}
 	r.sessions[sess.ID] = sess
-	return sess, nil
+	return cloneSession(sess), nil
 }
 
 func (r *SessionRegistry) Heartbeat(sessionID string) error {
@@ -70,7 +77,9 @@ func (r *SessionRegistry) Heartbeat(sessionID string) error {
 	if !ok {
 		return fmt.Errorf("session %s not found", sessionID)
 	}
-	sess.LastSeen = time.Now()
+	now := time.Now()
+	r.resetIfNeeded(sess, now)
+	sess.LastSeen = now
 	return nil
 }
 
@@ -81,16 +90,7 @@ func (r *SessionRegistry) GetSession(sessionID string) *Session {
 	if !ok {
 		return nil
 	}
-	return &Session{
-		ID:                 sess.ID,
-		HostID:             sess.HostID,
-		SubscriptionID:     sess.SubscriptionID,
-		CreatedAt:          sess.CreatedAt,
-		LastSeen:           sess.LastSeen,
-		RateLimitRemaining: sess.RateLimitRemaining,
-		RateLimitWindow:    sess.RateLimitWindow,
-		RateLimitResetAt:   sess.RateLimitResetAt,
-	}
+	return cloneSession(sess)
 }
 
 func (r *SessionRegistry) ConsumeRequest(sessionID string) error {
@@ -100,9 +100,26 @@ func (r *SessionRegistry) ConsumeRequest(sessionID string) error {
 	if !ok {
 		return fmt.Errorf("session %s not found", sessionID)
 	}
+	now := time.Now()
+	r.resetIfNeeded(sess, now)
 	if sess.RateLimitRemaining <= 0 {
 		return fmt.Errorf("rate limit exceeded")
 	}
 	sess.RateLimitRemaining--
 	return nil
+}
+
+func (r *SessionRegistry) resetIfNeeded(sess *Session, now time.Time) {
+	if sess.RateLimitResetAt.IsZero() || !now.Before(sess.RateLimitResetAt) {
+		sess.RateLimitRemaining = r.policy.MaxRequests
+		sess.RateLimitResetAt = now.Add(r.policy.Window)
+	}
+}
+
+func cloneSession(sess *Session) *Session {
+	if sess == nil {
+		return nil
+	}
+	cloned := *sess
+	return &cloned
 }

@@ -1,0 +1,112 @@
+# Local RAG and HQ Authentication Design
+
+## Overview
+
+The UI remains the root controller for user identity. The user logs in through the UI, and that authenticated session is then used to bootstrap the local runtime. The local daemon and the local RAG process are not treated as independent clients with their own login flow; instead, they inherit the UI session through hydrated authentication material.
+
+This keeps the local experience aligned with the existing product model while preserving a secure boundary for policy enforcement and limits.
+
+## Goals
+
+- Keep the UI as the single entry point for authentication.
+- Let the local daemon and local RAG runtime operate under the same authenticated identity as the UI.
+- Reuse the existing bearer-token and refresh-token model rather than introducing a separate trust model.
+- Allow HQ to enforce policy, quotas, and revocation without becoming a second runtime.
+
+## Core Trust Model
+
+1. The user authenticates in the UI.
+2. The UI receives an access token and a refresh token.
+3. The UI hydrates the local daemon with those tokens over localhost.
+4. The local daemon uses the access token when calling HQ for policy or enforcement checks.
+5. If the access token is near expiry, the daemon uses the refresh token to obtain a new access token.
+6. HQ validates the token and returns policy decisions, limit state, or revocation signals.
+
+This makes the local runtime a delegated extension of the UI session rather than an autonomous client.
+
+## Architecture
+
+### Components
+
+- UI / HTTP server
+  - Owns login, session issuance, and refresh handling.
+  - Acts as the root controller for user identity.
+
+- Local daemon
+  - Runs locally on the user host.
+  - Exposes local execution and local ask endpoints.
+  - Receives the UI-hydrated access and refresh tokens.
+  - Uses those tokens when communicating with HQ.
+
+- Local RAG runtime
+  - Uses the shared agent runtime and local configuration.
+  - Executes local asks and tool-mediated work on the host.
+  - Does not need its own independent user login.
+
+- HQ / policy control plane
+  - Receives authenticated requests from the local daemon.
+  - Enforces policy, budget limits, and revocation decisions.
+  - Does not replace the local runtime; it only governs it.
+
+## Request Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI as UI / Browser
+    participant Local as Local Daemon
+    participant RAG as Local RAG Runtime
+    participant HQ as HQ Policy Service
+
+    User->>UI: Sign in
+    UI->>UI: Issue access + refresh tokens
+    UI->>Local: Hydrate tokens over localhost
+    Local->>RAG: Start local ask / execution flow
+    RAG->>Local: Request policy check or execution approval
+    Local->>HQ: Send authenticated policy request
+    HQ-->>Local: Allow / deny / limit state
+    Local-->>RAG: Continue or block execution
+    RAG-->>UI: Return result or policy response
+```
+
+## Security Properties
+
+- No independent local login path is required.
+- The local daemon inherits the UI session identity.
+- Tokens remain short-lived and refreshable.
+- HQ can revoke or deny access centrally.
+- Communication remains local-first for the agent runtime, with HQ only used for policy coordination.
+
+## Practical API Shape
+
+The initial HQ boundary can remain minimal:
+
+- POST /api/policy/check
+  - Validate the supplied access token.
+  - Return allow/deny and current policy state.
+
+- POST /api/policy/heartbeat
+  - Report local runtime activity and usage.
+  - Let HQ update enforcement state.
+
+- POST /api/policy/refresh
+  - Exchange a refresh token for a new access token when needed.
+
+These endpoints can reuse the same bearer-token semantics already used by the UI session layer.
+
+## Implementation Notes
+
+- The local daemon should accept hydrated tokens from the UI through a local bootstrap channel such as headers, environment variables, or a small local config payload.
+- The daemon should not create a second identity model; it should reuse the same session-token validation logic already present in the UI auth layer.
+- HQ should treat the local daemon as a delegated authenticated client, not as a standalone user.
+- The UI remains the root of trust for authentication and renewal.
+
+## Current Status
+
+The current implementation already has the essential building blocks:
+
+- the UI auth layer supports signed access tokens and refresh tokens,
+- the local daemon already exposes local execution and local ask endpoints,
+- and the shared agent runtime can be used as the common execution substrate for both the UI and the local host experience.
+
+The remaining work is to wire the UI-hydrated tokens through the daemon and add the authenticated HQ policy boundary.

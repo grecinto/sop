@@ -217,6 +217,11 @@
                 <option value="json">JSON</option>
                 <option value="table">Table</option>
             </select>
+
+            <select id="chat-runtime-select" style="padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal;" onclick="event.stopPropagation()" onchange="setChatRuntimeMode(this.value)" title="Runtime target for chat requests">
+                <option value="hq">HQ</option>
+                <option value="local">Local</option>
+            </select>
             
             <!-- Global Feedback Controls (Hidden until next release) -->
             <!--
@@ -231,6 +236,7 @@
             <input type="hidden" id="agent-select" value="copilot">
         </div>
         <div class="chat-controls">
+            <button id="chat-pin-btn" class="chat-pin-btn" type="button" onclick="toggleChatPin()" title="Toggle always-on-top">📌</button>
             <button class="reset-btn" onclick="resetChatPosition(true)" title="Reset Position" style="font-size: 14px;">&#x21ba;</button>
             <button class="minimize-btn" onclick="toggleChatWidget()">_</button>
         </div>
