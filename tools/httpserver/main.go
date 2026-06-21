@@ -21,10 +21,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/sharedcode/sop"
-	"github.com/sharedcode/sop/ai"
 	aidb "github.com/grecinto/sop-cloud/ai/database"
 	"github.com/grecinto/sop-cloud/ai/memory"
+	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/btree"
 	"github.com/sharedcode/sop/common"
 	"github.com/sharedcode/sop/database"
@@ -361,6 +361,7 @@ func main() {
 	http.HandleFunc("/login", handleLoginPage)
 	http.HandleFunc("/app", requireAuth(handleIndex))
 	http.HandleFunc("/viewer", requireAuth(handleViewer))
+	http.HandleFunc("/file-preview", requireAuth(handleFilePreview))
 	http.HandleFunc("/api/databases", withAuth(handleDatabases))
 	http.HandleFunc("/api/databases/update", withAuth(handleUpdateDatabase))
 	http.HandleFunc("/api/stores", withAuth(handleListStores))

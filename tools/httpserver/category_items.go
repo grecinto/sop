@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/sharedcode/sop"
 	"github.com/grecinto/sop-cloud/ai/memory"
+	"github.com/sharedcode/sop"
 
 	aidb "github.com/grecinto/sop-cloud/ai/database"
 	"github.com/sharedcode/sop/database"
@@ -223,8 +223,28 @@ func handleListSpaceItems(w http.ResponseWriter, r *http.Request) {
 				if payloadRef, found := payload["payload_ref"]; found {
 					t.PayloadRef = fmt.Sprint(payloadRef)
 				}
+				if t.PayloadRef == "" {
+					if filesystemRef, found := payload["filesystem_ref"]; found {
+						t.PayloadRef = fmt.Sprint(filesystemRef)
+					}
+				}
 				if cloudProvider, found := payload["cloud_provider"]; found {
 					t.CloudProvider = fmt.Sprint(cloudProvider)
+				}
+			}
+			if len(t.DocID) > 0 {
+				if docID, err := sop.ParseUUID(t.DocID.First()); err == nil {
+					if doc, err := memoryDb.Store.GetDocument(ctx, docID); err == nil && doc != nil {
+						if t.PayloadRef == "" && doc.PayloadRef != "" {
+							t.PayloadRef = doc.PayloadRef
+						}
+						if t.StorageMode == "" && doc.StorageMode != "" {
+							t.StorageMode = string(doc.StorageMode)
+						}
+						if t.CloudProvider == "" && doc.CloudSource.Provider != "" {
+							t.CloudProvider = doc.CloudSource.Provider
+						}
+					}
 				}
 			}
 			if len(val.Positions) > 0 {

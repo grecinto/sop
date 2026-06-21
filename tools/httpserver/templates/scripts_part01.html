@@ -1159,33 +1159,98 @@
         return docID ? [docID] : [];
     };
 
+    window.buildFilePreviewURL = function(fileRef) {
+        const value = String(fileRef || '').trim();
+        if (!value) return '';
+        return '/file-preview?path=' + encodeURIComponent(value);
+    };
+
+    window.isLocalFileReference = function(ref) {
+        const value = String(ref || '').trim();
+        if (!value) return false;
+        if (/^(https?:)?\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:') || value.startsWith('mailto:')) {
+            return false;
+        }
+        return value.startsWith('file://') || value.includes('/') || value.includes('\\') || /^\./.test(value) || /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(value);
+    };
+
+    window.resolveItemPreviewSrc = function(ref) {
+        const value = String(ref || '').trim();
+        if (!value) return '';
+        if (window.isLocalFileReference(value)) {
+            return window.buildFilePreviewURL(value);
+        }
+        return value;
+    };
+
+    window.getItemPreviewReference = function(item) {
+        if (!item || typeof item !== 'object') return '';
+        const payload = item.data || item.payload || {};
+        const candidates = [
+            item.payload_ref,
+            item.payloadRef,
+            item.file_ref,
+            item.fileRef,
+            item.filesystem_ref,
+            item.filesystemRef,
+            item.url,
+            item.source,
+            item.link,
+            payload.payload_ref,
+            payload.payloadRef,
+            payload.file_ref,
+            payload.fileRef,
+            payload.filesystem_ref,
+            payload.filesystemRef,
+            payload.url,
+            payload.source,
+            payload.link,
+            item.reference,
+            item.ref,
+            payload.reference,
+            payload.ref
+        ];
+        for (const candidate of candidates) {
+            if (candidate && String(candidate).trim()) {
+                return String(candidate).trim();
+            }
+        }
+        return '';
+    };
+
     window.getItemMediaPreviewHtml = function(item, primaryDocID) {
         if (!item) return '';
 
-        const contentType = String(item.content_type || item.contentType || '').toLowerCase();
-        const payloadRef = item.payload_ref || item.payloadRef || '';
+        const payload = item.data || item.payload || {};
+        const rawContentType = [item.content_type, item.contentType, item.mime_type, item.mimeType, payload.content_type, payload.contentType, payload.mime_type, payload.mimeType].find(v => v && String(v).trim());
+        const contentType = String(rawContentType || '').split(';')[0].trim().toLowerCase();
+        const payloadRef = window.getItemPreviewReference(item);
         const fallbackText = item.text || item.description || item.summaries?.[0] || '';
+        const docURL = primaryDocID ? window.buildDocViewerURL(primaryDocID, fallbackText) : '';
+        const previewRef = payloadRef || docURL;
+        const src = window.resolveItemPreviewSrc(previewRef);
 
-        if (!contentType && !payloadRef) {
+        if (!contentType && !src) {
             return '';
         }
 
-        if (contentType.startsWith('image/')) {
-            const src = payloadRef || (primaryDocID ? window.buildDocViewerURL(primaryDocID, fallbackText) : '');
+        const isImage = contentType.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(String(previewRef));
+        const isVideo = contentType.startsWith('video/') || contentType === 'application/x-mpegurl' || contentType === 'application/vnd.apple.mpegurl' || /\.(mp4|webm|ogg|m3u8)(\?.*)?$/i.test(String(previewRef));
+
+        if (isImage) {
             if (!src) return '';
             return `
-                <div style="display:flex; align-items:center; justify-content:center; width:100%; min-height:120px; border-radius:8px; overflow:hidden; background:rgba(0,0,0,0.05);">
-                    <img src="${window.escapeHTML(src)}" alt="${window.escapeHTML(fallbackText || 'media preview')}" style="display:block; width:100%; height:auto; max-height:180px; object-fit:contain;" />
+                <div style="display:flex; align-items:center; justify-content:center; width:100%; min-height:180px; border-radius:8px; overflow:hidden; background:rgba(0,0,0,0.05); padding:10px; box-sizing:border-box;">
+                    <img src="${window.escapeHTML(src)}" alt="${window.escapeHTML(fallbackText || 'media preview')}" style="display:block; width:auto; max-width:100%; max-width:min(100%, 3in); height:auto; max-height:2.5in; object-fit:contain;" />
                 </div>
             `;
         }
 
-        if (contentType.startsWith('video/') || contentType === 'application/x-mpegurl' || contentType === 'application/vnd.apple.mpegurl') {
-            const src = payloadRef || (primaryDocID ? window.buildDocViewerURL(primaryDocID, fallbackText) : '');
+        if (isVideo) {
             if (!src) return '';
             return `
-                <div style="display:flex; align-items:center; justify-content:center; width:100%; min-height:120px; border-radius:8px; overflow:hidden; background:rgba(0,0,0,0.08);">
-                    <video controls preload="metadata" playsinline style="display:block; width:100%; max-height:180px; object-fit:contain; background:#000;">
+                <div style="display:flex; align-items:center; justify-content:center; width:100%; min-height:180px; border-radius:8px; overflow:hidden; background:rgba(0,0,0,0.08); padding:10px; box-sizing:border-box;">
+                    <video controls preload="metadata" playsinline style="display:block; width:auto; max-width:min(100%, 3in); max-height:2.5in; object-fit:contain; background:#000;">
                         <source src="${window.escapeHTML(src)}" type="${window.escapeHTML(contentType || 'video/mp4')}" />
                         Your browser does not support the video tag.
                     </video>
@@ -1327,7 +1392,8 @@
         modal.style.borderRadius = '8px';
         modal.style.width = '70%';
         modal.style.maxWidth = '900px';
-        modal.style.height = '65%';
+        modal.style.height = 'auto';
+        modal.style.minHeight = '65%';
         modal.style.maxHeight = '90vh';
         modal.style.display = 'flex';
         modal.style.flexDirection = 'column';
@@ -1381,9 +1447,15 @@
         referenceInfo.style.color = 'var(--text-color)';
         referenceInfo.style.fontSize = '0.9em';
         referenceInfo.style.lineHeight = '1.4';
+        referenceInfo.style.maxHeight = 'none';
         if (docRef) {
-            const refLabel = docStorageMode === 'filesystem_reference' ? 'Filesystem Reference:' : (docCloudProvider ? 'Reference:' : 'Reference:');
-            referenceInfo.innerHTML = `<strong>${window.escapeHTML(refLabel)}</strong> ${window.escapeHTML(docRef)}${docStorageMode ? `<br><strong>Storage Mode:</strong> ${window.escapeHTML(docStorageMode)}` : ''}${docCloudProvider ? `<br><strong>Provider:</strong> ${window.escapeHTML(docCloudProvider)}` : ''}`;
+            const refLabel = docStorageMode === 'filesystem_reference' ? 'Filename:' : 'Reference:';
+            const previewSrc = window.resolveItemPreviewSrc(docRef);
+            const isImagePreview = docRef && /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(docRef);
+            const previewHtml = isImagePreview ? `<div class="preview-image" style="margin-top:10px; display:flex; align-items:center; justify-content:center; border:1px solid var(--border-color); border-radius:6px; padding:8px; background:#fff; overflow:hidden; min-height:2.5in; max-height:4in;"><img src="${window.escapeHTML(previewSrc)}" alt="Preview" style="display:block; max-width:6.5in; max-height:2.5in; width:auto; height:auto; object-fit:contain;" /></div>` : '';
+            const displayRef = (docRef || '').trim();
+            const displayValue = displayRef;
+            referenceInfo.innerHTML = `<strong>${window.escapeHTML(refLabel)}</strong> <span style="word-break:break-all;">${window.escapeHTML(displayValue)}</span>${docStorageMode ? `<br><strong>Storage Mode:</strong> ${window.escapeHTML(docStorageMode)}` : ''}${docCloudProvider ? `<br><strong>Provider:</strong> ${window.escapeHTML(docCloudProvider)}` : ''}${previewHtml}`;
         } else {
             referenceInfo.innerHTML = '<em>No external document reference attached.</em>';
         }
@@ -1943,15 +2015,20 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 5px; border-bottom: 1px solid var(--border-color); position: sticky; top: 0; background: var(--bg-color); z-index: 10; overflow: hidden;">
                         <h3 id="kb-items-header-title" style="margin: 0; font-size: 1.1em; color: var(--text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 10px;">All Items</h3>
                         <div style="display: flex; align-items: center; gap: 10px;">
-                            <div title="Switch between text and icon view" style="display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--secondary-bg);">
-                                <span style="font-size: 0.8em; color: var(--text-muted);">Text</span>
-                                <label style="position: relative; display: inline-flex; align-items: center; cursor: pointer;">
-                                    <input id="space-items-view-toggle" type="checkbox" style="position: absolute; opacity: 0; pointer-events: none;" onchange="window.setSpaceItemDisplayMode(this.checked ? 'icon' : 'text')">
-                                    <span style="width: 40px; height: 22px; border-radius: 999px; background: var(--border-color); display: inline-block; position: relative; transition: background 0.2s ease;">
-                                        <span style="position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: transform 0.2s ease;"></span>
-                                    </span>
+                            <style>
+                                #space-items-view-toggle {
+                                    width: 16px;
+                                    height: 16px;
+                                    margin: 0;
+                                    accent-color: var(--link-color);
+                                    cursor: pointer;
+                                }
+                            </style>
+                            <div title="Show media previews in the item cards" style="display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--secondary-bg);">
+                                <label style="position: relative; display: inline-flex; align-items: center; cursor: pointer; gap: 6px;">
+                                    <input id="space-items-view-toggle" type="checkbox" onchange="window.setSpaceItemDisplayMode(this.checked ? 'icon' : 'text')">
+                                    <span style="font-size: 0.8em; color: var(--text-muted);">Icon</span>
                                 </label>
-                                <span style="font-size: 0.8em; color: var(--text-muted);">Icon</span>
                             </div>
                             <select id="items-per-page-select" onchange="window._currentLimit = parseInt(this.value); if(window._lastFetchItemsArgs) { window.fetchItemsForCategory(window._lastFetchItemsArgs.spaceName, window._lastFetchItemsArgs.categoryId, window._lastFetchItemsArgs.categoryName, window._lastFetchItemsArgs.liElement, window._lastFetchItemsArgs.catObj, 0, window._currentLimit); }" style="padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); font-size: 0.85em; cursor: pointer; outline: none;">
                                 <option value="10" ${window._currentLimit === 10 ? 'selected' : ''}>10 / page</option>
@@ -1963,7 +2040,7 @@
                             ${actionButtons}
                         </div>
                     </div>
-                    <div id="kb-items-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 15px; align-content: flex-start; padding-bottom: 20px;">
+                    <div id="kb-items-grid" style="display: block; column-width: 280px; column-gap: 15px; padding-bottom: 20px;">
                         <div style="padding: 15px;">Please select a category.</div>
                     </div>
                 </div>
@@ -2370,6 +2447,9 @@
                     }
                     const docLinkHref = primaryDocID ? window.buildDocViewerURL(primaryDocID, t.text || '') : "";
                     const categoryAttr = JSON.stringify(currCatName || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+                    const itemRef = window.getItemPreviewReference(t);
+                    const itemStorageMode = (t.storage_mode || t.storageMode || (t.data && (t.data.storage_mode || t.data.storageMode)) || '').toString();
+                    const itemCloudProvider = (t.cloud_provider || t.cloudProvider || (t.data && (t.data.cloud_provider || t.data.cloudProvider)) || '').toString();
                     const mediaPreviewHtml = window.getItemMediaPreviewHtml(t, primaryDocID);
                     const displayMode = window._spaceItemDisplayMode || 'text';
                     let descHtml = '';
@@ -2383,9 +2463,9 @@
                                 <div style="margin-top: 8px; display: flex; align-items: center; position: relative;">
                                     <a class="read-more-btn" onclick="toggleDomainItemDesc(this)" data-item-id="${window.escapeHTML(t.id || '')}" data-item-category="${window.escapeHTML(t.category_id || t.category || '')}" style="cursor:pointer; color:var(--link-color); font-size:0.85em; text-decoration:underline;">Read More</a>
                                     ${kbIsReadOnly ? 
-                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
+                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
                                         : 
-                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Edit Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></a>
+                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Edit Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></a>
                                          <a class="delete-item-btn" data-item-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-item-name="${window.escapeHTML(((t.summaries && t.summaries.length > 0) ? t.summaries[0] : (t.text || t.description || t.topic || t.concept || t.name || t.id || '')).substring(0, 100))}" onclick="window.deleteSpaceItem(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Delete Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg></a>`
                                     }
                                     <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
@@ -2421,7 +2501,7 @@
                     const contentBodyHtml = displayMode === 'icon' && mediaPreviewHtml ? mediaPreviewHtml : descHtml;
 
                     contentHtml += `
-                        <div class="kb-item-card" style="width: 100%; box-sizing: border-box; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 15px; background: var(--bg-color); box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; flex-direction: column; transition: transform 0.2s, box-shadow 0.2s; cursor: pointer;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 8px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.05)';">
+                        <div class="kb-item-card" data-preview-ref="${window.escapeHTML(itemRef)}" style="width: 100%; box-sizing: border-box; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 15px; background: var(--bg-color); box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: inline-block; margin-bottom: 15px; break-inside: avoid; transition: transform 0.2s, box-shadow 0.2s; cursor: pointer;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 8px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.05)';">
                             <div style="display:flex; justify-content:${(!categoryId || categoryName === 'All Items') ? 'space-between' : 'flex-end'}; align-items:center; margin-bottom:5px;">
                                 ${(!categoryId || categoryName === 'All Items') ? `
                                 <div style="font-size: 0.75em; font-weight: 600; color: #fff; background-color: #5b6ed1; padding: 3px 8px; border-radius: 12px; text-transform: uppercase;">
@@ -3003,6 +3083,12 @@ function showAddSpaceItem() {
     const summariesInput = document.getElementById('new-space-item-summaries');
     if (summariesInput) summariesInput.value = '';
     
+    const sourceRadios = document.querySelectorAll('input[name="new-space-item-source"]');
+    sourceRadios.forEach(radio => {
+        radio.onchange = toggleSpaceItemAssetSource;
+    });
+    toggleSpaceItemAssetSource();
+
     // Re-populate correct categories
     const catSelect = document.getElementById('new-space-item-category');
     if (catSelect && window._currentKBCategories) {
@@ -3064,6 +3150,18 @@ async function autoSummarizeAddSpaceItem() {
     }
 }
 
+function toggleSpaceItemAssetSource() {
+    const uploadSection = document.getElementById('new-space-item-upload-section');
+    const referenceSection = document.getElementById('new-space-item-reference-section');
+    const selected = document.querySelector('input[name="new-space-item-source"]:checked')?.value || 'upload';
+    if (uploadSection) {
+        uploadSection.style.display = selected === 'upload' ? 'block' : 'none';
+    }
+    if (referenceSection) {
+        referenceSection.style.display = selected === 'reference' ? 'block' : 'none';
+    }
+}
+
 function browseSpaceItemReference() {
     const picker = document.createElement('input');
     picker.type = 'file';
@@ -3073,9 +3171,14 @@ function browseSpaceItemReference() {
         if (!file) {
             return;
         }
+        const absolutePath = file.path && String(file.path).trim();
+        const relativePath = file.webkitRelativePath && String(file.webkitRelativePath).trim();
+        const resolvedPath = absolutePath || relativePath || file.name || '';
         const refInput = document.getElementById('new-space-item-cloud-ref');
         if (refInput) {
-            refInput.value = file.path || file.name;
+            refInput.value = resolvedPath;
+            refInput.placeholder = 'Paste the full path manually (or full reference, e.g. applecloud://container/notes.txt)';
+            refInput.title = 'The browser may only expose a filename. Paste the full path manually if needed.';
         }
         const providerSelect = document.getElementById('new-space-item-cloud-provider');
         if (providerSelect) {
@@ -3119,11 +3222,28 @@ async function saveSpaceItem() {
         summaries = summariesInput.split('.').map(s => s.trim()).filter(s => s.length > 0);
     }
 
+    const assetMode = document.querySelector('input[name="new-space-item-source"]:checked')?.value || 'upload';
     const cloudRef = document.getElementById('new-space-item-cloud-ref').value.trim();
     const cloudProvider = document.getElementById('new-space-item-cloud-provider').value.trim();
+    const refInput = document.getElementById('new-space-item-cloud-ref');
+    const hasPathSeparator = /[\\/]/.test(cloudRef);
+    const hasExplicitScheme = /^(applecloud|gcs|s3|file|https?|data):/i.test(cloudRef);
+    const isLikelyFullReference = !!cloudRef && (hasPathSeparator || hasExplicitScheme);
+    if (assetMode === 'reference' && !isLikelyFullReference) {
+        if (refInput) {
+            refInput.focus();
+            refInput.placeholder = 'Please enter the full reference/path';
+            refInput.style.borderColor = 'var(--danger-bg)';
+            refInput.title = 'A full path or full reference is required.';
+        }
+        showAlert('A full path or full reference is required before saving. Please enter it in the reference field.');
+        return;
+    }
     const cloudBucket = document.getElementById('new-space-item-cloud-bucket').value.trim();
     const cloudObjectKey = document.getElementById('new-space-item-cloud-object-key').value.trim();
     const cloudAccessHint = document.getElementById('new-space-item-cloud-access-hint').value.trim();
+    const uploadInput = document.getElementById('new-space-item-upload-file');
+    const uploadFile = uploadInput && uploadInput.files && uploadInput.files[0] ? uploadInput.files[0] : null;
 
     const reqBody = {
         id: "", 
@@ -3138,6 +3258,7 @@ async function saveSpaceItem() {
         if (cloudProvider === 'filesystem') {
             reqBody.data.storage_mode = 'filesystem_reference';
             reqBody.data.filesystem_ref = cloudRef;
+            reqBody.data.payload_ref = cloudRef;
         } else {
             reqBody.data.storage_mode = 'external_metadata_only';
             reqBody.data.payload_ref = cloudRef;
@@ -3155,13 +3276,29 @@ async function saveSpaceItem() {
             reqBody.data.access_hint = cloudAccessHint;
         }
     }
-    
+
     try {
-        const res = await authFetch(`/api/spaces/item/add?name=${encodeURIComponent(kbNameDisplay)}&database=${encodeURIComponent(dbNameDisplay)}`, {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify(reqBody)
-        });
+        let res;
+        if (assetMode === 'upload' && uploadFile) {
+            const formData = new FormData();
+            formData.append('file', uploadFile);
+            formData.append('category_id', categoryId);
+            formData.append('description', desc);
+            formData.append('summaries', summariesInput);
+            formData.append('storage_mode', 'filesystem_reference');
+            formData.append('cloud_provider', 'filesystem');
+            formData.append('filename', uploadFile.name || '');
+            res = await authFetch(`/api/spaces/item/add?name=${encodeURIComponent(kbNameDisplay)}&database=${encodeURIComponent(dbNameDisplay)}`, {
+                method: 'POST',
+                body: formData
+            });
+        } else {
+            res = await authFetch(`/api/spaces/item/add?name=${encodeURIComponent(kbNameDisplay)}&database=${encodeURIComponent(dbNameDisplay)}`, {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(reqBody)
+            });
+        }
         
         if (res.ok) {
             const resData = await res.json();

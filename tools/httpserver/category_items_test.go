@@ -8,9 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/sharedcode/sop"
 	aidb "github.com/grecinto/sop-cloud/ai/database"
 	"github.com/grecinto/sop-cloud/ai/memory"
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/database"
 )
 
@@ -694,6 +694,81 @@ func TestHandleListSpaceItemsReturnsDocumentReferenceMetadata(t *testing.T) {
 	}
 	if item["storage_mode"] != string(memory.DocumentStorageModeFilesystemReference) {
 		t.Fatalf("expected storage_mode to be exposed in list response, got %#v", item["storage_mode"])
+	}
+}
+
+func TestHandleListSpaceItemsFallsBackToFilesystemRef(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := "testdb_list_filesystem_ref_fallback"
+	spaceName := "test_space_list_filesystem_ref_fallback"
+
+	config = Config{
+		RootPassword: "secret_password",
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	sendJSON := func(method, url string, handler http.HandlerFunc, body interface{}) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, url, bytes.NewBuffer(b))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		handler(rr, req)
+		return rr
+	}
+
+	rr := sendJSON("POST", "/api/spaces/create", handleCreateSpace, CreateSpaceRequest{DatabaseName: dbName, SpaceName: spaceName})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to create space: %v", rr.Body.String())
+	}
+
+	rr = sendJSON("POST", "/api/spaces/category/add?database="+dbName+"&name="+spaceName, handleAddSpaceCategory, AddSpaceCategoryRequest{Name: "Root"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add category: %v", rr.Body.String())
+	}
+	var catRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&catRes); err != nil {
+		t.Fatalf("Failed to decode category response: %v", err)
+	}
+	categoryID := catRes["id"].(string)
+
+	reqBody := AddSpaceItemRequest{
+		CategoryID: categoryID,
+		Summaries:  []string{"Filesystem fallback"},
+		Data: map[string]any{
+			"text":           "Filesystem fallback",
+			"description":    "A filesystem-backed item without payload_ref",
+			"content_type":   "application/pdf",
+			"filesystem_ref": "/tmp/inbox/report.pdf",
+		},
+	}
+
+	rr = sendJSON("POST", "/api/spaces/item/add?database="+dbName+"&name="+spaceName, handleAddSpaceItem, reqBody)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add item: %v", rr.Body.String())
+	}
+
+	req, _ := http.NewRequest("GET", "/api/spaces/items?database="+dbName+"&name="+spaceName, nil)
+	rrGet := httptest.NewRecorder()
+	handleListSpaceItems(rrGet, req)
+	if rrGet.Code != http.StatusOK {
+		t.Fatalf("List returned wrong status: got %v body %s", rrGet.Code, rrGet.Body.String())
+	}
+
+	var listRes map[string]any
+	if err := json.NewDecoder(rrGet.Body).Decode(&listRes); err != nil {
+		t.Fatalf("Failed to decode list response: %v", err)
+	}
+	items := listRes["data"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("Expected 1 item after add, got %d", len(items))
+	}
+	item := items[0].(map[string]any)
+	if item["payload_ref"] != "/tmp/inbox/report.pdf" {
+		t.Fatalf("expected filesystem_ref fallback to be exposed in list response, got %#v", item["payload_ref"])
 	}
 }
 

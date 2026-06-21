@@ -26,6 +26,13 @@ type AddSpaceItemRequest struct {
 	Data       map[string]any `json:"data"`
 }
 
+// AddSpaceItemUploadRequest carries multipart upload metadata for filesystem-backed items.
+type AddSpaceItemUploadRequest struct {
+	FileName string
+	Data     []byte
+	Size     int64
+}
+
 // AddSpaceItemsBatchRequest defines the payload for batch processing of space items.
 type AddSpaceItemsBatchRequest struct {
 	Items []AddSpaceItemRequest `json:"items"`

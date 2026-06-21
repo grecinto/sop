@@ -5,14 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/sharedcode/sop"
 	aidb "github.com/grecinto/sop-cloud/ai/database"
-	"github.com/sharedcode/sop/ai/embed"
 	"github.com/grecinto/sop-cloud/ai/memory"
+	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai/embed"
 	"github.com/sharedcode/sop/database"
 )
 
@@ -101,6 +103,15 @@ func ensureDocumentReference(ctx context.Context, kb *memory.KnowledgeBase[map[s
 	if rawData, ok := data["data"].([]byte); ok {
 		doc.Data = rawData
 	}
+	if uploadData, ok := data["__uploaded_bytes"].([]byte); ok {
+		doc.Data = uploadData
+	}
+	if content, ok := data["content"].(string); ok {
+		doc.Content = content
+	}
+	if rawData, ok := data["data"].([]byte); ok {
+		doc.Data = rawData
+	}
 	if storageMode, ok := data["storage_mode"].(string); ok && storageMode != "" {
 		doc.StorageMode = memory.DocumentStorageMode(storageMode)
 	}
@@ -111,6 +122,16 @@ func ensureDocumentReference(ctx context.Context, kb *memory.KnowledgeBase[map[s
 	}
 	if payloadRef, ok := data["payload_ref"].(string); ok && payloadRef != "" {
 		doc.PayloadRef = payloadRef
+	}
+	if uploadData, ok := data["__uploaded_bytes"].([]byte); ok && len(uploadData) > 0 {
+		doc.Data = uploadData
+		if doc.PayloadRef == "" {
+			filename := ""
+			if v, ok := data["filename"].(string); ok {
+				filename = v
+			}
+			doc.PayloadRef = "uploaded://" + filepath.Base(filename)
+		}
 	}
 	if filesystemRef, ok := data["filesystem_ref"].(string); ok && filesystemRef != "" {
 		if doc.PayloadRef == "" {
@@ -444,9 +465,51 @@ func handleAddSpaceItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AddSpaceItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
-		return
+	var uploadReq *AddSpaceItemUploadRequest
+	if strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, "Failed to parse file upload", http.StatusBadRequest)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "Missing uploaded file", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, err := io.ReadAll(file)
+		if err != nil {
+			http.Error(w, "Failed to read uploaded file", http.StatusBadRequest)
+			return
+		}
+		uploadReq = &AddSpaceItemUploadRequest{FileName: header.Filename, Data: data, Size: int64(len(data))}
+		req.Data = map[string]any{}
+		if r.FormValue("description") != "" {
+			req.Data["description"] = r.FormValue("description")
+		}
+		if r.FormValue("text") != "" {
+			req.Data["text"] = r.FormValue("text")
+		}
+		if r.FormValue("category_id") != "" {
+			req.CategoryID = r.FormValue("category_id")
+		}
+		if r.FormValue("summaries") != "" {
+			req.Summaries = strings.Split(r.FormValue("summaries"), ".")
+		}
+		if r.FormValue("storage_mode") != "" {
+			req.Data["storage_mode"] = r.FormValue("storage_mode")
+		}
+		if r.FormValue("cloud_provider") != "" {
+			req.Data["cloud_provider"] = r.FormValue("cloud_provider")
+		}
+		if uploadReq.FileName != "" {
+			req.Data["filename"] = uploadReq.FileName
+		}
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+			return
+		}
 	}
 
 	parsedCatID, err := sop.ParseUUID(req.CategoryID)

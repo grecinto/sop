@@ -21,3 +21,72 @@ func TestMediaPreviewRendererIsDefinedInTemplate(t *testing.T) {
 		t.Fatalf("expected media preview helper to render image and video markup in %s", path)
 	}
 }
+
+func TestSpaceItemDisplayToggleIsInteractiveInTemplate(t *testing.T) {
+	path := filepath.Join("templates", "scripts_part01.html")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "pointer-events: none;") {
+		t.Fatalf("expected the icon toggle input to remain interactive in %s", path)
+	}
+	if !strings.Contains(content, `type="checkbox"`) {
+		t.Fatalf("expected the icon toggle to render as a checkbox in %s", path)
+	}
+	if !strings.Contains(content, "accent-color: var(--link-color);") {
+		t.Fatalf("expected the icon toggle to expose a checked-state style in %s", path)
+	}
+}
+
+func TestEditModalUsesFilenameLabelAndPreviewContainer(t *testing.T) {
+	path := filepath.Join("templates", "scripts_part01.html")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Filename:") {
+		t.Fatalf("expected edit modal to use Filename label in %s", path)
+	}
+	if !strings.Contains(content, "preview-image") {
+		t.Fatalf("expected edit modal preview container to exist in %s", path)
+	}
+}
+
+func TestItemCardMarkupCarriesPreviewReferenceAttribute(t *testing.T) {
+	path := filepath.Join("templates", "scripts_part01.html")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "data-preview-ref") {
+		t.Fatalf("expected item cards to carry a dedicated preview reference attribute in %s", path)
+	}
+}
+
+func TestReferencePickerExplainsPathFallbackInTemplate(t *testing.T) {
+	path := filepath.Join("templates", "scripts_part01.html")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Paste the full path manually") {
+		t.Fatalf("expected reference picker fallback guidance in %s", path)
+	}
+}
+
+func TestSaveSpaceItemRequiresFullReferenceInTemplate(t *testing.T) {
+	path := filepath.Join("templates", "scripts_part01.html")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Please enter the full reference/path") {
+		t.Fatalf("expected save flow to require a full reference/path in %s", path)
+	}
+}

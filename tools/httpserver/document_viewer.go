@@ -1,17 +1,84 @@
 package main
 
 import (
+	"mime"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/sharedcode/sop"
 	"github.com/grecinto/sop-cloud/ai/database"
+	"github.com/sharedcode/sop"
 )
 
 func isExternalDocID(docID string) bool {
 	trimmed := strings.TrimSpace(docID)
 	return strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "file://") || strings.HasPrefix(trimmed, "mailto:")
+}
+
+func resolvePreviewPath(rawPath string) (string, error) {
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" {
+		return "", os.ErrInvalid
+	}
+
+	if strings.HasPrefix(trimmed, "file://") {
+		if parsed, err := url.Parse(trimmed); err == nil && parsed.Path != "" {
+			trimmed = parsed.Path
+		}
+	}
+
+	if strings.HasPrefix(trimmed, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		trimmed = filepath.Join(homeDir, strings.TrimPrefix(trimmed, "~/"))
+	}
+
+	candidatePath := trimmed
+	if !filepath.IsAbs(candidatePath) {
+		if cwd, err := os.Getwd(); err == nil {
+			candidatePath = filepath.Join(cwd, candidatePath)
+		}
+	}
+
+	cleanedPath := filepath.Clean(candidatePath)
+	if cleanedPath == "." || strings.Contains(cleanedPath, "..") {
+		return "", os.ErrInvalid
+	}
+
+	return cleanedPath, nil
+}
+
+func handleFilePreview(w http.ResponseWriter, r *http.Request) {
+	rawPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	cleanedPath, err := resolvePreviewPath(rawPath)
+	if err != nil {
+		http.Error(w, "invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	f, err := os.Open(cleanedPath)
+	if err != nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		http.Error(w, "invalid file path", http.StatusBadRequest)
+		return
+	}
+
+	contentType := mime.TypeByExtension(filepath.Ext(cleanedPath))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	http.ServeContent(w, r, filepath.Base(cleanedPath), info.ModTime(), f)
 }
 
 func handleViewer(w http.ResponseWriter, r *http.Request) {
