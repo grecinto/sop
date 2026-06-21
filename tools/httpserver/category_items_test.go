@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -492,6 +493,140 @@ func TestHandleAddSpaceItemPersistsAppleCloudDocumentReference(t *testing.T) {
 	}
 	if !doc.IsAppleCloud() {
 		t.Fatalf("expected document to be classified as Apple Cloud-backed")
+	}
+}
+
+func TestHandleAddSpaceItemMultipartUploadPersistsUploadedBytes(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := "testdb_multipart_upload"
+	spaceName := "test_space_multipart_upload"
+
+	config = Config{
+		RootPassword: "secret_password",
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	rr := httptest.NewRecorder()
+	createReq := httptest.NewRequest("POST", "/api/spaces/create", bytes.NewBufferString(`{"database_name":"`+dbName+`","space_name":"`+spaceName+`"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	handleCreateSpace(rr, createReq)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to create space: %v", rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	catReq := httptest.NewRequest("POST", "/api/spaces/category/add?database="+dbName+"&name="+spaceName, bytes.NewBufferString(`{"name":"Root"}`))
+	catReq.Header.Set("Content-Type", "application/json")
+	handleAddSpaceCategory(rr, catReq)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add category: %v", rr.Body.String())
+	}
+	var catRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&catRes); err != nil {
+		t.Fatalf("Failed to decode category response: %v", err)
+	}
+	categoryID := catRes["id"].(string)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "sample.txt")
+	if err != nil {
+		t.Fatalf("failed to create form file part: %v", err)
+	}
+	if _, err := part.Write([]byte("hello from upload")); err != nil {
+		t.Fatalf("failed to write uploaded bytes: %v", err)
+	}
+	for _, field := range []struct{ key, value string }{
+		{key: "category_id", value: categoryID},
+		{key: "description", value: "Uploaded file"},
+		{key: "summaries", value: "Upload summary"},
+		{key: "storage_mode", value: string(memory.DocumentStorageModeFilesystemReference)},
+		{key: "cloud_provider", value: "filesystem"},
+		{key: "filename", value: "sample.txt"},
+	} {
+		if err := writer.WriteField(field.key, field.value); err != nil {
+			t.Fatalf("failed to write form field %s: %v", field.key, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close multipart writer: %v", err)
+	}
+
+	rr = httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/spaces/item/add?database="+dbName+"&name="+spaceName, &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	handleAddSpaceItem(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add uploaded item: %v", rr.Body.String())
+	}
+
+	ctx := context.Background()
+	dbOpts, err := getDBOptions(ctx, dbName)
+	if err != nil {
+		t.Fatalf("Failed to get DB options: %v", err)
+	}
+	trans, err := database.BeginTransaction(ctx, dbOpts, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer trans.Rollback(ctx)
+
+	db := aidb.NewDatabase(dbOpts)
+	kb, err := db.OpenKnowledgeBase(ctx, spaceName, trans, nil, nil, false)
+	if err != nil {
+		t.Fatalf("Failed to open knowledge base: %v", err)
+	}
+
+	itemsTree, err := kb.Store.Items(ctx)
+	if err != nil {
+		t.Fatalf("Failed to access items tree: %v", err)
+	}
+	var addRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&addRes); err != nil {
+		t.Fatalf("failed to decode add-item response: %v", err)
+	}
+	itemID, err := sop.ParseUUID(addRes["id"].(string))
+	if err != nil {
+		t.Fatalf("failed to parse item ID: %v", err)
+	}
+	parsedCatID, err := sop.ParseUUID(categoryID)
+	if err != nil {
+		t.Fatalf("failed to parse category ID: %v", err)
+	}
+	found, err := itemsTree.Find(ctx, memory.ItemKey{CategoryID: parsedCatID, ItemID: itemID}, false)
+	if err != nil {
+		t.Fatalf("failed to locate stored item: %v", err)
+	}
+	if !found {
+		t.Fatal("expected the item to be stored")
+	}
+	item, err := itemsTree.GetCurrentValue(ctx)
+	if err != nil {
+		t.Fatalf("failed to read stored item: %v", err)
+	}
+	if got, ok := item.Data["doc_id"].(string); !ok || got == "" {
+		t.Fatalf("expected item payload to include the persisted document reference, got %#v", item.Data["doc_id"])
+	}
+	uid, err := sop.ParseUUID(item.Data["doc_id"].(string))
+	if err != nil {
+		t.Fatalf("failed to parse stored doc id: %v", err)
+	}
+	doc, err := kb.Store.GetDocument(ctx, uid)
+	if err != nil {
+		t.Fatalf("failed to retrieve document: %v", err)
+	}
+	if doc == nil {
+		t.Fatal("expected a document to be created for the uploaded item")
+	}
+	if doc.PayloadRef != "uploaded://sample.txt" {
+		t.Fatalf("expected uploaded payload reference to be preserved, got %q", doc.PayloadRef)
+	}
+	if string(doc.Data) != "hello from upload" {
+		t.Fatalf("expected uploaded bytes to be persisted, got %q", string(doc.Data))
 	}
 }
 

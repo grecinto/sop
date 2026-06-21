@@ -5,9 +5,9 @@ import (
 	"fmt"
 	log "log/slog"
 
+	"github.com/grecinto/sop-cloud/ai/memory"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
-	"github.com/grecinto/sop-cloud/ai/memory"
 	"github.com/sharedcode/sop/ai/vector"
 	"github.com/sharedcode/sop/btree"
 	"github.com/sharedcode/sop/common"
@@ -157,7 +157,28 @@ func (db *Database) OpenKnowledgeBase(
 	if err != nil {
 		return nil, err
 	}
-	streamingDocsTree := memory.NewStreamingDocumentBtree(chunkedDocsTree)
+	info := chunkedDocsTree.GetStoreInfo()
+	chunkSize := memory.DefaultDocumentChunkSize
+	if storedChunkSize, ok := info.GetCustomDataValue("streaming_document_chunk_size"); ok {
+		switch v := storedChunkSize.(type) {
+		case int:
+			if v > 0 {
+				chunkSize = v
+			}
+		case int64:
+			if v > 0 {
+				chunkSize = int(v)
+			}
+		case float64:
+			if v > 0 {
+				chunkSize = int(v)
+			}
+		}
+	} else {
+		chunkSize = db.Options().IdealChunkSize(memory.DefaultDocumentChunkSize)
+	}
+	info.SetCustomData("streaming_document_chunk_size", chunkSize)
+	streamingDocsTree := memory.NewStreamingDocumentBtree(chunkedDocsTree, chunkSize)
 	docsTree := memory.NewDocumentBackendTree(streamingDocsTree)
 
 	// Assemble the storage engine

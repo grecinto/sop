@@ -505,6 +505,9 @@ func handleAddSpaceItem(w http.ResponseWriter, r *http.Request) {
 		if uploadReq.FileName != "" {
 			req.Data["filename"] = uploadReq.FileName
 		}
+		if uploadReq != nil && len(uploadReq.Data) > 0 {
+			req.Data["__uploaded_bytes"] = uploadReq.Data
+		}
 	} else {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON body", http.StatusBadRequest)

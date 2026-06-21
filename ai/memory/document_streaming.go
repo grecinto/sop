@@ -23,10 +23,23 @@ type streamingDocumentBtree struct {
 	store *sd.StreamingDataStore[sop.UUID]
 }
 
+const DefaultDocumentChunkSize = sd.DefaultChunkSize
+
 // NewStreamingDocumentBtree wraps an underlying chunked B-tree so Document values
 // are persisted as streamed JSON payloads instead of single large in-memory values.
-func NewStreamingDocumentBtree(inner btree.BtreeInterface[sd.StreamingDataKey[sop.UUID], []byte]) DocumentTree {
-	return &streamingDocumentBtree{store: &sd.StreamingDataStore[sop.UUID]{BtreeInterface: inner}}
+func NewStreamingDocumentBtree(inner btree.BtreeInterface[sd.StreamingDataKey[sop.UUID], []byte], chunkSize ...int) DocumentTree {
+	size := DefaultDocumentChunkSize
+	if len(chunkSize) > 0 && chunkSize[0] > 0 {
+		size = chunkSize[0]
+	}
+	return &streamingDocumentBtree{store: sd.NewStreamingDataStore[sop.UUID](inner, size)}
+}
+
+// DocumentChunkSizeForErasureConfig returns a chunk size tuned for the database's
+// erasure coding topology. More shards (more disks) use larger chunks; fewer shards
+// stay at the baseline 1MB minimum.
+func DocumentChunkSizeForErasureConfig(erasureConfig map[string]sop.ErasureCodingConfig) int {
+	return sop.IdealChunkSizeForErasureConfig(DefaultDocumentChunkSize, erasureConfig)
 }
 
 func (s *streamingDocumentBtree) Add(ctx context.Context, key sop.UUID, value Document) (bool, error) {
@@ -265,7 +278,7 @@ func (s *streamingDocumentBtree) Count() int64 {
 	return count
 }
 
-func (s *streamingDocumentBtree) GetStoreInfo() sop.StoreInfo {
+func (s *streamingDocumentBtree) GetStoreInfo() *sop.StoreInfo {
 	return s.store.BtreeInterface.GetStoreInfo()
 }
 

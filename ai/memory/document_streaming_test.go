@@ -19,7 +19,7 @@ func TestStreamingDocumentStoreChunksLargePayloads(t *testing.T) {
 		ID:          sop.NewUUID(),
 		Title:       "large payload",
 		ContentType: "text/plain",
-		Content:     strings.Repeat("chunked-document-content-", 4000),
+		Content:     strings.Repeat("chunked-document-content-", 50000),
 	}
 
 	if _, err := store.Add(ctx, doc.ID, doc); err != nil {
@@ -47,6 +47,24 @@ func TestStreamingDocumentStoreChunksLargePayloads(t *testing.T) {
 	}
 }
 
+func TestDocumentChunkSizeForErasureConfigScalesWithShardCount(t *testing.T) {
+	if got := DocumentChunkSizeForErasureConfig(nil); got != DefaultDocumentChunkSize {
+		t.Fatalf("expected default chunk size %d, got %d", DefaultDocumentChunkSize, got)
+	}
+
+	if got := DocumentChunkSizeForErasureConfig(map[string]sop.ErasureCodingConfig{"default": {DataShardsCount: 2, ParityShardsCount: 1}}); got != DefaultDocumentChunkSize {
+		t.Fatalf("expected baseline chunk size %d for a few shards, got %d", DefaultDocumentChunkSize, got)
+	}
+
+	if got := DocumentChunkSizeForErasureConfig(map[string]sop.ErasureCodingConfig{"default": {DataShardsCount: 4, ParityShardsCount: 2}}); got != 2*DefaultDocumentChunkSize {
+		t.Fatalf("expected doubled chunk size %d for a medium EC layout, got %d", 2*DefaultDocumentChunkSize, got)
+	}
+
+	if got := DocumentChunkSizeForErasureConfig(map[string]sop.ErasureCodingConfig{"default": {DataShardsCount: 8, ParityShardsCount: 0}}); got != 4*DefaultDocumentChunkSize {
+		t.Fatalf("expected quadrupled chunk size %d for a large EC layout, got %d", 4*DefaultDocumentChunkSize, got)
+	}
+}
+
 func TestStreamingDocumentStoreExposesChunkMetadata(t *testing.T) {
 	ctx := context.Background()
 	underlying := inmemory.NewBtree[sd.StreamingDataKey[sop.UUID], []byte](false)
@@ -56,7 +74,7 @@ func TestStreamingDocumentStoreExposesChunkMetadata(t *testing.T) {
 		ID:          sop.NewUUID(),
 		Title:       "chunk metadata",
 		ContentType: "text/plain",
-		Content:     strings.Repeat("chunk-metadata-payload-", 8000),
+		Content:     strings.Repeat("chunk-metadata-payload-", 50000),
 	}
 
 	if _, err := store.Add(ctx, doc.ID, doc); err != nil {

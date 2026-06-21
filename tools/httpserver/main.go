@@ -1898,8 +1898,12 @@ func handleUpdateStoreInfo(w http.ResponseWriter, r *http.Request) {
 	t := trans.GetPhasedTransaction()
 	if ct, ok := t.(*common.Transaction); ok {
 		// Tell engine this store needs meta data save.
+		if si == nil {
+			http.Error(w, "Failed to update store info: store metadata was not available", http.StatusInternalServerError)
+			return
+		}
 		si.NeedsMetaDataSave = true
-		if _, err := ct.StoreRepository.Update(ctx, []sop.StoreInfo{si}); err != nil {
+		if _, err := ct.StoreRepository.Update(ctx, []sop.StoreInfo{*si}); err != nil {
 			http.Error(w, "Failed to update store info: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -3453,16 +3457,16 @@ func handleWriteOperation(w http.ResponseWriter, r *http.Request, op string) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func coerceRecordKey(value any, info sop.StoreInfo) (any, error) {
+func coerceRecordKey(value any, info *sop.StoreInfo) (any, error) {
 	return coerceRecordField(value, info)
 }
 
-func coerceRecordValue(value any, info sop.StoreInfo) (any, error) {
+func coerceRecordValue(value any, info *sop.StoreInfo) (any, error) {
 	return coerceRecordField(value, info)
 }
 
-func coerceRecordField(value any, info sop.StoreInfo) (any, error) {
-	if value == nil || len(info.Schema) == 0 {
+func coerceRecordField(value any, info *sop.StoreInfo) (any, error) {
+	if value == nil || info == nil || len(info.Schema) == 0 {
 		return value, nil
 	}
 

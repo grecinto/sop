@@ -205,9 +205,9 @@ func (f *FilesystemDocumentTree) Count() int64 {
 	return f.inner.Count()
 }
 
-func (f *FilesystemDocumentTree) GetStoreInfo() sop.StoreInfo {
+func (f *FilesystemDocumentTree) GetStoreInfo() *sop.StoreInfo {
 	if f.inner == nil {
-		return sop.StoreInfo{}
+		return &sop.StoreInfo{}
 	}
 	return f.inner.GetStoreInfo()
 }

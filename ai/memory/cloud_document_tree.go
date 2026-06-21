@@ -202,9 +202,9 @@ func (c *CloudDocumentTree) Count() int64 {
 	return c.inner.Count()
 }
 
-func (c *CloudDocumentTree) GetStoreInfo() sop.StoreInfo {
+func (c *CloudDocumentTree) GetStoreInfo() *sop.StoreInfo {
 	if c.inner == nil {
-		return sop.StoreInfo{}
+		return &sop.StoreInfo{}
 	}
 	return c.inner.GetStoreInfo()
 }
