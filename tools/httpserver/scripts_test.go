@@ -14,7 +14,7 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
-	"github.com/grecinto/sop-cloud/ai/database"
+	publicdb "github.com/sharedcode/sop/ai/database"
 )
 
 // MockGenerator is a placeholder.
@@ -84,11 +84,11 @@ func TestHandleExecuteScript(t *testing.T) {
 	// 1. Setup Agent Service
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{
-		Type:          sop.Clustered,
+		Type:          sop.Standalone,
 		StoresFolders: []string{tmpDir},
 		CacheType:     sop.NoCache,
 	}
-	sysDB := database.NewDatabase(dbOpts)
+	sysDB := publicdb.NewDatabase(dbOpts)
 
 	// Create registry with MockAgent to handle "echo" tool
 	registry := map[string]ai.Agent[map[string]any]{
@@ -175,11 +175,11 @@ func TestSourceLinkPopupTemplateUsesEscapedAttributes(t *testing.T) {
 func TestHandleExecuteScript_DefaultsVerboseTrue(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{
-		Type:          sop.Clustered,
+		Type:          sop.Standalone,
 		StoresFolders: []string{tmpDir},
 		CacheType:     sop.NoCache,
 	}
-	sysDB := database.NewDatabase(dbOpts)
+	sysDB := publicdb.NewDatabase(dbOpts)
 	registry := map[string]ai.Agent[map[string]any]{
 		"mock": &MockAgent{},
 	}
