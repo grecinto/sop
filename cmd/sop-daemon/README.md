@@ -1,0 +1,95 @@
+# SOP Desktop Daemon
+
+This directory contains the private host-side daemon for the overlay repo. It is the product-specific runtime that sits on top of the shared public SOP engine and provides host-side execution and local RAG behavior for the private deployment model.
+
+## What it provides
+
+- local command execution for approved UI actions,
+- a local Ask endpoint for host-side RAG requests,
+- and the local topology/transport glue that connects the private runtime to the higher-level product experience.
+
+## Run locally
+
+```bash
+go run ./cmd/sop-daemon -port 9090 -config /path/to/agent-config.json
+```
+
+The daemon listens on 127.0.0.1 by default and exposes:
+
+- POST /api/execute
+- POST /api/ask
+
+## Private overlay scope
+
+The following pieces are the private overlay pieces that belong in this repository:
+
+- [cmd/sop-daemon/main.go](cmd/sop-daemon/main.go): host-side daemon entrypoint and HTTP bridge
+- [cmd/sop-daemon/rag.go](cmd/sop-daemon/rag.go): local Ask handling and local RAG bootstrap
+- [cmd/sop-daemon/localrag/main.go](cmd/sop-daemon/localrag/main.go): local interactive RAG CLI
+- [cmd/sop-daemon/topology/bundle.go](cmd/sop-daemon/topology/bundle.go): packaging logic for host installation
+- [cmd/sop-daemon/topology/remote.go](cmd/sop-daemon/topology/remote.go): host/HQ transport for private product flows
+- [cmd/sop-daemon/communication.go](cmd/sop-daemon/communication.go): session coordination and policy handling between host and HQ
+
+These files stay local because they encode the behavior that is specific to this product layer rather than the generic upstream engine.
+
+## Host/HQ coordination sketch
+
+The HQ-side platform should remain the authority for entitlement and policy. The host daemon should establish a long-lived session with HQ and keep it alive for the lifetime of the local RAG runtime.
+
+The initial flow should be:
+
+1. Host daemon starts and registers itself with HQ using a subscription identifier.
+2. HQ returns a session token and policy envelope (rate limits, feature flags, tenant context).
+3. The daemon sends periodic heartbeats while the local runtime is active.
+4. Each Ask request consumes budget from the session policy and is evaluated centrally by HQ.
+5. If the subscription is revoked, rate-limited, or expired, HQ can instruct the host to stop serving local Ask traffic.
+
+The current implementation in [cmd/sop-daemon/communication.go](cmd/sop-daemon/communication.go) gives a simple session registry and budget model for the host side, but the actual wire protocol, auth, and HQ enforcement logic should be added in the private repo.
+
+## Security proposal
+
+The private implementation should use signed tokens for both HQ and the local RAG runtime. The proposed model is documented in [cmd/sop-daemon/SECURITY_PROTOCOL.md](cmd/sop-daemon/SECURITY_PROTOCOL.md).
+
+In short:
+
+- HQ remains the authority for subscriptions, rate-limits, and revocation.
+- The host daemon verifies signed tokens locally and enforces the latest policy when online.
+- If HQ is unavailable, the host falls back to the last valid cached token and policy snapshot and continues enforcing them locally until the token or budget expires.
+
+## Implementation checklist for the private repo
+
+### Phase 1: packaging and deployment
+- [ ] Build a host-installable binary for the daemon.
+- [ ] Package the daemon with its local config and model-cache defaults.
+- [ ] Add a minimal bootstrap flow for first-run host registration.
+
+### Phase 2: HQ/host protocol
+- [ ] Define the register/heartbeat/ask/policy-refresh/revoke wire protocol.
+- [ ] Add signed-token issuance and verification.
+- [ ] Add policy caching and offline fallback behavior.
+- [ ] Add host-side revocation handling and stop conditions.
+
+### Phase 3: local enforcement
+- [ ] Enforce signed-token checks inside the local RAG runtime.
+- [ ] Enforce cached policy limits locally when HQ is unreachable.
+- [ ] Add audit logging for policy decisions and revocations.
+
+### Phase 4: operations and governance
+- [ ] Add private configuration for tenant IDs, signing keys, and model locations.
+- [ ] Add rollout and rollback guidance for host deployments.
+- [ ] Add incident handling for offline mode and token expiry.
+
+## Handoff notes
+
+This package is intentionally the boundary between:
+
+- the generic SOP AI engine, which can remain in the public repo, and
+- the proprietary host/HQ deployment runtime, which should stay private.
+
+When returning to this work later, the main focus areas should be:
+
+1. the secure session protocol between HQ and the host,
+2. the offline enforcement model,
+3. and the packaging flow for the downloadable daemon binary.
+
+For the repo split planning itself, see [cmd/sop-daemon/PRIVATE_REPO_SPLIT.md](cmd/sop-daemon/PRIVATE_REPO_SPLIT.md).

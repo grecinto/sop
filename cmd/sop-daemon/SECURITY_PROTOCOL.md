@@ -1,0 +1,98 @@
+# HQ/Host RAG Security Protocol Proposal
+
+## Goal
+
+Support signed-token enforcement for both HQ and the local RAG runtime, while preserving offline operation when HQ is unreachable.
+
+## Core model
+
+Use asymmetric signing for all access tokens.
+
+- HQ owns the private signing key.
+- The host daemon only needs the public verification key.
+- Each token is short-lived and carries policy and scope information.
+
+## Token shape
+
+Each token should include:
+
+- `iss`: issuer, typically HQ
+- `sub`: host or user identity
+- `aud`: target service, for example `sop-host-rag`
+- `jti`: unique token id for replay tracking
+- `iat`, `nbf`, `exp`: validity window
+- `scopes`: capabilities such as `ask`, `execute`, `heartbeat`
+- `tenant_id`: tenant or subscription context
+- `policy_version`: version of the last policy snapshot
+- `rate_limit_budget`: remaining online budget if HQ is reachable
+- `offline_until`: how long the host may continue using its cached policy
+- `device_id`: optional host binding information
+
+## Enforcement model
+
+### 1. Online mode
+
+When HQ and the host are both reachable:
+
+- HQ is the authoritative policy engine.
+- The host daemon verifies the token locally using the HQ public key.
+- HQ also validates the token and enforces the latest policy.
+- The host syncs policy, revocation state, and budget updates through periodic heartbeats.
+
+This gives you dual enforcement:
+
+- local enforcement for fast local decisions
+- central enforcement for subscription, rate-limit, and entitlement control
+
+### 2. Offline mode
+
+When HQ is unreachable:
+
+- the host daemon continues using the last valid signed token and cached policy snapshot
+- the local RAG runtime enforces the cached policy locally
+- the daemon only continues until one of these happens:
+  - the token expires
+  - the offline window ends
+  - the local budget is exhausted
+  - the host receives a revocation update later
+
+## Recommended flow
+
+1. Host starts and registers with HQ.
+2. HQ issues a signed session token plus a policy envelope.
+3. The host stores the token and policy envelope locally in encrypted storage.
+4. For each Ask request, the host sends the signed token and a lightweight policy check.
+5. If HQ is online, HQ can refresh the policy and revoke the session centrally.
+6. If HQ is offline, the host relies on the cached signed token and the last synced policy snapshot.
+
+## Revocation strategy
+
+Use a hybrid revocation approach:
+
+- short-lived tokens for safety
+- central revocation list or denylist in HQ
+- local cached revocation state on the host for offline grace periods
+
+A good default is:
+
+- token lifetime: 5 to 15 minutes
+- offline grace: 1 to 24 hours depending on business rules
+- heartbeat interval: every 30 to 60 seconds
+
+## Security recommendations
+
+- Use Ed25519 or ECDSA signing rather than a shared secret.
+- Rotate keys periodically and publish new public keys through a JWKS-style endpoint or a pinned bundle.
+- Bind the token to the host identity where possible.
+- Store cached policy and tokens encrypted at rest.
+- Include a nonce or replay-safe challenge for sensitive operations.
+
+## Suggested implementation stack
+
+- HQ: sign and issue tokens, maintain policy and revocation state
+- Host daemon: verify tokens, cache policy, send heartbeats, enforce locally when offline
+- Local RAG runtime: consume the validated policy and refuse requests if the token or budget is invalid
+
+## Recommended architecture decision
+
+Treat HQ as the source of truth for subscription, entitlement, and policy, but let the local daemon remain an enforcement point when the network is unavailable. That gives you centralized control and resilient offline operation.

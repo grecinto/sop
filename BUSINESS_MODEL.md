@@ -1,27 +1,17 @@
 # Business Model & Commercialization Strategy
 
-This document outlines the business model and commercialization strategy for the `sop` (Shared Object Platform) project.
+This document captures the product framing for the private overlay repository. The public SOP code remains the shared engine; this repository adds the product-specific runtime, UI, and deployment behavior that justify a private commercial layer.
 
-## 1. Open Core Model
+## 1. Private overlay model
 
-We will adopt an "Open Core" business model. This model allows us to maintain a free, open-source core project while offering commercial products and services with advanced features built upon it.
+The private repository is best treated as an overlay on top of the public SOP engine rather than as a full replacement. The public repository carries the reusable engine and generic AI/runtime primitives; this repository carries the parts that are deployment-specific, product-specific, or proprietary.
 
-- **Public Repository (`sop`)**:
-    - **License**: MIT License.
-    - **Content**: The core `sop` database engine, its command-line interface (CLI), and the Go language bindings. This repository will remain open and will be the hub for community contributions.
-    - **Purpose**: To foster a community, encourage adoption, and establish `sop` as a standard.
+- **Public layer**: shared storage, AI runtime primitives, and reusable engine behavior.
+- **Private layer**: product UI, host/desktop runtime, private deployment logic, and proprietary workflow behavior.
 
-- **Private Repository (`sop-cloud`)**:
-    - **License**: Proprietary/Commercial.
-    - **Content**: This repository will contain all commercial code, including:
-        - The advanced, user-friendly UI, featuring the **floating tool window**.
-        - Cloud services and "Software as a Service" (SaaS) offerings.
-        - Managed hosting solutions.
-        - Enterprise-grade features (e.g., advanced security, analytics, integrations).
-        - Bindings for other languages that are part of the commercial offering.
-    - **Purpose**: To generate revenue by selling products and services to professional and enterprise users.
+This lets the public repo stay generic while the private repo focuses on differentiated product value.
 
-## 2. The Floating Tool Window
+## 2. Product differentiation
 
 A key commercial feature will be the "floating tool window" integrated into the UI.
 
@@ -29,7 +19,7 @@ A key commercial feature will be the "floating tool window" integrated into the 
 - **Value Proposition**: This tool will significantly enhance productivity by offering a seamless way to build, test, and execute complex operations without leaving the primary work context. It represents a major step up from a standard CLI or a basic UI.
 - **Commercial Justification**: As a sophisticated and powerful feature, the floating tool window will be a primary driver for users to upgrade from the free, open-source version to a paid, commercial license. It will be exclusively available as part of the `sop-cloud` offering.
 
-## 3. Revenue Streams
+## 3. Revenue model
 
 The primary revenue streams will be:
 
