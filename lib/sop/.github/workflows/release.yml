@@ -1,0 +1,172 @@
+name: Release SOP Data Manager
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: 'Release Notes (overrides auto-generation)'
+        required: false
+        default: 'Manual Rebuild / Maintenance Release'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build Native (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build macOS binaries
+        run: |
+          chmod +x build_release.sh
+          # Only build macos parts
+          export ONLY_MACOS=1
+          export SOP_VERSION=${{ github.ref_name }}
+          ./build_release.sh
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libs-macos
+          path: |
+            bindings/python/sop/*.dylib
+            bindings/python/sop/*.h
+            bindings/csharp/Sop/*.dylib
+            bindings/csharp/Sop/*.h
+            bindings/java/src/main/resources/darwin-*/*.dylib
+            release/model_catalog.json
+            release/sop-httpserver-darwin-*
+            release/sop-bundle-darwin-*.tar.gz
+
+  build-linux-windows:
+    name: Build Native (Linux & Windows)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install Cross-Compilation Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64 zip
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Build Linux and Windows binaries
+        run: |
+          chmod +x build_release.sh
+          # Skip macos parts (built in separate job)
+          export SKIP_MACOS=1
+          export SOP_VERSION=${{ github.ref_name }}
+          ./build_release.sh
+
+      - name: Upload Linux/Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libs-linux-win
+          path: |
+            bindings/python/sop/*.so
+            bindings/python/sop/*.dll
+            bindings/python/sop/*.h
+            bindings/csharp/Sop/*.so
+            bindings/csharp/Sop/*.dll
+            bindings/csharp/Sop/*.h
+            bindings/java/src/main/resources/linux-*/*.so
+            bindings/java/src/main/resources/win32-*/*.dll
+            release/model_catalog.json
+            release/sop-httpserver-linux-*
+            release/sop-httpserver-windows-*
+            release/sop-bundle-linux-*.tar.gz
+            release/sop-bundle-windows-*.zip
+
+  package-and-release:
+    name: Package and Release
+    needs: [build-macos, build-linux-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: libs-macos
+          # Default path is current working directory, preserving structure
+
+      - name: Download Linux/Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: libs-linux-win
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Package Python Wheel
+        run: |
+          cd bindings/python
+          pip install build wheel
+          python3 -m build
+          # Ensure release dir exists
+          mkdir -p ../../release
+          cp dist/*.whl ../../release/
+          cd ../..
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Package C# NuGet
+        run: |
+          cd bindings/csharp/Sop
+          sed -i 's/<Version>1.0.0<\/Version>/<Version>${{ github.ref_name }}<\/Version>/' Sop.csproj
+          mkdir -p ../../../release
+          dotnet pack -c Release -o ../../../release/
+          cd ../../..
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Package Java JAR
+        run: |
+          cd bindings/java
+          mvn versions:set -DnewVersion=${{ github.ref_name }}
+          mvn package -DskipTests
+          mkdir -p ../../release
+          cp target/*.jar ../../release/
+          cd ../..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          files: |
+            release/*
+          body: ${{ inputs.release_notes }}
+          draft: false
+          prerelease: false
+          generate_release_notes: ${{ inputs.release_notes == '' }}

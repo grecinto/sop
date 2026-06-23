@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build & Test (public + integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      cassandra:
+        image: cassandra:4
+        ports:
+          - 9042:9042
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Wait for Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Waiting for Redis..."
+          for i in {1..60}; do
+            (echo > /dev/tcp/127.0.0.1/6379) && break || sleep 2
+          done
+          echo "Redis reachable."
+
+      - name: Wait for Cassandra
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Waiting for Cassandra..."
+          for i in {1..60}; do
+            (echo > /dev/tcp/127.0.0.1/9042) && break || sleep 2
+          done
+          echo "Cassandra reachable."
+
+      - name: Prepare datapath
+        shell: bash
+        env:
+          datapath: ${{ github.workspace }}/.sop_data
+        run: |
+          set -euo pipefail
+          mkdir -p "$datapath"
+          echo "datapath prepared at: $datapath"
+
+      - name: Run unit tests
+        shell: bash
+        env:
+          datapath: ${{ github.workspace }}/.sop_data
+        run: |
+          set -euo pipefail
+          echo "Running unit tests"
+          go test -timeout 30m -v -count=1 ./inmemory ./infs ./btree ./common
+
+      - name: Verify AI Knowledge Compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Compiling SOP Knowledge Base JSON..."
+          cd ai
+          go run cmd/knowledge_compiler/main.go cmd/knowledge_compiler/normalize.go
+          git diff --exit-code sop_base_knowledge.json || (echo "AI Knowledge Base (sop_base_knowledge.json) is outdated. Please run 'cd ai && go run cmd/knowledge_compiler/main.go cmd/knowledge_compiler/normalize.go' and commit the result." && exit 1)
+
+      - name: Run infs integration tests
+        shell: bash
+        env:
+          datapath: ${{ github.workspace }}/.sop_data
+        run: |
+          set -euo pipefail
+          echo "Running infs integration tests"
+          go test -timeout 30m -v -tags=integration -count=1 ./infs/integrationtests/...
+
+      - name: Run incfs integration tests
+        shell: bash
+        env:
+          datapath: ${{ github.workspace }}/.sop_data
+          SOP_RUN_INCFS_IT: 1
+        run: |
+          set -euo pipefail
+          echo "Running incfs integration tests"
+          go test -timeout 30m -v -tags=integration -count=1 ./incfs/integrationtests/...

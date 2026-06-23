@@ -1,0 +1,498 @@
+# SOP System Knowledge Base & Handoff
+
+**Last Updated:** January 12, 2026
+**Purpose:** This document serves as a knowledge transfer artifact for future AI agents (e.g., GPT-5.2) or developers continuing work on the SOP Data Manager. It details the system architecture, specific implementation nuances, and recent modifications.
+
+---
+
+## 1. System Overview
+
+**SOP (Scalable Objects Persistence)** is a high-performance, NoSQL database engine built in Go. It uses B-Trees for storage and supports ACID transactions.
+
+*   **Core**: Go-based B-Tree engine (`github.com/sharedcode/sop`).
+*   **UI**: A web-based "Data Manager" tool (`tools/httpserver`), serving HTML templates and a WebSocket/Rest API.
+*   **AI Agent**: An intelligent agent (`ai/agent`) integrated into the Data Manager to convert Natural Language into database operations.
+
+## 2. Command Processing Rules
+
+
+
+The system has a hybrid command processing engine that prioritizes explicit tool invocations over Natural Language Understanding (NLU).
+
+### Slash Command Priority
+**Rule**: Any input starting with `/` (e.g., `/create`, `/run`, `/list_tools`) is treated as a **High Priority User Command**.
+*   **Behavior**:
+    1.  The system attempts to execute these as direct tool calls *locally*, bypassing the LLM.
+    2.  If the tool executes successfully, the result is returned immediately.
+    3.  **Fallback**: If (and only if) the tool execution fails with an "unknown tool" error, the system may treat it as a natural language query (e.g., "/msg hello") and pass it to the LLM. If the tool exists but fails (e.g., invalid arguments), the error is returned directly to the user to prevent hallucinated fixes.
+*   **Rationale**: This ensures deterministic execution of administrative commands and prevents the LLM from hallucinating output for valid system commands.
+
+---
+
+## 3. AI Agent Architecture
+
+The AI Agent is a "ReAct" (Reason + Act) style agent defined in `ai/agent/`.
+
+### Context Injection & Intent Classification
+To avoid prompt bloating and token exhaustion, the AI agent dynamically selects the context it needs via an overarching outline (`ai/memory/CONTEXT_OUTLINE.md`). During the **ClassifyTaskIntent** phase, the LLM maps the user's request against this outline to determine the target **Domains** (Stores, Spaces) and the required **Layers** (API Tools, Domain Manuals, or Cross-Domain Orchestration) needed to satisfy the request.
+
+### Tool Registry (`ai/agent/copilottools.go`)
+The agent exposes tools to the LLM via a registry. The specific semantics of these operations are defined in independent knowledge bases to avoid bloating the compiled binary.
+*   **Stores**: Manage B-Tree items using operations like `add`, `update`, `delete`, `select`, `join`, and `execute_script`. (See context: `ai/memory/STORES_MANAGEMENT.md`)
+*   **Spaces**: Manage Abstract Knowledge instances using tools like `mint_to_space`, `create_space`, `vectorize_space`. (See context: `ai/memory/SPACE_MANAGEMENT.md`)
+*   **Cross-Domain Orchestration**: Handled dynamically without direct codebase contamination. (See context: `ai/memory/DOMAIN_MIX_AND_MATCH.md`)
+
+### Scripting Engine (`ai/agent/dataadmintools.atomic.go`)
+The `execute_script` tool accepts a JSON array of operations. This is the "Assembly Language" of the agent.
+*   **Key Operations**:
+    *   `open_db`, `begin_tx`, `open_store`
+    *   `scan`: Iterates a B-Tree (returns full objects).
+    *   `filter`: Operates on streams filtering by data bounds. Accepts a `condition` argument. **CRITICAL:** Use native CEL (Common Expression Language) string format for the condition (e.g. `{"condition": "value.first_name == 'John' && value.total_amount > 500"}`). DO NOT use JsonLogic tree objects.
+    *   `join_right`: Performs a stream-based right outer join (returns combined objects).
+    *   `project`: Filters and renames fields (CRITICAL for column selection).
+    *   `limit`: Restricts the number of results.
+    *   `return`: Resolves a variable or literal value and serves it as the final result of the execution.
+    *   `explain_join`: Predicts execution strategy (Index Scan vs Full Scan) for performance debugging.
+
+### Stateless Execution Principle (CRITICAL)
+**Design Mandate**: The Data Management Copilot operates on a **Stateless Execution Model**.
+*   **Definition**: While the *User Session* (chat history) is stateful, the *Script Execution* must be atomic and stateless. Each `execute_script` call starts with a fresh memory context.
+*   **Why**:
+    1.  **Safety**: Prevents "dangling transactions" (e.g., a `begin_tx` from 5 minutes ago holding DB locks).
+    2.  **Determinism**: Prevents "Variable Leakage" (e.g., a "Filter" command inadvertently filtering the dataset from a previous, unrelated query because `LastUpdatedVar` was stale).
+    3.  **Stability**: Ensures that re-running a script produces the exact same result, stripped of any ephemeral runtime artifacts.
+*   **Implementation**:
+    *   The `ScriptContext` is created fresh for each run (or explicitly cleared of legacy variables like `LastUpdatedVar`).
+    *   **Drafting over Macro**: We support "Drafting" (iterating on the *source code* of a script) but reject "Macro Recording" (relying on the *runtime state* of a previous step). The code is the source of truth, not the memory.
+
+### `return` Opcode Behavior Scope & Variable Resolution
+The `return` opcode is the designated exit mechanism for scripts. It has logic to ensure variables are returned as their underlying objects, not as literal strings.
+
+*   **Implementation**: Located in `ai/agent/dataadmintools.atomic.go`, inside `bindOperation`.
+*   **Resolution Logic**:
+    1.  **Input Check**: It takes an argument `value`.
+    2.  **Variable Resolution (Standardized)**: It calls `e.resolveVarName(strVal)`. This handles:
+        *   `@my_var` syntax (explicit variable reference).
+        *   `my_var` syntax (implicit variable reference).
+    3.  **Lookup**: It attempts to find the resolved name in `e.Context.Variables`.
+    4.  **Behavior**:
+        *   **Found**: Returns the actual helper object/map/list stored in the context (unwrapping it).
+        *   **Not Found**: Returns the literal input string (e.g., "status" if no variable named "status" exists).
+*   **Rationale**: This explicit resolution prevents regressions where `return "@data"` would simply return the string literal `"@data"` instead of the JSON object it points to.
+*   **Regression History**: In Jan 2026, a refactor inadvertently removed the post-execution unpacking logic. This was restored by embedding `resolveVarName` directly into the `return` opcode handler, ensuring atomic correctness within the engine itself rather than relying on the caller.
+
+### Self-Correction & Knowledge Management
+While the Omni Protocol's "Butler architecture" serves many advanced orchestration and system goals, one of its core functionalities is driving autonomous knowledge management. It maintains strict separation between structural framework expertise and interactive self-correction.
+
+*   **V1 Implementation**: The agent possessed a specialized `manage_knowledge` tool that allowed it to persist learned rules explicitly into a B-Tree store.
+*   **V2 Mechanism (Current)**:
+    1.  **SOP KB Queries**: The `Service` uses dynamic `SearchKeywords` routines to fetch underlying operations (tool definitions, code usage) offline from domain Markdown docs.
+    2.  **Memory Subsystem (LTM KB)**: User corrections and evolving contextual vocabulary are automatically routed by the Butler into the active Long-Term Memory (LTM KB), effectively bypassing the archaic `manage_knowledge` tool constraint.
+*   **Loop**:
+    1.  User supplies an active correction (e.g., "Use 'Client' not 'User'").
+    2.  The engine semantically anchors this constraint natively within the active LTM KB store during operations.
+    3.  Future LLM prompts dynamically inject these specific semantic constraints when matching relevance, bypassing static Prompt Builder congestion.
+
+### Script Parameterization
+scripts serve as "Frozen Reasoning". To make them reusable, we support **Dynamic Parameterization**.
+*   **Syntax**: `$variable_name` (e.g., `{"key": "$user_id"}`) or `@variable_name` (explicit reference).
+*   **Mechanism**: The `execute_script` tool accepts an `args` map.
+*   **Verification**: The `TestScriptParameterizationWorkflow` ensures that parameters are correctly injected during execution, allowing a single script (e.g., "Find User Orders") to work for any user ID.
+
+### Automatic Refinement
+To ensure scripts are maintainable and readable by humans (not just machines), the system applies "Automatic Refinement" when saving scripts.
+*   **Problem**: LLMs often generate minimal, implicit code (e.g., `begin_tx` without assigning it to a variable, followed by `open_store` assuming the last transaction). While the runtime supports this via conventions, the stored script becomes hard to debug.
+*   **Solution**: The `create_script` and `save_script` tools run a refinement pass (`RefineScriptSteps`) that:
+    1.  **Injects Defaults**: Explicitly adds `result_var: "tx"` to `begin_tx`, `result_var: "store_name"` to `open_store`, etc.
+    2.  **Explicit Wiring**: Adds `transaction: "tx"` to operations that require it if missing.
+*   **Result**: The stored JSON is self-documenting. A script created as `[{"begin_tx":{}}]` is saved as `[{"begin_tx":{"result_var": "tx"}}]`.
+
+---
+
+## 4. UI/Backend Communication Protocol (NDJSON Streaming)
+
+The Data Manager UI communicates with the backend via **Newline Delimited JSON (NDJSON)** streams over HTTP Chunked Transfer Encoding. This allows for real-time feedback, incremental table rendering, and long-running process monitoring.
+
+### 4.1. Protocol Basics
+*   **Endpoint**: `/api/scripts/execute` (and `/api/ai/chat`).
+*   **Content-Type**: `application/x-ndjson`.
+*   **Format**: Each line is a standalone JSON object representing an event.
+*   **Buffering**: The UI (`scripts.html`) buffers `record` events and only renders them when a control signal is received.
+
+### 4.2. Event Types & Control Flow
+The protocol defines specific event types that drive the frontend state machine:
+
+| Event Type | Payload Key | Description | UI Action |
+| :--- | :--- | :--- | :--- |
+| `step_start` | (metadata) | Marks the beginning of a script step. | **CONTROL SIGNAL**: Flushes any buffered records to the grid. Prints a "Step X: Executing..." header. |
+| `ask` | `prompt` | The script is requesting user input. | **CONTROL SIGNAL**: Flushes flushed records. Displays a prompt dialog. |
+| `error` | `error` | An error occurred. | **CONTROL SIGNAL**: Flushes records. Prints error in red. Stops processing? (Depends on `continueOnError`). |
+| `record` | `record` | A single data item (row). | **DATA SIGNAL**: Does **NOT** render immediately. Pushed to `currentTableRecords` buffer. |
+| `content` | `payload` | General text output (markdown). | **CONTROL SIGNAL**: Flushes records. Appends text to the output stream. |
+| `log` | `message` | Debug/Info log. | Converted to `content` (prefixed with `> *Log:*`). |
+
+### 4.2.1. Connector model for the UI path
+The UI-facing path uses `CtxKeyEventStreamer` as the default connector. In that setup, result rows are emitted through the callback-backed `EventResultStreamer` adapter, which turns `WriteItem()` into `record` events and `EndArray()` into the matching completion signal for the NDJSON UI stream.
+
+This gives the RAG/Ask pipeline a single default bridge to the live HTTP/UI writer:
+- UI path: `CtxKeyEventStreamer` -> `EventResultStreamer` -> NDJSON `record` / `result_stream` events.
+- Non-UI or remote client path: explicit `CtxKeyResultStreamer` or legacy `JSONStreamer` can still be injected when another runtime wants structured row streaming instead of the UI callback.
+
+The resolver order is therefore: callback connector first, explicit result streamer second, legacy JSON streamer last.
+
+### 4.3. The "Border Box" Issue (Troubleshooting)
+If the UI displays an empty "border box" or malformed table container at the end of a stream:
+*   **Cause**: This usually happens when the backend sends a final Control Signal (like `step_start` for a commit or cleanup step) which triggers a `flushRecords()`.
+*   **Mechanism**: If `currentTableRecords` is empty (because the previous step produced no output, or was already flushed), `flushRecords` *should* do nothing.
+*   **Bug Pattern**: However, if the backend sends a `step_start` for an internal operation (like `commit_tx`) that *has no output*, the UI might render a "Step Executing" header but no content, or worse, if the previous flush left a dangling container.
+*   **Resolution**: Ensure `step_start` events are only emitted for steps that are "meaningful" to the user, or ensure the UI can gracefully handle headers with no subsequent body. (Fixed in Jan 2026 by adding `verbose` filtering in the backend and fixing double-append bugs in the frontend).
+
+---
+
+## 5. Projection & Field Selection Logic (Critical Nuances)
+
+We have implemented sophisticated logic to handle SQL-style projections (`SELECT a.*, b.name AS employee`) within the NoSQL pipeline.
+
+### The Problem
+SOP stores are B-Trees storing complete objects. Joins merge these into composite maps like `{"department": "Sales", "Right.name": "Alice"}`. Users want precise control over the output JSON keys.
+
+### The Solution: `renderItem` & `parseProjectionFields`
+Located in `ai/agent/dataadmintools.utils.go`.
+
+#### Supported Field Formats
+1.  **Wildcard**: `["*"]` or `nil` or `[""]` (empty string in list).
+    *   Returns the flattened object.
+    *   **Fix**: We explicitly handle `[""]` (which some LLMs generate erroneously) as a wildcard.
+2.  **List of Strings**: `["field1", "field2"]`
+    *   Preserves order.
+3.  **Aliases**: `["field AS alias", "field2 as alias2"]`
+    *   Case-insensitive " AS " parsing.
+4.  **Scoped Wildcards**: `["a.*"]`, `["left.*"]`, `["b.*"]`
+    *   **Logic**:
+        *   `a.*` / `left.*`: Returns all fields *excluding* those with `Right.` prefix.
+        *   `b.*` / `right.*`: Returns *only* fields with `Right.` prefix (and keeps/strips prefix based on need, currently keeps collision avoidance).
+    *   **Mix & Match**: You can do `["a.*", "b.name AS Employee"]`.
+        *   The system expands `a.*` first (appending keys).
+        *   Then adds `Employee` (aliased from `Right.name`).
+
+#### Key Implementation Details
+*   **`parseProjectionFields`**: Parses raw input into a list of `ProjectionField{Src, Dst}`.
+*   **`renderItem`**: Takes `key`, `val` (or a joined map) and the parsed fields. It constructs an `OrderedMap` to ensure the JSON output matches the requested field order.
+*   **Wildcard Expansion**: Inside `renderItem`, if a field source ends in `*` (e.g., `a.*`), it calls `flattenItem` to get all available keys and filters them based on the prefix (Scope).
+
+### Internal Data Representation: **"Always Prefixed"**
+To resolve ambiguities in Joins and Projections, the system now enforces a strict **Namespaced Internal Representation**.
+*   **Storage**: B-Trees store raw objects (un-prefixed field names like `name`, `id`).
+*   **Pipeline (`scan`)**: The `scan` operation serves as the **Presentation Adapter**. It automatically prefixes all fields with the store name (e.g., `{"name": "Alice"}` becomes `{"users.name": "Alice"}`).
+*   **Pipeline Flow**: All downstream operations (`join`, `project`, `filter` *after scan*) see fully qualified keys.
+*   **Output (`renderItem`)**: The projection layer is responsible for stripping these prefixes for the final user output, unless aliases are used to preserve them.
+*   **Filtering**: Note that `scan` filtering usually happens *before* this prefixing (using the store's local schema), but downstream filters must use the prefixed names.
+
+### Detailed Prefixing Rules (Strict Architecture)
+
+To ensure consistency in complex Joins and Projections, the system adheres to a strict **Namespaced Data Model**. All data emerging from any Store operation (`Scan`, `Join`) MUST be prefixed. This allows downstream operations to unambiguously reference fields from any source, even in deep join chains.
+
+1.  **Universal Prefixing**:
+    *   **Rule**: Every field in the pipeline MUST be prefixed with its source namespace (Store Name or Alias).
+    *   **Example**: `{"id": "123"}` becomes `{"users.id": "123"}` immediately after reading from the store.
+    *   **Scope**: This applies to ALL downstream operations (`Project`, `Filter`, `Join ON`). Scripts must use `users.id` instead of `id`.
+
+2.  **Primitive Normalization**:
+    *   **Rule**: Even single-value primitive stores (e.g., `key=string`, `value=int`) are normalized into map structures using the standard fields `key` and `value`, which are then prefixed.
+    *   **Example**: A store `counts` (key=string, val=int) produces `{"counts.key": "visitors", "counts.value": 100}`.
+    *   **Rationale**: This treats primitives uniformly with complex objects, allowing constructs like `project ["counts.value"]`.
+
+3.  **Sanitization vs. Runtime Role**:
+    *   **Sanitization (Static)**: The `sanitizeScript` function attempts to canonicalize instructions where possible (e.g., normalizing `join_type`, inferring Aliases). However, because Alias resolution is often dynamic (dependent on variables), strict static rewriting of field names (e.g., rewriting `id` to `users.id` in `project`) is **not fully enforced** at the AST level.
+    *   **Runtime (Dynamic)**: The Runtime (`StoreCursor`) is the **System of Record** for prefixing. It guarantees that data is prefixed. The *Script Author* (LLM) is responsible for providing correctly prefixed field names in `project` and `join` clauses. The runtime enforces this contract by producing only prefixed data.
+
+4.  **Output Stream Normalization**:
+    *   **Rule**: `renderItem` (`dataadmintools.utils.go`) is the **sole** component authorized to strip prefixes.
+    *   **Logic**: It strips prefixes ONLY if:
+        a) The user aliased the field explicitly (`users.id AS id`).
+        b) Implementation heuristics detect a "Smart Strip" scenario (e.g., `project ["users.*"]` on a single-source result might strip `users.` for cleaner JSON).
+    *   **Smart Key Collapsing (Friendly Output)**:
+        *   **Context**: Results from operations like Joins are often `OrderedMap`s to preserve field sequence. By default, `OrderedMap` enforces valid, unique keys (often requiring prefixes).
+        *   **Feature**: We introduced an `isImplicit` flag on `OrderedMap`.
+        *   **Behavior**:
+            *   **Implicit (True)**: Maps created by the system (e.g., raw Join result) without explicit user projection. The serializer is allowed to "Collapse" keys (remove prefixes) if they are unique (e.g., `users.name` -> `name`).
+            *   **Explicit (False)**: Maps created by `project` or user-defined structs. The serializer MUST preserve keys exactly as defined (no collapsing), to honor the user's explicit choices.
+            *   **Fix**: This resolved regressions where Right Outer Joins were failing to collapse keys because they were incorrectly treated as explicit.
+
+---
+
+## 4. Documentation & LLM Instructions
+
+### `ai/agent/dataadmintools.go`
+The tool descriptions here are the **source of truth** for the LLM.
+*   **`execute_script`**:
+    *   Explicitly warns: `'scan' and 'join' return full objects. To select specific fields or renamed columns, you MUST add a 'project' step.`
+    *   Example pipeline updated to include a `project` step.
+*   **`select` / `join`**:
+    *   `fields` argument spec: `list<string>, optional. Use ['*'] or nil for all fields. Supported formats: ['*'], ['field1', 'field2'], ['field AS alias']`.
+
+### `ai/AI_COPILOT_USAGE.md`
+User-facing documentation. We generally do *not* put internal prompt instructions here, keeping it clean for the end-user.
+
+---
+
+## 5. UI Customization
+
+### Chat Interface (`tools/httpserver/templates/index.html`)
+*   **Input Box**: Default height increased to `60px` (min `40px`) to accommodate multi-line queries better.
+*   **CSS**: `#chat-input` styling rules.
+*   **Step Visibility**: The prompt for the step number is now rendered as "Step [N]:" (e.g., "Step 1:").
+    *   Logic ensures `step_index` is checked strictly (`!== undefined && !== null`).
+    *   Fallback for missing index displays "Step (No Index):".
+
+### Backend UI Rendering (`tools/httpserver/main.ai.go`)
+*   **Event Interception**: The chat backend intercepts NDJSON events from the execution engine.
+*   **Structured Formatting**: Parses the new structured `step_start` events to render distinct step headers (e.g., `**Step <N>:**`).
+    *   Extracts `step_index`.
+    *   Uses `command` as fallback if `name` is missing.
+
+### Script Execution Architecture (`ai/agent/service.runner.go`)
+*   **Structured Execution Results**: The engine now emits discrete, structured events for each execution step (`step_start`, `record`, `outputs`) rather than a single blob. This enables granular real-time feedback.
+*   **Context Propagation**: `step_index` and metadata are propagated via `context.Context` to ensure deep nested calls (streaming or legacy fallback) can correctly attribute their output to the specific step.
+
+---
+
+## 6. Development & Testing
+
+### Key Test Files
+*   **`ai/agent/dataadmintools_utils.go`**: Logic for projection parsing.
+*   **`ai/agent/limit_ordering_test.go`**: Tests for `project`, `limit`, and order preservation.
+*   **`ai/agent/dataadmintools_join_repro_test.go`**: Regression tests for joins and alias collisions.
+
+---
+
+## 7. Join Optimization & JIT Planning
+
+We implemented a **Just-In-Time (JIT) Planner** within the `JoinProcessor` (`ai/agent/dataadmintools.join.go`) to optimize Joins dynamically based on the B-Tree structure.
+
+### Hash Join vs. Lookup Join
+The Join Processor chooses between:
+1.  **Lookup Join (Preferred)**: Uses B-Tree `Find()` and `Next()`. Complexity: $O(M \times \log N)$.
+    *   **Bloom Filter Optimization**: If `Lookup` is selected and the Right store has >100 items, we build a **Bloom Filter** ($1\%$ false positive rate) to skip B-Tree lookups for non-existent keys.
+2.  **Hash Join (Fallback)**: Scans Right store completely into memory. Complexity: $O(M + N)$.
+    *   **Conditions**: Used when the `ON` clause does not match the **Index Prefix** of the Right Store (making lookups impossible).
+    *   **Memory Note**: Builds a `map[string][]Item`. Fast access, but high initialization cost for large stores.
+
+### Optimization Logic
+1.  **Prefix Validation** (`validateIndexPrefix`):
+    *   Verifies that the `JOIN ON` columns match the **Right Store's Index Prefix**.
+    *   Checks strictly (must start at Index Field 0) but allows partial prefixes (e.g., Index `[A, B]`, Join `[A]`).
+    *   **Mapped Names**: Resolves user aliases (e.g., `join on b`) to internal Store Field Names (e.g., `B`) before checking.
+2.  **Sort Optimization** (`checkRightSortOptimization`):
+    *   If the query requests `ORDER BY a.field, b.field DESC`:
+        *   Standard behavior: Buffer Right matches in memory and sort using Go `sort.Slice`.
+        *   **Optimization**: If the **Right B-Tree Index** naturally provides this order (e.g., Index is `[A ASC, B DESC]`), we **disable buffering**.
+    *   This logic strictly compares Field Names and Sort Direction (Asc/Desc) against the B-Tree spec.
+3.  **Execution**:
+    *   The `Execute` method runs these checks *before* processing any rows.
+    *   If `isRightSortOptimized` is true, `processLeftItem` streams results directly, achieving maximum performance.
+
+### Efficient Query Scenarios (Supported)
+
+The following scenarios leverage the B-Tree structure for **Fast Lookup** ($O(M \log N)$) instead of Full Table Scan ($O(N)$):
+
+| Scenario | Index Spec | Join Condition | Order By | Status | Reason |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Exact Full Key** | `[A, B]` | `ON b.A=.. AND b.B=..` | (Any) | **Fast** | Full match. |
+| **Prefix Match** | `[A, B]` | `ON b.A=..` | (Any) | **Fast** | Partial prefix A is valid for lookup. |
+| **Sort Optimization (Value)** | `[A, B]` | `ON b.A=..` | `ORDER BY b.B` | **Fast + Stream** | `B` follows `A` in index. Sorted natively. |
+| **Sort Optimization (Direction)** | `[A ASC, B DESC]` | `ON b.A=..` | `ORDER BY b.B DESC` | **Fast + Stream** | Requested `DESC` matches Index `DESC`. |
+
+### Inefficient Scenarios (Fallback to Hash Join)
+
+| Scenario | Index Spec | Join Condition | Order By | Status | Reason |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Skip First Field** | `[A, B]` | `ON b.B=..` | (Any) | **Slow (Scan)** | Cannot seek B-Tree without prefix `A`. |
+| **Sort Mismatch** | `[A, B]` | `ON b.A=..` | `ORDER BY b.B DESC` | **Buffered Sort** | Index is `B ASC`, Query wants `B DESC`. Requires memory sort. |
+| **Sort Gap** | `[A, B, C]` | `ON b.A=..` | `ORDER BY b.C` | **Buffered Sort** | Skipping `B` breaks sort order continuity. |
+
+*   **`ai/agent/dataadmintools_select_ordered_test.go`**: Tests for simple select ordering.
+
+### Running Tests
+```bash
+# Run all agent tests
+go test -v ./ai/agent
+
+# Run specific test
+go test -v ./ai/agent -run TestProjectLimitOrdering
+```
+
+## 7. Known Quirks / Future Work
+*   **LLM "Empty String" Wildcard**: Some models return `[""]` for "all fields". We patched this in `dataadmintools.utils.go`, but better prompt engineering in `dataadmintools.go` is the long-term fix (already attempted).
+*   **"Right." Prefix**: The Join operation (Right Join) currently prefixes fields from the "Right" store with `Right.`. The `project` step is often needed to rename these to cleaner names (e.g., `Right.name` -> `employee_name`).
+
+---
+
+## 8. Memory Architecture
+
+The system implements a distinct separation between transient context and persistent knowledge.
+
+### Short-Term Memory (Session Context)
+*   **Implementation**: `RunnerSession` struct in `ai/agent/memory_shortterm.go` (and `service.session.go`).
+*   **Scope**: Transient. Exists only for the duration of the current user session (WebSocket connection).
+*   **Components**:
+    *   **History**: A transcript of the conversation (User/Assistant messages).
+    *   **Variables**: A generic map[`string`]any for storing session-scoped objects (e.g., active specific DB transactions `tx1`, result streams `stream_cursor`).
+    *   **Transaction**: The current active global transaction (if any).
+    *   **CurrentScript**: Buffer for script lines being drafted before execution.
+
+### Long-Term Memory (System Knowledge)
+*   **V1 Implementation (Legacy)**: Initially implemented as an `llm_knowledge` B-Tree store. The `manage_knowledge` tool exposed this B-Tree to the agent for saving self-corrections.
+*   **V2 Implementation (Omni Protocol)**: Operates on a **generic blueprint**: **Expertise KB + Memory (STM/LTM)**. Deeply curated by "The Butler" architecture, it adapts based on the agent's profile:
+    *   **Omni (The System Agent)**: Uses the **SOP KB** (static expertise detailing the SOP library and tech stack) + **Memory System**. Additionally, Omni can be configured to execute data lookups against custom user-defined KBs.
+    *   **Avatars**: Can have their own **Custom KB** (user-defined rules/domain knowledge) + **Memory System** for their specific user/LLM interactions.
+*   The generic architecture is conceptually composed of:
+    1.  **Expertise KB (e.g. SOP KB)**: A static generic knowledge base generated offline from domain Markdown docs detailing how to use tools and library parameters.
+    2.  **Memory System (Global MRU, STM, and LTM KB)**: An active layer responding to conversation patterns and caching recent/persistent context or user corrections organically.
+*   **Scope**: Persistent. Survives server restarts and spans across sessions/users.
+*   **Structure**: Vector chunks with semantic metadata tags.
+*   **Mechanism**:
+    *   **Dynamic Instruction Loading**: The orchestrator searches the SOP KB at query time using tools like `SearchKeywords` (e.g. searching for `execute_script Tool Operations`). This keeps instructions out of monolithic static prompts and fetches them only when contextually relevant.
+    *   **Self-Correction**: Instead of the LLM manually pushing corrections to a legacy B-Tree, it relies on the Memory System tracking context contextually (into STM/LTM KB). The Copilot naturally and seamlessly self-corrects without manual user intervention based on the most relevant vectors dynamically retrieved by the Butler.
+
+---
+
+## 9. System Database & Deployment
+
+The **System Database** is a dedicated SOP database used to store internal metadata, configuration, and the Agent's own operating manual.
+
+
+### Setup Wizard Configuration
+The Setup Wizard (`tools/httpserver/templates/index.html`) supports three configuration modes for the System DB:
+1.  **Enterprise Brain (Managed):**
+    *   Activated when a System DB is detected in the active configuration (whether from config file, environment, or manual selection).
+    *   UI displays a "Chip/Brain" icon to indicate that the instance is connected to a shared system intelligence.
+    *   Ensures all instances share the same "corporate brain".
+2.  **Custom Existing DB:**
+    *   User manually enters a path to an existing System DB.
+3.  **Local Environment:**
+    *   Default behavior. Creates a new System DB alongside the User DB (e.g., `.../sop_data/system_db`).
+
+**Configuration Default:**
+*   **Mode:** Defaults to **Clustered** (Redis-backed) to support embedded/k8s scaling scenarios, though "Standalone" is available for simpler local tests.
+
+---
+
+## 10. Scaling Strategy (Vector Store)
+
+### Current State: B-Tree Lookup
+Currently, the Agent retrieves instructions using **Exact Match** lookup from the `llm_knowledge` B-Tree. This is efficient for the current set of tools (~20-50).
+
+### Vector Store Integration (`ai/vector`)
+A sophisticated **Transactional Vector Store** (IVF-based) is implemented in the codebase but is **not currently auto-scaling**.
+*   **Status:** "Opt-in" / "Up in the air".
+*   **Usage:** Must be explicitly enabled in the Agent configuration (`vector_store: true`).
+*   **Gap:** There is currently **no auto-migration logic** that transitions from the KV store to the Vector Store when the instruction set grows too large. This "auto-scale to RAG" feature is planned but not implemented.
+
+---
+
+## 11. AI Feedback Loop (Implemented Jan 2026)
+
+A fully functional feedback mechanism ("Thumb Up/Thumb Down") has been integrated into the `scripts.html` UI and the backend (Jan 24-25, 2026). This system enables the storage of user feedback on AI responses to improve future performance (RLHF/RAG).
+
+### 11.1 Architecture
+
+*   **Frontend (`tools/httpserver/templates/scripts.html`)**:
+    *   Intercepts clicks on feedback buttons (Thumbs Up/Down).
+    *   Constructs a payload containing the `UserContent` (Query) and `AIResponse`.
+    *   Sends a `POST` request to `/api/ai/feedback`.
+    *   Visual feedback (turning icons green/red) is handled locally.
+
+*   **Backend (`tools/httpserver/main.ai.go`)**:
+    *   **Endpoint**: `handleAIFeedback`.
+    *   **Storage Strategy**: Hybrid (B-Tree + Vector Store).
+        *   **Raw Data**: The full JSON object corresponds to `llm_feedback` B-Tree in the `system` database. This is the System of Record.
+        *   **Semantic Index**: Incoming queries are embedded using `embed.NewSimple` (Hashing Embedder, 384 dim) and stored in the `llm_feedback` Vector Store.
+    *   **Transactionality**: Both operations share a single ACID transaction (`database.BeginTransaction`).
+
+### 11.2 Current Limitations & Roadmap
+
+1.  **Embeddings**: Currently uses a hashing embedder (deterministic but not semantic).
+    *   *Next Step*: Replace with a semantic model (e.g., OpenAI/BERT) in `ai/embed`.
+2.  **Retrieval (RAG)**: Data is stored but not queried.
+    *   *Next Step*: Update `sql_admin` agent to query `llm_feedback` vectors for similar past queries before generating answers.
+3.  **Policy Enforcement**:
+    *   *Next Step*: Convert negative feedback clusters into "Do Not" policies injected into the system prompt.
+
+---
+
+## 12. Coding Standards & Guidelines
+
+To ensure maintainability and professional code quality, adhere to the following strict guidelines when refactoring or adding new code.
+
+### File Size Limits
+*   **Maximum Lines per File:** **750 lines**.
+*   **Action:** If a file exceeds or approaches this limit, refactor immediately by extracting logical components into separate files (e.g., helpers, handlers, types) or sub-packages.
+
+### Commenting Style
+*   **Objective**: Comments must be purely technical and descriptive.
+*   **Focus**: Explain **what** the code does, **why** a specific complex logic is used, and the **flow** of execution.
+*   **Prohibited**:
+    *   Do **not** write apologetic or explanatory narratives about mistakes (e.g., "We made a mistake here previously...").
+    *   Do **not** include "obsolete drama" or conversational meta-commentary.
+    *   Do **not** state "This is a workaround" without a technical reason.
+*   **Example (Good)**: `// Collect all target paths to validate isolation and permissions.`
+*   **Example (Bad)**: `// Sorry, we used to deduplicate here but that caused a bug so now we blindly append...`
+
+### Modularity
+*   **Function Size**: Functions must **not exceed 500 lines**.
+*   **Strategy**: Decompose complex logic into named sub-functions with clear, single responsibilities. Use helper functions to keep the main flow readable.
+
+---
+
+## 8. Type System & Inference Strategy (Updated Jan 2026)
+
+### Type Erasure & Flexible Binding
+*   **No Explicit Persistence**: We deliberately **removed** `KeyTypeName` and `ValueTypeName` from `StoreInfo`. Storing Go type names proved brittle and unnecessary given the multi-language nature of SOP.
+*   **Late Binding**: The system relies on **runtime type inference** rather than persisted metadata.
+*   **Sampling Strategy**: The "Data Manager" UI determines the display type for a Store by **sampling the first item** in the B-Tree.
+    *   This logic is centralized in `sop.InferType` (`types.go`).
+    *   It handles `UUID` (sop/native/string), `time.Time`, and primitives.
+
+### Supported Primitives
+*   The system intentionally supports a rich set of primitives (int, float, string, UUID, time) matching `btree/comparer.go`.
+*   **Exclusion**: Single `byte` or `char` types are **not** supported as B-Tree keys, as they are deemed unnecessary for persistence use cases. Use `string` or `[]byte` (Blob) instead.
+
+---
+
+## 9. Architecture Decisions & Tradeoffs
+
+### Script Identification Strategy (Jan 29, 2026)
+*   **Context**: The scripting engine supports nested scripts via the `call_script` instruction. Scripts are stored in a B-Tree with a composite key `{Category, Name}`.
+*   **Decision**: We chose to expose the `Category` parameter explicitly in the `call_script` instruction (and the `Script` execution context) rather than introducing a system-wide UUID for internal tracking.
+*   **Reasoning**:
+    1.  **Direct Mapping**: The runtime execution arguments (`category`, `name`) map 1:1 to the underlying physical storage key (`ModelKey{Category, Name}`).
+    2.  **Performance**: This avoids the need for a secondary index or lookup table that would be required to resolve a UUID to a physical storage location.
+    3.  **Readability**: Semantically, `call_script("backup", "system")` is more legible for human operators and LLM agents than `call_script("550e8400-e29b...")`.
+*   **Constraint**: This implies that strict renaming or moving of scripts across categories requires updating references in calling scripts, similar to file path changes.
+
+### Streaming Execution Requirement (CRITICAL)
+*   **Mandate**: All script execution pathways, especially REST API clients and CLI tools, **MUST USE STREAMING**.
+*   **Reasoning**: Buffering large result sets (e.g., millions of records) causes server-side Out-Of-Memory (OOM) crashes.
+*   **Implementation**:
+    *   **NDJSON**: The standard output format is Newline Delimited JSON.
+    *   **Direct Access**: Handlers should bypass buffering layers (like `Ask()` returning string) and write directly to `http.ResponseWriter` using a flushing wrapper (e.g., `DirectFlushingWriter`).
+    *   **Chat vs Script Tab**: Even the Chat interface (`/run` command) must stream results to handle large ad-hoc queries safely.
+
+### Registry Partitioning (Chained Segments vs Binary Search)
+*   **Context**: The ID Registry (Virtual ID $\rightarrow$ Physical Location) is partitioned into "Segment Files" (buckets). When a bucket fills, it spills over to a new file, forming a logical linked list of file segments.
+*   **Decision**: We use a **Linear Search** across a small number of segment files (typically 1-5) rather than implementing a complex Binary Search or B-Tree across file segments.
+*   **Reasoning**:
+    1.  **Simplicity**: It drastically reduces implementation complexity (ACID compliance, file management).
+    2.  **Optimality via Config**: By allowing users to tune `RegistryHashModValue` (Bucket Count) and `SlotLength` (Bucket Density), we ensure that 99% of use cases fit entirely within **1 or 2 segment files**.
+    3.  **Cost/Benefit**: Moving to Binary Search would introduce $O(\log N)$ complexity for file management. Since $N$ (number of files) is kept small by design, the constant factor overhead of opening/seeking files dominates. Scanning 2 files linearly is faster and safer than managing a distributed index for 2 files.
+*   **Validation**: Even with a modest configuration (HashMod=400k, SlotLength=20k), a single 1.6GB segment file tracks **300+ Billion items**. Use cases requiring >1 Trillion items can simply use 4-5 segment files, keeping the linear penalty negligible ($O(5) \approx O(1)$).
+
+### Script ModelStore vs JSONDB Query Strictness (April 2026)
+*   **Context**: The `scripts` B-Tree is instantiated using `model.ModelKey` as the generic key type structure. However, scripts data itself operates dynamically as `map[string]any`.
+*   **The Bug**: During a session refactor, the `jsondb.FindOne(...)` command for fetching a script was altered to pass a `map[string]any{"Category": category, "Name": scriptName}`. This silently failed (returned "not found") because SOP B-Tree's internal comparisons strictly enforce exact Go type matching.
+*   **The Fix**: **Runtime queries against explicitly typed B-Tree stores MUST use the exact struct type (`model.ModelKey`)**, even when using the dynamic `jsondb` interface to retrieve the values. E.g., `funcStore.FindOne(ctx, model.ModelKey{Category: cat, Name: name}, true)`.
+
+### Client-Side Typing vs. Storage-Side Erasure (The "Library Nightmare" Avoidance)
+*   **Client-Side**: Users are fully expected and encouraged to use strongly-typed definitions (Go structs, Java classes, C# records) within their own application domain code to interact with their data.
+*   **Storage-Side (SOP)**: SOP manages user data dynamically (as JSON / `map[string]any` via `jsondb`) **not** because the data is inherently unstructured, but to avoid the "library nightmare" of requiring a compiled copy of every user's custom struct inside the database engine itself. This strict decoupling (Type Erasure at the storage boundary) is what allows SOP to efficiently serve polyglot clients across language boundaries without becoming an unmaintainable dependency monolith.

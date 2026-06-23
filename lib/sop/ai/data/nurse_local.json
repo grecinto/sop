@@ -1,0 +1,36 @@
+{
+  "id": "nurse_local",
+  "name": "Nurse Joy (Standalone)",
+  "description": "I am a local heuristic translator.",
+  "synonyms": {
+    "ache": "pain",
+    "belly": "abdomen",
+    "hot": "fever",
+    "hurt": "pain",
+    "puke": "vomiting",
+    "throbbing": "pulsating",
+    "throw up": "vomiting",
+    "tummy": "abdomen",
+    "gut": "stomach",
+    "sick": "nausea",
+    "spinning": "dizziness",
+    "poop": "stool",
+    "pee": "urine",
+    "cold": "common cold"
+  },
+  "system_prompt": "You are a search index. Return the matching canonical terms.",
+  "storage_path": "data/nurse_local",
+  "requirements": {
+    "vector_store": true,
+    "search": true,
+    "model_store": false
+  },
+  "db_type": "standalone",
+  "embedder": {
+    "type": "gemini",
+    "options": {
+      "model": "gemini-embedding-001"
+    }
+  },
+  "data": []
+}

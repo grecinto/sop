@@ -1,0 +1,122 @@
+package agent
+
+import (
+	"encoding/json"
+	"os"
+)
+
+// Config defines the structure of the JSON configuration file for an agent.
+type Config struct {
+	ID                    string            `json:"id"`
+	Type                  string            `json:"type,omitempty"` // "standard" (default), "copilot", "policy", etc.
+	Name                  string            `json:"name"`
+	Description           string            `json:"description"`
+	UserPrompt            string            `json:"user_prompt,omitempty"`    // Optional: Custom prompt for the interactive loop (e.g. "Patient> ")
+	AssistantName         string            `json:"assistant_name,omitempty"` // Optional: Custom name for the assistant (e.g. "AI Doctor")
+	Synonyms              map[string]string `json:"synonyms"`
+	SystemPrompt          string            `json:"system_prompt"`
+	Policies              []PolicyConfig    `json:"policies"`
+	ETL                   ETLConfig         `json:"etl,omitempty"`                     // Configuration for the ETL/Curator pipeline
+	Embedder              EmbedderConfig    `json:"embedder,omitempty"`                // Configuration for the embedder
+	Generator             GeneratorConfig   `json:"generator,omitempty"`               // Configuration for the LLM generator
+	Data                  []DataItem        `json:"data"`                              // For seeding (MVP)
+	StoragePath           string            `json:"storage_path,omitempty"`            // Optional: Override default storage path. Will be converted to absolute path.
+	DBType                string            `json:"db_type,omitempty"`                 // Optional: "standalone" (default) or "clustered"
+	ContentSize           string            `json:"content_size,omitempty"`            // Optional: "small", "medium", "big". Defaults to "medium".
+	SkipDeduplication     bool              `json:"skip_deduplication,omitempty"`      // Optional: Skip deduplication phase
+	EnableIngestionBuffer bool              `json:"enable_ingestion_buffer,omitempty"` // Optional: Enable Stage 0 buffering for faster ingestion
+	Verbose               bool              `json:"verbose,omitempty"`                 // Optional: Enable verbose output (e.g. tool instructions)
+	// Cognitive Memory Consolidation (STM to LTM)
+	SleepCycleIntervalHours int            `json:"sleep_cycle_interval_hours,omitempty"` // e.g. 1 (run every X hours on the clock). 0 disables hourly.
+	IdleSleepTimeoutMinutes int            `json:"idle_sleep_timeout_minutes,omitempty"` // e.g. 5 (run cycle after X minutes of avatar inactivity).
+	StubMode                bool           `json:"stub_mode,omitempty"`                  // Optional: If true, tools will return success without executing (for debugging LLM output)
+	Agents                  []Config       `json:"agents,omitempty"`                     // Optional: Define agents locally to be referenced by ID
+	Pipeline                []PipelineStep `json:"pipeline,omitempty"`                   // Optional: Define a chain of agents
+	Params                  map[string]any `json:"params,omitempty"`                     // Type-specific configuration parameters
+}
+
+type PipelineStep struct {
+	Agent    PipelineAgent `json:"agent"`
+	OutputTo string        `json:"output_to,omitempty"` // "context", "next_step" (default)
+}
+
+type PipelineAgent struct {
+	ID     string
+	Config *Config
+}
+
+func (pa *PipelineAgent) UnmarshalJSON(data []byte) error {
+	// Try string
+	var id string
+	if err := json.Unmarshal(data, &id); err == nil {
+		pa.ID = id
+		return nil
+	}
+
+	// Try config object
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err == nil {
+		pa.Config = &cfg
+		pa.ID = cfg.ID
+		return nil
+	}
+
+	return nil // Or error if strict
+}
+
+func (pa PipelineAgent) MarshalJSON() ([]byte, error) {
+	if pa.Config != nil {
+		return json.Marshal(pa.Config)
+	}
+	return json.Marshal(pa.ID)
+}
+
+type GeneratorConfig struct {
+	Type    string         `json:"type"`              // "ollama", "gemini", "chatgpt"
+	Options map[string]any `json:"options,omitempty"` // Generator-specific options (model, api_key, etc.)
+}
+
+type EmbedderConfig struct {
+	Type        string         `json:"type"`              // "simple" (default), "agent", "ollama", "gemini", or "local"
+	AgentID     string         `json:"agent_id"`          // For "agent" type: ID of the agent to use
+	Instruction string         `json:"instruction"`       // For "agent" type: Instruction for the agent
+	Options     map[string]any `json:"options,omitempty"` // For "local" type: model_path, provider, gpu_layers
+}
+
+type PolicyConfig struct {
+	ID         string `json:"id,omitempty"` // Optional: ID for referencing in pipeline
+	Type       string `json:"type"`         // e.g. "profanity"
+	MaxStrikes int    `json:"max_strikes"`  // e.g. 3
+}
+
+type ETLConfig struct {
+	Curator CuratorConfig `json:"curator,omitempty"`
+}
+
+type CuratorConfig struct {
+	Type    string         `json:"type"`              // "ollama", "agent"
+	ID      string         `json:"id,omitempty"`      // ID of the agent to use (if type="agent")
+	Options map[string]any `json:"options,omitempty"` // e.g. {"model": "llama3"}
+	Prompt  string         `json:"prompt,omitempty"`  // The instruction for curation
+}
+
+type DataItem struct {
+	ID          string         `json:"id"`
+	Text        string         `json:"text"`
+	Description string         `json:"description"`
+	Category    string         `json:"category,omitempty"`
+	Payload     map[string]any `json:"payload,omitempty"` // Generic payload for structured data (e.g. JSON objects)
+}
+
+// LoadConfigFromFile reads and parses a JSON configuration file.
+func LoadConfigFromFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}

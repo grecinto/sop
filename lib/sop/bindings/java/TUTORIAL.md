@@ -1,0 +1,224 @@
+# SOP Java Tutorial
+
+This tutorial guides you through building a simple inventory management system using SOP with Java.
+
+<h2> Prerequisites</h2>
+
+*   Java 11+
+*   Maven
+*   (Optional) Redis for Clustered mode
+
+<h2>Step 1: Project Setup</h2>
+
+Create a new Maven project and add the `sop-java` dependency (assuming you have built and installed it locally).
+
+```xml
+<dependencies>
+    <dependency>
+        <groupId>io.github.sharedcode</groupId>
+        <artifactId>sop4j</artifactId>
+        <version>2.3.3</version>
+    </dependency>
+</dependencies>
+```
+
+<h2>Step 2: Define Your Data Model</h2>
+
+SOP stores POJOs (Plain Old Java Objects). Let's define a `Product` class.
+
+```java
+import java.io.Serializable;
+
+public class Product implements Serializable {
+    public String id;
+    public String name;
+    public double price;
+    public int stock;
+
+    public Product() {} // Required for Jackson deserialization
+
+    public Product(String id, String name, double price, int stock) {
+        this.id = id;
+        this.name = name;
+        this.price = price;
+        this.stock = stock;
+    }
+
+    @Override
+    public String toString() {
+        return String.format("Product[id=%s, name=%s, price=%.2f, stock=%d]", id, name, price, stock);
+    }
+}
+```
+
+<h2>Step 3: Initialize the Database</h2>
+
+We'll start in **Standalone Mode** (local file system, no Redis).
+
+```java
+import com.sharedcode.sop.*;
+import java.util.Collections;
+
+public class InventoryApp {
+    public static void main(String[] args) {
+        // 1. Create Context
+        try (Context ctx = new Context()) {
+            
+            // 2. Configure Database
+            DatabaseOptions dbOpts = new DatabaseOptions();
+            dbOpts.stores_folders = Collections.singletonList("inventory_data");
+            dbOpts.type = DatabaseType.Standalone;
+            
+            Database db = new Database(dbOpts);
+            
+            // ... operations ...
+        } catch (SopException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+<h2>Step 4: Create and Populate the B-Tree</h2>
+
+We'll create a B-Tree named "products" where the Key is the Product ID (`String`) and the Value is the `Product` object.
+
+```java
+            // 3. Start Transaction (Write)
+            try (Transaction trans = db.beginTransaction(ctx)) {
+                
+                // 4. Create/Open B-Tree
+                // Keys are String, Values are Product
+                BTree<String, Product> products = BTree.create(ctx, "products", trans, null, String.class, Product.class);
+
+                // 5. Add Items
+                products.add("p1", new Product("p1", "Laptop", 999.99, 10));
+                products.add("p2", new Product("p2", "Mouse", 25.50, 100));
+                products.add("p3", new Product("p3", "Keyboard", 75.00, 50));
+
+                System.out.println("Added 3 products.");
+
+                // 6. Commit
+                trans.commit();
+            }
+```
+
+<h2>Step 5: Read and Update Data</h2>
+
+Now let's read a product, update its stock, and save it back.
+
+```java
+            // 7. Start Transaction (Read/Write)
+            try (Transaction trans = db.beginTransaction(ctx)) {
+                BTree<String, Product> products = BTree.open(ctx, "products", trans, String.class, Product.class);
+
+                // 8. Find Item
+                if (products.find("p2")) {
+                    Item<String, Product> item = products.getCurrentValue();
+                    Product p = item.value;
+                    
+                    System.out.println("Found: " + p);
+
+                    // 9. Update Stock
+                    p.stock -= 5; // Sell 5 mice
+                    
+                    // 10. Update in B-Tree
+                    products.updateCurrentValue(item);
+                    System.out.println("Updated stock for " + p.name);
+                }
+
+                trans.commit();
+            }
+```
+
+<h2>Step 6: Range Query (Iterate)</h2>
+
+Let's list all products.
+
+```java
+            try (Transaction trans = db.beginTransaction(ctx, TransactionMode.ForReading)) {
+                BTree<String, Product> products = BTree.open(ctx, "products", trans, String.class, Product.class);
+
+                System.out.println("\n--- Product List ---");
+                if (products.first()) {
+                    do {
+                        Item<String, Product> item = products.getCurrentValue();
+                        System.out.println(item.value);
+                    } while (products.next());
+                }
+            }
+```
+
+<h2>Step 7: Modeling Relations</h2>
+
+In SOP, **Relations Metadata** is the primary way to link stores. Link Stores are reserved for complex Many-to-Many scenarios.
+
+**1. Logical Relations (Metadata)**
+Register relations in `BTreeOptions`. This tells the system how to link records (e.g., Product's `supplier_id` -> Supplier's `id`).
+
+```java
+            try (Transaction trans = db.beginTransaction(ctx)) {
+                // Products Store with Metadata pointing to Suppliers
+                BTreeOptions opts = new BTreeOptions();
+                opts.relations = Arrays.asList(
+                    new Relation(
+                        Arrays.asList("supplier_id"), // Source field in Products
+                        "suppliers",                  // Target Store
+                        Arrays.asList("id")           // Target field in Suppliers
+                    )
+                );
+                
+                // Create the store with options
+                BTree<String, Product> products = BTree.create(ctx, "products", trans, opts, String.class, Product.class);
+                trans.commit();
+            }
+```
+
+Benefit: This metadata allows the system to auto-resolve lookups for 1:1, 1:N, and N:1 relationships automatically.
+
+**2. Link Stores (Many-to-Many)**
+For **Many-to-Many** relationships (e.g., Doctors <-> Patients, where valid links are many on both sides), use a **Link Store**.
+
+*   **Store: Doctors**: Key=`DoctorID`
+*   **Store: Patients**: Key=`PatientID`
+*   **Store: Doctor_Patients**: Key=`DoctorID:PatientID`
+
+```java
+            try (Transaction trans = db.beginTransaction(ctx)) {
+                // Link Store: Key="DoctorID:PatientID"
+                BTree<String, String> links = BTree.create(ctx, "doctor_patients", trans, null, String.class, String.class);
+                
+                // Add Link
+                links.add("d1:p100", "");
+                trans.commit();
+            }
+```
+
+**Summary:**
+*   Use **Metadata** for standard Foreign Key relationships.
+*   Use **Link Stores** only for Many-to-Many mapping tables.
+
+<h2>Step 8: Scaling to Clustered Mode</h2>
+
+To switch to **Clustered Mode** (multiple app instances sharing data via Redis):
+
+1.  Start Redis (`redis-server`).
+2.  Initialize Redis in your code.
+3.  Change `DatabaseOptions.type` to `1`.
+
+```java
+// At application startup
+Redis.initialize("redis://localhost:6379");
+
+// ... inside main ...
+dbOpts.type = DatabaseType.Clustered;
+
+// ... at application shutdown
+Redis.close();
+```
+
+<h2>Next Steps</h2>
+
+*   **Composite Keys**: Use `BTreeComplexKey` to create multi-part keys (e.g., `Region/Category/ID`) for advanced sorting.
+*   **Batch Operations**: Use `add(List<Item>)` for high-performance bulk inserts.
+*   **Cassandra**: Use `CassandraConfig` to back your store with Cassandra for massive scale.

@@ -1,0 +1,12 @@
+go 1.26.4
+
+use (
+	.
+	./adapters/cassandra
+	./adapters/redis
+	./ai
+	./incfs
+	./infs
+	./jsondb
+	./search
+)

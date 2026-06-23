@@ -1,0 +1,52 @@
+{
+  "id": "doctor_pipeline",
+  "name": "Dr. Pipeline",
+  "description": "I am a pipeline-based medical assistant.",
+  "user_prompt": "Patient> ",
+  "assistant_name": "AI Doctor",
+  "policies": [
+    {
+      "id": "profanity_filter",
+      "type": "profanity",
+      "max_strikes": 3
+    }
+  ],
+  "agents": [
+    {
+      "id": "doctor_core",
+      "name": "Dr. Core",
+      "description": "I am the core medical knowledge base.",
+      "system_prompt": "You are a medical expert. Based on the provided canonical symptoms, diagnose the condition.",
+      "storage_path": "data/doctor_core",
+      "db_type": "standalone",
+      "enable_ingestion_buffer": true,
+      "auto_optimize": true,
+      "generator": {
+        "type": "gemini",
+        "options": {
+          "model": "gemini-2.5-flash"
+        }
+      },
+      "embedder": {
+        "type": "gemini",
+        "options": {
+          "model": "gemini-embedding-001"
+        }
+      },
+      "requirements": {
+        "vector_store": true,
+        "search": true,
+        "model_store": false
+      },
+      "data": []
+    }
+  ],
+  "pipeline": [
+    {
+      "agent": "profanity_filter"
+    },
+    {
+      "agent": "doctor_core"
+    }
+  ]
+}
