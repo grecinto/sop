@@ -25,6 +25,7 @@ type TaskContextClassification struct {
 	SpacesArtifacts []string    `json:"spaces_artifacts,omitempty"`
 	Layers          []LayerInfo `json:"layers"`
 	ScriptAuthoring bool        `json:"-"`
+	GeneralContext  bool        `json:"-"`
 	RoutingGate     string      `json:"-"`
 	// KB Search Results (for specialized KB routing)
 	KBSearchResults string `json:"-"`
@@ -583,12 +584,19 @@ func parseClassificationResponse(raw string) (*TaskContextClassification, error)
 		return nil, fmt.Errorf("failed to parse classification JSON: %w (raw: %s)", err, raw)
 	}
 	normalizeTaskContext(&result)
+	if strings.TrimSpace(result.Domain) == "" && len(result.DBArtifacts) == 0 && len(result.StoresArtifacts) == 0 && len(result.SpacesArtifacts) == 0 {
+		result.GeneralContext = true
+	}
 	return &result, nil
 }
 
 func normalizeTaskContext(taskCtx *TaskContextClassification) {
 	if taskCtx == nil {
 		return
+	}
+
+	if taskCtx.Domain == "" && len(taskCtx.StoresArtifacts) == 0 && len(taskCtx.SpacesArtifacts) == 0 && len(taskCtx.DBArtifacts) == 0 && len(taskCtx.Layers) == 0 {
+		taskCtx.GeneralContext = true
 	}
 
 	taskCtx.Entity = canonicalizeEntity(taskCtx.Entity)

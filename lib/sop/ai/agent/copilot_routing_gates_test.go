@@ -38,6 +38,37 @@ func (m *RouterTestGen) PrewarmCache(ctx context.Context, opts ai.GenOptions) er
 	return nil
 }
 
+func TestEvaluateRoutingGates_MarksGeneralContextAfterLightClassification(t *testing.T) {
+	ctx := context.Background()
+	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}
+	sysDB := database.NewDatabase(sysDBOptions)
+
+	cfg := Config{}
+	ag := NewCopilotAgent(cfg, map[string]sop.DatabaseOptions{}, sysDB)
+	if ag.service == nil {
+		ag.service = &Service{}
+	}
+	ag.service.session = &RunnerSession{MRU: []MRUItem{}}
+
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
+	gen := &RouterTestGen{Response: `{"entity": "Omni", "domain": "", "db_artifacts": [], "layers": []}`}
+	taskCtx, err := ag.evaluateRoutingGates(ctx, "Fresh ask about something else", gen)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if taskCtx == nil {
+		t.Fatal("expected a routing classification")
+	}
+	if !taskCtx.GeneralContext {
+		t.Fatalf("expected cold-start light classification to mark general context")
+	}
+	if taskCtx.RoutingGate != RoutingGateDiscovery {
+		t.Fatalf("expected cold-start routing gate for general context, got %q", taskCtx.RoutingGate)
+	}
+}
+
 func TestEvaluateRoutingGates_SpecializedRoutingHandlesDeepPathQueries(t *testing.T) {
 	ctx := context.Background()
 	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}

@@ -795,7 +795,7 @@ func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		return "", err
 	}
 	if taskContext == nil {
-		taskContext = &TaskContextClassification{Domain: "General"}
+		taskContext = &TaskContextClassification{}
 	}
 	log.Info("Copilot Ask Routing",
 		"routing_gate", taskContext.RoutingGate,
@@ -1294,6 +1294,35 @@ func lastNonEmptyQueryLine(query string) string {
 	return ""
 }
 
+func isGeneralTaskContext(taskClassification *TaskContextClassification) bool {
+	if taskClassification == nil {
+		return false
+	}
+	return taskClassification.GeneralContext
+}
+
+func (a *CopilotAgent) buildGeneralTaskContext(ctx context.Context, query string, fallback *TaskContextClassification) *TaskContextClassification {
+	generalTaskCtx := &TaskContextClassification{Domain: "General", GeneralContext: true}
+	if fallback != nil {
+		generalTaskCtx.Entity = fallback.Entity
+		generalTaskCtx.DBArtifacts = append([]string(nil), fallback.DBArtifacts...)
+		generalTaskCtx.StoresArtifacts = append([]string(nil), fallback.StoresArtifacts...)
+		generalTaskCtx.SpacesArtifacts = append([]string(nil), fallback.SpacesArtifacts...)
+		generalTaskCtx.Layers = append([]LayerInfo(nil), fallback.Layers...)
+		generalTaskCtx.ScriptAuthoring = fallback.ScriptAuthoring
+		if strings.TrimSpace(fallback.RoutingGate) != "" {
+			generalTaskCtx.RoutingGate = fallback.RoutingGate
+		} else {
+			generalTaskCtx.RoutingGate = RoutingGateContinuity
+		}
+	} else {
+		generalTaskCtx.RoutingGate = RoutingGateContinuity
+	}
+	annotateTaskContextIntent(generalTaskCtx, query)
+	a.persistRoutingState(ctx, generalTaskCtx)
+	return generalTaskCtx
+}
+
 func (a *CopilotAgent) evaluateRoutingGates(ctx context.Context, query string, gen ai.Generator) (*TaskContextClassification, error) {
 	a.rehydrateMRUFromMemory(ctx)
 	isTest := isRoutingTestGenerator(gen)
@@ -1312,16 +1341,31 @@ func (a *CopilotAgent) evaluateRoutingGates(ctx context.Context, query string, g
 	if taskClassification, err := a.tryPrefixBasedRouting(ctx, query, gen, isTest, anchor); err != nil {
 		return nil, err
 	} else if taskClassification != nil {
+		if isGeneralTaskContext(taskClassification) {
+			return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
+		}
 		return taskClassification, nil
 	}
 
 	if taskClassification, err := a.tryAskContinuationBasedRouting(ctx, query, gen, isTest, anchor); err != nil {
 		return nil, err
 	} else if taskClassification != nil {
+		if isGeneralTaskContext(taskClassification) {
+			return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
+		}
 		return taskClassification, nil
 	}
 
-	return a.tryColdStartBasedRouting(ctx, query, gen, isTest)
+	if taskClassification, err := a.tryColdStartBasedRouting(ctx, query, gen, isTest); err != nil {
+		return nil, err
+	} else if taskClassification != nil {
+		if isGeneralTaskContext(taskClassification) {
+			return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
+		}
+		return taskClassification, nil
+	}
+
+	return nil, nil
 }
 
 func (a *CopilotAgent) renderToolDefinitionContext(title string, toolNames []string) string {
@@ -2528,10 +2572,18 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = askOutcome
 		}
 	}
+	if isGeneralTaskContext(&taskClassification) {
+		generalContext := "General Ask Context:\n- Treat this as an open-ended request with no specific Stores or Spaces target.\n- Use the conversation history, memory continuity, and available tools to ground the answer.\n- Ask a short clarification question only if the request is genuinely ambiguous."
+		if focusedExecutionContext != "" {
+			focusedExecutionContext = generalContext + "\n\n" + focusedExecutionContext
+		} else {
+			focusedExecutionContext = generalContext
+		}
+	}
 	builder.With(ComponentFocusedContext, focusedExecutionContext)
 
 	// 5. Generic schema fallback only when no specific store targets were classified.
-	if taskClassification.Domain == StoresDomain && len(taskClassification.DBArtifacts) == 0 {
+	if !taskClassification.GeneralContext && taskClassification.Domain == StoresDomain && len(taskClassification.DBArtifacts) == 0 {
 		builder.With(ComponentSchema, a.getSchemaInjectionContext(ctx))
 	}
 
