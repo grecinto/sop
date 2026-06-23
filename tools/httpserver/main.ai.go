@@ -851,7 +851,6 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 		filepath.Join(cwd, "..", "..", "..", configPath),
 		filepath.Join("/Volumes/T7/sop-cloud", configPath),
 		filepath.Join("/Volumes/T7/sop", configPath),
-		filepath.Join("/Volumes/T7/sop-public", configPath),
 		filepath.Join("/Users/grecinto/sop", configPath), // Absolute fallback
 	}
 

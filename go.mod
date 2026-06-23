@@ -4,14 +4,28 @@ go 1.26.4
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/sharedcode/sop v1.2.0
-	github.com/sharedcode/sop/adapters/redis v0.0.0
-	github.com/sharedcode/sop/ai v0.0.0
+	github.com/sharedcode/sop v0.0.0
+	github.com/sharedcode/sop/adapters/redis v0.0.0-20260623010650-e2bdbe9d445c
+	github.com/sharedcode/sop/ai v0.0.0-20260623010650-e2bdbe9d445c
 	github.com/sharedcode/sop/jsondb v0.0.0
 	github.com/sharedcode/sop/search v0.0.0
 	github.com/yuin/goldmark v1.8.2
 	golang.org/x/crypto v0.38.0
 )
+
+replace github.com/sharedcode/sop => github.com/sharedcode/sop v0.0.0-20260623010650-e2bdbe9d445c
+
+replace github.com/sharedcode/sop/ai => github.com/sharedcode/sop/ai v0.0.0-20260623010650-e2bdbe9d445c
+
+replace github.com/sharedcode/sop/adapters/redis => github.com/sharedcode/sop/adapters/redis v0.0.0-20260623010650-e2bdbe9d445c
+
+replace github.com/sharedcode/sop/incfs => github.com/sharedcode/sop/incfs v0.0.0-20260623010650-e2bdbe9d445c
+
+replace github.com/sharedcode/sop/infs => github.com/sharedcode/sop/infs v0.0.0-20260623010650-e2bdbe9d445c
+
+replace github.com/sharedcode/sop/jsondb => github.com/sharedcode/sop/jsondb v0.0.0-20260623010650-e2bdbe9d445c
+
+replace github.com/sharedcode/sop/search => github.com/sharedcode/sop/search v0.0.0-20260623010650-e2bdbe9d445c
 
 require (
 	cel.dev/expr v0.23.1 // indirect
@@ -31,8 +45,8 @@ require (
 	github.com/redis/go-redis/v9 v9.8.0 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
-	github.com/sharedcode/sop/adapters/cassandra v0.0.0-20260620003309-e74ec3458840 // indirect
-	github.com/sharedcode/sop/incfs v0.0.0 // indirect
+	github.com/sharedcode/sop/adapters/cassandra v0.0.0-20260623010650-e2bdbe9d445c // indirect
+	github.com/sharedcode/sop/incfs v0.0.0-20260623010650-e2bdbe9d445c // indirect
 	github.com/sharedcode/sop/infs v0.0.0 // indirect
 	github.com/stoewer/go-strcase v1.2.0 // indirect
 	golang.org/x/exp v0.0.0-20230515195305-f3d0a9c9a5cc // indirect
@@ -43,17 +57,3 @@ require (
 	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 )
-
-replace github.com/sharedcode/sop => ../sop-public
-
-replace github.com/sharedcode/sop/ai => ../sop-public/ai
-
-replace github.com/sharedcode/sop/adapters/redis => ../sop-public/adapters/redis
-
-replace github.com/sharedcode/sop/incfs => ../sop-public/incfs
-
-replace github.com/sharedcode/sop/infs => ../sop-public/infs
-
-replace github.com/sharedcode/sop/jsondb => ../sop-public/jsondb
-
-replace github.com/sharedcode/sop/search => ../sop-public/search
