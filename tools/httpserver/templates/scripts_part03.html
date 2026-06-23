@@ -1,0 +1,529 @@
+{{define "scripts_part03"}}
+<script>
+    function formatStepsJSON() {
+        const el = document.getElementById('json-steps-editor');
+        if (!el) return;
+        try {
+            const parsed = JSON.parse(el.value);
+            el.value = JSON.stringify(parsed, null, 2);
+        } catch (e) {
+            showAlert("Invalid JSON in steps editor. Cannot format.");
+        }
+    }
+
+
+
+    // Polyfill for args modal which was removed
+    function closeArgsModal() {
+        const m = document.getElementById('args-modal');
+        if (m) m.style.display = 'none';
+    }
+    
+    function saveArgsFromModal() {
+        closeArgsModal();
+    }
+    
+    async function runScriptInEditor() {
+        const domainSelect = document.getElementById('domain-select');
+        let domain = domainSelect ? domainSelect.value : '';
+        if (domain === "custom" && window.customKBs && window.customKBs.length > 0) {
+            domain = window.customKBs[0];
+        }
+
+        let name = '';
+        let category = 'general';
+
+        if (currentItemKey && typeof currentItemKey === 'object') {
+            // Check for both capitalized (Go default) and lowercase (custom JSON tag) property names
+            name = currentItemKey.Name || currentItemKey.name || '';
+            category = currentItemKey.Category || currentItemKey.category || 'general';
+        }
+        
+        if (!name) {
+            showAlert("Script must have a name to run.");
+            return;
+        }
+
+        const outputDiv = document.getElementById('script-execution-output');
+        const contentDiv = document.getElementById('script-output-content');
+        if (outputDiv) outputDiv.style.display = 'block';
+        if (contentDiv) {
+            contentDiv.innerHTML = '<div style="color: #fff;">Initializing execution...</div>';
+            contentDiv.innerHTML += '<div style="color: #e74c3c; font-size: 0.9em;">Note: Runs the SAVED version of the script. Verify "Save" is disabled (saved).</div>';
+        }
+
+        try {
+            const response = await authFetch('/api/scripts/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    category: category,
+                    verbose: true, session_id: currentSessionID, user_id: currentUserID, domain: domain,
+                    args: {} 
+                })
+            });
+
+            if (!response.ok) {
+                const text = await response.text();
+                if (contentDiv) contentDiv.innerHTML += `<div style="color: #e74c3c;">HTTP Error: ${response.status} - ${text}</div>`;
+                return;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            // State for rendering
+            let currentTableRecords = [];
+            // Stream-Rendering State
+            let currentTableBody = null; 
+            let currentTableRowCount = 0;
+            const MAX_ROWS = 2500;
+            
+            const flushRecords = (finishStep = false) => {
+                if (currentTableRecords.length > 0) {
+                     // If we don't have an active table for this step, start one
+                     if (!currentTableBody) {
+                         const container = document.createElement('div');
+                         container.className = 'chat-message ai-table-container';
+                         
+                         const records = currentTableRecords;
+                         const table = document.createElement('table');
+                         table.className = 'data-table';
+                         table.style.width = '100%';
+                         table.style.fontSize = '0.9em';
+                         
+                         // Headers determined from first batch
+                         const keys = Object.keys(records[0]);
+                         const thead = document.createElement('thead');
+                         const trHead = document.createElement('tr');
+                         keys.forEach(k => {
+                            const th = document.createElement('th');
+                            th.textContent = k;
+                            th.style.textAlign = 'left';
+                            trHead.appendChild(th);
+                         });
+                         thead.appendChild(trHead);
+                         table.appendChild(thead);
+                         
+                         const tbody = document.createElement('tbody');
+                         table.appendChild(tbody);
+                         container.appendChild(table);
+                         contentDiv.appendChild(container);
+                         
+                         currentTableBody = tbody;
+                     }
+                     
+                     // Append Buffered Rows
+                     const keys = Array.from(currentTableBody.parentElement.querySelectorAll('th')).map(th => th.textContent);
+                     
+                     for (const r of currentTableRecords) {
+                         if (currentTableRowCount >= MAX_ROWS) {
+                             if (currentTableRowCount === MAX_ROWS) {
+                                 const tr = document.createElement('tr');
+                                 const td = document.createElement('td');
+                                 td.colSpan = keys.length;
+                                 td.textContent = `... (Display truncated after ${MAX_ROWS} rows) ...`;
+                                 td.style.fontStyle = 'italic';
+                                 td.style.color = '#888';
+                                 td.style.padding = '10px';
+                                 tr.appendChild(td);
+                                 currentTableBody.appendChild(tr);
+                                 currentTableRowCount++;
+                             }
+                             continue;
+                         }
+                         
+                         const tr = document.createElement('tr');
+                         keys.forEach(k => {
+                            const td = document.createElement('td');
+                            let val = r[k];
+                            // Handle objects
+                            if (typeof val === 'object' && val !== null) val = JSON.stringify(val);
+                            td.textContent = (val === undefined || val === null) ? '' : String(val);
+                            tr.appendChild(td);
+                         });
+                         currentTableBody.appendChild(tr);
+                         currentTableRowCount++;
+                     }
+
+                     contentDiv.scrollTop = contentDiv.scrollHeight;
+                     currentTableRecords = [];
+                }
+                
+                if (finishStep) {
+                    currentTableBody = null;
+                    currentTableRowCount = 0;
+                }
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+                
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const event = JSON.parse(line);
+                        // console.log('ScriptEvent:', event);
+                        
+                        if (event.type === 'step_start') {
+                            flushRecords(true);
+                            const el = document.createElement('div');
+                            el.style.marginTop = '10px';
+                            el.style.borderBottom = '1px solid #444';
+                            el.style.paddingBottom = '4px';
+                            const stepPrefix = (event.step_index !== undefined && event.step_index !== null) ? `Step ${event.step_index}` : 'Step';
+                            // Clean format: "Step 1: command_name"
+                            el.innerHTML = `<span style="color: #64b5f6;">▶ ${stepPrefix}:</span> <code>${event.command || 'unknown'}</code>`; 
+                            contentDiv.appendChild(el);
+                        } else if (event.type === 'ask') {
+                            flushRecords(true);
+                            const el = document.createElement('div');
+                            el.style.marginTop = '10px';
+                            el.style.borderBottom = '1px solid #444';
+                            el.style.paddingBottom = '4px';
+                            const stepPrefix = event.step_index ? `Step ${event.step_index}` : 'Step (No Index)';
+                            const promptSafe = (event.prompt || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                            el.innerHTML = `<span style="color: #64b5f6;">▶ ${stepPrefix} Ask:</span> "${promptSafe}"`;
+                            contentDiv.appendChild(el);
+
+                            const res = event.record || event.result;
+                            if (res) {
+                                const resEl = document.createElement('div');
+                                resEl.style.marginTop = '4px';
+                                resEl.style.whiteSpace = 'pre-wrap';
+                                if (typeof res === 'object') {
+                                     resEl.textContent = JSON.stringify(res, null, 2);
+                                } else {
+                                     resEl.textContent = res;
+                                }
+                                contentDiv.appendChild(resEl);
+                            }
+                        } else if (event.type === 'record') {
+                            const rec = event.record || event.result || event.payload;
+                            if (rec) {
+                                // Optimized: Stop buffering if we exceed MAX_ROWS, complement DOM truncation logic
+                                if (currentTableRowCount < MAX_ROWS) {
+                                    currentTableRecords.push(rec);
+                                    // Periodic flush to prevent huge memory buffer (Chunked Rendering)
+                                    if (currentTableRecords.length >= 100) {
+                                        flushRecords(false);
+                                    }
+                                } else if (currentTableRowCount === MAX_ROWS) {
+                                    // Buffer one last time to trigger the "truncated" row in flushRecords
+                                    currentTableRecords.push(rec);
+                                    flushRecords(false);
+                                } else {
+                                    // Just count it
+                                    currentTableRowCount++;
+                                }
+                            }
+                        } else if (event.type === 'error') {
+                            flushRecords(true);
+                            const el = document.createElement('div');
+                            el.style.color = '#e74c3c';
+                            el.innerHTML = `<strong>Error:</strong> ${event.error}`;
+                            contentDiv.appendChild(el);
+                        } else {
+                            // Fallback for other events
+                            flushRecords(true);
+                            const el = document.createElement('div');
+                            el.style.color = '#aaa';
+                            el.textContent = JSON.stringify(event);
+                            contentDiv.appendChild(el);
+                        }
+                        
+                        // Throttle scrolling if needed, but doing it here is fine for chunks
+                        contentDiv.scrollTop = contentDiv.scrollHeight;
+
+                    } catch (e) {
+                         // Maybe not JSON?
+                         if (contentDiv) {
+                            const el = document.createElement('div');
+                            el.textContent = line;
+                            contentDiv.appendChild(el);
+                         }
+                    }
+                }
+            }
+
+            flushRecords(true);
+            
+            if (contentDiv) {
+                const end = document.createElement('div');
+                end.innerHTML = '<span style="color: #2ecc71;">Done.</span>';
+                contentDiv.appendChild(end);
+                contentDiv.scrollTop = contentDiv.scrollHeight;
+            }
+
+        } catch (e) {
+            if (contentDiv) contentDiv.innerHTML += `<div style="color: red;">Exception: ${e.message}</div>`;
+        }
+    }
+
+    function addScriptStep() {
+        const steps = getStepsFromDOM();
+        steps.push({
+            type: "command",
+            name: "Generate",
+            command: "llm.generate",
+            args: { prompt: "New instruction" },
+            out: "result"
+        });
+        const newIdx = steps.length - 1;
+        saveStepsToDOM(steps, newIdx);
+        
+        setTimeout(() => {
+             const newBody = document.getElementById(`step-body-${newIdx}`);
+             if(newBody) newBody.scrollIntoView({ behavior: 'smooth' });
+        }, 50);
+    }
+
+    function deleteScriptStep(idx) {
+        showConfirm("Delete this step?", () => {
+            const steps = getStepsFromDOM();
+            steps.splice(idx, 1);
+            saveStepsToDOM(steps);
+        }, null, "Delete Step");
+    }
+
+    function moveScriptStepUp(idx) {
+        if (idx <= 0) return;
+        const steps = getStepsFromDOM();
+        [steps[idx - 1], steps[idx]] = [steps[idx], steps[idx - 1]];
+        saveStepsToDOM(steps);
+    }
+
+    function moveScriptStepDown(idx) {
+        const steps = getStepsFromDOM();
+        if (idx >= steps.length - 1) return;
+        [steps[idx + 1], steps[idx]] = [steps[idx], steps[idx + 1]];
+        saveStepsToDOM(steps);
+    }
+
+    // --- End Script Visualizer ---
+
+    async function showDetail(row, item, autoOpen = true) {
+        console.log("showDetail called. Store:", currentStore); // Debug
+        
+        // Check for unsaved changes if panel is open
+        const panel = document.getElementById('detail-panel');
+        const wasOpen = (panel.style.display === 'block' || panel.style.display === 'flex');
+
+        if (wasOpen) {
+             const btn = document.getElementById('btn-save');
+             if (btn && !btn.disabled) {
+                 if (!await confirmAsync("You have unsaved changes. Are you sure you want to discard them?", "Unsaved Changes")) {
+                     return;
+                 }
+             }
+        }
+
+        // Highlight selected row
+        if (row) {
+            document.querySelectorAll('#items-table tr').forEach(tr => tr.classList.remove('selected-row'));
+            row.classList.add('selected-row');
+        }
+
+        currentItemKey = item.key;
+        currentItemValue = item.value;
+        
+        // Try to parse value if it's a string (e.g. stored as JSON string)
+        if (typeof currentItemValue === 'string') {
+            try {
+                const parsed = JSON.parse(currentItemValue);
+                if (typeof parsed === 'object' && parsed !== null) {
+                    // Check if it's a byte array
+                    const isByteArray = Array.isArray(parsed) && parsed.every(n => typeof n === 'number');
+                    if (!isByteArray) {
+                        currentItemValue = parsed;
+                        // Update item.value locally so the rest of the function uses the object
+                        item.value = parsed;
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to parse value as JSON:", e);
+            }
+        }
+
+        // If panel was closed and autoOpen is false, just return (after setting currentItemKey and highlight)
+        if (!wasOpen && !autoOpen) {
+            return;
+        }
+
+        const viewer = document.getElementById('json-viewer');
+        
+        // Format Key Display
+        let keyStr = "";
+        if (typeof item.key === 'object' && item.key !== null) {
+            // Reorder key fields based on IndexSpec
+            let orderedKey = {};
+            let keyFields = Object.keys(item.key);
+            
+            if (currentStoreInfo && currentStoreInfo.indexSpec && currentStoreInfo.indexSpec.index_fields) {
+                const indexOrder = currentStoreInfo.indexSpec.index_fields.map(f => f.field_name);
+                keyFields.sort((a, b) => {
+                    const idxA = indexOrder.indexOf(a);
+                    const idxB = indexOrder.indexOf(b);
+                    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                    if (idxA !== -1) return -1;
+                    if (idxB !== -1) return 1;
+                    return a.localeCompare(b);
+                });
+            }
+            
+            keyFields.forEach(k => {
+                orderedKey[k] = item.key[k];
+            });
+            keyStr = JSON.stringify(orderedKey, null, 2);
+        } else {
+            keyStr = String(item.key);
+        }
+        
+        // Debug Info on UI
+        // (Removed debug message)
+
+        let valueHtml = '';
+        let isScriptView = false;
+
+        // Check if Value is a Byte Array (Blob)
+        let isBlob = false;
+        if (Array.isArray(currentItemValue) && currentItemValue.every(n => typeof n === 'number')) {
+            isBlob = true;
+        }
+
+        // Check if this is a script store
+        isScriptView = currentStore && currentStore.toLowerCase() === 'scripts';
+        const shouldUseJsonView = detailValueMode && !isScriptView;
+
+        if (isBlob || shouldUseJsonView) {
+             // Blob View (Raw JSON Array) or user-selected JSON view
+             const len = Array.isArray(currentItemValue) ? currentItemValue.length : 0;
+             const jsonStr = JSON.stringify(currentItemValue, null, 2);
+             valueHtml = `
+                <div id="detail-value-editor">
+                    ${Array.isArray(currentItemValue) && currentItemValue.every(n => typeof n === 'number') ? `<div style="margin-bottom: 5px; font-size: 12px; color: var(--text-muted);">Byte Array (${len} bytes)</div>` : ''}
+                    <textarea id="edit-value" oninput="markItemDirty()" style="width: 100%; height: 300px; font-family: monospace; margin-top: 5px;" class="form-input">${jsonStr}</textarea>
+                </div>
+            `;
+        } else if (typeof currentItemValue === 'object' && currentItemValue !== null) {
+            
+            if (isScriptView) {
+                 valueHtml = renderScriptView(currentItemValue);
+            } else {
+                // Form View
+                valueHtml = '<div id="detail-value-editor"><div id="value-form" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; padding-right: 2px;">';
+                const keys = Object.keys(currentItemValue);
+                if (keys.length === 0) {
+                     valueHtml += '<em>Empty Object</em>';
+                }
+                keys.forEach(key => {
+                    let val = currentItemValue[key];
+                    let displayVal = val;
+                    if (typeof val === 'object') {
+                        displayVal = JSON.stringify(val);
+                    }
+                    // Escape quotes for attribute
+                    const safeVal = String(displayVal).replace(/"/g, '&quot;');
+                    
+                    valueHtml += `
+                        <div class="form-group" style="display: flex; flex-direction: column;">
+                            <label class="form-label">${key}</label>
+                            <input type="text" class="value-input form-input" data-key="${key}" value="${safeVal}" 
+                                oninput="markItemDirty()">
+                        </div>
+                    `;
+                });
+                valueHtml += '</div></div>';
+            }
+        } else {
+            // Primitive View (Textarea)
+            const valStr = JSON.stringify(currentItemValue, null, 2);
+                valueHtml = `<div id="detail-value-editor"><textarea id="edit-value" oninput="markItemDirty()" style="width: 100%; height: 300px; font-family: monospace; margin-top: 5px;" class="form-input">${valStr}</textarea></div>`;
+        }
+
+        const jsonToggle = (!isScriptView) ? `<label style="display:flex; align-items:center; gap:6px; font-size: 11px; color: var(--text-muted); cursor:pointer;" title="Switch the value editor between form and raw JSON."><input type="checkbox" id="detail-value-mode-toggle" onchange="toggleDetailValueMode()" ${detailValueMode ? 'checked' : ''}> Edit as JSON</label>` : '';
+
+        // Back Button Logic
+        let backBtn = '';
+        // If it is a Script View, renderScriptView handles the Back button logic (Steps Section).
+        // If it is a Standard View (JSON/Primitive), we show the Back button here.
+        if (!isScriptView && viewStack.length > 0) {
+            backBtn = `<button onclick="popView()" style="padding: 2px 8px; font-size: 12px; margin-right: 10px;" title="Go back to previous item.">⬅ Back</button>`;
+        }
+
+        viewer.innerHTML = `
+            <div style="margin-bottom: 0px; display: flex; align-items: flex-start; gap: 8px;">
+                <strong style="margin-top: 5px; color: var(--key-color);">Key:</strong>
+                <pre class="pre-block detail-key" title="${keyStr.replace(/"/g, '&quot;')}" style="margin: 0; flex: 1; padding: 4px; overflow: hidden; height: 38px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-wrap; word-break: break-all;">${keyStr.replace(/\n/g, ' ')}</pre>
+            </div>
+                <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                <strong>${isScriptView ? '' : 'Value:'}</strong>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    ${jsonToggle}
+                    ${backBtn}
+                    <button onclick="closeDetail()" style="padding: 2px 4px; font-size: 1.1em; background: none; border: none; cursor: pointer;" title="Close the item details panel.">✕</button>
+                </div>
+            </div>
+            <div style="margin-bottom: 10px;">
+                ${valueHtml}
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <!-- Save Button (Icon) -->
+                <!-- Color #3498db is applied when dirty via markItemDirty() -->
+                <button id="btn-save" onclick="saveItem()" disabled title="Save changes to the item" style="background: none; border: none; padding: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-color);">
+                    <svg id="btn-save-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="transition: color 0.2s ease;">
+                        <path d="M11 2H9v3h2z"/>
+                        <path d="M1.5 0h11.586a1.5 1.5 0 0 1 1.06.44l1.415 1.414A1.5 1.5 0 0 1 16 2.914V14.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 0 14.5v-13A1.5 1.5 0 0 1 1.5 0M1 1.5v13a.5.5 0 0 0 .5.5H2v-4.5A1.5 1.5 0 0 1 3.5 9h9a1.5 1.5 0 0 1 1.5 1.5V15h.5a.5.5 0 0 0 .5-.5V2.914a.5.5 0 0 0-.146-.353l-1.415-1.415A.5.5 0 0 0 13.086 1H13v4.5A1.5 1.5 0 0 1 11.5 7h-7A1.5 1.5 0 0 1 3 5.5V1H1.5a.5.5 0 0 0-.5.5m3 4a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 .5-.5V1H4zM3 15h10v-4.5a.5.5 0 0 0-.5-.5h-9a.5.5 0 0 0-.5.5z"/>
+                    </svg>
+                </button>
+                
+                <!-- Delete Button (Icon) -->
+                <button id="btn-delete" onclick="deleteItem()" title="Delete this item from the store" style="background: none; border: none; padding: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-color);">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                        <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+                        <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+                    </svg>
+                </button>
+            </div>
+        `;
+
+        // Disable Key Editing (Implicitly handled as Key is displayed in <pre>)
+        // But we should check if we need to disable Value editing for some reason?
+        // No, Value updates are allowed.
+        
+        // However, if the store is Read-Only (No Index Specs/CEL), we should disable Delete button here too.
+        let isReadOnly = isStoreReadOnly(currentStoreInfo);
+        
+        if (isReadOnly) {
+            const saveBtn = document.getElementById('btn-save');
+            if (saveBtn) {
+                saveBtn.style.display = 'none'; // Hide save button entirely
+            }
+
+            const delBtn = document.getElementById('btn-delete') || viewer.querySelector('.btn-danger');
+            if (delBtn) {
+                delBtn.style.display = 'none'; // Hide delete button entirely
+            }
+
+            // Disable all form inputs, textareas, and selects
+            viewer.querySelectorAll('input.form-input, input.value-input, textarea, select').forEach(el => {
+                if (el.tagName === 'INPUT' && el.type === 'hidden') return;
+                el.disabled = true;
+                el.style.opacity = '0.7';
+                el.style.cursor = 'not-allowed';
+            });
+            
+            // Note: Close button shouldn't be disabled. It'll stay active so user can dismiss the panel.
+        }
+
+        openUIModal('detail-resizer', 'block');
+        panel.style.display = 'flex';
+    }
+
+</script>
+{{end}}

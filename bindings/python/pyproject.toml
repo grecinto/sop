@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sop4py"
+version = "2.3.3"
+authors = [
+    { name="Gerardo Recinto", email="gerardorecinto@yahoo.com" },
+]
+description = "Scalable Objects Persistence (SOP) V2 for Python. General Public Availability (GPA) Release"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.scripts]
+sop-httpserver = "sop.httpserver:main"
+sop-demo = "sop.demo:main"
+
+# activate venv: sop$ source .venv/bin/activate
+# build: python3 -m build
+# upload to pypi using twine: python3 -m twine upload dist/*
+# project link: https://pypi.org/project/sop-python-beta-3

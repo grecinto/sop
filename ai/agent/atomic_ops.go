@@ -1,0 +1,783 @@
+package agent
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+func getKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func findSimilarKey(target string, m map[string]any) string {
+
+	targetLower := strings.ToLower(target)
+	for k := range m {
+		if strings.ToLower(k) == targetLower {
+			return k
+		}
+		if strings.Contains(strings.ToLower(k), targetLower) || strings.Contains(targetLower, strings.ToLower(k)) {
+			return k
+		}
+	}
+	return ""
+}
+
+func matchesMap(item any, condition map[string]any) bool {
+	for k, v := range condition {
+		itemVal := getField(item, k)
+
+		if ops, ok := v.(map[string]any); ok {
+			isOperator := false
+			for op := range ops {
+				if strings.HasPrefix(op, "$") {
+					isOperator = true
+					break
+				}
+			}
+
+			if isOperator {
+				for op, opVal := range ops {
+					switch op {
+					case "$eq":
+						if compare(itemVal, opVal) != 0 {
+							return false
+						}
+					case "$gt":
+						if compare(itemVal, opVal) <= 0 {
+							return false
+						}
+					case "$gte":
+						if compare(itemVal, opVal) < 0 {
+							return false
+						}
+					case "$lt":
+						if compare(itemVal, opVal) >= 0 {
+							return false
+						}
+					case "$lte":
+						if compare(itemVal, opVal) > 0 {
+							return false
+						}
+					case "$ne":
+						if compare(itemVal, opVal) == 0 {
+							return false
+						}
+					case "$in":
+						found := false
+						if list, ok := opVal.([]any); ok {
+							for _, val := range list {
+								if compare(itemVal, val) == 0 {
+									found = true
+									break
+								}
+							}
+						}
+						if !found {
+							return false
+						}
+					case "$nin":
+						if list, ok := opVal.([]any); ok {
+							for _, val := range list {
+								if compare(itemVal, val) == 0 {
+									return false
+								}
+							}
+						}
+					}
+				}
+				continue
+			}
+		}
+
+		if compare(itemVal, v) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func resolveKey(m map[string]any, target string) (string, bool) {
+
+	if _, ok := m[target]; ok {
+		return target, true
+	}
+
+	for k := range m {
+		if strings.EqualFold(k, target) {
+			return k, true
+		}
+	}
+
+	{
+		var candidate string
+		foundCount := 0
+		suffix := "." + strings.ToLower(target)
+		for k := range m {
+			kLower := strings.ToLower(k)
+			if strings.HasSuffix(kLower, suffix) {
+				candidate = k
+				foundCount++
+			}
+		}
+		if foundCount == 1 {
+			return candidate, true
+		}
+	}
+
+	if idx := strings.Index(target, "."); idx != -1 {
+		suffix := target[idx+1:]
+		if _, ok := m[suffix]; ok {
+			return suffix, true
+		}
+	}
+
+	return "", false
+}
+
+func getField(itemObj any, field string) any {
+	var item map[string]any
+	if m, ok := itemObj.(map[string]any); ok {
+		item = m
+	} else if om, ok := itemObj.(OrderedMap); ok {
+		item = om.m
+	} else if om, ok := itemObj.(*OrderedMap); ok && om != nil {
+		item = om.m
+	} else {
+		return nil
+	}
+
+	if key, found := resolveKey(item, field); found {
+		return item[key]
+	}
+
+	if field == "key" {
+		if v, ok := item["key"]; ok {
+			return v
+		}
+	}
+
+	if keyMap, ok := item["key"].(map[string]any); ok {
+		if v, ok := keyMap[field]; ok {
+			return v
+		}
+	}
+
+	if valMap, ok := item["value"].(map[string]any); ok {
+		if v, ok := valMap[field]; ok {
+			return v
+		}
+	}
+
+	if keyMap, ok := item["key"].(map[string]any); ok {
+		if v, ok := keyMap[field]; ok {
+			return v
+		}
+	}
+
+	reconstructed := make(map[string]any)
+	prefix := field + "."
+	hasReconstructed := false
+
+	for k, v := range item {
+		if strings.HasPrefix(k, prefix) {
+			suffix := k[len(prefix):]
+			if suffix != "" {
+				reconstructed[suffix] = v
+				hasReconstructed = true
+			}
+		}
+	}
+	if hasReconstructed {
+		return reconstructed
+	}
+
+	return nil
+}
+
+// Helper: Compare two values
+func compare(a, b any) int {
+
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+
+	sa, okA := a.(string)
+	sb, okB := b.(string)
+	if okA && okB {
+		if sa < sb {
+			return -1
+		}
+		if sa > sb {
+			return 1
+		}
+		return 0
+	}
+
+	fa, okA := toFloat(a)
+	fb, okB := toFloat(b)
+	if okA && okB {
+		if fa < fb {
+			return -1
+		}
+		if fa > fb {
+			return 1
+		}
+		return 0
+	}
+
+	sa = fmt.Sprintf("%v", a)
+	sb = fmt.Sprintf("%v", b)
+	if sa < sb {
+		return -1
+	}
+	if sa > sb {
+		return 1
+	}
+	return 0
+}
+
+func toFloat(v any) (float64, bool) {
+	switch i := v.(type) {
+	case int:
+		return float64(i), true
+	case int64:
+		return float64(i), true
+	case float64:
+		return i, true
+	case float32:
+		return float64(i), true
+	case int32:
+		return float64(i), true
+	case int16:
+		return float64(i), true
+	case int8:
+		return float64(i), true
+	case uint:
+		return float64(i), true
+	case uint64:
+		return float64(i), true
+	case uint32:
+		return float64(i), true
+	case uint16:
+		return float64(i), true
+	case uint8:
+		return float64(i), true
+	}
+	return 0, false
+}
+
+// sanitizeScript performs a pass over the script instructions to clean up common LLM errors.
+// This is the "Compiler/Linter" phase before execution.
+func sanitizeScript(script []ScriptInstruction) []ScriptInstruction {
+	script = normalizeScriptCompatibilityShapes(script)
+
+	varOrigins := make(map[string]string)
+	hasExplicitOutput := false
+
+	for i := range script {
+		instr := &script[i]
+		if instr.Op == "return" || instr.ResultVar == "output" || instr.ResultVar == "final_result" || instr.ResultVar == "result" {
+			hasExplicitOutput = true
+		}
+
+		if instr.Op == "scan" || instr.Op == "open_store" {
+			if store, ok := instr.Args["store"].(string); ok {
+				if rVar := instr.ResultVar; rVar != "" {
+					varOrigins[rVar] = store
+				}
+			} else if store, ok := instr.Args["name"].(string); ok {
+
+				if rVar := instr.ResultVar; rVar != "" {
+					varOrigins[rVar] = store
+				}
+			}
+		} else if instr.Op == "filter" || instr.Op == "project" || instr.Op == "limit" || instr.Op == "sort" {
+
+			if rVar := instr.ResultVar; rVar != "" {
+				if inputVar := instr.InputVar; inputVar != "" {
+					if origin, ok := varOrigins[inputVar]; ok {
+						varOrigins[rVar] = origin
+					}
+				}
+			}
+		}
+
+		if instr.Op == "project" {
+			if fieldsRaw, ok := instr.Args["fields"]; ok {
+
+				parsed := parseProjectionFields(fieldsRaw)
+
+				instr.Args["fields"] = parsed
+			}
+		}
+
+		if instr.Op == "join" || instr.Op == "join_right" {
+
+			isExplicitRight := instr.Op == "join_right"
+			instr.Op = "join"
+
+			if t, ok := instr.Args["type"].(string); ok {
+				instr.Args["type"] = strings.ToLower(strings.TrimSpace(t))
+			} else if isExplicitRight {
+				instr.Args["type"] = "right_outer"
+			}
+
+			if _, ok := instr.Args["type"]; !ok {
+				instr.Args["type"] = "inner"
+			}
+
+			if _, hasAlias := instr.Args["left_alias"]; !hasAlias {
+				if origin, ok := varOrigins[instr.InputVar]; ok {
+					instr.Args["left_alias"] = origin
+				}
+			}
+
+			if _, hasAlias := instr.Args["alias"]; !hasAlias {
+				if _, hasRightAlias := instr.Args["right_alias"]; !hasRightAlias {
+
+					resultVar := instr.ResultVar
+					if resultVar != "" {
+
+						for j := i + 1; j < len(script); j++ {
+							future := &script[j]
+							if future.Op == "project" && future.InputVar == resultVar {
+
+								var candidates []string
+								if fRaw, ok := future.Args["fields"]; ok {
+									p := parseProjectionFields(fRaw)
+									for _, field := range p {
+										candidates = append(candidates, field.Src)
+									}
+								}
+
+								prefix := resultVar + "."
+								found := false
+								for _, c := range candidates {
+									if strings.HasPrefix(c, prefix) {
+										found = true
+										break
+									}
+								}
+
+								if found {
+
+									instr.Args["alias"] = resultVar
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if onMap, ok := instr.Args["on"].(map[string]any); ok {
+				newOn := make(map[string]any)
+				for k, v := range onMap {
+
+					newK := k
+
+					if strings.EqualFold(k, "Value") {
+						newK = "value"
+					} else if strings.EqualFold(k, "Key") {
+						newK = "key"
+					}
+
+					newV := v
+					if vStr, ok := v.(string); ok {
+						if strings.EqualFold(vStr, "Value") {
+							newV = "value"
+						} else if strings.EqualFold(vStr, "Key") {
+							newV = "key"
+						}
+					}
+					newOn[newK] = newV
+				}
+				instr.Args["on"] = newOn
+			}
+		}
+
+	}
+	if !hasExplicitOutput && scriptEndsWithTerminalControl(script) {
+		for i := len(script) - 1; i >= 0; i-- {
+			if isTerminalControlOp(script[i].Op) {
+				continue
+			}
+			if isImplicitOutputCandidate(script[i].Op) && script[i].ResultVar == "" {
+				script[i].ResultVar = "output"
+			}
+			break
+		}
+	}
+	script = hoistCommitBeforeReturn(script)
+	return script
+}
+
+// hoistCommitBeforeReturn moves any commit_tx or rollback_tx steps that follow a
+// return step to immediately precede it. A return placed before a commit causes
+// the engine to short-circuit (HasReturned=true breaks the step loop) and skips
+// the transaction control step entirely, leaving the transaction uncommitted.
+func hoistCommitBeforeReturn(script []ScriptInstruction) []ScriptInstruction {
+	// Find the index of the first return op.
+	returnIdx := -1
+	for i, instr := range script {
+		if strings.EqualFold(strings.TrimSpace(instr.Op), "return") {
+			returnIdx = i
+			break
+		}
+	}
+	if returnIdx < 0 {
+		return script
+	}
+
+	// Collect tx-control steps that appear after the return.
+	var txSteps []ScriptInstruction
+	var rest []ScriptInstruction
+	for i := returnIdx + 1; i < len(script); i++ {
+		op := strings.ToLower(strings.TrimSpace(script[i].Op))
+		if op == "commit_tx" || op == "rollback_tx" {
+			txSteps = append(txSteps, script[i])
+		} else {
+			rest = append(rest, script[i])
+		}
+	}
+
+	if len(txSteps) == 0 {
+		return script
+	}
+
+	// Rebuild: prefix + txSteps + return + any remaining non-tx trailing steps.
+	out := make([]ScriptInstruction, 0, len(script))
+	out = append(out, script[:returnIdx]...)
+	out = append(out, txSteps...)
+	out = append(out, script[returnIdx])
+	out = append(out, rest...)
+	return out
+}
+
+func normalizeScriptCompatibilityShapes(script []ScriptInstruction) []ScriptInstruction {
+	normalized := make([]ScriptInstruction, 0, len(script)+2)
+	openStores := make(map[string]string)
+	currentTxVar := ""
+
+	for _, instr := range script {
+		instr := instr
+		instr.Args = cloneAnyMap(instr.Args)
+
+		normalizeLegacyFilterArgs(&instr)
+		normalizeLegacySortArgs(&instr)
+		normalizeReturnVariableReference(&instr)
+		normalizeImplicitBeginTxResultVar(&instr, len(normalized))
+		normalizeImplicitTransactionReference(&instr, currentTxVar)
+
+		if strings.EqualFold(instr.Op, "begin_tx") && strings.TrimSpace(instr.ResultVar) != "" {
+			currentTxVar = strings.TrimSpace(instr.ResultVar)
+		}
+
+		normalizeImplicitOpenStoreResultVar(&instr)
+
+		if strings.EqualFold(instr.Op, "open_store") {
+			if storeName, _ := instr.Args["name"].(string); strings.TrimSpace(storeName) != "" && strings.TrimSpace(instr.ResultVar) != "" {
+				openStores[strings.TrimSpace(storeName)] = strings.TrimSpace(instr.ResultVar)
+			}
+		}
+
+		if expanded, ok := expandRelationTargetJoin(instr, openStores, currentTxVar); ok {
+			if strings.TrimSpace(instr.InputVar) == "" && len(expanded) > 0 {
+				compatInputVar := captureImplicitPipelineInput(normalized, len(normalized))
+				if compatInputVar != "" {
+					for idx := range expanded {
+						if strings.EqualFold(expanded[idx].Op, "join") {
+							expanded[idx].InputVar = compatInputVar
+							break
+						}
+					}
+				}
+			}
+			normalized = append(normalized, expanded...)
+			for _, step := range expanded {
+				if strings.EqualFold(step.Op, "open_store") {
+					if storeName, _ := step.Args["name"].(string); strings.TrimSpace(storeName) != "" && strings.TrimSpace(step.ResultVar) != "" {
+						openStores[strings.TrimSpace(storeName)] = strings.TrimSpace(step.ResultVar)
+					}
+				}
+			}
+			continue
+		}
+
+		normalized = append(normalized, instr)
+	}
+
+	return normalized
+}
+
+func normalizeImplicitBeginTxResultVar(instr *ScriptInstruction, stepIndex int) {
+	if instr == nil || !strings.EqualFold(instr.Op, "begin_tx") {
+		return
+	}
+	if strings.TrimSpace(instr.ResultVar) != "" {
+		return
+	}
+	if stepIndex == 0 {
+		instr.ResultVar = "tx"
+		return
+	}
+	instr.ResultVar = fmt.Sprintf("tx_%d", stepIndex+1)
+}
+
+func normalizeImplicitTransactionReference(instr *ScriptInstruction, currentTxVar string) {
+	if instr == nil || strings.TrimSpace(currentTxVar) == "" || instr.Args == nil {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(instr.Op)) {
+	case "open_store", "commit_tx", "rollback_tx":
+		if txName, _ := instr.Args["transaction"].(string); strings.TrimSpace(txName) == "" {
+			instr.Args["transaction"] = currentTxVar
+		} else {
+			instr.Args["transaction"] = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(txName), "@"), "$")
+		}
+	}
+}
+
+func normalizeImplicitOpenStoreResultVar(instr *ScriptInstruction) {
+	if instr == nil || !strings.EqualFold(instr.Op, "open_store") {
+		return
+	}
+	if strings.TrimSpace(instr.ResultVar) != "" || instr.Args == nil {
+		return
+	}
+	storeName, _ := instr.Args["name"].(string)
+	if strings.TrimSpace(storeName) == "" {
+		storeName, _ = instr.Args["store"].(string)
+	}
+	storeName = strings.TrimSpace(storeName)
+	if storeName == "" {
+		return
+	}
+	instr.ResultVar = storeName
+}
+
+func normalizeReturnVariableReference(instr *ScriptInstruction) {
+	if instr == nil || !strings.EqualFold(instr.Op, "return") || instr.Args == nil {
+		return
+	}
+	valueMap, ok := instr.Args["value"].(map[string]any)
+	if !ok || len(valueMap) != 1 {
+		return
+	}
+	varName, ok := valueMap["$var"].(string)
+	if !ok || strings.TrimSpace(varName) == "" {
+		return
+	}
+	instr.Args["value"] = "@" + strings.TrimSpace(varName)
+}
+
+func captureImplicitPipelineInput(script []ScriptInstruction, stepIndex int) string {
+	if len(script) == 0 {
+		return ""
+	}
+	last := &script[len(script)-1]
+	if strings.TrimSpace(last.ResultVar) != "" {
+		return strings.TrimSpace(last.ResultVar)
+	}
+	if !isImplicitOutputCandidate(last.Op) {
+		return ""
+	}
+	compatVar := fmt.Sprintf("__compat_input_%d", stepIndex)
+	last.ResultVar = compatVar
+	return compatVar
+}
+
+// normalizeLegacySortArgs converts the compact sort form {field, direction} to the
+// canonical {fields: ["<field> <dir>"]} form expected by stageSort.
+func normalizeLegacySortArgs(instr *ScriptInstruction) {
+	if instr == nil || !strings.EqualFold(instr.Op, "sort") {
+		return
+	}
+	if instr.Args == nil {
+		return
+	}
+	if _, hasFields := instr.Args["fields"]; hasFields {
+		return
+	}
+	field, _ := instr.Args["field"].(string)
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return
+	}
+	dir, _ := instr.Args["direction"].(string)
+	dir = strings.TrimSpace(strings.ToLower(dir))
+	if dir == "descending" {
+		dir = "desc"
+	} else if dir == "ascending" || dir == "" {
+		dir = "asc"
+	}
+	instr.Args["fields"] = []any{field + " " + dir}
+	delete(instr.Args, "field")
+	delete(instr.Args, "direction")
+}
+
+func normalizeLegacyFilterArgs(instr *ScriptInstruction) {
+	if instr == nil || !strings.EqualFold(instr.Op, "filter") {
+		return
+	}
+	if instr.Args == nil {
+		return
+	}
+	if _, hasCondition := instr.Args["condition"]; hasCondition {
+		return
+	}
+	field, _ := instr.Args["field"].(string)
+	operator, _ := instr.Args["op"].(string)
+	value, hasValue := instr.Args["value"]
+	field = strings.TrimSpace(field)
+	operator = strings.TrimSpace(operator)
+	if field == "" || operator == "" || !hasValue {
+		return
+	}
+
+	condition := map[string]any{}
+	switch operator {
+	case "==", "=":
+		condition[field] = map[string]any{"$eq": value}
+	case "!=":
+		condition[field] = map[string]any{"$ne": value}
+	case ">":
+		condition[field] = map[string]any{"$gt": value}
+	case ">=":
+		condition[field] = map[string]any{"$gte": value}
+	case "<":
+		condition[field] = map[string]any{"$lt": value}
+	case "<=":
+		condition[field] = map[string]any{"$lte": value}
+	default:
+		condition[field] = value
+	}
+	instr.Args["condition"] = condition
+	delete(instr.Args, "field")
+	delete(instr.Args, "op")
+	delete(instr.Args, "value")
+}
+
+func expandRelationTargetJoin(instr ScriptInstruction, openStores map[string]string, currentTxVar string) ([]ScriptInstruction, bool) {
+	if !(strings.EqualFold(instr.Op, "join") || strings.EqualFold(instr.Op, "join_right")) {
+		return nil, false
+	}
+	if instr.Args == nil {
+		return nil, false
+	}
+	if _, hasDirectStore := instr.Args["with"]; hasDirectStore {
+		return nil, false
+	}
+	if _, hasDirectStore := instr.Args["store"]; hasDirectStore {
+		return nil, false
+	}
+	if _, hasDirectStore := instr.Args["right_store"]; hasDirectStore {
+		return nil, false
+	}
+	relationName, _ := instr.Args["relation"].(string)
+	targetVar, _ := instr.Args["target"].(string)
+	relationName = strings.TrimSpace(relationName)
+	targetVar = strings.TrimSpace(targetVar)
+	if relationName == "" || targetVar == "" {
+		return nil, false
+	}
+
+	relationVar := openStores[relationName]
+	steps := make([]ScriptInstruction, 0, 3)
+	if relationVar == "" {
+		relationVar = relationName
+		openArgs := map[string]any{"name": relationName}
+		if currentTxVar != "" {
+			openArgs["transaction"] = currentTxVar
+		}
+		steps = append(steps, ScriptInstruction{
+			Op:        "open_store",
+			Args:      openArgs,
+			ResultVar: relationVar,
+		})
+	}
+
+	joinType, _ := instr.Args["type"].(string)
+	joinType = strings.TrimSpace(joinType)
+	if joinType == "" {
+		joinType = "inner"
+	}
+
+	intermediateVar := relationName + "__joined"
+	if strings.TrimSpace(instr.ResultVar) != "" {
+		intermediateVar = instr.ResultVar + "__bridge"
+	}
+
+	steps = append(steps,
+		ScriptInstruction{
+			Op:        "join",
+			Args:      map[string]any{"store": relationVar, "type": joinType, "on": map[string]any{"key": "key"}},
+			InputVar:  instr.InputVar,
+			ResultVar: intermediateVar,
+		},
+		ScriptInstruction{
+			Op:        "join",
+			Args:      map[string]any{"store": targetVar, "type": joinType, "on": map[string]any{"value": "key"}},
+			InputVar:  intermediateVar,
+			ResultVar: instr.ResultVar,
+		},
+	)
+
+	return steps, true
+}
+
+func cloneAnyMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func scriptEndsWithTerminalControl(script []ScriptInstruction) bool {
+	for i := len(script) - 1; i >= 0; i-- {
+		op := strings.TrimSpace(script[i].Op)
+		if op == "" {
+			continue
+		}
+		return isTerminalControlOp(op)
+	}
+	return false
+}
+
+func isTerminalControlOp(op string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(op))
+	switch normalized {
+	case "commit_tx", "rollback_tx":
+		return true
+	case "defer":
+		return true
+	default:
+		return false
+	}
+}
+
+func isImplicitOutputCandidate(op string) bool {
+	switch strings.ToLower(strings.TrimSpace(op)) {
+	case "scan", "select", "filter", "sort", "project", "limit", "join", "join_right", "find", "first", "last", "next", "previous", "get_current_key", "get_current_value", "inspect":
+		return true
+	default:
+		return false
+	}
+}

@@ -1,0 +1,94 @@
+# SOP Scalability & Performance Limits
+
+SOP is designed to scale with the available hardware. By decoupling **Coordination** (Redis) from **Storage** (Filesystem/B-Trees), it supports horizontal growth across nodes and storage targets.
+
+## 1. Theoretical Capacity Limits
+
+SOP uses a **Registry** to map Logical IDs (UUIDs) to Physical Locations. This registry is sharded into "Segment Files" on disk.
+
+### The Math: Capacity Per Segment
+
+Using the max configuration constants and realistic load factors:
+*   **Registry Hash Mod**: `750,000` (Max blocks per segment file)
+*   **Block Size**: `4,096 bytes` (4KB)
+*   **Handles Per Block**: `66` (Max handles per sector)
+*   **B-Tree Slot Length**: `20,000` (Max items per B-Tree Node)
+*   **B-Tree Load Factor**: `68%` (Typical average occupancy)
+
+#### 1.1. Virtual IDs (Handles) Per Segment
+Each Registry Segment File can address:
+$$ 750,000 \text{ blocks} \times 66 \text{ handles/block} = 49,500,000 \text{ Handles} $$
+
+**Result**: A single 3GB Registry File can track **49.5 Million** unique B-Tree Nodes.
+
+#### 1.2. Total Items Per Segment
+If each Handle represents one B-Tree Node, and each Node holds up to 20,000 items @ 68% load:
+$$ 49,500,000 \text{ Nodes} \times (20,000 \times 0.68) \text{ Items/Node} = 673,200,000,000 \text{ Items} $$
+
+**Result**: A single Registry Segment can index **673.2 Billion Items**.
+
+### The Math: Horizontal Scaling
+
+SOP automatically allocates new Registry Segments as needed. It is designed to handle high volume segments, BUT currently set to a limit of 1,000 to keep the logic simple.
+
+| Segments | Total Nodes (Handles) | Total Capacity (Items @ 20k Slots, 68% Load) |
+| :--- | :--- | :--- |
+| **1** | 49.5 Million | 673.2 Billion |
+| **10** | 495 Million | 6.73 Trillion |
+| **100** | 4.95 Billion | 67.3 Trillion |
+| **1,000** | 49.5 Billion | 673.2 Trillion |
+
+**Conclusion**: With just 1,000 registry segments (a manageable number for any modern filesystem), SOP can address **Over Half a Quadrillion Items**. The limit is purely your disk space (Petabytes).
+
+---
+
+## 2. Throughput & IOPS (The "Speed Limit")
+
+Since SOP stores data on disk (DirectIO) and uses Redis only for lightweight locking, the throughput is defined by:
+1.  **Redis Cluster Performance** (Coordination)
+2.  **Network Fabric** (Bandwidth)
+3.  **Storage Backend** (IOPS)
+
+### 2.1. Redis Cluster (Coordination Layer)
+SOP uses Redis for **Locking** and **L2 Caching**. It does *not* store data in Redis.
+*   **Operation**: `SETNX` / `GET` (O(1) complexity).
+*   **Cluster Scale**: A large Redis Cluster (e.g., 100+ nodes) can easily handle **100 Million+ Ops/Sec**.
+*   **SOP Impact**: Since SOP only locks on *Write* (and only on the specific node being modified), a single Redis cluster can coordinate thousands of concurrent SOP writers without contention.
+
+### 2.2. Storage Backend (Data Layer)
+SOP uses **DirectIO** (bypassing OS page cache) to write 4KB blocks directly to disk.
+*   **High-throughput storage backends**: Modern SAN and NVMe systems can deliver millions of IOPS.
+*   **Parallelism**: SOP nodes work independently. If you have 1,000 Application Nodes connected to a high-speed SAN, SOP will saturate the SAN's bandwidth.
+*   **No Central Bottleneck**: Unlike a traditional SQL DB with a single "Master" writer, SOP allows every node to write to different B-Tree segments simultaneously.
+
+## 3. Storage Architecture: Distribution & Normalization
+
+SOP uses a segmented storage design that breaks the database into manageable pieces rather than one monolithic file.
+
+### 3.1. Segmentation & Registry
+*   **Segmented Blobs**: Data is split into node segments and data blobs. This avoids the performance degradation often seen with very large single-file databases.
+*   **Registry Mapping**: The Registry maps Logical IDs to physical segments, allowing the system to address very large object counts without scanning one large index file.
+
+### 3.2. Storage-Friendly Hierarchy (S3-Style)
+SOP is designed to work efficiently with storage drives and filesystems.
+*   **Hierarchical Folders**: To avoid filesystem limits (e.g., too many files in a single directory), SOP uses a hierarchical folder structure similar to AWS S3 buckets.
+*   **UUID Distribution**: It leverages the randomness of UUIDs to distribute files evenly across these folders.
+*   **Sustained Throughput**: This even distribution ensures that no single folder becomes a hotspot or bottleneck, maintaining sustained high throughput for B-Tree nodes, large data blobs, and registry segments alike.
+
+## 4. Architectural Advantages
+
+Key architectural properties:
+
+1.  **Independent Nodes**: Each SOP instance (embedded in your app) talks directly to the storage. There is no "Database Server" middleman to become a bottleneck.
+2.  **Linear Scalability**: To double your throughput, simply add more Application Nodes and more Redis Shards. The architecture has no intrinsic ceiling.
+3.  **Large-scale addressing**: As calculated above, the addressing scheme supports very large object counts. In practice, storage capacity will become the limiting factor before the addressing model does.
+
+**Summary**: In practice, SOP scale is bounded mainly by hardware capacity and deployment design.
+
+## 5. The Embedded Advantage: Zero-Admin Mode
+
+SOP is not just for the data center; its architecture is uniquely suited for embedded systems and applications where a traditional server-based database is impossible.
+
+*   **Embedded Mode**: SOP can be run in a fully embedded, self-contained mode where the lightweight Redis-based coordination layer is bypassed entirely.
+*   **Zero Administration**: This mode eliminates the need for any external database server or administration, simplifying deployment in small, localized, or IoT environments (competing directly with databases like SQLite, but offering B-Tree segments optimized for high-volume data structures).
+*   **Small Footprint**: You can ship SOP directly within your application's binary, providing full transactional durability and scalable storage capacity for client-side, mobile, or deeply embedded devices.

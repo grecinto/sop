@@ -1,0 +1,128 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Go
+
+on:
+  push:
+    branches: [ "master"]
+  pull_request:
+    branches: [ "master"]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -v ./inmemory ./infs ./btree ./common ./fs ./incfs
+
+      - name: Unit tests with coverage
+        run: go test -timeout 600s -race -covermode=atomic -coverprofile=coverage.out -coverpkg=./btree/...,./inmemory/...,./fs/...,./common
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v3
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  stress:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: go.mod
+
+      - name: Wait for Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Waiting for Redis..."
+          for i in {1..60}; do
+            (echo > /dev/tcp/127.0.0.1/6379) && break || sleep 2
+          done
+          echo "Redis reachable."
+
+      - name: Prepare datapath
+        shell: bash
+        env:
+          datapath: ${{ github.workspace }}/.sop_data
+        run: |
+          set -euo pipefail
+          mkdir -p "$datapath"
+          echo "datapath prepared at: $datapath"
+
+      - name: Run stress test suite
+        env:
+          datapath: ${{ github.workspace }}/.sop_data
+        run: |
+          go test -timeout 2h -tags=stress ./infs/stresstests
+
+  stress-replication-only:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: go.mod
+
+      - name: Wait for Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Waiting for Redis..."
+          for i in {1..60}; do
+            (echo > /dev/tcp/127.0.0.1/6379) && break || sleep 2
+          done
+          echo "Redis reachable."
+
+      - name: Prepare datapath
+        shell: bash
+        env:
+          datapath: ${{ github.workspace }}/.sop_data
+        run: |
+          set -euo pipefail
+          mkdir -p "$datapath"
+          echo "datapath prepared at: $datapath"
+
+      - name: Run replication stress only
+        env:
+          datapath: ${{ github.workspace }}/.sop_data
+        run: |
+          go test -timeout 2h -tags=stress ./infs/stresstests/replication -run Reinstate_MultiTable_Concurrency_SecondFailover -count=1

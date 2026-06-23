@@ -1,0 +1,189 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Docker: Build and Test",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"build",
+				"-t",
+				"mydi",
+				"."
+			],
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "Docker: Build (No Coverage)",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"build",
+				"-f",
+				"Dockerfile.nocov",
+				"-t",
+				"mydi-nocov",
+				"."
+			],
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "Docker: Run Tests",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"run",
+				"mydi"
+			],
+			"dependsOn": [
+				"Docker: Build and Test"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Docker: Run Integration (No Coverage)",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"run",
+				"--rm",
+				"mydi-nocov"
+			],
+			"dependsOn": [
+				"Docker: Build (No Coverage)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Go: Test (Unit)",
+			"type": "shell",
+			"command": "go",
+			"args": [
+				"test",
+				"./..."
+			],
+			"group": "test",
+			"problemMatcher": [
+				"$go"
+			]
+		},
+		{
+			"label": "Go: Test (Integration)",
+			"type": "shell",
+			"command": "go",
+			"args": [
+				"test",
+				"-tags=integration",
+				"./infs/integrationtests"
+			],
+			"group": "test",
+			"problemMatcher": [
+				"$go"
+			]
+		},
+		{
+			"label": "Go: Test (Stress)",
+			"type": "shell",
+			"command": "go",
+			"args": [
+				"test",
+				"-timeout",
+				"2h",
+				"-tags=stress",
+				"./infs/stresstests/..."
+			],
+			"group": "test",
+			"problemMatcher": [
+				"$go"
+			]
+		},
+		{
+			"label": "Go: Test (Unit + Integration)",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"Running Unit then Integration tests..."
+			],
+			"group": "test",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"Go: Test (Unit)",
+				"Go: Test (Integration)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Docker: Run Integration (No Coverage)",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"run",
+				"--rm",
+				"mydi-nocov"
+			],
+			"group": "test"
+		},
+		{
+			"label": "Docker: Run Integration (No Coverage)",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"run",
+				"--rm",
+				"mydi-nocov"
+			],
+			"group": "test"
+		},
+		{
+			"label": "Go: Test (Unit)",
+			"type": "shell",
+			"command": "go",
+			"args": [
+				"test",
+				"./..."
+			],
+			"problemMatcher": [
+				"$go"
+			],
+			"group": "test"
+		},
+		{
+			"label": "Go: Test (AI)",
+			"type": "shell",
+			"command": "go",
+			"args": [
+				"test",
+				"./..."
+			],
+			"options": {
+				"cwd": "${workspaceFolder}/ai"
+			},
+			"group": "test",
+			"problemMatcher": [
+				"$go"
+			]
+		},
+		{
+			"label": "Go: Test All",
+			"type": "shell",
+			"command": "./run_all_tests.sh",
+			"group": "test",
+			"problemMatcher": [
+				"$go"
+			]
+		},
+		{
+			"label": "Build Release Packages",
+			"type": "shell",
+			"command": "./build_release.sh",
+			"group": "build"
+		},
+		{
+			"label": "Go: AI Dynamic Coverage",
+			"type": "shell",
+			"command": "cd ai/memory && go test -coverprofile=coverage.out && go tool cover -func=coverage.out"
+		}
+	]
+}
