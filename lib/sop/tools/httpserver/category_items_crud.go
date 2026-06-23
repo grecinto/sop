@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/sharedcode/sop"
 	aidb "github.com/sharedcode/sop/ai/database"
-	"github.com/sharedcode/sop/ai/embed"
 	"github.com/sharedcode/sop/ai/memory"
+	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai/embed"
 	"github.com/sharedcode/sop/database"
 )
 
@@ -19,6 +22,190 @@ func generateDeterministicID(catID sop.UUID, dataStr string) sop.UUID {
 	hashBytes := sha256.Sum256([]byte(catID.String() + ":" + dataStr))
 	id, _ := sop.ParseUUID(fmt.Sprintf("%x", hashBytes[:16]))
 	return id
+}
+
+func cloneDataMap(input map[string]any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(input))
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
+}
+
+func ensureDocumentReference(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], item *memory.Item[map[string]any], data map[string]any) error {
+	if kb == nil || item == nil || data == nil {
+		return nil
+	}
+
+	hasDocumentMetadata := false
+	if _, ok := data["storage_mode"]; ok {
+		hasDocumentMetadata = true
+	}
+	if _, ok := data["payload_ref"]; ok {
+		hasDocumentMetadata = true
+	}
+	if _, ok := data["cloud_provider"]; ok {
+		hasDocumentMetadata = true
+	}
+	if _, ok := data["title"]; ok {
+		hasDocumentMetadata = true
+	}
+	if _, ok := data["url"]; ok {
+		hasDocumentMetadata = true
+	}
+	if _, ok := data["source"]; ok {
+		hasDocumentMetadata = true
+	}
+	if _, ok := data["content_type"]; ok {
+		hasDocumentMetadata = true
+	}
+	if _, ok := data["content"]; ok {
+		hasDocumentMetadata = true
+	}
+	if _, ok := data["doc_id"]; ok {
+		hasDocumentMetadata = true
+	}
+	if !hasDocumentMetadata && len(item.DocID) == 0 {
+		return nil
+	}
+
+	docID := sop.NewUUID()
+	if len(item.DocID) > 0 {
+		if parsed, err := sop.ParseUUID(item.DocID.First()); err == nil {
+			docID = parsed
+		}
+	}
+	if explicitDocID, ok := data["doc_id"].(string); ok {
+		if parsed, err := sop.ParseUUID(explicitDocID); err == nil {
+			docID = parsed
+		}
+	}
+
+	doc := memory.Document{ID: docID}
+	if title, ok := data["title"].(string); ok {
+		doc.Title = title
+	}
+	if url, ok := data["url"].(string); ok {
+		doc.URL = url
+	}
+	if source, ok := data["source"].(string); ok {
+		doc.Source = source
+	}
+	if contentType, ok := data["content_type"].(string); ok {
+		doc.ContentType = contentType
+	}
+	if content, ok := data["content"].(string); ok {
+		doc.Content = content
+	}
+	if rawData, ok := data["data"].([]byte); ok {
+		doc.Data = rawData
+	}
+	if uploadData, ok := data["__uploaded_bytes"].([]byte); ok {
+		doc.Data = uploadData
+	}
+	if content, ok := data["content"].(string); ok {
+		doc.Content = content
+	}
+	if rawData, ok := data["data"].([]byte); ok {
+		doc.Data = rawData
+	}
+	if storageMode, ok := data["storage_mode"].(string); ok && storageMode != "" {
+		doc.StorageMode = memory.DocumentStorageMode(storageMode)
+	}
+	if doc.StorageMode == "" {
+		if _, ok := data["filesystem_ref"]; ok {
+			doc.StorageMode = memory.DocumentStorageModeFilesystemReference
+		}
+	}
+	if payloadRef, ok := data["payload_ref"].(string); ok && payloadRef != "" {
+		doc.PayloadRef = payloadRef
+	}
+	if uploadData, ok := data["__uploaded_bytes"].([]byte); ok && len(uploadData) > 0 {
+		doc.Data = uploadData
+		if doc.PayloadRef == "" {
+			filename := ""
+			if v, ok := data["filename"].(string); ok {
+				filename = v
+			}
+			doc.PayloadRef = "uploaded://" + filepath.Base(filename)
+		}
+	}
+	if filesystemRef, ok := data["filesystem_ref"].(string); ok && filesystemRef != "" {
+		if doc.PayloadRef == "" {
+			doc.PayloadRef = filesystemRef
+		}
+		if doc.StorageMode == "" {
+			doc.StorageMode = memory.DocumentStorageModeFilesystemReference
+		}
+	}
+	if cloudProvider, ok := data["cloud_provider"].(string); ok {
+		doc.CloudSource.Provider = cloudProvider
+	}
+	if bucket, ok := data["bucket"].(string); ok {
+		doc.CloudSource.Bucket = bucket
+	}
+	if objectKey, ok := data["object_key"].(string); ok {
+		doc.CloudSource.ObjectKey = objectKey
+	}
+	if accessHint, ok := data["access_hint"].(string); ok {
+		doc.CloudSource.AccessHint = accessHint
+	}
+	if region, ok := data["region"].(string); ok {
+		doc.CloudSource.Region = region
+	}
+	if cloudSource, ok := data["cloud_source"].(map[string]any); ok {
+		if provider, ok := cloudSource["provider"].(string); ok {
+			doc.CloudSource.Provider = provider
+		}
+		if bucket, ok := cloudSource["bucket"].(string); ok {
+			doc.CloudSource.Bucket = bucket
+		}
+		if objectKey, ok := cloudSource["object_key"].(string); ok {
+			doc.CloudSource.ObjectKey = objectKey
+		}
+		if accessHint, ok := cloudSource["access_hint"].(string); ok {
+			doc.CloudSource.AccessHint = accessHint
+		}
+		if region, ok := cloudSource["region"].(string); ok {
+			doc.CloudSource.Region = region
+		}
+		if url, ok := cloudSource["url"].(string); ok {
+			doc.CloudSource.URL = url
+		}
+	}
+	if doc.StorageMode == "" && (doc.PayloadRef != "" || doc.CloudSource.Provider != "" || doc.CloudSource.ObjectKey != "") {
+		doc.StorageMode = memory.DocumentStorageModeExternalMetadataOnly
+	}
+
+	if err := kb.Store.UpsertDocument(ctx, doc); err != nil {
+		return err
+	}
+	item.DocID = memory.DocIDs{doc.ID.String()}
+	if data != nil {
+		data["doc_id"] = doc.ID.String()
+		if doc.StorageMode != "" {
+			data["storage_mode"] = string(doc.StorageMode)
+		}
+		if doc.PayloadRef != "" {
+			data["payload_ref"] = doc.PayloadRef
+		}
+		if doc.CloudSource.Provider != "" {
+			data["cloud_provider"] = doc.CloudSource.Provider
+		}
+		if doc.CloudSource.ObjectKey != "" {
+			data["object_key"] = doc.CloudSource.ObjectKey
+		}
+		if doc.CloudSource.Bucket != "" {
+			data["bucket"] = doc.CloudSource.Bucket
+		}
+		if doc.CloudSource.AccessHint != "" {
+			data["access_hint"] = doc.CloudSource.AccessHint
+		}
+	}
+	return nil
 }
 
 type addCategoryResponse struct {
@@ -278,9 +465,54 @@ func handleAddSpaceItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AddSpaceItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
-		return
+	var uploadReq *AddSpaceItemUploadRequest
+	if strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, "Failed to parse file upload", http.StatusBadRequest)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "Missing uploaded file", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		data, err := io.ReadAll(file)
+		if err != nil {
+			http.Error(w, "Failed to read uploaded file", http.StatusBadRequest)
+			return
+		}
+		uploadReq = &AddSpaceItemUploadRequest{FileName: header.Filename, Data: data, Size: int64(len(data))}
+		req.Data = map[string]any{}
+		if r.FormValue("description") != "" {
+			req.Data["description"] = r.FormValue("description")
+		}
+		if r.FormValue("text") != "" {
+			req.Data["text"] = r.FormValue("text")
+		}
+		if r.FormValue("category_id") != "" {
+			req.CategoryID = r.FormValue("category_id")
+		}
+		if r.FormValue("summaries") != "" {
+			req.Summaries = strings.Split(r.FormValue("summaries"), ".")
+		}
+		if r.FormValue("storage_mode") != "" {
+			req.Data["storage_mode"] = r.FormValue("storage_mode")
+		}
+		if r.FormValue("cloud_provider") != "" {
+			req.Data["cloud_provider"] = r.FormValue("cloud_provider")
+		}
+		if uploadReq.FileName != "" {
+			req.Data["filename"] = uploadReq.FileName
+		}
+		if uploadReq != nil && len(uploadReq.Data) > 0 {
+			req.Data["__uploaded_bytes"] = uploadReq.Data
+		}
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+			return
+		}
 	}
 
 	parsedCatID, err := sop.ParseUUID(req.CategoryID)
@@ -340,6 +572,17 @@ func handleAddSpaceItem(w http.ResponseWriter, r *http.Request) {
 	dataStr := string(dataBytes)
 
 	detID := generateDeterministicID(parsedCatID, dataStr)
+	payloadData := cloneDataMap(req.Data)
+	newItem := memory.Item[map[string]any]{
+		ID:         detID,
+		DocID:      req.DocID,
+		CategoryID: parsedCatID,
+		Data:       payloadData,
+	}
+	if err := ensureDocumentReference(ctx, kb, &newItem, payloadData); err != nil {
+		http.Error(w, "Failed to persist document reference: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	itemsTree, err := kb.Store.Items(ctx)
 	if err == nil {
 		if found, _ := itemsTree.Find(ctx, memory.ItemKey{CategoryID: parsedCatID, ItemID: detID}, false); found {
@@ -365,13 +608,8 @@ func handleAddSpaceItem(w http.ResponseWriter, r *http.Request) {
 		vecs = req.Positions
 	}
 
-	newItem := memory.Item[map[string]any]{
-		ID:         detID,
-		DocID:      req.DocID,
-		CategoryID: parsedCatID,
-		Summaries:  summaries,
-		Data:       req.Data,
-	}
+	newItem.Summaries = summaries
+	newItem.Data = payloadData
 
 	err = kb.Store.UpsertByCategoryPath(ctx, cat.Name, newItem, vecs)
 	if err != nil {
@@ -614,6 +852,16 @@ func handleAddSpaceItemsBatch(w http.ResponseWriter, r *http.Request) {
 		dataStr := string(dataBytes)
 
 		detID := generateDeterministicID(parsedCatID, dataStr)
+		item := memory.Item[map[string]any]{
+			ID:         detID,
+			DocID:      itm.DocID,
+			CategoryID: parsedCatID,
+			Data:       itm.Data,
+		}
+		if err := ensureDocumentReference(ctx, kb, &item, itm.Data); err != nil {
+			http.Error(w, "Failed to persist document reference: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		itemsTree, err := kb.Store.Items(ctx)
 		if err == nil {
 			if found, _ := itemsTree.Find(ctx, memory.ItemKey{CategoryID: parsedCatID, ItemID: detID}, false); found {
@@ -624,12 +872,7 @@ func handleAddSpaceItemsBatch(w http.ResponseWriter, r *http.Request) {
 					ChunkStr:     chunkStr,
 					MaxSummaries: maxSummaries,
 					Skip:         true,
-					Item: memory.Item[map[string]any]{
-						ID:         detID,
-						DocID:      itm.DocID,
-						CategoryID: parsedCatID,
-						Data:       itm.Data,
-					},
+					Item:         item,
 				}
 				states = append(states, state)
 				continue
@@ -647,7 +890,7 @@ func handleAddSpaceItemsBatch(w http.ResponseWriter, r *http.Request) {
 			Skip:         false,
 			Item: memory.Item[map[string]any]{
 				ID:         detID,
-				DocID:      itm.DocID,
+				DocID:      item.DocID,
 				CategoryID: parsedCatID,
 				Summaries:  summaries,
 				Data:       itm.Data,

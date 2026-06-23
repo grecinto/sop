@@ -5,10 +5,9 @@ import (
 	"fmt"
 
 	"github.com/sharedcode/sop"
-	"github.com/sharedcode/sop/btree"
 )
 
-func (s *store[T]) Documents(ctx context.Context) (btree.BtreeInterface[sop.UUID, Document], error) {
+func (s *store[T]) Documents(ctx context.Context) (DocumentTree, error) {
 	return s.documents, nil
 }
 

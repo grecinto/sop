@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai/memory"
+	"github.com/sharedcode/sop"
 
 	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/database"
@@ -211,8 +211,40 @@ func handleListSpaceItems(w http.ResponseWriter, r *http.Request) {
 				if desc, found := payload["description"]; found {
 					t.Description = fmt.Sprint(desc)
 				}
+				if contentType, found := payload["content_type"]; found {
+					t.ContentType = fmt.Sprint(contentType)
+				}
 				if cat, found := payload["category"]; found {
 					t.Category = fmt.Sprint(cat)
+				}
+				if storageMode, found := payload["storage_mode"]; found {
+					t.StorageMode = fmt.Sprint(storageMode)
+				}
+				if payloadRef, found := payload["payload_ref"]; found {
+					t.PayloadRef = fmt.Sprint(payloadRef)
+				}
+				if t.PayloadRef == "" {
+					if filesystemRef, found := payload["filesystem_ref"]; found {
+						t.PayloadRef = fmt.Sprint(filesystemRef)
+					}
+				}
+				if cloudProvider, found := payload["cloud_provider"]; found {
+					t.CloudProvider = fmt.Sprint(cloudProvider)
+				}
+			}
+			if len(t.DocID) > 0 {
+				if docID, err := sop.ParseUUID(t.DocID.First()); err == nil {
+					if doc, err := memoryDb.Store.GetDocument(ctx, docID); err == nil && doc != nil {
+						if t.PayloadRef == "" && doc.PayloadRef != "" {
+							t.PayloadRef = doc.PayloadRef
+						}
+						if t.StorageMode == "" && doc.StorageMode != "" {
+							t.StorageMode = string(doc.StorageMode)
+						}
+						if t.CloudProvider == "" && doc.CloudSource.Provider != "" {
+							t.CloudProvider = doc.CloudSource.Provider
+						}
+					}
 				}
 			}
 			if len(val.Positions) > 0 {

@@ -23,8 +23,7 @@ import (
 type KnowledgeBase[T any] struct {
 	Store   MemoryStore[T]
 	Manager *MemoryManager[T]
-	// transaction is used by the convenience constructor to keep the underlying
-	// filesystem-backed stores alive for the lifetime of the KnowledgeBase.
+	// transaction stores the optional active transaction associated with this knowledge base.
 	transaction sop.Transaction
 	// MaxMathCategoryDistance specifies the max Euclidean distance to cluster centroids
 	// to avoid calling the LLM for category categorization. Set to 0.0 or less to disable
@@ -39,26 +38,33 @@ func (kb *KnowledgeBase[T]) Name() string {
 	return kb.Store.Name()
 }
 
-// SetTransaction attaches a transaction that should be committed or rolled back
-// when the KnowledgeBase is closed. This is primarily used by the convenience
-// constructor for the filesystem-backed default path.
+// SetTransaction associates an active transaction with this knowledge base.
 func (kb *KnowledgeBase[T]) SetTransaction(tx sop.Transaction) {
-	if kb != nil {
-		kb.transaction = tx
+	if kb == nil {
+		return
 	}
+	kb.transaction = tx
 }
 
-// Close commits any transaction owned by this KnowledgeBase.
-func (kb *KnowledgeBase[T]) Close(ctx context.Context) error {
-	if kb == nil || kb.transaction == nil {
+// Transaction returns the active transaction associated with this knowledge base.
+func (kb *KnowledgeBase[T]) Transaction() sop.Transaction {
+	if kb == nil {
 		return nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	return kb.transaction
+}
+
+func isNilGenericValue[T any](v T) bool {
+	value := reflect.ValueOf(v)
+	if !value.IsValid() {
+		return true
 	}
-	err := kb.transaction.Commit(ctx)
-	kb.transaction = nil
-	return err
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func uniqueCategories(cats []*Category) []*Category {

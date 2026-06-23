@@ -22,7 +22,7 @@ type store[T any] struct {
 	categoriesByDistance btree.BtreeInterface[DistanceKey, byte]
 	vectors              btree.BtreeInterface[VectorKey, Vector]
 	items                btree.BtreeInterface[ItemKey, Item[T]]
-	documents            btree.BtreeInterface[sop.UUID, Document]
+	documents            DocumentTree
 	textIndex            ai.TextIndex
 	llm                  LLM[T]
 	domainReference      []float32
@@ -47,7 +47,7 @@ func NewStore[T any](
 		categoriesByDistance: categoriesByDistance,
 		vectors:              vectors,
 		items:                items,
-		documents:            documents,
+		documents:            asDocumentTree(documents),
 	}
 }
 

@@ -8,6 +8,39 @@ import (
 	"github.com/sharedcode/sop/btree"
 )
 
+// DocumentTree is the logical UUID-keyed document-store interface for canonical documents.
+// The concrete implementation may use an internal composite key with chunk indices
+// to stream large payloads, but callers still interact with documents by UUID.
+type DocumentTree interface {
+	btree.BtreeInterface[sop.UUID, Document]
+	GetDocumentChunkMetadata(key sop.UUID) ([]DocumentChunkMetadata, error)
+	GetDocumentChunk(key sop.UUID, chunkIndex int) ([]byte, error)
+}
+
+// plainDocumentTree adapts a standard UUID-keyed B-tree to the DocumentTree contract.
+// It exposes no chunk metadata for non-streaming backends.
+type plainDocumentTree struct {
+	btree.BtreeInterface[sop.UUID, Document]
+}
+
+func asDocumentTree(inner btree.BtreeInterface[sop.UUID, Document]) DocumentTree {
+	if inner == nil {
+		return nil
+	}
+	if dt, ok := inner.(DocumentTree); ok {
+		return dt
+	}
+	return &plainDocumentTree{BtreeInterface: inner}
+}
+
+func (p *plainDocumentTree) GetDocumentChunkMetadata(key sop.UUID) ([]DocumentChunkMetadata, error) {
+	return nil, nil
+}
+
+func (p *plainDocumentTree) GetDocumentChunk(key sop.UUID, chunkIndex int) ([]byte, error) {
+	return nil, nil
+}
+
 // Database is an interface that allows the memory layer to orchestrate its own batched transactions.
 type Database interface {
 	ai.Database
@@ -112,8 +145,8 @@ type MemoryStore[T any] interface {
 	// Content returns the Content B-Tree for advanced manipulation (The actual Item Data).
 	Items(ctx context.Context) (btree.BtreeInterface[ItemKey, Item[T]], error)
 
-	// Documents returns the Documents B-Tree for reading the raw canonical documents.
-	Documents(ctx context.Context) (btree.BtreeInterface[sop.UUID, Document], error)
+	// Documents returns the streaming-capable document tree for raw canonical documents.
+	Documents(ctx context.Context) (DocumentTree, error)
 
 	// UpsertDocument adds or updates a full canonical document.
 	UpsertDocument(ctx context.Context, doc Document) error

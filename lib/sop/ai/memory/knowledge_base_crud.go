@@ -249,6 +249,27 @@ func (kb *KnowledgeBase[T]) DeleteItems(ctx context.Context, itemKeys []ItemKey)
 		return err
 	}
 	for _, key := range itemKeys {
+		found, err := tree.Find(ctx, key, false)
+		if err != nil {
+			return err
+		}
+		if found {
+			item, err := tree.GetCurrentValue(ctx)
+			if err != nil {
+				return err
+			}
+			for _, docIDStr := range item.DocID {
+				if parsed, err := sop.ParseUUID(docIDStr); err == nil {
+					docTree, err := kb.Store.Documents(ctx)
+					if err != nil {
+						return err
+					}
+					if _, err := docTree.Remove(ctx, parsed); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		_, _ = tree.Remove(ctx, key)
 	}
 	return nil

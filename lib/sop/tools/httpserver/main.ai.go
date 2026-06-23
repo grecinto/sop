@@ -16,14 +16,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
-	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/embed"
 
-	_ "github.com/sharedcode/sop/ai/generator"
 	"github.com/sharedcode/sop/ai/memory"
+	_ "github.com/sharedcode/sop/ai/generator"
 	"github.com/sharedcode/sop/ai/obfuscation"
 	"github.com/sharedcode/sop/btree"
 	"github.com/sharedcode/sop/database"
@@ -452,15 +452,15 @@ func resolveContextAndAgent(ctx context.Context, req *aiChatRequest, sendEvent f
 	if req.Agent == "" {
 		req.Agent = "copilot"
 	}
+	if req.SessionID == "" {
+		req.SessionID = uuid.New().String()
+	}
 	blueprint, exists := loadedAgents[req.Agent]
 	if !exists {
 		msg := fmt.Sprintf("Agent '%s' is not initialized or not found.", req.Agent)
 		log.Info("Response: Agent Not Found", "error", msg)
 		sendEvent("error", msg)
 		return nil, fmt.Errorf("agent not found")
-	}
-	if req.SessionID == "" {
-		req.SessionID = uuid.New().String()
 	}
 	return blueprint, nil
 }
@@ -842,10 +842,15 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 	// ctx is passed in
 
 	// Try to find the file in common locations
+	cwd, _ := os.Getwd()
 	pathsToTry := []string{
 		configPath,
-		filepath.Join("..", "..", configPath),            // From tools/httpserver
-		filepath.Join("..", configPath),                  // From tools
+		filepath.Join(cwd, configPath),
+		filepath.Join(cwd, "..", configPath),
+		filepath.Join(cwd, "..", "..", configPath),
+		filepath.Join(cwd, "..", "..", "..", configPath),
+		filepath.Join("/Volumes/T7/sop-cloud", configPath),
+		filepath.Join("/Volumes/T7/sop", configPath),
 		filepath.Join("/Users/grecinto/sop", configPath), // Absolute fallback
 	}
 
@@ -960,7 +965,7 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 		}
 		svc, err := agent.NewFromConfig(ctx, agentCfg, agent.Dependencies{
 			AgentRegistry: registry,
-			SystemDB:      sysDB,
+			SystemDB:      nil,
 			Databases:     databases,
 		})
 		return svc, err
@@ -1012,7 +1017,7 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 	// Initialize the main agent
 	mainAgent, err := agent.NewFromConfig(ctx, *cfg, agent.Dependencies{
 		AgentRegistry: registry,
-		SystemDB:      sysDB,
+		SystemDB:      nil,
 		Databases:     databases,
 	})
 	if err != nil {

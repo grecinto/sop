@@ -191,11 +191,16 @@ func handleUpdateSpaceItem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	payloadData := cloneDataMap(mergedData)
 	newItem := memory.Item[map[string]any]{
 		ID:         itemID,
 		CategoryID: existingItem.CategoryID,
 		Summaries:  summaries,
-		Data:       mergedData,
+		Data:       payloadData,
+	}
+	if err := ensureDocumentReference(ctx, kb, &newItem, payloadData); err != nil {
+		http.Error(w, "Failed to persist document reference: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	err = kb.Store.UpsertByCategoryPath(ctx, categoryName, newItem, vecs)

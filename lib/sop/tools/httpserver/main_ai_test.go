@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
 )
 
 func TestInitializeRequest_UsesAuthenticatedUserID(t *testing.T) {
@@ -39,5 +42,28 @@ func TestConstructPayload_PreservesRawUserMessage(t *testing.T) {
 	}
 	if got := strings.TrimSpace(fullMessage); got != req.Message {
 		t.Fatalf("expected raw user message to stay untouched, got %q want %q", got, req.Message)
+	}
+}
+
+func TestLoadAgentFindsCopilotConfigFromToolsWorkingDirectory(t *testing.T) {
+	oldLoadedAgents := loadedAgents
+	loadedAgents = make(map[string]ai.Agent[map[string]any])
+	defer func() { loadedAgents = oldLoadedAgents }()
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	toolsDir := filepath.Join(oldWd, "..")
+	if err := os.Chdir(toolsDir); err != nil {
+		t.Fatalf("Chdir(%q) error = %v", toolsDir, err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	if err := loadAgent(context.Background(), "copilot", "ai/data/copilot_pipeline.json"); err != nil {
+		t.Fatalf("loadAgent() error = %v", err)
+	}
+	if _, ok := loadedAgents["copilot"]; !ok {
+		t.Fatal("expected copilot agent to be registered")
 	}
 }

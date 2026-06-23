@@ -216,6 +216,41 @@ func TestBatchItemsAndSearch(t *testing.T) {
 	}
 }
 
+func TestDeleteItems_CleansUpAssociatedDocument(t *testing.T) {
+	ctx := context.Background()
+	s := prepareTestStore()
+	kb := &KnowledgeBase[string]{Store: s}
+
+	catID := sop.NewUUID()
+	itemID := sop.NewUUID()
+	if err := kb.UpsertCategories(ctx, []UpsertCategoryParam{{Category: &Category{ID: catID, Name: "Docs"}}}); err != nil {
+		t.Fatalf("UpsertCategories failed: %v", err)
+	}
+
+	docID := sop.NewUUID()
+	doc := Document{ID: docID, StorageMode: DocumentStorageModeFilesystemReference, PayloadRef: "/tmp/example.pdf"}
+	if err := s.UpsertDocument(ctx, doc); err != nil {
+		t.Fatalf("UpsertDocument failed: %v", err)
+	}
+
+	item := Item[string]{ID: itemID, CategoryID: catID, DocID: DocIDs{docID.String()}, Data: "payload", Summaries: []string{"summary"}}
+	if err := kb.UpsertItems(ctx, []UpsertItemParam[string]{{CategoryID: catID, Item: &item}}); err != nil {
+		t.Fatalf("UpsertItems failed: %v", err)
+	}
+
+	if err := kb.DeleteItems(ctx, []ItemKey{{CategoryID: catID, ItemID: itemID}}); err != nil {
+		t.Fatalf("DeleteItems failed: %v", err)
+	}
+
+	got, err := s.GetDocument(ctx, docID)
+	if err != nil {
+		t.Fatalf("GetDocument returned error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected associated document to be removed, got %#v", got)
+	}
+}
+
 func TestKnowledgeBase_SearchByPath_UsesSemanticFallbackPath(t *testing.T) {
 	ctx := context.Background()
 	base := prepareTestStore()

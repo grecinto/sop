@@ -11,6 +11,7 @@ github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3x
 github.com/prometheus/client_golang v1.19.1/go.mod h1:mP78NwGzrVks5S2H6ab8+ZZGJLZUq1hoULYBAYBw1Ho=
 github.com/prometheus/common v0.48.0/go.mod h1:0/KsvlIEfPQCQ5I2iNSAWKPZziNCvRs5EC6ILDTlAPc=
 github.com/prometheus/procfs v0.12.0/go.mod h1:pcuDEFsWDnvcgNzo4EEweacyhjeA9Zk3cnaOZAZEfOo=
+github.com/rogpeppe/go-internal v1.15.0/go.mod h1:DrUVZyrJU+txYW5/1kwtXQSMFio52ZOxX7yM1VHvnxs=
 github.com/russross/blackfriday/v2 v2.0.1/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
 github.com/sharedcode/sop/jsondb v0.0.0-20260623001643-cb8cd3bebb54/go.mod h1:wdpzg9OI5R8rHIZsh1vRCiG0o+CyhJ6dZRgjh6WNzFQ=
 github.com/sharedcode/sop/search v0.0.0-20260623001643-cb8cd3bebb54/go.mod h1:t7aFmVnV+++XB6s5wvCt5GUXnkrOaxWf7k25ljtvlc4=

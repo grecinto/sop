@@ -201,14 +201,77 @@ func (k DistanceKey) Compare(other any) int {
 // Document represents a large source asset (markdown file, text blob, PDF parsed text, etc).
 // It acts as the canonical reading interface to prevent bloated indexes and context-loss in RAG.
 // Multiple Items (with unique Vectors/Summaries) can point back to this same Document.
+type DocumentStorageMode string
+
+const (
+	DocumentStorageModeSpaceLocalStreaming  DocumentStorageMode = "space_local_streaming"
+	DocumentStorageModeStreamingStoreDocID  DocumentStorageMode = "streaming_store_docid"
+	DocumentStorageModeExternalMetadataOnly DocumentStorageMode = "external_metadata_only"
+	DocumentStorageModeFilesystemReference  DocumentStorageMode = "filesystem_reference"
+)
+
+// Document represents a large source asset (markdown file, text blob, PDF parsed text, etc).
+// It acts as the canonical reading interface to prevent bloated indexes and context-loss in RAG.
+// Multiple Items (with unique Vectors/Summaries) can point back to this same Document.
+type DocumentCloudSource struct {
+	Provider   string `json:"provider,omitempty"`
+	Bucket     string `json:"bucket,omitempty"`
+	ObjectKey  string `json:"object_key,omitempty"`
+	Region     string `json:"region,omitempty"`
+	AccessHint string `json:"access_hint,omitempty"`
+	URL        string `json:"url,omitempty"`
+}
+
 type Document struct {
-	ID          sop.UUID `json:"id"`
-	Title       string   `json:"title,omitempty"`
-	URL         string   `json:"url,omitempty"`
-	Source      string   `json:"source,omitempty"`
-	ContentType string   `json:"content_type,omitempty"` // e.g. "text/markdown", "text/plain"
-	Content     string   `json:"content,omitempty"`
-	Data        []byte   `json:"data,omitempty"` // For pure blobs, pdf binaries, etc
+	ID          sop.UUID            `json:"id"`
+	Title       string              `json:"title,omitempty"`
+	URL         string              `json:"url,omitempty"`
+	Source      string              `json:"source,omitempty"`
+	ContentType string              `json:"content_type,omitempty"` // e.g. "text/markdown", "text/plain"
+	Content     string              `json:"content,omitempty"`
+	Data        []byte              `json:"data,omitempty"` // For pure blobs, pdf binaries, etc
+	StorageMode DocumentStorageMode `json:"storage_mode,omitempty"`
+	PayloadRef  string              `json:"payload_ref,omitempty"`
+	CloudSource DocumentCloudSource `json:"cloud_source,omitempty"`
+}
+
+func (d Document) NormalizedStorageMode() DocumentStorageMode {
+	if d.StorageMode == "" {
+		return DocumentStorageModeSpaceLocalStreaming
+	}
+	return d.StorageMode
+}
+
+func (d Document) IsSpaceLocalStreaming() bool {
+	return d.NormalizedStorageMode() == DocumentStorageModeSpaceLocalStreaming
+}
+
+func (d Document) IsStreamingStoreDocID() bool {
+	return d.NormalizedStorageMode() == DocumentStorageModeStreamingStoreDocID
+}
+
+func (d Document) IsExternalMetadataOnly() bool {
+	return d.NormalizedStorageMode() == DocumentStorageModeExternalMetadataOnly
+}
+
+func (d Document) IsFilesystemReference() bool {
+	return d.NormalizedStorageMode() == DocumentStorageModeFilesystemReference
+}
+
+func (d Document) NormalizedCloudProvider() string {
+	provider := strings.ToLower(strings.TrimSpace(d.CloudSource.Provider))
+	if provider != "" {
+		return provider
+	}
+	if strings.HasPrefix(strings.ToLower(d.PayloadRef), "applecloud://") || strings.HasPrefix(strings.ToLower(d.PayloadRef), "icloud://") {
+		return "apple_cloud"
+	}
+	return ""
+}
+
+func (d Document) IsAppleCloud() bool {
+	provider := d.NormalizedCloudProvider()
+	return provider == "apple_cloud" || provider == "icloud"
 }
 
 // ChunkData is a standard struct designed for the generic T in Item[T],

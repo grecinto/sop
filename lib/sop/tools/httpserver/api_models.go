@@ -26,6 +26,13 @@ type AddSpaceItemRequest struct {
 	Data       map[string]any `json:"data"`
 }
 
+// AddSpaceItemUploadRequest carries multipart upload metadata for filesystem-backed items.
+type AddSpaceItemUploadRequest struct {
+	FileName string
+	Data     []byte
+	Size     int64
+}
+
 // AddSpaceItemsBatchRequest defines the payload for batch processing of space items.
 type AddSpaceItemsBatchRequest struct {
 	Items []AddSpaceItemRequest `json:"items"`
@@ -43,15 +50,19 @@ type UpdateSpaceItemRequest struct {
 // SpaceItemView defines the JSON model delivered to the UI for displaying Items.
 // It acts as a ViewModel rendering data originally stored generically inside Item[T].
 type SpaceItemView struct {
-	ID          string        `json:"id"`
-	DocID       memory.DocIDs `json:"doc_id,omitempty"`
-	CategoryID  string        `json:"category_id,omitempty"`
-	Category    string        `json:"category"`
-	Text        string        `json:"text"`
-	Description string        `json:"description"`
-	Summaries   []string      `json:"summaries,omitempty"`
-	Vector      []float32     `json:"vector,omitempty"`
-	VectorSize  int           `json:"vector_size,omitempty"`
+	ID            string        `json:"id"`
+	DocID         memory.DocIDs `json:"doc_id,omitempty"`
+	CategoryID    string        `json:"category_id,omitempty"`
+	Category      string        `json:"category"`
+	Text          string        `json:"text"`
+	Description   string        `json:"description"`
+	Summaries     []string      `json:"summaries,omitempty"`
+	Vector        []float32     `json:"vector,omitempty"`
+	VectorSize    int           `json:"vector_size,omitempty"`
+	ContentType   string        `json:"content_type,omitempty"`
+	StorageMode   string        `json:"storage_mode,omitempty"`
+	PayloadRef    string        `json:"payload_ref,omitempty"`
+	CloudProvider string        `json:"cloud_provider,omitempty"`
 }
 
 // TemplateMetadata defines the structure for space template info.

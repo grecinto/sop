@@ -20,10 +20,11 @@ type DocumentChunkMetadata struct {
 // many ordered chunks that are stored in the underlying B-tree and can be
 // reconstructed incrementally.
 type streamingDocumentBtree struct {
-	store *sd.StreamingDataStore[sop.UUID]
+	store     *sd.StreamingDataStore[sop.UUID]
+	chunkSize int
 }
 
-const DefaultDocumentChunkSize = sd.DefaultChunkSize
+const DefaultDocumentChunkSize = 1024 * 1024
 
 // NewStreamingDocumentBtree wraps an underlying chunked B-tree so Document values
 // are persisted as streamed JSON payloads instead of single large in-memory values.
@@ -32,14 +33,34 @@ func NewStreamingDocumentBtree(inner btree.BtreeInterface[sd.StreamingDataKey[so
 	if len(chunkSize) > 0 && chunkSize[0] > 0 {
 		size = chunkSize[0]
 	}
-	return &streamingDocumentBtree{store: sd.NewStreamingDataStore[sop.UUID](inner, size)}
+	return &streamingDocumentBtree{
+		store:     &sd.StreamingDataStore[sop.UUID]{BtreeInterface: inner},
+		chunkSize: size,
+	}
 }
 
 // DocumentChunkSizeForErasureConfig returns a chunk size tuned for the database's
 // erasure coding topology. More shards (more disks) use larger chunks; fewer shards
 // stay at the baseline 1MB minimum.
 func DocumentChunkSizeForErasureConfig(erasureConfig map[string]sop.ErasureCodingConfig) int {
-	return sop.IdealChunkSizeForErasureConfig(DefaultDocumentChunkSize, erasureConfig)
+	if len(erasureConfig) == 0 {
+		return DefaultDocumentChunkSize
+	}
+	maxShards := 0
+	for _, cfg := range erasureConfig {
+		totalShards := cfg.DataShardsCount + cfg.ParityShardsCount
+		if totalShards > maxShards {
+			maxShards = totalShards
+		}
+	}
+	switch {
+	case maxShards <= 3:
+		return DefaultDocumentChunkSize
+	case maxShards <= 6:
+		return 2 * DefaultDocumentChunkSize
+	default:
+		return 4 * DefaultDocumentChunkSize
+	}
 }
 
 func (s *streamingDocumentBtree) Add(ctx context.Context, key sop.UUID, value Document) (bool, error) {
@@ -278,7 +299,10 @@ func (s *streamingDocumentBtree) Count() int64 {
 	return count
 }
 
-func (s *streamingDocumentBtree) GetStoreInfo() *sop.StoreInfo {
+func (s *streamingDocumentBtree) GetStoreInfo() sop.StoreInfo {
+	if s.store == nil || s.store.BtreeInterface == nil {
+		return sop.StoreInfo{}
+	}
 	return s.store.BtreeInterface.GetStoreInfo()
 }
 

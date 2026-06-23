@@ -12,6 +12,7 @@ import (
 	"github.com/sharedcode/sop/btree"
 	"github.com/sharedcode/sop/common"
 	core "github.com/sharedcode/sop/database"
+	sd "github.com/sharedcode/sop/streamingdata"
 )
 
 func vectorKeyComparer(a, b memory.VectorKey) int {
@@ -148,12 +149,35 @@ func (db *Database) OpenKnowledgeBase(
 		return nil, err
 	}
 
-	// 5. Open Documents Store
+	// 5. Open Documents Store as a chunked streaming document tree, and wrap it
+	// with a filesystem-backed adapter so filesystem-reference documents can be
+	// served through the same public document-store interface.
 	docsStore := sop.ConfigureStore(fmt.Sprintf("%s/documents", name), true, btree.DefaultSlotLength, "dynamic canonical documents store", sop.BigData, "")
-	docsTree, err := openOrCreateBtree[sop.UUID, memory.Document](ctx, db, docsStore.Name, t, nil, docsStore)
+	chunkedDocsTree, err := openOrCreateBtree[sd.StreamingDataKey[sop.UUID], []byte](ctx, db, docsStore.Name, t, nil, docsStore)
 	if err != nil {
 		return nil, err
 	}
+	info := chunkedDocsTree.GetStoreInfo()
+	chunkSize := memory.DefaultDocumentChunkSize
+	if storedChunkSize, ok := info.GetCustomData("streaming_document_chunk_size"); ok {
+		switch v := storedChunkSize.(type) {
+		case int:
+			if v > 0 {
+				chunkSize = v
+			}
+		case int64:
+			if v > 0 {
+				chunkSize = int(v)
+			}
+		case float64:
+			if v > 0 {
+				chunkSize = int(v)
+			}
+		}
+	}
+	info.SetCustomData("streaming_document_chunk_size", chunkSize)
+	streamingDocsTree := memory.NewStreamingDocumentBtree(chunkedDocsTree, chunkSize)
+	docsTree := memory.NewDocumentBackendTree(streamingDocsTree)
 
 	// Assemble the storage engine
 	store := memory.NewStore(name, db, catsTree, catsByPathTree, catsByDistTree, vecsTree, itemsTree, docsTree)

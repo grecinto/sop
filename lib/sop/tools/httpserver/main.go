@@ -361,6 +361,7 @@ func main() {
 	http.HandleFunc("/login", handleLoginPage)
 	http.HandleFunc("/app", requireAuth(handleIndex))
 	http.HandleFunc("/viewer", requireAuth(handleViewer))
+	http.HandleFunc("/file-preview", requireAuth(handleFilePreview))
 	http.HandleFunc("/api/databases", withAuth(handleDatabases))
 	http.HandleFunc("/api/databases/update", withAuth(handleUpdateDatabase))
 	http.HandleFunc("/api/stores", withAuth(handleListStores))
@@ -2443,12 +2444,12 @@ func handleUpdateItem(w http.ResponseWriter, r *http.Request) {
 
 	// Apply persisted schema coercion before writing the value.
 	si := store.GetStoreInfo()
-	finalKey, err := coerceRecordKey(req.Key, si)
+	finalKey, err := coerceRecordKey(req.Key, &si)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	finalValue, err := coerceRecordValue(req.Value, si)
+	finalValue, err := coerceRecordValue(req.Value, &si)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -3349,12 +3350,12 @@ func handleWriteOperation(w http.ResponseWriter, r *http.Request, op string) {
 
 	// Apply persisted schema coercion before writing the item.
 	si := store.GetStoreInfo()
-	finalKey, err := coerceRecordKey(req.Key, si)
+	finalKey, err := coerceRecordKey(req.Key, &si)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	finalValue, err := coerceRecordValue(req.Value, si)
+	finalValue, err := coerceRecordValue(req.Value, &si)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -3452,16 +3453,16 @@ func handleWriteOperation(w http.ResponseWriter, r *http.Request, op string) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func coerceRecordKey(value any, info sop.StoreInfo) (any, error) {
+func coerceRecordKey(value any, info *sop.StoreInfo) (any, error) {
 	return coerceRecordField(value, info)
 }
 
-func coerceRecordValue(value any, info sop.StoreInfo) (any, error) {
+func coerceRecordValue(value any, info *sop.StoreInfo) (any, error) {
 	return coerceRecordField(value, info)
 }
 
-func coerceRecordField(value any, info sop.StoreInfo) (any, error) {
-	if value == nil || len(info.Schema) == 0 {
+func coerceRecordField(value any, info *sop.StoreInfo) (any, error) {
+	if value == nil || info == nil || len(info.Schema) == 0 {
 		return value, nil
 	}
 

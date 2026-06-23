@@ -204,9 +204,9 @@ func (d *documentBackendTree) Count() int64 {
 	return d.inner.Count()
 }
 
-func (d *documentBackendTree) GetStoreInfo() *sop.StoreInfo {
+func (d *documentBackendTree) GetStoreInfo() sop.StoreInfo {
 	if d.inner == nil {
-		return &sop.StoreInfo{}
+		return sop.StoreInfo{}
 	}
 	return d.inner.GetStoreInfo()
 }

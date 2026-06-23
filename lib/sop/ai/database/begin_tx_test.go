@@ -4,7 +4,7 @@ import (
     "context"
     "testing"
     "github.com/sharedcode/sop"
-    "github.com/sharedcode/sop/ai/database"
+    "github.com/grecinto/sop-cloud/ai/database"
 )
 
 func TestBeginTx_Double(t *testing.T) {
