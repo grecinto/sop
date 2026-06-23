@@ -22,6 +22,28 @@ func TestMediaPreviewRendererIsDefinedInTemplate(t *testing.T) {
 	}
 }
 
+func TestObjectValueFormRendererIsSharedAcrossTemplates(t *testing.T) {
+	part03Path := filepath.Join("templates", "scripts_part03.html")
+	part03Data, err := os.ReadFile(part03Path)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	part03Content := string(part03Data)
+	if !strings.Contains(part03Content, "renderObjectValueFormHtml") {
+		t.Fatalf("expected detail editor to reuse the shared object form renderer in %s", part03Path)
+	}
+
+	part04Path := filepath.Join("templates", "scripts_part04.html")
+	part04Data, err := os.ReadFile(part04Path)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	part04Content := string(part04Data)
+	if !strings.Contains(part04Content, "function renderObjectValueFormHtml") {
+		t.Fatalf("expected shared object form renderer helper in %s", part04Path)
+	}
+}
+
 func TestSpaceItemDisplayToggleIsInteractiveInTemplate(t *testing.T) {
 	path := filepath.Join("templates", "scripts_part01.html")
 	data, err := os.ReadFile(path)

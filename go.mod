@@ -1,6 +1,6 @@
 module github.com/grecinto/sop-cloud
 
-go 1.26
+go 1.26.4
 
 require (
 	github.com/google/uuid v1.6.0
@@ -9,6 +9,7 @@ require (
 	github.com/sharedcode/sop/ai v0.0.0
 	github.com/sharedcode/sop/jsondb v0.0.0
 	github.com/sharedcode/sop/search v0.0.0
+	github.com/yuin/goldmark v1.8.2
 	golang.org/x/crypto v0.38.0
 )
 
@@ -34,7 +35,6 @@ require (
 	github.com/sharedcode/sop/incfs v0.0.0 // indirect
 	github.com/sharedcode/sop/infs v0.0.0 // indirect
 	github.com/stoewer/go-strcase v1.2.0 // indirect
-	github.com/yuin/goldmark v1.8.2 // indirect
 	golang.org/x/exp v0.0.0-20230515195305-f3d0a9c9a5cc // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect

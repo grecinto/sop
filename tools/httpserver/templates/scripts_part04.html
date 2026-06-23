@@ -17,6 +17,27 @@
         }
     }
 
+    function renderObjectValueFormHtml(value) {
+        const keys = Object.keys(value || {});
+        let html = '<div id="value-form" style="display: flex; flex-wrap: wrap; gap: 8px; max-height: 400px; overflow-y: auto; padding-right: 2px; align-items: flex-start;">';
+        if (keys.length === 0) {
+            html += '<em>Empty Object</em>';
+        }
+        keys.forEach(key => {
+            let displayVal = value[key];
+            if (typeof displayVal === 'object' && displayVal !== null) {
+                displayVal = JSON.stringify(displayVal);
+            }
+            html += `
+                <div class="form-group" style="display: flex; flex-direction: column; flex: 1 1 240px; min-width: 220px;">
+                    <label class="form-label">${escapeHtml(key)}</label>
+                    <input type="text" class="value-input form-input" data-key="${escapeHtml(key)}" value="${escapeHtml(String(displayVal))}" oninput="markItemDirty()">
+                </div>`;
+        });
+        html += '</div>';
+        return html;
+    }
+
     function renderDetailValueEditor(value, forceJson = false) {
         const editor = document.getElementById('detail-value-editor');
         if (!editor) return;
@@ -28,24 +49,7 @@
             return;
         }
 
-        const keys = Object.keys(value || {});
-        let html = '<div id="value-form" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; padding-right: 2px;">';
-        if (keys.length === 0) {
-            html += '<em>Empty Object</em>';
-        }
-        keys.forEach(key => {
-            let displayVal = value[key];
-            if (typeof displayVal === 'object' && displayVal !== null) {
-                displayVal = JSON.stringify(displayVal);
-            }
-            html += `
-                <div class="form-group" style="display: flex; flex-direction: column;">
-                    <label class="form-label">${escapeHtml(key)}</label>
-                    <input type="text" class="value-input form-input" data-key="${escapeHtml(key)}" value="${escapeHtml(String(displayVal))}" oninput="markItemDirty()">
-                </div>`;
-        });
-        html += '</div>';
-        editor.innerHTML = html;
+        editor.innerHTML = `<div id="detail-value-editor">${renderObjectValueFormHtml(value)}</div>`;
     }
 
     function toggleDetailValueMode() {

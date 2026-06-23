@@ -416,29 +416,7 @@
                  valueHtml = renderScriptView(currentItemValue);
             } else {
                 // Form View
-                valueHtml = '<div id="detail-value-editor"><div id="value-form" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; padding-right: 2px;">';
-                const keys = Object.keys(currentItemValue);
-                if (keys.length === 0) {
-                     valueHtml += '<em>Empty Object</em>';
-                }
-                keys.forEach(key => {
-                    let val = currentItemValue[key];
-                    let displayVal = val;
-                    if (typeof val === 'object') {
-                        displayVal = JSON.stringify(val);
-                    }
-                    // Escape quotes for attribute
-                    const safeVal = String(displayVal).replace(/"/g, '&quot;');
-                    
-                    valueHtml += `
-                        <div class="form-group" style="display: flex; flex-direction: column;">
-                            <label class="form-label">${key}</label>
-                            <input type="text" class="value-input form-input" data-key="${key}" value="${safeVal}" 
-                                oninput="markItemDirty()">
-                        </div>
-                    `;
-                });
-                valueHtml += '</div></div>';
+                valueHtml = `<div id="detail-value-editor">${renderObjectValueFormHtml(currentItemValue)}</div>`;
             }
         } else {
             // Primitive View (Textarea)
