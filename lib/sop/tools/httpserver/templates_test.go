@@ -113,6 +113,31 @@ func TestSaveSpaceItemRequiresFullReferenceInTemplate(t *testing.T) {
 	}
 }
 
+func TestAddSpaceItemModalUsesStretchableBodyAndReferenceMetadataToggle(t *testing.T) {
+	modalsPath := filepath.Join("templates", "modals.html")
+	modalsData, err := os.ReadFile(modalsPath)
+	if err != nil {
+		t.Fatalf("read modal template: %v", err)
+	}
+	modalsContent := string(modalsData)
+	if !strings.Contains(modalsContent, "new-space-item-form-body") {
+		t.Fatalf("expected add-space-item modal to expose a dedicated stretchable form body in %s", modalsPath)
+	}
+	if !strings.Contains(modalsContent, "new-space-item-cloud-metadata-section") {
+		t.Fatalf("expected add-space-item modal to expose a cloud metadata section container in %s", modalsPath)
+	}
+
+	scriptsPath := filepath.Join("templates", "scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "toggleSpaceItemReferenceDetails") {
+		t.Fatalf("expected add-space-item modal to toggle reference metadata visibility in %s", scriptsPath)
+	}
+}
+
 func TestChatWidgetSupportsPinnedFloatingMode(t *testing.T) {
 	modalsPath := filepath.Join("templates", "modals.html")
 	modalsData, err := os.ReadFile(modalsPath)

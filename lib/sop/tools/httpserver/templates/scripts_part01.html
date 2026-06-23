@@ -3087,6 +3087,10 @@ function showAddSpaceItem() {
     sourceRadios.forEach(radio => {
         radio.onchange = toggleSpaceItemAssetSource;
     });
+    const providerSelect = document.getElementById('new-space-item-cloud-provider');
+    if (providerSelect) {
+        providerSelect.onchange = toggleSpaceItemReferenceDetails;
+    }
     toggleSpaceItemAssetSource();
 
     // Re-populate correct categories
@@ -3160,6 +3164,18 @@ function toggleSpaceItemAssetSource() {
     if (referenceSection) {
         referenceSection.style.display = selected === 'reference' ? 'block' : 'none';
     }
+    toggleSpaceItemReferenceDetails();
+}
+
+function toggleSpaceItemReferenceDetails() {
+    const metadataSection = document.getElementById('new-space-item-cloud-metadata-section');
+    const selected = document.querySelector('input[name="new-space-item-source"]:checked')?.value || 'upload';
+    if (!metadataSection) {
+        return;
+    }
+    const provider = document.getElementById('new-space-item-cloud-provider')?.value || '';
+    const shouldShowMetadata = selected === 'reference' && ['apple_cloud', 'google_cloud', 's3'].includes(provider);
+    metadataSection.style.display = shouldShowMetadata ? 'block' : 'none';
 }
 
 function browseSpaceItemReference() {
