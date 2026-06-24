@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
@@ -115,10 +117,23 @@ type ConversationThread struct {
 }
 
 // ShortTermMemory manages the history of conversation threads.
+type RuntimeCaveat struct {
+	ID             string
+	Kind           string
+	CategoryRoot   string
+	Summary        string
+	Details        string
+	Source         string
+	CreatedAt      int64
+	LastInjectedAt int64
+	Active         bool
+}
+
 type ShortTermMemory struct {
 	Threads            map[sop.UUID]*ConversationThread
 	Order              []sop.UUID // Maintains the sequence of threads
 	CurrentThreadID    sop.UUID   // The currently active thread
+	RuntimeCaveats     []RuntimeCaveat
 	LastRoutingState   *TaskContextClassification
 	LastMRUSnapshot    []MRUItem
 	LastRecipeSnapshot []RecipeItem
@@ -174,6 +189,103 @@ func (stm *ShortTermMemory) GetCurrentThread() *ConversationThread {
 		return nil
 	}
 	return stm.Threads[stm.CurrentThreadID]
+}
+
+func (stm *ShortTermMemory) AddCaveat(caveat string) {
+	stm.AddRuntimeCaveat(caveat, "", "caveat", "runtime_guidance", "runtime")
+}
+
+func (stm *ShortTermMemory) AddRuntimeCaveat(summary, details, kind, categoryRoot, source string) {
+	if stm == nil {
+		return
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return
+	}
+	if kind == "" {
+		kind = "caveat"
+	}
+	if categoryRoot == "" {
+		categoryRoot = "runtime_guidance"
+	}
+	if source == "" {
+		source = "runtime"
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(summary))
+	for i := range stm.RuntimeCaveats {
+		if strings.EqualFold(strings.TrimSpace(stm.RuntimeCaveats[i].Summary), summary) && strings.EqualFold(strings.TrimSpace(stm.RuntimeCaveats[i].CategoryRoot), categoryRoot) {
+			stm.RuntimeCaveats[i].Details = strings.TrimSpace(details)
+			stm.RuntimeCaveats[i].Kind = kind
+			stm.RuntimeCaveats[i].Source = source
+			stm.RuntimeCaveats[i].Active = true
+			stm.RuntimeCaveats[i].LastInjectedAt = time.Now().UnixMilli()
+			return
+		}
+		if strings.ToLower(strings.TrimSpace(stm.RuntimeCaveats[i].Summary)) == normalized && strings.EqualFold(strings.TrimSpace(stm.RuntimeCaveats[i].CategoryRoot), categoryRoot) {
+			stm.RuntimeCaveats[i].Details = strings.TrimSpace(details)
+			stm.RuntimeCaveats[i].Kind = kind
+			stm.RuntimeCaveats[i].Source = source
+			stm.RuntimeCaveats[i].Active = true
+			stm.RuntimeCaveats[i].LastInjectedAt = time.Now().UnixMilli()
+			return
+		}
+	}
+
+	stm.RuntimeCaveats = append(stm.RuntimeCaveats, RuntimeCaveat{
+		ID:             sop.NewUUID().String(),
+		Kind:           kind,
+		CategoryRoot:   categoryRoot,
+		Summary:        summary,
+		Details:        strings.TrimSpace(details),
+		Source:         source,
+		CreatedAt:      time.Now().UnixMilli(),
+		LastInjectedAt: time.Now().UnixMilli(),
+		Active:         true,
+	})
+}
+
+func (stm *ShortTermMemory) GetRuntimeCaveats(limit int) []RuntimeCaveat {
+	if stm == nil || len(stm.RuntimeCaveats) == 0 {
+		return nil
+	}
+	active := make([]RuntimeCaveat, 0, len(stm.RuntimeCaveats))
+	for _, caveat := range stm.RuntimeCaveats {
+		if caveat.Active {
+			active = append(active, caveat)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+	if limit > 0 && len(active) > limit {
+		active = active[len(active)-limit:]
+	}
+	return active
+}
+
+func (stm *ShortTermMemory) ClearRuntimeCaveats(categoryRoot string) int {
+	if stm == nil {
+		return 0
+	}
+	categoryRoot = strings.TrimSpace(strings.ToLower(categoryRoot))
+	if categoryRoot == "" {
+		count := len(stm.RuntimeCaveats)
+		stm.RuntimeCaveats = nil
+		return count
+	}
+	kept := stm.RuntimeCaveats[:0]
+	cleared := 0
+	for _, caveat := range stm.RuntimeCaveats {
+		if strings.EqualFold(strings.TrimSpace(caveat.CategoryRoot), categoryRoot) {
+			cleared++
+			continue
+		}
+		kept = append(kept, caveat)
+	}
+	stm.RuntimeCaveats = kept
+	return cleared
 }
 
 func (stm *ShortTermMemory) SetRoutingState(taskCtx *TaskContextClassification) {

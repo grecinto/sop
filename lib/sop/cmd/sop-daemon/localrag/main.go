@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/grecinto/sop-cloud/ai/database"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
+	"github.com/sharedcode/sop/ai/database"
 )
 
 func main() {
@@ -75,7 +75,7 @@ func main() {
 		}
 		dbOpts := sop.DatabaseOptions{StoresFolders: []string{dbPath}, Type: dbType}
 		sysDB := database.NewDatabase(dbOpts)
-		deps.SystemDB = sysDB.Database
+		deps.SystemDB = sysDB
 		deps.Databases = map[string]sop.DatabaseOptions{"default": dbOpts}
 	}
 

@@ -6,6 +6,12 @@ import (
 	"fmt"
 )
 
+var localCommandExecutor func(ctx context.Context, command, reasoning string) (string, error)
+
+func SetLocalCommandExecutor(fn func(ctx context.Context, command, reasoning string) (string, error)) {
+	localCommandExecutor = fn
+}
+
 const executeLocalCommandArgsSchema = `{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute on the user's local machine after approval."},"reasoning":{"type":"string","description":"Short explanation shown to the user for why this local command is needed."}},"required":["command"]}`
 
 const sendEmailArgsSchema = `{"type":"object","properties":{"to":{"type":"string","description":"Recipient email address."},"subject":{"type":"string","description":"Email subject line."},"body":{"type":"string","description":"Email body content."}},"required":["to"]}`
@@ -31,6 +37,10 @@ func (a *CopilotAgent) toolExecuteLocalCommand(ctx context.Context, args map[str
 
 	reasoningRaw, _ := args["reasoning"]
 	reasoning, _ := reasoningRaw.(string)
+
+	if localCommandExecutor != nil {
+		return localCommandExecutor(ctx, command, reasoning)
+	}
 
 	payload := map[string]any{
 		"action_type": "local_shell_execution",

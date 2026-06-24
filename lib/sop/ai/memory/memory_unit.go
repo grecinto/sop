@@ -30,7 +30,9 @@ type MemoryUnit struct {
 	stm *ShortTermMemoryStore
 }
 
-const MaxSTMEpisodeAge = 24 * time.Hour
+// MaxSTMEpisodeAge keeps STM bounded to short-horizon continuity rather than
+// long-lived history, which matches the lightweight memory plan.
+const MaxSTMEpisodeAge = time.Hour
 
 func NewMemoryUnit(agentID string) *MemoryUnit {
 	return &MemoryUnit{

@@ -1616,6 +1616,10 @@ func (a *CopilotAgent) epilogueAndCleanup(ctx context.Context, query string, int
 		persistCarryoverState(a.service.session.Memory, buildCarryoverState(ctx, a.service.session, a.brain, thread, query, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState))
 	}
 
+	if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		a.captureRuntimeCaveatsFromText(finalText)
+	}
+
 	// 8. Log Episode for SleepCycle (Episodic Memory)
 	if a.service != nil && a.service.EnableShortTermMemory {
 		thoughtPayload := map[string]any{
@@ -2212,6 +2216,18 @@ func (a *CopilotAgent) handleSlashCommand(ctx context.Context, query string, gen
 		return true, fmt.Sprintf("Verbose mode: **%s**", status), nil
 	}
 
+	if err == nil && (toolName == "clear_caveats" || toolName == "clear_guidance" || toolName == "clear_runtime_caveats") {
+		if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+			categoryRoot := ""
+			if v, ok := args["category"]; ok {
+				categoryRoot = fmt.Sprint(v)
+			}
+			cleared := a.service.session.Memory.ClearRuntimeCaveats(categoryRoot)
+			return true, fmt.Sprintf("Cleared %d runtime caveat(s).", cleared), nil
+		}
+		return true, "No active runtime memory available to clear.", nil
+	}
+
 	if err == nil && toolName != "" {
 		res, execErr := a.Execute(ctx, toolName, args)
 		if execErr != nil {
@@ -2572,8 +2588,15 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = askOutcome
 		}
 	}
+	if caveatContext := a.getCaveatContext(); caveatContext != "" {
+		if focusedExecutionContext != "" {
+			focusedExecutionContext = caveatContext + "\n\n" + focusedExecutionContext
+		} else {
+			focusedExecutionContext = caveatContext
+		}
+	}
 	if isGeneralTaskContext(&taskClassification) {
-		generalContext := "General Ask Context:\n- Treat this as an open-ended request with no specific Stores or Spaces target.\n- Use the conversation history, memory continuity, and available tools to ground the answer.\n- Ask a short clarification question only if the request is genuinely ambiguous."
+		generalContext := "General Ask Context:\n- This is an open-ended request that may cover any topic: coding, research, analysis, creative work, or general information.\n- Use the conversation history, memory continuity, and available tools to provide a helpful and accurate response.\n- Ask a short clarification question only if the request is genuinely ambiguous."
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = generalContext + "\n\n" + focusedExecutionContext
 		} else {
@@ -2736,6 +2759,68 @@ func summarizeTaskContextForLog(taskClassification TaskContextClassification) st
 		layers = append(layers, fmt.Sprintf("%s[%s]", layer.Name, strings.Join(layer.CRUD, "")))
 	}
 	return fmt.Sprintf("entity=%s domain=%s artifacts=%s layers=%s", taskClassification.Entity, taskClassification.Domain, strings.Join(artifacts, ","), strings.Join(layers, ","))
+}
+
+func (a *CopilotAgent) captureRuntimeCaveatsFromText(text string) {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return
+	}
+	for _, rawLine := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" {
+			continue
+		}
+		var summary, details, kind, categoryRoot string
+		switch {
+		case strings.HasPrefix(trimmed, "runtime_caveat:"):
+			kind = "caveat"
+			categoryRoot = "runtime_guidance"
+			summary = strings.TrimSpace(strings.TrimPrefix(trimmed, "runtime_caveat:"))
+		case strings.HasPrefix(trimmed, "guidance:"):
+			kind = "guidance"
+			categoryRoot = "runtime_guidance"
+			summary = strings.TrimSpace(strings.TrimPrefix(trimmed, "guidance:"))
+		case strings.HasPrefix(trimmed, "note:"):
+			kind = "note"
+			categoryRoot = "runtime_guidance"
+			summary = strings.TrimSpace(strings.TrimPrefix(trimmed, "note:"))
+		default:
+			continue
+		}
+		if detailIdx := strings.Index(summary, "|details:"); detailIdx >= 0 {
+			parts := strings.SplitN(summary, "|details:", 2)
+			summary = strings.TrimSpace(parts[0])
+			details = strings.TrimSpace(parts[1])
+		}
+		if summary == "" {
+			continue
+		}
+		a.service.session.Memory.AddRuntimeCaveat(summary, details, kind, categoryRoot, "llm_generated")
+	}
+}
+
+func (a *CopilotAgent) getCaveatContext() string {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return ""
+	}
+	caveats := a.service.session.Memory.GetRuntimeCaveats(3)
+	if len(caveats) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Runtime Guidance:\n")
+	for _, caveat := range caveats {
+		if caveat.CategoryRoot != "" {
+			sb.WriteString(fmt.Sprintf("- [%s] %s", strings.TrimSpace(caveat.CategoryRoot), strings.TrimSpace(caveat.Summary)))
+		} else {
+			sb.WriteString(fmt.Sprintf("- %s", strings.TrimSpace(caveat.Summary)))
+		}
+		if strings.TrimSpace(caveat.Details) != "" {
+			sb.WriteString(fmt.Sprintf(": %s", strings.TrimSpace(caveat.Details)))
+		}
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func (a *CopilotAgent) getSessionMemoryContext() string {
@@ -3298,7 +3383,7 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 	p = ai.GetSessionPayload(ctx)
 	preExistingTx := resolvePayloadTx(p, dbName)
 
-	if !dbFound && toolName != "list_databases" && toolName != "list_scripts" && toolName != "get_script_details" && toolName != "list_tools" && toolName != "handoff_to_avatar" {
+	if !dbFound && toolName != "list_databases" && toolName != "list_scripts" && toolName != "get_script_details" && toolName != "list_tools" && toolName != "handoff_to_avatar" && toolName != "execute_local_command" && toolName != "send_email" {
 		// Debugging
 		var keys []string
 		if a.systemDB != nil {

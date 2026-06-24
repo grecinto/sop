@@ -46,6 +46,7 @@ type Service struct {
 	// Feature Flags
 	EnableHistoryInjection bool
 	EnableShortTermMemory  bool
+	DisableBiomimicry      bool
 
 	// Session State
 	session *RunnerSession
@@ -110,6 +111,8 @@ func (s *Service) Clone() ai.Agent[map[string]any] {
 		registry:               clonedRegistry,
 		EnableObfuscation:      s.EnableObfuscation,
 		EnableHistoryInjection: s.EnableHistoryInjection,
+		EnableShortTermMemory:  s.EnableShortTermMemory,
+		DisableBiomimicry:      s.DisableBiomimicry,
 		session:                NewRunnerSession(),
 		lastKnowledgeRefresh:   make(map[string]time.Time),
 	}
@@ -131,9 +134,16 @@ func (s *Service) SetFeature(feature string, enabled bool) {
 		s.EnableShortTermMemory = enabled
 	case "history_injection":
 		s.EnableHistoryInjection = enabled
+	case "biomimicry":
+		s.DisableBiomimicry = !enabled
 	case "obfuscation":
 		s.EnableObfuscation = enabled
 	}
+}
+
+// BiomimicryEnabled reports whether the long-term consolidation/sleep-cycle path is enabled.
+func (s *Service) BiomimicryEnabled() bool {
+	return s == nil || !s.DisableBiomimicry
 }
 
 // ServiceAskOptions contains explicit, typed parameters for Service.Ask().

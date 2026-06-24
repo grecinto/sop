@@ -14,6 +14,13 @@ import (
 // StartSleepCycle launches background consolidators over the isolated Avatar STM
 // migrating Short-Term episodic memories into Semantic Long-Term memory.
 func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, idleTimeoutMinutes int, nowFn func() time.Time) {
+	if a == nil || a.Memory == nil {
+		return
+	}
+	if a.service != nil && !a.service.BiomimicryEnabled() {
+		log.Info("CopilotAgent: Biomimicry disabled; skipping sleep cycle consolidation", "agent_id", a.Memory.AgentID)
+		return
+	}
 	if nowFn == nil {
 		nowFn = time.Now
 	}

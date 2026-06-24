@@ -96,6 +96,37 @@ Architectural rule:
 - MRU is the transient projection layer for the next turn.
 - Restart/reboot should rebuild MRU consciously from persisted STM/LTM rather than blindly replaying stale MRU snapshots.
 
+### 7.5. Periodic Caveat Sourcer and Rehydration
+Beyond the current carry-over path (session memory, MRU replay, and direct prompt injection), we should add a periodic caveat sourcer that rehydrates the active conversation from durable guidance stored in LTM.
+
+**Design intent:**
+- Use the existing 1-hour STM retention window and MRU-based continuity as the short-horizon substrate.
+- Add a periodic caveat harness of roughly 1 hour that scans LTM for high-signal caveat, guidance, and operational-note entries.
+- Rehydrate the active conversation with a small, curated subset of those caveats so the model can behave more safely and more consistently across longer-running sessions.
+
+**Implementation shape:**
+- Caveats, guidance, notes, and operation-manual fragments should be stored under their own dedicated category root in LTM, separate from ordinary episodic memory.
+- The periodic sourcer should select a small number of active caveats based on recency, relevance, and current session context.
+- The sourced caveats should be injected into the prompt assembly path as lightweight guidance, not as a full transcript replay.
+- The system should support clearing these caveats on explicit user-directed commands (for example via a slash-command tool) so the guidance can be reset when a fresh task context warrants it.
+
+**Why this matters:**
+- It preserves the current feature of carrying caveats forward across the conversation.
+- It adds a durable, periodic rehydration loop so the agent can recover important guidance even after a session has been idle or the conversation has shifted focus.
+
+### 7.6. LLM-Defined Caveat Injection Timing
+The injection timing for caveats should not be hardcoded as a purely static rule. The LLM should be allowed to recommend when caveat guidance should be surfaced.
+
+**Proposed policy:**
+- The LLM may emit caveat events with structured metadata, including severity, scope, and a recommended re-injection interval.
+- The runtime can then use that metadata to decide whether a caveat should be injected immediately, re-injected on the next turn, or scheduled for a later periodic sweep.
+- This gives the system a hybrid behavior: deterministic carry-over for high-signal continuity, plus LLM-guided timing for adaptive relevance.
+
+**Practical rule of thumb:**
+- High-risk or high-precision caveats should be injected immediately and retained for a short window.
+- General behavioral guidance can be re-injected on a periodic cadence (for example every 1 hour) or when the session context shifts meaningfully.
+- The sourcer should prefer a small number of caveats per injection to avoid prompt bloat and preserve focus.
+
 ### 8. Persona-Influenced Refinement
 Later Sleep Cycle phases will incorporate persona influence deliberately.
 *   **Persona as Flavor, not Leakage:** Persona influence should shape how thoughts are summarized, grouped, and prioritized without contaminating unrelated domains or violating sandbox boundaries.

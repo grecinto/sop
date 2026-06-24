@@ -4,6 +4,12 @@
 
 Support signed-token enforcement for both HQ and the local RAG runtime, while preserving offline operation when HQ is unreachable.
 
+This protocol also supports the new local RAG deployment model:
+
+- a simple one-click standalone setup that defaults to a fully working local RAG runtime,
+- an advanced setup path using the existing Setup Wizard for more customized deployments,
+- and a governance model where HQ-authenticated sessions can still track usage and enforce limits while the local runtime remains autonomous and low-friction.
+
 ## Core model
 
 Use asymmetric signing for all access tokens.
@@ -64,6 +70,8 @@ When HQ is unreachable:
 4. For each Ask request, the host sends the signed token and a lightweight policy check.
 5. If HQ is online, HQ can refresh the policy and revoke the session centrally.
 6. If HQ is offline, the host relies on the cached signed token and the last synced policy snapshot.
+7. For the simple setup path, this flow is the only required user-facing setup step beyond authentication; the runtime can self-bootstrap into a default standalone local RAG configuration.
+8. For the advanced setup path, the user can still choose the richer Setup Wizard experience, but the token-based governance layer remains the same.
 
 ## Revocation strategy
 
