@@ -1,0 +1,44 @@
+{
+  "name": "sop-ai-desktop",
+  "version": "1.0.0",
+  "description": "SOP AI Desktop - Always-on-top floating AI chat window",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "package": "electron-builder"
+  },
+  "keywords": [
+    "AI",
+    "RAG",
+    "Desktop",
+    "Electron"
+  ],
+  "author": "SOP Cloud",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.sopcloud.ai-desktop",
+    "productName": "SOP AI Desktop",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "extraResources": [
+      {
+        "from": "../httpserver/httpserver",
+        "to": "bin/httpserver"
+      },
+      {
+        "from": "../httpserver/templates",
+        "to": "templates"
+      }
+    ]
+  }
+}
