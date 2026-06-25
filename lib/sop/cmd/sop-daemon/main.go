@@ -72,6 +72,8 @@ func main() {
 	configPath := flag.String("config", "", "Path to the SOP daemon configuration file")
 	policyMaxRequests := flag.Int("rate-limit-max-requests", 20, "Maximum local requests per session before enforcement kicks in")
 	policyWindow := flag.Duration("rate-limit-window", time.Minute, "Rate limit window for local daemon requests")
+	accessTokenTTL := flag.Duration("access-token-ttl", 15*time.Minute, "Access token expiry duration")
+	refreshTokenTTL := flag.Duration("refresh-token-ttl", 48*time.Hour, "Refresh token expiry duration (2 days default)")
 	flag.Parse()
 
 	// Set local command executor for agent tools
@@ -92,7 +94,18 @@ func main() {
 		log.Printf("Warning: could not load sopbackend config: %v", err)
 	}
 
-	// Disable authentication for local daemon (it's local-only, no auth needed)
+	// Initialize daemon authentication with JWT
+	authConfig := DaemonAuthConfig{
+		AccessTokenTTL:  *accessTokenTTL,
+		RefreshTokenTTL: *refreshTokenTTL,
+	}
+	authHandler, err := NewDaemonAuthHandler(authConfig)
+	if err != nil {
+		log.Fatalf("Failed to initialize daemon authentication: %v", err)
+	}
+	log.Printf("Daemon authentication initialized (access_ttl=%v, refresh_ttl=%v)", *accessTokenTTL, *refreshTokenTTL)
+
+	// Disable sopbackend's auth since we handle it ourselves
 	sopbackend.SetDisableAuth(true)
 
 	// Initialize agents from sopbackend
@@ -120,44 +133,64 @@ func main() {
 	mux := http.NewServeMux()
 	sopbackend.RegisterAllHandlers(mux)
 
-	// Wrap all handlers with CORS support
-	corsHandler := addCORSToAll(mux)
+	// Register daemon authentication endpoints (NO auth required)
+	mux.HandleFunc("/api/daemon/auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleBootstrap)))
+	mux.HandleFunc("/api/daemon/refresh", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleRefresh)))
 
-	// Override/Add daemon-specific handlers on the mux (before CORS wrapping)
-	mux.HandleFunc("/api/execute", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(executeHandler))))
-	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff))))
+	// Override/Add daemon-specific handlers WITH authentication
+	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))
+	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff)))))
 
-	// Override /api/ask with local RAG implementation
-	mux.HandleFunc("/api/ask", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Override /api/ask with local RAG implementation WITH authentication
+	mux.HandleFunc("/api/ask", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ragSvc == nil {
 			respondJSON(w, http.StatusServiceUnavailable, AskResponse{Error: "local RAG is not configured"})
 			return
 		}
 		ragSvc.handleAsk(w, r)
-	}))))
+	})))))
+
+	// Wrap all handlers with CORS support
+	corsHandler := addCORSToAll(mux)
 
 	addr := buildListenAddr("127.0.0.1", *port)
-	log.Printf("Starting SOP Desktop Daemon on %s", addr)
+	log.Printf("Starting SOP Daemon on %s", addr)
+	log.Printf("Authentication: JWT with bootstrap secret")
+	log.Printf("Token expiry: access=%v, refresh=%v", *accessTokenTTL, *refreshTokenTTL)
+	log.Printf("Auth endpoints: /api/daemon/auth, /api/daemon/refresh")
 	log.Printf("Full backend API available (via sopbackend)")
 	if ragSvc != nil {
-		log.Printf("Local RAG endpoint enabled at /api/ask")
+		log.Printf("Local RAG endpoint enabled at /api/ask (authenticated)")
 	} else {
 		log.Printf("Local RAG endpoint disabled")
 	}
-	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff")
-	log.Printf("Waiting for requests from SOP UI...")
+	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff (authenticated)")
+	log.Printf("Waiting for UI authentication...")
 
 	if err := http.ListenAndServe(addr, corsHandler); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
 
-// addCORSToAll wraps the handler with CORS support for all requests
+// addCORSToAll wraps the handler with CORS support for localhost only
 func addCORSToAll(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow CORS from any origin (since UI might be hosted anywhere)
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		origin := r.Header.Get("Origin")
+
+		// Only allow localhost origins for security
+		if origin != "" &&
+			(strings.HasPrefix(origin, "http://localhost") ||
+				strings.HasPrefix(origin, "http://127.0.0.1") ||
+				strings.HasPrefix(origin, "https://localhost") ||
+				strings.HasPrefix(origin, "https://127.0.0.1")) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		} else if origin != "" {
+			// Reject non-localhost origins
+			http.Error(w, "Forbidden: daemon only accepts localhost origins", http.StatusForbidden)
+			return
+		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == "OPTIONS" {
@@ -171,10 +204,22 @@ func addCORSToAll(handler http.Handler) http.Handler {
 
 func handleOptionsAndCORS(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Allow CORS from any origin (since UI might be hosted anywhere, e.g. sop.yourdomain.com)
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		origin := r.Header.Get("Origin")
+
+		// Only allow localhost origins for security
+		if origin != "" &&
+			(strings.HasPrefix(origin, "http://localhost") ||
+				strings.HasPrefix(origin, "http://127.0.0.1") ||
+				strings.HasPrefix(origin, "https://localhost") ||
+				strings.HasPrefix(origin, "https://127.0.0.1")) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		} else if origin != "" {
+			// Reject non-localhost origins
+			http.Error(w, "Forbidden: daemon only accepts localhost origins", http.StatusForbidden)
+			return
+		}
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

@@ -131,14 +131,14 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		log.Debug("withAuth: handler invocation", "handler", handlerName(next), "method", r.Method, "path", r.URL.Path)
-		
+
 		// Bypass authentication if disabled (for local daemon)
 		if config.DisableAuth {
 			log.Debug("withAuth: skipping authentication (disabled)", "path", r.URL.Path, "method", r.Method)
 			next(w, r)
 			return
 		}
-		
+
 		if !HasConfigFileOnDisk() {
 			log.Debug("withAuth: skipping bearer-token validation", "path", r.URL.Path, "method", r.Method, "reason", "config file not present on disk")
 			next(w, r)

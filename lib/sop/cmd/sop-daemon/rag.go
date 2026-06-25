@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
@@ -58,27 +59,26 @@ func ensureConfigPath(explicitPath string) (string, bool, error) {
 		return "", false, fmt.Errorf("create config directory: %w", err)
 	}
 
-	// Create default database path relative to config
-	dbPath := filepath.Join(filepath.Dir(defaultPath), "sop_data")
-	
+	// Create default SystemDB path relative to config
+	systemDBPath := filepath.Join(filepath.Dir(defaultPath), "system")
+
 	bootstrap := fmt.Sprintf(`{
   "port": 9090,
-  "databases": [
-    {
-      "name": "local",
-      "path": "%s",
-      "mode": "standalone"
-    }
-  ],
+  "system_db": {
+    "name": "system",
+    "path": "%s",
+    "mode": "standalone"
+  },
+  "databases": [],
   "pageSize": 40,
   "production_mode": true
 }
-`, dbPath)
+`, systemDBPath)
 	if err := os.WriteFile(defaultPath, []byte(bootstrap), 0o644); err != nil {
 		return "", false, fmt.Errorf("write default config: %w", err)
 	}
-	
-	log.Printf("Created default daemon config at %s with standalone database (no SOP KB)", defaultPath)
+
+	log.Printf("Created default daemon config at %s with standalone SystemDB", defaultPath)
 	return defaultPath, true, nil
 }
 
@@ -192,11 +192,31 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	if payload.SessionID == "" {
 		payload.SessionID = "local-daemon"
 	}
+
+	// Update session store with latest tokens from this request
+	// This ensures daemon always has fresh tokens for renewal
+	accessToken := strings.TrimSpace(req.Auth.AccessToken)
+	refreshToken := strings.TrimSpace(req.Auth.RefreshToken)
+	hqBaseURL := strings.TrimSpace(req.HQ.BaseURL)
+	if accessToken != "" || refreshToken != "" {
+		ctxKey := payload.SessionID
+		daemonSessionStore.mu.Lock()
+		daemonSessionStore.data[ctxKey] = daemonSessionContext{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			HQBaseURL:    hqBaseURL,
+			HQUserID:     strings.TrimSpace(req.HQ.UserID),
+			HQSessionID:  payload.SessionID,
+			LastUpdated:  time.Now().UTC(),
+		}
+		daemonSessionStore.mu.Unlock()
+	}
+
 	cfg := ai.NewConfigMap()
 	cfg.Set("payload", payload)
-	cfg.Set("access_token", strings.TrimSpace(req.Auth.AccessToken))
-	cfg.Set("refresh_token", strings.TrimSpace(req.Auth.RefreshToken))
-	cfg.Set("hq_base_url", strings.TrimSpace(req.HQ.BaseURL))
+	cfg.Set("access_token", accessToken)
+	cfg.Set("refresh_token", refreshToken)
+	cfg.Set("hq_base_url", hqBaseURL)
 	cfg.Set("hq_user_id", strings.TrimSpace(req.HQ.UserID))
 	cfg.Set("hq_session_id", strings.TrimSpace(req.HQ.SessionID))
 	ctx = context.WithValue(ctx, "session_payload", payload)

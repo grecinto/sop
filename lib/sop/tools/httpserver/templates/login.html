@@ -68,6 +68,7 @@
   <main class="card">
     <h1>SOP Login</h1>
     <p>Sign in to continue to the SOP workspace.</p>
+    <div id="session-message" style="display: none; padding: 12px; margin-bottom: 16px; background: rgba(79, 140, 255, 0.15); border: 1px solid rgba(79, 140, 255, 0.3); border-radius: 8px; color: var(--accent-2); font-size: 0.95rem;"></div>
     <form id="login-form" autocomplete="on">
       <label for="username">Username</label>
       <input id="username" name="username" type="text" placeholder="root" required>
@@ -78,10 +79,26 @@
     </form>
     <p class="muted">Tip: use the administrator credentials you configured during setup.</p>
   </main>
+  
+  {{template "scripts_daemon" .}}
+  
   <script>
     (function () {
       var form = document.getElementById('login-form');
       var errorBox = document.getElementById('login-error');
+      var messageBox = document.getElementById('session-message');
+      
+      // Parse URL parameters
+      var urlParams = new URLSearchParams(window.location.search);
+      var returnUrl = urlParams.get('return') || '/app';
+      var message = urlParams.get('message');
+      
+      // Display session message if present
+      if (message) {
+        messageBox.textContent = decodeURIComponent(message);
+        messageBox.style.display = 'block';
+      }
+      
       form.addEventListener('submit', function (event) {
         event.preventDefault();
         errorBox.textContent = '';
@@ -102,7 +119,24 @@
           });
         }).then(function (body) {
           if (body && body.access_token) {
-            window.location.assign('/app');
+            // Store tokens in localStorage so daemon handoff can access them
+            localStorage.setItem('sop_access_token', body.access_token);
+            if (body.refresh_token) {
+              localStorage.setItem('sop_refresh_token', body.refresh_token);
+            }
+            // Store user info for daemon handoff
+            if (body.user && body.user.username) {
+              localStorage.setItem('sop_userId', body.user.username);
+            }
+            
+            // Mark HQ login completed for daemon subscription monitoring
+            if (window.daemonAuth) {
+              window.daemonAuth.markHQLoginCompleted();
+              console.log('[Login] HQ login completed, daemon usage authorized for 48 hours');
+            }
+            
+            // Redirect to return URL or default /app
+            window.location.assign(returnUrl);
           } else {
             throw new Error('No access token returned by the server');
           }

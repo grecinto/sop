@@ -216,6 +216,9 @@ func main() {
 	http.HandleFunc("/viewer", sopbackend.RequireAuth(handleViewer))
 	http.HandleFunc("/file-preview", sopbackend.RequireAuth(handleFilePreview))
 
+	// Daemon Bootstrap API (for UI to authenticate with local daemon)
+	http.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
+
 	// Register backend API handlers
 	sopbackend.RegisterAllHandlers(http.DefaultServeMux)
 
@@ -366,4 +369,58 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		log.Error("Failed to execute chat template", "error", err)
 		http.Error(w, "Chat template execution failed", http.StatusInternalServerError)
 	}
+}
+
+// handleDaemonBootstrapSecret provides the daemon bootstrap secret to the UI
+// This allows the browser to authenticate with the local daemon
+func handleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get daemon config directory
+	var configDir string
+	if v := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(v) != "" {
+		configDir = filepath.Join(v, "sop")
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Error("Failed to get user home directory", "error", err)
+			http.Error(w, "Failed to get config directory", http.StatusInternalServerError)
+			return
+		}
+		configDir = filepath.Join(home, ".config", "sop")
+	}
+
+	bootstrapPath := filepath.Join(configDir, "daemon.bootstrap")
+
+	// Read bootstrap secret
+	secretBytes, err := os.ReadFile(bootstrapPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Debug("Bootstrap file does not exist", "path", bootstrapPath)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "Bootstrap file not found. Daemon may not be running.",
+			})
+			return
+		}
+		log.Error("Failed to read bootstrap file", "error", err)
+		http.Error(w, "Failed to read bootstrap file", http.StatusInternalServerError)
+		return
+	}
+
+	secret := strings.TrimSpace(string(secretBytes))
+	if secret == "" {
+		log.Error("Bootstrap file is empty")
+		http.Error(w, "Bootstrap file is empty", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"bootstrap_secret": secret,
+	})
 }
