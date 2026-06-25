@@ -69,6 +69,126 @@ func TestLocalAgentExecuteToolUsesDaemonCommandRunner(t *testing.T) {
 	}
 }
 
+func TestHandleUIHandoffReturnsWelcomeContextAndStoresSessionInfo(t *testing.T) {
+	ctxKey := "handoff-test"
+	daemonSessionStore.mu.Lock()
+	delete(daemonSessionStore.data, ctxKey)
+	daemonSessionStore.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"ping","auth":{"access_token":"token-123","refresh_token":"refresh-123"},"hq":{"base_url":"https://hq.example","user_id":"user-1","session_id":"handoff-test"}}`))
+	rr := httptest.NewRecorder()
+
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var resp UIHandoffResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.WelcomeContext == "" {
+		t.Fatalf("expected welcome context in handoff response, got %+v", resp)
+	}
+	if !strings.Contains(strings.ToLower(resp.WelcomeContext), "local") {
+		t.Fatalf("welcome context should describe the local RAG experience, got %q", resp.WelcomeContext)
+	}
+
+	daemonSessionStore.mu.Lock()
+	ctx, ok := daemonSessionStore.data[ctxKey]
+	daemonSessionStore.mu.Unlock()
+	if !ok {
+		t.Fatalf("expected handoff context to be stored for %q", ctxKey)
+	}
+	if ctx.AccessToken != "token-123" || ctx.RefreshToken != "refresh-123" {
+		t.Fatalf("unexpected stored tokens: %+v", ctx)
+	}
+	if ctx.HQBaseURL != "https://hq.example" || ctx.HQUserID != "user-1" || ctx.HQSessionID != ctxKey {
+		t.Fatalf("unexpected stored HQ context: %+v", ctx)
+	}
+}
+
+func TestHandleUIHandoffAllowsMissingAuthTokensForLocalRuntime(t *testing.T) {
+	ctxKey := "handoff-local-runtime"
+	daemonSessionStore.mu.Lock()
+	delete(daemonSessionStore.data, ctxKey)
+	daemonSessionStore.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"ping","auth":{"access_token":"","refresh_token":""},"hq":{"base_url":"https://hq.example","user_id":"user-2","session_id":"handoff-local-runtime"}}`))
+	rr := httptest.NewRecorder()
+
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var resp UIHandoffResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Accepted {
+		t.Fatalf("expected handoff to be accepted without auth tokens, got %+v", resp)
+	}
+	if resp.Error != "" {
+		t.Fatalf("expected no error, got %q", resp.Error)
+	}
+}
+
+type recordingAskAgent struct {
+	calls []struct {
+		ctx context.Context
+		cfg *ai.ConfigMap
+	}
+}
+
+func (a *recordingAskAgent) Open(ctx context.Context) error  { return nil }
+func (a *recordingAskAgent) Close(ctx context.Context) error { return nil }
+func (a *recordingAskAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
+	return nil, nil
+}
+func (a *recordingAskAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	a.calls = append(a.calls, struct {
+		ctx context.Context
+		cfg *ai.ConfigMap
+	}{ctx: ctx, cfg: cfg})
+	return "ok", nil
+}
+
+func TestLocalRAGAskPropagatesHandoffContextIntoAgentRequest(t *testing.T) {
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"sop:","auth":{"access_token":"token-123","refresh_token":"refresh-123"},"hq":{"base_url":"https://hq.example","user_id":"user-42","session_id":"sess-42"}}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected 1 ask call, got %d", len(agent.calls))
+	}
+
+	payload := ai.GetSessionPayload(agent.calls[0].ctx)
+	if payload == nil {
+		t.Fatal("expected session payload in ask context")
+	}
+	if payload.UserID != "user-42" || payload.SessionID != "sess-42" {
+		t.Fatalf("unexpected session payload: %+v", payload)
+	}
+	if agent.calls[0].cfg == nil {
+		t.Fatal("expected config map to be passed to agent ask")
+	}
+	if val, ok := agent.calls[0].cfg.Get("payload"); !ok {
+		t.Fatal("expected payload in config map")
+	} else if mappedPayload, ok := val.(*ai.SessionPayload); !ok || mappedPayload != payload {
+		t.Fatalf("unexpected payload in config map: %v", val)
+	}
+}
+
 func TestWithRateLimitRejectsRequestsAfterLocalBudgetIsExhausted(t *testing.T) {
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 1, Window: time.Minute})
 	handler := withRateLimit(reg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

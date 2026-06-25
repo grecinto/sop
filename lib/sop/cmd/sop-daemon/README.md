@@ -8,6 +8,54 @@ This directory contains the private host-side daemon for the overlay repo. It is
 - a local Ask endpoint for host-side RAG requests,
 - and the local topology/transport glue that connects the private runtime to the higher-level product experience.
 
+## Unified deployment model
+
+The platform is designed around a unified codebase that can run in multiple deployment environments without changing the product experience.
+
+- The same runtime can run on the user’s local host.
+- The same runtime can run in HQ-managed infrastructure.
+- The same runtime can run in a premise HQ or advanced self-hosted deployment.
+
+This creates a strong topology because the product is implemented once and deployed where it is most appropriate.
+
+### Local host mode
+
+- the user’s machine runs the local daemon and local RAG runtime,
+- Ask/LLM interactions and command-line tools run on the host device,
+- STM/LTM-style local memory is retained on the host,
+- and the experience remains fully functional even when HQ is not the active runtime.
+
+### HQ mode
+
+- the runtime operates in the shared HQ environment,
+- shared policy, identity, and coordination remain centralized,
+- and the same code path serves the shared product experience.
+
+### Premise HQ / advanced mode
+
+- the runtime is deployed behind the customer’s own HQ or premise infrastructure,
+- more of the data ownership and policy enforcement can stay on-premise,
+- and HQ can remain a control plane, coordination layer, or optional shared service.
+
+This is a strong and efficient architecture because it avoids parallel implementations while still supporting local, cloud, and advanced enterprise deployment needs. It is also a clear advantage over database-specific stacks: a SQLite-backed deployment and a Postgres-backed deployment often need different backend endpoints and database-management code, while SOP keeps the product on one unified codebase and one runtime contract.
+
+## Authentication model
+
+The daemon currently supports a simple local-first flow for one trusted client:
+
+- the client presents a signed bearer token,
+- the daemon validates it,
+- and the handshake accepts the renewal/HQ metadata without creating a daemon-owned session.
+
+For advanced mode, the design should evolve toward a Copilot-style model:
+
+- the client site authenticates with HQ or an identity provider,
+- the client receives a short-lived access token and a renewal/refresh mechanism,
+- the daemon validates that token and binds the request to a client identity and workspace context,
+- and each client can be isolated by tenant, workspace, or runtime scope.
+
+This keeps the daemon lightweight and stateless while still supporting multiple concurrent clients in a scalable way.
+
 ## Run locally
 
 ```bash

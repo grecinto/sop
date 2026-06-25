@@ -769,6 +769,7 @@ func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	}
 
 	sessionID := a.logAskStart(ctx, query, gen)
+	log.Info("Copilot Ask start", "query", query, "session_id", sessionID)
 
 	rawQuery := query
 	if rewrittenQuery, rewritten := a.tryMetaTalkBasedRouting(ctx, query); rewritten {
@@ -790,8 +791,10 @@ func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 
 	// TODO: process unpacking IsNewTopic from Options, and use that as added signal for routing in Gate 2 (MRU).
 
+	log.Info("Copilot Ask routing evaluation start", "query", query)
 	taskContext, err := a.evaluateRoutingGates(ctx, query, gen)
 	if err != nil {
+		log.Info("Copilot Ask routing evaluation failed", "query", query, "error", err)
 		return "", err
 	}
 	if taskContext == nil {
@@ -800,6 +803,7 @@ func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	log.Info("Copilot Ask Routing",
 		"routing_gate", taskContext.RoutingGate,
 		"task_context", summarizeTaskContextForLog(*taskContext),
+		"query", query,
 	)
 
 	// 4a. KB Search Direct Display (Case 1: Few matches)

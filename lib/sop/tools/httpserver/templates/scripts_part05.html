@@ -13,49 +13,183 @@
         localStorage.setItem('sop_chat_state', JSON.stringify(state));
     }
 
-    function toggleChatPin() {
-        const widget = document.getElementById('chat-widget');
-        const btn = document.getElementById('chat-pin-btn');
-        if (!widget || !btn) return;
-
-        const pinned = widget.classList.toggle('pinned');
-        btn.classList.toggle('active', pinned);
-        btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
-        btn.title = pinned ? 'Disable always-on-top' : 'Enable always-on-top';
-        widget.style.zIndex = pinned ? '2000' : '1000';
-        localStorage.setItem('sop_chat_pinned', pinned ? 'true' : 'false');
-    }
-
-    function applyChatPinState() {
-        const widget = document.getElementById('chat-widget');
-        const btn = document.getElementById('chat-pin-btn');
-        if (!widget || !btn) return;
-
-        const pinned = localStorage.getItem('sop_chat_pinned') === 'true';
-        widget.classList.toggle('pinned', pinned);
-        btn.classList.toggle('active', pinned);
-        btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
-        btn.title = pinned ? 'Disable always-on-top' : 'Enable always-on-top';
-        widget.style.zIndex = pinned ? '2000' : '1000';
-    }
-
     function getChatRuntimeMode() {
         const saved = localStorage.getItem('sop_chat_runtime');
         return saved === 'local' ? 'local' : 'hq';
     }
 
+    function getDaemonBaseURL() {
+        const saved = localStorage.getItem('sop_daemon_url');
+        return saved && saved.trim() ? saved.trim() : 'http://127.0.0.1:9090';
+    }
+
+    function setDaemonBaseURL(url) {
+        const value = (url || '').trim();
+        localStorage.setItem('sop_daemon_url', value || 'http://127.0.0.1:9090');
+        return localStorage.getItem('sop_daemon_url');
+    }
+
+    function persistChatRuntimeLocalURL() {
+        const input = document.getElementById('chat-runtime-local-url');
+        if (!input) return;
+        setDaemonBaseURL(input.value);
+    }
+
     function setChatRuntimeMode(mode) {
         const runtime = mode === 'local' ? 'local' : 'hq';
         localStorage.setItem('sop_chat_runtime', runtime);
-        const select = document.getElementById('chat-runtime-select');
-        if (select) select.value = runtime;
+        const checkbox = document.getElementById('chat-runtime-hq');
+        const input = document.getElementById('chat-runtime-local-url');
+        const domainSelect = document.getElementById('domain-select');
+        const formatSelect = document.getElementById('format-select');
+        if (checkbox) checkbox.checked = runtime === 'hq';
+        if (input) {
+            input.style.display = runtime === 'hq' ? 'none' : 'inline-block';
+            if (runtime === 'local' && !input.value) {
+                input.value = getDaemonBaseURL();
+            }
+        }
+        if (domainSelect) {
+            domainSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
+        }
+        if (formatSelect) {
+            formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
+        }
+        updateLocalAgentControls();
+        if (typeof window.reloadDatabases === 'function') {
+            window.reloadDatabases(true).catch(err => console.warn('Failed to refresh dashboard for runtime switch', err));
+        }
         return runtime;
     }
 
     function applyChatRuntimeSelection() {
-        const select = document.getElementById('chat-runtime-select');
-        if (!select) return;
-        select.value = getChatRuntimeMode();
+        const checkbox = document.getElementById('chat-runtime-hq');
+        const input = document.getElementById('chat-runtime-local-url');
+        const domainSelect = document.getElementById('domain-select');
+        const formatSelect = document.getElementById('format-select');
+        const runtime = getChatRuntimeMode();
+        if (checkbox) checkbox.checked = runtime === 'hq';
+        if (input) {
+            input.value = getDaemonBaseURL();
+            input.style.display = runtime === 'hq' ? 'none' : 'inline-block';
+        }
+        if (domainSelect) {
+            domainSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
+        }
+        if (formatSelect) {
+            formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
+        }
+        updateLocalAgentControls();
+    }
+
+    function getDaemonAskURL() {
+        return getDaemonBaseURL().replace(/\/$/, '') + '/api/ask';
+    }
+
+    function getDaemonHandoffURL() {
+        return getDaemonBaseURL().replace(/\/$/, '') + '/api/handoff';
+    }
+
+    function buildLocalDaemonHandoffPayload(query) {
+        const token = typeof getStoredSessionToken === 'function' ? getStoredSessionToken() : '';
+        const refreshToken = typeof getStoredRefreshToken === 'function' ? getStoredRefreshToken() : '';
+        return {
+            query: query || 'connect',
+            auth: {
+                access_token: token,
+                refresh_token: refreshToken
+            },
+            hq: {
+                base_url: window.location.origin || 'http://127.0.0.1:3000',
+                user_id: currentUserID || '',
+                session_id: currentSessionID || ''
+            }
+        };
+    }
+
+    async function reconnectToLocalAgent() {
+        const button = document.getElementById('chat-reconnect-local-agent');
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Connecting...';
+        }
+        try {
+            if (getChatRuntimeMode() === 'local') {
+                const response = await fetch(getDaemonHandoffURL(), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(buildLocalDaemonHandoffPayload('connect'))
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    throw new Error(text || 'Unable to reconnect to local agent');
+                }
+                const data = await response.json().catch(() => null);
+                if (data && data.welcome_context) {
+                    appendChatMessage('ai', data.welcome_context);
+                }
+                if (button) {
+                    button.textContent = 'Connected';
+                }
+                return true;
+            }
+
+            const response = await authFetch('/api/ai/test-connection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini' })
+            });
+            if (!response.ok) {
+                throw new Error('Unable to reconnect to HQ');
+            }
+            const data = await response.json().catch(() => null);
+            if (data && data.welcome_context) {
+                appendChatMessage('ai', data.welcome_context);
+            }
+            if (button) {
+                button.textContent = 'Connected';
+            }
+            return true;
+        } catch (err) {
+            if (button) {
+                button.textContent = 'Reconnect';
+            }
+            appendChatMessage('ai', 'Reconnect failed: ' + (err.message || 'unknown error'));
+            return false;
+        } finally {
+            if (button) {
+                setTimeout(() => {
+                    button.disabled = false;
+                    button.textContent = 'Reconnect';
+                }, 1500);
+            }
+        }
+    }
+
+    async function ensureLocalAgentReachable() {
+        const response = await fetch(getDaemonHandoffURL(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildLocalDaemonHandoffPayload('connect'))
+        });
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            throw new Error(text || 'Local agent is unavailable');
+        }
+        const data = await response.json().catch(() => null);
+        if (data && data.welcome_context && !window.__sopLocalWelcomeShown) {
+            window.__sopLocalWelcomeShown = true;
+            appendChatMessage('ai', data.welcome_context);
+        }
+        return true;
+    }
+
+    function updateLocalAgentControls() {
+        const button = document.getElementById('chat-reconnect-local-agent');
+        const runtimeMode = getChatRuntimeMode();
+        if (button) {
+            button.style.display = runtimeMode === 'local' ? 'inline-block' : 'none';
+        }
     }
 
     function resetChatPosition(forceDefault) {
@@ -166,7 +300,6 @@
     document.addEventListener('DOMContentLoaded', function() {
         const widget = document.getElementById('chat-widget');
         const header = widget.querySelector('.chat-header');
-        applyChatPinState();
         applyChatRuntimeSelection();
         let isDragging = false;
         let dragStartX, dragStartY;
@@ -714,6 +847,38 @@
         }
 
         try {
+            if (getChatRuntimeMode() === 'local') {
+                try {
+                    await ensureLocalAgentReachable();
+                } catch (err) {
+                    const loadingEl = document.getElementById(loadingId);
+                    if (loadingEl) loadingEl.remove();
+                    appendChatMessage('ai', 'Local agent unavailable: ' + (err.message || 'unknown error'));
+                    return;
+                }
+                const response = await fetch(getDaemonAskURL(), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: message,
+                        ...buildLocalDaemonHandoffPayload(message)
+                    })
+                });
+
+                const loadingEl = document.getElementById(loadingId);
+                if (loadingEl) loadingEl.remove();
+
+                if (!response.ok) {
+                    const text = await response.text();
+                    appendChatMessage('ai', 'Local RAG Error: ' + response.status + ' - ' + text);
+                    return;
+                }
+
+                const data = await response.json();
+                appendChatMessage('ai', data.answer || data.error || 'No response from local RAG.');
+                return;
+            }
+
             const response = await authFetch('/api/ai/chat', {
                 method: 'POST',
                 headers: applyAIConfigHeaders({ 'Content-Type': 'application/json' }, chatAIConfig),
@@ -1370,7 +1535,7 @@
         container.innerHTML = '<span style="color: #eab308;">⏳ Executing locally via SOP Daemon...</span>';
         
         try {
-            const res = await fetch('http://127.0.0.1:9090/api/execute', {
+            const res = await fetch(getDaemonBaseURL().replace(/\/$/, '') + '/api/execute', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command: command })

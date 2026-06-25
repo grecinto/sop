@@ -1,59 +1,87 @@
-# Distributed RAG Topology
+# Unified Topology for SOP Runtime
 
-This package captures the rollout primitives for a multi-tier RAG architecture:
+This package captures a unified deployment model for SOP in which the same runtime code can operate in multiple hosting environments without branching the product experience.
 
-1. HQ RAG in a managed cluster (for example on GoDaddy or AWS)
-2. Downloadable RAG for a user's host machine
-3. A UI in HQ that can download the host bundle and switch to it as the active server-side RAG endpoint
+The design supports three first-class deployment surfaces:
 
-## Core ideas
+1. Local host runtime on the user’s machine
+2. HQ-managed runtime in the cloud
+3. Premise HQ or self-hosted HQ runtime for advanced enterprise deployments
 
-- The same agent/config runtime powers both HQ and host deployments.
-- The host deployment is packaged as a portable bundle that contains the agent config and the local storage payload.
-- The HQ UI can direct Ask traffic to either the HQ cluster RAG or the downloaded host RAG by swapping the endpoint target.
-- Local RAG is intended to be a full-featured RAG runtime, not a reduced or degraded experience compared with HQ.
+## Core design principle
 
-## Local RAG deployment modes
+SOP is designed around a single, shared runtime and configuration model that can be hosted in different places while preserving one product experience.
 
-### 1. Simple / one-click setup
+- The same engine, agent runtime, and API contracts power local, HQ, and premise deployments.
+- The deployment target changes where the runtime lives, not how it behaves.
+- The UI can switch between runtime modes while preserving the same core workflow and the same underlying knowledge and policy model.
+- The local deployment is a full runtime, not a reduced or degraded mode.
 
-This is the default experience for most users.
+## Why this topology is strong
 
-- The system defaults to a standalone local deployment.
-- All key settings are pre-selected or defaulted so the user can complete setup in a single click.
-- The runtime should bootstrap the local RAG environment with minimal user interaction.
-- This path is optimized for speed, ease, and low-friction onboarding.
+This model is efficient because it avoids separate implementations for each environment.
 
-### 2. Advanced setup
+- One code set reduces maintenance and rollout risk.
+- One runtime contract keeps features and behavior consistent.
+- Local execution gives low latency, privacy, and offline-friendly operation.
+- HQ or premise HQ provides shared governance, central policy, and cross-user coordination.
+- Advanced deployments can move more of the runtime and data ownership to the customer environment while keeping the same software foundation.
+- This is a key advantage over database-specific stacks: in SQLite or Postgres, the backend endpoints, database management logic, and operational behavior often diverge, while SOP preserves a unified 100% code base across deployment surfaces.
 
-This path preserves the richer configuration experience already available through the existing Setup Wizard.
+## Deployment modes
 
-- Users can choose the full advanced flow when they want more control.
-- The setup wizard can still configure the full local RAG environment, including advanced options and custom deployment choices.
-- This path is intended for power users, enterprise deployments, or cases where specific tuning is needed.
+### 1. Local host mode
 
-## Deployment model
+This is the default experience for a single user or a personal workstation.
 
-The system should support both deployment styles:
+- The daemon runs on the user’s machine.
+- Local RAG, local command execution, and local workflow help are handled directly on that host.
+- The experience remains responsive and self-contained while still being able to hand off identity and context to HQ when needed.
+- This mode is ideal for privacy-sensitive use, low-latency interaction, and offline-friendly operation.
 
-- Standalone local RAG for simple, single-user, or low-friction deployments.
-- Clustered or more advanced local RAG deployments when the user explicitly chooses them through the advanced setup flow.
+### 2. HQ mode
 
-The important principle is that the platform remains flexible while defaulting toward a simple, autonomous onboarding experience.
+This is the shared cloud-hosted experience.
+
+- The runtime operates in HQ-managed infrastructure.
+- Shared policy, identity, and central orchestration remain in the HQ environment.
+- The same code path can serve the web experience and the connected runtime model without a separate implementation.
+- This mode is ideal for multi-user, managed, and centrally governed deployments.
+
+### 3. Premise HQ / advanced mode
+
+This is the enterprise and self-hosted extension of the same architecture.
+
+- The runtime is deployed behind the customer’s own HQ or premise infrastructure.
+- The deployment can keep more data, policy, and runtime ownership on-premise while still using the same unified code base.
+- HQ acts as the control plane, policy authority, or coordination layer when desired.
+- This mode is ideal for regulated environments, private networks, or organizations that want tighter infrastructure control.
+
+## Runtime model
+
+The system should support a unified runtime model across all deployment targets:
+
+- Same agent/config/runtime implementation
+- Same request/response contracts
+- Same authentication and policy hooks
+- Same workspace and knowledge model
+- Different hosting surfaces depending on the deployment
+
+That makes the platform flexible while keeping the implementation simple and robust.
 
 ## Authentication and governance
 
-Since each UI/RAG session is governed and protected by HQ authentication, the platform can track usage and enforce limits centrally.
+The topology preserves a strong governance model without forcing a split implementation.
 
-- Authentication is the primary requirement for setup and runtime access.
-- A signed token flow is sufficient to protect the local runtime without requiring intrusive manual setup.
-- HQ can enforce quotas, entitlement checks, and policy boundaries even when the local RAG instance is running independently.
-- The system should preserve minimal intrusion: users should not need to perform complicated manual configuration beyond authenticating and optionally selecting the advanced setup path.
+- Authentication and entitlement remain central even when the runtime is local.
+- HQ or premise HQ can enforce policy, quotas, and identity checks.
+- The local runtime can continue operating independently when connectivity is limited, with cached policy and local enforcement.
+- This creates a strong balance between autonomy and centralized control.
 
 ## Components
 
-- Bundle export: create a portable archive for a host deployment.
-- Remote Ask transport: send Ask requests to a remote endpoint.
-- Setup flow: support a one-click default standalone startup path plus the existing advanced Setup Wizard.
-- Policy enforcement: use authenticated token flow to gate access, track usage, and support future rate limiting or quota enforcement.
-- Future extension points: signed bundles, version pinning, manifest validation, remote health checks, and policy refresh.
+- Unified runtime packaging for local, HQ, and premise deployments
+- Shared transport and policy contracts between runtime surfaces
+- Bootstrap and setup flow for simple local onboarding and advanced enterprise deployment
+- Policy enforcement, identity continuity, and runtime switching across deployment modes
+- Future extension points for signed bundles, version pinning, health checks, and policy refresh

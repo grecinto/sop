@@ -488,6 +488,11 @@ func (a *CopilotAgent) getSubcategories(ctx context.Context, db *database.Databa
 }
 
 func (a *CopilotAgent) resolveDBForKB(ctx context.Context, kbName string) *database.Database {
+	kbName = ai.CanonicalKBName(kbName)
+	if kbName == "" {
+		return nil
+	}
+
 	p := ai.GetSessionPayload(ctx)
 	if p != nil && p.CurrentDB != "" {
 		if opts, ok := a.databases[p.CurrentDB]; ok {
@@ -498,5 +503,11 @@ func (a *CopilotAgent) resolveDBForKB(ctx context.Context, kbName string) *datab
 		}
 	}
 
-	return a.systemDB
+	if a.systemDB != nil {
+		if exists, _ := a.systemDB.KnowledgeBaseExists(ctx, kbName); exists {
+			return a.systemDB
+		}
+	}
+
+	return nil
 }

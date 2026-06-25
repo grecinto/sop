@@ -147,6 +147,23 @@ func TestLooksLikeSpecializedRoutingQuery_RecognizesSOPPrefixes(t *testing.T) {
 	}
 }
 
+func TestTrySpecializedFocusedRouting_SkipsMissingSOPKBWithoutFallback(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+	taskCtx, handled, err := ag.trySpecializedFocusedRouting(ctx, "omni:sop", "Omni", "Spaces", "")
+	if err != nil {
+		t.Fatalf("trySpecializedFocusedRouting failed: %v", err)
+	}
+	if handled {
+		t.Fatal("expected specialized focused routing to skip the missing SOP KB case")
+	}
+	if taskCtx != nil {
+		t.Fatalf("expected no task context for missing SOP KB, got %#v", taskCtx)
+	}
+}
+
 func TestRoutingKBName_UsesOmniTargetKB(t *testing.T) {
 	if got := routingKBName("omni:medical:skin diseases"); got != "medical" {
 		t.Fatalf("routingKBName() = %q, want %q", got, "medical")

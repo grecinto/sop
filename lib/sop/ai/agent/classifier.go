@@ -264,9 +264,10 @@ func (a *CopilotAgent) trySpecializedFocusedRouting(ctx context.Context, query, 
 
 	db := a.resolveDBForKB(ctx, kbName)
 	if db == nil {
-		log.Info("Specialized focused routing skipped: no KB database resolved", "kb_name", kbName)
+		log.Info("Specialized focused routing skipped: no KB database resolved", "kb_name", kbName, "query", query, "normalized_query", normalizedQuery)
 		return nil, false, nil
 	}
+	log.Info("Specialized focused routing proceeding with resolved DB", "kb_name", kbName, "query", query, "normalized_query", normalizedQuery)
 
 	// Special case: if normalizedQuery is empty (just "omni:KB"), show root categories
 	showSubcategories := false

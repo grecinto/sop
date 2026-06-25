@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
 func isExternalDocID(docID string) bool {
@@ -101,7 +102,7 @@ func handleViewer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbOpt, err := getDBOptions(r.Context(), dbName)
+	dbOpt, err := sopbackend.GetDBOptions(r.Context(), dbName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

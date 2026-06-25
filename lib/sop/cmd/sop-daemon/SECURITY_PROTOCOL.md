@@ -14,6 +14,48 @@ This protocol also supports the new local RAG deployment model:
 
 Use asymmetric signing for all access tokens.
 
+## Default vs advanced deployment split
+
+### Default mode
+
+The default deployment should keep the host device as the active execution surface:
+
+- Ask/LLM flows run locally on the user’s machine,
+- command-line tools execute on the host,
+- local STM/LTM-style memory remains on the host,
+- and Spaces/Stores remain centralized in HQ.
+
+This gives the user a personal local runtime while keeping shared records and shared workspace state central.
+
+### Advanced mode
+
+Advanced mode can support a more self-hosted setup:
+
+- the user can run a richer local or self-hosted RAG environment,
+- Spaces and Stores can live on the user side,
+- and HQ can act as a coordination plane, policy authority, or shared-service layer.
+
+This makes the system flexible for users who want more local ownership while preserving the simpler default path for most users.
+
+## Advanced mode: client-authenticated multi-client model
+
+For advanced deployments, the daemon should not rely on a daemon-owned session lifecycle for each client. Instead, the client site should authenticate with HQ or a central identity layer and present a short-lived access token plus renewal metadata.
+
+The daemon should then:
+
+- validate the access token,
+- extract the client identity, tenant context, and workspace scope,
+- bind that identity to the request context,
+- and route requests into a client-scoped runtime context.
+
+This aligns with a Copilot-style architecture where authentication is handled centrally and the local daemon remains a lightweight enforcement point. It is more scalable than maintaining a separate session store inside each daemon instance, while still allowing per-client isolation for rate limits, workspace state, and policy enforcement.
+
+In short:
+
+- simple mode: one trusted local client, minimal handshake, no daemon-side session lifecycle
+- advanced mode: multiple clients, client-side authentication, per-client identity and workspace isolation, centralized renewal and policy control
+
+
 - HQ owns the private signing key.
 - The host daemon only needs the public verification key.
 - Each token is short-lived and carries policy and scope information.

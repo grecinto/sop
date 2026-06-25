@@ -209,21 +209,25 @@
                 </span>
             </button>
 
-            <select id="domain-select" style="padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal; margin-left: 4px;" onclick="event.stopPropagation()" onchange="handleDomainChange(this)" title="Active Space">
+            <select id="domain-select" style="display: none; padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal; margin-left: 4px;" onclick="event.stopPropagation()" onchange="handleDomainChange(this)" title="Active Space">
                 <option value="" selected>None</option>
                 <option value="custom">Custom...</option>
             </select>
 
-            <select id="format-select" style="padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); font-size: 11px; font-weight: normal;" onclick="event.stopPropagation()" title="Response Format">
+            <select id="format-select" style="display: none; padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); font-size: 11px; font-weight: normal;" onclick="event.stopPropagation()" title="Response Format">
                 <option value="csv">CSV</option>
                 <option value="json">JSON</option>
                 <option value="table">Table</option>
             </select>
 
-            <select id="chat-runtime-select" style="padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal;" onclick="event.stopPropagation()" onchange="setChatRuntimeMode(this.value)" title="Runtime target for chat requests">
-                <option value="hq">HQ</option>
-                <option value="local">Local</option>
-            </select>
+            <div id="chat-runtime-controls" style="display: flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; padding-left: 8px;">
+                <label id="chat-runtime-toggle" style="display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal; cursor: pointer;" onclick="event.stopPropagation()" title="Use HQ runtime when checked, otherwise use local daemon">
+                    <input type="checkbox" id="chat-runtime-hq" checked onclick="event.stopPropagation(); setChatRuntimeMode(this.checked ? 'hq' : 'local')" style="margin: 0; cursor: pointer;">
+                    <span>HQ</span>
+                </label>
+                <input type="text" id="chat-runtime-local-url" value="http://127.0.0.1:9090" style="display: none; width: 114px; padding: 2px 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); font-size: 11px; flex-shrink: 0;" onblur="persistChatRuntimeLocalURL()" onclick="event.stopPropagation()" title="Local daemon URL">
+                <button id="chat-reconnect-local-agent" type="button" onclick="event.stopPropagation(); reconnectToLocalAgent()" style="display: none; padding: 2px 6px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; cursor: pointer;" title="Reconnect to the local agent">Reconnect</button>
+            </div>
             
             <!-- Global Feedback Controls (Hidden until next release) -->
             <!--
@@ -238,7 +242,6 @@
             <input type="hidden" id="agent-select" value="copilot">
         </div>
         <div class="chat-controls">
-            <button id="chat-pin-btn" class="chat-pin-btn" type="button" onclick="toggleChatPin()" title="Toggle always-on-top">📌</button>
             <button class="reset-btn" onclick="resetChatPosition(true)" title="Reset Position" style="font-size: 14px;">&#x21ba;</button>
             <button class="minimize-btn" onclick="toggleChatWidget()">_</button>
         </div>
@@ -288,35 +291,20 @@
 
     <div id="chat-history">
         <div class="chat-message ai">
-            Hello! I am your <strong>Butler</strong>. I can help you effortlessly generate intelligent, application-ready <strong>Spaces</strong> (Spaces), guide you through integrating SOP in your SDLC, and seamlessly assist you in managing underlying SOP B-Tree databases.<br><br>
-            <strong>SOP is a Database architecture built for AI.</strong> Whether you're quickly spinning up custom Spaces dynamically or executing complex NoSQL B-Tree transactions, I'm here to help.<br><br>
-            Type <strong>/list_tools</strong> to show all available tool commands.<br><br>
-            
-            <div style="margin: 0 0 6px 0;">
-                <em style="color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 2px;">Want to learn SOP?</em>
-                <em style="color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 2px;">Sample how to work with Spaces:</em>
-                <ul style="color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;">
-                    <li style="margin: 0 0 2px 0; padding: 0;">"Generate sample tasks and add them to my Tasks space"</li>
-                </ul>
-            </div>
-            <div style="margin: 0 0 6px 0;">
-                <em style="color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 2px;">Routing based prompt:</em>
-                <ul style="color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;">
-                    <li style="margin: 0 0 2px 0; padding: 0;">"sop:language bindings:c#"</li>
-                </ul>
-            </div>
-
-            {{if .HasDemo}}
-            <div style="margin: 0 0 0 0;">
-                <em style="color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 2px;">With Demo Data loaded, try these examples:</em>
-                <ul style="color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;">
-                    <li style="margin: 0 0 2px 0; padding: 0;">"Show me all users sorted by Age descending"</li>
-                    <li style="margin: 0 0 2px 0; padding: 0;">"Find orders for users with first_name 'John' with total amount > 500"</li>
-                    <li style="margin: 0 0 2px 0; padding: 0;">"Create a script named 'expensive_orders' to find orders over $1000"</li>
-                </ul>
-            </div>
-            {{end}}
-            
+            Hello! I am your local <strong>Daemon Assistant</strong>. I help you work with the local shell and the embedded RAG runtime directly from this desktop experience.<br><br>
+            I can help you:<br>
+            <ul style="color: var(--text-muted); font-size: 0.9em; margin: 0 0 8px 18px; padding: 0; list-style-position: outside;">
+                <li style="margin: 0 0 4px 0; padding: 0;">run shell commands and inspect command output</li>
+                <li style="margin: 0 0 4px 0; padding: 0;">answer questions using the local RAG knowledge you configured</li>
+                <li style="margin: 0 0 4px 0; padding: 0;">help you troubleshoot local workflows from the command line</li>
+            </ul>
+            Type <strong>/list_tools</strong> to see the commands available in this session.<br><br>
+            <em style="color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;">Try asking things like:</em>
+            <ul style="color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;">
+                <li style="margin: 0 0 2px 0; padding: 0;">"Show me the current directory and files"</li>
+                <li style="margin: 0 0 2px 0; padding: 0;">"Explain how to run the local daemon"</li>
+                <li style="margin: 0 0 2px 0; padding: 0;">"Help me inspect my local project structure"</li>
+            </ul>
         </div>
     </div>
     <div class="chat-input-area" style="position: relative;">

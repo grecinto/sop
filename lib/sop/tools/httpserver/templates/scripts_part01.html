@@ -633,22 +633,58 @@
     let currentKeyColumnWidth = '45%';
     let columnWidths = [];
     let availableDatabases = [];
+    let runtimeRefreshPayload = null;
+    let lastRuntimeMode = null;
     const CHIP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M5 0a.5.5 0 0 1 .5.5V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2A2.5 2.5 0 0 1 14 4.5h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14a2.5 2.5 0 0 1-2.5 2.5v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14A2.5 2.5 0 0 1 2 11.5H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2A2.5 2.5 0 0 1 4.5 2V.5A.5.5 0 0 1 5 0zm-.5 3A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 11.5 3h-7zM5 6.5A1.5 1.5 0 0 1 6.5 5h3A1.5 1.5 0 0 1 11 6.5v3A1.5 1.5 0 0 1 9.5 11h-3A1.5 1.5 0 0 1 5 9.5v-3z"/></svg>`;
+
+    function getCurrentRuntimeMode() {
+        return (typeof getChatRuntimeMode === 'function' ? getChatRuntimeMode() : 'hq');
+    }
+
+    async function loadRuntimeRefreshPayload() {
+        if (typeof getChatRuntimeMode === 'function' && getChatRuntimeMode() === 'local') {
+            const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+            const response = await fetch(`${daemonBase}/api/runtime/refresh`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                credentials: 'omit'
+            });
+            if (!response.ok) {
+                const text = await response.text().catch(() => '');
+                throw new Error(text || `Runtime refresh failed (${response.status})`);
+            }
+            return await response.json();
+        }
+        return await apiCall('/api/runtime/refresh');
+    }
 
     // Load Databases on Start
     // Refactored into a reusable function to support dynamic database switching
     window.reloadDatabases = function(autoSelect = true) {
-        return apiCall('/api/databases')
-            .then(databases => {
+        const runtimeMode = getCurrentRuntimeMode();
+        if (lastRuntimeMode && lastRuntimeMode !== runtimeMode) {
+            currentDatabase = null;
+            currentStore = null;
+            localStorage.removeItem('sop_current_database');
+        }
+        lastRuntimeMode = runtimeMode;
+
+        return loadRuntimeRefreshPayload()
+            .then(payload => {
+                runtimeRefreshPayload = payload || null;
+                const databases = payload && Array.isArray(payload.databases) ? payload.databases : [];
                 availableDatabases = databases;
 
                 let systemDB = databases ? databases.find(d => d.is_system) : null;
                 let sysName = systemDB ? systemDB.name : "system";
 
-                return apiCall(`/api/spaces?database=${encodeURIComponent(sysName)}`)
+                // Load space list - data-driven approach works for both local and HQ modes
+                const loadSpaceList = apiCall(`/api/spaces?database=${encodeURIComponent(sysName)}`)
                     .then(res => (res && res.data) ? res.data : [])
-                    .catch(e => [])
-                    .then(spaces => {
+                    .catch(() => []);
+
+                return loadSpaceList.then(spaces => {
                         // Build a warning alert for missing databases
                         let warnings = [];
                         if (databases && databases.length > 0) {
@@ -659,7 +695,7 @@
                             });
                         }
                         
-                        // Check if SOP KB exists in the System DB
+                        // Check for missing SOP KB - data-driven approach
                         if (databases && databases.length > 0 && !spaces.includes("SOP")) {
                             warnings.push("• SOP KB (KnowledgeBase) Space is missing from the System Database.");
                         }
@@ -825,10 +861,12 @@
                 }
 
                 if (autoSelect) {
-                    // Persistence Logic
+                    const preferredDB = payload && payload.selected_database ? payload.selected_database : null;
                     const savedDB = localStorage.getItem('sop_current_database');
-                    const targetDB = databases.find(d => d.name === savedDB);
-                    
+                    const preferredTarget = preferredDB ? databases.find(d => d.name === preferredDB) : null;
+                    const savedTarget = savedDB ? databases.find(d => d.name === savedDB) : null;
+                    const targetDB = preferredTarget || savedTarget;
+
                     let finalDBVal = null;
 
                     if (targetDB) {
@@ -838,7 +876,7 @@
                     } else if (systemDBs.length > 0) {
                         finalDBVal = systemDBs[0].name;
                     }
-                    
+
                     if (finalDBVal) {
                          selectDatabase(finalDBVal);
                          // Update UI States
@@ -846,7 +884,7 @@
                              let label = finalDBVal;
                              const finalDB = databases.find(d => d.name === finalDBVal);
                              document.getElementById('db-chip-label').textContent = label;
-                             
+
                              // Toggle Icon for Initial Load
                              const icon = document.getElementById('db-chip-icon');
                              if (icon) {
@@ -993,7 +1031,8 @@
         // Reset DB Options
         document.getElementById('db-options-section').style.display = 'none';
         document.getElementById('db-options-content').innerHTML = 'Loading...';
-        
+
+        // Fetch stores - data-driven approach works for both local and HQ modes
         apiCall(`/api/stores?database=${encodeURIComponent(name)}&_=${Date.now()}`)
             .then(bundle => {
                 let stores = bundle.data || [];

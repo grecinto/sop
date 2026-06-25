@@ -1222,30 +1222,55 @@ Execution focus for item #2:
 - keep the orchestration policy provider-neutral
 - use GPT support early to expose missing shared abstractions before further provider-specific tuning
 
+### Caveat policy and runtime guidance
+
+We should define a caveat as a structured, action-oriented reminder that captures a recurring failure mode, risky assumption, or recovery pattern so the agent can avoid repeating it. A caveat is not just a note; it should encode a concrete corrective action and the context in which the guidance should be re-injected.
+
+Suggested policy:
+
+- A caveat should be created when an event is both meaningful and likely to recur: a retrieval miss, empty/low-confidence result set, tool failure, schema mismatch, auth/permission issue, contradictory evidence, or a repeated LLM-side mistake that the agent should avoid.
+- Detection should be hybrid. Some cases are best detected deterministically at the RAG/tooling layer (for example: empty retrieval, failed fetch, tool timeout, permission error, unsupported query shape, repeated downstream error). Other cases are best surfaced by the LLM when it recognizes a pattern or a recovery action that should be remembered.
+- The agent should not rely on the LLM to infer every caveat automatically. The preferred pattern is:
+  1. RAG/tooling detects a deterministic event and emits a structured caveat candidate.
+  2. The LLM can optionally register a higher-level caveat through a dedicated tool or tool-like action when it observes a nuanced recovery pattern.
+  3. The system stores the caveat in STM and later re-injects it into the prompt when the current task is in the same domain, category, or recovery path.
+- Each caveat should carry a compact schema with at least:
+  - `summary`: short human-readable headline
+  - `details`: explanation of the event
+  - `kind`: class of caveat such as `retrieval`, `tool_failure`, `schema`, `policy`, or `reasoning`
+  - `category_root`: routing bucket such as `runtime_guidance` or a domain-specific root
+  - `action_guidance`: the specific instruction to follow to avoid recurrence
+  - `source`: `rag`, `tool`, `llm`, or `runtime`
+  - `confidence`: optional score or certainty marker
+  - `scope`: local session, agent, or long-term knowledge scope
+- The caveat tool should be explicit and structured rather than free-form. The LLM should call it with the above attributes, not merely emit a plain-language warning.
+- The default injection policy should be: inject only the most relevant active caveats, not every caveat, and prefer the ones whose category or semantic similarity matches the current request.
+- The runtime should also support a clear “clear/reset” path for caveats when the underlying issue is resolved or the guidance is no longer relevant.
+
+Practical recommendation:
+
+- Use deterministic RAG/tool hooks as the primary source of caveats.
+- Expose a dedicated `record_caveat` tool to the LLM for nuanced cases that need human-readable guidance.
+- Keep caveat creation lightweight and structured so we can persist it to STM first and later promote it into LTM during the sleep/consolidation path.
+
 ### Open Implementation TODOs
 
-- [ ] TODO: Treat GPT support as the first proving ground for dual-surface Stores execution (`execute_script` + lego blocks) and use its stronger tool/script fluency to expose missing provider-neutral abstractions before deeper Gemini-specific tuning.
-- [ ] TODO: Refine `execute_script` as the rich-plan surface while preserving valid grounded slices across retries and clarification turns instead of regenerating whole plans.
-- [ ] TODO: Make piped native lego blocks first-class in shared Ask/ReAct policy, including stepwise repair, preserved pipeline state, and final emission/execution flow.
-- [ ] TODO: Define the shared provider-neutral switching policy: `execute_script` first, clarification/meta-talk when grounding is missing, richer `execute_script` retry, then optional lego-block mode when whole-plan structural instability persists.
-- [ ] TODO: Keep Stores dual-surface work scoped to Stores for now; do not force Spaces into the same join/filter/pipeline model before Stores-to-Spaces interop is intentionally designed.
-- [ ] TODO: Explicitly defer `TransactionPool` adoption from the current blocker track and revisit it as the next transaction-plane optimization phase once control-surface reliability is stable.
-- [ ] TODO: Remove remaining duplicate `execute_script` guidance injection paths outside the compact Stores slice.
-- [ ] TODO: Continue slicing generated Stores recipe content into more granular units for Gate 3 retrieval and prompt assembly beyond the current research/read/join/predicate split.
-- [ ] TODO: Slice runtime guidance into smaller recipe-oriented units for Gate 3 retrieval and prompt assembly.
-- [ ] TODO: Add per-session Ask Outcome storage and rolling working summary.
-- [ ] TODO: Add provider-neutral carryover state and policy types in `ai/interfaces.go` for mode selection, token estimates, reset reasons, and provider conversation handles.
-- [ ] TODO: Persist carryover metadata in `ai/agent/memory_shortterm.go` so STM can track live-thread validity across adjacent asks.
-- [ ] TODO: Add continuity decision and carryover instrumentation in `ai/agent/service.go` before `ReasoningRequest` assembly.
-- [ ] TODO: Implement `compact` carryover mode first by suppressing broad `HistoryText` replay and relying on MRU, `OutcomeFacts`, and learned recipes.
-- [ ] TODO: Persist final Ask outcome and carryover metadata together in `ai/agent/copilot.go` at Ask completion.
-- [ ] TODO: Add true Gemini live-thread reuse in `ai/generator/gemini.go` behind the carryover policy once compact mode and instrumentation are stable.
-- [ ] TODO: Add tests for carryover mode selection, reset triggers, and reduced prompt replay on same-lane follow-up asks.
-- [ ] TODO: Add prompt assembly tests for single-Ask progression and follow-up Ask reuse.
-- [ ] TODO: Continue converting user-visible hard-stop tool outcomes from plain text to structured native terminal envelopes; keep infrastructure failures as typed Go errors.
-- [ ] TODO: Let Stage 1 focused retrieval dynamically narrow provider tool registration before Stage 2 Ask/ReAct execution, instead of relying primarily on prompt-side narrowing.
-- [ ] TODO: Extend the provider-owned model to Anthropic and other providers that can genuinely preserve a native tool/thread state.
-- [ ] TODO: Continue moving Gemini-specific progression semantics out of generic shared shaping and into the Gemini-owned loop where the native thread is actually interpreted.
+- [x] Add per-session Ask Outcome storage and rolling working summary.
+- [x] Add provider-neutral carryover state and policy types in `ai/interfaces.go` for mode selection, token estimates, reset reasons, and provider conversation handles.
+- [x] Persist carryover metadata in `ai/agent/memory_shortterm.go` so STM can track live-thread validity across adjacent asks.
+- [x] Add continuity decision and carryover instrumentation in `ai/agent/service.go` before `ReasoningRequest` assembly.
+- [x] Implement `compact` carryover mode first by suppressing broad `HistoryText` replay and relying on MRU, `OutcomeFacts`, and learned recipes.
+- [x] Persist final Ask outcome and carryover metadata together in `ai/agent/copilot.go` at Ask completion.
+- [x] Add tests for carryover mode selection, reset triggers, and reduced prompt replay on same-lane follow-up asks.
+- [x] Add prompt assembly tests for single-Ask progression and follow-up Ask reuse.
+- [ ] Implement periodic caveat sourcing from LTM into STM so active guidance refreshes on an hourly cadence.
+- [ ] Define the caveat schema, injection policy, and refresh cadence for both RAG-detected and LLM-declared events.
+- [ ] Wire the one-click standalone local-RAG setup flow and the advanced Setup Wizard into the daemon runtime.
+- [ ] Keep the standard path simple: install the local RAG bundle from the HQ UI, auto-discover the runtime, and use it as the default active backend for that site/session.
+- [ ] Keep the advanced path explicit: expose a Setup Wizard for custom local-cluster deployment, then leave the local runtime as the operational HTTP server for Ask and local actions, with the Setup Wizard as the only built-in local UI.
+- [ ] Solidify the command-shell tools exposed to the LLM so local RAG can automate a wider range of user tasks safely and predictably.
+- [ ] Solidify periodic pinging from local RAG to HQ so HQ can track site activity for accounting, rate-limit enforcement, and security monitoring.
+- [ ] Add end-to-end coverage for the local-RAG runtime flow and prompt guidance injection.
 
 ## 3. Roadmap and Release Details
 
