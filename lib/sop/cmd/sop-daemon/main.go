@@ -392,7 +392,7 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildLocalRAGWelcomeContext() string {
-	return "You are now connected to the local SOP daemon runtime. This experience is responsible for local shell access, local RAG answers, and direct workflow help on this machine. The daemon owns the local execution context, while the HQ connection details are carried along for identity and continuity."
+	return "Hello! I am your local <strong>Daemon Assistant</strong>. I help you work with the local shell and the embedded RAG runtime directly from this desktop experience.<br><br>I can help you:<br><ul style=\"color: var(--text-muted); font-size: 0.9em; margin: 0 0 8px 18px; padding: 0; list-style-position: outside;\"><li style=\"margin: 0 0 4px 0; padding: 0;\">run shell commands and inspect command output</li><li style=\"margin: 0 0 4px 0; padding: 0;\">answer questions using the local RAG knowledge you configured</li><li style=\"margin: 0 0 4px 0; padding: 0;\">help you troubleshoot local workflows from the command line</li></ul>Type <strong>/list_tools</strong> to see the commands available in this session.<br><br><em style=\"color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;\">Try asking things like:</em><ul style=\"color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;\"><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Show me the current directory and files\"</li><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Explain how to run the local daemon\"</li><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Help me inspect my local project structure\"</li></ul>"
 }
 
 func executeHandler(w http.ResponseWriter, r *http.Request) {

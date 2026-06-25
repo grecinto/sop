@@ -725,23 +725,39 @@
         return (typeof getChatRuntimeMode === 'function' ? getChatRuntimeMode() : 'hq');
     }
 
+    async function waitForDaemonAuthClient(timeoutMs = 4000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (window.daemonAuth && typeof window.daemonAuth.bootstrap === 'function') {
+                return true;
+            }
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        return Boolean(window.daemonAuth && typeof window.daemonAuth.bootstrap === 'function');
+    }
+
     async function daemonRuntimeRequest(endpoint, options = {}) {
         const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
         const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
 
         console.log('[daemonRuntimeRequest] endpoint:', endpoint, 'useDaemonAuth:', useDaemonAuth);
-        if (useDaemonAuth && window.daemonAuth) {
-            const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
-            if (existingToken) {
-                options.headers = options.headers || {};
-                options.headers.Authorization = `Bearer ${existingToken}`;
-            } else if (typeof window.daemonAuth.bootstrap === 'function') {
-                console.log('[daemonRuntimeRequest] bootstrapping daemon auth before fetch');
-                await window.daemonAuth.bootstrap();
-                const bootToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
-                if (bootToken) {
+        if (useDaemonAuth) {
+            const authReady = await waitForDaemonAuthClient(4000);
+            if (!authReady) {
+                console.warn('[daemonRuntimeRequest] daemon auth client not available yet; continuing without auth');
+            } else if (window.daemonAuth) {
+                const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+                if (existingToken) {
                     options.headers = options.headers || {};
-                    options.headers.Authorization = `Bearer ${bootToken}`;
+                    options.headers.Authorization = `Bearer ${existingToken}`;
+                } else if (typeof window.daemonAuth.bootstrap === 'function') {
+                    console.log('[daemonRuntimeRequest] bootstrapping daemon auth before fetch');
+                    await window.daemonAuth.bootstrap();
+                    const bootToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+                    if (bootToken) {
+                        options.headers = options.headers || {};
+                        options.headers.Authorization = `Bearer ${bootToken}`;
+                    }
                 }
             }
         }
@@ -788,14 +804,7 @@
     // Refactored into a reusable function to support dynamic database switching
     window.reloadDatabases = function(autoSelect = true) {
         const runtimeMode = getCurrentRuntimeMode();
-        console.log('[reloadDatabases] called with mode:', runtimeMode);
-        if (lastRuntimeMode && lastRuntimeMode !== runtimeMode) {
-            console.log('[reloadDatabases] runtime mode changed from', lastRuntimeMode, 'to', runtimeMode, '- clearing current selections');
-            currentDatabase = null;
-            currentStore = null;
-            localStorage.removeItem('sop_current_database');
-        }
-        lastRuntimeMode = runtimeMode;
+        console.log('[reloadDatabases] called with runtime:', runtimeMode, 'autoSelect:', autoSelect);
 
         const dbOptionsSection = document.getElementById('db-options-section');
         const dbOptionsContent = document.getElementById('db-options-content');
@@ -1004,34 +1013,24 @@
                 }
 
                 if (autoSelect) {
-                    const preferredDB = payload && payload.selected_database ? payload.selected_database : null;
-                    const savedDB = localStorage.getItem('sop_current_database');
-                    const existingSelection = currentDatabase && databases.some(d => d.name === currentDatabase) ? currentDatabase : null;
-                    const preferredTarget = preferredDB ? databases.find(d => d.name === preferredDB) : null;
-                    const savedTarget = savedDB ? databases.find(d => d.name === savedDB) : null;
-                    const targetDB = preferredTarget || savedTarget || (existingSelection ? databases.find(d => d.name === existingSelection) : null);
-
+                    console.log('[reloadDatabases autoSelect] available databases:', databases.map(d => d.name));
+                    
+                    // SIMPLE: Just pick system DB if available, otherwise first DB
                     let finalDBVal = null;
-
-                    if (targetDB) {
-                        finalDBVal = targetDB.name;
-                    } else if (userDBs.length > 0) {
-                        finalDBVal = userDBs[0].name;
-                    } else if (systemDBs.length > 0) {
+                    if (systemDBs.length > 0) {
                         finalDBVal = systemDBs[0].name;
                     } else if (databases.length > 0) {
                         finalDBVal = databases[0].name;
                     }
 
+                    console.log('[reloadDatabases autoSelect] selecting:', finalDBVal);
+
                     if (finalDBVal) {
-                         selectDatabase(finalDBVal, true);
+                         selectDatabase(finalDBVal, true, null);
                          // Update UI States
                          if (IS_ENTERPRISE) {
-                             let label = finalDBVal;
                              const finalDB = databases.find(d => d.name === finalDBVal);
-                             document.getElementById('db-chip-label').textContent = label;
-
-                             // Toggle Icon for Initial Load
+                             document.getElementById('db-chip-label').textContent = finalDBVal;
                              const icon = document.getElementById('db-chip-icon');
                              if (icon) {
                                  icon.style.display = (finalDB && finalDB.is_system) ? 'inline' : 'none';
@@ -1039,6 +1038,8 @@
                          } else {
                              document.getElementById('database-select').value = finalDBVal;
                          }
+                    } else {
+                        console.warn('[reloadDatabases autoSelect] no database available');
                     }
                 }
             })})
@@ -1060,21 +1061,13 @@
             });
     };
 
-    function initializeDashboardBootstrap() {
-        return reloadDatabases(true).then(() => {
-            const activeDb = currentDatabase || localStorage.getItem('sop_current_database') || '';
-            if (activeDb) {
-                const dbSelect = document.getElementById('database-select');
-                if (dbSelect && dbSelect.value !== activeDb) {
-                    dbSelect.value = activeDb;
-                }
-                const storeList = document.getElementById('store-list');
-                if (storeList && storeList.children.length === 0) {
-                    return selectDatabase(activeDb, true);
-                }
-                return selectDatabase(activeDb, true);
-            }
-        });
+    async function initializeDashboardBootstrap() {
+        const runtimeMode = getCurrentRuntimeMode();
+        if (runtimeMode === 'local') {
+            await waitForDaemonAuthClient(4000);
+        }
+
+        return reloadDatabases(true);
     }
 
     window.initializeDashboardBootstrap = initializeDashboardBootstrap;
@@ -1156,10 +1149,12 @@
     }
 
     async function selectDatabase(name, forceRefresh = false, storeToSelect = null) {
+        console.log('[selectDatabase] called with name:', name, 'forceRefresh:', forceRefresh, 'storeToSelect:', storeToSelect);
         const requestedName = (typeof name === 'string' && name.trim()) ? name.trim() : '';
         if (!requestedName) {
             const fallbackDb = availableDatabases.find(db => db && db.name);
             if (!fallbackDb) {
+                console.warn('[selectDatabase] no database name provided and no fallback available');
                 return;
             }
             name = fallbackDb.name;
@@ -1227,17 +1222,27 @@
             dbOptionsContent.innerHTML = 'Loading...';
         }
 
+        const storeToRestore = (typeof storeToSelect === 'string' && storeToSelect.trim())
+            ? storeToSelect.trim()
+            : localStorage.getItem('sop_current_store');
+
+        console.log('[selectDatabase] storeToRestore:', storeToRestore);
+
         // Fetch stores - data-driven approach works for both local and HQ modes
         runtimeDataCall(`/api/stores?database=${encodeURIComponent(name)}&_=${Date.now()}`)
             .then(bundle => {
                 let stores = bundle && bundle.data ? bundle.data : [];
+                console.log('[selectDatabase] fetched stores:', stores, 'for database:', name);
                 if (bundle && bundle.rbac) { window.CONTEXT_RBAC["store"] = bundle.rbac; }
                 const list = document.getElementById('store-list');
                 list.innerHTML = '';
                 if (!stores || stores.length === 0) {
+                    console.warn('[selectDatabase] no stores found for database:', name);
                     list.innerHTML = '<li>No stores found</li>';
                     return;
                 }
+
+                let storeRestored = false;
                 stores.forEach(store => {
                     const li = document.createElement('li');
                     li.textContent = store.charAt(0).toUpperCase() + store.slice(1);
@@ -1246,10 +1251,16 @@
                     li.onclick = () => selectStore(store, li);
                     list.appendChild(li);
 
-                    if (storeToSelect && store === storeToSelect) {
+                    if (storeToRestore && store === storeToRestore) {
+                        console.log('[selectDatabase] restoring store:', store);
                         selectStore(store, li);
+                        storeRestored = true;
                     }
                 });
+                
+                if (storeToRestore && !storeRestored) {
+                    console.warn('[selectDatabase] storeToRestore', storeToRestore, 'not found in stores:', stores);
+                }
             })
             .catch(err => {
                 const list = document.getElementById('store-list');
@@ -2864,6 +2875,7 @@ async function selectStore(name, element, force = false) {
         if (!await closeDetail()) return;
 
         currentStore = name;
+        localStorage.setItem('sop_current_store', name);
         columnWidths = []; // Reset column widths
         loadColumnPreferences(); // Load saved column settings
         columnsInitialized = false;

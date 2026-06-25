@@ -69,9 +69,18 @@
         }
         updateLocalAgentControls();
 
+        // FORCE CLEAR EVERYTHING on runtime switch
+        console.log('[RuntimeToggle] clearing all state for runtime switch');
+        localStorage.removeItem('sop_current_database');
+        localStorage.removeItem('sop_current_store');
+        if (typeof window !== 'undefined') {
+            window.currentDatabase = null;
+            window.currentStore = null;
+        }
+
         // Reload dashboard to reflect new runtime
         if (typeof window.reloadDatabases === 'function') {
-            window.reloadDatabases(true).catch(err => {
+            window.reloadDatabases(true, runtime).catch(err => {
                 console.error('[RuntimeToggle] reloadDatabases failed:', err);
                 const errorDiv = document.createElement('div');
                 errorDiv.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #f44336; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; box-shadow: 0 2px 5px rgba(0,0,0,0.2);';
@@ -111,6 +120,7 @@
             formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
         }
         updateLocalAgentControls();
+        return runtime;
     }
 
     function getDaemonAskURL() {
@@ -143,7 +153,7 @@
                 }
                 const data = await response.json().catch(() => null);
                 if (data && data.welcome_context) {
-                    appendChatMessage('ai', data.welcome_context);
+                    replaceWelcomeContextMessage(data.welcome_context);
                 }
                 return data;
             }
@@ -159,13 +169,31 @@
             }
             const data = await response.json().catch(() => null);
             if (data && data.welcome_context) {
-                appendChatMessage('ai', data.welcome_context);
+                replaceWelcomeContextMessage(data.welcome_context);
             }
             return data;
         } catch (err) {
             appendChatMessage('ai', `Welcome context unavailable for ${runtimeMode === 'local' ? 'local daemon' : 'HQ'} runtime: ${err.message || 'unknown error'}`);
             return null;
         }
+    }
+
+    function replaceWelcomeContextMessage(text) {
+        const history = document.getElementById('chat-history');
+        if (!history) return;
+
+        history.innerHTML = '';
+        currentAiMsgId = null;
+
+        const div = document.createElement('div');
+        div.className = 'chat-message ai';
+        div.dataset.welcomeContext = 'true';
+        div.innerHTML = text.replace(/\n/g, '<br>');
+        history.appendChild(div);
+
+        requestAnimationFrame(() => {
+            history.scrollTop = history.scrollHeight;
+        });
     }
 
     function buildLocalDaemonHandoffPayload(query) {
@@ -246,7 +274,7 @@
         const data = await response.json().catch(() => null);
         if (data && data.welcome_context && !window.__sopLocalWelcomeShown) {
             window.__sopLocalWelcomeShown = true;
-            appendChatMessage('ai', data.welcome_context);
+            replaceWelcomeContextMessage(data.welcome_context);
         }
         return true;
     }
@@ -363,11 +391,21 @@
         }
     }
 
+    async function hydrateRuntimeWelcomeContext() {
+        const runtime = applyChatRuntimeSelection();
+        const history = document.getElementById('chat-history');
+        const hasWelcome = history && Array.from(history.children).some(el => el.dataset && el.dataset.welcomeContext === 'true');
+        if (!hasWelcome) {
+            await requestRuntimeWelcomeContext(runtime);
+        }
+    }
+
     // --- Draggable Chat Widget Logic ---
     document.addEventListener('DOMContentLoaded', function() {
         const widget = document.getElementById('chat-widget');
         const header = widget.querySelector('.chat-header');
         applyChatRuntimeSelection();
+        void hydrateRuntimeWelcomeContext();
         let isDragging = false;
         let dragStartX, dragStartY;
 

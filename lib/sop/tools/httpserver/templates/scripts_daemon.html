@@ -338,10 +338,20 @@
     // Create global instance
     window.daemonAuth = new DaemonAuthClient();
 
+    window.ensureDaemonAuth = async function() {
+        if (!window.daemonAuth || typeof window.daemonAuth.bootstrap !== 'function') {
+            return false;
+        }
+        if (window.daemonAuth.bootstrapping) {
+            return window.daemonAuth.bootstrap();
+        }
+        return window.daemonAuth.bootstrap();
+    };
+
     // Auto-bootstrap on page load (non-blocking)
     window.addEventListener('DOMContentLoaded', () => {
         console.log('[DaemonAuth] Page loaded, attempting daemon authentication...');
-        window.daemonAuth.bootstrap().catch(err => {
+        window.ensureDaemonAuth().catch(err => {
             console.warn('[DaemonAuth] Auto-bootstrap failed:', err);
         });
     });
