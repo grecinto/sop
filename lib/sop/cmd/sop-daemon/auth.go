@@ -161,6 +161,26 @@ func ensureBootstrapSecret() (string, error) {
 	return secret, nil
 }
 
+func (h *DaemonAuthHandler) loadBootstrapSecretFromDisk() (string, error) {
+	if h.bootstrapPath == "" {
+		return "", fmt.Errorf("bootstrap path not configured")
+	}
+
+	data, err := os.ReadFile(h.bootstrapPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", err
+		}
+		return "", fmt.Errorf("read bootstrap secret: %w", err)
+	}
+
+	secret := strings.TrimSpace(string(data))
+	if secret == "" {
+		return "", fmt.Errorf("bootstrap secret file is empty")
+	}
+	return secret, nil
+}
+
 // getConfigDir returns the daemon configuration directory
 func getConfigDir() (string, error) {
 	if v := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(v) != "" {
@@ -214,7 +234,17 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Validate bootstrap secret
+	// Validate using the current bootstrap secret stored on disk.
+	currentBootstrapSecret, err := h.loadBootstrapSecretFromDisk()
+	if err != nil {
+		log.Printf("Failed to load bootstrap secret from disk: %v", err)
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
+		return
+	}
+	if h.bootstrapSecret != currentBootstrapSecret {
+		h.bootstrapSecret = currentBootstrapSecret
+	}
+
 	if req.BootstrapSecret != h.bootstrapSecret {
 		log.Printf("Invalid bootstrap secret attempt")
 		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})

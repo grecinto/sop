@@ -17,6 +17,29 @@ import (
 
 const defaultDaemonConfigFileName = "config.json"
 
+// isValidDaemonConfig checks if the config file has the required daemon structure
+func isValidDaemonConfig(configPath string) bool {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return false
+	}
+
+	var config struct {
+		SystemDB *struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+			Mode string `json:"mode"`
+		} `json:"system_db"`
+	}
+
+	if err := json.Unmarshal(data, &config); err != nil {
+		return false
+	}
+
+	// Valid daemon config must have system_db with path
+	return config.SystemDB != nil && config.SystemDB.Path != ""
+}
+
 func ensureConfigPath(explicitPath string) (string, bool, error) {
 	if strings.TrimSpace(explicitPath) != "" {
 		resolved := resolveConfigPath(explicitPath)
@@ -28,7 +51,6 @@ func ensureConfigPath(explicitPath string) (string, bool, error) {
 		candidates = append(candidates, filepath.Join(v, "sop", defaultDaemonConfigFileName))
 	} else {
 		if home, err := os.UserHomeDir(); err == nil {
-			// TODO: add explicit macOS and Windows app-data/config directory handling here.
 			candidates = append(candidates, filepath.Join(home, ".config", "sop", defaultDaemonConfigFileName))
 			candidates = append(candidates, filepath.Join(home, "sop", defaultDaemonConfigFileName))
 		}
@@ -36,38 +58,43 @@ func ensureConfigPath(explicitPath string) (string, bool, error) {
 		candidates = append(candidates, filepath.Join(cwd(), "sop", defaultDaemonConfigFileName))
 	}
 
+	var defaultPath string
 	for _, candidate := range candidates {
 		if candidate == "" {
 			continue
 		}
 		if _, err := os.Stat(candidate); err == nil {
-			return candidate, false, nil
+			if isValidDaemonConfig(candidate) {
+				return candidate, false, nil
+			}
+			log.Printf("Found invalid daemon config at %s, will recreate with proper structure", candidate)
+			defaultPath = candidate
+			break
 		}
 	}
 
-	defaultPath := ""
-	if v := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(v) != "" {
-		defaultPath = filepath.Join(v, "sop", defaultDaemonConfigFileName)
-	} else if home, err := os.UserHomeDir(); err == nil {
-		// TODO: use platform-appropriate config directories on macOS and Windows.
-		defaultPath = filepath.Join(home, ".config", "sop", defaultDaemonConfigFileName)
-	} else {
-		defaultPath = filepath.Join(cwd(), defaultDaemonConfigFileName)
+	if defaultPath == "" {
+		if v := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(v) != "" {
+			defaultPath = filepath.Join(v, "sop", defaultDaemonConfigFileName)
+		} else if home, err := os.UserHomeDir(); err == nil {
+			defaultPath = filepath.Join(home, ".config", "sop", defaultDaemonConfigFileName)
+		} else {
+			defaultPath = filepath.Join(cwd(), defaultDaemonConfigFileName)
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(defaultPath), 0o755); err != nil {
 		return "", false, fmt.Errorf("create config directory: %w", err)
 	}
 
-	// Create default SystemDB path relative to config
 	systemDBPath := filepath.Join(filepath.Dir(defaultPath), "system")
-
 	bootstrap := fmt.Sprintf(`{
   "port": 9090,
   "system_db": {
     "name": "system",
     "path": "%s",
-    "mode": "standalone"
+    "mode": "standalone",
+    "is_system": true
   },
   "databases": [],
   "pageSize": 40,

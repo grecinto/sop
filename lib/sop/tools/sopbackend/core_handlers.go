@@ -1099,7 +1099,11 @@ func handleGetDBOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(dbOpts)
+	if err := json.NewEncoder(w).Encode(dbOpts); err != nil {
+		log.Error("db-options encode failed", "database", dbName, "error", err)
+		return
+	}
+	log.Info("db-options served", "database", dbName, "payload", dbOpts)
 }
 
 // handleGetStoreInfo handles retrieval of store metadata.

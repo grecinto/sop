@@ -10,9 +10,10 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
-	"github.com/grecinto/sop-cloud/ai/database"
+	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/ai/vector"
+	"github.com/sharedcode/sop/btree"
 	core "github.com/sharedcode/sop/database"
 )
 
@@ -160,7 +161,7 @@ func TestAIDatabase_RemoveKnowledgeBase_ReturnsNotFoundWhenMissing(t *testing.T)
 	}
 }
 
-func TestAIDatabase_OpenKnowledgeBase_ReopensLegacyStoreConfiguration(t *testing.T) {
+func TestAIDatabase_OpenKnowledgeBase_OpensMatchingStoreConfiguration(t *testing.T) {
 	storagePath := t.TempDir()
 
 	db := database.NewDatabase(core.DatabaseOptions{
@@ -173,9 +174,9 @@ func TestAIDatabase_OpenKnowledgeBase_ReopensLegacyStoreConfiguration(t *testing
 		t.Fatalf("BeginTransaction failed: %v", err)
 	}
 
-	legacyStore := sop.ConfigureStore("kb_legacy/categories", true, 2, "legacy categories store", sop.BigData, "")
+	legacyStore := sop.ConfigureStore("kb_legacy/categories", true, btree.DefaultSlotLength, "legacy categories store", sop.SmallData, "")
 	if _, err := core.NewBtree[sop.UUID, *memory.Category](ctx, db.Config(), legacyStore.Name, tx, nil, legacyStore); err != nil {
-		t.Fatalf("pre-creating legacy categories store failed: %v", err)
+		t.Fatalf("pre-creating matching categories store failed: %v", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -187,7 +188,7 @@ func TestAIDatabase_OpenKnowledgeBase_ReopensLegacyStoreConfiguration(t *testing
 		t.Fatalf("BeginTransaction reopen failed: %v", err)
 	}
 	if _, err := db.OpenKnowledgeBase(ctx, "kb_legacy", reopenTx, nil, nil, false); err != nil {
-		t.Fatalf("expected OpenKnowledgeBase to reopen a legacy store without failing, got: %v", err)
+		t.Fatalf("expected OpenKnowledgeBase to reopen a matching store without failing, got: %v", err)
 	}
 	if err := reopenTx.Rollback(ctx); err != nil {
 		t.Fatalf("Rollback failed: %v", err)

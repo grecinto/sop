@@ -18,15 +18,26 @@
         return saved === 'local' ? 'local' : 'hq';
     }
 
+    function normalizeDaemonBaseURL(url) {
+        const value = (url || '').trim();
+        if (!value) {
+            return 'http://127.0.0.1:9090';
+        }
+        return value.replace(/\/$/, '');
+    }
+
     function getDaemonBaseURL() {
-        const saved = localStorage.getItem('sop_daemon_url');
-        return saved && saved.trim() ? saved.trim() : 'http://127.0.0.1:9090';
+        const configured = window.SOP_DAEMON_BASE_URL || localStorage.getItem('sop_daemon_url') || 'http://127.0.0.1:9090';
+        const value = normalizeDaemonBaseURL(configured);
+        window.SOP_DAEMON_BASE_URL = value;
+        return value;
     }
 
     function setDaemonBaseURL(url) {
-        const value = (url || '').trim();
-        localStorage.setItem('sop_daemon_url', value || 'http://127.0.0.1:9090');
-        return localStorage.getItem('sop_daemon_url');
+        const value = normalizeDaemonBaseURL(url);
+        window.SOP_DAEMON_BASE_URL = value;
+        localStorage.setItem('sop_daemon_url', value);
+        return value;
     }
 
     function persistChatRuntimeLocalURL() {
@@ -37,6 +48,7 @@
 
     function setChatRuntimeMode(mode) {
         const runtime = mode === 'local' ? 'local' : 'hq';
+        console.log('[RuntimeToggle] switching runtime to', runtime);
         localStorage.setItem('sop_chat_runtime', runtime);
         const checkbox = document.getElementById('chat-runtime-hq');
         const input = document.getElementById('chat-runtime-local-url');
@@ -56,9 +68,28 @@
             formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
         }
         updateLocalAgentControls();
+
+        // Reload dashboard to reflect new runtime
         if (typeof window.reloadDatabases === 'function') {
-            window.reloadDatabases(true).catch(err => console.warn('Failed to refresh dashboard for runtime switch', err));
+            window.reloadDatabases(true).catch(err => {
+                console.error('[RuntimeToggle] reloadDatabases failed:', err);
+                const errorDiv = document.createElement('div');
+                errorDiv.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #f44336; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; box-shadow: 0 2px 5px rgba(0,0,0,0.2);';
+                errorDiv.textContent = `Runtime switch failed: ${err.message || 'Unknown error'}`;
+                document.body.appendChild(errorDiv);
+                setTimeout(() => errorDiv.remove(), 4000);
+            });
         }
+
+        void requestRuntimeWelcomeContext(runtime);
+
+        const currentMode = runtime === 'local' ? 'Local Daemon' : 'HQ';
+        const alertDiv = document.createElement('div');
+        alertDiv.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #4CAF50; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; box-shadow: 0 2px 5px rgba(0,0,0,0.2);';
+        alertDiv.textContent = `Switched to ${currentMode} runtime`;
+        document.body.appendChild(alertDiv);
+        setTimeout(() => alertDiv.remove(), 2000);
+
         return runtime;
     }
 
@@ -90,6 +121,53 @@
         return getDaemonBaseURL().replace(/\/$/, '') + '/api/handoff';
     }
 
+    async function daemonFetch(endpoint, options = {}) {
+        if (window.daemonAuth && typeof window.daemonAuth.request === 'function') {
+            return window.daemonAuth.request(endpoint, options);
+        }
+
+        return fetch(endpoint, options);
+    }
+
+    async function requestRuntimeWelcomeContext(runtimeMode) {
+        try {
+            if (runtimeMode === 'local') {
+                const response = await daemonFetch('/api/handoff', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(buildLocalDaemonHandoffPayload('connect'))
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    throw new Error(text || 'Unable to connect to local daemon');
+                }
+                const data = await response.json().catch(() => null);
+                if (data && data.welcome_context) {
+                    appendChatMessage('ai', data.welcome_context);
+                }
+                return data;
+            }
+
+            const response = await authFetch('/api/ai/test-connection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', handshake: true })
+            });
+            if (!response.ok) {
+                const text = await response.text().catch(() => '');
+                throw new Error(text || 'Unable to connect to HQ');
+            }
+            const data = await response.json().catch(() => null);
+            if (data && data.welcome_context) {
+                appendChatMessage('ai', data.welcome_context);
+            }
+            return data;
+        } catch (err) {
+            appendChatMessage('ai', `Welcome context unavailable for ${runtimeMode === 'local' ? 'local daemon' : 'HQ'} runtime: ${err.message || 'unknown error'}`);
+            return null;
+        }
+    }
+
     function buildLocalDaemonHandoffPayload(query) {
         const token = typeof getStoredSessionToken === 'function' ? getStoredSessionToken() : '';
         const refreshToken = typeof getStoredRefreshToken === 'function' ? getStoredRefreshToken() : '';
@@ -115,39 +193,28 @@
         }
         try {
             if (getChatRuntimeMode() === 'local') {
-                const response = await fetch(getDaemonHandoffURL(), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(buildLocalDaemonHandoffPayload('connect'))
-                });
-                if (!response.ok) {
-                    const text = await response.text().catch(() => '');
-                    throw new Error(text || 'Unable to reconnect to local agent');
-                }
-                const data = await response.json().catch(() => null);
-                if (data && data.welcome_context) {
-                    appendChatMessage('ai', data.welcome_context);
+                const data = await requestRuntimeWelcomeContext('local');
+                if (!data) {
+                    throw new Error('Unable to reconnect to local agent');
                 }
                 if (button) {
                     button.textContent = 'Connected';
                 }
+                if (typeof window.reloadDatabases === 'function') {
+                    await window.reloadDatabases(true);
+                }
                 return true;
             }
 
-            const response = await authFetch('/api/ai/test-connection', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini' })
-            });
-            if (!response.ok) {
+            const data = await requestRuntimeWelcomeContext('hq');
+            if (!data) {
                 throw new Error('Unable to reconnect to HQ');
-            }
-            const data = await response.json().catch(() => null);
-            if (data && data.welcome_context) {
-                appendChatMessage('ai', data.welcome_context);
             }
             if (button) {
                 button.textContent = 'Connected';
+            }
+            if (typeof window.reloadDatabases === 'function') {
+                await window.reloadDatabases(true);
             }
             return true;
         } catch (err) {
@@ -167,7 +234,7 @@
     }
 
     async function ensureLocalAgentReachable() {
-        const response = await fetch(getDaemonHandoffURL(), {
+        const response = await daemonFetch('/api/handoff', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(buildLocalDaemonHandoffPayload('connect'))
@@ -856,7 +923,7 @@
                     appendChatMessage('ai', 'Local agent unavailable: ' + (err.message || 'unknown error'));
                     return;
                 }
-                const response = await fetch(getDaemonAskURL(), {
+                const response = await daemonFetch('/api/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

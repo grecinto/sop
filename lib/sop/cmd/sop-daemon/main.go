@@ -8,13 +8,17 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/sharedcode/sop"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
+	"github.com/sharedcode/sop/database"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -89,9 +93,45 @@ func main() {
 	}
 	localRuntimeConfigPath = resolvedConfig
 
-	// Load sopbackend configuration
-	if err := sopbackend.LoadConfig(resolvedConfig); err != nil {
-		log.Printf("Warning: could not load sopbackend config: %v", err)
+	// Load sopbackend configuration exactly like the httpserver does
+	if _, err := os.Stat(resolvedConfig); err == nil {
+		if err := sopbackend.LoadConfig(resolvedConfig); err != nil {
+			log.Printf("Warning: could not load sopbackend config: %v", err)
+		} else {
+			sopbackend.SetConfigFile(resolvedConfig)
+			if _, err := sopbackend.LoadModelCatalog(resolvedConfig); err != nil {
+				log.Printf("Warning: could not load model catalog: %v", err)
+			}
+			log.Printf("Loaded daemon configuration from: %s", resolvedConfig)
+		}
+	} else if _, err := sopbackend.LoadModelCatalog(""); err != nil {
+		log.Printf("Warning: could not load model catalog: %v", err)
+	}
+
+	// Auto-provision system DB if it doesn't exist
+	cfg := sopbackend.GetConfig()
+	if cfg.SystemDB != nil {
+		cfg.SystemDB.IsSystem = true
+		if cfg.SystemDB.Path != "" {
+			dbOptionsPath := filepath.Join(cfg.SystemDB.Path, "dboptions.json")
+			if _, err := os.Stat(dbOptionsPath); os.IsNotExist(err) {
+				log.Printf("System DB not found at %s, auto-provisioning...", cfg.SystemDB.Path)
+
+				// Setup the system database with standalone mode
+				options := sop.DatabaseOptions{
+					Type:                 sop.Standalone,
+					StoresFolders:        []string{cfg.SystemDB.Path},
+					RegistryHashModValue: 0, // Default for system DB
+				}
+
+				ctx := context.Background()
+				if _, err := database.Setup(ctx, options); err != nil {
+					log.Printf("Warning: failed to auto-provision system DB: %v", err)
+				} else {
+					log.Printf("System DB auto-provisioned at %s", cfg.SystemDB.Path)
+				}
+			}
+		}
 	}
 
 	// Initialize daemon authentication with JWT
@@ -108,9 +148,11 @@ func main() {
 	// Disable sopbackend's auth since we handle it ourselves
 	sopbackend.SetDisableAuth(true)
 
-	// Initialize agents from sopbackend
-	if err := sopbackend.InitAgents(context.Background()); err != nil {
-		log.Printf("Warning: agent initialization failed: %v", err)
+	// Initialize agents from sopbackend exactly like httpserver does
+	if len(cfg.Databases) > 0 || cfg.SystemDB != nil {
+		if err := sopbackend.InitAgents(context.Background()); err != nil {
+			log.Printf("Warning: agent initialization failed: %v", err)
+		}
 	}
 
 	// Load model catalog from sopbackend
@@ -150,8 +192,9 @@ func main() {
 		ragSvc.handleAsk(w, r)
 	})))))
 
-	// Wrap all handlers with CORS support
-	corsHandler := addCORSToAll(mux)
+	// Wrap all handlers with request logging and CORS support
+	loggingHandler := addLoggingToAll(mux)
+	corsHandler := addCORSToAll(loggingHandler)
 
 	addr := buildListenAddr("127.0.0.1", *port)
 	log.Printf("Starting SOP Daemon on %s", addr)
@@ -172,26 +215,69 @@ func main() {
 	}
 }
 
+type statusResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (w *statusResponseWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func addLoggingToAll(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		wrapped := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+		isDBOptions := r.URL.Path == "/api/db/options"
+		if isDBOptions {
+			log.Printf("[daemon-dboptions] request database=%q from=%s auth=%t", r.URL.Query().Get("database"), r.RemoteAddr, authHeader != "")
+		}
+		log.Printf("[daemon-request] %s %s from=%s auth=%t", r.Method, r.URL.RequestURI(), r.RemoteAddr, authHeader != "")
+		handler.ServeHTTP(wrapped, r)
+		if isDBOptions {
+			log.Printf("[daemon-dboptions] completed database=%q status=%d duration=%s", r.URL.Query().Get("database"), wrapped.statusCode, time.Since(start))
+		}
+		log.Printf("[daemon-request] completed %s %s status=%d duration=%s", r.Method, r.URL.RequestURI(), wrapped.statusCode, time.Since(start))
+	})
+}
+
+func setLocalCORSHeaders(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+
+	// Only allow localhost origins for security
+	if origin != "" &&
+		(strings.HasPrefix(origin, "http://localhost") ||
+			strings.HasPrefix(origin, "http://127.0.0.1") ||
+			strings.HasPrefix(origin, "https://localhost") ||
+			strings.HasPrefix(origin, "https://127.0.0.1")) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		requestedHeaders := strings.TrimSpace(r.Header.Get("Access-Control-Request-Headers"))
+		if requestedHeaders != "" {
+			w.Header().Set("Access-Control-Allow-Headers", requestedHeaders)
+		} else {
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-LLM-Provider, X-LLM-API-Key, X-LLM-URL, X-LLM-Model, X-Embedder-Provider, X-Embedder-API-Key, X-Embedder-URL, X-Embedder-Model")
+		}
+		return true
+	}
+
+	if origin != "" {
+		http.Error(w, "Forbidden: daemon only accepts localhost origins", http.StatusForbidden)
+		return false
+	}
+
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-LLM-Provider, X-LLM-API-Key, X-LLM-URL, X-LLM-Model, X-Embedder-Provider, X-Embedder-API-Key, X-Embedder-URL, X-Embedder-Model")
+	return true
+}
+
 // addCORSToAll wraps the handler with CORS support for localhost only
 func addCORSToAll(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-
-		// Only allow localhost origins for security
-		if origin != "" &&
-			(strings.HasPrefix(origin, "http://localhost") ||
-				strings.HasPrefix(origin, "http://127.0.0.1") ||
-				strings.HasPrefix(origin, "https://localhost") ||
-				strings.HasPrefix(origin, "https://127.0.0.1")) {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		} else if origin != "" {
-			// Reject non-localhost origins
-			http.Error(w, "Forbidden: daemon only accepts localhost origins", http.StatusForbidden)
+		if !setLocalCORSHeaders(w, r) {
 			return
 		}
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -204,20 +290,7 @@ func addCORSToAll(handler http.Handler) http.Handler {
 
 func handleOptionsAndCORS(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-
-		// Only allow localhost origins for security
-		if origin != "" &&
-			(strings.HasPrefix(origin, "http://localhost") ||
-				strings.HasPrefix(origin, "http://127.0.0.1") ||
-				strings.HasPrefix(origin, "https://localhost") ||
-				strings.HasPrefix(origin, "https://127.0.0.1")) {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		} else if origin != "" {
-			// Reject non-localhost origins
-			http.Error(w, "Forbidden: daemon only accepts localhost origins", http.StatusForbidden)
+		if !setLocalCORSHeaders(w, r) {
 			return
 		}
 

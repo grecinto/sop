@@ -146,6 +146,30 @@ func TestHandleTestLLMConnection_OpenAIUsesConfiguredAPIURL(t *testing.T) {
 	}
 }
 
+func TestHandleTestLLMConnection_HandshakeReturnsWelcomeContextWithoutLiveGeneration(t *testing.T) {
+	body := []byte(`{"provider":"openai","model":"gpt-4o-mini","handshake":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/test-connection", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handleTestLLMConnection(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d with body %s", http.StatusOK, w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	ctx, ok := resp["welcome_context"].(string)
+	if !ok || strings.TrimSpace(ctx) == "" {
+		t.Fatalf("expected welcome_context in response body, got %+v", resp)
+	}
+	if !strings.Contains(strings.ToLower(ctx), "hq") {
+		t.Fatalf("expected HQ welcome context, got %q", ctx)
+	}
+}
+
 func TestHandleTestLLMConnection_ReturnsWelcomeContext(t *testing.T) {
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

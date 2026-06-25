@@ -13,10 +13,11 @@ import (
 )
 
 type llmConnectionTestRequest struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	APIKey   string `json:"api_key"`
-	URL      string `json:"url"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	APIKey    string `json:"api_key"`
+	URL       string `json:"url"`
+	Handshake bool   `json:"handshake"`
 }
 
 type embedderConnectionTestRequest struct {
@@ -60,6 +61,20 @@ func handleTestLLMConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	if settings.Provider == "" {
 		http.Error(w, "Provider is required", http.StatusBadRequest)
+		return
+	}
+
+	isHandshake := req.Handshake || strings.Contains(strings.ToLower(r.URL.Query().Get("mode")), "handshake")
+	if isHandshake {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":              true,
+			"provider":        settings.Provider,
+			"model":           settings.Model,
+			"response":        "Handshake OK",
+			"features":        map[string]any{"supports_tools": true, "supports_thinking_config": false, "warnings": []string{}},
+			"welcome_context": buildHQWelcomeContext(),
+		})
 		return
 	}
 

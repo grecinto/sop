@@ -292,7 +292,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	tmpl, err := template.ParseFS(content, "templates/login.html")
+	tmpl, err := template.ParseFS(content, "templates/*.html")
 	if err != nil {
 		http.Error(w, "Could not load login template: "+err.Error(), http.StatusInternalServerError)
 		return

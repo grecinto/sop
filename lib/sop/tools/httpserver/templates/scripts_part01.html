@@ -268,6 +268,81 @@
         }
     }
 
+    async function runtimeDataCall(endpoint, method = 'GET', body = null, overrideHeaders = null) {
+        const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+        const isSpacesEndpoint = typeof endpoint === 'string' && endpoint.includes('/api/spaces');
+        console.log('[runtimeDataCall] endpoint=', endpoint, 'mode=', runtimeMode, 'method=', method);
+        if (runtimeMode === 'local') {
+            try {
+                const h = { 'Content-Type': 'application/json' };
+                applyAIConfigHeaders(h, getStoredAIConfig());
+                if (overrideHeaders) {
+                    for (const [k, v] of Object.entries(overrideHeaders)) {
+                        h[k] = v;
+                    }
+                }
+
+                const options = {
+                    method,
+                    headers: h,
+                    cache: 'no-store',
+                    credentials: 'omit'
+                };
+                if (body !== null && body !== undefined) {
+                    options.body = JSON.stringify(body);
+                }
+
+                const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
+
+                const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+                const targetUrl = `${daemonBase}${endpoint}`;
+                console.log('[runtimeDataCall] local fetch target=', targetUrl, 'useDaemonAuth=', useDaemonAuth, 'daemonAuthAvailable=', !!(window.daemonAuth && typeof window.daemonAuth.request === 'function'));
+                if (useDaemonAuth && window.daemonAuth) {
+                    const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+                    if (existingToken) {
+                        h.Authorization = `Bearer ${existingToken}`;
+                    } else if (typeof window.daemonAuth.bootstrap === 'function') {
+                        console.log('[runtimeDataCall] bootstrapping daemon auth before fetch');
+                        await window.daemonAuth.bootstrap();
+                        const bootToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+                        if (bootToken) {
+                            h.Authorization = `Bearer ${bootToken}`;
+                        }
+                    }
+                }
+                console.log('[runtimeDataCall] sending local request with auth=', !!h.Authorization, 'to=', targetUrl);
+                const response = await fetch(targetUrl, options);
+
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(`API Error (${response.status}): ${text || response.statusText}`);
+                }
+
+                const json = await response.json();
+                if (json && json.error) {
+                    throw new Error(json.error);
+                }
+                return json;
+            } catch (error) {
+                console.warn(`[Runtime data fallback] ${method} ${endpoint}:`, error.message || error);
+                if (isSpacesEndpoint) {
+                    return { data: [] };
+                }
+                throw error;
+            }
+        }
+
+        try {
+            return await apiCall(endpoint, method, body, overrideHeaders);
+        } catch (error) {
+            console.warn(`[Runtime data fallback] ${method} ${endpoint}:`, error.message || error);
+            if (isSpacesEndpoint) {
+                return { data: [] };
+            }
+            throw error;
+        }
+    }
+
     function getStoredAIConfig() {
         const raw = localStorage.getItem('sop_ai_config');
         if (!raw) return {};
@@ -603,6 +678,15 @@
     
     const CURRENT_CONFIG_FILE = "{{ .ConfigFile }}";
 
+    function shouldDisplaySetupWizard(runtimeMode) {
+        const hasExistingConfig = Boolean(
+            typeof CURRENT_CONFIG_FILE !== 'undefined' &&
+            CURRENT_CONFIG_FILE &&
+            String(CURRENT_CONFIG_FILE).trim() !== ''
+        );
+        return runtimeMode === 'hq' && !hasExistingConfig;
+    }
+
     // Environment Flags
     // ALLOW_INVALID_MAP_KEY: If true, allows saving a store with Map Key type without
     // requiring an Index Specification or CEL Expression. Controlled by SOP_ALLOW_INVALID_MAP_KEY env var.
@@ -641,20 +725,61 @@
         return (typeof getChatRuntimeMode === 'function' ? getChatRuntimeMode() : 'hq');
     }
 
-    async function loadRuntimeRefreshPayload() {
-        if (typeof getChatRuntimeMode === 'function' && getChatRuntimeMode() === 'local') {
-            const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
-            const response = await fetch(`${daemonBase}/api/runtime/refresh`, {
-                method: 'GET',
-                headers: { 'Content-Type': 'application/json' },
-                cache: 'no-store',
-                credentials: 'omit'
-            });
-            if (!response.ok) {
-                const text = await response.text().catch(() => '');
-                throw new Error(text || `Runtime refresh failed (${response.status})`);
+    async function daemonRuntimeRequest(endpoint, options = {}) {
+        const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+        const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
+
+        console.log('[daemonRuntimeRequest] endpoint:', endpoint, 'useDaemonAuth:', useDaemonAuth);
+        if (useDaemonAuth && window.daemonAuth) {
+            const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+            if (existingToken) {
+                options.headers = options.headers || {};
+                options.headers.Authorization = `Bearer ${existingToken}`;
+            } else if (typeof window.daemonAuth.bootstrap === 'function') {
+                console.log('[daemonRuntimeRequest] bootstrapping daemon auth before fetch');
+                await window.daemonAuth.bootstrap();
+                const bootToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+                if (bootToken) {
+                    options.headers = options.headers || {};
+                    options.headers.Authorization = `Bearer ${bootToken}`;
+                }
             }
-            return await response.json();
+        }
+
+        const targetUrl = `${daemonBase}${endpoint}`;
+        console.log('[daemonRuntimeRequest] direct fetch to:', targetUrl, 'auth=', !!(options.headers && options.headers.Authorization));
+        return fetch(targetUrl, options);
+    }
+
+    async function loadRuntimeRefreshPayload() {
+        const runtimeMode = (typeof getChatRuntimeMode === 'function' ? getChatRuntimeMode() : 'hq');
+        console.log('[loadRuntimeRefreshPayload] runtimeMode:', runtimeMode);
+        if (runtimeMode === 'local') {
+            const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+            console.log('[loadRuntimeRefreshPayload] calling daemon at:', daemonBase);
+            try {
+                const response = await daemonRuntimeRequest('/api/runtime/refresh', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    cache: 'no-store',
+                    credentials: 'omit'
+                });
+                console.log('[loadRuntimeRefreshPayload] daemon response status:', response.status);
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    console.error('[loadRuntimeRefreshPayload] daemon error:', text);
+                    throw new Error(text || `Runtime refresh failed (${response.status})`);
+                }
+                const payload = await response.json().catch(() => null);
+                console.log('[loadRuntimeRefreshPayload] daemon payload:', payload);
+                if (payload && (Array.isArray(payload.databases) || payload.runtime)) {
+                    return payload;
+                }
+            } catch (err) {
+                // When in local mode, don't fall back to HQ - surface the connection error
+                console.error('Local daemon connection failed:', err);
+                throw new Error(`Cannot connect to local daemon at ${daemonBase}. Ensure the daemon is running.`);
+            }
         }
         return await apiCall('/api/runtime/refresh');
     }
@@ -663,24 +788,33 @@
     // Refactored into a reusable function to support dynamic database switching
     window.reloadDatabases = function(autoSelect = true) {
         const runtimeMode = getCurrentRuntimeMode();
+        console.log('[reloadDatabases] called with mode:', runtimeMode);
         if (lastRuntimeMode && lastRuntimeMode !== runtimeMode) {
+            console.log('[reloadDatabases] runtime mode changed from', lastRuntimeMode, 'to', runtimeMode, '- clearing current selections');
             currentDatabase = null;
             currentStore = null;
             localStorage.removeItem('sop_current_database');
         }
         lastRuntimeMode = runtimeMode;
 
+        const dbOptionsSection = document.getElementById('db-options-section');
+        const dbOptionsContent = document.getElementById('db-options-content');
+        if (dbOptionsSection) dbOptionsSection.style.display = 'none';
+        if (dbOptionsContent) dbOptionsContent.innerHTML = 'Loading...';
+
         return loadRuntimeRefreshPayload()
             .then(payload => {
+                console.log('[reloadDatabases] received payload:', payload);
                 runtimeRefreshPayload = payload || null;
                 const databases = payload && Array.isArray(payload.databases) ? payload.databases : [];
+                console.log('[reloadDatabases] databases:', databases.length, 'found');
                 availableDatabases = databases;
 
                 let systemDB = databases ? databases.find(d => d.is_system) : null;
                 let sysName = systemDB ? systemDB.name : "system";
 
                 // Load space list - data-driven approach works for both local and HQ modes
-                const loadSpaceList = apiCall(`/api/spaces?database=${encodeURIComponent(sysName)}`)
+                const loadSpaceList = runtimeDataCall(`/api/spaces?database=${encodeURIComponent(sysName)}`)
                     .then(res => (res && res.data) ? res.data : [])
                     .catch(() => []);
 
@@ -695,8 +829,9 @@
                             });
                         }
                         
-                        // Check for missing SOP KB - data-driven approach
-                        if (databases && databases.length > 0 && !spaces.includes("SOP")) {
+                        // Missing SOP KB is acceptable for daemon/local runtime; treat it as informational only.
+                        const runtimeMode = getCurrentRuntimeMode();
+                        if (databases && databases.length > 0 && !spaces.includes("SOP") && runtimeMode !== 'local') {
                             warnings.push("• SOP KB (KnowledgeBase) Space is missing from the System Database.");
                         }
 
@@ -706,10 +841,12 @@
                 
                 if (!databases || databases.length === 0) {
                     const select = document.getElementById('database-select');
-                    select.innerHTML = '';
-                    const opt = document.createElement('option');
-                    opt.textContent = "No databases found";
-                    select.appendChild(opt);
+                    if (select) {
+                        select.innerHTML = '';
+                        const opt = document.createElement('option');
+                        opt.textContent = runtimeMode === 'local' ? 'Local runtime ready' : 'No databases found';
+                        select.appendChild(opt);
+                    }
 
                     openUIModal('database-section', 'block');
                     
@@ -740,15 +877,19 @@
                         }
                         return;
                     }
-                    
-                    showSetupWizard();
+
+                    if (shouldDisplaySetupWizard(runtimeMode)) {
+                        showSetupWizard();
+                    }
                     return;
                 }
                 
+                console.log('[reloadDatabases] updating UI with', databases.length, 'databases');
                 openUIModal('database-section', 'block');
 
                 const userDBs = databases.filter(db => !db.is_system);
                 const systemDBs = databases.filter(db => db.is_system);
+                console.log('[reloadDatabases] userDBs:', userDBs.length, 'systemDBs:', systemDBs.length);
 
                 if (IS_ENTERPRISE) {
                     // Enterprise Mode: Use Chip UI
@@ -815,11 +956,13 @@
                     
                 } else {
                      // Standard Mode: Use <select>
+                     console.log('[reloadDatabases] using standard mode select UI');
                      openUIModal('database-select', 'block');
                      closeUIModal('enterprise-db-container');
                      
                     const select = document.getElementById('database-select');
                     select.innerHTML = '';
+                    console.log('[reloadDatabases] populating dropdown with', databases.length, 'databases');
 
                     userDBs.forEach(db => {
                         const opt = document.createElement('option');
@@ -863,9 +1006,10 @@
                 if (autoSelect) {
                     const preferredDB = payload && payload.selected_database ? payload.selected_database : null;
                     const savedDB = localStorage.getItem('sop_current_database');
+                    const existingSelection = currentDatabase && databases.some(d => d.name === currentDatabase) ? currentDatabase : null;
                     const preferredTarget = preferredDB ? databases.find(d => d.name === preferredDB) : null;
                     const savedTarget = savedDB ? databases.find(d => d.name === savedDB) : null;
-                    const targetDB = preferredTarget || savedTarget;
+                    const targetDB = preferredTarget || savedTarget || (existingSelection ? databases.find(d => d.name === existingSelection) : null);
 
                     let finalDBVal = null;
 
@@ -875,10 +1019,12 @@
                         finalDBVal = userDBs[0].name;
                     } else if (systemDBs.length > 0) {
                         finalDBVal = systemDBs[0].name;
+                    } else if (databases.length > 0) {
+                        finalDBVal = databases[0].name;
                     }
 
                     if (finalDBVal) {
-                         selectDatabase(finalDBVal);
+                         selectDatabase(finalDBVal, true);
                          // Update UI States
                          if (IS_ENTERPRISE) {
                              let label = finalDBVal;
@@ -898,22 +1044,55 @@
             })})
             .catch(err => {
                 console.error(err);
-                document.getElementById('database-select').innerHTML = '<option>Error loading databases</option>';
+                const runtimeMode = getCurrentRuntimeMode();
+                
+                // Handle local daemon connection failure with clear user messaging
+                if (runtimeMode === 'local' && err.message && err.message.includes('Cannot connect to local daemon')) {
+                    showAlert(err.message, null, "Local Daemon Unavailable", "red");
+                    const select = document.getElementById('database-select');
+                    if (select) {
+                        select.innerHTML = '<option>Local daemon offline</option>';
+                    }
+                } else {
+                    document.getElementById('database-select').innerHTML = '<option>Error loading databases</option>';
+                }
                 openUIModal('database-section', 'block');
             });
     };
 
+    function initializeDashboardBootstrap() {
+        return reloadDatabases(true).then(() => {
+            const activeDb = currentDatabase || localStorage.getItem('sop_current_database') || '';
+            if (activeDb) {
+                const dbSelect = document.getElementById('database-select');
+                if (dbSelect && dbSelect.value !== activeDb) {
+                    dbSelect.value = activeDb;
+                }
+                const storeList = document.getElementById('store-list');
+                if (storeList && storeList.children.length === 0) {
+                    return selectDatabase(activeDb, true);
+                }
+                return selectDatabase(activeDb, true);
+            }
+        });
+    }
+
+    window.initializeDashboardBootstrap = initializeDashboardBootstrap;
+
     // Initial Load
-    reloadDatabases(true).then(() => {
-        // Initialization handled during setup wizard now
-    });
+    initializeDashboardBootstrap();
 
     async function refreshSpacesList(databaseName, spaceToSelect = null) {
         const normalizedSpaceToSelect = typeof spaceToSelect === 'string'
             ? spaceToSelect.replace(/\/data$/, '')
             : null;
-        const bundle = await apiCall(`/api/spaces?database=${encodeURIComponent(databaseName)}&user_id=${encodeURIComponent(currentUserID)}&_=${Date.now()}`);
-        let kbs = bundle.data || [];
+        let bundle = { data: [] };
+        try {
+            bundle = await runtimeDataCall(`/api/spaces?database=${encodeURIComponent(databaseName)}&user_id=${encodeURIComponent(currentUserID)}&_=${Date.now()}`);
+        } catch (err) {
+            console.warn('[refreshSpacesList] falling back to empty space list', err);
+        }
+        let kbs = bundle && bundle.data ? bundle.data : [];
         const kbList = document.getElementById('kb-list');
         const domainSelect = document.getElementById('domain-select');
 
@@ -977,16 +1156,28 @@
     }
 
     async function selectDatabase(name, forceRefresh = false, storeToSelect = null) {
-        if (!forceRefresh && currentDatabase === name) return;
-
-        // Check for unsaved changes
-        if (!await closeDetail()) {
-            // Revert selection
-            const select = document.getElementById('database-select');
-            if (select && currentDatabase) {
-                select.value = currentDatabase;
+        const requestedName = (typeof name === 'string' && name.trim()) ? name.trim() : '';
+        if (!requestedName) {
+            const fallbackDb = availableDatabases.find(db => db && db.name);
+            if (!fallbackDb) {
+                return;
             }
-            return;
+            name = fallbackDb.name;
+        }
+
+        const alreadySelected = !forceRefresh && currentDatabase === name;
+        if (alreadySelected) {
+            console.log('[selectDatabase] database already selected, refreshing data in place for', name);
+        } else {
+            // Check for unsaved changes
+            if (!await closeDetail()) {
+                // Revert selection
+                const select = document.getElementById('database-select');
+                if (select && currentDatabase) {
+                    select.value = currentDatabase;
+                }
+                return;
+            }
         }
 
         currentDatabase = name;
@@ -1030,13 +1221,17 @@
         
         // Reset DB Options
         document.getElementById('db-options-section').style.display = 'none';
-        document.getElementById('db-options-content').innerHTML = 'Loading...';
+        const dbOptionsContent = document.getElementById('db-options-content');
+        if (dbOptionsContent) {
+            dbOptionsContent.style.display = 'none';
+            dbOptionsContent.innerHTML = 'Loading...';
+        }
 
         // Fetch stores - data-driven approach works for both local and HQ modes
-        apiCall(`/api/stores?database=${encodeURIComponent(name)}&_=${Date.now()}`)
+        runtimeDataCall(`/api/stores?database=${encodeURIComponent(name)}&_=${Date.now()}`)
             .then(bundle => {
-                let stores = bundle.data || [];
-                if (bundle.rbac) { window.CONTEXT_RBAC["store"] = bundle.rbac; }
+                let stores = bundle && bundle.data ? bundle.data : [];
+                if (bundle && bundle.rbac) { window.CONTEXT_RBAC["store"] = bundle.rbac; }
                 const list = document.getElementById('store-list');
                 list.innerHTML = '';
                 if (!stores || stores.length === 0) {
@@ -1058,7 +1253,8 @@
             })
             .catch(err => {
                 const list = document.getElementById('store-list');
-                list.innerHTML = `<li class="error-text">Error: ${err.message}</li>`;
+                console.warn('[selectDatabase] stores fallback:', err.message || err);
+                list.innerHTML = '<li>No stores found</li>';
             });
 
         // Fetch Spaces
@@ -1069,13 +1265,31 @@
             });
 
         // Fetch DB Options
-        apiCall(`/api/db/options?database=${encodeURIComponent(name)}`)
+        console.log('[selectDatabase] requesting db options', { name, runtimeMode: getCurrentRuntimeMode ? getCurrentRuntimeMode() : 'hq' });
+        runtimeDataCall(`/api/db/options?database=${encodeURIComponent(name)}`)
             .then(opts => {
+                console.log('[selectDatabase] db options response for', name, opts);
                 const section = document.getElementById('db-options-section');
                 const content = document.getElementById('db-options-content');
                 section.style.display = 'block';
-                
+                if (content) {
+                    content.style.display = 'block';
+                }
+
                 let html = '';
+                const hasUsefulOptions = !!opts && typeof opts === 'object' && (
+                    Object.keys(opts).length > 0 ||
+                    Array.isArray(opts.stores_folders) ||
+                    typeof opts.cache_type !== 'undefined' ||
+                    typeof opts.type !== 'undefined' ||
+                    typeof opts.erasure_config !== 'undefined' ||
+                    typeof opts.redis_config !== 'undefined'
+                );
+                if (!hasUsefulOptions) {
+                    console.warn('[selectDatabase] no usable db options for', name, opts);
+                    content.innerHTML = '<span class="muted-text">No database options available.</span>';
+                    return;
+                }
                 
                 // Display Mode (Type)
                 // L2CacheType: 2=Redis (Clustered), others (0=NoCache, 1=InMemory) = Standalone
@@ -1122,9 +1336,16 @@
                 content.innerHTML = html;
             })
             .catch(err => {
-                console.error("Failed to fetch DB options", err);
-                document.getElementById('db-options-content').innerHTML = '<span class="error-text">Failed to load options</span>';
-                document.getElementById('db-options-section').style.display = 'block';
+                console.warn("DB options unavailable, using empty state", err.message || err);
+                const content = document.getElementById('db-options-content');
+                const section = document.getElementById('db-options-section');
+                if (content) {
+                    content.style.display = 'block';
+                    content.innerHTML = '<span class="muted-text">No database options available.</span>';
+                }
+                if (section) {
+                    section.style.display = 'block';
+                }
             });
     }
 
