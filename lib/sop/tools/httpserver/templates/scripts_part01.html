@@ -722,7 +722,10 @@
     const CHIP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M5 0a.5.5 0 0 1 .5.5V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2A2.5 2.5 0 0 1 14 4.5h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14a2.5 2.5 0 0 1-2.5 2.5v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14A2.5 2.5 0 0 1 2 11.5H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2A2.5 2.5 0 0 1 4.5 2V.5A.5.5 0 0 1 5 0zm-.5 3A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 11.5 3h-7zM5 6.5A1.5 1.5 0 0 1 6.5 5h3A1.5 1.5 0 0 1 11 6.5v3A1.5 1.5 0 0 1 9.5 11h-3A1.5 1.5 0 0 1 5 9.5v-3z"/></svg>`;
 
     function getCurrentRuntimeMode() {
-        return (typeof getChatRuntimeMode === 'function' ? getChatRuntimeMode() : 'hq');
+        // Read directly from localStorage to avoid dependency on getChatRuntimeMode from scripts_part05
+        const saved = localStorage.getItem('sop_chat_runtime');
+        const trimmed = saved ? saved.trim() : '';
+        return trimmed === 'local' ? 'local' : 'hq';
     }
 
     async function waitForDaemonAuthClient(timeoutMs = 4000) {
@@ -768,8 +771,9 @@
     }
 
     async function loadRuntimeRefreshPayload() {
-        const runtimeMode = (typeof getChatRuntimeMode === 'function' ? getChatRuntimeMode() : 'hq');
-        console.log('[loadRuntimeRefreshPayload] runtimeMode:', runtimeMode);
+        const runtimeMode = getCurrentRuntimeMode();
+        console.log('[loadRuntimeRefreshPayload] READING runtime from localStorage:', localStorage.getItem('sop_chat_runtime'));
+        console.log('[loadRuntimeRefreshPayload] getCurrentRuntimeMode() returned:', runtimeMode);
         if (runtimeMode === 'local') {
             const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
             console.log('[loadRuntimeRefreshPayload] calling daemon at:', daemonBase);
@@ -805,6 +809,18 @@
     window.reloadDatabases = function(autoSelect = true) {
         const runtimeMode = getCurrentRuntimeMode();
         console.log('[reloadDatabases] called with runtime:', runtimeMode, 'autoSelect:', autoSelect);
+
+        // FORCE CLEAR DROPDOWN IMMEDIATELY - don't wait for async operations
+        const select = document.getElementById('database-select');
+        if (select) {
+            console.log('[reloadDatabases] FORCE clearing select dropdown immediately');
+            select.innerHTML = '<option>Loading...</option>';
+        }
+        const menu = document.getElementById('db-dropdown-menu');
+        if (menu) {
+            console.log('[reloadDatabases] FORCE clearing enterprise dropdown menu immediately');
+            menu.innerHTML = '';
+        }
 
         const dbOptionsSection = document.getElementById('db-options-section');
         const dbOptionsContent = document.getElementById('db-options-content');
@@ -970,8 +986,10 @@
                      closeUIModal('enterprise-db-container');
                      
                     const select = document.getElementById('database-select');
+                    console.log('[reloadDatabases] BEFORE clearing dropdown, innerHTML length:', select.innerHTML.length);
                     select.innerHTML = '';
-                    console.log('[reloadDatabases] populating dropdown with', databases.length, 'databases');
+                    console.log('[reloadDatabases] AFTER clearing dropdown, innerHTML length:', select.innerHTML.length);
+                    console.log('[reloadDatabases] populating dropdown with', databases.length, 'databases:', databases.map(d => d.name));
 
                     userDBs.forEach(db => {
                         const opt = document.createElement('option');
@@ -1015,18 +1033,38 @@
                 if (autoSelect) {
                     console.log('[reloadDatabases autoSelect] available databases:', databases.map(d => d.name));
                     
-                    // SIMPLE: Just pick system DB if available, otherwise first DB
+                    // Validate saved database exists in CURRENT runtime's database list
+                    const savedDB = localStorage.getItem('sop_current_database');
+                    const savedExists = savedDB ? databases.find(d => d.name === savedDB) : null;
+                    
+                    // If saved database doesn't exist in current runtime, clear it
+                    if (savedDB && !savedExists) {
+                        console.warn('[reloadDatabases autoSelect] saved database', savedDB, 'not found in current runtime, clearing localStorage');
+                        localStorage.removeItem('sop_current_database');
+                        localStorage.removeItem('sop_current_store');
+                        currentDatabase = null;
+                        currentStore = null;
+                    }
+                    
                     let finalDBVal = null;
-                    if (systemDBs.length > 0) {
-                        finalDBVal = systemDBs[0].name;
-                    } else if (databases.length > 0) {
-                        finalDBVal = databases[0].name;
+                    if (savedExists) {
+                        // Restore saved database (validated to exist in current runtime)
+                        finalDBVal = savedDB;
+                        console.log('[reloadDatabases autoSelect] restoring saved database:', finalDBVal);
+                    } else {
+                        // Fallback: system DB first, then any DB
+                        if (systemDBs.length > 0) {
+                            finalDBVal = systemDBs[0].name;
+                        } else if (databases.length > 0) {
+                            finalDBVal = databases[0].name;
+                        }
+                        console.log('[reloadDatabases autoSelect] no valid saved db, selecting:', finalDBVal);
                     }
 
-                    console.log('[reloadDatabases autoSelect] selecting:', finalDBVal);
-
                     if (finalDBVal) {
-                         selectDatabase(finalDBVal, true, null);
+                         // Restore saved store only if we're using the saved database
+                         const savedStore = (savedExists && finalDBVal === savedDB) ? localStorage.getItem('sop_current_store') : null;
+                         selectDatabase(finalDBVal, true, savedStore);
                          // Update UI States
                          if (IS_ENTERPRISE) {
                              const finalDB = databases.find(d => d.name === finalDBVal);

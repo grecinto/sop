@@ -15,7 +15,9 @@
 
     function getChatRuntimeMode() {
         const saved = localStorage.getItem('sop_chat_runtime');
-        return saved === 'local' ? 'local' : 'hq';
+        const trimmed = saved ? saved.trim() : '';
+        console.log('[getChatRuntimeMode] localStorage raw:', JSON.stringify(saved), 'trimmed:', JSON.stringify(trimmed));
+        return trimmed === 'local' ? 'local' : 'hq';
     }
 
     function normalizeDaemonBaseURL(url) {
@@ -173,7 +175,11 @@
             }
             return data;
         } catch (err) {
-            appendChatMessage('ai', `Welcome context unavailable for ${runtimeMode === 'local' ? 'local daemon' : 'HQ'} runtime: ${err.message || 'unknown error'}`);
+            console.warn(`[requestRuntimeWelcomeContext] Failed to get welcome context for ${runtimeMode === 'local' ? 'local daemon' : 'HQ'} runtime:`, err.message || err);
+            // Don't show error in chat for local daemon - auth failures are handled gracefully
+            if (runtimeMode !== 'local') {
+                appendChatMessage('ai', `Welcome context unavailable for ${runtimeMode === 'local' ? 'local daemon' : 'HQ'} runtime: ${err.message || 'unknown error'}`);
+            }
             return null;
         }
     }
