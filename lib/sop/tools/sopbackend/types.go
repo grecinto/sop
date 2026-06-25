@@ -52,6 +52,7 @@ type Config struct {
 	Mode         string `json:"-"`
 	ConfigFile   string `json:"-"`
 	RedisURL     string `json:"-"`
+	DisableAuth  bool   `json:"-"` // Disable authentication (for local daemon)
 }
 
 // Package-level global variables used by handler functions

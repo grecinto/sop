@@ -101,6 +101,21 @@ These endpoints can reuse the same bearer-token semantics already used by the UI
 - HQ should treat the local daemon as a delegated authenticated client, not as a standalone user.
 - The UI remains the root of trust for authentication and renewal.
 
+## Planned Product Workflow
+
+The intended product flow is intentionally simple and host-centric:
+
+1. The user signs in through the HQ UI and completes self-registration or onboarding.
+2. The UI keeps the default path simple: the HQ experience remains the default until the user explicitly switches to local mode.
+3. When local mode is selected, the UI uses the configured local agent URL as the active endpoint when HQ is offline or unavailable.
+4. The local daemon is treated as a manually startable host process: the user or installer starts it explicitly, and the UI connects to it once it is available.
+5. If the daemon is not reachable, the UI notifies the user that the local agent is unavailable and offers a "Reconnect to local agent" action so the user can retry the connection after fixing the local installation or starting the daemon manually.
+6. The UI passes the signed access token, refresh token, and HQ connection context to the daemon over localhost so the daemon can continue using the same authenticated identity without requiring a separate login flow.
+7. In the simple/default mode, the daemon does not create its own session lifecycle; it relies on the client-supplied token and renewal metadata.
+8. The long-term host integration can optionally let the daemon be registered with the host OS so it can auto-start on login or boot, but the first version only needs reliable manual startup, explicit configuration, and graceful recovery.
+
+This keeps the product straightforward for everyday users while leaving room for richer host-to-HQ integrations later.
+
 ## Current Status
 
 The current implementation already has the essential building blocks:

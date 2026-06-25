@@ -257,6 +257,8 @@ bindings/rust/target/
 /sop_server
 tools/httpserver/httpserver
 tools/httpserver/sop_server
+cmd/sop-daemon/sop-daemon
+cmd/sop-daemon/scripts/
 # Generated Headers
 bindings/**/libjsondb*.h
 !copilot_pipeline.json

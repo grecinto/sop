@@ -26,6 +26,11 @@ func SetProductionMode(production bool) {
 	config.ProductionMode = production
 }
 
+// SetDisableAuth disables authentication (for local daemon mode)
+func SetDisableAuth(disable bool) {
+	config.DisableAuth = disable
+}
+
 // GetModelCatalog returns a copy of the current model catalog
 func GetModelCatalog() ModelCatalog {
 	return modelCatalog

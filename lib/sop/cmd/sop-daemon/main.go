@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -16,7 +15,7 @@ import (
 	"time"
 
 	sharedagent "github.com/sharedcode/sop/ai/agent"
-	"github.com/sharedcode/sop/tools/runtimehub"
+	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
 type ExecuteRequest struct {
@@ -70,46 +69,66 @@ var localRuntimeConfigPath string
 
 func main() {
 	port := flag.Int("port", 9090, "Port to run the local SOP daemon on")
-	configPath := flag.String("config", "", "Path to a local agent config JSON file for the embedded RAG runtime")
+	configPath := flag.String("config", "", "Path to the SOP daemon configuration file")
 	policyMaxRequests := flag.Int("rate-limit-max-requests", 20, "Maximum local requests per session before enforcement kicks in")
 	policyWindow := flag.Duration("rate-limit-window", time.Minute, "Rate limit window for local daemon requests")
 	flag.Parse()
 
+	// Set local command executor for agent tools
 	sharedagent.SetLocalCommandExecutor(runLocalCommand)
 
-	if _, err := loadModelCatalog(*configPath); err != nil {
-		log.Printf("warning: could not load model catalog for local daemon: %v", err)
-	}
-	if modelCatalogPath != "" {
-		log.Printf("Loaded model catalog for local daemon from %s", modelCatalogPath)
-	}
-	if _, err := runtimehub.Bootstrap(context.Background(), runtimehub.RuntimeConfig{ConfigPath: *configPath, AutoProvisionDefaultDB: true, LocalCommandExecutor: runLocalCommand}); err != nil {
-		log.Printf("warning: shared runtime bootstrap failed: %v", err)
-	}
-
-	localRegistry := NewSessionRegistry(SubscriptionPolicy{MaxRequests: *policyMaxRequests, Window: *policyWindow})
-
-	var ragSvc *localRAGService
+	// Load configuration using sopbackend
 	resolvedConfig, created, err := ensureConfigPath(*configPath)
 	if err != nil {
-		log.Printf("warning: local RAG runtime disabled: %v", err)
-	} else {
-		rag, err := newLocalRAGService(resolvedConfig)
-		if err != nil {
-			log.Printf("warning: local RAG runtime disabled: %v", err)
-		} else {
-			ragSvc = rag
-		}
-		if created {
-			log.Printf("Created initial local daemon config at %s", resolvedConfig)
-		}
+		log.Fatalf("Failed to resolve daemon config: %v", err)
+	}
+	if created {
+		log.Printf("Created initial local daemon config at %s", resolvedConfig)
 	}
 	localRuntimeConfigPath = resolvedConfig
 
-	http.HandleFunc("/api/execute", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(executeHandler))))
-	http.HandleFunc("/api/runtime/refresh", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(handleRuntimeRefresh))))
-	http.HandleFunc("/api/handoff", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff))))
-	http.HandleFunc("/api/ask", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Load sopbackend configuration
+	if err := sopbackend.LoadConfig(resolvedConfig); err != nil {
+		log.Printf("Warning: could not load sopbackend config: %v", err)
+	}
+
+	// Disable authentication for local daemon (it's local-only, no auth needed)
+	sopbackend.SetDisableAuth(true)
+
+	// Initialize agents from sopbackend
+	if err := sopbackend.InitAgents(context.Background()); err != nil {
+		log.Printf("Warning: agent initialization failed: %v", err)
+	}
+
+	// Load model catalog from sopbackend
+	catalog := sopbackend.GetModelCatalog()
+	log.Printf("Loaded model catalog: %d LLM groups, %d Embedder groups", len(catalog.LLM), len(catalog.Embedder))
+
+	// Initialize local session registry for rate limiting
+	localRegistry := NewSessionRegistry(SubscriptionPolicy{MaxRequests: *policyMaxRequests, Window: *policyWindow})
+
+	// Initialize local RAG service (daemon-specific)
+	var ragSvc *localRAGService
+	rag, err := newLocalRAGService(resolvedConfig)
+	if err != nil {
+		log.Printf("warning: local RAG runtime disabled: %v", err)
+	} else {
+		ragSvc = rag
+	}
+
+	// Register all sopbackend handlers (provides full backend API)
+	mux := http.NewServeMux()
+	sopbackend.RegisterAllHandlers(mux)
+
+	// Wrap all handlers with CORS support
+	corsHandler := addCORSToAll(mux)
+
+	// Override/Add daemon-specific handlers on the mux (before CORS wrapping)
+	mux.HandleFunc("/api/execute", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(executeHandler))))
+	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff))))
+	
+	// Override /api/ask with local RAG implementation
+	mux.HandleFunc("/api/ask", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ragSvc == nil {
 			respondJSON(w, http.StatusServiceUnavailable, AskResponse{Error: "local RAG is not configured"})
 			return
@@ -119,16 +138,35 @@ func main() {
 
 	addr := buildListenAddr("127.0.0.1", *port)
 	log.Printf("Starting SOP Desktop Daemon on %s", addr)
+	log.Printf("Full backend API available (via sopbackend)")
 	if ragSvc != nil {
 		log.Printf("Local RAG endpoint enabled at /api/ask")
 	} else {
-		log.Printf("Local RAG endpoint disabled; pass -config to enable it")
+		log.Printf("Local RAG endpoint disabled")
 	}
-	log.Printf("Waiting for local execution commands from SOP UI...")
+	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff")
+	log.Printf("Waiting for requests from SOP UI...")
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	if err := http.ListenAndServe(addr, corsHandler); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// addCORSToAll wraps the handler with CORS support for all requests
+func addCORSToAll(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow CORS from any origin (since UI might be hosted anywhere)
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		handler.ServeHTTP(w, r)
+	})
 }
 
 func handleOptionsAndCORS(h http.HandlerFunc) http.HandlerFunc {
@@ -177,70 +215,6 @@ func runLocalCommand(ctx context.Context, command, reasoning string) (string, er
 		return "", marshalErr
 	}
 	return string(payload), nil
-}
-
-type runtimeRefreshResponse struct {
-	Runtime   string `json:"runtime"`
-	Databases []struct {
-		Name     string `json:"name"`
-		Path     string `json:"path,omitempty"`
-		Mode     string `json:"mode,omitempty"`
-		IsSystem bool   `json:"is_system,omitempty"`
-		Warning  string `json:"warning,omitempty"`
-	} `json:"databases"`
-	SelectedDatabase string              `json:"selected_database,omitempty"`
-	Stores           map[string][]string `json:"stores,omitempty"`
-	Spaces           map[string][]string `json:"spaces,omitempty"`
-}
-
-func handleRuntimeRefresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	response := runtimeRefreshResponse{Runtime: "local", Databases: []struct {
-		Name     string `json:"name"`
-		Path     string `json:"path,omitempty"`
-		Mode     string `json:"mode,omitempty"`
-		IsSystem bool   `json:"is_system,omitempty"`
-		Warning  string `json:"warning,omitempty"`
-	}{}, Stores: map[string][]string{}, Spaces: map[string][]string{}}
-
-	if strings.TrimSpace(localRuntimeConfigPath) != "" {
-		data, err := os.ReadFile(localRuntimeConfigPath)
-		if err == nil {
-			var cfg struct {
-				Name        string `json:"name"`
-				StoragePath string `json:"storage_path"`
-			}
-			if err := json.Unmarshal(data, &cfg); err == nil {
-				name := strings.TrimSpace(cfg.Name)
-				if name == "" {
-					name = "Local Agent"
-				}
-				path := strings.TrimSpace(cfg.StoragePath)
-				if path == "" {
-					path = strings.TrimSpace(localRuntimeConfigPath)
-				}
-				response.Databases = append(response.Databases, struct {
-					Name     string `json:"name"`
-					Path     string `json:"path,omitempty"`
-					Mode     string `json:"mode,omitempty"`
-					IsSystem bool   `json:"is_system,omitempty"`
-					Warning  string `json:"warning,omitempty"`
-				}{
-					Name:     name,
-					Path:     path,
-					Mode:     "standalone",
-					IsSystem: true,
-				})
-				response.SelectedDatabase = response.Databases[0].Name
-			}
-		}
-	}
-
-	respondJSON(w, http.StatusOK, response)
 }
 
 func handleUIHandoff(w http.ResponseWriter, r *http.Request) {

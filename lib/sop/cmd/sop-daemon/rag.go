@@ -190,11 +190,8 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	cfg.Set("hq_user_id", strings.TrimSpace(req.HQ.UserID))
 	cfg.Set("hq_session_id", strings.TrimSpace(req.HQ.SessionID))
 	ctx = context.WithValue(ctx, "session_payload", payload)
-	if modelCatalogPath != "" {
-		ctx = context.WithValue(ctx, "model_catalog_path", modelCatalogPath)
-	}
 
-	log.Printf("daemon ask request received: query=%q session=%q catalog=%q", req.Query, payload.SessionID, modelCatalogPath)
+	log.Printf("daemon ask request received: query=%q session=%q", req.Query, payload.SessionID)
 	answer, err := s.service.Ask(ctx, req.Query, cfg)
 	if err != nil {
 		log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
