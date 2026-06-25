@@ -28,20 +28,42 @@ Flow:
 
 ## Prerequisites
 
-- **Node.js** 18+ (for Electron)
+- **Node.js** 18+ (for Electron) - Install with `brew install node`
 - **Go** 1.21+ (already have this)
 - **Built httpserver binary** at `../httpserver/httpserver`
 
-## Setup
+## Quick Start
 
-### 1. Install Dependencies
+**Easiest way to launch:**
+
+```bash
+cd /Volumes/T7/sop-cloud/lib/sop/tools/electron-app
+./start.sh
+```
+
+The `start.sh` script will:
+- ✅ Check all prerequisites (Node.js, npm, httpserver binary)
+- ✅ Install dependencies if needed
+- ✅ Build httpserver if needed
+- 🚀 Launch the app!
+
+## Manual Setup (if you prefer)
+
+### 1. Install Node.js
+
+```bash
+brew install node
+# or download from https://nodejs.org/
+```
+
+### 2. Install Dependencies
 
 ```bash
 cd /Volumes/T7/sop-cloud/lib/sop/tools/electron-app
 npm install
 ```
 
-### 2. Build httpserver Binary
+### 3. Build httpserver Binary
 
 ```bash
 cd ../httpserver
@@ -49,7 +71,7 @@ go build
 chmod +x httpserver
 ```
 
-### 3. Run in Development Mode
+### 4. Run in Development Mode
 
 ```bash
 cd ../electron-app
