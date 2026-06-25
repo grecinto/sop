@@ -212,7 +212,6 @@ func main() {
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/login", handleLoginPage)
 	http.HandleFunc("/app", sopbackend.RequireAuth(handleIndex))
-	http.HandleFunc("/chat", handleChat)
 	http.HandleFunc("/viewer", sopbackend.RequireAuth(handleViewer))
 	http.HandleFunc("/file-preview", sopbackend.RequireAuth(handleFilePreview))
 
@@ -352,22 +351,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	if err := tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
 		log.Error("Failed to execute template", "error", err)
 		http.Error(w, "Template execution failed", http.StatusInternalServerError)
-	}
-}
-
-func handleChat(w http.ResponseWriter, r *http.Request) {
-	tmpl, err := template.ParseFS(content, "templates/chat.html")
-	if err != nil {
-		http.Error(w, "Could not load chat template: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	data := map[string]any{
-		"Version": sop.Version,
-	}
-	if err := tmpl.ExecuteTemplate(w, "chat.html", data); err != nil {
-		log.Error("Failed to execute chat template", "error", err)
-		http.Error(w, "Chat template execution failed", http.StatusInternalServerError)
 	}
 }
 

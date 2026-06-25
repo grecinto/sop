@@ -17,48 +17,6 @@
         return window.innerWidth <= 768 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     }
 
-    function updateChatPinButton() {
-        const button = document.getElementById('chat-pin-btn');
-        if (!button) return;
-        const isLocalRuntime = getChatRuntimeMode() === 'local';
-        const pinned = isLocalRuntime && localStorage.getItem('sop_chat_pinned') === 'true';
-        button.style.display = isLocalRuntime ? 'inline-flex' : 'none';
-        button.classList.toggle('active', pinned);
-        button.setAttribute('aria-pressed', pinned ? 'true' : 'false');
-        button.title = pinned ? 'Unpin AI chat window' : 'Pin AI chat window';
-    }
-
-    function applyChatPinnedState() {
-        const widget = document.getElementById('chat-widget');
-        if (!widget) return;
-        const isLocalRuntime = getChatRuntimeMode() === 'local';
-        const pinned = isLocalRuntime && localStorage.getItem('sop_chat_pinned') === 'true';
-        widget.classList.toggle('pinned', pinned && !isMobileViewport());
-        if (pinned && !isMobileViewport()) {
-            widget.style.left = 'auto';
-            widget.style.top = '12px';
-            widget.style.right = '12px';
-            widget.style.bottom = 'auto';
-        }
-        if (!pinned || isMobileViewport()) {
-            setDashboardVisibility(true);
-        }
-        updateChatPinButton();
-    }
-
-    function toggleChatPin() {
-        const widget = document.getElementById('chat-widget');
-        if (!widget) return;
-        if (getChatRuntimeMode() !== 'local') return;
-        const nextPinned = !widget.classList.contains('pinned');
-        localStorage.setItem('sop_chat_pinned', nextPinned ? 'true' : 'false');
-        if (!nextPinned) {
-            setDashboardVisibility(true);
-        }
-        applyChatPinnedState();
-        saveChatState();
-    }
-
     function getChatRuntimeMode() {
         const saved = localStorage.getItem('sop_chat_runtime');
         const trimmed = saved ? saved.trim() : '';
@@ -116,11 +74,7 @@
             formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
         }
         updateLocalAgentControls();
-        if (runtime !== 'local') {
-            localStorage.setItem('sop_chat_pinned', 'false');
-        }
-        applyChatPinnedState();
-
+        updateChatFloaterButton();
         // FORCE CLEAR EVERYTHING on runtime switch
         console.log('[RuntimeToggle] clearing all state for runtime switch');
         localStorage.removeItem('sop_current_database');
@@ -172,8 +126,17 @@
             formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
         }
         updateLocalAgentControls();
-        applyChatPinnedState();
+        updateChatFloaterButton();
         return runtime;
+    }
+
+    function updateChatFloaterButton() {
+        const button = document.getElementById('chat-floater-btn');
+        if (!button) return;
+        const isLocalRuntime = getChatRuntimeMode() === 'local';
+        button.style.display = isLocalRuntime ? 'inline-flex' : 'none';
+        button.disabled = !isLocalRuntime;
+        button.title = isLocalRuntime ? 'Open AI chat in a floating window' : 'Floating window is only available in local runtime';
     }
 
     function getDaemonAskURL() {
@@ -270,54 +233,6 @@
         };
     }
 
-    async function reconnectToLocalAgent() {
-        const button = document.getElementById('chat-reconnect-local-agent');
-        if (button) {
-            button.disabled = true;
-            button.textContent = 'Connecting...';
-        }
-        try {
-            if (getChatRuntimeMode() === 'local') {
-                const data = await requestRuntimeWelcomeContext('local');
-                if (!data) {
-                    throw new Error('Unable to reconnect to local agent');
-                }
-                if (button) {
-                    button.textContent = 'Connected';
-                }
-                if (typeof window.reloadDatabases === 'function') {
-                    await window.reloadDatabases(true);
-                }
-                return true;
-            }
-
-            const data = await requestRuntimeWelcomeContext('hq');
-            if (!data) {
-                throw new Error('Unable to reconnect to HQ');
-            }
-            if (button) {
-                button.textContent = 'Connected';
-            }
-            if (typeof window.reloadDatabases === 'function') {
-                await window.reloadDatabases(true);
-            }
-            return true;
-        } catch (err) {
-            if (button) {
-                button.textContent = 'Reconnect';
-            }
-            appendChatMessage('ai', 'Reconnect failed: ' + (err.message || 'unknown error'));
-            return false;
-        } finally {
-            if (button) {
-                setTimeout(() => {
-                    button.disabled = false;
-                    button.textContent = 'Reconnect';
-                }, 1500);
-            }
-        }
-    }
-
     async function ensureLocalAgentReachable() {
         const response = await daemonFetch('/api/handoff', {
             method: 'POST',
@@ -337,85 +252,107 @@
     }
 
     function updateLocalAgentControls() {
-        const button = document.getElementById('chat-reconnect-local-agent');
-        const runtimeMode = getChatRuntimeMode();
-        if (button) {
-            button.style.display = runtimeMode === 'local' ? 'inline-block' : 'none';
-        }
+        return;
     }
 
     function resetChatPosition(forceDefault) {
         const widget = document.getElementById('chat-widget');
-        
-        // Mobile Detection: Check width or user agent
+        if (!widget) return;
+
+        widget.classList.remove('pinned');
+        document.body.classList.remove('sop-chat-dashboard-hidden');
+
+        if (isChatFloaterMode() && window.location.search.includes('chatFloater=1')) {
+            widget.style.width = '100%';
+            widget.style.height = '100%';
+            widget.style.left = '0';
+            widget.style.top = '0';
+            widget.style.right = '0';
+            widget.style.bottom = '0';
+            widget.style.borderRadius = '0';
+            widget.style.margin = '0';
+            return;
+        }
+
         const isMobile = isMobileViewport();
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
 
         if (isMobile) {
-            // On mobile, we let the CSS media query handle the full-screen layout.
-            // We clear inline styles that might interfere.
             widget.style.width = '';
             widget.style.height = '';
             widget.style.left = '';
             widget.style.top = '';
             widget.style.right = '';
             widget.style.bottom = '';
+            widget.style.borderRadius = '';
+            widget.style.margin = '';
             return;
         }
 
-        const viewportWidth = window.innerWidth;
-        const viewportHeight = window.innerHeight;
-        
-        // Clear state if forced
         if (forceDefault) {
             localStorage.removeItem('sop_chat_state');
         }
 
-        if (widget.classList.contains('pinned') && !isMobileViewport()) {
-            widget.style.left = 'auto';
-            widget.style.top = '12px';
-            widget.style.right = '12px';
-            widget.style.bottom = 'auto';
-            return;
-        }
-
-        // Attempt to load saved state (unless forced)
         if (!forceDefault) {
             const savedStateJson = localStorage.getItem('sop_chat_state');
             if (savedStateJson) {
                 try {
                     const state = JSON.parse(savedStateJson);
-                    if (state.width && state.height && state.left && state.top) {
+                    const maxWidth = viewportWidth * 0.9;
+                    const maxHeight = viewportHeight * 0.9;
+                    const isValidPixelValue = (value) => {
+                        if (value === null || value === undefined || value === '') return false;
+                        if (typeof value === 'number') return Number.isFinite(value) && value >= 0;
+                        const str = String(value).trim();
+                        if (!str || /%|vw|vh|em|rem|calc/i.test(str)) return false;
+                        return /^-?\d+(?:\.\d+)?(?:px)?$/i.test(str);
+                    };
+                    const widthNum = parseFloat(state.width);
+                    const heightNum = parseFloat(state.height);
+                    const leftNum = parseFloat(state.left);
+                    const topNum = parseFloat(state.top);
+                    const hasValidSavedState = isValidPixelValue(state.width) &&
+                        isValidPixelValue(state.height) &&
+                        isValidPixelValue(state.left) &&
+                        isValidPixelValue(state.top) &&
+                        Number.isFinite(widthNum) && Number.isFinite(heightNum) &&
+                        Number.isFinite(leftNum) && Number.isFinite(topNum) &&
+                        widthNum < maxWidth && heightNum < maxHeight;
+
+                    if (hasValidSavedState) {
                         widget.style.width = state.width;
                         widget.style.height = state.height;
                         widget.style.left = state.left;
                         widget.style.top = state.top;
                         widget.style.right = 'auto';
                         widget.style.bottom = 'auto';
-                        
-                        // Basic bounds check (optional but good)
+
                         const rect = widget.getBoundingClientRect();
                         if (rect.left > viewportWidth - 50) widget.style.left = (viewportWidth - rect.width - 20) + 'px';
                         if (rect.top > viewportHeight - 50) widget.style.top = (viewportHeight - rect.height - 20) + 'px';
-                        
+
                         return;
                     }
+
+                    localStorage.removeItem('sop_chat_state');
                 } catch (e) {
-                    console.error("Failed to load chat state", e);
+                    console.error('Failed to load chat state', e);
+                    localStorage.removeItem('sop_chat_state');
                 }
             }
         }
 
-        // Defaults (matches CSS)
         const width = 550;
         const height = 555;
-        
         widget.style.width = width + 'px';
         widget.style.height = height + 'px';
-        // Position at bottom-left, above the toggle button (which is ~52px from bottom)
         widget.style.left = '57px';
         widget.style.top = (viewportHeight - height + 2) + 'px';
         widget.style.right = 'auto';
         widget.style.bottom = 'auto';
+        widget.style.borderRadius = '8px';
+        widget.style.margin = '';
     }
 
     // Handle resize events to adjust chat position if needed
@@ -430,11 +367,50 @@
         document.body.classList.toggle('sop-chat-dashboard-hidden', !visible);
     }
 
+    function handleChatInput(event) {
+        const input = event && event.target ? event.target : document.getElementById('chat-input');
+        const sendBtn = document.getElementById('chat-send-btn');
+        const value = input && typeof input.value === 'string' ? input.value : '';
+        if (sendBtn) {
+            sendBtn.disabled = value.trim() === '';
+        }
+    }
+
+    function isChatFloaterMode() {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('chatOnly') === '1' || params.get('chatFloater') === '1';
+    }
+
+    function initializeChatFloaterMode() {
+        if (!isChatFloaterMode()) {
+            return;
+        }
+
+        if (window.location.search.includes('chatFloater=1')) {
+            document.body.classList.add('sop-chat-floater-mode');
+            setTimeout(() => {
+                applyChatRuntimeSelection();
+                toggleChatWidget(true);
+                resetChatPosition();
+                handleChatInput();
+                void hydrateRuntimeWelcomeContext();
+            }, 150);
+        }
+    }
+
     async function openChatPiP() {
+        if (getChatRuntimeMode() !== 'local') {
+            console.warn('[openChatPiP] Floater is only available in local runtime');
+            return;
+        }
+
         const widget = document.getElementById('chat-widget');
         if (widget) {
-            widget.classList.remove('active');
+            widget.classList.add('active');
         }
+
+        const floaterUrl = new URL('/app', window.location.origin);
+        floaterUrl.searchParams.set('chatFloater', '1');
 
         if (window && window.documentPictureInPicture && typeof window.documentPictureInPicture.requestWindow === 'function') {
             try {
@@ -442,39 +418,27 @@
                     width: 420,
                     height: 650
                 });
-                const response = await fetch('/chat', { credentials: 'same-origin' });
-                const html = await response.text();
-                const doc = pipWindow.document;
-                doc.open();
-                doc.write(html);
-                doc.close();
-                doc.title = 'SOP AI Chat';
+                const targetDocument = pipWindow.document;
+                targetDocument.open();
+                targetDocument.write(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/><title>SOP AI Chat</title><style>html,body{margin:0;padding:0;width:100%;height:100%;background:#1f1f1f;overflow:hidden;}iframe{border:0;width:100%;height:100%;}</style></head><body><iframe src="${floaterUrl.toString()}" allow="clipboard-write"></iframe></body></html>`);
+                targetDocument.close();
                 return;
             } catch (err) {
                 console.warn('[openChatPiP] PiP failed, falling back to popup:', err);
             }
         }
 
-        const popup = window.open('/chat', 'sop-ai-chat-pip', 'width=420,height=650,resizable=yes,scrollbars=yes');
+        const popup = window.open(floaterUrl.toString(), 'sop-ai-chat-pip', 'width=420,height=650,resizable=yes,scrollbars=yes');
         if (popup) {
             popup.focus();
-        }
-    }
-
-    function handleChatMinimize() {
-        const widget = document.getElementById('chat-widget');
-        const pinned = getChatRuntimeMode() === 'local' && localStorage.getItem('sop_chat_pinned') === 'true' && !isMobileViewport();
-
-        if (pinned) {
-            const shouldHideDashboard = !document.body.classList.contains('sop-chat-dashboard-hidden');
-            setDashboardVisibility(!shouldHideDashboard);
-            if (shouldHideDashboard) {
-                widget.classList.add('active');
-                resetChatPosition();
-            }
             return;
         }
 
+        console.warn('[openChatPiP] Popup was blocked; opening the chat route in the current tab instead.');
+        window.location.href = floaterUrl.toString();
+    }
+
+    function handleChatMinimize() {
         toggleChatWidget();
     }
 
@@ -483,6 +447,16 @@
         const btn = document.getElementById('chat-toggle-btn');
         const input = document.getElementById('chat-input');
         
+        if (isChatFloaterMode() && window.location.search.includes('chatFloater=1')) {
+            widget.classList.add('active');
+            widget.style.display = 'flex';
+            handleChatInput();
+            if (input) {
+                setTimeout(() => input.focus(), 100);
+            }
+            return;
+        }
+
         if (widget.classList.contains('active') && !forceOpen) {
             widget.classList.remove('active');
         } else {
@@ -493,17 +467,22 @@
 
             // Mobile-specific input optimization
             if (window.innerWidth <= 768) {
-                input.setAttribute('inputmode', 'search');
-                input.setAttribute('enterkeyhint', 'send');
-                input.name = 'sop_ai_chat_prompt_unique_id'; // Prevent history
+                if (input) {
+                    input.setAttribute('inputmode', 'search');
+                    input.setAttribute('enterkeyhint', 'send');
+                    input.name = 'sop_ai_chat_prompt_unique_id'; // Prevent history
+                }
             } else {
                 // Reset for desktop
-                input.removeAttribute('inputmode');
-                input.removeAttribute('enterkeyhint');
-                input.name = 'sop_ai_chat_prompt';
+                if (input) {
+                    input.removeAttribute('inputmode');
+                    input.removeAttribute('enterkeyhint');
+                    input.name = 'sop_ai_chat_prompt';
+                }
             }
 
             // Focus input when opening
+            handleChatInput();
             setTimeout(() => input.focus(), 100);
         }
     }
@@ -522,14 +501,16 @@
         const widget = document.getElementById('chat-widget');
         const header = widget.querySelector('.chat-header');
         applyChatRuntimeSelection();
-        applyChatPinnedState();
+        if (window.location.search.includes('chatFloater=1')) {
+            initializeChatFloaterMode();
+        }
         void hydrateRuntimeWelcomeContext();
         let isDragging = false;
         let dragStartX, dragStartY;
 
         header.addEventListener('mousedown', function(e) {
             // Ignore if clicking controls or select
-            if (widget.classList.contains('pinned') || e.target.closest('.chat-controls') || e.target.closest('select')) return;
+            if (e.target.closest('.chat-controls') || e.target.closest('select')) return;
             
             isDragging = true;
             dragStartX = e.clientX;
