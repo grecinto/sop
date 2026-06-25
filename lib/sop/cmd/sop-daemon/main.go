@@ -126,7 +126,7 @@ func main() {
 	// Override/Add daemon-specific handlers on the mux (before CORS wrapping)
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(executeHandler))))
 	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff))))
-	
+
 	// Override /api/ask with local RAG implementation
 	mux.HandleFunc("/api/ask", handleOptionsAndCORS(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ragSvc == nil {

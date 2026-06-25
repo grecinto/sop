@@ -58,17 +58,27 @@ func ensureConfigPath(explicitPath string) (string, bool, error) {
 		return "", false, fmt.Errorf("create config directory: %w", err)
 	}
 
-	bootstrap := `{
-  "id": "local-agent",
-  "name": "Local Agent",
-  "description": "Default local agent configuration for SOP daemon",
-  "system_prompt": "You are a helpful local assistant.",
-  "storage_path": "./storage"
+	// Create default database path relative to config
+	dbPath := filepath.Join(filepath.Dir(defaultPath), "sop_data")
+	
+	bootstrap := fmt.Sprintf(`{
+  "port": 9090,
+  "databases": [
+    {
+      "name": "local",
+      "path": "%s",
+      "mode": "standalone"
+    }
+  ],
+  "pageSize": 40,
+  "production_mode": true
 }
-`
+`, dbPath)
 	if err := os.WriteFile(defaultPath, []byte(bootstrap), 0o644); err != nil {
 		return "", false, fmt.Errorf("write default config: %w", err)
 	}
+	
+	log.Printf("Created default daemon config at %s with standalone database (no SOP KB)", defaultPath)
 	return defaultPath, true, nil
 }
 
