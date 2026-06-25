@@ -242,8 +242,17 @@
             <input type="hidden" id="agent-select" value="copilot">
         </div>
         <div class="chat-controls">
+            <button type="button" id="chat-pin-btn" class="chat-pin-btn" onclick="event.stopPropagation(); toggleChatPin()" title="Pin AI chat window" style="display: none;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3v2"></path>
+                    <path d="M12 9v6"></path>
+                    <path d="M12 15l-3 4h6l-3-4"></path>
+                    <path d="M4 4l16 16"></path>
+                </svg>
+            </button>
+            <button type="button" class="pip-btn" onclick="event.stopPropagation(); openChatPiP()" title="Open AI chat in a floating window" style="font-size: 12px;">⧉</button>
             <button class="reset-btn" onclick="resetChatPosition(true)" title="Reset Position" style="font-size: 14px;">&#x21ba;</button>
-            <button class="minimize-btn" onclick="toggleChatWidget()">_</button>
+            <button class="minimize-btn" onclick="handleChatMinimize()">_</button>
         </div>
     </div>
     

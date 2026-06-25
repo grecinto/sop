@@ -321,6 +321,34 @@
             background: none;
         }
 
+        .chat-controls .chat-pin-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            padding: 0;
+            opacity: 0.75;
+            border-radius: 3px;
+        }
+
+        .chat-controls .chat-pin-btn.active {
+            color: var(--accent-color);
+            opacity: 1;
+        }
+
+        .chat-widget.pinned {
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+            border-color: var(--accent-color);
+        }
+
+        body.sop-chat-dashboard-hidden #sidebar,
+        body.sop-chat-dashboard-hidden #resizer,
+        body.sop-chat-dashboard-hidden #main,
+        body.sop-chat-dashboard-hidden #detail-panel {
+            display: none !important;
+        }
+
         .chat-toggle-btn {
             position: fixed;
             bottom: 5px; /* match env icon padding */
