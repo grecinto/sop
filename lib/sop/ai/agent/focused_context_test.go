@@ -176,6 +176,23 @@ func TestBuildSystemPrompt_StoresFocusedContext_StaysWithinBudgetGuardrail(t *te
 	}
 }
 
+func TestAutomationPolicyResolvesRegisteredFamilies(t *testing.T) {
+	policy := AutomationPolicy{Enabled: true, ShellAutomationEnabled: boolPtr(false), GitAutomationEnabled: boolPtr(true), PostgresAutomationEnabled: boolPtr(true), SplunkAutomationEnabled: boolPtr(false)}
+
+	if policy.IsFamilyRegistered("shell") {
+		t.Fatal("expected shell family to be unregistered when explicitly disabled")
+	}
+	if !policy.IsFamilyRegistered("git") {
+		t.Fatal("expected git family to be registered when enabled")
+	}
+	if !policy.IsFamilyRegistered("postgres") {
+		t.Fatal("expected postgres family to be registered when enabled")
+	}
+	if policy.IsFamilyRegistered("splunk") {
+		t.Fatal("expected splunk family to be unregistered when explicitly disabled")
+	}
+}
+
 func TestBuildSystemPrompt_IncludesAutomationToolFamilyContext(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
@@ -201,6 +218,9 @@ func TestBuildSystemPrompt_UsesClassifiedAutomationFamilies(t *testing.T) {
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowPostgresRead: true, AllowPostgresWrite: true})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
 	prompt := ag.buildSystemPrompt(ctx, "Can you help me with the system?", TaskContextClassification{
 		AutomationFamilies: []string{"postgres"},
 	})
@@ -210,6 +230,21 @@ func TestBuildSystemPrompt_UsesClassifiedAutomationFamilies(t *testing.T) {
 	}
 	if strings.Contains(prompt, "Splunk") {
 		t.Fatalf("did not expect splunk guidance when only postgres was classified, got prompt: %s", prompt)
+	}
+}
+
+func TestBuildSystemPrompt_DoesNotAddAutomationGuidanceWithoutRelevantFamilies(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+
+	SetAutomationPolicy(DefaultAutomationPolicy())
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	prompt := ag.buildSystemPrompt(ctx, "Can you help me with the system?", TaskContextClassification{})
+
+	if strings.Contains(prompt, "PostgreSQL") || strings.Contains(prompt, "Splunk") || strings.Contains(prompt, "Git") {
+		t.Fatalf("expected no automation guidance when no relevant automation family is present, got prompt: %s", prompt)
 	}
 }
 

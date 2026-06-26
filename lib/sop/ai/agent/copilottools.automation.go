@@ -11,26 +11,38 @@ import (
 )
 
 type AutomationPolicy struct {
-	Enabled               bool
-	AllowShellCommands    bool
-	AllowEmail            bool
-	AllowPostgresRead     bool
-	AllowPostgresWrite    bool
-	AllowSplunkRead       bool
-	AllowSplunkWrite      bool
-	RequireApproval       bool
-	DefaultTimeoutSeconds int
-	MaxTimeoutSeconds     int
+	Enabled                   bool
+	ShellAutomationEnabled    *bool
+	GitAutomationEnabled      *bool
+	PostgresAutomationEnabled *bool
+	SplunkAutomationEnabled   *bool
+	AllowShellCommands        bool
+	AllowEmail                bool
+	AllowPostgresRead         bool
+	AllowPostgresWrite        bool
+	AllowSplunkRead           bool
+	AllowSplunkWrite          bool
+	RequireApproval           bool
+	DefaultTimeoutSeconds     int
+	MaxTimeoutSeconds         int
 }
 
 func DefaultAutomationPolicy() AutomationPolicy {
+	shellEnabled := true
+	gitEnabled := true
+	postgresEnabled := true
+	splunkEnabled := true
 	return AutomationPolicy{
-		Enabled:               false,
-		AllowShellCommands:    false,
-		AllowEmail:            false,
-		RequireApproval:       true,
-		DefaultTimeoutSeconds: 600,
-		MaxTimeoutSeconds:     1800,
+		Enabled:                   false,
+		ShellAutomationEnabled:    &shellEnabled,
+		GitAutomationEnabled:      &gitEnabled,
+		PostgresAutomationEnabled: &postgresEnabled,
+		SplunkAutomationEnabled:   &splunkEnabled,
+		AllowShellCommands:        false,
+		AllowEmail:                false,
+		RequireApproval:           true,
+		DefaultTimeoutSeconds:     600,
+		MaxTimeoutSeconds:         1800,
 	}
 }
 
@@ -69,7 +81,40 @@ func GetAutomationPolicy() AutomationPolicy {
 	return DefaultAutomationPolicy()
 }
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func boolValue(v *bool, fallback bool) bool {
+	if v != nil {
+		return *v
+	}
+	return fallback
+}
+
+func (p AutomationPolicy) IsFamilyRegistered(family string) bool {
+	if !p.Enabled && !localDesktopAutomationEnabled.Load() {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(family)) {
+	case "shell":
+		return boolValue(p.ShellAutomationEnabled, true)
+	case "git":
+		return boolValue(p.GitAutomationEnabled, true)
+	case "postgres":
+		return boolValue(p.PostgresAutomationEnabled, true)
+	case "splunk":
+		return boolValue(p.SplunkAutomationEnabled, true)
+	default:
+		return false
+	}
+}
+
 func (p AutomationPolicy) isShellAutomationEnabled() bool {
+	if !p.IsFamilyRegistered("shell") {
+		return false
+	}
 	if p.Enabled {
 		return p.AllowShellCommands
 	}
@@ -85,7 +130,7 @@ func (p AutomationPolicy) isEmailAutomationEnabled() bool {
 
 func (p AutomationPolicy) isPostgresReadEnabled() bool {
 	enabled := p.Enabled || localDesktopAutomationEnabled.Load()
-	if !enabled {
+	if !enabled || !p.IsFamilyRegistered("postgres") {
 		return false
 	}
 	return p.AllowPostgresRead || p.AllowPostgresWrite || (!p.AllowPostgresRead && !p.AllowPostgresWrite)
@@ -93,7 +138,7 @@ func (p AutomationPolicy) isPostgresReadEnabled() bool {
 
 func (p AutomationPolicy) isPostgresWriteEnabled() bool {
 	enabled := p.Enabled || localDesktopAutomationEnabled.Load()
-	if !enabled {
+	if !enabled || !p.IsFamilyRegistered("postgres") {
 		return false
 	}
 	return p.AllowPostgresWrite
@@ -101,7 +146,7 @@ func (p AutomationPolicy) isPostgresWriteEnabled() bool {
 
 func (p AutomationPolicy) isSplunkReadEnabled() bool {
 	enabled := p.Enabled || localDesktopAutomationEnabled.Load()
-	if !enabled {
+	if !enabled || !p.IsFamilyRegistered("splunk") {
 		return false
 	}
 	return p.AllowSplunkRead || p.AllowSplunkWrite || (!p.AllowSplunkRead && !p.AllowSplunkWrite)
@@ -109,7 +154,7 @@ func (p AutomationPolicy) isSplunkReadEnabled() bool {
 
 func (p AutomationPolicy) isSplunkWriteEnabled() bool {
 	enabled := p.Enabled || localDesktopAutomationEnabled.Load()
-	if !enabled {
+	if !enabled || !p.IsFamilyRegistered("splunk") {
 		return false
 	}
 	return p.AllowSplunkWrite

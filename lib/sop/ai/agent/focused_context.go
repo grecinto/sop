@@ -101,6 +101,7 @@ func (a *CopilotAgent) buildAutomationFamilyFocusedExecutionContext(ctx context.
 	if len(families) == 0 {
 		families = inferAutomationFamiliesFromQuery(query)
 	}
+	families = filterAutomationFamiliesByPolicy(families)
 
 	var sections []string
 	for _, family := range families {
@@ -138,6 +139,21 @@ func inferAutomationFamiliesFromQuery(query string) []string {
 		families = append(families, "shell")
 	}
 	return normalizeAutomationFamilies(families)
+}
+
+func filterAutomationFamiliesByPolicy(families []string) []string {
+	policy := GetAutomationPolicy()
+	if len(families) == 0 {
+		return nil
+	}
+
+	filtered := make([]string, 0, len(families))
+	for _, family := range families {
+		if policy.IsFamilyRegistered(family) {
+			filtered = append(filtered, family)
+		}
+	}
+	return normalizeAutomationFamilies(filtered)
 }
 
 func (a *CopilotAgent) buildStoresFocusedExecutionContext(ctx context.Context, taskClassification TaskContextClassification) string {

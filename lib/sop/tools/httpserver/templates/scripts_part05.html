@@ -66,7 +66,8 @@
             }
         }
         if (domainSelect) {
-            domainSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
+            domainSelect.style.display = 'none';
+            domainSelect.setAttribute('aria-hidden', 'true');
         }
         if (formatSelect) {
             formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
@@ -97,13 +98,6 @@
 
         void requestRuntimeWelcomeContext(runtime);
 
-        const currentMode = runtime === 'local' ? 'Local Daemon' : 'HQ';
-        const alertDiv = document.createElement('div');
-        alertDiv.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #4CAF50; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; box-shadow: 0 2px 5px rgba(0,0,0,0.2);';
-        alertDiv.textContent = `Switched to ${currentMode} runtime`;
-        document.body.appendChild(alertDiv);
-        setTimeout(() => alertDiv.remove(), 2000);
-
         return runtime;
     }
 
@@ -119,7 +113,8 @@
             input.style.display = runtime === 'hq' ? 'none' : 'inline-block';
         }
         if (domainSelect) {
-            domainSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
+            domainSelect.style.display = 'none';
+            domainSelect.setAttribute('aria-hidden', 'true');
         }
         if (formatSelect) {
             formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
