@@ -132,11 +132,21 @@
 
     function updateChatFloaterButton() {
         const button = document.getElementById('chat-floater-btn');
+        const resetButton = document.getElementById('chat-reset-btn');
+        const minimizeButton = document.getElementById('chat-minimize-btn');
         if (!button) return;
         const isLocalRuntime = getChatRuntimeMode() === 'local';
-        button.style.display = isLocalRuntime ? 'inline-flex' : 'none';
-        button.disabled = !isLocalRuntime;
+        const isFloaterMode = isChatFloaterMode();
+        button.style.display = isFloaterMode ? 'none' : (isLocalRuntime ? 'inline-flex' : 'none');
+        button.disabled = false;
         button.title = isLocalRuntime ? 'Open AI chat in a floating window' : 'Floating window is only available in local runtime';
+        button.textContent = '⧉';
+        if (resetButton) {
+            resetButton.style.display = isFloaterMode ? 'none' : 'inline-flex';
+        }
+        if (minimizeButton) {
+            minimizeButton.style.display = isFloaterMode ? 'none' : 'inline-flex';
+        }
     }
 
     function getDaemonAskURL() {
@@ -381,12 +391,46 @@
         return params.get('chatOnly') === '1' || params.get('chatFloater') === '1';
     }
 
+    function requestMainWindowRefreshOnClose() {
+        const cleanupSignal = 'sop_chat_floater_cleanup';
+        const persistCleanupSignal = () => {
+            try {
+                localStorage.setItem(cleanupSignal, String(Date.now()));
+            } catch (err) {
+                console.warn('[chatFloater] Unable to persist the cleanup signal:', err);
+            }
+        };
+
+        const cleanupAndRefresh = () => {
+            persistCleanupSignal();
+        };
+
+        window.addEventListener('pagehide', cleanupAndRefresh);
+        window.addEventListener('beforeunload', cleanupAndRefresh);
+    }
+
+    function registerMainWindowFloaterCleanupListener() {
+        const cleanupSignal = 'sop_chat_floater_cleanup';
+        window.addEventListener('storage', (event) => {
+            if (event.key !== cleanupSignal || !event.newValue) {
+                return;
+            }
+            try {
+                localStorage.removeItem(cleanupSignal);
+            } catch (err) {
+                console.warn('[chatFloater] Unable to clear the cleanup signal:', err);
+            }
+            window.location.reload();
+        });
+    }
+
     function initializeChatFloaterMode() {
         if (!isChatFloaterMode()) {
             return;
         }
 
         if (window.location.search.includes('chatFloater=1')) {
+            requestMainWindowRefreshOnClose();
             document.body.classList.add('sop-chat-floater-mode');
             setTimeout(() => {
                 applyChatRuntimeSelection();
@@ -406,7 +450,8 @@
 
         const widget = document.getElementById('chat-widget');
         if (widget) {
-            widget.classList.add('active');
+            widget.classList.remove('active');
+            widget.style.display = 'none';
         }
 
         const floaterUrl = new URL('/app', window.location.origin);
@@ -424,18 +469,12 @@
                 targetDocument.close();
                 return;
             } catch (err) {
-                console.warn('[openChatPiP] PiP failed, falling back to popup:', err);
+                console.warn('[openChatPiP] PiP failed, falling back to the current tab:', err);
             }
         }
 
-        const popup = window.open(floaterUrl.toString(), 'sop-ai-chat-pip', 'width=420,height=650,resizable=yes,scrollbars=yes');
-        if (popup) {
-            popup.focus();
-            return;
-        }
-
-        console.warn('[openChatPiP] Popup was blocked; opening the chat route in the current tab instead.');
-        window.location.href = floaterUrl.toString();
+        console.warn('[openChatPiP] Opening the chat route in a fresh tab instead.');
+        window.open(floaterUrl.toString(), '_blank', 'noopener,noreferrer');
     }
 
     function handleChatMinimize() {
@@ -500,6 +539,7 @@
     document.addEventListener('DOMContentLoaded', function() {
         const widget = document.getElementById('chat-widget');
         const header = widget.querySelector('.chat-header');
+        registerMainWindowFloaterCleanupListener();
         applyChatRuntimeSelection();
         if (window.location.search.includes('chatFloater=1')) {
             initializeChatFloaterMode();

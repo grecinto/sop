@@ -250,6 +250,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 8px;
             font-weight: bold;
             cursor: move;
             user-select: none;
@@ -260,7 +261,31 @@
             align-items: center;
             gap: 8px;
             min-width: 0;
-            flex: 1;
+            flex: 1 1 auto;
+            overflow: visible;
+        }
+
+        body.sop-chat-floater-mode .chat-header {
+            padding: 10px 12px;
+            gap: 6px;
+        }
+
+        body.sop-chat-floater-mode .chat-header-controls {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: visible;
+        }
+
+        body.sop-chat-floater-mode .chat-ai-summary-button {
+            flex: 0 1 auto;
+            min-width: 180px;
+            max-width: 320px;
+            width: auto;
+        }
+
+        body.sop-chat-floater-mode .chat-controls {
+            flex: 0 0 auto;
+            margin-left: auto;
         }
 
         .chat-ai-summary-button {
@@ -269,8 +294,10 @@
             align-items: flex-start;
             justify-content: center;
             gap: 1px;
-            min-width: 0;
-            max-width: 220px;
+            min-width: 180px;
+            max-width: 320px;
+            width: auto;
+            flex: 0 1 auto;
             padding: 4px 9px;
             border: 1px solid var(--input-border);
             border-radius: 6px;
@@ -440,9 +467,13 @@
                 padding-right: env(safe-area-inset-right) !important;
             }
             
-            /* Don't allow closing chat on mobile, hide the close/minimize header controls */
-            .chat-header-controls {
+            /* Keep the floater header controls visible even in narrow detached windows. */
+            body:not(.sop-chat-floater-mode) .chat-header-controls {
                 display: none !important;
+            }
+
+            body.sop-chat-floater-mode .chat-header-controls {
+                display: flex !important;
             }
 
             .chat-history-controls {
@@ -500,9 +531,13 @@
                 padding-right: env(safe-area-inset-right) !important;
             }
             
-            /* Don't allow closing chat on mobile, hide the close/minimize header controls */
-            .chat-header-controls {
+            /* Keep the floater header controls visible even in narrow detached windows. */
+            body:not(.sop-chat-floater-mode) .chat-header-controls {
                 display: none !important;
+            }
+
+            body.sop-chat-floater-mode .chat-header-controls {
+                display: flex !important;
             }
 
             .chat-history-controls {
