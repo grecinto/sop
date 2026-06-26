@@ -20,7 +20,6 @@
     function getChatRuntimeMode() {
         const saved = localStorage.getItem('sop_chat_runtime');
         const trimmed = saved ? saved.trim() : '';
-        console.log('[getChatRuntimeMode] localStorage raw:', JSON.stringify(saved), 'trimmed:', JSON.stringify(trimmed));
         return trimmed === 'local' ? 'local' : 'hq';
     }
 
@@ -54,7 +53,6 @@
 
     function setChatRuntimeMode(mode) {
         const runtime = mode === 'local' ? 'local' : 'hq';
-        console.log('[RuntimeToggle] switching runtime to', runtime);
         localStorage.setItem('sop_chat_runtime', runtime);
         const checkbox = document.getElementById('chat-runtime-hq');
         const input = document.getElementById('chat-runtime-local-url');
@@ -75,8 +73,9 @@
         }
         updateLocalAgentControls();
         updateChatFloaterButton();
-        // FORCE CLEAR EVERYTHING on runtime switch
-        console.log('[RuntimeToggle] clearing all state for runtime switch');
+        if (typeof window.syncEnvironmentManagerVisibility === 'function') {
+            window.syncEnvironmentManagerVisibility();
+        }
         localStorage.removeItem('sop_current_database');
         localStorage.removeItem('sop_current_store');
         if (typeof window !== 'undefined') {
@@ -127,6 +126,9 @@
         }
         updateLocalAgentControls();
         updateChatFloaterButton();
+        if (typeof window.syncEnvironmentManagerVisibility === 'function') {
+            window.syncEnvironmentManagerVisibility();
+        }
         return runtime;
     }
 
@@ -814,7 +816,6 @@
                 user_id: currentUserID,
                 session_id: currentSessionID
             });
-            console.log(`Feedback ${type} sent for msg ${currentAiMsgId}`);
         } catch (e) {
             console.error("Failed to send feedback", e);
         }
@@ -1291,7 +1292,6 @@
                             
                             if (match) {
                                 const newDbName = match[1];
-                                console.log("Detected Client-Side Switch DB Action:", newDbName);
 
                                 // 1. Reload the DB List (in case it's a new DB) - Don't auto-select
                                 if (typeof reloadDatabases === 'function') {
@@ -1330,7 +1330,6 @@
                             const refreshSpacesMatch = textPayload.match(refreshSpacesRegex);
                             if (refreshSpacesMatch) {
                                 const targetSpaceName = refreshSpacesMatch[1] ? refreshSpacesMatch[1].trim() : currentStore;
-                                console.log("Detected Client-Side Refresh Spaces Action", targetSpaceName);
                                 if (typeof refreshSpacesList === 'function' && currentDatabase) {
                                     await refreshSpacesList(currentDatabase, targetSpaceName);
                                 } else if (typeof selectDatabase === 'function' && currentDatabase) {
@@ -1349,7 +1348,6 @@
                             const refreshSpaceViewMatch = textPayload.match(refreshSpaceViewRegex);
                             if (refreshSpaceViewMatch) {
                                 const targetSpaceName = refreshSpaceViewMatch[1];
-                                console.log("Detected Client-Side Refresh Space View Action:", targetSpaceName);
                                 const activeSpaceName = currentStore ? currentStore.replace('/data', '') : '';
                                 if (activeSpaceName === targetSpaceName && typeof selectSpace === 'function') {
                                     const targetLi = Array.from(document.querySelectorAll('#kb-list li')).find(li => li.title === targetSpaceName);

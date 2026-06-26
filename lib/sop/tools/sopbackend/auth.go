@@ -530,13 +530,11 @@ func (c *Config) AuthenticateBearerToken(ctx context.Context, token string) (boo
 		return false, nil, nil
 	}
 
-	log.Debug("AuthenticateBearerToken: validating token", "token_prefix", tokenPrefix(token))
 	user, err := currentTokenFacade().ValidateToken(ctx, token)
 	if err != nil {
 		log.Warn("AuthenticateBearerToken: token rejected", "error", err)
 		return false, nil, err
 	}
-	log.Debug("AuthenticateBearerToken: token accepted", "user", user.Username, "role", user.Role, "token_prefix", tokenPrefix(token))
 	return true, user, nil
 }
 
@@ -556,6 +554,18 @@ func authTokenFromRequest(r *http.Request) string {
 		return cookie.Value
 	}
 	return ""
+}
+
+func CanManageEnvironments(auth sop.AuthContext) bool {
+	if auth.Permissions != nil {
+		if allowed, ok := auth.Permissions["manage_environments"]; ok {
+			return allowed
+		}
+	}
+	if config.DisableAuth {
+		return false
+	}
+	return true
 }
 
 func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -588,10 +598,16 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		log.Debug("requireAuth: token accepted", "path", r.URL.Path, "user", user.Username, "role", user.Role)
 
-		// Add user info to context for downstream handlers
-		authCtx := sop.AuthContext{
-			UserID: user.Username,
-			Roles:  []string{user.Role},
+		// Preserve any existing auth policy from upstream middleware and merge
+		// in the user identity for downstream handlers.
+		authCtx := sop.GetAuthFromContext(r.Context())
+		authCtx.UserID = user.Username
+		authCtx.Roles = []string{user.Role}
+		if authCtx.Permissions == nil {
+			authCtx.Permissions = map[string]bool{}
+		}
+		if _, ok := authCtx.Permissions["manage_environments"]; !ok {
+			authCtx.Permissions["manage_environments"] = !config.DisableAuth
 		}
 		ctx := sop.ContextWithAuth(r.Context(), authCtx)
 		next(w, r.WithContext(ctx))

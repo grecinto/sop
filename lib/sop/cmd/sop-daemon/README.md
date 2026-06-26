@@ -6,6 +6,7 @@ This directory contains the private host-side daemon for the overlay repo. It is
 
 - local command execution for approved UI actions,
 - a local Ask endpoint for host-side RAG requests,
+- direct command-prefix routing for fast local shell execution,
 - and the local topology/transport glue that connects the private runtime to the higher-level product experience.
 
 ## Unified deployment model
@@ -66,6 +67,26 @@ The daemon listens on 127.0.0.1 by default and exposes:
 
 - POST /api/execute
 - POST /api/ask
+
+## Direct local command execution
+
+The local-agent Ask flow accepts direct command prefixes so users can work with the host shell without going through the full reasoning loop:
+
+- `cmd:...`
+- `shell:...`
+- `exec:...`
+- `run:...`
+
+Examples:
+
+```text
+cmd:pwd
+cmd:go test ./...
+cmd:git status
+cmd:find . -name "*.go" | head
+```
+
+When local desktop automation is enabled, the same execution path can also trigger richer helpers for repo inspection and editing, including file reads/writes/patches, directory management, repo search/grep, test execution, and path inspection. These actions are still approval-aware and policy-gated by the automation layer.
 
 ## Private overlay scope
 

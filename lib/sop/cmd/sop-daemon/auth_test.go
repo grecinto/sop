@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,8 +10,40 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
+
+func TestDaemonRequireAuthPropagatesUserRoleToContext(t *testing.T) {
+	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute)}
+	ctx := context.Background()
+	token, _, err := h.sessionStore.CreateSession(ctx, "alice", sop.RoleAdmin)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	var gotAuth sop.AuthContext
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = sop.GetAuthFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	h.RequireAuth(next)(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d", http.StatusNoContent, rr.Code)
+	}
+	if gotAuth.UserID != "alice" {
+		t.Fatalf("expected user id alice, got %q", gotAuth.UserID)
+	}
+	if len(gotAuth.Roles) != 1 || gotAuth.Roles[0] != sop.RoleAdmin {
+		t.Fatalf("expected admin role to be propagated, got %#v", gotAuth.Roles)
+	}
+}
 
 func TestHandleBootstrapUsesCurrentBootstrapSecretFromDisk(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

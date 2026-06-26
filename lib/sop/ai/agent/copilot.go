@@ -1123,7 +1123,24 @@ func normalizeMetaQuestionText(text string) string {
 }
 
 func (a *CopilotAgent) handleDirectToolInvocation(ctx context.Context, query string, gen ai.Generator) (bool, string, error) {
-	if strings.HasPrefix(strings.TrimSpace(query), "/") {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return false, "", nil
+	}
+
+	if directCommand, ok := parseDirectCommandInvocation(trimmed); ok {
+		a.registerTools(ctx)
+		res, err := a.toolExecuteLocalCommand(ctx, map[string]any{
+			"command":   directCommand,
+			"reasoning": "Direct local command execution requested by user.",
+		})
+		if err != nil {
+			return true, "", err
+		}
+		return true, res, nil
+	}
+
+	if strings.HasPrefix(trimmed, "/") {
 		// Register tools for local command parsing
 		a.registerTools(ctx)
 		handled, res, err := a.handleSlashCommand(ctx, query, gen)
@@ -1135,6 +1152,22 @@ func (a *CopilotAgent) handleDirectToolInvocation(ctx context.Context, query str
 		}
 	}
 	return false, "", nil
+}
+
+func parseDirectCommandInvocation(query string) (string, bool) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return "", false
+	}
+
+	prefixes := []string{"cmd:", "cmd ", "shell:", "shell ", "exec:", "exec ", "run:", "run "}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			command := strings.TrimSpace(trimmed[len(prefix):])
+			return command, command != ""
+		}
+	}
+	return "", false
 }
 
 func (a *CopilotAgent) handlePendingUserConfirmation(ctx context.Context, query string) (bool, string, error) {

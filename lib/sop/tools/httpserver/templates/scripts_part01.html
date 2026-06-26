@@ -271,7 +271,6 @@
     async function runtimeDataCall(endpoint, method = 'GET', body = null, overrideHeaders = null) {
         const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
         const isSpacesEndpoint = typeof endpoint === 'string' && endpoint.includes('/api/spaces');
-        console.log('[runtimeDataCall] endpoint=', endpoint, 'mode=', runtimeMode, 'method=', method);
         if (runtimeMode === 'local') {
             try {
                 const h = { 'Content-Type': 'application/json' };
@@ -296,13 +295,11 @@
 
                 const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
                 const targetUrl = `${daemonBase}${endpoint}`;
-                console.log('[runtimeDataCall] local fetch target=', targetUrl, 'useDaemonAuth=', useDaemonAuth, 'daemonAuthAvailable=', !!(window.daemonAuth && typeof window.daemonAuth.request === 'function'));
                 if (useDaemonAuth && window.daemonAuth) {
                     const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
                     if (existingToken) {
                         h.Authorization = `Bearer ${existingToken}`;
                     } else if (typeof window.daemonAuth.bootstrap === 'function') {
-                        console.log('[runtimeDataCall] bootstrapping daemon auth before fetch');
                         await window.daemonAuth.bootstrap();
                         const bootToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
                         if (bootToken) {
@@ -310,7 +307,6 @@
                         }
                     }
                 }
-                console.log('[runtimeDataCall] sending local request with auth=', !!h.Authorization, 'to=', targetUrl);
                 const response = await fetch(targetUrl, options);
 
                 if (!response.ok) {
@@ -743,7 +739,6 @@
         const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
         const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
 
-        console.log('[daemonRuntimeRequest] endpoint:', endpoint, 'useDaemonAuth:', useDaemonAuth);
         if (useDaemonAuth) {
             const authReady = await waitForDaemonAuthClient(4000);
             if (!authReady) {
@@ -754,7 +749,6 @@
                     options.headers = options.headers || {};
                     options.headers.Authorization = `Bearer ${existingToken}`;
                 } else if (typeof window.daemonAuth.bootstrap === 'function') {
-                    console.log('[daemonRuntimeRequest] bootstrapping daemon auth before fetch');
                     await window.daemonAuth.bootstrap();
                     const bootToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
                     if (bootToken) {
@@ -766,17 +760,13 @@
         }
 
         const targetUrl = `${daemonBase}${endpoint}`;
-        console.log('[daemonRuntimeRequest] direct fetch to:', targetUrl, 'auth=', !!(options.headers && options.headers.Authorization));
         return fetch(targetUrl, options);
     }
 
     async function loadRuntimeRefreshPayload() {
         const runtimeMode = getCurrentRuntimeMode();
-        console.log('[loadRuntimeRefreshPayload] READING runtime from localStorage:', localStorage.getItem('sop_chat_runtime'));
-        console.log('[loadRuntimeRefreshPayload] getCurrentRuntimeMode() returned:', runtimeMode);
         if (runtimeMode === 'local') {
             const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
-            console.log('[loadRuntimeRefreshPayload] calling daemon at:', daemonBase);
             try {
                 const response = await daemonRuntimeRequest('/api/runtime/refresh', {
                     method: 'GET',
@@ -784,14 +774,12 @@
                     cache: 'no-store',
                     credentials: 'omit'
                 });
-                console.log('[loadRuntimeRefreshPayload] daemon response status:', response.status);
                 if (!response.ok) {
                     const text = await response.text().catch(() => '');
                     console.error('[loadRuntimeRefreshPayload] daemon error:', text);
                     throw new Error(text || `Runtime refresh failed (${response.status})`);
                 }
                 const payload = await response.json().catch(() => null);
-                console.log('[loadRuntimeRefreshPayload] daemon payload:', payload);
                 if (payload && (Array.isArray(payload.databases) || payload.runtime)) {
                     return payload;
                 }
@@ -808,17 +796,14 @@
     // Refactored into a reusable function to support dynamic database switching
     window.reloadDatabases = function(autoSelect = true) {
         const runtimeMode = getCurrentRuntimeMode();
-        console.log('[reloadDatabases] called with runtime:', runtimeMode, 'autoSelect:', autoSelect);
 
         // FORCE CLEAR DROPDOWN IMMEDIATELY - don't wait for async operations
         const select = document.getElementById('database-select');
         if (select) {
-            console.log('[reloadDatabases] FORCE clearing select dropdown immediately');
             select.innerHTML = '<option>Loading...</option>';
         }
         const menu = document.getElementById('db-dropdown-menu');
         if (menu) {
-            console.log('[reloadDatabases] FORCE clearing enterprise dropdown menu immediately');
             menu.innerHTML = '';
         }
 
@@ -829,10 +814,8 @@
 
         return loadRuntimeRefreshPayload()
             .then(payload => {
-                console.log('[reloadDatabases] received payload:', payload);
                 runtimeRefreshPayload = payload || null;
                 const databases = payload && Array.isArray(payload.databases) ? payload.databases : [];
-                console.log('[reloadDatabases] databases:', databases.length, 'found');
                 availableDatabases = databases;
 
                 let systemDB = databases ? databases.find(d => d.is_system) : null;
@@ -909,12 +892,10 @@
                     return;
                 }
                 
-                console.log('[reloadDatabases] updating UI with', databases.length, 'databases');
                 openUIModal('database-section', 'block');
 
                 const userDBs = databases.filter(db => !db.is_system);
                 const systemDBs = databases.filter(db => db.is_system);
-                console.log('[reloadDatabases] userDBs:', userDBs.length, 'systemDBs:', systemDBs.length);
 
                 if (IS_ENTERPRISE) {
                     // Enterprise Mode: Use Chip UI
@@ -981,15 +962,11 @@
                     
                 } else {
                      // Standard Mode: Use <select>
-                     console.log('[reloadDatabases] using standard mode select UI');
                      openUIModal('database-select', 'block');
                      closeUIModal('enterprise-db-container');
                      
                     const select = document.getElementById('database-select');
-                    console.log('[reloadDatabases] BEFORE clearing dropdown, innerHTML length:', select.innerHTML.length);
                     select.innerHTML = '';
-                    console.log('[reloadDatabases] AFTER clearing dropdown, innerHTML length:', select.innerHTML.length);
-                    console.log('[reloadDatabases] populating dropdown with', databases.length, 'databases:', databases.map(d => d.name));
 
                     userDBs.forEach(db => {
                         const opt = document.createElement('option');
@@ -1031,15 +1008,13 @@
                 }
 
                 if (autoSelect) {
-                    console.log('[reloadDatabases autoSelect] available databases:', databases.map(d => d.name));
-                    
                     // Validate saved database exists in CURRENT runtime's database list
                     const savedDB = localStorage.getItem('sop_current_database');
                     const savedExists = savedDB ? databases.find(d => d.name === savedDB) : null;
                     
                     // If saved database doesn't exist in current runtime, clear it
                     if (savedDB && !savedExists) {
-                        console.warn('[reloadDatabases autoSelect] saved database', savedDB, 'not found in current runtime, clearing localStorage');
+                        console.warn('[reloadDatabases autoSelect] saved database not found in current runtime, clearing localStorage');
                         localStorage.removeItem('sop_current_database');
                         localStorage.removeItem('sop_current_store');
                         currentDatabase = null;
@@ -1050,7 +1025,6 @@
                     if (savedExists) {
                         // Restore saved database (validated to exist in current runtime)
                         finalDBVal = savedDB;
-                        console.log('[reloadDatabases autoSelect] restoring saved database:', finalDBVal);
                     } else {
                         // Fallback: system DB first, then any DB
                         if (systemDBs.length > 0) {
@@ -1058,7 +1032,6 @@
                         } else if (databases.length > 0) {
                             finalDBVal = databases[0].name;
                         }
-                        console.log('[reloadDatabases autoSelect] no valid saved db, selecting:', finalDBVal);
                     }
 
                     if (finalDBVal) {
@@ -1099,7 +1072,17 @@
             });
     };
 
+    function syncEnvironmentManagerVisibility() {
+        const button = document.getElementById('env-manager-btn');
+        if (!button) return;
+        const runtimeMode = getCurrentRuntimeMode();
+        const shouldShow = runtimeMode !== 'local';
+        button.style.display = shouldShow ? 'inline-flex' : 'none';
+        button.title = shouldShow ? 'Manage Environments' : 'Environment Manager is unavailable in local daemon mode';
+    }
+
     async function initializeDashboardBootstrap() {
+        syncEnvironmentManagerVisibility();
         const runtimeMode = getCurrentRuntimeMode();
         if (runtimeMode === 'local') {
             await waitForDaemonAuthClient(4000);
@@ -1187,7 +1170,6 @@
     }
 
     async function selectDatabase(name, forceRefresh = false, storeToSelect = null) {
-        console.log('[selectDatabase] called with name:', name, 'forceRefresh:', forceRefresh, 'storeToSelect:', storeToSelect);
         const requestedName = (typeof name === 'string' && name.trim()) ? name.trim() : '';
         if (!requestedName) {
             const fallbackDb = availableDatabases.find(db => db && db.name);
@@ -1200,7 +1182,6 @@
 
         const alreadySelected = !forceRefresh && currentDatabase === name;
         if (alreadySelected) {
-            console.log('[selectDatabase] database already selected, refreshing data in place for', name);
         } else {
             // Check for unsaved changes
             if (!await closeDetail()) {
@@ -1264,13 +1245,11 @@
             ? storeToSelect.trim()
             : localStorage.getItem('sop_current_store');
 
-        console.log('[selectDatabase] storeToRestore:', storeToRestore);
 
         // Fetch stores - data-driven approach works for both local and HQ modes
         runtimeDataCall(`/api/stores?database=${encodeURIComponent(name)}&_=${Date.now()}`)
             .then(bundle => {
                 let stores = bundle && bundle.data ? bundle.data : [];
-                console.log('[selectDatabase] fetched stores:', stores, 'for database:', name);
                 if (bundle && bundle.rbac) { window.CONTEXT_RBAC["store"] = bundle.rbac; }
                 const list = document.getElementById('store-list');
                 list.innerHTML = '';
@@ -1290,7 +1269,6 @@
                     list.appendChild(li);
 
                     if (storeToRestore && store === storeToRestore) {
-                        console.log('[selectDatabase] restoring store:', store);
                         selectStore(store, li);
                         storeRestored = true;
                     }
@@ -1314,10 +1292,8 @@
             });
 
         // Fetch DB Options
-        console.log('[selectDatabase] requesting db options', { name, runtimeMode: getCurrentRuntimeMode ? getCurrentRuntimeMode() : 'hq' });
         runtimeDataCall(`/api/db/options?database=${encodeURIComponent(name)}`)
             .then(opts => {
-                console.log('[selectDatabase] db options response for', name, opts);
                 const section = document.getElementById('db-options-section');
                 const content = document.getElementById('db-options-content');
                 section.style.display = 'block';
@@ -4049,7 +4025,6 @@ window.showEditKB = async function() {
                     try {
                         await window.resolveSpaceEmbedderAuth({ embedder: payload.embedder });
                     } catch(e) {
-                        console.log("JIT provider auth cancelled by user during Space Edit");
                         return;
                     }
                 }

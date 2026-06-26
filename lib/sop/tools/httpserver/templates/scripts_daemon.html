@@ -41,7 +41,6 @@
          */
         async bootstrap() {
             if (this.bootstrapping) {
-                console.log('[DaemonAuth] Bootstrap already in progress');
                 return false;
             }
 
@@ -50,12 +49,9 @@
             try {
                 // Check if we already have valid tokens
                 if (this.hasValidToken()) {
-                    console.log('[DaemonAuth] Already authenticated with daemon');
                     this.bootstrapping = false;
                     return true;
                 }
-
-                console.log('[DaemonAuth] Starting bootstrap authentication...');
 
                 // Step 1: Get bootstrap secret from httpserver (proxies filesystem read)
                 const secretResponse = await fetch('/api/daemon/bootstrap-secret');
@@ -74,8 +70,6 @@
                 if (!bootstrapSecret) {
                     throw new Error('Bootstrap secret is empty');
                 }
-
-                console.log('[DaemonAuth] Retrieved bootstrap secret, authenticating with daemon...');
 
                 // Step 2: Authenticate with daemon using bootstrap secret
                 const authResponse = await fetch(`${getDaemonBaseURL()}/api/daemon/auth`, {
@@ -104,7 +98,6 @@
                 localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, this.refreshToken);
                 localStorage.setItem(TOKEN_EXPIRY_KEY, this.tokenExpiry);
 
-                console.log('[DaemonAuth] ✅ Successfully authenticated with daemon');
                 this.bootstrapping = false;
                 return true;
 
@@ -157,15 +150,12 @@
             const timestamp = Date.now().toString();
             this.lastHQLogin = timestamp;
             localStorage.setItem(LAST_HQ_LOGIN_KEY, timestamp);
-            console.log('[DaemonAuth] HQ login timestamp updated for subscription monitoring');
         }
 
         /**
          * Redirect to HQ login page with return URL
          */
         redirectToHQLogin() {
-            console.log('[DaemonAuth] 🔒 HQ re-login required for subscription monitoring');
-            
             // Clear daemon tokens before redirecting
             this.clearTokens();
             
@@ -195,8 +185,6 @@
             }
 
             try {
-                console.log('[DaemonAuth] Refreshing access token...');
-
                 const response = await fetch(`${getDaemonBaseURL()}/api/daemon/refresh`, {
                     method: 'POST',
                     headers: {
@@ -231,7 +219,6 @@
                 localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, this.refreshToken);
                 localStorage.setItem(TOKEN_EXPIRY_KEY, this.tokenExpiry);
 
-                console.log('[DaemonAuth] ✅ Token refreshed successfully');
                 return true;
 
             } catch (error) {
@@ -282,7 +269,6 @@
 
             // If unauthorized, try to refresh and retry once
             if (response.status === 401) {
-                console.log('[DaemonAuth] Received 401, attempting token refresh...');
                 const refreshed = await this.refresh();
                 if (refreshed) {
                     // Retry with new token
@@ -350,13 +336,10 @@
 
     // Auto-bootstrap on page load (non-blocking)
     window.addEventListener('DOMContentLoaded', () => {
-        console.log('[DaemonAuth] Page loaded, attempting daemon authentication...');
         window.ensureDaemonAuth().catch(err => {
             console.warn('[DaemonAuth] Auto-bootstrap failed:', err);
         });
     });
-
-    console.log('[DaemonAuth] Client initialized');
 })();
 </script>
 {{end}}

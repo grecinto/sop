@@ -34,6 +34,32 @@ func TestCopilotAgent_Ask_SlashCommand(t *testing.T) {
 	}
 }
 
+func TestCopilotAgent_Ask_CommandPrefixExecutesLocalAutomationDirectly(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalCommandExecutor(nil)
+
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		if req.Command != "echo direct-ok" {
+			t.Fatalf("command = %q, want %q", req.Command, "echo direct-ok")
+		}
+		return `{"stdout":"direct-ok","stderr":"","exit_code":0}`, nil
+	})
+
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.Background()
+	payload := &ai.SessionPayload{CurrentDB: "system"}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
+	resp, err := agent.Ask(ctx, "cmd:echo direct-ok", nil)
+	if err != nil {
+		t.Fatalf("Ask with direct command prefix failed: %v", err)
+	}
+	if !strings.Contains(resp, "direct-ok") {
+		t.Fatalf("direct command response = %q, want it to contain command output", resp)
+	}
+}
+
 func TestParseSlashCommand(t *testing.T) {
 	tests := []struct {
 		input    string

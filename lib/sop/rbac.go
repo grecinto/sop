@@ -43,9 +43,10 @@ const (
 )
 
 type AuthContext struct {
-	UserID   string
-	Roles    []string
-	IsSystem bool
+	UserID      string
+	Roles       []string
+	IsSystem    bool
+	Permissions map[string]bool
 }
 
 type authContextKey string

@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sharedcode/sop/ai"
@@ -128,7 +131,180 @@ type AskResponse struct {
 }
 
 type localRAGService struct {
-	service ai.Agent[map[string]any]
+	service       ai.Agent[map[string]any]
+	shellSessions *shellSessionState
+}
+
+type shellSessionState struct {
+	mu       sync.Mutex
+	sessions map[string]*shellSession
+}
+
+type shellSession struct {
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	process  *os.Process
+	cwd      string
+	busy     bool
+	lastErr  error
+	output   bytes.Buffer
+	exitCode int
+}
+
+func newShellSessionState() *shellSessionState {
+	return &shellSessionState{sessions: make(map[string]*shellSession)}
+}
+
+func newShellSessionManager() *shellSessionState {
+	return newShellSessionState()
+}
+
+func (s *shellSessionState) run(sessionID, command string, timeout time.Duration) (string, bool, error) {
+	if s == nil {
+		return "", false, nil
+	}
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
+		return "", false, nil
+	}
+
+	s.mu.Lock()
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		session = newShellSession()
+		s.sessions[sessionID] = session
+	}
+	s.mu.Unlock()
+
+	return session.run(trimmed, timeout)
+}
+
+func newShellSession() *shellSession {
+	return &shellSession{cwd: "."}
+}
+
+func (s *shellSession) run(command string, timeout time.Duration) (string, bool, error) {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return "", false, nil
+	}
+
+	s.mu.Lock()
+	if s.cwd == "" {
+		s.cwd = "."
+	}
+	cwd := s.cwd
+	s.mu.Unlock()
+
+	if strings.HasPrefix(trimmed, "cd ") {
+		target := strings.TrimSpace(strings.TrimPrefix(trimmed, "cd"))
+		if target == "" || target == "~" {
+			target = os.Getenv("HOME")
+		}
+		if target == "" {
+			return "", false, nil
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(cwd, target)
+		}
+		absPath, err := filepath.Abs(target)
+		if err != nil {
+			return "", false, err
+		}
+		s.mu.Lock()
+		s.cwd = absPath
+		s.mu.Unlock()
+		return "", false, nil
+	}
+
+	if strings.EqualFold(trimmed, "status") {
+		s.mu.Lock()
+		output := strings.TrimSpace(s.output.String())
+		running := s.busy
+		exitCode := s.exitCode
+		s.mu.Unlock()
+		if running {
+			return fmt.Sprintf("running=true\nexit_code=%d\n%s", exitCode, output), true, nil
+		}
+		return fmt.Sprintf("running=false\nexit_code=%d\n%s", exitCode, output), false, nil
+	}
+
+	if strings.EqualFold(trimmed, "stop") {
+		s.mu.Lock()
+		if s.busy && s.process != nil {
+			_ = s.process.Kill()
+		}
+		s.busy = false
+		s.exitCode = 1
+		output := strings.TrimSpace(s.output.String())
+		s.mu.Unlock()
+		return fmt.Sprintf("stopped\n%s", output), false, nil
+	}
+
+	if s.busy && s.process != nil {
+		return strings.TrimSpace(s.output.String()), true, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", trimmed)
+	cmd.Dir = cwd
+	cmd.Env = os.Environ()
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stdout
+
+	s.mu.Lock()
+	s.busy = true
+	s.cmd = cmd
+	s.process = nil
+	s.output.Reset()
+	s.exitCode = 0
+	s.mu.Unlock()
+
+	if err := cmd.Start(); err != nil {
+		s.mu.Lock()
+		s.busy = false
+		s.lastErr = err
+		s.mu.Unlock()
+		return "", false, err
+	}
+
+	s.mu.Lock()
+	s.process = cmd.Process
+	s.mu.Unlock()
+
+	err := cmd.Wait()
+	s.mu.Lock()
+	s.lastErr = err
+	s.cmd = nil
+	s.process = nil
+	if ctx.Err() == context.DeadlineExceeded {
+		s.busy = true
+		s.exitCode = -1
+	} else {
+		s.busy = false
+		if err != nil {
+			s.exitCode = 1
+		} else {
+			s.exitCode = 0
+		}
+	}
+	if stdout.Len() > 0 {
+		s.output.Write(stdout.Bytes())
+	}
+	output := strings.TrimSpace(s.output.String())
+	s.mu.Unlock()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, true, nil
+	}
+	if err != nil {
+		return output, false, err
+	}
+	return output, false, nil
 }
 
 func newLocalRAGService(configPath string) (*localRAGService, error) {
@@ -137,7 +313,7 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 	}
 
 	if svc, err := autoProvisionSharedCopilotService(context.Background()); err == nil {
-		return &localRAGService{service: svc}, nil
+		return &localRAGService{service: svc, shellSessions: newShellSessionState()}, nil
 	} else {
 		log.Printf("falling back to local runtime config for daemon agent bootstrap: %v", err)
 	}
@@ -155,7 +331,7 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build agent: %w", err)
 	}
-	return &localRAGService{service: svc}, nil
+	return &localRAGService{service: svc, shellSessions: newShellSessionState()}, nil
 }
 
 func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string]any], error) {
@@ -219,6 +395,13 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	if payload.SessionID == "" {
 		payload.SessionID = "local-daemon"
 	}
+	if s.shellSessions == nil {
+		s.shellSessions = newShellSessionState()
+	}
+	sessionID := strings.TrimSpace(strings.TrimSpace(r.Header.Get("X-SOP-Session-ID")))
+	if sessionID == "" {
+		sessionID = payload.SessionID
+	}
 
 	// Update session store with latest tokens from this request
 	// This ensures daemon always has fresh tokens for renewal
@@ -249,6 +432,16 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	ctx = context.WithValue(ctx, "session_payload", payload)
 
 	log.Printf("daemon ask request received: query=%q session=%q", req.Query, payload.SessionID)
+	if fallbackAnswer, handled, fallbackErr := s.trySimpleShellCommandFallback(req.Query, sessionID); handled {
+		if fallbackErr != nil {
+			log.Printf("daemon shell fallback failed: query=%q error=%v", req.Query, fallbackErr)
+			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: fallbackErr.Error()})
+			return
+		}
+		log.Printf("daemon ask request completed via shell fallback: query=%q answer_len=%d", req.Query, len(fallbackAnswer))
+		respondJSON(w, http.StatusOK, AskResponse{Answer: fallbackAnswer})
+		return
+	}
 	answer, err := s.service.Ask(ctx, req.Query, cfg)
 	if err != nil {
 		log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
@@ -257,6 +450,43 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("daemon ask request completed: query=%q answer_len=%d", req.Query, len(answer))
 	respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
+}
+
+func looksLikeAgentRoutingQuery(query string) bool {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "sop:") ||
+		strings.HasPrefix(lower, "omni:") ||
+		strings.HasPrefix(lower, "omni/sop/") ||
+		strings.HasPrefix(lower, "omni->sop->") ||
+		lower == "sop"
+}
+
+func (s *localRAGService) trySimpleShellCommandFallback(query, sessionID string) (string, bool, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") || looksLikeAgentRoutingQuery(trimmed) {
+		return "", false, nil
+	}
+	if strings.Contains(trimmed, "\n") || strings.Contains(trimmed, "\r") {
+		return "", false, nil
+	}
+	if s.shellSessions == nil {
+		s.shellSessions = newShellSessionState()
+	}
+	output, stillRunning, err := s.shellSessions.run(sessionID, trimmed, 5*time.Second)
+	if err != nil {
+		return "", true, err
+	}
+	if output == "" && stillRunning {
+		return "", true, nil
+	}
+	if output == "" {
+		return "", true, nil
+	}
+	return output, true, nil
 }
 
 func resolveConfigPath(path string) string {

@@ -16,6 +16,23 @@ We have introduced a **Direct Command Interface** that works entirely offline:
 
 This keeps the same execution surface available with or without an external LLM.
 
+### Direct Local Command Prefixes
+SOP also supports a lightweight command-style entrypoint for local automation:
+
+*   `cmd:...`, `shell:...`, `exec:...`, and `run:...` are recognized as direct local-command requests.
+*   These prefixes bypass the normal reasoning loop for simple shell execution and keep the interaction fast and token-efficient.
+*   When local desktop automation is enabled, the same route can trigger richer repo and filesystem helpers such as `execute_local_command`, `search_repo_files`, `grep_repo_text`, `run_repo_tests`, `read_file`, `write_file`, `patch_file`, `create_directory`, `rename_file`, `delete_file`, `delete_directory`, `copy_file`, `list_directory`, `path_exists`, and `stat_path`.
+*   These actions remain policy-gated and approval-aware so local execution is still safe by default.
+
+Examples:
+
+```text
+cmd:pwd
+cmd:go test ./...
+cmd:git status
+cmd:find . -name "*.go" | head
+```
+
 ## The Problem: Context Switching
 Managing complex NoSQL data often involves jumping between a GUI to view items and a terminal to run queries or scripts. You might see a record, wonder "how many other records have this specific field value?", and have to switch context to write a script to find out.
 

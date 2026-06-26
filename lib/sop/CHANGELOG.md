@@ -1,6 +1,15 @@
 # Changelog
 
 ## SOP V2 build 54 (Upcoming)
+- **AI Assistant UX & Local-Agent Experience**: Polished the detached AI experience and tightened the local daemon UI behavior.
+    - **Floating AI Window**: The AI can now open in a detached floating window without breaking the main app shell.
+        - The main widget is hidden while the floater is open, so the shell stays visually stable.
+        - The detached window shows only the relevant AI controls and no longer includes the confusing back/undo-style behavior.
+        - The main-window AI launcher remains functional after the floater has been used.
+        - The floater header controls now appear and behave like the original AI window.
+    - **Local Daemon / Local-Agent UI**: Environment Manager visibility is now hidden in local daemon mode and follows the shared RBAC policy layer plus the runtime toggle for immediate UI updates.
+    - **Tool Registration**: Command-line tool registration is now optional, improving security and making local automation flows more flexible.
+
 - **Gate 1 Advanced KB Routing**: Major enhancements to specialized focused routing for knowledge base queries.
     - **Root Category Navigation**: Query `omni:<kb>` to display all root categories with item counts and subcategory information.
         - Example: `omni:sop` shows all top-level categories in the SOP knowledge base

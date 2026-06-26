@@ -111,6 +111,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -395,7 +396,14 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 
 		// Add user info to context
 		ctx := context.WithValue(r.Context(), "user", userRecord)
-		next(w, r.WithContext(ctx))
+		authCtx := sop.AuthContext{
+			UserID:      userRecord.Username,
+			Roles:       []string{userRecord.Role},
+			Permissions: map[string]bool{"manage_environments": false},
+		}
+		ctx = sop.ContextWithAuth(ctx, authCtx)
+		r = r.WithContext(ctx)
+		next(w, r)
 	}
 }
 

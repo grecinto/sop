@@ -193,6 +193,62 @@ async function handoffToHQ(query, hqContext) {
 }
 ```
 
+## Desktop Command-Shell Syntax
+
+The desktop/local-agent experience supports three input styles:
+
+1. Plain shell commands for local execution.
+   - Examples: `ls`, `pwd`, `echo hello`, `git status`
+   - These run directly in the local shell.
+
+2. Direct command prefixes for fast local execution.
+   - Examples: `cmd:pwd`, `shell:git status`, `exec:go test ./...`, `run:ls`
+   - These bypass the normal reasoning loop and route directly to the local automation executor.
+   - They are ideal for quick shell work, repo inspection, or command-style execution without paying the full reasoning cost.
+
+3. Slash commands for built-in SOP actions.
+   - Examples: `/list_tools`, `/verbose`, `/run my_script`
+   - These are reserved for built-in agent features and should not be used for general shell execution.
+
+4. Natural language questions and instructions.
+   - Examples: "What files are in this folder?", "Explain how to run the daemon"
+   - These go through the AI agent.
+
+Shell state is preserved per session:
+- `cd /Volumes` changes the working directory for the current session.
+- A later `ls` or `pwd` uses that updated directory.
+- Multi-part shell commands such as `cd /Volumes && ls` are also supported when the shell can execute them.
+
+When local desktop automation is enabled, the same direct path can also trigger richer automation tools such as repo search, repo grep, test execution, file read/write/patch, directory creation and deletion, path existence checks, and path metadata inspection. These are approval-aware and policy-gated so the local-agent experience remains safe by default.
+
+This keeps the local desktop experience predictable: plain shell commands still work, direct command prefixes provide a lightweight fast path for local work, and `/...` remains reserved for built-in SOP commands.
+
+## UI Notes: Floating AI Window and Local-Agent Experience
+
+The detached AI floater now behaves as a focused companion window instead of a disruptive overlay:
+- Opening the floater hides the main widget in the shell so the primary app layout remains stable.
+- The detached window presents only the relevant AI controls and removes the confusing back/undo-style behavior.
+- The main-window AI launcher still works after the floater has been used.
+- The floater header controls are visible and behave like the original AI window.
+
+For the local daemon / local-agent experience, Environment Manager visibility follows the same pattern as the rest of the UI policy:
+- Shared RBAC policy stays the general source of truth.
+- The current HQ vs local runtime toggle provides an immediate client-side override for the simpler local-agent experience.
+
+## UI Visibility Notes for Environment Manager
+
+The Environment Manager visibility is intentionally driven by two signals in the UI:
+
+1. RBAC / user-role policy from the shared backend policy layer.
+2. The current HQ vs local daemon runtime toggle in the client.
+
+Temporary rule for the UI:
+- Show the Environment Manager for HQ/httpserver flows.
+- Hide it when the UI is operating in local daemon mode.
+- Keep the decision aligned with RBAC where possible, but use the runtime toggle as an immediate client-side override until a general UI policy endpoint exists.
+
+This is implemented in the app shell and runtime-toggle handlers so the button updates immediately when the user switches runtime modes.
+
 ## Security Features
 
 ### Bootstrap Rotation

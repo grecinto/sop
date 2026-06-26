@@ -80,8 +80,19 @@ func main() {
 	refreshTokenTTL := flag.Duration("refresh-token-ttl", 48*time.Hour, "Refresh token expiry duration (2 days default)")
 	flag.Parse()
 
-	// Set local command executor for agent tools
+	// Set local command executor and keep local desktop automation registration opt-in.
 	sharedagent.SetLocalCommandExecutor(runLocalCommand)
+
+	// For local agent, enable desktop automation with a conservative default policy.
+	sharedagent.SetLocalDesktopAutomationEnabled(true)
+	sharedagent.SetAutomationPolicy(sharedagent.AutomationPolicy{
+		Enabled:               true,
+		AllowShellCommands:    true,
+		AllowEmail:            false,
+		RequireApproval:       true,
+		DefaultTimeoutSeconds: 600,
+		MaxTimeoutSeconds:     1800,
+	})
 
 	// Load configuration using sopbackend
 	resolvedConfig, created, err := ensureConfigPath(*configPath)
@@ -303,12 +314,126 @@ func handleOptionsAndCORS(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func runLocalCommand(ctx context.Context, command, reasoning string) (string, error) {
+type localCommandSession struct {
+	workingDir string
+	lastCmd    *exec.Cmd
+}
+
+var localCommandSessionState = struct {
+	mu       sync.Mutex
+	sessions map[string]*localCommandSession
+}{
+	sessions: make(map[string]*localCommandSession),
+}
+
+func runLocalCommand(ctx context.Context, req sharedagent.LocalCommandRequest) (string, error) {
+	return runLocalCommandWithWorkingDir(ctx, req.Command, req.Reasoning, req.WorkingDir, req.TimeoutSeconds, req.SessionID)
+}
+
+func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, workingDir string, timeoutSeconds int, sessionID string) (string, error) {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 600
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	if strings.TrimSpace(command) == "" {
+		return `{"stdout":"","stderr":"","exit_code":0}`, nil
+	}
+
+	trimmedCommand := strings.TrimSpace(command)
+	if strings.HasPrefix(trimmedCommand, "cd") || strings.EqualFold(trimmedCommand, "cd") {
+		if sessionID != "" {
+			localCommandSessionState.mu.Lock()
+			sessionState := localCommandSessionState.sessions[sessionID]
+			if sessionState == nil {
+				sessionState = &localCommandSession{}
+				localCommandSessionState.sessions[sessionID] = sessionState
+			}
+			if sessionState.workingDir == "" {
+				sessionState.workingDir = workingDir
+				if sessionState.workingDir == "" {
+					sessionState.workingDir = "."
+				}
+			}
+			localCommandSessionState.mu.Unlock()
+		}
+		if strings.EqualFold(trimmedCommand, "cd") || strings.TrimSpace(strings.TrimPrefix(trimmedCommand, "cd")) == "" {
+			if sessionID != "" {
+				localCommandSessionState.mu.Lock()
+				sessionState := localCommandSessionState.sessions[sessionID]
+				if sessionState != nil {
+					if home, err := os.UserHomeDir(); err == nil {
+						sessionState.workingDir = home
+					} else {
+						sessionState.workingDir = "."
+					}
+				}
+				localCommandSessionState.mu.Unlock()
+			}
+			return `{"stdout":"","stderr":"","exit_code":0}`, nil
+		}
+		if sessionID != "" {
+			localCommandSessionState.mu.Lock()
+			sessionState := localCommandSessionState.sessions[sessionID]
+			if sessionState != nil {
+				target := strings.TrimSpace(strings.TrimPrefix(trimmedCommand, "cd"))
+				if target == "~" {
+					if home, err := os.UserHomeDir(); err == nil {
+						target = home
+					}
+				}
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(sessionState.workingDir, target)
+				}
+				if absPath, err := filepath.Abs(target); err == nil {
+					sessionState.workingDir = absPath
+				}
+			}
+			localCommandSessionState.mu.Unlock()
+		}
+		return `{"stdout":"","stderr":"","exit_code":0}`, nil
+	}
+
+	if strings.EqualFold(trimmedCommand, "pwd") {
+		workingDirForPwd := workingDir
+		if sessionID != "" {
+			localCommandSessionState.mu.Lock()
+			if sessionState := localCommandSessionState.sessions[sessionID]; sessionState != nil && sessionState.workingDir != "" {
+				workingDirForPwd = sessionState.workingDir
+			}
+			localCommandSessionState.mu.Unlock()
+		}
+		if workingDirForPwd == "" {
+			workingDirForPwd = "."
+		}
+		return fmt.Sprintf(`{"stdout":"%s\n","stderr":"","exit_code":0}`, strings.ReplaceAll(workingDirForPwd, "\n", "\\n")), nil
+	}
+
+	if sessionID != "" {
+		localCommandSessionState.mu.Lock()
+		if existing, ok := localCommandSessionState.sessions[sessionID]; ok && existing != nil {
+			if workingDir == "" && existing.workingDir != "" {
+				workingDir = existing.workingDir
+			}
+		}
+		localCommandSessionState.mu.Unlock()
+	}
+
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
+	}
+	if workingDir != "" {
+		cmd.Dir = workingDir
+	} else if sessionID != "" {
+		localCommandSessionState.mu.Lock()
+		if existing, ok := localCommandSessionState.sessions[sessionID]; ok && existing != nil {
+			cmd.Dir = existing.workingDir
+		}
+		localCommandSessionState.mu.Unlock()
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -316,6 +441,21 @@ func runLocalCommand(ctx context.Context, command, reasoning string) (string, er
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	if sessionID != "" {
+		localCommandSessionState.mu.Lock()
+		sessionState := localCommandSessionState.sessions[sessionID]
+		if sessionState == nil {
+			sessionState = &localCommandSession{}
+			localCommandSessionState.sessions[sessionID] = sessionState
+		}
+		if workingDir != "" {
+			sessionState.workingDir = workingDir
+		} else if sessionState.workingDir == "" {
+			sessionState.workingDir = cmd.Dir
+		}
+		sessionState.lastCmd = cmd
+		localCommandSessionState.mu.Unlock()
+	}
 	resp := ExecuteResponse{Stdout: stdout.String(), Stderr: stderr.String()}
 	if err != nil {
 		resp.Error = err.Error()

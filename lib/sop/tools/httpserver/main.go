@@ -120,7 +120,7 @@ func main() {
 			if _, err := sopbackend.LoadModelCatalog(targetConfigPath); err != nil {
 				log.Error(fmt.Sprintf("Failed to load model catalog: %v", err))
 			}
-			log.Info(fmt.Sprintf("Loaded configuration from: %s", targetConfigPath))
+			log.Debug(fmt.Sprintf("Loaded configuration from: %s", targetConfigPath))
 			config := sopbackend.GetConfig()
 			if len(config.Databases) == 0 && config.SystemDB == nil {
 				log.Warn(fmt.Sprintf("Loaded configuration file '%s' but found 0 databases defined.", targetConfigPath))
@@ -226,10 +226,7 @@ func main() {
 
 	// Start Server
 	addr := fmt.Sprintf(":%d", config.Port)
-	log.Info(fmt.Sprintf("SOP Data Manager v%s running at http://localhost%s", sop.Version, addr))
-	for _, db := range config.Databases {
-		log.Debug(fmt.Sprintf("Database '%s': %s (%s)", db.Name, db.Path, db.Mode))
-	}
+	log.Debug(fmt.Sprintf("SOP Data Manager v%s running at http://localhost%s", sop.Version, addr))
 
 	// Open Browser
 	if openBrowserFlag {
@@ -247,13 +244,7 @@ func main() {
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			isLocalhost := strings.HasPrefix(r.RemoteAddr, "127.0.0.1:") || strings.HasPrefix(r.RemoteAddr, "[::1]:")
 			if isGoRun && isLocalhost {
-				auth := sop.AuthContext{
-					IsSystem: true,
-					Roles:    []string{sop.RoleAdmin},
-					UserID:   "admin",
-				}
-				ctx := sop.ContextWithAuth(r.Context(), auth)
-				http.DefaultServeMux.ServeHTTP(w, r.WithContext(ctx))
+				http.DefaultServeMux.ServeHTTP(w, r)
 				return
 			}
 			http.DefaultServeMux.ServeHTTP(w, r)
@@ -263,6 +254,15 @@ func main() {
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Error(err.Error())
 	}
+}
+
+func shouldShowEnvironmentManager(r *http.Request) bool {
+	if r == nil {
+		return true
+	}
+
+	auth := sop.GetAuthFromContext(r.Context())
+	return sopbackend.CanManageEnvironments(auth)
 }
 
 func openBrowser(url string) {
@@ -347,6 +347,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		"ModelCatalogJSON":        modelCatalogJSON(),
 		"MinHashMod":              1,
 		"MaxHashMod":              256,
+		"CanManageEnvironments":   shouldShowEnvironmentManager(r),
 	}
 	if err := tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
 		log.Error("Failed to execute template", "error", err)
@@ -382,7 +383,6 @@ func handleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {
 	secretBytes, err := os.ReadFile(bootstrapPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Debug("Bootstrap file does not exist", "path", bootstrapPath)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{

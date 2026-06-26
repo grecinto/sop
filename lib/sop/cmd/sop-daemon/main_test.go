@@ -46,15 +46,23 @@ func TestExecuteHandlerRunsShellCommand(t *testing.T) {
 }
 
 func TestLocalAgentExecuteToolUsesDaemonCommandRunner(t *testing.T) {
-	sharedagent.SetLocalCommandExecutor(func(ctx context.Context, command, reasoning string) (string, error) {
-		if command != "echo hello" {
-			t.Fatalf("command = %q, want %q", command, "echo hello")
+	sharedagent.SetLocalCommandExecutor(func(ctx context.Context, req sharedagent.LocalCommandRequest) (string, error) {
+		if req.Command != "echo hello" {
+			t.Fatalf("command = %q, want %q", req.Command, "echo hello")
 		}
-		if reasoning != "show me the output" {
-			t.Fatalf("reasoning = %q, want %q", reasoning, "show me the output")
+		if req.Reasoning != "show me the output" {
+			t.Fatalf("reasoning = %q, want %q", req.Reasoning, "show me the output")
+		}
+		if req.WorkingDir != "" {
+			t.Fatalf("working dir = %q, want empty", req.WorkingDir)
+		}
+		if req.TimeoutSeconds != 600 {
+			t.Fatalf("timeout = %d, want 600", req.TimeoutSeconds)
 		}
 		return `{"stdout":"hello","stderr":"","exit_code":0}`, nil
 	})
+	sharedagent.SetLocalDesktopAutomationEnabled(true)
+	defer sharedagent.SetLocalDesktopAutomationEnabled(false)
 	defer sharedagent.SetLocalCommandExecutor(nil)
 
 	ag := sharedagent.NewCopilotAgent(sharedagent.Config{}, nil, nil)
@@ -66,6 +74,61 @@ func TestLocalAgentExecuteToolUsesDaemonCommandRunner(t *testing.T) {
 	}
 	if !strings.Contains(out, "hello") {
 		t.Fatalf("Execute() output = %q, want it to contain command output", out)
+	}
+}
+
+func TestLocalAgentExecuteToolPassesWorkingDirAndTimeout(t *testing.T) {
+	sharedagent.SetLocalCommandExecutor(func(ctx context.Context, req sharedagent.LocalCommandRequest) (string, error) {
+		if req.Command != "pwd" {
+			t.Fatalf("command = %q, want %q", req.Command, "pwd")
+		}
+		if req.WorkingDir != "/tmp" {
+			t.Fatalf("working dir = %q, want %q", req.WorkingDir, "/tmp")
+		}
+		if req.TimeoutSeconds != 45 {
+			t.Fatalf("timeout = %d, want 45", req.TimeoutSeconds)
+		}
+		return `{"stdout":"/tmp","stderr":"","exit_code":0}`, nil
+	})
+	sharedagent.SetLocalDesktopAutomationEnabled(true)
+	defer sharedagent.SetLocalDesktopAutomationEnabled(false)
+	defer sharedagent.SetLocalCommandExecutor(nil)
+
+	ag := sharedagent.NewCopilotAgent(sharedagent.Config{}, nil, nil)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "system"})
+
+	out, err := ag.Execute(ctx, "execute_local_command", map[string]any{"command": "pwd", "reasoning": "inspect repo state", "working_dir": "/tmp", "timeout_seconds": 45})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(out, "/tmp") {
+		t.Fatalf("Execute() output = %q, want it to contain repo working directory output", out)
+	}
+}
+
+func TestRunLocalCommandUsesSessionStateForFollowUpCommands(t *testing.T) {
+	first, err := runLocalCommand(context.Background(), sharedagent.LocalCommandRequest{Command: "cd /tmp", SessionID: "repo-session", TimeoutSeconds: 10})
+	if err != nil {
+		t.Fatalf("first runLocalCommand() error = %v", err)
+	}
+	var firstResp ExecuteResponse
+	if err := json.Unmarshal([]byte(first), &firstResp); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+	if firstResp.Error != "" {
+		t.Fatalf("first response error = %q", firstResp.Error)
+	}
+
+	second, err := runLocalCommand(context.Background(), sharedagent.LocalCommandRequest{Command: "pwd", SessionID: "repo-session", TimeoutSeconds: 10})
+	if err != nil {
+		t.Fatalf("second runLocalCommand() error = %v", err)
+	}
+	var secondResp ExecuteResponse
+	if err := json.Unmarshal([]byte(second), &secondResp); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if !strings.Contains(secondResp.Stdout, "/tmp") {
+		t.Fatalf("expected second command output to reflect session cwd, got %q", secondResp.Stdout)
 	}
 }
 
@@ -137,7 +200,8 @@ func TestHandleUIHandoffAllowsMissingAuthTokensForLocalRuntime(t *testing.T) {
 }
 
 type recordingAskAgent struct {
-	calls []struct {
+	response string
+	calls    []struct {
 		ctx context.Context
 		cfg *ai.ConfigMap
 	}
@@ -153,7 +217,106 @@ func (a *recordingAskAgent) Ask(ctx context.Context, query string, cfg *ai.Confi
 		ctx context.Context
 		cfg *ai.ConfigMap
 	}{ctx: ctx, cfg: cfg})
+	if a.response != "" {
+		return a.response, nil
+	}
 	return "ok", nil
+}
+
+func TestLocalRAGAskUsesShellFallbackForSimpleCommands(t *testing.T) {
+	agent := &recordingAskAgent{response: "⚠️ **AI Copilot Disabled**: No valid API Key found."}
+	svc := &localRAGService{service: agent}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"echo hello"}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	var resp AskResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("unexpected error response: %q", resp.Error)
+	}
+	if !strings.Contains(resp.Answer, "hello") {
+		t.Fatalf("expected shell fallback output in answer, got %q", resp.Answer)
+	}
+}
+
+func TestShellSessionManagerPersistsDirectoryAcrossCommands(t *testing.T) {
+	mgr := newShellSessionManager()
+
+	if _, _, err := mgr.run("shell-pty", "cd /tmp", 2*time.Second); err != nil {
+		t.Fatalf("first run failed: %v", err)
+	}
+	out, stillRunning, err := mgr.run("shell-pty", "pwd", 2*time.Second)
+	if err != nil {
+		t.Fatalf("second run failed: %v", err)
+	}
+	if stillRunning {
+		t.Fatalf("expected pwd to finish promptly, got still-running output")
+	}
+	if !strings.Contains(out, "/tmp") {
+		t.Fatalf("expected pwd output to reflect /tmp, got %q", out)
+	}
+}
+
+func TestShellSessionManagerSupportsLongRunningProcessAndStatus(t *testing.T) {
+	mgr := newShellSessionManager()
+
+	out, stillRunning, err := mgr.run("long-run", "sh -c 'printf start; sleep 1; printf end'", 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("first run failed: %v", err)
+	}
+	if !stillRunning {
+		t.Fatalf("expected first run to stay running beyond the timeout, got output %q", out)
+	}
+	if !strings.Contains(out, "start") {
+		t.Fatalf("expected partial output from long-running process, got %q", out)
+	}
+
+	status, stillRunning, err := mgr.run("long-run", "status", 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("status query failed: %v", err)
+	}
+	if !stillRunning {
+		t.Fatalf("expected status query to report the process is still running, got %q", status)
+	}
+	if !strings.Contains(status, "start") {
+		t.Fatalf("expected status output to include buffered output, got %q", status)
+	}
+}
+
+func TestLocalRAGAskPersistsShellSessionDirectoryAcrossRequests(t *testing.T) {
+	svc := &localRAGService{service: &recordingAskAgent{}}
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"cd /tmp"}`))
+	firstReq.Header.Set("X-SOP-Session-ID", "shell-session")
+	firstRR := httptest.NewRecorder()
+	svc.handleAsk(firstRR, firstReq)
+	if firstRR.Code != http.StatusOK {
+		t.Fatalf("first handleAsk() status = %d, want %d", firstRR.Code, http.StatusOK)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"pwd"}`))
+	secondReq.Header.Set("X-SOP-Session-ID", "shell-session")
+	secondRR := httptest.NewRecorder()
+	svc.handleAsk(secondRR, secondReq)
+	if secondRR.Code != http.StatusOK {
+		t.Fatalf("second handleAsk() status = %d, want %d", secondRR.Code, http.StatusOK)
+	}
+
+	var secondResp AskResponse
+	if err := json.NewDecoder(secondRR.Body).Decode(&secondResp); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if !strings.Contains(secondResp.Answer, "/tmp") {
+		t.Fatalf("expected pwd output to reflect the updated directory, got %q", secondResp.Answer)
+	}
 }
 
 func TestLocalRAGAskPropagatesHandoffContextIntoAgentRequest(t *testing.T) {

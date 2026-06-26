@@ -1,10 +1,36 @@
 package main
 
 import (
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/tools/sopbackend"
 )
+
+func TestShouldShowEnvironmentManagerVisibilityRules(t *testing.T) {
+	defer sopbackend.SetDisableAuth(false)
+
+	sopbackend.SetDisableAuth(false)
+	plainReq := httptest.NewRequest("GET", "/app", nil)
+	if !shouldShowEnvironmentManager(plainReq) {
+		t.Fatalf("expected default requests to keep environment manager visible")
+	}
+
+	sopbackend.SetDisableAuth(true)
+	localAgentReq := httptest.NewRequest("GET", "/app", nil)
+	if shouldShowEnvironmentManager(localAgentReq) {
+		t.Fatalf("expected disabled-auth/local-agent mode to hide environment manager")
+	}
+
+	deniedReq := httptest.NewRequest("GET", "/app", nil)
+	deniedReq = deniedReq.WithContext(sop.ContextWithAuth(deniedReq.Context(), sop.AuthContext{Permissions: map[string]bool{"manage_environments": false}}))
+	if shouldShowEnvironmentManager(deniedReq) {
+		t.Fatalf("expected explicit permission deny to hide environment manager")
+	}
+}
 
 func TestFloaterUsesSharedAppShell(t *testing.T) {
 	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
