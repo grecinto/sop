@@ -48,7 +48,7 @@ func (a *CopilotAgent) getFocusedExecutionContext(ctx context.Context, taskClass
 	case strings.EqualFold(taskClassification.Domain, SpacesDomain):
 		return a.buildSpacesFocusedExecutionContext(taskClassification)
 	default:
-		return ""
+		return a.buildAutomationFamilyFocusedExecutionContext(ctx, taskClassification)
 	}
 }
 
@@ -82,6 +82,35 @@ func (a *CopilotAgent) buildCrossDomainFocusedExecutionContext(ctx context.Conte
 		sections = append(sections, "Spaces Execution Context:\n"+spacesCtx)
 	}
 
+	return strings.Join(sections, "\n\n")
+}
+
+func (a *CopilotAgent) buildAutomationFamilyFocusedExecutionContext(ctx context.Context, taskClassification TaskContextClassification) string {
+	query := strings.TrimSpace(taskClassification.CleanQuery)
+	if query == "" {
+		query = strings.TrimSpace(taskClassification.Entity)
+	}
+	if query == "" {
+		query = ""
+	}
+
+	var sections []string
+	if strings.Contains(strings.ToLower(query), "postgres") || strings.Contains(strings.ToLower(query), "sql") {
+		sections = append(sections, "External Automation Tool Context:\n- PostgreSQL: prefer explicit read-only queries first; use write operations only when the request explicitly requires mutation and the policy permits it. If connection details are missing, use the provided config or environment variables instead of inventing defaults. Keep statements scoped and explain results succinctly.")
+	}
+	if strings.Contains(strings.ToLower(query), "splunk") {
+		sections = append(sections, "External Automation Tool Context:\n- Splunk: prefer targeted search queries with explicit time windows and indexes when known. Use saved-search operations only when the user explicitly asks to create, update, or delete one. Keep results concise and grounded in the returned events.")
+	}
+	if strings.Contains(strings.ToLower(query), "git") || strings.Contains(strings.ToLower(query), "repo") || strings.Contains(strings.ToLower(query), "repository") {
+		sections = append(sections, "External Automation Tool Context:\n- Git and repository workflows: prefer inspecting state before mutating; use scoped diffs, branch checks, and targeted commits. Avoid making destructive changes without clear user intent.")
+	}
+	if strings.Contains(strings.ToLower(query), "command") || strings.Contains(strings.ToLower(query), "shell") || strings.Contains(strings.ToLower(query), "cmd") || strings.Contains(strings.ToLower(query), "local") {
+		sections = append(sections, "External Automation Tool Context:\n- Local shell and command execution: prefer explicit commands with clear reasoning and a bounded working directory; require approval when the policy expects it. Keep commands narrow and avoid unnecessary destructive actions.")
+	}
+
+	if len(sections) == 0 {
+		return ""
+	}
 	return strings.Join(sections, "\n\n")
 }
 
@@ -290,7 +319,7 @@ func buildStoresCRUDOperationsContext(flags map[string]bool) string {
 		sections = append(sections,
 			"- C = Create. Use write transactions. If key shape, field names, or value shape are uncertain, research them with list_stores first. For multi-step creates, generate a concrete write script and run it with execute_script.",
 			"- Set the target database explicitly.",
-		dbNote,
+			dbNote,
 		)
 	}
 	if flags["U"] {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
+	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
 const defaultDaemonConfigFileName = "config.json"
@@ -335,6 +336,17 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 }
 
 func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string]any], error) {
+	for _, agentID := range []string{"copilot", "sql_core"} {
+		if agentSvc, ok := sopbackend.GetLoadedAgents()[agentID]; ok && agentSvc != nil {
+			return agentSvc, nil
+		}
+	}
+	for _, agentSvc := range sopbackend.GetLoadedAgents() {
+		if agentSvc != nil {
+			return agentSvc, nil
+		}
+	}
+
 	candidates := []string{
 		"ai/data/copilot_pipeline.json",
 		filepath.Join(cwd(), "ai/data/copilot_pipeline.json"),
@@ -429,7 +441,6 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	cfg.Set("hq_base_url", hqBaseURL)
 	cfg.Set("hq_user_id", strings.TrimSpace(req.HQ.UserID))
 	cfg.Set("hq_session_id", strings.TrimSpace(req.HQ.SessionID))
-	ctx = context.WithValue(ctx, "session_payload", payload)
 
 	log.Printf("daemon ask request received: query=%q session=%q", req.Query, payload.SessionID)
 	if fallbackAnswer, handled, fallbackErr := s.trySimpleShellCommandFallback(req.Query, sessionID); handled {

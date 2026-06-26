@@ -204,6 +204,9 @@ func TestListTools_SpacesUpdateRoutingExposesSpaceMutationTools(t *testing.T) {
 }
 
 func TestListTools_LowRiskExposedToolsUseJSONSchemas(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: true, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: "system"})

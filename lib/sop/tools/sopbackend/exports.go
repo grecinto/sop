@@ -4,11 +4,23 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 // GetConfig returns a copy of the current configuration
 func GetConfig() Config {
 	return config
+}
+
+// GetLoadedAgents returns the currently initialized backend agents.
+func GetLoadedAgents() map[string]ai.Agent[map[string]any] {
+	return loadedAgents
+}
+
+// SetLoadedAgents replaces the currently initialized backend agents.
+func SetLoadedAgents(agents map[string]ai.Agent[map[string]any]) {
+	loadedAgents = agents
 }
 
 // SetConfigFile sets the config file path

@@ -176,6 +176,26 @@ func TestBuildSystemPrompt_StoresFocusedContext_StaysWithinBudgetGuardrail(t *te
 	}
 }
 
+func TestBuildSystemPrompt_IncludesAutomationToolFamilyContext(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+
+	SetLocalDesktopAutomationEnabled(true)
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, AllowPostgresRead: true, AllowPostgresWrite: true, AllowSplunkRead: true, AllowSplunkWrite: true, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetLocalDesktopAutomationEnabled(false)
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	ag.registerTools(ctx)
+	prompt := ag.buildSystemPrompt(ctx, "Inspect the repo and query postgres and splunk", TaskContextClassification{})
+
+	for _, expected := range []string{"External Automation Tool Context", "PostgreSQL", "Splunk", "Git", "Local shell"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("expected automation context to contain %q in prompt: %s", expected, prompt)
+		}
+	}
+}
+
 func TestBuildStoresCRUDOperationsContext_WriteGuidanceUsesGroundedScriptContract(t *testing.T) {
 	content := buildStoresCRUDOperationsContext(map[string]bool{"C": true, "U": true, "D": true})
 

@@ -11,7 +11,27 @@ import (
 
 	"github.com/sharedcode/sop/ai"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
+	"github.com/sharedcode/sop/tools/sopbackend"
 )
+
+type stubSharedAgent struct {
+	name string
+}
+
+func (a *stubSharedAgent) Open(ctx context.Context) error  { return nil }
+func (a *stubSharedAgent) Close(ctx context.Context) error { return nil }
+func (a *stubSharedAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
+	return nil, nil
+}
+func (a *stubSharedAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	return "shared-agent", nil
+}
+func (a *stubSharedAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	return "", nil
+}
+func (a *stubSharedAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	return nil, nil
+}
 
 func TestBuildListenAddr(t *testing.T) {
 	if got, want := buildListenAddr("127.0.0.1", 9090), "127.0.0.1:9090"; got != want {
@@ -20,6 +40,25 @@ func TestBuildListenAddr(t *testing.T) {
 
 	if got, want := buildListenAddr("0.0.0.0", 8080), "0.0.0.0:8080"; got != want {
 		t.Fatalf("buildListenAddr() = %q, want %q", got, want)
+	}
+}
+
+func TestAutoProvisionSharedCopilotServiceUsesBackendLoadedAgents(t *testing.T) {
+	oldAgents := sopbackend.GetLoadedAgents()
+	defer sopbackend.SetLoadedAgents(oldAgents)
+
+	backend := sopbackend.NewBackend(&sopbackend.Config{}, &sopbackend.ModelCatalog{})
+	backend.LoadedAgents = map[string]ai.Agent[map[string]any]{"copilot": &stubSharedAgent{name: "shared"}}
+	if err := backend.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	svc, err := autoProvisionSharedCopilotService(context.Background())
+	if err != nil {
+		t.Fatalf("autoProvisionSharedCopilotService() error = %v", err)
+	}
+	if _, ok := svc.(*stubSharedAgent); !ok {
+		t.Fatalf("autoProvisionSharedCopilotService() = %T, want *stubSharedAgent", svc)
 	}
 }
 

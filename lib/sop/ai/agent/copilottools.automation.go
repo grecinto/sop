@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,10 @@ type AutomationPolicy struct {
 	Enabled               bool
 	AllowShellCommands    bool
 	AllowEmail            bool
+	AllowPostgresRead     bool
+	AllowPostgresWrite    bool
+	AllowSplunkRead       bool
+	AllowSplunkWrite      bool
 	RequireApproval       bool
 	DefaultTimeoutSeconds int
 	MaxTimeoutSeconds     int
@@ -78,6 +83,38 @@ func (p AutomationPolicy) isEmailAutomationEnabled() bool {
 	return localDesktopAutomationEnabled.Load()
 }
 
+func (p AutomationPolicy) isPostgresReadEnabled() bool {
+	enabled := p.Enabled || localDesktopAutomationEnabled.Load()
+	if !enabled {
+		return false
+	}
+	return p.AllowPostgresRead || p.AllowPostgresWrite || (!p.AllowPostgresRead && !p.AllowPostgresWrite)
+}
+
+func (p AutomationPolicy) isPostgresWriteEnabled() bool {
+	enabled := p.Enabled || localDesktopAutomationEnabled.Load()
+	if !enabled {
+		return false
+	}
+	return p.AllowPostgresWrite
+}
+
+func (p AutomationPolicy) isSplunkReadEnabled() bool {
+	enabled := p.Enabled || localDesktopAutomationEnabled.Load()
+	if !enabled {
+		return false
+	}
+	return p.AllowSplunkRead || p.AllowSplunkWrite || (!p.AllowSplunkRead && !p.AllowSplunkWrite)
+}
+
+func (p AutomationPolicy) isSplunkWriteEnabled() bool {
+	enabled := p.Enabled || localDesktopAutomationEnabled.Load()
+	if !enabled {
+		return false
+	}
+	return p.AllowSplunkWrite
+}
+
 func (p AutomationPolicy) validateRequest(req LocalCommandRequest) error {
 	if !p.isShellAutomationEnabled() {
 		return fmt.Errorf("local automation is disabled")
@@ -121,6 +158,29 @@ const pathExistsArgsSchema = `{"type":"object","properties":{"path":{"type":"str
 
 const statPathArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"File or directory path to inspect."}},"required":["path"]}`
 
+const gitStatusArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"short":{"type":"boolean","description":"Return a concise status summary."}}}`
+const gitDiffArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"staged":{"type":"boolean","description":"Show staged changes only."}}}`
+const gitLogArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"max_count":{"type":"integer","description":"Maximum number of commits to return."}}}`
+const gitBranchArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."}}}`
+const gitCheckoutArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"ref":{"type":"string","description":"Branch, tag, or commit to switch to."}},"required":["path","ref"]}`
+const gitCommitArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"message":{"type":"string","description":"Commit message."},"all":{"type":"boolean","description":"Stage all modified and deleted files before committing."}},"required":["path","message"]}`
+const gitPullArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"rebase":{"type":"boolean","description":"Use rebase instead of merge when pulling."}}}`
+const gitPushArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"remote":{"type":"string","description":"Remote name to push to."},"branch":{"type":"string","description":"Branch name to push."}}}`
+
+const postgresQueryArgsSchema = `{"type":"object","properties":{"query":{"type":"string","description":"Read-only SQL query to run against PostgreSQL."},"connection_string":{"type":"string","description":"Optional PostgreSQL connection string such as postgresql://user:pass@host:5432/dbname."},"host":{"type":"string","description":"Optional PostgreSQL host name."},"port":{"type":"string","description":"Optional PostgreSQL port."},"database":{"type":"string","description":"Optional PostgreSQL database name."},"user":{"type":"string","description":"Optional PostgreSQL user name."},"password":{"type":"string","description":"Optional PostgreSQL password."}},"required":["query"]}`
+
+const postgresExecuteArgsSchema = `{"type":"object","properties":{"statement":{"type":"string","description":"Write-capable SQL statement for PostgreSQL such as INSERT, UPDATE, DELETE, CREATE, ALTER, or DROP."},"connection_string":{"type":"string","description":"Optional PostgreSQL connection string such as postgresql://user:pass@host:5432/dbname."},"host":{"type":"string","description":"Optional PostgreSQL host name."},"port":{"type":"string","description":"Optional PostgreSQL port."},"database":{"type":"string","description":"Optional PostgreSQL database name."},"user":{"type":"string","description":"Optional PostgreSQL user name."},"password":{"type":"string","description":"Optional PostgreSQL password."}},"required":["statement"]}`
+
+const postgresListTablesArgsSchema = `{"type":"object","properties":{"connection_string":{"type":"string","description":"Optional PostgreSQL connection string such as postgresql://user:pass@host:5432/dbname."},"host":{"type":"string","description":"Optional PostgreSQL host name."},"port":{"type":"string","description":"Optional PostgreSQL port."},"database":{"type":"string","description":"Optional PostgreSQL database name."},"user":{"type":"string","description":"Optional PostgreSQL user name."},"password":{"type":"string","description":"Optional PostgreSQL password."}}}`
+
+const splunkSearchArgsSchema = `{"type":"object","properties":{"query":{"type":"string","description":"Splunk search query or SPL statement."},"host":{"type":"string","description":"Optional Splunk host or base URL."},"port":{"type":"string","description":"Optional Splunk management port."},"username":{"type":"string","description":"Optional Splunk username."},"password":{"type":"string","description":"Optional Splunk password or token."},"index":{"type":"string","description":"Optional Splunk index to scope the search to."},"earliest":{"type":"string","description":"Optional earliest time expression such as -15m or 2024-01-01T00:00:00."},"latest":{"type":"string","description":"Optional latest time expression."},"max_results":{"type":"integer","description":"Optional maximum number of events to return."}},"required":["query"]}`
+
+const splunkListSavedSearchesArgsSchema = `{"type":"object","properties":{"host":{"type":"string","description":"Optional Splunk host or base URL."},"port":{"type":"string","description":"Optional Splunk management port."},"username":{"type":"string","description":"Optional Splunk username."},"password":{"type":"string","description":"Optional Splunk password or token."}}}`
+
+const splunkCreateSavedSearchArgsSchema = `{"type":"object","properties":{"name":{"type":"string","description":"Name for the saved search."},"search":{"type":"string","description":"Splunk search query to save."},"host":{"type":"string","description":"Optional Splunk host or base URL."},"port":{"type":"string","description":"Optional Splunk management port."},"username":{"type":"string","description":"Optional Splunk username."},"password":{"type":"string","description":"Optional Splunk password or token."}},"required":["name","search"]}`
+
+const splunkDeleteSavedSearchArgsSchema = `{"type":"object","properties":{"name":{"type":"string","description":"Name of the saved search to delete."},"host":{"type":"string","description":"Optional Splunk host or base URL."},"port":{"type":"string","description":"Optional Splunk management port."},"username":{"type":"string","description":"Optional Splunk username."},"password":{"type":"string","description":"Optional Splunk password or token."}},"required":["name"]}`
+
 const sendEmailArgsSchema = `{"type":"object","properties":{"to":{"type":"string","description":"Recipient email address."},"subject":{"type":"string","description":"Email subject line."},"body":{"type":"string","description":"Email body content."}},"required":["to"]}`
 
 // toolExecuteLocalCommand equips the LLM to orchestrate shell commands on the user's local machine.
@@ -149,6 +209,30 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 		a.registry.Register("list_directory", "Lists the contents of a directory in the local workspace for inspection before further edits.", listDirectoryArgsSchema, wrapStringTool(a.toolListDirectory))
 		a.registry.Register("path_exists", "Checks whether a file or directory exists at the requested path in the local workspace.", pathExistsArgsSchema, wrapStringTool(a.toolPathExists))
 		a.registry.Register("stat_path", "Returns file or directory metadata for the requested path in the local workspace.", statPathArgsSchema, wrapStringTool(a.toolStatPath))
+		a.registry.Register("git_status", "Shows the working tree status for a repository, including modified, staged, and untracked files.", gitStatusArgsSchema, wrapStringTool(a.toolGitStatus))
+		a.registry.Register("git_diff", "Shows the current diff for a repository, or staged changes when requested.", gitDiffArgsSchema, wrapStringTool(a.toolGitDiff))
+		a.registry.Register("git_log", "Shows recent commit history for a repository.", gitLogArgsSchema, wrapStringTool(a.toolGitLog))
+		a.registry.Register("git_branch", "Lists branches for a repository.", gitBranchArgsSchema, wrapStringTool(a.toolGitBranch))
+		a.registry.Register("git_checkout", "Switches a repository to a different branch, tag, or commit.", gitCheckoutArgsSchema, wrapStringTool(a.toolGitCheckout))
+		a.registry.Register("git_commit", "Creates a git commit for a repository after staging changes if requested.", gitCommitArgsSchema, wrapStringTool(a.toolGitCommit))
+		a.registry.Register("git_pull", "Pulls changes from a remote into a repository, optionally using rebase.", gitPullArgsSchema, wrapStringTool(a.toolGitPull))
+		a.registry.Register("git_push", "Pushes a branch to a remote repository.", gitPushArgsSchema, wrapStringTool(a.toolGitPush))
+		if policy.isPostgresReadEnabled() {
+			a.registry.Register("postgres_query", "Runs a read-only SQL query against PostgreSQL through the local psql CLI using a connection string or host/database/user/password fields.", postgresQueryArgsSchema, wrapStringTool(a.toolPostgresQuery))
+			a.registry.Register("postgres_list_tables", "Lists PostgreSQL tables from the configured database for inspection and debugging.", postgresListTablesArgsSchema, wrapStringTool(a.toolPostgresListTables))
+		}
+		if policy.isPostgresWriteEnabled() {
+			a.registry.Register("postgres_execute", "Executes a write-capable SQL statement against PostgreSQL such as INSERT, UPDATE, DELETE, CREATE, ALTER, or DROP.", postgresExecuteArgsSchema, wrapStringTool(a.toolPostgresExecute))
+		}
+		if policy.isSplunkReadEnabled() {
+			a.registry.Register("splunk_search", "Runs a Splunk search using the local splunk CLI or a REST-compatible shell wrapper and returns the matching events.", splunkSearchArgsSchema, wrapStringTool(a.toolSplunkSearch))
+			a.registry.Register("splunk_list_saved_searches", "Lists existing Splunk saved searches from the configured host.", splunkListSavedSearchesArgsSchema, wrapStringTool(a.toolSplunkListSavedSearches))
+		}
+		if policy.isSplunkWriteEnabled() {
+			a.registry.Register("splunk_create_saved_search", "Creates a Splunk saved search from a name and search string.", splunkCreateSavedSearchArgsSchema, wrapStringTool(a.toolSplunkCreateSavedSearch))
+			a.registry.Register("splunk_update_saved_search", "Updates an existing Splunk saved search.", splunkCreateSavedSearchArgsSchema, wrapStringTool(a.toolSplunkUpdateSavedSearch))
+			a.registry.Register("splunk_delete_saved_search", "Deletes an existing Splunk saved search.", splunkDeleteSavedSearchArgsSchema, wrapStringTool(a.toolSplunkDeleteSavedSearch))
+		}
 	}
 
 	if policy.isEmailAutomationEnabled() {
@@ -586,6 +670,408 @@ func (a *CopilotAgent) toolStatPath(ctx context.Context, args map[string]any) (s
 
 	command := fmt.Sprintf("stat %s", shellQuote(path))
 	return a.runLocalAutomationCommand(ctx, args, command, "Inspect the requested path metadata in the local workspace.", "", 60)
+}
+
+func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (string, error) {
+	path := repoPathFromArgs(args)
+	short := boolFlagFromArgs(args, "short")
+	command := fmt.Sprintf("git -C %s status", shellQuote(path))
+	if short {
+		command += " --short"
+	}
+	return a.runLocalAutomationCommand(ctx, args, command, "Inspect the repository status before making changes.", path, 60)
+}
+
+func (a *CopilotAgent) toolGitDiff(ctx context.Context, args map[string]any) (string, error) {
+	path := repoPathFromArgs(args)
+	staged := boolFlagFromArgs(args, "staged")
+	command := fmt.Sprintf("git -C %s diff", shellQuote(path))
+	if staged {
+		command += " --staged"
+	}
+	return a.runLocalAutomationCommand(ctx, args, command, "Inspect repository changes before committing or rebasing.", path, 60)
+}
+
+func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (string, error) {
+	path := repoPathFromArgs(args)
+	count := 10
+	if countRaw, ok := args["max_count"]; ok {
+		switch v := countRaw.(type) {
+		case int:
+			count = v
+		case float64:
+			count = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				count = int(parsed)
+			}
+		}
+	}
+	if count <= 0 {
+		count = 10
+	}
+	command := fmt.Sprintf("git -C %s log --oneline -n %d", shellQuote(path), count)
+	return a.runLocalAutomationCommand(ctx, args, command, "Inspect recent repository history.", path, 60)
+}
+
+func (a *CopilotAgent) toolGitBranch(ctx context.Context, args map[string]any) (string, error) {
+	path := repoPathFromArgs(args)
+	command := fmt.Sprintf("git -C %s branch --all", shellQuote(path))
+	return a.runLocalAutomationCommand(ctx, args, command, "Inspect repository branches.", path, 60)
+}
+
+func (a *CopilotAgent) toolGitCheckout(ctx context.Context, args map[string]any) (string, error) {
+	path := repoPathFromArgs(args)
+	refRaw, ok := args["ref"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'ref'")
+	}
+	ref, ok := refRaw.(string)
+	if !ok || strings.TrimSpace(ref) == "" {
+		return "", fmt.Errorf("'ref' must be a non-empty string")
+	}
+	command := fmt.Sprintf("git -C %s checkout %s", shellQuote(path), shellQuote(ref))
+	return a.runLocalAutomationCommand(ctx, args, command, "Switch the repository to another branch or revision.", path, 60)
+}
+
+func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (string, error) {
+	path := repoPathFromArgs(args)
+	messageRaw, ok := args["message"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'message'")
+	}
+	message, ok := messageRaw.(string)
+	if !ok || strings.TrimSpace(message) == "" {
+		return "", fmt.Errorf("'message' must be a non-empty string")
+	}
+	command := fmt.Sprintf("git -C %s add -A && git -C %s commit -m %s", shellQuote(path), shellQuote(path), shellQuote(message))
+	if allRaw, ok := args["all"]; ok {
+		if all, ok := allRaw.(bool); ok && !all {
+			command = fmt.Sprintf("git -C %s commit -m %s", shellQuote(path), shellQuote(message))
+		}
+	}
+	return a.runLocalAutomationCommand(ctx, args, command, "Create a git commit for the requested repository change.", path, 60)
+}
+
+func (a *CopilotAgent) toolGitPull(ctx context.Context, args map[string]any) (string, error) {
+	path := repoPathFromArgs(args)
+	command := fmt.Sprintf("git -C %s pull", shellQuote(path))
+	if rebase := boolFlagFromArgs(args, "rebase"); rebase {
+		command = fmt.Sprintf("git -C %s pull --rebase", shellQuote(path))
+	}
+	return a.runLocalAutomationCommand(ctx, args, command, "Pull the latest changes for the repository.", path, 60)
+}
+
+func (a *CopilotAgent) toolGitPush(ctx context.Context, args map[string]any) (string, error) {
+	path := repoPathFromArgs(args)
+	remote := "origin"
+	if remoteRaw, ok := args["remote"]; ok {
+		if value, ok := remoteRaw.(string); ok && strings.TrimSpace(value) != "" {
+			remote = value
+		}
+	}
+	branch := ""
+	if branchRaw, ok := args["branch"]; ok {
+		if value, ok := branchRaw.(string); ok && strings.TrimSpace(value) != "" {
+			branch = value
+		}
+	}
+	command := fmt.Sprintf("git -C %s push %s", shellQuote(path), remote)
+	if branch != "" {
+		command += " " + shellQuote(branch)
+	}
+	return a.runLocalAutomationCommand(ctx, args, command, "Push repository changes to the requested remote branch.", path, 60)
+}
+
+func (a *CopilotAgent) toolPostgresQuery(ctx context.Context, args map[string]any) (string, error) {
+	queryRaw, ok := args["query"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'query'")
+	}
+	query, ok := queryRaw.(string)
+	if !ok || strings.TrimSpace(query) == "" {
+		return "", fmt.Errorf("'query' must be a non-empty string")
+	}
+	if isPostgresWriteQuery(query) {
+		return "", fmt.Errorf("postgres query is read-only only; write statements are not allowed")
+	}
+
+	limit := 0
+	if raw, ok := args["limit"]; ok {
+		switch v := raw.(type) {
+		case int:
+			limit = v
+		case float64:
+			limit = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				limit = int(parsed)
+			}
+		}
+	}
+	query = applyPostgresQueryLimit(query, limit)
+
+	if postgresNativeAPIEnabled(args) {
+		cfg := buildPostgresConfig(args)
+		return executePostgresQueryNative(ctx, cfg, query, false)
+	}
+
+	connectionString := ""
+	if raw, ok := args["connection_string"]; ok {
+		if value, ok := raw.(string); ok {
+			connectionString = strings.TrimSpace(value)
+		}
+	}
+
+	if connectionString == "" {
+		host := firstNonEmptyString(args["host"], os.Getenv("POSTGRES_HOST"), "localhost")
+		port := firstNonEmptyString(args["port"], os.Getenv("POSTGRES_PORT"), "5432")
+		database := firstNonEmptyString(args["database"], os.Getenv("POSTGRES_DATABASE"), "postgres")
+		user := firstNonEmptyString(args["user"], os.Getenv("POSTGRES_USER"), "postgres")
+		password := firstNonEmptyString(args["password"], os.Getenv("POSTGRES_PASSWORD"), "")
+		connectionString = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", user, password, host, port, database)
+	}
+
+	command := fmt.Sprintf("psql %s -c %s", shellQuote(connectionString), shellQuote(query))
+	return a.runLocalAutomationCommand(ctx, args, command, "Run the requested PostgreSQL query through the local psql CLI.", "", 60)
+}
+
+func (a *CopilotAgent) toolPostgresExecute(ctx context.Context, args map[string]any) (string, error) {
+	statementRaw, ok := args["statement"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'statement'")
+	}
+	statement, ok := statementRaw.(string)
+	if !ok || strings.TrimSpace(statement) == "" {
+		return "", fmt.Errorf("'statement' must be a non-empty string")
+	}
+	policy := GetAutomationPolicy()
+	if !policy.isPostgresWriteEnabled() {
+		return "", fmt.Errorf("postgres write access is not enabled")
+	}
+	if postgresNativeAPIEnabled(args) {
+		cfg := buildPostgresConfig(args)
+		return executePostgresQueryNative(ctx, cfg, statement, true)
+	}
+	connectionString := ""
+	if raw, ok := args["connection_string"]; ok {
+		if value, ok := raw.(string); ok {
+			connectionString = strings.TrimSpace(value)
+		}
+	}
+	if connectionString == "" {
+		host := firstNonEmptyString(args["host"], os.Getenv("POSTGRES_HOST"), "localhost")
+		port := firstNonEmptyString(args["port"], os.Getenv("POSTGRES_PORT"), "5432")
+		database := firstNonEmptyString(args["database"], os.Getenv("POSTGRES_DATABASE"), "postgres")
+		user := firstNonEmptyString(args["user"], os.Getenv("POSTGRES_USER"), "postgres")
+		password := firstNonEmptyString(args["password"], os.Getenv("POSTGRES_PASSWORD"), "")
+		connectionString = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", user, password, host, port, database)
+	}
+	command := fmt.Sprintf("psql %s -c %s", shellQuote(connectionString), shellQuote(statement))
+	return a.runLocalAutomationCommand(ctx, args, command, "Execute the requested PostgreSQL statement through the local psql CLI.", "", 60)
+}
+
+func (a *CopilotAgent) toolPostgresListTables(ctx context.Context, args map[string]any) (string, error) {
+	if postgresNativeAPIEnabled(args) {
+		cfg := buildPostgresConfig(args)
+		return executePostgresQueryNative(ctx, cfg, `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`, false)
+	}
+	connectionString := ""
+	if raw, ok := args["connection_string"]; ok {
+		if value, ok := raw.(string); ok {
+			connectionString = strings.TrimSpace(value)
+		}
+	}
+	if connectionString == "" {
+		host := firstNonEmptyString(args["host"], os.Getenv("POSTGRES_HOST"), "localhost")
+		port := firstNonEmptyString(args["port"], os.Getenv("POSTGRES_PORT"), "5432")
+		database := firstNonEmptyString(args["database"], os.Getenv("POSTGRES_DATABASE"), "postgres")
+		user := firstNonEmptyString(args["user"], os.Getenv("POSTGRES_USER"), "postgres")
+		password := firstNonEmptyString(args["password"], os.Getenv("POSTGRES_PASSWORD"), "")
+		connectionString = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", user, password, host, port, database)
+	}
+	command := fmt.Sprintf("psql %s -c %s", shellQuote(connectionString), shellQuote(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`))
+	return a.runLocalAutomationCommand(ctx, args, command, "List PostgreSQL tables through the local psql CLI.", "", 60)
+}
+
+func (a *CopilotAgent) toolPostgresDescribeTable(ctx context.Context, args map[string]any) (string, error) {
+	tableRaw, ok := args["table"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'table'")
+	}
+	table, ok := tableRaw.(string)
+	if !ok || strings.TrimSpace(table) == "" {
+		return "", fmt.Errorf("'table' must be a non-empty string")
+	}
+	query := fmt.Sprintf(`SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = '%s' ORDER BY ordinal_position`, table)
+	if postgresNativeAPIEnabled(args) {
+		cfg := buildPostgresConfig(args)
+		return executePostgresQueryNative(ctx, cfg, query, false)
+	}
+	connectionString := ""
+	if raw, ok := args["connection_string"]; ok {
+		if value, ok := raw.(string); ok {
+			connectionString = strings.TrimSpace(value)
+		}
+	}
+	if connectionString == "" {
+		host := firstNonEmptyString(args["host"], os.Getenv("POSTGRES_HOST"), "localhost")
+		port := firstNonEmptyString(args["port"], os.Getenv("POSTGRES_PORT"), "5432")
+		database := firstNonEmptyString(args["database"], os.Getenv("POSTGRES_DATABASE"), "postgres")
+		user := firstNonEmptyString(args["user"], os.Getenv("POSTGRES_USER"), "postgres")
+		password := firstNonEmptyString(args["password"], os.Getenv("POSTGRES_PASSWORD"), "")
+		connectionString = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", user, password, host, port, database)
+	}
+	command := fmt.Sprintf("psql %s -c %s", shellQuote(connectionString), shellQuote(query))
+	return a.runLocalAutomationCommand(ctx, args, command, "Inspect a PostgreSQL table schema through the local psql CLI.", "", 60)
+}
+
+func (a *CopilotAgent) toolSplunkSearch(ctx context.Context, args map[string]any) (string, error) {
+	queryRaw, ok := args["query"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'query'")
+	}
+	query, ok := queryRaw.(string)
+	if !ok || strings.TrimSpace(query) == "" {
+		return "", fmt.Errorf("'query' must be a non-empty string")
+	}
+
+	if splunkNativeAPIEnabled(args) {
+		cfg := buildSplunkConfig(args)
+		if savedSearchName, ok := args["saved_search_name"].(string); ok && strings.TrimSpace(savedSearchName) != "" {
+			query = fmt.Sprintf("savedsearch %q", strings.TrimSpace(savedSearchName))
+		}
+		return executeSplunkSearchNative(ctx, cfg, query)
+	}
+
+	host := firstNonEmptyString(args["host"], os.Getenv("SPLUNK_HOST"), "localhost")
+	port := firstNonEmptyString(args["port"], os.Getenv("SPLUNK_PORT"), "8089")
+	username := firstNonEmptyString(args["username"], os.Getenv("SPLUNK_USERNAME"), "")
+	password := firstNonEmptyString(args["password"], os.Getenv("SPLUNK_PASSWORD"), "")
+	index := firstNonEmptyString(args["index"], os.Getenv("SPLUNK_INDEX"), "")
+	earliest := stringArg(args, "earliest")
+	latest := stringArg(args, "latest")
+	maxResults := 50
+	if raw, ok := args["max_results"]; ok {
+		switch v := raw.(type) {
+		case int:
+			maxResults = v
+		case float64:
+			maxResults = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				maxResults = int(parsed)
+			}
+		}
+	}
+	if maxResults <= 0 {
+		maxResults = 50
+	}
+
+	flags := []string{"--output", "json"}
+	if username != "" {
+		flags = append(flags, "-auth", fmt.Sprintf("%s:%s", username, password))
+	}
+	if index != "" {
+		flags = append(flags, "index", index)
+	}
+	if earliest != "" {
+		flags = append(flags, "earliest", earliest)
+	}
+	if latest != "" {
+		flags = append(flags, "latest", latest)
+	}
+	flags = append(flags, "count", strconv.Itoa(maxResults))
+
+	command := fmt.Sprintf("splunk search %s --uri %s:%s %s", strings.Join(flags, " "), shellQuote(host), shellQuote(port), shellQuote(query))
+	return a.runLocalAutomationCommand(ctx, args, command, "Run the requested Splunk search through the local Splunk CLI.", "", 60)
+}
+
+func (a *CopilotAgent) toolSplunkListSavedSearches(ctx context.Context, args map[string]any) (string, error) {
+	if splunkNativeAPIEnabled(args) {
+		cfg := buildSplunkConfig(args)
+		return executeSplunkSearchNative(ctx, cfg, "| rest /services/saved/searches | table title")
+	}
+	return a.runLocalAutomationCommand(ctx, args, "splunk search '| rest /services/saved/searches | table title'", "List existing Splunk saved searches.", "", 60)
+}
+
+func (a *CopilotAgent) toolSplunkCreateSavedSearch(ctx context.Context, args map[string]any) (string, error) {
+	if splunkNativeAPIEnabled(args) {
+		cfg := buildSplunkConfig(args)
+		return executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+	}
+	name, _ := args["name"].(string)
+	search, _ := args["search"].(string)
+	command := fmt.Sprintf("splunk create saved-search %s -search %s", shellQuote(name), shellQuote(search))
+	command = strings.Replace(command, "splunk create saved-search", "splunk create saved/searches", 1)
+	return a.runLocalAutomationCommand(ctx, args, command, "Create a saved Splunk search.", "", 60)
+}
+
+func (a *CopilotAgent) toolSplunkUpdateSavedSearch(ctx context.Context, args map[string]any) (string, error) {
+	if splunkNativeAPIEnabled(args) {
+		cfg := buildSplunkConfig(args)
+		return executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+	}
+	name, _ := args["name"].(string)
+	search, _ := args["search"].(string)
+	command := fmt.Sprintf("splunk edit saved-search %s -search %s", shellQuote(name), shellQuote(search))
+	return a.runLocalAutomationCommand(ctx, args, command, "Update a saved Splunk search.", "", 60)
+}
+
+func (a *CopilotAgent) toolSplunkDeleteSavedSearch(ctx context.Context, args map[string]any) (string, error) {
+	if splunkNativeAPIEnabled(args) {
+		cfg := buildSplunkConfig(args)
+		return executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+	}
+	name, _ := args["name"].(string)
+	command := fmt.Sprintf("splunk delete saved-search %s", shellQuote(name))
+	return a.runLocalAutomationCommand(ctx, args, command, "Delete a saved Splunk search.", "", 60)
+}
+
+func boolFlagFromArgs(args map[string]any, key string) bool {
+	if raw, ok := args[key]; ok {
+		if value, ok := raw.(bool); ok {
+			return value
+		}
+	}
+	return false
+}
+
+func repoPathFromArgs(args map[string]any) string {
+	pathRaw, ok := args["path"]
+	if !ok {
+		return "."
+	}
+	path, ok := pathRaw.(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return "."
+	}
+	return path
+}
+
+func firstNonEmptyString(values ...interface{}) string {
+	for _, value := range values {
+		switch v := value.(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		case nil:
+			continue
+		default:
+			continue
+		}
+	}
+	return ""
+}
+
+func stringArg(args map[string]any, key string) string {
+	if raw, ok := args[key]; ok {
+		if value, ok := raw.(string); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func pathDir(path string) string {

@@ -111,6 +111,362 @@ func TestAutomationToolsRegisterRepoSearchHelpers(t *testing.T) {
 	}
 }
 
+func TestAutomationToolsRegisterGitHelpers(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	ag := &CopilotAgent{}
+	ag.registerTools(context.Background())
+
+	found := map[string]bool{}
+	for _, tool := range ag.registry.List() {
+		found[tool.Name] = true
+	}
+
+	for _, toolName := range []string{"git_status", "git_diff", "git_log", "git_branch", "git_checkout", "git_commit", "git_pull", "git_push"} {
+		if !found[toolName] {
+			t.Fatalf("expected %s to be registered", toolName)
+		}
+	}
+}
+
+func TestAutomationToolsRegisterPostgresAndSplunkAdapters(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	ag := &CopilotAgent{}
+	ag.registerTools(context.Background())
+
+	found := map[string]bool{}
+	for _, tool := range ag.registry.List() {
+		found[tool.Name] = true
+	}
+
+	if !found["postgres_query"] {
+		t.Fatalf("expected postgres_query to be registered")
+	}
+	if !found["splunk_search"] {
+		t.Fatalf("expected splunk_search to be registered")
+	}
+}
+
+func TestPostgresQueryUsesLocalCommandExecutor(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	var received LocalCommandRequest
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		received = req
+		return "ok", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolPostgresQuery(context.Background(), map[string]any{"query": "select 1", "connection_string": "postgres://user:pass@localhost:5432/app"})
+	if err != nil {
+		t.Fatalf("toolPostgresQuery() error = %v", err)
+	}
+	if out != "ok" {
+		t.Fatalf("toolPostgresQuery() output = %q", out)
+	}
+	if !strings.Contains(received.Command, "psql") {
+		t.Fatalf("expected psql command, got %q", received.Command)
+	}
+	if !strings.Contains(received.Command, "select 1") {
+		t.Fatalf("expected query in command, got %q", received.Command)
+	}
+}
+
+func TestPostgresQueryUsesNativeAPIWhenEnabled(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	previous := postgresQueryExecutor
+	postgresQueryExecutor = func(ctx context.Context, cfg postgresConfig, query string, allowWrite bool) (string, error) {
+		if query != "select 1" {
+			t.Fatalf("expected select query, got %q", query)
+		}
+		if allowWrite {
+			t.Fatal("expected read-only mode")
+		}
+		if cfg.Database != "appdb" {
+			t.Fatalf("expected appdb database, got %q", cfg.Database)
+		}
+		return `{"status":"ok","rows":[],"mode":"read"}`, nil
+	}
+	defer func() { postgresQueryExecutor = previous }()
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolPostgresQuery(context.Background(), map[string]any{"query": "select 1", "use_native_api": true, "host": "db.internal", "port": "5433", "database": "appdb", "user": "appuser", "password": "secret"})
+	if err != nil {
+		t.Fatalf("toolPostgresQuery() error = %v", err)
+	}
+	if !strings.Contains(out, `"status":"ok"`) {
+		t.Fatalf("expected native API result, got %q", out)
+	}
+}
+
+func TestPostgresQueryAppliesQueryLimit(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	previous := postgresQueryExecutor
+	postgresQueryExecutor = func(ctx context.Context, cfg postgresConfig, query string, allowWrite bool) (string, error) {
+		if !strings.Contains(query, "LIMIT 25") {
+			t.Fatalf("expected query limit to be appended, got %q", query)
+		}
+		return `{"status":"ok","rows":[],"mode":"read"}`, nil
+	}
+	defer func() { postgresQueryExecutor = previous }()
+
+	ag := &CopilotAgent{}
+	_, err := ag.toolPostgresQuery(context.Background(), map[string]any{"query": "select 1", "use_native_api": true, "limit": 25})
+	if err != nil {
+		t.Fatalf("toolPostgresQuery() error = %v", err)
+	}
+}
+
+func TestPostgresDescribeTableUsesNativeAPIWhenEnabled(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	previous := postgresQueryExecutor
+	postgresQueryExecutor = func(ctx context.Context, cfg postgresConfig, query string, allowWrite bool) (string, error) {
+		if !strings.Contains(query, "information_schema.columns") {
+			t.Fatalf("expected schema inspection query, got %q", query)
+		}
+		if !strings.Contains(query, "users") {
+			t.Fatalf("expected table name in schema inspection query, got %q", query)
+		}
+		return `{"status":"ok","rows":[],"mode":"read"}`, nil
+	}
+	defer func() { postgresQueryExecutor = previous }()
+
+	ag := &CopilotAgent{}
+	_, err := ag.toolPostgresDescribeTable(context.Background(), map[string]any{"table": "users", "use_native_api": true})
+	if err != nil {
+		t.Fatalf("toolPostgresDescribeTable() error = %v", err)
+	}
+}
+
+func TestSplunkSearchUsesLocalCommandExecutor(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	var received LocalCommandRequest
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		received = req
+		return "ok", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolSplunkSearch(context.Background(), map[string]any{"query": "index=main error", "host": "https://splunk.example", "port": "8089", "username": "admin", "password": "secret", "max_results": 5})
+	if err != nil {
+		t.Fatalf("toolSplunkSearch() error = %v", err)
+	}
+	if out != "ok" {
+		t.Fatalf("toolSplunkSearch() output = %q", out)
+	}
+	if !strings.Contains(received.Command, "splunk search") {
+		t.Fatalf("expected splunk search command, got %q", received.Command)
+	}
+	if !strings.Contains(received.Command, "index=main") {
+		t.Fatalf("expected index in command, got %q", received.Command)
+	}
+}
+
+func TestPostgresQueryUsesEnvironmentConfigWhenArgsOmitted(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	t.Setenv("POSTGRES_HOST", "db.internal")
+	t.Setenv("POSTGRES_PORT", "5433")
+	t.Setenv("POSTGRES_DATABASE", "appdb")
+	t.Setenv("POSTGRES_USER", "appuser")
+	t.Setenv("POSTGRES_PASSWORD", "secret")
+
+	var received LocalCommandRequest
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		received = req
+		return "ok", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolPostgresQuery(context.Background(), map[string]any{"query": "select 1"})
+	if err != nil {
+		t.Fatalf("toolPostgresQuery() error = %v", err)
+	}
+	if out != "ok" {
+		t.Fatalf("toolPostgresQuery() output = %q", out)
+	}
+	if !strings.Contains(received.Command, "postgresql://appuser:secret@db.internal:5433/appdb") {
+		t.Fatalf("expected environment-based connection string, got %q", received.Command)
+	}
+}
+
+func TestPostgresQueryRejectsWriteQueries(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	ag := &CopilotAgent{}
+	_, err := ag.toolPostgresQuery(context.Background(), map[string]any{"query": "DELETE FROM users"})
+	if err == nil {
+		t.Fatal("expected write query to be rejected")
+	}
+	if !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("expected read-only error, got %v", err)
+	}
+}
+
+func TestSplunkSearchUsesEnvironmentConfigWhenArgsOmitted(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	t.Setenv("SPLUNK_HOST", "splunk.internal")
+	t.Setenv("SPLUNK_PORT", "8089")
+	t.Setenv("SPLUNK_USERNAME", "admin")
+	t.Setenv("SPLUNK_PASSWORD", "secret")
+	t.Setenv("SPLUNK_INDEX", "main")
+
+	var received LocalCommandRequest
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		received = req
+		return "ok", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolSplunkSearch(context.Background(), map[string]any{"query": "error"})
+	if err != nil {
+		t.Fatalf("toolSplunkSearch() error = %v", err)
+	}
+	if out != "ok" {
+		t.Fatalf("toolSplunkSearch() output = %q", out)
+	}
+	if !strings.Contains(received.Command, "splunk search") {
+		t.Fatalf("expected splunk search command, got %q", received.Command)
+	}
+	if !strings.Contains(received.Command, "splunk.internal") {
+		t.Fatalf("expected environment-based host, got %q", received.Command)
+	}
+	if !strings.Contains(received.Command, "main") {
+		t.Fatalf("expected environment-based index, got %q", received.Command)
+	}
+}
+
+func TestSplunkSearchUsesNativeAPIWhenEnabled(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	previous := splunkSearchExecutor
+	splunkSearchExecutor = func(ctx context.Context, cfg splunkConfig, query string) (string, error) {
+		if query != "index=main error" {
+			t.Fatalf("expected search query, got %q", query)
+		}
+		if cfg.Index != "main" {
+			t.Fatalf("expected main index, got %q", cfg.Index)
+		}
+		return `{"status":"ok","results":[]}`, nil
+	}
+	defer func() { splunkSearchExecutor = previous }()
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolSplunkSearch(context.Background(), map[string]any{"query": "index=main error", "use_native_api": true, "host": "https://splunk.example", "index": "main", "max_results": 5})
+	if err != nil {
+		t.Fatalf("toolSplunkSearch() error = %v", err)
+	}
+	if !strings.Contains(out, `"status":"ok"`) {
+		t.Fatalf("expected native API result, got %q", out)
+	}
+}
+
+func TestSplunkSearchSupportsSavedSearchSemantics(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	previous := splunkSearchExecutor
+	splunkSearchExecutor = func(ctx context.Context, cfg splunkConfig, query string) (string, error) {
+		if !strings.Contains(query, "savedsearch") {
+			t.Fatalf("expected saved-search semantics, got %q", query)
+		}
+		return `{"status":"ok","results":[]}`, nil
+	}
+	defer func() { splunkSearchExecutor = previous }()
+
+	ag := &CopilotAgent{}
+	_, err := ag.toolSplunkSearch(context.Background(), map[string]any{"query": "errors", "use_native_api": true, "saved_search_name": "errors"})
+	if err != nil {
+		t.Fatalf("toolSplunkSearch() error = %v", err)
+	}
+}
+
+func TestPostgresExecuteRequiresWritePermission(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, AllowPostgresRead: true, AllowPostgresWrite: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	ag := &CopilotAgent{}
+	_, err := ag.toolPostgresExecute(context.Background(), map[string]any{"statement": "INSERT INTO users (id) VALUES (1)"})
+	if err == nil {
+		t.Fatal("expected postgres write operation to be rejected without write permission")
+	}
+	if !strings.Contains(err.Error(), "write") {
+		t.Fatalf("expected write-permission error, got %v", err)
+	}
+}
+
+func TestSplunkCreateSavedSearchUsesLocalCommandExecutor(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, AllowSplunkRead: true, AllowSplunkWrite: true, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	var received LocalCommandRequest
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		received = req
+		return "ok", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolSplunkCreateSavedSearch(context.Background(), map[string]any{"name": "errors", "search": "index=main error", "host": "splunk.internal", "port": "8089", "username": "admin", "password": "secret"})
+	if err != nil {
+		t.Fatalf("toolSplunkCreateSavedSearch() error = %v", err)
+	}
+	if out != "ok" {
+		t.Fatalf("toolSplunkCreateSavedSearch() output = %q", out)
+	}
+	if !strings.Contains(received.Command, "saved/searches") {
+		t.Fatalf("expected saved-search management command, got %q", received.Command)
+	}
+	if !strings.Contains(received.Command, "errors") {
+		t.Fatalf("expected saved search name in command, got %q", received.Command)
+	}
+}
+
+func TestGitStatusUsesLocalCommandExecutor(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	var received LocalCommandRequest
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		received = req
+		return "ok", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolGitStatus(context.Background(), map[string]any{"path": "/tmp/repo"})
+	if err != nil {
+		t.Fatalf("toolGitStatus() error = %v", err)
+	}
+	if out != "ok" {
+		t.Fatalf("toolGitStatus() output = %q", out)
+	}
+	if !strings.Contains(received.Command, "git -C") || !strings.Contains(received.Command, "status") {
+		t.Fatalf("expected git status command, got %q", received.Command)
+	}
+}
+
 func TestSearchRepoFilesUsesLocalCommandExecutor(t *testing.T) {
 	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
 	defer SetAutomationPolicy(DefaultAutomationPolicy())

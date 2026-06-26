@@ -46,6 +46,18 @@ func (m *retryMetaAskMockGen) PrewarmCache(ctx context.Context, opts ai.GenOptio
 	return nil
 }
 
+func TestBuildSystemPrompt_IncludesExplicitParametersGuardrail(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	prompt := ag.buildSystemPrompt(context.Background(), "Inspect the repo", TaskContextClassification{})
+
+	if !strings.Contains(prompt, "Explicit Parameters Guardrail") {
+		t.Fatalf("expected buildSystemPrompt to include explicit parameters guardrail, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "ConfigMap payload") {
+		t.Fatalf("expected buildSystemPrompt to instruct use of explicit arguments or ConfigMap payload, got: %s", prompt)
+	}
+}
+
 func TestRewriteRetryMetaAsk_UsesLatestAskOutcomeQuery(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: NewRunnerSession(), EnableShortTermMemory: false}
