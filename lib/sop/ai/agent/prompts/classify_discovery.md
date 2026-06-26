@@ -7,6 +7,7 @@ Respond with JSON only in this schema:
   "db_artifacts": ["users_table"],
   "stores_artifacts": ["users_table"],
   "spaces_artifacts": [],
+  "automation_families": ["postgres"],
   "layers": [
     {"name": "Single-Domain", "crud": ["C", "R"]}
   ]
@@ -26,5 +27,7 @@ Context Outline Options:
     *Disambiguation: If the words "store" or "space" are just part of normal content or a category name, keep the request Single-Domain. Use Cross-Domain only when the request operates across both Stores and Spaces.*
 
 For Cross-Domain requests, populate `stores_artifacts` and `spaces_artifacts` separately. Use `db_artifacts` only for single-domain compatibility or when there is only one relevant domain-specific artifact list.
+
+If the request is clearly about supported external automation families, populate `automation_families` with only the relevant values from: `postgres`, `splunk`, `git`, `shell`. Leave it empty when the request is not clearly about an automation family.
 
   Select only the necessary components for the user's request. Tag Layers with the CRUD actions (C, R, U, D) requested by the user. Leave arrays empty if none apply.

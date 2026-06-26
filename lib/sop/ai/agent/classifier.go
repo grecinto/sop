@@ -18,15 +18,16 @@ type LayerInfo struct {
 }
 
 type TaskContextClassification struct {
-	Entity          string      `json:"entity"`
-	Domain          string      `json:"domain"`
-	DBArtifacts     []string    `json:"db_artifacts"`
-	StoresArtifacts []string    `json:"stores_artifacts,omitempty"`
-	SpacesArtifacts []string    `json:"spaces_artifacts,omitempty"`
-	Layers          []LayerInfo `json:"layers"`
-	ScriptAuthoring bool        `json:"-"`
-	GeneralContext  bool        `json:"-"`
-	RoutingGate     string      `json:"-"`
+	Entity             string      `json:"entity"`
+	Domain             string      `json:"domain"`
+	DBArtifacts        []string    `json:"db_artifacts"`
+	StoresArtifacts    []string    `json:"stores_artifacts,omitempty"`
+	SpacesArtifacts    []string    `json:"spaces_artifacts,omitempty"`
+	Layers             []LayerInfo `json:"layers"`
+	AutomationFamilies []string    `json:"automation_families,omitempty"`
+	ScriptAuthoring    bool        `json:"-"`
+	GeneralContext     bool        `json:"-"`
+	RoutingGate        string      `json:"-"`
 	// KB Search Results (for specialized KB routing)
 	KBSearchResults string `json:"-"`
 	KBMatchCount    int    `json:"-"`
@@ -606,6 +607,7 @@ func normalizeTaskContext(taskCtx *TaskContextClassification) {
 	taskCtx.StoresArtifacts = normalizeArtifacts(taskCtx.StoresArtifacts)
 	taskCtx.SpacesArtifacts = normalizeArtifacts(taskCtx.SpacesArtifacts)
 	taskCtx.Layers = normalizeLayers(taskCtx.Layers)
+	taskCtx.AutomationFamilies = normalizeAutomationFamilies(taskCtx.AutomationFamilies)
 
 	if taskCtx.Entity == "" {
 		taskCtx.Entity = "Omni"
@@ -689,6 +691,40 @@ func normalizeArtifacts(artifacts []string) []string {
 	if len(normalized) == 0 {
 		return nil
 	}
+	return normalized
+}
+
+func normalizeAutomationFamilies(families []string) []string {
+	if len(families) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(families))
+	seen := make(map[string]bool, len(families))
+	for _, family := range families {
+		family = strings.ToLower(strings.TrimSpace(family))
+		switch family {
+		case "postgres", "postgresql", "psql", "sql":
+			family = "postgres"
+		case "splunk":
+			family = "splunk"
+		case "git", "repo", "repository", "repos":
+			family = "git"
+		case "shell", "cli", "cmd", "command", "commands", "local-shell", "localcommand":
+			family = "shell"
+		default:
+			family = strings.TrimSpace(family)
+		}
+		if family == "" || seen[family] {
+			continue
+		}
+		seen[family] = true
+		normalized = append(normalized, family)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	sort.Strings(normalized)
 	return normalized
 }
 

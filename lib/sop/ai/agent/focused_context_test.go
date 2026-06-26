@@ -189,10 +189,27 @@ func TestBuildSystemPrompt_IncludesAutomationToolFamilyContext(t *testing.T) {
 	ag.registerTools(ctx)
 	prompt := ag.buildSystemPrompt(ctx, "Inspect the repo and query postgres and splunk", TaskContextClassification{})
 
-	for _, expected := range []string{"External Automation Tool Context", "PostgreSQL", "Splunk", "Git", "Local shell"} {
+	for _, expected := range []string{"External Automation Tool Context", "PostgreSQL", "Splunk", "Git"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("expected automation context to contain %q in prompt: %s", expected, prompt)
 		}
+	}
+}
+
+func TestBuildSystemPrompt_UsesClassifiedAutomationFamilies(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+
+	prompt := ag.buildSystemPrompt(ctx, "Can you help me with the system?", TaskContextClassification{
+		AutomationFamilies: []string{"postgres"},
+	})
+
+	if !strings.Contains(prompt, "PostgreSQL") {
+		t.Fatalf("expected classified postgres family to surface postgres automation guidance, got prompt: %s", prompt)
+	}
+	if strings.Contains(prompt, "Splunk") {
+		t.Fatalf("did not expect splunk guidance when only postgres was classified, got prompt: %s", prompt)
 	}
 }
 

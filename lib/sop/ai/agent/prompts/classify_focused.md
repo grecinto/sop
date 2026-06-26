@@ -13,6 +13,8 @@ When the Domain is or may be Stores, parse likely store names from the user's qu
 
 For Cross-Domain requests, populate `stores_artifacts` and `spaces_artifacts` separately. Use `db_artifacts` only for single-domain compatibility or when there is only one relevant domain-specific artifact list.
 
+If the request is clearly about supported external automation families, populate `automation_families` with only the relevant values from: `postgres`, `splunk`, `git`, `shell`. Leave it empty when the request is not clearly about an automation family.
+
 Operational Layers definition:
 - "Single-Domain": Operations restricted to a single domain (either Stores or Spaces).
 - "Cross-Domain": Operations coordinating across multiple domains (mixing Stores and Spaces).
@@ -25,6 +27,7 @@ Respond with JSON only in this schema. Fill in the Domain and DB Artifact if the
   "db_artifacts": ["%s"],
   "stores_artifacts": ["%s"],
   "spaces_artifacts": ["%s"],
+  "automation_families": ["postgres"],
   "layers": [
     {"name": "Single-Domain", "crud": ["C", "R"]}
   ]

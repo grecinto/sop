@@ -2610,7 +2610,7 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 	}
 	builder.With(ComponentPlaybooks, playbooksContext)
 	builder.With(ComponentRecipes, a.getRecipeContext(taskClassification))
-	focusedExecutionContext := a.getFocusedExecutionContext(ctx, taskClassification)
+	focusedExecutionContext := a.getFocusedExecutionContext(ctx, query, taskClassification)
 	if memoryContinuation := a.getMemoryContinuationContext(taskClassification); memoryContinuation != "" {
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = memoryContinuation + "\n\n" + focusedExecutionContext

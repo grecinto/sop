@@ -37,9 +37,9 @@ func orderedCRUDFlags(flags map[string]bool) []string {
 	return ordered
 }
 
-func (a *CopilotAgent) getFocusedExecutionContext(ctx context.Context, taskClassification TaskContextClassification) string {
+func (a *CopilotAgent) getFocusedExecutionContext(ctx context.Context, query string, taskClassification TaskContextClassification) string {
 	if isCrossDomain(taskClassification.Layers) {
-		return a.buildCrossDomainFocusedExecutionContext(ctx, taskClassification)
+		return a.buildCrossDomainFocusedExecutionContext(ctx, query, taskClassification)
 	}
 
 	switch {
@@ -48,11 +48,11 @@ func (a *CopilotAgent) getFocusedExecutionContext(ctx context.Context, taskClass
 	case strings.EqualFold(taskClassification.Domain, SpacesDomain):
 		return a.buildSpacesFocusedExecutionContext(taskClassification)
 	default:
-		return a.buildAutomationFamilyFocusedExecutionContext(ctx, taskClassification)
+		return a.buildAutomationFamilyFocusedExecutionContext(ctx, query, taskClassification)
 	}
 }
 
-func (a *CopilotAgent) buildCrossDomainFocusedExecutionContext(ctx context.Context, taskClassification TaskContextClassification) string {
+func (a *CopilotAgent) buildCrossDomainFocusedExecutionContext(ctx context.Context, query string, taskClassification TaskContextClassification) string {
 	storesArtifacts := taskClassification.StoresArtifacts
 	if len(storesArtifacts) == 0 && strings.EqualFold(taskClassification.Domain, StoresDomain) {
 		storesArtifacts = taskClassification.DBArtifacts
@@ -85,8 +85,11 @@ func (a *CopilotAgent) buildCrossDomainFocusedExecutionContext(ctx context.Conte
 	return strings.Join(sections, "\n\n")
 }
 
-func (a *CopilotAgent) buildAutomationFamilyFocusedExecutionContext(ctx context.Context, taskClassification TaskContextClassification) string {
-	query := strings.TrimSpace(taskClassification.CleanQuery)
+func (a *CopilotAgent) buildAutomationFamilyFocusedExecutionContext(ctx context.Context, query string, taskClassification TaskContextClassification) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		query = strings.TrimSpace(taskClassification.CleanQuery)
+	}
 	if query == "" {
 		query = strings.TrimSpace(taskClassification.Entity)
 	}
@@ -94,24 +97,47 @@ func (a *CopilotAgent) buildAutomationFamilyFocusedExecutionContext(ctx context.
 		query = ""
 	}
 
+	families := normalizeAutomationFamilies(taskClassification.AutomationFamilies)
+	if len(families) == 0 {
+		families = inferAutomationFamiliesFromQuery(query)
+	}
+
 	var sections []string
-	if strings.Contains(strings.ToLower(query), "postgres") || strings.Contains(strings.ToLower(query), "sql") {
-		sections = append(sections, "External Automation Tool Context:\n- PostgreSQL: prefer explicit read-only queries first; use write operations only when the request explicitly requires mutation and the policy permits it. If connection details are missing, use the provided config or environment variables instead of inventing defaults. Keep statements scoped and explain results succinctly.")
-	}
-	if strings.Contains(strings.ToLower(query), "splunk") {
-		sections = append(sections, "External Automation Tool Context:\n- Splunk: prefer targeted search queries with explicit time windows and indexes when known. Use saved-search operations only when the user explicitly asks to create, update, or delete one. Keep results concise and grounded in the returned events.")
-	}
-	if strings.Contains(strings.ToLower(query), "git") || strings.Contains(strings.ToLower(query), "repo") || strings.Contains(strings.ToLower(query), "repository") {
-		sections = append(sections, "External Automation Tool Context:\n- Git and repository workflows: prefer inspecting state before mutating; use scoped diffs, branch checks, and targeted commits. Avoid making destructive changes without clear user intent.")
-	}
-	if strings.Contains(strings.ToLower(query), "command") || strings.Contains(strings.ToLower(query), "shell") || strings.Contains(strings.ToLower(query), "cmd") || strings.Contains(strings.ToLower(query), "local") {
-		sections = append(sections, "External Automation Tool Context:\n- Local shell and command execution: prefer explicit commands with clear reasoning and a bounded working directory; require approval when the policy expects it. Keep commands narrow and avoid unnecessary destructive actions.")
+	for _, family := range families {
+		switch family {
+		case "postgres":
+			sections = append(sections, "External Automation Tool Context:\n- PostgreSQL: prefer explicit read-only queries first; use write operations only when the request explicitly requires mutation and the policy permits it. If connection details are missing, use the provided config or environment variables instead of inventing defaults. Keep statements scoped and explain results succinctly.")
+		case "splunk":
+			sections = append(sections, "External Automation Tool Context:\n- Splunk: prefer targeted search queries with explicit time windows and indexes when known. Use saved-search operations only when the user explicitly asks to create, update, or delete one. Keep results concise and grounded in the returned events.")
+		case "git":
+			sections = append(sections, "External Automation Tool Context:\n- Git and repository workflows: prefer inspecting state before mutating; use scoped diffs, branch checks, and targeted commits. Avoid making destructive changes without clear user intent.")
+		case "shell":
+			sections = append(sections, "External Automation Tool Context:\n- Local shell and command execution: prefer explicit commands with clear reasoning and a bounded working directory; require approval when the policy expects it. Keep commands narrow and avoid unnecessary destructive actions.")
+		}
 	}
 
 	if len(sections) == 0 {
 		return ""
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+func inferAutomationFamiliesFromQuery(query string) []string {
+	lower := strings.ToLower(query)
+	var families []string
+	if strings.Contains(lower, "postgres") || strings.Contains(lower, "sql") || strings.Contains(lower, "psql") {
+		families = append(families, "postgres")
+	}
+	if strings.Contains(lower, "splunk") {
+		families = append(families, "splunk")
+	}
+	if strings.Contains(lower, "git") || strings.Contains(lower, "repo") || strings.Contains(lower, "repository") || strings.Contains(lower, "repos") {
+		families = append(families, "git")
+	}
+	if strings.Contains(lower, "command") || strings.Contains(lower, "shell") || strings.Contains(lower, "cmd") || strings.Contains(lower, "local") {
+		families = append(families, "shell")
+	}
+	return normalizeAutomationFamilies(families)
 }
 
 func (a *CopilotAgent) buildStoresFocusedExecutionContext(ctx context.Context, taskClassification TaskContextClassification) string {
