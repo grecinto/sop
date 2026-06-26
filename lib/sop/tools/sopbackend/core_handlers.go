@@ -2337,12 +2337,6 @@ func handleAddStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hardening: Prevent adding stores to System DB
-	if IsSystemDB(req.Database) {
-		http.Error(w, "Access Denied: Creating new stores in the System DB is not allowed.", http.StatusForbidden)
-		return
-	}
-
 	if req.StoreName == "" {
 		http.Error(w, "Store name is required", http.StatusBadRequest)
 		return

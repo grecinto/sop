@@ -185,6 +185,32 @@ func TestHandleUpdateStoreInfo_PersistsSchemaFieldMetadata(t *testing.T) {
 	}
 }
 
+func TestHandleAddStore_AllowsSystemDB(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := SystemDBName
+	config = Config{
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	createReq := map[string]any{
+		"database":   dbName,
+		"store":      "system_store",
+		"key_type":   "string",
+		"value_type": "string",
+	}
+	body, _ := json.Marshal(createReq)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/store/add", bytes.NewReader(body))
+	handleAddStore(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected system DB store creation to succeed, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleAddStore_IgnoresSchemaMetadataAtCreation(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbName := "testdb_add_store_schema"

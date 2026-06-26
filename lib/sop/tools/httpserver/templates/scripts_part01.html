@@ -120,7 +120,50 @@
         }
     }
 
+    function getRuntimeRequestTarget(endpoint) {
+        if (typeof endpoint !== 'string' || !endpoint.startsWith('/api/')) {
+            return endpoint;
+        }
+        const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+        if (runtimeMode !== 'local') {
+            return endpoint;
+        }
+        const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+        return `${daemonBase}${endpoint}`;
+    }
+
+    function applyRuntimeAuthHeaders(headers, endpoint) {
+        if (typeof endpoint !== 'string' || !endpoint.startsWith('/api/')) {
+            return;
+        }
+        const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+        if (runtimeMode !== 'local') {
+            return;
+        }
+        if (endpoint.startsWith('/api/daemon/bootstrap-secret')) {
+            return;
+        }
+        if (window.daemonAuth) {
+            const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+            if (existingToken) {
+                headers.Authorization = `Bearer ${existingToken}`;
+            }
+        }
+    }
+
     async function refreshSessionToken() {
+        const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+        if (runtimeMode === 'local') {
+            if (window.daemonAuth && typeof window.daemonAuth.bootstrap === 'function') {
+                await window.daemonAuth.bootstrap();
+                const token = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+                if (token) {
+                    return true;
+                }
+            }
+            throw new Error('Daemon auth unavailable');
+        }
+
         const response = await fetch('/api/auth/refresh', {
             method: 'POST',
             credentials: 'same-origin',
@@ -140,6 +183,23 @@
     }
 
     async function authFetch(endpoint, options = {}) {
+        const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+        if (runtimeMode === 'local' && typeof endpoint === 'string' && endpoint.startsWith('/api/')) {
+            const headers = Object.assign({}, options.headers || {});
+            headers['Cache-Control'] = 'no-store';
+            headers.Pragma = 'no-cache';
+            applyRuntimeAuthHeaders(headers, endpoint);
+            const response = await daemonRuntimeRequest(endpoint, Object.assign({}, options, {
+                cache: 'no-store',
+                credentials: 'omit',
+                headers
+            }));
+            if (!response.ok && (response.status === 401 || response.status === 403)) {
+                throw new Error(`Auth required (${response.status})`);
+            }
+            return response;
+        }
+
         const headers = Object.assign({}, options.headers || {});
         headers['Cache-Control'] = 'no-store';
         headers.Pragma = 'no-cache';
@@ -177,9 +237,10 @@
 
     function apiCallSync(endpoint, method = 'GET', body = null, overrideHeaders = null) {
         try {
+            const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
             const token = getStoredSessionToken();
             const h = { 'Content-Type': 'application/json' };
-            if (token) {
+            if (runtimeMode !== 'local' && token) {
                 h.Authorization = `Bearer ${token}`;
             }
             applyAIConfigHeaders(h, getStoredAIConfig());
@@ -190,9 +251,14 @@
                 }
             }
 
+            if (runtimeMode === 'local' && typeof endpoint === 'string' && endpoint.startsWith('/api/')) {
+                applyRuntimeAuthHeaders(h, endpoint);
+            }
+
+            const targetUrl = getRuntimeRequestTarget(endpoint);
             const xhr = new XMLHttpRequest();
-            xhr.open(method, endpoint, false);
-            xhr.withCredentials = true;
+            xhr.open(method, targetUrl, false);
+            xhr.withCredentials = runtimeMode !== 'local';
             Object.keys(h).forEach(k => xhr.setRequestHeader(k, h[k]));
             xhr.send(body ? JSON.stringify(body) : null);
 
@@ -225,6 +291,7 @@
 
     async function apiCall(endpoint, method = 'GET', body = null, overrideHeaders = null) {
         try {
+            const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
             const h = { 'Content-Type': 'application/json' };
             applyAIConfigHeaders(h, getStoredAIConfig());
 
@@ -238,10 +305,24 @@
                 method: method,
                 headers: h,
                 cache: 'no-store',
-                credentials: 'same-origin'
+                credentials: runtimeMode === 'local' ? 'omit' : 'same-origin'
             };
             if (body) {
                 options.body = JSON.stringify(body);
+            }
+
+            if (runtimeMode === 'local' && typeof endpoint === 'string' && endpoint.startsWith('/api/')) {
+                applyRuntimeAuthHeaders(h, endpoint);
+                const response = await daemonRuntimeRequest(endpoint, options);
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(`API Error (${response.status}): ${text || response.statusText}`);
+                }
+                const json = await response.json();
+                if (json.error) {
+                    throw new Error(json.error);
+                }
+                return json;
             }
 
             const response = await authFetch(endpoint, options);
@@ -1197,19 +1278,12 @@
         currentDatabase = name;
         localStorage.setItem('sop_current_database', name);
 
-        // Hardening: Hide Add Store button for System DB / System DBs
-        const dbObj = availableDatabases.find(d => d.name === name);
         const btnAddStore = document.getElementById('btn-add-store');
-        // Define isSystemDB locally so we can reuse it in the store listing
-        const isSystemDB = (dbObj && dbObj.is_system) || name === 'system' || name === SYSTEM_DB_NAME;
 
         if (btnAddStore) {
-            // Check implicit system names too just in case is_system missing
-            if (isSystemDB) {
-                 btnAddStore.style.display = 'none';
-            } else {
-                 btnAddStore.style.display = 'inline-block';
-            }
+            btnAddStore.style.display = 'inline-block';
+            btnAddStore.style.opacity = '1';
+            btnAddStore.style.pointerEvents = 'auto';
         }
 
         currentStore = null;
