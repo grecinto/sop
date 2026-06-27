@@ -914,10 +914,18 @@ IMPORTANT:
 - Do not change the logic of the script, only replace values with template variables.
 `, string(scriptJSON), instructions)
 
+	providerOverride := extractProviderOverrideFromContext(ctx)
+	provider := ""
+	model := ""
+	if providerOverride != nil {
+		provider = providerOverride.Provider
+		model = providerOverride.Model
+	}
+
 	// 3. Call LLM
 	genOut, err := s.generator.Generate(ctx, prompt, ai.GenOptions{
-		Temperature:   0.2,   // Low temperature for precision
-		ThinkingLevel: "low", // Strict JSON schema adherence for script refinement
+		Temperature:   0.2,                                                                     // Low temperature for precision
+		ThinkingLevel: NormalizeThinkingLevelForGenerator(s.generator, provider, model, "low"), // Strict JSON schema adherence for script refinement
 	})
 	if err != nil {
 		return fmt.Sprintf("Error generating refinement: %v", err), nil

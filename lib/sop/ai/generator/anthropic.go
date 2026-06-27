@@ -380,18 +380,15 @@ func (g *anthropic) thinkingConfig(level string) *anthropicThinkingConfig {
 	if thinkingLevel == "" {
 		return nil
 	}
-	if strings.Contains(strings.ToLower(g.model), "opus") && thinkingLevel == "low" {
-		thinkingLevel = "medium"
-	}
 
 	var budgetTokens int
 	switch thinkingLevel {
 	case "low":
-		budgetTokens = 512
-	case "medium":
 		budgetTokens = 1024
-	case "high":
+	case "medium":
 		budgetTokens = 2048
+	case "high":
+		budgetTokens = 4096
 	default:
 		return nil
 	}

@@ -459,8 +459,22 @@
         };
     }
 
+    function normalizeProviderConfig(provider, model) {
+        const split = splitProviderValue(provider || '');
+        const normalizedProvider = (split.provider || '').trim();
+        const normalizedModel = (model || '').trim() || (split.model || '').trim();
+        if (!normalizedProvider) {
+            return { provider: '', model: normalizedModel };
+        }
+        if (normalizedProvider.toLowerCase() === 'kelindar') {
+            return { provider: 'local', model: normalizedModel };
+        }
+        return { provider: normalizedProvider, model: normalizedModel };
+    }
+
     function buildProviderValue(provider, model) {
-        return model ? `${provider}:${model}` : (provider || '');
+        const normalized = normalizeProviderConfig(provider, model);
+        return normalized.model ? `${normalized.provider}:${normalized.model}` : (normalized.provider || '');
     }
 
     function applyAIConfigHeaders(headers, aiConfig) {

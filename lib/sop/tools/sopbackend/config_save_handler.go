@@ -93,28 +93,6 @@ func ensureRootUserFromPassword(password string, role string) error {
 	return config.SetUser("root", password, role)
 }
 
-func normalizeProviderAndModel(provider, model string) (string, string) {
-	provider = strings.TrimSpace(provider)
-	model = strings.TrimSpace(model)
-	if provider == "" {
-		return "", model
-	}
-
-	parts := strings.SplitN(provider, ":", 2)
-	if len(parts) == 2 {
-		provider = strings.TrimSpace(parts[0])
-		if model == "" {
-			model = strings.TrimSpace(parts[1])
-		}
-	}
-
-	if strings.EqualFold(provider, "kelindar") {
-		return "local", model
-	}
-
-	return provider, model
-}
-
 // handleSaveConfig writes the provided configuration to the specified file path.
 // Broken down into modular steps for readability/maintainability.
 func handleSaveConfig(w http.ResponseWriter, r *http.Request) {

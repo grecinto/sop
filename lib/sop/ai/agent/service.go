@@ -206,6 +206,9 @@ type ServiceAskOptions struct {
 	// ProviderDetails for runtime provider configuration (API key, base URL, model)
 	ProviderDetails *ProviderDetails
 
+	// ThinkingLevel overrides the default reasoning intensity for the current ask.
+	ThinkingLevel string
+
 	// IsNewTopic indicates this query starts a new conversation topic
 	IsNewTopic bool
 
@@ -288,6 +291,12 @@ func (s *Service) optsFromConfigMap(cfg *ai.ConfigMap) *ServiceAskOptions {
 		}
 	}
 
+	if val, ok := cfg.Get("thinking_level"); ok {
+		if level, ok := val.(string); ok {
+			opts.ThinkingLevel = strings.TrimSpace(level)
+		}
+	}
+
 	if val, ok := cfg.Get("is_new_topic"); ok {
 		if v, ok := val.(bool); ok {
 			opts.IsNewTopic = v
@@ -320,6 +329,9 @@ type AskRequest struct {
 
 	// ProviderOverride optionally provides runtime provider configuration (provider, model, API key, base URL)
 	ProviderOverride *ProviderDetails
+
+	// ThinkingLevel overrides the default reasoning intensity for the current ask.
+	ThinkingLevel string
 
 	// Database optionally overrides the session's current database
 	Database *database.Database
@@ -537,9 +549,17 @@ Format:
 	// Combine instructions into the prompt since GenOptions doesn't support SystemPrompt
 	fullPrompt := "Answer in strict JSON.\n" + prompt
 
+	providerOverride := extractProviderOverrideFromContext(ctx)
+	provider := ""
+	model := ""
+	if providerOverride != nil {
+		provider = providerOverride.Provider
+		model = providerOverride.Model
+	}
+
 	output, err := gen.Generate(ctx, fullPrompt, ai.GenOptions{
-		Temperature:   0.1,   // Deterministic
-		ThinkingLevel: "low", // Strict JSON schema adherence for topic routing
+		Temperature:   0.1,                                                              // Deterministic
+		ThinkingLevel: ResolveThinkingLevelForContext(ctx, gen, provider, model, "low"), // Strict JSON schema adherence for topic routing
 	})
 	if err != nil {
 		return nil, err
@@ -1819,6 +1839,7 @@ func (s *Service) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (str
 		Executor:         opts.Executor,
 		Generator:        opts.Generator,
 		ProviderOverride: opts.ProviderDetails,
+		ThinkingLevel:    opts.ThinkingLevel,
 		Database:         opts.Database,
 		Writer:           opts.Writer,
 		EventStreamer:    opts.EventStreamer,
@@ -1972,6 +1993,9 @@ func (s *Service) ask(ctx context.Context, req AskRequest) (AskResponse, error) 
 	}
 	ctx = context.WithValue(ctx, "session_payload", req.Session)
 	ctx = context.WithValue(ctx, RunnerSessionKey, s.session)
+	if trimmedThinkingLevel := strings.TrimSpace(req.ThinkingLevel); trimmedThinkingLevel != "" {
+		ctx = context.WithValue(ctx, ctxKeyThinkingLevel, trimmedThinkingLevel)
+	}
 
 	// Ensure tools are registered before any direct slash execution so commands like
 	// /list_directory resolve through the shared executor instead of failing as unknown tools.

@@ -859,6 +859,11 @@ func (a *CopilotAgent) applyAskConfig(ctx context.Context, cfg *ai.ConfigMap) co
 				ctx = context.WithValue(ctx, ai.CtxKeyDefaultFormat, strings.TrimSpace(format))
 			}
 		}
+		if val, ok := cfg.Get("thinking_level"); ok {
+			if level, ok := val.(string); ok && strings.TrimSpace(level) != "" {
+				ctx = context.WithValue(ctx, ctxKeyThinkingLevel, strings.TrimSpace(level))
+			}
+		}
 	}
 	return ctx
 }
@@ -2100,6 +2105,19 @@ func (a *CopilotAgent) persistAskOutcomeMRU(ctx context.Context, query string, f
 	}
 }
 
+func splitProviderAndModel(provider, model string) (string, string) {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" {
+		return "", model
+	}
+	if providerPart, modelPart, ok := strings.Cut(provider, ":"); ok && strings.TrimSpace(modelPart) != "" && model == "" {
+		provider = strings.TrimSpace(providerPart)
+		model = strings.TrimSpace(modelPart)
+	}
+	return provider, model
+}
+
 // ----------------------------------------------------------------------------
 // HELPER METHODS
 // ----------------------------------------------------------------------------
@@ -2107,7 +2125,7 @@ func (a *CopilotAgent) persistAskOutcomeMRU(ctx context.Context, query string, f
 func (a *CopilotAgent) resolveGeneratorWithOverride(ctx context.Context, providerOverride *ProviderDetails) ai.Generator {
 	// Use explicit ProviderDetails parameter first
 	if providerOverride != nil && providerOverride.Provider != "" {
-		provider := providerOverride.Provider
+		provider, resolvedModel := splitProviderAndModel(providerOverride.Provider, providerOverride.Model)
 		if provider == "openai" {
 			provider = ProviderChatGPT
 		}
@@ -2118,7 +2136,7 @@ func (a *CopilotAgent) resolveGeneratorWithOverride(ctx context.Context, provide
 		switch provider {
 		case ProviderGemini:
 			if providerOverride.APIKey != "" {
-				model := providerOverride.Model
+				model := resolvedModel
 				if model == "" {
 					model = DefaultModelGemini
 				}
@@ -2129,7 +2147,7 @@ func (a *CopilotAgent) resolveGeneratorWithOverride(ctx context.Context, provide
 			}
 		case ProviderChatGPT:
 			if providerOverride.APIKey != "" {
-				model := providerOverride.Model
+				model := resolvedModel
 				if model == "" {
 					model = DefaultModelOpenAI
 				}
@@ -2144,7 +2162,7 @@ func (a *CopilotAgent) resolveGeneratorWithOverride(ctx context.Context, provide
 			}
 		case ProviderAnthropic:
 			if providerOverride.APIKey != "" {
-				model := providerOverride.Model
+				model := resolvedModel
 				if model == "" {
 					model = DefaultModelAnthropic
 				}
@@ -2175,6 +2193,7 @@ func (a *CopilotAgent) resolveGenerator(ctx context.Context) ai.Generator {
 		providerOverrideStr = provider
 		modelOverride = model
 	}
+	providerOverrideStr, modelOverride = splitProviderAndModel(providerOverrideStr, modelOverride)
 	if providerOverrideStr == "openai" {
 		providerOverrideStr = ProviderChatGPT
 	}

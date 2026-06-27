@@ -166,6 +166,7 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 			temperature = nativeReActRepairTemperature
 			thinkingLevel = "medium" // More reasoning for repair strategies
 		}
+		thinkingLevel = NormalizeThinkingLevelForGenerator(req.Generator, "", "", thinkingLevel)
 		genOpts := ai.GenOptions{
 			SystemPrompt:  req.SystemPrompt,
 			MaxTokens:     e.MaxTokens,
@@ -395,7 +396,7 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 		SystemPrompt:  req.SystemPrompt,
 		MaxTokens:     e.MaxTokens,
 		Temperature:   0.7,
-		ThinkingLevel: "high", // Higher reasoning for final synthesis and explanation
+		ThinkingLevel: NormalizeThinkingLevelForGenerator(req.Generator, "", "", "high"), // Higher reasoning for final synthesis and explanation
 		ToolCallContinuations: func() []ai.ToolCallContinuation {
 			if pendingContinuation == nil {
 				return nil

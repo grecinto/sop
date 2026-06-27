@@ -57,7 +57,7 @@
                 const secretResponse = await fetch('/api/daemon/bootstrap-secret');
                 if (!secretResponse.ok) {
                     if (secretResponse.status === 404) {
-                        console.warn('[DaemonAuth] Daemon not running or bootstrap file not found');
+                        console.debug('[DaemonAuth] Daemon not running or bootstrap file not found');
                         this.bootstrapping = false;
                         return false;
                     }
@@ -173,11 +173,11 @@
          */
         async refresh() {
             if (!this.refreshToken) {
-                console.warn('[DaemonAuth] No refresh token available');
+                console.debug('[DaemonAuth] No refresh token available');
                 
                 // Check if HQ re-login is required
                 if (this.isHQLoginRequired()) {
-                    console.warn('[DaemonAuth] Refresh token expired and HQ re-login required');
+                    console.debug('[DaemonAuth] Refresh token expired and HQ re-login required');
                     return false;
                 }
                 
@@ -196,12 +196,12 @@
                 });
 
                 if (!response.ok) {
-                    console.warn('[DaemonAuth] Token refresh failed (status: ' + response.status + ')');
+                    console.debug('[DaemonAuth] Token refresh failed (status: ' + response.status + ')');
                     this.clearTokens();
                     
                     // If refresh token expired (401), check if HQ re-login is required
                     if (response.status === 401 && this.isHQLoginRequired()) {
-                        console.warn('[DaemonAuth] Refresh token expired after maximum period, HQ re-login required for subscription monitoring');
+                        console.debug('[DaemonAuth] Refresh token expired after maximum period, HQ re-login required for subscription monitoring');
                         return false;
                     }
                     
@@ -242,7 +242,7 @@
                 if (!refreshed) {
                     // Check if HQ re-login is required before attempting bootstrap
                     if (this.isHQLoginRequired()) {
-                        console.warn('[DaemonAuth] Cannot bootstrap: HQ re-login required for subscription monitoring');
+                        console.debug('[DaemonAuth] Cannot bootstrap: HQ re-login required for subscription monitoring');
                         this.redirectToHQLogin();
                         // Throw error to prevent request from proceeding
                         throw new Error('HQ login required for subscription monitoring');
@@ -280,7 +280,7 @@
                 } else {
                     // Check if HQ re-login is required
                     if (this.isHQLoginRequired()) {
-                        console.warn('[DaemonAuth] Refresh failed and HQ re-login required');
+                        console.debug('[DaemonAuth] Refresh failed and HQ re-login required');
                         this.redirectToHQLogin();
                         throw new Error('HQ login required for subscription monitoring');
                     }
@@ -337,7 +337,7 @@
     // Auto-bootstrap on page load (non-blocking)
     window.addEventListener('DOMContentLoaded', () => {
         window.ensureDaemonAuth().catch(err => {
-            console.warn('[DaemonAuth] Auto-bootstrap failed:', err);
+            console.debug('[DaemonAuth] Auto-bootstrap failed:', err);
         });
     });
 })();

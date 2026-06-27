@@ -22,19 +22,25 @@
             "options": [
                 {
                     "value": "gemini:gemini-3.5-flash",
-                    "label": "Gemini 3.5 Flash"
+                    "label": "Gemini 3.5 Flash",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "gemini:gemini-3.1-pro-preview",
-                    "label": "Gemini 3.1 Pro Preview"
+                    "label": "Gemini 3.1 Pro Preview",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "gemini:gemini-2.5-pro",
-                    "label": "Gemini 2.5 Pro"
+                    "label": "Gemini 2.5 Pro",
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "gemini:gemini-3.1-flash-lite",
-                    "label": "Gemini 3.1 Flash Lite"
+                    "label": "Gemini 3.1 Flash Lite",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "gemini:gemma-4-it",
@@ -59,43 +65,54 @@
             "options": [
                 {
                     "value": "anthropic:claude-opus-4-8",
-                    "label": "Claude Opus 4.8"
+                    "label": "Claude Opus 4.8",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-opus-4-7",
-                    "label": "Claude Opus 4.7"
+                    "label": "Claude Opus 4.7",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-opus-4-6",
-                    "label": "Claude Opus 4.6"
+                    "label": "Claude Opus 4.6",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-sonnet-4-6",
-                    "label": "Claude Sonnet 4.6"
+                    "label": "Claude Sonnet 4.6",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-sonnet-4-5",
-                    "label": "Claude Sonnet 4.5"
+                    "label": "Claude Sonnet 4.5",
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-haiku-4-5",
-                    "label": "Claude Haiku 4.5"
+                    "label": "Claude Haiku 4.5",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-opus-4-5",
-                    "label": "Claude Opus 4.5"
+                    "label": "Claude Opus 4.5",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-opus-4-1",
-                    "label": "Claude Opus 4.1"
+                    "label": "Claude Opus 4.1",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-3-5-sonnet-20241022",
-                    "label": "Claude 3.5 Sonnet (Oct 2024)"
+                    "label": "Claude 3.5 Sonnet (Oct 2024)",
+                    "thinking_level_range": ["medium", "high"]
                 },
                 {
                     "value": "anthropic:claude-3-5-haiku",
-                    "label": "Claude 3.5 Haiku"
+                    "label": "Claude 3.5 Haiku",
+                    "thinking_level_range": ["medium", "high"]
                 }
             ]
         },
@@ -104,35 +121,44 @@
             "options": [
                 {
                     "value": "openai:gpt-5.5",
-                    "label": "GPT-5.5"
+                    "label": "GPT-5.5",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "openai:gpt-5.4",
-                    "label": "GPT-5.4"
+                    "label": "GPT-5.4",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "openai:gpt-5.4-mini",
-                    "label": "GPT-5.4 Mini"
+                    "label": "GPT-5.4 Mini",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "openai:gpt-5.2",
-                    "label": "GPT-5.2"
+                    "label": "GPT-5.2",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "openai:gpt-5.5-pro",
-                    "label": "GPT-5.5 Pro"
+                    "label": "GPT-5.5 Pro",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "openai:gpt-5.4-pro",
-                    "label": "GPT-5.4 Pro"
+                    "label": "GPT-5.4 Pro",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "openai:gpt-5.4-nano",
-                    "label": "GPT-5.4 Nano"
+                    "label": "GPT-5.4 Nano",
+                    "thinking_level_range": ["low", "medium", "high"]
                 },
                 {
                     "value": "openai:gpt-5.2-pro",
-                    "label": "GPT-5.2 Pro"
+                    "label": "GPT-5.2 Pro",
+                    "thinking_level_range": ["low", "medium", "high"]
                 }
             ]
         }

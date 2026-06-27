@@ -140,6 +140,7 @@ func (a *CopilotAgent) registerSystemTools(ctx context.Context) {
 	a.registry.Register("list_databases", "Lists all available databases.", emptyObjectArgsSchema, wrapStringTool(a.toolListDatabases))
 	a.registry.Register("list_stores", ListStoresInstruction, listStoresArgsSchema, wrapStringTool(a.toolListStores))
 	a.registry.Register("list_tools", "Lists all available tools and their usage instructions.", emptyObjectArgsSchema, wrapStringTool(a.toolListTools))
+	a.registry.Register("clear", "Clear temporary session-scoped chat state such as pending confirmations, draft script context, and recent interaction buffers.", emptyObjectArgsSchema, wrapStringTool(a.toolClear))
 	a.registry.Register("set_verbose", "Toggle session verbosity for follow-up tool results and progress streaming.", `{"type":"object","properties":{"verbose":{"type":"boolean","description":"Set verbosity on or off. If omitted, the current setting is toggled."}}}`, wrapStringTool(a.toolSetVerbose))
 }
 
@@ -178,6 +179,24 @@ func (a *CopilotAgent) toolListTools(ctx context.Context, args map[string]any) (
 		})
 	}
 	return formatToolInventoryList(visible), nil
+}
+
+func (a *CopilotAgent) toolClear(ctx context.Context, args map[string]any) (string, error) {
+	rs := runnerSessionFromContext(ctx)
+	if rs == nil && a.service != nil {
+		rs = a.service.session
+	}
+	if rs != nil {
+		rs.ConversationHistory = ""
+		rs.CurrentScript = nil
+		rs.CurrentScriptName = ""
+		rs.CurrentScriptCategory = ""
+		rs.AutoSave = false
+		rs.LastStep = nil
+		rs.LastInteractionToolCalls = nil
+		rs.PendingConfirmation = nil
+	}
+	return "Session context cleared.", nil
 }
 
 func (a *CopilotAgent) toolSetVerbose(ctx context.Context, args map[string]any) (string, error) {

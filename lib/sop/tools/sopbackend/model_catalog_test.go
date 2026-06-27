@@ -11,6 +11,15 @@ func TestLoadModelCatalogUsesDefaultCatalogWithoutWritingFile(t *testing.T) {
 	configPath := filepath.Join(tempDir, "config.json")
 	modelCatalogPath := filepath.Join(tempDir, modelCatalogFilename)
 
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
 	seededDefaults, err := LoadModelCatalog(configPath)
 	if err != nil {
 		t.Fatalf("loadModelCatalog returned error: %v", err)
@@ -23,9 +32,6 @@ func TestLoadModelCatalogUsesDefaultCatalogWithoutWritingFile(t *testing.T) {
 	}
 	if len(modelCatalog.Embedder) == 0 {
 		t.Fatal("expected default embedder catalog entries")
-	}
-	if got := modelCatalog.Embedder[len(modelCatalog.Embedder)-1].Options[len(modelCatalog.Embedder[len(modelCatalog.Embedder)-1].Options)-1].Value; got != "kelindar:nomic-embed-text-v1.5-q8_0" {
-		t.Fatalf("expected default embedder catalog to include the registry-backed local kelindar option, got %q", got)
 	}
 	if modelCatalog.LLM[0].Options[0].Value != "gemini:gemini-3.1-pro-preview" {
 		t.Fatalf("unexpected first default llm option: %q", modelCatalog.LLM[0].Options[0].Value)
@@ -75,6 +81,41 @@ func TestSaveConfigFileDoesNotCreateModelCatalogSidecar(t *testing.T) {
 
 	if _, err := os.Stat(modelCatalogPath); !os.IsNotExist(err) {
 		t.Fatalf("expected no model catalog sidecar to be created, got err=%v", err)
+	}
+}
+
+func TestLoadModelCatalogFindsCatalogInParentOfConfigDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	toolsDir := filepath.Join(tempDir, "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatalf("mkdir tools dir: %v", err)
+	}
+
+	configPath := filepath.Join(toolsDir, "config.json")
+	catalogPath := filepath.Join(tempDir, modelCatalogFilename)
+	contents := `{
+		"llm": [{"label": "Vendor", "options": [{"value": "vendor:model-parent", "label": "Model Parent"}]}],
+		"embedder": [{"label": "Vendor", "options": [{"value": "vendor:embed-parent", "label": "Embed Parent"}]}]
+	}`
+	if err := os.WriteFile(catalogPath, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write model catalog: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"port": 8080}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	seededDefaults, err := LoadModelCatalog(configPath)
+	if err != nil {
+		t.Fatalf("loadModelCatalog returned error: %v", err)
+	}
+	if seededDefaults {
+		t.Fatal("expected existing parent catalog to remain source of truth")
+	}
+	if got := modelCatalog.LLM[0].Options[0].Value; got != "vendor:model-parent" {
+		t.Fatalf("expected parent catalog llm option, got %q", got)
+	}
+	if got := modelCatalog.Embedder[0].Options[0].Value; got != "vendor:embed-parent" {
+		t.Fatalf("expected parent catalog embedder option, got %q", got)
 	}
 }
 

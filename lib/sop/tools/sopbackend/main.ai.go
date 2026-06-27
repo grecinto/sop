@@ -215,17 +215,18 @@ func handleAIChat(w http.ResponseWriter, r *http.Request) {
 }
 
 type aiChatRequest struct {
-	Message     string                 `json:"message"`
-	Database    string                 `json:"database"`
-	StoreName   string                 `json:"store"`
-	Agent       string                 `json:"agent"`
-	Provider    string                 `json:"provider"`
-	Format      string                 `json:"format"`
-	SessionID   string                 `json:"session_id"`
-	UserID      string                 `json:"user_id"`
-	ClientID    string                 `json:"client_id"`
-	Domain      string                 `json:"domain"`
-	SelectedKBs []ai.ArtifactReference `json:"selected_kbs"`
+	Message       string                 `json:"message"`
+	Database      string                 `json:"database"`
+	StoreName     string                 `json:"store"`
+	Agent         string                 `json:"agent"`
+	Provider      string                 `json:"provider"`
+	Format        string                 `json:"format"`
+	ThinkingLevel string                 `json:"thinking_level"`
+	SessionID     string                 `json:"session_id"`
+	UserID        string                 `json:"user_id"`
+	ClientID      string                 `json:"client_id"`
+	Domain        string                 `json:"domain"`
+	SelectedKBs   []ai.ArtifactReference `json:"selected_kbs"`
 }
 
 func buildAppBaseURL(r *http.Request) string {
@@ -347,15 +348,15 @@ func setupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 
 		if eventType == "records" || eventType == "record" || eventType == "preview" {
 			b, _ := json.Marshal(payload)
-			log.Debug("UI: Sending Payload (WIRE)", "type", eventType, "json_preview", string(b))
+			log.Debug("UI: streaming event", "type", eventType, "bytes", len(b))
 		} else if eventType == "content" {
 			s := fmt.Sprintf("%v", payload)
-			log.Debug("UI: Sending Content", "length", len(s))
+			log.Debug("UI: streaming content", "length", len(s))
 		}
 
 		w.Header().Set("Content-Type", "application/x-ndjson")
 
-		log.Debug("UI: writing NDJSON event", "type", eventType, "payload_type", fmt.Sprintf("%T", payload), "payload_preview", fmt.Sprintf("%v", payload))
+		log.Debug("UI: writing NDJSON event", "type", eventType, "payload_type", fmt.Sprintf("%T", payload))
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"type":    eventType,
 			"payload": payload,
@@ -538,6 +539,9 @@ func constructPayload(ctx context.Context, w http.ResponseWriter, req *aiChatReq
 
 	if req.Database != "" {
 		cfg.Set("database", req.Database)
+	}
+	if trimmedThinkingLevel := strings.TrimSpace(req.ThinkingLevel); trimmedThinkingLevel != "" {
+		cfg.Set("thinking_level", trimmedThinkingLevel)
 	}
 	format := req.Format
 	if format == "" {

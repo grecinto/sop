@@ -424,7 +424,7 @@ func TestAnthropicGenerate_ParsesToolCallsFromResponse(t *testing.T) {
 	}
 }
 
-func TestAnthropicThinkingConfig_NormalizesOpusLowToMedium(t *testing.T) {
+func TestAnthropicThinkingConfig_UsesMinimumBudgetForLowThinking(t *testing.T) {
 	gen := &anthropic{model: "claude-opus-4-20250514"}
 	cfg := gen.thinkingConfig("low")
 	if cfg == nil {
@@ -434,18 +434,18 @@ func TestAnthropicThinkingConfig_NormalizesOpusLowToMedium(t *testing.T) {
 		t.Fatalf("expected thinking type enabled, got %q", cfg.Type)
 	}
 	if cfg.BudgetTokens != 1024 {
-		t.Fatalf("expected medium budget of 1024, got %d", cfg.BudgetTokens)
+		t.Fatalf("expected minimum budget of 1024, got %d", cfg.BudgetTokens)
 	}
 }
 
-func TestAnthropicThinkingConfig_LeavesNonOpusThinkingLevelUntouched(t *testing.T) {
+func TestAnthropicThinkingConfig_UsesHigherBudgetForMediumThinking(t *testing.T) {
 	gen := &anthropic{model: "claude-sonnet-4-20250514"}
-	cfg := gen.thinkingConfig("low")
+	cfg := gen.thinkingConfig("medium")
 	if cfg == nil {
 		t.Fatal("expected thinking config for sonnet model")
 	}
-	if cfg.BudgetTokens != 512 {
-		t.Fatalf("expected low budget of 512, got %d", cfg.BudgetTokens)
+	if cfg.BudgetTokens != 2048 {
+		t.Fatalf("expected medium budget of 2048, got %d", cfg.BudgetTokens)
 	}
 }
 

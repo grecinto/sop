@@ -91,6 +91,21 @@ func (s *Service) handleSessionCommand(ctx context.Context, query string, db *da
 		return sb.String(), true, nil
 	}
 
+	// /clear
+	if query == "/clear" {
+		if s.session != nil {
+			s.session.ConversationHistory = ""
+			s.session.CurrentScript = nil
+			s.session.CurrentScriptName = ""
+			s.session.CurrentScriptCategory = ""
+			s.session.AutoSave = false
+			s.session.LastStep = nil
+			s.session.LastInteractionToolCalls = nil
+			s.session.PendingConfirmation = nil
+		}
+		return "Session context cleared.", true, nil
+	}
+
 	// /list_tools
 	if query == "/list_tools" {
 		log.Info("Service.handleSessionCommand.list_tools: resolving inventory")

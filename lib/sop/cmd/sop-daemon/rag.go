@@ -124,6 +124,11 @@ type AskRequest struct {
 		UserID    string `json:"user_id"`
 		SessionID string `json:"session_id"`
 	} `json:"hq"`
+	LLMProvider   string `json:"llm_provider,omitempty"`
+	LLMAPIKey     string `json:"llm_api_key,omitempty"`
+	LLMModel      string `json:"llm_model,omitempty"`
+	LLMURL        string `json:"llm_url,omitempty"`
+	ThinkingLevel string `json:"thinking_level,omitempty"`
 }
 
 type AskResponse struct {
@@ -317,23 +322,9 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 		log.Printf("daemon newLocalRAGService: using auto-provisioned shared service")
 		return &localRAGService{service: svc, shellSessions: newShellSessionState()}, nil
 	} else {
-		log.Printf("daemon newLocalRAGService: falling back to local runtime config: %v", err)
+		log.Printf("daemon newLocalRAGService: shared RAG runtime unavailable: %v", err)
+		return nil, fmt.Errorf("shared RAG runtime unavailable: %w", err)
 	}
-
-	cfg, err := agent.LoadConfigFromFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
-	}
-	if cfg.StoragePath != "" {
-		if absPath, err := filepath.Abs(cfg.StoragePath); err == nil {
-			cfg.StoragePath = absPath
-		}
-	}
-	svc, err := agent.NewFromConfig(context.Background(), *cfg, agent.Dependencies{})
-	if err != nil {
-		return nil, fmt.Errorf("build agent: %w", err)
-	}
-	return &localRAGService{service: svc, shellSessions: newShellSessionState()}, nil
 }
 
 func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string]any], error) {
@@ -470,25 +461,53 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	cfg.Set("payload", payload)
 	cfg.Set("access_token", accessToken)
 	cfg.Set("refresh_token", refreshToken)
+	if trimmedThinkingLevel := strings.TrimSpace(req.ThinkingLevel); trimmedThinkingLevel != "" {
+		cfg.Set("thinking_level", trimmedThinkingLevel)
+	}
 	cfg.Set("hq_base_url", hqBaseURL)
 	cfg.Set("hq_user_id", strings.TrimSpace(req.HQ.UserID))
 	cfg.Set("hq_session_id", strings.TrimSpace(req.HQ.SessionID))
+	if provider := strings.TrimSpace(req.LLMProvider); provider != "" || strings.TrimSpace(req.LLMAPIKey) != "" || strings.TrimSpace(req.LLMModel) != "" || strings.TrimSpace(req.LLMURL) != "" {
+		providerDetails := &agent.ProviderDetails{
+			Provider: strings.TrimSpace(req.LLMProvider),
+			APIKey:   strings.TrimSpace(req.LLMAPIKey),
+			Model:    strings.TrimSpace(req.LLMModel),
+			BaseURL:  strings.TrimSpace(req.LLMURL),
+		}
+		cfg.Set("provider_details", providerDetails)
+		providerName, modelName := agent.NormalizeProviderAndModel(providerDetails.Provider, providerDetails.Model)
+		if providerName != "" {
+			providerCtxValue := providerName
+			if modelName != "" {
+				providerCtxValue = providerName + ":" + modelName
+			}
+			ctx = context.WithValue(ctx, ai.CtxKeyProvider, providerCtxValue)
+		}
+		if providerDetails.APIKey != "" {
+			ctx = context.WithValue(ctx, ai.CtxKeyAPIKey, providerDetails.APIKey)
+		}
+		if providerDetails.BaseURL != "" {
+			ctx = context.WithValue(ctx, ai.CtxKeyBaseURL, providerDetails.BaseURL)
+		}
+	}
 
 	normalizedQuery := normalizeAgentQuery(req.Query)
 	payload.CurrentUserQuery = req.Query
 	cfg.Set("payload", payload)
 
 	log.Printf("daemon handleAsk: request received query=%q session=%q normalized_query=%q", req.Query, payload.SessionID, normalizedQuery)
-	if strings.HasPrefix(normalizedQuery, "/") && hasSharedBackendAgents() {
-		answer, err := sopbackend.AskSharedAgent(ctx, normalizedQuery, cfg)
-		if err != nil {
-			log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
-			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
+	if hasSharedBackendAgents() {
+		if strings.HasPrefix(normalizedQuery, "/") || !shouldUseShellFallback(normalizedQuery) {
+			answer, err := sopbackend.AskSharedAgent(ctx, normalizedQuery, cfg)
+			if err != nil {
+				log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
+				respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
+				return
+			}
+			log.Printf("daemon handleAsk: completed via shared backend handler query=%q answer_len=%d", req.Query, len(answer))
+			respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
 			return
 		}
-		log.Printf("daemon handleAsk: completed via shared backend handler query=%q answer_len=%d", req.Query, len(answer))
-		respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
-		return
 	}
 	if fallbackAnswer, handled, fallbackErr := s.trySimpleShellCommandFallback(normalizedQuery, sessionID); handled {
 		if fallbackErr != nil {
@@ -580,6 +599,9 @@ func (s *localRAGService) trySimpleShellCommandFallback(query, sessionID string)
 	if strings.Contains(trimmed, "\n") || strings.Contains(trimmed, "\r") {
 		return "", false, nil
 	}
+	if !looksLikeSimpleShellCommand(trimmed) {
+		return "", false, nil
+	}
 	if s.shellSessions == nil {
 		s.shellSessions = newShellSessionState()
 	}
@@ -594,6 +616,46 @@ func (s *localRAGService) trySimpleShellCommandFallback(query, sessionID string)
 		return "", true, nil
 	}
 	return output, true, nil
+}
+
+func shouldUseShellFallback(query string) bool {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return false
+	}
+	if strings.ContainsAny(trimmed, "|&;<>()$`") {
+		return false
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return false
+	}
+	first := strings.ToLower(fields[0])
+	if !isKnownSimpleShellCommand(first) {
+		return false
+	}
+	for _, field := range fields[1:] {
+		if strings.HasPrefix(field, "-") {
+			continue
+		}
+		if strings.Contains(field, " ") || strings.Contains(field, "\t") {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeSimpleShellCommand(query string) bool {
+	return shouldUseShellFallback(query)
+}
+
+func isKnownSimpleShellCommand(command string) bool {
+	switch command {
+	case "echo", "pwd", "ls", "cd", "cat", "head", "tail", "grep", "find", "uname", "date", "whoami", "env", "git", "python", "python3", "node", "bash", "sh", "mkdir", "rm", "cp", "mv", "touch", "open":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveConfigPath(path string) string {

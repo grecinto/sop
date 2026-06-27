@@ -19,8 +19,10 @@ type ModelCatalogGroup struct {
 }
 
 type ModelCatalogOption struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
+	Value                string   `json:"value"`
+	Label                string   `json:"label"`
+	DefaultThinkingLevel string   `json:"default_thinking_level,omitempty"`
+	ThinkingLevelRange   []string `json:"thinking_level_range,omitempty"`
 }
 
 func defaultLocalEmbedderOptions() []ModelCatalogOption {
@@ -99,19 +101,22 @@ func DefaultModelCatalog() ModelCatalog {
 			{
 				Label: "Google",
 				Options: []ModelCatalogOption{
-					{Value: "gemini:gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro Preview"},
+					{Value: "gemini:gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro Preview", ThinkingLevelRange: []string{"low", "medium", "high"}},
 				},
 			},
 			{
 				Label: "Anthropic",
 				Options: []ModelCatalogOption{
-					{Value: "anthropic:claude-4.6-sonnet", Label: "Claude Sonnet 4.6"},
+					{Value: "anthropic:claude-sonnet-4-6", Label: "Claude Sonnet 4.6", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"medium", "high"}},
+					{Value: "anthropic:claude-sonnet-4-5", Label: "Claude Sonnet 4.5", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"medium", "high"}},
+					{Value: "anthropic:claude-opus-4-8", Label: "Claude Opus 4.8", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"medium", "high"}},
 				},
 			},
 			{
 				Label: "OpenAI",
 				Options: []ModelCatalogOption{
-					{Value: "openai:gpt-5.4", Label: "GPT-5.4"},
+					{Value: "openai:gpt-5.4", Label: "GPT-5.4", DefaultThinkingLevel: "medium", ThinkingLevelRange: []string{"low", "medium", "high"}},
+					{Value: "openai:gpt-5.5-pro", Label: "GPT-5.5 Pro", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"low", "medium", "high"}},
 				},
 			},
 			{
@@ -177,17 +182,35 @@ func modelCatalogCandidatePaths(configPath string) []string {
 		paths = append(paths, cleaned)
 	}
 
-	if configPath != "" {
-		add(filepath.Join(filepath.Dir(configPath), modelCatalogFilename))
-		if exePath, err := os.Executable(); err == nil {
-			add(filepath.Join(filepath.Dir(exePath), modelCatalogFilename))
+	addFromDir := func(start string) {
+		if start == "" {
+			return
 		}
+		current := filepath.Clean(start)
+		for {
+			add(filepath.Join(current, modelCatalogFilename))
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+	}
+
+	if configPath != "" {
+		addFromDir(filepath.Dir(configPath))
+		if exePath, err := os.Executable(); err == nil {
+			addFromDir(filepath.Dir(exePath))
+		}
+		if cwd, err := os.Getwd(); err == nil {
+			addFromDir(cwd)
+		}
+		add(modelCatalogFilename)
 		return paths
 	}
 
 	if cwd, err := os.Getwd(); err == nil {
-		add(filepath.Join(cwd, modelCatalogFilename))
-		add(filepath.Join(filepath.Dir(cwd), modelCatalogFilename))
+		addFromDir(cwd)
 	}
 
 	add(modelCatalogFilename)

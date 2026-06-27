@@ -38,6 +38,22 @@ func TestListTools(t *testing.T) {
 	}
 }
 
+func TestListToolsIncludesClearCommand(t *testing.T) {
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "system"})
+
+	agent.registerTools(ctx)
+
+	output, err := agent.Execute(ctx, "list_tools", nil)
+	if err != nil {
+		t.Fatalf("list_tools failed: %v", err)
+	}
+
+	if !strings.Contains(output, "/clear") {
+		t.Fatalf("expected list_tools output to include /clear, got:\n%s", output)
+	}
+}
+
 func TestListToolsFormatterIsSharedAcrossServiceAndToolPaths(t *testing.T) {
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.Background()

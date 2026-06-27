@@ -108,10 +108,18 @@ func (a *CopilotAgent) ClassifyTaskContext(ctx context.Context, query string, ge
 
 	prompt := fmt.Sprintf(promptClassifyDiscovery, strings.Join(storesList, ", "), strings.Join(spacesList, ", "))
 
+	providerOverride := extractProviderOverrideFromContext(ctx)
+	provider := ""
+	model := ""
+	if providerOverride != nil {
+		provider = providerOverride.Provider
+		model = providerOverride.Model
+	}
+
 	opts := ai.GenOptions{
 		SystemPrompt:  prompt,
 		Temperature:   0.0,
-		ThinkingLevel: "low", // Strict JSON schema adherence for classification
+		ThinkingLevel: NormalizeThinkingLevelForGenerator(gen, provider, model, "low"), // Strict JSON schema adherence for classification
 	}
 
 	resp, err := gen.Generate(ctx, query, opts)
@@ -148,10 +156,18 @@ func (a *CopilotAgent) ClassifyFocusedTaskContext(ctx context.Context, query, en
 
 	prompt := fmt.Sprintf(promptClassifyFocused, entity, domain, artifact, availableContext, query, entity, domain, artifact, storesArtifact, spacesArtifact)
 
+	providerOverride := extractProviderOverrideFromContext(ctx)
+	provider := ""
+	model := ""
+	if providerOverride != nil {
+		provider = providerOverride.Provider
+		model = providerOverride.Model
+	}
+
 	opts := ai.GenOptions{
 		SystemPrompt:  prompt,
 		Temperature:   0.0,
-		ThinkingLevel: "low", // Strict JSON schema adherence for focused classification
+		ThinkingLevel: NormalizeThinkingLevelForGenerator(gen, provider, model, "low"), // Strict JSON schema adherence for focused classification
 	}
 
 	resp, err := gen.Generate(ctx, query, opts)
@@ -379,10 +395,18 @@ func (a *CopilotAgent) ClassifyContinuityTaskContext(ctx context.Context, query 
 	anchorJSON, _ := json.MarshalIndent(anchor, "", "  ")
 	prompt := fmt.Sprintf(promptClassifyContinuity, string(digestJSON), string(routingJSON), string(anchorJSON), query)
 
+	providerOverride := extractProviderOverrideFromContext(ctx)
+	provider := ""
+	model := ""
+	if providerOverride != nil {
+		provider = providerOverride.Provider
+		model = providerOverride.Model
+	}
+
 	opts := ai.GenOptions{
 		SystemPrompt:  prompt,
 		Temperature:   0.0,
-		ThinkingLevel: "low", // Strict JSON schema adherence for continuity classification
+		ThinkingLevel: NormalizeThinkingLevelForGenerator(gen, provider, model, "low"), // Strict JSON schema adherence for continuity classification
 	}
 
 	resp, err := gen.Generate(ctx, query, opts)

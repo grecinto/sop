@@ -157,11 +157,11 @@ func main() {
 	// Initialize local session registry for rate limiting
 	localRegistry := NewSessionRegistry(SubscriptionPolicy{MaxRequests: *policyMaxRequests, Window: *policyWindow})
 
-	// Initialize local RAG service (daemon-specific)
+	// Initialize the shared RAG service for daemon asks.
 	var ragSvc *localRAGService
 	rag, err := newLocalRAGService(resolvedConfig)
 	if err != nil {
-		log.Printf("warning: local RAG runtime disabled: %v", err)
+		log.Printf("warning: shared RAG runtime unavailable: %v", err)
 	} else {
 		ragSvc = rag
 	}
@@ -178,10 +178,10 @@ func main() {
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))
 	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff)))))
 
-	// Override /api/ask with local RAG implementation WITH authentication
+	// Override /api/ask to use the shared RAG implementation with authentication.
 	mux.HandleFunc("/api/ask", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ragSvc == nil {
-			respondJSON(w, http.StatusServiceUnavailable, AskResponse{Error: "local RAG is not configured"})
+			respondJSON(w, http.StatusServiceUnavailable, AskResponse{Error: "official RAG is not configured"})
 			return
 		}
 		ragSvc.handleAsk(w, r)
@@ -198,9 +198,9 @@ func main() {
 	log.Printf("Auth endpoints: /api/daemon/auth, /api/daemon/refresh")
 	log.Printf("Full backend API available (via sopbackend)")
 	if ragSvc != nil {
-		log.Printf("Local RAG endpoint enabled at /api/ask (authenticated)")
+		log.Printf("Official RAG endpoint enabled at /api/ask (authenticated)")
 	} else {
-		log.Printf("Local RAG endpoint disabled")
+		log.Printf("Official RAG endpoint disabled")
 	}
 	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff (authenticated)")
 	log.Printf("Waiting for UI authentication...")

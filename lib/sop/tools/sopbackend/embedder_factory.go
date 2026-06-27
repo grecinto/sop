@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop/ai"
+	sharedagent "github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/ai/embed"
 )
 
@@ -15,6 +16,10 @@ type embedderSettings struct {
 	APIKey   string
 	URL      string
 	Model    string
+}
+
+func normalizeProviderAndModel(provider, model string) (string, string) {
+	return sharedagent.NormalizeProviderAndModel(provider, model)
 }
 
 func resolveEmbedderSettings(r *http.Request) embedderSettings {

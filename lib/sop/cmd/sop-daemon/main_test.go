@@ -99,6 +99,22 @@ func TestTrySimpleShellCommandFallbackSkipsAgentCommandsWithoutSlash(t *testing.
 	}
 }
 
+func TestTrySimpleShellCommandFallbackSkipsNaturalLanguageQuestions(t *testing.T) {
+	svc := &localRAGService{shellSessions: newShellSessionState()}
+	query := "show me list of changed files in this repo in git"
+
+	got, handled, err := svc.trySimpleShellCommandFallback(query, "session")
+	if err != nil {
+		t.Fatalf("trySimpleShellCommandFallback(%q) returned error: %v", query, err)
+	}
+	if handled {
+		t.Fatalf("trySimpleShellCommandFallback(%q) should bypass shell fallback for natural-language prompts", query)
+	}
+	if got != "" {
+		t.Fatalf("trySimpleShellCommandFallback(%q) returned unexpected output %q", query, got)
+	}
+}
+
 func TestHandleAskRoutesPlainListToolsToAgentWithSlashPrefix(t *testing.T) {
 	agent := &recordingQueryAgent{}
 	svc := &localRAGService{service: agent, shellSessions: newShellSessionState()}
@@ -157,6 +173,104 @@ func TestHandleAskUsesSharedBackendHandlerForSlashCommands(t *testing.T) {
 	}
 	if len(sharedAgent.queries) != 1 || sharedAgent.queries[0] != "/list_tools" {
 		t.Fatalf("expected shared backend handler to receive /list_tools, got %v", sharedAgent.queries)
+	}
+}
+
+func TestHandleAskUsesSharedBackendHandlerForNaturalLanguageQueries(t *testing.T) {
+	localAgent := &recordingQueryAgent{}
+	sharedAgent := &recordingQueryAgent{}
+	svc := &localRAGService{service: localAgent, shellSessions: newShellSessionState()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"show me list of changed files in this repo in git"}`))
+	rr := httptest.NewRecorder()
+
+	sopbackend.SetLoadedAgents(map[string]ai.Agent[map[string]any]{"copilot": sharedAgent})
+	defer sopbackend.SetLoadedAgents(nil)
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(localAgent.queries) != 0 {
+		t.Fatalf("expected local service agent to be bypassed for natural-language queries, got %v", localAgent.queries)
+	}
+	if len(sharedAgent.queries) != 1 {
+		t.Fatalf("expected shared backend handler to receive the natural-language query, got %v", sharedAgent.queries)
+	}
+	if sharedAgent.queries[0] != "show me list of changed files in this repo in git" {
+		t.Fatalf("expected shared backend handler to receive the original query, got %q", sharedAgent.queries[0])
+	}
+}
+
+func TestHandleAskNormalizesKelindarProviderUsingSharedBackendLogic(t *testing.T) {
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newShellSessionState()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","llm_provider":"kelindar","llm_model":"nomic-embed-text-v1.5-q8_0"}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	if agent.calls[0].cfg == nil {
+		t.Fatal("expected agent config to be populated")
+	}
+	value, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := value.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", value)
+	}
+	if providerDetails.Provider != "kelindar" {
+		t.Fatalf("provider = %q, want %q", providerDetails.Provider, "kelindar")
+	}
+	if providerDetails.Model != "nomic-embed-text-v1.5-q8_0" {
+		t.Fatalf("model = %q, want %q", providerDetails.Model, "nomic-embed-text-v1.5-q8_0")
+	}
+}
+
+func TestHandleAskPassesProviderDetailsToAgentConfig(t *testing.T) {
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newShellSessionState()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","llm_provider":"gemini","llm_api_key":"secret-key","llm_model":"gemini-2.5-pro","llm_url":"https://example.test"}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	if agent.calls[0].cfg == nil {
+		t.Fatal("expected agent config to be populated")
+	}
+	value, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := value.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", value)
+	}
+	if providerDetails.Provider != "gemini" {
+		t.Fatalf("provider = %q, want %q", providerDetails.Provider, "gemini")
+	}
+	if providerDetails.APIKey != "secret-key" {
+		t.Fatalf("api key = %q, want %q", providerDetails.APIKey, "secret-key")
+	}
+	if providerDetails.Model != "gemini-2.5-pro" {
+		t.Fatalf("model = %q, want %q", providerDetails.Model, "gemini-2.5-pro")
+	}
+	if providerDetails.BaseURL != "https://example.test" {
+		t.Fatalf("base URL = %q, want %q", providerDetails.BaseURL, "https://example.test")
 	}
 }
 

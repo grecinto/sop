@@ -223,9 +223,102 @@
         });
     }
 
+    function clearChatHistory() {
+        const history = document.getElementById('chat-history');
+        if (!history) return;
+
+        history.innerHTML = '';
+        currentAiMsgId = null;
+
+        const input = document.getElementById('chat-input');
+        if (input) {
+            input.value = '';
+        }
+
+        requestAnimationFrame(() => {
+            history.scrollTop = 0;
+        });
+    }
+
+    function closeChatThinkingMenu() {
+        const menu = document.getElementById('chat-thinking-menu');
+        if (menu) {
+            menu.classList.remove('show');
+        }
+    }
+
+    function toggleChatThinkingMenu(event) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        const menu = document.getElementById('chat-thinking-menu');
+        if (!menu) return;
+
+        const shouldOpen = !menu.classList.contains('show');
+        closeChatThinkingMenu();
+        if (shouldOpen) {
+            menu.classList.add('show');
+        }
+
+        if (!window.__sopChatThinkingMenuBound) {
+            document.addEventListener('click', (clickEvent) => {
+                if (!clickEvent.target.closest('.chat-thinking-dropdown')) {
+                    closeChatThinkingMenu();
+                }
+            });
+            window.__sopChatThinkingMenuBound = true;
+        }
+    }
+
+    function selectChatThinkingLevel(value) {
+        const input = document.getElementById('chat-thinking-select');
+        const trigger = document.getElementById('chat-thinking-trigger');
+        if (input) {
+            input.value = value || '';
+        }
+        if (trigger) {
+            trigger.title = `Reasoning level: ${value ? value : 'Auto'}`;
+            trigger.setAttribute('data-level', value || 'auto');
+        }
+        closeChatThinkingMenu();
+        updateComposerState();
+    }
+
+    function getSelectedThinkingLevel() {
+        const input = document.getElementById('chat-thinking-select');
+        const value = (input?.value || '').trim().toLowerCase();
+        return value === 'auto' || value === '' ? '' : value;
+    }
+
+    function updateComposerState() {
+        const input = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('chat-send-btn');
+        if (!sendBtn) return;
+
+        const hasText = (input?.value || '').trim() !== '';
+        const isBusy = !!chatAbortController;
+        sendBtn.disabled = !isBusy && !hasText;
+        sendBtn.title = isBusy ? 'Abort request' : (hasText ? 'Send message' : 'Type a message to send');
+        sendBtn.setAttribute('aria-label', isBusy ? 'Abort request' : 'Send message');
+
+        const icon = sendBtn.querySelector('.chat-send-icon');
+        if (icon) {
+            icon.innerHTML = isBusy
+                ? '<path d="M6 6 18 18"></path><path d="M6 18 18 6"></path>'
+                : '<path d="M4 12h12"></path><path d="m12 4 8 8-8 8"></path>';
+        }
+    }
+
     function buildLocalDaemonHandoffPayload(query) {
         const token = typeof getStoredSessionToken === 'function' ? getStoredSessionToken() : '';
         const refreshToken = typeof getStoredRefreshToken === 'function' ? getStoredRefreshToken() : '';
+        const chatAIConfig = typeof getStoredAIConfig === 'function' ? getStoredAIConfig() : {};
+        const providerConfig = typeof normalizeProviderConfig === 'function'
+            ? normalizeProviderConfig(chatAIConfig.brain_provider || '', chatAIConfig.brain_model || '')
+            : { provider: chatAIConfig.brain_provider || '', model: (chatAIConfig.brain_model || '').trim() };
+        const provider = providerConfig.provider || '';
+        const model = providerConfig.model || '';
+        const apiKey = chatAIConfig.brain_api_key || '';
+        const baseURL = chatAIConfig.brain_url || '';
         return {
             query: query || 'connect',
             auth: {
@@ -236,7 +329,12 @@
                 base_url: window.location.origin || 'http://127.0.0.1:3000',
                 user_id: currentUserID || '',
                 session_id: currentSessionID || ''
-            }
+            },
+            llm_provider: provider,
+            llm_api_key: apiKey,
+            llm_model: model,
+            llm_url: baseURL,
+            thinking_level: getSelectedThinkingLevel()
         };
     }
 
@@ -1046,13 +1144,23 @@
         }
 
         if (isToolInventoryContent(normalized)) {
-            return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: monospace;">${escapeHtml(normalized)}</div>`;
+            return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: var(--chat-font-family);">${escapeHtml(normalized)}</div>`;
         }
 
         return marked.parse(normalized);
     }
 
-    function ensureAssistantContentBlock() {
+    function scrollChatHistoryToBottom() {
+        const history = document.getElementById('chat-history');
+        if (!history) {
+            return;
+        }
+        requestAnimationFrame(() => {
+            history.scrollTop = history.scrollHeight;
+        });
+    }
+
+    function createAssistantContentBlock() {
         const history = document.getElementById('chat-history');
         if (!history) {
             return null;
@@ -1069,8 +1177,13 @@
         msgDiv.appendChild(contentSpan);
         history.appendChild(msgDiv);
         pruneChatHistory();
-        history.scrollTop = history.scrollHeight;
-        return contentSpan;
+        scrollChatHistoryToBottom();
+        return { msgDiv, contentSpan };
+    }
+
+    function ensureAssistantContentBlock() {
+        const block = createAssistantContentBlock();
+        return block ? block.contentSpan : null;
     }
 
     async function appendAssistantTextPayload(contentSpan, textPayload) {
@@ -1195,6 +1308,80 @@
                 // Not JSON
             }
         });
+
+        scrollChatHistoryToBottom();
+    }
+
+    async function renderStreamEvent(event, streamState) {
+        if (!streamState) {
+            return;
+        }
+
+        if (event === null || event === undefined) {
+            return;
+        }
+
+        const normalizedEvent = { ...event };
+        if (normalizedEvent.payload === undefined) {
+            if (normalizedEvent.record !== undefined) normalizedEvent.payload = normalizedEvent.record;
+            else if (normalizedEvent.result !== undefined) normalizedEvent.payload = normalizedEvent.result;
+        }
+
+        if (normalizedEvent.type === 'result') {
+            normalizedEvent.type = 'content';
+        }
+
+        let handled = false;
+        const flushRecords = () => {
+            if (streamState.currentTableRecords.length > 0) {
+                renderDataResults(streamState.currentTableRecords, streamState.format, streamState.currentTableType);
+                streamState.currentTableRecords = [];
+                streamState.currentContentSpan = null;
+                scrollChatHistoryToBottom();
+            }
+        };
+
+        if (normalizedEvent.type === 'content') {
+            handled = true;
+            flushRecords();
+            if (!streamState.currentContentSpan) {
+                const block = createAssistantContentBlock();
+                if (block) {
+                    streamState.currentContentSpan = block.contentSpan;
+                }
+            }
+            const textPayload = String(normalizedEvent.payload ?? '');
+            if (textPayload) {
+                await appendAssistantTextPayload(streamState.currentContentSpan, textPayload);
+            }
+        } else if (normalizedEvent.type === 'record' || normalizedEvent.type === 'kv') {
+            handled = true;
+            streamState.currentTableRecords.push(normalizedEvent.payload);
+            streamState.currentTableType = normalizedEvent.type;
+        } else if (normalizedEvent.type === 'result_stream') {
+            handled = true;
+            flushRecords();
+            streamState.currentContentSpan = null;
+        } else if (normalizedEvent.type === 'tool_call') {
+            handled = true;
+        } else if (normalizedEvent.type === 'tool_error') {
+            handled = true;
+            const fallbackText = typeof normalizedEvent.payload === 'string'
+                ? normalizedEvent.payload
+                : (normalizedEvent.payload && normalizedEvent.payload.error ? String(normalizedEvent.payload.error) : JSON.stringify(normalizedEvent.payload, null, 2));
+            if (fallbackText) {
+                const fallbackSpan = ensureAssistantContentBlock();
+                await appendAssistantTextPayload(fallbackSpan, fallbackText);
+            }
+        }
+
+        if (!handled && normalizedEvent.type !== 'message' && normalizedEvent.payload !== undefined) {
+            const fallbackText = typeof normalizedEvent.payload === 'string' ? normalizedEvent.payload : JSON.stringify(normalizedEvent.payload, null, 2);
+            if (fallbackText) {
+                const fallbackSpan = ensureAssistantContentBlock();
+                await appendAssistantTextPayload(fallbackSpan, fallbackText);
+            }
+        }
     }
 
     function streamChatText(role, text, options = {}) {
@@ -1298,7 +1485,8 @@
                 verbose: true,
                 session_id: currentSessionID,
                 user_id: currentUserID,
-                domain: payloadDomain
+                domain: payloadDomain,
+                thinking_level: getSelectedThinkingLevel()
             }),
             fetcher: authFetch,
             runtimeMode: 'hq'
@@ -1326,6 +1514,9 @@
             return false;
         }
 
+        const formatSelect = document.getElementById('format-select');
+        const format = formatSelect ? formatSelect.value : 'csv';
+
         if (runtimeMode === 'local') {
             const responseText = await response.text();
             let data;
@@ -1336,8 +1527,13 @@
                 appendChatMessage('ai', 'Local RAG Error: invalid JSON response.');
                 return false;
             }
-            const currentContentSpan = ensureAssistantContentBlock();
-            await appendAssistantTextPayload(currentContentSpan, data.answer || data.error || 'No response from local RAG.');
+            const streamState = {
+                format,
+                currentContentSpan: null,
+                currentTableRecords: [],
+                currentTableType: null
+            };
+            await renderStreamEvent({ type: 'content', payload: data.answer || data.error || 'No response from local RAG.' }, streamState);
             return true;
         }
 
@@ -1349,10 +1545,12 @@
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-        let currentContentSpan = null;
-        let currentTableContainer = null;
-        let currentTableRecords = [];
-        let currentTableType = null;
+        const streamState = {
+            format,
+            currentContentSpan: null,
+            currentTableRecords: [],
+            currentTableType: null
+        };
         let pendingChunk = '';
         const yieldToBrowser = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
 
@@ -1396,53 +1594,7 @@
                         event.type = 'content';
                     }
 
-                    let handled = false;
-                    const flushRecords = () => {
-                        if (currentTableRecords.length > 0) {
-                            renderDataResults(currentTableRecords, format, currentTableType);
-                            currentTableRecords = [];
-                            currentContentSpan = null;
-                            const hist = document.getElementById('chat-history');
-                            if (hist) hist.scrollTop = hist.scrollHeight;
-                        }
-                    };
-
-                    if (event.type === 'content') {
-                        handled = true;
-                        flushRecords();
-                        if (!currentContentSpan) {
-                            const msgDiv = document.createElement('div');
-                            msgDiv.className = 'chat-message ai';
-                            const msgId = 'msg-' + generateUUID();
-                            msgDiv.id = msgId;
-                            currentAiMsgId = msgId;
-                            currentContentSpan = document.createElement('span');
-                            msgDiv.appendChild(currentContentSpan);
-                            document.getElementById('chat-history').appendChild(msgDiv);
-                            pruneChatHistory();
-                            document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight;
-                        }
-                        const textPayload = String(event.payload);
-                        await appendAssistantTextPayload(currentContentSpan, textPayload);
-                    } else if (event.type === 'record' || event.type === 'kv') {
-                        handled = true;
-                        currentTableRecords.push(event.payload);
-                        currentTableType = event.type;
-                    } else if (event.type === 'result_stream') {
-                        handled = true;
-                        flushRecords();
-                        currentContentSpan = null;
-                    } else if (event.type === 'tool_call') {
-                        handled = true;
-                    }
-
-                    if (!handled && event.type !== 'message' && event.payload !== undefined) {
-                        const fallbackText = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload, null, 2);
-                        if (fallbackText) {
-                            const fallbackSpan = ensureAssistantContentBlock();
-                            await appendAssistantTextPayload(fallbackSpan, fallbackText);
-                        }
-                    }
+                    await renderStreamEvent(event, streamState);
                 } catch (parseErr) {
                     console.warn('[UI runtime response] failed to parse event line', parseErr, trimmed);
                 }
@@ -1462,10 +1614,7 @@
         if (chatAbortController) {
             chatAbortController.abort();
             chatAbortController = null;
-            if (sendBtn) {
-                sendBtn.textContent = 'Send';
-                sendBtn.disabled = input.value.trim() === '';
-            }
+            updateComposerState();
             appendChatMessage('ai', 'Request cancelled by user.');
             return;
         }
@@ -1475,6 +1624,11 @@
         const agent = agentSelect ? agentSelect.value : 'db_admin';
 
         if (!message) return;
+
+        if (/^\/clear(?:\s|$)/i.test(message)) {
+            clearChatHistory();
+            return;
+        }
 
         if (/^(yes|no)$/i.test(message) && findLatestPendingConfirmationMessage()) {
             removePendingConfirmationPrompt();
@@ -1494,10 +1648,7 @@
         const loadingId = appendChatMessage('ai', 'Thinking...');
         // Setup AbortController
         chatAbortController = new AbortController();
-        if (sendBtn) {
-            sendBtn.textContent = 'Stop';
-            sendBtn.disabled = false;
-        }
+        updateComposerState();
 
         try {
             const runtimeMode = getChatRuntimeMode();
@@ -1510,8 +1661,7 @@
                     appendChatMessage('ai', 'Local agent unavailable: ' + (err.message || 'unknown error'));
                     return;
                 }
-                console.info('[UI runtime adapter] sending local request', {
-                    message,
+                console.debug('[UI runtime adapter] sending local request', {
                     runtimeMode
                 });
             }
@@ -1522,7 +1672,7 @@
             });
 
             if (resolvedRuntimeMode === 'local') {
-                console.info('[UI local daemon] received response', {
+                console.debug('[UI local daemon] received response', {
                     ok: response.ok,
                     status: response.status,
                     contentType: response.headers.get('content-type')
@@ -1547,10 +1697,7 @@
              }
         } finally {
              chatAbortController = null;
-             if (sendBtn) {
-                 sendBtn.textContent = 'Send';
-                 sendBtn.disabled = input.value.trim() === '';
-             }
+             updateComposerState();
              if (currentAiMsgId) {
                  updateHeaderFeedbackVisibility(true);
              }
