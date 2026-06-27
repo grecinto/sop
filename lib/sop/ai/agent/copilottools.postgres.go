@@ -3,9 +3,12 @@ package agent
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 type postgresConfig struct {
@@ -98,7 +101,13 @@ func executePostgresQueryNative(ctx context.Context, cfg postgresConfig, query s
 	if err != nil {
 		return "", err
 	}
-	rowData := make([]map[string]any, 0)
+
+	var sb strings.Builder
+	sb.WriteString(`{"status":"ok","columns":`)
+	columnsJSON, _ := json.Marshal(columns)
+	sb.Write(columnsJSON)
+	sb.WriteString(`,"rows":[`)
+	rowIndex := 0
 	for rows.Next() {
 		values := make([]any, len(columns))
 		for i := range values {
@@ -115,13 +124,21 @@ func executePostgresQueryNative(ctx context.Context, cfg postgresConfig, query s
 				row[column] = nil
 			}
 		}
-		rowData = append(rowData, row)
+		if rowIndex > 0 {
+			sb.WriteByte(',')
+		}
+		rowJSON, _ := json.Marshal(row)
+		sb.Write(rowJSON)
+		if streamerEnabled := ctx.Value(ai.CtxKeyEventStreamer); streamerEnabled != nil {
+			emitAutomationToolStreamContent(ctx, string(rowJSON))
+		}
+		rowIndex++
 	}
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	payload := map[string]any{"status": "ok", "columns": columns, "rows": rowData, "mode": "read"}
-	return marshalJSON(payload)
+	sb.WriteString(`],"mode":"read"}`)
+	return sb.String(), nil
 }
 
 func isPostgresWriteQuery(query string) bool {

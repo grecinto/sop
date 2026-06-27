@@ -35,3 +35,19 @@ func TestDefaultToolExecutor_ListTools_UsesServiceRegistry(t *testing.T) {
 		t.Fatalf("ListTools() = %#v, want one echo tool from Service registry", tools)
 	}
 }
+
+func TestDefaultToolExecutor_Execute_UsesServiceRegistry(t *testing.T) {
+	svc := agent.NewService(nil, nil, nil, nil, nil, map[string]ai.Agent[map[string]any]{
+		"tool": &MockAgent{},
+	}, false)
+
+	executor := &DefaultToolExecutor{Agents: map[string]ai.Agent[map[string]any]{"copilot": svc}}
+
+	out, err := executor.Execute(context.Background(), "echo", map[string]any{"msg": "hello"})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if out != "Echo: hello" {
+		t.Fatalf("Execute() = %q, want %q", out, "Echo: hello")
+	}
+}

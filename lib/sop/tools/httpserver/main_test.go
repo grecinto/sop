@@ -10,6 +10,16 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
+func TestDefaultRuntimeAutomationPolicyDisablesShellCommands(t *testing.T) {
+	policy := defaultRuntimeAutomationPolicy()
+	if policy.Enabled {
+		t.Fatal("expected default runtime automation policy to stay disabled")
+	}
+	if policy.AllowShellCommands {
+		t.Fatal("expected default runtime automation policy to disable shell commands")
+	}
+}
+
 func TestShouldShowEnvironmentManagerVisibilityRules(t *testing.T) {
 	defer sopbackend.SetDisableAuth(false)
 
@@ -95,6 +105,54 @@ func TestFloaterScriptHandlesInputStateAndMainWindowHide(t *testing.T) {
 	}
 	if strings.Contains(content, "setDashboardVisibility(false)") {
 		t.Fatalf("expected floater mode to leave the main dashboard launcher behavior intact")
+	}
+}
+
+func TestFloaterRendersToolInventoryAsPlainText(t *testing.T) {
+	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	if err != nil {
+		t.Fatalf("failed to read chat script template: %v", err)
+	}
+	content := string(scriptContent)
+	if !strings.Contains(content, "function isToolInventoryContent") {
+		t.Fatalf("expected chat stream renderer to detect tool inventory content")
+	}
+	if !strings.Contains(content, "### Available Tools") {
+		t.Fatalf("expected tool inventory rendering logic to recognize the shared inventory header")
+	}
+}
+
+func TestFloaterUsesSharedRuntimeResponseHandler(t *testing.T) {
+	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	if err != nil {
+		t.Fatalf("failed to read chat script template: %v", err)
+	}
+	content := string(scriptContent)
+	if !strings.Contains(content, "function handleRuntimeResponse") {
+		t.Fatalf("expected shared runtime response handler in chat script")
+	}
+	if !strings.Contains(content, "await handleRuntimeResponse(response, loadingId, 'local')") {
+		t.Fatalf("expected local runtime branch to call the shared runtime response handler")
+	}
+	if !strings.Contains(content, "await handleRuntimeResponse(response, loadingId, 'hq')") {
+		t.Fatalf("expected remote runtime branch to call the shared runtime response handler")
+	}
+}
+
+func TestFloaterUsesUnifiedRuntimeRequestAdapter(t *testing.T) {
+	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	if err != nil {
+		t.Fatalf("failed to read chat script template: %v", err)
+	}
+	content := string(scriptContent)
+	if !strings.Contains(content, "function buildRuntimeRequestConfig") {
+		t.Fatalf("expected a shared runtime request adapter in chat script")
+	}
+	if !strings.Contains(content, "function executeRuntimeRequest") {
+		t.Fatalf("expected a shared runtime executor in chat script")
+	}
+	if !strings.Contains(content, "const runtimeRequest = buildRuntimeRequestConfig") {
+		t.Fatalf("expected sendChatMessage to use the shared runtime adapter")
 	}
 }
 

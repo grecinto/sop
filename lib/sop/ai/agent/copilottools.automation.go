@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 type AutomationPolicy struct {
@@ -52,6 +55,7 @@ type LocalCommandRequest struct {
 	WorkingDir     string
 	TimeoutSeconds int
 	SessionID      string
+	StreamOutput   func(string)
 }
 
 var localCommandExecutor func(ctx context.Context, req LocalCommandRequest) (string, error)
@@ -668,19 +672,48 @@ func (a *CopilotAgent) toolCopyFile(ctx context.Context, args map[string]any) (s
 
 func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]any) (string, error) {
 	pathRaw, ok := args["path"]
-	if !ok {
-		return "", fmt.Errorf("missing required argument 'path'")
-	}
-	path, ok := pathRaw.(string)
-	if !ok {
-		return "", fmt.Errorf("'path' must be a string")
+	path := "."
+	if ok {
+		if pathValue, ok := pathRaw.(string); ok {
+			path = pathValue
+		} else {
+			return "", fmt.Errorf("'path' must be a string")
+		}
 	}
 	if path == "" {
 		path = "."
 	}
 
-	command := fmt.Sprintf("ls -la %s", shellQuote(path))
-	return a.runLocalAutomationCommand(ctx, args, command, "List the contents of the requested directory in the local workspace.", "", 60)
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return "", err
+	}
+
+	var names []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() {
+			name += "/"
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Directory contents for %s:\n", path))
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("content", strings.TrimSpace(sb.String()))
+	}
+	for _, name := range names {
+		line := fmt.Sprintf("- %s", name)
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+		if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+			streamer("content", line)
+		}
+	}
+	formatted := strings.TrimSpace(sb.String())
+	return formatted, nil
 }
 
 func (a *CopilotAgent) toolPathExists(ctx context.Context, args map[string]any) (string, error) {
@@ -858,7 +891,11 @@ func (a *CopilotAgent) toolPostgresQuery(ctx context.Context, args map[string]an
 
 	if postgresNativeAPIEnabled(args) {
 		cfg := buildPostgresConfig(args)
-		return executePostgresQueryNative(ctx, cfg, query, false)
+		result, err := executePostgresQueryNative(ctx, cfg, query, false)
+		if err == nil {
+			emitAutomationToolResult(ctx, "postgres_query", result)
+		}
+		return result, err
 	}
 
 	connectionString := ""
@@ -896,7 +933,11 @@ func (a *CopilotAgent) toolPostgresExecute(ctx context.Context, args map[string]
 	}
 	if postgresNativeAPIEnabled(args) {
 		cfg := buildPostgresConfig(args)
-		return executePostgresQueryNative(ctx, cfg, statement, true)
+		result, err := executePostgresQueryNative(ctx, cfg, statement, true)
+		if err == nil {
+			emitAutomationToolResult(ctx, "postgres_execute", result)
+		}
+		return result, err
 	}
 	connectionString := ""
 	if raw, ok := args["connection_string"]; ok {
@@ -919,7 +960,11 @@ func (a *CopilotAgent) toolPostgresExecute(ctx context.Context, args map[string]
 func (a *CopilotAgent) toolPostgresListTables(ctx context.Context, args map[string]any) (string, error) {
 	if postgresNativeAPIEnabled(args) {
 		cfg := buildPostgresConfig(args)
-		return executePostgresQueryNative(ctx, cfg, `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`, false)
+		result, err := executePostgresQueryNative(ctx, cfg, `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`, false)
+		if err == nil {
+			emitAutomationToolResult(ctx, "postgres_list_tables", result)
+		}
+		return result, err
 	}
 	connectionString := ""
 	if raw, ok := args["connection_string"]; ok {
@@ -986,7 +1031,11 @@ func (a *CopilotAgent) toolSplunkSearch(ctx context.Context, args map[string]any
 		if savedSearchName, ok := args["saved_search_name"].(string); ok && strings.TrimSpace(savedSearchName) != "" {
 			query = fmt.Sprintf("savedsearch %q", strings.TrimSpace(savedSearchName))
 		}
-		return executeSplunkSearchNative(ctx, cfg, query)
+		result, err := executeSplunkSearchNative(ctx, cfg, query)
+		if err == nil {
+			emitAutomationToolResult(ctx, "splunk_search", result)
+		}
+		return result, err
 	}
 
 	host := firstNonEmptyString(args["host"], os.Getenv("SPLUNK_HOST"), "localhost")
@@ -1035,7 +1084,11 @@ func (a *CopilotAgent) toolSplunkSearch(ctx context.Context, args map[string]any
 func (a *CopilotAgent) toolSplunkListSavedSearches(ctx context.Context, args map[string]any) (string, error) {
 	if splunkNativeAPIEnabled(args) {
 		cfg := buildSplunkConfig(args)
-		return executeSplunkSearchNative(ctx, cfg, "| rest /services/saved/searches | table title")
+		result, err := executeSplunkSearchNative(ctx, cfg, "| rest /services/saved/searches | table title")
+		if err == nil {
+			emitAutomationToolResult(ctx, "splunk_list_saved_searches", result)
+		}
+		return result, err
 	}
 	return a.runLocalAutomationCommand(ctx, args, "splunk search '| rest /services/saved/searches | table title'", "List existing Splunk saved searches.", "", 60)
 }
@@ -1043,7 +1096,11 @@ func (a *CopilotAgent) toolSplunkListSavedSearches(ctx context.Context, args map
 func (a *CopilotAgent) toolSplunkCreateSavedSearch(ctx context.Context, args map[string]any) (string, error) {
 	if splunkNativeAPIEnabled(args) {
 		cfg := buildSplunkConfig(args)
-		return executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+		result, err := executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+		if err == nil {
+			emitAutomationToolResult(ctx, "splunk_create_saved_search", result)
+		}
+		return result, err
 	}
 	name, _ := args["name"].(string)
 	search, _ := args["search"].(string)
@@ -1055,7 +1112,11 @@ func (a *CopilotAgent) toolSplunkCreateSavedSearch(ctx context.Context, args map
 func (a *CopilotAgent) toolSplunkUpdateSavedSearch(ctx context.Context, args map[string]any) (string, error) {
 	if splunkNativeAPIEnabled(args) {
 		cfg := buildSplunkConfig(args)
-		return executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+		result, err := executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+		if err == nil {
+			emitAutomationToolResult(ctx, "splunk_update_saved_search", result)
+		}
+		return result, err
 	}
 	name, _ := args["name"].(string)
 	search, _ := args["search"].(string)
@@ -1066,11 +1127,42 @@ func (a *CopilotAgent) toolSplunkUpdateSavedSearch(ctx context.Context, args map
 func (a *CopilotAgent) toolSplunkDeleteSavedSearch(ctx context.Context, args map[string]any) (string, error) {
 	if splunkNativeAPIEnabled(args) {
 		cfg := buildSplunkConfig(args)
-		return executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+		result, err := executeSplunkSearchNative(ctx, cfg, fmt.Sprintf("| rest /services/saved/searches | search title=%q", args["name"]))
+		if err == nil {
+			emitAutomationToolResult(ctx, "splunk_delete_saved_search", result)
+		}
+		return result, err
 	}
 	name, _ := args["name"].(string)
 	command := fmt.Sprintf("splunk delete saved-search %s", shellQuote(name))
 	return a.runLocalAutomationCommand(ctx, args, command, "Delete a saved Splunk search.", "", 60)
+}
+
+func emitAutomationToolChunk(ctx context.Context, toolName, chunk string) {
+	if strings.TrimSpace(chunk) == "" {
+		return
+	}
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("tool_stream_chunk", map[string]any{"tool": toolName, "text": chunk})
+	}
+}
+
+func emitAutomationToolStreamContent(ctx context.Context, content string) {
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("content", content)
+	}
+}
+
+func emitAutomationToolResult(ctx context.Context, toolName, result string) {
+	if strings.TrimSpace(result) == "" {
+		return
+	}
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("content", fmt.Sprintf("🛠️ Result from %s:\n%s", toolName, strings.TrimSpace(result)))
+	}
 }
 
 func boolFlagFromArgs(args map[string]any, key string) bool {
@@ -1164,6 +1256,9 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		WorkingDir:     workingDir,
 		TimeoutSeconds: timeoutSeconds,
 		SessionID:      sessionIDFromArgs(args),
+		StreamOutput: func(chunk string) {
+			emitAutomationToolChunk(ctx, "local_command", chunk)
+		},
 	}
 
 	policy := GetAutomationPolicy()
@@ -1172,7 +1267,11 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 	}
 
 	if localCommandExecutor != nil {
-		return localCommandExecutor(ctx, request)
+		result, err := localCommandExecutor(ctx, request)
+		if err == nil {
+			emitAutomationToolResult(ctx, "local_command", result)
+		}
+		return result, err
 	}
 
 	requiresApproval := policy.RequireApproval || isSensitiveCommand(command)

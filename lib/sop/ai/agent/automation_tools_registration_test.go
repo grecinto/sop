@@ -2,8 +2,12 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 func TestAutomationToolsAreDisabledByDefault(t *testing.T) {
@@ -147,6 +151,49 @@ func TestAutomationToolsRegisterPostgresAndSplunkAdapters(t *testing.T) {
 	}
 	if !found["splunk_search"] {
 		t.Fatalf("expected splunk_search to be registered")
+	}
+}
+
+func TestAutomationToolResultsStreamToEventStreamer(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		return `{"stdout":"one\ntwo\n","stderr":"","exit_code":0}`, nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	var gotEvents []struct {
+		typ     string
+		payload any
+	}
+	ctx := context.WithValue(context.Background(), ai.CtxKeyEventStreamer, func(eventType string, payload any) {
+		gotEvents = append(gotEvents, struct {
+			typ     string
+			payload any
+		}{typ: eventType, payload: payload})
+	})
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolExecuteLocalCommand(ctx, map[string]any{"command": "printf 'one\ntwo'", "reasoning": "show output", "timeout_seconds": 60})
+	if err != nil {
+		t.Fatalf("toolExecuteLocalCommand() error = %v", err)
+	}
+	if !strings.Contains(out, "one") || !strings.Contains(out, "two") {
+		t.Fatalf("toolExecuteLocalCommand() output = %q", out)
+	}
+
+	foundContent := false
+	for _, event := range gotEvents {
+		if event.typ == "content" {
+			foundContent = true
+			if payload, ok := event.payload.(string); !ok || payload == "" {
+				t.Fatalf("expected content payload to be a non-empty string, got %#v", event.payload)
+			}
+		}
+	}
+	if !foundContent {
+		t.Fatal("expected automation tool execution to emit content events")
 	}
 }
 
@@ -882,27 +929,179 @@ func TestAutomationToolsRegisterListDirectoryHelper(t *testing.T) {
 	}
 }
 
-func TestListDirectoryUsesLocalCommandExecutor(t *testing.T) {
-	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+func TestListDirectoryListsDirectoryContentsDirectly(t *testing.T) {
+	SetAutomationPolicy(DefaultAutomationPolicy())
 	defer SetAutomationPolicy(DefaultAutomationPolicy())
-
-	var received LocalCommandRequest
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
 	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
-		received = req
-		return "ok", nil
+		t.Fatalf("list_directory should not route through the local command executor")
+		return "", nil
 	})
 	defer SetLocalCommandExecutor(nil)
 
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alpha.txt"), []byte("one"), 0o644); err != nil {
+		t.Fatalf("write alpha.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "beta.txt"), []byte("two"), 0o644); err != nil {
+		t.Fatalf("write beta.txt: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
 	ag := &CopilotAgent{}
-	out, err := ag.toolListDirectory(context.Background(), map[string]any{"path": "/tmp/repo"})
+	out, err := ag.toolListDirectory(context.Background(), map[string]any{"path": dir})
 	if err != nil {
 		t.Fatalf("toolListDirectory() error = %v", err)
 	}
-	if out != "ok" {
+	if !strings.Contains(out, "alpha.txt") || !strings.Contains(out, "beta.txt") || !strings.Contains(out, "nested/") {
 		t.Fatalf("toolListDirectory() output = %q", out)
 	}
-	if !strings.Contains(received.Command, "ls") {
-		t.Fatalf("expected ls command, got %q", received.Command)
+}
+
+func TestListDirectoryEmitsFormattedContentThroughEventStreamer(t *testing.T) {
+	SetAutomationPolicy(DefaultAutomationPolicy())
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		t.Fatalf("list_directory should not route through the local command executor")
+		return "", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alpha.txt"), []byte("one"), 0o644); err != nil {
+		t.Fatalf("write alpha.txt: %v", err)
+	}
+
+	var got []string
+	ctx := context.WithValue(context.Background(), ai.CtxKeyEventStreamer, func(eventType string, payload any) {
+		if eventType == "content" {
+			if content, ok := payload.(string); ok {
+				got = append(got, content)
+			}
+		}
+	})
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolListDirectory(ctx, map[string]any{"path": dir})
+	if err != nil {
+		t.Fatalf("toolListDirectory() error = %v", err)
+	}
+	if !strings.Contains(out, "- alpha.txt") {
+		t.Fatalf("toolListDirectory() output = %q", out)
+	}
+	if len(got) < 2 {
+		t.Fatalf("expected list_directory to emit multiple content chunks, got %d", len(got))
+	}
+	if !strings.Contains(got[0], "Directory contents") {
+		t.Fatalf("expected first streamed chunk to contain the directory header, got %q", got[0])
+	}
+	if !strings.Contains(strings.Join(got, "\n"), "- alpha.txt") {
+		t.Fatalf("expected streamed content to include alpha.txt, got %q", strings.Join(got, "\n"))
+	}
+}
+
+func TestPostgresQueryStreamsNativeResults(t *testing.T) {
+	SetAutomationPolicy(DefaultAutomationPolicy())
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	postgresQueryExecutor = func(ctx context.Context, cfg postgresConfig, query string, allowWrite bool) (string, error) {
+		return "row1", nil
+	}
+	defer func() { postgresQueryExecutor = nil }()
+
+	var got []string
+	ctx := context.WithValue(context.Background(), ai.CtxKeyEventStreamer, func(eventType string, payload any) {
+		if eventType == "content" {
+			if content, ok := payload.(string); ok {
+				got = append(got, content)
+			}
+		}
+	})
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolPostgresQuery(ctx, map[string]any{"query": "select 1", "use_native_api": true})
+	if err != nil {
+		t.Fatalf("toolPostgresQuery() error = %v", err)
+	}
+	if out != "row1" {
+		t.Fatalf("toolPostgresQuery() output = %q", out)
+	}
+	if len(got) == 0 {
+		t.Fatal("expected postgres query results to emit content events")
+	}
+	if !strings.Contains(got[0], "row1") {
+		t.Fatalf("streamed content = %q", got[0])
+	}
+}
+
+func TestSplunkCreateSavedSearchStreamsNativeResults(t *testing.T) {
+	SetAutomationPolicy(DefaultAutomationPolicy())
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	splunkSearchExecutor = func(ctx context.Context, cfg splunkConfig, query string) (string, error) {
+		return "saved", nil
+	}
+	defer func() { splunkSearchExecutor = nil }()
+
+	var got []string
+	ctx := context.WithValue(context.Background(), ai.CtxKeyEventStreamer, func(eventType string, payload any) {
+		if eventType == "content" {
+			if content, ok := payload.(string); ok {
+				got = append(got, content)
+			}
+		}
+	})
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolSplunkCreateSavedSearch(ctx, map[string]any{"name": "demo", "search": "index=main", "use_native_api": true})
+	if err != nil {
+		t.Fatalf("toolSplunkCreateSavedSearch() error = %v", err)
+	}
+	if out != "saved" {
+		t.Fatalf("toolSplunkCreateSavedSearch() output = %q", out)
+	}
+	if len(got) == 0 {
+		t.Fatal("expected splunk create results to emit content events")
+	}
+	if !strings.Contains(got[0], "saved") {
+		t.Fatalf("streamed content = %q", got[0])
+	}
+}
+
+func TestListDirectoryDefaultsToCurrentWorkingDirectoryWhenPathMissing(t *testing.T) {
+	SetAutomationPolicy(DefaultAutomationPolicy())
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		t.Fatalf("list_directory should not route through the local command executor")
+		return "", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "listdir-default-test.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write default test file: %v", err)
+	}
+	defer os.Remove(filepath.Join(cwd, "listdir-default-test.txt"))
+
+	ag := &CopilotAgent{}
+	out, err := ag.toolListDirectory(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("toolListDirectory() error = %v", err)
+	}
+	if !strings.Contains(out, "listdir-default-test.txt") {
+		t.Fatalf("toolListDirectory() output = %q", out)
 	}
 }
 

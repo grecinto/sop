@@ -1028,6 +1028,430 @@
             .replaceAll("'", '&#39;');
     }
 
+    function isToolInventoryContent(text) {
+        const normalized = String(text ?? '').trim();
+        if (!normalized) {
+            return false;
+        }
+        return normalized.includes('### Available Tools') ||
+            normalized.includes('**Registered Tools**') ||
+            normalized.includes('/list_tools') ||
+            normalized.includes('Use these tools via slash(/) commands.');
+    }
+
+    function renderStreamContent(text) {
+        const normalized = String(text ?? '');
+        if (!normalized) {
+            return '';
+        }
+
+        if (isToolInventoryContent(normalized)) {
+            return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: monospace;">${escapeHtml(normalized)}</div>`;
+        }
+
+        return marked.parse(normalized);
+    }
+
+    function ensureAssistantContentBlock() {
+        const history = document.getElementById('chat-history');
+        if (!history) {
+            return null;
+        }
+
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'chat-message ai';
+
+        const msgId = 'msg-' + generateUUID();
+        msgDiv.id = msgId;
+        currentAiMsgId = msgId;
+
+        const contentSpan = document.createElement('span');
+        msgDiv.appendChild(contentSpan);
+        history.appendChild(msgDiv);
+        pruneChatHistory();
+        history.scrollTop = history.scrollHeight;
+        return contentSpan;
+    }
+
+    async function appendAssistantTextPayload(contentSpan, textPayload) {
+        if (!contentSpan || textPayload === undefined || textPayload === null) {
+            return;
+        }
+
+        let payload = String(textPayload);
+
+        const avatarRegex = /^Avatar\s+([a-zA-Z0-9_-]+)\s+completed task:\s*([\s\S]*)/i;
+        const avatarMatch = payload.match(avatarRegex);
+        if (avatarMatch && contentSpan) {
+            const subAvatarName = avatarMatch[1];
+            payload = avatarMatch[2] || (payload.replace(avatarMatch[0], ''));
+
+            const parentDiv = contentSpan.parentElement;
+            if (parentDiv && !parentDiv.classList.contains('avatar-handoff-applied')) {
+                parentDiv.classList.add('avatar-handoff-applied');
+                const badge = document.createElement('div');
+                badge.innerHTML = `<span style="display: inline-block; font-size: 0.75rem; background: #6366f1; color: white; padding: 3px 8px; border-radius: 12px; font-weight: bold; margin-bottom: 8px; font-family: monospace; box-shadow: 0 2px 4px rgba(99, 102, 241, 0.3);">🔀 Routed to specialised agent: ${subAvatarName}</span>`;
+                parentDiv.insertBefore(badge, contentSpan);
+                parentDiv.style.borderLeft = "4px solid #6366f1";
+            }
+        }
+
+        const kbResultsRegex = /===\s*Results from KB:\s*([a-zA-Z0-9_-]+)\s*===/gi;
+        if (kbResultsRegex.test(payload) && contentSpan) {
+            payload = payload.replace(/===\s*Results from KB:\s*([a-zA-Z0-9_-]+)\s*===/gi,
+                '<div style="margin-top: 10px; margin-bottom: 5px; font-size: 0.8rem; background: #10b981; color: white; padding: 3px 8px; border-radius: 4px; display: inline-block; font-weight: bold; font-family: monospace;">📚 Searched Knowledge Base: $1</div>\n'
+            );
+        }
+
+        const switchDbRegex = /\[\[SWITCH_DATABASE:\s*([a-zA-Z0-9_-]+)\]\]/;
+        const match = payload.match(switchDbRegex);
+
+        if (match) {
+            const newDbName = match[1];
+            if (typeof reloadDatabases === 'function') {
+                await reloadDatabases(false);
+            }
+            await selectDatabase(newDbName, true);
+
+            const dbSelect = document.getElementById('database-select');
+            if (dbSelect) dbSelect.value = newDbName;
+
+            const chipLabel = document.getElementById('db-chip-label');
+            if (chipLabel) chipLabel.textContent = newDbName;
+
+            const dbObj = availableDatabases.find(d => d.name === newDbName);
+            const icon = document.getElementById('db-chip-icon');
+            if (icon) {
+                icon.style.display = (dbObj && dbObj.is_system) ? 'inline' : 'none';
+            }
+
+            payload = payload.replace(match[0], '');
+            if (!payload.trim()) {
+                payload = `Switched database context to **${newDbName}**.`;
+            }
+        }
+
+        const refreshSpacesRegex = /\[\[REFRESH_SPACES(?::\s*([^\]]+))?\]\]/;
+        const refreshSpacesMatch = payload.match(refreshSpacesRegex);
+        if (refreshSpacesMatch) {
+            const targetSpaceName = refreshSpacesMatch[1] ? refreshSpacesMatch[1].trim() : currentStore;
+            if (typeof refreshSpacesList === 'function' && currentDatabase) {
+                await refreshSpacesList(currentDatabase, targetSpaceName);
+            } else if (typeof selectDatabase === 'function' && currentDatabase) {
+                await selectDatabase(currentDatabase, true, targetSpaceName);
+            }
+            payload = payload.replace(refreshSpacesRegex, '');
+        }
+
+        const clearPendingConfirmationRegex = /\[\[CLEAR_PENDING_CONFIRMATION\]\]/;
+        if (clearPendingConfirmationRegex.test(payload)) {
+            removePendingConfirmationPrompt();
+            payload = payload.replace(clearPendingConfirmationRegex, '');
+        }
+
+        const refreshSpaceViewRegex = /\[\[REFRESH_SPACE_VIEW:\s*([a-zA-Z0-9_-]+)\s*\]\]/;
+        const refreshSpaceViewMatch = payload.match(refreshSpaceViewRegex);
+        if (refreshSpaceViewMatch) {
+            const targetSpaceName = refreshSpaceViewMatch[1];
+            const activeSpaceName = currentStore ? currentStore.replace('/data', '') : '';
+            if (activeSpaceName === targetSpaceName && typeof selectSpace === 'function') {
+                const targetLi = Array.from(document.querySelectorAll('#kb-list li')).find(li => li.title === targetSpaceName);
+                await selectSpace(targetSpaceName, targetLi || document.querySelector('#sidebar li.active'), true);
+            }
+            payload = payload.replace(refreshSpaceViewRegex, '');
+        }
+
+        contentSpan.innerHTML += renderStreamContent(payload);
+
+        const parentDiv = contentSpan.parentElement;
+        if (parentDiv) {
+            const accumulatedText = contentSpan.textContent || contentSpan.innerText || '';
+            if (isPendingDeleteConfirmationText(accumulatedText)) {
+                parentDiv.classList.add('pending-confirmation-message');
+            } else {
+                parentDiv.classList.remove('pending-confirmation-message');
+            }
+        }
+
+        const preBlocks = contentSpan.querySelectorAll('pre code.language-json');
+        preBlocks.forEach(codeBlock => {
+            if (codeBlock.parentElement.nextElementSibling && codeBlock.parentElement.nextElementSibling.classList.contains('import-ai-btn')) {
+                return;
+            }
+
+            try {
+                const jsonText = codeBlock.innerText || codeBlock.textContent;
+                const parsed = JSON.parse(jsonText);
+
+                if (parsed && typeof parsed === 'object' && Array.isArray(parsed.categories) && Array.isArray(parsed.items) && !codeBlock.classList.contains('auto-imported')) {
+                    codeBlock.classList.add('auto-imported');
+                    const buttonContainer = document.createElement('div');
+                    buttonContainer.className = 'import-ai-btn';
+                    buttonContainer.style.marginTop = '8px';
+                    buttonContainer.innerHTML = `<button onclick="window.importParsedSpaceDataFromAI(JSON.parse(this.getAttribute('data-json')))" data-json='${escapeHtml(JSON.stringify(parsed))}'>Import to Space</button>`;
+                    codeBlock.parentElement.parentElement.insertBefore(buttonContainer, codeBlock.parentElement.nextElementSibling);
+                }
+            } catch (e) {
+                // Not JSON
+            }
+        });
+    }
+
+    function streamChatText(role, text, options = {}) {
+        const history = document.getElementById('chat-history');
+        if (!history) return null;
+
+        const normalized = String(text ?? '');
+        if (!normalized) {
+            return null;
+        }
+
+        const container = document.createElement('div');
+        container.className = `chat-message ${role}`;
+        const msgId = 'msg-' + generateUUID();
+        container.id = msgId;
+        if (role === 'ai') currentAiMsgId = msgId;
+
+        const contentEl = document.createElement('div');
+        contentEl.style.whiteSpace = 'pre-wrap';
+        contentEl.style.wordBreak = 'break-word';
+        container.appendChild(contentEl);
+        history.appendChild(container);
+        pruneChatHistory();
+        history.scrollTop = history.scrollHeight;
+
+        const chunkSize = options.chunkSize || 140;
+        const delayMs = options.delayMs || 18;
+        const chunks = [];
+        let start = 0;
+        while (start < normalized.length) {
+            let end = Math.min(start + chunkSize, normalized.length);
+            if (end < normalized.length) {
+                const newlineBoundary = normalized.lastIndexOf('\n', end);
+                if (newlineBoundary > start) {
+                    end = newlineBoundary;
+                } else {
+                    const spaceBoundary = normalized.lastIndexOf(' ', end);
+                    if (spaceBoundary > start + Math.floor(chunkSize / 2)) {
+                        end = spaceBoundary;
+                    }
+                }
+            }
+            chunks.push(normalized.slice(start, end));
+            start = end;
+        }
+
+        let index = 0;
+        const renderNextChunk = () => {
+            if (index >= chunks.length) {
+                return;
+            }
+            contentEl.textContent += chunks[index++];
+            history.scrollTop = history.scrollHeight;
+            if (index < chunks.length) {
+                window.setTimeout(renderNextChunk, delayMs);
+            }
+        };
+
+        renderNextChunk();
+        return msgId;
+    }
+
+    function buildRuntimeRequestConfig(message, runtimeMode, options = {}) {
+        const chatAIConfig = getStoredAIConfig();
+        const provider = buildProviderValue(chatAIConfig.brain_provider, chatAIConfig.brain_model);
+        const formatSelect = document.getElementById('format-select');
+        const format = formatSelect ? formatSelect.value : 'csv';
+        const domainSelect = document.getElementById('domain-select');
+        const domain = domainSelect ? domainSelect.value : '';
+        let payloadDomain = domain;
+        if (domain === 'custom' && window.customKBs && window.customKBs.length > 0) {
+            payloadDomain = window.customKBs.join(',');
+        }
+
+        if (runtimeMode === 'local') {
+            return {
+                endpoint: '/api/ask',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    query: message,
+                    ...buildLocalDaemonHandoffPayload(message)
+                }),
+                fetcher: daemonFetch,
+                runtimeMode: 'local'
+            };
+        }
+
+        return {
+            endpoint: '/api/ai/chat',
+            method: 'POST',
+            headers: applyAIConfigHeaders({ 'Content-Type': 'application/json' }, chatAIConfig),
+            body: JSON.stringify({
+                message: message,
+                database: currentDatabase,
+                store: currentStore,
+                agent: options.agent || 'db_admin',
+                provider: provider,
+                format: format,
+                runtime: runtimeMode,
+                verbose: true,
+                session_id: currentSessionID,
+                user_id: currentUserID,
+                domain: payloadDomain
+            }),
+            fetcher: authFetch,
+            runtimeMode: 'hq'
+        };
+    }
+
+    async function executeRuntimeRequest(message, runtimeMode, options = {}) {
+        const runtimeRequest = buildRuntimeRequestConfig(message, runtimeMode, options);
+        const response = await runtimeRequest.fetcher(runtimeRequest.endpoint, {
+            method: runtimeRequest.method,
+            headers: runtimeRequest.headers,
+            body: runtimeRequest.body,
+            signal: options.signal
+        });
+        return { response, runtimeMode: runtimeRequest.runtimeMode };
+    }
+
+    async function handleRuntimeResponse(response, loadingId, runtimeMode) {
+        const loadingEl = document.getElementById(loadingId);
+        if (loadingEl) loadingEl.remove();
+
+        if (!response.ok) {
+            const text = await response.text();
+            appendChatMessage('ai', `${runtimeMode === 'local' ? 'Local RAG' : 'HTTP'} Error: ${response.status} - ${text}`);
+            return false;
+        }
+
+        if (runtimeMode === 'local') {
+            const responseText = await response.text();
+            let data;
+            try {
+                data = JSON.parse(responseText);
+            } catch (parseErr) {
+                console.error('[UI runtime response] failed to parse local JSON', parseErr, responseText);
+                appendChatMessage('ai', 'Local RAG Error: invalid JSON response.');
+                return false;
+            }
+            const currentContentSpan = ensureAssistantContentBlock();
+            await appendAssistantTextPayload(currentContentSpan, data.answer || data.error || 'No response from local RAG.');
+            return true;
+        }
+
+        if (!response.body) {
+            console.error('[AI stream] response body is null; stream will not start');
+            appendChatMessage('ai', 'Stream start failed: response body is unavailable.');
+            return false;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let currentContentSpan = null;
+        let currentTableContainer = null;
+        let currentTableRecords = [];
+        let currentTableType = null;
+        let pendingChunk = '';
+        const yieldToBrowser = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+
+            const chunk = pendingChunk + decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+            pendingChunk = lines.pop() || '';
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                try {
+                    const event = (() => {
+                        try {
+                            return JSON.parse(trimmed);
+                        } catch (parseErr) {
+                            const start = Math.min(trimmed.indexOf('{'), trimmed.indexOf('['));
+                            if (start >= 0) {
+                                const candidate = trimmed.slice(start);
+                                try {
+                                    return JSON.parse(candidate);
+                                } catch (candidateErr) {
+                                    throw parseErr;
+                                }
+                            }
+                            throw parseErr;
+                        }
+                    })();
+
+                    if (event.payload === undefined) {
+                        if (event.record !== undefined) event.payload = event.record;
+                        else if (event.result !== undefined) event.payload = event.result;
+                    }
+
+                    if (event.type === 'result') {
+                        event.type = 'content';
+                    }
+
+                    let handled = false;
+                    const flushRecords = () => {
+                        if (currentTableRecords.length > 0) {
+                            renderDataResults(currentTableRecords, format, currentTableType);
+                            currentTableRecords = [];
+                            currentContentSpan = null;
+                            const hist = document.getElementById('chat-history');
+                            if (hist) hist.scrollTop = hist.scrollHeight;
+                        }
+                    };
+
+                    if (event.type === 'content') {
+                        handled = true;
+                        flushRecords();
+                        if (!currentContentSpan) {
+                            const msgDiv = document.createElement('div');
+                            msgDiv.className = 'chat-message ai';
+                            const msgId = 'msg-' + generateUUID();
+                            msgDiv.id = msgId;
+                            currentAiMsgId = msgId;
+                            currentContentSpan = document.createElement('span');
+                            msgDiv.appendChild(currentContentSpan);
+                            document.getElementById('chat-history').appendChild(msgDiv);
+                            pruneChatHistory();
+                            document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight;
+                        }
+                        const textPayload = String(event.payload);
+                        await appendAssistantTextPayload(currentContentSpan, textPayload);
+                    } else if (event.type === 'record' || event.type === 'kv') {
+                        handled = true;
+                        currentTableRecords.push(event.payload);
+                        currentTableType = event.type;
+                    } else if (event.type === 'result_stream') {
+                        handled = true;
+                        flushRecords();
+                        currentContentSpan = null;
+                    } else if (event.type === 'tool_call') {
+                        handled = true;
+                    }
+
+                    if (!handled && event.type !== 'message' && event.payload !== undefined) {
+                        const fallbackText = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload, null, 2);
+                        if (fallbackText) {
+                            const fallbackSpan = ensureAssistantContentBlock();
+                            await appendAssistantTextPayload(fallbackSpan, fallbackText);
+                        }
+                    }
+                } catch (parseErr) {
+                    console.warn('[UI runtime response] failed to parse event line', parseErr, trimmed);
+                }
+            }
+        }
+
+        return true;
+    }
+
     async function sendChatMessage() {
         updateHeaderFeedbackVisibility(false);
         currentAiMsgId = null;
@@ -1049,12 +1473,6 @@
         const message = input.value.trim();
         const agentSelect = document.getElementById('agent-select');
         const agent = agentSelect ? agentSelect.value : 'db_admin';
-        const chatAIConfig = getStoredAIConfig();
-        const provider = buildProviderValue(chatAIConfig.brain_provider, chatAIConfig.brain_model);
-        const formatSelect = document.getElementById('format-select');
-        const format = formatSelect ? formatSelect.value : 'csv';
-        const domainSelect = document.getElementById('domain-select');
-        const domain = domainSelect ? domainSelect.value : '';
 
         if (!message) return;
 
@@ -1081,13 +1499,9 @@
             sendBtn.disabled = false;
         }
 
-        let payloadDomain = domain;
-        if (domain === "custom" && window.customKBs && window.customKBs.length > 0) {
-            payloadDomain = window.customKBs.join(",");
-        }
-
         try {
-            if (getChatRuntimeMode() === 'local') {
+            const runtimeMode = getChatRuntimeMode();
+            if (runtimeMode === 'local') {
                 try {
                     await ensureLocalAgentReachable();
                 } catch (err) {
@@ -1096,644 +1510,31 @@
                     appendChatMessage('ai', 'Local agent unavailable: ' + (err.message || 'unknown error'));
                     return;
                 }
-                const response = await daemonFetch('/api/ask', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        query: message,
-                        ...buildLocalDaemonHandoffPayload(message)
-                    })
+                console.info('[UI runtime adapter] sending local request', {
+                    message,
+                    runtimeMode
                 });
-
-                const loadingEl = document.getElementById(loadingId);
-                if (loadingEl) loadingEl.remove();
-
-                if (!response.ok) {
-                    const text = await response.text();
-                    appendChatMessage('ai', 'Local RAG Error: ' + response.status + ' - ' + text);
-                    return;
-                }
-
-                const data = await response.json();
-                appendChatMessage('ai', data.answer || data.error || 'No response from local RAG.');
-                return;
             }
 
-            const response = await authFetch('/api/ai/chat', {
-                method: 'POST',
-                headers: applyAIConfigHeaders({ 'Content-Type': 'application/json' }, chatAIConfig),
-                body: JSON.stringify({ 
-                    message: message,
-                    database: currentDatabase,
-                    store: currentStore,
-                    agent: agent,
-                    provider: provider,
-                    format: format,
-                    runtime: getChatRuntimeMode(),
-                    verbose: true, session_id: currentSessionID, user_id: currentUserID, domain: payloadDomain
-                }),
+            const { response, runtimeMode: resolvedRuntimeMode } = await executeRuntimeRequest(message, runtimeMode, {
+                agent,
                 signal: chatAbortController.signal
             });
 
-            // Remove Loading
-            const loadingEl = document.getElementById(loadingId);
-            if (loadingEl) loadingEl.remove();
-
-
-            if (!response.ok) {
-                const text = await response.text();
-                appendChatMessage('ai', 'HTTP Error: ' + response.status + ' - ' + text);
-                return;
+            if (resolvedRuntimeMode === 'local') {
+                console.info('[UI local daemon] received response', {
+                    ok: response.ok,
+                    status: response.status,
+                    contentType: response.headers.get('content-type')
+                });
             }
 
-            // Read the stream
-            if (!response.body) {
-                console.error('[AI stream] response body is null; stream will not start');
-                appendChatMessage('ai', 'Stream start failed: response body is unavailable.');
-                return;
+            if (resolvedRuntimeMode === 'local') {
+                await handleRuntimeResponse(response, loadingId, 'local');
+            } else {
+                await handleRuntimeResponse(response, loadingId, 'hq');
             }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            
-            // State for rendering
-            let currentContentSpan = null;
-            let currentTableContainer = null;
-            let currentTableRecords = [];
-            let currentTableType = null; // 'record' or 'kv'
-            let pendingChunk = '';
-            const yieldToBrowser = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) {
-                    break;
-                }
-                
-                const chunk = pendingChunk + decoder.decode(value, { stream: true });
-                // Split by newline to handle multiple objects in one chunk while preserving partial lines.
-                const lines = chunk.split('\n');
-                pendingChunk = lines.pop() || '';
-                
-                for (const line of lines) {
-                    const trimmed = line.trim();
-                    if (!trimmed) continue;
-                    try {
-                        const event = (() => {
-                            try {
-                                return JSON.parse(trimmed);
-                            } catch (parseErr) {
-                                const start = Math.min(trimmed.indexOf('{'), trimmed.indexOf('['));
-                                if (start >= 0) {
-                                    const candidate = trimmed.slice(start);
-                                    try {
-                                        return JSON.parse(candidate);
-                                    } catch (candidateErr) {
-                                        throw parseErr;
-                                    }
-                                }
-                                throw parseErr;
-                            }
-                        })();
-
-                        // Normalize payload/data from mixed backend formats
-                        // StepExecutionResult uses 'record' or 'result' instead of 'payload'
-                        if (event.payload === undefined) {
-                            if (event.record !== undefined) event.payload = event.record;
-                            else if (event.result !== undefined) event.payload = event.result;
-                        }
-
-                        // Simple fallback: if the event is anything other than a plain text event,
-                        // still render its payload as visible text so the UI proves data is flowing.
-                        const rawPayloadForDisplay = typeof event.payload === 'string'
-                            ? event.payload
-                            : JSON.stringify(event.payload, null, 2);
-
-                        // Map 'result' type to 'content' if it acts like text output
-                        // This ensures command string outputs (like "Transaction committed") are shown
-                        if (event.type === 'result') {
-                            event.type = 'content';
-                        }
-
-                        let handled = false;
-                        
-                        // Helper to flush pending records before showing text or other content
-                        const flushRecords = () => {
-                            if (currentTableRecords.length > 0) {
-                                renderDataResults(currentTableRecords, format, currentTableType);
-                                currentTableRecords = []; // Clear
-                                // Also ensure we create a NEW content span for subsequent text
-                                currentContentSpan = null; 
-                                
-                                // Scroll down
-                                const hist = document.getElementById('chat-history');
-                                if (hist) hist.scrollTop = hist.scrollHeight;
-                            }
-                        };
-
-                        if (event.type === 'content') {
-                            handled = true;
-                            flushRecords(); // Flush any data tables before showing new text analysis/headers
-
-                             if (!currentContentSpan) {
-                                // Start new content block
-                                const msgDiv = document.createElement('div');
-                                msgDiv.className = 'chat-message ai';
-                                
-                                // Set ID for feedback
-                                const msgId = 'msg-' + generateUUID();
-                                msgDiv.id = msgId;
-                                currentAiMsgId = msgId;
-
-                                currentContentSpan = document.createElement('span');
-                                msgDiv.appendChild(currentContentSpan);
-                                document.getElementById('chat-history').appendChild(msgDiv);
-                                pruneChatHistory();
-                                document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight;
-                            }
-                            
-                            // Check for Client-Side Action Patterns
-                            let textPayload = String(event.payload);
-
-                            // Detect Avatar Delegation Indicator
-                            const avatarRegex = /^Avatar\s+([a-zA-Z0-9_-]+)\s+completed task:\s*([\s\S]*)/i;
-                            const avatarMatch = textPayload.match(avatarRegex);
-                            if (avatarMatch && currentContentSpan) {
-                                const subAvatarName = avatarMatch[1];
-                                textPayload = avatarMatch[2] || (textPayload.replace(avatarMatch[0], '')); // Strip out the prefix
-                                
-                                const parentDiv = currentContentSpan.parentElement;
-                                if (parentDiv && !parentDiv.classList.contains('avatar-handoff-applied')) {
-                                    parentDiv.classList.add('avatar-handoff-applied');
-                                    const badge = document.createElement('div');
-                                    badge.innerHTML = `<span style="display: inline-block; font-size: 0.75rem; background: #6366f1; color: white; padding: 3px 8px; border-radius: 12px; font-weight: bold; margin-bottom: 8px; font-family: monospace; box-shadow: 0 2px 4px rgba(99, 102, 241, 0.3);">🔀 Routed to specialised agent: ${subAvatarName}</span>`;
-                                    parentDiv.insertBefore(badge, currentContentSpan);
-                                    parentDiv.style.borderLeft = "4px solid #6366f1";
-                                }
-                            }
-
-                            // Detect Multi-KB Semantic Search fanout
-                            // It returns blocks like: === Results from KB: xxx ===\n
-                            const kbResultsRegex = /===\s*Results from KB:\s*([a-zA-Z0-9_-]+)\s*===/gi;
-                            if (kbResultsRegex.test(textPayload) && currentContentSpan) {
-                                // Transform these text headers into nice UI blocks
-                                textPayload = textPayload.replace(/===\s*Results from KB:\s*([a-zA-Z0-9_-]+)\s*===/gi, 
-                                    '<div style="margin-top: 10px; margin-bottom: 5px; font-size: 0.8rem; background: #10b981; color: white; padding: 3px 8px; border-radius: 4px; display: inline-block; font-weight: bold; font-family: monospace;">📚 Searched Knowledge Base: $1</div>\n'
-                                );
-                            }
-
-                            const switchDbRegex = /\[\[SWITCH_DATABASE:\s*([a-zA-Z0-9_-]+)\]\]/;
-                            const match = textPayload.match(switchDbRegex);
-                            
-                            if (match) {
-                                const newDbName = match[1];
-
-                                // 1. Reload the DB List (in case it's a new DB) - Don't auto-select
-                                if (typeof reloadDatabases === 'function') {
-                                    await reloadDatabases(false);
-                                }
-
-                                // 2. Execute switch logic (sets global var, saves to localStorage, fetches stores)
-                                await selectDatabase(newDbName, true);
-                                
-                                // 3. Visual Sync (redundant but safe)
-                                // Standard Mode
-                                const dbSelect = document.getElementById('database-select');
-                                if (dbSelect) dbSelect.value = newDbName;
-                                
-                                // Enterprise Mode
-                                const chipLabel = document.getElementById('db-chip-label');
-                                if (chipLabel) chipLabel.textContent = newDbName;
-                                
-                                // Update Icon if System DB (Enterprise)
-                                const dbObj = availableDatabases.find(d => d.name === newDbName);
-                                const icon = document.getElementById('db-chip-icon');
-                                if (icon) {
-                                    icon.style.display = (dbObj && dbObj.is_system) ? 'inline' : 'none';
-                                }
-
-                                // Remove the tag from display
-                                textPayload = textPayload.replace(match[0], '');
-                                
-                                // Fix: If the message is empty after removing the tag, provide a default confirmation
-                                if (!textPayload.trim()) {
-                                    textPayload = `Switched database context to **${newDbName}**.`;
-                                }
-                            }
-
-                            const refreshSpacesRegex = /\[\[REFRESH_SPACES(?::\s*([^\]]+))?\]\]/;
-                            const refreshSpacesMatch = textPayload.match(refreshSpacesRegex);
-                            if (refreshSpacesMatch) {
-                                const targetSpaceName = refreshSpacesMatch[1] ? refreshSpacesMatch[1].trim() : currentStore;
-                                if (typeof refreshSpacesList === 'function' && currentDatabase) {
-                                    await refreshSpacesList(currentDatabase, targetSpaceName);
-                                } else if (typeof selectDatabase === 'function' && currentDatabase) {
-                                    await selectDatabase(currentDatabase, true, targetSpaceName);
-                                }
-                                textPayload = textPayload.replace(refreshSpacesRegex, '');
-                            }
-
-                            const clearPendingConfirmationRegex = /\[\[CLEAR_PENDING_CONFIRMATION\]\]/;
-                            if (clearPendingConfirmationRegex.test(textPayload)) {
-                                removePendingConfirmationPrompt();
-                                textPayload = textPayload.replace(clearPendingConfirmationRegex, '');
-                            }
-
-                            const refreshSpaceViewRegex = /\[\[REFRESH_SPACE_VIEW:\s*([a-zA-Z0-9_-]+)\s*\]\]/;
-                            const refreshSpaceViewMatch = textPayload.match(refreshSpaceViewRegex);
-                            if (refreshSpaceViewMatch) {
-                                const targetSpaceName = refreshSpaceViewMatch[1];
-                                const activeSpaceName = currentStore ? currentStore.replace('/data', '') : '';
-                                if (activeSpaceName === targetSpaceName && typeof selectSpace === 'function') {
-                                    const targetLi = Array.from(document.querySelectorAll('#kb-list li')).find(li => li.title === targetSpaceName);
-                                    await selectSpace(targetSpaceName, targetLi || document.querySelector('#sidebar li.active'), true);
-                                }
-                                textPayload = textPayload.replace(refreshSpaceViewRegex, '');
-                            }
-
-                            // For now basic accumulation, markdown later?
-                            // If event.payload is the whole response (as per our backend right now), just set it.
-                            // If we switch to token streaming, we append.
-                            // Backend emits entire string for now.
-                            // Handle Markdown
-                            const markdownHtml = marked.parse(textPayload);
-                            currentContentSpan.innerHTML += markdownHtml;
-
-                            const parentDiv = currentContentSpan.parentElement;
-                            if (parentDiv) {
-                                const accumulatedText = currentContentSpan.textContent || currentContentSpan.innerText || '';
-                                if (isPendingDeleteConfirmationText(accumulatedText)) {
-                                    parentDiv.classList.add('pending-confirmation-message');
-                                } else {
-                                    parentDiv.classList.remove('pending-confirmation-message');
-                                }
-                            }
-                            
-                            // Post-process the ai message to inject the "Import to Space" button for JSON blocks
-                            const preBlocks = currentContentSpan.querySelectorAll('pre code.language-json');
-                            preBlocks.forEach(codeBlock => {
-                                // Prevent double-injecting buttons
-                                if (codeBlock.parentElement.nextElementSibling && codeBlock.parentElement.nextElementSibling.classList.contains('import-ai-btn')) {
-                                    return; 
-                                }
-                                
-                                try {
-                                    const jsonText = codeBlock.innerText || codeBlock.textContent;
-                                    const parsed = JSON.parse(jsonText);
-                                    
-                                    // Check if it matches ExportData[T] schema: has 'categories' and 'items'
-                                if (parsed && typeof parsed === 'object' && Array.isArray(parsed.categories) && Array.isArray(parsed.items) && !codeBlock.classList.contains('auto-imported')) {
-                                    codeBlock.classList.add('auto-imported'); // Prevent re-triggering
-
-                                    const targetSpace = parsed.target_space || (currentStore ? currentStore.replace('/data', '') : null);
-                                    if (!targetSpace) return;
-                                    
-                                    // Insert status message instead of a button
-                                    codeBlock.parentElement.insertAdjacentHTML('afterend', `<div class="import-status" style="margin-top: 10px; font-size: 0.9em; color: #10b981;"><i>Auto-importing to space: ${targetSpace}... 🚀</i></div>`);
-                                    const statusDiv = codeBlock.parentElement.nextElementSibling;
-                                    
-                                    // Check if this space is currently up front and animate it 'as upload is happening'
-                                    const isUpFront = !!(currentStore && currentStore.replace('/data', '') === targetSpace);
-                                    const uiDiv = document.getElementById('table-results');
-                                    if (isUpFront && uiDiv) {
-                                        uiDiv.style.transition = 'opacity 0.3s ease';
-                                        uiDiv.style.opacity = '0.4'; // Dim while uploading
-                                    }
-
-                                    // Convert text to File blob to use the existing import endpoint
-                                    const blob = new Blob([jsonText], { type: 'application/json' });
-                                    const formData = new FormData();
-                                    formData.append('file', blob, 'ai-import.json');
-                                    
-                                    authFetch(`/api/spaces/import?database=${encodeURIComponent(currentDatabase)}&name=${encodeURIComponent(targetSpace)}`, {
-                                        method: 'POST',
-                                        body: formData
-                                    }).then(async res => {
-                                        if (res.ok) {
-                                            statusDiv.innerHTML = `<i>Successfully auto-imported to space: ${targetSpace} ✅</i>`;
-                                            
-                                            if (isUpFront && uiDiv) {
-                                                uiDiv.innerHTML = '<g style="padding: 20px; color: #10b981; font-weight: bold;"><em>🔅 AI Upload completed! Refreshing categories... </em></g>';
-                                                uiDiv.style.opacity = '1'; // Bring opacity back
-
-                                                // Allow a short visual cue before triggering the actual reload click
-                                                setTimeout(() => {
-                                                    const activeLi = document.querySelector('#sidebar li.active');
-                                                    if (activeLi) activeLi.click(); // Reload space elements
-                                                }, 800);
-                                            }
-                                        } else {
-                                            const err = await res.text();
-                                            statusDiv.innerHTML = `<i style="color: #ef4444;">Auto-import failed: ${err} ❌</i>`;
-                                            if (isUpFront && uiDiv) uiDiv.style.opacity = '1'; // restore UI
-                                        }
-                                    }).catch(e => {
-                                        statusDiv.innerHTML = `<i style="color: #ef4444;">Error during auto-import: ${e.message} ❌</i>`;
-                                        if (isUpFront && uiDiv) uiDiv.style.opacity = '1'; // restore UI
-                                    });
-                                }
-                            } catch(e) {
-                                    // Not valid JSON yet (maybe streaming)
-                                }
-                            });
-
-                            document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight;
-                            await yieldToBrowser();
-                        } 
-                        else if (event.type === 'record' || event.type === 'kv') {
-                            handled = true;
-                            // Collect records
-                            // If we encounter a schema change, we might want to flush?
-                            // For simplicity, we just collect until text/content interrupts.
-                            currentTableRecords.push(event.payload);
-                            currentTableType = event.type;
-                        }
-                        else if (event.type === 'result_stream') {
-                            handled = true;
-                            flushRecords();
-                            currentContentSpan = null;
-                        }
-                        else if (event.type === 'tool_call') {
-                            handled = true;
-                            flushRecords();
-                            appendChatMessage('ai', '🛠️ Calling Tool: ' + event.payload.tool);
-                            currentContentSpan = null;
-                        }
-                        else if (event.type === 'tool_result') {
-                            handled = true;
-                            flushRecords();
-
-                            const payload = event.payload || {};
-                            const args = payload.args || {};
-                            let targetSpaceName = null;
-                            ['kb_name', 'name', 'space_name', 'space'].some(key => {
-                                const value = args[key];
-                                if (typeof value === 'string' && value.trim()) {
-                                    targetSpaceName = value.trim();
-                                    return true;
-                                }
-                                return false;
-                            });
-
-                            if (!targetSpaceName && typeof payload.result === 'string') {
-                                const kbResultMatch = payload.result.match(/Knowledge Base '([^']+)'/i)
-                                    || payload.result.match(/Space\/KnowledgeBase '([^']+)'/i)
-                                    || payload.result.match(/Space '([^']+)'/i);
-                                if (kbResultMatch && kbResultMatch[1]) {
-                                    targetSpaceName = kbResultMatch[1].trim();
-                                }
-                            }
-
-                            const refreshTargetDatabase = currentDatabase || (typeof args.database === 'string' ? args.database.trim() : '');
-                            const runStructuredSpaceRefresh = async () => {
-                                if (!refreshTargetDatabase) {
-                                    return;
-                                }
-                                if (typeof refreshSpacesList === 'function') {
-                                    await refreshSpacesList(refreshTargetDatabase, payload.tool === 'delete_space' ? null : targetSpaceName);
-                                } else if (typeof selectDatabase === 'function') {
-                                    await selectDatabase(refreshTargetDatabase, true, payload.tool === 'delete_space' ? null : targetSpaceName);
-                                }
-                            };
-
-                            if (payload.tool === 'create_space' || payload.tool === 'mint_to_space' || payload.tool === 'delete_space') {
-                                await runStructuredSpaceRefresh();
-
-                                // A short follow-up refresh hardens the sidebar against small post-commit timing races.
-                                if (refreshTargetDatabase && payload.tool !== 'delete_space') {
-                                    setTimeout(() => {
-                                        runStructuredSpaceRefresh().catch(err => console.error('Structured space refresh retry failed', err));
-                                    }, 250);
-                                }
-                            }
-
-                            if (payload.tool === 'mint_to_space' && targetSpaceName) {
-                                const activeSpaceName = currentStore ? currentStore.replace('/data', '') : '';
-                                if (activeSpaceName === targetSpaceName && typeof selectSpace === 'function') {
-                                    const targetLi = Array.from(document.querySelectorAll('#kb-list li')).find(li => li.title === targetSpaceName);
-                                    await selectSpace(targetSpaceName, targetLi || document.querySelector('#sidebar li.active'), true);
-                                }
-                            }
-
-                            currentContentSpan = null;
-                        }
-                        else if (event.type === 'space_mutation') {
-                            handled = true;
-                            flushRecords();
-
-                            const payload = event.payload || {};
-                            const targetDatabase = (typeof payload.database === 'string' && payload.database.trim())
-                                ? payload.database.trim()
-                                : currentDatabase;
-                            const targetSpaceName = (typeof payload.kb_name === 'string' && payload.kb_name.trim())
-                                ? payload.kb_name.trim()
-                                : null;
-
-                            if (targetDatabase) {
-                                if (typeof refreshSpacesList === 'function') {
-                                    await refreshSpacesList(targetDatabase, payload.action === 'delete' ? null : targetSpaceName);
-                                } else if (typeof selectDatabase === 'function') {
-                                    await selectDatabase(targetDatabase, true, payload.action === 'delete' ? null : targetSpaceName);
-                                }
-
-                                if (payload.action !== 'delete') {
-                                    setTimeout(() => {
-                                        if (typeof refreshSpacesList === 'function') {
-                                            refreshSpacesList(targetDatabase, targetSpaceName).catch(err => console.error('space_mutation refresh retry failed', err));
-                                        } else if (typeof selectDatabase === 'function') {
-                                            selectDatabase(targetDatabase, true, targetSpaceName).catch(err => console.error('space_mutation select retry failed', err));
-                                        }
-                                    }, 250);
-                                }
-                            }
-
-                            if (payload.action === 'mint' && targetSpaceName) {
-                                const activeSpaceName = currentStore ? currentStore.replace('/data', '') : '';
-                                if (activeSpaceName === targetSpaceName && typeof selectSpace === 'function') {
-                                    const targetLi = Array.from(document.querySelectorAll('#kb-list li')).find(li => li.title === targetSpaceName);
-                                    await selectSpace(targetSpaceName, targetLi || document.querySelector('#sidebar li.active'), true);
-                                }
-                            }
-
-                            currentContentSpan = null;
-                        }
-                        else if (event.type === 'tool_error') {
-                            handled = true;
-                            flushRecords();
-                            currentContentSpan = null;
-                        }
-                        else if (event.type === 'step_start') {
-                            handled = true;
-                            flushRecords();
-                            let label = event.payload || event.command;
-                            const idx = event.step_index;
-                            if (label) {
-                                let prefix = '➡️ Step';
-                                if (idx) {
-                                    prefix += ' ' + idx;
-                                }
-                                appendChatMessage('ai', prefix + ': ' + label);
-                            }
-                            currentContentSpan = null;
-                            await yieldToBrowser();
-                        }
-                        else if (event.type === 'action_required') {
-                            handled = true;
-                            flushRecords();
-                            const action = event.payload || {};
-
-                            if (String(action.action_type || '').trim() === 'local_shell_execution') {
-                                const msgDiv = document.createElement('div');
-                                msgDiv.className = 'chat-message ai';
-
-                                const card = document.createElement('div');
-                                card.style.cssText = 'background: #1e1e1e; border: 1px solid #4ade80; border-radius: 8px; padding: 12px; margin-top: 8px;';
-
-                                const header = document.createElement('div');
-                                header.style.cssText = 'display: flex; align-items: center; margin-bottom: 8px;';
-                                const icon = document.createElement('span');
-                                icon.textContent = '💻';
-                                icon.style.cssText = 'font-size: 1.2rem; margin-right: 8px;';
-                                const title = document.createElement('strong');
-                                title.textContent = 'Local Command Request';
-                                header.appendChild(icon);
-                                header.appendChild(title);
-
-                                const reasoning = document.createElement('p');
-                                reasoning.textContent = String(action.reasoning || 'The AI wants to run a command locally.');
-                                reasoning.style.cssText = 'margin: 0 0 8px 0; font-size: 0.9rem; color: #a1a1aa;';
-
-                                const code = document.createElement('code');
-                                code.textContent = '$ ' + String(action.command || '');
-                                code.style.cssText = 'display: block; background: #000; padding: 8px; border-radius: 4px; color: #4ade80; margin-bottom: 12px; font-family: monospace; white-space: pre-wrap; word-break: break-word;';
-
-                                const actions = document.createElement('div');
-                                actions.style.cssText = 'display: flex; gap: 8px;';
-
-                                const approveBtn = document.createElement('button');
-                                approveBtn.type = 'button';
-                                approveBtn.textContent = 'Approve & Run Locally';
-                                approveBtn.style.cssText = 'background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold;';
-                                approveBtn.onclick = () => {
-                                    if (typeof window.approveLocalCommand === 'function') {
-                                        window.approveLocalCommand(encodeURIComponent(String(action.command || '')), approveBtn);
-                                    }
-                                };
-
-                                const denyBtn = document.createElement('button');
-                                denyBtn.type = 'button';
-                                denyBtn.textContent = 'Deny';
-                                denyBtn.style.cssText = 'background: #3f3f46; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;';
-                                denyBtn.onclick = () => {
-                                    if (typeof window.rejectLocalCommand === 'function') {
-                                        window.rejectLocalCommand(denyBtn);
-                                    }
-                                };
-
-                                actions.appendChild(approveBtn);
-                                actions.appendChild(denyBtn);
-
-                                card.appendChild(header);
-                                card.appendChild(reasoning);
-                                card.appendChild(code);
-                                card.appendChild(actions);
-                                msgDiv.appendChild(card);
-
-                                document.getElementById('chat-history').appendChild(msgDiv);
-                                document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight;
-                            }
-                            
-                            currentContentSpan = null;
-                        }
-                        else if (event.type === 'switch_database') {
-                            handled = true;
-                            flushRecords();
-                            const newDbName = event.payload;
-                            appendChatMessage('ai', `🔄 Switching active database context to '${newDbName}'...`);
-                            
-                            // 1. Trigger the UI switch immediately.
-                            // This updates 'currentDatabase' global var and refreshes sidebar/store list.
-                            await selectDatabase(newDbName, true);
-
-                            // 2. IMPORTANT: We do NOT need to wait for selectDatabase to finish before processing next lines,
-                            // BUT if the agent is about to send us data (like 'record' events or 'content' about stores),
-                            // we want the UI state to be consistent. 
-                            // The selectDatabase call updates 'currentDatabase' synchronously at the start, 
-                            // so subsequent fetch calls (if any from user action) will use the new DB.
-                            
-                            // Re-sync the sidebar dropdown if it exists to match visual state
-                            const dbSelect = document.getElementById('database-select');
-                            if (dbSelect) dbSelect.value = newDbName;
-
-                            currentContentSpan = null;
-                        }
-                        else if (event.type === 'session_id') {
-                            handled = true;
-                            currentSessionID = event.payload;
-                        }
-                        else if (event.type === 'error') {
-                            handled = true;
-                            flushRecords();
-                            appendChatMessage('ai', 'Error: ' + event.payload);
-                            currentContentSpan = null;
-                            await yieldToBrowser();
-                        }
-
-                        if (!handled) {
-                            flushRecords();
-                            appendChatMessage('ai', rawPayloadForDisplay || `Event: ${event.type}`);
-                            currentContentSpan = null;
-                        }
-                    } catch (e) {
-                        console.error('[AI stream] parse error', {
-                            line,
-                            error: e,
-                            pendingChunkLength: pendingChunk.length
-                        });
-                    }
-                }
-            }
-
-            if (pendingChunk.trim()) {
-                try {
-                    const trimmedPending = pendingChunk.trim();
-                    const event = (() => {
-                        try {
-                            return JSON.parse(trimmedPending);
-                        } catch (parseErr) {
-                            const start = Math.min(trimmedPending.indexOf('{'), trimmedPending.indexOf('['));
-                            if (start >= 0) {
-                                try {
-                                    return JSON.parse(trimmedPending.slice(start));
-                                } catch (candidateErr) {
-                                    throw parseErr;
-                                }
-                            }
-                            throw parseErr;
-                        }
-                    })();
-                    if (event.payload === undefined) {
-                        if (event.record !== undefined) event.payload = event.record;
-                        else if (event.result !== undefined) event.payload = event.result;
-                    }
-                    if (event.type === 'result') {
-                        event.type = 'content';
-                    }
-                    if (event.type === 'error') {
-                        appendChatMessage('ai', 'Error: ' + event.payload);
-                    }
-                } catch (e) {
-                    console.error('[AI stream] final parse error', {
-                        pendingChunk,
-                        error: e
-                    });
-                }
-            }
-            
-            // After stream, if we have records, render them
-            if (currentTableRecords.length > 0) {
-                renderDataResults(currentTableRecords, format, currentTableType);
-            }
+            return;
 
         } catch (err) {
              const loadingEl = document.getElementById(loadingId);

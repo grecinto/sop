@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 
+	log "log/slog"
+
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 )
@@ -90,6 +92,7 @@ func shouldExposeNativeTool(name string, exposure nativeToolExposure) bool {
 
 func (a *CopilotAgent) listRegisteredTools(exposure nativeToolExposure) []ai.ToolDefinition {
 	if a.registry == nil {
+		log.Info("CopilotAgent.listRegisteredTools: no registry available")
 		return nil
 	}
 	tools := make([]ai.ToolDefinition, 0)
@@ -107,6 +110,7 @@ func (a *CopilotAgent) listRegisteredTools(exposure nativeToolExposure) []ai.Too
 			Schema:      tool.ArgsSchema,
 		})
 	}
+	log.Info("CopilotAgent.listRegisteredTools: built exposure list", "restricted", exposure.restrict, "allowed_count", len(exposure.allowed), "tool_count", len(tools))
 	return tools
 }
 
@@ -143,5 +147,6 @@ func (a *CopilotAgent) listStoredScriptTools(ctx context.Context) []ai.ToolDefin
 			Schema:      defaultArgsSchema,
 		})
 	}
+	log.Info("CopilotAgent.listStoredScriptTools: built script tool list", "tool_count", len(tools))
 	return tools
 }

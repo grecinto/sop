@@ -390,6 +390,35 @@ func TestSetupStream_MarksRecordEventsAsStreamedContent(t *testing.T) {
 	}
 }
 
+func TestSetupStream_MarksContentEventsAsStreamedContent(t *testing.T) {
+	w := httptest.NewRecorder()
+	sendEvent, hasStreamedContent := setupStream(w)
+
+	sendEvent("content", "list_tools inventory")
+
+	if !hasStreamedContent() {
+		t.Fatal("expected content events to count as streamed UI output")
+	}
+}
+
+func TestSetupStream_SanitizesToolErrorMessagesBeforeRendering(t *testing.T) {
+	w := httptest.NewRecorder()
+	sendEvent, _ := setupStream(w)
+
+	sendEvent(ai.ReasoningEventToolError, map[string]any{
+		"tool":  "list_directory",
+		"error": "tool 'list_directory' not found in any registered agent for request 123e4567-e89b-12d3-a456-426614174000",
+	})
+
+	body := w.Body.String()
+	if strings.Contains(body, "123e4567-e89b-12d3-a456-426614174000") {
+		t.Fatalf("expected sanitized tool error payload, got: %s", body)
+	}
+	if !strings.Contains(body, "could not find the requested tool") {
+		t.Fatalf("expected friendly tool error message in stream, got: %s", body)
+	}
+}
+
 func TestSetupStream_UnescapesToolResultText(t *testing.T) {
 	if got := renderVisibleText(`Link table: UserID -\u003e OrderID`); got != "Link table: UserID -> OrderID" {
 		t.Fatalf("expected real arrow rendering for escaped unicode text, got: %q", got)

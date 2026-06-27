@@ -74,6 +74,67 @@ const (
 	VectorizeSpaceItemsInstruction      = "Generate or refresh embeddings for specific items inside a Space category. Provide kb_name, category, and item_names when the refresh should stay tightly scoped to known changed items, and prefer this over category-wide or full-space vectorization when possible."
 )
 
+func formatToolInventoryList(tools []ai.ToolDefinition) string {
+	var sb strings.Builder
+	sb.WriteString("### Available Tools\n\nUse these tools via slash(/) commands. Arguments can be positional (e.g. `/cmd arg1`) or named (e.g. `/cmd key=value`).\n\n**Registered Tools**\n\n")
+
+	for _, t := range tools {
+		var desc string
+		desc = strings.TrimSpace(t.Description)
+		if desc == "" {
+			desc = "No description available"
+		} else {
+			desc = strings.ReplaceAll(desc, "\n", " ")
+			if idx := strings.Index(desc, "."); idx > 0 {
+				desc = desc[:idx+1]
+			}
+			if len(desc) > 150 {
+				desc = desc[:147] + "..."
+			}
+		}
+
+		cmdStr := fmt.Sprintf("/%s", t.Name)
+		if schema := strings.TrimSpace(t.Schema); schema != "" {
+			var simpleArgs []string
+			if strings.HasPrefix(schema, "{") {
+				var schemaMap map[string]any
+				if err := json.Unmarshal([]byte(schema), &schemaMap); err == nil {
+					if props, ok := schemaMap["properties"].(map[string]any); ok {
+						names := make([]string, 0, len(props))
+						for name := range props {
+							names = append(names, name)
+						}
+						sort.Strings(names)
+						for _, name := range names {
+							simpleArgs = append(simpleArgs, "<"+name+">")
+						}
+					}
+				}
+			} else {
+				argsSchema := strings.TrimPrefix(schema, "(")
+				argsSchema = strings.TrimSuffix(argsSchema, ")")
+				if len(argsSchema) > 0 {
+					parts := strings.Split(argsSchema, ",")
+					for _, p := range parts {
+						argName := strings.Split(p, ":")[0]
+						argName = strings.TrimSpace(argName)
+						if argName != "" {
+							simpleArgs = append(simpleArgs, "<"+argName+">")
+						}
+					}
+				}
+			}
+			if len(simpleArgs) > 0 {
+				cmdStr += " " + strings.Join(simpleArgs, " ")
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("%s: %s\n", cmdStr, desc))
+	}
+
+	return sb.String()
+}
+
 // registerSystemTools registers the core system inspection tools.
 func (a *CopilotAgent) registerSystemTools(ctx context.Context) {
 	a.registry.Register("list_databases", "Lists all available databases.", emptyObjectArgsSchema, wrapStringTool(a.toolListDatabases))
@@ -84,7 +145,7 @@ func (a *CopilotAgent) registerSystemTools(ctx context.Context) {
 
 // registerTools registers all available tools for the CopilotAgent.
 func (a *CopilotAgent) registerTools(ctx context.Context) {
-	log.Debug("CopilotAgent.registerTools: Starting registration...")
+	log.Info("CopilotAgent.registerTools: starting")
 	if a.registry == nil {
 		a.registry = NewRegistry()
 	}
@@ -97,86 +158,26 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 	a.registerRoutingTools(ctx)
 	a.registerAutomationTools(ctx)
 
+	registered := a.registry.List()
+	log.Info("CopilotAgent.registerTools: completed", "tool_count", len(registered))
 }
 
 func (a *CopilotAgent) toolListTools(ctx context.Context, args map[string]any) (string, error) {
 	a.registerTools(ctx)
 
-	tools := a.registry.List()
-
-	// Sort tools by name for consistent output
-	sort.Slice(tools, func(i, j int) bool {
-		return tools[i].Name < tools[j].Name
-	})
-
-	var sb strings.Builder
-	// Note: Header is handled by the caller or omitted to allow clean concatenation
-	// But since this tool can be called independently by the agent, we should perhaps skip heavy headers if it's meant to be a simple list.
-	// However, the prompt says "it should display complete set". I'll just list them.
-
-	for _, t := range tools {
+	registryTools := a.registry.List()
+	visible := make([]ai.ToolDefinition, 0, len(registryTools))
+	for _, t := range registryTools {
 		if t.Hidden {
 			continue
 		}
-
-		// Use ShortDescription if available for UI brevity, otherwise fallback and clean Description
-		var desc string
-		if t.ShortDescription != "" {
-			desc = t.ShortDescription
-		} else {
-			desc = strings.ReplaceAll(t.Description, "\n", " ")
-			// Limit to the first sentence to keep the UI clean (hide heavy LLM instructions)
-			if idx := strings.Index(desc, "."); idx > 0 {
-				desc = desc[:idx+1]
-			}
-			if len(desc) > 150 {
-				desc = desc[:147] + "..."
-			}
-		}
-
-		// Simplify ArgsSchema for CLI display
-		argsSchema := t.ArgsSchema
-		var simpleArgs []string
-		if strings.HasPrefix(strings.TrimSpace(argsSchema), "{") {
-			var schema map[string]any
-			if err := json.Unmarshal([]byte(argsSchema), &schema); err == nil {
-				if props, ok := schema["properties"].(map[string]any); ok {
-					names := make([]string, 0, len(props))
-					for name := range props {
-						names = append(names, name)
-					}
-					sort.Strings(names)
-					for _, name := range names {
-						simpleArgs = append(simpleArgs, "<"+name+">")
-					}
-				}
-			}
-		} else {
-			argsSchema = strings.TrimPrefix(argsSchema, "(")
-			argsSchema = strings.TrimSuffix(argsSchema, ")")
-			if len(argsSchema) > 0 {
-				parts := strings.Split(argsSchema, ",")
-				for _, p := range parts {
-					argName := strings.Split(p, ":")[0]
-					argName = strings.TrimSpace(argName)
-					if argName != "" {
-						simpleArgs = append(simpleArgs, "<"+argName+">")
-					}
-				}
-			}
-		}
-
-		prettyArgs := strings.Join(simpleArgs, " ")
-
-		cmdStr := fmt.Sprintf("/%s", t.Name)
-		if prettyArgs != "" {
-			cmdStr += " " + prettyArgs
-		}
-
-		sb.WriteString(fmt.Sprintf("- `%s`: %s\n", cmdStr, desc))
+		visible = append(visible, ai.ToolDefinition{
+			Name:        t.Name,
+			Description: t.Description,
+			Schema:      t.ArgsSchema,
+		})
 	}
-
-	return sb.String(), nil
+	return formatToolInventoryList(visible), nil
 }
 
 func (a *CopilotAgent) toolSetVerbose(ctx context.Context, args map[string]any) (string, error) {

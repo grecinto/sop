@@ -18,6 +18,14 @@ type stubSharedAgent struct {
 	name string
 }
 
+type recordingQueryAgent struct {
+	queries []string
+}
+
+type executorAwareAgent struct {
+	gotExecutor bool
+}
+
 func (a *stubSharedAgent) Open(ctx context.Context) error  { return nil }
 func (a *stubSharedAgent) Close(ctx context.Context) error { return nil }
 func (a *stubSharedAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
@@ -33,6 +41,38 @@ func (a *stubSharedAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, e
 	return nil, nil
 }
 
+func (a *recordingQueryAgent) Open(ctx context.Context) error  { return nil }
+func (a *recordingQueryAgent) Close(ctx context.Context) error { return nil }
+func (a *recordingQueryAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
+	return nil, nil
+}
+func (a *recordingQueryAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	a.queries = append(a.queries, query)
+	return "ok", nil
+}
+func (a *recordingQueryAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	return "", nil
+}
+func (a *recordingQueryAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	return nil, nil
+}
+
+func (a *executorAwareAgent) Open(ctx context.Context) error  { return nil }
+func (a *executorAwareAgent) Close(ctx context.Context) error { return nil }
+func (a *executorAwareAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
+	return nil, nil
+}
+func (a *executorAwareAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	_, a.gotExecutor = ctx.Value(ai.CtxKeyExecutor).(*sopbackend.DefaultToolExecutor)
+	return "ok", nil
+}
+func (a *executorAwareAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	return "", nil
+}
+func (a *executorAwareAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	return nil, nil
+}
+
 func TestBuildListenAddr(t *testing.T) {
 	if got, want := buildListenAddr("127.0.0.1", 9090), "127.0.0.1:9090"; got != want {
 		t.Fatalf("buildListenAddr() = %q, want %q", got, want)
@@ -40,6 +80,83 @@ func TestBuildListenAddr(t *testing.T) {
 
 	if got, want := buildListenAddr("0.0.0.0", 8080), "0.0.0.0:8080"; got != want {
 		t.Fatalf("buildListenAddr() = %q, want %q", got, want)
+	}
+}
+
+func TestTrySimpleShellCommandFallbackSkipsAgentCommandsWithoutSlash(t *testing.T) {
+	svc := &localRAGService{shellSessions: newShellSessionState()}
+	for _, query := range []string{"list_tools", "list_databases", "last-tool"} {
+		got, handled, err := svc.trySimpleShellCommandFallback(query, "session")
+		if err != nil {
+			t.Fatalf("trySimpleShellCommandFallback(%q) returned error: %v", query, err)
+		}
+		if handled {
+			t.Fatalf("trySimpleShellCommandFallback(%q) should bypass shell fallback for agent-style commands", query)
+		}
+		if got != "" {
+			t.Fatalf("trySimpleShellCommandFallback(%q) returned unexpected output %q", query, got)
+		}
+	}
+}
+
+func TestHandleAskRoutesPlainListToolsToAgentWithSlashPrefix(t *testing.T) {
+	agent := &recordingQueryAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newShellSessionState()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"list_tools"}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.queries) != 1 {
+		t.Fatalf("expected one agent query, got %d", len(agent.queries))
+	}
+	if agent.queries[0] != "/list_tools" {
+		t.Fatalf("expected agent query to be /list_tools, got %q", agent.queries[0])
+	}
+}
+
+func TestHandleAskInjectsBackendExecutorIntoContext(t *testing.T) {
+	agent := &executorAwareAgent{}
+	svc := &localRAGService{service: &stubSharedAgent{name: "shared"}, shellSessions: newShellSessionState()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"list_tools"}`))
+	rr := httptest.NewRecorder()
+
+	sopbackend.SetLoadedAgents(map[string]ai.Agent[map[string]any]{"copilot": agent})
+	defer sopbackend.SetLoadedAgents(nil)
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if !agent.gotExecutor {
+		t.Fatal("expected handleAsk to inject the shared backend DefaultToolExecutor into the shared agent context")
+	}
+}
+
+func TestHandleAskUsesSharedBackendHandlerForSlashCommands(t *testing.T) {
+	localAgent := &recordingQueryAgent{}
+	sharedAgent := &recordingQueryAgent{}
+	svc := &localRAGService{service: localAgent, shellSessions: newShellSessionState()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"list_tools"}`))
+	rr := httptest.NewRecorder()
+
+	sopbackend.SetLoadedAgents(map[string]ai.Agent[map[string]any]{"copilot": sharedAgent})
+	defer sopbackend.SetLoadedAgents(nil)
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(localAgent.queries) != 0 {
+		t.Fatalf("expected local service agent to be bypassed for slash commands, got %v", localAgent.queries)
+	}
+	if len(sharedAgent.queries) != 1 || sharedAgent.queries[0] != "/list_tools" {
+		t.Fatalf("expected shared backend handler to receive /list_tools, got %v", sharedAgent.queries)
 	}
 }
 

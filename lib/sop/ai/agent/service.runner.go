@@ -1066,8 +1066,12 @@ func (e *ServiceToolExecutor) Execute(ctx context.Context, toolName string, args
 	toolCtx := e.toolCtx
 	if toolCtx == nil {
 		// Backward compatibility: extract from context
+		var executor ai.ToolExecutor
+		if rawExec, ok := ctx.Value(ai.CtxKeyExecutor).(ai.ToolExecutor); ok {
+			executor = rawExec
+		}
 		toolCtx = &ToolExecutionContext{
-			Executor:        ctx.Value(ai.CtxKeyExecutor).(ai.ToolExecutor),
+			Executor:        executor,
 			Recorder:        nil, // will be extracted per-use
 			Writer:          nil, // will be extracted per-use
 			ResultStreamer:  nil, // will be extracted per-use
@@ -1175,9 +1179,11 @@ func (e *ServiceToolExecutor) injectToolContextToLegacyContext(ctx context.Conte
 
 func (e *ServiceToolExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
 	if e == nil || e.s == nil {
+		log.Info("ServiceToolExecutor.ListTools: nil executor or service")
 		return nil, nil
 	}
 
+	log.Info("ServiceToolExecutor.ListTools: collecting tools", "agent_count", len(e.s.registry))
 	var tools []ai.ToolDefinition
 	for _, agent := range e.s.registry {
 		if executor, ok := agent.(ai.ToolExecutor); ok {
@@ -1189,6 +1195,7 @@ func (e *ServiceToolExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinitio
 		}
 	}
 
+	log.Info("ServiceToolExecutor.ListTools: completed", "tool_count", len(tools))
 	return tools, nil
 }
 

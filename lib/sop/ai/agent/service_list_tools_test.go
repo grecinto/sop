@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -59,6 +61,123 @@ func TestServiceListTools(t *testing.T) {
 	// Check for an agent tool
 	if !strings.Contains(out, "/add") {
 		t.Error("Output should contain /add command")
+	}
+}
+
+type listToolsStubAgent struct {
+	tools []ai.ToolDefinition
+}
+
+func (a *listToolsStubAgent) Open(ctx context.Context) error  { return nil }
+func (a *listToolsStubAgent) Close(ctx context.Context) error { return nil }
+func (a *listToolsStubAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
+	return nil, nil
+}
+func (a *listToolsStubAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	return "", nil
+}
+func (a *listToolsStubAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	return "", nil
+}
+func (a *listToolsStubAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	return a.tools, nil
+}
+
+type directSlashStubAgent struct{}
+
+func (a *directSlashStubAgent) Open(ctx context.Context) error  { return nil }
+func (a *directSlashStubAgent) Close(ctx context.Context) error { return nil }
+func (a *directSlashStubAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
+	return nil, nil
+}
+func (a *directSlashStubAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	return "", nil
+}
+func (a *directSlashStubAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	if toolName == "list_directory" {
+		return "dir1\nfile2", nil
+	}
+	return "", fmt.Errorf("unknown tool: %s", toolName)
+}
+func (a *directSlashStubAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	return []ai.ToolDefinition{{Name: "list_directory", Description: "list directory"}}, nil
+}
+
+func TestServiceAskBypassesPipelineForDirectSlashCommands(t *testing.T) {
+	svc := &Service{
+		registry: map[string]ai.Agent[map[string]any]{"stub": &directSlashStubAgent{}},
+		session:  &RunnerSession{},
+		pipeline: []PipelineStep{{Agent: PipelineAgent{ID: "broken"}}},
+	}
+
+	resp, err := svc.ask(context.Background(), AskRequest{Query: "/list_directory", Session: &ai.SessionPayload{}})
+	if err != nil {
+		t.Fatalf("ask() error = %v", err)
+	}
+	if resp.FinalText != "dir1\nfile2" {
+		t.Fatalf("ask() final text = %q, want %q", resp.FinalText, "dir1\nfile2")
+	}
+}
+
+func TestServiceAskRegistersToolsBeforeDirectSlashCommands(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	tempDir := t.TempDir()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+
+	svc := &Service{
+		registry: map[string]ai.Agent[map[string]any]{"copilot": NewCopilotAgent(Config{}, nil, nil)},
+		session:  &RunnerSession{},
+		pipeline: []PipelineStep{{Agent: PipelineAgent{ID: "broken"}}},
+	}
+
+	resp, err := svc.ask(context.Background(), AskRequest{Query: "/list_directory", Session: &ai.SessionPayload{}})
+	if err != nil {
+		t.Fatalf("ask() error = %v", err)
+	}
+	if resp.FinalText == "" {
+		t.Fatal("expected non-empty directory listing")
+	}
+	if strings.Contains(resp.FinalText, "not found") || strings.Contains(resp.FinalText, "failed") {
+		t.Fatalf("unexpected tool failure output: %q", resp.FinalText)
+	}
+}
+
+func TestListToolsUsesRegisteredToolExecutorInventory(t *testing.T) {
+	registry := make(map[string]ai.Agent[map[string]any])
+	registry["stub"] = &listToolsStubAgent{tools: []ai.ToolDefinition{{Name: "alpha", Description: "Alpha tool", Schema: "{}"}, {Name: "beta", Description: "Beta tool", Schema: "{}"}}}
+
+	svc := &Service{registry: registry, session: &RunnerSession{}}
+	out, handled, err := svc.handleSessionCommand(context.Background(), "/list_tools", nil)
+	if err != nil {
+		t.Fatalf("Handler failed: %v", err)
+	}
+	if !handled {
+		t.Fatal("Handler should have handled the command")
+	}
+	if !strings.Contains(out, "/alpha") || !strings.Contains(out, "/beta") {
+		t.Fatalf("Output should include registered agent tools, got: %s", out)
+	}
+}
+
+func TestServiceListToolsDoesNotInterceptListDirectory(t *testing.T) {
+	svc := &Service{registry: map[string]ai.Agent[map[string]any]{}, session: &RunnerSession{}}
+	out, handled, err := svc.handleSessionCommand(context.Background(), "/list_directory", nil)
+	if err != nil {
+		t.Fatalf("Handler should not error for /list_directory: %v", err)
+	}
+	if handled {
+		t.Fatalf("Handler should not intercept /list_directory, got handled=%t output=%q", handled, out)
+	}
+	if out != "" {
+		t.Fatalf("Handler should not produce output for /list_directory, got %q", out)
 	}
 }
 

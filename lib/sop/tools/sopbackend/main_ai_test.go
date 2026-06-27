@@ -2,6 +2,7 @@ package sopbackend
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -11,6 +12,16 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 )
+
+func TestFormatUserFacingAgentErrorRedactsToolFailureNoise(t *testing.T) {
+	msg := formatUserFacingAgentError("copilot", fmt.Errorf("tool 'list_directory' not found in any registered agent for request 123e4567-e89b-12d3-a456-426614174000"))
+	if !strings.Contains(msg, "could not find the requested tool") {
+		t.Fatalf("expected concise tool-unavailable message, got %q", msg)
+	}
+	if strings.Contains(msg, "123e4567-e89b-12d3-a456-426614174000") {
+		t.Fatalf("expected UUID-like noise to be removed, got %q", msg)
+	}
+}
 
 func TestInitializeRequest_UsesAuthenticatedUserID(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/ai/chat", strings.NewReader(`{"message":"hi","user_id":"client-random"}`))

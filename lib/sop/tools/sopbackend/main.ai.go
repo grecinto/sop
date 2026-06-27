@@ -11,19 +11,20 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
+	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/embed"
 
-	"github.com/sharedcode/sop/ai/memory"
 	_ "github.com/sharedcode/sop/ai/generator"
+	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/ai/obfuscation"
 	"github.com/sharedcode/sop/btree"
 	"github.com/sharedcode/sop/database"
@@ -370,6 +371,9 @@ func setupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 
 	sendEvent := func(eventType string, payload any) {
 		switch eventType {
+		case "session_id":
+			// Filter out session_id from client stream - it's for internal logging only
+			return
 		case ai.ReasoningEventAssistantMessage:
 			if message, ok := payload.(map[string]any); ok {
 				if streaming, _ := message["streaming"].(bool); streaming {
@@ -387,6 +391,10 @@ func setupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 					return
 				}
 			}
+		case "content":
+			contentStreamed = true
+			writeEvent(eventType, payload)
+			return
 		case ai.ReasoningEventToolCall:
 			if toolCall, ok := payload.(map[string]any); ok {
 				if tool, _ := toolCall["tool"].(string); isStructuredToolResult(tool) {
@@ -398,18 +406,27 @@ func setupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 			if errorEvent, ok := payload.(map[string]any); ok {
 				if errorMsg, _ := errorEvent["error"].(string); strings.TrimSpace(errorMsg) != "" {
 					contentStreamed = true
+					message := sanitizeUserFacingErrorMessage(errorMsg)
+					if message == "" {
+						message = strings.TrimSpace(errorMsg)
+					}
 					// Format error for display
 					tool, _ := errorEvent["tool"].(string)
 					iteration, _ := errorEvent["iteration"].(int)
 					var msg string
 					if iteration > 0 {
-						msg = fmt.Sprintf("⚠️ Error (iteration %d, tool: %s): %s\n", iteration, tool, errorMsg)
+						msg = fmt.Sprintf("⚠️ Error (iteration %d, tool: %s): %s\n", iteration, tool, message)
 					} else {
-						msg = fmt.Sprintf("⚠️ Error (tool: %s): %s\n", tool, errorMsg)
+						msg = fmt.Sprintf("⚠️ Error (tool: %s): %s\n", tool, message)
 					}
+					sanitizedEvent := map[string]any{}
+					for key, value := range errorEvent {
+						sanitizedEvent[key] = value
+					}
+					sanitizedEvent["error"] = message
 					writeEvent("content", msg)
-					// Also send the raw error event for UI to handle if needed
-					writeEvent("tool_error", errorEvent)
+					// Also send the sanitized error event for UI to handle if needed
+					writeEvent("tool_error", sanitizedEvent)
 					return
 				}
 			}
@@ -478,18 +495,33 @@ func lockSession(req *aiChatRequest, blueprint ai.Agent[map[string]any]) (ai.Age
 	return agentSvc, sessionMu
 }
 
+func InjectSharedRuntimeContext(ctx context.Context, sendEvent func(string, any), w http.ResponseWriter) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithValue(ctx, ai.CtxKeyExecutor, &DefaultToolExecutor{Agents: loadedAgents})
+	if sendEvent != nil {
+		ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, func(msg string) {
+			sendEvent("content", msg+"\n")
+		})
+		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, sendEvent)
+		ctx = context.WithValue(ctx, ai.CtxKeyResultStreamer, agent.NewEventResultStreamer(sendEvent))
+	} else {
+		ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, func(string) {})
+		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, func(string, any) {})
+	}
+	if w != nil {
+		ctx = context.WithValue(ctx, agent.CtxKeyJSONStreamer, agent.NewNDJSONStreamer(&DirectFlushingWriter{w: w}))
+	}
+	return ctx
+}
+
 func constructPayload(ctx context.Context, w http.ResponseWriter, req *aiChatRequest, llmSettings llmSettings, sendEvent func(string, any), rs *agent.RunnerSession) (context.Context, *ai.SessionPayload, *ai.ConfigMap, string) {
 	if req.Provider != "" {
 		ctx = context.WithValue(ctx, ai.CtxKeyProvider, req.Provider)
 	}
 	ctx = context.WithValue(ctx, agent.RunnerSessionKey, rs)
-	ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, func(msg string) {
-		sendEvent("content", msg+"\n")
-	})
-	ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, sendEvent)
-	ctx = context.WithValue(ctx, ai.CtxKeyResultStreamer, agent.NewEventResultStreamer(sendEvent))
-	ctx = context.WithValue(ctx, agent.CtxKeyJSONStreamer, agent.NewNDJSONStreamer(&DirectFlushingWriter{w: w}))
-	ctx = context.WithValue(ctx, ai.CtxKeyExecutor, &DefaultToolExecutor{Agents: loadedAgents})
+	ctx = InjectSharedRuntimeContext(ctx, sendEvent, w)
 
 	cfg := ai.NewConfigMap()
 
@@ -614,10 +646,48 @@ func executeAgentLifecycle(ctx context.Context, r *http.Request, agentSvc ai.Age
 	return nil
 }
 
+var uuidLikePattern = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+
+func sanitizeUserFacingErrorMessage(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return ""
+	}
+
+	msg = uuidLikePattern.ReplaceAllString(msg, "")
+	msg = strings.TrimSpace(msg)
+	lower := strings.ToLower(msg)
+
+	switch {
+	case strings.Contains(lower, "unknown tool"), strings.Contains(lower, "not found in any registered agent"), strings.Contains(lower, "tool not found"), strings.Contains(lower, "no executor available"):
+		return "could not find the requested tool"
+	case strings.Contains(lower, "no session payload found"):
+		return "session context is unavailable"
+	case strings.Contains(lower, "database not found"):
+		return "the requested database is not available"
+	case strings.Contains(lower, "request canceled"):
+		return "the request was canceled"
+	default:
+		return msg
+	}
+}
+
+func formatUserFacingAgentError(agentName string, err error) string {
+	if err == nil {
+		return fmt.Sprintf("agent %q could not complete the request", agentName)
+	}
+
+	msg := sanitizeUserFacingErrorMessage(err.Error())
+	if msg == "" {
+		return fmt.Sprintf("agent %q could not complete the request", agentName)
+	}
+	return msg
+}
+
 func executeRAG(ctx context.Context, agentSvc ai.Agent[map[string]any], req *aiChatRequest, fullMessage string, cfg *ai.ConfigMap, sendEvent func(string, any)) (string, error) {
 	response, err := agentSvc.Ask(ctx, fullMessage, cfg)
 	if err != nil {
-		msg := fmt.Sprintf("Agent '%s' failed: %v", req.Agent, err)
+		msg := fmt.Sprintf("Agent '%s' failed: %s", req.Agent, formatUserFacingAgentError(req.Agent, err))
 		log.Error("Response: Agent Ask Failed", "error", msg)
 		sendEvent("error", msg)
 		return "", err
@@ -1042,13 +1112,27 @@ type DefaultToolExecutor struct {
 }
 
 func (e *DefaultToolExecutor) Execute(ctx context.Context, tool string, args map[string]any) (string, error) {
-	// For now, we assume tools are handled by the "copilot" agent (CopilotAgent)
-	// In a real system, we might look up the tool in a global registry or iterate agents.
+	if e == nil {
+		return "", fmt.Errorf("tool '%s' not found or no executor available", tool)
+	}
 
-	// Try copilot first
 	if agentSvc, ok := e.Agents["copilot"]; ok {
-		if da, ok := agentSvc.(*agent.CopilotAgent); ok {
-			return da.Execute(ctx, tool, args)
+		if executor, ok := agentSvc.(interface {
+			Execute(context.Context, string, map[string]any) (string, error)
+		}); ok {
+			if resp, err := executor.Execute(ctx, tool, args); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+				return resp, err
+			}
+		}
+	}
+
+	for _, agentSvc := range e.Agents {
+		if executor, ok := agentSvc.(interface {
+			Execute(context.Context, string, map[string]any) (string, error)
+		}); ok {
+			if resp, err := executor.Execute(ctx, tool, args); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+				return resp, err
+			}
 		}
 	}
 
@@ -1107,6 +1191,7 @@ func (e *DefaultToolExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinitio
 		}
 	}
 
+	log.Info("DefaultToolExecutor.ListTools: no tools returned", "agent_count", len(e.Agents))
 	return nil, nil
 }
 

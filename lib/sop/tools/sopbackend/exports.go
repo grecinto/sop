@@ -2,12 +2,18 @@ package sopbackend
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sharedcode/sop/ai"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 )
+
+var ErrAgentNotInitialized = errors.New("agent not initialized")
 
 // GetConfig returns a copy of the current configuration
 func GetConfig() Config {
@@ -22,6 +28,31 @@ func GetLoadedAgents() map[string]ai.Agent[map[string]any] {
 // SetLoadedAgents replaces the currently initialized backend agents.
 func SetLoadedAgents(agents map[string]ai.Agent[map[string]any]) {
 	loadedAgents = agents
+}
+
+// AskSharedAgent routes a query through the shared backend agent runtime.
+// It prefers the initialized backend agents so daemon and httpserver use the same
+// handler/formatting path for slash-style requests such as /list_tools.
+func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cfg == nil {
+		cfg = ai.NewConfigMap()
+	}
+	ctx = InjectSharedRuntimeContext(ctx, nil, nil)
+
+	for _, agentID := range []string{"copilot", "sql_core"} {
+		if agentSvc, ok := loadedAgents[agentID]; ok && agentSvc != nil {
+			return agentSvc.Ask(ctx, query, cfg)
+		}
+	}
+	for _, agentSvc := range loadedAgents {
+		if agentSvc != nil {
+			return agentSvc.Ask(ctx, query, cfg)
+		}
+	}
+	return "", ErrAgentNotInitialized
 }
 
 // SetConfigFile sets the config file path
@@ -73,6 +104,47 @@ func Initialize(ctx context.Context, opts RuntimeOptions) error {
 		return err
 	}
 	return nil
+}
+
+// BootstrapRuntime loads the shared config, applies runtime defaults, and initializes the backend once.
+func BootstrapRuntime(ctx context.Context, configPath string, opts RuntimeOptions, port int, productionMode *bool) (string, error) {
+	targetConfigPath := strings.TrimSpace(configPath)
+	if targetConfigPath == "" {
+		targetConfigPath = FindExistingConfigFile()
+	}
+	if targetConfigPath == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			targetConfigPath = filepath.Join(cwd, "config.json")
+		} else {
+			targetConfigPath = "config.json"
+		}
+	}
+
+	if _, err := os.Stat(targetConfigPath); err == nil {
+		if err := LoadConfig(targetConfigPath); err != nil {
+			return "", err
+		}
+		SetConfigFile(targetConfigPath)
+		if _, err := LoadModelCatalog(targetConfigPath); err != nil {
+			return "", err
+		}
+	} else if _, err := LoadModelCatalog(""); err != nil {
+		return "", err
+	}
+
+	if port != 0 {
+		SetPort(port)
+	}
+	if productionMode != nil {
+		SetProductionMode(*productionMode)
+	} else {
+		SetProductionMode(true)
+	}
+
+	if err := Initialize(ctx, opts); err != nil {
+		return "", err
+	}
+	return targetConfigPath, nil
 }
 
 // InitAgents initializes the agents with the current configuration.

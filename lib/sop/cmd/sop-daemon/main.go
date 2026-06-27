@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sharedcode/sop/ai"
+
 	"github.com/sharedcode/sop"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/database"
@@ -80,19 +82,8 @@ func main() {
 	refreshTokenTTL := flag.Duration("refresh-token-ttl", 48*time.Hour, "Refresh token expiry duration (2 days default)")
 	flag.Parse()
 
-	// Set local command executor and keep local desktop automation registration opt-in.
+	// Keep the daemon-specific command executor hook, but let sopbackend own the shared bootstrap.
 	sharedagent.SetLocalCommandExecutor(runLocalCommand)
-
-	// For local agent, enable desktop automation with a conservative default policy.
-	sharedagent.SetLocalDesktopAutomationEnabled(true)
-	sharedagent.SetAutomationPolicy(sharedagent.AutomationPolicy{
-		Enabled:               true,
-		AllowShellCommands:    true,
-		AllowEmail:            false,
-		RequireApproval:       true,
-		DefaultTimeoutSeconds: 600,
-		MaxTimeoutSeconds:     1800,
-	})
 
 	// Load configuration using sopbackend
 	resolvedConfig, created, err := ensureConfigPath(*configPath)
@@ -104,19 +95,19 @@ func main() {
 	}
 	localRuntimeConfigPath = resolvedConfig
 
-	// Load sopbackend configuration exactly like the httpserver does
-	if _, err := os.Stat(resolvedConfig); err == nil {
-		if err := sopbackend.LoadConfig(resolvedConfig); err != nil {
-			log.Printf("Warning: could not load sopbackend config: %v", err)
-		} else {
-			sopbackend.SetConfigFile(resolvedConfig)
-			if _, err := sopbackend.LoadModelCatalog(resolvedConfig); err != nil {
-				log.Printf("Warning: could not load model catalog: %v", err)
-			}
-			log.Printf("Loaded daemon configuration from: %s", resolvedConfig)
-		}
-	} else if _, err := sopbackend.LoadModelCatalog(""); err != nil {
-		log.Printf("Warning: could not load model catalog: %v", err)
+	// Load sopbackend configuration exactly like the httpserver does and initialize it once.
+	policy := sharedagent.AutomationPolicy{
+		Enabled:               true,
+		AllowShellCommands:    true,
+		AllowEmail:            false,
+		RequireApproval:       true,
+		DefaultTimeoutSeconds: 600,
+		MaxTimeoutSeconds:     1800,
+	}
+	if _, err := sopbackend.BootstrapRuntime(context.Background(), resolvedConfig, sopbackend.RuntimeOptions{EnableLocalAutomation: true, AutomationPolicy: &policy}, *port, nil); err != nil {
+		log.Printf("Warning: backend bootstrap failed: %v", err)
+	} else {
+		log.Printf("Loaded daemon configuration from: %s", resolvedConfig)
 	}
 
 	// Auto-provision system DB if it doesn't exist
@@ -158,21 +149,6 @@ func main() {
 
 	// Disable sopbackend's auth since we handle it ourselves
 	sopbackend.SetDisableAuth(true)
-
-	// Initialize sopbackend once for the daemon runtime with local automation enabled.
-	if len(cfg.Databases) > 0 || cfg.SystemDB != nil {
-		policy := sharedagent.AutomationPolicy{
-			Enabled:               true,
-			AllowShellCommands:    true,
-			AllowEmail:            false,
-			RequireApproval:       true,
-			DefaultTimeoutSeconds: 600,
-			MaxTimeoutSeconds:     1800,
-		}
-		if err := sopbackend.Initialize(context.Background(), sopbackend.RuntimeOptions{EnableLocalAutomation: true, AutomationPolicy: &policy}); err != nil {
-			log.Printf("Warning: backend initialization failed: %v", err)
-		}
-	}
 
 	// Load model catalog from sopbackend
 	catalog := sopbackend.GetModelCatalog()
@@ -335,7 +311,11 @@ var localCommandSessionState = struct {
 }
 
 func runLocalCommand(ctx context.Context, req sharedagent.LocalCommandRequest) (string, error) {
-	return runLocalCommandWithWorkingDir(ctx, req.Command, req.Reasoning, req.WorkingDir, req.TimeoutSeconds, req.SessionID)
+	result, err := runLocalCommandWithWorkingDir(ctx, req.Command, req.Reasoning, req.WorkingDir, req.TimeoutSeconds, req.SessionID)
+	if err == nil && req.StreamOutput != nil {
+		req.StreamOutput(result)
+	}
+	return result, err
 }
 
 func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, workingDir string, timeoutSeconds int, sessionID string) (string, error) {
@@ -465,6 +445,9 @@ func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, work
 		localCommandSessionState.mu.Unlock()
 	}
 	resp := ExecuteResponse{Stdout: stdout.String(), Stderr: stderr.String()}
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("content", fmt.Sprintf("🛠️ Result from local_command:\n%s", strings.TrimSpace(resp.Stdout)))
+	}
 	if err != nil {
 		resp.Error = err.Error()
 		if exitErr, ok := err.(*exec.ExitError); ok {

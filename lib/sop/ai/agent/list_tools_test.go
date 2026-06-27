@@ -38,6 +38,92 @@ func TestListTools(t *testing.T) {
 	}
 }
 
+func TestListToolsFormatterIsSharedAcrossServiceAndToolPaths(t *testing.T) {
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.Background()
+	payload := &ai.SessionPayload{CurrentDB: "system"}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
+	agent.registerTools(ctx)
+
+	toolOutput, err := agent.Execute(ctx, "list_tools", nil)
+	if err != nil {
+		t.Fatalf("list_tools tool execution failed: %v", err)
+	}
+
+	svc := &Service{registry: map[string]ai.Agent[map[string]any]{"copilot": agent}, session: &RunnerSession{}}
+	serviceOutput, handled, err := svc.handleSessionCommand(ctx, "/list_tools", nil)
+	if err != nil {
+		t.Fatalf("service list_tools failed: %v", err)
+	}
+	if !handled {
+		t.Fatal("service list_tools should be handled")
+	}
+
+	if !strings.Contains(toolOutput, "### Available Tools") || !strings.Contains(serviceOutput, "### Available Tools") {
+		t.Fatalf("both list_tools outputs should include the shared header, got tool=%q service=%q", toolOutput, serviceOutput)
+	}
+	if !strings.Contains(toolOutput, "/list_databases") || !strings.Contains(serviceOutput, "/list_databases") {
+		t.Fatalf("both list_tools outputs should share the same slash-prefixed entry, got tool=%q service=%q", toolOutput, serviceOutput)
+	}
+	if strings.Contains(toolOutput, "\n- `/") || strings.Contains(serviceOutput, "\n- `/") {
+		t.Fatalf("list_tools output should not use bullet prefixes in front of slash commands, got tool=%q service=%q", toolOutput, serviceOutput)
+	}
+}
+
+func TestListToolsFormatterUsesPlainSlashCommandLines(t *testing.T) {
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "system"})
+	agent.registerTools(ctx)
+
+	output, err := agent.Execute(ctx, "list_tools", nil)
+	if err != nil {
+		t.Fatalf("list_tools failed: %v", err)
+	}
+
+	if strings.Contains(output, "\n- `/") {
+		t.Fatalf("expected slash-prefixed tool lines without bullet prefixes, got:\n%s", output)
+	}
+	if !strings.Contains(output, "\n/list_databases:") {
+		t.Fatalf("expected /list_databases line in output, got:\n%s", output)
+	}
+}
+
+func TestServiceListToolsStreamsContentWhenEventStreamerIsPresent(t *testing.T) {
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: "system"})
+	agent.registerTools(ctx)
+
+	var streamed []string
+	ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, func(eventType string, payload any) {
+		if eventType != "content" {
+			return
+		}
+		if msg, ok := payload.(string); ok {
+			streamed = append(streamed, msg)
+		}
+	})
+
+	svc := &Service{registry: map[string]ai.Agent[map[string]any]{"copilot": agent}, session: &RunnerSession{}}
+	out, handled, err := svc.handleSessionCommand(ctx, "/list_tools", nil)
+	if err != nil {
+		t.Fatalf("service list_tools failed: %v", err)
+	}
+	if !handled {
+		t.Fatal("service list_tools should be handled")
+	}
+	if len(streamed) == 0 {
+		t.Fatalf("expected list_tools content to be streamed, got output=%q", out)
+	}
+	if !strings.Contains(streamed[0], "### Available Tools") {
+		t.Fatalf("expected streamed content to include the tool inventory header, got %q", streamed[0])
+	}
+	if !strings.Contains(out, "### Available Tools") {
+		t.Fatalf("expected the handler to return the tool inventory text alongside the stream, got %q", out)
+	}
+}
+
 func TestListTools_ReRegistersAutomationToolsAfterPolicyEnablement(t *testing.T) {
 	SetLocalDesktopAutomationEnabled(false)
 	SetAutomationPolicy(DefaultAutomationPolicy())

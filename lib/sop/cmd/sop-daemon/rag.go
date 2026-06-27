@@ -314,9 +314,10 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 	}
 
 	if svc, err := autoProvisionSharedCopilotService(context.Background()); err == nil {
+		log.Printf("daemon newLocalRAGService: using auto-provisioned shared service")
 		return &localRAGService{service: svc, shellSessions: newShellSessionState()}, nil
 	} else {
-		log.Printf("falling back to local runtime config for daemon agent bootstrap: %v", err)
+		log.Printf("daemon newLocalRAGService: falling back to local runtime config: %v", err)
 	}
 
 	cfg, err := agent.LoadConfigFromFile(configPath)
@@ -336,6 +337,7 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 }
 
 func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string]any], error) {
+	log.Printf("daemon autoProvisionSharedCopilotService: starting")
 	for _, agentID := range []string{"copilot", "sql_core"} {
 		if agentSvc, ok := sopbackend.GetLoadedAgents()[agentID]; ok && agentSvc != nil {
 			return agentSvc, nil
@@ -343,7 +345,34 @@ func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string
 	}
 	for _, agentSvc := range sopbackend.GetLoadedAgents() {
 		if agentSvc != nil {
+			log.Printf("daemon autoProvisionSharedCopilotService: using fallback loaded agent")
 			return agentSvc, nil
+		}
+	}
+
+	policy := agent.AutomationPolicy{
+		Enabled:               true,
+		AllowShellCommands:    true,
+		AllowEmail:            false,
+		RequireApproval:       true,
+		DefaultTimeoutSeconds: 600,
+		MaxTimeoutSeconds:     1800,
+	}
+	if err := sopbackend.Initialize(ctx, sopbackend.RuntimeOptions{EnableLocalAutomation: true, AutomationPolicy: &policy}); err != nil {
+		log.Printf("daemon autoProvisionSharedCopilotService: shared backend bootstrap failed: %v", err)
+	} else {
+		log.Printf("daemon autoProvisionSharedCopilotService: shared backend initialized")
+		for _, agentID := range []string{"copilot", "sql_core"} {
+			if agentSvc, ok := sopbackend.GetLoadedAgents()[agentID]; ok && agentSvc != nil {
+				log.Printf("daemon autoProvisionSharedCopilotService: using initialized agent: %s", agentID)
+				return agentSvc, nil
+			}
+		}
+		for _, agentSvc := range sopbackend.GetLoadedAgents() {
+			if agentSvc != nil {
+				log.Printf("daemon autoProvisionSharedCopilotService: using initialized fallback agent")
+				return agentSvc, nil
+			}
 		}
 	}
 
@@ -435,6 +464,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx = context.WithValue(ctx, "session_payload", payload)
+	ctx = sopbackend.InjectSharedRuntimeContext(ctx, nil, nil)
 
 	cfg := ai.NewConfigMap()
 	cfg.Set("payload", payload)
@@ -444,24 +474,52 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	cfg.Set("hq_user_id", strings.TrimSpace(req.HQ.UserID))
 	cfg.Set("hq_session_id", strings.TrimSpace(req.HQ.SessionID))
 
-	log.Printf("daemon ask request received: query=%q session=%q", req.Query, payload.SessionID)
-	if fallbackAnswer, handled, fallbackErr := s.trySimpleShellCommandFallback(req.Query, sessionID); handled {
+	normalizedQuery := normalizeAgentQuery(req.Query)
+	payload.CurrentUserQuery = req.Query
+	cfg.Set("payload", payload)
+
+	log.Printf("daemon handleAsk: request received query=%q session=%q normalized_query=%q", req.Query, payload.SessionID, normalizedQuery)
+	if strings.HasPrefix(normalizedQuery, "/") && hasSharedBackendAgents() {
+		answer, err := sopbackend.AskSharedAgent(ctx, normalizedQuery, cfg)
+		if err != nil {
+			log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
+			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
+			return
+		}
+		log.Printf("daemon handleAsk: completed via shared backend handler query=%q answer_len=%d", req.Query, len(answer))
+		respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
+		return
+	}
+	if fallbackAnswer, handled, fallbackErr := s.trySimpleShellCommandFallback(normalizedQuery, sessionID); handled {
 		if fallbackErr != nil {
-			log.Printf("daemon shell fallback failed: query=%q error=%v", req.Query, fallbackErr)
+			log.Printf("daemon shell fallback failed: query=%q error=%v", normalizedQuery, fallbackErr)
 			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: fallbackErr.Error()})
 			return
 		}
-		log.Printf("daemon ask request completed via shell fallback: query=%q answer_len=%d", req.Query, len(fallbackAnswer))
+		log.Printf("daemon handleAsk: completed via shell fallback query=%q answer_len=%d", normalizedQuery, len(fallbackAnswer))
 		respondJSON(w, http.StatusOK, AskResponse{Answer: fallbackAnswer})
 		return
 	}
-	answer, err := s.service.Ask(ctx, req.Query, cfg)
+	ctx = sopbackend.InjectSharedRuntimeContext(ctx, nil, nil)
+	if s.service != nil {
+		answer, err := s.service.Ask(ctx, normalizedQuery, cfg)
+		if err != nil {
+			log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
+			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
+			return
+		}
+		log.Printf("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
+		respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
+		return
+	}
+
+	answer, err := sopbackend.AskSharedAgent(ctx, normalizedQuery, cfg)
 	if err != nil {
 		log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
 		respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
 		return
 	}
-	log.Printf("daemon ask request completed: query=%q answer_len=%d", req.Query, len(answer))
+	log.Printf("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
 	respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
 }
 
@@ -478,9 +536,45 @@ func looksLikeAgentRoutingQuery(query string) bool {
 		lower == "sop"
 }
 
+func hasSharedBackendAgents() bool {
+	for _, agentSvc := range sopbackend.GetLoadedAgents() {
+		if agentSvc != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAgentQuery(query string) string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return trimmed
+	}
+	if strings.HasPrefix(trimmed, "/") {
+		return trimmed
+	}
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "list_tools", "list_databases", "list_stores", "switch_database", "last-tool", "last_tool",
+		"create", "step", "save", "show", "parameterize", "refine", "save_as", "run",
+		"insert_step", "delete_step", "update_step", "reorder_steps", "delete", "select", "add", "update", "delete_record",
+		"list_scripts", "get_script_details", "save_script", "save_step", "save_last_step", "refactor_last_interaction",
+		"set_verbose", "execute_script", "begin_tx", "commit_tx", "rollback_tx", "open_store", "scan", "filter", "join", "join_right", "project", "limit", "sort",
+		"manage_transaction", "mint_to_space", "delete_space", "enrich_space", "update_space_config", "read_space_config",
+		"vectorize_space", "vectorize_space_categories", "vectorize_space_items", "list_directory", "read_file", "write_file",
+		"copy_file", "rename_file", "delete_file", "delete_directory", "create_directory", "path_exists", "stat_path",
+		"search_repo_files", "grep_repo_text", "run_repo_tests", "execute_local_command", "send_email", "git_status", "git_branch",
+		"git_checkout", "git_commit", "git_diff", "git_log", "git_pull", "git_push", "postgres_list_tables", "postgres_query",
+		"splunk_list_saved_searches", "splunk_search", "handoff_to_avatar":
+		return "/" + trimmed
+	default:
+		return trimmed
+	}
+}
+
 func (s *localRAGService) trySimpleShellCommandFallback(query, sessionID string) (string, bool, error) {
 	trimmed := strings.TrimSpace(query)
-	if trimmed == "" || strings.HasPrefix(trimmed, "/") || looksLikeAgentRoutingQuery(trimmed) {
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") || looksLikeAgentRoutingQuery(trimmed) || normalizeAgentQuery(trimmed) != trimmed {
 		return "", false, nil
 	}
 	if strings.Contains(trimmed, "\n") || strings.Contains(trimmed, "\r") {

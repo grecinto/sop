@@ -2275,7 +2275,7 @@ func (a *CopilotAgent) handleSlashCommand(ctx context.Context, query string, gen
 				}
 				return true, fmt.Sprintf("Error executing command '%s' (and no AI Copilot available to interpret it): %v", toolName, execErr), fmt.Errorf("tool fallback failed")
 			}
-			return true, fmt.Sprintf("Error executing command '%s': %v", toolName, execErr), fmt.Errorf("tool execution failed")
+			return true, fmt.Sprintf("Tool '%s' failed.", toolName), fmt.Errorf("tool execution failed")
 		}
 		return true, res, nil
 	}
@@ -3422,7 +3422,7 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 	p = ai.GetSessionPayload(ctx)
 	preExistingTx := resolvePayloadTx(p, dbName)
 
-	if !dbFound && toolName != "list_databases" && toolName != "list_scripts" && toolName != "get_script_details" && toolName != "list_tools" && toolName != "handoff_to_avatar" && toolName != "execute_local_command" && toolName != "send_email" {
+	if !dbFound && toolName != "list_databases" && toolName != "list_scripts" && toolName != "get_script_details" && toolName != "list_tools" && toolName != "handoff_to_avatar" && toolName != "execute_local_command" && toolName != "send_email" && toolName != "search_repo_files" && toolName != "grep_repo_text" && toolName != "run_repo_tests" && toolName != "read_file" && toolName != "write_file" && toolName != "patch_file" && toolName != "create_directory" && toolName != "rename_file" && toolName != "delete_file" && toolName != "delete_directory" && toolName != "copy_file" && toolName != "list_directory" && toolName != "path_exists" && toolName != "stat_path" && toolName != "git_status" && toolName != "git_diff" && toolName != "git_log" && toolName != "git_branch" && toolName != "git_checkout" && toolName != "git_commit" && toolName != "git_pull" && toolName != "git_push" {
 		// Debugging
 		var keys []string
 		if a.systemDB != nil {

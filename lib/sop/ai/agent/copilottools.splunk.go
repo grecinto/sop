@@ -123,5 +123,27 @@ func executeSplunkSearchNative(ctx context.Context, cfg splunkConfig, query stri
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("splunk request failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	return string(body), nil
+	payload := strings.TrimSpace(string(body))
+	if payload != "" {
+		if strings.HasPrefix(payload, "[") {
+			var items []json.RawMessage
+			if err := json.Unmarshal([]byte(payload), &items); err == nil {
+				for _, item := range items {
+					emitAutomationToolStreamContent(ctx, string(item))
+				}
+				return payload, nil
+			}
+		}
+		if strings.Contains(payload, "\n") {
+			for _, line := range strings.Split(payload, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if trimmed != "" {
+					emitAutomationToolStreamContent(ctx, trimmed)
+				}
+			}
+			return payload, nil
+		}
+		emitAutomationToolStreamContent(ctx, payload)
+	}
+	return payload, nil
 }

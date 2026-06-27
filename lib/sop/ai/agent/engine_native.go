@@ -339,7 +339,7 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 				continue
 			}
 			log.Error("Native ReAct Engine Tool Failure", "tool", toolCall.Name, "error", err)
-			return ai.ReasoningResponse{}, fmt.Errorf("tool execution failed: %w", err)
+			return ai.ReasoningResponse{}, fmt.Errorf("tool execution failed")
 		}
 		result, hint := unwrapToolResultEnvelope(rawResult)
 		emitVerboseProgress(ctx, "Tool `%s` completed.", toolCall.Name)

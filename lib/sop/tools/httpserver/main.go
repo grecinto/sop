@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
+	sharedagent "github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -35,6 +36,17 @@ func modelCatalogJSON() template.JS {
 		return template.JS("{}")
 	}
 	return template.JS(b)
+}
+
+func defaultRuntimeAutomationPolicy() sharedagent.AutomationPolicy {
+	policy := sharedagent.DefaultAutomationPolicy()
+	policy.Enabled = false
+	policy.AllowShellCommands = false
+	policy.AllowEmail = false
+	policy.RequireApproval = true
+	policy.DefaultTimeoutSeconds = 600
+	policy.MaxTimeoutSeconds = 1800
+	return policy
 }
 
 func main() {
@@ -98,46 +110,20 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Load configuration
-	targetConfigPath := configFile
-	if targetConfigPath == "" {
-		targetConfigPath = sopbackend.FindExistingConfigFile()
-	}
-	if targetConfigPath == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			targetConfigPath = filepath.Join(cwd, "config.json")
-		} else {
-			targetConfigPath = "config.json"
-		}
-	}
-
-	if _, err := os.Stat(targetConfigPath); err == nil {
-		err := sopbackend.LoadConfig(targetConfigPath)
-		if err != nil {
-			log.Error(fmt.Sprintf("Failed to load config file: %v", err))
-		} else {
-			sopbackend.SetConfigFile(targetConfigPath)
-			if _, err := sopbackend.LoadModelCatalog(targetConfigPath); err != nil {
-				log.Error(fmt.Sprintf("Failed to load model catalog: %v", err))
-			}
-			log.Debug(fmt.Sprintf("Loaded configuration from: %s", targetConfigPath))
-			config := sopbackend.GetConfig()
-			if len(config.Databases) == 0 && config.SystemDB == nil {
-				log.Warn(fmt.Sprintf("Loaded configuration file '%s' but found 0 databases defined.", targetConfigPath))
-			}
-		}
-	} else if _, err := sopbackend.LoadModelCatalog(""); err != nil {
-		log.Error(fmt.Sprintf("Failed to load model catalog: %v", err))
-	}
-
-	// Set CLI flags if provided
-	if port != 0 {
-		sopbackend.SetPort(port)
-	}
+	// Load configuration and initialize the shared backend once.
+	effectiveProductionMode := productionMode
 	if !wasProductionFlagPassed {
-		sopbackend.SetProductionMode(true)
+		effectiveProductionMode = true
+	}
+	targetConfigPath, err := sopbackend.BootstrapRuntime(context.Background(), configFile, sopbackend.RuntimeOptions{}, port, &effectiveProductionMode)
+	if err != nil {
+		log.Error(fmt.Sprintf("Failed to initialize shared backend: %v", err))
 	} else {
-		sopbackend.SetProductionMode(productionMode)
+		log.Debug(fmt.Sprintf("Loaded configuration from: %s", targetConfigPath))
+		config := sopbackend.GetConfig()
+		if len(config.Databases) == 0 && config.SystemDB == nil {
+			log.Warn(fmt.Sprintf("Loaded configuration file '%s' but found 0 databases defined.", targetConfigPath))
+		}
 	}
 
 	// Path validation and warning checks

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"unicode"
 
+	log "log/slog"
+
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/database"
@@ -91,60 +93,22 @@ func (s *Service) handleSessionCommand(ctx context.Context, query string, db *da
 
 	// /list_tools
 	if query == "/list_tools" {
-		var sb strings.Builder
-		sb.WriteString(`### Available Tools
-
-Use these tools via slash(/) commands. Arguments can be positional (e.g. ` + "`/cmd arg1`" + `) or named (e.g. ` + "`/cmd key=value`" + `).
-
-**Session Commands**
-- ` + "`/create <name> [--category <cat>] [--autosave]`" + `: Start drafting a new script.
-- ` + "`/step [instruction]`" + `: Add the last tool call or a new instruction to the draft.
-- ` + "`/save`" + `: Save the current draft.
-- ` + "`/show <name> [--json]`" + `: Display a saved script.
-- ` + "`/parameterize <name> <param> <value>`" + `: Replace hardcoded values with parameters.
-- ` + "`/refine <name> [feedback]`" + `: Refine a script using AI.
-- ` + "`/save_as <name>`" + `: Save the last executed tool as a script.
-- ` + "`/run <script> [args...]`" + `: Execute a saved script.
-- ` + "`/list_databases`" + `: List available databases.
-- ` + "`/switch_database <name>`" + `: Switch active database.
-- ` + "`/list_stores [database]`" + `: List stores in a database.
-- ` + "`/last-tool`" + `: Show instructions for the last executed tool.
-- ` + "`/insert_step <name> <index> <type> <desc> <name> [params...]`" + `: Insert a step.
-- ` + "`/delete_step <name> <index>`" + `: Delete a step.
-- ` + "`/update_step <name> <index> <desc> <name> [params...]`" + `: Update a step.
-- ` + "`/reorder_steps <name> <from> <to>`" + `: Reorder steps.
-- ` + "`/delete <name>`" + `: Delete a script.
-- ` + "`/select ...`" + `: High-level select.
-- ` + "`/add ...`" + `: High-level add.
-- ` + "`/update ...`" + `: High-level update.
-- ` + "`/delete_record ...`" + `: High-level delete record.
-
-**Agent Tools**
-`)
-
-		// Delegate to the agent's tool execution to get its list
-
-		// Find the Data Admin agent in the registry
-		var adminAgent *CopilotAgent
-		for _, a := range s.registry {
-			if da, ok := a.(*CopilotAgent); ok {
-				adminAgent = da
-				break
-			}
+		log.Info("Service.handleSessionCommand.list_tools: resolving inventory")
+		tools, err := s.ListTools(ctx)
+		if err != nil {
+			return "", true, fmt.Errorf("list tools failed: %w", err)
 		}
-
-		if adminAgent != nil {
-			res, err := adminAgent.toolListTools(ctx, nil)
-			if err == nil {
-				sb.WriteString(res)
-			} else {
-				sb.WriteString(fmt.Sprintf("\n(Error listing agent tools: %v)\n", err))
-			}
-		} else {
-			sb.WriteString("\n(Data Admin Agent not found - other tools unavailable)\n")
+		if len(tools) == 0 {
+			log.Info("Service.handleSessionCommand.list_tools: no tools registered")
+			return "", true, fmt.Errorf("no tools registered")
 		}
+		log.Info("Service.handleSessionCommand.list_tools: inventory ready", "tool_count", len(tools))
 
-		return sb.String(), true, nil
+		inventory := formatToolInventoryList(tools)
+		if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+			streamer("content", inventory)
+		}
+		return inventory, true, nil
 	}
 
 	// /list_stores [database]
@@ -1303,7 +1267,7 @@ Use these tools via slash(/) commands. Arguments can be positional (e.g. ` + "`/
 		return fmt.Sprintf("Record '%s' deleted from '%s'.", key, storeName), true, nil
 	}
 
-	if strings.HasPrefix(query, "/list") {
+	if query == "/list" || strings.HasPrefix(query, "/list ") || strings.HasPrefix(query, "/list\t") {
 		args := strings.Fields(query)
 		category := ai.DefaultScriptCategory
 		for i := 1; i < len(args); i++ {

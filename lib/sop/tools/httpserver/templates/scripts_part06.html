@@ -686,33 +686,120 @@
         }
     }
 
+    function looksLikeMarkdownContent(text) {
+        const normalized = String(text ?? '').trim();
+        if (!normalized) {
+            return false;
+        }
+
+        if (/^```/.test(normalized)) {
+            return true;
+        }
+
+        if (/^#{1,6}\s/m.test(normalized)) {
+            return true;
+        }
+
+        if (/^\s*([-*+]|(\d+\.))\s+/m.test(normalized)) {
+            return true;
+        }
+
+        if (/\*\*[^*]+\*\*/.test(normalized) || /`[^`]+`/.test(normalized) || /\[.+\]\(.+\)/.test(normalized)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function splitMessageIntoRenderChunks(text, maxLines = 8, maxChars = 2200) {
+        const normalized = String(text ?? '').replace(/\r\n/g, '\n');
+        if (!normalized) {
+            return [''];
+        }
+
+        if (looksLikeMarkdownContent(normalized)) {
+            return [normalized];
+        }
+
+        const lines = normalized.split('\n');
+        if (lines.length <= maxLines && normalized.length <= maxChars) {
+            return [normalized];
+        }
+
+        const chunks = [];
+        let currentChunk = '';
+
+        lines.forEach((line) => {
+            const candidate = currentChunk ? `${currentChunk}\n${line}` : line;
+            const candidateLines = candidate.split('\n').length;
+            if (!currentChunk) {
+                currentChunk = line;
+                return;
+            }
+
+            if (candidate.length > maxChars || candidateLines > maxLines) {
+                chunks.push(currentChunk);
+                currentChunk = line;
+                return;
+            }
+
+            currentChunk = candidate;
+        });
+
+        if (currentChunk) {
+            chunks.push(currentChunk);
+        }
+
+        return chunks.length > 0 ? chunks : [normalized];
+    }
+
+    function escapeHtml(text) {
+        return String(text ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function renderChatContent(text) {
+        const normalized = String(text ?? '');
+        if (!normalized) {
+            return '';
+        }
+
+        if (typeof window.marked !== 'undefined' && typeof window.marked.parse === 'function' && looksLikeMarkdownContent(normalized)) {
+            return window.marked.parse(normalized);
+        }
+
+        return `<div class="chat-plain-text" style="white-space: pre-wrap;">${escapeHtml(normalized)}</div>`;
+    }
+
     function appendChatMessage(role, text) {
         pruneChatHistory();
-        console.log("Appending message:", role, text); // Debug Log
         const history = document.getElementById('chat-history');
-        const div = document.createElement('div');
-        div.className = `chat-message ${role}`;
-        const msgId = 'msg-' + generateUUID();
-        div.id = msgId;
-        if (role === 'ai') currentAiMsgId = msgId;
-        
-        // Simple markdown-like parsing for code blocks
-        if (text.includes('```')) {
-            text = text.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>');
-        }
-        
-        div.innerHTML = text.replace(/\n/g, '<br>');
+        if (!history) return null;
 
-        history.appendChild(div);
-        
-        console.log("Message appended to history. History child count:", history.children.length); // Debug Log
+        const chunks = splitMessageIntoRenderChunks(text);
+        let lastId = null;
 
-        // Auto-scroll to bottom
+        chunks.forEach((chunk, index) => {
+            const div = document.createElement('div');
+            div.className = `chat-message ${role}`;
+            const msgId = 'msg-' + generateUUID();
+            div.id = msgId;
+            lastId = msgId;
+            if (role === 'ai' && index === 0) currentAiMsgId = msgId;
+
+            div.innerHTML = renderChatContent(chunk);
+            history.appendChild(div);
+        });
+
         requestAnimationFrame(() => {
             history.scrollTop = history.scrollHeight;
         });
-        
-        return div.id;
+
+        return lastId;
     }
 
     function handleFeedback(e, msgId, type) {

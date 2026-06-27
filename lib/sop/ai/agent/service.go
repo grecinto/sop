@@ -82,6 +82,14 @@ func (s *Service) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
 	return (&ServiceToolExecutor{s: s}).ListTools(ctx)
 }
 
+// Execute routes a tool call through the service-backed registry.
+func (s *Service) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("service not initialized")
+	}
+	return (&ServiceToolExecutor{s: s}).Execute(ctx, toolName, args)
+}
+
 // Clone creates a new isolated instance of the agent sharing read-only components.
 func (s *Service) RunnerSession() *RunnerSession {
 	if s == nil {
@@ -1965,10 +1973,28 @@ func (s *Service) ask(ctx context.Context, req AskRequest) (AskResponse, error) 
 	ctx = context.WithValue(ctx, "session_payload", req.Session)
 	ctx = context.WithValue(ctx, RunnerSessionKey, s.session)
 
-	// 5. Perform topic routing and short-term memory thread promotion/initialization
+	// Ensure tools are registered before any direct slash execution so commands like
+	// /list_directory resolve through the shared executor instead of failing as unknown tools.
+	s.registerTools()
+
+	// 5. Handle direct slash commands before any pipeline or LLM work so tools like
+	// /list_directory run via the shared executor instead of failing in a configured pipeline.
+	if trimmed := strings.TrimSpace(query); strings.HasPrefix(trimmed, "/") {
+		if engineResp, handled, err := handleDirectSlashReasoningRequest(ctx, ai.ReasoningRequest{
+			UserQuery: trimmed,
+			Executor:  req.Executor,
+		}); handled {
+			if err != nil {
+				return AskResponse{}, err
+			}
+			return AskResponse{FinalText: engineResp.FinalText, UpdatedSession: req.Session, ToolCalls: engineResp.ToolCalls}, nil
+		}
+	}
+
+	// 6. Perform topic routing and short-term memory thread promotion/initialization
 	topicResult := s.performTopicRoutingWithRequest(ctx, query, req.Session)
 
-	// 6. Short-circuit to configured pipeline when present
+	// 7. Short-circuit to configured pipeline when present
 	if len(s.pipeline) > 0 {
 		// TODO: Refactor RunPipeline to accept explicit parameters
 		// For now, fall back to context-based approach for pipeline
