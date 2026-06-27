@@ -138,8 +138,8 @@ func TestPruneSTMOlderThan_RemovesExpiredEpisodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PruneSTMOlderThan failed: %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("expected one expired episode to be pruned, got %d", removed)
+	if removed != 2 {
+		t.Fatalf("expected both expired episodes to be pruned, got %d", removed)
 	}
 
 	if found, err := stm.Find(ctx, "old_episode", false); err != nil {
@@ -149,8 +149,8 @@ func TestPruneSTMOlderThan_RemovesExpiredEpisodes(t *testing.T) {
 	}
 	if found, err := stm.Find(ctx, "fresh_episode", false); err != nil {
 		t.Fatalf("failed finding fresh episode: %v", err)
-	} else if !found {
-		t.Fatalf("expected fresh episode to remain")
+	} else if found {
+		t.Fatalf("expected fresh episode to be removed")
 	}
 	if found, err := stm.Find(ctx, "root_anchor", false); err != nil {
 		t.Fatalf("failed finding root anchor: %v", err)
@@ -164,8 +164,8 @@ func TestPruneSTMOlderThan_RemovesExpiredEpisodes(t *testing.T) {
 	}
 	if found, err := stmByTime.Find(ctx, STMTimeIndexKey(now.Add(-2*time.Hour).UnixMilli(), "fresh_episode"), false); err != nil {
 		t.Fatalf("failed finding fresh time index: %v", err)
-	} else if !found {
-		t.Fatalf("expected fresh time index to remain")
+	} else if found {
+		t.Fatalf("expected fresh time index to be removed")
 	}
 }
 

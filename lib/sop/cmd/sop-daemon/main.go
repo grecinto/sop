@@ -159,10 +159,18 @@ func main() {
 	// Disable sopbackend's auth since we handle it ourselves
 	sopbackend.SetDisableAuth(true)
 
-	// Initialize agents from sopbackend exactly like httpserver does
+	// Initialize sopbackend once for the daemon runtime with local automation enabled.
 	if len(cfg.Databases) > 0 || cfg.SystemDB != nil {
-		if err := sopbackend.InitAgents(context.Background()); err != nil {
-			log.Printf("Warning: agent initialization failed: %v", err)
+		policy := sharedagent.AutomationPolicy{
+			Enabled:               true,
+			AllowShellCommands:    true,
+			AllowEmail:            false,
+			RequireApproval:       true,
+			DefaultTimeoutSeconds: 600,
+			MaxTimeoutSeconds:     1800,
+		}
+		if err := sopbackend.Initialize(context.Background(), sopbackend.RuntimeOptions{EnableLocalAutomation: true, AutomationPolicy: &policy}); err != nil {
+			log.Printf("Warning: backend initialization failed: %v", err)
 		}
 	}
 

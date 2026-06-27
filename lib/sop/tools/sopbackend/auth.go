@@ -578,6 +578,33 @@ func CanManageEnvironments(auth sop.AuthContext) bool {
 	return true
 }
 
+func requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return RequireAuth(next)
+}
+
+func handleRoot(w http.ResponseWriter, r *http.Request) {
+	if HasConfigFileOnDisk() {
+		handleLoginPage(w, r)
+		return
+	}
+	http.Redirect(w, r, "/app", http.StatusFound)
+}
+
+func handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = fmt.Fprintf(w, `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>SOP Login</title>
+  </head>
+  <body>
+    <h1>SOP Login</h1>
+    <p>Please sign in.</p>
+  </body>
+</html>`)
+}
+
 func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Debug("requireAuth: handler invocation", "handler", handlerName(next), "method", r.Method, "path", r.URL.Path)

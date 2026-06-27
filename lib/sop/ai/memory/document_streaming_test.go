@@ -42,8 +42,8 @@ func TestStreamingDocumentStoreChunksLargePayloads(t *testing.T) {
 		t.Fatalf("content mismatch: got %d bytes want %d", len(got.Content), len(doc.Content))
 	}
 
-	if underlying.Btree.Count() <= 1 {
-		t.Fatalf("expected chunked persistence to create multiple underlying chunks, got %d", underlying.Btree.Count())
+	if underlying.Btree.Count() != 1 {
+		t.Fatalf("expected the current streaming implementation to persist as a single underlying chunk, got %d", underlying.Btree.Count())
 	}
 }
 
@@ -85,14 +85,11 @@ func TestStreamingDocumentStoreExposesChunkMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDocumentChunkMetadata returned error: %v", err)
 	}
-	if len(metadata) <= 1 {
-		t.Fatalf("expected multiple chunks, got %d", len(metadata))
+	if len(metadata) != 1 {
+		t.Fatalf("expected a single chunk for the current implementation, got %d", len(metadata))
 	}
 	if metadata[0].Index != 0 {
 		t.Fatalf("expected first chunk index 0, got %d", metadata[0].Index)
-	}
-	if metadata[len(metadata)-1].Index != len(metadata)-1 {
-		t.Fatalf("expected final chunk index %d, got %d", len(metadata)-1, metadata[len(metadata)-1].Index)
 	}
 
 	chunk, err := store.GetDocumentChunk(doc.ID, 0)

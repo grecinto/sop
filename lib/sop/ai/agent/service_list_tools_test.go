@@ -61,3 +61,33 @@ func TestServiceListTools(t *testing.T) {
 		t.Error("Output should contain /add command")
 	}
 }
+
+func TestServiceListToolsWithoutSessionPayload(t *testing.T) {
+	registry := make(map[string]ai.Agent[map[string]any])
+
+	da := NewCopilotAgent(Config{}, nil, nil)
+	da.registerTools(context.Background())
+	registry["random_key_name"] = da
+
+	svc := &Service{
+		registry: registry,
+		session:  &RunnerSession{},
+	}
+
+	out, handled, err := svc.handleSessionCommand(context.Background(), "/list_tools", nil)
+	if err != nil {
+		t.Fatalf("Handler failed without session payload: %v", err)
+	}
+	if !handled {
+		t.Fatal("Handler should have handled the command without session payload")
+	}
+	if len(out) == 0 {
+		t.Fatal("Output should not be empty without session payload")
+	}
+	if strings.Contains(out, "Error listing agent tools") {
+		t.Fatalf("Output should not contain an agent-listing error, got: %s", out)
+	}
+	if !strings.Contains(out, "/add") {
+		t.Fatalf("Output should contain /add even without session payload, got: %s", out)
+	}
+}

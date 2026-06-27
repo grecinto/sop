@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop/ai"
+	sharedagent "github.com/sharedcode/sop/ai/agent"
 )
 
 // GetConfig returns a copy of the current configuration
@@ -48,9 +49,35 @@ func GetModelCatalog() ModelCatalog {
 	return modelCatalog
 }
 
-// InitAgents initializes the agents with the current configuration
+// RuntimeOptions customizes backend initialization for a specific app/runtime.
+type RuntimeOptions struct {
+	EnableLocalAutomation bool
+	AutomationPolicy      *sharedagent.AutomationPolicy
+}
+
+// Initialize performs shared backend initialization for a specific runtime.
+func Initialize(ctx context.Context, opts RuntimeOptions) error {
+	if opts.EnableLocalAutomation {
+		sharedagent.SetLocalDesktopAutomationEnabled(true)
+		if opts.AutomationPolicy != nil {
+			sharedagent.SetAutomationPolicy(*opts.AutomationPolicy)
+		} else {
+			sharedagent.SetAutomationPolicy(sharedagent.DefaultAutomationPolicy())
+		}
+	} else {
+		sharedagent.SetLocalDesktopAutomationEnabled(false)
+		sharedagent.SetAutomationPolicy(sharedagent.DefaultAutomationPolicy())
+	}
+
+	if err := initAgents(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// InitAgents initializes the agents with the current configuration.
 func InitAgents(ctx context.Context) error {
-	return initAgents(ctx)
+	return Initialize(ctx, RuntimeOptions{})
 }
 
 // RegisterAllHandlers registers all backend API handlers on the provided mux

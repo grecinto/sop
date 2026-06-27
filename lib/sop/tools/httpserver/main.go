@@ -203,7 +203,7 @@ func main() {
 
 	// Initialize backend (agents, RBAC, sessions)
 	if len(config.Databases) > 0 || config.SystemDB != nil {
-		if err := sopbackend.InitAgents(context.Background()); err != nil {
+		if err := sopbackend.Initialize(context.Background(), sopbackend.RuntimeOptions{}); err != nil {
 			log.Error(fmt.Sprintf("Failed to initialize agents: %v", err))
 		}
 	}

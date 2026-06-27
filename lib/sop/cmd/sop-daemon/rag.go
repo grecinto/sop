@@ -434,6 +434,8 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		daemonSessionStore.mu.Unlock()
 	}
 
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
 	cfg := ai.NewConfigMap()
 	cfg.Set("payload", payload)
 	cfg.Set("access_token", accessToken)

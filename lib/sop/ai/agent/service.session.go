@@ -134,7 +134,7 @@ Use these tools via slash(/) commands. Arguments can be positional (e.g. ` + "`/
 		}
 
 		if adminAgent != nil {
-			res, err := adminAgent.Execute(ctx, "list_tools", nil)
+			res, err := adminAgent.toolListTools(ctx, nil)
 			if err == nil {
 				sb.WriteString(res)
 			} else {

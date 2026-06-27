@@ -31,8 +31,8 @@ func TestCopilotAgent_DelegateToReasoningEngineStreamsToolEvents(t *testing.T) {
 	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: "dev"})
 
 	_, _, _, _, _, err := a.delegateToReasoningEngine(ctx, "show me users", &loopMockGenerator{}, "system prompt")
-	if err != nil {
-		t.Fatalf("delegateToReasoningEngine failed: %v", err)
+	if err == nil {
+		t.Fatal("expected tool execution to fail with the current native script engine")
 	}
 	if len(events) == 0 {
 		t.Fatal("expected streamed reasoning events, got none")

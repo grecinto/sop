@@ -56,10 +56,6 @@ func main() {
 		panic(err)
 	}
 
-	if err := kb.Close(ctx); err != nil {
-		panic(err)
-	}
-
 	fmt.Println("2) Vectorize categories and items with the real embedder")
 	if err := db.Vectorize(ctx, "demo-cli-kb", nil, embedder, 10); err != nil {
 		panic(err)
