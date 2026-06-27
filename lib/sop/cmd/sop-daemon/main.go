@@ -104,7 +104,7 @@ func main() {
 		DefaultTimeoutSeconds: 600,
 		MaxTimeoutSeconds:     1800,
 	}
-	if _, err := sopbackend.BootstrapRuntime(context.Background(), resolvedConfig, sopbackend.RuntimeOptions{EnableLocalAutomation: true, AutomationPolicy: &policy}, *port, nil); err != nil {
+	if _, err := sopbackend.InitializeRuntime(context.Background(), resolvedConfig, sopbackend.RuntimeOptions{EnableLocalAutomation: true, AutomationPolicy: &policy}, *port, nil); err != nil {
 		log.Printf("Warning: backend bootstrap failed: %v", err)
 	} else {
 		log.Printf("Loaded daemon configuration from: %s", resolvedConfig)

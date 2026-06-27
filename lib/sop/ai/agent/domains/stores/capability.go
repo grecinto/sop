@@ -1,0 +1,89 @@
+package stores
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/sharedcode/sop/ai/agent/capabilities"
+)
+
+const (
+	CapabilityID   = "stores"
+	CapabilityName = "Stores"
+)
+
+type ExecutionContextInput struct {
+	CRUDFlags       map[string]bool
+	DBArtifacts     []string
+	ScriptAuthoring bool
+	ActiveDatabase  string
+}
+
+type Capability struct{}
+
+func NewCapability() *Capability { return &Capability{} }
+
+func (c *Capability) ID() string   { return CapabilityID }
+func (c *Capability) Name() string { return CapabilityName }
+func (c *Capability) Entitlement() capabilities.Entitlement {
+	return capabilities.Entitlement{EnabledByDefault: true, Tier: "base"}
+}
+func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
+	if state.Domain == "" {
+		return false
+	}
+	return state.Domain == "Stores" || state.Domain == CapabilityID || state.Domain == CapabilityName
+}
+func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
+	return strings.Join([]string{
+		"Structured Context: Stores Tools",
+		"You are a Stores Database Expert Agent. Translate requests into executable store operations.",
+		"CRITICAL RULES:",
+		"1. Never guess store names, field names, or join mappings. Use list_stores first whenever schema, relations, or field paths are uncertain.",
+		"2. Think through the read/join/filter plan before writing the operation.",
+		"3. SOP store queries are not SQL. When the user asks for a query or filter, produce SOP-native JSON tool/script operations, not SQL syntax.",
+		"4. When you generate a multi-step store plan using steps such as begin_tx, open_store, scan, filter, sort, project, commit_tx, rollback_tx or return, place those steps inside execute_script.script and call execute_script to submit the plan to the executor. The last step's result is returned automatically or use return to explicitly specify the return value.",
+		"5. If execution fails, analyze the error, rewrite the operation, and retry once. If it still fails, ask the user a short clarification question.",
+	}, "\n")
+}
+
+func (c *Capability) BuildExecutionContext(input ExecutionContextInput) string {
+	var sb strings.Builder
+	sb.WriteString("Domain: Stores\n")
+	if ordered := orderedCRUDFlags(input.CRUDFlags); len(ordered) > 0 {
+		sb.WriteString(fmt.Sprintf("CRUD Scope: %s\n", strings.Join(ordered, ", ")))
+	}
+	if input.ActiveDatabase != "" {
+		sb.WriteString(fmt.Sprintf("Active Database: %s\n", input.ActiveDatabase))
+	}
+	if len(input.DBArtifacts) > 0 {
+		sb.WriteString("Target Stores:\n")
+		for _, artifact := range input.DBArtifacts {
+			sb.WriteString(fmt.Sprintf("- %s\n", artifact))
+		}
+	}
+	if input.ScriptAuthoring {
+		sb.WriteString("\nRelevant Script Authoring Operations:\n")
+		sb.WriteString("- Use execute_script for multi-step store workflows when the request requires a concrete plan or mutation.")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func orderedCRUDFlags(flags map[string]bool) []string {
+	order := []string{"C", "R", "U", "D"}
+	ordered := make([]string, 0, len(flags))
+	for _, crud := range order {
+		if flags[crud] {
+			ordered = append(ordered, crud)
+		}
+	}
+	return ordered
+}
+
+func (c *Capability) ExposeTools() []capabilities.ToolDefinition { return nil }
+func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
+	return ""
+}
+func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
+	return capabilities.CapabilityResult{Summary: "stores capability placeholder"}, nil
+}

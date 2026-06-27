@@ -8,11 +8,22 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/capabilities"
+	"github.com/sharedcode/sop/ai/agent/domains/spaces"
+	"github.com/sharedcode/sop/ai/agent/domains/stores"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/jsondb"
 )
 
 var crudOrder = []string{"C", "R", "U", "D"}
+
+type storesExecutionContextBuilder interface {
+	BuildExecutionContext(stores.ExecutionContextInput) string
+}
+
+type spacesExecutionContextBuilder interface {
+	BuildExecutionContext(spaces.ExecutionContextInput) string
+}
 
 func collectCRUDFlags(layers []LayerInfo) map[string]bool {
 	flags := make(map[string]bool)
@@ -35,6 +46,28 @@ func orderedCRUDFlags(flags map[string]bool) []string {
 		}
 	}
 	return ordered
+}
+
+func (a *CopilotAgent) storesExecutionContextInputFromTask(ctx context.Context, taskClassification TaskContextClassification) stores.ExecutionContextInput {
+	crudFlags := collectCRUDFlags(taskClassification.Layers)
+	activeDB := ""
+	if a != nil {
+		_, currentDB := a.getActiveSessionDatabase(ctx)
+		activeDB = currentDB
+	}
+	return stores.ExecutionContextInput{
+		CRUDFlags:       crudFlags,
+		DBArtifacts:     taskClassification.DBArtifacts,
+		ScriptAuthoring: taskClassification.ScriptAuthoring,
+		ActiveDatabase:  activeDB,
+	}
+}
+
+func (a *CopilotAgent) spacesExecutionContextInputFromTask(taskClassification TaskContextClassification) spaces.ExecutionContextInput {
+	return spaces.ExecutionContextInput{
+		CRUDFlags:   collectCRUDFlags(taskClassification.Layers),
+		DBArtifacts: taskClassification.DBArtifacts,
+	}
 }
 
 func (a *CopilotAgent) getFocusedExecutionContext(ctx context.Context, query string, taskClassification TaskContextClassification) string {
@@ -157,6 +190,14 @@ func filterAutomationFamiliesByPolicy(families []string) []string {
 }
 
 func (a *CopilotAgent) buildStoresFocusedExecutionContext(ctx context.Context, taskClassification TaskContextClassification) string {
+	if a != nil && a.capabilityRegistry != nil {
+		if cap, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: StoresDomain}); ok {
+			if storesCap, ok := cap.(storesExecutionContextBuilder); ok {
+				return storesCap.BuildExecutionContext(a.storesExecutionContextInputFromTask(ctx, taskClassification))
+			}
+		}
+	}
+
 	crudFlags := collectCRUDFlags(taskClassification.Layers)
 	var sb strings.Builder
 
@@ -226,6 +267,14 @@ func (a *CopilotAgent) buildStoresFocusedExecutionContext(ctx context.Context, t
 }
 
 func (a *CopilotAgent) buildSpacesFocusedExecutionContext(taskClassification TaskContextClassification) string {
+	if a != nil && a.capabilityRegistry != nil {
+		if cap, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: SpacesDomain}); ok {
+			if spacesCap, ok := cap.(spacesExecutionContextBuilder); ok {
+				return spacesCap.BuildExecutionContext(a.spacesExecutionContextInputFromTask(taskClassification))
+			}
+		}
+	}
+
 	crudFlags := collectCRUDFlags(taskClassification.Layers)
 	var sb strings.Builder
 
@@ -597,6 +646,14 @@ func structuredContextSectionHeading(section string) string {
 func (a *CopilotAgent) buildFocusedToolContext(taskCtx *TaskContextClassification) string {
 	if taskCtx == nil {
 		return ""
+	}
+
+	if a != nil && a.capabilityRegistry != nil {
+		if cap, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate}); ok {
+			if ctx := cap.BuildContext("", capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate}); ctx != "" {
+				return strings.TrimSpace(ctx)
+			}
+		}
 	}
 
 	if isCrossDomain(taskCtx.Layers) {

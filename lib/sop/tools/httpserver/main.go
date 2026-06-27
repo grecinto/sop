@@ -115,7 +115,7 @@ func main() {
 	if !wasProductionFlagPassed {
 		effectiveProductionMode = true
 	}
-	targetConfigPath, err := sopbackend.BootstrapRuntime(context.Background(), configFile, sopbackend.RuntimeOptions{}, port, &effectiveProductionMode)
+	targetConfigPath, err := sopbackend.InitializeRuntime(context.Background(), configFile, sopbackend.RuntimeOptions{}, port, &effectiveProductionMode)
 	if err != nil {
 		log.Error(fmt.Sprintf("Failed to initialize shared backend: %v", err))
 	} else {
@@ -184,13 +184,6 @@ func main() {
 		implPath := filepath.Join(implicitPath, sopbackend.SystemDBName)
 		if _, err := os.Stat(implPath); os.IsNotExist(err) {
 			log.Warn(fmt.Sprintf("Warning: Implicit System DB does not exist at path '%s'.", implPath))
-		}
-	}
-
-	// Initialize backend (agents, RBAC, sessions)
-	if len(config.Databases) > 0 || config.SystemDB != nil {
-		if err := sopbackend.Initialize(context.Background(), sopbackend.RuntimeOptions{}); err != nil {
-			log.Error(fmt.Sprintf("Failed to initialize agents: %v", err))
 		}
 	}
 

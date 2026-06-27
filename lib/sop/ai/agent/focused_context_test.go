@@ -73,17 +73,14 @@ func TestBuildSystemPrompt_IncludesFocusedStoreContext(t *testing.T) {
 	if !strings.Contains(prompt, "Target Stores") || !strings.Contains(prompt, "- users") {
 		t.Fatalf("expected focused users store details in prompt: %s", prompt)
 	}
-	if !strings.Contains(prompt, `stores:[\"users\"]`) {
-		t.Fatalf("expected focused prompt to include scoped list_stores research hint: %s", prompt)
+	if !strings.Contains(prompt, "Active Database: appdb") {
+		t.Fatalf("expected focused prompt to show the active database context: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Relations:") || !strings.Contains(prompt, "orders([user_id])") {
-		t.Fatalf("expected relations metadata for users store: %s", prompt)
+	if !strings.Contains(prompt, "Structured Context: Stores Tools") {
+		t.Fatalf("expected system tools to use the capability-based Stores guidance: %s", prompt)
 	}
-	if !strings.Contains(prompt, "R = Read") || !strings.Contains(prompt, "begin_tx(mode=read)") {
-		t.Fatalf("expected read-only store operations in prompt: %s", prompt)
-	}
-	if !strings.Contains(prompt, "use the active Current Database name from context") {
-		t.Fatalf("expected focused prompt to teach open_db database selection from active context: %s", prompt)
+	if !strings.Contains(prompt, "Never guess store names") || !strings.Contains(prompt, "SOP store queries are not SQL") {
+		t.Fatalf("expected capability-based Stores guidance to remain in the prompt: %s", prompt)
 	}
 	if strings.Contains(prompt, "Available Stores:") {
 		t.Fatalf("expected no generic all-store schema dump when a target artifact is classified: %s", prompt)
@@ -160,11 +157,11 @@ func TestBuildSystemPrompt_StoresFocusedContext_StaysWithinBudgetGuardrail(t *te
 	if len(focusedContent) > 1000 {
 		t.Fatalf("expected stores focused execution context to stay within 1000 chars after prompt reductions, got %d\nContent: %s", len(focusedContent), focusedContent)
 	}
-	if !strings.Contains(focusedContent, "Target Stores") || !strings.Contains(focusedContent, "Relevant Store Operations") {
+	if !strings.Contains(focusedContent, "Domain: Stores") || !strings.Contains(focusedContent, "Target Stores") {
 		t.Fatalf("expected focused execution context to retain core Stores anchors: %s", focusedContent)
 	}
-	if !strings.Contains(focusedContent, `stores:["users"]`) {
-		t.Fatalf("expected focused execution context to retain scoped list_stores hint, got %s", focusedContent)
+	if !strings.Contains(focusedContent, "CRUD Scope: R") {
+		t.Fatalf("expected focused execution context to retain CRUD scope, got %s", focusedContent)
 	}
 	for _, element := range elements {
 		if element.Component == ComponentSystemTools && strings.Contains(element.Content, "Execution Flow Engine Guardrails") {
@@ -306,28 +303,33 @@ func TestBuildSystemPrompt_IncludesCrossDomainFocusedContext(t *testing.T) {
 	if err := json.Unmarshal([]byte(prompt), &elements); err != nil {
 		t.Fatalf("expected buildSystemPrompt to return JSON prompt elements: %v\nPrompt: %s", err, prompt)
 	}
+	var focusedContext string
+	var systemTools string
 	for _, element := range elements {
-		if element.Component != ComponentSystemTools {
-			continue
+		switch element.Component {
+		case ComponentFocusedContext:
+			focusedContext = element.Content
+		case ComponentSystemTools:
+			systemTools = element.Content
 		}
-		if strings.Contains(element.Content, "Execution Flow Engine Guardrails") {
-			t.Fatalf("expected cross-domain system tools to avoid duplicated execution guardrails, got: %s", element.Content)
-		}
-		if strings.Contains(element.Content, "[truncated]") {
-			t.Fatalf("expected cross-domain system tools context to fit without truncation after prompt reductions, got: %s", element.Content)
-		}
-		if !strings.Contains(element.Content, "Structured Context: Stores Tools") || !strings.Contains(element.Content, "Structured Context: Spaces Tools") {
-			t.Fatalf("expected cross-domain system tools to use generated stores and spaces tool context, got: %s", element.Content)
-		}
-		if !strings.Contains(element.Content, "You are a Stores Database Expert Agent") || !strings.Contains(element.Content, "- mint_to_space:") {
-			t.Fatalf("expected compact stores guidance plus generated spaces tool descriptions, got: %s", element.Content)
-		}
-		if !strings.Contains(element.Content, "defines the durability boundary") {
-			t.Fatalf("expected cross-domain system tools to preserve Space transaction boundary guidance, got: %s", element.Content)
-		}
-		if strings.Contains(element.Content, "# Spaces Manual") {
-			t.Fatalf("expected cross-domain system tools to avoid the old spaces manual blob, got: %s", element.Content)
-		}
+	}
+	if !strings.Contains(focusedContext, "Stores Execution Context") || !strings.Contains(focusedContext, "Spaces Execution Context") {
+		t.Fatalf("expected cross-domain focused execution context to carry stores and spaces execution guidance, got: %s", focusedContext)
+	}
+	if strings.Contains(systemTools, "Execution Flow Engine Guardrails") {
+		t.Fatalf("expected cross-domain system tools to avoid duplicated execution guardrails, got: %s", systemTools)
+	}
+	if strings.Contains(systemTools, "[truncated]") {
+		t.Fatalf("expected cross-domain system tools context to fit without truncation after prompt reductions, got: %s", systemTools)
+	}
+	if !strings.Contains(systemTools, "Structured Context: Stores Tools") {
+		t.Fatalf("expected cross-domain system tools to surface the capability-based Stores guidance, got: %s", systemTools)
+	}
+	if strings.Contains(systemTools, "Structured Context: Spaces Tools") {
+		t.Fatalf("expected cross-domain system tools to avoid the old spaces manual blob, got: %s", systemTools)
+	}
+	if !strings.Contains(systemTools, "You are a Stores Database Expert Agent") {
+		t.Fatalf("expected cross-domain system tools to preserve the Stores capability guidance, got: %s", systemTools)
 	}
 }
 
@@ -350,13 +352,13 @@ func TestBuildSystemPrompt_IncludesScriptAuthoringContextForStores(t *testing.T)
 	if !strings.Contains(prompt, "Relevant Script Authoring Operations") {
 		t.Fatalf("expected focused execution context to include script authoring guidance: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Structured Context: Script Authoring Tools") {
-		t.Fatalf("expected system tools to include script authoring manual: %s", prompt)
+	if !strings.Contains(prompt, "Use execute_script for multi-step store workflows") {
+		t.Fatalf("expected focused execution context to include execute_script authoring guidance: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Use create_script for new reusable scripts") {
+	if !strings.Contains(prompt, "create_script") {
 		t.Fatalf("expected create_script guidance in prompt: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Put reusable steps under the `script` field") {
+	if !strings.Contains(prompt, "store reusable steps under the") || !strings.Contains(prompt, "script field") {
 		t.Fatalf("expected script payload shape guidance in prompt: %s", prompt)
 	}
 
@@ -364,16 +366,24 @@ func TestBuildSystemPrompt_IncludesScriptAuthoringContextForStores(t *testing.T)
 	if err := json.Unmarshal([]byte(prompt), &elements); err != nil {
 		t.Fatalf("expected buildSystemPrompt to return JSON prompt elements: %v\nPrompt: %s", err, prompt)
 	}
+	var focusedContext string
+	var systemTools string
 	for _, element := range elements {
-		if element.Component != ComponentSystemTools {
-			continue
+		switch element.Component {
+		case ComponentFocusedContext:
+			focusedContext = element.Content
+		case ComponentSystemTools:
+			systemTools = element.Content
 		}
-		if strings.Contains(element.Content, "[truncated]") {
-			t.Fatalf("expected script-authoring system tools context to fit without truncation after prompt reductions, got: %s", element.Content)
-		}
-		if !strings.Contains(element.Content, "Structured Context: Script Authoring Tools") {
-			t.Fatalf("expected script-authoring manual to remain present in system tools, got: %s", element.Content)
-		}
+	}
+	if strings.Contains(systemTools, "[truncated]") {
+		t.Fatalf("expected script-authoring system tools context to fit without truncation after prompt reductions, got: %s", systemTools)
+	}
+	if !strings.Contains(focusedContext, "Relevant Script Authoring Operations") {
+		t.Fatalf("expected script-authoring guidance to remain in focused execution context, got: %s", focusedContext)
+	}
+	if !strings.Contains(systemTools, "Structured Context: Stores Tools") {
+		t.Fatalf("expected system tools to keep the Stores capability context for script-authoring prompts, got: %s", systemTools)
 	}
 }
 

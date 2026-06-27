@@ -20,6 +20,10 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/capabilities"
+	"github.com/sharedcode/sop/ai/agent/domains/desktop"
+	"github.com/sharedcode/sop/ai/agent/domains/spaces"
+	"github.com/sharedcode/sop/ai/agent/domains/stores"
 	"github.com/sharedcode/sop/ai/agent/parser"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/embed"
@@ -387,6 +391,9 @@ type CopilotAgent struct {
 
 	// StoreOpener allows mocking the store creation (e.g. for testing)
 	StoreOpener func(ctx context.Context, dbOpts sop.DatabaseOptions, storeName string, tx sop.Transaction) (jsondb.StoreAccessor, error)
+
+	// capabilityRegistry provides modular domain capabilities for Ask routing and context building.
+	capabilityRegistry *capabilities.Registry
 }
 
 // Clone creates a new isolated instance of the agent sharing read-only components.
@@ -588,8 +595,24 @@ func (a *CopilotAgent) getMRUSnapshot() []MRUItem {
 	return append([]MRUItem(nil), sess.MRU...)
 }
 
+// CapabilityOption customizes the capability registry for a CopilotAgent.
+type CapabilityOption func(*CopilotAgent)
+
+// WithCapability appends a capability to the agent's registry.
+func WithCapability(cap capabilities.Capability) CapabilityOption {
+	return func(a *CopilotAgent) {
+		if a == nil || cap == nil {
+			return
+		}
+		if a.capabilityRegistry == nil {
+			a.capabilityRegistry = capabilities.NewRegistry()
+		}
+		a.capabilityRegistry.Register(cap)
+	}
+}
+
 // NewCopilotAgent creates a new instance of CopilotAgent.
-func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, systemDB *database.Database) *CopilotAgent {
+func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, systemDB *database.Database, opts ...CapabilityOption) *CopilotAgent {
 	// Initialize the "Brain" (Generator) from configuration
 	var gen ai.Generator
 	var err error
@@ -613,6 +636,12 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		systemDB:        systemDB,
 		Memory:          memory.NewMemoryUnit(ai.AgentIDOmni),
 		compiledScripts: make(map[string]CachedScript),
+	}
+	agent.capabilityRegistry = capabilities.NewRegistry(desktop.NewCapability(), stores.NewCapability(), spaces.NewCapability())
+	for _, opt := range opts {
+		if opt != nil {
+			opt(agent)
+		}
 	}
 	// Tools are registered dynamically in Open() or Ask() to ensure context propagation
 	// context.Background() is used here to ensure tools are available even if Open() is not called or context context is missing

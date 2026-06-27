@@ -37,6 +37,28 @@ Tools are no longer hardcoded strings. They are defined in a structured `Registr
 *   **Definition**: Tools have a Name, Description, Argument Schema, and a Go Handler function.
 *   **Discovery**: Agents can dynamically list and inspect available tools to generate their system prompts.
 
+### 5. Plug-and-Play Capabilities for Ask
+Ask now supports a modular capability layer that keeps domain behavior out of the core runtime and makes it easy to add or remove capabilities without changing the orchestration engine.
+*   **Capability Contract**: Each domain module implements a small interface that can classify requests, build focused context, expose tools, and optionally run domain-specific logic.
+*   **Registry-Based Routing**: The agent maintains a capability registry that resolves the first matching capability for a query and can also compose multiple enabled capabilities for the same routing state.
+*   **Routing State**: The runtime passes lightweight routing input such as domain and gate information, rather than relying on implicit context state inside the core Ask pipeline.
+*   **Entitlements and Enablement**: Capabilities can declare premium or default-enabled behavior, and the registry filters them according to the active entitlement map.
+*   **Runtime Extension**: New domains can be introduced by registering a capability implementation, enabling support for web research, custom verticals, or other services without branching the core Ask pipeline.
+*   **Shared Runtime**: The same capability-aware runtime is used by the daemon and httpserver entry points, keeping behavior consistent across both surfaces.
+
+```mermaid
+flowchart LR
+    A[User Query] --> B[Ask Runtime]
+    B --> C[Capability Registry]
+    C --> D[Desktop Capability]
+    C --> E[Stores Capability]
+    C --> F[Spaces Capability]
+    D --> G[Focused Context + Tool Exposure]
+    E --> G
+    F --> G
+    G --> H[Core Agent Prompt / Tooling]
+```
+
 ### 6. Explicit Transaction Management
 While automatic transaction wrapping (Saga Pattern) is recommended for most cases, you can still manage transactions explicitly using the `manage_transaction` tool. This is useful when:
 *   **Minimizing Lock Time**: You want to perform heavy AI processing or external API calls *outside* of a transaction, and only wrap the database writes.
@@ -216,6 +238,52 @@ Process a large list of items in batches, committing every few steps to avoid lo
 ```
 
 This pattern ensures that if Batch 2 fails, Batch 1 remains committed.
+
+## Adding a New Capability
+A new domain capability can be added by implementing the capability interface and registering it with the shared registry. The pattern is intentionally small so teams can extend Ask without hard-coding logic into the main runtime.
+
+The interface is intentionally narrow and explicit:
+*   `CanHandle` decides whether the capability is relevant for the request.
+*   `BuildContext` and `BuildInstructions` provide the focused prompt material that should be injected into Ask.
+*   `ExposeTools` contributes tool definitions when the capability should surface extra actions.
+*   `Run` is available for explicit capability execution when the workflow needs an actual domain handler.
+
+```go
+package mydomain
+
+import "github.com/sharedcode/sop/ai/agent/capabilities"
+
+type Capability struct{}
+
+func NewCapability() *Capability { return &Capability{} }
+
+func (c *Capability) ID() string { return "mydomain" }
+func (c *Capability) Name() string { return "My Domain" }
+func (c *Capability) Entitlement() capabilities.Entitlement {
+    return capabilities.Entitlement{EnabledByDefault: true, Tier: "base"}
+}
+func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
+    return state.Domain == "My Domain"
+}
+func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
+    return "Structured Context: My Domain"
+}
+func (c *Capability) ExposeTools() []capabilities.ToolDefinition { return nil }
+func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string { return "" }
+func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
+    return capabilities.CapabilityResult{}, nil
+}
+```
+
+Register it when building the agent:
+
+```go
+ag := agent.NewCopilotAgent(cfg, databases, systemDB,
+    agent.WithCapability(mydomain.NewCapability()),
+)
+```
+
+This keeps the core Ask pipeline stable while letting new domains plug in independently.
 
 ---
 

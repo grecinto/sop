@@ -106,8 +106,8 @@ func Initialize(ctx context.Context, opts RuntimeOptions) error {
 	return nil
 }
 
-// BootstrapRuntime loads the shared config, applies runtime defaults, and initializes the backend once.
-func BootstrapRuntime(ctx context.Context, configPath string, opts RuntimeOptions, port int, productionMode *bool) (string, error) {
+// InitializeRuntime loads the shared config, applies runtime defaults, and initializes the backend once.
+func InitializeRuntime(ctx context.Context, configPath string, opts RuntimeOptions, port int, productionMode *bool) (string, error) {
 	targetConfigPath := strings.TrimSpace(configPath)
 	if targetConfigPath == "" {
 		targetConfigPath = FindExistingConfigFile()
@@ -145,6 +145,11 @@ func BootstrapRuntime(ctx context.Context, configPath string, opts RuntimeOption
 		return "", err
 	}
 	return targetConfigPath, nil
+}
+
+// BootstrapRuntime loads the shared config, applies runtime defaults, and initializes the backend once.
+func BootstrapRuntime(ctx context.Context, configPath string, opts RuntimeOptions, port int, productionMode *bool) (string, error) {
+	return InitializeRuntime(ctx, configPath, opts, port, productionMode)
 }
 
 // InitAgents initializes the agents with the current configuration.

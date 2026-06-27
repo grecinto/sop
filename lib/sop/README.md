@@ -12,6 +12,7 @@ Packed inside the library is everything you need to build next-generation distri
 *   **Swarm Computing Engine**: A framework for distributed coordination, allowing applications to act as coherent parts of a greater whole.
 *   **Polyglot Storage Engine**: An ACID-compliant B-Tree storage system with Caching and Erasure Coding, optimized for performance. [Read the Architecture Whitepaper](SOP_ARCHITECTURE_WHITEPAPER.md).
 *   **AI Scripting & Computing Engine**: A versatile runtime that allows for creating intelligent, self-correcting workflows. See [Platform Tools & Relational Intelligence](SOP_PLATFORM_TOOLS.md).
+*   **Plug-and-Play Ask Capabilities**: Ask now uses a modular capability registry so desktop, stores, spaces, and future domains can be added without branching the core runtime. See [AI Agent Guide](ai/agent/README.md) for the architecture overview.
 
 ## Installation & Distribution
 

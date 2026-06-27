@@ -581,8 +581,11 @@ func TestCopilotPipeline_Phases(t *testing.T) {
 	if !strings.Contains(prompt, "\"component\": \"focused_execution_context\"") {
 		t.Fatalf("Snapshot Failure: Built prompt missing focused execution context component")
 	}
-	if !strings.Contains(prompt, "Domain: Spaces") || !strings.Contains(prompt, "Relevant Space Operations") {
+	if !strings.Contains(prompt, "Domain: Spaces") || !strings.Contains(prompt, "CRUD Scope: R") {
 		t.Fatalf("Snapshot Failure: Built prompt missing focused Spaces execution context")
+	}
+	if !strings.Contains(prompt, "Structured Context: Spaces Tools") {
+		t.Fatalf("Snapshot Failure: Built prompt missing capability-based Spaces tool context")
 	}
 
 	if !strings.Contains(prompt, "System Tools") && !strings.Contains(prompt, "System_Tools") && !strings.Contains(prompt, "active memory") {
