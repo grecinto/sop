@@ -3,7 +3,6 @@ package sopbackend
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,29 +57,24 @@ func TestSessionIDHandling(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, "session_id") {
-		t.Fatalf("Expected response to emit a session_id event, got: %s", body)
+	if strings.Contains(body, `"type":"session_id"`) || strings.Contains(body, `"event":"session_id"`) {
+		t.Fatalf("expected session_id to remain internal to the backend stream, got: %s", body)
 	}
 
-	// Extract session ID from simple NDJSON parsing
-	var sessionID string
-	for _, line := range strings.Split(body, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if strings.Contains(line, `"type":"session_id"`) || strings.Contains(line, `"event":"session_id"`) {
-			var event map[string]any
-			if err := json.Unmarshal([]byte(line), &event); err == nil {
-				if d, ok := event["payload"].(string); ok {
-					sessionID = d
-					break
-				}
-			}
-		}
+	activeSessions.mu.Lock()
+	if len(activeSessions.lookup) != 1 {
+		activeSessions.mu.Unlock()
+		t.Fatalf("expected exactly 1 active session, got %d", len(activeSessions.lookup))
 	}
+	var sessionID string
+	for id := range activeSessions.lookup {
+		sessionID = id
+		break
+	}
+	activeSessions.mu.Unlock()
 
 	if sessionID == "" {
-		t.Fatal("Failed to parse session_id from response")
+		t.Fatal("Failed to resolve generated session_id from session manager")
 	}
 
 	// Verify the session agent was stored
@@ -193,26 +187,25 @@ func TestSessionPayloadPropagation(t *testing.T) {
 		t.Fatalf("Expected status OK, got %v", res.Status)
 	}
 
-	// Parse response to find session ID so we can get the cloned agent
 	body := w.Body.String()
-	var sessionID string
-	for _, line := range strings.Split(body, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if strings.Contains(line, `"type":"session_id"`) {
-			var event map[string]any
-			if err := json.Unmarshal([]byte(line), &event); err == nil {
-				if d, ok := event["payload"].(string); ok {
-					sessionID = d
-					break
-				}
-			}
-		}
+	if strings.Contains(body, `"type":"session_id"`) || strings.Contains(body, `"event":"session_id"`) {
+		t.Fatalf("expected session_id to remain internal to the backend stream, got: %s", body)
 	}
 
+	activeSessions.mu.Lock()
+	if len(activeSessions.lookup) != 1 {
+		activeSessions.mu.Unlock()
+		t.Fatalf("expected exactly 1 active session, got %d", len(activeSessions.lookup))
+	}
+	var sessionID string
+	for id := range activeSessions.lookup {
+		sessionID = id
+		break
+	}
+	activeSessions.mu.Unlock()
+
 	if sessionID == "" {
-		t.Fatal("Failed to parse session_id from response")
+		t.Fatal("Failed to resolve session_id from session manager")
 	}
 
 	agentRaw, exists := activeSessions.Get(sessionID)

@@ -120,6 +120,11 @@ func TestServiceAskBypassesPipelineForDirectSlashCommands(t *testing.T) {
 }
 
 func TestServiceAskRegistersToolsBeforeDirectSlashCommands(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)

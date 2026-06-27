@@ -9,9 +9,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/sharedcode/sop"
 	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
-	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/database"
 )
 
@@ -997,7 +997,7 @@ func TestHandleAddSpaceCategory_NormalizesChildPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCurrentValue failed: %v", err)
 	}
-	if got, want := cat.Path, "Root A / Child A1"; got != want {
+	if got, want := cat.Path, "Root A/Child A1"; got != want {
 		t.Fatalf("child category path = %q, want %q", got, want)
 	}
 }

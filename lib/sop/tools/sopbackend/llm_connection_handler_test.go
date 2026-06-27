@@ -165,8 +165,12 @@ func TestHandleTestLLMConnection_HandshakeReturnsWelcomeContextWithoutLiveGenera
 	if !ok || strings.TrimSpace(ctx) == "" {
 		t.Fatalf("expected welcome_context in response body, got %+v", resp)
 	}
-	if !strings.Contains(strings.ToLower(ctx), "hq") {
-		t.Fatalf("expected HQ welcome context, got %q", ctx)
+	lower := strings.ToLower(ctx)
+	if !strings.Contains(lower, "butler") {
+		t.Fatalf("expected Butler welcome context, got %q", ctx)
+	}
+	if !strings.Contains(lower, "/list_tools") {
+		t.Fatalf("expected tool help in welcome context, got %q", ctx)
 	}
 }
 
@@ -201,7 +205,11 @@ func TestHandleTestLLMConnection_ReturnsWelcomeContext(t *testing.T) {
 	if !ok || strings.TrimSpace(ctx) == "" {
 		t.Fatalf("expected welcome_context in response body, got %+v", resp)
 	}
-	if !strings.Contains(strings.ToLower(ctx), "hq") {
-		t.Fatalf("expected HQ welcome context, got %q", ctx)
+	lower := strings.ToLower(ctx)
+	if !strings.Contains(lower, "butler") {
+		t.Fatalf("expected Butler welcome context, got %q", ctx)
+	}
+	if !strings.Contains(lower, "/list_tools") {
+		t.Fatalf("expected tool help in welcome context, got %q", ctx)
 	}
 }

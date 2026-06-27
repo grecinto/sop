@@ -154,7 +154,7 @@ func TestHandleExecuteScript(t *testing.T) {
 }
 
 func TestSourceLinkPopupTemplateUsesEscapedAttributes(t *testing.T) {
-	templatePath := filepath.Join("templates", "scripts_part01.html")
+	templatePath := filepath.Join("..", "httpserver", "templates", "scripts_part01.html")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("failed to read template: %v", err)

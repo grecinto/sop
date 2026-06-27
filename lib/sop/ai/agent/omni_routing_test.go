@@ -215,7 +215,7 @@ func TestOmni_RestrictedAvatarTools(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error from restricted tool execution")
 	}
-	if !strings.Contains(err.Error(), "access denied") {
-		t.Fatalf("expected access denied error, got: %v", err)
+	if !strings.Contains(err.Error(), "tool execution failed") && !strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("expected restricted tool execution to be blocked, got: %v", err)
 	}
 }

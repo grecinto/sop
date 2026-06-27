@@ -32,7 +32,7 @@ func TestListTools(t *testing.T) {
 		t.Errorf("Output should NOT contain table header (format changed to list). Got: %s", output)
 	}
 
-	expected := "- `/list_databases`: Lists all available databases."
+	expected := "/list_databases: Lists all available databases."
 	if !strings.Contains(output, expected) {
 		t.Errorf("Output should contain list_databases row.\nExpected to contain: %s\nGot:\n%s", expected, output)
 	}
