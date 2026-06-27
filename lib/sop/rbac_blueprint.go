@@ -26,9 +26,10 @@ type ContextRBACMap map[UICapability]bool
 
 // BundledResponse represents the standard JSON payload structure containing both the domain data and the paired RBAC map.
 type BundledResponse struct {
-	Data     interface{}               `json:"data"`
-	RBAC     ContextRBACMap            `json:"rbac,omitempty"`
-	ItemRBAC map[string]ContextRBACMap `json:"item_rbac,omitempty"`
+	Data         interface{}               `json:"data"`
+	RBAC         ContextRBACMap            `json:"rbac,omitempty"`
+	ItemRBAC     map[string]ContextRBACMap `json:"item_rbac,omitempty"`
+	DisplayNames map[string]string         `json:"display_names,omitempty"`
 }
 
 // ActionToUICapability maps an internal Action to the UI consumable Capability string

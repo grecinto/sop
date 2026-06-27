@@ -1020,6 +1020,17 @@ func handleListStores(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(bundled)
 }
 
+func resolveSpaceDisplayName(name string, cfg *memory.KnowledgeBaseConfig) string {
+	_ = cfg
+
+	lowerName := strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(lowerName, "ltm_") || strings.HasPrefix(lowerName, "memory_") {
+		return "memory"
+	}
+
+	return name
+}
+
 func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	dbName := r.URL.Query().Get("database")
@@ -1061,17 +1072,23 @@ func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 		filtered = make([]string, 0)
 	}
 
-	// PRE-FETCH vectorization status in one transaction for performance
+	// PRE-FETCH vectorization status and display labels in one transaction for performance
 	vectorizedMap := make(map[string]bool)
+	displayNames := make(map[string]string, len(filtered))
 	tx, _ := db.BeginTransaction(ctx, sop.ForReading)
 	if tx != nil {
 		for _, name := range filtered {
 			kb, errKB := db.OpenKnowledgeBase(ctx, name, tx, nil, nil, false)
 			if errKB == nil && kb != nil {
 				cfg, cfgErr := kb.GetConfig(ctx)
-				if cfgErr == nil && cfg != nil && cfg.LastVectorized > 0 {
-					vectorizedMap[name] = true
+				if cfgErr == nil && cfg != nil {
+					if cfg.LastVectorized > 0 {
+						vectorizedMap[name] = true
+					}
 				}
+				displayNames[name] = resolveSpaceDisplayName(name, cfg)
+			} else {
+				displayNames[name] = resolveSpaceDisplayName(name, nil)
 			}
 		}
 		tx.Rollback(ctx)
@@ -1094,9 +1111,10 @@ func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bundled := sop.BundledResponse{
-		Data:     filtered,
-		RBAC:     sop.ResolveRBACMap(ctx, "space", sop.EntitlementContext{AssetID: dbName, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil),
-		ItemRBAC: itemRBAC,
+		Data:         filtered,
+		RBAC:         sop.ResolveRBACMap(ctx, "space", sop.EntitlementContext{AssetID: dbName, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil),
+		ItemRBAC:     itemRBAC,
+		DisplayNames: displayNames,
 	}
 
 	json.NewEncoder(w).Encode(bundled)
@@ -2690,11 +2708,6 @@ func handleDeleteSpace(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
-		return
-	}
-
-	if IsSystemDB(req.Database) {
-		http.Error(w, "Access Denied: Deleting spaces from the System DB is not allowed.", http.StatusForbidden)
 		return
 	}
 

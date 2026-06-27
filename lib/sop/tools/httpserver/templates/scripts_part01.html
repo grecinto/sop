@@ -1231,8 +1231,10 @@
         let selectedElement = null;
         let selectedName = null;
         kbs.forEach(kb => {
+            const displayName = (bundle.display_names && bundle.display_names[kb]) ? bundle.display_names[kb] : kb;
+            const labelText = displayName.charAt(0).toUpperCase() + displayName.slice(1);
             const li = document.createElement('li');
-            li.textContent = kb.charAt(0).toUpperCase() + kb.slice(1);
+            li.textContent = labelText;
             li.title = kb;
             li.classList.add('truncate-text');
             li.onclick = () => selectSpace(kb, li);
@@ -1250,9 +1252,11 @@
                     canSelect = false;
                 }
                 if (!existing && canSelect) {
+                    const displayName = (bundle.display_names && bundle.display_names[kb]) ? bundle.display_names[kb] : kb;
+                    const labelText = displayName.charAt(0).toUpperCase() + displayName.slice(1);
                     const opt = document.createElement('option');
                     opt.value = kb;
-                    opt.textContent = kb.charAt(0).toUpperCase() + kb.slice(1);
+                    opt.textContent = labelText;
                     opt.setAttribute('data-dynamic', 'true');
                     domainSelect.appendChild(opt);
                 }
