@@ -9,11 +9,12 @@ import (
 
 func TestShouldExposeStoreInUI_HidesInternalStores(t *testing.T) {
 	cases := []struct {
-		name    string
-		store   string
-		userID  string
-		isAdmin bool
-		exposed bool
+		name          string
+		store         string
+		userID        string
+		isAdmin       bool
+		isSystemAdmin bool
+		exposed       bool
 	}{
 		{name: "plain store", store: "users", userID: "alice", exposed: true},
 		{name: "component store hidden", store: "ltm_omni/items", userID: "alice", exposed: false},
@@ -24,7 +25,9 @@ func TestShouldExposeStoreInUI_HidesInternalStores(t *testing.T) {
 		{name: "other user stm hidden", store: "stm_bob", userID: "alice", exposed: false},
 		{name: "other user ltm hidden", store: "ltm_bob", userID: "alice", exposed: false},
 		{name: "sessions hidden for non-admin", store: "sessions", userID: "alice", exposed: false},
-		{name: "sessions visible for admin", store: "sessions", userID: "root", isAdmin: true, exposed: true},
+		{name: "sessions hidden for admin", store: "sessions", userID: "root", isAdmin: true, exposed: false},
+		{name: "admin own stm hidden", store: "stm_root", userID: "root", isAdmin: true, exposed: false},
+		{name: "system admin own stm visible", store: "stm_root", userID: "root", isSystemAdmin: true, exposed: true},
 	}
 
 	for _, tc := range cases {
@@ -34,6 +37,9 @@ func TestShouldExposeStoreInUI_HidesInternalStores(t *testing.T) {
 				roles := []string{}
 				if tc.isAdmin {
 					roles = append(roles, sop.RoleAdmin)
+				}
+				if tc.isSystemAdmin {
+					roles = append(roles, sop.RoleSystemAdmin)
 				}
 				ctx = sop.ContextWithAuth(ctx, sop.AuthContext{UserID: tc.userID, Roles: roles})
 			}

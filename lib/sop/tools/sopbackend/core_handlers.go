@@ -939,19 +939,31 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 	if strings.HasSuffix(storeName, "_vecs") || strings.HasSuffix(storeName, "_by_time") {
 		return false
 	}
-
-	if strings.EqualFold(storeName, "sessions") && !isAdminRoleInContext(ctx) {
+	if strings.EqualFold(storeName, "sessions") {
 		return false
 	}
 
-	if strings.HasPrefix(storeName, "stm_") || strings.HasPrefix(storeName, "ltm_") {
+	if strings.HasPrefix(storeName, "stm_") {
+		if isRegularAdminRoleInContext(ctx) {
+			return false
+		}
 		currentUserID := strings.TrimSpace(sop.GetAuthFromContext(ctx).UserID)
 		if currentUserID == "" {
 			return false
 		}
 		ownerSTM := memory.BuildSTMStoreName(ai.AgentIDOmni, currentUserID)
+		if storeName != ownerSTM {
+			return false
+		}
+	}
+
+	if strings.HasPrefix(storeName, "ltm_") {
+		currentUserID := strings.TrimSpace(sop.GetAuthFromContext(ctx).UserID)
+		if currentUserID == "" {
+			return false
+		}
 		ownerLTM := memory.BuildLTMStoreName(ai.AgentIDOmni, currentUserID)
-		if storeName != ownerSTM && storeName != ownerLTM {
+		if storeName != ownerLTM {
 			return false
 		}
 	}
@@ -2635,9 +2647,9 @@ func handleDeleteStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hardening: Prevent deleting stores from System DB
-	if IsSystemDB(req.Database) {
-		http.Error(w, "Access Denied: Deleting stores from the System DB is not allowed.", http.StatusForbidden)
+	// Allow deleting non-script stores from the System DB while protecting the scripts store.
+	if IsSystemDB(req.Database) && strings.EqualFold(req.StoreName, "scripts") {
+		http.Error(w, "Access Denied: The scripts store is protected and cannot be deleted.", http.StatusForbidden)
 		return
 	}
 

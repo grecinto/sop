@@ -203,6 +203,10 @@
         const headers = Object.assign({}, options.headers || {});
         headers['Cache-Control'] = 'no-store';
         headers.Pragma = 'no-cache';
+        const token = getStoredSessionToken();
+        if (runtimeMode !== 'local' && token) {
+            headers.Authorization = `Bearer ${token}`;
+        }
 
         const response = await fetch(endpoint, Object.assign({}, options, {
             cache: 'no-store',
@@ -214,10 +218,14 @@
                 try {
                     const refreshed = await refreshSessionToken();
                     if (refreshed) {
-                        const retryHeaders = Object.assign({}, options.headers || {});
+                        const retryHeaders = Object.assign({}, headers);
+                        const retryToken = getStoredSessionToken();
+                        if (retryToken) {
+                            retryHeaders.Authorization = `Bearer ${retryToken}`;
+                        }
                         return await fetch(endpoint, Object.assign({}, options, {
                             _retry: true,
-                            headers: Object.assign({}, options.headers || {})
+                            headers: retryHeaders
                         }));
                     }
                 } catch (err) {
@@ -2187,7 +2195,6 @@
 
         // Protected Stores
         const storeName = info.name || currentStore;
-        if (storeName === 'llm_feedback') return true;
 
         if (isSpaceReadOnly(storeName, currentDatabase)) return true;
 
@@ -2644,7 +2651,7 @@
             const currentDbObj = availableDatabases.find(db => db.name === currentDatabase);
             const isSystemDB = currentDbObj ? currentDbObj.is_system : false;
             
-            if (currentStore === 'llm_feedback' || (isSystemDB && currentStore === 'memory')) {
+            if (false) {
                 allowAdd = false;
             }
 
@@ -2956,6 +2963,14 @@
     }
 }
 
+function isProtectedSystemStoreName(storeName, dbObj = null) {
+    const name = typeof storeName === 'string' ? storeName.toLowerCase() : '';
+    if (!name) return false;
+
+    const isSystem = !!(dbObj && dbObj.is_system) || currentDatabase === 'system' || currentDatabase === SYSTEM_DB_NAME;
+    return isSystem && (name === 'scripts' || name === 'script');
+}
+
 async function selectStore(name, element, force = false) {
         if (currentStore === name && !force) return;
 
@@ -2988,21 +3003,14 @@ async function selectStore(name, element, force = false) {
         document.querySelectorAll('#sidebar li').forEach(el => el.classList.remove('active'));
         element.classList.add('active');
 
+        const dbObj = availableDatabases && currentDatabase ? availableDatabases.find(d => d.name === currentDatabase) : null;
+        const isSystem = (dbObj && dbObj.is_system) || currentDatabase === 'system' || currentDatabase === SYSTEM_DB_NAME;
+        const isProtectedSystemStore = isProtectedSystemStoreName(name, dbObj);
+
         // Show Delete Button
         const deleteBtn = document.getElementById('btn-delete-store');
-        
-        // Hardening: Disable delete for System DB and protected stores
-        const dbObj = availableDatabases.find(d => d.name === currentDatabase);
-        const isSystem = (dbObj && dbObj.is_system) || currentDatabase === 'system' || currentDatabase === SYSTEM_DB_NAME;
-        const isProtectedStore = (name === 'llm_feedback' || name === 'memory');
-        
-        if (isSystem || isProtectedStore) {
-            deleteBtn.style.display = 'none';
-        } else {
-            deleteBtn.style.display = 'inline-block';
-        }
-        
-        deleteBtn.title = `Delete store '${name}'`;
+        deleteBtn.style.display = isProtectedSystemStore ? 'none' : 'inline-block';
+        deleteBtn.title = isProtectedSystemStore ? `Delete disabled for protected store '${name}'` : `Delete store '${name}'`;
 
         // Show Code Button
         const codeBtn = document.getElementById('btn-code-store');
@@ -3035,11 +3043,9 @@ async function selectStore(name, element, force = false) {
             .then(info => {
                 currentStoreInfo = info;
 
-                // Toggle Edit/View buttons based on count
-                // NOTE: We now use the Edit button for ALL stores (populated or empty).
-                // The Edit modal handles read-only fields for populated stores.
-                // However, for System DB, we force Read-Only View.
-                if (isSystem) {
+                // Use the same metadata editor for user and system DBs.
+                // Only protected system stores stay read-only.
+                if (isProtectedSystemStore) {
                     editBtn.style.display = 'none';
                     viewBtn.style.display = 'inline-block';
                     viewBtn.title = `View Store Metadata for '${name}' (Read-Only)`;
@@ -3278,7 +3284,7 @@ async function selectStore(name, element, force = false) {
         const isReadOnly = isStoreReadOnly(info);
 
         if (info.description !== "AI Models Registry" && !isReadOnly) {
-            // Hardening: Prevent adding items to memory in System DB
+            // Hardening: Prevent adding items to STM/LTM-backed stores in the System DB
             // Determine if current DB is System DB using the flag from API
             const currentDbObj = availableDatabases.find(db => db.name === currentDatabase);
             const isSystemDB = currentDbObj ? currentDbObj.is_system : false;

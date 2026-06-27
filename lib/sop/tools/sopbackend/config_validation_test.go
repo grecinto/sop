@@ -120,6 +120,77 @@ func TestValidateSetupWizardRootPassword(t *testing.T) {
 	}
 }
 
+func TestHandleSaveConfig_RejectsInvalidSystemAdminBootstrapSecret(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	config = Config{}
+	config.ConfigFile = configFile
+
+	payload := map[string]interface{}{
+		"registry_path":                 filepath.Join(tmpDir, "system"),
+		"port":                          8080,
+		"root_password":                 "secret123",
+		"system_admin_bootstrap_secret": "wrong-secret",
+		"system_options": map[string]interface{}{
+			"stores_folders": []string{},
+			"type":           0,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+
+	handleSaveConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "bootstrap secret") {
+		t.Fatalf("expected bootstrap secret error, got %s", w.Body.String())
+	}
+}
+
+func TestHandleSaveConfig_PersistsSystemAdminRoleWhenBootstrapSecretMatches(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	config = Config{}
+	config.ConfigFile = configFile
+
+	t.Setenv("SOP_SYSTEM_ADMIN_BOOTSTRAP_SECRET", "correct-secret")
+
+	payload := map[string]interface{}{
+		"registry_path":                 filepath.Join(tmpDir, "system"),
+		"port":                          8080,
+		"root_password":                 "secret123",
+		"system_admin_bootstrap_secret": "correct-secret",
+		"system_options": map[string]interface{}{
+			"stores_folders": []string{},
+			"type":           0,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+
+	handleSaveConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if len(config.Users) == 0 {
+		t.Fatal("expected root user to be created")
+	}
+	if config.Users[0].Role != sop.RoleSystemAdmin {
+		t.Fatalf("expected root role %q, got %q", sop.RoleSystemAdmin, config.Users[0].Role)
+	}
+}
+
 func TestHandleSaveConfig_DeduplicatesPaths(t *testing.T) {
 	// Restore config state after test
 	defer func() {

@@ -211,6 +211,62 @@ func TestHandleAddStore_AllowsSystemDB(t *testing.T) {
 	}
 }
 
+func TestHandleDeleteStore_AllowsSystemDBExceptScripts(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := SystemDBName
+	config = Config{
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	createReq := map[string]any{
+		"database":   dbName,
+		"store":      "system_deletable",
+		"key_type":   "string",
+		"value_type": "string",
+	}
+	body, _ := json.Marshal(createReq)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/store/add", bytes.NewReader(body))
+	handleAddStore(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create store failed: %d %s", w.Code, w.Body.String())
+	}
+
+	deleteReq := map[string]any{"database": dbName, "store": "system_deletable"}
+	body, _ = json.Marshal(deleteReq)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/store/delete", bytes.NewReader(body))
+	handleDeleteStore(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected deleting non-script store in system DB to succeed, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleDeleteStore_ProtectsScriptsStoreInSystemDB(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := SystemDBName
+	config = Config{
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	deleteReq := map[string]any{"database": dbName, "store": "scripts"}
+	body, _ := json.Marshal(deleteReq)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/store/delete", bytes.NewReader(body))
+	handleDeleteStore(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected scripts store deletion to be forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleAddStore_IgnoresSchemaMetadataAtCreation(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbName := "testdb_add_store_schema"

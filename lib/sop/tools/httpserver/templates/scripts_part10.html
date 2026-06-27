@@ -725,6 +725,13 @@
                 return showAlert("Root password is required to finish setup.");
             }
 
+            const systemAdminBootstrapSecret = (document.getElementById('setup-system-admin-bootstrap-secret')?.value || '').trim();
+            if (systemAdminBootstrapSecret) {
+                // The server will validate the secret against the environment variable.
+                // If it matches, the initial root user will be created as SystemAdmin.
+                // If it does not match, the default Admin role will be used.
+            }
+
             // Step 3: Validate AI Configuration before finishing
             const bProviderValue = document.getElementById('setup-brain-provider') ? document.getElementById('setup-brain-provider').value : "";
             const bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
@@ -1043,6 +1050,7 @@
             registry_path: regPath,
             port: port,
             root_password: document.getElementById('setup-root-password')?.value || '',
+            system_admin_bootstrap_secret: document.getElementById('setup-system-admin-bootstrap-secret')?.value || '',
             brain_provider: bProvider,
             brain_model: bModel,
             brain_url: bUrl,

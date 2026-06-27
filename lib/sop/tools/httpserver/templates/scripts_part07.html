@@ -399,10 +399,12 @@
                 resetStoreFormState();
             }
 
-            // Determine if Read-Only Mode (System DB)
+            // Use the same form for user and system DBs, and only make protected system stores read-only.
             const dbObj = availableDatabases.find(d => d.name === currentDatabase);
             const isSystem = (dbObj && dbObj.is_system) || currentDatabase === 'system' || currentDatabase === SYSTEM_DB_NAME;
-            const isReadOnlyMode = forceReadOnly || isSystem;
+            const isProtectedSystemStore = isProtectedSystemStoreName(currentStore, dbObj);
+            const isEmptyStore = typeof currentStoreInfo?.count === 'number' ? currentStoreInfo.count === 0 : true;
+            const isReadOnlyMode = forceReadOnly || isProtectedSystemStore;
 
             // Fetch stores for potential relationships
             fetchRelationStores();
@@ -461,7 +463,6 @@
             }
 
             // Ensure count is treated as number
-            const isEmptyStore = (currentStoreInfo.count === 0);
             const canEditStructuralFields = isEmptyStore && !isReadOnlyMode;
             const hasExplicitMapKeySchema = !!(
                 (Array.isArray(currentStoreInfo.keyFields) && currentStoreInfo.keyFields.length > 0) ||

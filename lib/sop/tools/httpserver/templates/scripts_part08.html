@@ -330,6 +330,8 @@
         const footer = document.querySelector('#add-store-modal .modal-footer');
         const saveBtn = footer?.querySelector('.btn-success');
         if (saveBtn) {
+            saveBtn.style.display = 'inline-block';
+            saveBtn.style.visibility = 'visible';
             saveBtn.removeAttribute('onclick');
             saveBtn.dataset.storeAction = 'add';
             saveBtn.textContent = 'Add';
@@ -487,6 +489,14 @@
         window.currentAdminCredentials = null;
         const unlockBtn = document.getElementById('btn-unlock-admin');
         if (unlockBtn) unlockBtn.style.display = 'none';
+
+        const addStoreFooter = document.querySelector('#add-store-modal .modal-footer');
+        const addStoreSaveBtn = addStoreFooter?.querySelector('.btn-success');
+        if (addStoreSaveBtn) {
+            addStoreSaveBtn.style.display = 'inline-block';
+            addStoreSaveBtn.style.visibility = 'visible';
+            addStoreSaveBtn.disabled = false;
+        }
     }
 
     function ensureValueMapAddButton() {

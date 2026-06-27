@@ -100,6 +100,8 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 }
 
 func (a *CopilotAgent) toolListTools(ctx context.Context, args map[string]any) (string, error) {
+	a.registerTools(ctx)
+
 	tools := a.registry.List()
 
 	// Sort tools by name for consistent output

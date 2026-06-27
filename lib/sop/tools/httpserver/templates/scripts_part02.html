@@ -361,7 +361,7 @@
         let isSystemDB = currentDbObj ? currentDbObj.is_system : false;
 
         let isReadOnly = false;
-        if (currentStore === 'llm_feedback' || (isSystemDB && currentStore === 'memory')) {
+        if (currentStore === 'llm_feedback') {
              isReadOnly = true;
         }
 

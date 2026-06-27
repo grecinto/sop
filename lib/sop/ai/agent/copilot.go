@@ -3038,6 +3038,8 @@ func (b *BaselineReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) 
 
 // ListTools returns the list of available tools.
 func (a *CopilotAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	a.registerTools(ctx)
+
 	var tools []ai.ToolDefinition
 	routingState := activeRoutingState(ctx)
 	exposure := buildNativeToolExposure(routingState)

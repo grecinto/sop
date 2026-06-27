@@ -38,6 +38,28 @@ func TestListTools(t *testing.T) {
 	}
 }
 
+func TestListTools_ReRegistersAutomationToolsAfterPolicyEnablement(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(false)
+	SetAutomationPolicy(DefaultAutomationPolicy())
+	defer SetLocalDesktopAutomationEnabled(false)
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "system"})
+
+	SetLocalDesktopAutomationEnabled(true)
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+
+	output, err := agent.Execute(ctx, "list_tools", nil)
+	if err != nil {
+		t.Fatalf("list_tools failed after enabling automation: %v", err)
+	}
+
+	if !strings.Contains(output, "/execute_local_command") {
+		t.Fatalf("expected automation tools to appear in list_tools output after policy enablement, got:\n%s", output)
+	}
+}
+
 func TestListTools_StoresRoutingExposesStoresProtocolTools(t *testing.T) {
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.Background()

@@ -446,7 +446,7 @@ func normalizeUsername(username string) string {
 func normalizeRole(role string) string {
 	role = strings.TrimSpace(role)
 	switch role {
-	case sop.RoleAdmin, sop.RoleUser, sop.RoleGuest:
+	case sop.RoleAdmin, sop.RoleSystemAdmin, sop.RoleUser, sop.RoleGuest:
 		return role
 	default:
 		return sop.RoleUser
@@ -503,20 +503,30 @@ func (c *Config) SetUser(username, password, role string) error {
 func isAdminRoleInContext(ctx context.Context) bool {
 	auth := sop.GetAuthFromContext(ctx)
 	for _, role := range auth.Roles {
-		if strings.EqualFold(role, sop.RoleAdmin) {
+		if sop.IsAdminRole(role) {
 			return true
 		}
 	}
 	return auth.IsSystem
 }
 
+func isRegularAdminRoleInContext(ctx context.Context) bool {
+	auth := sop.GetAuthFromContext(ctx)
+	for _, role := range auth.Roles {
+		if strings.EqualFold(role, sop.RoleAdmin) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Config) IsAdminOverride(ctx context.Context, username, password, legacyToken string) bool {
-	if ok, user, err := c.Authenticate(username, password); err == nil && ok && user != nil && (user.Role == sop.RoleAdmin || strings.EqualFold(user.Username, "root")) {
+	if ok, user, err := c.Authenticate(username, password); err == nil && ok && user != nil && (sop.IsAdminRole(user.Role) || strings.EqualFold(user.Username, "root")) {
 		return true
 	}
 
 	if legacyToken != "" {
-		if ok, user, err := c.AuthenticateBearerToken(ctx, legacyToken); err == nil && ok && user != nil && (user.Role == sop.RoleAdmin || strings.EqualFold(user.Username, "root")) {
+		if ok, user, err := c.AuthenticateBearerToken(ctx, legacyToken); err == nil && ok && user != nil && (sop.IsAdminRole(user.Role) || strings.EqualFold(user.Username, "root")) {
 			return true
 		}
 	}

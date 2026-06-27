@@ -3,6 +3,7 @@ package sop
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 var (
@@ -20,10 +21,15 @@ const (
 )
 
 const (
-	RoleAdmin = "Admin"
-	RoleUser  = "User"
-	RoleGuest = "Guest"
+	RoleAdmin       = "Admin"
+	RoleSystemAdmin = "SystemAdmin"
+	RoleUser        = "User"
+	RoleGuest       = "Guest"
 )
+
+func IsAdminRole(role string) bool {
+	return strings.EqualFold(role, RoleAdmin) || strings.EqualFold(role, RoleSystemAdmin)
+}
 
 type ResourceAccess struct {
 	Visibility Visibility          `json:"visibility"`
@@ -72,7 +78,7 @@ func Authorize(ctx context.Context, access ResourceAccess, action Action) bool {
 	}
 
 	for _, role := range caller.Roles {
-		if role == RoleAdmin {
+		if IsAdminRole(role) {
 			return true
 		}
 	}

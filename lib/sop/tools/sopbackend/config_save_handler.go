@@ -41,6 +41,8 @@ type SaveConfigRequest struct {
 	Port         int    `json:"port"`
 	RootPassword string `json:"root_password,omitempty"`
 
+	SystemAdminBootstrapSecret string `json:"system_admin_bootstrap_secret,omitempty"`
+
 	UseSharedBrain bool                `json:"use_shared_brain"`
 	SystemOptions  sop.DatabaseOptions `json:"system_options"`
 	Databases      []UserDBRequest     `json:"databases"`
@@ -53,7 +55,24 @@ func validateSetupWizardRootPassword(password string) error {
 	return nil
 }
 
-func ensureRootUserFromPassword(password string) error {
+func validateSetupWizardSystemAdminSecret(secret string) error {
+	if strings.TrimSpace(secret) == "" {
+		return nil
+	}
+
+	configuredSecret := strings.TrimSpace(os.Getenv("SOP_SYSTEM_ADMIN_BOOTSTRAP_SECRET"))
+	if configuredSecret == "" {
+		return fmt.Errorf("system admin bootstrap secret is not configured on this server")
+	}
+
+	if secret != configuredSecret {
+		return fmt.Errorf("system admin bootstrap secret is invalid")
+	}
+
+	return nil
+}
+
+func ensureRootUserFromPassword(password string, role string) error {
 	password = strings.TrimSpace(password)
 	if password == "" {
 		return nil
@@ -67,7 +86,11 @@ func ensureRootUserFromPassword(password string) error {
 		}
 	}
 
-	return config.SetUser("root", password, sop.RoleAdmin)
+	if role == "" {
+		role = sop.RoleAdmin
+	}
+
+	return config.SetUser("root", password, role)
 }
 
 func normalizeProviderAndModel(provider, model string) (string, string) {
@@ -111,6 +134,10 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Validation Failed: %v", err), http.StatusBadRequest)
 		return
 	}
+	if err := validateSetupWizardSystemAdminSecret(req.SystemAdminBootstrapSecret); err != nil {
+		http.Error(w, fmt.Sprintf("Validation Failed: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	// 2. Validate Safety (Paths, Conflicts, Permissions)
 	if err := validatePathConflictsAndPermissions(req); err != nil {
@@ -124,7 +151,13 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		config.Port = req.Port
 	}
 	if req.RootPassword != "" {
-		if err := ensureRootUserFromPassword(req.RootPassword); err != nil {
+		rootRole := sop.RoleAdmin
+		if strings.TrimSpace(req.SystemAdminBootstrapSecret) != "" {
+			if err := validateSetupWizardSystemAdminSecret(req.SystemAdminBootstrapSecret); err == nil {
+				rootRole = sop.RoleSystemAdmin
+			}
+		}
+		if err := ensureRootUserFromPassword(req.RootPassword, rootRole); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to seed root user: %v", err), http.StatusInternalServerError)
 			return
 		}

@@ -235,7 +235,9 @@
     }
 
     function handleChatInput(e) {
-        const input = e.target;
+        const input = e && e.target ? e.target : document.getElementById('chat-input');
+        if (!input) return;
+
         input.style.height = '40px'; // Reset for recalculation
         const newHeight = Math.min(input.scrollHeight, 150);
         input.style.height = Math.max(40, newHeight) + 'px';
@@ -243,7 +245,7 @@
         // Handle Send button display logic here if needed
         const sendBtn = document.getElementById('chat-send-btn');
         if (sendBtn) {
-            sendBtn.disabled = input.value.trim() === '';
+            sendBtn.disabled = (input.value || '').trim() === '';
         }
     }
 
