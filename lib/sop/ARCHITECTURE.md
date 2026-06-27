@@ -695,3 +695,15 @@ The active OMNI routing and prompt path is intentionally explicit:
 5. Fall back to broad schema injection only when no specific artifacts are classified.
 
 This design keeps routing deterministic while giving the LLM laser-focused execution context for fluent script generation.
+
+### Planned Extension: Web-Research Routing via Special Tokens
+For future revisit, the routing architecture can be extended with a dedicated web-research branch triggered by special prefixes such as `www:` or `web:`.
+
+Design intent:
+- `www:` or `web:` becomes an explicit signal that the Ask should route into a live web-research flow rather than the normal local/domain-only flow.
+- The classifier can add a lightweight `WebResearch` domain/layer component to routing state, while the existing three-gate structure remains intact.
+- The web branch can reuse the same macro/micro execution model: route -> assemble context -> inject web-specific context -> run the reasoning loop with web tools.
+- Web tools should be narrow and explicit, such as search, fetch, extract, and cite-source actions, so the agent can gather fresh external evidence without turning every Ask into an uncontrolled browsing session.
+- The reasoning flow should receive web context as a first-class prompt component and should return grounded answers with citations and uncertainty markers when sources are weak or conflicting.
+
+This keeps the system flexible: normal Ask remains deterministic and local-context oriented, while web-assisted Ask becomes a specialized, source-aware reasoning mode for current or external information.

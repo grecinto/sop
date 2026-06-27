@@ -77,6 +77,9 @@ Conventions for this document:
 
 - [ ] Document-to-Space tool for promoting resolved insights into curated Spaces.
 - [ ] Clarification fallback tool for unresolved ambiguity after autonomous research.
+- [ ] Add `www:` / `web:` special-router support so Ask can switch into a dedicated web-research branch.
+- [ ] Extend classification/routing state with a lightweight `WebResearch` domain/layer component for the new branch.
+- [ ] Add web tools for search, fetch, extract, and source-citation handling, plus web-context injection into the reasoning loop.
 - [ ] Additional Omni consumption hardening for cross-database loopback flows.
 - [ ] Medical Space showcase package for deep-domain demonstration.
 - [ ] Display Key/Value map struct fields on the Edit Store form, matching the Add Store field-builder experience for map-based stores.

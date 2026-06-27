@@ -240,6 +240,59 @@
         });
     }
 
+    function getDefaultThinkingLevelForCurrentConfig() {
+        const chatAIConfig = typeof getStoredAIConfig === 'function' ? getStoredAIConfig() : {};
+        const providerConfig = typeof normalizeProviderConfig === 'function'
+            ? normalizeProviderConfig(chatAIConfig.brain_provider || '', chatAIConfig.brain_model || '')
+            : { provider: chatAIConfig.brain_provider || '', model: (chatAIConfig.brain_model || '').trim() };
+
+        const provider = (providerConfig.provider || '').trim().toLowerCase();
+        const model = (providerConfig.model || '').trim().toLowerCase();
+        const normalizedProvider = provider === 'openai' ? 'chatgpt' : provider;
+
+        if (normalizedProvider === 'anthropic') {
+            if (model.includes('opus') || model.includes('sonnet')) return 'high';
+            if (model.includes('haiku')) return 'medium';
+        } else if (normalizedProvider === 'gemini') {
+            if (model.includes('flash-lite')) return 'low';
+            if (model.includes('flash')) return 'medium';
+            if (model.includes('pro')) return 'high';
+        } else if (normalizedProvider === 'chatgpt') {
+            if (model.includes('mini') || model.includes('nano')) return 'low';
+            if (model.includes('pro')) return 'high';
+            return 'medium';
+        }
+
+        return '';
+    }
+
+    function syncChatThinkingMenuSelection(selectedValue) {
+        const menu = document.getElementById('chat-thinking-menu');
+        if (!menu) return;
+
+        const input = document.getElementById('chat-thinking-select');
+        const trigger = document.getElementById('chat-thinking-trigger');
+        const currentValue = (selectedValue ?? input?.value ?? '').trim().toLowerCase();
+        const resolvedValue = currentValue && currentValue !== 'auto' ? currentValue : getDefaultThinkingLevelForCurrentConfig();
+
+        menu.querySelectorAll('.chat-thinking-option').forEach((button) => {
+            const value = (button.getAttribute('data-value') || '').trim().toLowerCase();
+            const isActive = value === (resolvedValue || '');
+            button.classList.toggle('active', isActive);
+            button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+
+        if (trigger) {
+            if (resolvedValue) {
+                trigger.title = `Reasoning level: ${resolvedValue}`;
+                trigger.setAttribute('data-level', resolvedValue);
+            } else {
+                trigger.title = 'Reasoning level override';
+                trigger.setAttribute('data-level', 'auto');
+            }
+        }
+    }
+
     function closeChatThinkingMenu() {
         const menu = document.getElementById('chat-thinking-menu');
         if (menu) {
@@ -256,6 +309,7 @@
         const shouldOpen = !menu.classList.contains('show');
         closeChatThinkingMenu();
         if (shouldOpen) {
+            syncChatThinkingMenuSelection();
             menu.classList.add('show');
         }
 
@@ -275,10 +329,7 @@
         if (input) {
             input.value = value || '';
         }
-        if (trigger) {
-            trigger.title = `Reasoning level: ${value ? value : 'Auto'}`;
-            trigger.setAttribute('data-level', value || 'auto');
-        }
+        syncChatThinkingMenuSelection(value || '');
         closeChatThinkingMenu();
         updateComposerState();
     }
