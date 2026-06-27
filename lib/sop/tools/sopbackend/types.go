@@ -42,6 +42,7 @@ type Config struct {
 	SessionSecret          string           `json:"session_secret,omitempty"`
 	AuthProviderName       string           `json:"auth_provider,omitempty"`
 	Users                  []UserRecord     `json:"users,omitempty"`
+	UsersStore             UserStore        `json:"-"`
 
 	// ObfuscationMode defines the global obfuscation policy (disabled, per_database, all_databases).
 	// This overrides any setting in the agent's own configuration.

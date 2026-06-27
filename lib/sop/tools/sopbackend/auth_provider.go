@@ -35,13 +35,13 @@ func (p *LocalAuthProvider) Authenticate(ctx context.Context, username, password
 		return false, nil, nil
 	}
 
-	for i := range p.cfg.Users {
-		if normalizeUsername(p.cfg.Users[i].Username) != username {
-			continue
-		}
-		if err := bcrypt.CompareHashAndPassword([]byte(p.cfg.Users[i].PasswordHash), []byte(password)); err == nil {
-			user := p.cfg.Users[i]
-			return true, &user, nil
+	user, ok, err := p.cfg.findUserRecord(ctx, username)
+	if err != nil {
+		return false, nil, err
+	}
+	if ok && user != nil && user.PasswordHash != "" {
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err == nil {
+			return true, user, nil
 		}
 		return false, nil, nil
 	}

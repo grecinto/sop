@@ -19,6 +19,9 @@ const joinArgsSchema = `{"type":"object","description":"Joins two stores on spec
 const manageTransactionArgsSchema = `{"type":"object","properties":{"database":{"type":"string","description":"Optional database override. Defaults to the active session database."},"action":{"type":"string","enum":["begin","commit","rollback"],"description":"Transaction action to execute."}},"required":["action"]}`
 
 func (a *CopilotAgent) registerStoresTools(ctx context.Context) {
+	if !a.hasRegisteredCapability(StoresDomain) {
+		return
+	}
 	a.registry.RegisterWithUI("select", "Selects data from a store using criteria. With action=delete or action=update, it mutates the selected records. Prefer explicit transaction control for multi-step or mutating flows.", SelectInstruction, selectArgsSchema, wrapStringTool(a.toolSelect))
 
 	a.registry.RegisterHidden("join", JoinInstruction, joinArgsSchema, a.toolJoin)

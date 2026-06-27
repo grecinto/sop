@@ -132,6 +132,74 @@ func TestAuthenticate_LegacyRootPasswordFallback(t *testing.T) {
 	}
 }
 
+func TestRegisterUser_PersistsToStoreAndAuthenticates(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	defer os.Chdir(oldWD)
+
+	config = Config{}
+	cfg := Config{UsersStore: NewUserStore()}
+	user, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter")
+	if err != nil {
+		t.Fatalf("RegisterUser() error = %v", err)
+	}
+	if user == nil || user.Username != "alice" || user.Role != sop.RoleUser {
+		t.Fatalf("RegisterUser() returned unexpected user: %+v", user)
+	}
+
+	ok, authUser, err := cfg.Authenticate("alice", "pw123")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if !ok || authUser == nil || authUser.Username != "alice" {
+		t.Fatalf("Authenticate() returned unexpected user: %+v", authUser)
+	}
+}
+
+func TestHandleRegister_ReturnsCreatedUser(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	defer os.Chdir(oldWD)
+
+	config = Config{}
+	config.UsersStore = NewUserStore()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"username":"bob","password":"pw123","email":"bob@example.com","subscription_plan":"starter"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handleRegister(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("handleRegister() status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var payload struct {
+		Status string `json:"status"`
+		User   struct {
+			Username string `json:"username"`
+			Role     string `json:"role"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload.Status != "ok" || payload.User.Username != "bob" || payload.User.Role != sop.RoleUser {
+		t.Fatalf("unexpected response payload: %+v", payload)
+	}
+}
+
 func TestHandleRoot_RedirectsToSetupWizardWhenExplicitConfigIsMissing(t *testing.T) {
 	config = Config{}
 	oldWd, err := os.Getwd()

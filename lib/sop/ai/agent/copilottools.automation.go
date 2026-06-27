@@ -237,6 +237,10 @@ const sendEmailArgsSchema = `{"type":"object","properties":{"to":{"type":"string
 // to communicate with the local SOP Desktop Companion daemon.
 
 func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
+	if !a.hasRegisteredCapability("Desktop", "Desktop Automation", "desktop") {
+		return
+	}
+
 	policy := GetAutomationPolicy()
 	if !policy.Enabled && !localDesktopAutomationEnabled.Load() {
 		return

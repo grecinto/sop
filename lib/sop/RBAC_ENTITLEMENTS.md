@@ -71,6 +71,39 @@ type ResourceAccess struct {
 
 ---
 
+## User Lifecycle & Self-Service Access
+
+The RBAC model is being extended beyond static role checks to cover a full user lifecycle for self-service deployments.
+
+### Role Hierarchy
+
+| Role | Default for self-registration | Promotion authority | Demotion authority |
+|---|---|---|---|
+| User | Yes | None | None |
+| PowerUser | No | Can promote or demote Users | Can demote Users |
+| Admin | No | Can promote or demote Users and PowerUsers | Can demote Users and PowerUsers |
+| SystemAdmin | No | Can promote or demote any lower role | Can demote any lower role |
+
+The governing rule is that a higher-privileged role can manage users at the same level or below. In practice, this means an Admin can demote a PowerUser or User, a PowerUser can demote a User, and a SystemAdmin can demote any lower-ranked account.
+
+### Planned Account Lifecycle
+
+The auth layer is being aligned around a persistent user store in the System DB with a small set of lifecycle operations:
+
+- Self-registration creates a new account as a User and selects an initial plan.
+- Self-unregistration removes the account from the active user store and revokes active sessions.
+- Role changes are mediated by the same RBAC policy layer used for resource access.
+- Subscription selection feeds plan-aware entitlement checks for workflow availability.
+
+### Plan-Aware Entitlements
+
+The same entitlement model used for RBAC can also gate workflow access by subscription:
+
+- Starter plan: enables the local-agent workflow.
+- Richer plan: enables both HQ and local-agent workflows.
+
+This keeps feature access explicit and testable rather than hardcoding UI-only switches.
+
 ## Evaluation Flow & Best Practices
 
 1. **Pre-flight Quota Checks**: Before creating a resource (like a Space), the API checks the caller's applied `StorageLimit`. It queries the DB for the user's current entity count, rejecting with `403 Forbidden` or `413 Payload Too Large` if breached.

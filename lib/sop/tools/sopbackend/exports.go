@@ -218,6 +218,7 @@ func RegisterAllHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config/environments/delete", WithAuth(handleDeleteEnvironment))
 
 	// Auth Endpoints
+	mux.HandleFunc("/api/auth/register", handleRegister)
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
 }

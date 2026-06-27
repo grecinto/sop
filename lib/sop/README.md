@@ -142,6 +142,9 @@ sop-httpserver
 SOP supports both local built-in auth and external identity-provider integration for enterprise deployments.
 
 - **Built-in auth**: the embedded HTTP server supports signed bearer access tokens, short-lived refresh renewal, and a dedicated signing secret for the hot path.
+- **Self-service account lifecycle**: the platform is moving toward registration, self-unregistration, role governance, and plan selection backed by a persistent users store and the shared RBAC policy layer.
+- **Role hierarchy and governance**: roles such as User, PowerUser, Admin, and SystemAdmin are intended to be managed through the same entitlement and policy pipeline, including demotion of same- or lower-ranked accounts by higher-privileged roles.
+- **Subscription-aware workflows**: Starter plans target the local-agent workflow, while a richer plan enables both HQ and local-agent workflows.
 - **Enterprise directory support**: the auth layer is designed to accept provider adapters for AD, Entra ID, LDAP, SAML, or OIDC without changing the core application logic.
 - **Secret handling**: keep `SOP_SESSION_SECRET` (or `session_secret`) in a secret manager or environment variable; do not bake signing keys into source control.
 - **Remote clients**: bearer tokens are suitable for CLI tools, scripts, and microservices that call the HTTP API directly over HTTPS.

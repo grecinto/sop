@@ -13,6 +13,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/jsondb"
@@ -144,6 +145,18 @@ func (a *CopilotAgent) registerSystemTools(ctx context.Context) {
 	a.registry.Register("set_verbose", "Toggle session verbosity for follow-up tool results and progress streaming.", `{"type":"object","properties":{"verbose":{"type":"boolean","description":"Set verbosity on or off. If omitted, the current setting is toggled."}}}`, wrapStringTool(a.toolSetVerbose))
 }
 
+func (a *CopilotAgent) hasRegisteredCapability(domains ...string) bool {
+	if a == nil || a.capabilityRegistry == nil {
+		return false
+	}
+	for _, domain := range domains {
+		if _, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: domain}); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // registerTools registers all available tools for the CopilotAgent.
 func (a *CopilotAgent) registerTools(ctx context.Context) {
 	log.Info("CopilotAgent.registerTools: starting")
@@ -152,12 +165,18 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 	}
 
 	a.registerSystemTools(ctx)
-	a.registerStoresTools(ctx)
+	if a.hasRegisteredCapability(StoresDomain) {
+		a.registerStoresTools(ctx)
+	}
 	a.registerAtomicTools()
-	a.registerSpaceTools(ctx)
+	if a.hasRegisteredCapability(SpacesDomain) {
+		a.registerSpaceTools(ctx)
+	}
 	a.registerScriptTools(ctx)
 	a.registerRoutingTools(ctx)
-	a.registerAutomationTools(ctx)
+	if a.hasRegisteredCapability("Desktop", "Desktop Automation", "desktop") {
+		a.registerAutomationTools(ctx)
+	}
 
 	registered := a.registry.List()
 	log.Info("CopilotAgent.registerTools: completed", "tool_count", len(registered))

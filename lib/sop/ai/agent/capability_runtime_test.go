@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -68,6 +69,18 @@ func TestNewCopilotAgentAppliesCapabilityOptions(t *testing.T) {
 	}
 	if cap.ID() != "stores" {
 		t.Fatalf("expected stores capability, got %q", cap.ID())
+	}
+}
+
+func TestRegisterToolsSkipsLegacyDomainToolsWithoutCapabilities(t *testing.T) {
+	ag := &CopilotAgent{registry: NewRegistry(), capabilityRegistry: capabilities.NewRegistry()}
+	ag.registerTools(context.Background())
+
+	if _, ok := ag.registry.Get("select"); ok {
+		t.Fatal("expected stores tool registration to be skipped without stores capability")
+	}
+	if _, ok := ag.registry.Get("mint_to_space"); ok {
+		t.Fatal("expected spaces tool registration to be skipped without spaces capability")
 	}
 }
 

@@ -29,6 +29,9 @@ const vectorizeSpaceCategoriesArgsSchema = `{"type":"object","properties":{"data
 const vectorizeSpaceItemsArgsSchema = `{"type":"object","properties":{"database":{"type":"string","description":"Optional database override. Defaults to the active session database."},"kb_name":{"type":"string","description":"Exact target knowledge base name whose specific items should be vectorized. Prefer this over category-wide or full-Space vectorization when only a few changed items need refresh."},"batch_size":{"type":"integer","description":"Optional vectorization batch size for the selected items."},"category_id":{"type":"string","description":"Optional category UUID scoping the items to vectorize."},"item_ids":{"type":"array","description":"Item UUIDs to vectorize for a tightly scoped semantic refresh.","items":{"type":"string"}}},"required":["kb_name"]}`
 
 func (a *CopilotAgent) registerSpaceTools(ctx context.Context) {
+	if !a.hasRegisteredCapability(SpacesDomain) {
+		return
+	}
 	a.registry.RegisterWithUI("mint_to_space", "Stores generated or durable knowledge in a target Space using the exact requested kb_name.", MintToSpaceInstruction, mintToSpaceArgsSchema, wrapStringTool(a.toolMintToSpace))
 	a.registry.RegisterWithUI("delete_space", "Deletes an entire Space only after explicit user intent.", DeleteSpaceInstruction, deleteSpaceArgsSchema, wrapStringTool(a.toolDeleteSpace))
 	a.registry.RegisterWithUI("enrich_space", "Reruns Space enrichment when derived knowledge needs an explicit refresh.", EnrichSpaceInstruction, enrichSpaceArgsSchema, wrapStringTool(a.toolEnrichSpace))

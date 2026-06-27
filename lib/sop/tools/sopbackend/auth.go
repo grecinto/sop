@@ -35,9 +35,87 @@ func getSystemDB(ctx context.Context) (*aidb.Database, error) {
 
 // UserRecord stores minimal credential and role data for the built-in auth model.
 type UserRecord struct {
-	Username     string `json:"username"`
-	Role         string `json:"role"`
-	PasswordHash string `json:"password_hash,omitempty"`
+	Username         string    `json:"username"`
+	Role             string    `json:"role"`
+	PasswordHash     string    `json:"password_hash,omitempty"`
+	Email            string    `json:"email,omitempty"`
+	SubscriptionPlan string    `json:"subscription_plan,omitempty"`
+	Status           string    `json:"status,omitempty"`
+	CreatedAt        time.Time `json:"created_at,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at,omitempty"`
+}
+
+// UserStore persists user identity records for the built-in auth model.
+type UserStore interface {
+	Save(ctx context.Context, user *UserRecord) error
+	Get(ctx context.Context, username string) (*UserRecord, bool, error)
+	Delete(ctx context.Context, username string) error
+	List(ctx context.Context) ([]UserRecord, error)
+}
+
+type InMemoryUserStore struct {
+	mu    sync.RWMutex
+	users map[string]UserRecord
+}
+
+func NewUserStore() *InMemoryUserStore {
+	return &InMemoryUserStore{users: make(map[string]UserRecord)}
+}
+
+func (s *InMemoryUserStore) Save(ctx context.Context, user *UserRecord) error {
+	if user == nil {
+		return fmt.Errorf("user is nil")
+	}
+	username := normalizeUsername(user.Username)
+	if username == "" {
+		return fmt.Errorf("username is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copyUser := *user
+	copyUser.Username = username
+	copyUser.UpdatedAt = time.Now().UTC()
+	if copyUser.CreatedAt.IsZero() {
+		copyUser.CreatedAt = copyUser.UpdatedAt
+	}
+	s.users[username] = copyUser
+	return nil
+}
+
+func (s *InMemoryUserStore) Get(ctx context.Context, username string) (*UserRecord, bool, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, false, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	user, ok := s.users[username]
+	if !ok {
+		return nil, false, nil
+	}
+	copyUser := user
+	return &copyUser, true, nil
+}
+
+func (s *InMemoryUserStore) Delete(ctx context.Context, username string) error {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.users, username)
+	return nil
+}
+
+func (s *InMemoryUserStore) List(ctx context.Context) ([]UserRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	users := make([]UserRecord, 0, len(s.users))
+	for _, user := range s.users {
+		users = append(users, user)
+	}
+	return users, nil
 }
 
 // SessionRecord holds a bearer token for the short-lived V1 login facade.
@@ -492,12 +570,90 @@ func (c *Config) SetUser(username, password, role string) error {
 		return err
 	}
 
-	c.Users = append(c.Users, UserRecord{
+	record := UserRecord{
 		Username:     username,
 		Role:         normalizeRole(role),
 		PasswordHash: hash,
-	})
+		Status:       "active",
+	}
+	c.Users = append(c.Users, record)
+	if store := c.ensureUserStore(); store != nil {
+		if err := store.Save(context.Background(), &record); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (c *Config) ensureUserStore() UserStore {
+	if c.UsersStore != nil {
+		return c.UsersStore
+	}
+	c.UsersStore = NewUserStore()
+	return c.UsersStore
+}
+
+func (c *Config) findUserRecord(ctx context.Context, username string) (*UserRecord, bool, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, false, nil
+	}
+	if store := c.UsersStore; store != nil {
+		user, ok, err := store.Get(ctx, username)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return user, true, nil
+		}
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) != username {
+			continue
+		}
+		user := c.Users[i]
+		return &user, true, nil
+	}
+	return nil, false, nil
+}
+
+func (c *Config) RegisterUser(ctx context.Context, username, password, email, role, subscriptionPlan string) (*UserRecord, error) {
+	username = normalizeUsername(username)
+	if username == "" || strings.TrimSpace(password) == "" {
+		return nil, fmt.Errorf("username and password are required")
+	}
+	if _, ok, err := c.findUserRecord(ctx, username); err != nil {
+		return nil, err
+	} else if ok {
+		return nil, fmt.Errorf("username already exists")
+	}
+
+	role = normalizeRole(role)
+	if role == "" {
+		role = sop.RoleUser
+	}
+	if subscriptionPlan == "" {
+		subscriptionPlan = "starter"
+	}
+
+	hash, err := hashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+
+	record := UserRecord{
+		Username:         username,
+		Role:             role,
+		PasswordHash:     hash,
+		Email:            strings.TrimSpace(email),
+		SubscriptionPlan: strings.TrimSpace(subscriptionPlan),
+		Status:           "active",
+	}
+	if err := c.ensureUserStore().Save(ctx, &record); err != nil {
+		return nil, err
+	}
+	c.Users = append(c.Users, record)
+	return &record, nil
 }
 
 func isAdminRoleInContext(ctx context.Context) bool {
@@ -745,6 +901,62 @@ func parseLoginRequest(r *http.Request) (string, string, error) {
 		return "", "", err
 	}
 	return req.Username, req.Password, nil
+}
+
+func parseRegisterRequest(r *http.Request) (string, string, string, string, string, error) {
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+		if err := r.ParseForm(); err != nil {
+			return "", "", "", "", "", err
+		}
+		return r.FormValue("username"), r.FormValue("password"), r.FormValue("email"), r.FormValue("role"), r.FormValue("subscription_plan"), nil
+	}
+
+	var req struct {
+		Username         string `json:"username"`
+		Password         string `json:"password"`
+		Email            string `json:"email"`
+		Role             string `json:"role"`
+		SubscriptionPlan string `json:"subscription_plan"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return "", "", "", "", "", err
+	}
+	return req.Username, req.Password, req.Email, req.Role, req.SubscriptionPlan, nil
+}
+
+func handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username, password, email, role, subscriptionPlan, err := parseRegisterRequest(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	user, err := config.RegisterUser(r.Context(), username, password, email, role, subscriptionPlan)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			status = http.StatusConflict
+		}
+		writeJSONError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"user": map[string]any{
+			"username":          user.Username,
+			"role":              user.Role,
+			"email":             user.Email,
+			"subscription_plan": user.SubscriptionPlan,
+		},
+	})
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
