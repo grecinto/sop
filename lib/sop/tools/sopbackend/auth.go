@@ -403,8 +403,43 @@ func (s *SessionStore) Refresh(ctx context.Context, refreshToken string) (string
 	return accessToken, newRefreshToken, nil
 }
 
+func isUserAccountActive(ctx context.Context, username, role string) bool {
+	username = normalizeUsername(username)
+	if username == "" {
+		return false
+	}
+	if strings.EqualFold(username, "root") {
+		return true
+	}
+	if strings.EqualFold(username, "ui-client") && strings.EqualFold(role, "daemon-user") {
+		return true
+	}
+	if strings.EqualFold(role, "daemon-user") {
+		return true
+	}
+	user, ok, err := config.findUserRecord(ctx, username)
+	if err != nil || !ok || user == nil {
+		return false
+	}
+	if strings.TrimSpace(user.Status) == "" {
+		return true
+	}
+	return strings.EqualFold(user.Status, "active")
+}
+
 func (s *SessionStore) ValidateToken(ctx context.Context, token string) (*UserRecord, error) {
+	return s.validateToken(ctx, token, true)
+}
+
+func (s *SessionStore) ValidateTokenWithoutAccountCheck(ctx context.Context, token string) (*UserRecord, error) {
+	return s.validateToken(ctx, token, false)
+}
+
+func (s *SessionStore) validateToken(ctx context.Context, token string, requireActiveAccount bool) (*UserRecord, error) {
 	if claims, err := parseAndVerifySignedAccessToken(token); err == nil {
+		if requireActiveAccount && !isUserAccountActive(ctx, claims.Subject, claims.Role) {
+			return nil, fmt.Errorf("invalid session")
+		}
 		return &UserRecord{Username: claims.Subject, Role: claims.Role}, nil
 	}
 
@@ -438,6 +473,15 @@ func (s *SessionStore) ValidateToken(ctx context.Context, token string) (*UserRe
 			log.Warn("ValidateToken: failed to commit expired session cleanup", "error", err)
 		}
 		return nil, fmt.Errorf("expired session")
+	}
+	if requireActiveAccount && !isUserAccountActive(ctx, r.Username, r.Role) {
+		if err := removeSessionRecord(ctx, store, r); err != nil {
+			log.Warn("ValidateToken: failed to remove revoked session", "error", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			log.Warn("ValidateToken: failed to commit revoked session cleanup", "error", err)
+		}
+		return nil, fmt.Errorf("invalid session")
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -485,6 +529,46 @@ func (s *SessionStore) RevokeToken(ctx context.Context, token string) {
 	}
 }
 
+func (s *SessionStore) revokeSessionsForUser(ctx context.Context, username string) {
+	store, tx, err := s.getStore(ctx)
+	if err != nil {
+		log.Warn("failed to get store for user session revocation", "error", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var records []SessionRecord
+	if ok, err := store.First(ctx); err != nil {
+		log.Warn("failed to iterate sessions for user revocation", "error", err)
+		return
+	} else if !ok {
+		_ = tx.Commit(ctx)
+		return
+	}
+
+	for {
+		record, err := store.GetCurrentValue(ctx)
+		if err != nil {
+			break
+		}
+		if strings.EqualFold(record.Username, username) {
+			records = append(records, record)
+		}
+		if ok, err := store.Next(ctx); err != nil || !ok {
+			break
+		}
+	}
+
+	for _, record := range records {
+		if err := removeSessionRecord(ctx, store, record); err != nil {
+			log.Warn("failed to revoke user session", "user", username, "error", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		log.Warn("failed to commit user session revocation", "error", err)
+	}
+}
+
 var (
 	tokenFacade     TokenFacade
 	tokenFacadeOnce sync.Once
@@ -494,8 +578,11 @@ func currentTokenFacade() TokenFacade {
 	tokenFacadeOnce.Do(func() {
 		tokenFacade = NewSessionStore(sessionTTL())
 	})
+	if tokenFacade == nil {
+		tokenFacade = NewSessionStore(sessionTTL())
+	}
 	// Allow TTL to be updated if config changes, without resetting the whole store.
-	if s, ok := tokenFacade.(*SessionStore); ok && s.ttl != sessionTTL() {
+	if s, ok := tokenFacade.(*SessionStore); ok && s != nil && s.ttl != sessionTTL() {
 		s.mu.Lock()
 		s.ttl = sessionTTL()
 		s.mu.Unlock()
@@ -529,6 +616,38 @@ func normalizeRole(role string) string {
 	default:
 		return sop.RoleUser
 	}
+}
+
+func roleLevel(role string) int {
+	switch normalizeRole(role) {
+	case sop.RoleSystemAdmin:
+		return 3
+	case sop.RoleAdmin:
+		return 2
+	case sop.RoleUser:
+		return 1
+	case sop.RoleGuest:
+		return 0
+	default:
+		return 1
+	}
+}
+
+func canManageRoleChange(ctx context.Context, actorUsername, actorRole, targetRole string) bool {
+	actorUsername = normalizeUsername(actorUsername)
+	actorRole = normalizeRole(actorRole)
+	targetRole = normalizeRole(targetRole)
+
+	if actorUsername == "root" {
+		return true
+	}
+	if strings.EqualFold(actorRole, sop.RoleSystemAdmin) {
+		return true
+	}
+	if !sop.IsAdminRole(actorRole) {
+		return false
+	}
+	return roleLevel(targetRole) <= roleLevel(actorRole)
 }
 
 func hashPassword(password string) (string, error) {
@@ -654,6 +773,83 @@ func (c *Config) RegisterUser(ctx context.Context, username, password, email, ro
 	}
 	c.Users = append(c.Users, record)
 	return &record, nil
+}
+
+func (c *Config) UnregisterUser(ctx context.Context, username string) error {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil
+	}
+
+	if store := c.UsersStore; store != nil {
+		if err := store.Delete(ctx, username); err != nil {
+			return err
+		}
+	}
+
+	users := c.Users[:0]
+	for _, existing := range c.Users {
+		if normalizeUsername(existing.Username) == username {
+			continue
+		}
+		users = append(users, existing)
+	}
+	c.Users = users
+
+	if tokenFacade != nil {
+		if store, ok := tokenFacade.(*SessionStore); ok {
+			store.revokeSessionsForUser(ctx, username)
+		}
+	}
+	return nil
+}
+
+func (c *Config) UpdateUserRole(ctx context.Context, username, role string) (*UserRecord, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+	role = normalizeRole(role)
+	if role == "" {
+		role = sop.RoleUser
+	}
+
+	authCtx := sop.GetAuthFromContext(ctx)
+	actorUsername := normalizeUsername(authCtx.UserID)
+	actorRole := ""
+	if len(authCtx.Roles) > 0 {
+		actorRole = normalizeRole(authCtx.Roles[0])
+	}
+	if actorRole == "" && actorUsername != "" {
+		if actor, ok, err := c.findUserRecord(ctx, actorUsername); err == nil && ok && actor != nil {
+			actorRole = normalizeRole(actor.Role)
+		}
+	}
+	if !canManageRoleChange(ctx, actorUsername, actorRole, role) {
+		return nil, fmt.Errorf("permission denied")
+	}
+
+	user, ok, err := c.findUserRecord(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	user.Role = role
+	user.UpdatedAt = time.Now().UTC()
+	if err := c.ensureUserStore().Save(ctx, user); err != nil {
+		return nil, err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == username {
+			c.Users[i].Role = role
+			c.Users[i].UpdatedAt = user.UpdatedAt
+			break
+		}
+	}
+	return user, nil
 }
 
 func isAdminRoleInContext(ctx context.Context) bool {
@@ -924,6 +1120,17 @@ func parseRegisterRequest(r *http.Request) (string, string, string, string, stri
 	return req.Username, req.Password, req.Email, req.Role, req.SubscriptionPlan, nil
 }
 
+func parseRoleUpdateRequest(r *http.Request) (string, string, error) {
+	var req struct {
+		Username string `json:"username"`
+		Role     string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return "", "", err
+	}
+	return strings.TrimSpace(req.Username), strings.TrimSpace(req.Role), nil
+}
+
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -955,6 +1162,80 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 			"role":              user.Role,
 			"email":             user.Email,
 			"subscription_plan": user.SubscriptionPlan,
+		},
+	})
+}
+
+func handleUnregister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authCtx := sop.GetAuthFromContext(r.Context())
+	username := normalizeUsername(authCtx.UserID)
+	if username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	if err := config.UnregisterUser(r.Context(), username); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "account removed"})
+}
+
+func handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	targetUsername, role, err := parseRoleUpdateRequest(r)
+	if err != nil || targetUsername == "" || role == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	authCtx := sop.GetAuthFromContext(r.Context())
+	actorUsername := normalizeUsername(authCtx.UserID)
+	actorRole := ""
+	if len(authCtx.Roles) > 0 {
+		actorRole = normalizeRole(authCtx.Roles[0])
+	}
+	if actorRole == "" && actorUsername != "" {
+		if actor, ok, actorErr := config.findUserRecord(r.Context(), actorUsername); actorErr == nil && ok && actor != nil {
+			actorRole = normalizeRole(actor.Role)
+		}
+	}
+	if !canManageRoleChange(r.Context(), actorUsername, actorRole, role) {
+		writeJSONError(w, http.StatusForbidden, "permission denied")
+		return
+	}
+
+	updatedUser, err := config.UpdateUserRole(r.Context(), targetUsername, role)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+			status = http.StatusForbidden
+		}
+		writeJSONError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"user": map[string]any{
+			"username": updatedUser.Username,
+			"role":     updatedUser.Role,
 		},
 	})
 }

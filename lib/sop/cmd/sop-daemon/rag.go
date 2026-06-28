@@ -416,13 +416,37 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	sessionKey := strings.TrimSpace(req.HQ.SessionID)
+	if sessionKey == "" {
+		sessionKey = strings.TrimSpace(req.HQ.UserID)
+	}
+	if sessionKey == "" {
+		sessionKey = "local-daemon"
+	}
+
+	var storedSessionContext daemonSessionContext
+	daemonSessionStore.mu.Lock()
+	if stored, ok := daemonSessionStore.data[sessionKey]; ok {
+		storedSessionContext = stored
+	}
+	daemonSessionStore.mu.Unlock()
+
 	payload := &ai.SessionPayload{
 		CurrentUserQuery: req.Query,
 		UserID:           strings.TrimSpace(req.HQ.UserID),
 		SessionID:        strings.TrimSpace(req.HQ.SessionID),
 	}
+	if payload.UserID == "" && storedSessionContext.HQUserID != "" {
+		payload.UserID = storedSessionContext.HQUserID
+	}
 	if payload.SessionID == "" {
-		payload.SessionID = payload.UserID
+		if storedSessionContext.HQSessionID != "" {
+			payload.SessionID = storedSessionContext.HQSessionID
+		} else if payload.UserID != "" {
+			payload.SessionID = payload.UserID
+		} else {
+			payload.SessionID = sessionKey
+		}
 	}
 	if payload.SessionID == "" {
 		payload.SessionID = "local-daemon"
@@ -440,16 +464,28 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	accessToken := strings.TrimSpace(req.Auth.AccessToken)
 	refreshToken := strings.TrimSpace(req.Auth.RefreshToken)
 	hqBaseURL := strings.TrimSpace(req.HQ.BaseURL)
-	if accessToken != "" || refreshToken != "" {
+	if accessToken == "" && refreshToken == "" {
+		accessToken = strings.TrimSpace(storedSessionContext.AccessToken)
+		refreshToken = strings.TrimSpace(storedSessionContext.RefreshToken)
+	}
+	if hqBaseURL == "" {
+		hqBaseURL = strings.TrimSpace(storedSessionContext.HQBaseURL)
+	}
+	if accessToken != "" || refreshToken != "" || hqBaseURL != "" || storedSessionContext.LLMProvider != "" || storedSessionContext.ThinkingLevel != "" {
 		ctxKey := payload.SessionID
 		daemonSessionStore.mu.Lock()
 		daemonSessionStore.data[ctxKey] = daemonSessionContext{
-			AccessToken:  accessToken,
-			RefreshToken: refreshToken,
-			HQBaseURL:    hqBaseURL,
-			HQUserID:     strings.TrimSpace(req.HQ.UserID),
-			HQSessionID:  payload.SessionID,
-			LastUpdated:  time.Now().UTC(),
+			AccessToken:   accessToken,
+			RefreshToken:  refreshToken,
+			HQBaseURL:     hqBaseURL,
+			HQUserID:      strings.TrimSpace(req.HQ.UserID),
+			HQSessionID:   payload.SessionID,
+			LLMProvider:   strings.TrimSpace(storedSessionContext.LLMProvider),
+			LLMAPIKey:     strings.TrimSpace(storedSessionContext.LLMAPIKey),
+			LLMModel:      strings.TrimSpace(storedSessionContext.LLMModel),
+			LLMURL:        strings.TrimSpace(storedSessionContext.LLMURL),
+			ThinkingLevel: strings.TrimSpace(storedSessionContext.ThinkingLevel),
+			LastUpdated:   time.Now().UTC(),
 		}
 		daemonSessionStore.mu.Unlock()
 	}
@@ -461,18 +497,32 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	cfg.Set("payload", payload)
 	cfg.Set("access_token", accessToken)
 	cfg.Set("refresh_token", refreshToken)
-	if trimmedThinkingLevel := strings.TrimSpace(req.ThinkingLevel); trimmedThinkingLevel != "" {
+	trimmedThinkingLevel := strings.TrimSpace(req.ThinkingLevel)
+	if trimmedThinkingLevel == "" {
+		trimmedThinkingLevel = strings.TrimSpace(storedSessionContext.ThinkingLevel)
+	}
+	if trimmedThinkingLevel != "" {
 		cfg.Set("thinking_level", trimmedThinkingLevel)
 	}
 	cfg.Set("hq_base_url", hqBaseURL)
 	cfg.Set("hq_user_id", strings.TrimSpace(req.HQ.UserID))
 	cfg.Set("hq_session_id", strings.TrimSpace(req.HQ.SessionID))
-	if provider := strings.TrimSpace(req.LLMProvider); provider != "" || strings.TrimSpace(req.LLMAPIKey) != "" || strings.TrimSpace(req.LLMModel) != "" || strings.TrimSpace(req.LLMURL) != "" {
+	provider := strings.TrimSpace(req.LLMProvider)
+	apiKey := strings.TrimSpace(req.LLMAPIKey)
+	model := strings.TrimSpace(req.LLMModel)
+	url := strings.TrimSpace(req.LLMURL)
+	if provider == "" && apiKey == "" && model == "" && url == "" {
+		provider = strings.TrimSpace(storedSessionContext.LLMProvider)
+		apiKey = strings.TrimSpace(storedSessionContext.LLMAPIKey)
+		model = strings.TrimSpace(storedSessionContext.LLMModel)
+		url = strings.TrimSpace(storedSessionContext.LLMURL)
+	}
+	if provider != "" || apiKey != "" || model != "" || url != "" {
 		providerDetails := &agent.ProviderDetails{
-			Provider: strings.TrimSpace(req.LLMProvider),
-			APIKey:   strings.TrimSpace(req.LLMAPIKey),
-			Model:    strings.TrimSpace(req.LLMModel),
-			BaseURL:  strings.TrimSpace(req.LLMURL),
+			Provider: provider,
+			APIKey:   apiKey,
+			Model:    model,
+			BaseURL:  url,
 		}
 		cfg.Set("provider_details", providerDetails)
 		providerName, modelName := agent.NormalizeProviderAndModel(providerDetails.Provider, providerDetails.Model)

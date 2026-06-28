@@ -46,6 +46,11 @@ type UIHandoffRequest struct {
 		UserID    string `json:"user_id"`
 		SessionID string `json:"session_id"`
 	} `json:"hq"`
+	LLMProvider   string `json:"llm_provider,omitempty"`
+	LLMAPIKey     string `json:"llm_api_key,omitempty"`
+	LLMModel      string `json:"llm_model,omitempty"`
+	LLMURL        string `json:"llm_url,omitempty"`
+	ThinkingLevel string `json:"thinking_level,omitempty"`
 }
 
 type UIHandoffResponse struct {
@@ -56,12 +61,17 @@ type UIHandoffResponse struct {
 }
 
 type daemonSessionContext struct {
-	AccessToken  string
-	RefreshToken string
-	HQBaseURL    string
-	HQUserID     string
-	HQSessionID  string
-	LastUpdated  time.Time
+	AccessToken   string
+	RefreshToken  string
+	HQBaseURL     string
+	HQUserID      string
+	HQSessionID   string
+	LLMProvider   string
+	LLMAPIKey     string
+	LLMModel      string
+	LLMURL        string
+	ThinkingLevel string
+	LastUpdated   time.Time
 }
 
 var daemonSessionStore = struct {
@@ -505,12 +515,17 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 
 	daemonSessionStore.mu.Lock()
 	daemonSessionStore.data[ctxKey] = daemonSessionContext{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		HQBaseURL:    hqBaseURL,
-		HQUserID:     strings.TrimSpace(req.HQ.UserID),
-		HQSessionID:  strings.TrimSpace(req.HQ.SessionID),
-		LastUpdated:  time.Now().UTC(),
+		AccessToken:   accessToken,
+		RefreshToken:  refreshToken,
+		HQBaseURL:     hqBaseURL,
+		HQUserID:      strings.TrimSpace(req.HQ.UserID),
+		HQSessionID:   strings.TrimSpace(req.HQ.SessionID),
+		LLMProvider:   strings.TrimSpace(req.LLMProvider),
+		LLMAPIKey:     strings.TrimSpace(req.LLMAPIKey),
+		LLMModel:      strings.TrimSpace(req.LLMModel),
+		LLMURL:        strings.TrimSpace(req.LLMURL),
+		ThinkingLevel: strings.TrimSpace(req.ThinkingLevel),
+		LastUpdated:   time.Now().UTC(),
 	}
 	daemonSessionStore.mu.Unlock()
 

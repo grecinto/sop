@@ -134,26 +134,9 @@ func (g *anthropic) Generate(ctx context.Context, prompt string, opts ai.GenOpti
 
 	url := "https://api.anthropic.com/v1/messages"
 
-	// Build messages array with tool call continuations if provided
-	messages := g.buildMessages(prompt, opts)
-
-	maxTokens := opts.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 4096 // Anthropic requires max_tokens
-	}
-
-	reqBody := anthropicRequest{
-		Model:     g.model,
-		Messages:  messages,
-		MaxTokens: maxTokens,
-		Thinking:  g.thinkingConfig(opts.ThinkingLevel),
-	}
-
-	// Only set temperature for models that support it
-	// Claude Opus 4+ and newer models have deprecated temperature
-	if g.supportsTemperature() {
-		temp := opts.Temperature
-		reqBody.Temperature = &temp
+	reqBody := g.buildBaseRequest(prompt, opts)
+	if reqBody.MaxTokens <= 0 {
+		reqBody.MaxTokens = 4096 // Anthropic requires max_tokens
 	}
 
 	// Add system prompt if provided (explicit parameter from opts)
@@ -184,15 +167,6 @@ func (g *anthropic) Generate(ctx context.Context, prompt string, opts ai.GenOpti
 			cacheControl.TTL = g.cacheTTL
 		}
 		reqBody.CacheControl = cacheControl
-	}
-
-	// if there are messages, then let's prepare them
-	if len(messages) > 0 {
-		// Add current user prompt (explicit parameter)
-		messages = append(messages, anthropicMessage{
-			Role:    "user",
-			Content: prompt, // Simple string content
-		})
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -375,9 +349,41 @@ func (g *anthropic) convertToolsWithCaching(tools []ai.ToolDefinition) []anthrop
 }
 
 // EstimateCost estimates the cost of the generation based on token usage.
+func (g *anthropic) buildBaseRequest(prompt string, opts ai.GenOptions) anthropicRequest {
+	messages := g.buildMessages(prompt, opts)
+
+	maxTokens := opts.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+
+	reqBody := anthropicRequest{
+		Model:     g.model,
+		Messages:  messages,
+		MaxTokens: maxTokens,
+		Thinking:  g.thinkingConfig(opts.ThinkingLevel),
+	}
+
+	if g.supportsTemperature() {
+		if reqBody.Thinking != nil {
+			temp := float32(1.0)
+			reqBody.Temperature = &temp
+		} else if opts.Temperature != 0 {
+			temp := opts.Temperature
+			reqBody.Temperature = &temp
+		}
+	}
+
+	return reqBody
+}
+
 func (g *anthropic) thinkingConfig(level string) *anthropicThinkingConfig {
 	thinkingLevel := strings.ToLower(strings.TrimSpace(level))
 	if thinkingLevel == "" {
+		thinkingLevel = "low"
+	}
+
+	if thinkingLevel == "disabled" || thinkingLevel == "none" || thinkingLevel == "off" || thinkingLevel == "false" {
 		return nil
 	}
 
@@ -413,17 +419,8 @@ func (g *anthropic) PrewarmCache(ctx context.Context, opts ai.GenOptions) error 
 
 	url := "https://api.anthropic.com/v1/messages"
 
-	reqBody := anthropicRequest{
-		Model:     g.model,
-		MaxTokens: 0, // Required for pre-warming
-		Thinking:  g.thinkingConfig(opts.ThinkingLevel),
-		Messages: []anthropicMessage{
-			{
-				Role:    "user",
-				Content: "warmup", // Placeholder message
-			},
-		},
-	}
+	reqBody := g.buildBaseRequest("warmup", opts)
+	reqBody.MaxTokens = 0 // Required for pre-warming
 
 	// Add system prompt if provided for caching
 	if opts.SystemPrompt != "" {

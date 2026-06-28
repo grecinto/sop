@@ -449,6 +449,44 @@ func TestAnthropicThinkingConfig_UsesHigherBudgetForMediumThinking(t *testing.T)
 	}
 }
 
+func TestAnthropicThinkingConfig_DefaultsToEnabledWhenLevelIsEmpty(t *testing.T) {
+	gen := &anthropic{model: "claude-3-5-sonnet-20241022"}
+	cfg := gen.thinkingConfig("")
+	if cfg == nil {
+		t.Fatal("expected default thinking config for Anthropic")
+	}
+	if cfg.Type != "enabled" {
+		t.Fatalf("expected default thinking type enabled, got %q", cfg.Type)
+	}
+	if cfg.BudgetTokens != 1024 {
+		t.Fatalf("expected default budget of 1024, got %d", cfg.BudgetTokens)
+	}
+}
+
+func TestAnthropicThinkingConfig_AllowsExplicitDisable(t *testing.T) {
+	gen := &anthropic{model: "claude-3-5-sonnet-20241022"}
+	for _, level := range []string{"disabled", "none", "off", "false"} {
+		cfg := gen.thinkingConfig(level)
+		if cfg != nil {
+			t.Fatalf("expected nil thinking config for explicit disable value %q, got %+v", level, cfg)
+		}
+	}
+}
+
+func TestAnthropicBuildBaseRequest_UsesTemperatureOneWhenThinkingEnabled(t *testing.T) {
+	gen := &anthropic{model: "claude-3-5-sonnet-20241022"}
+	req := gen.buildBaseRequest("hello", ai.GenOptions{Temperature: 0.2})
+	if req.Thinking == nil {
+		t.Fatal("expected thinking config to be enabled by default")
+	}
+	if req.Temperature == nil {
+		t.Fatal("expected temperature to be set when thinking is enabled")
+	}
+	if *req.Temperature != 1.0 {
+		t.Fatalf("expected temperature to be 1.0 when thinking is enabled, got %v", *req.Temperature)
+	}
+}
+
 func TestAnthropicFactory_UsesCorrectDefaultModel(t *testing.T) {
 	gen, err := New("anthropic", map[string]any{"api_key": "test-key"})
 	if err != nil {

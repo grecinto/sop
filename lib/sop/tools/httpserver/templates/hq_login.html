@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SOP HQ Sign In</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #09111d;
+      --panel: #101c2c;
+      --panel-border: #223247;
+      --text: #edf4ff;
+      --muted: #b7c3d8;
+      --accent: #4f8cff;
+      --accent-2: #7cb8ff;
+      --danger: #ff7b7b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: Arial, Helvetica, sans-serif;
+      background:
+        linear-gradient(135deg, rgba(79, 140, 255, 0.08), transparent 25%),
+        linear-gradient(315deg, rgba(124, 184, 255, 0.08), transparent 35%),
+        var(--bg);
+      color: var(--text);
+    }
+    .card {
+      width: min(460px, calc(100vw - 24px));
+      background: rgba(16, 28, 44, 0.94);
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.35);
+      padding: 24px;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.6rem; }
+    p { color: var(--muted); line-height: 1.45; }
+    .actions { display: grid; gap: 10px; margin-top: 18px; }
+    button, .secondary-link {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #05101e;
+    }
+    .secondary-link {
+      background: transparent;
+      color: var(--accent-2);
+      border: 1px solid rgba(124, 184, 255, 0.25);
+    }
+    .muted { color: var(--muted); font-size: 0.95rem; }
+    .warning { color: var(--danger); margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Continue with HQ</h1>
+    <p>Use the shared SOP UI to hand off to your HQ sign-in experience, then return to your local workspace.</p>
+    <div class="actions">
+      {{if .HQBaseURL}}
+      <a id="hq-continue-link" class="secondary-link" href="{{.HQBaseURL}}">Open HQ sign-in</a>
+      {{else}}
+      <p class="warning">No HQ base URL is configured yet. Set SOP_HQ_BASE_URL to enable the handoff.</p>
+      {{end}}
+      <a class="secondary-link" href="{{.ReturnTo}}">Back to local workspace</a>
+    </div>
+    <p class="muted">This route is served by the shared sopbackend UI so the same browser experience can move between local and HQ authentication flows.</p>
+  </main>
+  <script>
+    (function () {
+      var link = document.getElementById('hq-continue-link');
+      if (link) {
+        window.location.assign(link.getAttribute('href'));
+      }
+    })();
+  </script>
+</body>
+</html>

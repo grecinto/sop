@@ -106,7 +106,46 @@ func (a *CopilotAgent) ClassifyTaskContext(ctx context.Context, query string, ge
 		return nil, err
 	}
 
-	prompt := fmt.Sprintf(promptClassifyDiscovery, strings.Join(storesList, ", "), strings.Join(spacesList, ", "))
+	// Check if desktop automation is available
+	policy := GetAutomationPolicy()
+	hasDesktopAutomation := policy.Enabled || localDesktopAutomationEnabled.Load()
+
+	// Build automation_families field and documentation conditionally
+	automationFieldJSON := ""
+	automationDocSection := ""
+	automationExamples := ""
+
+	if hasDesktopAutomation {
+		automationFieldJSON = "\n  \"automation_families\": [],"
+		automationDocSection = `
+
+### 6. Identify Automation Families
+Populate ` + "`automation_families`" + ` ONLY when the request clearly involves:
+- **postgres**: PostgreSQL-specific operations, psql commands, pg_* utilities
+- **splunk**: Splunk queries, SPL, Splunk indexing/searching
+- **git**: Git commands, repository operations, version control
+- **shell**: Shell/terminal commands, bash/zsh scripts, file system operations
+
+Leave empty for general database or knowledge operations.
+`
+		automationExamples = `
+**Query: "run git status and show me the changes"**
+` + "```json" + `
+{
+  "entity": "Omni",
+  "domain": "",
+  "db_artifacts": [],
+  "stores_artifacts": [],
+  "spaces_artifacts": [],
+  "automation_families": ["git", "shell"],
+  "layers": [{"name": "Single-Domain", "crud": ["R"]}]
+}
+` + "```" + `
+
+`
+	}
+
+	prompt := fmt.Sprintf(promptClassifyDiscovery, strings.Join(storesList, ", "), strings.Join(spacesList, ", "), automationFieldJSON, automationDocSection, automationExamples)
 
 	providerOverride := extractProviderOverrideFromContext(ctx)
 	provider := ""

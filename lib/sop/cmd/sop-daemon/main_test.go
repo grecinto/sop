@@ -622,6 +622,50 @@ func TestLocalRAGAskPropagatesHandoffContextIntoAgentRequest(t *testing.T) {
 	}
 }
 
+func TestLocalRAGAskUsesHandoffProviderDetailsWhenAskBodyOmitsThem(t *testing.T) {
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent}
+	ctxKey := "handoff-provider-session"
+
+	handoffReq := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"ping","auth":{"access_token":"token-123","refresh_token":"refresh-123"},"hq":{"base_url":"https://hq.example","user_id":"user-42","session_id":"handoff-provider-session"},"llm_provider":"anthropic","llm_api_key":"test-key","llm_model":"claude-3-5-sonnet-20241022","llm_url":"https://api.anthropic.com","thinking_level":"medium"}`))
+	handoffRR := httptest.NewRecorder()
+	handleUIHandoff(handoffRR, handoffReq)
+	if handoffRR.Code != http.StatusOK {
+		t.Fatalf("handoff status = %d, want %d", handoffRR.Code, http.StatusOK)
+	}
+
+	askReq := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","hq":{"base_url":"https://hq.example","user_id":"user-42","session_id":"handoff-provider-session"}}`))
+	askRR := httptest.NewRecorder()
+	svc.handleAsk(askRR, askReq)
+	if askRR.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", askRR.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected 1 ask call, got %d", len(agent.calls))
+	}
+
+	if agent.calls[0].cfg == nil {
+		t.Fatal("expected config map to be passed to agent ask")
+	}
+	val, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider details to be propagated from handoff")
+	}
+	providerDetails, ok := val.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected *sharedagent.ProviderDetails, got %T", val)
+	}
+	if providerDetails.Provider != "anthropic" || providerDetails.Model != "claude-3-5-sonnet-20241022" || providerDetails.APIKey != "test-key" || providerDetails.BaseURL != "https://api.anthropic.com" {
+		t.Fatalf("unexpected provider details: %+v", providerDetails)
+	}
+	if ctxVal, ok := agent.calls[0].ctx.Value(ai.CtxKeyProvider).(string); !ok || ctxVal != "anthropic:claude-3-5-sonnet-20241022" {
+		t.Fatalf("expected provider context to be set from handoff, got %v", ctxVal)
+	}
+	if ctxKey != "" {
+		_ = ctxKey
+	}
+}
+
 func TestWithRateLimitRejectsRequestsAfterLocalBudgetIsExhausted(t *testing.T) {
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 1, Window: time.Minute})
 	handler := withRateLimit(reg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

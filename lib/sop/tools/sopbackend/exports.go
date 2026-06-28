@@ -159,6 +159,10 @@ func InitAgents(ctx context.Context) error {
 
 // RegisterAllHandlers registers all backend API handlers on the provided mux
 func RegisterAllHandlers(mux *http.ServeMux) {
+	RegisterUIRoutes(mux)
+
+	mux.HandleFunc("/admin/users", WithAuth(handleAdminUsersPage))
+	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
 	// Runtime & Database Endpoints
 	mux.HandleFunc("/api/runtime/refresh", WithAuth(handleRuntimeRefresh))
 	mux.HandleFunc("/api/databases", WithAuth(handleDatabases))
@@ -221,6 +225,8 @@ func RegisterAllHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/register", handleRegister)
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
+	mux.HandleFunc("/api/auth/unregister", WithAuth(handleUnregister))
+	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 }
 
 // StartSessionCleanup starts a background goroutine to clean up stale sessions

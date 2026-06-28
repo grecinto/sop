@@ -113,10 +113,14 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config/environments/switch", WithAuth(handleSwitchEnvironment))
 	mux.HandleFunc("/api/config/environments/delete", WithAuth(handleDeleteEnvironment))
 
-	// Auth Endpoints
+	// Admin UI / Auth Endpoints
+	mux.HandleFunc("/admin/users", WithAuth(handleAdminUsersPage))
+	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
 	mux.HandleFunc("/api/auth/register", handleRegister)
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
+	mux.HandleFunc("/api/auth/unregister", WithAuth(handleUnregister))
+	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 }
 
 // StartSessionCleanup starts a background goroutine to clean up stale sessions.

@@ -137,6 +137,12 @@ To launch the Data Manager:
 sop-httpserver
 ```
 
+To install the admin CLI for user management:
+```bash
+make install-sop-admin
+sop-admin list-users
+```
+
 ## Security & Enterprise Integration
 
 SOP supports both local built-in auth and external identity-provider integration for enterprise deployments.
@@ -145,6 +151,7 @@ SOP supports both local built-in auth and external identity-provider integration
 - **Self-service account lifecycle**: the platform is moving toward registration, self-unregistration, role governance, and plan selection backed by a persistent users store and the shared RBAC policy layer.
 - **Role hierarchy and governance**: roles such as User, PowerUser, Admin, and SystemAdmin are intended to be managed through the same entitlement and policy pipeline, including demotion of same- or lower-ranked accounts by higher-privileged roles.
 - **Subscription-aware workflows**: Starter plans target the local-agent workflow, while a richer plan enables both HQ and local-agent workflows.
+- **Offline continuity**: the UI can connect directly to a local agent so users can continue their work even if the HQ site or hosting server becomes unavailable, or if a browser session is interrupted.
 - **Enterprise directory support**: the auth layer is designed to accept provider adapters for AD, Entra ID, LDAP, SAML, or OIDC without changing the core application logic.
 - **Secret handling**: keep `SOP_SESSION_SECRET` (or `session_secret`) in a secret manager or environment variable; do not bake signing keys into source control.
 - **Remote clients**: bearer tokens are suitable for CLI tools, scripts, and microservices that call the HTTP API directly over HTTPS.
@@ -611,6 +618,41 @@ SOP is a NoSQL-like key/value storage engine with built-in indexing and transact
 - Ensure the process user has RW permissions on the target data directories/drives. SOP uses DirectIO and filesystem APIs with 4096-byte sector alignment.
 
 Tip: Using Python? See “SOP for Python” below.
+
+## Cheap Hosting & High Availability Setup
+For a low-cost HA deployment, run the same SOP service on two modest hosts (for example, two VPS or cloud instances) and let the backup node take over automatically if the primary becomes unhealthy.
+
+This pattern is useful as a comparative study and a practical proof-of-concept for IT managers because it shows how enterprise-style availability can be achieved with a simple architecture, modest hardware, and lower operating cost than traditional clustered databases or expensive commercial HA stacks.
+
+Comparative study for IT managers
+- SQLite: excellent for embedded and single-node use, but not a native multi-node failover or active/passive replication engine.
+- Traditional database clusters: strong HA capabilities, but often require larger infrastructure, more licensing, and more operational overhead.
+- SOP with two-host replication and EC-based data protection: a leaner option that preserves durability and failover readiness while keeping the footprint small and the operating cost low.
+
+Recommended pattern
+- Install the same health-check and failover scripts on both servers. Each host can monitor the peer, confirm whether the app is healthy, and decide whether to stay passive or promote itself.
+- Use a heartbeat or lease mechanism rather than a raw ping alone. A simple lease file, Redis key, Consul, or etcd lock is enough for a basic setup, while Keepalived/HAProxy adds IP-based traffic failover.
+- Add a short grace period so brief network hiccups do not trigger false promotion. A 15–30 second timeout is usually a good starting point.
+- On promotion, the backup should start the app service, update the VIP/load balancer/DNS target, and mark itself active. When the old primary returns, it should either remain passive or be fenced/re-joined.
+
+Minimal control loop
+1. The primary renews a heartbeat or lease every few seconds.
+2. The backup watches for lease loss.
+3. After the timeout expires, the backup promotes itself and starts the service.
+4. The old primary, if still alive, is fenced or stopped to prevent split-brain.
+
+Good low-cost options
+- Keepalived + HAProxy for IP failover
+- systemd service + a small bash/Ansible controller
+- Redis/Consul/etcd lease for leader election
+
+POC value for IT teams
+- Validate the design with two small servers and a shared storage path.
+- Test automatic promotion, service startup, and traffic cutover.
+- Measure recovery time and operational complexity before scaling to a larger deployment.
+
+Important caveat
+- SOP provides data durability, replication, and EC-based recovery; the hosting layer still needs automation to launch the app on the backup server and route traffic to it.
 
 ## Lifecycle: failures, failover, reinstate, EC auto-repair
 SOP is designed to keep your app online through common storage failures.

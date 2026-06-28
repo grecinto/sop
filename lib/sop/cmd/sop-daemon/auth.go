@@ -387,8 +387,10 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 			return
 		}
 
-		// Validate token
-		userRecord, err := h.sessionStore.ValidateToken(r.Context(), token)
+		// Validate token without requiring a registered user account.
+		// The daemon uses its own bootstrap/session flow and should accept its
+		// issued tokens even when the account is only present in the auth context.
+		userRecord, err := h.sessionStore.ValidateTokenWithoutAccountCheck(r.Context(), token)
 		if err != nil {
 			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid or expired token"})
 			return

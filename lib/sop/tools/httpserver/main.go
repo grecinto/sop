@@ -187,13 +187,6 @@ func main() {
 		}
 	}
 
-	// UI Routes
-	http.HandleFunc("/", handleRoot)
-	http.HandleFunc("/login", handleLoginPage)
-	http.HandleFunc("/app", sopbackend.RequireAuth(handleIndex))
-	http.HandleFunc("/viewer", sopbackend.RequireAuth(handleViewer))
-	http.HandleFunc("/file-preview", sopbackend.RequireAuth(handleFilePreview))
-
 	// Daemon Bootstrap API (for UI to authenticate with local daemon)
 	http.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
 

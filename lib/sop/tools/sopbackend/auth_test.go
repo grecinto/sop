@@ -162,6 +162,124 @@ func TestRegisterUser_PersistsToStoreAndAuthenticates(t *testing.T) {
 	}
 }
 
+func TestUnregisterUser_RemovesUserAndRevokesSessions(t *testing.T) {
+	cfg := Config{UsersStore: NewUserStore()}
+	store := NewSessionStore(time.Hour)
+	tokenFacade = store
+
+	user, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter")
+	if err != nil {
+		t.Fatalf("RegisterUser() error = %v", err)
+	}
+	if user == nil {
+		t.Fatal("RegisterUser() returned nil user")
+	}
+
+	accessToken, refreshToken, err := store.CreateSession(context.Background(), user.Username, user.Role)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	if err := cfg.UnregisterUser(context.Background(), user.Username); err != nil {
+		t.Fatalf("UnregisterUser() error = %v", err)
+	}
+
+	if _, ok, err := cfg.findUserRecord(context.Background(), user.Username); err != nil {
+		t.Fatalf("findUserRecord() error = %v", err)
+	} else if ok {
+		t.Fatal("expected user to be removed")
+	}
+
+	if ok, _, err := cfg.Authenticate(user.Username, "pw123"); err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	} else if ok {
+		t.Fatal("Authenticate() = true, want false after unregister")
+	}
+
+	if _, err := store.ValidateToken(context.Background(), accessToken); err == nil {
+		t.Fatal("ValidateToken() = nil, want error after unregister")
+	}
+	if _, _, err := store.Refresh(context.Background(), refreshToken); err == nil {
+		t.Fatal("Refresh() = nil, want error after unregister")
+	}
+}
+
+func TestUpdateUserRole_AllowsHigherLevelAdminToDemoteLowerRoleUser(t *testing.T) {
+	cfg := Config{UsersStore: NewUserStore()}
+	if _, err := cfg.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
+		t.Fatalf("RegisterUser(admin) error = %v", err)
+	}
+	if _, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+		t.Fatalf("RegisterUser(alice) error = %v", err)
+	}
+
+	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{Roles: []string{sop.RoleAdmin}, UserID: "admin"})
+	updated, err := cfg.UpdateUserRole(ctx, "alice", sop.RoleGuest)
+	if err != nil {
+		t.Fatalf("UpdateUserRole() error = %v", err)
+	}
+	if updated == nil || updated.Role != sop.RoleGuest {
+		t.Fatalf("UpdateUserRole() returned unexpected role: %+v", updated)
+	}
+}
+
+func TestUpdateUserRole_RejectsLowerLevelUserTryingToChangeAdminRole(t *testing.T) {
+	cfg := Config{UsersStore: NewUserStore()}
+	if _, err := cfg.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
+		t.Fatalf("RegisterUser(admin) error = %v", err)
+	}
+	if _, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+		t.Fatalf("RegisterUser(alice) error = %v", err)
+	}
+
+	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{Roles: []string{sop.RoleUser}, UserID: "alice"})
+	if _, err := cfg.UpdateUserRole(ctx, "admin", sop.RoleUser); err == nil {
+		t.Fatal("UpdateUserRole() = nil error, want permission error")
+	}
+}
+
+func TestHandleUnregister_AllowsSelfServiceRemoval(t *testing.T) {
+	config = Config{UsersStore: NewUserStore()}
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+		t.Fatalf("RegisterUser() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/unregister", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+	w := httptest.NewRecorder()
+
+	handleUnregister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleUnregister() status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if _, ok, err := config.findUserRecord(context.Background(), "alice"); err != nil {
+		t.Fatalf("findUserRecord() error = %v", err)
+	} else if ok {
+		t.Fatal("expected user to be removed")
+	}
+}
+
+func TestHandleUpdateUserRole_RejectsLowerPrivilegeUser(t *testing.T) {
+	config = Config{UsersStore: NewUserStore()}
+	if _, err := config.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
+		t.Fatalf("RegisterUser(admin) error = %v", err)
+	}
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+		t.Fatalf("RegisterUser(alice) error = %v", err)
+	}
+
+	body := strings.NewReader(`{"username":"admin","role":"User"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/users/role", body)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+	w := httptest.NewRecorder()
+
+	handleUpdateUserRole(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("handleUpdateUserRole() status = %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleRegister_ReturnsCreatedUser(t *testing.T) {
 	oldWD, err := os.Getwd()
 	if err != nil {
@@ -515,6 +633,25 @@ func TestValidateToken_AcceptsStatelessAccessTokenAfterSessionRemoval(t *testing
 	}
 	if user == nil || !strings.EqualFold(user.Username, "root") || !strings.EqualFold(user.Role, sop.RoleAdmin) {
 		t.Fatalf("ValidateToken() = %+v, want root admin user", user)
+	}
+}
+
+func TestValidateToken_AcceptsDaemonBootstrapSessionWithoutRegisteredUser(t *testing.T) {
+	withIsolatedSessionStore(t)
+	store := NewSessionStore(30 * time.Minute)
+	ctx := context.Background()
+
+	access, _, err := store.CreateSession(ctx, "ui-client", "daemon-user")
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	user, err := store.ValidateToken(ctx, access)
+	if err != nil {
+		t.Fatalf("ValidateToken() error = %v", err)
+	}
+	if user == nil || !strings.EqualFold(user.Username, "ui-client") || !strings.EqualFold(user.Role, "daemon-user") {
+		t.Fatalf("ValidateToken() = %+v, want daemon bootstrap user", user)
 	}
 }
 
