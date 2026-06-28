@@ -604,11 +604,16 @@ func WithCapability(cap capabilities.Capability) CapabilityOption {
 		if a == nil || cap == nil {
 			return
 		}
-		if a.capabilityRegistry == nil {
-			a.capabilityRegistry = capabilities.NewRegistry()
-		}
+		a.ensureCapabilityRegistry()
 		a.capabilityRegistry.Register(cap)
 	}
+}
+
+func (a *CopilotAgent) ensureCapabilityRegistry() {
+	if a == nil || a.capabilityRegistry != nil {
+		return
+	}
+	a.capabilityRegistry = capabilities.NewRegistry(desktop.NewCapability(), stores.NewCapability(), spaces.NewCapability())
 }
 
 // NewCopilotAgent creates a new instance of CopilotAgent.
@@ -637,7 +642,7 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		Memory:          memory.NewMemoryUnit(ai.AgentIDOmni),
 		compiledScripts: make(map[string]CachedScript),
 	}
-	agent.capabilityRegistry = capabilities.NewRegistry(desktop.NewCapability(), stores.NewCapability(), spaces.NewCapability())
+	agent.ensureCapabilityRegistry()
 	for _, opt := range opts {
 		if opt != nil {
 			opt(agent)

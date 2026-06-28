@@ -374,20 +374,26 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 		emitChatGPTOwnedLoopEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneChatGPTToolArgs(toolCall.Args), execErr, iteration))
 	}
 
+	executionMode := ai.ReActToolResultExecutionModeStructuredSummary
+	if finalToolResult {
+		executionMode = ai.ReActToolResultExecutionModeSummary
+	}
+
 	return ai.ReActToolResult{
-			Name:   toolCall.Name,
-			Args:   cloneChatGPTToolArgs(toolCall.Args),
-			Result: resultText,
-			Hint:   cloneChatGPTToolProgressHint(hint),
+			Name:          toolCall.Name,
+			Args:          cloneChatGPTToolArgs(toolCall.Args),
+			Result:        resultText,
+			Hint:          cloneChatGPTToolProgressHint(hint),
+			ExecutionMode: executionMode,
 		}, openAIResponsesInputItem{
 			Type:   "function_call_output",
 			CallID: strings.TrimSpace(toolCall.NativeID),
-			Output: summarizeChatGPTContinuationToolOutput(toolCall.Name, resultText, finalToolResult),
+			Output: summarizeChatGPTContinuationToolOutput(toolCall.Name, resultText, executionMode),
 		}
 }
 
-func summarizeChatGPTContinuationToolOutput(toolName, resultText string, finalToolResult bool) string {
-	return SummarizeToolResultForLLM(toolName, resultText, finalToolResult)
+func summarizeChatGPTContinuationToolOutput(toolName, resultText string, executionMode ai.ReActToolResultExecutionMode) string {
+	return SummarizeToolResultForLLM(toolName, resultText, executionMode)
 }
 
 // ----------------------------------------------------------------------------

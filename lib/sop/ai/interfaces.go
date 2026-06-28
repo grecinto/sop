@@ -435,13 +435,35 @@ type MemoryHydrationUpdate struct {
 
 type MemoryHydrationSink func(update MemoryHydrationUpdate)
 
+// ReActToolResultExecutionMode controls how much of a tool result should be
+// surfaced to the next model turn versus the UI stream.
+//
+// The modes are:
+//   - summary: use a concise summary for investigatory tool calls.
+//   - structured_summary: preserve a compact, structured preview for
+//     intermediate results that are still meaningful but too large to replay
+//     verbatim.
+//   - full_small_only: keep the next turn compact and preserve only the
+//     essential facts, while still passing through the full payload to the UI.
+//   - full: preserve the full payload for the next model turn without
+//     summarization, useful when the model needs complete access to the tool output.
+type ReActToolResultExecutionMode string
+
+const (
+	ReActToolResultExecutionModeSummary           ReActToolResultExecutionMode = "summary"
+	ReActToolResultExecutionModeStructuredSummary ReActToolResultExecutionMode = "structured_summary"
+	ReActToolResultExecutionModeFullSmallOnly     ReActToolResultExecutionMode = "full_small_only"
+	ReActToolResultExecutionModeFull              ReActToolResultExecutionMode = "full"
+)
+
 // ReActToolResult is the provider-neutral per-step state that the ReAct
 // engine can expose to provider-specific loop adapters.
 type ReActToolResult struct {
-	Name   string
-	Args   map[string]any
-	Result string
-	Hint   *ToolProgressHint
+	Name          string
+	Args          map[string]any
+	Result        string
+	Hint          *ToolProgressHint
+	ExecutionMode ReActToolResultExecutionMode
 }
 
 // ReActPendingRepair is a provider-neutral snapshot of a pending repair path.

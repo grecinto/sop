@@ -442,6 +442,17 @@ func TestNativeReActEngine_UsesLowTemperatureForToolCalls(t *testing.T) {
 	}
 }
 
+func TestCloneReActToolResults_PreservesExecutionMode(t *testing.T) {
+	input := []nativeToolResult{{Name: "search_web", ExecutionMode: ai.ReActToolResultExecutionModeSummary}}
+	got := cloneReActToolResults(input)
+	if len(got) != 1 {
+		t.Fatalf("expected one cloned result, got %d", len(got))
+	}
+	if got[0].ExecutionMode != ai.ReActToolResultExecutionModeSummary {
+		t.Fatalf("expected execution mode to be preserved, got %q", got[0].ExecutionMode)
+	}
+}
+
 func TestNativeReActEngine_UsesProviderReActTurnStrategyForContinuationTurns(t *testing.T) {
 	engine := &NativeReActEngine{}
 	gen := &reActTurnStrategyMockGenerator{}

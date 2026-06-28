@@ -1,0 +1,15 @@
+[Unit]
+Description=SOP cheap HA failover monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sop-ha watch
+Restart=always
+RestartSec=10
+Environment=CONFIG_FILE=/etc/sop-ha/sop-ha.conf
+WorkingDirectory=/var/lib/sop-ha
+
+[Install]
+WantedBy=multi-user.target

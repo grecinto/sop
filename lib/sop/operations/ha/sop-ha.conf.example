@@ -1,0 +1,8 @@
+# Example configuration for the SOP cheap HA helper.
+# Copy this file to /etc/sop-ha/sop-ha.conf and edit it per host.
+
+SERVICE_NAME=sop
+PEER_HOST=backup-host
+PEER_USER=root
+POLL_INTERVAL=10
+FAIL_TIMEOUT=30

@@ -56,6 +56,11 @@ func (r *UIRouter) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/login", r.handleLoginPage)
 	mux.HandleFunc("/hq-login", r.handleHQLoginPage)
 	mux.HandleFunc("/app", RequireAuth(r.handleIndex))
+	mux.HandleFunc("/app/subscribe", RequireAuth(r.handleSubscribe))
+	mux.HandleFunc("/app/unsubscribe", RequireAuth(r.handleUnsubscribe))
+	mux.HandleFunc("/app/unregister", RequireAuth(r.handleUnregister))
+	mux.HandleFunc("/app/hq", RequireAuth(r.handleHQPreview))
+	mux.HandleFunc("/logout", r.handleLogout)
 	mux.HandleFunc("/viewer", RequireAuth(r.handleViewer))
 	mux.HandleFunc("/file-preview", RequireAuth(r.handleFilePreview))
 }
@@ -117,42 +122,214 @@ func (r *UIRouter) handleIndex(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	hasDemo := false
-	ctx := req.Context()
-	cfg := GetConfig()
-	for _, dbCfg := range cfg.Databases {
-		if dbOpts, err := GetDBOptionsFromConfig(ctx, &dbCfg); err == nil {
-			db := aidb.NewDatabase(dbOpts)
-			if exists, err := db.StoreExists(ctx, "users"); err == nil && exists {
-				hasDemo = true
-				break
-			}
-		}
+	data := r.landingPageData(req)
+	if err := r.Templates.ExecuteTemplate(w, "landing.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (r *UIRouter) handleSubscribe(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if r.Templates == nil {
+		http.Error(w, "templates not initialized", http.StatusInternalServerError)
+		return
 	}
 
-	isEnterprise := cfg.SystemDB != nil
-	if !isEnterprise && len(cfg.Databases) > 0 {
-		isEnterprise = true
+	if req.Method == http.MethodPost {
+		if err := req.ParseForm(); err != nil {
+			http.Error(w, "invalid form submission", http.StatusBadRequest)
+			return
+		}
+		cardNumber := strings.TrimSpace(req.Form.Get("card_number"))
+		cardName := strings.TrimSpace(req.Form.Get("card_name"))
+		cardExpiry := strings.TrimSpace(req.Form.Get("card_expiry"))
+		cardCVC := strings.TrimSpace(req.Form.Get("card_cvc"))
+		if cardNumber == "" || cardName == "" || cardExpiry == "" || cardCVC == "" {
+			http.Error(w, "payment details are required", http.StatusBadRequest)
+			return
+		}
+
+		auth := sop.GetAuthFromContext(req.Context())
+		if userID := strings.TrimSpace(auth.UserID); userID != "" {
+			_, _ = config.UpdateSubscriptionPlan(req.Context(), userID, "starter")
+		}
+
+		data := r.landingPageData(req)
+		data["SubscriptionSuccess"] = true
+		data["ShowDownloadStep"] = true
+		data["SubscriptionMessage"] = "Your Starter Kit trial is active. We will only charge your card after the first month ends, then $5/month thereafter."
+		if err := r.Templates.ExecuteTemplate(w, "landing.html", data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	data := r.landingPageData(req)
+	data["ShowSubscribeForm"] = true
+	if err := r.Templates.ExecuteTemplate(w, "landing.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (r *UIRouter) handleUnsubscribe(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if r.Templates == nil {
+		http.Error(w, "templates not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	auth := sop.GetAuthFromContext(req.Context())
+	if userID := strings.TrimSpace(auth.UserID); userID != "" {
+		_, _ = config.UpdateSubscriptionPlan(req.Context(), userID, "none")
+	}
+
+	data := r.landingPageData(req)
+	data["SubscriptionMessage"] = "You have been unsubscribed. You can reactivate the Starter Kit at any time."
+	data["IsUnsubscribed"] = true
+	if err := r.Templates.ExecuteTemplate(w, "landing.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (r *UIRouter) handleUnregister(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	auth := sop.GetAuthFromContext(req.Context())
+	if userID := strings.TrimSpace(auth.UserID); userID != "" {
+		_ = config.UnregisterUser(req.Context(), userID)
+	}
+	clearSessionCookies(w)
+	http.Redirect(w, req, "/login?message=unregistered", http.StatusFound)
+}
+
+func (r *UIRouter) handleHQPreview(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if r.Templates == nil {
+		http.Error(w, "templates not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	auth := sop.GetAuthFromContext(req.Context())
+	if !isAdminAuthContext(auth) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
 
 	data := map[string]any{
-		"Version":                 sop.Version,
-		"Mode":                    cfg.Mode,
-		"ModelCatalog":            GetModelCatalog(),
-		"AllowInvalidMapKey":      os.Getenv("SOP_ALLOW_INVALID_MAP_KEY") == "true",
-		"HasDemo":                 hasDemo,
-		"LLMProvider":             "openai",
-		"IsEnterprise":            isEnterprise,
-		"SystemDBName":            SystemDBName,
-		"ConfigFile":              cfg.ConfigFile,
-		"SetupWizardAIConfigJSON": r.setupWizardAIConfigJSON(),
-		"ModelCatalogJSON":        r.modelCatalogJSON(),
-		"MinHashMod":              1,
-		"MaxHashMod":              256,
-		"CanManageEnvironments":   CanManageEnvironments(sop.GetAuthFromContext(req.Context())),
+		"Version":          sop.Version,
+		"Username":         strings.TrimSpace(auth.UserID),
+		"CurrentRole":      strings.Join(auth.Roles, ", "),
+		"IsAdmin":          true,
+		"CurrentPlan":      "hq-local-agent",
+		"CurrentPlanLabel": "HQ + Local Agent",
 	}
-	if err := r.Templates.ExecuteTemplate(w, "index.html", data); err != nil {
+	if err := r.Templates.ExecuteTemplate(w, "hq_preview.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func isAdminAuthContext(auth sop.AuthContext) bool {
+	for _, role := range auth.Roles {
+		if sop.IsAdminRole(role) || strings.EqualFold(role, sop.RoleSystemAdmin) {
+			return true
+		}
+	}
+	return auth.IsSystem || strings.EqualFold(strings.TrimSpace(auth.UserID), "root")
+}
+
+func (r *UIRouter) handleLogout(w http.ResponseWriter, req *http.Request) {
+	clearSessionCookies(w)
+	http.Redirect(w, req, "/login", http.StatusFound)
+}
+
+func clearSessionCookies(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "sop_access_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: "sop_refresh_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+}
+
+func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
+	cfg := GetConfig()
+	auth := sop.GetAuthFromContext(req.Context())
+	username := strings.TrimSpace(auth.UserID)
+	if username == "" {
+		username = "there"
+	}
+
+	currentPlan := "starter"
+	currentRole := ""
+	if len(auth.Roles) > 0 {
+		currentRole = strings.TrimSpace(auth.Roles[0])
+	}
+	if user, ok, err := cfg.findUserRecord(req.Context(), username); err == nil && ok && user != nil {
+		if strings.TrimSpace(user.SubscriptionPlan) != "" {
+			currentPlan = strings.TrimSpace(user.SubscriptionPlan)
+		}
+		if strings.TrimSpace(user.Role) != "" {
+			currentRole = strings.TrimSpace(user.Role)
+		}
+	}
+
+	isAdmin := false
+	for _, role := range auth.Roles {
+		if sop.IsAdminRole(role) || strings.EqualFold(role, sop.RoleSystemAdmin) {
+			isAdmin = true
+			break
+		}
+	}
+	if strings.EqualFold(username, "root") || auth.IsSystem {
+		isAdmin = true
+	}
+
+	planLabel := "Starter Kit"
+	planDescription := "Everything you need to get started with SOP, including access to the core workspace experience."
+	if strings.EqualFold(currentPlan, "none") || strings.TrimSpace(currentPlan) == "" {
+		planLabel = "No active plan"
+		planDescription = "You are currently unsubscribed. You can start the Starter Kit trial again whenever you are ready."
+	} else if strings.EqualFold(currentPlan, "starter") || strings.EqualFold(currentPlan, "starter kit") {
+		planLabel = "Starter Kit"
+		planDescription = "Your current plan gives you access to the core SOP experience with one starter workspace."
+	} else {
+		planLabel = strings.Title(strings.ToLower(currentPlan))
+		planDescription = "This plan is available for you today. More options will be added soon."
+	}
+
+	availablePlans := []map[string]string{{
+		"name":        "Starter Kit",
+		"slug":        "starter",
+		"description": "The only plan available at launch, designed for getting started quickly.",
+		"current":     "true",
+		"disabled":    "false",
+	}, {
+		"name":        "HQ + Local Agent",
+		"slug":        "hq-local-agent",
+		"description": "A richer subscription for the HQ experience and local agent workflow, coming online soon.",
+		"current":     "false",
+		"disabled":    "true",
+	}}
+
+	adminCapabilities := []map[string]string{}
+	if isAdmin {
+		adminCapabilities = []map[string]string{
+			{"title": "View all registered users", "description": "See the current user roster, account state, and role assignments.", "href": "/admin/users"},
+			{"title": "Manage user roles", "description": "Adjust access and permissions for teammates and admins.", "href": "/admin/users"},
+			{"title": "Review account health", "description": "Monitor the account setup and subscription status from one place.", "href": "/app"},
+		}
+	}
+
+	return map[string]any{
+		"Version":                sop.Version,
+		"Username":               username,
+		"CurrentPlan":            currentPlan,
+		"CurrentPlanLabel":       planLabel,
+		"CurrentPlanDescription": planDescription,
+		"AvailablePlans":         availablePlans,
+		"CurrentRole":            currentRole,
+		"IsAdmin":                isAdmin,
+		"AdminCapabilities":      adminCapabilities,
+		"ShowSubscribeForm":      false,
+		"ShowDownloadStep":       false,
+		"SubscriptionSuccess":    false,
+		"SubscriptionMessage":    "",
+		"IsUnsubscribed":         false,
 	}
 }
 

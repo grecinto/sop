@@ -804,6 +804,39 @@ func (c *Config) UnregisterUser(ctx context.Context, username string) error {
 	return nil
 }
 
+func (c *Config) UpdateSubscriptionPlan(ctx context.Context, username, subscriptionPlan string) (*UserRecord, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+	plan := strings.TrimSpace(subscriptionPlan)
+	if plan == "" {
+		plan = "none"
+	}
+
+	user, ok, err := c.findUserRecord(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	user.SubscriptionPlan = plan
+	user.UpdatedAt = time.Now().UTC()
+	if err := c.ensureUserStore().Save(ctx, user); err != nil {
+		return nil, err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == username {
+			c.Users[i].SubscriptionPlan = plan
+			c.Users[i].UpdatedAt = user.UpdatedAt
+			break
+		}
+	}
+	return user, nil
+}
+
 func (c *Config) UpdateUserRole(ctx context.Context, username, role string) (*UserRecord, error) {
 	username = normalizeUsername(username)
 	if username == "" {

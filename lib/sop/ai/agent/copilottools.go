@@ -146,6 +146,7 @@ func (a *CopilotAgent) registerSystemTools(ctx context.Context) {
 }
 
 func (a *CopilotAgent) hasRegisteredCapability(domains ...string) bool {
+	a.ensureCapabilityRegistry()
 	if a == nil || a.capabilityRegistry == nil {
 		return false
 	}

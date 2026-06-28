@@ -28,10 +28,11 @@ const nativeReActToolCallTemperature float32 = 0.1
 const nativeReActRepairTemperature float32 = 0.0
 
 type nativeToolResult struct {
-	Name   string
-	Result string
-	Args   map[string]any
-	Hint   *ai.ToolProgressHint
+	Name          string
+	Result        string
+	Args          map[string]any
+	Hint          *ai.ToolProgressHint
+	ExecutionMode ai.ReActToolResultExecutionMode
 }
 
 type askAnchoredMRUState []MRUItem
@@ -477,10 +478,11 @@ func cloneReActToolResults(results []nativeToolResult) []ai.ReActToolResult {
 	cloned := make([]ai.ReActToolResult, 0, len(results))
 	for _, result := range results {
 		cloned = append(cloned, ai.ReActToolResult{
-			Name:   result.Name,
-			Args:   cloneToolEventMap(result.Args),
-			Result: result.Result,
-			Hint:   cloneToolProgressHint(result.Hint),
+			Name:          result.Name,
+			Args:          cloneToolEventMap(result.Args),
+			Result:        result.Result,
+			Hint:          cloneToolProgressHint(result.Hint),
+			ExecutionMode: result.ExecutionMode,
 		})
 	}
 	return cloned
@@ -1811,10 +1813,11 @@ func summarizeOutcomeRecipes(toolResults []nativeToolResult) []ai.LearnedRecipe 
 
 func nativeToolResultAsShared(result nativeToolResult) ai.ReActToolResult {
 	return ai.ReActToolResult{
-		Name:   result.Name,
-		Result: result.Result,
-		Args:   result.Args,
-		Hint:   result.Hint,
+		Name:          result.Name,
+		Result:        result.Result,
+		Args:          result.Args,
+		Hint:          result.Hint,
+		ExecutionMode: result.ExecutionMode,
 	}
 }
 

@@ -29,6 +29,26 @@ The primary revenue streams will be:
 
 ## 4. Technical Architecture Models
 
+### New site onboarding experience
+
+The next product iteration for sop-cloud will center on a lightweight self-serve onboarding experience for new users. The planned flow is:
+
+1. sign up or sign in,
+2. complete a starter subscription flow,
+3. download the local agent from the SOP GitHub Releases page,
+4. return later to sign in and manage the account,
+5. unsubscribe or unregister when desired,
+6. view a future richer plan for the HQ and local-agent experience, which is shown as a disabled preview for regular users and available for system-admin testing.
+
+The implementation notes and task backlog for this experience are tracked in [docs/NEW_SITE_STORIES.md](docs/NEW_SITE_STORIES.md) and [docs/NEW_SITE_IMPLEMENTATION_TASKS.md](docs/NEW_SITE_IMPLEMENTATION_TASKS.md). The intended architecture keeps the existing Data Manager experience intact as the low-level operational UI, while the new product site/app is introduced as a separate React-based frontend served through httpserver on its own routes. The daemon remains separate from that UI surface.
+
+The intended boundary is:
+- daemon: background/runtime responsibilities only;
+- sopbackend: shared auth, subscription, account, and business-logic services;
+- httpserver: web hosting and API surface for both the Data Manager and the new product site/app;
+- React site/app: product-facing frontend experience served from httpserver on dedicated routes.
+
+
 To support both our SaaS offerings and advanced on-premise or desktop use-cases, we will support two primary technical architectures for AI and RAG (Retrieval-Augmented Generation) processing.
 
 ### a. Standard Server-Side RAG (Default Model)

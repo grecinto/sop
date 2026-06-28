@@ -233,11 +233,15 @@ func (g *anthropic) Generate(ctx context.Context, prompt string, opts ai.GenOpti
 
 // buildMessages constructs the messages array with tool call continuations
 // Parameters passed explicitly, NOT extracted from Context
-func summarizeAnthropicContinuationToolOutput(toolName string, response any, finalToolResult bool) any {
-	if !strings.EqualFold(strings.TrimSpace(toolName), "execute_script") {
-		return response
+func summarizeAnthropicContinuationToolOutput(toolName string, response any, executionMode ai.ReActToolResultExecutionMode) any {
+	resultText := ExtractToolResultText(response)
+	if strings.EqualFold(strings.TrimSpace(toolName), "execute_script") {
+		return map[string]any{"result": SummarizeToolResultForLLM(toolName, resultText, executionMode)}
 	}
-	return map[string]any{"result": SummarizeToolResultForLLM(toolName, ExtractToolResultText(response), finalToolResult)}
+	if text := SummarizeToolResultForLLM(toolName, resultText, executionMode); text != "" {
+		return map[string]any{"result": text}
+	}
+	return response
 }
 
 func (g *anthropic) buildMessages(prompt string, opts ai.GenOptions) []anthropicMessage {
@@ -261,7 +265,11 @@ func (g *anthropic) buildMessages(prompt string, opts ai.GenOptions) []anthropic
 			})
 
 			// User message with tool result
-			summarizedResponse := summarizeAnthropicContinuationToolOutput(cont.ToolCall.Name, cont.Response, i == len(opts.ToolCallContinuations)-1)
+			executionMode := ai.ReActToolResultExecutionModeStructuredSummary
+			if i == len(opts.ToolCallContinuations)-1 {
+				executionMode = ai.ReActToolResultExecutionModeSummary
+			}
+			summarizedResponse := summarizeAnthropicContinuationToolOutput(cont.ToolCall.Name, cont.Response, executionMode)
 			resultContent, _ := json.Marshal(summarizedResponse)
 			userContent := []anthropicContentBlock{
 				{

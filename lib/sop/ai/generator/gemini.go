@@ -366,11 +366,11 @@ func geminiValidationErrorParts(line string) (string, string, string) {
 	return category, remainder, example
 }
 
-func summarizeGeminiContinuationToolOutput(toolName string, response any, finalToolResult bool) any {
+func summarizeGeminiContinuationToolOutput(toolName string, response any, executionMode ai.ReActToolResultExecutionMode) any {
 	if !strings.EqualFold(strings.TrimSpace(toolName), "execute_script") {
 		return response
 	}
-	return map[string]any{"result": SummarizeToolResultForLLM(toolName, ExtractToolResultText(response), finalToolResult)}
+	return map[string]any{"result": SummarizeToolResultForLLM(toolName, ExtractToolResultText(response), executionMode)}
 }
 
 func geminiOwnedLoopCarryoverState(continuations []ai.ToolCallContinuation, provider, model, finalText string, toolCalls []ai.ToolCall, toolResults []ai.ReActToolResult) *ai.CarryoverState {
@@ -597,10 +597,11 @@ func cloneGeminiReActToolResults(results []ai.ReActToolResult) []ai.ReActToolRes
 	cloned := make([]ai.ReActToolResult, 0, len(results))
 	for _, result := range results {
 		cloned = append(cloned, ai.ReActToolResult{
-			Name:   result.Name,
-			Args:   cloneGeminiToolArgs(result.Args),
-			Result: result.Result,
-			Hint:   result.Hint,
+			Name:          result.Name,
+			Args:          cloneGeminiToolArgs(result.Args),
+			Result:        result.Result,
+			Hint:          result.Hint,
+			ExecutionMode: result.ExecutionMode,
 		})
 	}
 	return cloned
@@ -662,10 +663,11 @@ func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest
 	}
 
 	return ai.ReActToolResult{
-			Name:   toolCall.Name,
-			Args:   cloneGeminiToolArgs(toolCall.Args),
-			Result: resultText,
-			Hint:   cloneGeminiToolProgressHint(hint),
+			Name:          toolCall.Name,
+			Args:          cloneGeminiToolArgs(toolCall.Args),
+			Result:        resultText,
+			Hint:          cloneGeminiToolProgressHint(hint),
+			ExecutionMode: ai.ReActToolResultExecutionModeStructuredSummary,
 		}, ai.ToolCallContinuation{
 			ToolCall: toolCall,
 			Response: continuationResponse,
@@ -924,7 +926,11 @@ func buildGeminiRequest(prompt string, opts ai.GenOptions) geminiRequest {
 			continue
 		}
 
-		summarizedResponse := summarizeGeminiContinuationToolOutput(continuation.ToolCall.Name, continuation.Response, i == len(opts.ToolCallContinuations)-1)
+		executionMode := ai.ReActToolResultExecutionModeStructuredSummary
+		if i == len(opts.ToolCallContinuations)-1 {
+			executionMode = ai.ReActToolResultExecutionModeSummary
+		}
+		summarizedResponse := summarizeGeminiContinuationToolOutput(continuation.ToolCall.Name, continuation.Response, executionMode)
 		reqBody.Contents = append(reqBody.Contents,
 			geminiContent{
 				Role: "model",
