@@ -1237,7 +1237,25 @@
             li.textContent = labelText;
             li.title = kb;
             li.classList.add('truncate-text');
+            li.setAttribute('data-space-name', kb);
             li.onclick = () => selectSpace(kb, li);
+            li.addEventListener('dragover', (event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'copy';
+                li.style.background = 'var(--hover-bg)';
+            });
+            li.addEventListener('dragleave', () => {
+                li.style.background = '';
+            });
+            li.addEventListener('drop', (event) => {
+                event.preventDefault();
+                li.style.background = '';
+                const sourceStoreName = event.dataTransfer?.getData('text/plain') || window._digestSourceStoreName || '';
+                if (!sourceStoreName) {
+                    return;
+                }
+                window.openDigestSourceStoreModal(sourceStoreName, kb);
+            });
             kbList.appendChild(li);
 
             if (normalizedSpaceToSelect && kb === normalizedSpaceToSelect) {
@@ -1365,7 +1383,17 @@
                     li.textContent = store.charAt(0).toUpperCase() + store.slice(1);
                     li.title = store;
                     li.classList.add('truncate-text');
+                    li.setAttribute('draggable', 'true');
+                    li.setAttribute('data-store-name', store);
                     li.onclick = () => selectStore(store, li);
+                    li.addEventListener('dragstart', (event) => {
+                        event.dataTransfer?.setData('text/plain', store);
+                        event.dataTransfer.effectAllowed = 'copy';
+                        window._digestSourceStoreName = store;
+                    });
+                    li.addEventListener('dragend', () => {
+                        window._digestSourceStoreName = '';
+                    });
                     list.appendChild(li);
 
                     if (storeToRestore && store === storeToRestore) {
@@ -3549,6 +3577,39 @@ function toggleSpaceItemAssetSource() {
         referenceSection.style.display = selected === 'reference' ? 'block' : 'none';
     }
     toggleSpaceItemReferenceDetails();
+    updateSpaceItemUploadLabel();
+}
+
+function updateSpaceItemUploadLabel() {
+    const input = document.getElementById('new-space-item-upload-file');
+    const label = document.getElementById('new-space-item-upload-label');
+    if (!input || !label) return;
+    const files = Array.from(input.files || []);
+    if (files.length > 0) {
+        const names = files.map(file => file.name).join(', ');
+        label.textContent = `Selected: ${names}`;
+        label.style.color = 'var(--success-bg)';
+    } else {
+        label.textContent = 'Drop files here or click to browse. Supported: PDF, DOC, DOCX, TXT, Markdown, HTML.';
+        label.style.color = 'var(--text-muted)';
+    }
+}
+
+function handleSpaceItemDrop(event) {
+    event.preventDefault();
+    const dropzone = document.getElementById('new-space-item-upload-dropzone');
+    if (dropzone) {
+        dropzone.style.borderColor = 'var(--border-color)';
+        dropzone.style.background = 'var(--pre-bg)';
+    }
+    const input = document.getElementById('new-space-item-upload-file');
+    if (!input || !event.dataTransfer || !event.dataTransfer.files || event.dataTransfer.files.length === 0) {
+        return;
+    }
+    const dataTransfer = new DataTransfer();
+    Array.from(event.dataTransfer.files).forEach(file => dataTransfer.items.add(file));
+    input.files = dataTransfer.files;
+    updateSpaceItemUploadLabel();
 }
 
 function toggleSpaceItemReferenceDetails() {
@@ -3679,15 +3740,36 @@ async function saveSpaceItem() {
 
     try {
         let res;
-        if (assetMode === 'upload' && uploadFile) {
+        if ((assetMode === 'upload' && uploadFile) || assetMode === 'reference') {
             const formData = new FormData();
-            formData.append('file', uploadFile);
+            if (uploadFile) {
+                formData.append('file', uploadFile);
+            }
             formData.append('category_id', categoryId);
             formData.append('description', desc);
             formData.append('summaries', summariesInput);
-            formData.append('storage_mode', 'filesystem_reference');
-            formData.append('cloud_provider', 'filesystem');
-            formData.append('filename', uploadFile.name || '');
+            formData.append('asset_mode', assetMode);
+            if (assetMode === 'reference') {
+                formData.append('storage_mode', 'external_metadata_only');
+                formData.append('payload_ref', cloudRef || (uploadFile ? `uploaded://${uploadFile.name}` : ''));
+                if (cloudProvider) {
+                    formData.append('cloud_provider', cloudProvider);
+                }
+                if (cloudBucket) {
+                    formData.append('bucket', cloudBucket);
+                }
+                if (cloudObjectKey) {
+                    formData.append('object_key', cloudObjectKey);
+                }
+                if (cloudAccessHint) {
+                    formData.append('access_hint', cloudAccessHint);
+                }
+                formData.append('filename', uploadFile ? uploadFile.name : '');
+            } else {
+                formData.append('storage_mode', 'filesystem_reference');
+                formData.append('cloud_provider', 'filesystem');
+                formData.append('filename', uploadFile.name || '');
+            }
             res = await authFetch(`/api/spaces/item/add?name=${encodeURIComponent(kbNameDisplay)}&database=${encodeURIComponent(dbNameDisplay)}`, {
                 method: 'POST',
                 body: formData

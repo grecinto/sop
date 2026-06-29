@@ -2,11 +2,14 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	log "log/slog"
 
@@ -20,6 +23,24 @@ import (
 	"github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/search"
 )
+
+// RepoSource describes a repository-backed source store entry.
+type RepoSource struct {
+	Name    string   `json:"name,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Branch  string   `json:"branch,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// RepoSourceStoreManifest describes the lightweight manifest for a repository-backed source store.
+type RepoSourceStoreManifest struct {
+	Name            string       `json:"name,omitempty"`
+	Description     string       `json:"description,omitempty"`
+	Repositories    []RepoSource `json:"repositories,omitempty"`
+	CredentialsRefs []string     `json:"credentials_refs,omitempty"`
+}
 
 // Database extends the core sop.Database with AI capabilities.
 type Database struct {
@@ -377,9 +398,390 @@ func (db *Database) RemoveSearch(ctx context.Context, name string) error {
 	return lastErr
 }
 
+// readStoreListFile reads a simple side-car store manifest file from the database root.
+// These manifests are intentionally lightweight and non-ACID: they hold intake-only
+// source-store names for folder and repository containers that can be re-digested into
+// a Space later without participating in the core transactional store graph.
+func (db *Database) storageFolders() []string {
+	folderList := db.config.StoresFolders
+	if len(folderList) == 0 && db.StoragePath() != "" {
+		folderList = []string{db.StoragePath()}
+	}
+	if len(folderList) == 0 {
+		return nil
+	}
+	return folderList
+}
+
+func SanitizeSourceStoreName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "source-store"
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '/', r == '\\', r == ':', r == '*', r == '?', r == '"', r == '<', r == '>', r == '|':
+			return '_'
+		default:
+			return r
+		}
+	}, name)
+}
+
+func sanitizeSourceStoreName(name string) string {
+	return SanitizeSourceStoreName(name)
+}
+
+func (db *Database) writeStoreListFile(filename string, stores []string) error {
+	folderList := db.storageFolders()
+	if len(folderList) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(stores))
+	ordered := make([]string, 0, len(stores))
+	for _, store := range stores {
+		name := strings.TrimSpace(store)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		ordered = append(ordered, name)
+	}
+
+	content := strings.Join(ordered, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	for _, folder := range folderList {
+		path := filepath.Join(folder, filename)
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			return fmt.Errorf("create storage folder %s: %w", folder, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func (db *Database) readStoreListFile(filename string) ([]string, error) {
+	folderList := db.storageFolders()
+	if len(folderList) == 0 {
+		return []string{}, nil
+	}
+
+	seen := make(map[string]struct{})
+	var stores []string
+	for _, folder := range folderList {
+		path := filepath.Join(folder, filename)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+
+		for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+			name := strings.TrimSpace(line)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			stores = append(stores, name)
+		}
+	}
+
+	return stores, nil
+}
+
 // GetStores returns the standard stores, excluding system and vector databases.
 func (db *Database) GetStores(ctx context.Context) ([]string, error) {
 	return db.getStores(ctx, false)
+}
+
+// GetFolderStores returns the folder-backed source stores declared in the side-car manifest.
+func (db *Database) GetFolderStores(ctx context.Context) ([]string, error) {
+	_ = ctx
+	return db.readStoreListFile("folderstorelist.txt")
+}
+
+// ResolveFolderStorePath locates the on-disk directory for a folder-backed source store.
+func (db *Database) ResolveFolderStorePath(ctx context.Context, name string) (string, error) {
+	_ = ctx
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("source store name is required")
+	}
+	for _, folder := range db.storageFolders() {
+		candidates := []string{filepath.Join(folder, name), filepath.Join(folder, SanitizeSourceStoreName(name))}
+		for _, candidate := range candidates {
+			info, err := os.Stat(candidate)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return "", fmt.Errorf("stat %s: %w", candidate, err)
+			}
+			if info.IsDir() {
+				return candidate, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("folder source store %q not found", name)
+}
+
+// ListFolderStoreFiles returns the relative file paths inside a folder-backed source store.
+func (db *Database) ListFolderStoreFiles(ctx context.Context, name string) ([]string, error) {
+	storePath, err := db.ResolveFolderStorePath(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	err = filepath.Walk(storePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relPath, err := filepath.Rel(storePath, path)
+		if err != nil {
+			relPath = info.Name()
+		}
+		files = append(files, filepath.ToSlash(relPath))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk %s: %w", storePath, err)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// ReadFolderStoreFile returns the text content from a file inside a folder-backed source store.
+func (db *Database) ReadFolderStoreFile(ctx context.Context, name, relPath string) (string, error) {
+	storePath, err := db.ResolveFolderStorePath(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	cleanRelPath := strings.TrimSpace(relPath)
+	if cleanRelPath == "" {
+		return "", fmt.Errorf("file path is required")
+	}
+	fullPath := filepath.Join(storePath, filepath.FromSlash(strings.TrimPrefix(cleanRelPath, "/")))
+	cleanRoot := filepath.Clean(storePath)
+	cleanPath := filepath.Clean(fullPath)
+	if cleanPath != cleanRoot && !strings.HasPrefix(cleanPath, cleanRoot+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path escapes source store root")
+	}
+	data, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return "", err
+	}
+	if !utf8.Valid(data) {
+		return "", fmt.Errorf("file is not valid utf-8")
+	}
+	return string(data), nil
+}
+
+// AddFolderStore appends a folder-backed source store to the side-car manifest.
+func (db *Database) AddFolderStore(ctx context.Context, name string) error {
+	_ = ctx
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("source store name is required")
+	}
+
+	stores, err := db.GetFolderStores(ctx)
+	if err != nil {
+		return err
+	}
+	for _, existing := range stores {
+		if existing == name {
+			return nil
+		}
+	}
+
+	stores = append(stores, name)
+	return db.writeStoreListFile("folderstorelist.txt", stores)
+}
+
+// GetRepoStores returns the repository-backed source stores declared in the side-car manifest.
+func (db *Database) GetRepoStores(ctx context.Context) ([]string, error) {
+	_ = ctx
+	return db.readStoreListFile("repostorelist.txt")
+}
+
+// AddRepoStore appends a repository-backed source store and persists its manifest.
+func (db *Database) AddRepoStore(ctx context.Context, name string, manifest RepoSourceStoreManifest) error {
+	_ = ctx
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("source store name is required")
+	}
+	manifest.Name = name
+
+	stores, err := db.GetRepoStores(ctx)
+	if err != nil {
+		return err
+	}
+	for _, existing := range stores {
+		if existing == name {
+			return db.WriteRepoStoreManifest(ctx, name, manifest)
+		}
+	}
+
+	stores = append(stores, name)
+	if err := db.writeStoreListFile("repostorelist.txt", stores); err != nil {
+		return err
+	}
+	return db.WriteRepoStoreManifest(ctx, name, manifest)
+}
+
+// WriteRepoStoreManifest persists the manifest for a repository-backed source store.
+func (db *Database) WriteRepoStoreManifest(ctx context.Context, name string, manifest RepoSourceStoreManifest) error {
+	_ = ctx
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("source store name is required")
+	}
+
+	manifest.Name = name
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal repo store manifest: %w", err)
+	}
+
+	for _, folder := range db.storageFolders() {
+		path := filepath.Join(folder, fmt.Sprintf("%s.repo.json", sanitizeSourceStoreName(name)))
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			return fmt.Errorf("create storage folder %s: %w", folder, err)
+		}
+		if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write repo store manifest %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// ReadRepoStoreManifest returns the persisted manifest for a repository-backed source store.
+func (db *Database) ReadRepoStoreManifest(ctx context.Context, name string) (RepoSourceStoreManifest, error) {
+	_ = ctx
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return RepoSourceStoreManifest{}, fmt.Errorf("source store name is required")
+	}
+
+	for _, folder := range db.storageFolders() {
+		path := filepath.Join(folder, fmt.Sprintf("%s.repo.json", sanitizeSourceStoreName(name)))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return RepoSourceStoreManifest{}, fmt.Errorf("read repo store manifest %s: %w", path, err)
+		}
+		var manifest RepoSourceStoreManifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			return RepoSourceStoreManifest{}, fmt.Errorf("decode repo store manifest %s: %w", path, err)
+		}
+		manifest.Name = name
+		return manifest, nil
+	}
+
+	return RepoSourceStoreManifest{Name: name}, nil
+}
+
+// ResolveRepoStoreRoot locates the repository root for a repo-backed source store.
+func (db *Database) ResolveRepoStoreRoot(ctx context.Context, name string) (string, error) {
+	_ = ctx
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("source store name is required")
+	}
+	manifest, err := db.ReadRepoStoreManifest(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if len(manifest.Repositories) == 0 {
+		return "", fmt.Errorf("repo source store %q has no repositories", name)
+	}
+	repo := manifest.Repositories[0]
+	if repo.URL == "" {
+		return "", fmt.Errorf("repo source store %q has no repository URL", name)
+	}
+	if filepath.IsAbs(repo.URL) {
+		return repo.URL, nil
+	}
+	for _, folder := range db.storageFolders() {
+		candidate := filepath.Join(folder, repo.URL)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return repo.URL, nil
+}
+
+// ListRepoStoreFiles returns the relative file paths inside a repo-backed source store.
+func (db *Database) ListRepoStoreFiles(ctx context.Context, name string) ([]string, error) {
+	storeRoot, err := db.ResolveRepoStoreRoot(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	err = filepath.Walk(storeRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relPath, err := filepath.Rel(storeRoot, path)
+		if err != nil {
+			relPath = info.Name()
+		}
+		files = append(files, filepath.ToSlash(relPath))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk %s: %w", storeRoot, err)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// ReadRepoStoreFile returns the text content from a file inside a repo-backed source store.
+func (db *Database) ReadRepoStoreFile(ctx context.Context, name, relPath string) (string, error) {
+	storeRoot, err := db.ResolveRepoStoreRoot(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	cleanRelPath := strings.TrimSpace(relPath)
+	if cleanRelPath == "" {
+		return "", fmt.Errorf("file path is required")
+	}
+	fullPath := filepath.Join(storeRoot, filepath.FromSlash(strings.TrimPrefix(cleanRelPath, "/")))
+	cleanRoot := filepath.Clean(storeRoot)
+	cleanPath := filepath.Clean(fullPath)
+	if cleanPath != cleanRoot && !strings.HasPrefix(cleanPath, cleanRoot+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path escapes source store root")
+	}
+	data, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return "", err
+	}
+	if !utf8.Valid(data) {
+		return "", fmt.Errorf("file is not valid utf-8")
+	}
+	return string(data), nil
 }
 
 // GetDomains returns only the vector databases (domains).
@@ -394,39 +796,43 @@ func (db *Database) getStores(ctx context.Context, vector bool) ([]string, error
 	}
 	defer trans.Rollback(ctx)
 
-	// Since trans in main.go actually supports GetStores, let's use type assertion
 	if getStoresTx, ok := trans.(interface {
 		GetStores(context.Context) ([]string, error)
 	}); ok {
 		allStores, err := getStoresTx.GetStores(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		var stores []string
-		kbLookup := make(map[string]byte)
-		for _, store := range allStores {
-			if !vector {
-				// non-vector
-				if !strings.Contains(store, "/") {
-					stores = append(stores, store)
-				}
-			} else {
-				// vector or text search
-				if strings.Contains(store, "/") {
-					parts := strings.Split(store, "/")
-					if _, exists := kbLookup[parts[0]]; !exists {
-						stores = append(stores, parts[0])
-						kbLookup[parts[0]] = 1
+		if err == nil {
+			var stores []string
+			kbLookup := make(map[string]byte)
+			for _, store := range allStores {
+				if !vector {
+					if !strings.Contains(store, "/") {
+						stores = append(stores, store)
+					}
+				} else {
+					if strings.Contains(store, "/") {
+						parts := strings.Split(store, "/")
+						if _, exists := kbLookup[parts[0]]; !exists {
+							stores = append(stores, parts[0])
+							kbLookup[parts[0]] = 1
+						}
 					}
 				}
 			}
+			if len(stores) > 0 || vector {
+				return stores, nil
+			}
 		}
+	}
+
+	if stores, fileErr := db.readStoreListFile("storelist.txt"); fileErr == nil {
 		if len(stores) > 0 {
 			return stores, nil
 		}
 		return make([]string, 0), nil
 	}
 
+	if err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("underlying transaction does not support GetStores")
 }

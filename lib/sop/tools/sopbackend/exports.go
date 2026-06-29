@@ -348,6 +348,7 @@ func RegisterAllHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/scripts/execute", WithAuth(handleExecuteScript))
 
 	// Knowledge Base Endpoints
+	mux.HandleFunc("/api/source-store/digest", WithAuth(handleDigestSourceStore))
 	mux.HandleFunc("/api/spaces/categories", WithAuth(handleListSpaceCategories))
 	mux.HandleFunc("/api/spaces/category/add", WithAuth(handleAddSpaceCategory))
 	mux.HandleFunc("/api/spaces/category/delete", WithAuth(handleDeleteSpaceCategory))

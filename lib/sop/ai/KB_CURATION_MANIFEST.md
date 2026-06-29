@@ -48,6 +48,75 @@ When regenerating or replacing the curated KB in the future, follow this sequenc
 6. Inspect the generated `ai/sop_base_knowledge.json` for expected category paths and item payloads.
 7. If you want to trial the KB in the UI, start `go run ./tools/httpserver` from the repo root. The built-in SOP preload path automatically detects `sop_base_knowledge.json`, `ai/sop_base_knowledge.json`, and `../ai/sop_base_knowledge.json` when the SOP KB is preloaded.
 8. If a temporary draft file was used, either delete it or leave it clearly marked as non-canonical.
+## Example: digest-to-Space workflow for large source stores
+
+The intended "digest to Space" flow is not a single giant prompt over an entire corpus. It should be a staged workflow that preserves grounding while keeping large datasets manageable.
+
+A practical sequence is:
+
+1. Inspect the source store first.
+   - List the files and folders in the source store.
+   - Identify likely high-signal files and skip obvious noise.
+   - Prefer an inventory pass over reading everything blindly.
+
+2. Build a curation plan before writing content into the Space.
+   - Identify the main themes, likely category paths, and the files that are most important.
+   - Use the bounded semantic taxonomy as the planning target.
+   - Decide whether the corpus should be curated as a single pass or as multiple semantic batches.
+
+3. Curate in batches or chunks when the material is large.
+   - For small or medium corpora, one pass is often enough.
+   - For large files or large folders, split the work into semantic chunks such as:
+     - file-by-file batches,
+     - section-by-section batches,
+     - or paragraph-group blocks with a small overlap at boundaries.
+   - Each chunk should be curated independently, but with the same grounding policy and category conventions.
+
+4. Merge and deduplicate after the chunk passes.
+   - Consolidate overlapping notes into a smaller set of high-signal items.
+   - Remove repeated material and keep the strongest, most retrieval-friendly version of each concept.
+   - Preserve provenance so every item can still be traced back to the source files.
+
+5. Persist the result into the target Space.
+   - Create or update category paths that align with the manifest taxonomy.
+   - Upsert curated items with title, summary, body, and source provenance.
+   - Keep the Space representation compact and semantic rather than storing raw dumps.
+
+This means "complete digestion" should be interpreted as complete coverage of the important signal, not as a single overly large prompt that tries to absorb the entire source store at once. For large repositories, chunked curation followed by consolidation is the more reliable approach.
+
+### LLM-controlled reading strategy with backend guardrails
+
+The LLM should be allowed to steer the reading plan, but the backend should retain control of the execution boundaries.
+
+Recommended policy:
+
+1. The backend exposes an inventory of files and metadata first.
+   - file path
+   - size
+   - preview or summary hint
+   - optional content type
+
+2. The LLM decides which files or sections deserve deeper inspection.
+   - It may recommend a reading order.
+   - It may suggest chunking by file, section, or semantic block.
+   - It may decide that some files are low-signal and should be skipped or sampled.
+
+3. The backend enforces safe reading and chunking limits.
+   - maximum chunk size
+   - maximum number of files per pass
+   - maximum tokens or text length per curation call
+   - explicit file-boundary preservation where possible
+
+4. The digest workflow supports two execution modes.
+   - Full mode is the default and re-curates the source material on every run for maximum consistency and quality.
+   - Delta mode is an opt-in mode for redo runs. It reuses previously curated output when the file metadata and/or file hash indicate that the source remains unchanged, and only re-curates files that appear to have changed.
+
+5. The LLM curates the retrieved chunks, but the system preserves provenance and merges results afterward.
+   - every curated item should carry source references
+   - overlapping or duplicate items should be unified in a consolidation pass
+
+This gives the best of both worlds: the model can adapt to the content and semantics, while the runtime remains bounded, repeatable, and cost-safe.
+
 ## Custom KB workflow for end users
 
 The same workflow can be used to author a custom Knowledge Base for a separate deployment or a private dataset:

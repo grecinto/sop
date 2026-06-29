@@ -187,6 +187,14 @@ const runRepoTestsArgsSchema = `{"type":"object","properties":{"path":{"type":"s
 
 const readFileArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to read."},"start_line":{"type":"integer","description":"Optional first line to include."},"end_line":{"type":"integer","description":"Optional last line to include."}},"required":["path"]}`
 
+const listFolderStoreFilesArgsSchema = `{"type":"object","properties":{"database":{"type":"string","description":"Optional database override. Defaults to the active session database."},"store":{"type":"string","description":"Name of the folder-backed source store to inspect."}},"required":["store"]}`
+
+const readFolderStoreFileArgsSchema = `{"type":"object","properties":{"database":{"type":"string","description":"Optional database override. Defaults to the active session database."},"store":{"type":"string","description":"Name of the folder-backed source store to inspect."},"path":{"type":"string","description":"Relative path to the file inside the source store."}},"required":["store","path"]}`
+
+const listRepoStoreFilesArgsSchema = `{"type":"object","properties":{"database":{"type":"string","description":"Optional database override. Defaults to the active session database."},"store":{"type":"string","description":"Name of the repository-backed source store to inspect."}},"required":["store"]}`
+
+const readRepoStoreFileArgsSchema = `{"type":"object","properties":{"database":{"type":"string","description":"Optional database override. Defaults to the active session database."},"store":{"type":"string","description":"Name of the repository-backed source store to inspect."},"path":{"type":"string","description":"Relative path to the file inside the repository-backed source store."}},"required":["store","path"]}`
+
 const writeFileArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to write."},"content":{"type":"string","description":"Full content to write to the file."}},"required":["path","content"]}`
 
 const patchFileArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Path to the file to patch."},"old_string":{"type":"string","description":"Exact text to replace in the file."},"new_string":{"type":"string","description":"Replacement text to write."}},"required":["path","old_string","new_string"]}`
@@ -240,6 +248,11 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 	if !a.hasRegisteredCapability("Desktop", "Desktop Automation", "desktop") {
 		return
 	}
+
+	a.registry.Register("list_folder_store_files", "Lists files inside a folder-backed source store so the agent can inspect them before curating into a Space.", listFolderStoreFilesArgsSchema, wrapStringTool(a.toolListFolderStoreFiles))
+	a.registry.Register("read_folder_store_file", "Reads a file from a folder-backed source store so the agent can inspect its contents before curating into a Space.", readFolderStoreFileArgsSchema, wrapStringTool(a.toolReadFolderStoreFile))
+	a.registry.Register("list_repo_store_files", "Lists files inside a repository-backed source store so the agent can inspect them before curating into a Space.", listRepoStoreFilesArgsSchema, wrapStringTool(a.toolListRepoStoreFiles))
+	a.registry.Register("read_repo_store_file", "Reads a file from a repository-backed source store so the agent can inspect its contents before curating into a Space.", readRepoStoreFileArgsSchema, wrapStringTool(a.toolReadRepoStoreFile))
 
 	policy := GetAutomationPolicy()
 	if !policy.Enabled && !localDesktopAutomationEnabled.Load() {
@@ -453,6 +466,100 @@ func (a *CopilotAgent) toolRunRepoTests(ctx context.Context, args map[string]any
 	}
 
 	return a.runLocalAutomationCommand(ctx, args, command, "Run the relevant Go tests for the requested repository path.", path, 120)
+}
+
+func (a *CopilotAgent) toolListFolderStoreFiles(ctx context.Context, args map[string]any) (string, error) {
+	db, err := a.getDBForSpaceContext(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	storeNameRaw, ok := args["store"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'store'")
+	}
+	storeName, ok := storeNameRaw.(string)
+	if !ok || strings.TrimSpace(storeName) == "" {
+		return "", fmt.Errorf("'store' must be a non-empty string")
+	}
+	files, err := db.ListFolderStoreFiles(ctx, storeName)
+	if err != nil {
+		return "", err
+	}
+	if len(files) == 0 {
+		return "No files found.", nil
+	}
+	return strings.Join(files, "\n"), nil
+}
+
+func (a *CopilotAgent) toolReadFolderStoreFile(ctx context.Context, args map[string]any) (string, error) {
+	db, err := a.getDBForSpaceContext(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	storeNameRaw, ok := args["store"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'store'")
+	}
+	storeName, ok := storeNameRaw.(string)
+	if !ok || strings.TrimSpace(storeName) == "" {
+		return "", fmt.Errorf("'store' must be a non-empty string")
+	}
+	pathRaw, ok := args["path"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'path'")
+	}
+	path, ok := pathRaw.(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("'path' must be a non-empty string")
+	}
+	return db.ReadFolderStoreFile(ctx, storeName, path)
+}
+
+func (a *CopilotAgent) toolListRepoStoreFiles(ctx context.Context, args map[string]any) (string, error) {
+	db, err := a.getDBForSpaceContext(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	storeNameRaw, ok := args["store"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'store'")
+	}
+	storeName, ok := storeNameRaw.(string)
+	if !ok || strings.TrimSpace(storeName) == "" {
+		return "", fmt.Errorf("'store' must be a non-empty string")
+	}
+	files, err := db.ListRepoStoreFiles(ctx, storeName)
+	if err != nil {
+		return "", err
+	}
+	if len(files) == 0 {
+		return "No files found.", nil
+	}
+	return strings.Join(files, "\n"), nil
+}
+
+func (a *CopilotAgent) toolReadRepoStoreFile(ctx context.Context, args map[string]any) (string, error) {
+	db, err := a.getDBForSpaceContext(ctx, args)
+	if err != nil {
+		return "", err
+	}
+	storeNameRaw, ok := args["store"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'store'")
+	}
+	storeName, ok := storeNameRaw.(string)
+	if !ok || strings.TrimSpace(storeName) == "" {
+		return "", fmt.Errorf("'store' must be a non-empty string")
+	}
+	pathRaw, ok := args["path"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'path'")
+	}
+	path, ok := pathRaw.(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("'path' must be a non-empty string")
+	}
+	return db.ReadRepoStoreFile(ctx, storeName, path)
 }
 
 func (a *CopilotAgent) toolReadFile(ctx context.Context, args map[string]any) (string, error) {

@@ -981,19 +981,40 @@ func handleListStores(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Open a read-only transaction to fetch stores
-	trans, err := database.BeginTransaction(ctx, dbOpts, sop.ForReading)
-	if err != nil {
-		http.Error(w, "Failed to begin transaction: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer trans.Rollback(ctx)
-
-	stores, err := trans.GetStores(ctx)
+	aiDB := aidb.NewDatabase(dbOpts)
+	stores, err := aiDB.GetStores(ctx)
 	if err != nil {
 		http.Error(w, "Failed to list stores: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	folderStores, err := aiDB.GetFolderStores(ctx)
+	if err != nil {
+		http.Error(w, "Failed to list folder stores: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	repoStores, err := aiDB.GetRepoStores(ctx)
+	if err != nil {
+		http.Error(w, "Failed to list repo stores: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Merge the primary transactional stores with the lightweight side-car source stores.
+	// Folder and repo stores are manifest-backed placeholders for later digest-to-Space
+	// curation, so they are surfaced in the Stores view without affecting the core ACID store model.
+	combinedStores := make([]string, 0, len(stores)+len(folderStores)+len(repoStores))
+	seen := make(map[string]struct{})
+	appendUnique := func(names []string) {
+		for _, name := range names {
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			combinedStores = append(combinedStores, name)
+		}
+	}
+	appendUnique(stores)
+	appendUnique(folderStores)
+	appendUnique(repoStores)
 
 	currentUserID := strings.TrimSpace(sop.GetAuthFromContext(ctx).UserID)
 	if currentUserID == "" {
@@ -1001,7 +1022,7 @@ func handleListStores(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var visibleStores []string
-	for _, s := range stores {
+	for _, s := range combinedStores {
 		rbac := sop.ResolveRBACMap(ctx, "store", sop.EntitlementContext{AssetID: s, Database: dbName, IsSystemDB: IsSystemDB(dbName), UserID: currentUserID}, nil)
 		if rbac[sop.UICapabilityRead] {
 			visibleStores = append(visibleStores, s)

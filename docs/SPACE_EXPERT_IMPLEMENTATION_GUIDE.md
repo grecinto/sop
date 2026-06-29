@@ -57,15 +57,16 @@ Acceptance criteria:
 - File metadata is recorded, including name, type, size, checksum, upload timestamp, and owner context.
 
 ### 3. Digest files into a Space
-As a user, I want to select a target Space and provide guidance for a “Digest to Space” action so that uploaded files become searchable, curated knowledge inside that Space.
+As a user, I want to drag a source store onto a target Space and choose a digest template so that uploaded files become searchable, curated knowledge inside that Space.
 
 Acceptance criteria:
-- The user can choose a target Space from a dropdown or picker.
-- The user can provide a natural-language instruction describing what the LLM should focus on while digesting the source material.
-- The user can specify priorities such as overall themes, coding patterns, testing conventions, troubleshooting notes, architecture concerns, or other domain-specific guidance.
+- The user can drag a source store from the left pane onto a target Space.
+- A lightweight digest picker opens with selectable templates such as Courseware, Code Expert, Research Digest, and General Knowledge.
+- The user can optionally refine the generated instruction with a short topic or audience hint without being forced to write a full LLM prompt.
 - A background or asynchronous job processes the files.
-- The uploaded content is extracted, chunked, summarized, and ingested into the Space according to the provided guidance.
+- The uploaded content is extracted, chunked, summarized, and ingested into the Space according to the selected template.
 - Progress and error states are visible to the user.
+- Advanced users can still open a custom-instruction mode for more precise control.
 
 ### 4. Use a Space as an AI expert context
 As a user, I want to select a Space during an AI session so that the assistant answers using the curated knowledge from that Space.
@@ -137,18 +138,21 @@ Requirements:
 - Reject unsupported file types gracefully and explain the reason.
 
 ### D. User-guided digestion instructions
-The digest workflow should not be a blind one-click action. It should be guided by the user’s intent.
+The digest workflow should not be a blind one-click action. It should be guided by the user’s intent, but the primary entry point should be a simple drag-and-drop template flow.
 
 Requirements:
-- The UI should allow the user to enter a natural-language instruction before starting digestion.
-- The instruction should define what the LLM should prioritize while extracting, summarizing, and categorizing material.
-- The system should use this instruction to influence chunking strategy, summarization style, category selection, and item-level knowledge extraction.
-- The instruction should be stored with the digestion job so it can be reviewed later.
+- The UI should allow the user to trigger digestion by dragging a source store onto a target Space.
+- The first experience should present a small set of digest templates instead of a free-form prompt field.
+- The selected template should define what the LLM should prioritize while extracting, summarizing, and categorizing material.
+- The system should use the template plus optional audience/topic hints to influence chunking strategy, summarization style, category selection, and item-level knowledge extraction.
+- Advanced users can optionally open a custom-instruction mode for more precise control.
+- The resolved instruction, template ID, and any optional hints should be stored with the digestion job so it can be reviewed later.
 
 Examples:
-- “Digest these files in this Store in general. Capture what is important, summarize it, and add entries to the Space.”
-- “Digest this repository’s .go files. Identify patterns and best practices, coding guidelines, variable naming conventions, testing patterns, and architecture decisions.”
-- “Focus on operational troubleshooting, runbook steps, and incident-response practices from these documents.”
+- “Courseware”: turn the source material into a student-friendly study guide with topics, key concepts, and review notes.
+- “Code Expert”: extract best practices, coding conventions, architecture patterns, testing approaches, and debugging guidance.
+- “Research Digest”: extract themes, evidence, structured summaries, and references for later retrieval.
+- “General Knowledge”: capture the important themes and summarize them for future use.
 
 ### E. Ingestion pipeline
 The ingestion workflow should be domain-agnostic and reusable.
@@ -254,6 +258,51 @@ This should not be tied to a specific domain; it should be generic and reusable.
 
 ---
 
+## Source-store side-car model
+
+The digest-to-Space workflow uses a separate side-car source-store layer rather than overloading the core ACID store graph.
+
+### Why this is a side-car model
+
+The main SOP stores remain the authoritative transactional layer for structured runtime data. The new source stores are different:
+
+- they are intake containers for raw material,
+- they are lightweight placeholders for future digestion into a Space,
+- they can be recreated or refreshed without disturbing the core store model,
+- and they are intentionally non-ACID so the implementation stays simple and focused on ingestion and later curation.
+
+### Supported source-store kinds
+
+1. Folder source stores
+   - Represent a directory-like container for uploaded files.
+   - A folder store is basically a folder plus optional metadata and a manifest for later processing.
+
+2. Repo source stores
+   - Represent a repository-backed intake source.
+   - A repo store keeps a manifest of repository definitions and any needed credentials references.
+   - The manifest is intentionally simple and not a full transactional database record.
+
+### Storage format
+
+The side-car layer is manifest-driven and lives beside the existing store registry files in the database root:
+
+- `storelist.txt` for the current transactional stores
+- `folderstorelist.txt` for folder source stores
+- `repostorelist.txt` for repo source stores
+
+The Data Manager can display all three lists together in the Stores section, while the digest step later materializes curated knowledge into a Space.
+
+### Lifecycle expectations
+
+A source store is not meant to become a permanent primary storage object. It is a staging object that can be:
+
+- created quickly,
+- updated with new files or repo references,
+- re-digested into a Space,
+- and optionally kept around for future re-curation.
+
+This keeps the primary Space workflow clean while still giving users a low-friction way to accumulate raw source material before turning it into curated expert knowledge.
+
 ## Recommended implementation phases
 
 ### Phase 1: Blob storage foundation
@@ -274,8 +323,8 @@ Tasks:
 
 ### Phase 3: Digest-to-Space workflow
 Tasks:
-- add a UI action such as “Digest to Space”,
-- add a target Space picker,
+- support a chat-driven digest flow from the AI chat window,
+- let the user provide a rich natural-language prompt that specifies the target Space, the intended focus, and the desired transformation,
 - add a background job to ingest parsed content into the selected Space,
 - preserve document references by creating or reusing a Space document entry for each uploaded source file,
 - attach the resulting `doc_id` and payload reference to the generated knowledge items,
@@ -313,11 +362,12 @@ Tasks:
 - allow delete or reprocess,
 - show associated Space and ingestion job state.
 
-### Digest action
-- choose target Space,
-- select one or more documents,
-- click “Digest to Space”,
-- see status progress and completion.
+### Drag-and-drop digest action
+- drag a source store from the left pane onto a target Space,
+- choose a digest template such as Courseware or Code Expert,
+- optionally provide a short topic or audience hint,
+- see status progress and completion,
+- and keep an advanced custom-instruction mode available for power users.
 
 ### AI session experience
 - include a Space dropdown or multi-select,

@@ -39,7 +39,8 @@
 ## Phase 7: Space expert / digest-to-Space feature
 - [ ] Implement a folder-based blob store for uploaded documents.
 - [ ] Add extraction and parsing for common document formats such as PDF, TXT, Markdown, HTML, and DOCX.
-- [ ] Add a “Digest to Space” workflow with target-Space selection and ingestion progress.
+- [ ] Add a drag-and-drop digest workflow where the user can drop a source store onto a target Space, choose a template such as Courseware or Code Expert, and track progress.
+- [ ] Support an optional advanced custom-instruction mode for power users who want to override or refine the generated prompt.
 - [ ] Reuse existing Space / KnowledgeBase primitives for curated knowledge storage.
 - [ ] Add expert-mode AI prompt grounding so selected Spaces become an active context source for coding, debugging, and domain-specific questions.
 - [ ] Reuse the existing Space document-reference model so each generated knowledge item points back to its source document via `doc_id`, `storage_mode`, and `payload_ref`.
