@@ -21,7 +21,7 @@ func TestUpdateSpaceItemPersists(t *testing.T) {
 	spaceName := "test_space_update"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -110,7 +110,7 @@ func TestListSpaceItemsExposesContentType(t *testing.T) {
 	spaceName := "test_space_list_content_type"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -182,7 +182,7 @@ func TestUpdateSpaceItemRequiresCategoryID(t *testing.T) {
 	spaceName := "test_space_update_no_cat"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -244,7 +244,7 @@ func TestHandleUpdateSpaceItemPersistsAppleCloudDocumentReference(t *testing.T) 
 	spaceName := "test_space_update_apple_cloud_doc"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -376,7 +376,7 @@ func TestHandleAddSpaceItemPersistsAppleCloudDocumentReference(t *testing.T) {
 	spaceName := "test_space_apple_cloud_doc"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -502,7 +502,7 @@ func TestHandleAddSpaceItemMultipartUploadPersistsUploadedBytes(t *testing.T) {
 	spaceName := "test_space_multipart_upload"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -636,7 +636,7 @@ func TestHandleAddSpaceItemPersistsFilesystemDocumentReference(t *testing.T) {
 	spaceName := "test_space_filesystem_doc"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -760,7 +760,7 @@ func TestHandleListSpaceItemsReturnsDocumentReferenceMetadata(t *testing.T) {
 	spaceName := "test_space_list_document_ref"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -838,7 +838,7 @@ func TestHandleListSpaceItemsFallsBackToFilesystemRef(t *testing.T) {
 	spaceName := "test_space_list_filesystem_ref_fallback"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -913,7 +913,7 @@ func TestHandleAddSpaceCategory_NormalizesChildPath(t *testing.T) {
 	spaceName := "test_space_trim_child_path"
 
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{{
 			Name: dbName,
 			Path: tmpDir,
@@ -1010,7 +1010,7 @@ func TestListSpaceCategoryAndItems(t *testing.T) {
 
 	// Setup global config
 	config = Config{
-		RootPassword: "secret_password",
+		RootPassword: SecuredString("secret_password"),
 		Databases: []DatabaseConfig{
 			{
 				Name: dbName,

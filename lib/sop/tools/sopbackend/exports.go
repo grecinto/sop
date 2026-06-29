@@ -2,7 +2,9 @@ package sopbackend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +20,11 @@ var ErrAgentNotInitialized = errors.New("agent not initialized")
 // GetConfig returns a copy of the current configuration
 func GetConfig() Config {
 	return config
+}
+
+// SetConfig replaces the current configuration.
+func SetConfig(cfg Config) {
+	config = cfg
 }
 
 // GetLoadedAgents returns the currently initialized backend agents.
@@ -108,6 +115,10 @@ func Initialize(ctx context.Context, opts RuntimeOptions) error {
 
 // InitializeRuntime loads the shared config, applies runtime defaults, and initializes the backend once.
 func InitializeRuntime(ctx context.Context, configPath string, opts RuntimeOptions, port int, productionMode *bool) (string, error) {
+	if _, err := validateRuntimeSecretConfiguration(); err != nil {
+		return "", err
+	}
+
 	targetConfigPath := strings.TrimSpace(configPath)
 	if targetConfigPath == "" {
 		targetConfigPath = FindExistingConfigFile()
@@ -152,14 +163,132 @@ func BootstrapRuntime(ctx context.Context, configPath string, opts RuntimeOption
 	return InitializeRuntime(ctx, configPath, opts, port, productionMode)
 }
 
+func validateRuntimeSecretConfiguration() (bool, error) {
+	if configEncryptionKey() != nil {
+		return true, nil
+	}
+	return false, fmt.Errorf("SOP_CONFIG_ENCRYPTION_KEY is required for encrypted config persistence")
+}
+
 // InitAgents initializes the agents with the current configuration.
 func InitAgents(ctx context.Context) error {
 	return Initialize(ctx, RuntimeOptions{})
 }
 
+// RegisterSwaggerHandlers registers a shared Swagger UI and OpenAPI document on the provided mux.
+func RegisterSwaggerHandlers(mux *http.ServeMux, basePath string) {
+	if mux == nil {
+		return
+	}
+	basePath = strings.TrimRight(basePath, "/")
+	if basePath == "" {
+		basePath = ""
+	}
+
+	spec := map[string]any{
+		"openapi": "3.0.3",
+		"info": map[string]any{
+			"title":       "SOP Backend API",
+			"version":     "1.0.0",
+			"description": "Shared API surface for the SOP Data Manager, daemon, and new site experience.",
+		},
+		"components": map[string]any{
+			"schemas": map[string]any{
+				"AuthLoginRequest": map[string]any{
+					"type":     "object",
+					"required": []string{"username", "password"},
+					"properties": map[string]any{
+						"username": map[string]any{"type": "string"},
+						"password": map[string]any{"type": "string"},
+					},
+				},
+				"AuthUserResponse": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"username":          map[string]any{"type": "string"},
+						"role":              map[string]any{"type": "string"},
+						"email":             map[string]any{"type": "string"},
+						"subscription_plan": map[string]any{"type": "string"},
+						"status":            map[string]any{"type": "string"},
+					},
+				},
+				"MonitorabilityInfoResponse": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"status":         map[string]any{"type": "string"},
+						"timestamp":      map[string]any{"type": "string"},
+						"service":        map[string]any{"type": "string"},
+						"version":        map[string]any{"type": "string"},
+						"environment":    map[string]any{"type": "string"},
+						"hostname":       map[string]any{"type": "string"},
+						"uptime_seconds": map[string]any{"type": "integer"},
+					},
+				},
+			},
+		},
+		"paths": map[string]any{
+			"/api/auth/login": map[string]any{"post": map[string]any{
+				"summary":     "Authenticate a user",
+				"requestBody": map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/AuthLoginRequest"}}}},
+				"responses":   map[string]any{"200": map[string]any{"description": "Authentication succeeded"}},
+			}},
+			"/api/auth/me": map[string]any{"get": map[string]any{
+				"summary":   "Get the current authenticated user",
+				"responses": map[string]any{"200": map[string]any{"description": "Current user", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/AuthUserResponse"}}}}},
+			}},
+			"/healthz": map[string]any{"get": map[string]any{"summary": "Liveness endpoint for the runtime instance"}},
+			"/readyz":  map[string]any{"get": map[string]any{"summary": "Readiness endpoint for the runtime instance"}},
+			"/info": map[string]any{"get": map[string]any{
+				"summary":   "Instance metadata for the runtime instance",
+				"responses": map[string]any{"200": map[string]any{"description": "Instance metadata", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/MonitorabilityInfoResponse"}}}}},
+			}},
+			"/metrics":       map[string]any{"get": map[string]any{"summary": "Prometheus-compatible metrics for the runtime instance"}},
+			"/api/databases": map[string]any{"get": map[string]any{"summary": "List databases"}},
+			"/api/stores":    map[string]any{"get": map[string]any{"summary": "List stores"}},
+			"/api/spaces":    map[string]any{"get": map[string]any{"summary": "List spaces"}},
+		},
+	}
+
+	mux.HandleFunc(basePath+"/swagger.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(spec)
+	})
+	mux.HandleFunc(basePath+"/swagger/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SOP Swagger UI</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+    <style>body { margin: 0; background: #07111f; color: #f7f9fc; } #swagger-ui { padding: 1rem; }</style>
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      window.onload = () => {
+        window.ui = SwaggerUIBundle({
+          url: './swagger.json',
+          dom_id: '#swagger-ui',
+          deepLinking: true,
+          presets: [SwaggerUIBundle.presets.apis],
+        });
+      };
+    </script>
+  </body>
+</html>`))
+	})
+	mux.HandleFunc(basePath+"/swagger", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, basePath+"/swagger/", http.StatusFound)
+	})
+}
+
 // RegisterAllHandlers registers all backend API handlers on the provided mux
 func RegisterAllHandlers(mux *http.ServeMux) {
 	RegisterUIRoutes(mux)
+	RegisterSwaggerHandlers(mux, "")
 
 	mux.HandleFunc("/admin/users", WithAuth(handleAdminUsersPage))
 	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
@@ -222,10 +351,8 @@ func RegisterAllHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config/environments/delete", WithAuth(handleDeleteEnvironment))
 
 	// Auth Endpoints
-	mux.HandleFunc("/api/auth/register", handleRegister)
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
-	mux.HandleFunc("/api/auth/unregister", WithAuth(handleUnregister))
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 }
 

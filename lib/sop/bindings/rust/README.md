@@ -30,6 +30,7 @@ The **SOP AI Kit** transforms SOP from a storage engine into a complete AI data 
 
 *   **Vector Store**: Native support for storing and searching high-dimensional vectors.
 *   **RAG Agents**: Build Retrieval-Augmented Generation applications with ease.
+*   **KnowledgeBase**: Use the shared ai/memory package and KnowledgeBase APIs to build memory-backed retrieval, semantic search, and knowledge workflows from Rust for end-user applications or microservices.
 *   **Scripts**: A functional AI runtime for drafting, refining, and executing complex workflows (Hybrid Execution Model).
 
 See [ai/README.md](../../ai/README.md) for a deep dive into the AI capabilities.

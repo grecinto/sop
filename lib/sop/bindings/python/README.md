@@ -32,6 +32,7 @@ The **SOP AI Kit** transforms SOP from a storage engine into a complete AI data 
 
 *   **Vector Store**: Native support for storing and searching high-dimensional vectors.
 *   **RAG Agents**: Build Retrieval-Augmented Generation applications with ease.
+*   **KnowledgeBase**: Use the shared ai/memory package and KnowledgeBase APIs to build memory-backed retrieval, semantic search, and knowledge workflows from Python for end-user applications or microservices.
 *   **Scripts**: A functional AI runtime for drafting, refining, and executing complex workflows (Hybrid Execution Model).
 
 > **Important**: To use the AI Copilot features (e.g., in the Data Manager), configure your LLM provider through the Setup Wizard or add generator configuration to your `config.json`. See the [Main README](../../README.md#ai-copilot-configuration) for details.

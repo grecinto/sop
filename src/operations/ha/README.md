@@ -53,7 +53,7 @@ This reduces friction for end users and makes the beta deployment feel more self
 Run the installer as root on each server:
 
 ```bash
-cd /path/to/sop/operations/ha
+cd /path/to/sop-cloud/src/operations/ha
 chmod +x install.sh sop-ha-failover.sh
 sudo ./install.sh
 ```
@@ -146,6 +146,18 @@ sudo /usr/local/bin/sop-ha promote
 sudo /usr/local/bin/sop-ha demote
 sudo /usr/local/bin/sop-ha status
 ```
+
+## Observability and HA layout
+
+This helper is intentionally lightweight, but it still provides basic operational visibility for an active/passive setup:
+
+- `sudo /usr/local/bin/sop-ha status` shows the current HA state, peer host, service health, and heartbeat timing.
+- `sudo journalctl -u sop-ha.service -f` streams the failover monitor logs for troubleshooting.
+- `/var/log/sop-ha.log` captures the monitor's transition history and promotion events.
+
+### Active/passive storage layout
+
+In this layout, the active node owns the writable storage path and serves the workload, while the passive node keeps a synchronized replica or standby copy of the same logical data layout. If the active node becomes unhealthy, the passive node can promote itself and continue serving requests using the replicated storage. This keeps the deployment simple while still giving operators a clear failover story and basic observability signals.
 
 ## Notes
 

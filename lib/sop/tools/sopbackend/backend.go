@@ -47,7 +47,7 @@ func (b *Backend) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// RegisterHandlers registers all backend API handlers on the provided mux.
+// RegisterHandlers registers the shared runtime API handlers for the platform on the provided mux.
 func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	// Sync global state before registering
 	config = *b.Config
@@ -116,10 +116,8 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	// Admin UI / Auth Endpoints
 	mux.HandleFunc("/admin/users", WithAuth(handleAdminUsersPage))
 	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
-	mux.HandleFunc("/api/auth/register", handleRegister)
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
-	mux.HandleFunc("/api/auth/unregister", WithAuth(handleUnregister))
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 }
 

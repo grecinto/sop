@@ -1,0 +1,13 @@
+go 1.26.4
+
+use (
+	.
+	./lib/sop
+	./lib/sop/adapters/cassandra
+	./lib/sop/adapters/redis
+	./lib/sop/ai
+	./lib/sop/incfs
+	./lib/sop/infs
+	./lib/sop/jsondb
+	./lib/sop/search
+)

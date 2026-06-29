@@ -91,7 +91,11 @@ demote_self() {
 
 status_report() {
   local state
+  local heartbeat_age
   state=$(read_state)
+  printf 'mode=active-passive\n'
+  printf 'storage_layout=active_writes_primary_passive_stands_by_on_replica\n'
+  printf 'peer_host=%s\n' "${PEER_HOST:-unset}"
   printf 'state=%s\n' "$state"
   if service_is_active; then
     printf 'service=active\n'
@@ -99,9 +103,12 @@ status_report() {
     printf 'service=inactive\n'
   fi
   if [[ -f "$HEARTBEAT_FILE" ]]; then
+    heartbeat_age=$(( $(date +%s) - $(stat -f '%m' "$HEARTBEAT_FILE" 2>/dev/null || echo 0) ))
     printf 'peer_last_seen=%s\n' "$(date -r "$HEARTBEAT_FILE" '+%Y-%m-%d %H:%M:%S')"
+    printf 'heartbeat_age_seconds=%s\n' "$heartbeat_age"
   else
     printf 'peer_last_seen=never\n'
+    printf 'heartbeat_age_seconds=never\n'
   fi
 }
 

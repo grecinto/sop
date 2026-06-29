@@ -35,14 +35,78 @@ func getSystemDB(ctx context.Context) (*aidb.Database, error) {
 
 // UserRecord stores minimal credential and role data for the built-in auth model.
 type UserRecord struct {
-	Username         string    `json:"username"`
-	Role             string    `json:"role"`
-	PasswordHash     string    `json:"password_hash,omitempty"`
-	Email            string    `json:"email,omitempty"`
-	SubscriptionPlan string    `json:"subscription_plan,omitempty"`
-	Status           string    `json:"status,omitempty"`
-	CreatedAt        time.Time `json:"created_at,omitempty"`
-	UpdatedAt        time.Time `json:"updated_at,omitempty"`
+	Username         string        `json:"username"`
+	Role             string        `json:"role"`
+	PasswordHash     SecuredString `json:"password_hash,omitempty"`
+	Email            SecuredString `json:"email,omitempty"`
+	SubscriptionPlan string        `json:"subscription_plan,omitempty"`
+	BillingStatus    string        `json:"billing_status,omitempty"`
+	StripeCustomerID SecuredString `json:"stripe_customer_id,omitempty"`
+	StripeSubID      SecuredString `json:"stripe_subscription_id,omitempty"`
+	Status           string        `json:"status,omitempty"`
+	CreatedAt        time.Time     `json:"created_at,omitempty"`
+	UpdatedAt        time.Time     `json:"updated_at,omitempty"`
+}
+
+type RegisterUserRequest struct {
+	Username         string
+	Password         string
+	Email            string
+	Role             string
+	SubscriptionPlan string
+}
+
+type UnregisterUserRequest struct {
+	Username string
+}
+
+type UpdateSubscriptionPlanRequest struct {
+	Username         string
+	SubscriptionPlan string
+}
+
+type SubscriptionRecord struct {
+	ID                   string    `json:"id"`
+	UserID               string    `json:"user_id"`
+	PlanCode             string    `json:"plan_code"`
+	ProviderSubscription string    `json:"provider_subscription_id,omitempty"`
+	Status               string    `json:"status"`
+	CurrentPeriodStart   time.Time `json:"current_period_start,omitempty"`
+	CurrentPeriodEnd     time.Time `json:"current_period_end,omitempty"`
+	CancelAtPeriodEnd    bool      `json:"cancel_at_period_end,omitempty"`
+	CreatedAt            time.Time `json:"created_at,omitempty"`
+	UpdatedAt            time.Time `json:"updated_at,omitempty"`
+}
+
+type PaymentRecord struct {
+	ID                string    `json:"id"`
+	UserID            string    `json:"user_id"`
+	SubscriptionID    string    `json:"subscription_id,omitempty"`
+	ProviderPaymentID string    `json:"provider_payment_id,omitempty"`
+	Amount            float64   `json:"amount"`
+	Currency          string    `json:"currency,omitempty"`
+	Status            string    `json:"status"`
+	ProviderEventID   string    `json:"provider_event_id,omitempty"`
+	CreatedAt         time.Time `json:"created_at,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+}
+
+type BillingCheckoutSession struct {
+	ID     string
+	URL    string
+	Status string
+}
+
+type BillingWebhookEvent struct {
+	EventType string
+	EventID   string
+	UserID    string
+	Plan      string
+}
+
+type AuthenticatedAccount struct {
+	Username string
+	Roles    []string
 }
 
 // UserStore persists user identity records for the built-in auth model.
@@ -177,7 +241,7 @@ func tokenSigningSecret() []byte {
 	if secret := strings.TrimSpace(os.Getenv("SOP_SESSION_SECRET")); secret != "" {
 		return []byte(secret)
 	}
-	if secret := strings.TrimSpace(config.SessionSecret); secret != "" {
+	if secret := strings.TrimSpace(config.SessionSecret.Plaintext()); secret != "" {
 		return []byte(secret)
 	}
 	return []byte("sop-session-default-secret")
@@ -692,7 +756,7 @@ func (c *Config) SetUser(username, password, role string) error {
 	record := UserRecord{
 		Username:     username,
 		Role:         normalizeRole(role),
-		PasswordHash: hash,
+		PasswordHash: SecuredString(hash),
 		Status:       "active",
 	}
 	c.Users = append(c.Users, record)
@@ -736,9 +800,25 @@ func (c *Config) findUserRecord(ctx context.Context, username string) (*UserReco
 	return nil, false, nil
 }
 
+func (c *Config) FindUserRecord(ctx context.Context, username string) (*UserRecord, bool, error) {
+	return c.findUserRecord(ctx, username)
+}
+
+// RegisterUser creates a user record using the shared auth store and default account semantics.
 func (c *Config) RegisterUser(ctx context.Context, username, password, email, role, subscriptionPlan string) (*UserRecord, error) {
-	username = normalizeUsername(username)
-	if username == "" || strings.TrimSpace(password) == "" {
+	return c.RegisterUserWithRequest(ctx, RegisterUserRequest{
+		Username:         username,
+		Password:         password,
+		Email:            email,
+		Role:             role,
+		SubscriptionPlan: subscriptionPlan,
+	})
+}
+
+// RegisterUserWithRequest creates a user record from an explicit request object for shared backend callers.
+func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRequest) (*UserRecord, error) {
+	username := normalizeUsername(req.Username)
+	if username == "" || strings.TrimSpace(req.Password) == "" {
 		return nil, fmt.Errorf("username and password are required")
 	}
 	if _, ok, err := c.findUserRecord(ctx, username); err != nil {
@@ -747,15 +827,16 @@ func (c *Config) RegisterUser(ctx context.Context, username, password, email, ro
 		return nil, fmt.Errorf("username already exists")
 	}
 
-	role = normalizeRole(role)
+	role := normalizeRole(req.Role)
 	if role == "" {
 		role = sop.RoleUser
 	}
+	subscriptionPlan := req.SubscriptionPlan
 	if subscriptionPlan == "" {
 		subscriptionPlan = "starter"
 	}
 
-	hash, err := hashPassword(password)
+	hash, err := hashPassword(req.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -763,8 +844,8 @@ func (c *Config) RegisterUser(ctx context.Context, username, password, email, ro
 	record := UserRecord{
 		Username:         username,
 		Role:             role,
-		PasswordHash:     hash,
-		Email:            strings.TrimSpace(email),
+		PasswordHash:     SecuredString(hash),
+		Email:            SecuredString(strings.TrimSpace(req.Email)),
 		SubscriptionPlan: strings.TrimSpace(subscriptionPlan),
 		Status:           "active",
 	}
@@ -775,8 +856,14 @@ func (c *Config) RegisterUser(ctx context.Context, username, password, email, ro
 	return &record, nil
 }
 
+// UnregisterUser removes a user from the shared auth store and revokes any related sessions.
 func (c *Config) UnregisterUser(ctx context.Context, username string) error {
-	username = normalizeUsername(username)
+	return c.UnregisterUserWithRequest(ctx, UnregisterUserRequest{Username: username})
+}
+
+// UnregisterUserWithRequest removes a user using an explicit request object for shared backend callers.
+func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUserRequest) error {
+	username := normalizeUsername(req.Username)
 	if username == "" {
 		return nil
 	}
@@ -804,12 +891,21 @@ func (c *Config) UnregisterUser(ctx context.Context, username string) error {
 	return nil
 }
 
+// UpdateSubscriptionPlan changes a user's stored subscription plan using the shared auth/user store.
 func (c *Config) UpdateSubscriptionPlan(ctx context.Context, username, subscriptionPlan string) (*UserRecord, error) {
-	username = normalizeUsername(username)
+	return c.UpdateSubscriptionPlanWithRequest(ctx, UpdateSubscriptionPlanRequest{
+		Username:         username,
+		SubscriptionPlan: subscriptionPlan,
+	})
+}
+
+// UpdateSubscriptionPlanWithRequest changes a user's stored subscription plan from an explicit request object.
+func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req UpdateSubscriptionPlanRequest) (*UserRecord, error) {
+	username := normalizeUsername(req.Username)
 	if username == "" {
 		return nil, fmt.Errorf("username is required")
 	}
-	plan := strings.TrimSpace(subscriptionPlan)
+	plan := strings.TrimSpace(req.SubscriptionPlan)
 	if plan == "" {
 		plan = "none"
 	}
@@ -823,6 +919,14 @@ func (c *Config) UpdateSubscriptionPlan(ctx context.Context, username, subscript
 	}
 
 	user.SubscriptionPlan = plan
+	if plan == "none" {
+		user.BillingStatus = "inactive"
+		user.StripeSubID = ""
+	} else {
+		if user.BillingStatus == "" {
+			user.BillingStatus = "active"
+		}
+	}
 	user.UpdatedAt = time.Now().UTC()
 	if err := c.ensureUserStore().Save(ctx, user); err != nil {
 		return nil, err
@@ -830,11 +934,156 @@ func (c *Config) UpdateSubscriptionPlan(ctx context.Context, username, subscript
 	for i := range c.Users {
 		if normalizeUsername(c.Users[i].Username) == username {
 			c.Users[i].SubscriptionPlan = plan
+			c.Users[i].BillingStatus = user.BillingStatus
+			c.Users[i].StripeSubID = user.StripeSubID
 			c.Users[i].UpdatedAt = user.UpdatedAt
 			break
 		}
 	}
 	return user, nil
+}
+
+func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan string) (*BillingCheckoutSession, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+	if strings.TrimSpace(plan) == "" {
+		plan = "starter"
+	}
+
+	user, ok, err := c.findUserRecord(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	user.SubscriptionPlan = strings.TrimSpace(plan)
+	user.BillingStatus = "active"
+	user.UpdatedAt = time.Now().UTC()
+	if err := c.ensureUserStore().Save(ctx, user); err != nil {
+		return nil, err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == username {
+			c.Users[i].SubscriptionPlan = user.SubscriptionPlan
+			c.Users[i].BillingStatus = user.BillingStatus
+			c.Users[i].UpdatedAt = user.UpdatedAt
+			break
+		}
+	}
+
+	c.Subscriptions = append(c.Subscriptions, SubscriptionRecord{
+		ID:                 fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan))),
+		UserID:             user.Username,
+		PlanCode:           strings.TrimSpace(plan),
+		Status:             "pending",
+		CurrentPeriodStart: time.Now().UTC(),
+		CurrentPeriodEnd:   time.Now().UTC().AddDate(0, 1, 0),
+		CancelAtPeriodEnd:  false,
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	})
+	c.Payments = append(c.Payments, PaymentRecord{
+		ID:             fmt.Sprintf("pay_%s", username),
+		UserID:         user.Username,
+		SubscriptionID: fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan))),
+		Amount:         5,
+		Currency:       "USD",
+		Status:         "pending",
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+	})
+
+	return &BillingCheckoutSession{
+		ID:     fmt.Sprintf("cs_%s", username),
+		URL:    fmt.Sprintf("https://example.test/checkout/%s", username),
+		Status: "pending",
+	}, nil
+}
+
+func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookEvent) error {
+	if strings.TrimSpace(event.UserID) == "" {
+		return fmt.Errorf("user id is required")
+	}
+	user, ok, err := c.findUserRecord(ctx, normalizeUsername(event.UserID))
+	if err != nil {
+		return err
+	}
+	if !ok || user == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	plan := strings.TrimSpace(event.Plan)
+	if plan == "" {
+		plan = "starter"
+	}
+	if strings.EqualFold(event.EventType, "checkout.session.completed") {
+		user.SubscriptionPlan = plan
+		user.BillingStatus = "active"
+		user.UpdatedAt = time.Now().UTC()
+		if err := c.ensureUserStore().Save(ctx, user); err != nil {
+			return err
+		}
+		for i := range c.Users {
+			if normalizeUsername(c.Users[i].Username) == normalizeUsername(event.UserID) {
+				c.Users[i].SubscriptionPlan = user.SubscriptionPlan
+				c.Users[i].BillingStatus = user.BillingStatus
+				c.Users[i].UpdatedAt = user.UpdatedAt
+				break
+			}
+		}
+		for i := range c.Subscriptions {
+			if c.Subscriptions[i].UserID == normalizeUsername(event.UserID) && c.Subscriptions[i].PlanCode == plan {
+				c.Subscriptions[i].Status = "active"
+				c.Subscriptions[i].UpdatedAt = time.Now().UTC()
+				break
+			}
+		}
+		for i := range c.Payments {
+			if c.Payments[i].UserID == normalizeUsername(event.UserID) {
+				c.Payments[i].Status = "succeeded"
+				c.Payments[i].ProviderEventID = event.EventID
+				c.Payments[i].UpdatedAt = time.Now().UTC()
+				break
+			}
+		}
+		return nil
+	}
+	if strings.EqualFold(event.EventType, "customer.subscription.deleted") || strings.EqualFold(event.EventType, "checkout.session.expired") {
+		user.SubscriptionPlan = "none"
+		user.BillingStatus = "inactive"
+		user.UpdatedAt = time.Now().UTC()
+		if err := c.ensureUserStore().Save(ctx, user); err != nil {
+			return err
+		}
+		for i := range c.Users {
+			if normalizeUsername(c.Users[i].Username) == normalizeUsername(event.UserID) {
+				c.Users[i].SubscriptionPlan = user.SubscriptionPlan
+				c.Users[i].BillingStatus = user.BillingStatus
+				c.Users[i].UpdatedAt = user.UpdatedAt
+				break
+			}
+		}
+		for i := range c.Subscriptions {
+			if c.Subscriptions[i].UserID == normalizeUsername(event.UserID) {
+				c.Subscriptions[i].Status = "canceled"
+				c.Subscriptions[i].UpdatedAt = time.Now().UTC()
+				break
+			}
+		}
+		for i := range c.Payments {
+			if c.Payments[i].UserID == normalizeUsername(event.UserID) {
+				c.Payments[i].Status = "expired"
+				c.Payments[i].ProviderEventID = event.EventID
+				c.Payments[i].UpdatedAt = time.Now().UTC()
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Config) UpdateUserRole(ctx context.Context, username, role string) (*UserRecord, error) {
@@ -949,6 +1198,20 @@ func authTokenFromRequest(r *http.Request) string {
 		return cookie.Value
 	}
 	return ""
+}
+
+func authenticatedAccountFromRequest(r *http.Request) AuthenticatedAccount {
+	authCtx := sop.GetAuthFromContext(r.Context())
+	username := normalizeUsername(authCtx.UserID)
+	roles := make([]string, 0, len(authCtx.Roles))
+	for _, role := range authCtx.Roles {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			continue
+		}
+		roles = append(roles, normalizeRole(role))
+	}
+	return AuthenticatedAccount{Username: username, Roles: roles}
 }
 
 func CanManageEnvironments(auth sop.AuthContext) bool {
@@ -1077,6 +1340,7 @@ func setSessionCookies(w http.ResponseWriter, accessToken, refreshToken string, 
 	})
 }
 
+// handleRefresh issues new access tokens for the shared runtime auth session flow.
 func handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1164,6 +1428,7 @@ func parseRoleUpdateRequest(r *http.Request) (string, string, error) {
 	return strings.TrimSpace(req.Username), strings.TrimSpace(req.Role), nil
 }
 
+// handleRegister is the shared runtime registration entrypoint for user creation.
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1176,15 +1441,24 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := config.RegisterUser(r.Context(), username, password, email, role, subscriptionPlan)
+	user, err := config.RegisterUserWithRequest(r.Context(), RegisterUserRequest{
+		Username:         username,
+		Password:         password,
+		Email:            email,
+		Role:             role,
+		SubscriptionPlan: subscriptionPlan,
+	})
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
 			status = http.StatusConflict
 		}
+		recordProductMetric("auth_register_failures")
 		writeJSONError(w, status, err.Error())
 		return
 	}
+
+	recordProductMetric("auth_register_successes")
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -1199,29 +1473,121 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleCurrentUser returns the current authenticated user from the shared runtime auth context.
+func handleCurrentUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := authenticatedAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	user, ok, err := config.findUserRecord(r.Context(), authAccount.Username)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || user == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"user": map[string]any{
+			"username":          user.Username,
+			"role":              user.Role,
+			"email":             user.Email,
+			"subscription_plan": user.SubscriptionPlan,
+			"status":            user.Status,
+			"created_at":        user.CreatedAt,
+			"updated_at":        user.UpdatedAt,
+		},
+	})
+}
+
+// handleSubscriptionUpdate updates a user's subscription plan through the shared runtime auth state.
+func handleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := authenticatedAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req struct {
+		Plan string `json:"plan"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	updated, err := config.UpdateSubscriptionPlanWithRequest(r.Context(), UpdateSubscriptionPlanRequest{
+		Username:         authAccount.Username,
+		SubscriptionPlan: req.Plan,
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			status = http.StatusNotFound
+		}
+		recordProductMetric("auth_subscription_failures")
+		writeJSONError(w, status, err.Error())
+		return
+	}
+
+	recordProductMetric("auth_subscription_successes")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"user": map[string]any{
+			"username":          updated.Username,
+			"subscription_plan": updated.SubscriptionPlan,
+			"updated_at":        updated.UpdatedAt,
+		},
+	})
+}
+
+// handleUnregister removes an authenticated user from the shared runtime auth state.
 func handleUnregister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	authCtx := sop.GetAuthFromContext(r.Context())
-	username := normalizeUsername(authCtx.UserID)
-	if username == "" {
+	authAccount := authenticatedAccountFromRequest(r)
+	if authAccount.Username == "" {
 		writeJSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
-	if err := config.UnregisterUser(r.Context(), username); err != nil {
+	if err := config.UnregisterUserWithRequest(r.Context(), UnregisterUserRequest{Username: authAccount.Username}); err != nil {
+		recordProductMetric("auth_unregister_failures")
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	recordProductMetric("auth_unregister_successes")
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "account removed"})
 }
 
+// handleUpdateUserRole adjusts a user's role in the shared runtime auth store.
 func handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1234,11 +1600,11 @@ func handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authCtx := sop.GetAuthFromContext(r.Context())
-	actorUsername := normalizeUsername(authCtx.UserID)
+	authAccount := authenticatedAccountFromRequest(r)
+	actorUsername := authAccount.Username
 	actorRole := ""
-	if len(authCtx.Roles) > 0 {
-		actorRole = normalizeRole(authCtx.Roles[0])
+	if len(authAccount.Roles) > 0 {
+		actorRole = authAccount.Roles[0]
 	}
 	if actorRole == "" && actorUsername != "" {
 		if actor, ok, actorErr := config.findUserRecord(r.Context(), actorUsername); actorErr == nil && ok && actor != nil {
@@ -1273,6 +1639,7 @@ func handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleLogin authenticates a user against the shared runtime auth store.
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1287,13 +1654,17 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	ok, user, err := config.Authenticate(username, password)
 	if err != nil {
+		recordProductMetric("auth_login_failures")
 		writeJSONError(w, http.StatusInternalServerError, "authentication failed")
 		return
 	}
 	if !ok || user == nil {
+		recordProductMetric("auth_login_failures")
 		writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+
+	recordProductMetric("auth_login_successes")
 
 	if existingToken := authTokenFromRequest(r); existingToken != "" {
 		validatedUser, validateErr := currentTokenFacade().ValidateToken(r.Context(), existingToken)

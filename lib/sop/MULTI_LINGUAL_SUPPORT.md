@@ -1,6 +1,8 @@
 # SOP: A Polyglot Storage Engine for the Modern Stack
 
-In the fragmented world of database technologies, developers often find themselves locking their data into language-specific silos or managing complex drivers for every service in their stack. **Scalable Objects Persistence (SOP)** takes a different approach: a **"Write Once, Run Anywhere"** architecture that delivers high-performance, ACID-compliant B-Tree storage across **Go**, **Java**, **Python**, and **C#**.
+In the fragmented world of database technologies, developers often find themselves locking their data into language-specific silos or managing complex drivers for every service in their stack. **Scalable Objects Persistence (SOP)** takes a different approach: a **"Write Once, Run Anywhere"** architecture that delivers high-performance, ACID-compliant B-Tree storage across **Go**, **Java**, **Python**, **C#**, and **Rust**.
+
+The AI layer extends that same model. The shared ai/memory package and KnowledgeBase APIs are intended to be available through the language bindings so memory-backed retrieval, knowledge organization, and agent workflows can be authored for end-user applications and exposed through microservices endpoints when a service-oriented integration path is preferred.
 
 ## The Architecture: Go at the Core
 

@@ -153,7 +153,7 @@ SOP supports both local built-in auth and external identity-provider integration
 - **Subscription-aware workflows**: Starter plans target the local-agent workflow, while a richer plan enables both HQ and local-agent workflows.
 - **Offline continuity**: the UI can connect directly to a local agent so users can continue their work even if the HQ site or hosting server becomes unavailable, or if a browser session is interrupted.
 - **Enterprise directory support**: the auth layer is designed to accept provider adapters for AD, Entra ID, LDAP, SAML, or OIDC without changing the core application logic.
-- **Secret handling**: keep `SOP_SESSION_SECRET` (or `session_secret`) in a secret manager or environment variable; do not bake signing keys into source control.
+- **Secret handling**: keep `SOP_SESSION_SECRET` (or `session_secret`) in a secret manager or environment variable; do not bake signing keys into source control. For the full deployment checklist of runtime secrets, see [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md).
 - **Remote clients**: bearer tokens are suitable for CLI tools, scripts, and microservices that call the HTTP API directly over HTTPS.
 - **Deployment guidance**: use HTTPS in front of the HTTP server, restrict token scopes/roles, and map external identities to internal roles before granting access.
 
@@ -422,6 +422,8 @@ What is SOP?
 Scalable Objects Persistence (SOP) is a **bare metal storage engine** that bakes together a set of storage related features & algorithms in order to provide the most efficient & reliable (ACID attributes of transactions) technique (known) of storage management and rich search. It brings to the application the raw muscle of "raw storage" via direct I/O communications with disk drives, bypassing the overhead of intermediate database layers.
 
 SOP V2 core is written in **Go**, but provides first-class bindings for **Python**, **Java**, **C#**, and **Rust**, making it a truly universal storage solution. It can be used for storage management by applications of many types across different hardware architectures & Operating Systems (OS).
+
+SOP AI extends this polyglot story. The AI experience is intended to be available through the shared ai/memory package and KnowledgeBase APIs across **Go**, **Python**, **Java**, **C#**, and **Rust**, so memory, retrieval, and knowledge workflows can be built for end-user applications and for microservices that need a consistent integration surface.
 
 ## Polyglot Support
 

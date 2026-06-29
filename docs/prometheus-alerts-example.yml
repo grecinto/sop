@@ -1,0 +1,20 @@
+groups:
+  - name: sop-site-alerts
+    rules:
+      - alert: SopSiteHigh5xxRate
+        expr: sum(rate(sop_http_response_status_total{status=~"Internal Server Error|Service Unavailable"}[5m])) by (instance) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SOP site backend is returning elevated 5xx responses"
+          description: "Check /healthz and /metrics for the affected instance."
+
+      - alert: SopSiteRegistrationFailures
+        expr: increase(sop_product_metric_total{name="site_auth_register_failures"}[15m]) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Registration failures are increasing"
+          description: "Investigate the site authentication and registration flow."

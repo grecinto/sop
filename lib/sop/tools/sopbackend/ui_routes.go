@@ -17,6 +17,8 @@ import (
 
 // UIRouter serves the shared SOP web UI from the sopbackend package so both
 // httpserver and daemon-based apps can reuse the same handlers and templates.
+// Product/account flows such as registration, subscription updates, and unregister
+// are handled by the site backend rather than by this shared UI layer.
 type UIRouter struct {
 	TemplateFS fs.FS
 	Pattern    string
@@ -34,7 +36,7 @@ func NewUIRouter(templateFS fs.FS, pattern string) *UIRouter {
 	return &UIRouter{TemplateFS: templateFS, Pattern: pattern}
 }
 
-// Register wires the shared UI routes onto the provided mux.
+// Register wires the shared platform UI routes onto the provided mux.
 func (r *UIRouter) Register(mux *http.ServeMux) {
 	if r == nil || mux == nil {
 		return

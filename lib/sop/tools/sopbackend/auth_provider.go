@@ -39,14 +39,14 @@ func (p *LocalAuthProvider) Authenticate(ctx context.Context, username, password
 	if err != nil {
 		return false, nil, err
 	}
-	if ok && user != nil && user.PasswordHash != "" {
-		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err == nil {
+	if ok && user != nil && user.PasswordHash.Plaintext() != "" {
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash.Plaintext()), []byte(password)); err == nil {
 			return true, user, nil
 		}
 		return false, nil, nil
 	}
 
-	if strings.EqualFold(username, "root") && strings.TrimSpace(p.cfg.RootPassword) != "" && strings.TrimSpace(password) == strings.TrimSpace(p.cfg.RootPassword) {
+	if strings.EqualFold(username, "root") && strings.TrimSpace(p.cfg.RootPassword.Plaintext()) != "" && strings.TrimSpace(password) == strings.TrimSpace(p.cfg.RootPassword.Plaintext()) {
 		return true, &UserRecord{Username: "root", Role: sop.RoleAdmin}, nil
 	}
 

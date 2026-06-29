@@ -71,7 +71,11 @@ On your first visit, you will see the **Setup Wizard**.
 
 ---
 
-## 3. Developing with SOP
+## 3. Environment Variables and Secrets
+
+Before deploying or running SOP in a shared environment, review [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md) for the required and recommended environment variables, including the bootstrap secret, session secret, and config encryption key. A copyable template is available in [.env.example](.env.example).
+
+## 4. Developing with SOP
 
 Now that your server is running, you can write code to interact with it. SOP is **polyglot**, meaning you can access the same data from Go, Python, C#, or Java.
 

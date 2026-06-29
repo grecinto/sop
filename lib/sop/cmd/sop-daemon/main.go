@@ -179,6 +179,8 @@ func main() {
 	// Register all sopbackend handlers (provides full backend API)
 	mux := http.NewServeMux()
 	sopbackend.RegisterAllHandlers(mux)
+	sopbackend.RegisterSwaggerHandlers(mux, "")
+	sopbackend.RegisterMonitorabilityHandlers(mux)
 
 	// Register daemon authentication endpoints (NO auth required)
 	mux.HandleFunc("/api/daemon/auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleBootstrap)))
@@ -215,7 +217,7 @@ func main() {
 	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff (authenticated)")
 	log.Printf("Waiting for UI authentication...")
 
-	if err := http.ListenAndServe(addr, corsHandler); err != nil {
+	if err := http.ListenAndServe(addr, sopbackend.NewObservabilityHandler(corsHandler)); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

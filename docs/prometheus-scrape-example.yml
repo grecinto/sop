@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: sop-site
+    static_configs:
+      - targets: ["localhost:8081"]
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: sop-httpserver
+    static_configs:
+      - targets: ["localhost:8080"]
+    metrics_path: /metrics
+    scheme: http
+
+  - job_name: sop-daemon
+    static_configs:
+      - targets: ["localhost:9090"]
+    metrics_path: /metrics
+    scheme: http

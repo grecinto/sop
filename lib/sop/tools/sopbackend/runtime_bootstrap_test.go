@@ -4,10 +4,31 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
+func TestInitializeRuntimeRequiresEncryptionKeyForConfigPersistence(t *testing.T) {
+	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "")
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	_, err := InitializeRuntime(context.Background(), configPath, RuntimeOptions{}, 0, nil)
+	if err == nil {
+		t.Fatal("InitializeRuntime() error = nil, want missing encryption key error")
+	}
+	if !strings.Contains(err.Error(), "SOP_CONFIG_ENCRYPTION_KEY") {
+		t.Fatalf("InitializeRuntime() error = %v, want message containing SOP_CONFIG_ENCRYPTION_KEY", err)
+	}
+}
+
 func TestInitializeRuntimeBootstrapsConfigAndReturnsResolvedPath(t *testing.T) {
+	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
 	systemPath := filepath.Join(tmpDir, "system")

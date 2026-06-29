@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -194,5 +195,37 @@ func TestFloaterIsLocalRuntimeOnly(t *testing.T) {
 	}
 	if !strings.Contains(string(scriptContent), "chatFloater") {
 		t.Fatalf("expected floater to open the dedicated chat page")
+	}
+}
+
+func TestSiteFrontendServesReactAppShell(t *testing.T) {
+	mux := http.NewServeMux()
+	registerSiteFrontendRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/site/", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected site frontend shell to render with status 200, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "SOP Cloud") {
+		t.Fatalf("expected site frontend shell to contain product title, got %q", body)
+	}
+}
+
+func TestSiteFrontendServesSubscriptionRouteShell(t *testing.T) {
+	mux := http.NewServeMux()
+	registerSiteFrontendRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/site/subscribe", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected site subscription route shell to render with status 200, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "Secure checkout") {
+		t.Fatalf("expected site subscription shell to mention secure checkout, got %q", body)
 	}
 }

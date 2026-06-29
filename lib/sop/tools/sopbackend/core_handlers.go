@@ -113,7 +113,7 @@ func init() {
 }
 
 func migrateLegacyRootPassword() {
-	if strings.TrimSpace(config.RootPassword) == "" {
+	if strings.TrimSpace(config.RootPassword.Plaintext()) == "" {
 		return
 	}
 
@@ -124,7 +124,7 @@ func migrateLegacyRootPassword() {
 		}
 	}
 
-	if err := config.SetUser("root", config.RootPassword, sop.RoleAdmin); err != nil {
+	if err := config.SetUser("root", config.RootPassword.Plaintext(), sop.RoleAdmin); err != nil {
 		log.Warn("failed to migrate legacy root password into users", "error", err)
 		return
 	}

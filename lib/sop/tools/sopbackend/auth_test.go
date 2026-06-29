@@ -118,7 +118,7 @@ func TestSaveAndLoadConfig_PersistsRootUserCredentials(t *testing.T) {
 }
 
 func TestAuthenticate_LegacyRootPasswordFallback(t *testing.T) {
-	cfg := Config{RootPassword: "legacy-secret"}
+	cfg := Config{RootPassword: SecuredString("legacy-secret")}
 
 	ok, user, err := cfg.Authenticate("root", "legacy-secret")
 	if err != nil {
@@ -238,24 +238,38 @@ func TestUpdateUserRole_RejectsLowerLevelUserTryingToChangeAdminRole(t *testing.
 	}
 }
 
-func TestHandleUnregister_AllowsSelfServiceRemoval(t *testing.T) {
-	config = Config{UsersStore: NewUserStore()}
-	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
-		t.Fatalf("RegisterUser() error = %v", err)
-	}
+func TestRegisterAllHandlers_DoesNotExposeProductAccountRoutes(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterAllHandlers(mux)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/unregister", nil)
-	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"username":"bob","password":"pw123","email":"bob@example.com","subscription_plan":"starter"}`))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-
-	handleUnregister(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("handleUnregister() status = %d, body=%s", w.Code, w.Body.String())
+	mux.ServeHTTP(w, req)
+	if w.Code == http.StatusCreated {
+		t.Fatalf("expected /api/auth/register to be handled by the site layer, not the shared backend, got status %d", w.Code)
 	}
-	if _, ok, err := config.findUserRecord(context.Background(), "alice"); err != nil {
-		t.Fatalf("findUserRecord() error = %v", err)
-	} else if ok {
-		t.Fatal("expected user to be removed")
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	meW := httptest.NewRecorder()
+	mux.ServeHTTP(meW, meReq)
+	if meW.Code == http.StatusUnauthorized {
+		t.Fatalf("expected /api/auth/me to be handled by the site layer, not the shared backend, got status %d", meW.Code)
+	}
+
+	subReq := httptest.NewRequest(http.MethodPost, "/api/auth/subscription", strings.NewReader(`{"plan":"none"}`))
+	subReq.Header.Set("Content-Type", "application/json")
+	subW := httptest.NewRecorder()
+	mux.ServeHTTP(subW, subReq)
+	if subW.Code == http.StatusUnauthorized {
+		t.Fatalf("expected /api/auth/subscription to be handled by the site layer, not the shared backend, got status %d", subW.Code)
+	}
+
+	unregisterReq := httptest.NewRequest(http.MethodPost, "/api/auth/unregister", nil)
+	unregisterW := httptest.NewRecorder()
+	mux.ServeHTTP(unregisterW, unregisterReq)
+	if unregisterW.Code == http.StatusUnauthorized {
+		t.Fatalf("expected /api/auth/unregister to be handled by the site layer, not the shared backend, got status %d", unregisterW.Code)
 	}
 }
 
@@ -315,6 +329,65 @@ func TestHandleRegister_ReturnsCreatedUser(t *testing.T) {
 	}
 	if payload.Status != "ok" || payload.User.Username != "bob" || payload.User.Role != sop.RoleUser {
 		t.Fatalf("unexpected response payload: %+v", payload)
+	}
+}
+
+func TestHandleCurrentUser_ReturnsAuthenticatedAccountState(t *testing.T) {
+	config = Config{UsersStore: NewUserStore()}
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+		t.Fatalf("RegisterUser() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+	w := httptest.NewRecorder()
+
+	handleCurrentUser(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleCurrentUser() status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var payload struct {
+		User struct {
+			Username         string `json:"username"`
+			Email            string `json:"email"`
+			SubscriptionPlan string `json:"subscription_plan"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload.User.Username != "alice" || payload.User.Email != "alice@example.com" || payload.User.SubscriptionPlan != "starter" {
+		t.Fatalf("unexpected current-user payload: %+v", payload)
+	}
+}
+
+func TestHandleSubscriptionUpdate_PersistsPlanChange(t *testing.T) {
+	config = Config{UsersStore: NewUserStore()}
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+		t.Fatalf("RegisterUser() error = %v", err)
+	}
+
+	body := strings.NewReader(`{"plan":"none"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/subscription", body)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+	w := httptest.NewRecorder()
+
+	handleSubscriptionUpdate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleSubscriptionUpdate() status = %d, body=%s", w.Code, w.Body.String())
+	}
+	user, ok, err := config.findUserRecord(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("findUserRecord() error = %v", err)
+	}
+	if !ok || user == nil {
+		t.Fatal("expected alice user record to exist")
+	}
+	if gotPlan := strings.ToLower(strings.TrimSpace(user.SubscriptionPlan)); gotPlan != "none" {
+		t.Fatalf("expected subscription plan to be updated to none, got %q", user.SubscriptionPlan)
 	}
 }
 
@@ -760,7 +833,7 @@ func TestAuthenticateBearerToken_RejectsExpiredSessionToken(t *testing.T) {
 func TestAuthenticateBearerToken_AcceptsSignedAccessTokenForRemoteClient(t *testing.T) {
 	withIsolatedSessionStore(t)
 	oldConfig := config
-	config = Config{SessionSecret: "remote-client-test-secret"}
+	config = Config{SessionSecret: SecuredString("remote-client-test-secret")}
 	defer func() { config = oldConfig }()
 
 	store := NewSessionStore(time.Minute)
@@ -938,7 +1011,7 @@ func TestHandleLogin_FormEncodedCredentials(t *testing.T) {
 }
 
 func TestAuthFromAuthorization_DoesNotAcceptLegacyRootPassword(t *testing.T) {
-	cfg := Config{RootPassword: "legacy-secret"}
+	cfg := Config{RootPassword: SecuredString("legacy-secret")}
 
 	username, password := cfg.authFromAuthorization("Bearer legacy-secret")
 	if username != "" || password != "" {
@@ -947,7 +1020,7 @@ func TestAuthFromAuthorization_DoesNotAcceptLegacyRootPassword(t *testing.T) {
 }
 
 func TestIsAdminOverride_DoesNotAcceptLegacyRootPassword(t *testing.T) {
-	cfg := Config{RootPassword: "legacy-secret"}
+	cfg := Config{RootPassword: SecuredString("legacy-secret")}
 
 	if ok := cfg.IsAdminOverride(context.Background(), "", "", "legacy-secret"); ok {
 		t.Fatal("IsAdminOverride() = true, want false for legacy root-password fallback")

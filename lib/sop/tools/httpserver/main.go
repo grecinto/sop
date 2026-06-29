@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"io"
 	log "log/slog"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/sharedcode/sop"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/tools/siteapi"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -192,6 +194,10 @@ func main() {
 
 	// Register backend API handlers
 	sopbackend.RegisterAllHandlers(http.DefaultServeMux)
+	siteapi.RegisterHandlers(http.DefaultServeMux)
+	registerSiteFrontendRoutes(http.DefaultServeMux)
+	sopbackend.RegisterSwaggerHandlers(http.DefaultServeMux, "")
+	sopbackend.RegisterMonitorabilityHandlers(http.DefaultServeMux)
 
 	// Start session cleanup
 	sopbackend.StartSessionCleanup(1*time.Minute, 2*time.Hour)
@@ -223,9 +229,104 @@ func main() {
 		})
 	}
 
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	if err := http.ListenAndServe(addr, sopbackend.NewObservabilityHandler(handler)); err != nil {
 		log.Error(err.Error())
 	}
+}
+
+func registerSiteFrontendRoutes(mux *http.ServeMux) {
+	if mux == nil {
+		return
+	}
+	mux.HandleFunc("/site", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/site" {
+			http.Redirect(w, r, "/site/", http.StatusFound)
+			return
+		}
+		serveSiteFrontend(w, r)
+	})
+	mux.HandleFunc("/site/", serveSiteFrontend)
+}
+
+func serveSiteFrontend(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/site/subscribe") {
+		if distDir := frontendDistDir(); distDir != "" {
+			indexPath := filepath.Join(distDir, "index.html")
+			if content, err := os.ReadFile(indexPath); err == nil {
+				html := string(content)
+				fallback := `<div id="site-shell-fallback"><h1>Secure checkout</h1><p>Choose your plan and complete the monthly subscription securely.</p></div>`
+				html = strings.Replace(html, "</body>", `<script>window.__SITE_INITIAL_ROUTE__ = "/site/subscribe";</script>`+fallback+"</body>", 1)
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = io.WriteString(w, html)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>SOP Cloud</title></head><body><div id="root"><h1>Secure checkout</h1><p>Choose your plan and complete the monthly subscription securely.</p></div></body></html>`)
+		return
+	}
+
+	if distDir := frontendDistDir(); distDir != "" {
+		indexPath := filepath.Join(distDir, "index.html")
+		if info, err := os.Stat(indexPath); err == nil && !info.IsDir() {
+			pathPrefix := strings.TrimPrefix(r.URL.Path, "/site")
+			if pathPrefix != "" && pathPrefix != "/" {
+				assetPath := filepath.Join(distDir, filepath.FromSlash(strings.TrimPrefix(pathPrefix, "/")))
+				if info, err := os.Stat(assetPath); err == nil && !info.IsDir() {
+					http.ServeFile(w, r, assetPath)
+					return
+				}
+			}
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = io.WriteString(w, `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SOP Cloud</title>
+    <style>
+      body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #07111f; color: #f5f7fb; }
+      main { max-width: 900px; margin: 0 auto; padding: 4rem 1.5rem; }
+      .card { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); border-radius: 20px; padding: 2rem; }
+      a { color: #7dd3fc; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <h1>SOP Cloud</h1>
+        <p>The new product experience is now served from the dedicated site route.</p>
+        <p>This shell is a placeholder until the React build is generated for the full experience.</p>
+      </div>
+    </main>
+  </body>
+</html>`)
+}
+
+func frontendDistDir() string {
+	candidates := []string{}
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, "frontend", "dist"))
+		candidates = append(candidates, filepath.Join(cwd, "..", "frontend", "dist"))
+		candidates = append(candidates, filepath.Join(cwd, "..", "..", "frontend", "dist"))
+		candidates = append(candidates, filepath.Join(cwd, "..", "..", "..", "frontend", "dist"))
+		candidates = append(candidates, filepath.Join(cwd, "..", "..", "..", "..", "frontend", "dist"))
+	}
+	if _, filename, _, ok := runtime.Caller(0); ok {
+		base := filepath.Dir(filename)
+		candidates = append(candidates, filepath.Join(base, "..", "..", "..", "..", "frontend", "dist"))
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func shouldShowEnvironmentManager(r *http.Request) bool {

@@ -8,8 +8,8 @@ This repo is organized as a thin overlay rather than a full fork of the public c
 
 - [ai/database](ai/database): database overlay logic for private knowledge-base and document-aware behavior.
 - [ai/memory](ai/memory): private memory models, knowledge-base semantics, and document support that are not part of the generic upstream package.
-- [tools/httpserver](tools/httpserver): only the media/document-specific override files remain local; the rest of the HTTP server implementation is shared with the upstream tree.
-- [cmd/sop-daemon](cmd/sop-daemon): private daemon/runtime and deployment logic that stays in this repository.
+- [lib/sop](lib/sop): the mature SOP Data Manager and daemon/runtime source code used by this overlay.
+- [src](src): the new product-facing application layer for the site experience, including the frontend and site backend.
 
 The repository uses a module replacement in [go.mod](go.mod) to point at the shared upstream checkout in [../sop-public](../sop-public). Where a file is an exact duplicate of the upstream implementation and does not carry private behavior, it is exposed through the local tree as a shared link and ignored by Git to avoid carrying duplicate copies here.
 
@@ -20,7 +20,83 @@ The repository uses a module replacement in [go.mod](go.mod) to point at the sha
 - The new React site/app is planned as a separate frontend experience served through httpserver, while the daemon remains a separate runtime process and does not take on the React UI surface.
 - The intended architecture uses four layers: the daemon for runtime/background services, sopbackend as the shared application core, httpserver as the web entry point, and a separate React frontend served from httpserver on dedicated routes. The existing Data Manager remains a distinct operational UI surface rather than being merged into the new product experience.
 - Prefer small overlay files over maintaining a full parallel copy of the shared server or AI packages.
-- The current overlay compiles successfully; a representative verification command is:
+- Frame the platform as an API-first, microservice-oriented system. The important contract is the capability it offers through HTTP and integrations, not the specific backend database implementation.
+- Swagger/OpenAPI documentation is exposed through the shared backend layer and is available from the HTTP server and daemon at /swagger.json and /swagger/.
+- Observability guidance for the new site and shared backend is documented in [docs/OBSERVABILITY_PLAN.md](docs/OBSERVABILITY_PLAN.md).
+- Internal entitlement and licensing design details for the new site, bundled Data Manager, and future bindings are documented in [docs/ENTITLEMENT_ARCHITECTURE.md](docs/ENTITLEMENT_ARCHITECTURE.md).
+- The next monitorability milestone is to standardize the shared /healthz, /readyz, and /metrics contract across the site backend, httpserver, and daemon for Prometheus integration.
+
+### Operations and observability
+
+Each runtime entrypoint exposes a consistent monitorability surface:
+
+- GET /healthz for liveness checks
+- GET /readyz for readiness checks
+- GET /info for instance metadata such as service name, environment, hostname, version, and uptime
+- GET /metrics for Prometheus-compatible metrics
+
+These endpoints are intended to be scraped by Prometheus or used directly by support tooling. The shared backend emits runtime metrics for the platform and product-level counters for site-facing account flows such as registration, subscription, and unregister. Those account flows belong to the new site experience and should not be treated as core Data Manager or daemon capabilities.
+
+A simple Prometheus scrape example is available in [docs/prometheus-scrape-example.yml](docs/prometheus-scrape-example.yml), a starter alert rule set is available in [docs/prometheus-alerts-example.yml](docs/prometheus-alerts-example.yml), and a starter Grafana dashboard example is available in [docs/grafana-dashboard-example.json](docs/grafana-dashboard-example.json).
+
+## Developer orientation
+
+This repository intentionally has two distinct development tracks:
+
+- The platform should be understood primarily by the features and services it exposes: authentication, storage orchestration, AI workflows, account management, onboarding, and integration endpoints.
+- SOP DB is already discussed in its own package locations, so the product-facing guidance should stay focused on capabilities and APIs rather than on storage internals.
+
+- [lib/sop](lib/sop): the mature SOP platform code, including the existing Data Manager, shared runtime, and daemon-oriented capabilities. Treat this as the stable platform layer and keep product-specific behavior out of it unless the change is truly reusable by the broader runtime.
+- [src](src): the new product-facing application layer for sop-cloud. Put self-registration, onboarding, account-management, subscription flows, and UI-specific behavior here. Keep these site/product flows out of the core Data Manager and daemon runtime contract.
+
+When editing this repo, follow these conventions:
+
+- Keep product-specific logic in [src](src) rather than introducing new site flows into [lib/sop](lib/sop).
+- Prefer explicit request structs and explicit parameters over passing state through context values.
+- Keep changes scoped and documented; if a feature is product-specific, it should live in the product layer and not be mixed into the shared runtime.
+- Start with [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) for the current architecture map and contributor workflow.
+
+## Running and testing the new site
+
+The new product site lives in [src](src) and is run through the standalone backend entrypoint in [src/backend/site](src/backend/site).
+
+### Start the site locally
+
+```bash
+cd /Volumes/T7/sop-cloud
+cd src/frontend
+npm install
+npm run build
+cd ../..
+PORT=8081 go run ./src/backend/site
+```
+
+Then open:
+
+- http://localhost:8081/site/
+- http://localhost:8081/site/subscribe
+
+### Verify the site backend
+
+```bash
+go test ./src/backend/site ./src/backend/siteapi
+```
+
+### Rebuild the frontend
+
+```bash
+cd src/frontend
+npm run build
+```
+
+### Quick smoke tests
+
+- Open the landing page at http://localhost:8081/site/
+- Submit the starter form to create or update an account
+- Visit the subscription page at http://localhost:8081/site/subscribe
+- Optionally call the API directly with curl for registration and account lookup
+
+The current overlay compiles successfully; a representative verification command is:
 
 ```bash
 go test ./tools/httpserver -run '^$' -count=1
@@ -431,6 +507,8 @@ What is SOP?
 Scalable Objects Persistence (SOP) is a **bare metal storage engine** that bakes together a set of storage related features & algorithms in order to provide the most efficient & reliable (ACID attributes of transactions) technique (known) of storage management and rich search. It brings to the application the raw muscle of "raw storage" via direct I/O communications with disk drives, bypassing the overhead of intermediate database layers.
 
 SOP V2 core is written in **Go**, but provides first-class bindings for **Python**, **Java**, **C#**, and **Rust**, making it a truly universal storage solution. It can be used for storage management by applications of many types across different hardware architectures & Operating Systems (OS).
+
+SOP AI extends this polyglot story. The AI experience is intended to be available through the shared ai/memory package and KnowledgeBase APIs across **Go**, **Python**, **Java**, **C#**, and **Rust**, so memory, retrieval, and knowledge workflows can be built for end-user applications and for microservices that need a consistent integration surface.
 
 ## Polyglot Support
 

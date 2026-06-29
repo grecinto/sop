@@ -28,3 +28,10 @@
 - [ ] Add UI tests for the new download/install step and account actions.
 - [ ] Add backend tests for subscription-state updates and unregister behavior.
 - [ ] Verify the full UI and auth flow end to end.
+
+## Phase 6: Monitorability and operations
+- [ ] Standardize the shared monitorability API contract across the new site backend, httpserver, and daemon.
+- [ ] Expose /healthz, /readyz, and /metrics from each instance using the shared backend contract.
+- [ ] Ensure the daemon and httpserver expose the same MA shape so Prometheus can scrape them consistently.
+- [ ] Add site-specific monitoring metrics for onboarding, auth, and subscription flows.
+- [ ] Document the Prometheus/Grafana integration path for operators and SAs.

@@ -1,0 +1,53 @@
+{
+  "title": "SOP Site Observability",
+  "schemaVersion": 38,
+  "version": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sop_http_requests_total, instance)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Request rate",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(rate(sop_http_requests_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "requests/sec"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP response status counts",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(sop_http_response_status_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Registration failures",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (instance) (increase(sop_product_metric_total{name=\"site_auth_register_failures\",instance=~\"$instance\"}[15m]))",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    }
+  ]
+}
