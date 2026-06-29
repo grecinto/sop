@@ -58,9 +58,16 @@ func (a *CopilotAgent) executeAvatarSubAgent(ctx context.Context, avatarName, ta
 }
 
 func (a *CopilotAgent) buildAvatarPrompt(ctx context.Context, avatarName, taskContext, customPersona string, allowedTools []string) string {
+	return a.buildAvatarPromptWithTaskContext(ctx, avatarName, taskContext, customPersona, allowedTools, TaskContextClassification{})
+}
+
+func (a *CopilotAgent) buildAvatarPromptWithTaskContext(ctx context.Context, avatarName, taskContext, customPersona string, allowedTools []string, taskClassification TaskContextClassification) string {
 	persona := customPersona
 	if persona == "" {
 		persona = fmt.Sprintf("You are the %s Avatar. Your task is strictly limited to your domain.", avatarName)
+	}
+	if expertGuidance := a.selectedSpaceExpertContextForRouting(ctx, taskContext, taskClassification); expertGuidance != "" {
+		persona += "\n\n" + expertGuidance
 	}
 
 	persona += fmt.Sprintf("\n\nTask Context from Omni Supervisor:\n%s\n\n", taskContext)

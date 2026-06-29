@@ -3,23 +3,48 @@ import { useEffect, useState, type FormEvent } from 'react';
 type Plan = 'starter' | 'hq' | 'none';
 type ViewMode = 'home' | 'subscribe' | 'docs';
 
+type BillingStatus = 'inactive' | 'pending' | 'active';
+
 type AccountState = {
   name: string;
   email: string;
   plan: Plan;
+  billingStatus: BillingStatus;
   trialActive: boolean;
   isAuthenticated: boolean;
+  checkoutUrl: string;
+  lastWebhookEvent: string;
+  failureReason: string;
+  lastWebhookAt: string;
 };
 
 const emptyState: AccountState = {
   name: '',
   email: '',
   plan: 'none',
+  billingStatus: 'inactive',
   trialActive: false,
   isAuthenticated: false,
+  checkoutUrl: '',
+  lastWebhookEvent: '',
+  failureReason: '',
+  lastWebhookAt: '',
 };
 
 const DRAFT_STORAGE_KEY = 'sop-cloud-site-draft';
+const ACCOUNT_STATE_STORAGE_KEY = 'sop-cloud-site-account-state';
+
+type PersistedAccountState = {
+  name: string;
+  email: string;
+  plan: Plan;
+  billingStatus: BillingStatus;
+  isAuthenticated: boolean;
+  checkoutUrl: string;
+  lastWebhookEvent: string;
+  failureReason: string;
+  lastWebhookAt: string;
+};
 
 function loadDraftState(): { name: string; email: string } {
   if (typeof window === 'undefined') {
@@ -38,6 +63,55 @@ function loadDraftState(): { name: string; email: string } {
   } catch {
     return { name: '', email: '' };
   }
+}
+
+function loadPersistedAccountState(): PersistedAccountState | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(ACCOUNT_STATE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<PersistedAccountState>;
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    return {
+      name: parsed.name ?? '',
+      email: parsed.email ?? '',
+      plan: normalizePlan(parsed.plan),
+      billingStatus: normalizeBillingStatus(parsed.billingStatus),
+      isAuthenticated: Boolean(parsed.isAuthenticated),
+      checkoutUrl: parsed.checkoutUrl ?? '',
+      lastWebhookEvent: parsed.lastWebhookEvent ?? '',
+      failureReason: parsed.failureReason ?? '',
+      lastWebhookAt: parsed.lastWebhookAt ?? '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistAccountState(account: AccountState) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.localStorage.setItem(
+    ACCOUNT_STATE_STORAGE_KEY,
+    JSON.stringify({
+      name: account.name,
+      email: account.email,
+      plan: account.plan,
+      billingStatus: account.billingStatus,
+      isAuthenticated: account.isAuthenticated,
+      checkoutUrl: account.checkoutUrl,
+      lastWebhookEvent: account.lastWebhookEvent,
+      failureReason: account.failureReason,
+      lastWebhookAt: account.lastWebhookAt,
+    })
+  );
 }
 
 function resolveView(pathname: string): ViewMode {
@@ -62,6 +136,16 @@ function normalizePlan(plan: string | undefined): Plan {
     return 'hq';
   }
   return 'none';
+}
+
+function normalizeBillingStatus(value: string | undefined): BillingStatus {
+  if (value === 'active') {
+    return 'active';
+  }
+  if (value === 'pending') {
+    return 'pending';
+  }
+  return 'inactive';
 }
 
 function slugify(value: string): string {
@@ -112,19 +196,26 @@ async function fetchJSON(url: string, init: RequestInit = {}): Promise<any> {
 }
 
 async function loadAccountFromServer(): Promise<AccountState> {
-  const response = await fetch('/api/auth/me', { credentials: 'include' });
+  const response = await fetch('/api/auth/status', { credentials: 'include' });
   if (!response.ok) {
     return emptyState;
   }
   const payload = await response.json();
   const user = payload?.user ?? {};
   const plan = normalizePlan(user.subscription_plan);
+  const billingStatus = normalizeBillingStatus(user.billing_status);
+  const billing = user.billing ?? {};
   return {
     name: user.username ?? '',
     email: user.email ?? '',
     plan,
-    trialActive: plan === 'starter',
+    billingStatus,
+    trialActive: billingStatus === 'active' && plan === 'starter',
     isAuthenticated: true,
+    checkoutUrl: billing.checkout_url ?? '',
+    lastWebhookEvent: billing.last_webhook_event ?? '',
+    failureReason: billing.failure_reason ?? '',
+    lastWebhookAt: billing.last_webhook_at ?? '',
   };
 }
 
@@ -132,7 +223,7 @@ async function ensureAuthenticatedAccount(name: string, email: string): Promise<
   const username = buildUsername(name, email);
   const password = buildPassword(email);
 
-  const loginResponse = await fetch('/api/auth/login', {
+  const loginResponse = await fetch('/api/site/auth/login', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -161,7 +252,7 @@ async function ensureAuthenticatedAccount(name: string, email: string): Promise<
       throw new Error('Unable to create your account.');
     }
 
-    const followUpLoginResponse = await fetch('/api/auth/login', {
+    const followUpLoginResponse = await fetch('/api/site/auth/login', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -183,12 +274,47 @@ async function updateSubscriptionPlan(plan: Plan): Promise<AccountState> {
   return loadAccountFromServer();
 }
 
-async function createCheckoutSession(plan: Plan): Promise<{ url: string }> {
+async function createCheckoutSession(plan: Plan): Promise<{ url: string; status: string }> {
   const payload = await fetchJSON('/api/auth/checkout', {
     method: 'POST',
     body: JSON.stringify({ plan }),
   });
-  return { url: payload?.checkout?.url || '' };
+  return {
+    url: payload?.checkout?.url || '',
+    status: payload?.checkout?.status || 'pending',
+  };
+}
+
+async function downloadLocalAgent(): Promise<void> {
+  const payload = await fetchJSON('/api/auth/download');
+  const downloadURL = payload?.download_url || '';
+  if (!payload?.available || !downloadURL) {
+    throw new Error('Your download is not available yet.');
+  }
+  if (typeof window !== 'undefined') {
+    window.open(downloadURL, '_blank', 'noopener,noreferrer');
+  }
+}
+
+async function loginWithCredentials(username: string, password: string): Promise<AccountState> {
+  const response = await fetch('/api/site/auth/login', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    throw new Error('Unable to sign in to your account.');
+  }
+  return loadAccountFromServer();
+}
+
+async function logoutFromServer(): Promise<void> {
+  await fetch('/api/site/auth/logout', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 export default function App() {
@@ -207,16 +333,37 @@ export default function App() {
 
   useEffect(() => {
     const draft = loadDraftState();
+    const persisted = loadPersistedAccountState();
     setName(draft.name);
     setEmail(draft.email);
+    if (persisted && persisted.isAuthenticated) {
+      const restored: AccountState = {
+        ...emptyState,
+        ...persisted,
+        trialActive: persisted.billingStatus === 'active' && persisted.plan === 'starter',
+      };
+      setAccount(restored);
+      setName(restored.name || draft.name);
+      setEmail(restored.email || draft.email);
+      setShowInstallStep(restored.billingStatus === 'active' && restored.plan === 'starter');
+      setCheckoutComplete(restored.billingStatus === 'active' && restored.plan === 'starter');
+    }
     void (async () => {
       try {
         const nextAccount = await loadAccountFromServer();
-        setAccount(nextAccount);
-        if (nextAccount.isAuthenticated) {
-          setName(nextAccount.name || draft.name);
-          setEmail(nextAccount.email || draft.email);
-          setShowInstallStep(nextAccount.plan === 'starter');
+        const resolvedAccount: AccountState = {
+          ...nextAccount,
+          name: nextAccount.name || persisted?.name || draft.name,
+          email: nextAccount.email || persisted?.email || draft.email,
+          trialActive: nextAccount.billingStatus === 'active' && nextAccount.plan === 'starter',
+        };
+        setAccount(resolvedAccount);
+        if (resolvedAccount.isAuthenticated) {
+          setName(resolvedAccount.name || draft.name);
+          setEmail(resolvedAccount.email || draft.email);
+          setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
+          setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
+          persistAccountState(resolvedAccount);
         }
       } catch {
         setAccount(emptyState);
@@ -229,6 +376,12 @@ export default function App() {
       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ name, email }));
     }
   }, [name, email]);
+
+  useEffect(() => {
+    if (account.isAuthenticated) {
+      persistAccountState(account);
+    }
+  }, [account]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -251,17 +404,27 @@ export default function App() {
     setStatusMessage('');
     try {
       const nextAccount = await ensureAuthenticatedAccount(name.trim(), email.trim());
-      setAccount({
+      const accountWithState = {
         ...nextAccount,
         name: name.trim(),
         email: email.trim(),
-        plan: 'starter',
-        trialActive: true,
+        plan: nextAccount.plan || 'starter',
+        billingStatus: nextAccount.billingStatus || 'pending',
+        trialActive: nextAccount.billingStatus === 'active',
         isAuthenticated: true,
-      });
-      setShowInstallStep(true);
+        checkoutUrl: nextAccount.checkoutUrl || '',
+        lastWebhookEvent: nextAccount.lastWebhookEvent || '',
+        failureReason: nextAccount.failureReason || '',
+        lastWebhookAt: nextAccount.lastWebhookAt || '',
+      };
+      setAccount(accountWithState);
+      setShowInstallStep(accountWithState.billingStatus === 'active');
       setView('home');
-      setStatusMessage('Your account is now connected to the backend and your starter plan is active.');
+      setStatusMessage(
+        accountWithState.billingStatus === 'active'
+          ? 'Your account is now connected to the backend and your starter plan is active.'
+          : 'Your account is connected. Your starter subscription is pending payment confirmation.'
+      );
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to sync your account.');
     } finally {
@@ -279,8 +442,40 @@ export default function App() {
     setStatusMessage('');
     try {
       const nextAccount = await ensureAuthenticatedAccount(account.name || name.trim(), account.email || email.trim());
+      if (nextAccount.billingStatus === 'pending' && nextAccount.checkoutUrl) {
+        setAccount({
+          ...nextAccount,
+          name: nextAccount.name || account.name || name.trim(),
+          email: nextAccount.email || account.email || email.trim(),
+          plan: 'starter',
+          billingStatus: 'pending',
+          trialActive: false,
+          isAuthenticated: true,
+        });
+        setShowInstallStep(false);
+        setCheckoutComplete(false);
+        setStatusMessage('Your checkout is still pending. We are taking you back to the payment page.');
+        window.location.assign(nextAccount.checkoutUrl);
+        return;
+      }
       const checkout = await createCheckoutSession('starter');
       if (checkout.url) {
+        setAccount({
+          ...nextAccount,
+          name: nextAccount.name || account.name || name.trim(),
+          email: nextAccount.email || account.email || email.trim(),
+          plan: 'starter',
+          billingStatus: 'pending',
+          trialActive: false,
+          isAuthenticated: true,
+          checkoutUrl: checkout.url,
+          lastWebhookEvent: '',
+          failureReason: '',
+          lastWebhookAt: '',
+        });
+        setShowInstallStep(false);
+        setCheckoutComplete(false);
+        setStatusMessage('We are sending you to checkout. Your starter plan will activate after payment confirmation.');
         window.location.assign(checkout.url);
         return;
       }
@@ -290,12 +485,21 @@ export default function App() {
         name: nextAccount.name || account.name || name.trim(),
         email: nextAccount.email || account.email || email.trim(),
         plan: synced.plan,
-        trialActive: true,
+        billingStatus: synced.billingStatus,
+        trialActive: synced.billingStatus === 'active',
         isAuthenticated: true,
+        checkoutUrl: '',
+        lastWebhookEvent: '',
+        failureReason: '',
+        lastWebhookAt: '',
       });
-      setShowInstallStep(true);
-      setCheckoutComplete(true);
-      setStatusMessage('Subscription confirmed. Your starter plan is now active.');
+      setShowInstallStep(synced.billingStatus === 'active');
+      setCheckoutComplete(synced.billingStatus === 'active');
+      setStatusMessage(
+        synced.billingStatus === 'active'
+          ? 'Subscription confirmed. Your starter plan is now active.'
+          : 'Your starter subscription is pending confirmation.'
+      );
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to complete the subscription.');
     } finally {
@@ -312,8 +516,13 @@ export default function App() {
         ...current,
         ...synced,
         plan: 'none',
+        billingStatus: 'inactive',
         trialActive: false,
         isAuthenticated: true,
+        checkoutUrl: '',
+        lastWebhookEvent: '',
+        failureReason: '',
+        lastWebhookAt: '',
       }));
       setCheckoutComplete(false);
       setStatusMessage('You have been unsubscribed from the starter plan.');
@@ -349,8 +558,86 @@ export default function App() {
     }
   };
 
-  const isStarterActive = account.plan === 'starter';
+  const handleLogin = async () => {
+    if (!name.trim() || !email.trim()) {
+      return;
+    }
+    setIsSubmitting(true);
+    setStatusMessage('');
+    try {
+      const username = buildUsername(name.trim(), email.trim());
+      const password = buildPassword(email.trim());
+      const synced = await loginWithCredentials(username, password);
+      const resolvedAccount = {
+        ...synced,
+        name: synced.name || name.trim(),
+        email: synced.email || email.trim(),
+        trialActive: synced.billingStatus === 'active' && synced.plan === 'starter',
+      };
+      setAccount(resolvedAccount);
+      setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
+      setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
+      setStatusMessage(resolvedAccount.isAuthenticated ? 'Signed in successfully.' : 'Signed in.');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Unable to sign in right now.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    setIsSubmitting(true);
+    setStatusMessage('');
+    try {
+      await downloadLocalAgent();
+      setStatusMessage('Opening the local-agent download link.');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Unable to start the download right now.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setIsSubmitting(true);
+    setStatusMessage('');
+    try {
+      await logoutFromServer();
+      setAccount(emptyState);
+      setName('');
+      setEmail('');
+      setCardName('');
+      setCardNumber('');
+      setCardExpiry('');
+      setCardCVC('');
+      setCheckoutComplete(false);
+      setShowInstallStep(false);
+      setStatusMessage('You have been signed out.');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Unable to sign out right now.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const isStarterActive = account.billingStatus === 'active' && account.plan === 'starter';
+  const isStarterPending = account.billingStatus === 'pending' && account.plan === 'starter';
   const isPreviewVisible = account.plan === 'starter' || account.plan === 'hq';
+  const canResumeCheckout = Boolean(account.checkoutUrl) && (account.billingStatus === 'pending' || Boolean(account.failureReason));
+  const billingStatusTitle = account.billingStatus === 'active'
+    ? 'Subscription confirmed'
+    : account.billingStatus === 'pending'
+      ? 'Checkout pending'
+      : account.failureReason
+        ? 'Checkout needs attention'
+        : 'Not subscribed';
+  const billingStatusBody = account.billingStatus === 'active'
+    ? 'Your Starter Kit is active and ready to use.'
+    : account.billingStatus === 'pending'
+      ? 'Your subscription is waiting for payment confirmation.'
+      : account.failureReason
+        ? `The last checkout ended with: ${account.failureReason}.` 
+        : 'No active subscription is currently in place.';
 
   if (view === 'subscribe') {
     return (
@@ -369,6 +656,16 @@ export default function App() {
               <p className="muted-copy">
                 Your card is handled securely and we only need the minimum information required to start the monthly subscription. An active subscription unlocks licensed use of the SOP AI polyglot library in the supported runtimes, including the bundled service-side experiences that enforce subscription-bound security tokens.
               </p>
+
+              {canResumeCheckout ? (
+                <div className="preview-box">
+                  <h4>{account.failureReason ? 'Resume or retry checkout' : 'Resume checkout'}</h4>
+                  <p>{account.failureReason ? `Your previous checkout ended with: ${account.failureReason}.` : 'Your checkout is still waiting for completion. Continue where you left off.'}</p>
+                  <button type="button" className="button button-secondary" onClick={() => { if (account.checkoutUrl) window.location.assign(account.checkoutUrl); }} disabled={isSubmitting}>
+                    Resume checkout
+                  </button>
+                </div>
+              ) : null}
 
               <form className="form-stack" onSubmit={handleSubscription}>
                 <label>
@@ -413,6 +710,13 @@ export default function App() {
               </div>
 
               {statusMessage ? <p className="muted-copy">{statusMessage}</p> : null}
+
+              {account.isAuthenticated ? (
+                <div className="preview-box">
+                  <h4>{billingStatusTitle}</h4>
+                  <p>{billingStatusBody}</p>
+                </div>
+              ) : null}
 
               {checkoutComplete ? (
                 <div className="success-banner">
@@ -632,11 +936,13 @@ export default function App() {
 
         <div className="stack-grid">
           <div className="form-panel">
-            <h2>{isStarterActive ? 'Your Starter Kit is active' : 'Start your Starter Kit'}</h2>
+            <h2>{isStarterActive ? 'Your Starter Kit is active' : isStarterPending ? 'Your Starter Kit checkout is pending' : 'Start your Starter Kit'}</h2>
             <p className="muted-copy">
               {isStarterActive
                 ? `Welcome back, ${account.name || 'there'}. Your starter plan is active and ready for local-agent setup.`
-                : 'Register your account and begin the guided starter experience.'}
+                : isStarterPending
+                  ? `Welcome back, ${account.name || 'there'}. Your starter checkout is pending payment confirmation.`
+                  : 'Register your account and begin the guided starter experience.'}
             </p>
             <form className="form-stack" onSubmit={handleStart}>
               <label>
@@ -659,19 +965,57 @@ export default function App() {
             <div className="summary-list">
               <div>
                 <span className="summary-label">Status</span>
-                <strong>{isStarterActive ? 'Starter Kit active' : 'Not subscribed'}</strong>
+                <strong>{isStarterActive ? 'Starter Kit active' : isStarterPending ? 'Checkout pending' : 'Not subscribed'}</strong>
               </div>
               <div>
                 <span className="summary-label">Plan</span>
-                <strong>{isStarterActive ? 'Starter Kit' : 'No active plan'}</strong>
+                <strong>{isStarterActive ? 'Starter Kit' : isStarterPending ? 'Starter Kit (pending)' : 'No active plan'}</strong>
               </div>
               <div>
                 <span className="summary-label">Trial</span>
-                <strong>{isStarterActive ? 'Active for the first month' : 'Not started'}</strong>
+                <strong>{isStarterActive ? 'Active for the first month' : isStarterPending ? 'Waiting for payment confirmation' : 'Not started'}</strong>
+              </div>
+            </div>
+
+            <div className="status-card">
+              <div className="status-pill">{account.isAuthenticated ? 'Signed in' : 'Not signed in'}</div>
+              <div className="status-details">
+                <strong>{account.name || 'No account linked yet'}</strong>
+                <span>{account.email || 'Create an account to start the guided flow'}</span>
               </div>
             </div>
 
             <div className="action-row">
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      const refreshed = await loadAccountFromServer();
+                      setAccount(refreshed);
+                      if (refreshed.isAuthenticated) {
+                        setName(refreshed.name || name);
+                        setEmail(refreshed.email || email);
+                        setShowInstallStep(refreshed.billingStatus === 'active' && refreshed.plan === 'starter');
+                        setCheckoutComplete(refreshed.billingStatus === 'active' && refreshed.plan === 'starter');
+                        setStatusMessage('Account status refreshed.');
+                      }
+                    } catch {
+                      setStatusMessage('Unable to refresh account status right now.');
+                    }
+                  })();
+                }}
+                disabled={isSubmitting}
+              >
+                Refresh status
+              </button>
+              <button type="button" className="button button-secondary" onClick={handleLogin} disabled={isSubmitting || !name.trim() || !email.trim()}>
+                Log in
+              </button>
+              <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
+                Log out
+              </button>
               <a className="button button-secondary" href="/site/subscribe">Go to subscription flow</a>
               <button type="button" className="button button-secondary" onClick={handleUnsubscribe} disabled={isSubmitting}>
                 Unsubscribe
@@ -684,10 +1028,10 @@ export default function App() {
             {showInstallStep || isStarterActive ? (
               <div className="preview-box install-box">
                 <h4>Next step: install the local agent</h4>
-                <p>Download the release binary from the SOP GitHub releases page and continue the setup on your machine.</p>
-                <a className="button button-secondary" href="https://github.com/sharedcode/sop/releases" target="_blank" rel="noreferrer">
-                  Open releases page
-                </a>
+                <p>Download the local agent through the protected site endpoint once your subscription is active.</p>
+                <button type="button" className="button button-secondary" onClick={handleDownload} disabled={isSubmitting}>
+                  {isSubmitting ? 'Preparing…' : 'Download local agent'}
+                </button>
               </div>
             ) : null}
 

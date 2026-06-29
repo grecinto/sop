@@ -34,9 +34,11 @@ type RunnerSession struct {
 	LastInteractionToolCalls []ai.ScriptStep
 
 	// Contextual Working Memory for the Session
-	MRU                 []MRUItem
-	MRUMu               sync.RWMutex
-	ConversationHistory string
+	MRU                              []MRUItem
+	MRUMu                            sync.RWMutex
+	ConversationHistory              string
+	LastSelectedSpaceContextKey      string
+	LastSelectedSpaceReinforcementAt int64
 
 	// PendingRefinement holds the proposed changes for a script from /script refine
 	PendingRefinement *RefinementProposal

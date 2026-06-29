@@ -56,15 +56,17 @@ func validateSetupWizardRootPassword(password string) error {
 }
 
 func validateSetupWizardSystemAdminSecret(secret string) error {
-	if strings.TrimSpace(secret) == "" {
-		return nil
-	}
-
 	configuredSecret := strings.TrimSpace(os.Getenv("SOP_SYSTEM_ADMIN_BOOTSTRAP_SECRET"))
 	if configuredSecret == "" {
+		if strings.TrimSpace(secret) == "" {
+			return nil
+		}
 		return fmt.Errorf("system admin bootstrap secret is not configured on this server")
 	}
 
+	if strings.TrimSpace(secret) == "" {
+		return fmt.Errorf("system admin bootstrap secret is required")
+	}
 	if secret != configuredSecret {
 		return fmt.Errorf("system admin bootstrap secret is invalid")
 	}

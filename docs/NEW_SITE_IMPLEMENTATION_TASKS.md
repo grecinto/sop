@@ -35,3 +35,12 @@
 - [ ] Ensure the daemon and httpserver expose the same MA shape so Prometheus can scrape them consistently.
 - [ ] Add site-specific monitoring metrics for onboarding, auth, and subscription flows.
 - [ ] Document the Prometheus/Grafana integration path for operators and SAs.
+
+## Phase 7: Space expert / digest-to-Space feature
+- [ ] Implement a folder-based blob store for uploaded documents.
+- [ ] Add extraction and parsing for common document formats such as PDF, TXT, Markdown, HTML, and DOCX.
+- [ ] Add a “Digest to Space” workflow with target-Space selection and ingestion progress.
+- [ ] Reuse existing Space / KnowledgeBase primitives for curated knowledge storage.
+- [ ] Add expert-mode AI prompt grounding so selected Spaces become an active context source for coding, debugging, and domain-specific questions.
+- [ ] Reuse the existing Space document-reference model so each generated knowledge item points back to its source document via `doc_id`, `storage_mode`, and `payload_ref`.
+- [ ] Document the end-to-end workflow in [docs/SPACE_EXPERT_IMPLEMENTATION_GUIDE.md](SPACE_EXPERT_IMPLEMENTATION_GUIDE.md).

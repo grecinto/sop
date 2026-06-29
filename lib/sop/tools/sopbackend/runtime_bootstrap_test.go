@@ -26,8 +26,32 @@ func TestInitializeRuntimeRequiresEncryptionKeyForConfigPersistence(t *testing.T
 	}
 }
 
+func TestInitializeRuntimeRequiresSessionSecretInProductionMode(t *testing.T) {
+	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_SESSION_SECRET", "")
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	_, err := InitializeRuntime(context.Background(), configPath, RuntimeOptions{}, 0, ptrBool(true))
+	if err == nil {
+		t.Fatal("InitializeRuntime() error = nil, want missing session secret error")
+	}
+	if !strings.Contains(err.Error(), "SOP_SESSION_SECRET") {
+		t.Fatalf("InitializeRuntime() error = %v, want message containing SOP_SESSION_SECRET", err)
+	}
+}
+
+func ptrBool(v bool) *bool {
+	return &v
+}
+
 func TestInitializeRuntimeBootstrapsConfigAndReturnsResolvedPath(t *testing.T) {
 	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_SESSION_SECRET", "session-secret")
 
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")

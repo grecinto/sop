@@ -1,22 +1,35 @@
 package siteapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
+var siteMux *http.ServeMux
+
 // RegisterHandlers registers the product-facing site account endpoints for registration, current-user lookup, subscription updates, and unregister flows.
 func RegisterHandlers(mux *http.ServeMux) {
+	siteMux = mux
 	mux.HandleFunc("/api/auth/register", HandleRegister)
+	mux.HandleFunc("/api/site/auth/login", HandleLogin)
+	mux.HandleFunc("/api/site/auth/logout", HandleLogout)
+	mux.HandleFunc("/api/auth/logout", HandleLogout)
 	mux.HandleFunc("/api/auth/me", sopbackend.WithAuth(HandleCurrentUser))
+	mux.HandleFunc("/api/auth/status", sopbackend.WithAuth(HandleStatus))
 	mux.HandleFunc("/api/auth/subscription", sopbackend.WithAuth(HandleSubscriptionUpdate))
 	mux.HandleFunc("/api/auth/checkout", sopbackend.WithAuth(HandleCheckoutSession))
+	mux.HandleFunc("/api/auth/download", sopbackend.WithAuth(HandleDownloadAsset))
 	mux.HandleFunc("/api/auth/webhooks/billing", HandleBillingWebhook)
 	mux.HandleFunc("/api/auth/unregister", sopbackend.WithAuth(HandleUnregister))
 }
@@ -135,10 +148,95 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]any{
 			"username":          user.Username,
 			"role":              user.Role,
-			"email":             user.Email,
+			"email":             user.Email.Plaintext(),
 			"subscription_plan": user.SubscriptionPlan,
+			"billing_status":    user.BillingStatus,
 		},
 	})
+}
+
+func clearSessionCookies(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "sop_access_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: "sop_refresh_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+}
+
+func HandleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	proxyReq := httptest.NewRequest(r.Method, "/api/auth/login", bytes.NewReader(bodyBytes))
+	proxyReq.Header = r.Header.Clone()
+	proxyReq = proxyReq.WithContext(r.Context())
+
+	recorder := httptest.NewRecorder()
+	if siteMux != nil {
+		siteMux.ServeHTTP(recorder, proxyReq)
+	} else {
+		sopbackend.RecordProductMetric("site_auth_login_failures")
+		writeJSONError(w, http.StatusInternalServerError, "login handler is unavailable")
+		return
+	}
+
+	for _, cookie := range recorder.Result().Cookies() {
+		http.SetCookie(w, cookie)
+	}
+	for key, values := range recorder.Header() {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(recorder.Code)
+	_, _ = w.Write(recorder.Body.Bytes())
+
+	sopbackend.RecordProductMetric("site_auth_login_requests")
+}
+
+func HandleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	clearSessionCookies(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "logged out"})
+}
+
+func buildUserResponsePayload(user *sopbackend.UserRecord) map[string]any {
+	lastWebhookAt := ""
+	if user != nil && !user.LastWebhookAt.IsZero() {
+		lastWebhookAt = user.LastWebhookAt.UTC().Format(time.RFC3339Nano)
+	}
+	billing := map[string]any{
+		"status":             user.BillingStatus,
+		"checkout_url":       user.CheckoutURL,
+		"last_webhook_at":    lastWebhookAt,
+		"last_webhook_event": user.LastWebhookEvent,
+		"failure_reason":     user.FailureReason,
+	}
+	return map[string]any{
+		"status": "ok",
+		"user": map[string]any{
+			"username":          user.Username,
+			"role":              user.Role,
+			"email":             user.Email.Plaintext(),
+			"subscription_plan": user.SubscriptionPlan,
+			"billing_status":    user.BillingStatus,
+			"billing":           billing,
+			"status":            user.Status,
+			"created_at":        user.CreatedAt,
+			"updated_at":        user.UpdatedAt,
+		},
+	}
 }
 
 func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
@@ -166,18 +264,35 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"user": map[string]any{
-			"username":          user.Username,
-			"role":              user.Role,
-			"email":             user.Email,
-			"subscription_plan": user.SubscriptionPlan,
-			"status":            user.Status,
-			"created_at":        user.CreatedAt,
-			"updated_at":        user.UpdatedAt,
-		},
-	})
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
+}
+
+func HandleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := currentAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	cfg := sopbackend.GetConfig()
+	user, ok, err := cfg.FindUserRecord(r.Context(), authAccount.Username)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || user == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
 }
 
 func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +339,7 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]any{
 			"username":          updated.Username,
 			"subscription_plan": updated.SubscriptionPlan,
+			"billing_status":    updated.BillingStatus,
 			"updated_at":        updated.UpdatedAt,
 		},
 	})
@@ -268,6 +384,52 @@ func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 			"url":    session.URL,
 			"status": session.Status,
 		},
+	})
+}
+
+func HandleDownloadAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := currentAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	cfg := sopbackend.GetConfig()
+	user, ok, err := cfg.FindUserRecord(r.Context(), authAccount.Username)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || user == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	isEntitled := strings.EqualFold(user.SubscriptionPlan, "starter") || strings.EqualFold(user.SubscriptionPlan, "hq") || strings.EqualFold(user.BillingStatus, "active")
+	if !isEntitled {
+		writeJSONError(w, http.StatusForbidden, "active subscription required")
+		return
+	}
+
+	downloadURL := strings.TrimSpace(os.Getenv("SOP_DOWNLOAD_URL"))
+	if downloadURL == "" {
+		// TODO: Replace this fallback with the Cloudflare R2 object URL or a short-lived signed URL
+		// once the daemon release is published and the Cloudflare asset is available.
+		downloadURL = "https://github.com/sharedcode/sop/releases/latest"
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":       "ok",
+		"available":    true,
+		"download_url": downloadURL,
+		"plan":         user.SubscriptionPlan,
 	})
 }
 

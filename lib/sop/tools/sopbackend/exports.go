@@ -115,7 +115,11 @@ func Initialize(ctx context.Context, opts RuntimeOptions) error {
 
 // InitializeRuntime loads the shared config, applies runtime defaults, and initializes the backend once.
 func InitializeRuntime(ctx context.Context, configPath string, opts RuntimeOptions, port int, productionMode *bool) (string, error) {
-	if _, err := validateRuntimeSecretConfiguration(); err != nil {
+	isProduction := true
+	if productionMode != nil {
+		isProduction = *productionMode
+	}
+	if _, err := validateRuntimeSecretConfiguration(isProduction); err != nil {
 		return "", err
 	}
 
@@ -163,11 +167,20 @@ func BootstrapRuntime(ctx context.Context, configPath string, opts RuntimeOption
 	return InitializeRuntime(ctx, configPath, opts, port, productionMode)
 }
 
-func validateRuntimeSecretConfiguration() (bool, error) {
-	if configEncryptionKey() != nil {
+func validateRuntimeSecretConfiguration(isProduction bool) (bool, error) {
+	var missing []string
+	if configEncryptionKey() == nil {
+		missing = append(missing, "SOP_CONFIG_ENCRYPTION_KEY")
+	}
+	if isProduction {
+		if strings.TrimSpace(os.Getenv("SOP_SESSION_SECRET")) == "" && strings.TrimSpace(config.SessionSecret.Plaintext()) == "" {
+			missing = append(missing, "SOP_SESSION_SECRET")
+		}
+	}
+	if len(missing) == 0 {
 		return true, nil
 	}
-	return false, fmt.Errorf("SOP_CONFIG_ENCRYPTION_KEY is required for encrypted config persistence")
+	return false, fmt.Errorf("missing required runtime secrets: %s", strings.Join(missing, ", "))
 }
 
 // InitAgents initializes the agents with the current configuration.
@@ -262,7 +275,21 @@ func RegisterSwaggerHandlers(mux *http.ServeMux, basePath string) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SOP Swagger UI</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
-    <style>body { margin: 0; background: #07111f; color: #f7f9fc; } #swagger-ui { padding: 1rem; }</style>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        background: #f5f8ff;
+        color: #08111f;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #07111f;
+          color: #f7f9fc;
+        }
+      }
+      #swagger-ui { padding: 1rem; }
+    </style>
   </head>
   <body>
     <div id="swagger-ui"></div>

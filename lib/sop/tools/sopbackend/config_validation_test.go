@@ -153,7 +153,42 @@ func TestHandleSaveConfig_RejectsInvalidSystemAdminBootstrapSecret(t *testing.T)
 	}
 }
 
+func TestHandleSaveConfig_RequiresBootstrapSecretWhenServerIsConfigured(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	config = Config{}
+	config.ConfigFile = configFile
+	t.Setenv("SOP_SYSTEM_ADMIN_BOOTSTRAP_SECRET", "configured-secret")
+
+	payload := map[string]interface{}{
+		"registry_path": filepath.Join(tmpDir, "system"),
+		"port":          8080,
+		"root_password": "secret123",
+		"system_options": map[string]interface{}{
+			"stores_folders": []string{},
+			"type":           0,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+
+	handleSaveConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "bootstrap secret") {
+		t.Fatalf("expected bootstrap secret requirement error, got %s", w.Body.String())
+	}
+}
+
 func TestHandleSaveConfig_PersistsSystemAdminRoleWhenBootstrapSecretMatches(t *testing.T) {
+	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
 	oldConfig := config
 	defer func() { config = oldConfig }()
 

@@ -41,6 +41,10 @@ type UserRecord struct {
 	Email            SecuredString `json:"email,omitempty"`
 	SubscriptionPlan string        `json:"subscription_plan,omitempty"`
 	BillingStatus    string        `json:"billing_status,omitempty"`
+	CheckoutURL      string        `json:"checkout_url,omitempty"`
+	LastWebhookEvent string        `json:"last_webhook_event,omitempty"`
+	LastWebhookAt    time.Time     `json:"last_webhook_at,omitempty"`
+	FailureReason    string        `json:"failure_reason,omitempty"`
 	StripeCustomerID SecuredString `json:"stripe_customer_id,omitempty"`
 	StripeSubID      SecuredString `json:"stripe_subscription_id,omitempty"`
 	Status           string        `json:"status,omitempty"`
@@ -831,7 +835,7 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 	if role == "" {
 		role = sop.RoleUser
 	}
-	subscriptionPlan := req.SubscriptionPlan
+	subscriptionPlan := strings.TrimSpace(req.SubscriptionPlan)
 	if subscriptionPlan == "" {
 		subscriptionPlan = "starter"
 	}
@@ -841,12 +845,18 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 		return nil, err
 	}
 
+	billingStatus := "inactive"
+	if subscriptionPlan != "" && !strings.EqualFold(subscriptionPlan, "none") {
+		billingStatus = "pending"
+	}
+
 	record := UserRecord{
 		Username:         username,
 		Role:             role,
 		PasswordHash:     SecuredString(hash),
 		Email:            SecuredString(strings.TrimSpace(req.Email)),
-		SubscriptionPlan: strings.TrimSpace(subscriptionPlan),
+		SubscriptionPlan: subscriptionPlan,
+		BillingStatus:    billingStatus,
 		Status:           "active",
 	}
 	if err := c.ensureUserStore().Save(ctx, &record); err != nil {
@@ -922,10 +932,8 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 	if plan == "none" {
 		user.BillingStatus = "inactive"
 		user.StripeSubID = ""
-	} else {
-		if user.BillingStatus == "" {
-			user.BillingStatus = "active"
-		}
+	} else if user.BillingStatus == "" || user.BillingStatus == "inactive" {
+		user.BillingStatus = "pending"
 	}
 	user.UpdatedAt = time.Now().UTC()
 	if err := c.ensureUserStore().Save(ctx, user); err != nil {
@@ -961,7 +969,12 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 	}
 
 	user.SubscriptionPlan = strings.TrimSpace(plan)
-	user.BillingStatus = "active"
+	if strings.EqualFold(strings.TrimSpace(plan), "none") {
+		user.BillingStatus = "inactive"
+		user.CheckoutURL = ""
+	} else {
+		user.BillingStatus = "pending"
+	}
 	user.UpdatedAt = time.Now().UTC()
 	if err := c.ensureUserStore().Save(ctx, user); err != nil {
 		return nil, err
@@ -997,9 +1010,22 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 		UpdatedAt:      time.Now().UTC(),
 	})
 
+	user.CheckoutURL = fmt.Sprintf("https://example.test/checkout/%s", username)
+	user.UpdatedAt = time.Now().UTC()
+	if err := c.ensureUserStore().Save(ctx, user); err != nil {
+		return nil, err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == username {
+			c.Users[i].CheckoutURL = user.CheckoutURL
+			c.Users[i].UpdatedAt = user.UpdatedAt
+			break
+		}
+	}
+
 	return &BillingCheckoutSession{
 		ID:     fmt.Sprintf("cs_%s", username),
-		URL:    fmt.Sprintf("https://example.test/checkout/%s", username),
+		URL:    user.CheckoutURL,
 		Status: "pending",
 	}, nil
 }
@@ -1020,6 +1046,9 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 	if plan == "" {
 		plan = "starter"
 	}
+	user.LastWebhookEvent = event.EventType
+	user.LastWebhookAt = time.Now().UTC()
+	user.FailureReason = ""
 	if strings.EqualFold(event.EventType, "checkout.session.completed") {
 		user.SubscriptionPlan = plan
 		user.BillingStatus = "active"
@@ -1055,6 +1084,10 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 	if strings.EqualFold(event.EventType, "customer.subscription.deleted") || strings.EqualFold(event.EventType, "checkout.session.expired") {
 		user.SubscriptionPlan = "none"
 		user.BillingStatus = "inactive"
+		user.FailureReason = "checkout session expired"
+		if strings.EqualFold(event.EventType, "customer.subscription.deleted") {
+			user.FailureReason = "subscription canceled"
+		}
 		user.UpdatedAt = time.Now().UTC()
 		if err := c.ensureUserStore().Save(ctx, user); err != nil {
 			return err
@@ -1467,8 +1500,9 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]any{
 			"username":          user.Username,
 			"role":              user.Role,
-			"email":             user.Email,
+			"email":             user.Email.Plaintext(),
 			"subscription_plan": user.SubscriptionPlan,
+			"billing_status":    user.BillingStatus,
 		},
 	})
 }
@@ -1503,8 +1537,9 @@ func handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]any{
 			"username":          user.Username,
 			"role":              user.Role,
-			"email":             user.Email,
+			"email":             user.Email.Plaintext(),
 			"subscription_plan": user.SubscriptionPlan,
+			"billing_status":    user.BillingStatus,
 			"status":            user.Status,
 			"created_at":        user.CreatedAt,
 			"updated_at":        user.UpdatedAt,
@@ -1556,6 +1591,7 @@ func handleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]any{
 			"username":          updated.Username,
 			"subscription_plan": updated.SubscriptionPlan,
+			"billing_status":    updated.BillingStatus,
 			"updated_at":        updated.UpdatedAt,
 		},
 	})

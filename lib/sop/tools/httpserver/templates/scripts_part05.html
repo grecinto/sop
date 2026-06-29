@@ -66,8 +66,8 @@
             }
         }
         if (domainSelect) {
-            domainSelect.style.display = 'none';
-            domainSelect.setAttribute('aria-hidden', 'true');
+            domainSelect.style.display = 'inline-block';
+            domainSelect.removeAttribute('aria-hidden');
         }
         if (formatSelect) {
             formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
@@ -113,8 +113,8 @@
             input.style.display = runtime === 'hq' ? 'none' : 'inline-block';
         }
         if (domainSelect) {
-            domainSelect.style.display = 'none';
-            domainSelect.setAttribute('aria-hidden', 'true');
+            domainSelect.style.display = 'inline-block';
+            domainSelect.removeAttribute('aria-hidden');
         }
         if (formatSelect) {
             formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';

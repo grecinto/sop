@@ -852,6 +852,174 @@ func TestBuildSystemPrompt_IncludesCoreSOPPlaybooksWhenNoKBIsSelected(t *testing
 	}
 }
 
+func TestBuildSystemPrompt_IncludesSelectedSpaceExpertInstructions(t *testing.T) {
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ctx := context.Background()
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	kb, err := sysDB.OpenKnowledgeBase(ctx, "medical", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("open kb: %v", err)
+	}
+	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{SystemPrompt: "You are the Medical Expert."}); err != nil {
+		t.Fatalf("set kb config: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	ag := NewCopilotAgent(Config{}, nil, sysDB)
+	promptCtx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		CurrentDB: SystemDBName,
+		SelectedKBs: []ai.ArtifactReference{{
+			Name:         "medical",
+			Type:         ai.ArtifactTypeSpace,
+			DatabaseName: SystemDBName,
+		}},
+	})
+
+	prompt := ag.buildSystemPrompt(promptCtx, "Explain the diagnosis guidance", TaskContextClassification{})
+
+	if !strings.Contains(prompt, "Selected Space Expert Context") {
+		t.Fatalf("expected selected-space guidance in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Continuing with the selected knowledge Space \"medical\"") {
+		t.Fatalf("expected Omni cold start to use compact selected-space guidance, got: %s", prompt)
+	}
+	if strings.Contains(prompt, "SystemPrompt: You are the Medical Expert.") {
+		t.Fatalf("expected Omni cold start to avoid full selected-space system prompt injection, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "medical") {
+		t.Fatalf("expected medical Space name in prompt, got: %s", prompt)
+	}
+}
+
+func TestBuildSystemPrompt_DoesNotRepeatSelectedSpaceSystemPromptOnContinuation(t *testing.T) {
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ctx := context.Background()
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	kb, err := sysDB.OpenKnowledgeBase(ctx, "medical", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("open kb: %v", err)
+	}
+	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{SystemPrompt: "You are the Medical Expert."}); err != nil {
+		t.Fatalf("set kb config: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	ag := NewCopilotAgent(Config{}, nil, sysDB)
+	ag.service = &Service{session: NewRunnerSession(), EnableShortTermMemory: false}
+	promptCtx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		CurrentDB: SystemDBName,
+		SelectedKBs: []ai.ArtifactReference{{
+			Name:         "medical",
+			Type:         ai.ArtifactTypeSpace,
+			DatabaseName: SystemDBName,
+		}},
+	})
+
+	firstPrompt := ag.buildSystemPrompt(promptCtx, "Explain the diagnosis guidance", TaskContextClassification{})
+	if !strings.Contains(firstPrompt, "SystemPrompt: You are the Medical Expert.") {
+		t.Fatalf("expected initial prompt to include selected-space system prompt, got: %s", firstPrompt)
+	}
+
+	secondPrompt := ag.buildSystemPrompt(promptCtx, "Explain the diagnosis guidance further", TaskContextClassification{})
+	if strings.Contains(secondPrompt, "SystemPrompt: You are the Medical Expert.") {
+		t.Fatalf("expected continuation prompt to avoid repeating the selected-space system prompt, got: %s", secondPrompt)
+	}
+	if !strings.Contains(secondPrompt, "Selected Space Expert Context") {
+		t.Fatalf("expected continuation prompt to keep expert framing concise, got: %s", secondPrompt)
+	}
+}
+
+func TestBuildSystemPrompt_IncludesSelectedSpaceResearchWorkflow(t *testing.T) {
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ctx := context.Background()
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	kb, err := sysDB.OpenKnowledgeBase(ctx, "medical", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("open kb: %v", err)
+	}
+	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{SystemPrompt: "You are the Medical Expert."}); err != nil {
+		t.Fatalf("set kb config: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	ag := NewCopilotAgent(Config{}, nil, sysDB)
+	ag.service = &Service{session: NewRunnerSession(), EnableShortTermMemory: false}
+	promptCtx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		CurrentDB: SystemDBName,
+		SelectedKBs: []ai.ArtifactReference{{
+			Name:         "medical",
+			Type:         ai.ArtifactTypeSpace,
+			DatabaseName: SystemDBName,
+		}},
+	})
+
+	prompt := ag.buildSystemPrompt(promptCtx, "Explain the diagnosis guidance", TaskContextClassification{})
+	for _, expected := range []string{
+		"Selected Space Expert Context",
+		"SystemPrompt: You are the Medical Expert.",
+		"Structured Expert Brief",
+		"search_space",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("expected selected-space guidance to remain in Omni prompt, got: %s", prompt)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_ReinjectsSelectedSpaceContextAfterStaleness(t *testing.T) {
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ctx := context.Background()
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	kb, err := sysDB.OpenKnowledgeBase(ctx, "medical", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("open kb: %v", err)
+	}
+	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{SystemPrompt: "You are the Medical Expert."}); err != nil {
+		t.Fatalf("set kb config: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	ag := NewCopilotAgent(Config{}, nil, sysDB)
+	ag.service = &Service{session: NewRunnerSession(), EnableShortTermMemory: false}
+	selectedKey := "medical"
+	ag.service.session.LastSelectedSpaceContextKey = selectedKey
+	ag.service.session.LastSelectedSpaceReinforcementAt = time.Now().Add(-2 * time.Hour).UnixMilli()
+
+	promptCtx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		CurrentDB: SystemDBName,
+		SelectedKBs: []ai.ArtifactReference{{
+			Name:         "medical",
+			Type:         ai.ArtifactTypeSpace,
+			DatabaseName: SystemDBName,
+		}},
+	})
+
+	prompt := ag.buildSystemPrompt(promptCtx, "Explain the diagnosis guidance further", TaskContextClassification{})
+	if !strings.Contains(prompt, "SystemPrompt: You are the Medical Expert.") {
+		t.Fatalf("expected stale selected-space context to be re-injected, got: %s", prompt)
+	}
+}
+
 func TestBuildSystemPrompt_DoesNotUseSelectedKBPersonaForOmni(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
