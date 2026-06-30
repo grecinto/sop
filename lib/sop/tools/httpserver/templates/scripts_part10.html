@@ -1132,6 +1132,14 @@
             let sopTaskId = null;
             let medTaskId = null;
 
+            // Derive system database name from the configured path
+            const systemDbNameForPreload = (() => {
+                const pathToUse = regPath || validationRegPath;
+                if (!pathToUse) return 'system';
+                const parts = pathToUse.split(/[\\/]/).filter(Boolean);
+                return parts[parts.length - 1] || 'system';
+            })();
+
             // 3. Trigger SOP Space preload
             try {
                 const sopRes = await authFetch('/api/spaces/preload', {
@@ -1139,7 +1147,7 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         template_id: 'SOP',
-                        database_name: SYSTEM_DB_NAME
+                        database_name: systemDbNameForPreload
                     })
                 });
                 if (sopRes.ok) {

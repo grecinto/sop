@@ -2,10 +2,14 @@ package sopbackend
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolvePreloadFilePathSearchesRepoStyleRoots(t *testing.T) {
@@ -96,5 +100,149 @@ func TestBuildImportSpaceRequestFromPreloadUsesMultipartPayload(t *testing.T) {
 	defer fh.Close()
 	if got := header.Filename; got != filepath.Base(filePath) {
 		t.Fatalf("expected uploaded filename %q, got %q", filepath.Base(filePath), got)
+	}
+}
+
+func TestHandlePreloadSpaceReturnsTaskIDForBackgroundPreload(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	assetPath := filepath.Join(tmpDir, "sop_base_knowledge.json")
+	if err := os.WriteFile(assetPath, []byte(`{"config":{},"categories":[],"items":[]}`), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	config = Config{Databases: []DatabaseConfig{{Name: "testdb", Path: filepath.Join(tmpDir, "db")}}}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/spaces/preload", strings.NewReader(`{"template_id":"SOP","database_name":"testdb"}`))
+	rec := httptest.NewRecorder()
+
+	handlePreloadSpace(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	taskID, ok := resp["task_id"].(string)
+	if !ok || taskID == "" {
+		t.Fatalf("expected task_id in preload response, got %#v", resp)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		task := GetTask(taskID)
+		if task != nil && (task.Status == "completed" || task.Status == "error") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestHandlePreloadSpaceCompletesSOPAssetPreload(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	config = Config{Databases: []DatabaseConfig{{Name: "testdb", Path: filepath.Join(tmpDir, "db")}}}
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("abs repo root: %v", err)
+	}
+	assetPath := filepath.Join(repoRoot, "ai", "sop_base_knowledge.json")
+	if _, err := os.Stat(assetPath); err != nil {
+		t.Fatalf("expected SOP asset at %s: %v", assetPath, err)
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("chdir repo root: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/spaces/preload", strings.NewReader(`{"template_id":"SOP","database_name":"testdb"}`))
+	rec := httptest.NewRecorder()
+
+	handlePreloadSpace(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	taskID, ok := resp["task_id"].(string)
+	if !ok || taskID == "" {
+		t.Fatalf("expected task_id in preload response, got %#v", resp)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	var task *Task
+	for time.Now().Before(deadline) {
+		task = GetTask(taskID)
+		if task != nil && task.Status == "completed" {
+			return
+		}
+		if task != nil && task.Status == "error" {
+			t.Fatalf("SOP preload task failed: %+v", task)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if task == nil {
+		t.Fatalf("SOP preload task never registered")
+	}
+	t.Fatalf("SOP preload task did not complete in time: %+v", task)
+}
+
+func TestResolvePreloadFilePathFindsNestedRepoStyleAsset(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join(tmpDir, "workspace")
+	assetDir := filepath.Join(repoRoot, "lib", "sop", "ai")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatalf("mkdir asset dir: %v", err)
+	}
+	assetPath := filepath.Join(assetDir, "sop_base_knowledge.json")
+	if err := os.WriteFile(assetPath, []byte(`{"config":{},"categories":[],"items":[]}`), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	workDir := filepath.Join(repoRoot, "tools", "httpserver")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir work dir: %v", err)
+	}
+
+	got := resolvePreloadFilePath("SOP", []string{workDir, repoRoot, filepath.Join(repoRoot, "tools")})
+	if got == "" {
+		t.Fatalf("expected nested repo-style asset to resolve")
+	}
+	if got != assetPath {
+		t.Fatalf("expected resolved path %q, got %q", assetPath, got)
 	}
 }

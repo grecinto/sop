@@ -499,6 +499,13 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		isEnterprise = true
 	}
 
+	systemDBName := strings.TrimSpace(sopbackend.SystemDBName)
+	if config.SystemDB != nil {
+		if trimmed := strings.TrimSpace(config.SystemDB.Name); trimmed != "" {
+			systemDBName = trimmed
+		}
+	}
+
 	data := map[string]any{
 		"Version":                 sop.Version,
 		"Mode":                    config.Mode,
@@ -507,7 +514,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		"HasDemo":                 hasDemo,
 		"LLMProvider":             "openai",
 		"IsEnterprise":            isEnterprise,
-		"SystemDBName":            sopbackend.SystemDBName,
+		"SystemDBName":            systemDBName,
 		"ConfigFile":              config.ConfigFile,
 		"SetupWizardAIConfigJSON": setupWizardAIConfigJSON(),
 		"ModelCatalogJSON":        modelCatalogJSON(),

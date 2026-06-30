@@ -134,6 +134,23 @@ func TestHandleIndexRendersRuntimeSwitchForSubscribedHQFeature(t *testing.T) {
 	}
 }
 
+func TestHandleIndexUsesConfiguredSystemDBNameInTemplate(t *testing.T) {
+	originalCfg := sopbackend.GetConfig()
+	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
+	sopbackend.SetConfig(sopbackend.Config{SystemDB: &sopbackend.DatabaseConfig{Name: "custom_system"}})
+
+	req := httptest.NewRequest("GET", "/app", nil)
+	rec := httptest.NewRecorder()
+
+	handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handleIndex() status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `const SYSTEM_DB_NAME = "custom_system";`) {
+		t.Fatalf("expected configured system DB name to be rendered into the template, got body=%s", rec.Body.String())
+	}
+}
+
 func TestShouldShowEnvironmentManagerVisibilityRules(t *testing.T) {
 	defer sopbackend.SetDisableAuth(false)
 
@@ -166,8 +183,26 @@ func TestSetupWizardUsesSystemDBNameForDefaultSystemPath(t *testing.T) {
 	if strings.Contains(text, `value="/tmp/sop_data/system_db"`) {
 		t.Fatalf("expected setup wizard to use the concrete system DB default for the system path, got template contents: %s", text)
 	}
-	if !strings.Contains(text, `value="/tmp/sop_data/system"`) {
-		t.Fatalf("expected setup wizard template to render the concrete system DB default path")
+	if !strings.Contains(text, `value="/tmp/sop_data/{{.SystemDBName}}"`) {
+		t.Fatalf("expected setup wizard template to render the template-driven system DB default path")
+	}
+}
+
+func TestSetupWizardPreloadUsesResolvedSystemDBName(t *testing.T) {
+	part10Content, err := os.ReadFile("templates/scripts_part10.html")
+	if err != nil {
+		t.Fatalf("failed to read setup wizard preload script: %v", err)
+	}
+	if !strings.Contains(string(part10Content), "database_name: systemDbNameForPreload") {
+		t.Fatalf("expected setup wizard preload script to derive and send the system DB name in the preload payload")
+	}
+
+	part11Content, err := os.ReadFile("templates/scripts_part11.html")
+	if err != nil {
+		t.Fatalf("failed to read template preload script: %v", err)
+	}
+	if !strings.Contains(string(part11Content), "database_name: SYSTEM_DB_NAME") {
+		t.Fatalf("expected template preload script to send the system DB name in the preload payload")
 	}
 }
 
@@ -181,6 +216,34 @@ func TestFloaterUsesSharedAppShell(t *testing.T) {
 	}
 	if !strings.Contains(string(scriptContent), "chatFloater") {
 		t.Fatalf("expected floater to open the shared app shell in floater mode")
+	}
+}
+
+func TestDaemonBootstrapScriptSkipsAutoBootstrapInHQMode(t *testing.T) {
+	scriptContent, err := os.ReadFile("templates/scripts_daemon.html")
+	if err != nil {
+		t.Fatalf("failed to read daemon script template: %v", err)
+	}
+	content := string(scriptContent)
+	if !strings.Contains(content, "const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');") {
+		t.Fatalf("expected daemon bootstrap script to check runtime mode before auto-bootstrap, got content=%s", content)
+	}
+	if !strings.Contains(content, "if (runtimeMode !== 'local') {") {
+		t.Fatalf("expected daemon bootstrap script to skip auto-bootstrap outside local runtime mode, got content=%s", content)
+	}
+}
+
+func TestWelcomeContextScriptSkipsDaemonHandoffOutsideLocalRuntime(t *testing.T) {
+	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	if err != nil {
+		t.Fatalf("failed to read chat script template: %v", err)
+	}
+	content := string(scriptContent)
+	if !strings.Contains(content, "async function requestRuntimeWelcomeContext(runtimeMode)") {
+		t.Fatalf("expected welcome-context loader to be present in the chat script")
+	}
+	if !strings.Contains(content, "if (runtimeMode !== 'local') {\n                return null;") {
+		t.Fatalf("expected welcome-context loader to skip daemon handoff outside local runtime mode")
 	}
 }
 

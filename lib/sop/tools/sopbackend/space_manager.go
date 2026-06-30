@@ -369,6 +369,9 @@ func builtinPreloadCandidates(templateID string) []string {
 			"ai/medical.json",
 			"../medical.json",
 			"../../medical.json",
+			"lib/sop/medical.json",
+			"../lib/sop/medical.json",
+			"../../lib/sop/medical.json",
 		)
 	}
 	if strings.Contains(normalized, "sop") {
@@ -377,6 +380,9 @@ func builtinPreloadCandidates(templateID string) []string {
 			"ai/sop_base_knowledge.json",
 			"../ai/sop_base_knowledge.json",
 			"../../ai/sop_base_knowledge.json",
+			"lib/sop/ai/sop_base_knowledge.json",
+			"../lib/sop/ai/sop_base_knowledge.json",
+			"../../lib/sop/ai/sop_base_knowledge.json",
 		)
 	}
 	return candidates
@@ -489,11 +495,15 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 
 	var req PreloadSpaceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Error("SOP preload request decode failed", "error", err)
 		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
 		return
 	}
 
+	log.Info("SOP preload request received", "template_id", req.TemplateID, "database_name", req.DatabaseName, "remote_addr", r.RemoteAddr, "user_agent", r.UserAgent())
+
 	if req.TemplateID == "" || req.DatabaseName == "" {
+		log.Error("SOP preload request missing required fields", "template_id", req.TemplateID, "database_name", req.DatabaseName)
 		http.Error(w, "template_id and database_name are required", http.StatusBadRequest)
 		return
 	}
@@ -525,12 +535,17 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 	for _, p := range pathsToTry {
 		if _, err := os.Stat(p); err == nil {
 			actualPath = p
+			log.Info("SOP preload candidate found directly", "template_id", req.TemplateID, "path", p)
 			break
 		}
+		log.Debug("SOP preload candidate missing", "template_id", req.TemplateID, "path", p)
 	}
 	if actualPath == "" {
 		if resolved := resolvePreloadFilePath(req.TemplateID, searchRoots); resolved != "" {
 			actualPath = resolved
+			log.Info("SOP preload candidate found via resolver", "template_id", req.TemplateID, "resolved_path", resolved)
+		} else {
+			log.Warn("SOP preload asset not found", "template_id", req.TemplateID, "search_roots", searchRoots, "paths_tried", pathsToTry)
 		}
 	}
 
@@ -564,31 +579,62 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if actualPath == "" {
+		log.Error("SOP preload failed because asset path was empty", "template_id", req.TemplateID)
 		http.Error(w, fmt.Sprintf("Failed to find Space file for template '%s'", req.TemplateID), http.StatusBadRequest)
 		return
 	}
 
-	if shouldUseImportPathForPreload(req.TemplateID, actualPath) {
-		importReq, err := buildImportSpaceRequest(r.Context(), actualPath, req.DatabaseName, req.TemplateID)
+	log.Info("SOP preload asset resolved", "template_id", req.TemplateID, "asset_path", actualPath)
+	dbEmbedder := GetConfiguredEmbedderForSpace(r, req.TemplateID, actualPath)
+	dbLLM := GetConfiguredLLM(r)
+	task := RegisterTask("SpacePreload", 100)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"task_id": task.TaskID,
+		"message": fmt.Sprintf("Preloading %s started in background", req.TemplateID),
+	})
+
+	log.Info("SOP preload task registered", "task_id", task.TaskID, "template_id", req.TemplateID, "database_name", req.DatabaseName, "asset_path", actualPath)
+
+	go func(taskID string, request PreloadSpaceRequest, preloadPath string, emb ai.Embeddings, llm ai.Generator) {
+		log.Info("SOP preload background worker started", "task_id", taskID, "template_id", request.TemplateID, "database_name", request.DatabaseName, "asset_path", preloadPath)
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Error("Panic during preload", "task_id", taskID, "template", request.TemplateID, "database", request.DatabaseName, "error", rec)
+				UpdateTask(taskID, "error", 0, 0, "", fmt.Sprintf("Panic during preload: %v", rec))
+			}
+		}()
+
+		ctx := context.Background()
+		var err error
+		log.Info("SOP preload worker branch selected", "task_id", taskID, "template_id", request.TemplateID, "asset_path", preloadPath, "use_import", shouldUseImportPathForPreload(request.TemplateID, preloadPath))
+		if shouldUseImportPathForPreload(request.TemplateID, preloadPath) {
+			err = runIngestImportSpace(ctx, IngestSpaceRequest{
+				DatabaseName:    request.DatabaseName,
+				SpaceName:       request.TemplateID,
+				PreloadFilePath: preloadPath,
+			}, emb, llm, func(progress int, total int, msg string) {
+				UpdateTask(taskID, "in_progress", progress, total, msg, "")
+			}, nil)
+		} else {
+			err = runIngestSpace(ctx, IngestSpaceRequest{
+				DatabaseName:    request.DatabaseName,
+				SpaceName:       request.TemplateID,
+				PreloadFilePath: preloadPath,
+			}, emb, llm, func(progress int, total int, msg string) {
+				UpdateTask(taskID, "in_progress", progress, total, msg, "")
+			}, nil)
+		}
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to build preload import request: %v", err), http.StatusInternalServerError)
+			log.Error("Space preload failed", "task_id", taskID, "template", request.TemplateID, "database", request.DatabaseName, "error", err)
+			UpdateTask(taskID, "error", 0, 0, "", err.Error())
 			return
 		}
-		handleImportSpace(w, importReq)
-	} else {
-		// Forward directly to ingest for other templates
 
-		// Remap to Ingest request
-		ingestReq := IngestSpaceRequest{
-			DatabaseName:    req.DatabaseName,
-			SpaceName:       req.TemplateID, // Use template ID as the Space name
-			PreloadFilePath: actualPath,
-		}
-
-		bodyBytes, _ := json.Marshal(ingestReq)
-		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		handleIngestSpace(w, r)
-	}
+		UpdateTask(taskID, "completed", 100, 100, fmt.Sprintf("Successfully pre-loaded %s", request.TemplateID), "")
+	}(task.TaskID, req, actualPath, dbEmbedder, dbLLM)
 }
 
 func extractSummaries(chunk SpaceIngestChunk) []string {
