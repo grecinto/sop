@@ -973,10 +973,6 @@
         nextBtn.textContent = "Setting up...";
         nextBtn.title = "Creating databases and configuring environments...";
 
-        console.log("DEBUG: wizard payload", {
-            dbName, dbPath, dbStoresFoldersRaw: finalDbStoresFoldersRaw, regPath, sysStoresFoldersRaw
-        });
-
         // --- Helper to Convert Frontend EC Config to SOP Backend Map ---
         const convertToSopEcMap = (arr) => {
              const m = {};

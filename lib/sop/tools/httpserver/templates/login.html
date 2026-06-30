@@ -129,6 +129,10 @@
             if (body.user && body.user.username) {
               localStorage.setItem('sop_userId', body.user.username);
             }
+            // Store subscription features for UI entitlement checks
+            if (body.user && body.user.subscription_features) {
+              localStorage.setItem('sop_subscription_features', JSON.stringify(body.user.subscription_features));
+            }
             
             // Mark HQ login completed for daemon subscription monitoring
             if (window.daemonAuth) {

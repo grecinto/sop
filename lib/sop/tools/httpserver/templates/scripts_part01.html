@@ -1177,13 +1177,18 @@
         const button = document.getElementById('env-manager-btn');
         if (!button) return;
         const runtimeMode = getCurrentRuntimeMode();
-        const shouldShow = runtimeMode !== 'local';
+        // Show if: user has HQ feature OR runtime is not local
+        const hasHQFeature = (typeof hasFeature === 'function' && hasFeature('hq_runtime'));
+        const shouldShow = hasHQFeature || runtimeMode !== 'local';
         button.style.display = shouldShow ? 'inline-flex' : 'none';
         button.title = shouldShow ? 'Manage Environments' : 'Environment Manager is unavailable in local daemon mode';
     }
 
     async function initializeDashboardBootstrap() {
         syncEnvironmentManagerVisibility();
+        if (typeof syncRuntimeControlsVisibility === 'function') {
+            syncRuntimeControlsVisibility();
+        }
         const runtimeMode = getCurrentRuntimeMode();
         if (runtimeMode === 'local') {
             await waitForDaemonAuthClient(4000);

@@ -1762,8 +1762,9 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 				"refresh_token": "",
 				"token_type":    "Bearer",
 				"user": map[string]any{
-					"username": validatedUser.Username,
-					"role":     validatedUser.Role,
+					"username":              validatedUser.Username,
+					"role":                  validatedUser.Role,
+					"subscription_features": user.SubscriptionFeatures,
 				},
 			})
 			return
@@ -1787,8 +1788,9 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		"refresh_token": refreshToken,
 		"token_type":    "Bearer",
 		"user": map[string]any{
-			"username": user.Username,
-			"role":     user.Role,
+			"username":              user.Username,
+			"role":                  user.Role,
+			"subscription_features": user.SubscriptionFeatures,
 		},
 	})
 }

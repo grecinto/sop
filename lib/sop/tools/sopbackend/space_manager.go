@@ -500,8 +500,6 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info("SOP preload request received", "template_id", req.TemplateID, "database_name", req.DatabaseName, "remote_addr", r.RemoteAddr, "user_agent", r.UserAgent())
-
 	if req.TemplateID == "" || req.DatabaseName == "" {
 		log.Error("SOP preload request missing required fields", "template_id", req.TemplateID, "database_name", req.DatabaseName)
 		http.Error(w, "template_id and database_name are required", http.StatusBadRequest)
@@ -535,7 +533,7 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 	for _, p := range pathsToTry {
 		if _, err := os.Stat(p); err == nil {
 			actualPath = p
-			log.Info("SOP preload candidate found directly", "template_id", req.TemplateID, "path", p)
+			log.Debug("SOP preload candidate found directly", "template_id", req.TemplateID, "path", p)
 			break
 		}
 		log.Debug("SOP preload candidate missing", "template_id", req.TemplateID, "path", p)
@@ -543,7 +541,7 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 	if actualPath == "" {
 		if resolved := resolvePreloadFilePath(req.TemplateID, searchRoots); resolved != "" {
 			actualPath = resolved
-			log.Info("SOP preload candidate found via resolver", "template_id", req.TemplateID, "resolved_path", resolved)
+			log.Debug("SOP preload candidate found via resolver", "template_id", req.TemplateID, "resolved_path", resolved)
 		} else {
 			log.Warn("SOP preload asset not found", "template_id", req.TemplateID, "search_roots", searchRoots, "paths_tried", pathsToTry)
 		}
@@ -584,7 +582,7 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info("SOP preload asset resolved", "template_id", req.TemplateID, "asset_path", actualPath)
+	log.Debug("SOP preload asset resolved", "template_id", req.TemplateID, "asset_path", actualPath)
 	dbEmbedder := GetConfiguredEmbedderForSpace(r, req.TemplateID, actualPath)
 	dbLLM := GetConfiguredLLM(r)
 	task := RegisterTask("SpacePreload", 100)
@@ -596,10 +594,10 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		"message": fmt.Sprintf("Preloading %s started in background", req.TemplateID),
 	})
 
-	log.Info("SOP preload task registered", "task_id", task.TaskID, "template_id", req.TemplateID, "database_name", req.DatabaseName, "asset_path", actualPath)
+	log.Debug("SOP preload task registered", "task_id", task.TaskID, "template_id", req.TemplateID, "database_name", req.DatabaseName, "asset_path", actualPath)
 
 	go func(taskID string, request PreloadSpaceRequest, preloadPath string, emb ai.Embeddings, llm ai.Generator) {
-		log.Info("SOP preload background worker started", "task_id", taskID, "template_id", request.TemplateID, "database_name", request.DatabaseName, "asset_path", preloadPath)
+		log.Debug("SOP preload background worker started", "task_id", taskID, "template_id", request.TemplateID, "database_name", request.DatabaseName, "asset_path", preloadPath)
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Error("Panic during preload", "task_id", taskID, "template", request.TemplateID, "database", request.DatabaseName, "error", rec)
@@ -609,7 +607,7 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 
 		ctx := context.Background()
 		var err error
-		log.Info("SOP preload worker branch selected", "task_id", taskID, "template_id", request.TemplateID, "asset_path", preloadPath, "use_import", shouldUseImportPathForPreload(request.TemplateID, preloadPath))
+		log.Debug("SOP preload worker branch selected", "task_id", taskID, "template_id", request.TemplateID, "asset_path", preloadPath, "use_import", shouldUseImportPathForPreload(request.TemplateID, preloadPath))
 		if shouldUseImportPathForPreload(request.TemplateID, preloadPath) {
 			err = runIngestImportSpace(ctx, IngestSpaceRequest{
 				DatabaseName:    request.DatabaseName,

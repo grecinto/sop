@@ -20,8 +20,33 @@
     const RUNTIME_SWITCH_ENABLED = {{ .RuntimeSwitchEnabled }};
     const DEFAULT_RUNTIME_MODE = "{{ .DefaultRuntimeMode }}";
 
+    function getUserSubscriptionFeatures() {
+        try {
+            const stored = localStorage.getItem('sop_subscription_features');
+            return stored ? JSON.parse(stored) : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function hasFeature(featureName) {
+        const features = getUserSubscriptionFeatures();
+        return features.some(f => String(f).toLowerCase().trim() === featureName.toLowerCase().trim());
+    }
+
     function shouldLocalDaemonOnly() {
+        // If user has hq_runtime feature, runtime switching is enabled
+        if (hasFeature('hq_runtime') || hasFeature('daemon_runtime')) {
+            return false;
+        }
         return !RUNTIME_SWITCH_ENABLED;
+    }
+
+    function syncRuntimeControlsVisibility() {
+        const controls = document.getElementById('chat-runtime-controls');
+        if (!controls) return;
+        const shouldShow = !shouldLocalDaemonOnly();
+        controls.style.display = shouldShow ? 'flex' : 'none';
     }
 
     function getChatRuntimeMode() {
@@ -145,11 +170,11 @@
         const resetButton = document.getElementById('chat-reset-btn');
         const minimizeButton = document.getElementById('chat-minimize-btn');
         if (!button) return;
-        const isLocalRuntime = getChatRuntimeMode() === 'local';
         const isFloaterMode = isChatFloaterMode();
-        button.style.display = isFloaterMode ? 'none' : (isLocalRuntime ? 'inline-flex' : 'none');
+        button.style.display = isFloaterMode ? 'none' : 'inline-flex';
         button.disabled = false;
-        button.title = isLocalRuntime ? 'Open AI chat in a floating window' : 'Floating window is only available in local runtime';
+        button.title = 'Open AI chat in a floating window';
+        button.style.opacity = '1';
         button.textContent = '⧉';
         if (resetButton) {
             resetButton.style.display = isFloaterMode ? 'none' : 'inline-flex';
@@ -602,11 +627,6 @@
     }
 
     async function openChatPiP() {
-        if (getChatRuntimeMode() !== 'local') {
-            console.warn('[openChatPiP] Floater is only available in local runtime');
-            return;
-        }
-
         const widget = document.getElementById('chat-widget');
         if (widget) {
             widget.classList.remove('active');
