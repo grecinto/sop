@@ -1,13 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -41,135 +42,23 @@ func TestApplyRedisOverridePropagatesToConfig(t *testing.T) {
 	}
 }
 
-func TestRuntimeSwitchIsDisabledForStarterPlan(t *testing.T) {
-	originalCfg := sopbackend.GetConfig()
-	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
-	sopbackend.SetConfig(sopbackend.Config{Users: []sopbackend.UserRecord{{Username: "alice", SubscriptionPlan: "starter"}}})
-
-	req := httptest.NewRequest("GET", "/app", nil)
-	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
-
-	if runtimeSwitchEnabled(req) {
-		t.Fatal("expected starter plan to disable runtime switching")
-	}
-	if got := defaultRuntimeModeForRequest(req); got != "local" {
-		t.Fatalf("expected starter plan to default to local runtime, got %q", got)
-	}
-}
-
-func TestUnauthenticatedRequestsDefaultToHQRuntime(t *testing.T) {
-	req := httptest.NewRequest("GET", "/app", nil)
-
-	if !runtimeSwitchEnabled(req) {
-		t.Fatal("expected unauthenticated requests to enable HQ runtime by default")
-	}
-	if got := defaultRuntimeModeForRequest(req); got != "hq" {
-		t.Fatalf("expected unauthenticated requests to default to HQ runtime, got %q", got)
-	}
-}
-
-func TestRuntimeSwitchRequiresSubscribedHQFeature(t *testing.T) {
-	originalCfg := sopbackend.GetConfig()
-	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
-	sopbackend.SetConfig(sopbackend.Config{Users: []sopbackend.UserRecord{{Username: "alice", SubscriptionPlan: "hq-local-agent"}}})
-
-	req := httptest.NewRequest("GET", "/app", nil)
-	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
-
-	if runtimeSwitchEnabled(req) {
-		t.Fatal("expected runtime switching to require the subscribed HQ feature")
-	}
-	if got := defaultRuntimeModeForRequest(req); got != "local" {
-		t.Fatalf("expected runtime without the HQ feature to default to local runtime, got %q", got)
-	}
-}
-
-func TestRuntimeSwitchUsesSubscribedFeatureList(t *testing.T) {
-	originalCfg := sopbackend.GetConfig()
-	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
-	sopbackend.SetConfig(sopbackend.Config{Users: []sopbackend.UserRecord{{Username: "alice", SubscriptionPlan: "starter", SubscriptionFeatures: []string{"hq_runtime"}}}})
-
-	req := httptest.NewRequest("GET", "/app", nil)
-	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
-
-	if !runtimeSwitchEnabled(req) {
-		t.Fatal("expected subscribed runtime feature to enable runtime switching")
-	}
-	if got := defaultRuntimeModeForRequest(req); got != "hq" {
-		t.Fatalf("expected subscribed runtime feature to default to HQ runtime, got %q", got)
-	}
-}
-
-func TestRuntimeSwitchUsesSubscriptionFeaturesFromAuthContext(t *testing.T) {
-	req := httptest.NewRequest("GET", "/app", nil)
-	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{
-		UserID:               "alice",
-		Roles:                []string{sop.RoleUser},
-		SubscriptionFeatures: []string{"hq_runtime"},
-	}))
-
-	if !runtimeSwitchEnabled(req) {
-		t.Fatal("expected runtime switching to honor features from the auth context")
-	}
-	if got := defaultRuntimeModeForRequest(req); got != "hq" {
-		t.Fatalf("expected auth-context feature to default to HQ runtime, got %q", got)
-	}
-}
-
-func TestHandleIndexRendersRuntimeSwitchForSubscribedHQFeature(t *testing.T) {
-	originalCfg := sopbackend.GetConfig()
-	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
-	sopbackend.SetConfig(sopbackend.Config{Users: []sopbackend.UserRecord{{Username: "alice", SubscriptionFeatures: []string{"hq_runtime"}}}})
-
-	req := httptest.NewRequest("GET", "/app", nil)
-	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
-	rec := httptest.NewRecorder()
-
-	handleIndex(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("handleIndex() status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `id="chat-runtime-hq"`) {
-		t.Fatalf("expected HQ runtime checkbox to be rendered for subscribed feature, got body=%s", rec.Body.String())
-	}
-}
-
-func TestHandleIndexUsesConfiguredSystemDBNameInTemplate(t *testing.T) {
-	originalCfg := sopbackend.GetConfig()
-	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
-	sopbackend.SetConfig(sopbackend.Config{SystemDB: &sopbackend.DatabaseConfig{Name: "custom_system"}})
-
-	req := httptest.NewRequest("GET", "/app", nil)
-	rec := httptest.NewRecorder()
-
-	handleIndex(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("handleIndex() status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `const SYSTEM_DB_NAME = "custom_system";`) {
-		t.Fatalf("expected configured system DB name to be rendered into the template, got body=%s", rec.Body.String())
-	}
-}
-
-func TestShouldShowEnvironmentManagerVisibilityRules(t *testing.T) {
-	defer sopbackend.SetDisableAuth(false)
-
-	sopbackend.SetDisableAuth(false)
-	plainReq := httptest.NewRequest("GET", "/app", nil)
-	if !shouldShowEnvironmentManager(plainReq) {
-		t.Fatalf("expected default requests to keep environment manager visible")
+func TestEnvironmentManagerVisibilityFollowsHQCheckboxState(t *testing.T) {
+	tmpl, err := template.ParseFS(content, "templates/scripts_part01.html")
+	if err != nil {
+		t.Fatalf("failed to parse scripts_part01 template: %v", err)
 	}
 
-	sopbackend.SetDisableAuth(true)
-	localAgentReq := httptest.NewRequest("GET", "/app", nil)
-	if shouldShowEnvironmentManager(localAgentReq) {
-		t.Fatalf("expected disabled-auth/local-agent mode to hide environment manager")
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "scripts_part01", map[string]any{"RuntimeSwitchEnabled": true}); err != nil {
+		t.Fatalf("failed to execute scripts_part01 template: %v", err)
 	}
 
-	deniedReq := httptest.NewRequest("GET", "/app", nil)
-	deniedReq = deniedReq.WithContext(sop.ContextWithAuth(deniedReq.Context(), sop.AuthContext{Permissions: map[string]bool{"manage_environments": false}}))
-	if shouldShowEnvironmentManager(deniedReq) {
-		t.Fatalf("expected explicit permission deny to hide environment manager")
+	rendered := buf.String()
+	if !strings.Contains(rendered, "const checkbox = document.getElementById('chat-runtime-hq');") {
+		t.Fatalf("expected environment manager visibility to read the HQ checkbox state, got content=%s", rendered)
+	}
+	if !strings.Contains(rendered, "const shouldShow = Boolean(checkbox && checkbox.checked) || (!checkbox && getCurrentRuntimeMode() === 'hq');") {
+		t.Fatalf("expected environment manager visibility to show when the HQ checkbox is checked, got content=%s", rendered)
 	}
 }
 
@@ -398,19 +287,6 @@ func TestHTTPServerDoesNotServeSiteFrontendRoutes(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected httpserver to leave /site/ unhandled, got %d", rec.Code)
-	}
-}
-
-func TestRegisterLegacyDataManagerRoutesUsesLegacyUIHandlers(t *testing.T) {
-	mux := http.NewServeMux()
-	registerLegacyDataManagerRoutes(mux)
-
-	req := httptest.NewRequest(http.MethodGet, "/app", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code == http.StatusNotFound {
-		t.Fatalf("expected legacy Data Manager route /app to be registered")
 	}
 }
 

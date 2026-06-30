@@ -1279,6 +1279,10 @@ func authTokenFromRequest(r *http.Request) string {
 	return ""
 }
 
+func AuthTokenFromRequest(r *http.Request) string {
+	return authTokenFromRequest(r)
+}
+
 func authenticatedAccountFromRequest(r *http.Request) AuthenticatedAccount {
 	authCtx := sop.GetAuthFromContext(r.Context())
 	username := normalizeUsername(authCtx.UserID)

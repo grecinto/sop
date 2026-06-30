@@ -19,7 +19,6 @@ import (
 
 	"github.com/sharedcode/sop"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
-	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/tools/siteapi"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -66,67 +65,6 @@ func applyRedisOverride(cfg *sopbackend.Config, redisURL string, wasFlagPassed b
 	for i := range cfg.Databases {
 		cfg.Databases[i].RedisURL = adjusted
 	}
-}
-
-func planRuntimeMetadata(req *http.Request) (bool, string) {
-	if req == nil {
-		return true, "hq"
-	}
-
-	auth := sop.GetAuthFromContext(req.Context())
-	username := strings.TrimSpace(auth.UserID)
-	if username == "" {
-		if len(auth.SubscriptionFeatures) > 0 {
-			features := make(map[string]struct{}, len(auth.SubscriptionFeatures))
-			for _, feature := range auth.SubscriptionFeatures {
-				if trimmed := strings.TrimSpace(strings.ToLower(feature)); trimmed != "" {
-					features[trimmed] = struct{}{}
-				}
-			}
-			if _, ok := features["hq_runtime"]; ok {
-				return true, "hq"
-			}
-		}
-		return true, "hq"
-	}
-
-	features := make(map[string]struct{}, len(auth.SubscriptionFeatures))
-	for _, feature := range auth.SubscriptionFeatures {
-		if trimmed := strings.TrimSpace(strings.ToLower(feature)); trimmed != "" {
-			features[trimmed] = struct{}{}
-		}
-	}
-	if _, ok := features["hq_runtime"]; ok {
-		return true, "hq"
-	}
-
-	cfg := sopbackend.GetConfig()
-	user, ok, err := cfg.FindUserRecord(req.Context(), username)
-	if err != nil || !ok || user == nil {
-		return false, "local"
-	}
-
-	features = make(map[string]struct{}, len(user.SubscriptionFeatures))
-	for _, feature := range user.SubscriptionFeatures {
-		if trimmed := strings.TrimSpace(strings.ToLower(feature)); trimmed != "" {
-			features[trimmed] = struct{}{}
-		}
-	}
-	if _, ok := features["hq_runtime"]; ok {
-		return true, "hq"
-	}
-
-	return false, "local"
-}
-
-func runtimeSwitchEnabled(req *http.Request) bool {
-	enabled, _ := planRuntimeMetadata(req)
-	return enabled
-}
-
-func defaultRuntimeModeForRequest(req *http.Request) string {
-	_, mode := planRuntimeMetadata(req)
-	return mode
 }
 
 func main() {
@@ -318,15 +256,6 @@ func main() {
 	}
 }
 
-func registerLegacyDataManagerRoutes(mux *http.ServeMux) {
-	if mux == nil {
-		return
-	}
-	mux.HandleFunc("/app", handleIndex)
-	mux.HandleFunc("/login", handleLoginPage)
-	mux.HandleFunc("/", handleRoot)
-}
-
 func registerSiteFrontendRoutes(mux *http.ServeMux) {
 	if mux == nil {
 		return
@@ -422,15 +351,6 @@ func frontendDistDir() string {
 	return ""
 }
 
-func shouldShowEnvironmentManager(r *http.Request) bool {
-	if r == nil {
-		return true
-	}
-
-	auth := sop.GetAuthFromContext(r.Context())
-	return sopbackend.CanManageEnvironments(auth)
-}
-
 func openBrowser(url string) {
 	var err error
 	switch runtime.GOOS {
@@ -445,87 +365,6 @@ func openBrowser(url string) {
 	}
 	if err != nil {
 		log.Error(fmt.Sprintf("Failed to open browser: %v", err))
-	}
-}
-
-func handleRoot(w http.ResponseWriter, r *http.Request) {
-	if sopbackend.HasConfigFileOnDisk() {
-		handleLoginPage(w, r)
-		return
-	}
-	http.Redirect(w, r, "/app", http.StatusFound)
-}
-
-func handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	tmpl, err := template.ParseFS(content, "templates/*.html")
-	if err != nil {
-		http.Error(w, "Could not load login template: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	data := map[string]any{
-		"Version": sop.Version,
-	}
-	if err := tmpl.ExecuteTemplate(w, "login.html", data); err != nil {
-		log.Error("Failed to execute login template", "error", err)
-		http.Error(w, "Login template execution failed", http.StatusInternalServerError)
-	}
-}
-
-func handleIndex(w http.ResponseWriter, r *http.Request) {
-	tmpl, err := template.ParseFS(content, "templates/*.html")
-	if err != nil {
-		http.Error(w, "Could not load template: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Check if "users" store exists
-	hasDemo := false
-	ctx := r.Context()
-	config := sopbackend.GetConfig()
-	for _, dbCfg := range config.Databases {
-		if dbOpts, err := sopbackend.GetDBOptionsFromConfig(ctx, &dbCfg); err == nil {
-			db := aidb.NewDatabase(dbOpts)
-			if exists, err := db.StoreExists(ctx, "users"); err == nil && exists {
-				hasDemo = true
-				break
-			}
-		}
-	}
-
-	// Check if SystemDB exists
-	isEnterprise := config.SystemDB != nil
-	if !isEnterprise && len(config.Databases) > 0 {
-		isEnterprise = true
-	}
-
-	systemDBName := strings.TrimSpace(sopbackend.SystemDBName)
-	if config.SystemDB != nil {
-		if trimmed := strings.TrimSpace(config.SystemDB.Name); trimmed != "" {
-			systemDBName = trimmed
-		}
-	}
-
-	data := map[string]any{
-		"Version":                 sop.Version,
-		"Mode":                    config.Mode,
-		"ModelCatalog":            sopbackend.GetModelCatalog(),
-		"AllowInvalidMapKey":      os.Getenv("SOP_ALLOW_INVALID_MAP_KEY") == "true",
-		"HasDemo":                 hasDemo,
-		"LLMProvider":             "openai",
-		"IsEnterprise":            isEnterprise,
-		"SystemDBName":            systemDBName,
-		"ConfigFile":              config.ConfigFile,
-		"SetupWizardAIConfigJSON": setupWizardAIConfigJSON(),
-		"ModelCatalogJSON":        modelCatalogJSON(),
-		"MinHashMod":              1,
-		"MaxHashMod":              256,
-		"CanManageEnvironments":   shouldShowEnvironmentManager(r),
-		"RuntimeSwitchEnabled":    runtimeSwitchEnabled(r),
-	}
-	if err := tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
-		log.Error("Failed to execute template", "error", err)
-		http.Error(w, "Template execution failed", http.StatusInternalServerError)
 	}
 }
 

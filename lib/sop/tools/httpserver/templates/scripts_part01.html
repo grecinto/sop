@@ -1176,10 +1176,8 @@
     function syncEnvironmentManagerVisibility() {
         const button = document.getElementById('env-manager-btn');
         if (!button) return;
-        const runtimeMode = getCurrentRuntimeMode();
-        // Show if: user has HQ feature OR runtime is not local
-        const hasHQFeature = (typeof hasFeature === 'function' && hasFeature('hq_runtime'));
-        const shouldShow = hasHQFeature || runtimeMode !== 'local';
+        const checkbox = document.getElementById('chat-runtime-hq');
+        const shouldShow = Boolean(checkbox && checkbox.checked) || (!checkbox && getCurrentRuntimeMode() === 'hq');
         button.style.display = shouldShow ? 'inline-flex' : 'none';
         button.title = shouldShow ? 'Manage Environments' : 'Environment Manager is unavailable in local daemon mode';
     }

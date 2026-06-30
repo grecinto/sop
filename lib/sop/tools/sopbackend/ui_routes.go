@@ -333,6 +333,17 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		}
 	}
 
+	// Compute runtime switch enabled based on user's subscription features
+	runtimeSwitchEnabled := false
+	if user, ok, err := cfg.findUserRecord(req.Context(), username); err == nil && ok && user != nil {
+		for _, feature := range user.SubscriptionFeatures {
+			if strings.TrimSpace(strings.ToLower(feature)) == "hq_runtime" {
+				runtimeSwitchEnabled = true
+				break
+			}
+		}
+	}
+
 	return map[string]any{
 		"Version":                sop.Version,
 		"Username":               username,
@@ -348,6 +359,7 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		"SubscriptionSuccess":    false,
 		"SubscriptionMessage":    "",
 		"IsUnsubscribed":         false,
+		"RuntimeSwitchEnabled":   runtimeSwitchEnabled,
 	}
 }
 
