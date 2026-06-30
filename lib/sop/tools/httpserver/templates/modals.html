@@ -245,7 +245,7 @@
                 </span>
             </button>
 
-            <select id="domain-select" style="display: inline-block; padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal; margin-left: 4px;" onclick="event.stopPropagation()" onchange="handleDomainChange(this)" title="Active Space">
+            <select id="domain-select" style="display: inline-block; width: 92px; min-width: 92px; max-width: 92px; flex: 0 0 92px; padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal; margin-left: 4px; overflow: hidden; text-overflow: ellipsis;" onclick="event.stopPropagation()" onchange="handleDomainChange(this)" title="Active Space">
                 <option value="" selected>None</option>
                 <option value="custom">Custom...</option>
             </select>

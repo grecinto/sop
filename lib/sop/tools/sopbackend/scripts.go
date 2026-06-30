@@ -139,7 +139,7 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if !HasConfigFileOnDisk() {
+		if strings.TrimSpace(config.ConfigFile) == "" && FindExistingConfigFile() == "" {
 			log.Debug("withAuth: skipping bearer-token validation", "path", r.URL.Path, "method", r.Method, "reason", "config file not present on disk")
 			next(w, r)
 			return
@@ -173,9 +173,11 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		if ok, user, err := config.AuthenticateBearerToken(r.Context(), token); err == nil && ok {
 			auth := sop.AuthContext{
-				IsSystem: true,
-				Roles:    []string{user.Role},
-				UserID:   user.Username,
+				IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
+				Roles:                []string{user.Role},
+				UserID:               user.Username,
+				SubscriptionPlan:     user.SubscriptionPlan,
+				SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
 			}
 			ctx := sop.ContextWithAuth(r.Context(), auth)
 			r = r.WithContext(ctx)

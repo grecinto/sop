@@ -368,6 +368,7 @@ func builtinPreloadCandidates(templateID string) []string {
 			"medical.json",
 			"ai/medical.json",
 			"../medical.json",
+			"../../medical.json",
 		)
 	}
 	if strings.Contains(normalized, "sop") {
@@ -375,9 +376,45 @@ func builtinPreloadCandidates(templateID string) []string {
 			"sop_base_knowledge.json",
 			"ai/sop_base_knowledge.json",
 			"../ai/sop_base_knowledge.json",
+			"../../ai/sop_base_knowledge.json",
 		)
 	}
 	return candidates
+}
+
+func resolvePreloadFilePath(templateID string, searchRoots []string) string {
+	trimmed := strings.TrimSpace(templateID)
+	if trimmed == "" {
+		return ""
+	}
+
+	candidates := builtinPreloadCandidates(trimmed)
+	for _, root := range searchRoots {
+		if root == "" {
+			continue
+		}
+
+		current := filepath.Clean(root)
+		for {
+			for _, candidate := range candidates {
+				candidatePath := filepath.Clean(filepath.Join(current, candidate))
+				if _, err := os.Stat(candidatePath); err == nil {
+					if absPath, err := filepath.Abs(candidatePath); err == nil {
+						return absPath
+					}
+					return candidatePath
+				}
+			}
+
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+	}
+
+	return ""
 }
 
 func buildImportSpaceRequest(ctx context.Context, filePath, databaseName, spaceName string) (*http.Request, error) {
@@ -462,6 +499,21 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var actualPath string
+	searchRoots := []string{}
+	if cwd, err := os.Getwd(); err == nil {
+		searchRoots = append(searchRoots, cwd)
+	}
+	if exePath, err := os.Executable(); err == nil {
+		searchRoots = append(searchRoots, filepath.Dir(exePath))
+	}
+	if configPath := strings.TrimSpace(os.Getenv("SOP_CONFIG_FILE")); configPath != "" {
+		searchRoots = append(searchRoots, filepath.Dir(configPath))
+	}
+	if repoRoot, err := filepath.Abs(filepath.Join(".", "..", "..")); err == nil {
+		searchRoots = append(searchRoots, repoRoot)
+	}
+	searchRoots = append(searchRoots, ".", "..", "../..", "ai")
+
 	pathsToTry := []string{
 		req.TemplateID + ".json",
 		"../" + req.TemplateID + ".json",
@@ -474,6 +526,11 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		if _, err := os.Stat(p); err == nil {
 			actualPath = p
 			break
+		}
+	}
+	if actualPath == "" {
+		if resolved := resolvePreloadFilePath(req.TemplateID, searchRoots); resolved != "" {
+			actualPath = resolved
 		}
 	}
 

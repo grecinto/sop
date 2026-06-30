@@ -8,6 +8,23 @@ import (
 	"testing"
 )
 
+func TestResolvePreloadFilePathSearchesRepoStyleRoots(t *testing.T) {
+	tmpRoot := t.TempDir()
+	repoRoot := filepath.Join(tmpRoot, "lib", "sop")
+	assetPath := filepath.Join(repoRoot, "ai", "sop_base_knowledge.json")
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0o755); err != nil {
+		t.Fatalf("mkdir asset dir: %v", err)
+	}
+	if err := os.WriteFile(assetPath, []byte(`{"items":[]}`), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	got := resolvePreloadFilePath("SOP", []string{repoRoot})
+	if got != assetPath {
+		t.Fatalf("resolvePreloadFilePath() = %q, want %q", got, assetPath)
+	}
+}
+
 func TestShouldUseImportPathForPreload(t *testing.T) {
 	tests := []struct {
 		name        string

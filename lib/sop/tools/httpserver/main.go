@@ -76,6 +76,27 @@ func planRuntimeMetadata(req *http.Request) (bool, string) {
 	auth := sop.GetAuthFromContext(req.Context())
 	username := strings.TrimSpace(auth.UserID)
 	if username == "" {
+		if len(auth.SubscriptionFeatures) > 0 {
+			features := make(map[string]struct{}, len(auth.SubscriptionFeatures))
+			for _, feature := range auth.SubscriptionFeatures {
+				if trimmed := strings.TrimSpace(strings.ToLower(feature)); trimmed != "" {
+					features[trimmed] = struct{}{}
+				}
+			}
+			if _, ok := features["hq_runtime"]; ok {
+				return true, "hq"
+			}
+		}
+		return true, "hq"
+	}
+
+	features := make(map[string]struct{}, len(auth.SubscriptionFeatures))
+	for _, feature := range auth.SubscriptionFeatures {
+		if trimmed := strings.TrimSpace(strings.ToLower(feature)); trimmed != "" {
+			features[trimmed] = struct{}{}
+		}
+	}
+	if _, ok := features["hq_runtime"]; ok {
 		return true, "hq"
 	}
 
@@ -85,7 +106,7 @@ func planRuntimeMetadata(req *http.Request) (bool, string) {
 		return false, "local"
 	}
 
-	features := make(map[string]struct{}, len(user.SubscriptionFeatures))
+	features = make(map[string]struct{}, len(user.SubscriptionFeatures))
 	for _, feature := range user.SubscriptionFeatures {
 		if trimmed := strings.TrimSpace(strings.ToLower(feature)); trimmed != "" {
 			features[trimmed] = struct{}{}

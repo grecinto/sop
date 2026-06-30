@@ -511,6 +511,15 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 		if requireActiveAccount && !isUserAccountActive(ctx, claims.Subject, claims.Role) {
 			return nil, fmt.Errorf("invalid session")
 		}
+		if user, ok, lookupErr := config.findUserRecord(ctx, claims.Subject); lookupErr == nil && ok && user != nil {
+			if strings.TrimSpace(user.Username) == "" {
+				user.Username = claims.Subject
+			}
+			if strings.TrimSpace(user.Role) == "" {
+				user.Role = claims.Role
+			}
+			return user, nil
+		}
 		return &UserRecord{Username: claims.Subject, Role: claims.Role}, nil
 	}
 
@@ -553,6 +562,16 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 			log.Warn("ValidateToken: failed to commit revoked session cleanup", "error", err)
 		}
 		return nil, fmt.Errorf("invalid session")
+	}
+
+	if user, ok, lookupErr := config.findUserRecord(ctx, r.Username); lookupErr == nil && ok && user != nil {
+		if strings.TrimSpace(user.Username) == "" {
+			user.Username = r.Username
+		}
+		if strings.TrimSpace(user.Role) == "" {
+			user.Role = r.Role
+		}
+		return user, nil
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1316,7 +1335,7 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Debug("requireAuth: handler invocation", "handler", handlerName(next), "method", r.Method, "path", r.URL.Path)
-		if !HasConfigFileOnDisk() {
+		if strings.TrimSpace(config.ConfigFile) == "" && FindExistingConfigFile() == "" {
 			log.Debug("requireAuth: skipping session validation", "path", r.URL.Path, "method", r.Method, "reason", "config file not present on disk")
 			next(w, r)
 			return
@@ -1348,6 +1367,9 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		authCtx := sop.GetAuthFromContext(r.Context())
 		authCtx.UserID = user.Username
 		authCtx.Roles = []string{user.Role}
+		authCtx.SubscriptionPlan = user.SubscriptionPlan
+		authCtx.SubscriptionFeatures = append([]string(nil), user.SubscriptionFeatures...)
+		authCtx.IsSystem = strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root")
 		if authCtx.Permissions == nil {
 			authCtx.Permissions = map[string]bool{}
 		}

@@ -622,23 +622,23 @@
                 document.getElementById('setup-sys-conn').value = document.getElementById('setup-db-conn').value;
                 document.getElementById('setup-sys-registry-hash-mod').value = document.getElementById('setup-db-registry-hash-mod').value;
                 
-                // Helper to replace last segment with SYSTEM_DB_NAME
-                const replaceLastSegment = (path) => {
-                    if (!path) return `/tmp/sop_data/${SYSTEM_DB_NAME}`;
+                // Build a system database path from the configured system DB name.
+                const systemDbName = (typeof SYSTEM_DB_NAME === 'string' && SYSTEM_DB_NAME.trim()) ? SYSTEM_DB_NAME : 'system';
+                const buildSystemDbPath = (path) => {
+                    if (!path) return `/tmp/sop_data/${systemDbName}`;
                     const isWin = path.includes('\\');
                     const sep = isWin ? '\\' : '/';
-                    // Split, remove last, add SYSTEM_DB_NAME
-                    // Handle trailing slash
-                    let parts = path.split(sep).filter(p => p.length > 0);
-                    if (parts.length > 0) parts.pop();
-                    parts.push(SYSTEM_DB_NAME);
+                    const parts = path.split(sep).filter(p => p.length > 0);
+                    if (parts.length === 0) return `/tmp/sop_data/${systemDbName}`;
+                    parts.pop();
+                    parts.push(systemDbName);
                     return (path.startsWith(sep) ? sep : '') + parts.join(sep);
                 };
 
                 const dbStores = document.getElementById('setup-db-stores-folders').value;
                 if (dbStores) {
                     const paths = dbStores.split(',').map(s => s.trim());
-                    const sysPaths = paths.map(p => replaceLastSegment(p));
+                    const sysPaths = paths.map(p => buildSystemDbPath(p));
                     document.getElementById('setup-sys-stores-folders').value = sysPaths.join(', ');
                 }
                 
@@ -648,8 +648,8 @@
                 const manualEntToggle = document.getElementById('setup-sys-use-manual-enterprise');
                 const isUsingEnterprise = (entToggle && entToggle.checked) || (manualEntToggle && manualEntToggle.checked);
                 
-                if (dbPath && !isUsingEnterprise) {
-                    document.getElementById('setup-reg-path').value = replaceLastSegment(dbPath);
+                if (!isUsingEnterprise) {
+                    document.getElementById('setup-reg-path').value = buildSystemDbPath(dbPath || document.getElementById('setup-reg-path').value);
                 }
 
                 toggleSetupConnectionField('sys');

@@ -100,6 +100,22 @@ func TestRuntimeSwitchUsesSubscribedFeatureList(t *testing.T) {
 	}
 }
 
+func TestRuntimeSwitchUsesSubscriptionFeaturesFromAuthContext(t *testing.T) {
+	req := httptest.NewRequest("GET", "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{
+		UserID:               "alice",
+		Roles:                []string{sop.RoleUser},
+		SubscriptionFeatures: []string{"hq_runtime"},
+	}))
+
+	if !runtimeSwitchEnabled(req) {
+		t.Fatal("expected runtime switching to honor features from the auth context")
+	}
+	if got := defaultRuntimeModeForRequest(req); got != "hq" {
+		t.Fatalf("expected auth-context feature to default to HQ runtime, got %q", got)
+	}
+}
+
 func TestHandleIndexRendersRuntimeSwitchForSubscribedHQFeature(t *testing.T) {
 	originalCfg := sopbackend.GetConfig()
 	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
@@ -137,6 +153,21 @@ func TestShouldShowEnvironmentManagerVisibilityRules(t *testing.T) {
 	deniedReq = deniedReq.WithContext(sop.ContextWithAuth(deniedReq.Context(), sop.AuthContext{Permissions: map[string]bool{"manage_environments": false}}))
 	if shouldShowEnvironmentManager(deniedReq) {
 		t.Fatalf("expected explicit permission deny to hide environment manager")
+	}
+}
+
+func TestSetupWizardUsesSystemDBNameForDefaultSystemPath(t *testing.T) {
+	content, err := os.ReadFile("templates/index.html")
+	if err != nil {
+		t.Fatalf("failed to read setup wizard template: %v", err)
+	}
+
+	text := string(content)
+	if strings.Contains(text, `value="/tmp/sop_data/system_db"`) {
+		t.Fatalf("expected setup wizard to use the concrete system DB default for the system path, got template contents: %s", text)
+	}
+	if !strings.Contains(text, `value="/tmp/sop_data/system"`) {
+		t.Fatalf("expected setup wizard template to render the concrete system DB default path")
 	}
 }
 
