@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	siteapi "github.com/grecinto/sop-cloud/src/backend/siteapi"
+	siteaccount "github.com/grecinto/sop-cloud/src/backend/siteaccount"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -72,7 +72,7 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
 	// The Data Manager UI remains served by the dedicated httpserver/daemon entrypoints.
 	sopbackend.RegisterSwaggerHandlers(mux, "")
 	sopbackend.RegisterMonitorabilityHandlers(mux)
-	siteapi.RegisterHandlers(mux)
+	siteaccount.RegisterHandlers(mux)
 	registerFrontendHandler(mux, frontendDir)
 }
 

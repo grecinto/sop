@@ -45,6 +45,8 @@ type Config struct {
 	Subscriptions          []SubscriptionRecord `json:"subscriptions,omitempty"`
 	Payments               []PaymentRecord      `json:"payments,omitempty"`
 	UsersStore             UserStore            `json:"-"`
+	SubscriptionsStore     SubscriptionStore    `json:"-"`
+	PaymentsStore          PaymentStore         `json:"-"`
 
 	// ObfuscationMode defines the global obfuscation policy (disabled, per_database, all_databases).
 	// This overrides any setting in the agent's own configuration.

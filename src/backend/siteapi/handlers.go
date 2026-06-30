@@ -143,16 +143,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"user": map[string]any{
-			"username":          user.Username,
-			"role":              user.Role,
-			"email":             user.Email.Plaintext(),
-			"subscription_plan": user.SubscriptionPlan,
-			"billing_status":    user.BillingStatus,
-		},
-	})
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
 }
 
 func clearSessionCookies(w http.ResponseWriter) {
@@ -212,6 +203,10 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildUserResponsePayload(user *sopbackend.UserRecord) map[string]any {
+	if user == nil {
+		return map[string]any{"status": "ok", "user": map[string]any{}}
+	}
+
 	lastWebhookAt := ""
 	if user != nil && !user.LastWebhookAt.IsZero() {
 		lastWebhookAt = user.LastWebhookAt.UTC().Format(time.RFC3339Nano)
@@ -223,6 +218,57 @@ func buildUserResponsePayload(user *sopbackend.UserRecord) map[string]any {
 		"last_webhook_event": user.LastWebhookEvent,
 		"failure_reason":     user.FailureReason,
 	}
+
+	cfg := sopbackend.GetConfig()
+	payments := make([]map[string]any, 0, len(cfg.Payments))
+	for _, payment := range cfg.Payments {
+		if !strings.EqualFold(payment.UserID, user.Username) {
+			continue
+		}
+		createdAt := ""
+		if !payment.CreatedAt.IsZero() {
+			createdAt = payment.CreatedAt.UTC().Format(time.RFC3339Nano)
+		}
+		updatedAt := ""
+		if !payment.UpdatedAt.IsZero() {
+			updatedAt = payment.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		}
+		payments = append(payments, map[string]any{
+			"id":                  payment.ID,
+			"status":              payment.Status,
+			"amount":              payment.Amount,
+			"currency":            payment.Currency,
+			"subscription_id":     payment.SubscriptionID,
+			"provider_payment_id": payment.ProviderPaymentID,
+			"created_at":          createdAt,
+			"updated_at":          updatedAt,
+		})
+	}
+
+	subscriptions := make([]map[string]any, 0, len(cfg.Subscriptions))
+	for _, subscription := range cfg.Subscriptions {
+		if !strings.EqualFold(subscription.UserID, user.Username) {
+			continue
+		}
+		createdAt := ""
+		if !subscription.CreatedAt.IsZero() {
+			createdAt = subscription.CreatedAt.UTC().Format(time.RFC3339Nano)
+		}
+		updatedAt := ""
+		if !subscription.UpdatedAt.IsZero() {
+			updatedAt = subscription.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		}
+		subscriptions = append(subscriptions, map[string]any{
+			"id":                       subscription.ID,
+			"plan_code":                subscription.PlanCode,
+			"status":                   subscription.Status,
+			"provider_subscription_id": subscription.ProviderSubscription,
+			"cancel_at_period_end":     subscription.CancelAtPeriodEnd,
+			"created_at":               createdAt,
+			"updated_at":               updatedAt,
+		})
+	}
+
 	return map[string]any{
 		"status": "ok",
 		"user": map[string]any{
@@ -232,6 +278,8 @@ func buildUserResponsePayload(user *sopbackend.UserRecord) map[string]any {
 			"subscription_plan": user.SubscriptionPlan,
 			"billing_status":    user.BillingStatus,
 			"billing":           billing,
+			"payments":          payments,
+			"subscriptions":     subscriptions,
 			"status":            user.Status,
 			"created_at":        user.CreatedAt,
 			"updated_at":        user.UpdatedAt,
@@ -334,15 +382,7 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"user": map[string]any{
-			"username":          updated.Username,
-			"subscription_plan": updated.SubscriptionPlan,
-			"billing_status":    updated.BillingStatus,
-			"updated_at":        updated.UpdatedAt,
-		},
-	})
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(updated))
 }
 
 func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
@@ -482,6 +522,8 @@ func HandleUnregister(w http.ResponseWriter, r *http.Request) {
 	}
 	sopbackend.RecordProductMetric("site_auth_unregister_requests")
 	sopbackend.SetConfig(cfg)
+
+	clearSessionCookies(w)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

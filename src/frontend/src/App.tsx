@@ -5,6 +5,19 @@ type ViewMode = 'home' | 'subscribe' | 'docs';
 
 type BillingStatus = 'inactive' | 'pending' | 'active';
 
+type PaymentSummary = {
+  id: string;
+  status: string;
+  amount: number;
+  currency: string;
+};
+
+type SubscriptionSummary = {
+  id: string;
+  status: string;
+  planCode: string;
+};
+
 type AccountState = {
   name: string;
   email: string;
@@ -16,6 +29,8 @@ type AccountState = {
   lastWebhookEvent: string;
   failureReason: string;
   lastWebhookAt: string;
+  payments: PaymentSummary[];
+  subscriptions: SubscriptionSummary[];
 };
 
 const emptyState: AccountState = {
@@ -29,6 +44,8 @@ const emptyState: AccountState = {
   lastWebhookEvent: '',
   failureReason: '',
   lastWebhookAt: '',
+  payments: [],
+  subscriptions: [],
 };
 
 const DRAFT_STORAGE_KEY = 'sop-cloud-site-draft';
@@ -44,6 +61,8 @@ type PersistedAccountState = {
   lastWebhookEvent: string;
   failureReason: string;
   lastWebhookAt: string;
+  payments: PaymentSummary[];
+  subscriptions: SubscriptionSummary[];
 };
 
 function loadDraftState(): { name: string; email: string } {
@@ -88,6 +107,8 @@ function loadPersistedAccountState(): PersistedAccountState | null {
       lastWebhookEvent: parsed.lastWebhookEvent ?? '',
       failureReason: parsed.failureReason ?? '',
       lastWebhookAt: parsed.lastWebhookAt ?? '',
+      payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+      subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [],
     };
   } catch {
     return null;
@@ -110,6 +131,8 @@ function persistAccountState(account: AccountState) {
       lastWebhookEvent: account.lastWebhookEvent,
       failureReason: account.failureReason,
       lastWebhookAt: account.lastWebhookAt,
+      payments: account.payments,
+      subscriptions: account.subscriptions,
     })
   );
 }
@@ -216,6 +239,8 @@ async function loadAccountFromServer(): Promise<AccountState> {
     lastWebhookEvent: billing.last_webhook_event ?? '',
     failureReason: billing.failure_reason ?? '',
     lastWebhookAt: billing.last_webhook_at ?? '',
+    payments: Array.isArray(user.payments) ? user.payments : [],
+    subscriptions: Array.isArray(user.subscriptions) ? user.subscriptions : [],
   };
 }
 
@@ -984,6 +1009,17 @@ export default function App() {
                 <span>{account.email || 'Create an account to start the guided flow'}</span>
               </div>
             </div>
+
+            {account.payments.length > 0 ? (
+              <div className="preview-box">
+                <h4>Most recent payment</h4>
+                <p>
+                  {account.payments[0].status === 'succeeded'
+                    ? `Paid ${account.payments[0].amount} ${account.payments[0].currency || 'USD'} for ${account.subscriptions[0]?.planCode || 'your plan'}.`
+                    : `Payment status: ${account.payments[0].status}.`}
+                </p>
+              </div>
+            ) : null}
 
             <div className="action-row">
               <button

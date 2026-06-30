@@ -23,8 +23,6 @@ import (
 type KnowledgeBase[T any] struct {
 	Store   MemoryStore[T]
 	Manager *MemoryManager[T]
-	// transaction stores the optional active transaction associated with this knowledge base.
-	transaction sop.Transaction
 	// MaxMathCategoryDistance specifies the max Euclidean distance to cluster centroids
 	// to avoid calling the LLM for category categorization. Set to 0.0 or less to disable
 	// and always rely on "pristine" LLM categorization.
@@ -36,22 +34,6 @@ type KnowledgeBase[T any] struct {
 // Returns this KnowledgeBase's name.
 func (kb *KnowledgeBase[T]) Name() string {
 	return kb.Store.Name()
-}
-
-// SetTransaction associates an active transaction with this knowledge base.
-func (kb *KnowledgeBase[T]) SetTransaction(tx sop.Transaction) {
-	if kb == nil {
-		return
-	}
-	kb.transaction = tx
-}
-
-// Transaction returns the active transaction associated with this knowledge base.
-func (kb *KnowledgeBase[T]) Transaction() sop.Transaction {
-	if kb == nil {
-		return nil
-	}
-	return kb.transaction
 }
 
 func isNilGenericValue[T any](v T) bool {

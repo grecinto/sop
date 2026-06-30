@@ -3006,7 +3006,7 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 	leanStoresAssembly := shouldUseLeanStoresAssembly(taskClassification)
 	persona, _ := a.resolvePersonaWithMetadata(ctx)
 	semanticMemory := a.getLTMSemanticContext(ctx, query)
-	selectedSpaceGuidance := a.selectedSpaceExpertContext(ctx, query, a.isContinuationPromptContext(taskClassification))
+	selectedSpaceGuidance := a.selectedSpaceExpertContext(ctx, query, true)
 	if leanStoresAssembly {
 		persona = trimPromptComponentContent(ComponentPersona, persona, 900)
 		semanticMemory = ""

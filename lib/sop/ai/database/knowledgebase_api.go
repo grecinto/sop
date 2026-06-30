@@ -43,6 +43,5 @@ func NewKnowledgeBase(
 		_ = tx.Rollback(ctx)
 		return nil, err
 	}
-	kb.SetTransaction(tx)
 	return kb, nil
 }

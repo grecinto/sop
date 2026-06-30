@@ -882,16 +882,29 @@ func TestBuildSystemPrompt_IncludesSelectedSpaceExpertInstructions(t *testing.T)
 
 	prompt := ag.buildSystemPrompt(promptCtx, "Explain the diagnosis guidance", TaskContextClassification{})
 
+	var elements []PromptElement
+	if err := json.Unmarshal([]byte(prompt), &elements); err != nil {
+		t.Fatalf("expected buildSystemPrompt to return JSON prompt elements: %v\nPrompt: %s", err, prompt)
+	}
+
+	var focusedContext string
+	for _, element := range elements {
+		if element.Component == ComponentFocusedContext {
+			focusedContext = element.Content
+			break
+		}
+	}
+
 	if !strings.Contains(prompt, "Selected Space Expert Context") {
 		t.Fatalf("expected selected-space guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Continuing with the selected knowledge Space \"medical\"") {
+	if !strings.Contains(focusedContext, "Continuing with the selected knowledge Space") {
 		t.Fatalf("expected Omni cold start to use compact selected-space guidance, got: %s", prompt)
 	}
-	if strings.Contains(prompt, "SystemPrompt: You are the Medical Expert.") {
+	if strings.Contains(focusedContext, "SystemPrompt: You are the Medical Expert.") {
 		t.Fatalf("expected Omni cold start to avoid full selected-space system prompt injection, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "medical") {
+	if !strings.Contains(focusedContext, "medical") {
 		t.Fatalf("expected medical Space name in prompt, got: %s", prompt)
 	}
 }

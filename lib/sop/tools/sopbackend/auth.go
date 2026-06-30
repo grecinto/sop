@@ -98,10 +98,454 @@ type PaymentRecord struct {
 	UpdatedAt         time.Time `json:"updated_at,omitempty"`
 }
 
+type SubscriptionStore interface {
+	Save(ctx context.Context, subscription *SubscriptionRecord) error
+	Get(ctx context.Context, id string) (*SubscriptionRecord, bool, error)
+	Delete(ctx context.Context, id string) error
+	ListByUser(ctx context.Context, username string) ([]SubscriptionRecord, error)
+	List(ctx context.Context) ([]SubscriptionRecord, error)
+}
+
+type PaymentStore interface {
+	Save(ctx context.Context, payment *PaymentRecord) error
+	Get(ctx context.Context, id string) (*PaymentRecord, bool, error)
+	Delete(ctx context.Context, id string) error
+	ListByUser(ctx context.Context, username string) ([]PaymentRecord, error)
+	List(ctx context.Context) ([]PaymentRecord, error)
+}
+
+type SubscriptionStoreImpl struct {
+	mu            sync.RWMutex
+	subscriptions map[string]SubscriptionRecord
+}
+
+func NewSubscriptionStore() *SubscriptionStoreImpl {
+	return &SubscriptionStoreImpl{subscriptions: make(map[string]SubscriptionRecord)}
+}
+
+func (s *SubscriptionStoreImpl) Save(ctx context.Context, subscription *SubscriptionRecord) error {
+	if subscription == nil {
+		return fmt.Errorf("subscription is nil")
+	}
+	id := strings.TrimSpace(subscription.ID)
+	if id == "" {
+		return fmt.Errorf("subscription id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copySubscription := *subscription
+	copySubscription.UpdatedAt = time.Now().UTC()
+	if copySubscription.CreatedAt.IsZero() {
+		copySubscription.CreatedAt = copySubscription.UpdatedAt
+	}
+	s.subscriptions[id] = copySubscription
+	return nil
+}
+
+func (s *SubscriptionStoreImpl) Get(ctx context.Context, id string) (*SubscriptionRecord, bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, false, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	subscription, ok := s.subscriptions[id]
+	if !ok {
+		return nil, false, nil
+	}
+	copySubscription := subscription
+	return &copySubscription, true, nil
+}
+
+func (s *SubscriptionStoreImpl) Delete(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, id)
+	return nil
+}
+
+func (s *SubscriptionStoreImpl) ListByUser(ctx context.Context, username string) ([]SubscriptionRecord, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	results := make([]SubscriptionRecord, 0)
+	for _, subscription := range s.subscriptions {
+		if normalizeUsername(subscription.UserID) == username {
+			results = append(results, subscription)
+		}
+	}
+	return results, nil
+}
+
+func (s *SubscriptionStoreImpl) List(ctx context.Context) ([]SubscriptionRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	results := make([]SubscriptionRecord, 0, len(s.subscriptions))
+	for _, subscription := range s.subscriptions {
+		results = append(results, subscription)
+	}
+	return results, nil
+}
+
+type PaymentStoreImpl struct {
+	mu       sync.RWMutex
+	payments map[string]PaymentRecord
+}
+
+func NewPaymentStore() *PaymentStoreImpl {
+	return &PaymentStoreImpl{payments: make(map[string]PaymentRecord)}
+}
+
+func (s *PaymentStoreImpl) Save(ctx context.Context, payment *PaymentRecord) error {
+	if payment == nil {
+		return fmt.Errorf("payment is nil")
+	}
+	id := strings.TrimSpace(payment.ID)
+	if id == "" {
+		return fmt.Errorf("payment id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copyPayment := *payment
+	copyPayment.UpdatedAt = time.Now().UTC()
+	if copyPayment.CreatedAt.IsZero() {
+		copyPayment.CreatedAt = copyPayment.UpdatedAt
+	}
+	s.payments[id] = copyPayment
+	return nil
+}
+
+func (s *PaymentStoreImpl) Get(ctx context.Context, id string) (*PaymentRecord, bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, false, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	payment, ok := s.payments[id]
+	if !ok {
+		return nil, false, nil
+	}
+	copyPayment := payment
+	return &copyPayment, true, nil
+}
+
+func (s *PaymentStoreImpl) Delete(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.payments, id)
+	return nil
+}
+
+func (s *PaymentStoreImpl) ListByUser(ctx context.Context, username string) ([]PaymentRecord, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	results := make([]PaymentRecord, 0)
+	for _, payment := range s.payments {
+		if normalizeUsername(payment.UserID) == username {
+			results = append(results, payment)
+		}
+	}
+	return results, nil
+}
+
+func (s *PaymentStoreImpl) List(ctx context.Context) ([]PaymentRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	results := make([]PaymentRecord, 0, len(s.payments))
+	for _, payment := range s.payments {
+		results = append(results, payment)
+	}
+	return results, nil
+}
+
 type BillingCheckoutSession struct {
 	ID     string
 	URL    string
 	Status string
+}
+
+type AccountTransaction interface {
+	SaveUser(user *UserRecord) error
+	SaveSubscription(subscription *SubscriptionRecord) error
+	SavePayment(payment *PaymentRecord) error
+	Commit() error
+	Rollback() error
+}
+
+type AccountTransactionImpl struct {
+	cfg                  *Config
+	userStore            UserStore
+	subscriptionStore    SubscriptionStore
+	paymentStore         PaymentStore
+	pendingUser          *UserRecord
+	pendingSubscriptions []SubscriptionRecord
+	pendingPayments      []PaymentRecord
+	committed            bool
+}
+
+type AccountRepository struct {
+	cfg *Config
+}
+
+func NewAccountRepository(cfg *Config) *AccountRepository {
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	return &AccountRepository{cfg: cfg}
+}
+
+func (r *AccountRepository) SaveUser(ctx context.Context, tx sop.Transaction, user *UserRecord) error {
+	if r == nil || r.cfg == nil {
+		return fmt.Errorf("account repository is not initialized")
+	}
+	if user == nil {
+		return fmt.Errorf("user is nil")
+	}
+	copyUser := *user
+	copyUser.Username = normalizeUsername(copyUser.Username)
+	if copyUser.Username == "" {
+		return fmt.Errorf("username is required")
+	}
+	if err := r.cfg.ensureUserStore().Save(ctx, &copyUser); err != nil {
+		return err
+	}
+	for i := range r.cfg.Users {
+		if normalizeUsername(r.cfg.Users[i].Username) == copyUser.Username {
+			r.cfg.Users[i] = copyUser
+			return nil
+		}
+	}
+	r.cfg.Users = append(r.cfg.Users, copyUser)
+	return nil
+}
+
+func (r *AccountRepository) SaveSubscription(ctx context.Context, tx sop.Transaction, subscription *SubscriptionRecord) error {
+	if r == nil || r.cfg == nil {
+		return fmt.Errorf("account repository is not initialized")
+	}
+	if subscription == nil {
+		return fmt.Errorf("subscription is nil")
+	}
+	copySubscription := *subscription
+	if copySubscription.ID == "" {
+		return fmt.Errorf("subscription id is required")
+	}
+	if err := r.cfg.ensureSubscriptionStore().Save(ctx, &copySubscription); err != nil {
+		return err
+	}
+	for i := range r.cfg.Subscriptions {
+		if r.cfg.Subscriptions[i].ID == copySubscription.ID {
+			r.cfg.Subscriptions[i] = copySubscription
+			return nil
+		}
+	}
+	r.cfg.Subscriptions = append(r.cfg.Subscriptions, copySubscription)
+	return nil
+}
+
+func (r *AccountRepository) SavePayment(ctx context.Context, tx sop.Transaction, payment *PaymentRecord) error {
+	if r == nil || r.cfg == nil {
+		return fmt.Errorf("account repository is not initialized")
+	}
+	if payment == nil {
+		return fmt.Errorf("payment is nil")
+	}
+	copyPayment := *payment
+	if copyPayment.ID == "" {
+		return fmt.Errorf("payment id is required")
+	}
+	if err := r.cfg.ensurePaymentStore().Save(ctx, &copyPayment); err != nil {
+		return err
+	}
+	for i := range r.cfg.Payments {
+		if r.cfg.Payments[i].ID == copyPayment.ID {
+			r.cfg.Payments[i] = copyPayment
+			return nil
+		}
+	}
+	r.cfg.Payments = append(r.cfg.Payments, copyPayment)
+	return nil
+}
+
+func (r *AccountRepository) FindUser(ctx context.Context, tx sop.Transaction, username string) (*UserRecord, bool, error) {
+	if r == nil || r.cfg == nil {
+		return nil, false, fmt.Errorf("account repository is not initialized")
+	}
+	return r.cfg.findUserRecord(ctx, username)
+}
+
+func (r *AccountRepository) ListSubscriptionsByUser(ctx context.Context, tx sop.Transaction, username string) ([]SubscriptionRecord, error) {
+	if r == nil || r.cfg == nil {
+		return nil, fmt.Errorf("account repository is not initialized")
+	}
+	return r.cfg.ensureSubscriptionStore().ListByUser(ctx, username)
+}
+
+func (r *AccountRepository) ListPaymentsByUser(ctx context.Context, tx sop.Transaction, username string) ([]PaymentRecord, error) {
+	if r == nil || r.cfg == nil {
+		return nil, fmt.Errorf("account repository is not initialized")
+	}
+	return r.cfg.ensurePaymentStore().ListByUser(ctx, username)
+}
+
+func (r *AccountRepository) DeleteUser(ctx context.Context, tx sop.Transaction, username string) error {
+	if r == nil || r.cfg == nil {
+		return fmt.Errorf("account repository is not initialized")
+	}
+	if store := r.cfg.UsersStore; store != nil {
+		if err := store.Delete(ctx, username); err != nil {
+			return err
+		}
+	}
+	users := r.cfg.Users[:0]
+	for _, existing := range r.cfg.Users {
+		if normalizeUsername(existing.Username) == normalizeUsername(username) {
+			continue
+		}
+		users = append(users, existing)
+	}
+	r.cfg.Users = users
+	return nil
+}
+
+func (r *AccountRepository) DeleteSubscription(ctx context.Context, tx sop.Transaction, id string) error {
+	if r == nil || r.cfg == nil {
+		return fmt.Errorf("account repository is not initialized")
+	}
+	if err := r.cfg.ensureSubscriptionStore().Delete(ctx, id); err != nil {
+		return err
+	}
+	subscriptions := r.cfg.Subscriptions[:0]
+	for _, existing := range r.cfg.Subscriptions {
+		if existing.ID == id {
+			continue
+		}
+		subscriptions = append(subscriptions, existing)
+	}
+	r.cfg.Subscriptions = subscriptions
+	return nil
+}
+
+func (r *AccountRepository) DeletePayment(ctx context.Context, tx sop.Transaction, id string) error {
+	if r == nil || r.cfg == nil {
+		return fmt.Errorf("account repository is not initialized")
+	}
+	if err := r.cfg.ensurePaymentStore().Delete(ctx, id); err != nil {
+		return err
+	}
+	payments := r.cfg.Payments[:0]
+	for _, existing := range r.cfg.Payments {
+		if existing.ID == id {
+			continue
+		}
+		payments = append(payments, existing)
+	}
+	r.cfg.Payments = payments
+	return nil
+}
+
+func (c *Config) BeginAccountTransaction() (AccountTransaction, error) {
+	return &AccountTransactionImpl{
+		cfg:                  c,
+		userStore:            c.ensureUserStore(),
+		subscriptionStore:    c.ensureSubscriptionStore(),
+		paymentStore:         c.ensurePaymentStore(),
+		pendingSubscriptions: make([]SubscriptionRecord, 0),
+		pendingPayments:      make([]PaymentRecord, 0),
+	}, nil
+}
+
+func (tx *AccountTransactionImpl) SaveUser(user *UserRecord) error {
+	if user == nil {
+		return fmt.Errorf("user is nil")
+	}
+	if err := tx.userStore.Save(context.Background(), user); err != nil {
+		return err
+	}
+	tx.pendingUser = user
+	return nil
+}
+
+func (tx *AccountTransactionImpl) SaveSubscription(subscription *SubscriptionRecord) error {
+	if subscription == nil {
+		return fmt.Errorf("subscription is nil")
+	}
+	if err := tx.subscriptionStore.Save(context.Background(), subscription); err != nil {
+		return err
+	}
+	tx.pendingSubscriptions = append(tx.pendingSubscriptions, *subscription)
+	return nil
+}
+
+func (tx *AccountTransactionImpl) SavePayment(payment *PaymentRecord) error {
+	if payment == nil {
+		return fmt.Errorf("payment is nil")
+	}
+	if err := tx.paymentStore.Save(context.Background(), payment); err != nil {
+		return err
+	}
+	tx.pendingPayments = append(tx.pendingPayments, *payment)
+	return nil
+}
+
+func (tx *AccountTransactionImpl) Commit() error {
+	if tx.committed {
+		return nil
+	}
+	if tx.cfg != nil {
+		if tx.pendingUser != nil {
+			tx.cfg.Users = append(tx.cfg.Users, *tx.pendingUser)
+		}
+		for _, subscription := range tx.pendingSubscriptions {
+			tx.cfg.Subscriptions = append(tx.cfg.Subscriptions, subscription)
+		}
+		for _, payment := range tx.pendingPayments {
+			tx.cfg.Payments = append(tx.cfg.Payments, payment)
+		}
+	}
+	tx.committed = true
+	return nil
+}
+
+func (tx *AccountTransactionImpl) Rollback() error {
+	if tx.committed {
+		return nil
+	}
+	if tx.cfg != nil {
+		if tx.pendingUser != nil {
+			if store := tx.userStore; store != nil {
+				_ = store.Delete(context.Background(), tx.pendingUser.Username)
+			}
+		}
+		for _, subscription := range tx.pendingSubscriptions {
+			if store := tx.subscriptionStore; store != nil {
+				_ = store.Delete(context.Background(), subscription.ID)
+			}
+		}
+		for _, payment := range tx.pendingPayments {
+			if store := tx.paymentStore; store != nil {
+				_ = store.Delete(context.Background(), payment.ID)
+			}
+		}
+	}
+	tx.committed = true
+	return nil
 }
 
 type BillingWebhookEvent struct {
@@ -124,16 +568,16 @@ type UserStore interface {
 	List(ctx context.Context) ([]UserRecord, error)
 }
 
-type InMemoryUserStore struct {
+type UserStoreImpl struct {
 	mu    sync.RWMutex
 	users map[string]UserRecord
 }
 
-func NewUserStore() *InMemoryUserStore {
-	return &InMemoryUserStore{users: make(map[string]UserRecord)}
+func NewUserStore() *UserStoreImpl {
+	return &UserStoreImpl{users: make(map[string]UserRecord)}
 }
 
-func (s *InMemoryUserStore) Save(ctx context.Context, user *UserRecord) error {
+func (s *UserStoreImpl) Save(ctx context.Context, user *UserRecord) error {
 	if user == nil {
 		return fmt.Errorf("user is nil")
 	}
@@ -153,7 +597,7 @@ func (s *InMemoryUserStore) Save(ctx context.Context, user *UserRecord) error {
 	return nil
 }
 
-func (s *InMemoryUserStore) Get(ctx context.Context, username string) (*UserRecord, bool, error) {
+func (s *UserStoreImpl) Get(ctx context.Context, username string) (*UserRecord, bool, error) {
 	username = normalizeUsername(username)
 	if username == "" {
 		return nil, false, nil
@@ -168,7 +612,7 @@ func (s *InMemoryUserStore) Get(ctx context.Context, username string) (*UserReco
 	return &copyUser, true, nil
 }
 
-func (s *InMemoryUserStore) Delete(ctx context.Context, username string) error {
+func (s *UserStoreImpl) Delete(ctx context.Context, username string) error {
 	username = normalizeUsername(username)
 	if username == "" {
 		return nil
@@ -179,7 +623,7 @@ func (s *InMemoryUserStore) Delete(ctx context.Context, username string) error {
 	return nil
 }
 
-func (s *InMemoryUserStore) List(ctx context.Context) ([]UserRecord, error) {
+func (s *UserStoreImpl) List(ctx context.Context) ([]UserRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	users := make([]UserRecord, 0, len(s.users))
@@ -219,13 +663,14 @@ type SessionStore struct {
 	mu         sync.RWMutex
 	ttl        time.Duration
 	refreshTTL time.Duration
+	storeName  string
 }
 
 func NewSessionStore(ttl time.Duration) *SessionStore {
 	if ttl <= 0 {
 		ttl = defaultSessionTTL
 	}
-	return &SessionStore{ttl: ttl, refreshTTL: defaultRefreshTTL}
+	return &SessionStore{ttl: ttl, refreshTTL: defaultRefreshTTL, storeName: fmt.Sprintf("sessions-%d", time.Now().UTC().UnixNano())}
 }
 
 func newToken() (string, error) {
@@ -821,6 +1266,22 @@ func (c *Config) ensureUserStore() UserStore {
 	return c.UsersStore
 }
 
+func (c *Config) ensureSubscriptionStore() SubscriptionStore {
+	if c.SubscriptionsStore != nil {
+		return c.SubscriptionsStore
+	}
+	c.SubscriptionsStore = NewSubscriptionStore()
+	return c.SubscriptionsStore
+}
+
+func (c *Config) ensurePaymentStore() PaymentStore {
+	if c.PaymentsStore != nil {
+		return c.PaymentsStore
+	}
+	c.PaymentsStore = NewPaymentStore()
+	return c.PaymentsStore
+}
+
 func (c *Config) findUserRecord(ctx context.Context, username string) (*UserRecord, bool, error) {
 	username = normalizeUsername(username)
 	if username == "" {
@@ -923,6 +1384,28 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 	if store := c.UsersStore; store != nil {
 		if err := store.Delete(ctx, username); err != nil {
 			return err
+		}
+	}
+	if store := c.ensureSubscriptionStore(); store != nil {
+		subscriptions, err := store.ListByUser(ctx, username)
+		if err != nil {
+			return err
+		}
+		for _, subscription := range subscriptions {
+			if err := store.Delete(ctx, subscription.ID); err != nil {
+				return err
+			}
+		}
+	}
+	if store := c.ensurePaymentStore(); store != nil {
+		payments, err := store.ListByUser(ctx, username)
+		if err != nil {
+			return err
+		}
+		for _, payment := range payments {
+			if err := store.Delete(ctx, payment.ID); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1034,8 +1517,9 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 		}
 	}
 
-	c.Subscriptions = append(c.Subscriptions, SubscriptionRecord{
-		ID:                 fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan))),
+	subscriptionID := fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan)))
+	subscription := SubscriptionRecord{
+		ID:                 subscriptionID,
 		UserID:             user.Username,
 		PlanCode:           strings.TrimSpace(plan),
 		Status:             "pending",
@@ -1044,17 +1528,25 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 		CancelAtPeriodEnd:  false,
 		CreatedAt:          time.Now().UTC(),
 		UpdatedAt:          time.Now().UTC(),
-	})
-	c.Payments = append(c.Payments, PaymentRecord{
+	}
+	if err := c.ensureSubscriptionStore().Save(ctx, &subscription); err != nil {
+		return nil, err
+	}
+	c.Subscriptions = append(c.Subscriptions, subscription)
+	payment := PaymentRecord{
 		ID:             fmt.Sprintf("pay_%s", username),
 		UserID:         user.Username,
-		SubscriptionID: fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan))),
+		SubscriptionID: subscriptionID,
 		Amount:         5,
 		Currency:       "USD",
 		Status:         "pending",
 		CreatedAt:      time.Now().UTC(),
 		UpdatedAt:      time.Now().UTC(),
-	})
+	}
+	if err := c.ensurePaymentStore().Save(ctx, &payment); err != nil {
+		return nil, err
+	}
+	c.Payments = append(c.Payments, payment)
 
 	user.CheckoutURL = fmt.Sprintf("https://example.test/checkout/%s", username)
 	user.UpdatedAt = time.Now().UTC()
@@ -1114,6 +1606,13 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 			if c.Subscriptions[i].UserID == normalizeUsername(event.UserID) && c.Subscriptions[i].PlanCode == plan {
 				c.Subscriptions[i].Status = "active"
 				c.Subscriptions[i].UpdatedAt = time.Now().UTC()
+				if store := c.ensureSubscriptionStore(); store != nil {
+					if existing, ok, err := store.Get(ctx, c.Subscriptions[i].ID); err == nil && ok && existing != nil {
+						existing.Status = "active"
+						existing.UpdatedAt = c.Subscriptions[i].UpdatedAt
+						_ = store.Save(ctx, existing)
+					}
+				}
 				break
 			}
 		}
@@ -1122,6 +1621,14 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 				c.Payments[i].Status = "succeeded"
 				c.Payments[i].ProviderEventID = event.EventID
 				c.Payments[i].UpdatedAt = time.Now().UTC()
+				if store := c.ensurePaymentStore(); store != nil {
+					if existing, ok, err := store.Get(ctx, c.Payments[i].ID); err == nil && ok && existing != nil {
+						existing.Status = "succeeded"
+						existing.ProviderEventID = event.EventID
+						existing.UpdatedAt = c.Payments[i].UpdatedAt
+						_ = store.Save(ctx, existing)
+					}
+				}
 				break
 			}
 		}
@@ -1150,6 +1657,13 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 			if c.Subscriptions[i].UserID == normalizeUsername(event.UserID) {
 				c.Subscriptions[i].Status = "canceled"
 				c.Subscriptions[i].UpdatedAt = time.Now().UTC()
+				if store := c.ensureSubscriptionStore(); store != nil {
+					if existing, ok, err := store.Get(ctx, c.Subscriptions[i].ID); err == nil && ok && existing != nil {
+						existing.Status = "canceled"
+						existing.UpdatedAt = c.Subscriptions[i].UpdatedAt
+						_ = store.Save(ctx, existing)
+					}
+				}
 				break
 			}
 		}
@@ -1158,6 +1672,14 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 				c.Payments[i].Status = "expired"
 				c.Payments[i].ProviderEventID = event.EventID
 				c.Payments[i].UpdatedAt = time.Now().UTC()
+				if store := c.ensurePaymentStore(); store != nil {
+					if existing, ok, err := store.Get(ctx, c.Payments[i].ID); err == nil && ok && existing != nil {
+						existing.Status = "expired"
+						existing.ProviderEventID = event.EventID
+						existing.UpdatedAt = c.Payments[i].UpdatedAt
+						_ = store.Save(ctx, existing)
+					}
+				}
 				break
 			}
 		}
@@ -1339,7 +1861,7 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Debug("requireAuth: handler invocation", "handler", handlerName(next), "method", r.Method, "path", r.URL.Path)
-		if strings.TrimSpace(config.ConfigFile) == "" && FindExistingConfigFile() == "" {
+		if !HasConfigFileOnDisk() {
 			log.Debug("requireAuth: skipping session validation", "path", r.URL.Path, "method", r.Method, "reason", "config file not present on disk")
 			next(w, r)
 			return
@@ -1827,9 +2349,9 @@ func (s *SessionStore) getStore(ctx context.Context) (btree.BtreeInterface[strin
 		return nil, nil, fmt.Errorf("session store failed to begin transaction: %v", err)
 	}
 
-	options := sop.ConfigureStore(sessionStoreName, true, 1000, "System sessions", sop.SmallData, "")
+	options := sop.ConfigureStore(s.storeName, true, 1000, "System sessions", sop.SmallData, "")
 	options.IsPrimitiveKey = true
-	store, err := database.NewBtree[string, SessionRecord](ctx, db.Options(), sessionStoreName, tx, nil, options)
+	store, err := database.NewBtree[string, SessionRecord](ctx, db.Options(), s.storeName, tx, nil, options)
 	if err != nil {
 		tx.Rollback(ctx)
 		return nil, nil, fmt.Errorf("session store failed to open/create store: %v", err)

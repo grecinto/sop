@@ -139,7 +139,7 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if strings.TrimSpace(config.ConfigFile) == "" && FindExistingConfigFile() == "" {
+		if !HasConfigFileOnDisk() {
 			log.Debug("withAuth: skipping bearer-token validation", "path", r.URL.Path, "method", r.Method, "reason", "config file not present on disk")
 			next(w, r)
 			return
