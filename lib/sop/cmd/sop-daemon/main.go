@@ -179,7 +179,6 @@ func main() {
 	// Register all sopbackend handlers (provides full backend API)
 	mux := http.NewServeMux()
 	sopbackend.RegisterAllHandlers(mux)
-	sopbackend.RegisterSwaggerHandlers(mux, "")
 	sopbackend.RegisterMonitorabilityHandlers(mux)
 
 	// Register daemon authentication endpoints (NO auth required)

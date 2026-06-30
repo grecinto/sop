@@ -465,10 +465,30 @@ func TestFindExistingConfigFile_IgnoresPackageLocalConfigWhenCwdHasNone(t *testi
 	}
 }
 
-func TestHandleRoot_ShowsLoginPageWhenConfigExists(t *testing.T) {
+func TestHandleRoot_RedirectsToSetupWizardWhenConfigIsEmpty(t *testing.T) {
 	config = Config{}
 	config.ConfigFile = filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(config.ConfigFile, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+
+	handleRoot(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Location"); got != "/app" {
+		t.Fatalf("expected redirect to /app, got %q", got)
+	}
+}
+
+func TestHandleRoot_ShowsLoginPageWhenConfigExists(t *testing.T) {
+	config = Config{}
+	config.ConfigFile = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(config.ConfigFile, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 

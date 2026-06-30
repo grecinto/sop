@@ -747,6 +747,9 @@
     const sidebar = document.getElementById('sidebar');
     const resizer = document.getElementById('resizer');
 
+    const initialSidebarWidth = parseInt(getComputedStyle(sidebar).width, 10) + 50;
+    sidebar.style.width = initialSidebarWidth + 'px';
+
     // Mouse Events
     resizer.addEventListener('mousedown', (e) => {
         e.preventDefault();

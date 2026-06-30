@@ -9,7 +9,7 @@ import (
 )
 
 func TestInitializeRuntimeRequiresEncryptionKeyForConfigPersistence(t *testing.T) {
-	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "")
+	t.Setenv("SOP_ENCRYPTION_KEY", "")
 
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")
@@ -21,13 +21,13 @@ func TestInitializeRuntimeRequiresEncryptionKeyForConfigPersistence(t *testing.T
 	if err == nil {
 		t.Fatal("InitializeRuntime() error = nil, want missing encryption key error")
 	}
-	if !strings.Contains(err.Error(), "SOP_CONFIG_ENCRYPTION_KEY") {
-		t.Fatalf("InitializeRuntime() error = %v, want message containing SOP_CONFIG_ENCRYPTION_KEY", err)
+	if !strings.Contains(err.Error(), "SOP_ENCRYPTION_KEY") {
+		t.Fatalf("InitializeRuntime() error = %v, want message containing SOP_ENCRYPTION_KEY", err)
 	}
 }
 
 func TestInitializeRuntimeRequiresSessionSecretInProductionMode(t *testing.T) {
-	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("SOP_SESSION_SECRET", "")
 
 	tmpDir := t.TempDir()
@@ -50,7 +50,7 @@ func ptrBool(v bool) *bool {
 }
 
 func TestInitializeRuntimeBootstrapsConfigAndReturnsResolvedPath(t *testing.T) {
-	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("SOP_SESSION_SECRET", "session-secret")
 
 	tmpDir := t.TempDir()

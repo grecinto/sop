@@ -153,7 +153,7 @@ SOP supports both local built-in auth and external identity-provider integration
 - **Subscription-aware workflows**: Starter plans target the local-agent workflow, while a richer plan enables both HQ and local-agent workflows.
 - **Offline continuity**: the UI can connect directly to a local agent so users can continue their work even if the HQ site or hosting server becomes unavailable, or if a browser session is interrupted.
 - **Enterprise directory support**: the auth layer is designed to accept provider adapters for AD, Entra ID, LDAP, SAML, or OIDC without changing the core application logic.
-- **Secret handling**: keep `SOP_SESSION_SECRET` (or `session_secret`) in a secret manager or environment variable; do not bake signing keys into source control. For the full deployment checklist of runtime secrets, see [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md).
+- **Secret handling**: keep `SOP_SESSION_SECRET` (or `session_secret`) and `SOP_ENCRYPTION_KEY` in a secret manager or environment variable; do not bake signing keys into source control. For the full deployment checklist of runtime secrets, see [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md).
 - **Remote clients**: bearer tokens are suitable for CLI tools, scripts, and microservices that call the HTTP API directly over HTTPS.
 - **Deployment guidance**: use HTTPS in front of the HTTP server, restrict token scopes/roles, and map external identities to internal roles before granting access.
 

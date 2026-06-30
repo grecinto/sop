@@ -818,7 +818,7 @@
     let availableDatabases = [];
     let runtimeRefreshPayload = null;
     let lastRuntimeMode = null;
-    const CHIP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M5 0a.5.5 0 0 1 .5.5V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2A2.5 2.5 0 0 1 14 4.5h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14a2.5 2.5 0 0 1-2.5 2.5v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14A2.5 2.5 0 0 1 2 11.5H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2A2.5 2.5 0 0 1 4.5 2V.5A.5.5 0 0 1 5 0zm-.5 3A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 11.5 3h-7zM5 6.5A1.5 1.5 0 0 1 6.5 5h3A1.5 1.5 0 0 1 11 6.5v3A1.5 1.5 0 0 1 9.5 11h-3A1.5 1.5 0 0 1 5 9.5v-3z"/></svg>`;
+    const CHIP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M6.5 0a.5.5 0 0 1 .5.5V3h3V.5a.5.5 0 0 1 1 0V3h1a2 2 0 0 1 2 2v1h1.5a.5.5 0 0 1 0 1H14v3h1.5a.5.5 0 0 1 0 1H14v1a2 2 0 0 1-2 2h-1v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14H5a2 2 0 0 1-2-2v-1H1.5a.5.5 0 0 1 0-1H3V8H1.5a.5.5 0 0 1 0-1H3V5a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM5 4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1H5z"/></svg>`;
 
     function getCurrentRuntimeMode() {
         // Read directly from localStorage to avoid dependency on getChatRuntimeMode from scripts_part05
@@ -1099,9 +1099,7 @@
                                 opt.disabled = true;
                                 opt.style.color = "red";
                             } else {
-                                // Standard System Red
-                                opt.style.color = "var(--danger-bg)"; 
-                                opt.textContent = "⚠️ " + db.name;
+                                opt.textContent = db.name;
                             }
                             opt.className = "option-system";
                             opt.style.fontWeight = "bold";

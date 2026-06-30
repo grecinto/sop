@@ -20,9 +20,9 @@
 
 ## Phase 4: Architecture and packaging
 - [ ] Create a dedicated React frontend package for the new site/app.
-- [ ] Serve the React site/app from httpserver on its own routes without wiring it into the daemon.
-- [ ] Keep sopbackend as the shared runtime/business-logic layer used by both httpserver and the daemon.
-- [ ] Preserve the existing Data Manager experience as a separate UI surface served by httpserver.
+- [ ] Serve the React site/app from the standalone site backend on its own routes without wiring it into the daemon or httpserver.
+- [ ] Keep sopbackend as the shared runtime/business-logic layer used by the SOP Data Manager apps and the standalone site backend.
+- [ ] Preserve the existing Data Manager experience as a separate UI surface served by the SOP Data Manager apps (daemon/httpserver).
 
 ## Phase 5: Polish and validation
 - [ ] Add UI tests for the new download/install step and account actions.

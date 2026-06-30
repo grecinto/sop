@@ -11,6 +11,35 @@ import (
 
 // Config utilities from confighub - integrated into sopbackend for self-containment
 
+func isDaemonConfigStoreDir(path string) bool {
+	cleaned := filepath.Clean(path)
+	if cleaned == "." {
+		return false
+	}
+	if absPath, err := filepath.Abs(cleaned); err == nil {
+		cleaned = absPath
+	}
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		cleaned = resolved
+	}
+
+	if v := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(v) != "" {
+		if resolved, err := filepath.EvalSymlinks(filepath.Clean(filepath.Join(v, "sop"))); err == nil {
+			return cleaned == resolved
+		}
+		return cleaned == filepath.Clean(filepath.Join(v, "sop"))
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		if resolvedHome, err := filepath.EvalSymlinks(home); err == nil {
+			home = resolvedHome
+		}
+		return cleaned == filepath.Join(home, ".config", "sop") || cleaned == filepath.Join(home, "sop")
+	}
+
+	return false
+}
+
 func ResolveConfigPath(explicit string) string {
 	if strings.TrimSpace(explicit) != "" {
 		return explicit
@@ -43,6 +72,9 @@ func CandidateConfigPaths(explicit string) []string {
 		return []string{p}
 	}
 	if cwd, err := os.Getwd(); err == nil {
+		if isDaemonConfigStoreDir(cwd) {
+			return nil
+		}
 		return []string{filepath.Join(cwd, "config.json")}
 	}
 	return []string{"config.json"}

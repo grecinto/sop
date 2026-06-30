@@ -21,6 +21,103 @@ func TestDefaultRuntimeAutomationPolicyDisablesShellCommands(t *testing.T) {
 	}
 }
 
+func TestApplyRedisOverridePropagatesToConfig(t *testing.T) {
+	cfg := sopbackend.Config{
+		RedisURL:  "old-host:6379",
+		SystemDB:  &sopbackend.DatabaseConfig{RedisURL: "old-host:6379"},
+		Databases: []sopbackend.DatabaseConfig{{RedisURL: "old-host:6379"}},
+	}
+
+	applyRedisOverride(&cfg, "localhost:6379", true)
+
+	if cfg.RedisURL != "localhost:6379" {
+		t.Fatalf("expected global Redis URL override to be applied, got %q", cfg.RedisURL)
+	}
+	if cfg.SystemDB == nil || cfg.SystemDB.RedisURL != "localhost:6379" {
+		t.Fatalf("expected system DB Redis URL override to be applied")
+	}
+	if len(cfg.Databases) != 1 || cfg.Databases[0].RedisURL != "localhost:6379" {
+		t.Fatalf("expected database Redis URL override to be applied")
+	}
+}
+
+func TestRuntimeSwitchIsDisabledForStarterPlan(t *testing.T) {
+	originalCfg := sopbackend.GetConfig()
+	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
+	sopbackend.SetConfig(sopbackend.Config{Users: []sopbackend.UserRecord{{Username: "alice", SubscriptionPlan: "starter"}}})
+
+	req := httptest.NewRequest("GET", "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+
+	if runtimeSwitchEnabled(req) {
+		t.Fatal("expected starter plan to disable runtime switching")
+	}
+	if got := defaultRuntimeModeForRequest(req); got != "local" {
+		t.Fatalf("expected starter plan to default to local runtime, got %q", got)
+	}
+}
+
+func TestUnauthenticatedRequestsDefaultToHQRuntime(t *testing.T) {
+	req := httptest.NewRequest("GET", "/app", nil)
+
+	if !runtimeSwitchEnabled(req) {
+		t.Fatal("expected unauthenticated requests to enable HQ runtime by default")
+	}
+	if got := defaultRuntimeModeForRequest(req); got != "hq" {
+		t.Fatalf("expected unauthenticated requests to default to HQ runtime, got %q", got)
+	}
+}
+
+func TestRuntimeSwitchRequiresSubscribedHQFeature(t *testing.T) {
+	originalCfg := sopbackend.GetConfig()
+	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
+	sopbackend.SetConfig(sopbackend.Config{Users: []sopbackend.UserRecord{{Username: "alice", SubscriptionPlan: "hq-local-agent"}}})
+
+	req := httptest.NewRequest("GET", "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+
+	if runtimeSwitchEnabled(req) {
+		t.Fatal("expected runtime switching to require the subscribed HQ feature")
+	}
+	if got := defaultRuntimeModeForRequest(req); got != "local" {
+		t.Fatalf("expected runtime without the HQ feature to default to local runtime, got %q", got)
+	}
+}
+
+func TestRuntimeSwitchUsesSubscribedFeatureList(t *testing.T) {
+	originalCfg := sopbackend.GetConfig()
+	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
+	sopbackend.SetConfig(sopbackend.Config{Users: []sopbackend.UserRecord{{Username: "alice", SubscriptionPlan: "starter", SubscriptionFeatures: []string{"hq_runtime"}}}})
+
+	req := httptest.NewRequest("GET", "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+
+	if !runtimeSwitchEnabled(req) {
+		t.Fatal("expected subscribed runtime feature to enable runtime switching")
+	}
+	if got := defaultRuntimeModeForRequest(req); got != "hq" {
+		t.Fatalf("expected subscribed runtime feature to default to HQ runtime, got %q", got)
+	}
+}
+
+func TestHandleIndexRendersRuntimeSwitchForSubscribedHQFeature(t *testing.T) {
+	originalCfg := sopbackend.GetConfig()
+	t.Cleanup(func() { sopbackend.SetConfig(originalCfg) })
+	sopbackend.SetConfig(sopbackend.Config{Users: []sopbackend.UserRecord{{Username: "alice", SubscriptionFeatures: []string{"hq_runtime"}}}})
+
+	req := httptest.NewRequest("GET", "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
+	rec := httptest.NewRecorder()
+
+	handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handleIndex() status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `id="chat-runtime-hq"`) {
+		t.Fatalf("expected HQ runtime checkbox to be rendered for subscribed feature, got body=%s", rec.Body.String())
+	}
+}
+
 func TestShouldShowEnvironmentManagerVisibilityRules(t *testing.T) {
 	defer sopbackend.SetDisableAuth(false)
 
@@ -198,34 +295,39 @@ func TestFloaterIsLocalRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestSiteFrontendServesReactAppShell(t *testing.T) {
+func TestHTTPServerDoesNotServeSiteFrontendRoutes(t *testing.T) {
 	mux := http.NewServeMux()
-	registerSiteFrontendRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/site/", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected site frontend shell to render with status 200, got %d", rec.Code)
-	}
-	if body := rec.Body.String(); !strings.Contains(body, "SOP Cloud") {
-		t.Fatalf("expected site frontend shell to contain product title, got %q", body)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected httpserver to leave /site/ unhandled, got %d", rec.Code)
 	}
 }
 
-func TestSiteFrontendServesSubscriptionRouteShell(t *testing.T) {
+func TestRegisterLegacyDataManagerRoutesUsesLegacyUIHandlers(t *testing.T) {
 	mux := http.NewServeMux()
-	registerSiteFrontendRoutes(mux)
+	registerLegacyDataManagerRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/site/subscribe", nil)
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected site subscription route shell to render with status 200, got %d", rec.Code)
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected legacy Data Manager route /app to be registered")
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "Secure checkout") {
-		t.Fatalf("expected site subscription shell to mention secure checkout, got %q", body)
+}
+
+func TestLegacyHTTPServerDoesNotRegisterSiteBackendRoutes(t *testing.T) {
+	mux := http.NewServeMux()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/site/auth/login", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected legacy httpserver mux to leave site API routes unhandled, got %d", rec.Code)
 	}
 }

@@ -473,6 +473,16 @@ func handleInitDatabase(w http.ResponseWriter, r *http.Request) {
 			shouldSetup = false
 			log.Info(fmt.Sprintf("Shared User DB detected at '%s'. Reusing...", req.Path))
 
+			existingOpts, err := database.GetOptions(r.Context(), req.Path)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Shared User DB selected but failed to read existing options in '%s': %v", req.Path, err), http.StatusBadRequest)
+				return
+			}
+			if err := validateSharedDatabaseReuse(existingOpts, options); err != nil {
+				http.Error(w, fmt.Sprintf("Shared User DB compatibility check failed: %v", err), http.StatusBadRequest)
+				return
+			}
+
 			// Check Write Permissions
 			testFile := filepath.Join(req.Path, ".sop_write_test")
 			if f, err := os.Create(testFile); err != nil {

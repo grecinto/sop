@@ -3,11 +3,11 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
-
-	siteapi "github.com/grecinto/sop-cloud/src/backend/siteapi"
-	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
 func TestResolveFrontendAssetPath(t *testing.T) {
@@ -34,10 +34,61 @@ func TestResolveFrontendAssetPath(t *testing.T) {
 	}
 }
 
+func TestDefaultFrontendDirUsesSourceTreePath(t *testing.T) {
+	t.Setenv("FRONTEND_DIR", "")
+
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+
+	want := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "frontend", "dist"))
+	if got := defaultFrontendDir(); got != want {
+		t.Fatalf("defaultFrontendDir() = %q, want %q", got, want)
+	}
+}
+
+func TestSiteBackendServesSiteFrontendRoutes(t *testing.T) {
+	frontendDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
+		t.Fatalf("failed to write test frontend asset: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, frontendDir)
+
+	for _, path := range []string{"/site/", "/site/subscribe"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected %s to serve the site frontend, got %d", path, rec.Code)
+		}
+		if body := rec.Body.String(); !strings.Contains(body, "site") {
+			t.Fatalf("expected %s response body to contain the site markup, got %q", path, body)
+		}
+	}
+}
+
+func TestSiteBackendDoesNotRegisterLegacyUIRoutes(t *testing.T) {
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, t.TempDir())
+
+	for _, path := range []string{"/login", "/app", "/app/subscribe"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected %s to be unhandled, got %d", path, rec.Code)
+		}
+	}
+}
+
 func TestSiteBackendExposesSwaggerEndpoints(t *testing.T) {
 	mux := http.NewServeMux()
-	sopbackend.RegisterAllHandlers(mux)
-	siteapi.RegisterHandlers(mux)
+	registerSiteHandlers(mux, t.TempDir())
 
 	t.Run("swagger json", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/swagger.json", nil)

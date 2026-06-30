@@ -9,7 +9,7 @@ import (
 )
 
 func TestSaveConfig_OmitsSensitiveAISelectionFields(t *testing.T) {
-	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	defer func() {
 		config = Config{}
 	}()
@@ -51,7 +51,7 @@ func TestSaveConfig_OmitsSensitiveAISelectionFields(t *testing.T) {
 }
 
 func TestSaveConfig_EncryptsSensitiveFieldsAndRestoresThemOnLoad(t *testing.T) {
-	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	defer func() {
 		config = Config{}

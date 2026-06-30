@@ -75,6 +75,22 @@ func (r *UIRouter) handleRoot(w http.ResponseWriter, req *http.Request) {
 	http.Redirect(w, req, "/app", http.StatusFound)
 }
 
+func (r *UIRouter) executeTemplateWithFallback(w http.ResponseWriter, data map[string]any, names ...string) error {
+	if r == nil || r.Templates == nil {
+		return os.ErrNotExist
+	}
+	for _, name := range names {
+		if name == "" || r.Templates.Lookup(name) == nil {
+			continue
+		}
+		if err := r.Templates.ExecuteTemplate(w, name, data); err != nil {
+			return err
+		}
+		return nil
+	}
+	return os.ErrNotExist
+}
+
 func (r *UIRouter) handleLoginPage(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Templates == nil {
@@ -90,7 +106,7 @@ func (r *UIRouter) handleLoginPage(w http.ResponseWriter, req *http.Request) {
 		"ReturnTo":  returnTo,
 		"HQBaseURL": strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")),
 	}
-	if err := r.Templates.ExecuteTemplate(w, "login.html", data); err != nil {
+	if err := r.executeTemplateWithFallback(w, data, "login.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -112,7 +128,7 @@ func (r *UIRouter) handleHQLoginPage(w http.ResponseWriter, req *http.Request) {
 		"ReturnTo":  returnTo,
 		"HQBaseURL": strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")),
 	}
-	if err := r.Templates.ExecuteTemplate(w, "hq_login.html", data); err != nil {
+	if err := r.executeTemplateWithFallback(w, data, "hq_login.html", "login.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -125,7 +141,7 @@ func (r *UIRouter) handleIndex(w http.ResponseWriter, req *http.Request) {
 	}
 
 	data := r.landingPageData(req)
-	if err := r.Templates.ExecuteTemplate(w, "landing.html", data); err != nil {
+	if err := r.executeTemplateWithFallback(w, data, "landing.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -160,7 +176,7 @@ func (r *UIRouter) handleSubscribe(w http.ResponseWriter, req *http.Request) {
 		data["SubscriptionSuccess"] = true
 		data["ShowDownloadStep"] = true
 		data["SubscriptionMessage"] = "Your Starter Kit trial is active. We will only charge your card after the first month ends, then $5/month thereafter."
-		if err := r.Templates.ExecuteTemplate(w, "landing.html", data); err != nil {
+		if err := r.executeTemplateWithFallback(w, data, "landing.html", "index.html"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
@@ -168,7 +184,7 @@ func (r *UIRouter) handleSubscribe(w http.ResponseWriter, req *http.Request) {
 
 	data := r.landingPageData(req)
 	data["ShowSubscribeForm"] = true
-	if err := r.Templates.ExecuteTemplate(w, "landing.html", data); err != nil {
+	if err := r.executeTemplateWithFallback(w, data, "landing.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -188,7 +204,7 @@ func (r *UIRouter) handleUnsubscribe(w http.ResponseWriter, req *http.Request) {
 	data := r.landingPageData(req)
 	data["SubscriptionMessage"] = "You have been unsubscribed. You can reactivate the Starter Kit at any time."
 	data["IsUnsubscribed"] = true
-	if err := r.Templates.ExecuteTemplate(w, "landing.html", data); err != nil {
+	if err := r.executeTemplateWithFallback(w, data, "landing.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -224,7 +240,7 @@ func (r *UIRouter) handleHQPreview(w http.ResponseWriter, req *http.Request) {
 		"CurrentPlan":      "hq-local-agent",
 		"CurrentPlanLabel": "HQ + Local Agent",
 	}
-	if err := r.Templates.ExecuteTemplate(w, "hq_preview.html", data); err != nil {
+	if err := r.executeTemplateWithFallback(w, data, "hq_preview.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

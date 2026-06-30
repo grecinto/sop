@@ -36,10 +36,10 @@ Keep shared platform behavior in [lib/sop](../lib/sop). Avoid adding new site-sp
 
 ## How to think about the two experiences
 
-- Mature tool stack: run the existing SOP Data Manager and daemon from [lib/sop](../lib/sop)
-  - httpserver for the original Data Manager experience
+- Mature tool stack: run the existing SOP Data Manager apps from [lib/sop](../lib/sop)
+  - httpserver for the Data Manager UI and management experience
   - sop-daemon for HQ/local RAG setup and runtime services
-- New site/app: use the standalone backend entrypoint in [src/backend/site](backend/site)
+- New site/app: use the standalone backend entrypoint in [src/backend/site](backend/site) for the React website experience; do not treat [lib/sop/tools/httpserver](../lib/sop/tools/httpserver) as the launcher for the product site UI.
 - Architecture rule for the new site: do not use context.Context as a general-purpose state container for request data or workflow state. Pass explicit parameters or request structs across handlers, services, and API boundaries.
 - This is the place for self-registration, landing page, subscriptions, starter-kit flows, account unregister, and other product-specific features.
 - Treat register, unregister, and subscription updates as site/product-facing flows rather than core Data Manager or daemon endpoints.

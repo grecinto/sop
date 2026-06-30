@@ -116,13 +116,13 @@ func decryptSecuredString(value string) (string, error) {
 func newEncryptionBlock() (cipher.Block, error) {
 	key := configEncryptionKey()
 	if len(key) == 0 {
-		return nil, fmt.Errorf("SOP_CONFIG_ENCRYPTION_KEY is required for encrypted config persistence")
+		return nil, fmt.Errorf("SOP_ENCRYPTION_KEY is required for encrypted config persistence")
 	}
 	return aes.NewCipher(key)
 }
 
 func configEncryptionKey() []byte {
-	if key := strings.TrimSpace(os.Getenv("SOP_CONFIG_ENCRYPTION_KEY")); key != "" {
+	if key := strings.TrimSpace(os.Getenv("SOP_ENCRYPTION_KEY")); key != "" {
 		sum := sha256.Sum256([]byte(key))
 		return sum[:]
 	}

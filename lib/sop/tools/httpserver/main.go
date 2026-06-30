@@ -51,6 +51,63 @@ func defaultRuntimeAutomationPolicy() sharedagent.AutomationPolicy {
 	return policy
 }
 
+func applyRedisOverride(cfg *sopbackend.Config, redisURL string, wasFlagPassed bool) {
+	if cfg == nil || !wasFlagPassed {
+		return
+	}
+	adjusted := strings.TrimSpace(redisURL)
+	if adjusted == "" {
+		return
+	}
+	cfg.RedisURL = adjusted
+	if cfg.SystemDB != nil {
+		cfg.SystemDB.RedisURL = adjusted
+	}
+	for i := range cfg.Databases {
+		cfg.Databases[i].RedisURL = adjusted
+	}
+}
+
+func planRuntimeMetadata(req *http.Request) (bool, string) {
+	if req == nil {
+		return true, "hq"
+	}
+
+	auth := sop.GetAuthFromContext(req.Context())
+	username := strings.TrimSpace(auth.UserID)
+	if username == "" {
+		return true, "hq"
+	}
+
+	cfg := sopbackend.GetConfig()
+	user, ok, err := cfg.FindUserRecord(req.Context(), username)
+	if err != nil || !ok || user == nil {
+		return false, "local"
+	}
+
+	features := make(map[string]struct{}, len(user.SubscriptionFeatures))
+	for _, feature := range user.SubscriptionFeatures {
+		if trimmed := strings.TrimSpace(strings.ToLower(feature)); trimmed != "" {
+			features[trimmed] = struct{}{}
+		}
+	}
+	if _, ok := features["hq_runtime"]; ok {
+		return true, "hq"
+	}
+
+	return false, "local"
+}
+
+func runtimeSwitchEnabled(req *http.Request) bool {
+	enabled, _ := planRuntimeMetadata(req)
+	return enabled
+}
+
+func defaultRuntimeModeForRequest(req *http.Request) string {
+	_, mode := planRuntimeMetadata(req)
+	return mode
+}
+
 func main() {
 	var showVersion bool
 	var openBrowserFlag bool
@@ -120,12 +177,18 @@ func main() {
 	targetConfigPath, err := sopbackend.InitializeRuntime(context.Background(), configFile, sopbackend.RuntimeOptions{}, port, &effectiveProductionMode)
 	if err != nil {
 		log.Error(fmt.Sprintf("Failed to initialize shared backend: %v", err))
-	} else {
-		log.Debug(fmt.Sprintf("Loaded configuration from: %s", targetConfigPath))
-		config := sopbackend.GetConfig()
-		if len(config.Databases) == 0 && config.SystemDB == nil {
-			log.Warn(fmt.Sprintf("Loaded configuration file '%s' but found 0 databases defined.", targetConfigPath))
+	} else if _, statErr := os.Stat(targetConfigPath); statErr == nil {
+		if sopbackend.HasConfigFileOnDisk() {
+			log.Debug(fmt.Sprintf("Loaded configuration from: %s", targetConfigPath))
+			config := sopbackend.GetConfig()
+			if len(config.Databases) == 0 && config.SystemDB == nil {
+				log.Warn(fmt.Sprintf("Configuration file '%s' does not define a usable database setup.", targetConfigPath))
+			}
+		} else {
+			log.Info(fmt.Sprintf("Configuration file exists but does not define a usable setup: %s", targetConfigPath))
 		}
+	} else {
+		log.Info(fmt.Sprintf("No configuration file found; using defaults: %s", targetConfigPath))
 	}
 
 	// Path validation and warning checks
@@ -232,6 +295,15 @@ func main() {
 	if err := http.ListenAndServe(addr, sopbackend.NewObservabilityHandler(handler)); err != nil {
 		log.Error(err.Error())
 	}
+}
+
+func registerLegacyDataManagerRoutes(mux *http.ServeMux) {
+	if mux == nil {
+		return
+	}
+	mux.HandleFunc("/app", handleIndex)
+	mux.HandleFunc("/login", handleLoginPage)
+	mux.HandleFunc("/", handleRoot)
 }
 
 func registerSiteFrontendRoutes(mux *http.ServeMux) {
@@ -421,6 +493,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		"MinHashMod":              1,
 		"MaxHashMod":              256,
 		"CanManageEnvironments":   shouldShowEnvironmentManager(r),
+		"RuntimeSwitchEnabled":    runtimeSwitchEnabled(r),
 	}
 	if err := tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
 		log.Error("Failed to execute template", "error", err)

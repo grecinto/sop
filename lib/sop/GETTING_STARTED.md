@@ -73,7 +73,7 @@ On your first visit, you will see the **Setup Wizard**.
 
 ## 3. Environment Variables and Secrets
 
-Before deploying or running SOP in a shared environment, review [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md) for the required and recommended environment variables, including the bootstrap secret, session secret, and config encryption key. A copyable template is available in [.env.example](.env.example).
+Before deploying or running SOP in a shared environment, review [docs/ENVIRONMENT_VARIABLES.md](docs/ENVIRONMENT_VARIABLES.md) for the required and recommended environment variables, including the bootstrap secret, session secret, and encryption key. A copyable template is available in [.env.example](.env.example). For local development, export `SOP_SESSION_SECRET` and `SOP_ENCRYPTION_KEY` before launching the server so startup can complete.
 
 ## 4. Developing with SOP
 

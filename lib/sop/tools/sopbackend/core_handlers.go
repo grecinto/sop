@@ -299,7 +299,15 @@ func GetDBOptions(ctx context.Context, dbName string) (sop.DatabaseOptions, erro
 }
 
 func HasConfigFileOnDisk() bool {
-	return FindExistingConfigFile() != ""
+	path := FindExistingConfigFile()
+	if path == "" {
+		return false
+	}
+	cfg, err := loadConfigFromDisk(path)
+	if err != nil {
+		return false
+	}
+	return len(cfg.Databases) > 0 || cfg.SystemDB != nil
 }
 
 type RuntimeRefreshResponse struct {

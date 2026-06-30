@@ -63,9 +63,9 @@ Acceptance criteria:
 - The new site should remain a thin product layer on top of the existing shared auth and user-management backend.
 - The initial implementation can use the current backend user record and session model rather than introducing a parallel identity stack.
 - Billing integration can be mocked or stubbed at first, but the UI should already reflect the eventual subscription and account-state model.
-- The new React site/app is intentionally separate from the daemon runtime and will be served through httpserver as a distinct product frontend.
-- sopbackend remains the shared runtime/business-logic layer used by httpserver and the daemon when needed.
-- The existing Data Manager experience stays intact as a separate operational UI surface served by httpserver.
+- The new React site/app is a separate website experience for subscriptions and self-service onboarding. It runs from the standalone site backend and is not launched from the SOP Data Manager apps.
+- sopbackend remains the shared runtime/business-logic layer used by the SOP Data Manager apps and the standalone site backend when needed.
+- The existing Data Manager experience stays intact as a separate operational UI surface served by the SOP Data Manager apps (daemon/httpserver).
 
 Acceptance criteria:
 - The landing page includes an unregister action.

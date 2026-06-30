@@ -6,17 +6,17 @@
                 <h2 style="margin: 0;">Database</h2>
             </div>
             <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%;">
-                <div>
-                    <select id="database-select" onchange="selectDatabase(this.value)" style="width: 100%; min-width: max-content; max-width: 100%; padding: 5px; box-sizing: border-box; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                <div style="width: 140px; min-width: 140px; max-width: 140px;">
+                    <select id="database-select" onchange="selectDatabase(this.value)" style="width: 100%; min-width: 140px; max-width: 140px; padding: 5px; box-sizing: border-box; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
                         <option>Loading...</option>
                     </select>
             
             <!-- Enterprise Chip Dropdown (Hidden initially, toggled by JS) -->
-            <div id="enterprise-db-container" style="display: none; position: relative;">
+            <div id="enterprise-db-container" style="display: none; position: relative; width: 100%; max-width: 100%;">
                 <div id="db-chip" class="db-chip" onclick="toggleDbDropdown()">
                     <span id="db-chip-icon" class="db-chip-icon" style="display: none;">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                            <path d="M5 0a.5.5 0 0 1 .5.5V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2A2.5 2.5 0 0 1 14 4.5h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14a2.5 2.5 0 0 1-2.5 2.5v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14A2.5 2.5 0 0 1 2 11.5H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2A2.5 2.5 0 0 1 4.5 2V.5A.5.5 0 0 1 5 0zm-.5 3A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 11.5 3h-7zM5 6.5A1.5 1.5 0 0 1 6.5 5h3A1.5 1.5 0 0 1 11 6.5v3A1.5 1.5 0 0 1 9.5 11h-3A1.5 1.5 0 0 1 5 9.5v-3z"/>
+                            <path d="M6.5 0a.5.5 0 0 1 .5.5V3h3V.5a.5.5 0 0 1 1 0V3h1a2 2 0 0 1 2 2v1h1.5a.5.5 0 0 1 0 1H14v3h1.5a.5.5 0 0 1 0 1H14v1a2 2 0 0 1-2 2h-1v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14H5a2 2 0 0 1-2-2v-1H1.5a.5.5 0 0 1 0-1H3V8H1.5a.5.5 0 0 1 0-1H3V5a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM5 4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1H5z"/>
                         </svg>
                     </span>
                     <span id="db-chip-label" style="margin-right: auto;">Select Database</span>

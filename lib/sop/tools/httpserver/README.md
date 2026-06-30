@@ -70,6 +70,8 @@ No separate frontend build step is required; the UI assets are embedded into the
 
 - `SOP_ALLOW_INVALID_MAP_KEY`: Set to `true` to bypass the validation that requires Map Key types to have an Index Specification or CEL Expression. This is primarily for testing purposes.
 - `SOP_ROOT_PASSWORD`: Optional legacy compatibility value for admin override flows; the Phase 1 login/auth facade now prefers the configured root user from `Config.Users`.
+- `SOP_SESSION_SECRET`: Required in production mode to sign and verify session and bearer tokens.
+- `SOP_ENCRYPTION_KEY`: Required when the runtime persists encrypted config values such as secrets or sensitive user data.
 
 ### Phase 1 Auth Facade (V1)
 

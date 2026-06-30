@@ -65,7 +65,7 @@ func validateSetupWizardSystemAdminSecret(secret string) error {
 	}
 
 	if strings.TrimSpace(secret) == "" {
-		return fmt.Errorf("system admin bootstrap secret is required")
+		return nil
 	}
 	if secret != configuredSecret {
 		return fmt.Errorf("system admin bootstrap secret is invalid")
@@ -74,7 +74,7 @@ func validateSetupWizardSystemAdminSecret(secret string) error {
 	return nil
 }
 
-func ensureRootUserFromPassword(password string, role string) error {
+func ensureRootUserFromPassword(password string, role string, features []string) error {
 	password = strings.TrimSpace(password)
 	if password == "" {
 		return nil
@@ -92,7 +92,41 @@ func ensureRootUserFromPassword(password string, role string) error {
 		role = sop.RoleAdmin
 	}
 
-	return config.SetUser("root", password, role)
+	if len(features) == 0 {
+		features = nil
+	}
+
+	return config.SetUserWithFeatures("root", password, role, features)
+}
+
+func normalizeRedisConnection(cfg *sop.RedisCacheConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	if strings.TrimSpace(cfg.URL) != "" {
+		return strings.ToLower(strings.TrimSpace(cfg.URL))
+	}
+	return fmt.Sprintf("%s|%s|%d", strings.TrimSpace(cfg.Address), strings.TrimSpace(cfg.Password), cfg.DB)
+}
+
+func validateSharedDatabaseReuse(existingOpts, requestedOpts sop.DatabaseOptions) error {
+	if existingOpts.GetDatabaseType() != sop.Clustered || requestedOpts.GetDatabaseType() != sop.Clustered {
+		return fmt.Errorf("shared database reuse is only allowed when both configurations are clustered with Redis coordination")
+	}
+	if existingOpts.RedisConfig == nil || requestedOpts.RedisConfig == nil {
+		return fmt.Errorf("shared database reuse requires both configurations to use the same Redis connection")
+	}
+	if normalizeRedisConnection(existingOpts.RedisConfig) != normalizeRedisConnection(requestedOpts.RedisConfig) {
+		return fmt.Errorf("shared database reuse requires the same Redis connection")
+	}
+	return nil
+}
+
+func loadDatabaseOptionsForReuse(path string) (sop.DatabaseOptions, error) {
+	if path == "" {
+		return sop.DatabaseOptions{}, fmt.Errorf("database path is empty")
+	}
+	return database.GetOptions(context.Background(), path)
 }
 
 // handleSaveConfig writes the provided configuration to the specified file path.
@@ -132,12 +166,14 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RootPassword != "" {
 		rootRole := sop.RoleAdmin
+		rootFeatures := []string(nil)
 		if strings.TrimSpace(req.SystemAdminBootstrapSecret) != "" {
 			if err := validateSetupWizardSystemAdminSecret(req.SystemAdminBootstrapSecret); err == nil {
 				rootRole = sop.RoleSystemAdmin
+				rootFeatures = []string{"hq_runtime", "daemon_runtime"}
 			}
 		}
-		if err := ensureRootUserFromPassword(req.RootPassword, rootRole); err != nil {
+		if err := ensureRootUserFromPassword(req.RootPassword, rootRole, rootFeatures); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to seed root user: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -395,14 +431,14 @@ func setupSystemDB(ctx context.Context, req *SaveConfigRequest) (*DatabaseConfig
 		if hasDBOptions && hasRegHashMod {
 			shouldSetup = false
 			log.Info(fmt.Sprintf("Shared Brain detected at '%s'. Reusing...", req.RegistryPath))
-			// Load options to ensure match
-			dbOptionsPath := filepath.Join(req.RegistryPath, "dboptions.json")
-			if existingOptsBytes, err := os.ReadFile(dbOptionsPath); err == nil {
-				var existingOpts sop.DatabaseOptions
-				if err := json.Unmarshal(existingOptsBytes, &existingOpts); err == nil {
-					sysOpts = existingOpts
-				}
+			existingOpts, err := loadDatabaseOptionsForReuse(req.RegistryPath)
+			if err != nil {
+				return nil, false, fmt.Errorf("shared brain selected but failed to read existing options in '%s': %w", req.RegistryPath, err)
 			}
+			if err := validateSharedDatabaseReuse(existingOpts, sysOpts); err != nil {
+				return nil, false, fmt.Errorf("shared brain compatibility check failed: %w", err)
+			}
+			sysOpts = existingOpts
 		} else {
 			return nil, false, fmt.Errorf("shared brain selected but files missing in '%s'", req.RegistryPath)
 		}
@@ -508,6 +544,16 @@ func setupUserDBs(ctx context.Context, req *SaveConfigRequest) ([]DatabaseConfig
 
 		// Normalize EC Config (default -> "")
 		normalizeDefaultEcConfig(&uOpts)
+
+		if udb.UseSharedDB {
+			existingOpts, err := loadDatabaseOptionsForReuse(udb.Path)
+			if err != nil {
+				return nil, fmt.Errorf("shared user database '%s' selected but failed to read existing options in '%s': %w", udb.Name, udb.Path, err)
+			}
+			if err := validateSharedDatabaseReuse(existingOpts, uOpts); err != nil {
+				return nil, fmt.Errorf("shared user database '%s' compatibility check failed: %w", udb.Name, err)
+			}
+		}
 
 		shouldSetupUser := !udb.UseSharedDB
 		if shouldSetupUser {

@@ -17,9 +17,9 @@ The repository uses a module replacement in [go.mod](go.mod) to point at the sha
 
 - Keep private behavior local and leave shared generic implementations upstream when possible.
 - For the new sop-cloud onboarding and account-management experience, see [docs/NEW_SITE_STORIES.md](docs/NEW_SITE_STORIES.md) and [docs/NEW_SITE_IMPLEMENTATION_TASKS.md](docs/NEW_SITE_IMPLEMENTATION_TASKS.md). The current site experience includes a starter-plan onboarding flow, a post-payment download/install step for the local agent, account management actions, and a future "HQ + Local Agent" plan preview that is disabled for regular users and available for system-admin testing.
-- The new React site/app is planned as a separate frontend experience served through httpserver, while the daemon remains a separate runtime process and does not take on the React UI surface.
+- The new React site/app is a separate frontend experience served by the standalone site backend in [src/backend/site](src/backend/site), while the daemon remains a separate runtime process and does not take on the React UI surface.
 - A detailed implementation blueprint for the blob-store, digest-to-Space, and expert-mode AI workflow is documented in [docs/SPACE_EXPERT_IMPLEMENTATION_GUIDE.md](docs/SPACE_EXPERT_IMPLEMENTATION_GUIDE.md).
-- The intended architecture uses four layers: the daemon for runtime/background services, sopbackend as the shared application core, httpserver as the web entry point, and a separate React frontend served from httpserver on dedicated routes. The existing Data Manager remains a distinct operational UI surface rather than being merged into the new product experience.
+- The intended architecture uses four layers: the daemon and httpserver as the SOP Data Manager-compatible product apps, sopbackend as the shared application core, and a separate React site app served by the standalone site backend on dedicated routes. The new React site is a separate website experience for subscriptions and self-service onboarding, not a replacement for the Data Manager UI.
 - The new source-store flow uses side-car containers for folder and repository intake. These are lightweight, manifest-driven placeholders that are not part of the core ACID store graph; they exist to hold raw intake material until a later chat-driven digest action curates that content into a normal Space.
 - Prefer small overlay files over maintaining a full parallel copy of the shared server or AI packages.
 - Frame the platform as an API-first, microservice-oriented system. The important contract is the capability it offers through HTTP and integrations, not the specific backend database implementation.
@@ -60,7 +60,7 @@ When editing this repo, follow these conventions:
 
 ## Running and testing the new site
 
-The new product site lives in [src](src) and is run through the standalone backend entrypoint in [src/backend/site](src/backend/site).
+The new product site lives in [src](src) and is run through the standalone backend entrypoint in [src/backend/site](src/backend/site). This is the dedicated launcher for the React site experience. The legacy Data Manager remains launched through the dedicated root launcher at [tools/httpserver](tools/httpserver), which invokes [lib/sop/tools/httpserver](lib/sop/tools/httpserver).
 
 ### Start the site locally
 
@@ -101,7 +101,7 @@ npm run build
 The current overlay compiles successfully; a representative verification command is:
 
 ```bash
-go test ./tools/httpserver -run '^$' -count=1
+go test ./src/backend/site ./src/backend/siteapi
 ```
 
 The remainder of this document contains the broader SOP reference material that still applies to the shared engine and runtime concepts.

@@ -35,29 +35,31 @@ func getSystemDB(ctx context.Context) (*aidb.Database, error) {
 
 // UserRecord stores minimal credential and role data for the built-in auth model.
 type UserRecord struct {
-	Username         string        `json:"username"`
-	Role             string        `json:"role"`
-	PasswordHash     SecuredString `json:"password_hash,omitempty"`
-	Email            SecuredString `json:"email,omitempty"`
-	SubscriptionPlan string        `json:"subscription_plan,omitempty"`
-	BillingStatus    string        `json:"billing_status,omitempty"`
-	CheckoutURL      string        `json:"checkout_url,omitempty"`
-	LastWebhookEvent string        `json:"last_webhook_event,omitempty"`
-	LastWebhookAt    time.Time     `json:"last_webhook_at,omitempty"`
-	FailureReason    string        `json:"failure_reason,omitempty"`
-	StripeCustomerID SecuredString `json:"stripe_customer_id,omitempty"`
-	StripeSubID      SecuredString `json:"stripe_subscription_id,omitempty"`
-	Status           string        `json:"status,omitempty"`
-	CreatedAt        time.Time     `json:"created_at,omitempty"`
-	UpdatedAt        time.Time     `json:"updated_at,omitempty"`
+	Username             string        `json:"username"`
+	Role                 string        `json:"role"`
+	PasswordHash         SecuredString `json:"password_hash,omitempty"`
+	Email                SecuredString `json:"email,omitempty"`
+	SubscriptionPlan     string        `json:"subscription_plan,omitempty"`
+	SubscriptionFeatures []string      `json:"subscription_features,omitempty"`
+	BillingStatus        string        `json:"billing_status,omitempty"`
+	CheckoutURL          string        `json:"checkout_url,omitempty"`
+	LastWebhookEvent     string        `json:"last_webhook_event,omitempty"`
+	LastWebhookAt        time.Time     `json:"last_webhook_at,omitempty"`
+	FailureReason        string        `json:"failure_reason,omitempty"`
+	StripeCustomerID     SecuredString `json:"stripe_customer_id,omitempty"`
+	StripeSubID          SecuredString `json:"stripe_subscription_id,omitempty"`
+	Status               string        `json:"status,omitempty"`
+	CreatedAt            time.Time     `json:"created_at,omitempty"`
+	UpdatedAt            time.Time     `json:"updated_at,omitempty"`
 }
 
 type RegisterUserRequest struct {
-	Username         string
-	Password         string
-	Email            string
-	Role             string
-	SubscriptionPlan string
+	Username             string
+	Password             string
+	Email                string
+	Role                 string
+	SubscriptionPlan     string
+	SubscriptionFeatures []string
 }
 
 type UnregisterUserRequest struct {
@@ -65,8 +67,9 @@ type UnregisterUserRequest struct {
 }
 
 type UpdateSubscriptionPlanRequest struct {
-	Username         string
-	SubscriptionPlan string
+	Username             string
+	SubscriptionPlan     string
+	SubscriptionFeatures []string
 }
 
 type SubscriptionRecord struct {
@@ -741,6 +744,10 @@ func (c *Config) authFromAuthorization(authHeader string) (string, string) {
 }
 
 func (c *Config) SetUser(username, password, role string) error {
+	return c.SetUserWithFeatures(username, password, role, nil)
+}
+
+func (c *Config) SetUserWithFeatures(username, password, role string, features []string) error {
 	username = normalizeUsername(username)
 	if username == "" || strings.TrimSpace(password) == "" {
 		return fmt.Errorf("username and password are required")
@@ -757,11 +764,26 @@ func (c *Config) SetUser(username, password, role string) error {
 		return err
 	}
 
+	filtered := make([]string, 0, len(features))
+	seen := make(map[string]struct{}, len(features))
+	for _, feature := range features {
+		trimmed := strings.TrimSpace(strings.ToLower(feature))
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		filtered = append(filtered, trimmed)
+	}
+
 	record := UserRecord{
-		Username:     username,
-		Role:         normalizeRole(role),
-		PasswordHash: SecuredString(hash),
-		Status:       "active",
+		Username:             username,
+		Role:                 normalizeRole(role),
+		PasswordHash:         SecuredString(hash),
+		SubscriptionFeatures: filtered,
+		Status:               "active",
 	}
 	c.Users = append(c.Users, record)
 	if store := c.ensureUserStore(); store != nil {
@@ -851,13 +873,14 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 	}
 
 	record := UserRecord{
-		Username:         username,
-		Role:             role,
-		PasswordHash:     SecuredString(hash),
-		Email:            SecuredString(strings.TrimSpace(req.Email)),
-		SubscriptionPlan: subscriptionPlan,
-		BillingStatus:    billingStatus,
-		Status:           "active",
+		Username:             username,
+		Role:                 role,
+		PasswordHash:         SecuredString(hash),
+		Email:                SecuredString(strings.TrimSpace(req.Email)),
+		SubscriptionPlan:     subscriptionPlan,
+		SubscriptionFeatures: append([]string(nil), req.SubscriptionFeatures...),
+		BillingStatus:        billingStatus,
+		Status:               "active",
 	}
 	if err := c.ensureUserStore().Save(ctx, &record); err != nil {
 		return nil, err
@@ -929,6 +952,9 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 	}
 
 	user.SubscriptionPlan = plan
+	if req.SubscriptionFeatures != nil {
+		user.SubscriptionFeatures = append([]string(nil), req.SubscriptionFeatures...)
+	}
 	if plan == "none" {
 		user.BillingStatus = "inactive"
 		user.StripeSubID = ""
@@ -942,6 +968,7 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 	for i := range c.Users {
 		if normalizeUsername(c.Users[i].Username) == username {
 			c.Users[i].SubscriptionPlan = plan
+			c.Users[i].SubscriptionFeatures = append([]string(nil), user.SubscriptionFeatures...)
 			c.Users[i].BillingStatus = user.BillingStatus
 			c.Users[i].StripeSubID = user.StripeSubID
 			c.Users[i].UpdatedAt = user.UpdatedAt

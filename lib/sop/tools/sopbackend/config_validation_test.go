@@ -153,7 +153,7 @@ func TestHandleSaveConfig_RejectsInvalidSystemAdminBootstrapSecret(t *testing.T)
 	}
 }
 
-func TestHandleSaveConfig_RequiresBootstrapSecretWhenServerIsConfigured(t *testing.T) {
+func TestHandleSaveConfig_AllowsBlankBootstrapSecretWhenServerIsConfigured(t *testing.T) {
 	oldConfig := config
 	defer func() { config = oldConfig }()
 
@@ -178,16 +178,19 @@ func TestHandleSaveConfig_RequiresBootstrapSecretWhenServerIsConfigured(t *testi
 	w := httptest.NewRecorder()
 
 	handleSaveConfig(w, req)
-	if w.Code != http.StatusBadRequest {
+	if w.Code != http.StatusOK {
 		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "bootstrap secret") {
-		t.Fatalf("expected bootstrap secret requirement error, got %s", w.Body.String())
+	if len(config.Users) == 0 {
+		t.Fatal("expected root user to be created")
+	}
+	if config.Users[0].Role != sop.RoleAdmin {
+		t.Fatalf("expected default root role %q, got %q", sop.RoleAdmin, config.Users[0].Role)
 	}
 }
 
 func TestHandleSaveConfig_PersistsSystemAdminRoleWhenBootstrapSecretMatches(t *testing.T) {
-	t.Setenv("SOP_CONFIG_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	oldConfig := config
 	defer func() { config = oldConfig }()
@@ -223,6 +226,74 @@ func TestHandleSaveConfig_PersistsSystemAdminRoleWhenBootstrapSecretMatches(t *t
 	}
 	if config.Users[0].Role != sop.RoleSystemAdmin {
 		t.Fatalf("expected root role %q, got %q", sop.RoleSystemAdmin, config.Users[0].Role)
+	}
+	var hasHQ, hasDaemon bool
+	for _, feature := range config.Users[0].SubscriptionFeatures {
+		switch strings.ToLower(strings.TrimSpace(feature)) {
+		case "hq_runtime":
+			hasHQ = true
+		case "daemon_runtime":
+			hasDaemon = true
+		}
+	}
+	if !hasHQ {
+		t.Fatalf("expected system admin user to receive HQ feature, got %v", config.Users[0].SubscriptionFeatures)
+	}
+	if !hasDaemon {
+		t.Fatalf("expected system admin user to receive daemon feature, got %v", config.Users[0].SubscriptionFeatures)
+	}
+}
+
+func TestHandleSaveConfig_RejectsIncompatibleSharedBrainReuse(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	config = Config{}
+	config.ConfigFile = configFile
+
+	sharedPath := filepath.Join(tmpDir, "shared-system")
+	if err := os.MkdirAll(sharedPath, 0o755); err != nil {
+		t.Fatalf("failed to create shared path: %v", err)
+	}
+
+	existingOpts := sop.DatabaseOptions{
+		StoresFolders: []string{sharedPath},
+		Type:          sop.Standalone,
+		CacheType:     sop.InMemory,
+	}
+	if data, err := json.Marshal(existingOpts); err != nil {
+		t.Fatalf("marshal existing options: %v", err)
+	} else if err := os.WriteFile(filepath.Join(sharedPath, "dboptions.json"), data, 0o644); err != nil {
+		t.Fatalf("write existing dboptions: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"registry_path":    sharedPath,
+		"port":             8080,
+		"root_password":    "secret123",
+		"use_shared_brain": true,
+		"system_options": map[string]interface{}{
+			"stores_folders": []string{},
+			"type":           1,
+			"cache_type":     2,
+			"redis_config": map[string]interface{}{
+				"address": "localhost:6379",
+			},
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+
+	handleSaveConfig(w, req)
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected incompatible shared-brain reuse to be rejected, got status %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "shared brain") && !strings.Contains(w.Body.String(), "Redis") {
+		t.Fatalf("expected compatibility error, got %s", w.Body.String())
 	}
 }
 

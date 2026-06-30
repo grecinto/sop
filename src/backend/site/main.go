@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	siteapi "github.com/grecinto/sop-cloud/src/backend/siteapi"
@@ -45,6 +47,35 @@ func resolveFrontendAssetPath(requestPath string) (string, bool) {
 	return "index.html", true
 }
 
+func defaultFrontendDir() string {
+	if dir := strings.TrimSpace(os.Getenv("FRONTEND_DIR")); dir != "" {
+		return dir
+	}
+
+	_, filename, _, ok := runtime.Caller(0)
+	if ok {
+		candidate := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "frontend", "dist"))
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	return filepath.Clean("./src/frontend/dist")
+}
+
+func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
+	if mux == nil {
+		return
+	}
+
+	// The React site is a separate product website and is hosted by this standalone backend.
+	// The Data Manager UI remains served by the dedicated httpserver/daemon entrypoints.
+	sopbackend.RegisterSwaggerHandlers(mux, "")
+	sopbackend.RegisterMonitorabilityHandlers(mux)
+	siteapi.RegisterHandlers(mux)
+	registerFrontendHandler(mux, frontendDir)
+}
+
 func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
 	filesystem := http.Dir(frontendDir)
 	fileServer := http.FileServer(filesystem)
@@ -74,16 +105,10 @@ func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
 }
 
 func main() {
-	frontendDir := os.Getenv("FRONTEND_DIR")
-	if frontendDir == "" {
-		frontendDir = "./src/frontend/dist"
-	}
+	frontendDir := defaultFrontendDir()
 
 	mux := http.NewServeMux()
-	sopbackend.RegisterAllHandlers(mux)
-	siteapi.RegisterHandlers(mux)
-	sopbackend.RegisterMonitorabilityHandlers(mux)
-	registerFrontendHandler(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir)
 
 	port := os.Getenv("PORT")
 	if port == "" {

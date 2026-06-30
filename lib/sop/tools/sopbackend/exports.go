@@ -170,7 +170,7 @@ func BootstrapRuntime(ctx context.Context, configPath string, opts RuntimeOption
 func validateRuntimeSecretConfiguration(isProduction bool) (bool, error) {
 	var missing []string
 	if configEncryptionKey() == nil {
-		missing = append(missing, "SOP_CONFIG_ENCRYPTION_KEY")
+		missing = append(missing, "SOP_ENCRYPTION_KEY")
 	}
 	if isProduction {
 		if strings.TrimSpace(os.Getenv("SOP_SESSION_SECRET")) == "" && strings.TrimSpace(config.SessionSecret.Plaintext()) == "" {
@@ -196,6 +196,11 @@ func RegisterSwaggerHandlers(mux *http.ServeMux, basePath string) {
 	basePath = strings.TrimRight(basePath, "/")
 	if basePath == "" {
 		basePath = ""
+	}
+	if req, err := http.NewRequest(http.MethodGet, basePath+"/swagger.json", nil); err == nil {
+		if _, pattern := mux.Handler(req); pattern == basePath+"/swagger.json" {
+			return
+		}
 	}
 
 	spec := map[string]any{
