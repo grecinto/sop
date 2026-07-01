@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,8 +22,7 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
-//go:embed templates/*
-var content embed.FS
+var content = sopbackend.SharedUIAssets()
 
 func setupWizardAIConfigJSON() template.JS {
 	return template.JS("{}")

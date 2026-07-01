@@ -38,6 +38,13 @@ func NewUIRouter(templateFS fs.FS, pattern string) *UIRouter {
 
 // Register wires the shared platform UI routes onto the provided mux.
 func (r *UIRouter) Register(mux *http.ServeMux) {
+	r.RegisterWithOptions(mux, true)
+}
+
+// RegisterWithOptions wires the shared platform UI routes onto the provided mux.
+// When includeRoot is false, the catch-all / handler is skipped so callers can mount
+// the shared UI on a sub-app without conflicting with a separate root frontend handler.
+func (r *UIRouter) RegisterWithOptions(mux *http.ServeMux, includeRoot bool) {
 	if r == nil || mux == nil {
 		return
 	}
@@ -47,14 +54,18 @@ func (r *UIRouter) Register(mux *http.ServeMux) {
 			mux.HandleFunc("/login", func(w http.ResponseWriter, req *http.Request) {
 				http.Error(w, "template load failed", http.StatusInternalServerError)
 			})
-			mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-				http.Redirect(w, req, "/app", http.StatusFound)
-			})
+			if includeRoot {
+				mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+					http.Redirect(w, req, "/app", http.StatusFound)
+				})
+			}
 			return
 		}
 		r.Templates = tmpl
 	}
-	mux.HandleFunc("/", r.handleRoot)
+	if includeRoot {
+		mux.HandleFunc("/", r.handleRoot)
+	}
 	mux.HandleFunc("/login", r.handleLoginPage)
 	mux.HandleFunc("/hq-login", r.handleHQLoginPage)
 	mux.HandleFunc("/app", RequireAuth(r.handleIndex))
@@ -563,6 +574,7 @@ func sharedTemplateDir() string {
 	if ok {
 		baseDir := filepath.Dir(currentFile)
 		candidates := []string{
+			filepath.Join(baseDir, "templates"),
 			filepath.Join(baseDir, "..", "httpserver", "templates"),
 			filepath.Join(baseDir, "..", "..", "httpserver", "templates"),
 			filepath.Join(baseDir, "..", "..", "..", "httpserver", "templates"),
@@ -573,7 +585,7 @@ func sharedTemplateDir() string {
 			}
 		}
 	}
-	return filepath.Join("..", "httpserver", "templates")
+	return filepath.Join("templates")
 }
 
 // osDirFS returns an os filesystem rooted at the provided path.
@@ -595,6 +607,12 @@ func RegisterSharedUIRoutes(mux *http.ServeMux) {
 // RegisterUIRoutes mounts the shared UI routing using the same registration shape.
 func RegisterUIRoutes(mux *http.ServeMux) {
 	RegisterSharedUIRoutes(mux)
+}
+
+// RegisterUIRoutesWithoutRoot mounts the shared UI routing without the root / redirect handler.
+func RegisterUIRoutesWithoutRoot(mux *http.ServeMux) {
+	router := NewUIRouter(SharedUIAssets(), "*.html")
+	router.RegisterWithOptions(mux, false)
 }
 
 // TemplatePattern returns the default template glob for shared UI assets.

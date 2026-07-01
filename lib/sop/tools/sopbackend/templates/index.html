@@ -898,7 +898,7 @@
                 <div id="setup-sys-path-group" style="display: flex; flex-direction: column; gap: 5px; flex: 1.5;">
                     <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
                         <label style="margin: 0; white-space: nowrap; min-width: 140px;">System Database Path</label>
-                        <input type="text" id="setup-reg-path" placeholder="/var/lib/sop/system_db" value="/tmp/sop_data/system" style="width: 100%; box-sizing: border-box;">
+                        <input type="text" id="setup-reg-path" placeholder="/var/lib/sop/system_db" value="/tmp/sop_data/{{.SystemDBName}}" style="width: 100%; box-sizing: border-box;">
                     </div>
                     <div id="setup-sys-manual-enterprise-group" style="display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 0.9em; margin-bottom: 5px;">
                          <input type="checkbox" id="setup-sys-use-manual-enterprise" onchange="toggleManualEnterpriseBrain()">

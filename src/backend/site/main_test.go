@@ -79,7 +79,7 @@ func TestSiteBackendServesSiteFrontendRoutes(t *testing.T) {
 	}
 }
 
-func TestSiteBackendDoesNotRegisterLegacyUIRoutes(t *testing.T) {
+func TestSiteBackendRegistersSharedUIRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	registerSiteHandlers(mux, t.TempDir())
 
@@ -88,8 +88,8 @@ func TestSiteBackendDoesNotRegisterLegacyUIRoutes(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected %s to be unhandled, got %d", path, rec.Code)
+		if rec.Code == http.StatusNotFound {
+			t.Fatalf("expected %s to be handled by the shared UI routes, got 404", path)
 		}
 	}
 }

@@ -115,6 +115,7 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
 	// The shared SOP UI/backend is also mounted here so site-admin/root users can manage
 	// the hosted environment through the same shared handlers used by the standalone httpserver/daemon.
 	siteaccount.InstallSopbackendUserStoreOverride()
+	sopbackend.RegisterUIRoutesWithoutRoot(mux)
 	sopbackend.RegisterSwaggerHandlers(mux, "")
 	sopbackend.RegisterMonitorabilityHandlers(mux)
 	siteaccount.RegisterHandlers(mux)

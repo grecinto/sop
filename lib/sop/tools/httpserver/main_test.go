@@ -3,9 +3,9 @@ package main
 import (
 	"bytes"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -43,7 +43,7 @@ func TestApplyRedisOverridePropagatesToConfig(t *testing.T) {
 }
 
 func TestEnvironmentManagerVisibilityFollowsHQCheckboxState(t *testing.T) {
-	tmpl, err := template.ParseFS(content, "templates/scripts_part01.html")
+	tmpl, err := template.ParseFS(content, "scripts_part01.html")
 	if err != nil {
 		t.Fatalf("failed to parse scripts_part01 template: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestEnvironmentManagerVisibilityFollowsHQCheckboxState(t *testing.T) {
 }
 
 func TestSetupWizardUsesSystemDBNameForDefaultSystemPath(t *testing.T) {
-	content, err := os.ReadFile("templates/index.html")
+	content, err := fs.ReadFile(content, "index.html")
 	if err != nil {
 		t.Fatalf("failed to read setup wizard template: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestSetupWizardUsesSystemDBNameForDefaultSystemPath(t *testing.T) {
 }
 
 func TestSetupWizardPreloadUsesResolvedSystemDBName(t *testing.T) {
-	part10Content, err := os.ReadFile("templates/scripts_part10.html")
+	part10Content, err := fs.ReadFile(content, "scripts_part10.html")
 	if err != nil {
 		t.Fatalf("failed to read setup wizard preload script: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestSetupWizardPreloadUsesResolvedSystemDBName(t *testing.T) {
 		t.Fatalf("expected setup wizard preload script to derive and send the system DB name in the preload payload")
 	}
 
-	part11Content, err := os.ReadFile("templates/scripts_part11.html")
+	part11Content, err := fs.ReadFile(content, "scripts_part11.html")
 	if err != nil {
 		t.Fatalf("failed to read template preload script: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestSetupWizardPreloadUsesResolvedSystemDBName(t *testing.T) {
 }
 
 func TestFloaterUsesSharedAppShell(t *testing.T) {
-	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	scriptContent, err := fs.ReadFile(content, "scripts_part05.html")
 	if err != nil {
 		t.Fatalf("failed to read chat script template: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestFloaterUsesSharedAppShell(t *testing.T) {
 }
 
 func TestDaemonBootstrapScriptSkipsAutoBootstrapInHQMode(t *testing.T) {
-	scriptContent, err := os.ReadFile("templates/scripts_daemon.html")
+	scriptContent, err := fs.ReadFile(content, "scripts_daemon.html")
 	if err != nil {
 		t.Fatalf("failed to read daemon script template: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestDaemonBootstrapScriptSkipsAutoBootstrapInHQMode(t *testing.T) {
 }
 
 func TestWelcomeContextScriptSkipsDaemonHandoffOutsideLocalRuntime(t *testing.T) {
-	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	scriptContent, err := fs.ReadFile(content, "scripts_part05.html")
 	if err != nil {
 		t.Fatalf("failed to read chat script template: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestWelcomeContextScriptSkipsDaemonHandoffOutsideLocalRuntime(t *testing.T)
 }
 
 func TestFloaterScriptHandlesInputStateAndMainWindowHide(t *testing.T) {
-	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	scriptContent, err := fs.ReadFile(content, "scripts_part05.html")
 	if err != nil {
 		t.Fatalf("failed to read chat script template: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestFloaterScriptHandlesInputStateAndMainWindowHide(t *testing.T) {
 }
 
 func TestFloaterRendersToolInventoryAsPlainText(t *testing.T) {
-	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	scriptContent, err := fs.ReadFile(content, "scripts_part05.html")
 	if err != nil {
 		t.Fatalf("failed to read chat script template: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestFloaterRendersToolInventoryAsPlainText(t *testing.T) {
 }
 
 func TestFloaterUsesSharedRuntimeResponseHandler(t *testing.T) {
-	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	scriptContent, err := fs.ReadFile(content, "scripts_part05.html")
 	if err != nil {
 		t.Fatalf("failed to read chat script template: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestFloaterUsesSharedRuntimeResponseHandler(t *testing.T) {
 }
 
 func TestFloaterUsesUnifiedRuntimeRequestAdapter(t *testing.T) {
-	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	scriptContent, err := fs.ReadFile(content, "scripts_part05.html")
 	if err != nil {
 		t.Fatalf("failed to read chat script template: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestFloaterUsesUnifiedRuntimeRequestAdapter(t *testing.T) {
 }
 
 func TestFloaterHeaderControlsStayVisibleInNarrowWindows(t *testing.T) {
-	stylesContent, err := os.ReadFile("templates/styles.html")
+	stylesContent, err := fs.ReadFile(content, "styles.html")
 	if err != nil {
 		t.Fatalf("failed to read styles template: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestFloaterHeaderControlsStayVisibleInNarrowWindows(t *testing.T) {
 }
 
 func TestFloaterIsLocalRuntimeOnly(t *testing.T) {
-	modalContent, err := os.ReadFile("templates/modals.html")
+	modalContent, err := fs.ReadFile(content, "modals.html")
 	if err != nil {
 		t.Fatalf("failed to read modals template: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestFloaterIsLocalRuntimeOnly(t *testing.T) {
 		t.Fatalf("expected floater button in modal template")
 	}
 
-	scriptContent, err := os.ReadFile("templates/scripts_part05.html")
+	scriptContent, err := fs.ReadFile(content, "scripts_part05.html")
 	if err != nil {
 		t.Fatalf("failed to read chat script template: %v", err)
 	}

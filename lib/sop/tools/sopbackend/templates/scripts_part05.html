@@ -171,7 +171,8 @@
         const minimizeButton = document.getElementById('chat-minimize-btn');
         if (!button) return;
         const isFloaterMode = isChatFloaterMode();
-        button.style.display = isFloaterMode ? 'none' : 'inline-flex';
+        const isLocalRuntime = getChatRuntimeMode() === 'local';
+        button.style.display = isFloaterMode ? 'none' : (isLocalRuntime ? 'inline-flex' : 'none');
         button.disabled = false;
         button.title = 'Open AI chat in a floating window';
         button.style.opacity = '1';
@@ -202,6 +203,10 @@
 
     async function requestRuntimeWelcomeContext(runtimeMode) {
         try {
+            if (runtimeMode !== 'local') {
+                return null;
+            }
+
             if (runtimeMode === 'local') {
                 const response = await daemonFetch('/api/handoff', {
                     method: 'POST',
@@ -627,6 +632,11 @@
     }
 
     async function openChatPiP() {
+        if (getChatRuntimeMode() !== 'local') {
+            console.warn('[openChatPiP] Floater is only available in local runtime');
+            return;
+        }
+
         const widget = document.getElementById('chat-widget');
         if (widget) {
             widget.classList.remove('active');

@@ -44,6 +44,12 @@
             this.bootstrapping = true;
 
             try {
+                const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+                if (runtimeMode !== 'local') {
+                    this.bootstrapping = false;
+                    return false;
+                }
+
                 // Check if we already have valid tokens
                 if (this.hasValidToken()) {
                     this.bootstrapping = false;
