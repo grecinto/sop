@@ -1,0 +1,18 @@
+services:
+  sop-site:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      SOP_CLOUD_DATA_DIR: /var/lib/sop-cloud
+      FRONTEND_DIR: /app/frontend/dist
+      datapath: /var/lib/sop-cloud
+    volumes:
+      - sop-cloud-data:/var/lib/sop-cloud
+    restart: unless-stopped
+
+volumes:
+  sop-cloud-data:

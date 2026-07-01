@@ -48,6 +48,14 @@ func TestDefaultFrontendDirUsesSourceTreePath(t *testing.T) {
 	}
 }
 
+func TestDefaultDataDirUsesContainerOverride(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "site-data")
+	t.Setenv("SOP_CLOUD_DATA_DIR", want)
+	if got := defaultDataDir(); got != want {
+		t.Fatalf("defaultDataDir() = %q, want %q", got, want)
+	}
+}
+
 func TestSiteBackendServesSiteFrontendRoutes(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {

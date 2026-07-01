@@ -1096,19 +1096,19 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 	}
 	c.Users = append(c.Users, *user)
 
-	if sharedCfg := sopbackend.GetConfig(); true {
-		_, err := sharedCfg.RegisterUserWithRequest(ctx, sopbackend.RegisterUserRequest{
-			Username:             username,
-			Password:             req.Password,
-			Email:                req.Email,
-			Role:                 req.Role,
-			SubscriptionPlan:     req.SubscriptionPlan,
-			SubscriptionFeatures: req.SubscriptionFeatures,
-		})
-		if err != nil {
-			return nil, err
-		}
+	sharedCfg := sopbackend.GetConfig()
+	_, err = sharedCfg.RegisterUserWithRequest(ctx, sopbackend.RegisterUserRequest{
+		Username:             username,
+		Password:             req.Password,
+		Email:                req.Email,
+		Role:                 req.Role,
+		SubscriptionPlan:     req.SubscriptionPlan,
+		SubscriptionFeatures: req.SubscriptionFeatures,
+	})
+	if err != nil {
+		return nil, err
 	}
+	sopbackend.SetConfig(sharedCfg)
 	return user, nil
 }
 
@@ -1151,9 +1151,9 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 	}
 	c.Users = filteredUsers
 
-	if sharedCfg := sopbackend.GetConfig(); true {
-		_ = sharedCfg.UnregisterUserWithRequest(ctx, sopbackend.UnregisterUserRequest{Username: username})
-	}
+	sharedCfg := sopbackend.GetConfig()
+	_ = sharedCfg.UnregisterUserWithRequest(ctx, sopbackend.UnregisterUserRequest{Username: username})
+	sopbackend.SetConfig(sharedCfg)
 	return nil
 }
 

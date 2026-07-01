@@ -3,7 +3,10 @@ package siteaccount
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,44 @@ import (
 func uniqueTestUsername(t *testing.T, prefix string) string {
 	t.Helper()
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+}
+
+func TestHandleLoginSetsSessionCookies(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-login-user")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "site-login@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	body := fmt.Sprintf(`{"username":"%s","password":"secret123"}`, username)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	HandleLogin(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleLogin() status = %d, body=%s", rr.Code, rr.Body.String())
+	}
+
+	var foundAccess, foundRefresh bool
+	for _, cookie := range rr.Result().Cookies() {
+		switch cookie.Name {
+		case "sop_access_token":
+			foundAccess = cookie.Value != ""
+		case "sop_refresh_token":
+			foundRefresh = cookie.Value != ""
+		}
+	}
+	if !foundAccess || !foundRefresh {
+		t.Fatalf("HandleLogin() expected both session cookies, got %v", rr.Result().Cookies())
+	}
 }
 
 func TestRegisterUserWithRequestPersistsUserAndBillingState(t *testing.T) {

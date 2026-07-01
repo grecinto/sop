@@ -13,6 +13,19 @@ The current implementation has the structural pieces in place:
 - [x] Site-specific API handlers live in [src/backend/siteaccount/handlers.go](../src/backend/siteaccount/handlers.go).
 - [x] Shared auth/session/token logic remains in [lib/sop/tools/sopbackend/auth.go](../lib/sop/tools/sopbackend/auth.go) and [lib/sop/tools/sopbackend/scripts.go](../lib/sop/tools/sopbackend/scripts.go).
 - [x] The shared auth middleware already populates the auth context used by httpserver and other backend paths.
+- [x] The shared SOP UI/backend is intended to support two use-cases: site-admin/root management for the hosted environment and per-user local workflows that target an end-user daemon instance.
+- [x] The new site backend is the intended host for the admin-facing UI routes, while the daemon remains a headless runtime for local-hosted AI workflows and release-based deployment.
+- [x] The packaging model is container-friendly and baremetal-friendly: one app process can host the product site frontend plus the shared SOP UI/backend, while the daemon remains a separate headless binary/package.
+- [x] The shared sopbackend auth path now supports a pluggable user-store override so the new site can own persisted user management without changing the default package behavior.
+
+## UI/backend usage model
+
+The shared SOP UI/backend is expected to act in two different deployment contexts:
+
+1. Site-admin/root management: the hosted site app exposes the SOP Data Manager UI/backend so SA/root users can manage environments, databases, stores, and spaces.
+2. End-user local workflows: the UI is repointed to an end-user daemon instance running on the user's machine so local-hosted AI workflows can be driven from the same UI experience.
+
+This split keeps the admin and personal workflows separate while reusing the same underlying UI and backend contracts.
 
 ## Phase 0: Auth handoff and continuity
 

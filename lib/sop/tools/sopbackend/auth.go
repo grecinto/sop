@@ -568,6 +568,19 @@ type UserStore interface {
 	List(ctx context.Context) ([]UserRecord, error)
 }
 
+var userStoreOverride UserStore
+
+// SetUserStoreOverride installs a custom user store for shared auth flows.
+// When nil, the built-in default store is used.
+func SetUserStoreOverride(store UserStore) {
+	userStoreOverride = store
+}
+
+// GetUserStoreOverride returns the currently installed user-store override.
+func GetUserStoreOverride() UserStore {
+	return userStoreOverride
+}
+
 type UserStoreImpl struct {
 	mu    sync.RWMutex
 	users map[string]UserRecord
@@ -1132,6 +1145,21 @@ func sessionTTL() time.Duration {
 	return defaultSessionTTL
 }
 
+// CreateSession issues a shared backend access/refresh token pair for the given user.
+func CreateSession(ctx context.Context, username, role string) (string, string, error) {
+	return currentTokenFacade().CreateSession(ctx, username, role)
+}
+
+// RefreshSession rotates a shared backend refresh token into a new access/refresh pair.
+func RefreshSession(ctx context.Context, refreshToken string) (string, string, error) {
+	return currentTokenFacade().Refresh(ctx, refreshToken)
+}
+
+// ValidateSessionToken verifies a shared backend session token using the singleton token facade.
+func ValidateSessionToken(ctx context.Context, token string) (*UserRecord, error) {
+	return currentTokenFacade().ValidateToken(ctx, token)
+}
+
 func tokenPrefix(token string) string {
 	if len(token) <= 8 {
 		return token
@@ -1259,6 +1287,10 @@ func (c *Config) SetUserWithFeatures(username, password, role string, features [
 }
 
 func (c *Config) ensureUserStore() UserStore {
+	if userStoreOverride != nil {
+		c.UsersStore = userStoreOverride
+		return c.UsersStore
+	}
 	if c.UsersStore != nil {
 		return c.UsersStore
 	}

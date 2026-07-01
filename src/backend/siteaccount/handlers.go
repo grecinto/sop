@@ -19,6 +19,8 @@ func RegisterHandlers(mux *http.ServeMux) {
 		return
 	}
 	mux.HandleFunc("/api/auth/register", HandleRegister)
+	mux.HandleFunc("/api/auth/login", HandleLogin)
+	mux.HandleFunc("/api/auth/refresh", HandleRefresh)
 	mux.HandleFunc("/api/site/auth/login", HandleLogin)
 	mux.HandleFunc("/api/site/auth/logout", HandleLogout)
 	mux.HandleFunc("/api/auth/logout", HandleLogout)
@@ -92,17 +94,68 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
 }
 
+func parseLoginRequest(r *http.Request) (struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}, error) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+		if err := r.ParseForm(); err != nil {
+			return req, err
+		}
+		req.Username = r.FormValue("username")
+		req.Password = r.FormValue("password")
+		return req, nil
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+func setSessionCookies(w http.ResponseWriter, accessToken, refreshToken string, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "sop_access_token",
+		Value:    accessToken,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int((30 * time.Minute).Seconds()),
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "sop_refresh_token",
+		Value:    refreshToken,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int((7 * 24 * time.Hour).Seconds()),
+	})
+}
+
+func clearSessionCookies(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "sop_access_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: "sop_refresh_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+}
+
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := parseLoginRequest(r)
+	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	sharedCfg := sopbackend.GetConfig()
+	ok, user, err := sharedCfg.Authenticate(req.Username, req.Password)
+	if err != nil || !ok || user == nil {
+		writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 	cfg := GetConfig()
@@ -110,17 +163,76 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "auth config unavailable")
 		return
 	}
-	user, ok, err := cfg.FindUserRecord(r.Context(), req.Username)
-	if err != nil || !ok || user == nil {
+	if _, found, findErr := cfg.FindUserRecord(r.Context(), normalizeUsername(req.Username)); findErr != nil {
+		writeJSONError(w, http.StatusInternalServerError, findErr.Error())
+		return
+	} else if !found {
 		writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+
+	accessToken, refreshToken, err := sopbackend.CreateSession(r.Context(), user.Username, user.Role)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+	setSessionCookies(w, accessToken, refreshToken, r.TLS != nil)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "user": map[string]any{"username": user.Username}})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":        "ok",
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"token_type":    "Bearer",
+		"user":          map[string]any{"username": user.Username, "role": user.Role},
+	})
+}
+
+func HandleRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+		if err := r.ParseForm(); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		req.RefreshToken = r.FormValue("refresh_token")
+	} else if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if cookie, errCookie := r.Cookie("sop_refresh_token"); errCookie == nil && strings.TrimSpace(cookie.Value) != "" {
+			req.RefreshToken = strings.TrimSpace(cookie.Value)
+		} else {
+			writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	if strings.TrimSpace(req.RefreshToken) == "" {
+		if cookie, errCookie := r.Cookie("sop_refresh_token"); errCookie == nil && strings.TrimSpace(cookie.Value) != "" {
+			req.RefreshToken = strings.TrimSpace(cookie.Value)
+		}
+	}
+	if strings.TrimSpace(req.RefreshToken) == "" {
+		writeJSONError(w, http.StatusBadRequest, "refresh token required")
+		return
+	}
+	accessToken, refreshToken, err := sopbackend.RefreshSession(r.Context(), req.RefreshToken)
+	if err != nil {
+		writeJSONError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	setSessionCookies(w, accessToken, refreshToken, r.TLS != nil)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "access_token": accessToken, "refresh_token": refreshToken, "token_type": "Bearer"})
 }
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
+	clearSessionCookies(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "logged out"})

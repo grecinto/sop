@@ -63,13 +63,58 @@ func defaultFrontendDir() string {
 	return filepath.Clean("./src/frontend/dist")
 }
 
+func defaultDataDir() string {
+	if dir := strings.TrimSpace(os.Getenv("SOP_CLOUD_DATA_DIR")); dir != "" {
+		return dir
+	}
+	if dir := strings.TrimSpace(os.Getenv("datapath")); dir != "" {
+		return dir
+	}
+	if dir := strings.TrimSpace(os.Getenv("SOP_DATA_DIR")); dir != "" {
+		return dir
+	}
+	return filepath.Clean("./.sop-data")
+}
+
+func configureRuntimeEnvironment(dataDir string) {
+	if strings.TrimSpace(dataDir) == "" {
+		return
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		log.Printf("failed to create runtime data dir %s: %v", dataDir, err)
+		return
+	}
+	if err := os.Setenv("datapath", dataDir); err != nil {
+		log.Printf("failed to set datapath env var: %v", err)
+	}
+	if err := os.Setenv("SOP_CLOUD_DATA_DIR", dataDir); err != nil {
+		log.Printf("failed to set SOP_CLOUD_DATA_DIR env var: %v", err)
+	}
+	if err := os.Setenv("SOP_DATA_DIR", dataDir); err != nil {
+		log.Printf("failed to set SOP_DATA_DIR env var: %v", err)
+	}
+
+	configPath := filepath.Join(dataDir, "config.json")
+	if _, err := os.Stat(configPath); err != nil && os.IsNotExist(err) {
+		if err := os.WriteFile(configPath, []byte(`{"port":8081}`), 0o644); err != nil {
+			log.Printf("failed to seed config at %s: %v", configPath, err)
+		}
+	}
+	sopbackend.SetConfigFile(configPath)
+	if err := os.Setenv("SOP_CONFIG_FILE", configPath); err != nil {
+		log.Printf("failed to set SOP_CONFIG_FILE env var: %v", err)
+	}
+}
+
 func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
 	if mux == nil {
 		return
 	}
 
 	// The React site is a separate product website and is hosted by this standalone backend.
-	// The Data Manager UI remains served by the dedicated httpserver/daemon entrypoints.
+	// The shared SOP UI/backend is also mounted here so site-admin/root users can manage
+	// the hosted environment through the same shared handlers used by the standalone httpserver/daemon.
+	siteaccount.InstallSopbackendUserStoreOverride()
 	sopbackend.RegisterSwaggerHandlers(mux, "")
 	sopbackend.RegisterMonitorabilityHandlers(mux)
 	siteaccount.RegisterHandlers(mux)
@@ -105,6 +150,8 @@ func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
 }
 
 func main() {
+	dataDir := defaultDataDir()
+	configureRuntimeEnvironment(dataDir)
 	frontendDir := defaultFrontendDir()
 
 	mux := http.NewServeMux()
