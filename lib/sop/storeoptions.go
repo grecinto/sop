@@ -44,6 +44,23 @@ type StoreOptions struct {
 	CustomData map[string]any
 }
 
+// ConfigureRelation returns StoreOptions tuned for a relationship-aware bridge store.
+// It adds relation metadata plus AI-oriented hints that can be surfaced by tooling and agents.
+func (so *StoreOptions) SetRelation(relation Relation, description string) {
+	so.Relations = []Relation{relation}
+	so.CustomData = map[string]any{
+		"relationship_bridge":        true,
+		"relationship_target_store":  relation.TargetStore,
+		"relationship_source_fields": relation.SourceFields,
+		"relationship_target_fields": relation.TargetFields,
+		"ai_semantics": map[string]any{
+			"kind":        "bridge",
+			"description": description,
+			"join_hint":   "use this store as a relation bridge for lookups and aggregates",
+		},
+	}
+}
+
 // ValueDataSize categorizes the expected size of Value data to guide configuration helpers.
 type ValueDataSize int
 

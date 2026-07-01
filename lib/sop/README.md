@@ -87,6 +87,17 @@ There are two ways to model relationships so that AI Agents can intuitively navi
 
 1.  **Direct Relations (Metadata)**: Use this for standard One-to-Many relationships (e.g., `Order.user_id` -> `User.id`). By registering this relationship in the `StoreOptions`, the AI understands the detailed schema and can perform high-performance Joins automatically.
     *   **Pro Tip**: This enables **Bi-Directional Querying** (Parent $\leftrightarrow$ Child) without the need for redundant "Link Stores" or double-indexing. Query "User's Orders" or "Order's User" with equal efficiency.
+    *   **Developer Tip**: For bridge or link stores, call `StoreOptions.SetRelation(...)` after creating the base options. This attaches relation metadata plus AI-oriented hints for downstream tooling and agents.
+
+```go
+opts := sop.ConfigureStore("users_subscriptions", false, 8, "Bridge store for user subscriptions", sop.SmallData, "")
+opts.SetRelation(sop.Relation{
+    SourceFields: []string{"user_id"},
+    TargetStore:  "users",
+    TargetFields: []string{"id"},
+}, "Bridge store for user subscriptions")
+```
+
 2.  **Link Store Pattern (Advanced)**: Use this for Many-to-Many relationships or complex graph traversals. Create a dedicated `Link Store` (e.g., `User_Orders`) to map IDs effectively without modifying the base tables.
 
 This structure allows AI Agents to navigate data using simple "Chain of Thought" reasoning steps (e.g., "First find the User ID, then look up their Orders") rather than struggling to generate complex SQL Joins. The SOP Data Manager provides first-class support for visualizing and debugging these relationships.

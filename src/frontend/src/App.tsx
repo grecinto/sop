@@ -648,6 +648,7 @@ export default function App() {
   const isStarterActive = account.billingStatus === 'active' && account.plan === 'starter';
   const isStarterPending = account.billingStatus === 'pending' && account.plan === 'starter';
   const isPreviewVisible = account.plan === 'starter' || account.plan === 'hq';
+  const shouldShowInstallPanel = showInstallStep || isStarterActive || checkoutComplete;
   const canResumeCheckout = Boolean(account.checkoutUrl) && (account.billingStatus === 'pending' || Boolean(account.failureReason));
   const billingStatusTitle = account.billingStatus === 'active'
     ? 'Subscription confirmed'
@@ -754,6 +755,16 @@ export default function App() {
                   <p>After checkout, we guide you to install the local agent and continue with the onboarding flow.</p>
                 </div>
               )}
+
+              {shouldShowInstallPanel ? (
+                <div className="preview-box install-box">
+                  <h4>Install the local agent</h4>
+                  <p>Download the local agent from the official SOP releases page to run the host-side workflow on your own machine. The agent pairs with the AI copilot so you can move from setup to guided execution.</p>
+                  <button type="button" className="button button-secondary" onClick={handleDownload} disabled={isSubmitting}>
+                    {isSubmitting ? 'Preparing…' : 'Download local agent'}
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         </section>
@@ -1061,10 +1072,10 @@ export default function App() {
               </button>
             </div>
 
-            {showInstallStep || isStarterActive ? (
+            {shouldShowInstallPanel ? (
               <div className="preview-box install-box">
                 <h4>Next step: install the local agent</h4>
-                <p>Download the local agent through the protected site endpoint once your subscription is active.</p>
+                <p>Your subscription is active, so the local agent is ready to install. Download it from the official SOP releases page and pair it with the AI copilot to launch the host-side workflow.</p>
                 <button type="button" className="button button-secondary" onClick={handleDownload} disabled={isSubmitting}>
                   {isSubmitting ? 'Preparing…' : 'Download local agent'}
                 </button>

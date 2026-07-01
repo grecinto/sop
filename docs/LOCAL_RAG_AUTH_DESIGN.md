@@ -125,3 +125,53 @@ The current implementation already has the essential building blocks:
 - and the shared agent runtime can be used as the common execution substrate for both the UI and the local host experience.
 
 The remaining work is to wire the UI-hydrated tokens through the daemon and add the authenticated HQ policy boundary.
+
+## New Site / httpserver / local daemon handoff (2026-06-30)
+
+This section captures the current implementation intent for the next pass: the new site experience should allow self-registration, subscription, payment, and onboarding, and then hand the user into the httpserver UI with a compatible, reusable auth session that continues to work with the local daemon on the host.
+
+### Goals
+
+- Reuse the shared sopbackend auth/session/token model rather than introduce a separate identity stack.
+- Allow the new site to issue a compatible bearer token and access cookie that httpserver can consume.
+- Preserve the user identity, role, subscription plan, and feature list as the session continues from the site into httpserver and then into the local daemon.
+- Keep the site backend focused on product onboarding and account state while preserving shared auth and session handling in sopbackend.
+
+### Current state
+
+- The new site accounting and billing state is implemented in [src/backend/siteaccount/account.go](../src/backend/siteaccount/account.go).
+- The site endpoints are registered in [src/backend/siteaccount/handlers.go](../src/backend/siteaccount/handlers.go).
+- The standalone site backend is served from [src/backend/site/main.go](../src/backend/site/main.go).
+- Shared auth/session/token handling remains in [lib/sop/tools/sopbackend/auth.go](../lib/sop/tools/sopbackend/auth.go) and [lib/sop/tools/sopbackend/scripts.go](../lib/sop/tools/sopbackend/scripts.go).
+
+### Required implementation contract
+
+1. Site registration and login create or reuse the same shared session token model used by sopbackend.
+2. The token is exposed through the same bearer-token and cookie contract that httpserver expects.
+3. When the site redirects to httpserver, the target app receives the same authenticated identity and entitlement context.
+4. The httpserver runtime uses the same auth context and feature list to decide which UI and backend capabilities are available.
+5. The local daemon receives the same token material over localhost and uses it to continue the authenticated session with the host-side runtime.
+
+### Implementation sequence for the next pass
+
+1. Add a site login path that issues a sopbackend-compatible access token.
+2. Return the access token and refresh token through the same response structure expected by the existing session layer.
+3. Add a redirect bridge from the site onboarding flow into the httpserver UI with the token preserved in the URL, cookie, or local storage handshake.
+4. Ensure httpserver accepts the token through the existing auth middleware without a second login.
+5. Add a simple local bootstrap path for the daemon to receive the same token context and continue the session on the host.
+6. Add end-to-end tests for registration, login, redirect, httpserver access, and daemon bootstrap.
+
+### Open questions to resolve before implementation
+
+- Should the redirect handoff use a short-lived one-time token or the same long-lived access token?
+- Should the daemon bootstrap be header-based, cookie-based, or environment-based for the first implementation?
+- Should the site maintain a separate onboarding session state or rely entirely on the shared sopbackend session state?
+
+### Pause/resume notes
+
+When work pauses, the implementation should resume from the auth-handoff boundary described above. The expected shape is:
+
+- site registration/login → shared session token issued,
+- site → httpserver redirect with same auth context,
+- httpserver → daemon bootstrap with same token material,
+- all using the shared sopbackend auth/session and entitlement model.
