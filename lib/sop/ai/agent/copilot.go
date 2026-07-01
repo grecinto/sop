@@ -21,6 +21,7 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/ai/agent/domains/desktop"
 	"github.com/sharedcode/sop/ai/agent/domains/spaces"
 	"github.com/sharedcode/sop/ai/agent/domains/stores"
@@ -366,6 +367,24 @@ func (a *CopilotAgent) rehydrateMRUFromMemory(ctx context.Context) {
 		activeKB = thread.Exchanges[len(thread.Exchanges)-1].ActiveKB
 	}
 
+	var codingContext string
+	for _, caveat := range stm.GetRuntimeCaveats(3) {
+		if caveat.CategoryRoot != "coding_workflow" && caveat.Source != "coding_workflow" && caveat.Kind != "coding_workflow" {
+			continue
+		}
+		if codingContext == "" {
+			codingContext = strings.TrimSpace(caveat.Summary)
+		} else {
+			codingContext += "\n" + strings.TrimSpace(caveat.Summary)
+		}
+		if details := strings.TrimSpace(caveat.Details); details != "" {
+			codingContext += ": " + details
+		}
+	}
+	if codingContext != "" {
+		a.markMRUCategoryWithSource("CODING_WORKFLOW_LAST", codingContext, MRUSourceAskOutcome)
+	}
+
 	projected := projectMRUItemsFromSTM(stm.GetMRUSnapshot(), activeKB)
 	for _, item := range projected {
 		a.markMRUCategoryWithSource(item.Category, item.Context, item.Source)
@@ -484,6 +503,159 @@ func normalizeMRUScope(scope string) string {
 	default:
 		return MRUScopeSession
 	}
+}
+
+func (a *CopilotAgent) recordCodingMemory(mem cw.CodingMemory) {
+	if a == nil {
+		return
+	}
+	if a.service == nil || a.service.session == nil {
+		return
+	}
+	sess := a.service.session
+	if sess.Memory == nil {
+		sess.Memory = NewShortTermMemory()
+	}
+
+	if a.systemDB != nil && a.service != nil {
+		if err := a.persistCodingMemoryToLTM(mem); err != nil {
+			log.Debug("CopilotAgent: failed persisting coding workflow memory to LTM", "error", err)
+		}
+	}
+
+	summary := strings.TrimSpace(mem.Description)
+	if summary == "" {
+		summary = "Recent coding workflow"
+	}
+	details := make([]string, 0, 4)
+	if mem.Outcome != "" {
+		details = append(details, mem.Outcome)
+	}
+	if len(mem.FilesTouched) > 0 {
+		details = append(details, "files="+strings.Join(mem.FilesTouched, ","))
+	}
+	if mem.TestStatus != "" {
+		details = append(details, "tests="+mem.TestStatus)
+	}
+	if mem.RepositoryHint != "" {
+		details = append(details, "repo="+mem.RepositoryHint)
+	}
+	if len(mem.Plan) > 0 {
+		details = append(details, "plan="+strings.Join(mem.Plan, " | "))
+	}
+	if len(details) > 0 {
+		sess.Memory.AddRuntimeCaveat(summary, strings.Join(details, "; "), "coding_workflow", "coding_workflow", "coding_workflow")
+	}
+
+	ctx := summary
+	if mem.Outcome != "" {
+		ctx = fmt.Sprintf("Recent coding workflow: %s\n- outcome: %s", summary, mem.Outcome)
+	}
+	if len(mem.FilesTouched) > 0 {
+		ctx += fmt.Sprintf("\n- files: %s", strings.Join(mem.FilesTouched, ", "))
+	}
+	if mem.TestStatus != "" {
+		ctx += fmt.Sprintf("\n- tests: %s", mem.TestStatus)
+	}
+	if len(mem.Plan) > 0 {
+		ctx += fmt.Sprintf("\n- plan: %s", strings.Join(mem.Plan, " | "))
+	}
+	if sess.Memory != nil {
+		sess.Memory.SetCodingWorkflowState(&CodingWorkflowExecutionState{
+			ActiveFile:     mem.ActiveFile,
+			Description:    mem.Description,
+			CurrentStep:    mem.NextStep,
+			Plan:           append([]string(nil), mem.Plan...),
+			LastOutcome:    mem.Outcome,
+			LastTestStatus: mem.TestStatus,
+			UpdatedAt:      time.Now().UnixMilli(),
+		})
+	}
+	a.markMRUCategoryWithSource("CODING_WORKFLOW_LAST", ctx, MRUSourceAskOutcome)
+}
+
+func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
+	if a == nil || a.service == nil || a.systemDB == nil {
+		return nil
+	}
+	ctx := context.Background()
+	if a.service != nil {
+		ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{AgentID: a.Memory.AgentID})
+	}
+	if a.Memory == nil {
+		return nil
+	}
+
+	payload := map[string]any{
+		"capability":      "coding_workflow",
+		"description":     strings.TrimSpace(mem.Description),
+		"outcome":         strings.TrimSpace(mem.Outcome),
+		"files_touched":   mem.FilesTouched,
+		"test_status":     strings.TrimSpace(mem.TestStatus),
+		"repository_hint": strings.TrimSpace(mem.RepositoryHint),
+		"lesson":          strings.TrimSpace(mem.Lesson),
+		"next_step":       strings.TrimSpace(mem.NextStep),
+		"recorded_at":     time.Now().UnixMilli(),
+	}
+
+	tx, err := a.systemDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	embedder := ai.Embeddings(nil)
+	if a.service != nil && a.service.Domain() != nil && a.service.Domain().Embedder() != nil {
+		embedder = a.service.Domain().Embedder()
+	}
+
+	ltm, err := a.systemDB.OpenKnowledgeBase(ctx, a.Memory.LongTermMemoryName(), tx, a.brain, embedder, false, true)
+	if err != nil {
+		return err
+	}
+
+	categoryPath := "Capabilities/Coding Workflow"
+	text := fmt.Sprintf("Coding workflow outcome: %s", strings.TrimSpace(mem.Description))
+	if mem.Outcome != "" {
+		text = fmt.Sprintf("%s\nOutcome: %s", text, mem.Outcome)
+	}
+	if len(mem.FilesTouched) > 0 {
+		text = fmt.Sprintf("%s\nFiles: %s", text, strings.Join(mem.FilesTouched, ", "))
+	}
+	if mem.TestStatus != "" {
+		text = fmt.Sprintf("%s\nTests: %s", text, mem.TestStatus)
+	}
+
+	if err := ltm.IngestThoughts(ctx, []memory.Thought[map[string]any]{{
+		Summaries:    []string{text},
+		CategoryPath: categoryPath,
+		Data:         payload,
+	}}, a.Memory.AgentID); err != nil {
+		return err
+	}
+
+	categoryID, err := ltm.Manager.EnsureCategory(ctx, categoryPath)
+	if err != nil {
+		return err
+	}
+	categoryExists := false
+	if cats, err := ltm.Store.Categories(ctx); err == nil {
+		if ok, err := cats.Find(ctx, categoryID, false); err == nil && ok {
+			categoryExists = true
+		}
+	}
+
+	if !categoryExists {
+		if err := a.systemDB.VectorizeCategories(ctx, a.Memory.LongTermMemoryName(), a.brain, embedder, 10, []sop.UUID{categoryID}); err != nil {
+			return err
+		}
+	} else {
+		if err := a.systemDB.VectorizeItems(ctx, a.Memory.LongTermMemoryName(), a.brain, embedder, 10, categoryID, nil); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (a *CopilotAgent) clearMRUCategory(category string) {
@@ -610,6 +782,56 @@ func WithCapability(cap capabilities.Capability) CapabilityOption {
 		}
 		a.ensureCapabilityRegistry()
 		a.capabilityRegistry.Register(cap)
+	}
+}
+
+// WithCodingWorkflowCapability registers the local coding workflow capability for runtimes
+// that are expected to support repository editing and inspection locally.
+func WithCodingWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOption {
+	return func(a *CopilotAgent) {
+		if a == nil {
+			return
+		}
+		a.ensureCapabilityRegistry()
+		if orchestrator != nil {
+			if orchestrator.ChangedFileInspector == nil {
+				orchestrator.ChangedFileInspector = &cw.GitRepoInspector{}
+			}
+			prevMemorySink := orchestrator.MemorySink
+			orchestrator.MemorySink = func(mem cw.CodingMemory) {
+				if prevMemorySink != nil {
+					prevMemorySink(mem)
+				}
+				if a != nil {
+					a.recordCodingMemory(mem)
+				}
+			}
+			if inspector, ok := orchestrator.ChangedFileInspector.(*cw.GitRepoInspector); ok && inspector.Client == nil {
+				inspector.Client = NewWorkflowGitToolAdapter(a)
+			}
+			if orchestrator.ContextManager == nil {
+				orchestrator.ContextManager = &cw.DefaultContextManager{}
+			}
+			if orchestrator.RepoIndexer == nil {
+				orchestrator.RepoIndexer = &cw.DefaultRepoIndexer{}
+			}
+			if orchestrator.PatchEngine == nil {
+				orchestrator.PatchEngine = &cw.DefaultPatchEngine{}
+			}
+			if orchestrator.DiffPreviewer == nil {
+				orchestrator.DiffPreviewer = &cw.DefaultDiffPreviewer{}
+			}
+			if orchestrator.RepoSearcher == nil {
+				orchestrator.RepoSearcher = &cw.FileSearchAdapter{}
+			}
+			if orchestrator.Memory == nil {
+				orchestrator.Memory = cw.NewInMemorySessionMemory()
+			}
+			if orchestrator.Policy == nil {
+				orchestrator.Policy = &cw.DefaultSafetyPolicy{}
+			}
+		}
+		a.capabilityRegistry.RegisterAtFront(cw.NewCapability(orchestrator))
 	}
 }
 
@@ -3057,6 +3279,13 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = askOutcome
 		}
 	}
+	if codingWorkflowContext := a.getCodingWorkflowContext(); codingWorkflowContext != "" {
+		if focusedExecutionContext != "" {
+			focusedExecutionContext = codingWorkflowContext + "\n\n" + focusedExecutionContext
+		} else {
+			focusedExecutionContext = codingWorkflowContext
+		}
+	}
 	if caveatContext := a.getCaveatContext(); caveatContext != "" {
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = caveatContext + "\n\n" + focusedExecutionContext
@@ -3273,6 +3502,43 @@ func (a *CopilotAgent) captureRuntimeCaveatsFromText(text string) {
 		}
 		a.service.session.Memory.AddRuntimeCaveat(summary, details, kind, categoryRoot, "llm_generated")
 	}
+}
+
+func (a *CopilotAgent) getCodingWorkflowContext() string {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return ""
+	}
+	caveats := a.service.session.Memory.GetRuntimeCaveats(3)
+	if len(caveats) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	var wrote bool
+	for _, caveat := range caveats {
+		categoryRoot := strings.TrimSpace(caveat.CategoryRoot)
+		source := strings.TrimSpace(caveat.Source)
+		kind := strings.TrimSpace(caveat.Kind)
+		if categoryRoot != "coding_workflow" && source != "coding_workflow" && kind != "coding_workflow" {
+			continue
+		}
+		if !wrote {
+			sb.WriteString("Coding Workflow Memory:\n")
+			wrote = true
+		}
+		if categoryRoot != "" {
+			sb.WriteString(fmt.Sprintf("- [%s] %s", strings.TrimSpace(categoryRoot), strings.TrimSpace(caveat.Summary)))
+		} else {
+			sb.WriteString(fmt.Sprintf("- %s", strings.TrimSpace(caveat.Summary)))
+		}
+		if strings.TrimSpace(caveat.Details) != "" {
+			sb.WriteString(fmt.Sprintf(": %s", strings.TrimSpace(caveat.Details)))
+		}
+		sb.WriteString("\n")
+	}
+	if !wrote {
+		return ""
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func (a *CopilotAgent) getCaveatContext() string {

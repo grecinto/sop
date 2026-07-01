@@ -45,6 +45,7 @@ Ask now supports a modular capability layer that keeps domain behavior out of th
 *   **Entitlements and Enablement**: Capabilities can declare premium or default-enabled behavior, and the registry filters them according to the active entitlement map.
 *   **Runtime Extension**: New domains can be introduced by registering a capability implementation, enabling support for web research, custom verticals, or other services without branching the core Ask pipeline.
 *   **Shared Runtime**: The same capability-aware runtime is used by the daemon and httpserver entry points, keeping behavior consistent across both surfaces.
+*   **Deployment Scope**: Coding-workflow capabilities should remain local-runtime scoped. HQ/site-server deployments should not expose them as a general capability path, while end-user host runtimes or local daemons may register them for local editing and repo-aware workflows.
 
 ```mermaid
 flowchart LR
@@ -65,7 +66,26 @@ While automatic transaction wrapping (Saga Pattern) is recommended for most case
 *   **Multiple Transactions**: A single script needs to perform multiple independent commits.
 *   **Inherited Context**: You are running a script without a specific `database` field and want to control the transaction on the inherited database connection.
 
-### 7. Dual-Layer Memory Architecture
+### 7. Generalized Workflow Capability
+The shared general workflow module is a distinct architectural layer from the coding workflow capability. The layout is:
+*   **Shared general workflow module**: owns task classification, context assembly, planning, continuation-aware state, and the execution-result contract.
+*   **Coding workflow capability**: one domain-facing adapter that routes code-editing and repo-oriented requests into the shared module.
+*   **Stores and Spaces capabilities**: other domain-facing adapters that can also route generation and analysis requests through the same module.
+
+This shared model supports three reusable task modes:
+*   **Code**: repository edits, symbol-aware changes, patch application, and test validation.
+*   **Generation**: structured artifact creation such as JSON, LEGO-style scripts, and other schema-driven outputs used in Stores and Spaces.
+*   **Analysis**: table/record inspection, chunked data exploration, hypothesis formation, and solution discovery.
+
+The important design point is that the general workflow engine is not “the coding workflow capability.” It is the reusable foundation, and the coding workflow capability is simply one consumer of that foundation.
+
+### Balanced TDD operating posture
+The coding workflow should follow a balanced operating model:
+*   **Design first**: understand the requirement, shape the change, and make the plan explicit before editing files.
+*   **TDD as an assistive companion**: when a change involves implementation detail, draft or review a focused test case to help steer the design without making tests a hard gate.
+*   **Keep the loop practical**: use tests to clarify expectations, reveal edge cases, and support iteration, but do not force a rigid test-first blocker for every small change.
+
+### 8. Dual-Layer Memory Architecture
 The agent is designed with a cognitive memory model that separates transient context from persistent knowledge.
 
 #### Short-Term Memory (Context)
@@ -284,6 +304,43 @@ ag := agent.NewCopilotAgent(cfg, databases, systemDB,
 ```
 
 This keeps the core Ask pipeline stable while letting new domains plug in independently.
+
+## Shared Continuity & Carryover Module Strategy
+The long-term design should treat continuity as a general pipeline capability rather than an Ask-only feature. The intent is for the same continuity machinery to strengthen Ask, coding workflows, stores, spaces, and future capabilities whenever they use memory, prompt context, or multi-turn state.
+
+A fuller architecture sketch is available in [CONTINUITY_MODULE_DESIGN.md](CONTINUITY_MODULE_DESIGN.md).
+
+### Design direction
+The current Ask runtime already demonstrates a useful continuity pattern, but it is still partly coupled to the Ask pipeline and its MRU/prompt wiring. The broader strategy is to make continuity a shared layer that:
+*   unifies compact and live carryover behavior across capabilities;
+*   preserves richer semantic continuity than provider-side continuation alone;
+*   treats provider state as a transport mechanism while the shared layer owns reasoning continuity and fallback reconstruction.
+
+### Architectural boundary
+The shared continuity layer should own:
+*   a general continuity state contract;
+*   policy and reset decisions;
+*   compact summary generation;
+*   memory-backed fallback injection;
+*   capability-specific hooks for contributing signals such as facts, recipes, tool patterns, or domain context.
+
+### Strategic plan
+1.  Keep Ask as the first proving ground for the pattern, because it already has strong continuity behavior and clear prompt integration points.
+2.  Establish a shared continuity abstraction that can be consumed by multiple capabilities without requiring each one to reimplement its own policy.
+3.  Let coding workflow and later domain capabilities contribute their outcomes into the same continuity stream so the agent can carry forward not just conversational context, but also task-level learnings.
+4.  Preserve provider-side continuation as an optional enhancement rather than the sole source of continuity.
+
+### Guiding principles
+*   Continuity should improve the system broadly, not just the Ask experience.
+*   Shared state should remain lightweight and explicit so it can be inspected and reasoned about.
+*   Memory and prompt construction should be aligned so continuity is visible across turns rather than being implicit or duplicated.
+*   New capabilities should be able to opt into the same continuity model instead of inventing parallel patterns.
+
+### Revisit criteria
+This direction should be revisited when:
+*   the same continuity behavior is needed in more than one capability beyond Ask;
+*   the shared layer can produce better continuity summaries than the current Ask-specific path;
+*   provider continuation and memory-backed fallback are both contributing cleanly without duplication.
 
 ---
 

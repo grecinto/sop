@@ -132,13 +132,97 @@ func (kb *KnowledgeBase[T]) UpsertCategories(ctx context.Context, params []Upser
 }
 
 func (kb *KnowledgeBase[T]) DeleteCategories(ctx context.Context, categoryIDs []sop.UUID) error {
-	tree, err := kb.Store.Categories(ctx)
+	catTree, err := kb.Store.Categories(ctx)
 	if err != nil {
 		return err
 	}
+	catsByPath, err := kb.Store.CategoriesByPath(ctx)
+	if err != nil {
+		return err
+	}
+	catsByDist, err := kb.Store.CategoriesByDistance(ctx)
+	if err != nil {
+		return err
+	}
+
 	for _, id := range categoryIDs {
-		_, err = tree.Remove(ctx, id)
+		found, err := catTree.Find(ctx, id, false)
 		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+
+		cat, err := catTree.GetCurrentValue(ctx)
+		if err != nil {
+			return err
+		}
+		if cat != nil {
+			if cat.Path != "" {
+				if _, err := catsByPath.Remove(ctx, cat.Path); err != nil {
+					return err
+				}
+			}
+			if cat.Name != "" {
+				if _, err := catsByPath.Remove(ctx, cat.Name); err != nil {
+					return err
+				}
+			}
+			for _, parent := range cat.ParentIDs {
+				if parent.ParentID.IsNil() {
+					continue
+				}
+				if ok, err := catTree.Find(ctx, parent.ParentID, false); err == nil && ok {
+					parentCat, err := catTree.GetCurrentValue(ctx)
+					if err != nil {
+						return err
+					}
+					filtered := parentCat.ChildrenIDs[:0]
+					for _, childID := range parentCat.ChildrenIDs {
+						if childID != id {
+							filtered = append(filtered, childID)
+						}
+					}
+					parentCat.ChildrenIDs = filtered
+					if _, err := catTree.UpdateCurrentItem(ctx, parent.ParentID, parentCat); err != nil {
+						return err
+					}
+				}
+			}
+			if len(cat.CenterVector) > 0 {
+				if len(cat.ParentIDs) == 0 {
+					dist := Distance(cat.CenterVector, kb.Store.DomainReference(), true)
+					if _, err := catsByDist.Remove(ctx, DistanceKey{ParentID: sop.NilUUID, Distance: dist, ID: id}); err != nil {
+						return err
+					}
+				} else {
+					for _, parent := range cat.ParentIDs {
+						if parent.ParentID.IsNil() {
+							dist := Distance(cat.CenterVector, kb.Store.DomainReference(), true)
+							if _, err := catsByDist.Remove(ctx, DistanceKey{ParentID: sop.NilUUID, Distance: dist, ID: id}); err != nil {
+								return err
+							}
+						} else {
+							if ok, err := catTree.Find(ctx, parent.ParentID, false); err == nil && ok {
+								parentCat, err := catTree.GetCurrentValue(ctx)
+								if err != nil {
+									return err
+								}
+								if len(parentCat.CenterVector) > 0 {
+									dist := Distance(cat.CenterVector, parentCat.CenterVector, true)
+									if _, err := catsByDist.Remove(ctx, DistanceKey{ParentID: parent.ParentID, Distance: dist, ID: id}); err != nil {
+										return err
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if _, err := catTree.Remove(ctx, id); err != nil {
 			return err
 		}
 	}

@@ -131,15 +131,30 @@ type RuntimeCaveat struct {
 	Active         bool
 }
 
+type CodingWorkflowExecutionState struct {
+	ActiveFile      string
+	Description     string
+	CurrentStep     string
+	Plan            []string
+	Symbols         []string
+	DependencyFiles []string
+	RelatedFiles    []string
+	TestFiles       []string
+	LastOutcome     string
+	LastTestStatus  string
+	UpdatedAt       int64
+}
+
 type ShortTermMemory struct {
-	Threads            map[sop.UUID]*ConversationThread
-	Order              []sop.UUID // Maintains the sequence of threads
-	CurrentThreadID    sop.UUID   // The currently active thread
-	RuntimeCaveats     []RuntimeCaveat
-	LastRoutingState   *TaskContextClassification
-	LastMRUSnapshot    []MRUItem
-	LastRecipeSnapshot []RecipeItem
-	LastCarryoverState *ai.CarryoverState
+	Threads             map[sop.UUID]*ConversationThread
+	Order               []sop.UUID // Maintains the sequence of threads
+	CurrentThreadID     sop.UUID   // The currently active thread
+	RuntimeCaveats      []RuntimeCaveat
+	LastRoutingState    *TaskContextClassification
+	LastMRUSnapshot     []MRUItem
+	LastRecipeSnapshot  []RecipeItem
+	LastCarryoverState  *ai.CarryoverState
+	CodingWorkflowState *CodingWorkflowExecutionState
 }
 
 // NewShortTermMemory initializes the memory structure.
@@ -342,6 +357,38 @@ func (stm *ShortTermMemory) SetCarryoverState(state *ai.CarryoverState) {
 
 func (stm *ShortTermMemory) GetCarryoverState() *ai.CarryoverState {
 	return cloneCarryoverState(stm.LastCarryoverState)
+}
+
+func (stm *ShortTermMemory) SetCodingWorkflowState(state *CodingWorkflowExecutionState) {
+	if stm == nil {
+		return
+	}
+	if state == nil {
+		stm.CodingWorkflowState = nil
+		return
+	}
+	cloned := &CodingWorkflowExecutionState{}
+	*cloned = *state
+	cloned.Plan = append([]string(nil), state.Plan...)
+	cloned.Symbols = append([]string(nil), state.Symbols...)
+	cloned.DependencyFiles = append([]string(nil), state.DependencyFiles...)
+	cloned.RelatedFiles = append([]string(nil), state.RelatedFiles...)
+	cloned.TestFiles = append([]string(nil), state.TestFiles...)
+	stm.CodingWorkflowState = cloned
+}
+
+func (stm *ShortTermMemory) GetCodingWorkflowState() *CodingWorkflowExecutionState {
+	if stm == nil || stm.CodingWorkflowState == nil {
+		return nil
+	}
+	cloned := &CodingWorkflowExecutionState{}
+	*cloned = *stm.CodingWorkflowState
+	cloned.Plan = append([]string(nil), stm.CodingWorkflowState.Plan...)
+	cloned.Symbols = append([]string(nil), stm.CodingWorkflowState.Symbols...)
+	cloned.DependencyFiles = append([]string(nil), stm.CodingWorkflowState.DependencyFiles...)
+	cloned.RelatedFiles = append([]string(nil), stm.CodingWorkflowState.RelatedFiles...)
+	cloned.TestFiles = append([]string(nil), stm.CodingWorkflowState.TestFiles...)
+	return cloned
 }
 
 func (stm *ShortTermMemory) ResetProjectionForTopicSwitch() {

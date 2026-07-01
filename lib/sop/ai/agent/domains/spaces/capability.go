@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	"github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 const (
@@ -17,9 +18,17 @@ type ExecutionContextInput struct {
 	DBArtifacts []string
 }
 
-type Capability struct{}
+type Capability struct {
+	Orchestrator *codingworkflow.Orchestrator
+}
 
-func NewCapability() *Capability { return &Capability{} }
+func NewCapability(orchestrator ...*codingworkflow.Orchestrator) *Capability {
+	var orch *codingworkflow.Orchestrator
+	if len(orchestrator) > 0 {
+		orch = orchestrator[0]
+	}
+	return &Capability{Orchestrator: orch}
+}
 
 func (c *Capability) ID() string   { return CapabilityID }
 func (c *Capability) Name() string { return CapabilityName }
@@ -76,5 +85,17 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	return ""
 }
 func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	return capabilities.CapabilityResult{Summary: "spaces capability placeholder"}, nil
+	if c == nil || c.Orchestrator == nil {
+		return capabilities.CapabilityResult{Summary: "spaces capability placeholder"}, nil
+	}
+	metadata := map[string]string{"query": query}
+	if state.Domain != "" {
+		metadata["domain"] = state.Domain
+	}
+	result, err := c.Orchestrator.Execute(codingworkflow.Task{Description: query, ActiveFile: "", State: codingworkflow.RunState{Args: map[string]string{"query": query}, Metadata: metadata}})
+	if err != nil {
+		return capabilities.CapabilityResult{}, err
+	}
+	data := map[string]any{"message": result.Message, "task_type": result.TaskType, "plan": result.Plan, "resumed_from_state": result.ResumedFromState}
+	return capabilities.CapabilityResult{Summary: result.Message, Data: data}, nil
 }

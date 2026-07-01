@@ -1,0 +1,794 @@
+package codingworkflow
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestDefaultContextManagerBuildsContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	activePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(activePath, []byte("package main\n\nfunc Hello() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write active file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "main_test.go"), []byte("package main\n\nimport \"testing\"\n\nfunc TestHello(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if pack.ActiveFile == "" {
+		t.Fatalf("expected active file to be populated")
+	}
+	if !strings.Contains(pack.ActiveFileSnippet, "func Hello") {
+		t.Fatalf("expected snippet to contain function declaration, got %q", pack.ActiveFileSnippet)
+	}
+	if len(pack.TestFiles) < 1 {
+		t.Fatalf("expected at least one related test file, got %d", len(pack.TestFiles))
+	}
+}
+
+func TestDefaultContextManagerIncludesModuleMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module example.com/demo\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if pack.ModuleName != "example.com/demo" {
+		t.Fatalf("expected module name example.com/demo, got %q", pack.ModuleName)
+	}
+	if !strings.Contains(pack.RepositorySummary, "example.com/demo") {
+		t.Fatalf("expected repository summary to include module name, got %q", pack.RepositorySummary)
+	}
+	if !contains(pack.RepositoryFiles, "go.mod") {
+		t.Fatalf("expected repository files to include go.mod, got %v", pack.RepositoryFiles)
+	}
+}
+
+func TestDefaultPlannerBuildsExecutionPlan(t *testing.T) {
+	planner := &DefaultPlanner{}
+	pack := ContextPack{ActiveFile: "main.go", RelatedFiles: []string{"main_test.go"}, TestFiles: []string{"main_test.go"}}
+	plan, err := planner.Plan(Task{WorkingDir: ".", ActiveFile: "main.go", Description: "fix parser"}, RunState{}, pack)
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	if len(plan) == 0 {
+		t.Fatalf("expected a non-empty execution plan")
+	}
+	joined := strings.Join(plan, " ")
+	if !strings.Contains(joined, "inspect") {
+		t.Fatalf("expected plan to include inspection step, got %q", joined)
+	}
+	if !strings.Contains(joined, "tests") {
+		t.Fatalf("expected plan to include testing step, got %q", joined)
+	}
+}
+
+func TestDefaultContextManagerBuildsGeneralContextWithoutActiveFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, Description: "analyze store inventory and propose a SQL-based cleanup plan"}, RunState{Metadata: map[string]string{"continuation_summary": "continue from prior store analysis"}})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if pack.ActiveFile != "" {
+		t.Fatalf("expected no active file for general analysis context, got %q", pack.ActiveFile)
+	}
+	if pack.TaskType != "analysis" {
+		t.Fatalf("expected analysis task type, got %q", pack.TaskType)
+	}
+	if !strings.Contains(pack.ContinuationSummary, "prior store analysis") {
+		t.Fatalf("expected continuation summary to be carried over, got %q", pack.ContinuationSummary)
+	}
+}
+
+func TestDefaultPlannerBuildsGeneralSolutionDiscoveryPlan(t *testing.T) {
+	planner := &DefaultPlanner{}
+	pack := ContextPack{TaskType: "analysis", ContinuationSummary: "continue from prior store analysis"}
+	plan, err := planner.Plan(Task{WorkingDir: ".", Description: "analyze store inventory and propose a SQL-based cleanup plan"}, RunState{}, pack)
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	joined := strings.Join(plan, " ")
+	if !strings.Contains(joined, "derive a solution") {
+		t.Fatalf("expected general analysis plan to include solution discovery, got %q", joined)
+	}
+	if !strings.Contains(joined, "validate the proposed approach") {
+		t.Fatalf("expected general analysis plan to include validation guidance, got %q", joined)
+	}
+}
+
+func TestDefaultContextManagerClassifiesGenerationTasks(t *testing.T) {
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: ".", Description: "generate a lego-style JSON script for a store workflow"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if pack.TaskType != "generation" {
+		t.Fatalf("expected generation task type, got %q", pack.TaskType)
+	}
+}
+
+func TestDefaultContextManagerClassifiesPlanningTasks(t *testing.T) {
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: ".", Description: "help me design a parser and discuss tradeoffs"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if pack.TaskType != "planning" {
+		t.Fatalf("expected planning task type, got %q", pack.TaskType)
+	}
+}
+
+func TestDefaultContextManagerClassifiesImplementationAfterPlanningIntent(t *testing.T) {
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: ".", Description: "implement the parser design now"}, RunState{Metadata: map[string]string{"mode": "planning"}})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if pack.TaskType != "code" {
+		t.Fatalf("expected implementation handoff to resolve to code mode, got %q", pack.TaskType)
+	}
+}
+
+func TestDefaultPlannerBuildsGenerationPlan(t *testing.T) {
+	planner := &DefaultPlanner{}
+	pack := ContextPack{TaskType: "generation", RepositorySummary: "schema=store"}
+	plan, err := planner.Plan(Task{WorkingDir: ".", Description: "generate a lego-style JSON script for a store workflow"}, RunState{}, pack)
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	joined := strings.Join(plan, " ")
+	if !strings.Contains(joined, "compose the requested artifact") {
+		t.Fatalf("expected generation plan to include composition guidance, got %q", joined)
+	}
+	if !strings.Contains(joined, "validate the structure") {
+		t.Fatalf("expected generation plan to include structure validation, got %q", joined)
+	}
+}
+
+func TestDefaultContextManagerIncludesNestedRepositoryFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "pkg", "internal"), 0o755); err != nil {
+		t.Fatalf("mkdir nested dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "pkg", "internal", "helper.go"), []byte("package internal\n"), 0o644); err != nil {
+		t.Fatalf("write nested file: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if !contains(pack.RepositoryFiles, filepath.ToSlash(filepath.Join("pkg", "internal", "helper.go"))) {
+		t.Fatalf("expected nested repository file in context, got %v", pack.RepositoryFiles)
+	}
+}
+
+func TestDefaultTestRunnerSelectsTargetedTests(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module example.com/demo\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "main_test.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main_test.go: %v", err)
+	}
+
+	runner := &DefaultTestRunner{}
+	result, err := runner.Run(Task{WorkingDir: tmpDir, ActiveFile: "main.go"}, RunState{})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Output == "" {
+		t.Fatalf("expected test output to be populated")
+	}
+}
+
+func TestDefaultTestRunnerSelectsRelatedTestFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "helper.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write helper.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "main_test.go"), []byte("package main\n\nfunc TestMain(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatalf("write main_test.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "helper_test.go"), []byte("package main\n\nfunc TestHelper(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatalf("write helper_test.go: %v", err)
+	}
+
+	runner := &DefaultTestRunner{}
+	files := runner.selectRelevantTestFiles(tmpDir, "main.go")
+	if !contains(files, "main_test.go") {
+		t.Fatalf("expected main_test.go to be selected, got %v", files)
+	}
+	if !contains(files, "helper_test.go") {
+		t.Fatalf("expected helper_test.go to be selected, got %v", files)
+	}
+}
+
+func TestDefaultPlannerBuildsMultiFilePlan(t *testing.T) {
+	planner := &DefaultPlanner{}
+	pack := ContextPack{ActiveFile: "main.go", RelatedFiles: []string{"main.go", "helper.go", "main_test.go"}, TestFiles: []string{"main_test.go"}}
+	plan, err := planner.Plan(Task{WorkingDir: ".", ActiveFile: "main.go", Description: "refactor parser"}, RunState{}, pack)
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	joined := strings.Join(plan, " ")
+	if !strings.Contains(joined, "3 related file") {
+		t.Fatalf("expected plan to mention related files, got %q", joined)
+	}
+}
+
+func TestDefaultPlannerBuildsConcreteEditChecklist(t *testing.T) {
+	planner := &DefaultPlanner{}
+	pack := ContextPack{ActiveFile: "main.go", Symbols: []string{"Hello"}, DependencyFiles: []string{"helper.go"}, RelatedFiles: []string{"helper.go"}, TestFiles: []string{"main_test.go"}}
+	plan, err := planner.Plan(Task{WorkingDir: ".", ActiveFile: "main.go", Description: "update Hello"}, RunState{}, pack)
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	joined := strings.Join(plan, " ")
+	if !strings.Contains(joined, "edit active file main.go") {
+		t.Fatalf("expected checklist to include active file edit, got %q", joined)
+	}
+	if !strings.Contains(joined, "inspect dependency file(s): helper.go") {
+		t.Fatalf("expected checklist to include dependency file guidance, got %q", joined)
+	}
+}
+
+func TestDefaultContextManagerCollectsActiveFileSymbols(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n\nfunc Hello() string {\n\treturn \"hi\"\n}\n\ntype Config struct{}\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "update Hello"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if !contains(pack.Symbols, "Hello") {
+		t.Fatalf("expected symbols to include Hello, got %v", pack.Symbols)
+	}
+	if !contains(pack.Symbols, "Config") {
+		t.Fatalf("expected symbols to include Config, got %v", pack.Symbols)
+	}
+}
+
+func TestDefaultContextManagerResumesActiveFileFromState(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, Description: "continue previous work"}, RunState{Metadata: map[string]string{"active_file": "main.go"}})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if pack.ActiveFile != "main.go" {
+		t.Fatalf("expected active file to be resumed, got %q", pack.ActiveFile)
+	}
+	if !pack.ResumedFromState {
+		t.Fatal("expected context to indicate it resumed from prior state")
+	}
+}
+
+func TestDefaultContextManagerCollectsDependencyFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n\nfunc Hello() string {\n\treturn Helper()\n}\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "helper.go"), []byte("package main\n\nfunc Helper() string {\n\treturn \"noop\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write helper.go: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if !contains(pack.DependencyFiles, "helper.go") {
+		t.Fatalf("expected dependency files to include helper.go, got %v", pack.DependencyFiles)
+	}
+}
+
+func TestDefaultPatchEngineAppliesReplacement(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("hello world\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	engine := &DefaultPatchEngine{}
+	err := engine.Apply(Task{WorkingDir: tmpDir}, &Patch{FilePath: "sample.txt", OldContent: "hello", NewContent: "goodbye"}, RunState{})
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after patch: %v", err)
+	}
+	if !strings.Contains(string(content), "goodbye world") {
+		t.Fatalf("expected patched content, got %q", string(content))
+	}
+}
+
+func TestDefaultContextManagerBuildsSymbolAwareContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	activePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(activePath, []byte("package main\n\nfunc Hello() string {\n\treturn \"hi\"\n}\n\nfunc Helper() string {\n\treturn \"noop\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write active file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "helper.go"), []byte("package main\n\nfunc Helper() string {\n\treturn \"noop\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write helper file: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "update Hello"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if pack.SymbolName != "Hello" {
+		t.Fatalf("expected symbol Hello, got %q", pack.SymbolName)
+	}
+	if !strings.Contains(pack.SymbolSnippet, "func Hello") {
+		t.Fatalf("expected symbol snippet to contain func Hello, got %q", pack.SymbolSnippet)
+	}
+	if !contains(pack.RelatedFiles, "helper.go") {
+		t.Fatalf("expected related files to include helper.go, got %v", pack.RelatedFiles)
+	}
+}
+
+func TestDefaultSafetyPolicyAllowsExplicitApproval(t *testing.T) {
+	policy := &DefaultSafetyPolicy{}
+	err := policy.Allow(Task{Patch: &Patch{FilePath: "sample.txt"}}, RunState{Metadata: map[string]string{"approval": "granted"}})
+	if err != nil {
+		t.Fatalf("expected approval metadata to authorize patching, got %v", err)
+	}
+}
+
+func TestDefaultContextManagerBuildsStructuralSnippet(t *testing.T) {
+	tmpDir := t.TempDir()
+	activePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(activePath, []byte("package main\n\nfunc Hello() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write active file: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "update Hello"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if !strings.Contains(pack.SymbolSnippet, "return \"hi\"") {
+		t.Fatalf("expected structural snippet to include function body, got %q", pack.SymbolSnippet)
+	}
+}
+
+func TestDefaultPatchEngineAppliesGitStylePatchContent(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if out, err := exec.Command("git", "init", tmpDir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, string(out))
+	}
+
+	engine := &DefaultPatchEngine{}
+	err := engine.Apply(Task{WorkingDir: tmpDir}, &Patch{FilePath: "sample.txt", PatchContent: "diff --git a/sample.txt b/sample.txt\n--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-hello\n+goodbye\n"}, RunState{})
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after patch: %v", err)
+	}
+	if string(content) != "goodbye\n" {
+		t.Fatalf("expected patched content, got %q", string(content))
+	}
+}
+
+func TestOrchestratorCreatesTestBeforeApplyingPatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write main file: %v", err)
+	}
+
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		PatchEngine:    &DefaultPatchEngine{},
+		Memory:         NewInMemorySessionMemory(),
+		Policy:         &DefaultSafetyPolicy{},
+		TestRunner:     &countingTestRunner{},
+	}
+
+	_, err := orchestrator.Execute(Task{
+		WorkingDir:       tmpDir,
+		ActiveFile:       "main.go",
+		Description:      "update greeting text",
+		AllowDestructive: true,
+		Patch:            &Patch{FilePath: "main.go", OldContent: "\"hi\"", NewContent: "\"hello\""},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	testPath := filepath.Join(tmpDir, "main_test.go")
+	if !fileExists(testPath) {
+		t.Fatalf("expected auto-generated test file %s", testPath)
+	}
+	content, err := os.ReadFile(testPath)
+	if err != nil {
+		t.Fatalf("read generated test file: %v", err)
+	}
+	if !strings.Contains(string(content), "TestGreeting") {
+		t.Fatalf("expected generated test to mention Greeting, got %q", string(content))
+	}
+}
+
+func TestOrchestratorUsesSearchResultsInContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write main file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "helper.go"), []byte("package main\n\nfunc Helper() string {\n\treturn \"hello\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write helper file: %v", err)
+	}
+
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		RepoSearcher:   &FileSearchAdapter{},
+		Memory:         NewInMemorySessionMemory(),
+		Policy:         &DefaultSafetyPolicy{},
+	}
+
+	result, err := orchestrator.Execute(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "inspect greeting"})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !contains(result.ContextPack.RelatedFiles, "helper.go") {
+		t.Fatalf("expected search-backed helper.go in related files, got %v", result.ContextPack.RelatedFiles)
+	}
+}
+
+type stubChangedFileInspector struct {
+	files []string
+}
+
+func (s *stubChangedFileInspector) ListChangedFiles(Task, RunState) ([]string, error) {
+	return s.files, nil
+}
+
+type stubRepoInspector struct {
+	summary RepoInspectionSummary
+}
+
+func (s *stubRepoInspector) Inspect(Task, RunState) (RepoInspectionSummary, error) {
+	return s.summary, nil
+}
+
+type countingTestRunner struct {
+	runs int
+}
+
+func (c *countingTestRunner) Run(task Task, state RunState) (TestResult, error) {
+	c.runs++
+	return TestResult{Passed: true, Output: "ok"}, nil
+}
+
+func TestOrchestratorUsesRepoInspectionSummaryInContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main file: %v", err)
+	}
+
+	orchestrator := &Orchestrator{
+		ContextManager:       &DefaultContextManager{},
+		RepoIndexer:          &DefaultRepoIndexer{},
+		ChangedFileInspector: &stubChangedFileInspector{files: []string{"main.go"}},
+		RepoInspector:        &stubRepoInspector{summary: RepoInspectionSummary{ChangedFiles: []string{"main.go"}, DiffPreview: "changed main.go"}},
+		RepoSearcher:         &FileSearchAdapter{},
+		Memory:               NewInMemorySessionMemory(),
+		Policy:               &DefaultSafetyPolicy{},
+	}
+
+	result, err := orchestrator.Execute(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "inspect repo"})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.ContextPack.RepositorySummary == "" {
+		t.Fatalf("expected repository inspection summary to be populated")
+	}
+	if !strings.Contains(result.ContextPack.RepositorySummary, "main.go") {
+		t.Fatalf("expected repository summary to mention main.go, got %q", result.ContextPack.RepositorySummary)
+	}
+}
+
+func TestOrchestratorExecutesBoundedPatchLoop(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(filePath, []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	countingRunner := &countingTestRunner{}
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		PatchEngine:    &DefaultPatchEngine{},
+		Memory:         NewInMemorySessionMemory(),
+		Policy:         &DefaultSafetyPolicy{},
+		TestRunner:     countingRunner,
+		MaxIterations:  2,
+	}
+
+	result, err := orchestrator.Execute(Task{
+		WorkingDir:       tmpDir,
+		ActiveFile:       "main.go",
+		Description:      "update greeting text",
+		AllowDestructive: true,
+		Patches: []*Patch{
+			{FilePath: "main.go", OldContent: "\"hi\"", NewContent: "\"hello\"", Description: "first pass"},
+			{FilePath: "main.go", OldContent: "\"hello\"", NewContent: "\"world\"", Description: "second pass"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(result.AppliedPatches) != 2 {
+		t.Fatalf("expected two applied patches, got %d", len(result.AppliedPatches))
+	}
+	if countingRunner.runs != 2 {
+		t.Fatalf("expected two test runs for the two patch iterations, got %d", countingRunner.runs)
+	}
+}
+
+func TestOrchestratorPersistsCodingMemorySummary(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(filePath, []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	memory := NewInMemorySessionMemory()
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		PatchEngine:    &DefaultPatchEngine{},
+		Memory:         memory,
+		Policy:         &DefaultSafetyPolicy{},
+	}
+
+	_, err := orchestrator.Execute(Task{
+		WorkingDir:       tmpDir,
+		ActiveFile:       "main.go",
+		Description:      "update greeting text",
+		AllowDestructive: true,
+		Patch:            &Patch{FilePath: "main.go", OldContent: "\"hi\"", NewContent: "\"hello\""},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	stored, err := memory.Load("coding-memory")
+	if err != nil {
+		t.Fatalf("Load coding memory: %v", err)
+	}
+	if !strings.Contains(stored["coding_memory"], "main.go") {
+		t.Fatalf("expected coding memory to mention main.go, got %v", stored)
+	}
+}
+
+func TestOrchestratorLoadsExistingCodingMemoryIntoContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(filePath, []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	memory := NewInMemorySessionMemory()
+	if err := memory.Save("coding-memory", map[string]string{"coding_memory": "description=fix parser; outcome=patched parser; files=parser.go; status=passed"}); err != nil {
+		t.Fatalf("seed coding memory: %v", err)
+	}
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		Memory:         memory,
+		Policy:         &DefaultSafetyPolicy{},
+	}
+
+	result, err := orchestrator.Execute(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "continue parser work"})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !strings.Contains(result.ContextPack.RecentCodingMemory, "patched parser") {
+		t.Fatalf("expected recent coding memory to be surfaced, got %q", result.ContextPack.RecentCodingMemory)
+	}
+	if !strings.Contains(result.Message, "patched parser") {
+		t.Fatalf("expected execution message to mention previous coding memory, got %q", result.Message)
+	}
+}
+
+func TestOrchestratorExecutesPatchAndPersistsMemory(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(filePath, []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	memory := NewInMemorySessionMemory()
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		PatchEngine:    &DefaultPatchEngine{},
+		Memory:         memory,
+		Policy:         &DefaultSafetyPolicy{},
+	}
+
+	result, err := orchestrator.Execute(Task{
+		WorkingDir:       tmpDir,
+		ActiveFile:       "main.go",
+		Description:      "update greeting text",
+		AllowDestructive: true,
+		State:            RunState{Metadata: map[string]string{"source": "tests"}},
+		Patch:            &Patch{FilePath: "main.go", OldContent: "\"hi\"", NewContent: "\"hello\""},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(result.AppliedPatches) != 1 {
+		t.Fatalf("expected one applied patch, got %d", len(result.AppliedPatches))
+	}
+
+	stored, err := memory.Load("latest-task")
+	if err != nil {
+		t.Fatalf("Load memory: %v", err)
+	}
+	if stored["description"] != "update greeting text" {
+		t.Fatalf("expected persisted description, got %v", stored)
+	}
+}
+
+func TestOrchestratorInvokesMemorySinkForCodingMemory(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(filePath, []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	var received CodingMemory
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		PatchEngine:    &DefaultPatchEngine{},
+		Memory:         NewInMemorySessionMemory(),
+		Policy:         &DefaultSafetyPolicy{},
+		MemorySink: func(mem CodingMemory) {
+			received = mem
+		},
+	}
+
+	_, err := orchestrator.Execute(Task{
+		WorkingDir:       tmpDir,
+		ActiveFile:       "main.go",
+		Description:      "update greeting text",
+		AllowDestructive: true,
+		Patch:            &Patch{FilePath: "main.go", OldContent: "\"hi\"", NewContent: "\"hello\""},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if received.Description != "update greeting text" {
+		t.Fatalf("expected memory sink to receive task description, got %+v", received)
+	}
+	if !contains(received.FilesTouched, "main.go") {
+		t.Fatalf("expected memory sink to receive touched file, got %+v", received.FilesTouched)
+	}
+}
+
+func TestOrchestratorEmitsStructuredContinuitySignal(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(filePath, []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	var received []ContinuitySignal
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		PatchEngine:    &DefaultPatchEngine{},
+		Memory:         NewInMemorySessionMemory(),
+		Policy:         &DefaultSafetyPolicy{},
+		ContinuitySink: func(signal ContinuitySignal) {
+			received = append(received, signal)
+		},
+	}
+
+	_, err := orchestrator.Execute(Task{
+		WorkingDir:       tmpDir,
+		ActiveFile:       "main.go",
+		Description:      "update greeting text",
+		AllowDestructive: true,
+		Patch:            &Patch{FilePath: "main.go", OldContent: "\"hi\"", NewContent: "\"hello\""},
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(received) != 1 {
+		t.Fatalf("expected one continuity signal, got %d", len(received))
+	}
+	if received[0].CapabilityID != CapabilityID {
+		t.Fatalf("expected capability id %q, got %q", CapabilityID, received[0].CapabilityID)
+	}
+	if received[0].Kind != "task_outcome" {
+		t.Fatalf("expected task_outcome kind, got %q", received[0].Kind)
+	}
+	if !strings.Contains(received[0].Summary, "update greeting text") {
+		t.Fatalf("expected summary to include task description, got %q", received[0].Summary)
+	}
+}
+
+func TestOrchestratorPreservesTaskClassificationAndPlanInResult(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(filePath, []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		Memory:         NewInMemorySessionMemory(),
+		Policy:         &DefaultSafetyPolicy{},
+		Planner:        &DefaultPlanner{},
+	}
+
+	result, err := orchestrator.Execute(Task{
+		WorkingDir:       tmpDir,
+		ActiveFile:       "main.go",
+		Description:      "analyze store inventory and propose a SQL-based cleanup plan",
+		State:            RunState{Metadata: map[string]string{"continuation_summary": "continue from prior analysis"}},
+		AllowDestructive: false,
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.TaskType != "analysis" {
+		t.Fatalf("expected analysis task type, got %q", result.TaskType)
+	}
+	if len(result.Plan) == 0 {
+		t.Fatal("expected orchestrator to return a plan")
+	}
+	if !strings.Contains(strings.Join(result.Plan, " "), "derive a solution") {
+		t.Fatalf("expected plan to include solution discovery, got %v", result.Plan)
+	}
+	if !result.ResumedFromState {
+		t.Fatal("expected resumed state flag to be set when continuation metadata is present")
+	}
+}

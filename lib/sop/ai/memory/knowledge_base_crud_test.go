@@ -145,6 +145,45 @@ func TestBatchCategories(t *testing.T) {
 	}
 }
 
+func TestDeleteCategories_RemovesPathAndDistanceIndexes(t *testing.T) {
+	ctx := context.Background()
+	s := prepareTestStore()
+	kb := &KnowledgeBase[string]{Store: s}
+
+	catID := sop.NewUUID()
+	if err := kb.UpsertCategories(ctx, []UpsertCategoryParam{{Category: &Category{ID: catID, Name: "Root", Path: "Root", CenterVector: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("UpsertCategories failed: %v", err)
+	}
+	s.SetDomainReference([]float32{1, 0})
+
+	catsByPath, err := s.CategoriesByPath(ctx)
+	if err != nil {
+		t.Fatalf("CategoriesByPath failed: %v", err)
+	}
+	if found, _ := catsByPath.Find(ctx, "Root", false); !found {
+		t.Fatalf("expected path index entry for category before delete")
+	}
+
+	catsByDist, err := s.CategoriesByDistance(ctx)
+	if err != nil {
+		t.Fatalf("CategoriesByDistance failed: %v", err)
+	}
+	if _, err := catsByDist.Add(ctx, DistanceKey{ParentID: sop.NilUUID, Distance: 0, ID: catID}, 0); err != nil {
+		t.Fatalf("Add distance index entry failed: %v", err)
+	}
+
+	if err := kb.DeleteCategories(ctx, []sop.UUID{catID}); err != nil {
+		t.Fatalf("DeleteCategories failed: %v", err)
+	}
+
+	if found, _ := catsByPath.Find(ctx, "Root", false); found {
+		t.Fatalf("expected path index entry to be removed after delete")
+	}
+	if found, _ := catsByDist.Find(ctx, DistanceKey{ParentID: sop.NilUUID, Distance: 0, ID: catID}, false); found {
+		t.Fatalf("expected distance index entry to be removed after delete")
+	}
+}
+
 func TestBatchItemsAndSearch(t *testing.T) {
 	ctx := context.Background()
 	s := prepareTestStore()

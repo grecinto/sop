@@ -73,6 +73,21 @@ func (r *Registry) Register(cap Capability) {
 	r.capabilities = append(r.capabilities, cap)
 }
 
+// RegisterAtFront inserts a capability ahead of existing registrations without duplicating it.
+func (r *Registry) RegisterAtFront(cap Capability) {
+	if cap == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, existing := range r.capabilities {
+		if existing.ID() == cap.ID() {
+			return
+		}
+	}
+	r.capabilities = append([]Capability{cap}, r.capabilities...)
+}
+
 // Resolve returns the first capability that can handle the request.
 func (r *Registry) Resolve(query string, state RoutingState) (Capability, bool) {
 	r.mu.RLock()
