@@ -3,6 +3,7 @@ package common
 import (
 	"cmp"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -35,6 +36,50 @@ func Test_OpenVsNewBTree(t *testing.T) {
 	}
 	if _, err := OpenBtree[int, string](ctx, "fooStore22", trans, nil); err == nil {
 		t.Logf("OpenBtree('fooStore', trans) failed, got nil want error.")
+	}
+}
+
+func Test_SimpleBridgeStoreUpsertListAndDelete(t *testing.T) {
+	trans, err := newMockTransaction(t, sop.ForWriting, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trans.Begin(ctx)
+
+	b3, err := NewBtree[string, []string](ctx, sop.StoreOptions{
+		Name:                     "bridge-helper",
+		SlotLength:               8,
+		IsUnique:                 false,
+		IsValueDataInNodeSegment: false,
+		LeafLoadBalancing:        true,
+		Description:              "",
+	}, trans, cmp.Compare)
+	if err != nil {
+		t.Fatalf("NewBtree() error = %v", err)
+	}
+
+	bridge := NewSimpleBridgeStore[string, string](b3)
+	if err := bridge.Upsert(ctx, []BridgeEntry[string, string]{{Key: "alice", Value: "sub-1"}, {Key: "alice", Value: "sub-2"}, {Key: "alice", Value: "sub-1"}}); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	values, err := bridge.ListValues(ctx, "alice")
+	if err != nil {
+		t.Fatalf("ListValues() error = %v", err)
+	}
+	if !reflect.DeepEqual(values, []string{"sub-1", "sub-2"}) {
+		t.Fatalf("ListValues() = %v, want %v", values, []string{"sub-1", "sub-2"})
+	}
+
+	if err := bridge.Delete(ctx, []BridgeDeleteRequest[string, string]{{Key: "alice", Values: []string{"sub-2"}}}); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	values, err = bridge.ListValues(ctx, "alice")
+	if err != nil {
+		t.Fatalf("ListValues(after delete) error = %v", err)
+	}
+	if !reflect.DeepEqual(values, []string{"sub-1"}) {
+		t.Fatalf("ListValues(after delete) = %v, want %v", values, []string{"sub-1"})
 	}
 }
 

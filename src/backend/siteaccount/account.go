@@ -10,6 +10,7 @@ import (
 	"github.com/sharedcode/sop"
 	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/btree"
+	"github.com/sharedcode/sop/common"
 	"github.com/sharedcode/sop/database"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -228,7 +229,7 @@ type relationshipIndexEntry struct {
 type relationshipIndexStoreImpl struct {
 	storeName string
 	tx        sop.Transaction
-	tree      btree.BtreeInterface[string, []string]
+	bridge    *common.SimpleBridgeStore[string, string]
 }
 
 func newSimpleRelationshipIndexStore(ctx context.Context, tx sop.Transaction, storeName string) (*relationshipIndexStoreImpl, error) {
@@ -243,104 +244,58 @@ func newSimpleRelationshipIndexStore(ctx context.Context, tx sop.Transaction, st
 	if err != nil {
 		return nil, err
 	}
-	return &relationshipIndexStoreImpl{storeName: storeName, tx: tx, tree: store}, nil
+	return &relationshipIndexStoreImpl{storeName: storeName, tx: tx, bridge: common.NewSimpleBridgeStore[string, string](store)}, nil
 }
 
 func (s *relationshipIndexStoreImpl) upsert(ctx context.Context, entries []relationshipIndexEntry) error {
-	if s == nil || s.tree == nil {
+	if s == nil || s.bridge == nil {
 		return fmt.Errorf("relationship index store is not initialized")
 	}
+	bridgeEntries := make([]common.BridgeEntry[string, string], 0, len(entries))
 	for _, entry := range entries {
-		if entry.username == "" || entry.entityID == "" {
+		username := normalizeUsername(entry.username)
+		entityID := strings.TrimSpace(entry.entityID)
+		if username == "" || entityID == "" {
 			continue
 		}
-		found, err := s.tree.Find(ctx, entry.username, true)
-		if err != nil {
-			return err
-		}
-		ids := make([]string, 0)
-		if found {
-			value, err := s.tree.GetCurrentValue(ctx)
-			if err != nil {
-				return err
-			}
-			ids = append(ids, value...)
-		}
-		if !containsString(ids, entry.entityID) {
-			ids = append(ids, entry.entityID)
-		}
-		if _, err := s.tree.Upsert(ctx, entry.username, ids); err != nil {
-			return err
-		}
+		bridgeEntries = append(bridgeEntries, common.BridgeEntry[string, string]{Key: username, Value: entityID})
 	}
-	return nil
+	return s.bridge.Upsert(ctx, bridgeEntries)
 }
 
 func (s *relationshipIndexStoreImpl) listIDs(ctx context.Context, username string) ([]string, error) {
-	if s == nil || s.tree == nil {
+	if s == nil || s.bridge == nil {
 		return nil, nil
 	}
 	username = normalizeUsername(username)
 	if username == "" {
 		return nil, nil
 	}
-	found, err := s.tree.Find(ctx, username, true)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
-	value, err := s.tree.GetCurrentValue(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return append([]string(nil), value...), nil
+	return s.bridge.ListValues(ctx, username)
 }
 
 func (s *relationshipIndexStoreImpl) delete(ctx context.Context, userEntities []UserEntityIDs) error {
-	if s == nil || s.tree == nil {
+	if s == nil || s.bridge == nil {
 		return nil
 	}
+	requests := make([]common.BridgeDeleteRequest[string, string], 0, len(userEntities))
 	for _, userEntity := range userEntities {
 		username := normalizeUsername(userEntity.Username)
 		if username == "" || len(userEntity.EntityIDs) == 0 {
 			continue
 		}
-		found, err := s.tree.Find(ctx, username, true)
-		if err != nil {
-			return err
-		}
-		if !found {
-			continue
-		}
-		value, err := s.tree.GetCurrentValue(ctx)
-		if err != nil {
-			return err
-		}
-		remaining := make([]string, 0, len(value))
-		for _, entry := range value {
-			shouldRemove := false
-			for _, entityID := range userEntity.EntityIDs {
-				if entry == strings.TrimSpace(entityID) {
-					shouldRemove = true
-					break
-				}
-			}
-			if !shouldRemove {
-				remaining = append(remaining, entry)
+		values := make([]string, 0, len(userEntity.EntityIDs))
+		for _, entityID := range userEntity.EntityIDs {
+			entityID = strings.TrimSpace(entityID)
+			if entityID != "" {
+				values = append(values, entityID)
 			}
 		}
-		if len(remaining) == 0 {
-			_, err = s.tree.Remove(ctx, username)
-		} else {
-			_, err = s.tree.Upsert(ctx, username, remaining)
-		}
-		if err != nil {
-			return err
+		if len(values) > 0 {
+			requests = append(requests, common.BridgeDeleteRequest[string, string]{Key: username, Values: values})
 		}
 	}
-	return nil
+	return s.bridge.Delete(ctx, requests)
 }
 
 type userSubscriptionIndexStoreImpl struct {

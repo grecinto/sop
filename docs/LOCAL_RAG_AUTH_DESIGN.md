@@ -77,6 +77,18 @@ sequenceDiagram
 - HQ can revoke or deny access centrally.
 - Communication remains local-first for the agent runtime, with HQ only used for policy coordination.
 
+## MFA and session policy
+
+The recommended policy is practical rather than overly rigid:
+
+- Password-based sign-in remains the default path.
+- MFA should be available for initial login, new-device sign-in, and sensitive or high-risk actions.
+- Trusted devices may stay signed in for a limited period, but refresh tokens should expire on a weekly or monthly cadence and require a fresh sign-in when they expire.
+- Re-authentication or an MFA challenge should be required every 60–90 days on trusted devices, and immediately for sensitive actions such as billing changes or account recovery.
+- MFA should not be required on every routine refresh; that creates unnecessary friction for normal use.
+
+This gives the product a clear security posture while keeping the day-to-day experience smooth.
+
 ## Practical API Shape
 
 The initial HQ boundary can remain minimal:

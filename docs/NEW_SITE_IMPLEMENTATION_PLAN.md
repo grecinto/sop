@@ -74,6 +74,18 @@ The first implementation should prefer the simplest reliable path that preserves
 
 The local daemon should behave as a delegated host-side client. It should receive the authenticated identity and token material from the UI layer over localhost and continue using that identity without a second login.
 
+### 5. MFA and session policy should stay practical
+
+The first implementation should support MFA without making routine use feel burdensome. A balanced policy is:
+
+- Password sign-in remains the default entry point.
+- MFA should be optional on initial login for trusted users, and can be required for new devices, suspicious activity, or high-risk actions.
+- Refresh tokens should expire on a reasonable cadence such as weekly or monthly, forcing a fresh sign-in when they are no longer valid.
+- Trusted devices may remain signed in for a limited window, but the app should require re-authentication every 60–90 days or for sensitive actions.
+- MFA should not be required on every single token refresh; that is too disruptive for everyday use.
+
+This keeps the security model strong enough for account protection while preserving a smooth user experience.
+
 ## Implementation phases
 
 ### Phase A — shared auth compatibility
