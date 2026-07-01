@@ -21,6 +21,14 @@ var (
 	siteAccountDBInst *aidb.Database
 )
 
+const (
+	userStoreName                  = "site_users"
+	subscriptionStoreName          = "site_subscriptions"
+	paymentStoreName               = "site_payments"
+	userSubscriptionIndexStoreName = "site_user_subscription_ids"
+	userPaymentIndexStoreName      = "site_user_payment_ids"
+)
+
 // Config stores the site-specific account state for the React/site app.
 type Config struct {
 	Users                      []UserRecord
@@ -195,66 +203,12 @@ func getSiteAccountDB(ctx context.Context) (*aidb.Database, error) {
 	return siteAccountDBInst, nil
 }
 
-func newStringStore[T any](ctx context.Context, db *aidb.Database, tx sop.Transaction, storeName string, createIfMissing bool) (btree.BtreeInterface[string, T], error) {
-	if tx != nil {
-		if phased := tx.GetPhasedTransaction(); phased != nil && phased.GetMode() == sop.ForReading {
-			createIfMissing = false
-		}
+func newStringKeyedStore[T any](ctx context.Context, db *aidb.Database, tx sop.Transaction, storeName string) (btree.BtreeInterface[string, T], error) {
+	if db == nil {
+		return nil, fmt.Errorf("database is not initialized")
 	}
-	if storeName == "" {
-		return nil, fmt.Errorf("store name can't be empty")
-	}
-	if createIfMissing {
-		if tx != nil {
-			if store, err := database.OpenBtreeCursor[string, T](ctx, db.Options(), storeName, tx, nil); err == nil {
-				return store, nil
-			} else if !strings.Contains(err.Error(), "does not exist") && !strings.Contains(err.Error(), "is empty") && !strings.Contains(err.Error(), "can't wrap a cursor on an unopened b-tree") {
-				return nil, err
-			}
-			if repoGetter, ok := tx.GetPhasedTransaction().(interface{ GetStoreRepository() sop.StoreRepository }); ok {
-				repo := repoGetter.GetStoreRepository()
-				if repo != nil {
-					stores, err := repo.Get(ctx, storeName)
-					if err != nil {
-						return nil, err
-					}
-					if len(stores) > 0 && !stores[0].IsEmpty() {
-						return database.OpenBtree[string, T](ctx, db.Options(), storeName, tx, nil)
-					}
-				}
-			}
-		}
-		store, err := database.NewBtree[string, T](ctx, db.Options(), storeName, tx, nil)
-		if err != nil {
-			if strings.Contains(err.Error(), "exists & has different configuration") {
-				return database.OpenBtree[string, T](ctx, db.Options(), storeName, tx, nil)
-			}
-			return nil, err
-		}
-		return store, nil
-	}
-	if tx != nil {
-		if repoGetter, ok := tx.GetPhasedTransaction().(interface{ GetStoreRepository() sop.StoreRepository }); ok {
-			repo := repoGetter.GetStoreRepository()
-			if repo != nil {
-				stores, err := repo.Get(ctx, storeName)
-				if err != nil {
-					return nil, err
-				}
-				if len(stores) == 0 || stores[0].IsEmpty() {
-					return nil, nil
-				}
-			}
-		}
-	}
-	store, err := database.OpenBtree[string, T](ctx, db.Options(), storeName, tx, nil)
-	if err != nil {
-		if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "is empty") {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return store, nil
+	so := sop.ConfigureStore(storeName, true, btree.DefaultSlotLength, "", sop.SmallData, "")
+	return database.NewBtree[string, T](ctx, db.Options(), storeName, tx, nil, so)
 }
 
 func containsString(values []string, target string) bool {
@@ -266,244 +220,193 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
-type userSubscriptionIndexStoreImpl struct {
+type relationshipIndexEntry struct {
+	username string
+	entityID string
+}
+
+type relationshipIndexStoreImpl struct {
 	storeName string
 	tx        sop.Transaction
 	tree      btree.BtreeInterface[string, []string]
+}
+
+func newSimpleRelationshipIndexStore(ctx context.Context, tx sop.Transaction, storeName string) (*relationshipIndexStoreImpl, error) {
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		return nil, fmt.Errorf("transaction is required")
+	}
+	store, err := newStringKeyedStore[[]string](ctx, db, tx, storeName)
+	if err != nil {
+		return nil, err
+	}
+	return &relationshipIndexStoreImpl{storeName: storeName, tx: tx, tree: store}, nil
+}
+
+func (s *relationshipIndexStoreImpl) upsert(ctx context.Context, entries []relationshipIndexEntry) error {
+	if s == nil || s.tree == nil {
+		return fmt.Errorf("relationship index store is not initialized")
+	}
+	for _, entry := range entries {
+		if entry.username == "" || entry.entityID == "" {
+			continue
+		}
+		found, err := s.tree.Find(ctx, entry.username, true)
+		if err != nil {
+			return err
+		}
+		ids := make([]string, 0)
+		if found {
+			value, err := s.tree.GetCurrentValue(ctx)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, value...)
+		}
+		if !containsString(ids, entry.entityID) {
+			ids = append(ids, entry.entityID)
+		}
+		if _, err := s.tree.Upsert(ctx, entry.username, ids); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *relationshipIndexStoreImpl) listIDs(ctx context.Context, username string) ([]string, error) {
+	if s == nil || s.tree == nil {
+		return nil, nil
+	}
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, nil
+	}
+	found, err := s.tree.Find(ctx, username, true)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	value, err := s.tree.GetCurrentValue(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append([]string(nil), value...), nil
+}
+
+func (s *relationshipIndexStoreImpl) delete(ctx context.Context, userEntities []UserEntityIDs) error {
+	if s == nil || s.tree == nil {
+		return nil
+	}
+	for _, userEntity := range userEntities {
+		username := normalizeUsername(userEntity.Username)
+		if username == "" || len(userEntity.EntityIDs) == 0 {
+			continue
+		}
+		found, err := s.tree.Find(ctx, username, true)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		value, err := s.tree.GetCurrentValue(ctx)
+		if err != nil {
+			return err
+		}
+		remaining := make([]string, 0, len(value))
+		for _, entry := range value {
+			shouldRemove := false
+			for _, entityID := range userEntity.EntityIDs {
+				if entry == strings.TrimSpace(entityID) {
+					shouldRemove = true
+					break
+				}
+			}
+			if !shouldRemove {
+				remaining = append(remaining, entry)
+			}
+		}
+		if len(remaining) == 0 {
+			_, err = s.tree.Remove(ctx, username)
+		} else {
+			_, err = s.tree.Upsert(ctx, username, remaining)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type userSubscriptionIndexStoreImpl struct {
+	*relationshipIndexStoreImpl
 }
 
 func newUserSubscriptionIndexStore(ctx context.Context, tx sop.Transaction) (*userSubscriptionIndexStoreImpl, error) {
-	db, err := getSiteAccountDB(ctx)
+	store, err := newSimpleRelationshipIndexStore(ctx, tx, userSubscriptionIndexStoreName)
 	if err != nil {
 		return nil, err
 	}
-	if tx == nil {
-		return nil, fmt.Errorf("transaction is required")
-	}
-	store, err := newStringStore[[]string](ctx, db, tx, "site_user_subscription_ids", true)
-	if err != nil {
-		return nil, err
-	}
-	return &userSubscriptionIndexStoreImpl{storeName: "site_user_subscription_ids", tx: tx, tree: store}, nil
+	return &userSubscriptionIndexStoreImpl{relationshipIndexStoreImpl: store}, nil
 }
 
 func (s *userSubscriptionIndexStoreImpl) Upsert(ctx context.Context, entries []UserSubscriptionEntry) error {
-	if s == nil || s.tree == nil {
-		return fmt.Errorf("subscription index store is not initialized")
-	}
+	normalized := make([]relationshipIndexEntry, 0, len(entries))
 	for _, entry := range entries {
 		username := normalizeUsername(entry.Username)
-		subscriptionID := strings.TrimSpace(entry.SubscriptionID)
-		if username == "" || subscriptionID == "" {
+		entityID := strings.TrimSpace(entry.SubscriptionID)
+		if username == "" || entityID == "" {
 			continue
 		}
-		found, err := s.tree.Find(ctx, username, true)
-		if err != nil {
-			return err
-		}
-		ids := make([]string, 0)
-		if found {
-			value, err := s.tree.GetCurrentValue(ctx)
-			if err != nil {
-				return err
-			}
-			ids = append(ids, value...)
-		}
-		if !containsString(ids, subscriptionID) {
-			ids = append(ids, subscriptionID)
-		}
-		if _, err := s.tree.Upsert(ctx, username, ids); err != nil {
-			return err
-		}
+		normalized = append(normalized, relationshipIndexEntry{username: username, entityID: entityID})
 	}
-	return nil
+	return s.relationshipIndexStoreImpl.upsert(ctx, normalized)
 }
 
 func (s *userSubscriptionIndexStoreImpl) ListIDs(ctx context.Context, username string) ([]string, error) {
-	if s == nil || s.tree == nil {
-		return nil, nil
-	}
-	username = normalizeUsername(username)
-	if username == "" {
-		return nil, nil
-	}
-	found, err := s.tree.Find(ctx, username, true)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
-	value, err := s.tree.GetCurrentValue(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return append([]string(nil), value...), nil
+	return s.relationshipIndexStoreImpl.listIDs(ctx, username)
 }
 
 func (s *userSubscriptionIndexStoreImpl) Delete(ctx context.Context, userSubscriptions []UserEntityIDs) error {
-	if s == nil || s.tree == nil {
-		return nil
-	}
-	for _, userSubscription := range userSubscriptions {
-		username := normalizeUsername(userSubscription.Username)
-		if username == "" || len(userSubscription.EntityIDs) == 0 {
-			continue
-		}
-		found, err := s.tree.Find(ctx, username, true)
-		if err != nil {
-			return err
-		}
-		if !found {
-			continue
-		}
-		value, err := s.tree.GetCurrentValue(ctx)
-		if err != nil {
-			return err
-		}
-		remaining := make([]string, 0, len(value))
-		for _, entry := range value {
-			shouldRemove := false
-			for _, subscriptionID := range userSubscription.EntityIDs {
-				if entry == strings.TrimSpace(subscriptionID) {
-					shouldRemove = true
-					break
-				}
-			}
-			if !shouldRemove {
-				remaining = append(remaining, entry)
-			}
-		}
-		if len(remaining) == 0 {
-			_, err = s.tree.Remove(ctx, username)
-		} else {
-			_, err = s.tree.Upsert(ctx, username, remaining)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.relationshipIndexStoreImpl.delete(ctx, userSubscriptions)
 }
 
 type userPaymentIndexStoreImpl struct {
-	storeName string
-	tx        sop.Transaction
-	tree      btree.BtreeInterface[string, []string]
+	*relationshipIndexStoreImpl
 }
 
 func newUserPaymentIndexStore(ctx context.Context, tx sop.Transaction) (*userPaymentIndexStoreImpl, error) {
-	db, err := getSiteAccountDB(ctx)
+	store, err := newSimpleRelationshipIndexStore(ctx, tx, userPaymentIndexStoreName)
 	if err != nil {
 		return nil, err
 	}
-	if tx == nil {
-		return nil, fmt.Errorf("transaction is required")
-	}
-	store, err := newStringStore[[]string](ctx, db, tx, "site_user_payment_ids", true)
-	if err != nil {
-		return nil, err
-	}
-	return &userPaymentIndexStoreImpl{storeName: "site_user_payment_ids", tx: tx, tree: store}, nil
+	return &userPaymentIndexStoreImpl{relationshipIndexStoreImpl: store}, nil
 }
 
 func (s *userPaymentIndexStoreImpl) Upsert(ctx context.Context, entries []UserPaymentEntry) error {
-	if s == nil || s.tree == nil {
-		return fmt.Errorf("payment index store is not initialized")
-	}
+	normalized := make([]relationshipIndexEntry, 0, len(entries))
 	for _, entry := range entries {
 		username := normalizeUsername(entry.Username)
-		paymentID := strings.TrimSpace(entry.PaymentID)
-		if username == "" || paymentID == "" {
+		entityID := strings.TrimSpace(entry.PaymentID)
+		if username == "" || entityID == "" {
 			continue
 		}
-		found, err := s.tree.Find(ctx, username, true)
-		if err != nil {
-			return err
-		}
-		ids := make([]string, 0)
-		if found {
-			value, err := s.tree.GetCurrentValue(ctx)
-			if err != nil {
-				return err
-			}
-			ids = append(ids, value...)
-		}
-		if !containsString(ids, paymentID) {
-			ids = append(ids, paymentID)
-		}
-		if _, err := s.tree.Upsert(ctx, username, ids); err != nil {
-			return err
-		}
+		normalized = append(normalized, relationshipIndexEntry{username: username, entityID: entityID})
 	}
-	return nil
+	return s.relationshipIndexStoreImpl.upsert(ctx, normalized)
 }
 
 func (s *userPaymentIndexStoreImpl) ListIDs(ctx context.Context, username string) ([]string, error) {
-	if s == nil || s.tree == nil {
-		return nil, nil
-	}
-	username = normalizeUsername(username)
-	if username == "" {
-		return nil, nil
-	}
-	found, err := s.tree.Find(ctx, username, true)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, nil
-	}
-	value, err := s.tree.GetCurrentValue(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return append([]string(nil), value...), nil
+	return s.relationshipIndexStoreImpl.listIDs(ctx, username)
 }
 
 func (s *userPaymentIndexStoreImpl) Delete(ctx context.Context, userPayments []UserEntityIDs) error {
-	if s == nil || s.tree == nil {
-		return nil
-	}
-	for _, userPayment := range userPayments {
-		username := normalizeUsername(userPayment.Username)
-		if username == "" || len(userPayment.EntityIDs) == 0 {
-			continue
-		}
-		found, err := s.tree.Find(ctx, username, true)
-		if err != nil {
-			return err
-		}
-		if !found {
-			continue
-		}
-		value, err := s.tree.GetCurrentValue(ctx)
-		if err != nil {
-			return err
-		}
-		remaining := make([]string, 0, len(value))
-		for _, entry := range value {
-			shouldRemove := false
-			for _, paymentID := range userPayment.EntityIDs {
-				if entry == strings.TrimSpace(paymentID) {
-					shouldRemove = true
-					break
-				}
-			}
-			if !shouldRemove {
-				remaining = append(remaining, entry)
-			}
-		}
-		if len(remaining) == 0 {
-			_, err = s.tree.Remove(ctx, username)
-		} else {
-			_, err = s.tree.Upsert(ctx, username, remaining)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.relationshipIndexStoreImpl.delete(ctx, userPayments)
 }
 
 type userStoreImpl struct {
@@ -520,11 +423,11 @@ func newUserStore(ctx context.Context, tx sop.Transaction) (*userStoreImpl, erro
 	if tx == nil {
 		return nil, fmt.Errorf("transaction is required")
 	}
-	store, err := newStringStore[UserRecord](ctx, db, tx, "site_users", true)
+	store, err := newStringKeyedStore[UserRecord](ctx, db, tx, userStoreName)
 	if err != nil {
 		return nil, err
 	}
-	return &userStoreImpl{storeName: "site_users", tx: tx, tree: store}, nil
+	return &userStoreImpl{storeName: userStoreName, tx: tx, tree: store}, nil
 }
 
 func (s *userStoreImpl) Upsert(ctx context.Context, users []UserRecord) error {
@@ -630,11 +533,11 @@ func newSubscriptionStore(ctx context.Context, tx sop.Transaction) (*subscriptio
 	if tx == nil {
 		return nil, fmt.Errorf("transaction is required")
 	}
-	store, err := newStringStore[SubscriptionRecord](ctx, db, tx, "site_subscriptions", true)
+	store, err := newStringKeyedStore[SubscriptionRecord](ctx, db, tx, subscriptionStoreName)
 	if err != nil {
 		return nil, err
 	}
-	return &subscriptionStoreImpl{storeName: "site_subscriptions", tx: tx, tree: store}, nil
+	return &subscriptionStoreImpl{storeName: subscriptionStoreName, tx: tx, tree: store}, nil
 }
 
 func (s *subscriptionStoreImpl) Upsert(ctx context.Context, subscriptions []SubscriptionRecord) error {
@@ -787,11 +690,11 @@ func newPaymentStore(ctx context.Context, tx sop.Transaction) (*paymentStoreImpl
 	if tx == nil {
 		return nil, fmt.Errorf("transaction is required")
 	}
-	store, err := newStringStore[PaymentRecord](ctx, db, tx, "site_payments", true)
+	store, err := newStringKeyedStore[PaymentRecord](ctx, db, tx, paymentStoreName)
 	if err != nil {
 		return nil, err
 	}
-	return &paymentStoreImpl{storeName: "site_payments", tx: tx, tree: store}, nil
+	return &paymentStoreImpl{storeName: paymentStoreName, tx: tx, tree: store}, nil
 }
 
 func (s *paymentStoreImpl) Upsert(ctx context.Context, payments []PaymentRecord) error {

@@ -5,17 +5,71 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
 func uniqueTestUsername(t *testing.T, prefix string) string {
 	t.Helper()
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+}
+
+func countTransactionBackends(t *testing.T, tx sop.Transaction) int {
+	t.Helper()
+	if tx == nil {
+		return 0
+	}
+	ph := tx.GetPhasedTransaction()
+	if ph == nil {
+		return 0
+	}
+	val := reflect.ValueOf(ph)
+	if !val.IsValid() || val.Kind() != reflect.Ptr || val.IsNil() {
+		return 0
+	}
+	field := val.Elem().FieldByName("btreesBackend")
+	if !field.IsValid() || field.Kind() != reflect.Slice {
+		return 0
+	}
+	return field.Len()
+}
+
+func resetSiteAccountDBForTest(t *testing.T) {
+	t.Helper()
+
+	siteAccountDBMu.Lock()
+	siteAccountDBInst = nil
+	siteAccountDBMu.Unlock()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+
+	sopbackend.SetConfig(sopbackend.Config{
+		Mode:     "clustered",
+		RedisURL: "192.168.1.89:6379",
+		SystemDB: &sopbackend.DatabaseConfig{
+			Name:     sopbackend.SystemDBName,
+			Path:     t.TempDir(),
+			Mode:     "clustered",
+			RedisURL: "192.168.1.89:6379",
+		},
+	})
+
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+		sopbackend.SetConfig(sopbackend.Config{})
+	})
 }
 
 func TestHandleLoginSetsSessionCookies(t *testing.T) {
@@ -85,6 +139,146 @@ func TestRegisterUserWithRequestPersistsUserAndBillingState(t *testing.T) {
 	}
 	if found.Username != username {
 		t.Fatalf("FindUserRecord() username = %q, want %q", found.Username, username)
+	}
+}
+
+func TestPrimaryStoresReuseSameTreeHandlePerTransaction(t *testing.T) {
+	cfg := NewConfig()
+	ctx := context.Background()
+
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		t.Fatalf("getSiteAccountDB() error = %v", err)
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		t.Fatalf("BeginTransaction() error = %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	before := countTransactionBackends(t, tx)
+	if _, err := cfg.ensureUserStore(ctx, tx); err != nil {
+		t.Fatalf("ensureUserStore() error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the first user-store open to add one backend entry, got %d", got)
+	}
+	if _, err := cfg.ensureUserStore(ctx, tx); err != nil {
+		t.Fatalf("ensureUserStore(second) error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the user store to be reused without adding a second backend entry, got %d", got)
+	}
+
+	before = countTransactionBackends(t, tx)
+	if _, err := cfg.ensureSubscriptionStore(ctx, tx); err != nil {
+		t.Fatalf("ensureSubscriptionStore() error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the first subscription-store open to add one backend entry, got %d", got)
+	}
+	if _, err := cfg.ensureSubscriptionStore(ctx, tx); err != nil {
+		t.Fatalf("ensureSubscriptionStore(second) error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the subscription store to be reused without adding a second backend entry, got %d", got)
+	}
+
+	before = countTransactionBackends(t, tx)
+	if _, err := cfg.ensurePaymentStore(ctx, tx); err != nil {
+		t.Fatalf("ensurePaymentStore() error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the first payment-store open to add one backend entry, got %d", got)
+	}
+	if _, err := cfg.ensurePaymentStore(ctx, tx); err != nil {
+		t.Fatalf("ensurePaymentStore(second) error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the payment store to be reused without adding a second backend entry, got %d", got)
+	}
+}
+
+func TestIndexStoreReusesSameTreeHandlePerTransaction(t *testing.T) {
+	cfg := NewConfig()
+	ctx := context.Background()
+
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		t.Fatalf("getSiteAccountDB() error = %v", err)
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		t.Fatalf("BeginTransaction() error = %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	before := countTransactionBackends(t, tx)
+	if _, err := cfg.ensureUserSubscriptionIndexStore(ctx, tx); err != nil {
+		t.Fatalf("ensureUserSubscriptionIndexStore() error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the first subscription-index open to add one backend entry, got %d", got)
+	}
+	if _, err := cfg.ensureUserSubscriptionIndexStore(ctx, tx); err != nil {
+		t.Fatalf("ensureUserSubscriptionIndexStore(second) error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the subscription index store to be reused without adding a second backend entry, got %d", got)
+	}
+
+	before = countTransactionBackends(t, tx)
+	if _, err := cfg.ensureUserPaymentIndexStore(ctx, tx); err != nil {
+		t.Fatalf("ensureUserPaymentIndexStore() error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the first payment-index open to add one backend entry, got %d", got)
+	}
+	if _, err := cfg.ensureUserPaymentIndexStore(ctx, tx); err != nil {
+		t.Fatalf("ensureUserPaymentIndexStore(second) error = %v", err)
+	}
+	if got := countTransactionBackends(t, tx); got != before+1 {
+		t.Fatalf("expected the payment index store to be reused without adding a second backend entry, got %d", got)
+	}
+}
+
+func TestSimpleRelationshipIndexStoreHelperMaintainsLinks(t *testing.T) {
+	ctx := context.Background()
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		t.Fatalf("getSiteAccountDB() error = %v", err)
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		t.Fatalf("BeginTransaction() error = %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	store, err := newSimpleRelationshipIndexStore(ctx, tx, "simple-bridge-helper")
+	if err != nil {
+		t.Fatalf("newSimpleRelationshipIndexStore() error = %v", err)
+	}
+	if err := store.upsert(ctx, []relationshipIndexEntry{{username: "ALICE", entityID: "sub-1"}, {username: "alice", entityID: "sub-2"}, {username: "alice", entityID: "sub-1"}}); err != nil {
+		t.Fatalf("upsert() error = %v", err)
+	}
+
+	ids, err := store.listIDs(ctx, "alice")
+	if err != nil {
+		t.Fatalf("listIDs() error = %v", err)
+	}
+	if len(ids) != 2 || !containsString(ids, "sub-1") || !containsString(ids, "sub-2") {
+		t.Fatalf("listIDs() = %v, want a deduplicated pair containing sub-1 and sub-2", ids)
+	}
+
+	if err := store.delete(ctx, []UserEntityIDs{{Username: "alice", EntityIDs: []string{"sub-2"}}}); err != nil {
+		t.Fatalf("delete() error = %v", err)
+	}
+	ids, err = store.listIDs(ctx, "alice")
+	if err != nil {
+		t.Fatalf("listIDs(after delete) error = %v", err)
+	}
+	if !reflect.DeepEqual(ids, []string{"sub-1"}) {
+		t.Fatalf("listIDs(after delete) = %v, want %v", ids, []string{"sub-1"})
 	}
 }
 

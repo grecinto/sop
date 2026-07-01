@@ -148,6 +148,37 @@ func Test_copyFile_Errors(t *testing.T) {
 	}
 }
 
+func Test_StoreRepository_Add_CaseInsensitiveDuplicate(t *testing.T) {
+	ctx := context.Background()
+	baseA := filepath.Join(t.TempDir(), "a")
+	baseB := filepath.Join(t.TempDir(), "b")
+	globalReplicationDetailsLocker.Lock()
+	prev := GlobalReplicationDetails
+	GlobalReplicationDetails = nil
+	globalReplicationDetailsLocker.Unlock()
+	defer func() {
+		globalReplicationDetailsLocker.Lock()
+		GlobalReplicationDetails = prev
+		globalReplicationDetailsLocker.Unlock()
+	}()
+
+	rt, err := NewReplicationTracker(ctx, []string{baseA, baseB}, true, mocks.NewMockClient())
+	if err != nil {
+		t.Fatalf("rt: %v", err)
+	}
+	sr, err := NewStoreRepository(ctx, rt, nil, mocks.NewMockClient(), 0)
+	if err != nil {
+		t.Fatalf("sr: %v", err)
+	}
+
+	if err := sr.Add(ctx, sop.StoreInfo{Name: "Alpha"}); err != nil {
+		t.Fatalf("initial add: %v", err)
+	}
+	if err := sr.Add(ctx, sop.StoreInfo{Name: "alpha"}); err == nil {
+		t.Fatalf("expected case-insensitive duplicate error")
+	}
+}
+
 func Test_StoreRepository_Add_Duplicate_And_CopyToPassive(t *testing.T) {
 	ctx := context.Background()
 	baseA := filepath.Join(t.TempDir(), "a")

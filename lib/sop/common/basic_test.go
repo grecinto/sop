@@ -38,6 +38,48 @@ func Test_OpenVsNewBTree(t *testing.T) {
 	}
 }
 
+func Test_NewBtreeReusesExistingHandleWithinTransaction(t *testing.T) {
+	trans, err := newMockTransaction(t, sop.ForWriting, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trans.Begin(ctx)
+
+	first, err := NewBtree[int, string](ctx, sop.StoreOptions{
+		Name:                     "reuse-store",
+		SlotLength:               8,
+		IsUnique:                 false,
+		IsValueDataInNodeSegment: false,
+		LeafLoadBalancing:        true,
+		Description:              "",
+	}, trans, cmp.Compare)
+	if err != nil {
+		t.Fatalf("first NewBtree() error = %v", err)
+	}
+
+	second, err := NewBtree[int, string](ctx, sop.StoreOptions{
+		Name:                     "reuse-store",
+		SlotLength:               8,
+		IsUnique:                 false,
+		IsValueDataInNodeSegment: false,
+		LeafLoadBalancing:        true,
+		Description:              "",
+	}, trans, cmp.Compare)
+	if err != nil {
+		t.Fatalf("second NewBtree() error = %v", err)
+	}
+	if first == nil || second == nil {
+		t.Fatal("expected both tree handles to be non-nil")
+	}
+	if ph, ok := trans.GetPhasedTransaction().(*Transaction); ok {
+		if len(ph.btreesBackend) != 1 {
+			t.Fatalf("expected the transaction to keep a single backend entry for reuse-store, got %d", len(ph.btreesBackend))
+		}
+	} else {
+		t.Fatalf("expected a *Transaction phased transaction, got %T", trans.GetPhasedTransaction())
+	}
+}
+
 func Test_SingleBTree(t *testing.T) {
 	trans, _ := newMockTransaction(t, sop.ForWriting, -1)
 	trans.Begin(ctx)

@@ -304,7 +304,7 @@ func CursorOnOpenedBtree[TK btree.Ordered, TV any](ctx context.Context, config s
 	return common.CursorOnOpenedBtree[TK, TV](ctx, name, t)
 }
 
-// NewBtree will open an existing one or create a new general purpose B-Tree store.
+// NewBtree opens an existing general-purpose B-tree or creates a new one for the transaction.
 func NewBtree[TK btree.Ordered, TV any](ctx context.Context, config sop.DatabaseOptions, name string, t sop.Transaction, comparer btree.ComparerFunc[TK], options ...sop.StoreOptions) (btree.BtreeInterface[TK, TV], error) {
 	var opts sop.StoreOptions
 	if len(options) > 0 {

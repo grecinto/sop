@@ -8,6 +8,7 @@ import (
 )
 
 func TestInstallSopbackendUserStoreOverridePersistsSetupWizardUsersInSiteStore(t *testing.T) {
+	resetSiteAccountDBForTest(t)
 	SetConfig(NewConfig())
 	defer sopbackend.SetUserStoreOverride(nil)
 	defer sopbackend.SetConfig(sopbackend.Config{})
