@@ -785,6 +785,7 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]st
 	}
 	if task.ActiveFile != "" {
 		plan = append(plan, fmt.Sprintf("edit active file %s", task.ActiveFile))
+		plan = append(plan, "decompose the task into the smallest implementation steps")
 		plan = append(plan, "define the expected behavior")
 		plan = append(plan, "draft or review a focused test case")
 	}
@@ -808,6 +809,7 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]st
 		plan = append(plan, fmt.Sprintf("edit %d related file(s)", len(pack.RelatedFiles)))
 		if len(pack.RelatedFiles) > 1 {
 			plan = append(plan, "inspect cross-file dependencies")
+			plan = append(plan, "decompose the change across the relevant files")
 		}
 	}
 	if len(pack.TestFiles) > 0 {
@@ -816,7 +818,8 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]st
 	if pack.ModuleName != "" {
 		plan = append(plan, fmt.Sprintf("work inside module %s", pack.ModuleName))
 	}
-	plan = append(plan, "run tests")
+	plan = append(plan, "validate the change against the repository context")
+	plan = append(plan, "run targeted tests and inspect failures")
 	return plan, nil
 }
 

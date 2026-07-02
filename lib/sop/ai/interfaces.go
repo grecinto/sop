@@ -238,10 +238,12 @@ type Item[T any] struct {
 
 // Hit represents a search result.
 type Hit[T any] struct {
-	ID      string
-	DocID   []string
-	Score   float32
-	Payload T
+	ID              string
+	DocID           []string
+	Score           float32
+	Payload         T
+	DocumentContent string
+	SourceLabel     string
 }
 
 // Generator defines the interface for an LLM or text generation model.

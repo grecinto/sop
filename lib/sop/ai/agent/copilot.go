@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -215,8 +216,8 @@ func (a *CopilotAgent) buildKBEnrichedQuery(cleanQuery, kbResults, llmInstructio
 		// Default reduction instruction for too many matches (Case 3)
 		sb.WriteString("**Instruction:** Please analyze the search results above and present the most relevant matches to the user.\n")
 	}
-	// Preserve source links verbatim so the final answer can remain clickable.
-	sb.WriteString("**Link Preservation:** Preserve the exact markdown source links from the KB results verbatim in your answer. Do not replace them with plain relative file paths or bare filenames.\n")
+	// Preserve source labels and links verbatim so the final answer can remain readable and clickable.
+	sb.WriteString("**Source Preservation:** Preserve the exact source labels and markdown source links from the KB results verbatim in your answer. Do not replace them with plain relative file paths or bare filenames.\n")
 
 	return sb.String()
 }
@@ -643,6 +644,122 @@ func buildLTMMemoryCategoryPath(category, capability, scopeType, scopeID string)
 		parts = append(parts, scopeID)
 	} else if capability != "" {
 		parts = append(parts, strings.Title(strings.ToLower(strings.ReplaceAll(capability, "_", " "))))
+	}
+	return strings.Join(parts, "/")
+}
+
+type codingMemoryLTMIndexEntry struct {
+	Kind         string
+	CategoryPath string
+	Payload      map[string]any
+}
+
+func buildCodingMemoryLTMPayloadAndIndexes(mem cw.CodingMemory) (map[string]any, []codingMemoryLTMIndexEntry) {
+	docID := sop.NewUUID()
+	canonicalPayload := map[string]any{
+		"document_id":     docID.String(),
+		"payload_type":    "coding_workflow_memory",
+		"description":     strings.TrimSpace(mem.Description),
+		"active_file":     strings.TrimSpace(mem.ActiveFile),
+		"files_touched":   mem.FilesTouched,
+		"outcome":         strings.TrimSpace(mem.Outcome),
+		"test_status":     strings.TrimSpace(mem.TestStatus),
+		"lesson":          strings.TrimSpace(mem.Lesson),
+		"next_step":       strings.TrimSpace(mem.NextStep),
+		"repository_hint": strings.TrimSpace(mem.RepositoryHint),
+		"recorded_at":     time.Now().UnixMilli(),
+	}
+	pathIndexPath := buildCodingMemoryPathIndexCategoryPath(mem)
+	semanticIndexPath := buildCodingMemorySemanticIndexCategoryPath(mem)
+	indexPayload := map[string]any{
+		"document_id":       docID.String(),
+		"payload_type":      "coding_workflow_memory",
+		"canonical_payload": canonicalPayload,
+		"path_index":        pathIndexPath,
+		"semantic_index":    semanticIndexPath,
+	}
+	entries := []codingMemoryLTMIndexEntry{
+		{Kind: "path", CategoryPath: pathIndexPath, Payload: indexPayload},
+		{Kind: "semantic", CategoryPath: semanticIndexPath, Payload: indexPayload},
+	}
+	return indexPayload, entries
+}
+
+func buildCodingMemoryLTMThoughts(mem cw.CodingMemory, documentID string, entries []codingMemoryLTMIndexEntry) []memory.Thought[map[string]any] {
+	thoughts := make([]memory.Thought[map[string]any], 0, len(entries))
+	for _, entry := range entries {
+		text := fmt.Sprintf("Coding workflow outcome: %s", strings.TrimSpace(mem.Description))
+		if mem.Outcome != "" {
+			text = fmt.Sprintf("%s\nOutcome: %s", text, mem.Outcome)
+		}
+		if len(mem.FilesTouched) > 0 {
+			text = fmt.Sprintf("%s\nFiles: %s", text, strings.Join(mem.FilesTouched, ", "))
+		}
+		if mem.TestStatus != "" {
+			text = fmt.Sprintf("%s\nTests: %s", text, mem.TestStatus)
+		}
+		thoughts = append(thoughts, memory.Thought[map[string]any]{
+			Summaries:    []string{text},
+			CategoryPath: entry.CategoryPath,
+			DocID:        memory.DocIDs{documentID},
+			Data: map[string]any{
+				"document_id":       documentID,
+				"index_kind":        entry.Kind,
+				"canonical_payload": entry.Payload["canonical_payload"],
+				"path_index":        entry.Payload["path_index"],
+				"semantic_index":    entry.Payload["semantic_index"],
+			},
+		})
+	}
+	return thoughts
+}
+
+func buildCodingMemoryPathIndexCategoryPath(mem cw.CodingMemory) string {
+	parts := []string{"Coding", "Workflow"}
+	repoHint := strings.TrimSpace(mem.RepositoryHint)
+	if repoHint != "" {
+		parts = append(parts, "Repo", repoHint)
+	} else {
+		parts = append(parts, "Repo", "Default")
+	}
+	if activeFile := strings.TrimSpace(mem.ActiveFile); activeFile != "" {
+		parts = append(parts, "File", filepath.Base(activeFile))
+	}
+	return strings.Join(parts, "/")
+}
+
+func buildCodingMemorySemanticIndexCategoryPath(mem cw.CodingMemory) string {
+	parts := []string{"Coding", "Workflow", "Semantic"}
+	seed := []string{}
+	if desc := strings.TrimSpace(mem.Description); desc != "" {
+		seed = append(seed, desc)
+	}
+	if outcome := strings.TrimSpace(mem.Outcome); outcome != "" {
+		seed = append(seed, outcome)
+	}
+	if lesson := strings.TrimSpace(mem.Lesson); lesson != "" {
+		seed = append(seed, lesson)
+	}
+	if nextStep := strings.TrimSpace(mem.NextStep); nextStep != "" {
+		seed = append(seed, nextStep)
+	}
+	if activeFile := strings.TrimSpace(mem.ActiveFile); activeFile != "" {
+		seed = append(seed, filepath.Base(activeFile))
+	}
+	for _, candidate := range seed {
+		normalized := strings.ToLower(strings.TrimSpace(candidate))
+		normalized = strings.NewReplacer(" ", "-", "/", "-", "_", "-", ".", "-").Replace(normalized)
+		normalized = strings.Trim(normalized, "-")
+		if normalized == "" {
+			continue
+		}
+		parts = append(parts, normalized)
+		if len(parts) >= 6 {
+			break
+		}
+	}
+	if len(parts) == 3 {
+		parts = append(parts, "general")
 	}
 	return strings.Join(parts, "/")
 }
@@ -1116,45 +1233,45 @@ func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
 			return err
 		}
 
-		categoryPath := buildLTMMemoryCategoryPath(category, "coding_workflow", scopeType, scopeID)
-		text := fmt.Sprintf("Coding workflow outcome: %s", strings.TrimSpace(mem.Description))
-		if mem.Outcome != "" {
-			text = fmt.Sprintf("%s\nOutcome: %s", text, mem.Outcome)
-		}
-		if len(mem.FilesTouched) > 0 {
-			text = fmt.Sprintf("%s\nFiles: %s", text, strings.Join(mem.FilesTouched, ", "))
-		}
-		if mem.TestStatus != "" {
-			text = fmt.Sprintf("%s\nTests: %s", text, mem.TestStatus)
-		}
-
-		if err := ltm.IngestThoughts(ctx, []memory.Thought[map[string]any]{{
-			Summaries:    []string{text},
-			CategoryPath: categoryPath,
-			Data:         payload,
-		}}, a.Memory.AgentID); err != nil {
-			return err
-		}
-
-		categoryID, err := ltm.Manager.EnsureCategory(ctx, categoryPath)
+		canonicalPayload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
+		docID, err := sop.ParseUUID(canonicalPayload["document_id"].(string))
 		if err != nil {
 			return err
 		}
-		categoryExists := false
-		if cats, err := ltm.Store.Categories(ctx); err == nil {
-			if ok, err := cats.Find(ctx, categoryID, false); err == nil && ok {
-				categoryExists = true
-			}
+		canonicalContent, err := json.Marshal(canonicalPayload["canonical_payload"])
+		if err != nil {
+			return err
+		}
+		if err := ltm.Store.UpsertDocument(ctx, memory.Document{
+			ID:          docID,
+			Title:       "coding_workflow_memory",
+			Source:      "coding_workflow",
+			ContentType: "application/json",
+			Content:     string(canonicalContent),
+			PayloadRef:  fmt.Sprintf("coding_workflow:%s", docID.String()),
+		}); err != nil {
+			return err
 		}
 
-		if !categoryExists {
-			if err := a.systemDB.VectorizeCategories(ctx, a.Memory.LongTermMemoryName(), a.brain, embedder, 10, []sop.UUID{categoryID}); err != nil {
+		thoughts := buildCodingMemoryLTMThoughts(mem, docID.String(), entries)
+
+		if err := ltm.IngestThoughts(ctx, thoughts, a.Memory.AgentID); err != nil {
+			return err
+		}
+
+		categoryIDs := make([]sop.UUID, 0, len(entries))
+		for _, entry := range entries {
+			categoryID, err := ltm.Manager.EnsureCategory(ctx, entry.CategoryPath)
+			if err != nil {
 				return err
 			}
-		} else {
-			if err := a.systemDB.VectorizeItems(ctx, a.Memory.LongTermMemoryName(), a.brain, embedder, 10, categoryID, nil); err != nil {
-				return err
-			}
+			categoryIDs = append(categoryIDs, categoryID)
+		}
+		if len(categoryIDs) == 0 {
+			return nil
+		}
+		if err := a.systemDB.VectorizeCategories(ctx, a.Memory.LongTermMemoryName(), a.brain, embedder, 10, categoryIDs); err != nil {
+			return err
 		}
 
 		return tx.Commit(ctx)
@@ -2892,7 +3009,7 @@ func (a *CopilotAgent) getLTMSemanticContext(ctx context.Context, query string) 
 				if len(allHits) > 0 {
 					knowledgeStr := ""
 					for _, hit := range allHits {
-						knowledgeStr += fmt.Sprintf("- (Score: %.2f) [%s] %s\n", hit.Score, hit.Category, hit.Text)
+						knowledgeStr += formatLearnedKnowledgeHit(ctx, kb, hit)
 					}
 					toolsDef += "\nContext Section (Learned Knowledge):\n" + knowledgeStr
 				}
@@ -2901,6 +3018,25 @@ func (a *CopilotAgent) getLTMSemanticContext(ctx context.Context, query string) 
 		}
 	}
 	return toolsDef
+}
+
+func formatLearnedKnowledgeHit(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], hit memory.KBDigestHit) string {
+	label := hit.Category
+	if label == "" {
+		label = "general"
+	}
+	text := strings.TrimSpace(hit.Text)
+	if text == "" {
+		return ""
+	}
+	sourceLabel := memory.ResolveHitSourceLabel(ctx, kb, hit.DocID)
+	if sourceLabel == "" && len(hit.DocID) > 0 && strings.TrimSpace(hit.DocID[0]) != "" {
+		sourceLabel = hit.DocID[0]
+	}
+	if sourceLabel != "" {
+		return fmt.Sprintf("- (Score: %.2f) [%s] %s\n  Source: %s\n", hit.Score, label, text, sourceLabel)
+	}
+	return fmt.Sprintf("- (Score: %.2f) [%s] %s\n", hit.Score, label, text)
 }
 
 func buildKnowledgeMiningQueries(domain string, query string) []string {

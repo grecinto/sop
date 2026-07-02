@@ -237,6 +237,16 @@ func (kb *KnowledgeBase[T]) findCategoriesByTextSearch(ctx context.Context, text
 	return nil, nil
 }
 
+func hydrateSearchHitsWithDocumentContent[T any](ctx context.Context, kb *KnowledgeBase[T], hits []ai.Hit[T]) {
+	if kb == nil || kb.Store == nil {
+		return
+	}
+	for i := range hits {
+		hits[i].DocumentContent = ResolveHitText(ctx, kb, hits[i].Payload, hits[i].DocID)
+		hits[i].SourceLabel = ResolveHitSourceLabel(ctx, kb, hits[i].DocID)
+	}
+}
+
 func mergeSearchHits[T any](semanticHits, textHits []ai.Hit[T]) []ai.Hit[T] {
 	seen := make(map[string]struct{}, len(semanticHits)+len(textHits))
 	merged := make([]ai.Hit[T], 0, len(semanticHits)+len(textHits))
@@ -352,6 +362,10 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 			}
 
 			hits = append(hits, catHits...)
+		}
+
+		if req.IncludeDocumentContent {
+			hydrateSearchHitsWithDocumentContent(ctx, kb, hits)
 		}
 
 		// Step 5: Sort by adjusted scores (category distance + item score)

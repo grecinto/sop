@@ -132,6 +132,21 @@ func TestDefaultPlannerBuildsExecutionPlan(t *testing.T) {
 	}
 }
 
+func TestDefaultPlannerAddsDecompositionAndValidationStepsForComplexCodeTasks(t *testing.T) {
+	planner := &DefaultPlanner{}
+	pack := ContextPack{TaskType: "code", ActiveFile: "parser.go", RelatedFiles: []string{"parser.go", "parser_test.go"}, TestFiles: []string{"parser_test.go"}}
+	plan, err := planner.Plan(Task{WorkingDir: ".", ActiveFile: "parser.go", Description: "implement parser and add coverage across parser and serializer"}, RunState{}, pack)
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	joined := strings.Join(plan, " ")
+	for _, want := range []string{"decompose", "validate", "tests"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected plan to include %q, got %q", want, joined)
+		}
+	}
+}
+
 func TestOrchestratorReusesPersistedRepositoryPathMemory(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "parser.go"), []byte("package main\n\nfunc Parse() string { return \"ok\" }\n"), 0o644); err != nil {

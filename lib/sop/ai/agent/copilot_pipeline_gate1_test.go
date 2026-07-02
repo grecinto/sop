@@ -288,6 +288,57 @@ func TestEvaluateRoutingGates_HandlesBareSopQuery(t *testing.T) {
 	}
 }
 
+func TestTrySpecializedFocusedRouting_PreservesSourceLabelsInKBResults(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+	kb, err := sysDB.OpenKnowledgeBase(ctx, "sop", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("OpenKnowledgeBase failed: %v", err)
+	}
+	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{TextSearchEnabled: true, LastVectorized: 1}); err != nil {
+		t.Fatalf("SetConfig failed: %v", err)
+	}
+	docID := sop.NewUUID()
+	if err := kb.Store.UpsertDocument(ctx, memory.Document{ID: docID, Title: "parser regression fix", Source: "coding_workflow", ContentType: "text/plain", Content: "canonical parser repair guidance"}); err != nil {
+		t.Fatalf("UpsertDocument failed: %v", err)
+	}
+	if err := kb.IngestThoughts(ctx, []memory.Thought[map[string]any]{{
+		Summaries:    []string{"Parser repair guide"},
+		CategoryPath: "language/parser",
+		DocID:        memory.DocIDs{docID.String()},
+		Vectors:      [][]float32{{0.1, 0.2, 0.3}},
+		Data:         map[string]any{"description": "parser repair"},
+	}}, "Omni"); err != nil {
+		t.Fatalf("IngestThoughts failed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+	taskCtx, handled, err := ag.trySpecializedFocusedRouting(ctx, "omni:sop:language/parser", "Omni", "Spaces", "")
+	if err != nil {
+		t.Fatalf("trySpecializedFocusedRouting failed: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected specialized focused routing to handle the SOP-style query")
+	}
+	if taskCtx == nil {
+		t.Fatal("expected a focused task context")
+	}
+	if !strings.Contains(taskCtx.KBSearchResults, "Source:") {
+		t.Fatalf("expected KB search results to carry source attribution, got %q", taskCtx.KBSearchResults)
+	}
+	if !strings.Contains(taskCtx.KBSearchResults, "parser repair") {
+		t.Fatalf("expected KB search results to include the content text, got %q", taskCtx.KBSearchResults)
+	}
+}
+
 func TestTrySpecializedFocusedRouting_SupportsWhitespaceAroundLLM(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
@@ -648,9 +699,12 @@ func TestBuildKBEnrichedQuery_UsesCleanQueryWithoutLLMToken(t *testing.T) {
 	if !strings.Contains(enrichedQuery, "operations/performance") {
 		t.Errorf("expected enriched query to contain KB results, got: %s", enrichedQuery)
 	}
-	// Verify the prompt explicitly tells the model to preserve absolute source links
-	if !strings.Contains(enrichedQuery, "Preserve the exact markdown source links") {
-		t.Errorf("expected enriched query to preserve source links, got: %s", enrichedQuery)
+	// Verify the prompt explicitly tells the model to preserve source labels and markdown source links
+	if !strings.Contains(enrichedQuery, "Preserve the exact source labels") {
+		t.Errorf("expected enriched query to preserve source labels, got: %s", enrichedQuery)
+	}
+	if !strings.Contains(enrichedQuery, "markdown source links") {
+		t.Errorf("expected enriched query to preserve markdown source links, got: %s", enrichedQuery)
 	}
 }
 

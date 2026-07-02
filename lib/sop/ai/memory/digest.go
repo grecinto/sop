@@ -2,10 +2,12 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/embed"
 )
@@ -99,7 +101,7 @@ func DigestKnowledgeBase(ctx context.Context, kb *KnowledgeBase[map[string]any],
 							DocID:      hit.DocID,
 							Score:      relevance,
 							Category:   extractDigestCategory(hit.Payload),
-							Text:       extractDigestText(hit.Payload),
+							Text:       ResolveHitText(ctx, kb, hit.Payload, hit.DocID),
 							Query:      query,
 							SearchType: "semantic",
 						})
@@ -125,7 +127,7 @@ func DigestKnowledgeBase(ctx context.Context, kb *KnowledgeBase[map[string]any],
 					DocID:      hit.DocID,
 					Score:      hit.Score,
 					Category:   extractDigestCategory(hit.Payload),
-					Text:       extractDigestText(hit.Payload),
+					Text:       ResolveHitText(ctx, kb, hit.Payload, hit.DocID),
 					Query:      query,
 					SearchType: "keyword",
 				})
@@ -201,14 +203,121 @@ func digestSemanticRelevance(distance float32) float32 {
 	return 1 / (1 + distance)
 }
 
-func extractDigestText(payload map[string]any) string {
+func ResolveHitText[T any](ctx context.Context, kb *KnowledgeBase[T], payload any, docIDs []string) string {
+	if kb == nil || kb.Store == nil {
+		return extractDigestText(payload)
+	}
+	for _, docID := range docIDs {
+		trimmed := strings.TrimSpace(docID)
+		if trimmed == "" {
+			continue
+		}
+		parsedID, err := sop.ParseUUID(trimmed)
+		if err != nil {
+			continue
+		}
+		doc, err := kb.Store.GetDocument(ctx, parsedID)
+		if err != nil || doc == nil {
+			continue
+		}
+		if text := strings.TrimSpace(doc.Content); text != "" {
+			return normalizeStructuredHitText(text)
+		}
+		if text := strings.TrimSpace(doc.PayloadRef); text != "" {
+			return normalizeStructuredHitText(text)
+		}
+	}
+	return extractDigestText(payload)
+}
+
+func ResolveHitSourceLabel[T any](ctx context.Context, kb *KnowledgeBase[T], docIDs []string) string {
+	if len(docIDs) == 0 {
+		return ""
+	}
+	for _, docID := range docIDs {
+		trimmed := strings.TrimSpace(docID)
+		if trimmed == "" {
+			continue
+		}
+		if kb == nil || kb.Store == nil {
+			return trimmed
+		}
+		parsedID, err := sop.ParseUUID(trimmed)
+		if err != nil {
+			return trimmed
+		}
+		doc, err := kb.Store.GetDocument(ctx, parsedID)
+		if err != nil || doc == nil {
+			return trimmed
+		}
+		for _, candidate := range []string{doc.Title, doc.Source, doc.URL, doc.PayloadRef} {
+			label := strings.TrimSpace(candidate)
+			if label != "" {
+				return label
+			}
+		}
+		return trimmed
+	}
+	return ""
+}
+
+func normalizeStructuredHitText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		var payload any
+		if err := json.Unmarshal([]byte(trimmed), &payload); err == nil {
+			return formatStructuredHitText(payload)
+		}
+	}
+	return trimmed
+}
+
+func formatStructuredHitText(payload any) string {
+	switch v := payload.(type) {
+	case map[string]any:
+		parts := make([]string, 0, len(v))
+		for _, key := range []string{"description", "summary", "outcome", "lesson", "next_step", "title", "content"} {
+			if value, ok := v[key]; ok {
+				text := strings.TrimSpace(fmt.Sprint(value))
+				if text != "" {
+					parts = append(parts, fmt.Sprintf("%s: %s", strings.ToTitle(strings.ReplaceAll(key, "_", " ")), text))
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, " | ")
+		}
+	case []any:
+		items := make([]string, 0, len(v))
+		for _, item := range v {
+			if rendered := formatStructuredHitText(item); rendered != "" {
+				items = append(items, rendered)
+			}
+		}
+		if len(items) > 0 {
+			return strings.Join(items, " | ")
+		}
+	}
+	return fmt.Sprintf("%v", payload)
+}
+
+func extractDigestText(payload any) string {
 	if payload == nil {
 		return ""
 	}
-	for _, field := range []string{"_raw_content", "content", "description", "text", "page_content"} {
-		if text, ok := payload[field].(string); ok && strings.TrimSpace(text) != "" {
-			return text
+	switch v := payload.(type) {
+	case map[string]any:
+		for _, field := range []string{"_raw_content", "content", "description", "text", "page_content"} {
+			if text, ok := v[field].(string); ok && strings.TrimSpace(text) != "" {
+				return normalizeStructuredHitText(text)
+			}
 		}
+	case string:
+		return normalizeStructuredHitText(v)
 	}
 	return fmt.Sprintf("%v", payload)
 }

@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
+	"github.com/sharedcode/sop/ai/memory"
+	"github.com/sharedcode/sop/inmemory"
 )
 
 func TestWithCodingWorkflowCapabilityRegistersCapability(t *testing.T) {
@@ -107,6 +110,98 @@ func TestBuildSystemPromptIncludesCodingWorkflowMemory(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "patched parser") {
 		t.Fatalf("expected prompt to include coding workflow outcome, got %s", prompt)
+	}
+}
+
+func TestFormatLearnedKnowledgeHitUsesCanonicalDocumentSourceLabel(t *testing.T) {
+	ctx := context.Background()
+	cats := inmemory.NewBtree[sop.UUID, *memory.Category](true)
+	vecs := inmemory.NewBtree[memory.VectorKey, memory.Vector](true)
+	items := inmemory.NewBtree[memory.ItemKey, memory.Item[map[string]any]](true)
+
+	store := memory.NewStore[map[string]any](
+		"learned_knowledge_label_kb",
+		nil,
+		cats.Btree,
+		inmemory.NewBtree[string, sop.UUID](false).Btree,
+		inmemory.NewBtree[memory.DistanceKey, byte](false).Btree,
+		vecs.Btree,
+		items.Btree,
+		inmemory.NewBtree[sop.UUID, memory.Document](false).Btree,
+	)
+
+	docID := sop.NewUUID()
+	if err := store.UpsertDocument(ctx, memory.Document{ID: docID, Title: "parser regression fix", Source: "coding_workflow", ContentType: "text/plain", Content: "canonical content"}); err != nil {
+		t.Fatalf("failed to store canonical document: %v", err)
+	}
+
+	kb := &memory.KnowledgeBase[map[string]any]{Store: store}
+	hit := memory.KBDigestHit{Score: 0.9, Category: "Architecture", Text: "patched parser", DocID: memory.DocIDs{docID.String()}}
+	formatted := formatLearnedKnowledgeHit(ctx, kb, hit)
+	if !strings.Contains(formatted, "Source: parser regression fix") {
+		t.Fatalf("expected learned knowledge prompt to use canonical document title as source, got %q", formatted)
+	}
+}
+
+func TestBuildCodingMemoryLTMPayloadBuildsCanonicalDocumentAndTwoIndexes(t *testing.T) {
+	mem := cw.CodingMemory{
+		Description:    "fix parser",
+		ActiveFile:     "parser.go",
+		FilesTouched:   []string{"parser.go"},
+		Outcome:        "patched parser",
+		TestStatus:     "passed",
+		Lesson:         "keep the parser behavior focused",
+		NextStep:       "add a regression test",
+		RepositoryHint: "sop-cloud",
+	}
+
+	payload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
+	if payload["document_id"] == "" {
+		t.Fatal("expected canonical document id to be populated")
+	}
+	if got := payload["path_index"]; got == "" {
+		t.Fatal("expected path index to be populated")
+	}
+	if got := payload["semantic_index"]; got == "" {
+		t.Fatal("expected semantic index to be populated")
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected two index entries, got %d", len(entries))
+	}
+	if entries[0].CategoryPath == entries[1].CategoryPath {
+		t.Fatal("expected the path-based and semantic index routes to differ")
+	}
+	if entries[0].Payload["document_id"] != entries[1].Payload["document_id"] {
+		t.Fatal("expected both index entries to point at the same canonical document")
+	}
+	canonical, ok := entries[0].Payload["canonical_payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected canonical payload map, got %T", entries[0].Payload["canonical_payload"])
+	}
+	if canonical["description"] != "fix parser" {
+		t.Fatalf("expected canonical payload to preserve description, got %#v", canonical["description"])
+	}
+}
+
+func TestBuildCodingMemoryLTMThoughtsAttachesCanonicalDocumentReference(t *testing.T) {
+	mem := cw.CodingMemory{
+		Description:  "fix parser",
+		Outcome:      "patched parser",
+		FilesTouched: []string{"parser.go"},
+		TestStatus:   "passed",
+	}
+	payload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
+	thoughts := buildCodingMemoryLTMThoughts(mem, payload["document_id"].(string), entries)
+	if len(thoughts) != 2 {
+		t.Fatalf("expected two thoughts, got %d", len(thoughts))
+	}
+	for _, thought := range thoughts {
+		if len(thought.DocID) != 1 || thought.DocID[0] != payload["document_id"].(string) {
+			t.Fatalf("expected thought to carry canonical document id, got %+v", thought.DocID)
+		}
+		if thought.Data["document_id"] != payload["document_id"].(string) {
+			t.Fatalf("expected thought data to preserve document id, got %#v", thought.Data["document_id"])
+		}
 	}
 }
 

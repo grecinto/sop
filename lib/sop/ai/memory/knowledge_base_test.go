@@ -21,6 +21,63 @@ func (m *MockPlaybookLLM) PrewarmCache(ctx context.Context, opts ai.GenOptions) 
 	return nil
 }
 
+func TestKnowledgeBase_SearchIncludesDocumentContentWhenRequested(t *testing.T) {
+	ctx := context.Background()
+
+	cats := inmemory.NewBtree[sop.UUID, *Category](true)
+	vecs := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[map[string]any]](true)
+
+	store := NewStore[map[string]any](
+		"search_doc_content_kb",
+		nil,
+		cats.Btree,
+		inmemory.NewBtree[string, sop.UUID](false).Btree,
+		inmemory.NewBtree[DistanceKey, byte](false).Btree,
+		vecs.Btree,
+		items.Btree,
+		inmemory.NewBtree[sop.UUID, Document](false).Btree,
+	).(*store[map[string]any])
+	store.SetTextIndex(&MockTextIndex{})
+
+	llm := &mapDigestLLM{}
+	store.SetLLM(llm)
+
+	kb := &KnowledgeBase[map[string]any]{
+		Store:   store,
+		Manager: NewMemoryManager[map[string]any](store, llm, &MockPlaybookEmbedder{}),
+	}
+
+	docID := sop.NewUUID()
+	if err := store.UpsertDocument(ctx, Document{ID: docID, Title: "parser regression fix", ContentType: "text/plain", Content: "Canonical parser repair guidance."}); err != nil {
+		t.Fatalf("failed to store canonical document: %v", err)
+	}
+
+	if err := kb.IngestThoughts(ctx, []Thought[map[string]any]{{
+		Summaries:    []string{"parser repair summary"},
+		CategoryPath: "Architecture",
+		DocID:        DocIDs{docID.String()},
+		Vectors:      [][]float32{{1, 0, 0}},
+		Data:         map[string]any{"content": "parser repair"},
+	}}, "test"); err != nil {
+		t.Fatalf("failed to ingest thought: %v", err)
+	}
+
+	batch, err := kb.Search(ctx, []SearchRequest[map[string]any]{{Text: "parser", Limit: 5, IncludeDocumentContent: true}})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(batch) != 1 || len(batch[0]) == 0 {
+		t.Fatalf("expected a search hit, got %#v", batch)
+	}
+	if got := batch[0][0].DocumentContent; got != "Canonical parser repair guidance." {
+		t.Fatalf("expected document content to be hydrated into the hit, got %q", got)
+	}
+	if got := batch[0][0].SourceLabel; got != "parser regression fix" {
+		t.Fatalf("expected source label to be hydrated into the hit, got %q", got)
+	}
+}
+
 func TestKnowledgeBase_API(t *testing.T) {
 	ctx := context.Background()
 

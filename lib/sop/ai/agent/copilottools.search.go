@@ -233,10 +233,15 @@ func (a *CopilotAgent) searchKnowledgeBase(ctx context.Context, db *database.Dat
 	// Unified result formatting
 	var results []string
 	for _, h := range batch[0] {
-		text := extractHitText(h.Payload)
+		text := memory.ResolveHitText(ctx, kb, h.Payload, h.DocID)
 		categoryVal := extractHitCategory(h.Payload)
+		sourceLabel := memory.ResolveHitSourceLabel(ctx, kb, h.DocID)
 		link := a.formatKBSourceLinks(ctx, memory.DocIDs(h.DocID))
-		results = append(results, fmt.Sprintf("Score: %.2f | CategoryPath: %s\nText: %s%s", h.Score, categoryVal, text, link))
+		if sourceLabel != "" {
+			results = append(results, fmt.Sprintf("Score: %.2f | CategoryPath: %s\nSource: %s\nText: %s%s", h.Score, categoryVal, sourceLabel, text, link))
+		} else {
+			results = append(results, fmt.Sprintf("Score: %.2f | CategoryPath: %s\nText: %s%s", h.Score, categoryVal, text, link))
+		}
 	}
 
 	a.MarkMRUCategory(kbName, fmt.Sprintf("Last searched query: %s", query))
