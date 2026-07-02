@@ -172,11 +172,11 @@ type SearchOptions[T any] struct {
 
 // SearchRequest is the reusable public contract for single and batch retrieval.
 type SearchRequest[T any] struct {
-	Text                  string
-	Vector                []float32
-	CategoryPath          string
-	CategoryVector        []float32
-	Limit                 int
-	Filter                func(T) bool
+	Text                   string
+	Vector                 []float32
+	CategoryPath           string
+	CategoryVector         []float32
+	Limit                  int
+	Filter                 func(T) bool
 	IncludeDocumentContent bool
 }

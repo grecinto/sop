@@ -656,18 +656,27 @@ type codingMemoryLTMIndexEntry struct {
 
 func buildCodingMemoryLTMPayloadAndIndexes(mem cw.CodingMemory) (map[string]any, []codingMemoryLTMIndexEntry) {
 	docID := sop.NewUUID()
+	scopeType := "repo"
+	scopeID := strings.TrimSpace(mem.RepositoryHint)
+	if scopeID == "" {
+		scopeID = "default"
+	}
 	canonicalPayload := map[string]any{
-		"document_id":     docID.String(),
-		"payload_type":    "coding_workflow_memory",
-		"description":     strings.TrimSpace(mem.Description),
-		"active_file":     strings.TrimSpace(mem.ActiveFile),
-		"files_touched":   mem.FilesTouched,
-		"outcome":         strings.TrimSpace(mem.Outcome),
-		"test_status":     strings.TrimSpace(mem.TestStatus),
-		"lesson":          strings.TrimSpace(mem.Lesson),
-		"next_step":       strings.TrimSpace(mem.NextStep),
-		"repository_hint": strings.TrimSpace(mem.RepositoryHint),
-		"recorded_at":     time.Now().UnixMilli(),
+		"document_id":      docID.String(),
+		"payload_type":     "coding_workflow_memory",
+		"description":      strings.TrimSpace(mem.Description),
+		"active_file":      strings.TrimSpace(mem.ActiveFile),
+		"files_touched":    mem.FilesTouched,
+		"outcome":          strings.TrimSpace(mem.Outcome),
+		"test_status":      strings.TrimSpace(mem.TestStatus),
+		"lesson":           strings.TrimSpace(mem.Lesson),
+		"next_step":        strings.TrimSpace(mem.NextStep),
+		"repository_hint":  strings.TrimSpace(mem.RepositoryHint),
+		"status":           "active",
+		"lifecycle_status": "active",
+		"scope_type":       scopeType,
+		"scope_id":         scopeID,
+		"recorded_at":      time.Now().UnixMilli(),
 	}
 	pathIndexPath := buildCodingMemoryPathIndexCategoryPath(mem)
 	semanticIndexPath := buildCodingMemorySemanticIndexCategoryPath(mem)
@@ -919,6 +928,112 @@ type ltmLifecycleStatus struct {
 	Score        int
 }
 
+func applyLTMLifecycleSignal(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], signal ltmLifecycleSignal) error {
+	if ctx == nil || kb == nil || signal.Action == "" {
+		return nil
+	}
+	itemsTree, err := kb.Store.Items(ctx)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	ok, err := itemsTree.First(ctx)
+	if err != nil {
+		return err
+	}
+	for ok {
+		currentKey := itemsTree.GetCurrentKey()
+		item, err := itemsTree.GetCurrentValue(ctx)
+		if err != nil {
+			return err
+		}
+		payload, okPayload := any(item.Data).(map[string]any)
+		if !okPayload || payload == nil {
+			payload = map[string]any{}
+		}
+		if !ltmLifecycleSignalMatchesPayload(payload, signal) {
+			ok, err = itemsTree.Next(ctx)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		switch strings.ToLower(signal.Action) {
+		case "retire":
+			payload["lifecycle_status"] = "archived"
+			payload["status"] = "archived"
+			payload["archived_at"] = now
+			payload["archive_reason"] = strings.TrimSpace(signal.Reason)
+			if signal.Reason == "" {
+				payload["archive_reason"] = "explicit_user_cue"
+			}
+			payload["lifecycle_last_evaluated_at"] = now
+			payload["updated_at"] = now
+		case "reactivate":
+			payload["lifecycle_status"] = "active"
+			payload["status"] = "active"
+			payload["scope_valid"] = true
+			delete(payload, "archived_at")
+			delete(payload, "archive_reason")
+			payload["lifecycle_last_used_at"] = now
+			payload["lifecycle_last_evaluated_at"] = now
+			payload["updated_at"] = now
+			if existingCount, ok := payload["lifecycle_access_count"].(int); ok {
+				payload["lifecycle_access_count"] = existingCount + 1
+			} else if existingCount, ok := payload["lifecycle_access_count"].(int64); ok {
+				payload["lifecycle_access_count"] = int(existingCount) + 1
+			} else if existingCount, ok := payload["lifecycle_access_count"].(float64); ok {
+				payload["lifecycle_access_count"] = int(existingCount) + 1
+			} else {
+				payload["lifecycle_access_count"] = 1
+			}
+		}
+		item.Data = payload
+		if _, err := itemsTree.UpdateCurrentItem(ctx, currentKey.Key, item); err != nil {
+			return err
+		}
+		ok, err = itemsTree.Next(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ltmLifecycleSignalMatchesPayload(payload map[string]any, signal ltmLifecycleSignal) bool {
+	if payload == nil || len(payload) == 0 {
+		return signal.ScopeType == "" || signal.ScopeType == "global"
+	}
+	if signal.ScopeType == "" || signal.ScopeType == "global" {
+		return true
+	}
+	scopeType := strings.TrimSpace(fmt.Sprint(payload["scope_type"]))
+	if scopeType == "" {
+		scopeType = strings.TrimSpace(fmt.Sprint(payload["scopeType"]))
+	}
+	scopeID := strings.TrimSpace(fmt.Sprint(payload["scope_id"]))
+	if scopeID == "" {
+		scopeID = strings.TrimSpace(fmt.Sprint(payload["scopeID"]))
+	}
+	if scopeType == "" && scopeID == "" {
+		scopeType = strings.TrimSpace(fmt.Sprint(payload["repository_hint"]))
+		scopeID = strings.TrimSpace(fmt.Sprint(payload["repository_hint"]))
+	}
+	if scopeType == "" {
+		return false
+	}
+	if signal.ScopeType != "" && !strings.EqualFold(scopeType, signal.ScopeType) {
+		return false
+	}
+	if signal.ScopeID != "" && signal.ScopeID != "global" {
+		if scopeID == "" {
+			return false
+		}
+		return strings.EqualFold(scopeID, signal.ScopeID)
+	}
+	return true
+}
+
 func evaluateLTMLifecycleStatus(lastUsedDays, ageDays, accessCount, relevanceScore int, scopeValid bool) ltmLifecycleStatus {
 	if lastUsedDays <= 14 && ageDays <= 30 && accessCount >= 2 && relevanceScore >= 10 {
 		return ltmLifecycleStatus{State: "active", Reason: "recent_and_relevant", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 20}
@@ -1127,6 +1242,10 @@ func detectLTMLifecycleSignal(query string) ltmLifecycleSignal {
 		{prefix: "done with space ", action: "retire", scope: "space"},
 		{prefix: "finished with repo ", action: "retire", scope: "repo"},
 		{prefix: "finished with space ", action: "retire", scope: "space"},
+		{prefix: "continue with repo ", action: "reactivate", scope: "repo"},
+		{prefix: "continue with space ", action: "reactivate", scope: "space"},
+		{prefix: "resume repo ", action: "reactivate", scope: "repo"},
+		{prefix: "resume space ", action: "reactivate", scope: "space"},
 		{prefix: "archive this context", action: "archive", scope: "global"},
 		{prefix: "forget this", action: "archive", scope: "global"},
 	} {
@@ -2974,6 +3093,9 @@ func (a *CopilotAgent) getLTMSemanticContext(ctx context.Context, query string) 
 			if err == nil {
 				payload := ai.GetSessionPayload(ctx)
 				lifecycleSignal := detectLTMLifecycleSignal(query)
+				if err := applyLTMLifecycleSignal(ctx, kb, lifecycleSignal); err != nil {
+					log.Warn("CopilotAgent: failed to apply explicit lifecycle signal", "action", lifecycleSignal.Action, "error", err)
+				}
 				targets := buildLTMRetrievalTargets(query, payload, a.getActiveRepoHint(ctx))
 				targets = filterLTMRetrievalTargets(targets, lifecycleSignal)
 				var allHits []memory.KBDigestHit

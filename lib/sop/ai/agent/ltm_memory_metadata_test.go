@@ -73,6 +73,16 @@ func TestDetectLTMLifecycleSignalParsesRepoRetirementCue(t *testing.T) {
 	}
 }
 
+func TestDetectLTMLifecycleSignalParsesRepoReactivationCue(t *testing.T) {
+	signal := detectLTMLifecycleSignal("continue with repo sop-cloud")
+	if signal.Action != "reactivate" {
+		t.Fatalf("expected reactivate action, got %q", signal.Action)
+	}
+	if signal.ScopeType != "repo" || signal.ScopeID != "sop-cloud" {
+		t.Fatalf("expected repo scope signal, got %#v", signal)
+	}
+}
+
 func TestFilterLTMRetrievalTargetsRemovesRetiredScope(t *testing.T) {
 	targets := []ltmRetrievalTarget{{Category: "coding", Capability: "coding_workflow", ScopeType: "repo", ScopeID: "sop-cloud"}, {Category: "general", Capability: "general", ScopeType: "global", ScopeID: "global"}}
 	filtered := filterLTMRetrievalTargets(targets, ltmLifecycleSignal{Action: "retire", ScopeType: "repo", ScopeID: "sop-cloud"})

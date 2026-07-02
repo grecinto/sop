@@ -205,6 +205,33 @@ func TestBuildCodingMemoryLTMThoughtsAttachesCanonicalDocumentReference(t *testi
 	}
 }
 
+func TestBuildCodingMemoryLTMPayloadStoresLifecycleMetadataForRepoState(t *testing.T) {
+	mem := cw.CodingMemory{Description: "fix parser", Outcome: "patched parser", RepositoryHint: "sop-cloud"}
+	payload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
+	thoughts := buildCodingMemoryLTMThoughts(mem, payload["document_id"].(string), entries)
+	if len(thoughts) == 0 {
+		t.Fatal("expected thoughts to be generated")
+	}
+	for _, key := range []string{"lifecycle_status", "status", "scope_type", "scope_id"} {
+		if _, ok := thoughts[0].Data[key]; ok {
+			t.Fatalf("expected item payload to omit %s, got %#v", key, thoughts[0].Data[key])
+		}
+	}
+	canonical, ok := entries[0].Payload["canonical_payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected canonical payload map, got %T", entries[0].Payload["canonical_payload"])
+	}
+	if canonical["lifecycle_status"] != "active" {
+		t.Fatalf("expected canonical repo payload to persist lifecycle_status, got %#v", canonical["lifecycle_status"])
+	}
+	if canonical["scope_type"] != "repo" {
+		t.Fatalf("expected canonical repo payload to persist scope_type, got %#v", canonical["scope_type"])
+	}
+	if canonical["scope_id"] != "sop-cloud" {
+		t.Fatalf("expected canonical repo payload to persist scope_id, got %#v", canonical["scope_id"])
+	}
+}
+
 func TestRecordCodingMemoryStoresPlanInSTMAndMRU(t *testing.T) {
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	agent.service = &Service{session: NewRunnerSession()}
