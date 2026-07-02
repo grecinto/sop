@@ -66,6 +66,13 @@ func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, 
 			return
 		}
 
+		retiredCount, err := a.applyLTMLifecycleRetention(ctx, ltm, nowFn())
+		if err != nil {
+			log.Warn("CopilotAgent: Failed applying lifecycle retention during sleep cycle", "agent_id", a.Memory.AgentID, "error", err)
+		} else if retiredCount > 0 {
+			log.Debug("CopilotAgent: Archived stale LTM entries during sleep cycle", "agent_id", a.Memory.AgentID, "count", retiredCount)
+		}
+
 		var thoughts []memory.Thought[map[string]any]
 		var itemIDs []string
 
@@ -179,6 +186,48 @@ func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, 
 					log.Info("CopilotAgent: Running Scheduled Deep Sleep Cycle", "agent_id", a.Memory.AgentID, "hour", t.Hour())
 					runSleepCycle()
 					a.Memory.LastEpisodeTS.Store(0) // Reset idle sensor
+				}
+			}
+		}
+	}()
+
+	// 3. Weekly compaction sweep for old archived memories
+	go func() {
+		log.Info("CopilotAgent: Initiating Weekly LTM Compaction Sweep", "agent_id", a.Memory.AgentID)
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if a.systemDB == nil || a.Memory == nil {
+					continue
+				}
+				tx, err := a.systemDB.BeginTransaction(ctx, sop.ForWriting)
+				if err != nil {
+					continue
+				}
+				var embedder ai.Embeddings
+				if a.service != nil && a.service.Domain() != nil && a.service.Domain().Embedder() != nil {
+					embedder = a.service.Domain().Embedder()
+				}
+				ltm, err := a.systemDB.OpenKnowledgeBase(ctx, a.Memory.LongTermMemoryName(), tx, a.brain, embedder, false)
+				if err != nil {
+					tx.Rollback(ctx)
+					continue
+				}
+				prunedCount, err := a.applyLTMLifecycleCompaction(ctx, ltm, time.Now())
+				if err != nil {
+					log.Warn("CopilotAgent: Failed applying lifecycle compaction", "agent_id", a.Memory.AgentID, "error", err)
+					tx.Rollback(ctx)
+					continue
+				}
+				if prunedCount > 0 {
+					log.Debug("CopilotAgent: Pruned archived LTM entries", "agent_id", a.Memory.AgentID, "count", prunedCount)
+				}
+				if err := tx.Commit(ctx); err != nil {
+					log.Warn("CopilotAgent: Failed committing lifecycle compaction", "agent_id", a.Memory.AgentID, "error", err)
 				}
 			}
 		}

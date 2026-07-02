@@ -649,8 +649,8 @@ func (a *CopilotAgent) buildFocusedToolContext(taskCtx *TaskContextClassificatio
 	}
 
 	if a != nil && a.capabilityRegistry != nil {
-		if cap, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate}); ok {
-			if ctx := cap.BuildContext("", capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate}); ctx != "" {
+		if cap, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate, CapabilityHint: taskCtx.CapabilityHint}); ok {
+			if ctx := cap.BuildContext("", capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate, CapabilityHint: taskCtx.CapabilityHint}); ctx != "" {
 				return strings.TrimSpace(ctx)
 			}
 		}

@@ -630,6 +630,445 @@ func (a *CopilotAgent) recordCodingMemory(mem cw.CodingMemory) {
 	a.markMRUCategoryWithSource("CODING_WORKFLOW_LAST", ctx, MRUSourceAskOutcome)
 }
 
+func buildLTMMemoryCategoryPath(category, capability, scopeType, scopeID string) string {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		category = "General"
+	}
+	scopeType = strings.TrimSpace(scopeType)
+	scopeID = strings.TrimSpace(scopeID)
+	parts := []string{strings.Title(strings.ToLower(category))}
+	if scopeType != "" && scopeID != "" {
+		parts = append(parts, strings.Title(strings.ToLower(scopeType)))
+		parts = append(parts, scopeID)
+	} else if capability != "" {
+		parts = append(parts, strings.Title(strings.ToLower(strings.ReplaceAll(capability, "_", " "))))
+	}
+	return strings.Join(parts, "/")
+}
+
+func buildLTMMemoryMetadata(category, capability, scopeType, scopeID string) map[string]any {
+	category = strings.TrimSpace(category)
+	capability = strings.TrimSpace(capability)
+	scopeType = strings.TrimSpace(scopeType)
+	scopeID = strings.TrimSpace(scopeID)
+	if category == "" {
+		category = "general"
+	}
+	if capability == "" {
+		capability = "general"
+	}
+	if scopeType == "" {
+		scopeType = "global"
+	}
+	if scopeID == "" {
+		scopeID = "global"
+	}
+	now := time.Now().UnixMilli()
+	return map[string]any{
+		"category":                    category,
+		"capability":                  capability,
+		"scope_type":                  scopeType,
+		"scope_id":                    scopeID,
+		"provenance":                  "agent",
+		"status":                      "active",
+		"lifecycle_status":            "active",
+		"lifecycle_access_count":      1,
+		"lifecycle_last_used_at":      now,
+		"lifecycle_last_evaluated_at": now,
+		"updated_at":                  now,
+	}
+}
+
+func updateLTMMemoryLifecycleState(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], itemID string, relevanceScore int) error {
+	if ctx == nil || kb == nil || strings.TrimSpace(itemID) == "" {
+		return nil
+	}
+
+	parsedID, err := sop.ParseUUID(itemID)
+	if err != nil {
+		return nil
+	}
+
+	itemsTree, err := kb.Store.Items(ctx)
+	if err != nil {
+		return err
+	}
+
+	ok, err := itemsTree.First(ctx)
+	if err != nil {
+		return err
+	}
+	for ok {
+		currentKey := itemsTree.GetCurrentKey()
+		item, err := itemsTree.GetCurrentValue(ctx)
+		if err != nil {
+			return err
+		}
+		if item.ID == parsedID {
+			payload, ok := any(item.Data).(map[string]any)
+			if !ok {
+				payload = map[string]any{}
+			}
+			if payload == nil {
+				payload = map[string]any{}
+			}
+			accessCount := 1
+			if existingCount, ok := payload["lifecycle_access_count"].(int); ok {
+				accessCount = existingCount + 1
+				payload["lifecycle_access_count"] = accessCount
+			} else if existingCount, ok := payload["lifecycle_access_count"].(int64); ok {
+				accessCount = int(existingCount) + 1
+				payload["lifecycle_access_count"] = accessCount
+			} else if existingCount, ok := payload["lifecycle_access_count"].(float64); ok {
+				accessCount = int(existingCount) + 1
+				payload["lifecycle_access_count"] = accessCount
+			} else {
+				payload["lifecycle_access_count"] = accessCount
+			}
+			now := time.Now().UnixMilli()
+			lastUsedAt := now
+			if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(int64); ok {
+				lastUsedAt = existingLastUsedAt
+			} else if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(int); ok {
+				lastUsedAt = int64(existingLastUsedAt)
+			} else if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(float64); ok {
+				lastUsedAt = int64(existingLastUsedAt)
+			}
+			recordedAt := now
+			if existingRecordedAt, ok := payload["recorded_at"].(int64); ok {
+				recordedAt = existingRecordedAt
+			} else if existingRecordedAt, ok := payload["recorded_at"].(int); ok {
+				recordedAt = int64(existingRecordedAt)
+			} else if existingRecordedAt, ok := payload["recorded_at"].(float64); ok {
+				recordedAt = int64(existingRecordedAt)
+			}
+			lastUsedDays := 0
+			if now > lastUsedAt {
+				lastUsedDays = int((now - lastUsedAt) / int64(24*time.Hour/time.Millisecond))
+			}
+			ageDays := 0
+			if now > recordedAt {
+				ageDays = int((now - recordedAt) / int64(24*time.Hour/time.Millisecond))
+			}
+			scopeValid := true
+			if existingScopeValid, ok := payload["scope_valid"].(bool); ok {
+				scopeValid = existingScopeValid
+			}
+			status := evaluateLTMLifecycleStatus(lastUsedDays, ageDays, accessCount, relevanceScore, scopeValid)
+			payload["lifecycle_last_used_at"] = now
+			payload["lifecycle_last_evaluated_at"] = now
+			payload["updated_at"] = now
+			payload["status"] = status.State
+			payload["lifecycle_status"] = status.State
+			item.Data = payload
+			_, err = itemsTree.UpdateCurrentItem(ctx, currentKey.Key, item)
+			return err
+		}
+		ok, err = itemsTree.Next(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type ltmRetrievalTarget struct {
+	Category   string
+	Capability string
+	ScopeType  string
+	ScopeID    string
+}
+
+type ltmLifecycleRetentionDecision struct {
+	Action     string
+	Reason     string
+	Confidence int
+}
+
+type ltmLifecycleSignal struct {
+	Action     string
+	ScopeType  string
+	ScopeID    string
+	Reason     string
+	Confidence int
+}
+
+type ltmLifecycleStatus struct {
+	State        string
+	Reason       string
+	LastUsedDays int
+	AgeDays      int
+	Score        int
+}
+
+func evaluateLTMLifecycleStatus(lastUsedDays, ageDays, accessCount, relevanceScore int, scopeValid bool) ltmLifecycleStatus {
+	if lastUsedDays <= 14 && ageDays <= 30 && accessCount >= 2 && relevanceScore >= 10 {
+		return ltmLifecycleStatus{State: "active", Reason: "recent_and_relevant", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 20}
+	}
+	if lastUsedDays <= 60 && accessCount >= 1 {
+		return ltmLifecycleStatus{State: "warm", Reason: "recently_seen", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 45}
+	}
+	if !scopeValid {
+		return ltmLifecycleStatus{State: "stale", Reason: "invalid_scope", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 100}
+	}
+	return ltmLifecycleStatus{State: "stale", Reason: "cold_or_unused", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 80}
+}
+
+func decideLTMLifecycleRetention(payload map[string]any, now time.Time) ltmLifecycleRetentionDecision {
+	if payload == nil || len(payload) == 0 || now.IsZero() {
+		return ltmLifecycleRetentionDecision{}
+	}
+	status := strings.TrimSpace(fmt.Sprint(payload["lifecycle_status"]))
+	if status == "" {
+		status = strings.TrimSpace(fmt.Sprint(payload["status"]))
+	}
+	if status == "" || strings.EqualFold(status, "active") || strings.EqualFold(status, "warm") {
+		return ltmLifecycleRetentionDecision{}
+	}
+	if strings.EqualFold(status, "archived") || strings.EqualFold(status, "deleted") {
+		return ltmLifecycleRetentionDecision{}
+	}
+
+	lastUsedAt := int64(0)
+	if v, ok := payload["lifecycle_last_used_at"].(int64); ok {
+		lastUsedAt = v
+	} else if v, ok := payload["lifecycle_last_used_at"].(int); ok {
+		lastUsedAt = int64(v)
+	} else if v, ok := payload["lifecycle_last_used_at"].(float64); ok {
+		lastUsedAt = int64(v)
+	}
+	recordedAt := int64(0)
+	if v, ok := payload["recorded_at"].(int64); ok {
+		recordedAt = v
+	} else if v, ok := payload["recorded_at"].(int); ok {
+		recordedAt = int64(v)
+	} else if v, ok := payload["recorded_at"].(float64); ok {
+		recordedAt = int64(v)
+	}
+	if lastUsedAt == 0 {
+		lastUsedAt = recordedAt
+	}
+	if recordedAt == 0 {
+		recordedAt = lastUsedAt
+	}
+	accessCount := 1
+	if v, ok := payload["lifecycle_access_count"].(int); ok {
+		accessCount = v
+	} else if v, ok := payload["lifecycle_access_count"].(int64); ok {
+		accessCount = int(v)
+	} else if v, ok := payload["lifecycle_access_count"].(float64); ok {
+		accessCount = int(v)
+	}
+	scopeValid := true
+	if v, ok := payload["scope_valid"].(bool); ok {
+		scopeValid = v
+	}
+
+	lastUsedDays := 0
+	if lastUsedAt > 0 && now.UnixMilli() > lastUsedAt {
+		lastUsedDays = int((now.UnixMilli() - lastUsedAt) / int64(24*time.Hour/time.Millisecond))
+	}
+	ageDays := 0
+	if recordedAt > 0 && now.UnixMilli() > recordedAt {
+		ageDays = int((now.UnixMilli() - recordedAt) / int64(24*time.Hour/time.Millisecond))
+	}
+
+	if !scopeValid {
+		return ltmLifecycleRetentionDecision{Action: "archive", Reason: "invalid_scope", Confidence: 90}
+	}
+	if strings.EqualFold(status, "stale") && (lastUsedDays > 90 || ageDays > 180 || (accessCount <= 1 && ageDays > 90)) {
+		return ltmLifecycleRetentionDecision{Action: "archive", Reason: "cold_or_unused", Confidence: 80}
+	}
+	if lastUsedDays > 180 && accessCount <= 1 {
+		return ltmLifecycleRetentionDecision{Action: "archive", Reason: "unused_for_long_time", Confidence: 75}
+	}
+	return ltmLifecycleRetentionDecision{}
+}
+
+func (a *CopilotAgent) applyLTMLifecycleRetention(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], now time.Time) (int, error) {
+	if ctx == nil || kb == nil || a == nil || now.IsZero() {
+		return 0, nil
+	}
+	itemsTree, err := kb.Store.Items(ctx)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	ok, err := itemsTree.First(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for ok {
+		currentKey := itemsTree.GetCurrentKey()
+		item, err := itemsTree.GetCurrentValue(ctx)
+		if err != nil {
+			return 0, err
+		}
+		payload, ok := any(item.Data).(map[string]any)
+		if !ok {
+			payload = map[string]any{}
+		}
+		decision := decideLTMLifecycleRetention(payload, now)
+		if decision.Action == "archive" {
+			payload["lifecycle_status"] = "archived"
+			payload["status"] = "archived"
+			payload["lifecycle_last_evaluated_at"] = now.UnixMilli()
+			payload["updated_at"] = now.UnixMilli()
+			payload["archived_at"] = now.UnixMilli()
+			payload["archive_reason"] = decision.Reason
+			item.Data = payload
+			if _, err := itemsTree.UpdateCurrentItem(ctx, currentKey.Key, item); err != nil {
+				return 0, err
+			}
+			count++
+		}
+		ok, err = itemsTree.Next(ctx)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return count, nil
+}
+
+func decideLTMLifecycleCompaction(payload map[string]any, now time.Time) bool {
+	if payload == nil || len(payload) == 0 || now.IsZero() {
+		return false
+	}
+	status := strings.TrimSpace(fmt.Sprint(payload["lifecycle_status"]))
+	if status == "" {
+		status = strings.TrimSpace(fmt.Sprint(payload["status"]))
+	}
+	if !strings.EqualFold(status, "archived") && !strings.EqualFold(status, "deleted") {
+		return false
+	}
+	archivedAt := int64(0)
+	if v, ok := payload["archived_at"].(int64); ok {
+		archivedAt = v
+	} else if v, ok := payload["archived_at"].(int); ok {
+		archivedAt = int64(v)
+	} else if v, ok := payload["archived_at"].(float64); ok {
+		archivedAt = int64(v)
+	}
+	if archivedAt == 0 {
+		return false
+	}
+	return now.UnixMilli()-archivedAt >= int64(7*24*time.Hour/time.Millisecond)
+}
+
+func (a *CopilotAgent) applyLTMLifecycleCompaction(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], now time.Time) (int, error) {
+	if ctx == nil || kb == nil || a == nil || now.IsZero() {
+		return 0, nil
+	}
+	itemsTree, err := kb.Store.Items(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var pruneKeys []memory.ItemKey
+	ok, err := itemsTree.First(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for ok {
+		currentKey := itemsTree.GetCurrentKey()
+		item, err := itemsTree.GetCurrentValue(ctx)
+		if err != nil {
+			return 0, err
+		}
+		payload, okPayload := any(item.Data).(map[string]any)
+		if !okPayload {
+			payload = map[string]any{}
+		}
+		if decideLTMLifecycleCompaction(payload, now) {
+			pruneKeys = append(pruneKeys, memory.ItemKey{CategoryID: currentKey.Key.CategoryID, ItemID: currentKey.Key.ItemID})
+		}
+		ok, err = itemsTree.Next(ctx)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if len(pruneKeys) == 0 {
+		return 0, nil
+	}
+	if err := kb.DeleteItems(ctx, pruneKeys); err != nil {
+		return 0, err
+	}
+	return len(pruneKeys), nil
+}
+
+func detectLTMLifecycleSignal(query string) ltmLifecycleSignal {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return ltmLifecycleSignal{}
+	}
+	for _, pattern := range []struct {
+		prefix string
+		action string
+		scope  string
+	}{
+		{prefix: "done with repo ", action: "retire", scope: "repo"},
+		{prefix: "done with space ", action: "retire", scope: "space"},
+		{prefix: "finished with repo ", action: "retire", scope: "repo"},
+		{prefix: "finished with space ", action: "retire", scope: "space"},
+		{prefix: "archive this context", action: "archive", scope: "global"},
+		{prefix: "forget this", action: "archive", scope: "global"},
+	} {
+		if strings.HasPrefix(q, pattern.prefix) {
+			value := strings.TrimSpace(strings.TrimPrefix(q, pattern.prefix))
+			value = strings.Trim(value, " .,:;!?\"")
+			if value == "" {
+				value = "global"
+			}
+			return ltmLifecycleSignal{Action: pattern.action, ScopeType: pattern.scope, ScopeID: value, Reason: "explicit_user_cue", Confidence: 90}
+		}
+	}
+	return ltmLifecycleSignal{}
+}
+
+func filterLTMRetrievalTargets(targets []ltmRetrievalTarget, signal ltmLifecycleSignal) []ltmRetrievalTarget {
+	if signal.Action == "" {
+		return targets
+	}
+	if signal.ScopeType == "" || signal.ScopeID == "" {
+		return targets
+	}
+	filtered := make([]ltmRetrievalTarget, 0, len(targets))
+	for _, target := range targets {
+		if target.ScopeType == signal.ScopeType && target.ScopeID == signal.ScopeID {
+			continue
+		}
+		filtered = append(filtered, target)
+	}
+	return filtered
+}
+
+func buildLTMRetrievalTargets(query string, payload *ai.SessionPayload, repoHint string) []ltmRetrievalTarget {
+	var targets []ltmRetrievalTarget
+	query = strings.TrimSpace(query)
+	if payload != nil && len(payload.SelectedKBs) > 0 {
+		for _, kb := range payload.SelectedKBs {
+			name := strings.TrimSpace(kb.Name)
+			if name == "" {
+				continue
+			}
+			if strings.EqualFold(string(kb.Type), string(ai.ArtifactTypeSpace)) || strings.EqualFold(string(kb.Type), "space") {
+				targets = append(targets, ltmRetrievalTarget{Category: "research", Capability: "research_workflow", ScopeType: "space", ScopeID: name})
+			}
+		}
+	}
+
+	repoHint = strings.TrimSpace(repoHint)
+	if repoHint != "" {
+		targets = append(targets, ltmRetrievalTarget{Category: "coding", Capability: "coding_workflow", ScopeType: "repo", ScopeID: repoHint})
+	}
+	if len(targets) == 0 {
+		if query != "" {
+			targets = append(targets, ltmRetrievalTarget{Category: "general", Capability: "general", ScopeType: "global", ScopeID: "global"})
+		}
+	}
+	return targets
+}
+
 func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
 	if a == nil || a.service == nil || a.systemDB == nil {
 		return nil
@@ -645,17 +1084,21 @@ func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
 			ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{AgentID: a.Memory.AgentID})
 		}
 
-		payload := map[string]any{
-			"capability":      "coding_workflow",
-			"description":     strings.TrimSpace(mem.Description),
-			"outcome":         strings.TrimSpace(mem.Outcome),
-			"files_touched":   mem.FilesTouched,
-			"test_status":     strings.TrimSpace(mem.TestStatus),
-			"repository_hint": strings.TrimSpace(mem.RepositoryHint),
-			"lesson":          strings.TrimSpace(mem.Lesson),
-			"next_step":       strings.TrimSpace(mem.NextStep),
-			"recorded_at":     time.Now().UnixMilli(),
+		category := "coding"
+		scopeType := "repo"
+		scopeID := strings.TrimSpace(mem.RepositoryHint)
+		if scopeID == "" {
+			scopeID = "default"
 		}
+		payload := buildLTMMemoryMetadata(category, "coding_workflow", scopeType, scopeID)
+		payload["description"] = strings.TrimSpace(mem.Description)
+		payload["outcome"] = strings.TrimSpace(mem.Outcome)
+		payload["files_touched"] = mem.FilesTouched
+		payload["test_status"] = strings.TrimSpace(mem.TestStatus)
+		payload["repository_hint"] = strings.TrimSpace(mem.RepositoryHint)
+		payload["lesson"] = strings.TrimSpace(mem.Lesson)
+		payload["next_step"] = strings.TrimSpace(mem.NextStep)
+		payload["recorded_at"] = time.Now().UnixMilli()
 
 		tx, err := a.systemDB.BeginTransaction(ctx, sop.ForWriting)
 		if err != nil {
@@ -673,7 +1116,7 @@ func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
 			return err
 		}
 
-		categoryPath := "Capabilities/Coding Workflow"
+		categoryPath := buildLTMMemoryCategoryPath(category, "coding_workflow", scopeType, scopeID)
 		text := fmt.Sprintf("Coding workflow outcome: %s", strings.TrimSpace(mem.Description))
 		if mem.Outcome != "" {
 			text = fmt.Sprintf("%s\nOutcome: %s", text, mem.Outcome)
@@ -1961,6 +2404,8 @@ func (a *CopilotAgent) evaluateRoutingGates(ctx context.Context, query string, g
 		if isGeneralTaskContext(taskClassification) {
 			return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
 		}
+		a.applyCapabilityRoutingHints(ctx, taskClassification, query)
+		a.persistCapabilityAffinityHint(taskClassification)
 		return taskClassification, nil
 	}
 
@@ -1971,6 +2416,8 @@ func (a *CopilotAgent) evaluateRoutingGates(ctx context.Context, query string, g
 			if isGeneralTaskContext(taskClassification) {
 				return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
 			}
+			a.applyCapabilityRoutingHints(ctx, taskClassification, query)
+			a.persistCapabilityAffinityHint(taskClassification)
 			return taskClassification, nil
 		}
 	} else {
@@ -1983,6 +2430,8 @@ func (a *CopilotAgent) evaluateRoutingGates(ctx context.Context, query string, g
 		if isGeneralTaskContext(taskClassification) {
 			return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
 		}
+		a.applyCapabilityRoutingHints(ctx, taskClassification, query)
+		a.persistCapabilityAffinityHint(taskClassification)
 		return taskClassification, nil
 	}
 
@@ -2379,6 +2828,25 @@ func (a *CopilotAgent) getScriptToolsPrompt(ctx context.Context) string {
 	return toolsDef
 }
 
+func (a *CopilotAgent) getActiveRepoHint(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		if strings.TrimSpace(payload.ActiveRepo) != "" {
+			return strings.TrimSpace(payload.ActiveRepo)
+		}
+	}
+	if a != nil && a.service != nil && a.service.session != nil {
+		if state := a.service.session.Memory.GetCodingWorkflowState(); state != nil && strings.TrimSpace(state.Description) != "" {
+			if strings.TrimSpace(state.ActiveFile) != "" {
+				return strings.TrimSpace(state.ActiveFile)
+			}
+		}
+	}
+	return ""
+}
+
 func (a *CopilotAgent) getLTMSemanticContext(ctx context.Context, query string) string {
 	toolsDef := ""
 	if a.systemDB != nil && a.service != nil && a.service.Domain() != nil && a.service.Domain().Embedder() != nil && a.Memory.AgentID != "" {
@@ -2387,17 +2855,44 @@ func (a *CopilotAgent) getLTMSemanticContext(ctx context.Context, query string) 
 			kbName := a.Memory.LongTermMemoryName()
 			kb, err := a.systemDB.OpenKnowledgeBase(ctx, kbName, tx, nil, nil, false, true)
 			if err == nil {
-				hits, err := memory.DigestKnowledgeBase(ctx, kb, a.service.Domain().Embedder(), memory.KBDigestRequest{
-					Queries:            []string{query},
-					PerQueryLimit:      5,
-					MaxResults:         5,
-					MinScore:           0.6,
-					UseClosestCategory: true,
-				})
-				if err == nil && len(hits) > 0 {
+				payload := ai.GetSessionPayload(ctx)
+				lifecycleSignal := detectLTMLifecycleSignal(query)
+				targets := buildLTMRetrievalTargets(query, payload, a.getActiveRepoHint(ctx))
+				targets = filterLTMRetrievalTargets(targets, lifecycleSignal)
+				var allHits []memory.KBDigestHit
+				for _, target := range targets {
+					queries := []string{query}
+					if target.Category != "" && target.Category != "general" {
+						queries = append(queries, fmt.Sprintf("%s %s", target.Category, query))
+					}
+					hits, err := memory.DigestKnowledgeBase(ctx, kb, a.service.Domain().Embedder(), memory.KBDigestRequest{
+						Queries:            queries,
+						PerQueryLimit:      3,
+						MaxResults:         3,
+						MinScore:           0.6,
+						UseClosestCategory: true,
+						KeywordFallback:    true,
+					})
+					if err == nil {
+						for _, hit := range hits {
+							if strings.TrimSpace(hit.Text) == "" {
+								continue
+							}
+							allHits = append(allHits, hit)
+						}
+					}
+				}
+				for _, hit := range allHits {
+					if strings.TrimSpace(hit.ID) != "" {
+						if err := updateLTMMemoryLifecycleState(ctx, kb, hit.ID, int(hit.Score*100)); err != nil {
+							log.Warn("CopilotAgent: failed to update lifecycle state for LTM hit", "item_id", hit.ID, "error", err)
+						}
+					}
+				}
+				if len(allHits) > 0 {
 					knowledgeStr := ""
-					for _, hit := range hits {
-						knowledgeStr += fmt.Sprintf("- (Score: %.2f) %s\n", hit.Score, hit.Text)
+					for _, hit := range allHits {
+						knowledgeStr += fmt.Sprintf("- (Score: %.2f) [%s] %s\n", hit.Score, hit.Category, hit.Text)
 					}
 					toolsDef += "\nContext Section (Learned Knowledge):\n" + knowledgeStr
 				}

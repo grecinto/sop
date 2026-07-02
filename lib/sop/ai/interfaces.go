@@ -715,6 +715,8 @@ type SessionPayload struct {
 	AgentID string
 	// ActiveDomain is the knowledge domain selected by the user.
 	ActiveDomain string
+	// ActiveRepo stores the currently active repository path or identifier when the session is working in a repo.
+	ActiveRepo string
 	// SelectedKBs are the explicit Knowledge Bases selected by the user from the dropdown.
 	SelectedKBs []ArtifactReference
 	// Transaction holds the active transaction for the session.

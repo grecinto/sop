@@ -7,8 +7,9 @@ import (
 
 // RoutingState is the minimal routing context shared between the core Ask pipeline and capabilities.
 type RoutingState struct {
-	Domain string
-	Gate   string
+	Domain         string
+	Gate           string
+	CapabilityHint string
 }
 
 // Entitlement describes whether a capability is available under the current plan.

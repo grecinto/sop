@@ -1,6 +1,8 @@
 package desktop
 
 import (
+	"strings"
+
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
@@ -21,6 +23,14 @@ func (c *Capability) Entitlement() capabilities.Entitlement {
 func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
 	if state.Domain == "" {
 		return false
+	}
+	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
+		if hint == "desktop_automation" || hint == "local_ops" {
+			return true
+		}
+		if hint == "coding_workflow" || hint == "repo_edit" {
+			return false
+		}
 	}
 	return state.Domain == "Desktop" || state.Domain == "Desktop Automation" || state.Domain == CapabilityID || state.Domain == CapabilityName
 }

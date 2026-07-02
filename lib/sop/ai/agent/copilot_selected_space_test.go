@@ -27,3 +27,18 @@ func TestBuildSelectedSpaceResearchContextPartsUsesPriorSuccesses(t *testing.T) 
 		t.Fatalf("expected current ask to be included in research context, got %q", joined)
 	}
 }
+
+func TestSelectedSpaceHasEvidenceRequiresRealGroundingSignals(t *testing.T) {
+	if selectedSpaceHasEvidence("", "", "") {
+		t.Fatal("expected no evidence when all selected-space signals are empty")
+	}
+	if !selectedSpaceHasEvidence("SystemPrompt: legal persona", "", "") {
+		t.Fatal("expected selected-space config to count as evidence")
+	}
+	if !selectedSpaceHasEvidence("", "Structured Expert Brief:\nPurpose: legal review", "") {
+		t.Fatal("expected selected-space brief to count as evidence")
+	}
+	if !selectedSpaceHasEvidence("", "", "Digest highlights:\n- relevant clause") {
+		t.Fatal("expected selected-space digest to count as evidence")
+	}
+}

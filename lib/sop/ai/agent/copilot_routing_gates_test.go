@@ -38,6 +38,91 @@ func (m *RouterTestGen) PrewarmCache(ctx context.Context, opts ai.GenOptions) er
 	return nil
 }
 
+func TestEvaluateRoutingGates_UsesCapabilityHintFromMRUForContinuation(t *testing.T) {
+	ctx := context.Background()
+	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}
+	sysDB := database.NewDatabase(sysDBOptions)
+
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+	if ag.service == nil {
+		ag.service = &Service{}
+	}
+	ag.service.session = &RunnerSession{MRU: []MRUItem{}}
+	ag.markMRUCategory(capabilityAffinityMRUCategory, "capability=coding_workflow; intent=repo_edit", MRUSourceAskOutcome, MRUScopeSession)
+
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	payload.Variables["RoutingState"] = &TaskContextClassification{Entity: "Omni", Domain: "Desktop"}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
+	gen := &RouterTestGen{}
+	taskCtx, err := ag.evaluateRoutingGates(ctx, "keep going with the parser fix", gen)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if taskCtx == nil {
+		t.Fatal("expected a routing classification")
+	}
+	if taskCtx.CapabilityHint != capabilityHintCodingWorkflow {
+		t.Fatalf("expected coding workflow hint to be reused on continuation, got %q", taskCtx.CapabilityHint)
+	}
+	if taskCtx.IntentFamily != intentFamilyRepoEdit {
+		t.Fatalf("expected repo edit intent family, got %q", taskCtx.IntentFamily)
+	}
+}
+
+func TestApplyCapabilityRoutingHintsKeepsPriorCapabilityForNearbyContinuation(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}
+	ag.markMRUCategory(capabilityAffinityMRUCategory, "capability=desktop_automation; intent=local_ops", MRUSourceAskOutcome, MRUScopeSession)
+
+	taskCtx := &TaskContextClassification{Domain: "Desktop", RoutingGate: RoutingGateContinuity}
+	ag.applyCapabilityRoutingHints(context.Background(), taskCtx, "check the current workspace state")
+
+	if taskCtx.CapabilityHint != capabilityHintDesktopAutomation {
+		t.Fatalf("expected nearby continuation to reuse desktop automation, got %q", taskCtx.CapabilityHint)
+	}
+	if taskCtx.IntentFamily != intentFamilyLocalOps {
+		t.Fatalf("expected local ops intent family, got %q", taskCtx.IntentFamily)
+	}
+}
+
+func TestApplyCapabilityRoutingHintsSwitchesToCodingWorkflowForImplementationAsk(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}
+	ag.markMRUCategory(capabilityAffinityMRUCategory, "capability=desktop_automation; intent=local_ops", MRUSourceAskOutcome, MRUScopeSession)
+
+	taskCtx := &TaskContextClassification{Domain: "Desktop", RoutingGate: RoutingGateContinuity}
+	ag.applyCapabilityRoutingHints(context.Background(), taskCtx, "implement a parser fix in the repository")
+
+	if taskCtx.CapabilityHint != capabilityHintCodingWorkflow {
+		t.Fatalf("expected implementation ask to switch to coding workflow, got %q", taskCtx.CapabilityHint)
+	}
+	if taskCtx.IntentFamily != intentFamilyRepoEdit {
+		t.Fatalf("expected repo edit intent family, got %q", taskCtx.IntentFamily)
+	}
+}
+
+func TestResetRoutingForTopicSwitchClearsCapabilityAffinityHint(t *testing.T) {
+	ctx := context.Background()
+	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}
+	sysDB := database.NewDatabase(sysDBOptions)
+
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+	if ag.service == nil {
+		ag.service = &Service{}
+	}
+	ag.service.session = &RunnerSession{MRU: []MRUItem{}}
+	ag.markMRUCategory(capabilityAffinityMRUCategory, "capability=coding_workflow; intent=repo_edit", MRUSourceAskOutcome, MRUScopeSession)
+
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+	ag.resetRoutingForTopicSwitch("let's start over", payload)
+
+	if _, ok := ag.GetMRUCategory(capabilityAffinityMRUCategory); ok {
+		t.Fatal("expected capability affinity hint to be cleared on topic switch")
+	}
+}
+
 func TestEvaluateRoutingGates_MarksGeneralContextAfterLightClassification(t *testing.T) {
 	ctx := context.Background()
 	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}

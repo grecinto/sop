@@ -34,6 +34,14 @@ func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bo
 	if state.Domain == "" {
 		return false
 	}
+	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
+		if hint == "coding_workflow" || hint == "codingworkflow" || hint == "repo_edit" {
+			return true
+		}
+		if hint == "desktop_automation" || hint == "local_ops" {
+			return false
+		}
+	}
 	q := strings.ToLower(query)
 	domain := strings.ToLower(state.Domain)
 	return domain == "desktop" || domain == "desktop automation" || domain == "spaces" || domain == "space" || domain == "stores" || domain == "store" || strings.Contains(q, "fix") || strings.Contains(q, "refactor") || strings.Contains(q, "patch") || strings.Contains(q, "search") || strings.Contains(q, "edit") || strings.Contains(q, "repo") || strings.Contains(q, "generate") || strings.Contains(q, "json") || strings.Contains(q, "script") || strings.Contains(q, "lego") || strings.Contains(q, "analy") || strings.Contains(q, "sql") || strings.Contains(q, "record") || strings.Contains(q, "table")

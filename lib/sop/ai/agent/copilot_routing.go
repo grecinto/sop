@@ -89,6 +89,119 @@ func (a *CopilotAgent) persistRoutingState(ctx context.Context, taskCtx *TaskCon
 	}
 }
 
+func (a *CopilotAgent) applyCapabilityRoutingHints(ctx context.Context, taskCtx *TaskContextClassification, query string) {
+	if taskCtx == nil {
+		return
+	}
+	inferredIntent, inferredHint := inferCapabilityRoutingSignal(query, taskCtx.Domain)
+	if taskCtx.RoutingGate == RoutingGateContinuity {
+		if prevCapability, prevIntent, ok := a.getCapabilityAffinityHintFromMRU(); ok {
+			if inferredHint != "" && inferredHint != capabilityHintGeneral {
+				if inferredIntent == intentFamilyRepoEdit {
+					taskCtx.CapabilityHint = inferredHint
+					taskCtx.IntentFamily = inferredIntent
+					return
+				}
+			}
+			taskCtx.CapabilityHint = prevCapability
+			if inferredIntent == intentFamilyGeneral || inferredIntent == "" {
+				taskCtx.IntentFamily = prevIntent
+			} else {
+				taskCtx.IntentFamily = inferredIntent
+			}
+			if taskCtx.CapabilityHint == "" {
+				taskCtx.CapabilityHint = inferredHint
+			}
+			return
+		}
+	}
+	if inferredHint != "" && inferredHint != capabilityHintGeneral {
+		taskCtx.CapabilityHint = inferredHint
+		taskCtx.IntentFamily = inferredIntent
+		return
+	}
+	if taskCtx.CapabilityHint == "" {
+		taskCtx.IntentFamily = inferredIntent
+	}
+}
+
+func (a *CopilotAgent) persistCapabilityAffinityHint(taskCtx *TaskContextClassification) {
+	if taskCtx == nil {
+		return
+	}
+	hint := strings.TrimSpace(taskCtx.CapabilityHint)
+	if hint == "" || hint == capabilityHintGeneral {
+		return
+	}
+	intent := strings.TrimSpace(taskCtx.IntentFamily)
+	if intent == "" {
+		intent = inferIntentFamily(taskCtx.Domain, "")
+	}
+	contextText := fmt.Sprintf("capability=%s; intent=%s", hint, intent)
+	a.markMRUCategory(capabilityAffinityMRUCategory, contextText, MRUSourceAskOutcome, MRUScopeSession)
+}
+
+func (a *CopilotAgent) getCapabilityAffinityHintFromMRU() (string, string, bool) {
+	if a == nil || a.service == nil || a.service.session == nil {
+		return "", "", false
+	}
+	if item, ok := a.findMRUItem(capabilityAffinityMRUCategory, MRUSourceAskOutcome, true); ok {
+		contextText := strings.TrimSpace(item.Context)
+		if contextText == "" {
+			return "", "", false
+		}
+		for _, segment := range strings.Split(contextText, ";") {
+			segment = strings.TrimSpace(segment)
+			if strings.HasPrefix(segment, "capability=") {
+				capability := strings.TrimSpace(strings.TrimPrefix(segment, "capability="))
+				intent := ""
+				for _, inner := range strings.Split(contextText, ";") {
+					inner = strings.TrimSpace(inner)
+					if strings.HasPrefix(inner, "intent=") {
+						intent = strings.TrimSpace(strings.TrimPrefix(inner, "intent="))
+						break
+					}
+				}
+				return capability, intent, capability != ""
+			}
+		}
+	}
+	return "", "", false
+}
+
+func inferCapabilityRoutingSignal(query string, domain string) (string, string) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return inferIntentFamily(domain, ""), capabilityHintGeneral
+	}
+	if strings.Contains(q, "git") || strings.Contains(q, "cmd") || strings.Contains(q, "shell") || strings.Contains(q, "postgres") || strings.Contains(q, "splunk") || strings.Contains(q, "docker") || strings.Contains(q, "service") || strings.Contains(q, "process") || strings.Contains(q, "terminal") || strings.Contains(q, "file system") || strings.Contains(q, "filesystem") || strings.Contains(q, "local") {
+		return intentFamilyLocalOps, capabilityHintDesktopAutomation
+	}
+	if strings.Contains(q, "fix") || strings.Contains(q, "refactor") || strings.Contains(q, "patch") || strings.Contains(q, "edit") || strings.Contains(q, "implement") || strings.Contains(q, "modify") || strings.Contains(q, "add test") || strings.Contains(q, "update") || strings.Contains(q, "repo") || strings.Contains(q, "code") || strings.Contains(q, "parser") || strings.Contains(q, "function") || strings.Contains(q, "class") || strings.Contains(q, "module") || strings.Contains(q, "generate") || strings.Contains(q, "json") || strings.Contains(q, "script") || strings.Contains(q, "analysis") || strings.Contains(q, "analy") || strings.Contains(q, "sql") || strings.Contains(q, "table") || strings.Contains(q, "record") || strings.Contains(q, "search") {
+		return intentFamilyRepoEdit, capabilityHintCodingWorkflow
+	}
+	if strings.Contains(q, "research") || strings.Contains(q, "explain") || strings.Contains(q, "what") || strings.Contains(q, "why") || strings.Contains(q, "summarize") || strings.Contains(q, "how") || strings.Contains(q, "concept") || strings.Contains(q, "docs") {
+		return intentFamilyKnowledge, capabilityHintGeneral
+	}
+	return inferIntentFamily(domain, q), capabilityHintGeneral
+}
+
+func inferIntentFamily(domain string, query string) string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "desktop" || domain == "desktop automation" {
+		return intentFamilyLocalOps
+	}
+	if query != "" {
+		if strings.Contains(query, "git") || strings.Contains(query, "postgres") || strings.Contains(query, "splunk") || strings.Contains(query, "cmd") || strings.Contains(query, "shell") {
+			return intentFamilyLocalOps
+		}
+		if strings.Contains(query, "fix") || strings.Contains(query, "refactor") || strings.Contains(query, "patch") || strings.Contains(query, "implement") || strings.Contains(query, "repo") || strings.Contains(query, "code") || strings.Contains(query, "parser") || strings.Contains(query, "script") || strings.Contains(query, "json") || strings.Contains(query, "analysis") || strings.Contains(query, "analy") || strings.Contains(query, "sql") {
+			return intentFamilyRepoEdit
+		}
+	}
+	return intentFamilyGeneral
+}
+
 func (a *CopilotAgent) tryPathStyleRouting(ctx context.Context, query string) *TaskContextClassification {
 
 	log.Info("Path-Style Routing Activated", "path_query", query)
@@ -129,7 +242,9 @@ func (a *CopilotAgent) tryPrefixBasedRouting(ctx context.Context, query string, 
 	}
 
 	annotateTaskContextIntent(taskCtx, query)
+	a.applyCapabilityRoutingHints(ctx, taskCtx, query)
 	taskCtx.RoutingGate = RoutingGateFocused
+	a.persistCapabilityAffinityHint(taskCtx)
 	a.persistRoutingState(ctx, taskCtx)
 	return taskCtx, nil
 }
@@ -158,7 +273,9 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 		if err == nil && updatedRS != nil {
 			log.Info("Ask-Continuation Routing Activated: Inheriting MRU Context with Updates", "domain", updatedRS.Domain)
 			annotateTaskContextIntent(updatedRS, query)
+			a.applyCapabilityRoutingHints(ctx, updatedRS, query)
 			updatedRS.RoutingGate = RoutingGateContinuity
+			a.persistCapabilityAffinityHint(updatedRS)
 			a.persistRoutingState(ctx, updatedRS)
 			return updatedRS, nil
 		}
@@ -167,7 +284,9 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 
 	log.Info("Ask-Continuation Routing Activated: Inheriting MRU Context (Test Mode)", "domain", rs.Domain)
 	annotateTaskContextIntent(rs, query)
+	a.applyCapabilityRoutingHints(ctx, rs, query)
 	rs.RoutingGate = RoutingGateContinuity
+	a.persistCapabilityAffinityHint(rs)
 	a.persistRoutingState(ctx, rs)
 	return rs, nil
 }
@@ -188,7 +307,9 @@ func (a *CopilotAgent) tryColdStartBasedRouting(ctx context.Context, query strin
 
 	log.Info("Cold-start routing classification success", "domain", taskCtx.Domain)
 	annotateTaskContextIntent(taskCtx, query)
+	a.applyCapabilityRoutingHints(ctx, taskCtx, query)
 	taskCtx.RoutingGate = RoutingGateDiscovery
+	a.persistCapabilityAffinityHint(taskCtx)
 	a.persistRoutingState(ctx, taskCtx)
 	return taskCtx, nil
 }

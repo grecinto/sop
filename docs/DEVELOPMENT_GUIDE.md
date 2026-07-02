@@ -41,6 +41,8 @@ Keep the boundary clear:
 - Observability for the product site, shared backend, onboarding flow, auth, and subscriptions is tracked in [OBSERVABILITY_PLAN.md](OBSERVABILITY_PLAN.md).
 - Shared monitorability endpoints should follow the Prometheus-compatible contract described in [OBSERVABILITY_PLAN.md](OBSERVABILITY_PLAN.md): /healthz for health and /metrics for scrapeable metrics.
 - For the new site and shared backend, do not use context.Context as a general-purpose state bucket for request values or domain state. Prefer explicit parameters or explicit request structs in handlers, service methods, and API boundaries.
+- LTM lifecycle maintenance should follow the documented policy: use a nightly wakeup servicer for cleanup and retention decisions, run a weekly compaction pass for archive/merge/prune work, and keep active-usage bookkeeping lightweight by updating recency metadata inline during retrieval and write flows.
+- The current retention behavior is conservative: a memory item stays active while it is recent and relevant, becomes archived once it is deemed stale, and is removed from the store once the weekly compaction pass observes it has been archived long enough.
 
 ## Design conventions
 

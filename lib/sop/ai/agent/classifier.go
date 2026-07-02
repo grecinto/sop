@@ -28,6 +28,8 @@ type TaskContextClassification struct {
 	ScriptAuthoring    bool        `json:"-"`
 	GeneralContext     bool        `json:"-"`
 	RoutingGate        string      `json:"-"`
+	CapabilityHint     string      `json:"-"`
+	IntentFamily       string      `json:"-"`
 	// KB Search Results (for specialized KB routing)
 	KBSearchResults string `json:"-"`
 	KBMatchCount    int    `json:"-"`
@@ -63,6 +65,17 @@ const (
 	RoutingGateFocused    = "focused"
 	RoutingGateContinuity = "continuity"
 	RoutingGateDiscovery  = "discovery"
+
+	capabilityHintCodingWorkflow    = "coding_workflow"
+	capabilityHintDesktopAutomation = "desktop_automation"
+	capabilityHintGeneral           = "general"
+
+	intentFamilyRepoEdit  = "repo_edit"
+	intentFamilyLocalOps  = "local_ops"
+	intentFamilyKnowledge = "knowledge"
+	intentFamilyGeneral   = "general"
+
+	capabilityAffinityMRUCategory = "CAPABILITY_AFFINITY"
 )
 
 func (a *CopilotAgent) GetSampleArtifacts(ctx context.Context) ([]string, []string, error) {

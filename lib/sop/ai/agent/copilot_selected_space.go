@@ -16,6 +16,18 @@ func (a *CopilotAgent) selectedSpaceExpertContextForRouting(ctx context.Context,
 	return a.selectedSpaceExpertContext(ctx, query, a.isContinuationPromptContext(taskClassification))
 }
 
+func selectedSpaceHasEvidence(configText, briefText, digestText string) bool {
+	for _, part := range []string{configText, briefText, digestText} {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(part), "purpose:") || strings.Contains(strings.ToLower(part), "systemprompt:") || strings.Contains(strings.ToLower(part), "description:") || strings.Contains(strings.ToLower(part), "digest highlights:") || strings.Contains(strings.ToLower(part), "structured expert brief:") || strings.Contains(strings.ToLower(part), "role:") || strings.Contains(strings.ToLower(part), "key concepts:") || strings.Contains(strings.ToLower(part), "research workflow:") || strings.Contains(strings.ToLower(part), "common constraints:") || strings.Contains(strings.ToLower(part), "score:") {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *CopilotAgent) selectedSpaceExpertContext(ctx context.Context, query string, compact bool) string {
 	p := ai.GetSessionPayload(ctx)
 	if p == nil || len(p.SelectedKBs) == 0 {
@@ -49,18 +61,24 @@ func (a *CopilotAgent) selectedSpaceExpertContext(ctx context.Context, query str
 
 		var details []string
 		details = append(details, fmt.Sprintf("Space: %s", name))
+		var configText string
+		var briefText string
+		var digestText string
 		if !compact {
-			if configText := a.selectedSpaceConfigContext(ctx, kbRef); configText != "" {
+			configText = a.selectedSpaceConfigContext(ctx, kbRef)
+			if configText != "" {
 				details = append(details, configText)
 			}
-			if briefText := a.selectedSpaceStructuredBriefContext(ctx, query, kbRef); briefText != "" {
+			briefText = a.selectedSpaceStructuredBriefContext(ctx, query, kbRef)
+			if briefText != "" {
 				details = append(details, briefText)
 			}
 		}
-		if digestText := a.selectedSpaceDigestContext(ctx, query, kbRef); digestText != "" {
+		digestText = a.selectedSpaceDigestContext(ctx, query, kbRef)
+		if digestText != "" {
 			details = append(details, digestText)
 		}
-		if len(details) > 0 {
+		if selectedSpaceHasEvidence(configText, briefText, digestText) {
 			sections = append(sections, strings.Join(details, "\n"))
 		}
 	}
