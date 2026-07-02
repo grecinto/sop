@@ -59,6 +59,60 @@ func TestDefaultContextManagerIncludesModuleMetadata(t *testing.T) {
 	}
 }
 
+func TestDefaultContextManagerExtractsImportsAndCodeStructure(t *testing.T) {
+	tmpDir := t.TempDir()
+	activePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(activePath, []byte("package main\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n)\n\n\ntype Config struct {\n\tName string\n}\n\nfunc BuildConfig() Config {\n\treturn Config{Name: \"demo\"}\n}\n"), 0o644); err != nil {
+		t.Fatalf("write active file: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if !contains(pack.Imports, "fmt") {
+		t.Fatalf("expected imports to include fmt, got %v", pack.Imports)
+	}
+	if !contains(pack.Imports, "strings") {
+		t.Fatalf("expected imports to include strings, got %v", pack.Imports)
+	}
+	if !contains(pack.Symbols, "Config") {
+		t.Fatalf("expected symbols to include Config, got %v", pack.Symbols)
+	}
+	if !contains(pack.Symbols, "BuildConfig") {
+		t.Fatalf("expected symbols to include BuildConfig, got %v", pack.Symbols)
+	}
+	if !strings.Contains(pack.CodeStructureSummary, "imports") {
+		t.Fatalf("expected code structure summary to mention imports, got %q", pack.CodeStructureSummary)
+	}
+}
+
+func TestDefaultContextManagerFindsRelatedFilesInNestedRepositoryPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n\nfunc BuildConfig() string { return \"demo\" }\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "pkg", "internal"), 0o755); err != nil {
+		t.Fatalf("mkdir nested dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "pkg", "internal", "helper.go"), []byte("package internal\n\nfunc BuildConfig() string { return \"helper\" }\n"), 0o644); err != nil {
+		t.Fatalf("write helper.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "pkg", "internal", "other.go"), []byte("package internal\n\nfunc Unrelated() string { return \"nope\" }\n"), 0o644); err != nil {
+		t.Fatalf("write other.go: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if !contains(pack.DependencyFiles, filepath.ToSlash(filepath.Join("pkg", "internal", "helper.go"))) {
+		t.Fatalf("expected nested helper file to be surfaced as dependency context, got %v", pack.DependencyFiles)
+	}
+}
+
 func TestDefaultPlannerBuildsExecutionPlan(t *testing.T) {
 	planner := &DefaultPlanner{}
 	pack := ContextPack{ActiveFile: "main.go", RelatedFiles: []string{"main_test.go"}, TestFiles: []string{"main_test.go"}}
@@ -415,6 +469,32 @@ func TestDefaultContextManagerBuildsSymbolAwareContext(t *testing.T) {
 	}
 	if !contains(pack.RelatedFiles, "helper.go") {
 		t.Fatalf("expected related files to include helper.go, got %v", pack.RelatedFiles)
+	}
+}
+
+func TestDefaultContextManagerUsesASTLeafsForCodeAwareContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	activePath := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(activePath, []byte("package main\n\nfunc Greeting() string {\n\treturn \"hi\"\n}\n\nfunc Helper() string {\n\treturn Greeting()\n}\n"), 0o644); err != nil {
+		t.Fatalf("write active file: %v", err)
+	}
+
+	manager := &DefaultContextManager{}
+	pack, err := manager.BuildContext(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "update Greeting"}, RunState{})
+	if err != nil {
+		t.Fatalf("BuildContext returned error: %v", err)
+	}
+	if !contains(pack.ASTLeafNodes, "Greeting") {
+		t.Fatalf("expected AST leaf nodes to include Greeting, got %v", pack.ASTLeafNodes)
+	}
+	if !strings.Contains(pack.CodeStructureSummary, "ast") {
+		t.Fatalf("expected code structure summary to mention AST context, got %q", pack.CodeStructureSummary)
+	}
+	if pack.StructuralPath == "" {
+		t.Fatalf("expected a structural path to be generated")
+	}
+	if !strings.Contains(pack.StructuralPath, "Greeting") {
+		t.Fatalf("expected structural path to include the resolved leaf, got %q", pack.StructuralPath)
 	}
 }
 

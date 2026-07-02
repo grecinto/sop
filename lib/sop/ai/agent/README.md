@@ -98,6 +98,21 @@ The Ask flow should stay lean and conversational during early reasoning, then op
 ### 8. Dual-Layer Memory Architecture
 The agent is designed with a cognitive memory model that separates transient context from persistent knowledge.
 
+#### Coding workflow memory payloads and retrieval
+The coding workflow now emits structured payloads that are durable in LTM and retrievable through two complementary mechanisms:
+
+*   **Path-based retrieval**: uses category paths derived from repo structure, file position, module ownership, and AST leaf identity. This is a direct, non-vectorized lookup by path.
+*   **Semantic-category retrieval**: uses nested conceptual categories that cut across files and modules for planning, debugging, and pattern reuse. This is a semantic, vectorized lookup by category meaning.
+
+This means the coding workflow should persist one canonical payload with:
+*   repository/module/file identity,
+*   AST or tree-sitter-derived leaf and symbol context,
+*   task intent and outcome,
+*   evidence snippets and test results,
+*   both a deterministic category path and semantic category tags.
+
+The storage layer should then register that same payload under two different index routes: a precise path index and a semantic nested-category index. Both routes point to the same document so the workflow gets deterministic recall and broader conceptual recall without duplicating the full payload.
+
 #### Short-Term Memory (Context)
 *   **Implementation**: `RunnerSession` (`ai/agent/memory_shortterm.go`).
 *   **Behavior**: Stores the active conversation history (`History`), temporary variables (`Variables`), and the current database transaction (`Transaction`).

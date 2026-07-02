@@ -1,11 +1,15 @@
 package codingworkflow
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	ts "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/golang"
 )
 
 // RunState carries explicit arguments and state for a workflow execution.
@@ -38,9 +42,13 @@ type ContextPack struct {
 	SymbolName            string
 	SymbolSnippet         string
 	Symbols               []string
+	Imports               []string
+	CodeStructureSummary  string
 	DependencyFiles       []string
 	RelatedFiles          []string
 	TestFiles             []string
+	ASTLeafNodes          []string
+	StructuralPath        string
 	WorkingDir            string
 	ModuleName            string
 	RepositoryFiles       []string
@@ -417,6 +425,9 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		return ExecutionResult{}, fmt.Errorf("persist memory: %w", err)
 	}
 	message := "context assembled"
+	if pack.CodeStructureSummary != "" {
+		message = fmt.Sprintf("%s; structure: %s", message, pack.CodeStructureSummary)
+	}
 	if pack.ExpertiseSummary != "" {
 		message = fmt.Sprintf("%s; expertise: %s", message, pack.ExpertiseSummary)
 	}
@@ -518,6 +529,22 @@ func (d *DefaultContextManager) BuildContext(task Task, state RunState) (Context
 	symbolName := ""
 	symbolSnippet := content
 	symbols := collectSymbols(content)
+	imports := collectImports(content)
+	astLeafNodes, structuralPath := collectASTLeafNodes(content, workingDir, resolvedActiveFile)
+	if len(astLeafNodes) > 0 {
+		for _, leaf := range astLeafNodes {
+			if leaf != "" && !contains(symbols, leaf) {
+				symbols = append(symbols, leaf)
+			}
+		}
+		if symbolName == "" && len(astLeafNodes) > 0 {
+			symbolName = astLeafNodes[0]
+		}
+	}
+	codeStructureSummary := summarizeCodeStructure(imports, symbols)
+	if len(astLeafNodes) > 0 {
+		codeStructureSummary = fmt.Sprintf("%s; ast=%s", codeStructureSummary, strings.Join(astLeafNodes, ","))
+	}
 	if resolvedActiveFile != "" {
 		testName := strings.TrimSuffix(resolvedActiveFile, filepath.Ext(resolvedActiveFile)) + "_test.go"
 		if testPath := filepath.Join(workingDir, testName); fileExists(testPath) {
@@ -571,7 +598,7 @@ func (d *DefaultContextManager) BuildContext(task Task, state RunState) (Context
 			continuationSummary = summary
 		}
 	}
-	return ContextPack{ActiveFile: resolvedActiveFile, ActiveFileSnippet: content, SymbolName: symbolName, SymbolSnippet: symbolSnippet, Symbols: symbols, DependencyFiles: dependencyFiles, RelatedFiles: related, TestFiles: testFiles, WorkingDir: workingDir, ModuleName: moduleName, RepositoryFiles: repoFiles, RepositorySummary: repositorySummary, ResumedFromState: resumedFromState, TaskType: taskType, ContinuationSummary: continuationSummary}, nil
+	return ContextPack{ActiveFile: resolvedActiveFile, ActiveFileSnippet: content, SymbolName: symbolName, SymbolSnippet: symbolSnippet, Symbols: symbols, Imports: imports, CodeStructureSummary: codeStructureSummary, DependencyFiles: dependencyFiles, RelatedFiles: related, TestFiles: testFiles, ASTLeafNodes: astLeafNodes, StructuralPath: structuralPath, WorkingDir: workingDir, ModuleName: moduleName, RepositoryFiles: repoFiles, RepositorySummary: repositorySummary, ResumedFromState: resumedFromState, TaskType: taskType, ContinuationSummary: continuationSummary}, nil
 }
 
 func classifyTaskType(task Task, state RunState, resolvedActiveFile string) string {
@@ -767,6 +794,12 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]st
 	}
 	if len(pack.Symbols) > 0 {
 		plan = append(plan, fmt.Sprintf("focus on symbols %s", strings.Join(pack.Symbols, ",")))
+	}
+	if len(pack.Imports) > 0 {
+		plan = append(plan, fmt.Sprintf("inspect imports %s", strings.Join(pack.Imports, ",")))
+	}
+	if pack.CodeStructureSummary != "" {
+		plan = append(plan, fmt.Sprintf("use code structure summary: %s", pack.CodeStructureSummary))
 	}
 	if len(pack.DependencyFiles) > 0 {
 		plan = append(plan, fmt.Sprintf("inspect dependency file(s): %s", strings.Join(pack.DependencyFiles, ",")))
@@ -1098,6 +1131,82 @@ func inferSymbolName(input string) string {
 	return candidate
 }
 
+func collectASTLeafNodes(content, workingDir, activeFile string) ([]string, string) {
+	if strings.TrimSpace(content) == "" {
+		return nil, ""
+	}
+	parser := ts.NewParser()
+	parser.SetLanguage(golang.GetLanguage())
+	tree, err := parser.ParseCtx(context.Background(), nil, []byte(content))
+	if err != nil || tree == nil {
+		return nil, ""
+	}
+	root := tree.RootNode()
+	if root == nil {
+		return nil, ""
+	}
+
+	leaves := []string{}
+	var walk func(node *ts.Node)
+	walk = func(node *ts.Node) {
+		if node == nil {
+			return
+		}
+		if node.Type() == "function_declaration" || node.Type() == "method_declaration" {
+			if name := extractASTLeafName(node, []byte(content)); name != "" && !contains(leaves, name) {
+				leaves = append(leaves, name)
+			}
+		}
+		for i := 0; i < int(node.NamedChildCount()); i++ {
+			walk(node.NamedChild(i))
+		}
+	}
+	walk(root)
+	if len(leaves) == 0 {
+		return nil, ""
+	}
+	structuralPath := ""
+	if activeFile != "" {
+		relPath := filepath.ToSlash(activeFile)
+		if relDir := filepath.Dir(relPath); relDir != "." && relDir != "/" {
+			structuralPath = strings.Join([]string{filepath.Base(workingDir), relDir, leaves[0]}, "/")
+		} else {
+			structuralPath = strings.Join([]string{filepath.Base(workingDir), leaves[0]}, "/")
+		}
+	}
+	if structuralPath == "" {
+		structuralPath = strings.Join([]string{filepath.Base(workingDir), leaves[0]}, "/")
+	}
+	return leaves, structuralPath
+}
+
+func extractASTLeafName(node *ts.Node, source []byte) string {
+	if node == nil {
+		return ""
+	}
+	for _, fieldName := range []string{"name"} {
+		if child := node.ChildByFieldName(fieldName); child != nil {
+			name := strings.TrimSpace(child.Content(source))
+			if name != "" {
+				return name
+			}
+		}
+	}
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		child := node.NamedChild(i)
+		if child == nil {
+			continue
+		}
+		if child.Type() == "identifier" || child.Type() == "field_identifier" {
+			name := strings.TrimSpace(child.Content(source))
+			if name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
 func collectSymbols(content string) []string {
 	var symbols []string
 	for _, line := range strings.Split(content, "\n") {
@@ -1121,6 +1230,51 @@ func collectSymbols(content string) []string {
 		}
 	}
 	return symbols
+}
+
+func collectImports(content string) []string {
+	var imports []string
+	inBlock := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "import ") {
+			if strings.Contains(trimmed, "(") {
+				inBlock = true
+				continue
+			}
+			if strings.HasPrefix(trimmed, "import \"") && strings.HasSuffix(trimmed, "\"") {
+				imports = append(imports, strings.Trim(trimmed[len("import "):], "\""))
+			}
+			continue
+		}
+		if inBlock {
+			if trimmed == ")" {
+				inBlock = false
+				continue
+			}
+			if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
+				imports = append(imports, strings.Trim(trimmed, "\""))
+			}
+		}
+	}
+	return imports
+}
+
+func summarizeCodeStructure(imports, symbols []string) string {
+	parts := []string{"code structure"}
+	if len(imports) > 0 {
+		parts = append(parts, fmt.Sprintf("imports=%s", strings.Join(imports, ",")))
+	}
+	if len(symbols) > 0 {
+		parts = append(parts, fmt.Sprintf("symbols=%s", strings.Join(symbols, ",")))
+	}
+	if len(parts) == 1 {
+		return "code structure: no obvious imports or symbols"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func extractSymbolSnippet(content, symbolName string) string {
@@ -1187,62 +1341,80 @@ func extractSymbolSnippet(content, symbolName string) string {
 }
 
 func collectRelatedFiles(workingDir, activeFile string) []string {
-	entries, err := os.ReadDir(workingDir)
+	var files []string
+	err := filepath.WalkDir(workingDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		relPath, err := filepath.Rel(workingDir, path)
+		if err != nil {
+			return err
+		}
+		if relPath == "." || relPath == activeFile || filepath.ToSlash(relPath) == filepath.ToSlash(activeFile) {
+			return nil
+		}
+		ext := filepath.Ext(relPath)
+		if ext == ".go" || ext == ".md" || ext == ".txt" {
+			files = append(files, filepath.ToSlash(relPath))
+		}
+		return nil
+	})
 	if err != nil {
 		return nil
-	}
-	var files []string
-	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == activeFile {
-			continue
-		}
-		if filepath.Ext(entry.Name()) == ".go" || filepath.Ext(entry.Name()) == ".md" || filepath.Ext(entry.Name()) == ".txt" {
-			files = append(files, entry.Name())
-		}
 	}
 	return files
 }
 
 func collectDependencyFiles(workingDir, activeFile, content string, symbols []string) []string {
-	entries, err := os.ReadDir(workingDir)
-	if err != nil {
-		return nil
-	}
 	if activeFile == "" {
 		return nil
 	}
 	var deps []string
 	normalizedContent := strings.ToLower(content)
-	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == activeFile {
-			continue
-		}
-		if filepath.Ext(entry.Name()) != ".go" {
-			continue
-		}
-		candidateContent, err := os.ReadFile(filepath.Join(workingDir, entry.Name()))
+	err := filepath.WalkDir(workingDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		relPath, err := filepath.Rel(workingDir, path)
+		if err != nil {
+			return err
+		}
+		if relPath == "." || relPath == activeFile || filepath.ToSlash(relPath) == filepath.ToSlash(activeFile) {
+			return nil
+		}
+		if filepath.Ext(relPath) != ".go" {
+			return nil
+		}
+		candidateContent, err := os.ReadFile(path)
+		if err != nil {
+			return nil
 		}
 		candidateText := string(candidateContent)
 		candidateLower := strings.ToLower(candidateText)
 		for _, symbol := range symbols {
 			if strings.Contains(candidateLower, strings.ToLower(symbol)) {
-				deps = append(deps, entry.Name())
-				break
+				deps = append(deps, filepath.ToSlash(relPath))
+				return nil
 			}
-		}
-		if len(deps) > 0 && contains(deps, entry.Name()) {
-			continue
 		}
 		for _, token := range strings.Fields(normalizedContent) {
 			if strings.HasPrefix(token, "helper") || strings.HasPrefix(token, "config") || strings.HasPrefix(token, "service") {
 				if strings.Contains(candidateLower, token) {
-					deps = append(deps, entry.Name())
-					break
+					deps = append(deps, filepath.ToSlash(relPath))
+					return nil
 				}
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil
 	}
 	return deps
 }

@@ -123,6 +123,21 @@ func handleUpdateSpaceItem(w http.ResponseWriter, r *http.Request) {
 	for k, v := range req.Data {
 		mergedData[k] = v
 	}
+	if lifecycleStatus, hasLifecycleStatus := req.Data["lifecycle_status"]; hasLifecycleStatus {
+		mergedData["lifecycle_status"] = lifecycleStatus
+	}
+	if lifecycleReason, hasLifecycleReason := req.Data["lifecycle_reason"]; hasLifecycleReason {
+		mergedData["lifecycle_reason"] = lifecycleReason
+	}
+	if archiveReason, hasArchiveReason := req.Data["archive_reason"]; hasArchiveReason {
+		mergedData["archive_reason"] = archiveReason
+	}
+	if archivedAt, hasArchivedAt := req.Data["archived_at"]; hasArchivedAt {
+		mergedData["archived_at"] = archivedAt
+	}
+	if accessCount, hasAccessCount := req.Data["lifecycle_access_count"]; hasAccessCount {
+		mergedData["lifecycle_access_count"] = accessCount
+	}
 
 	// Fetch category to get SummaryMaxCount and Name
 	maxSummaries := MAX_ITEM_SUMMARIES

@@ -14,6 +14,73 @@ Extend the current long-term memory (LTM) system into a general-purpose, capabil
 
 This plan is intended to be updated as work is completed.
 
+## V1 Coding-Workflow Direction
+
+For V1, the coding workflow should be built around high-quality repository-aware memory rather than a generic chat memory layer. The system should be able to retrieve the right repo context, remember prior edits and patterns, and ground future work in the active project.
+
+The implementation should use a hybrid memory model:
+
+- deterministic context for the active file, symbol, tests, and nearby package/module structure
+- semantic memory for similar prior work, recurring patterns, and repo-specific recall
+- structured metadata for scope, capability, lifecycle, and provenance
+
+For code-aware retrieval, the system should derive compact memory objects from source files rather than storing full parse trees. The recommended memory objects are:
+
+- repo-level summaries and architecture notes
+- file-level summaries and purpose notes
+- symbol-level summaries for functions, classes, methods, and interfaces
+- relationship facts such as imports, calls, and ownership
+- vector embeddings for semantic similarity and retrieval ranking
+- lifecycle metadata for staleness, archival, and retention
+
+This keeps retrieval precise and explainable while still allowing semantic search for high-quality coding assistance.
+
+## Finalized Design Decision: Categories and Items for Coding LTM
+
+Yes — for a high-quality coding workflow, both categories and items should participate in semantic retrieval.
+
+### Category design
+
+Categories should be the coarse-routing layer for LTM. They represent the semantic bucket or topic node for a repo/module/feature area. A category should be vectorized so the system can quickly identify the right topic cluster even when the wording differs from the current request.
+
+Recommended category fields:
+- stable ID and parent/child hierarchy
+- human-readable name and path
+- short description or semantic summary
+- scope metadata such as repo, space, capability, and user/project
+- lifecycle metadata such as active, warm, cold, archived
+- a category-level embedding anchor or vector reference
+
+### Item design
+
+Items should be the fine-grained retrieval layer. They represent the actual memory artifact inside a category, such as a file summary, symbol summary, debugging note, task outcome, or guidance capsule. Items should be vectorized so the system can retrieve semantically similar memories even when the exact vocabulary changes.
+
+Recommended item fields:
+- stable ID and category linkage
+- a concise title or summary
+- a compact semantic payload derived from the original artifact
+- source metadata such as repo path, symbol name, doc ID, or task ID
+- scope and capability metadata
+- lifecycle and freshness metadata
+- an item-level embedding or vector reference
+
+### Retrieval model
+
+The optimal design is hybrid, not vector-only:
+1. deterministic filters first (repo, capability, scope, lifecycle, category path)
+2. category-level semantic routing second
+3. item-level semantic matching third
+4. reranking with path/symbol proximity and recency
+
+This keeps semantic search powerful while preserving the precision needed for coding work.
+
+### Storage recommendation
+
+The actual embeddings should not be duplicated inside every prompt or stored as raw full-file parse trees. The clean design is:
+- store compact text summaries and metadata on the category/item object
+- store or reference the actual embedding in the vector subsystem keyed by category/item ID
+- keep a lightweight vector hash or version marker on the object for de-duplication and refresh logic
+
 ## Design Principles
 
 - Keep LTM general-purpose and shared across capabilities.
@@ -69,6 +136,19 @@ Acceptance criteria:
 - Research asks retrieve space-scoped research artifacts first.
 - Coding asks retrieve repo-scoped coding artifacts first.
 - Weak retrieval results do not degrade prompt quality.
+
+### Phase 2A — Code-Aware Memory and Vector Retrieval
+
+- [ ] Add a code-memory ingestion path that extracts repo/file/symbol summaries from source content.
+- [ ] Add lightweight parser or AST/tree-sitter-based extraction for functions, classes, interfaces, imports, and package/module boundaries.
+- [ ] Store derived code-memory objects with summary text, symbol identity, relationships, and vector embeddings.
+- [ ] Add retrieval ranking that blends path-based signals, symbol proximity, and semantic similarity.
+- [ ] Add a repo-aware fallback hierarchy so active-repo memory is preferred before cross-repo memory.
+
+Acceptance criteria:
+- Coding retrieval can surface the most relevant file or symbol even when the exact token overlap is low.
+- Code memory remains compact and explainable rather than storing raw parse trees for every file.
+- The system can retrieve both concrete repo context and semantically related prior work for the same project.
 
 ### Phase 3 — Hybrid Context Assembly
 

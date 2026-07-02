@@ -21,6 +21,54 @@ import (
 	"github.com/sharedcode/sop/database"
 )
 
+func TestSpaceItemViewExposesLifecycleMetadata(t *testing.T) {
+	payload := map[string]any{
+		"lifecycle_status":       "archived",
+		"lifecycle_reason":       "cold_or_unused",
+		"archived_at":            int64(1700000000000),
+		"archive_reason":         "cold_or_unused",
+		"lifecycle_access_count": 1,
+	}
+	item := SpaceItemView{}
+	if payload != nil {
+		if lifecycleStatus, found := payload["lifecycle_status"]; found {
+			item.LifecycleStatus = fmt.Sprint(lifecycleStatus)
+		}
+		if lifecycleReason, found := payload["lifecycle_reason"]; found {
+			item.LifecycleReason = fmt.Sprint(lifecycleReason)
+		}
+		if archivedAt, found := payload["archived_at"]; found {
+			switch v := archivedAt.(type) {
+			case int64:
+				item.ArchivedAt = v
+			case int:
+				item.ArchivedAt = int64(v)
+			case float64:
+				item.ArchivedAt = int64(v)
+			}
+		}
+		if archiveReason, found := payload["archive_reason"]; found {
+			item.ArchiveReason = fmt.Sprint(archiveReason)
+		}
+		if accessCount, found := payload["lifecycle_access_count"]; found {
+			switch v := accessCount.(type) {
+			case int:
+				item.LifecycleAccessCount = v
+			case int64:
+				item.LifecycleAccessCount = int(v)
+			case float64:
+				item.LifecycleAccessCount = int(v)
+			}
+		}
+	}
+	if item.LifecycleStatus != "archived" {
+		t.Fatalf("expected archived lifecycle status to be exposed, got %q", item.LifecycleStatus)
+	}
+	if item.ArchiveReason != "cold_or_unused" {
+		t.Fatalf("expected archive reason to be exposed, got %q", item.ArchiveReason)
+	}
+}
+
 func TestBuildDigestPromptUsesComprehensiveCurationInstructions(t *testing.T) {
 	req := DigestSourceStoreRequest{
 		SourceStore:  "source-store",
@@ -798,6 +846,180 @@ func TestUpdateSpaceItemPersists(t *testing.T) {
 	}
 }
 
+func TestUpdateSpaceItemPersistsLifecycleMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := "testdb_update_lifecycle_metadata"
+	spaceName := "test_space_update_lifecycle_metadata"
+
+	config = Config{
+		RootPassword: SecuredString("secret_password"),
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	sendJSON := func(method, url string, handler http.HandlerFunc, body interface{}) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, url, bytes.NewBuffer(b))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		handler(rr, req)
+		return rr
+	}
+
+	rr := sendJSON("POST", "/api/spaces/create", handleCreateSpace, CreateSpaceRequest{DatabaseName: dbName, SpaceName: spaceName})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to create space: %v", rr.Body.String())
+	}
+
+	rr = sendJSON("POST", "/api/spaces/category/add?database="+dbName+"&name="+spaceName, handleAddSpaceCategory, AddSpaceCategoryRequest{Name: "Root"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add category: %v", rr.Body.String())
+	}
+	var catRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&catRes); err != nil {
+		t.Fatalf("Failed to decode category response: %v", err)
+	}
+	categoryID := catRes["id"].(string)
+
+	rr = sendJSON("POST", "/api/spaces/item/add?database="+dbName+"&name="+spaceName, handleAddSpaceItem, AddSpaceItemRequest{
+		CategoryID: categoryID,
+		Summaries:  []string{"Initial summary"},
+		Data:       map[string]any{"text": "Initial text", "description": "Initial description"},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add item: %v", rr.Body.String())
+	}
+	var addRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&addRes); err != nil {
+		t.Fatalf("Failed to decode add item response: %v", err)
+	}
+	itemID := addRes["id"].(string)
+
+	rr = sendJSON("POST", "/api/spaces/item/update?database="+dbName+"&name="+spaceName, handleUpdateSpaceItem, UpdateSpaceItemRequest{
+		ID:         itemID,
+		CategoryID: categoryID,
+		Summaries:  []string{"Updated lifecycle summary"},
+		Data: map[string]any{
+			"chunk":                  "Updated lifecycle text",
+			"text":                   "Updated lifecycle text",
+			"description":            "Updated lifecycle description",
+			"lifecycle_status":       "archived",
+			"lifecycle_reason":       "cold_or_unused",
+			"archive_reason":         "cold_or_unused",
+			"archived_at":            int64(1700000000000),
+			"lifecycle_access_count": 2,
+		},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Update returned wrong status: got %v body %s", rr.Code, rr.Body.String())
+	}
+
+	req, _ := http.NewRequest("GET", "/api/spaces/items?database="+dbName+"&name="+spaceName, nil)
+	rrGet := httptest.NewRecorder()
+	handleListSpaceItems(rrGet, req)
+	if rrGet.Code != http.StatusOK {
+		t.Fatalf("List returned wrong status: got %v body %s", rrGet.Code, rrGet.Body.String())
+	}
+
+	var listRes map[string]any
+	if err := json.NewDecoder(rrGet.Body).Decode(&listRes); err != nil {
+		t.Fatalf("Failed to decode list response: %v", err)
+	}
+	items := listRes["data"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("Expected 1 item after update, got %d", len(items))
+	}
+	item := items[0].(map[string]any)
+	if got := fmt.Sprint(item["lifecycle_status"]); got != "archived" {
+		t.Fatalf("Expected lifecycle_status to persist, got %v", item["lifecycle_status"])
+	}
+	if got := fmt.Sprint(item["archive_reason"]); got != "cold_or_unused" {
+		t.Fatalf("Expected archive_reason to persist, got %v", item["archive_reason"])
+	}
+}
+
+func TestAddSpaceItemPersistsLifecycleMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := "testdb_add_lifecycle_metadata"
+	spaceName := "test_space_add_lifecycle_metadata"
+
+	config = Config{
+		RootPassword: SecuredString("secret_password"),
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	sendJSON := func(method, url string, handler http.HandlerFunc, body interface{}) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, url, bytes.NewBuffer(b))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		handler(rr, req)
+		return rr
+	}
+
+	rr := sendJSON("POST", "/api/spaces/create", handleCreateSpace, CreateSpaceRequest{DatabaseName: dbName, SpaceName: spaceName})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to create space: %v", rr.Body.String())
+	}
+
+	rr = sendJSON("POST", "/api/spaces/category/add?database="+dbName+"&name="+spaceName, handleAddSpaceCategory, AddSpaceCategoryRequest{Name: "Root"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add category: %v", rr.Body.String())
+	}
+	var catRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&catRes); err != nil {
+		t.Fatalf("Failed to decode category response: %v", err)
+	}
+	categoryID := catRes["id"].(string)
+
+	rr = sendJSON("POST", "/api/spaces/item/add?database="+dbName+"&name="+spaceName, handleAddSpaceItem, AddSpaceItemRequest{
+		CategoryID: categoryID,
+		Summaries:  []string{"Initial summary"},
+		Data: map[string]any{
+			"text":                   "Initial text",
+			"description":            "Initial description",
+			"lifecycle_status":       "archived",
+			"lifecycle_reason":       "cold_or_unused",
+			"archive_reason":         "cold_or_unused",
+			"archived_at":            int64(1700000000000),
+			"lifecycle_access_count": 2,
+		},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add item: %v", rr.Body.String())
+	}
+
+	req, _ := http.NewRequest("GET", "/api/spaces/items?database="+dbName+"&name="+spaceName, nil)
+	rrGet := httptest.NewRecorder()
+	handleListSpaceItems(rrGet, req)
+	if rrGet.Code != http.StatusOK {
+		t.Fatalf("List returned wrong status: got %v body %s", rrGet.Code, rrGet.Body.String())
+	}
+
+	var listRes map[string]any
+	if err := json.NewDecoder(rrGet.Body).Decode(&listRes); err != nil {
+		t.Fatalf("Failed to decode list response: %v", err)
+	}
+	items := listRes["data"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("Expected 1 item after add, got %d", len(items))
+	}
+	item := items[0].(map[string]any)
+	if got := fmt.Sprint(item["lifecycle_status"]); got != "archived" {
+		t.Fatalf("Expected lifecycle_status to persist, got %v", item["lifecycle_status"])
+	}
+	if got := fmt.Sprint(item["archive_reason"]); got != "cold_or_unused" {
+		t.Fatalf("Expected archive_reason to persist, got %v", item["archive_reason"])
+	}
+}
+
 func TestListSpaceItemsExposesContentType(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbName := "testdb_list_content_type"
@@ -1187,6 +1409,130 @@ func TestHandleAddSpaceItemPersistsAppleCloudDocumentReference(t *testing.T) {
 	}
 	if !doc.IsAppleCloud() {
 		t.Fatalf("expected document to be classified as Apple Cloud-backed")
+	}
+}
+
+func TestHandleAddSpaceItemMultipartPersistsBlankLifecycleFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := "testdb_multipart_blank_lifecycle"
+	spaceName := "test_space_multipart_blank_lifecycle"
+
+	config = Config{
+		RootPassword: SecuredString("secret_password"),
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	rr := httptest.NewRecorder()
+	createReq := httptest.NewRequest("POST", "/api/spaces/create", bytes.NewBufferString(`{"database_name":"`+dbName+`","space_name":"`+spaceName+`"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	handleCreateSpace(rr, createReq)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to create space: %v", rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	catReq := httptest.NewRequest("POST", "/api/spaces/category/add?database="+dbName+"&name="+spaceName, bytes.NewBufferString(`{"name":"Root"}`))
+	catReq.Header.Set("Content-Type", "application/json")
+	handleAddSpaceCategory(rr, catReq)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add category: %v", rr.Body.String())
+	}
+	var catRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&catRes); err != nil {
+		t.Fatalf("Failed to decode category response: %v", err)
+	}
+	categoryID := catRes["id"].(string)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for _, field := range []struct{ key, value string }{
+		{key: "category_id", value: categoryID},
+		{key: "description", value: "Lifecycle clear test"},
+		{key: "summaries", value: "Lifecycle clear summary"},
+		{key: "asset_mode", value: "reference"},
+		{key: "storage_mode", value: string(memory.DocumentStorageModeExternalMetadataOnly)},
+		{key: "payload_ref", value: "uploaded://sample.txt"},
+		{key: "filename", value: "sample.txt"},
+		{key: "lifecycle_status", value: ""},
+		{key: "lifecycle_reason", value: ""},
+		{key: "archive_reason", value: ""},
+		{key: "lifecycle_access_count", value: "0"},
+	} {
+		if err := writer.WriteField(field.key, field.value); err != nil {
+			t.Fatalf("failed to write form field %s: %v", field.key, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close multipart writer: %v", err)
+	}
+
+	rr = httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/spaces/item/add?database="+dbName+"&name="+spaceName, &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	handleAddSpaceItem(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add item with blank lifecycle overrides: %v", rr.Body.String())
+	}
+
+	var addRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&addRes); err != nil {
+		t.Fatalf("failed to decode add-item response: %v", err)
+	}
+	itemID, err := sop.ParseUUID(addRes["id"].(string))
+	if err != nil {
+		t.Fatalf("failed to parse item ID: %v", err)
+	}
+
+	ctx := context.Background()
+	dbOpts, err := GetDBOptions(ctx, dbName)
+	if err != nil {
+		t.Fatalf("Failed to get DB options: %v", err)
+	}
+	trans, err := database.BeginTransaction(ctx, dbOpts, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer trans.Rollback(ctx)
+
+	db := aidb.NewDatabase(dbOpts)
+	kb, err := db.OpenKnowledgeBase(ctx, spaceName, trans, nil, nil, false)
+	if err != nil {
+		t.Fatalf("Failed to open knowledge base: %v", err)
+	}
+	itemsTree, err := kb.Store.Items(ctx)
+	if err != nil {
+		t.Fatalf("Failed to access items tree: %v", err)
+	}
+	parsedCatID, err := sop.ParseUUID(categoryID)
+	if err != nil {
+		t.Fatalf("failed to parse category ID: %v", err)
+	}
+	found, err := itemsTree.Find(ctx, memory.ItemKey{CategoryID: parsedCatID, ItemID: itemID}, false)
+	if err != nil {
+		t.Fatalf("failed to locate stored item: %v", err)
+	}
+	if !found {
+		t.Fatal("expected the item to be stored")
+	}
+	item, err := itemsTree.GetCurrentValue(ctx)
+	if err != nil {
+		t.Fatalf("failed to read stored item: %v", err)
+	}
+	if got := fmt.Sprint(item.Data["lifecycle_status"]); got != "" {
+		t.Fatalf("expected blank lifecycle_status to be persisted, got %q", got)
+	}
+	if got := fmt.Sprint(item.Data["lifecycle_reason"]); got != "" {
+		t.Fatalf("expected blank lifecycle_reason to be persisted, got %q", got)
+	}
+	if got := fmt.Sprint(item.Data["archive_reason"]); got != "" {
+		t.Fatalf("expected blank archive_reason to be persisted, got %q", got)
+	}
+	if got := fmt.Sprint(item.Data["lifecycle_access_count"]); got != "0" {
+		t.Fatalf("expected lifecycle_access_count 0 to be persisted, got %q", got)
 	}
 }
 
@@ -1734,6 +2080,131 @@ func TestHandleListSpaceItemsFallsBackToFilesystemRef(t *testing.T) {
 	item := items[0].(map[string]any)
 	if item["payload_ref"] != "/tmp/inbox/report.pdf" {
 		t.Fatalf("expected filesystem_ref fallback to be exposed in list response, got %#v", item["payload_ref"])
+	}
+}
+
+func TestHandleAddSpaceCategoryPersistsLifecycleMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := "testdb_category_lifecycle_metadata"
+	spaceName := "test_space_category_lifecycle_metadata"
+
+	config = Config{
+		RootPassword: SecuredString("secret_password"),
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	sendJSON := func(method, url string, handler http.HandlerFunc, body interface{}) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, url, bytes.NewBuffer(b))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		handler(rr, req)
+		return rr
+	}
+
+	rr := sendJSON("POST", "/api/spaces/create", handleCreateSpace, CreateSpaceRequest{DatabaseName: dbName, SpaceName: spaceName})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to create space: %v", rr.Body.String())
+	}
+
+	rr = sendJSON("POST", "/api/spaces/category/add?database="+dbName+"&name="+spaceName, handleAddSpaceCategory, AddSpaceCategoryRequest{
+		Name: "Repo Root",
+		Metadata: map[string]any{
+			"lifecycle_status":       "archived",
+			"lifecycle_reason":       "repo_finished",
+			"archive_reason":         "repo_finished",
+			"archived_at":            int64(1700000000000),
+			"lifecycle_access_count": 3,
+		},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add category: %v", rr.Body.String())
+	}
+
+	var addRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&addRes); err != nil {
+		t.Fatalf("Failed to decode category response: %v", err)
+	}
+	categoryID := addRes["id"].(string)
+
+	ctx := context.Background()
+	dbOpts, err := GetDBOptions(ctx, dbName)
+	if err != nil {
+		t.Fatalf("getDBOptions failed: %v", err)
+	}
+	trans, err := database.BeginTransaction(ctx, dbOpts, sop.ForReading)
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+	defer trans.Rollback(ctx)
+
+	db := aidb.NewDatabase(dbOpts)
+	kb, err := db.OpenKnowledgeBase(ctx, spaceName, trans, nil, nil, false)
+	if err != nil {
+		t.Fatalf("OpenKnowledgeBase failed: %v", err)
+	}
+
+	categoriesTree, err := kb.Store.Categories(ctx)
+	if err != nil {
+		t.Fatalf("Categories failed: %v", err)
+	}
+	parsedID, err := sop.ParseUUID(categoryID)
+	if err != nil {
+		t.Fatalf("ParseUUID failed: %v", err)
+	}
+	found, err := categoriesTree.Find(ctx, parsedID, false)
+	if err != nil {
+		t.Fatalf("Find category failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected category to exist")
+	}
+	cat, err := categoriesTree.GetCurrentValue(ctx)
+	if err != nil {
+		t.Fatalf("GetCurrentValue failed: %v", err)
+	}
+	if got := fmt.Sprint(cat.Metadata["lifecycle_status"]); got != "archived" {
+		t.Fatalf("expected persisted lifecycle_status archived, got %q", got)
+	}
+	if got := fmt.Sprint(cat.Metadata["archive_reason"]); got != "repo_finished" {
+		t.Fatalf("expected persisted archive_reason repo_finished, got %q", got)
+	}
+
+	req, _ := http.NewRequest("GET", "/api/spaces/categories?database="+dbName+"&name="+spaceName, nil)
+	rrList := httptest.NewRecorder()
+	handleListSpaceCategories(rrList, req)
+	if rrList.Code != http.StatusOK {
+		t.Fatalf("category list failed: %v", rrList.Body.String())
+	}
+	var listRes map[string]any
+	if err := json.NewDecoder(rrList.Body).Decode(&listRes); err != nil {
+		t.Fatalf("Failed to decode category list response: %v", err)
+	}
+	items := listRes["data"].([]any)
+	if len(items) == 0 {
+		t.Fatal("expected category list to include categories")
+	}
+	foundCategory := false
+	for _, raw := range items {
+		item := raw.(map[string]any)
+		if item["id"] == categoryID {
+			foundCategory = true
+			metadata, ok := item["metadata"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected category metadata to be present in list response, got %#v", item["metadata"])
+			}
+			if got := fmt.Sprint(metadata["lifecycle_status"]); got != "archived" {
+				t.Fatalf("expected list response metadata lifecycle_status archived, got %q", got)
+			}
+			break
+		}
+	}
+	if !foundCategory {
+		t.Fatalf("expected category %s to appear in list response", categoryID)
 	}
 }
 

@@ -2050,8 +2050,21 @@ func handleListItems(w http.ResponseWriter, r *http.Request) {
 		}
 
 		itemMap := map[string]any{
-			"key":   kItem.Key,
-			"value": v,
+			"key": kItem.Key,
+		}
+		if valueMap, ok := v.(map[string]any); ok {
+			itemValue := make(map[string]any, len(valueMap))
+			for k, val := range valueMap {
+				itemValue[k] = val
+			}
+			if _, exists := itemValue["lifecycle_status"]; !exists {
+				if lifecycleStatus, ok := itemValue["lifecycle_status"]; ok {
+					itemValue["lifecycle_status"] = lifecycleStatus
+				}
+			}
+			itemMap["value"] = itemValue
+		} else {
+			itemMap["value"] = v
 		}
 
 		if isNDJSON {

@@ -153,8 +153,78 @@ func TestHandleExecuteScript(t *testing.T) {
 	}
 }
 
+func TestSpaceItemCardsRenderLifecycleBadges(t *testing.T) {
+	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("failed to read template: %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "lifecycle_status") {
+		t.Fatalf("expected lifecycle status handling in item card template")
+	}
+	if !strings.Contains(text, "archived") {
+		t.Fatalf("expected archived lifecycle styling in item card template")
+	}
+}
+
+func TestCategoryLifecycleActionsRemainSimple(t *testing.T) {
+	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("failed to read template: %v", err)
+	}
+
+	text := string(content)
+	if strings.Contains(text, "window.touchArchivedItem") {
+		t.Fatalf("expected item-level touch handler to be removed from template")
+	}
+	if strings.Contains(text, "touch-item-btn") {
+		t.Fatalf("expected item-level touch button markup to be removed from template")
+	}
+}
+
+func TestLifecycleStateIsDisplayedWithoutManualControls(t *testing.T) {
+	for _, tc := range []struct {
+		path   string
+		needle string
+	}{
+		{path: filepath.Join(".", "templates", "modals.html"), needle: "Lifecycle state"},
+		{path: filepath.Join(".", "templates", "scripts_part01.html"), needle: "lifecycle_status"},
+	} {
+		content, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("failed to read template %s: %v", tc.path, err)
+		}
+		text := string(content)
+		if !strings.Contains(text, tc.needle) {
+			t.Fatalf("expected %s to include automated lifecycle state display, but found no %q", tc.path, tc.needle)
+		}
+	}
+}
+
+func TestLifecycleOverrideInputsAreNotRendered(t *testing.T) {
+	for _, tc := range []struct {
+		path   string
+		needle string
+	}{
+		{path: filepath.Join(".", "templates", "modals.html"), needle: "new-space-item-lifecycle-status"},
+		{path: filepath.Join(".", "templates", "scripts_part01.html"), needle: "inline-item-lifecycle-status"},
+	} {
+		content, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("failed to read template %s: %v", tc.path, err)
+		}
+		text := string(content)
+		if strings.Contains(text, tc.needle) {
+			t.Fatalf("expected %s to omit lifecycle override controls, but found %q", tc.path, tc.needle)
+		}
+	}
+}
+
 func TestSourceLinkPopupTemplateUsesEscapedAttributes(t *testing.T) {
-	templatePath := filepath.Join("..", "httpserver", "templates", "scripts_part01.html")
+	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("failed to read template: %v", err)

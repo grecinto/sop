@@ -6,6 +6,32 @@ This document captures the missing capabilities required to make SOP's coding wo
 
 The focus is on workflow execution, not just answer generation.
 
+## V1 Product Direction
+
+For V1, the coding workflow should be designed to compete with high-quality coding copilots on everyday repository work. The bar is not merely “answer questions about code”; it is to help a developer inspect, edit, test, debug, and continue work with minimal friction.
+
+The V1 implementation should prioritize:
+
+- repo-aware context selection over generic chat context
+- explicit planning before edits, with user-visible intent and rationale
+- patch application with validation, diff review, and rollback safety
+- test-and-fix loops that iterate until a task is verified
+- persistent memory for repo-specific work, including file, symbol, and relationship recall
+- code-aware retrieval that can reason over files, symbols, and nearby tests rather than only raw text
+
+For this direction, AST/tree-sitter-style structure is a first-class V1 capability, but the system should store derived code-memory objects rather than raw full parse trees. The long-term memory layer should keep compact summaries, symbol facts, relationships, and vector embeddings so retrieval remains fast and useful.
+
+## V1 Task Tracker
+
+- [ ] Add repo-aware context assembly that selects the active file, nearest symbol, nearby tests, and relevant package/module context.
+- [ ] Add a deterministic patch and edit layer that can apply targeted edits, show diffs, and support safe rollback.
+- [ ] Add a test-and-fix loop that runs relevant tests, parses failures, and iterates until success or a bounded stop condition.
+- [ ] Add code-aware retrieval using lightweight parsing or AST/tree-sitter support for symbols, imports, and call relationships.
+- [ ] Add hybrid retrieval that combines deterministic context, path-based structure, and semantic memory for repo-specific recall.
+- [ ] Add persistent coding memory for repo/file/symbol summaries, relationships, embeddings, and lifecycle state.
+- [ ] Add explicit workflow tracing so the user can see what context was selected, what changed, and what was validated.
+- [ ] Add safety controls for destructive operations, including preview, approval, and rollback paths.
+
 ## Guard Rails for Future Copilots
 
 The implementation should follow a few durable rules so future copilots, contributors, and adapters do not drift into implicit or unsafe behavior:

@@ -307,6 +307,11 @@ func handleAddSpaceCategory(w http.ResponseWriter, r *http.Request) {
 
 		cat.Name = req.Name
 		cat.Description = req.Description
+		if req.Metadata != nil {
+			cat.Metadata = cloneDataMap(req.Metadata)
+		} else if cat.Metadata == nil {
+			cat.Metadata = map[string]any{}
+		}
 
 		// Only generate a new vector if CenterVector already existed
 		if len(cat.CenterVector) > 0 {
@@ -360,6 +365,7 @@ func handleAddSpaceCategory(w http.ResponseWriter, r *http.Request) {
 			CenterVector:    vec,
 			SummaryMaxCount: MAX_ITEM_SUMMARIES,
 			ParentIDs:       parentIDs,
+			Metadata:        cloneDataMap(req.Metadata),
 		}
 
 		id, err = kb.Store.AddCategory(ctx, cat)
@@ -572,10 +578,28 @@ func handleAddSpaceItem(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("content_type") != "" {
 			req.Data["content_type"] = r.FormValue("content_type")
 		}
+		if _, ok := r.Form["lifecycle_status"]; ok {
+			req.Data["lifecycle_status"] = r.FormValue("lifecycle_status")
+		}
+		if _, ok := r.Form["lifecycle_reason"]; ok {
+			req.Data["lifecycle_reason"] = r.FormValue("lifecycle_reason")
+		}
+		if _, ok := r.Form["archive_reason"]; ok {
+			req.Data["archive_reason"] = r.FormValue("archive_reason")
+		}
+		if _, ok := r.Form["archived_at"]; ok {
+			req.Data["archived_at"] = r.FormValue("archived_at")
+		}
+		if _, ok := r.Form["lifecycle_access_count"]; ok {
+			req.Data["lifecycle_access_count"] = r.FormValue("lifecycle_access_count")
+		}
 	} else {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 			return
+		}
+		if req.Data == nil {
+			req.Data = map[string]any{}
 		}
 	}
 

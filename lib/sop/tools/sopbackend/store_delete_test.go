@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -127,6 +128,83 @@ func TestHandleDeleteItem_AllowsDeletingOnlyRemainingRow(t *testing.T) {
 	}
 	if got := store.Count(); got != 0 {
 		t.Fatalf("expected the only row to be deleted, got %d", got)
+	}
+}
+
+func TestHandleListItems_IncludesLifecycleMetadataWhenPresent(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := "testdb_list_lifecycle_metadata"
+	config = Config{
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	createReq := map[string]any{
+		"database":   dbName,
+		"store":      "lifecycle_store",
+		"key_type":   "string",
+		"value_type": "string",
+	}
+	body, _ := json.Marshal(createReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/store/add", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	handleAddStore(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create store failed: %d %s", w.Code, w.Body.String())
+	}
+
+	addReq := map[string]any{
+		"database": dbName,
+		"store":    "lifecycle_store",
+		"key":      "only-row",
+		"value": map[string]any{
+			"text":                   "sample",
+			"lifecycle_status":       "archived",
+			"lifecycle_reason":       "cold_or_unused",
+			"archive_reason":         "cold_or_unused",
+			"archived_at":            int64(1700000000000),
+			"lifecycle_access_count": 2,
+		},
+	}
+	body, _ = json.Marshal(addReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/store/item/add", bytes.NewBuffer(body))
+	w = httptest.NewRecorder()
+	handleAddItem(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("add row failed: %d %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/store/items?database="+dbName+"&name=lifecycle_store&action=current&key=only-row", nil)
+	w = httptest.NewRecorder()
+	handleListItems(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list items failed: %d %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal list response failed: %v", err)
+	}
+	data, ok := resp["data"].([]any)
+	if !ok || len(data) != 1 {
+		t.Fatalf("expected one item in response, got %T len=%d", resp["data"], len(data))
+	}
+	item, ok := data[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected item map, got %T", data[0])
+	}
+	value, ok := item["value"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected item value map, got %T", item["value"])
+	}
+	if got := fmt.Sprint(value["lifecycle_status"]); got != "archived" {
+		t.Fatalf("expected lifecycle_status archived, got %q", got)
+	}
+	if got := fmt.Sprint(value["archive_reason"]); got != "cold_or_unused" {
+		t.Fatalf("expected archive_reason cold_or_unused, got %q", got)
 	}
 }
 

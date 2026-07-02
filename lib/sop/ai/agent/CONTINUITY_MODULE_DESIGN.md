@@ -65,6 +65,39 @@ The module can be expressed around a few simple concepts:
   - the prompt-facing payload assembled for the next turn;
   - is the shared input to Ask and other capabilities.
 
+### Coding-workflow memory payloads
+The coding workflow should not persist only a loose summary string. It should emit a structured payload that can be written into LTM and retrieved through two distinct index routes that both resolve to the same canonical document.
+
+The canonical document should be the single source of truth for the full payload:
+
+- `workspace_id` / `repo_id`
+- `module_path`
+- `relative_path`
+- `active_file`
+- `structural_path`
+- `task_type`
+- `description`
+- `ast_leaf_nodes`
+- `symbol_name`
+- `symbol_kind`
+- `imports`
+- `related_tests`
+- `outcome_status`
+- `files_touched`
+- `lesson`
+- `next_step`
+- `evidence_snippet`
+- `test_summary`
+- `semantic_categories`
+- `category_path`
+
+The storage layer should then maintain separate index references to that document:
+
+- a deterministic path index, such as `a/b/c -> document_id`
+- a semantic nested-category index, such as `x/y/z -> document_id`
+
+This keeps the payload canonical while allowing both retrieval modes to work. The indexes should contain lightweight references rather than duplicated full payloads so updates remain consistent and storage stays compact.
+
 ## Runtime flow
 The intended flow is:
 
@@ -83,6 +116,24 @@ Ask should be the first consumer because it already has a mature continuity patt
 
 ### Coding workflow
 The coding workflow should contribute task outcomes, repo-edit learnings, and generation/analysis artifacts into the shared continuity stream rather than maintaining a separate memory path.
+
+For coding workflow, LTM access should support two retrieval modes:
+
+1. **Path-based retrieval** using category paths derived from repo structure and AST leaves.
+   - This is a direct, deterministic lookup route and is not vectorized.
+   - Best for exact file/symbol recall, same-module reuse, and deterministic follow-up edits.
+   - Example path shape: `repo/module/file/symbol`.
+
+2. **Semantic-category retrieval** using nested conceptual categories that cross-cut files and modules.
+   - This is a semantic, vectorized retrieval route that uses category meaning rather than exact path identity.
+   - Best for planning, debugging, refactoring, and cross-file pattern recall.
+   - Example categories: `coding-workflow`, `ast-context`, `parser-repair`, `test-fix`, `refactor`.
+
+The workflow should write one canonical payload and register it under both retrieval surfaces:
+- a deterministic path-based index, and
+- a semantic nested-category index.
+
+Both indexes should point back to the same document ID. This keeps LTM retrieval aligned with the two different ways developers think about code: by location and by concept.
 
 ### Stores and spaces
 These domains should use the same module so they inherit the same continuity semantics and avoid parallel continuity implementations. Their generation-oriented and data-analysis-oriented tasks can reuse the same workflow planning and continuation model as coding.

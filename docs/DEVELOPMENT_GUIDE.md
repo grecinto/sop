@@ -43,6 +43,7 @@ Keep the boundary clear:
 - For the new site and shared backend, do not use context.Context as a general-purpose state bucket for request values or domain state. Prefer explicit parameters or explicit request structs in handlers, service methods, and API boundaries.
 - LTM lifecycle maintenance should follow the documented policy: use a nightly wakeup servicer for cleanup and retention decisions, run a weekly compaction pass for archive/merge/prune work, and keep active-usage bookkeeping lightweight by updating recency metadata inline during retrieval and write flows.
 - The current retention behavior is conservative: a memory item stays active while it is recent and relevant, becomes archived once it is deemed stale, and is removed from the store once the weekly compaction pass observes it has been archived long enough.
+- In the Data Manager, lifecycle state is now surfaced directly on space-item cards so archived or stale entries are visibly labeled and can be distinguished from active content without opening the item details.
 
 ## Design conventions
 

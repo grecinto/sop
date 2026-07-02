@@ -77,13 +77,15 @@ func (d *DocIDs) UnmarshalJSON(data []byte) error {
 // Item represents the actual content (The "Thought" or Document).
 // Singular form as requested. It is fundamentally mapped to one or more Vector embeddings.
 type Item[T any] struct {
-	ID         sop.UUID    `json:"id"`
-	CategoryID sop.UUID    `json:"category_id"`
-	DocID      DocIDs      `json:"doc_id,omitempty"`      // UUID of uploaded documents OR string URI for external docs
-	Summaries  []string    `json:"summaries,omitempty"`   // 1 or more distinct, clean sentences for vector indexing
-	Data       T           `json:"data"`                  // The application data or structured thought
-	Positions  []VectorKey `json:"positions,omitempty"`   // Direct links to its Vectors for O(1) cleanup during Category moves
-	VectorHash string      `json:"vector_hash,omitempty"` // Hash of EmbedderName + Content to avoid re-vectorizing unchanged items
+	ID               sop.UUID    `json:"id"`
+	CategoryID       sop.UUID    `json:"category_id"`
+	DocID            DocIDs      `json:"doc_id,omitempty"`            // UUID of uploaded documents OR string URI for external docs
+	Summaries        []string    `json:"summaries,omitempty"`         // 1 or more distinct, clean sentences for vector indexing
+	Data             T           `json:"data"`                        // The application data or structured thought
+	Positions        []VectorKey `json:"positions,omitempty"`         // Direct links to its Vectors for O(1) cleanup during Category moves
+	VectorHash       string      `json:"vector_hash,omitempty"`       // Hash of EmbedderName + Content to avoid re-vectorizing unchanged items
+	EmbeddingText    string      `json:"embedding_text,omitempty"`    // Compact semantic text used to derive item embeddings
+	EmbeddingVersion string      `json:"embedding_version,omitempty"` // Version of the embedder/contract used for this item
 }
 
 // Returns true if Item is considered the KnowledgeBase's Config item.
@@ -132,16 +134,19 @@ type Category struct {
 	// Use-case: A category like "Database Migrations" can belong to both "Release Management"
 	// and "Database Administration". Adding the explicit UseCase here gives the LLM
 	// the ability to review, validate, and improve these graph edges during deep sleep cycles.
-	ParentIDs       []CategoryParent `json:"parents,omitempty"`
-	CenterVector    []float32        `json:"center_vector"`               // Mathematical center of this chunk/category
-	ChildrenIDs     []sop.UUID       `json:"children_ids,omitempty"`      // IDs of Sub-Categories
-	Radius          float32          `json:"radius,omitempty"`            // Size of the cluster
-	ItemCount       int              `json:"item_count,omitempty"`        // Number of vectors/items in this bucket
-	Name            string           `json:"name,omitempty"`              // Human-readable concept name
-	Path            string           `json:"path,omitempty"`              // Full contextual taxonomy path (e.g. "tools / execute_script")
-	Description     string           `json:"description,omitempty"`       // Broader context
-	SummaryMaxCount int              `json:"summary_max_count,omitempty"` // Maximum number of summaries for items in this category
-	VectorHash      string           `json:"vector_hash,omitempty"`       // Hash of EmbedderName + Content to deduplicate vectorization
+	ParentIDs        []CategoryParent `json:"parents,omitempty"`
+	CenterVector     []float32        `json:"center_vector"`               // Mathematical center of this chunk/category
+	ChildrenIDs      []sop.UUID       `json:"children_ids,omitempty"`      // IDs of Sub-Categories
+	Radius           float32          `json:"radius,omitempty"`            // Size of the cluster
+	ItemCount        int              `json:"item_count,omitempty"`        // Number of vectors/items in this bucket
+	Name             string           `json:"name,omitempty"`              // Human-readable concept name
+	Path             string           `json:"path,omitempty"`              // Full contextual taxonomy path (e.g. "tools / execute_script")
+	Description      string           `json:"description,omitempty"`       // Broader context
+	SummaryMaxCount  int              `json:"summary_max_count,omitempty"` // Maximum number of summaries for items in this category
+	Metadata         map[string]any   `json:"metadata,omitempty"`          // Optional lifecycle/policy metadata for the category subtree
+	VectorHash       string           `json:"vector_hash,omitempty"`       // Hash of EmbedderName + Content to deduplicate vectorization
+	EmbeddingText    string           `json:"embedding_text,omitempty"`    // Compact semantic text used to derive category-level embeddings
+	EmbeddingVersion string           `json:"embedding_version,omitempty"` // Version of the embedder/contract used for this category
 }
 
 // VectorKey is the key for the Vectors B-Tree. It dictates how vectors are sorted

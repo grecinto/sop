@@ -1823,6 +1823,10 @@
         const docRef = link.getAttribute('data-payload-ref') || '';
         const docStorageMode = link.getAttribute('data-storage-mode') || '';
         const docCloudProvider = link.getAttribute('data-cloud-provider') || '';
+        const lifecycleStatus = (link.getAttribute('data-lifecycle-status') || '').toString().trim();
+        const lifecycleReason = (link.getAttribute('data-lifecycle-reason') || '').toString().trim();
+        const archiveReason = (link.getAttribute('data-archive-reason') || '').toString().trim();
+        const archivedAt = link.getAttribute('data-archived-at') || '';
         const readonly = isSpaceReadOnly(currentStore, currentDatabase);
         titleObj.innerText = readonly ? (categoryName ? 'View ' + categoryName + ' Details' : 'View Details') : (categoryName ? 'Edit ' + categoryName + ' content' : 'Edit Item content');
         
@@ -1852,6 +1856,7 @@
         descLbl.innerText = 'Content/Description:';
         descLbl.style.fontSize = '0.9em';
 
+
         const referenceInfo = document.createElement('div');
         referenceInfo.style.marginBottom = '12px';
         referenceInfo.style.padding = '10px';
@@ -1871,7 +1876,7 @@
             const displayValue = displayRef;
             referenceInfo.innerHTML = `<strong>${window.escapeHTML(refLabel)}</strong> <span style="word-break:break-all;">${window.escapeHTML(displayValue)}</span>${docStorageMode ? `<br><strong>Storage Mode:</strong> ${window.escapeHTML(docStorageMode)}` : ''}${docCloudProvider ? `<br><strong>Provider:</strong> ${window.escapeHTML(docCloudProvider)}` : ''}${previewHtml}`;
         } else {
-            referenceInfo.innerHTML = '<em>No external document reference attached.</em>';
+            referenceInfo.innerHTML = `<em>No external document reference attached.</em>`;
         }
 
         // Create textarea
@@ -1979,8 +1984,9 @@
             if (newSummVal) {
                 summArr = newSummVal.split('.').map(s => s.trim()).filter(s => s.length > 0);
             }
+            const data = {chunk: newVal, text: newVal, description: newVal};
 
-            inlineUpdateItem(itemId, categoryId, {chunk: newVal, text: newVal, description: newVal}, summArr).then(() => {
+            inlineUpdateItem(itemId, categoryId, data, summArr).then(() => {
                 // To keep the click handler fresh without a full page reload, we refresh the list if possible
                 if (window._lastFetchItemsArgs) {
                     const args = window._lastFetchItemsArgs;
@@ -2858,6 +2864,13 @@
                             displayCatName = catObj.name;
                         }
                     }
+                    const lifecycleStatus = (t.lifecycle_status || t.lifecycleStatus || (t.data && (t.data.lifecycle_status || t.data.lifecycleStatus)) || '').toString().toLowerCase();
+                    const lifecycleReason = (t.lifecycle_reason || t.lifecycleReason || (t.data && (t.data.lifecycle_reason || t.data.lifecycleReason)) || '').toString();
+                    const archiveReason = (t.archive_reason || t.archiveReason || (t.data && (t.data.archive_reason || t.data.archiveReason)) || '').toString();
+                    const isArchived = lifecycleStatus === 'archived' || lifecycleStatus === 'retired' || lifecycleStatus === 'inactive';
+                    const lifecycleBadgeText = isArchived ? 'Archived' : (lifecycleStatus === 'stale' ? 'Stale' : (lifecycleStatus ? lifecycleStatus.charAt(0).toUpperCase() + lifecycleStatus.slice(1) : ''));
+                    const lifecycleBadgeColor = isArchived ? '#8b3a3a' : (lifecycleStatus === 'stale' ? '#8a6d3b' : '#4c6ef5');
+                    const lifecycleBadgeTitle = isArchived ? (archiveReason || lifecycleReason || 'Archived by lifecycle policy') : (lifecycleReason || 'Lifecycle status');
                     const docLinkHref = primaryDocID ? window.buildDocViewerURL(primaryDocID, t.text || '') : "";
                     const categoryAttr = JSON.stringify(currCatName || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
                     const itemRef = window.getItemPreviewReference(t);
@@ -2876,7 +2889,7 @@
                                 <div style="margin-top: 8px; display: flex; align-items: center; position: relative;">
                                     <a class="read-more-btn" onclick="toggleDomainItemDesc(this)" data-item-id="${window.escapeHTML(t.id || '')}" data-item-category="${window.escapeHTML(t.category_id || t.category || '')}" style="cursor:pointer; color:var(--link-color); font-size:0.85em; text-decoration:underline;">Read More</a>
                                     ${kbIsReadOnly ? 
-                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
+                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" data-lifecycle-status="${window.escapeHTML(lifecycleStatus)}" data-lifecycle-reason="${window.escapeHTML(lifecycleReason)}" data-archive-reason="${window.escapeHTML(archiveReason)}" data-archived-at="${window.escapeHTML(archivedAt)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
                                         : 
                                         `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Edit Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></a>
                                          <a class="delete-item-btn" data-item-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-item-name="${window.escapeHTML(((t.summaries && t.summaries.length > 0) ? t.summaries[0] : (t.text || t.description || t.topic || t.concept || t.name || t.id || '')).substring(0, 100))}" onclick="window.deleteSpaceItem(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Delete Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg></a>`
@@ -2897,7 +2910,7 @@
                                 </div>
                                 <div style="margin-top: 8px; display: flex; align-items: center; position: relative;">
                                     ${kbIsReadOnly ? 
-                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
+                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" data-lifecycle-status="${window.escapeHTML(lifecycleStatus)}" data-lifecycle-reason="${window.escapeHTML(lifecycleReason)}" data-archive-reason="${window.escapeHTML(archiveReason)}" data-archived-at="${window.escapeHTML(archivedAt)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
                                         : 
                                         `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDesc || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); display: inline-flex; align-items: center;" title="Edit Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></a>
                                          <a class="delete-item-btn" data-item-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-item-name="${window.escapeHTML(((t.summaries && t.summaries.length > 0) ? t.summaries[0] : (t.text || t.description || t.topic || t.concept || t.name || t.id || '')).substring(0, 100))}" onclick="window.deleteSpaceItem(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Delete Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg></a>`
@@ -2921,7 +2934,11 @@
                                     ${displayCatName}
                                 </div>
                                 ` : ''}
-                                
+                                ${lifecycleBadgeText ? `
+                                <div title="${window.escapeHTML(lifecycleBadgeTitle)}" style="font-size: 0.75em; font-weight: 600; color: #fff; background-color: ${lifecycleBadgeColor}; padding: 3px 8px; border-radius: 12px; text-transform: uppercase;">
+                                    ${window.escapeHTML(lifecycleBadgeText)}
+                                </div>
+                                ` : ''}
                             </div>
                             <div style="font-size: 1.15em; font-weight: 600; margin-bottom: 10px; color: var(--text-color);">
                                 ${t.summaries && t.summaries.length > 0 ? t.summaries[0].substring(0, 50).replace(/</g, '&lt;') : (t.id ? t.id.substring(0,8) : "Unnamed Item")}
@@ -3495,6 +3512,14 @@ function showAddSpaceItem() {
     document.getElementById('new-space-item-desc').value = '';
     const summariesInput = document.getElementById('new-space-item-summaries');
     if (summariesInput) summariesInput.value = '';
+    const lifecycleStatusInput = document.getElementById('new-space-item-lifecycle-status');
+    if (lifecycleStatusInput) lifecycleStatusInput.value = '';
+    const lifecycleReasonInput = document.getElementById('new-space-item-lifecycle-reason');
+    if (lifecycleReasonInput) lifecycleReasonInput.value = '';
+    const archiveReasonInput = document.getElementById('new-space-item-archive-reason');
+    if (archiveReasonInput) archiveReasonInput.value = '';
+    const lifecycleAccessCountInput = document.getElementById('new-space-item-lifecycle-access-count');
+    if (lifecycleAccessCountInput) lifecycleAccessCountInput.value = '0';
     
     const sourceRadios = document.querySelectorAll('input[name="new-space-item-source"]');
     sourceRadios.forEach(radio => {
@@ -3715,7 +3740,6 @@ async function saveSpaceItem() {
             description: desc
         }
     };
-
     if (cloudRef) {
         if (cloudProvider === 'filesystem') {
             reqBody.data.storage_mode = 'filesystem_reference';
@@ -3765,10 +3789,18 @@ async function saveSpaceItem() {
                 if (cloudAccessHint) {
                     formData.append('access_hint', cloudAccessHint);
                 }
+                formData.append('lifecycle_status', lifecycleStatus);
+                formData.append('lifecycle_reason', lifecycleReason);
+                formData.append('archive_reason', archiveReason);
+                formData.append('lifecycle_access_count', lifecycleAccessCount);
                 formData.append('filename', uploadFile ? uploadFile.name : '');
             } else {
                 formData.append('storage_mode', 'filesystem_reference');
                 formData.append('cloud_provider', 'filesystem');
+                formData.append('lifecycle_status', lifecycleStatus);
+                formData.append('lifecycle_reason', lifecycleReason);
+                formData.append('archive_reason', archiveReason);
+                formData.append('lifecycle_access_count', lifecycleAccessCount);
                 formData.append('filename', uploadFile.name || '');
             }
             res = await authFetch(`/api/spaces/item/add?name=${encodeURIComponent(kbNameDisplay)}&database=${encodeURIComponent(dbNameDisplay)}`, {

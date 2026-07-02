@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai/memory"
 
 	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/database"
@@ -93,6 +93,7 @@ func handleListSpaceCategories(w http.ResponseWriter, r *http.Request) {
 			"children":      children,
 			"parents":       cat.ParentIDs,
 			"center_vector": cat.CenterVector,
+			"metadata":      cloneDataMap(cat.Metadata),
 		}
 	}
 
@@ -230,6 +231,35 @@ func handleListSpaceItems(w http.ResponseWriter, r *http.Request) {
 				}
 				if cloudProvider, found := payload["cloud_provider"]; found {
 					t.CloudProvider = fmt.Sprint(cloudProvider)
+				}
+				if lifecycleStatus, found := payload["lifecycle_status"]; found {
+					t.LifecycleStatus = fmt.Sprint(lifecycleStatus)
+				}
+				if lifecycleReason, found := payload["lifecycle_reason"]; found {
+					t.LifecycleReason = fmt.Sprint(lifecycleReason)
+				}
+				if archivedAt, found := payload["archived_at"]; found {
+					switch v := archivedAt.(type) {
+					case int64:
+						t.ArchivedAt = v
+					case int:
+						t.ArchivedAt = int64(v)
+					case float64:
+						t.ArchivedAt = int64(v)
+					}
+				}
+				if archiveReason, found := payload["archive_reason"]; found {
+					t.ArchiveReason = fmt.Sprint(archiveReason)
+				}
+				if accessCount, found := payload["lifecycle_access_count"]; found {
+					switch v := accessCount.(type) {
+					case int:
+						t.LifecycleAccessCount = v
+					case int64:
+						t.LifecycleAccessCount = int(v)
+					case float64:
+						t.LifecycleAccessCount = int(v)
+					}
 				}
 			}
 			if len(t.DocID) > 0 {

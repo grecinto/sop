@@ -20,6 +20,7 @@ type KBDigestRequest struct {
 }
 
 type KBDigestHit struct {
+	ID         string
 	DocID      []string
 	Score      float32
 	Category   string
@@ -94,6 +95,7 @@ func DigestKnowledgeBase(ctx context.Context, kb *KnowledgeBase[map[string]any],
 							continue
 						}
 						mergeDigestHit(merged, KBDigestHit{
+							ID:         hit.ID,
 							DocID:      hit.DocID,
 							Score:      relevance,
 							Category:   extractDigestCategory(hit.Payload),
@@ -119,6 +121,7 @@ func DigestKnowledgeBase(ctx context.Context, kb *KnowledgeBase[map[string]any],
 			}
 			for _, hit := range batch[0] {
 				mergeDigestHit(merged, KBDigestHit{
+					ID:         hit.ID,
 					DocID:      hit.DocID,
 					Score:      hit.Score,
 					Category:   extractDigestCategory(hit.Payload),
