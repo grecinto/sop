@@ -105,12 +105,3 @@ func TestBuildSelectedSpaceResearchQueriesUsesPriorMemory(t *testing.T) {
 		t.Fatalf("expected prior item path to become a research query, got %v", queries)
 	}
 }
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}

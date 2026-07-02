@@ -293,4 +293,29 @@ func TestThreeGates_RoutingArchitecture(t *testing.T) {
 			t.Fatalf("expected routing state to be restored and updated through Gate 2, got %v", payload.Variables["RoutingState"])
 		}
 	})
+
+	t.Run("Gate 2: New Topic Signal Skips Continuation Inheritance", func(t *testing.T) {
+		gen := &RouterTestGen{Response: `{"entity": "Omni", "domain": "FreshDomain", "db_artifacts": [], "layers": []}`}
+		payload := &ai.SessionPayload{Variables: make(map[string]any)}
+		payload.Variables["RoutingState"] = &TaskContextClassification{Entity: "Omni", Domain: "OldDomain"}
+		ctx = context.WithValue(ctx, "session_payload", payload)
+		ctx = ag.applyAskConfig(ctx, ai.NewConfigMap())
+		cfg := ai.NewConfigMap()
+		cfg.Set("is_new_topic", true)
+		ctx = ag.applyAskConfig(ctx, cfg)
+
+		taskCtx, err := ag.evaluateRoutingGates(ctx, "Let's start over with fresh context", gen)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if taskCtx == nil {
+			t.Fatal("expected a routing classification")
+		}
+		if taskCtx.Domain != "FreshDomain" {
+			t.Fatalf("expected new-topic signal to bypass stale MRU continuation and use fresh routing, got domain %q", taskCtx.Domain)
+		}
+		if taskCtx.RoutingGate != RoutingGateDiscovery {
+			t.Fatalf("expected cold-start routing gate for explicit new-topic asks, got %q", taskCtx.RoutingGate)
+		}
+	})
 }

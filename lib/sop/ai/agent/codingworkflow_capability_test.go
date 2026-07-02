@@ -78,6 +78,24 @@ func TestShouldFlushLTMBufferedWritesUsesWindowOrCount(t *testing.T) {
 	}
 }
 
+func TestQueueLTMBufferedWriteFlushesAtThreshold(t *testing.T) {
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	agent.ltmFlushLastFlush = time.Now().Add(-time.Minute)
+
+	var executed int
+	for i := 0; i < LTMFlushMaxCUDItems; i++ {
+		if err := agent.queueLTMBufferedWrite("cud", func(context.Context) error {
+			executed++
+			return nil
+		}); err != nil {
+			t.Fatalf("queue returned error: %v", err)
+		}
+	}
+	if executed == 0 {
+		t.Fatal("expected buffered LTM write to flush when the count threshold is reached")
+	}
+}
+
 func TestBuildSystemPromptIncludesCodingWorkflowMemory(t *testing.T) {
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	agent.service = &Service{session: NewRunnerSession()}
