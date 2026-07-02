@@ -27,6 +27,91 @@ func (p *testAuthProvider) Authenticate(ctx context.Context, username, password 
 	return false, nil, nil
 }
 
+func TestNewSessionStoreUsesGlobalStoreName(t *testing.T) {
+	s := NewSessionStore(time.Minute)
+	if s.storeName != sessionStoreName {
+		t.Fatalf("NewSessionStore().storeName = %q, want %q", s.storeName, sessionStoreName)
+	}
+}
+
+func TestSessionStoreGCResumesFromLastProcessedKey(t *testing.T) {
+	store := NewSessionStore(time.Hour)
+	ctx := context.Background()
+
+	storeTxn, tx, err := store.getStore(ctx)
+	if err != nil {
+		t.Fatalf("getStore() error = %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	for {
+		ok, err := storeTxn.First(ctx)
+		if err != nil {
+			t.Fatalf("First() error while clearing existing sessions: %v", err)
+		}
+		if !ok {
+			break
+		}
+		if _, err := storeTxn.RemoveCurrentItem(ctx); err != nil {
+			t.Fatalf("RemoveCurrentItem() error while clearing existing sessions: %v", err)
+		}
+	}
+
+	for _, key := range []string{"k1", "k2", "k3", "k4"} {
+		record := SessionRecord{
+			Token:            key,
+			RefreshToken:     key + "-refresh",
+			Username:         "alice",
+			Role:             sop.RoleUser,
+			IssuedAt:         time.Now().Add(-2 * time.Hour),
+			ExpiresAt:        time.Now().Add(-time.Hour),
+			RefreshExpiresAt: time.Now().Add(-time.Hour),
+		}
+		if _, err := storeTxn.Add(ctx, key, record); err != nil {
+			t.Fatalf("Add(%q) error = %v", key, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	removed, err := store.collectStaleSessions(ctx, 0, 2)
+	if err != nil {
+		t.Fatalf("collectStaleSessions() first run error = %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("collectStaleSessions() first run removed = %d, want 2", removed)
+	}
+	if got := store.gcCursor; got != "k2" {
+		t.Fatalf("gcCursor after first run = %q, want %q", got, "k2")
+	}
+
+	removed, err = store.collectStaleSessions(ctx, 0, 2)
+	if err != nil {
+		t.Fatalf("collectStaleSessions() second run error = %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("collectStaleSessions() second run removed = %d, want 2", removed)
+	}
+	if got := store.gcCursor; got != "k4" {
+		t.Fatalf("gcCursor after second run = %q, want %q", got, "k4")
+	}
+}
+
+func TestShouldExposeStoreInRBAC_AllowsGlobalSessionsStoreForSystemAdmin(t *testing.T) {
+	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root", Roles: []string{sop.RoleSystemAdmin}})
+	if !shouldExposeStoreInRBAC(ctx, sessionStoreName) {
+		t.Fatalf("shouldExposeStoreInRBAC(%q) = false, want true for system admin", sessionStoreName)
+	}
+}
+
+func TestShouldExposeStoreInRBAC_HidesGlobalSessionsStoreForNonAdmin(t *testing.T) {
+	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}})
+	if shouldExposeStoreInRBAC(ctx, sessionStoreName) {
+		t.Fatalf("shouldExposeStoreInRBAC(%q) = true, want false for non-admin", sessionStoreName)
+	}
+}
+
 func TestAuthenticateUser_ValidCredentials(t *testing.T) {
 	cfg := Config{}
 
@@ -511,7 +596,7 @@ func TestRequireAuth_RedirectsToLoginForProtectedAppPage(t *testing.T) {
 		t.Fatalf("SetUser() error = %v", err)
 	}
 	config.ConfigFile = filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(config.ConfigFile, []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(config.ConfigFile, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -519,14 +604,14 @@ func TestRequireAuth_RedirectsToLoginForProtectedAppPage(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("protected handler should not run when not authenticated")
+		t.Fatalf("protected handler should not run when not authenticated")
 	}))(w, req)
 
 	if w.Code != http.StatusFound {
 		t.Fatalf("expected 302, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := w.Header().Get("Location"); got != "/login?next=%2Fapp" {
-		t.Fatalf("expected redirect to /login?next=/app, got %q", got)
+	if got := w.Header().Get("Location"); got != "/login?return=%2Fapp" {
+		t.Fatalf("expected redirect to /login?return=/app, got %q", got)
 	}
 }
 

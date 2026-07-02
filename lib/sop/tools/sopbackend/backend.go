@@ -2,11 +2,124 @@ package sopbackend
 
 import (
 	"context"
+	log "log/slog"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	aidb "github.com/sharedcode/sop/ai/database"
 )
+
+const (
+	defaultSessionCleanupInterval = 2 * time.Hour
+	defaultSessionGCBatchSize     = 50
+)
+
+func DefaultSessionCleanupInterval() time.Duration {
+	return defaultSessionCleanupInterval
+}
+
+func DefaultSessionGCBatchSize() int {
+	return defaultSessionGCBatchSize
+}
+
+func isReadOnlyContext(id string) bool {
+	lower := strings.ToLower(id)
+	return lower == "sop" || strings.HasPrefix(lower, "memory_")
+}
+
+func registerBuiltinRBACBlueprints() {
+	// Re-register the built-in RBAC blueprints so reused backend instances inherit
+	// the same policy rules as a fresh sopbackend startup.
+	sop.RegisterAssetRBAC(sop.AssetBlueprint{
+		AssetType:   "space",
+		Description: "Space represents a domain or workspace in the system",
+		Endpoints:   []string{string(sop.EndpointSpacesList)},
+		Actions:     []sop.Action{sop.ActionRead, sop.ActionWrite, sop.ActionDelete, sop.ActionAISelect},
+		Evaluator: func(ctx context.Context, entCtx sop.EntitlementContext, action sop.Action, evalState *sop.RBACEvaluationState) bool {
+			if action == sop.ActionAISelect {
+				if isReadOnlyContext(entCtx.AssetID) {
+					return false
+				}
+
+				if evalState != nil && evalState.VectorizedSpaces != nil {
+					if allowed, exists := evalState.VectorizedSpaces[entCtx.AssetID]; exists {
+						return allowed
+					}
+					return false
+				}
+
+				if evalState != nil && evalState.ConfigCache != nil {
+					if allowed, exists := evalState.ConfigCache[entCtx.AssetID]; exists {
+						return allowed
+					}
+				}
+
+				if evalState != nil && evalState.Transaction != nil {
+					dbOpts, err := GetDBOptions(ctx, entCtx.Database)
+					if err == nil {
+						db := aidb.NewDatabase(dbOpts)
+						kb, errKB := db.OpenKnowledgeBase(ctx, entCtx.AssetID, evalState.Transaction, nil, nil, false)
+						if errKB == nil && kb != nil {
+							cfg, cfgErr := kb.GetConfig(ctx)
+							if cfgErr == nil && cfg != nil {
+								allowed := cfg.LastVectorized > 0
+								if evalState.ConfigCache != nil {
+									evalState.ConfigCache[entCtx.AssetID] = allowed
+								}
+								return allowed
+							}
+						}
+					}
+					return false
+				}
+
+				// Fallback slow path (if evaluated outside of handleListSpaces)
+				dbOpts, err := GetDBOptions(ctx, entCtx.Database)
+				if err == nil {
+					db := aidb.NewDatabase(dbOpts)
+					tx, _ := db.BeginTransaction(ctx, sop.ForReading)
+					if tx != nil {
+						kb, errKB := db.OpenKnowledgeBase(ctx, entCtx.AssetID, tx, nil, nil, false)
+						if errKB == nil && kb != nil {
+							cfg, cfgErr := kb.GetConfig(ctx)
+							if cfgErr == nil && cfg != nil {
+								tx.Rollback(ctx)
+								return cfg.LastVectorized > 0
+							}
+						}
+						tx.Rollback(ctx)
+					}
+				}
+
+				return true
+			}
+
+			if isReadOnlyContext(entCtx.AssetID) && entCtx.IsSystemDB && (action == sop.ActionWrite || action == sop.ActionDelete) {
+				return false
+			}
+			return true
+		},
+	})
+
+	sop.RegisterAssetRBAC(sop.AssetBlueprint{
+		AssetType:   "store",
+		Description: "Store represents a schema-backed data collection in the current database",
+		Endpoints:   []string{string(sop.EndpointStoresList)},
+		Actions:     []sop.Action{sop.ActionRead, sop.ActionWrite, sop.ActionDelete},
+		Evaluator: func(ctx context.Context, entCtx sop.EntitlementContext, action sop.Action, evalState *sop.RBACEvaluationState) bool {
+			if entCtx.IsSystemDB && (action == sop.ActionWrite || action == sop.ActionDelete) {
+				return false
+			}
+			if !shouldExposeStoreInRBAC(ctx, entCtx.AssetID) {
+				return false
+			}
+			return sop.Authorize(ctx, sop.ResourceAccess{Visibility: sop.VisibilityPublic}, action)
+		},
+	})
+}
 
 // Backend represents the reusable SOP backend that can be used by both httpserver and sop-daemon.
 type Backend struct {
@@ -29,6 +142,8 @@ func NewBackend(cfg *Config, catalog *ModelCatalog) *Backend {
 
 // Initialize sets up the backend state (agents, RBAC, sessions).
 func (b *Backend) Initialize(ctx context.Context) error {
+	registerBuiltinRBACBlueprints()
+
 	// Sync global state
 	config = *b.Config
 	modelCatalog = *b.ModelCatalog
@@ -122,14 +237,24 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 }
 
-// StartSessionCleanup starts a background goroutine to clean up stale sessions.
-func (b *Backend) StartSessionCleanup(interval, ttl time.Duration) {
+// StartBackgroundService starts the shared background service loop for the backend.
+// It currently handles session cleanup and can host additional periodic work over time.
+func (b *Backend) StartBackgroundService(interval, ttl time.Duration) {
 	go func() {
 		for {
 			time.Sleep(interval)
-			evicted := b.ActiveSessions.RemoveStale(ttl)
-			if evicted > 0 {
-				// Log cleanup if needed
+			if b.ActiveSessions != nil {
+				evicted := b.ActiveSessions.RemoveStale(ttl)
+				if evicted > 0 {
+					// Log cleanup if needed
+				}
+			}
+			if currentTokenFacade() != nil {
+				if store, ok := currentTokenFacade().(*SessionStore); ok && store != nil {
+					if _, err := store.collectStaleSessions(context.Background(), 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
+						log.Warn("background service: failed to collect stale sessions", "error", err)
+					}
+				}
 			}
 		}
 	}()
@@ -138,6 +263,7 @@ func (b *Backend) StartSessionCleanup(interval, ttl time.Duration) {
 // SyncState synchronizes the backend state with global package variables.
 // This is needed because the backend logic uses package-level variables.
 func (b *Backend) SyncState() {
+	registerBuiltinRBACBlueprints()
 	config = *b.Config
 	modelCatalog = *b.ModelCatalog
 	loadedAgents = b.LoadedAgents

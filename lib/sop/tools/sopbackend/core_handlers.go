@@ -43,28 +43,47 @@ func FindExistingConfigFile() string {
 }
 
 func init() {
-	isReadOnlyContext := func(id string) bool {
-		lower := strings.ToLower(id)
-		return lower == "sop" || strings.HasPrefix(lower, "memory_")
-	}
-
 	sop.RegisterAssetRBAC(sop.AssetBlueprint{
 		AssetType:   "space",
 		Description: "Space represents a domain or workspace in the system",
 		Endpoints:   []string{string(sop.EndpointSpacesList)},
 		Actions:     []sop.Action{sop.ActionRead, sop.ActionWrite, sop.ActionDelete, sop.ActionAISelect},
-		Evaluator: func(ctx context.Context, entCtx sop.EntitlementContext, action sop.Action) bool {
+		Evaluator: func(ctx context.Context, entCtx sop.EntitlementContext, action sop.Action, evalState *sop.RBACEvaluationState) bool {
 			if action == sop.ActionAISelect {
-				lower := strings.ToLower(entCtx.AssetID)
-				if lower == "sop" || strings.HasPrefix(lower, "memory_") || lower == "longtermmemory" || lower == "long_term_memory" {
+				if isReadOnlyContext(entCtx.AssetID) {
 					return false
 				}
 
-				// Check if the Space has been vectorized, otherwise it cannot be used by AI.
-				// For performance, handleListSpaces injects a map of vectorized spaces into the context.
-				type vecMapKey struct{}
-				if vMap, ok := ctx.Value("vectorized_spaces").(map[string]bool); ok {
-					return vMap[entCtx.AssetID]
+				if evalState != nil && evalState.VectorizedSpaces != nil {
+					if allowed, exists := evalState.VectorizedSpaces[entCtx.AssetID]; exists {
+						return allowed
+					}
+					return false
+				}
+
+				if evalState != nil && evalState.ConfigCache != nil {
+					if allowed, exists := evalState.ConfigCache[entCtx.AssetID]; exists {
+						return allowed
+					}
+				}
+
+				if evalState != nil && evalState.Transaction != nil {
+					dbOpts, err := GetDBOptions(ctx, entCtx.Database)
+					if err == nil {
+						db := aidb.NewDatabase(dbOpts)
+						kb, errKB := db.OpenKnowledgeBase(ctx, entCtx.AssetID, evalState.Transaction, nil, nil, false)
+						if errKB == nil && kb != nil {
+							cfg, cfgErr := kb.GetConfig(ctx)
+							if cfgErr == nil && cfg != nil {
+								allowed := cfg.LastVectorized > 0
+								if evalState.ConfigCache != nil {
+									evalState.ConfigCache[entCtx.AssetID] = allowed
+								}
+								return allowed
+							}
+						}
+					}
+					return false
 				}
 
 				// Fallback slow path (if evaluated outside of handleListSpaces)
@@ -100,7 +119,7 @@ func init() {
 		Description: "Store represents a schema-backed data collection in the current database",
 		Endpoints:   []string{string(sop.EndpointStoresList)},
 		Actions:     []sop.Action{sop.ActionRead, sop.ActionWrite, sop.ActionDelete},
-		Evaluator: func(ctx context.Context, entCtx sop.EntitlementContext, action sop.Action) bool {
+		Evaluator: func(ctx context.Context, entCtx sop.EntitlementContext, action sop.Action, evalState *sop.RBACEvaluationState) bool {
 			if entCtx.IsSystemDB && (action == sop.ActionWrite || action == sop.ActionDelete) {
 				return false
 			}
@@ -947,8 +966,8 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 	if strings.HasSuffix(storeName, "_vecs") || strings.HasSuffix(storeName, "_by_time") {
 		return false
 	}
-	if strings.EqualFold(storeName, "sessions") {
-		return false
+	if strings.EqualFold(storeName, sessionStoreName) {
+		return isSystemAdminRoleInContext(ctx)
 	}
 
 	if strings.HasPrefix(storeName, "stm_") {
@@ -1086,12 +1105,16 @@ func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 
 	if result != nil {
 		for _, name := range result {
-			if strings.HasPrefix(name, expectedMemoryPrefix) {
-				if name == expectedMemoryFull {
-					filtered = append(filtered, name)
+			trimmedName := strings.TrimSpace(name)
+			if trimmedName == "" {
+				continue
+			}
+			if strings.HasPrefix(trimmedName, expectedMemoryPrefix) {
+				if trimmedName == expectedMemoryFull {
+					filtered = append(filtered, trimmedName)
 				}
 			} else {
-				filtered = append(filtered, name)
+				filtered = append(filtered, trimmedName)
 			}
 		}
 	}
@@ -1101,9 +1124,13 @@ func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 		filtered = make([]string, 0)
 	}
 
-	// PRE-FETCH vectorization status and display labels in one transaction for performance
+	// PRE-FETCH vectorization status and display labels in one transaction for performance.
+	// Reuse the same transaction for the later RBAC evaluation so each space can consult the same open KB handles.
+	// Keep batch-scoped state explicit here (transaction + config cache) and pass it into the RBAC evaluator
+	// instead of relying on context values for hot-path state propagation.
 	vectorizedMap := make(map[string]bool)
 	displayNames := make(map[string]string, len(filtered))
+	configCache := make(map[string]bool)
 	tx, _ := db.BeginTransaction(ctx, sop.ForReading)
 	if tx != nil {
 		for _, name := range filtered {
@@ -1114,19 +1141,31 @@ func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 					if cfg.LastVectorized > 0 {
 						vectorizedMap[name] = true
 					}
+					displayNames[name] = resolveSpaceDisplayName(name, cfg)
+				} else {
+					displayNames[name] = resolveSpaceDisplayName(name, nil)
 				}
-				displayNames[name] = resolveSpaceDisplayName(name, cfg)
 			} else {
 				displayNames[name] = resolveSpaceDisplayName(name, nil)
 			}
 		}
-		tx.Rollback(ctx)
 	}
-	ctx = context.WithValue(ctx, "vectorized_spaces", vectorizedMap)
+	eligibleSpaces := make([]string, 0, len(filtered))
+	for _, name := range filtered {
+		if vectorizedMap[name] {
+			eligibleSpaces = append(eligibleSpaces, name)
+		}
+	}
+
+	evalState := &sop.RBACEvaluationState{
+		Transaction:      tx,
+		ConfigCache:      configCache,
+		VectorizedSpaces: vectorizedMap,
+	}
 
 	itemRBAC := make(map[string]sop.ContextRBACMap)
-	for _, name := range filtered {
-		itemMap := sop.ResolveRBACMap(ctx, "space", sop.EntitlementContext{AssetID: name, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil)
+	for _, name := range eligibleSpaces {
+		itemMap := sop.ResolveRBACMapWithState(ctx, "space", sop.EntitlementContext{AssetID: name, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil, evalState)
 		// Default to allowed, only ship the exclusion rules over the wire
 		exclusionsOnly := make(sop.ContextRBACMap)
 		for k, v := range itemMap {
@@ -1139,11 +1178,16 @@ func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if tx != nil {
+		tx.Rollback(ctx)
+	}
+
 	bundled := sop.BundledResponse{
-		Data:         filtered,
-		RBAC:         sop.ResolveRBACMap(ctx, "space", sop.EntitlementContext{AssetID: dbName, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil),
-		ItemRBAC:     itemRBAC,
-		DisplayNames: displayNames,
+		Data:             eligibleSpaces,
+		RBAC:             sop.ResolveRBACMapWithState(ctx, "space", sop.EntitlementContext{AssetID: dbName, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil, evalState),
+		ItemRBAC:         itemRBAC,
+		DisplayNames:     displayNames,
+		VectorizedSpaces: vectorizedMap,
 	}
 
 	json.NewEncoder(w).Encode(bundled)

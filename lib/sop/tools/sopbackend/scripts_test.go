@@ -231,8 +231,24 @@ func TestCategoryTreeRendersLifecycleCue(t *testing.T) {
 	}
 
 	text := string(content)
-	if !strings.Contains(text, "renderCategoryLifecycleBadge") {
-		t.Fatalf("expected category tree lifecycle badge renderer in template")
+	if !strings.Contains(text, "renderCategoryLifecycleIndicator") {
+		t.Fatalf("expected category tree lifecycle indicator renderer in template")
+	}
+	if strings.Contains(text, "categoryBadgeText") {
+		t.Fatalf("expected category tree lifecycle rendering to use a compact indicator instead of a full badge")
+	}
+}
+
+func TestItemCardsRenderLifecycleFieldsWithSafeFallbacks(t *testing.T) {
+	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("failed to read template: %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "const lifecycleStatus = (t.lifecycle_status || t.lifecycleStatus || (t.data && (t.data.lifecycle_status || t.data.lifecycleStatus)) || '')") {
+		t.Fatalf("expected item card template to read lifecycle metadata with safe fallback values")
 	}
 }
 

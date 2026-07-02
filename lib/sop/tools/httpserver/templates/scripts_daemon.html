@@ -47,6 +47,14 @@
             this.bootstrapping = true;
 
             try {
+                // Require HQ re-login after the configured interval before using daemon auth.
+                if (this.isHQLoginRequired()) {
+                    console.debug('[DaemonAuth] HQ login required for subscription monitoring');
+                    this.clearTokens();
+                    this.bootstrapping = false;
+                    return false;
+                }
+
                 // Check if we already have valid tokens
                 if (this.hasValidToken()) {
                     this.bootstrapping = false;
@@ -114,6 +122,11 @@
          * @returns {boolean}
          */
         hasValidToken() {
+            if (this.isHQLoginRequired()) {
+                this.clearTokens();
+                return false;
+            }
+
             if (!this.accessToken || !this.tokenExpiry) {
                 return false;
             }

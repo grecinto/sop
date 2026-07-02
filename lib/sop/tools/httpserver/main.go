@@ -219,8 +219,8 @@ func main() {
 	sopbackend.RegisterSwaggerHandlers(http.DefaultServeMux, "")
 	sopbackend.RegisterMonitorabilityHandlers(http.DefaultServeMux)
 
-	// Start session cleanup
-	sopbackend.StartSessionCleanup(1*time.Minute, 2*time.Hour)
+	// Start shared background services
+	sopbackend.StartBackgroundService(sopbackend.DefaultSessionCleanupInterval(), 2*time.Hour)
 
 	// Start Server
 	addr := fmt.Sprintf(":%d", config.Port)

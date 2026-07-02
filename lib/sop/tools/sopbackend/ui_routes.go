@@ -123,25 +123,16 @@ func (r *UIRouter) handleLoginPage(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *UIRouter) handleHQLoginPage(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if r.Templates == nil {
-		http.Error(w, "templates not initialized", http.StatusInternalServerError)
-		return
-	}
-
 	returnTo := req.URL.Query().Get("return")
 	if returnTo == "" {
 		returnTo = "/app"
 	}
 
-	data := map[string]any{
-		"Version":   sop.Version,
-		"ReturnTo":  returnTo,
-		"HQBaseURL": strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")),
+	loginURL := "/login?return=" + url.QueryEscape(returnTo)
+	if message := req.URL.Query().Get("message"); message != "" {
+		loginURL += "&message=" + url.QueryEscape(message)
 	}
-	if err := r.executeTemplateWithFallback(w, data, "hq_login.html", "login.html", "index.html"); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	http.Redirect(w, req, loginURL, http.StatusFound)
 }
 
 func (r *UIRouter) handleIndex(w http.ResponseWriter, req *http.Request) {

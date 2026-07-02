@@ -1211,10 +1211,21 @@
             console.warn('[refreshSpacesList] falling back to empty space list', err);
         }
         let kbs = bundle && bundle.data ? bundle.data : [];
+        const vectorizedMap = bundle && bundle.vectorized_spaces ? bundle.vectorized_spaces : {};
+        if (vectorizedMap && typeof vectorizedMap === 'object') {
+            kbs = kbs.filter(kb => {
+                if (typeof vectorizedMap[kb] === 'boolean') {
+                    return vectorizedMap[kb];
+                }
+                return true;
+            });
+        }
         const kbList = document.getElementById('kb-list');
         const domainSelect = document.getElementById('domain-select');
 
-        kbList.innerHTML = '';
+        if (kbList) {
+            kbList.innerHTML = '';
+        }
 
         if (domainSelect) {
             Array.from(domainSelect.options).forEach(opt => {
@@ -1225,42 +1236,47 @@
         }
 
         if (!kbs || kbs.length === 0) {
-            kbList.innerHTML = '<li>No Spaces found</li>';
+            if (kbList) {
+                kbList.innerHTML = '<li>No Spaces found</li>';
+            }
             return;
         }
 
         let selectedElement = null;
         let selectedName = null;
+        let addedEligibleOptions = 0;
         kbs.forEach(kb => {
             const displayName = (bundle.display_names && bundle.display_names[kb]) ? bundle.display_names[kb] : kb;
             const labelText = displayName.charAt(0).toUpperCase() + displayName.slice(1);
-            const li = document.createElement('li');
-            li.textContent = labelText;
-            li.title = kb;
-            li.classList.add('truncate-text');
-            li.setAttribute('data-space-name', kb);
-            li.onclick = () => selectSpace(kb, li);
-            li.addEventListener('dragover', (event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = 'copy';
-                li.style.background = 'var(--hover-bg)';
-            });
-            li.addEventListener('dragleave', () => {
-                li.style.background = '';
-            });
-            li.addEventListener('drop', (event) => {
-                event.preventDefault();
-                li.style.background = '';
-                const sourceStoreName = event.dataTransfer?.getData('text/plain') || window._digestSourceStoreName || '';
-                if (!sourceStoreName) {
-                    return;
-                }
-                window.openDigestSourceStoreModal(sourceStoreName, kb);
-            });
-            kbList.appendChild(li);
+            if (kbList) {
+                const li = document.createElement('li');
+                li.textContent = labelText;
+                li.title = kb;
+                li.classList.add('truncate-text');
+                li.setAttribute('data-space-name', kb);
+                li.onclick = () => selectSpace(kb, li);
+                li.addEventListener('dragover', (event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'copy';
+                    li.style.background = 'var(--hover-bg)';
+                });
+                li.addEventListener('dragleave', () => {
+                    li.style.background = '';
+                });
+                li.addEventListener('drop', (event) => {
+                    event.preventDefault();
+                    li.style.background = '';
+                    const sourceStoreName = event.dataTransfer?.getData('text/plain') || window._digestSourceStoreName || '';
+                    if (!sourceStoreName) {
+                        return;
+                    }
+                    window.openDigestSourceStoreModal(sourceStoreName, kb);
+                });
+                kbList.appendChild(li);
+            }
 
             if (normalizedSpaceToSelect && kb === normalizedSpaceToSelect) {
-                selectedElement = li;
+                selectedElement = kbList ? kbList.lastElementChild : null;
                 selectedName = kb;
             }
 
@@ -1278,9 +1294,20 @@
                     opt.textContent = labelText;
                     opt.setAttribute('data-dynamic', 'true');
                     domainSelect.appendChild(opt);
+                    addedEligibleOptions += 1;
                 }
             }
         });
+
+        if (domainSelect) {
+            if (addedEligibleOptions > 0) {
+                domainSelect.style.display = 'inline-block';
+                domainSelect.removeAttribute('aria-hidden');
+            } else {
+                domainSelect.style.display = 'none';
+                domainSelect.setAttribute('aria-hidden', 'true');
+            }
+        }
 
         if (selectedElement && selectedName) {
             const kbContainer = document.getElementById('kb-list-container');
@@ -2510,28 +2537,42 @@
 
         // Recursively render tree
         const treeRoot = document.querySelector('#kb-category-tree');
-        function renderCategoryLifecycleBadge(cat) {
+        function renderCategoryLifecycleIndicator(cat) {
             if (!cat) return null;
             const metadata = (cat.metadata && typeof cat.metadata === 'object') ? cat.metadata : {};
+            const hasLifecycleFields = metadata && (
+                Object.prototype.hasOwnProperty.call(metadata, 'lifecycle_status') ||
+                Object.prototype.hasOwnProperty.call(metadata, 'lifecycleStatus') ||
+                Object.prototype.hasOwnProperty.call(metadata, 'lifecycle_reason') ||
+                Object.prototype.hasOwnProperty.call(metadata, 'lifecycleReason') ||
+                Object.prototype.hasOwnProperty.call(metadata, 'lifecycle_access_count') ||
+                Object.prototype.hasOwnProperty.call(metadata, 'lifecycleAccessCount')
+            );
+            if (!hasLifecycleFields) return null;
+
             const lifecycleStatus = (metadata.lifecycle_status || metadata.lifecycleStatus || '').toString().trim().toLowerCase();
             const isActive = !lifecycleStatus || lifecycleStatus === 'active';
-            const badgeText = isActive ? 'Active' : (lifecycleStatus === 'stale' ? 'Stale' : (lifecycleStatus === 'archived' || lifecycleStatus === 'retired' || lifecycleStatus === 'inactive' ? 'Archived' : lifecycleStatus.charAt(0).toUpperCase() + lifecycleStatus.slice(1)));
-            const badgeColor = isActive ? '#2f855a' : (lifecycleStatus === 'stale' ? '#8a6d3b' : '#8b3a3a');
-            const badgeTitle = isActive ? 'Repository category is active' : (lifecycleStatus === 'stale' ? 'Repository category is stale' : 'Repository category is archived');
-            const badge = document.createElement('span');
-            badge.textContent = badgeText;
-            badge.title = badgeTitle;
-            badge.style.marginLeft = '6px';
-            badge.style.padding = '1px 6px';
-            badge.style.borderRadius = '999px';
-            badge.style.fontSize = '0.7em';
-            badge.style.fontWeight = '700';
-            badge.style.color = '#fff';
-            badge.style.backgroundColor = badgeColor;
-            badge.style.display = 'inline-flex';
-            badge.style.alignItems = 'center';
-            badge.style.whiteSpace = 'nowrap';
-            return badge;
+            const indicatorTitle = isActive ? 'Repository category is active' : (lifecycleStatus === 'stale' ? 'Repository category is stale' : 'Repository category is archived');
+            const indicatorLabel = isActive ? 'A' : (lifecycleStatus === 'stale' ? 'S' : 'R');
+            const indicatorColor = isActive ? '#2f855a' : (lifecycleStatus === 'stale' ? '#6b7280' : '#9ca3af');
+            const indicator = document.createElement('span');
+            indicator.title = indicatorTitle;
+            indicator.textContent = indicatorLabel;
+            indicator.style.marginLeft = '6px';
+            indicator.style.width = '12px';
+            indicator.style.height = '12px';
+            indicator.style.borderRadius = '50%';
+            indicator.style.backgroundColor = indicatorColor;
+            indicator.style.color = '#fff';
+            indicator.style.display = 'inline-flex';
+            indicator.style.alignItems = 'center';
+            indicator.style.justifyContent = 'center';
+            indicator.style.fontSize = '7px';
+            indicator.style.fontWeight = '700';
+            indicator.style.lineHeight = '1';
+            indicator.style.flexShrink = '0';
+            indicator.style.opacity = '0.95';
+            return indicator;
         }
 
         function renderTreeNodes(catList, container, depth=0) {
@@ -2570,7 +2611,7 @@
                 titleSpan.style.textOverflow = 'ellipsis';
                 titleSpan.title = cat.name;
 
-                const badge = renderCategoryLifecycleBadge(cat);
+                const indicator = renderCategoryLifecycleIndicator(cat);
 
                 const childrenContainer = document.createElement('ul');
                 childrenContainer.style.listStyle = 'none';
@@ -2643,8 +2684,8 @@
                 titleContainer.style.overflow = 'hidden';
                 titleContainer.appendChild(arrowSpan);
                 titleContainer.appendChild(titleSpan);
-                if (badge) {
-                    titleContainer.appendChild(badge);
+                if (indicator) {
+                    titleContainer.appendChild(indicator);
                 }
                 if (!isReadOnlyKB) {
                     titleContainer.appendChild(addSubBtn);
@@ -2842,47 +2883,45 @@
                 }
 
                 const categoryMeta = (catObj && catObj.metadata && typeof catObj.metadata === 'object') ? catObj.metadata : {};
-                const categoryLifecycleStatus = (categoryMeta.lifecycle_status || categoryMeta.lifecycleStatus || '').toString().trim().toLowerCase();
-                const isCategoryActive = !categoryLifecycleStatus || categoryLifecycleStatus === 'active';
-                const categoryBadgeText = isCategoryActive ? 'Active' : (categoryLifecycleStatus === 'stale' ? 'Stale' : (categoryLifecycleStatus === 'archived' || categoryLifecycleStatus === 'retired' || categoryLifecycleStatus === 'inactive' ? 'Archived' : categoryLifecycleStatus.charAt(0).toUpperCase() + categoryLifecycleStatus.slice(1)));
-                const categoryBadgeColor = isCategoryActive ? '#2f855a' : (categoryLifecycleStatus === 'stale' ? '#8a6d3b' : '#8b3a3a');
-                const categoryBadgeTitle = isCategoryActive ? 'Repository category is active' : (categoryLifecycleStatus === 'stale' ? 'Repository category is stale' : 'Repository category is archived');
-                const categoryBadge = document.createElement('span');
-                categoryBadge.textContent = categoryBadgeText;
-                categoryBadge.title = categoryBadgeTitle;
-                categoryBadge.style.marginLeft = '10px';
-                categoryBadge.style.display = 'inline-flex';
-                categoryBadge.style.alignItems = 'center';
-                categoryBadge.style.padding = '3px 8px';
-                categoryBadge.style.borderRadius = '999px';
-                categoryBadge.style.fontSize = '0.75em';
-                categoryBadge.style.fontWeight = '700';
-                categoryBadge.style.color = '#fff';
-                categoryBadge.style.backgroundColor = categoryBadgeColor;
-                categoryBadge.style.textTransform = 'uppercase';
-                headerTitle.appendChild(categoryBadge);
+                const hasCategoryLifecycleMetadata = categoryMeta && (
+                    Object.prototype.hasOwnProperty.call(categoryMeta, 'lifecycle_status') ||
+                    Object.prototype.hasOwnProperty.call(categoryMeta, 'lifecycleStatus') ||
+                    Object.prototype.hasOwnProperty.call(categoryMeta, 'lifecycle_reason') ||
+                    Object.prototype.hasOwnProperty.call(categoryMeta, 'lifecycleReason') ||
+                    Object.prototype.hasOwnProperty.call(categoryMeta, 'lifecycle_access_count') ||
+                    Object.prototype.hasOwnProperty.call(categoryMeta, 'lifecycleAccessCount')
+                );
+                if (hasCategoryLifecycleMetadata) {
+                    const categoryLifecycleStatus = (categoryMeta.lifecycle_status || categoryMeta.lifecycleStatus || '').toString().trim().toLowerCase();
+                    const isCategoryActive = !categoryLifecycleStatus || categoryLifecycleStatus === 'active';
+                    const categoryIndicator = renderCategoryLifecycleIndicator(catObj);
+                    if (categoryIndicator) {
+                        categoryIndicator.style.marginLeft = '10px';
+                        headerTitle.appendChild(categoryIndicator);
+                    }
 
-                if (!isReadOnlyKB && !isCategoryActive) {
-                    const touchBtn = document.createElement('span');
-                    touchBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0a1 1 0 0 1 1 1v7.086l1.293-1.293a1 1 0 0 1 1.414 1.414l-3 3a1 1 0 0 1-1.414 0l-3-3A1 1 0 1 1 4.293 5.793L5.586 7.086V1a1 1 0 0 1 1-1zm-5 13a1 1 0 0 1 1 1v1h8v-1a1 1 0 1 1 2 0v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1a1 1 0 0 1 1-1z"/></svg>';
-                    touchBtn.title = 'Reactivate repository state';
-                    touchBtn.style.marginLeft = '8px';
-                    touchBtn.style.cursor = 'pointer';
-                    touchBtn.style.display = 'inline-flex';
-                    touchBtn.style.alignItems = 'center';
-                    touchBtn.style.color = '#2f855a';
-                    touchBtn.onclick = (e) => {
-                        e.stopPropagation();
-                        showConfirm(
-                            'Proceed to reactivate the repository category and return it to an active state?',
-                            () => window.reactivateCategoryLifecycle(catObj, spaceName, categoryName, offset, limit, lastCatId, lastItemId),
-                            null,
-                            'Reactivate Repository',
-                            'Proceed',
-                            'Cancel'
-                        );
-                    };
-                    headerTitle.appendChild(touchBtn);
+                    if (!isReadOnlyKB && !isCategoryActive) {
+                        const touchBtn = document.createElement('span');
+                        touchBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0a1 1 0 0 1 1 1v7.086l1.293-1.293a1 1 0 0 1 1.414 1.414l-3 3a1 1 0 0 1-1.414 0l-3-3A1 1 0 1 1 4.293 5.793L5.586 7.086V1a1 1 0 0 1 1-1zm-5 13a1 1 0 0 1 1 1v1h8v-1a1 1 0 1 1 2 0v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1a1 1 0 0 1 1-1z"/></svg>';
+                        touchBtn.title = 'Reactivate repository state';
+                        touchBtn.style.marginLeft = '8px';
+                        touchBtn.style.cursor = 'pointer';
+                        touchBtn.style.display = 'inline-flex';
+                        touchBtn.style.alignItems = 'center';
+                        touchBtn.style.color = '#2f855a';
+                        touchBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            showConfirm(
+                                'Proceed to reactivate the repository category and return it to an active state?',
+                                () => window.reactivateCategoryLifecycle(catObj, spaceName, categoryName, offset, limit, lastCatId, lastItemId),
+                                null,
+                                'Reactivate Repository',
+                                'Proceed',
+                                'Cancel'
+                            );
+                        };
+                        headerTitle.appendChild(touchBtn);
+                    }
                 }
             }
 
@@ -2976,6 +3015,10 @@
                     const itemRef = window.getItemPreviewReference(t);
                     const itemStorageMode = (t.storage_mode || t.storageMode || (t.data && (t.data.storage_mode || t.data.storageMode)) || '').toString();
                     const itemCloudProvider = (t.cloud_provider || t.cloudProvider || (t.data && (t.data.cloud_provider || t.data.cloudProvider)) || '').toString();
+                    const lifecycleStatus = (t.lifecycle_status || t.lifecycleStatus || (t.data && (t.data.lifecycle_status || t.data.lifecycleStatus)) || '').toString();
+                    const lifecycleReason = (t.lifecycle_reason || t.lifecycleReason || (t.data && (t.data.lifecycle_reason || t.data.lifecycleReason)) || '').toString();
+                    const archiveReason = (t.archive_reason || t.archiveReason || (t.data && (t.data.archive_reason || t.data.archiveReason)) || '').toString();
+                    const archivedAt = (t.archived_at || t.archivedAt || (t.data && (t.data.archived_at || t.data.archivedAt)) || '').toString();
                     const mediaPreviewHtml = window.getItemMediaPreviewHtml(t, primaryDocID);
                     const displayMode = window._spaceItemDisplayMode || 'text';
                     let descHtml = '';

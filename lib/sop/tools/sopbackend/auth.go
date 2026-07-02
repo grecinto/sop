@@ -677,13 +677,105 @@ type SessionStore struct {
 	ttl        time.Duration
 	refreshTTL time.Duration
 	storeName  string
+	gcCursor   string
+}
+
+func (s *SessionStore) collectStaleSessions(ctx context.Context, grace time.Duration, maxRecords int) (int, error) {
+	s.mu.Lock()
+	cursor := s.gcCursor
+	s.mu.Unlock()
+
+	store, tx, err := s.getStore(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	var records []SessionRecord
+	var startFromFirst bool
+	var lastProcessedKey string
+	if cursor == "" {
+		startFromFirst = true
+	}
+
+	if startFromFirst {
+		if ok, err := store.First(ctx); err != nil {
+			return 0, fmt.Errorf("failed to iterate sessions for garbage collection: %v", err)
+		} else if !ok {
+			_ = tx.Commit(ctx)
+			return 0, nil
+		}
+	} else {
+		if ok, err := store.Find(ctx, cursor, false); err != nil {
+			if ok, err := store.First(ctx); err != nil {
+				return 0, fmt.Errorf("failed to reset session garbage collection cursor: %v", err)
+			} else if !ok {
+				_ = tx.Commit(ctx)
+				return 0, nil
+			}
+		} else if !ok {
+			if ok, err := store.First(ctx); err != nil {
+				return 0, fmt.Errorf("failed to reset session garbage collection cursor: %v", err)
+			} else if !ok {
+				_ = tx.Commit(ctx)
+				return 0, nil
+			}
+		} else {
+			if ok, err := store.Next(ctx); err != nil || !ok {
+				if ok, err := store.First(ctx); err != nil {
+					return 0, fmt.Errorf("failed to wrap session garbage collection cursor: %v", err)
+				} else if !ok {
+					_ = tx.Commit(ctx)
+					return 0, nil
+				}
+			}
+		}
+	}
+
+	for len(records) < maxRecords {
+		record, err := store.GetCurrentValue(ctx)
+		if err != nil {
+			break
+		}
+		records = append(records, record)
+		if record.Token != "" {
+			lastProcessedKey = record.Token
+		}
+		if ok, err := store.Next(ctx); err != nil || !ok {
+			break
+		}
+	}
+
+	removed := 0
+	now := time.Now().UTC()
+	for _, record := range records {
+		if now.Add(-grace).Before(record.ExpiresAt) && now.Add(-grace).Before(record.RefreshExpiresAt) {
+			continue
+		}
+		if err := removeSessionRecord(ctx, store, record); err != nil {
+			log.Warn("session GC: failed to remove stale session", "token_prefix", tokenPrefix(record.Token), "error", err)
+			continue
+		}
+		removed++
+	}
+
+	if lastProcessedKey != "" {
+		s.mu.Lock()
+		s.gcCursor = lastProcessedKey
+		s.mu.Unlock()
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return removed, fmt.Errorf("failed to commit session garbage collection: %v", err)
+	}
+	return removed, nil
 }
 
 func NewSessionStore(ttl time.Duration) *SessionStore {
 	if ttl <= 0 {
 		ttl = defaultSessionTTL
 	}
-	return &SessionStore{ttl: ttl, refreshTTL: defaultRefreshTTL, storeName: fmt.Sprintf("sessions-%d", time.Now().UTC().UnixNano())}
+	return &SessionStore{ttl: ttl, refreshTTL: defaultRefreshTTL, storeName: sessionStoreName}
 }
 
 func newToken() (string, error) {
@@ -1787,6 +1879,16 @@ func isRegularAdminRoleInContext(ctx context.Context) bool {
 	return false
 }
 
+func isSystemAdminRoleInContext(ctx context.Context) bool {
+	auth := sop.GetAuthFromContext(ctx)
+	for _, role := range auth.Roles {
+		if strings.EqualFold(role, sop.RoleSystemAdmin) {
+			return true
+		}
+	}
+	return auth.IsSystem
+}
+
 func (c *Config) IsAdminOverride(ctx context.Context, username, password, legacyToken string) bool {
 	if ok, user, err := c.Authenticate(username, password); err == nil && ok && user != nil && (sop.IsAdminRole(user.Role) || strings.EqualFold(user.Username, "root")) {
 		return true
@@ -1903,7 +2005,7 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		log.Debug("requireAuth: checking auth token", "path", r.URL.Path, "has_token", token != "")
 		if token == "" {
 			log.Warn("requireAuth: unauthenticated redirect", "path", r.URL.Path, "reason", "missing session token", "method", r.Method)
-			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			http.Redirect(w, r, "/login?return="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
 
@@ -1915,7 +2017,7 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 				reason = strings.ToLower(err.Error())
 			}
 			log.Warn("requireAuth: unauthenticated redirect", "path", r.URL.Path, "reason", reason, "error", err, "ok", ok, "method", r.Method, "token_prefix", tokenPrefix(token))
-			http.Redirect(w, r, "/login", http.StatusFound)
+			http.Redirect(w, r, "/login?return="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 			return
 		}
 		log.Debug("requireAuth: token accepted", "path", r.URL.Path, "user", user.Username, "role", user.Role)

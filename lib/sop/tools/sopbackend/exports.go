@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	log "log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -389,14 +390,24 @@ func RegisterAllHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 }
 
-// StartSessionCleanup starts a background goroutine to clean up stale sessions
-func StartSessionCleanup(interval, ttl time.Duration) {
+// StartBackgroundService starts the shared background service loop for the backend.
+// It currently handles session cleanup and can host additional periodic work over time.
+func StartBackgroundService(interval, ttl time.Duration) {
 	go func() {
 		for {
 			time.Sleep(interval)
-			evicted := activeSessions.RemoveStale(ttl)
-			if evicted > 0 {
-				// Log cleanup if needed
+			if activeSessions != nil {
+				evicted := activeSessions.RemoveStale(ttl)
+				if evicted > 0 {
+					// Log cleanup if needed
+				}
+			}
+			if currentTokenFacade() != nil {
+				if store, ok := currentTokenFacade().(*SessionStore); ok && store != nil {
+					if _, err := store.collectStaleSessions(context.Background(), 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
+						log.Warn("background service: failed to collect stale sessions", "error", err)
+					}
+				}
 			}
 		}
 	}()

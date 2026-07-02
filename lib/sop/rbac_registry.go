@@ -12,8 +12,12 @@ type AssetBlueprint struct {
 	Endpoints   []string // UI API endpoints related to this asset
 	Actions     []Action // Capabilities: Read, Write, Delete, Execute
 
-	// Evaluator executes the actual permission check for a specific asset instance or context
-	Evaluator func(ctx context.Context, entitlementCtx EntitlementContext, action Action) bool
+	// Evaluator executes the actual permission check for a specific asset instance or context.
+	// Optional evaluation state can be passed explicitly for batch-oriented flows.
+	// IMPORTANT: keep batch-scoped state explicit here (for example, shared transaction/cache state)
+	// rather than threading it through context values. Hot paths should not rely on implicit context
+	// state that is easy to miss during maintenance or review.
+	Evaluator func(ctx context.Context, entitlementCtx EntitlementContext, action Action, evalState *RBACEvaluationState) bool
 }
 
 var (

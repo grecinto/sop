@@ -730,6 +730,9 @@
         const header = widget.querySelector('.chat-header');
         registerMainWindowFloaterCleanupListener();
         applyChatRuntimeSelection();
+        if (currentDatabase && typeof refreshSpacesList === 'function') {
+            void refreshSpacesList(currentDatabase);
+        }
         if (window.location.search.includes('chatFloater=1')) {
             initializeChatFloaterMode();
         }

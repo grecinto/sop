@@ -26,10 +26,11 @@ type ContextRBACMap map[UICapability]bool
 
 // BundledResponse represents the standard JSON payload structure containing both the domain data and the paired RBAC map.
 type BundledResponse struct {
-	Data         interface{}               `json:"data"`
-	RBAC         ContextRBACMap            `json:"rbac,omitempty"`
-	ItemRBAC     map[string]ContextRBACMap `json:"item_rbac,omitempty"`
-	DisplayNames map[string]string         `json:"display_names,omitempty"`
+	Data             interface{}               `json:"data"`
+	RBAC             ContextRBACMap            `json:"rbac,omitempty"`
+	ItemRBAC         map[string]ContextRBACMap `json:"item_rbac,omitempty"`
+	DisplayNames     map[string]string         `json:"display_names,omitempty"`
+	VectorizedSpaces map[string]bool           `json:"vectorized_spaces,omitempty"`
 }
 
 // ActionToUICapability maps an internal Action to the UI consumable Capability string
@@ -57,8 +58,23 @@ type EntitlementContext struct {
 	UserID     string
 }
 
+// RBACEvaluationState carries optional batch-scoped state for expensive policy evaluations.
+// Keep this explicit and pass it into ResolveRBACMapWithState/ResolveRBACMap when a caller is
+// processing many assets in one pass (for example, a spaces list). This avoids hidden context state
+// and makes the performance-sensitive dependency graph obvious during code review.
+type RBACEvaluationState struct {
+	Transaction      Transaction
+	ConfigCache      map[string]bool
+	VectorizedSpaces map[string]bool
+}
+
 // ResolveRBACMap evaluates the dynamic AssetBlueprint for a functional context (e.g., current space/store), delegating to the core evaluator.
 func ResolveRBACMap(ctx context.Context, assetType string, entitlementCtx EntitlementContext, getLocalAccess func() ResourceAccess) ContextRBACMap {
+	return ResolveRBACMapWithState(ctx, assetType, entitlementCtx, getLocalAccess, nil)
+}
+
+// ResolveRBACMapWithState evaluates the dynamic AssetBlueprint while optionally passing batch-scoped state.
+func ResolveRBACMapWithState(ctx context.Context, assetType string, entitlementCtx EntitlementContext, getLocalAccess func() ResourceAccess, evalState *RBACEvaluationState) ContextRBACMap {
 	bp, exists := GetAssetBlueprint(assetType)
 	if !exists {
 		return make(ContextRBACMap) // Safety fallback
@@ -74,7 +90,7 @@ func ResolveRBACMap(ctx context.Context, assetType string, entitlementCtx Entitl
 	for _, action := range bp.Actions {
 		uiCap := ActionToUICapability(action)
 		if bp.Evaluator != nil {
-			capabilities[uiCap] = bp.Evaluator(ctx, entitlementCtx, action)
+			capabilities[uiCap] = bp.Evaluator(ctx, entitlementCtx, action, evalState)
 		} else {
 			capabilities[uiCap] = CanPerformAction(ctx, entitlementCtx.AssetID, localAccess, action)
 		}

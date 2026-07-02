@@ -3,6 +3,26 @@
     const setupWizardAIConfigDefaults = {{.SetupWizardAIConfigJSON}};
     const setupWizardModelCatalog = {{.ModelCatalogJSON}};
 
+    function getStoredAIConfig() {
+        const raw = localStorage.getItem('sop_ai_config');
+        if (!raw) return {};
+        try {
+            return JSON.parse(raw) || {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function setStoredAIConfig(aiConfig) {
+        localStorage.setItem('sop_ai_config', JSON.stringify(aiConfig || {}));
+    }
+
+    function mergeStoredAIConfig(partialConfig) {
+        const nextConfig = Object.assign({}, getStoredAIConfig(), partialConfig || {});
+        setStoredAIConfig(nextConfig);
+        return nextConfig;
+    }
+
     function toggleEnterpriseBrain() {
         // Legacy function, kept for safety if referenced elsewhere, but effectively superseded by toggleManualEnterpriseBrain
     }
