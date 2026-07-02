@@ -47,6 +47,36 @@ func TestBuildLTMMemoryMetadataPersistsLifecycleStateFields(t *testing.T) {
 	}
 }
 
+func TestTouchLTMLifecycleForRepoAccessMarksRepoActive(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	payload := map[string]any{
+		"scope_type":             "repo",
+		"scope_id":               "sop-cloud",
+		"lifecycle_status":       "stale",
+		"status":                 "stale",
+		"scope_valid":            false,
+		"lifecycle_access_count": 1,
+		"lifecycle_last_used_at": now.Add(-100 * 24 * time.Hour).UnixMilli(),
+	}
+
+	touched := touchLTMLifecycleForRepoAccess(payload, now)
+	if got, ok := touched["lifecycle_status"].(string); !ok || got != "active" {
+		t.Fatalf("expected lifecycle_status to be active, got %#v", touched["lifecycle_status"])
+	}
+	if got, ok := touched["status"].(string); !ok || got != "active" {
+		t.Fatalf("expected status to be active, got %#v", touched["status"])
+	}
+	if got := touched["lifecycle_last_used_at"]; got != now.UnixMilli() {
+		t.Fatalf("expected lifecycle_last_used_at to be refreshed, got %#v", got)
+	}
+	if got := touched["lifecycle_access_count"]; got != 2 {
+		t.Fatalf("expected lifecycle_access_count to increment, got %#v", got)
+	}
+	if got := touched["scope_valid"]; got != true {
+		t.Fatalf("expected scope_valid to be re-enabled, got %#v", got)
+	}
+}
+
 func TestBuildLTMRetrievalTargetsPrefersResearchSpaceAndRepoScope(t *testing.T) {
 	targets := buildLTMRetrievalTargets("fix parser", &ai.SessionPayload{SelectedKBs: []ai.ArtifactReference{{Name: "legal-space", Type: ai.ArtifactTypeSpace}}}, "sop-cloud")
 	if len(targets) < 2 {
@@ -60,6 +90,19 @@ func TestBuildLTMRetrievalTargetsPrefersResearchSpaceAndRepoScope(t *testing.T) 
 	}
 	if targets[1].Category != "coding" || targets[1].ScopeType != "repo" || targets[1].ScopeID != "sop-cloud" {
 		t.Fatalf("expected second target to use repo scope, got %#v", targets[1])
+	}
+}
+
+func TestBuildLTMRetrievalTargetsKeepsRepoAndSpaceScopesSeparate(t *testing.T) {
+	targets := buildLTMRetrievalTargets("debug login for repo sop-cloud", &ai.SessionPayload{SelectedKBs: []ai.ArtifactReference{{Name: "finance-space", Type: ai.ArtifactTypeSpace}}}, "sop-cloud")
+	if len(targets) != 2 {
+		t.Fatalf("expected repo and space targets only, got %d", len(targets))
+	}
+	if targets[0].ScopeType != "space" || targets[0].ScopeID != "finance-space" {
+		t.Fatalf("expected first target to preserve selected space scope, got %#v", targets[0])
+	}
+	if targets[1].ScopeType != "repo" || targets[1].ScopeID != "sop-cloud" {
+		t.Fatalf("expected second target to preserve repo scope, got %#v", targets[1])
 	}
 }
 

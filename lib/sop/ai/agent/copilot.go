@@ -806,6 +806,108 @@ func buildLTMMemoryMetadata(category, capability, scopeType, scopeID string) map
 	}
 }
 
+func isRepoScopedLTMPayload(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	scopeType := strings.TrimSpace(fmt.Sprint(payload["scope_type"]))
+	if scopeType == "" {
+		scopeType = strings.TrimSpace(fmt.Sprint(payload["scopeType"]))
+	}
+	if scopeType != "" && !strings.EqualFold(scopeType, "repo") {
+		return false
+	}
+	if scopeType == "repo" {
+		return true
+	}
+	repoHint := strings.TrimSpace(fmt.Sprint(payload["repository_hint"]))
+	if repoHint == "" {
+		repoHint = strings.TrimSpace(fmt.Sprint(payload["scope_id"]))
+	}
+	if repoHint == "" {
+		repoHint = strings.TrimSpace(fmt.Sprint(payload["scopeID"]))
+	}
+	return repoHint != ""
+}
+
+func touchLTMLifecycleForRepoAccess(payload map[string]any, now time.Time) map[string]any {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if !isRepoScopedLTMPayload(payload) {
+		return payload
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	accessCount := 1
+	if existingCount, ok := payload["lifecycle_access_count"].(int); ok {
+		accessCount = existingCount + 1
+	} else if existingCount, ok := payload["lifecycle_access_count"].(int64); ok {
+		accessCount = int(existingCount) + 1
+	} else if existingCount, ok := payload["lifecycle_access_count"].(float64); ok {
+		accessCount = int(existingCount) + 1
+	}
+	lastUsedAt := now.UnixMilli()
+	payload["lifecycle_access_count"] = accessCount
+	payload["lifecycle_last_used_at"] = lastUsedAt
+	payload["lifecycle_last_evaluated_at"] = lastUsedAt
+	payload["updated_at"] = lastUsedAt
+	payload["status"] = "active"
+	payload["lifecycle_status"] = "active"
+	payload["scope_valid"] = true
+	delete(payload, "archived_at")
+	delete(payload, "archive_reason")
+	return payload
+}
+
+func touchRepoScopedLTMLifecycleState(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], scopeID string, now time.Time) error {
+	if ctx == nil || kb == nil || strings.TrimSpace(scopeID) == "" {
+		return nil
+	}
+	itemsTree, err := kb.Store.Items(ctx)
+	if err != nil {
+		return err
+	}
+	scopeID = strings.TrimSpace(scopeID)
+	ok, err := itemsTree.First(ctx)
+	if err != nil {
+		return err
+	}
+	for ok {
+		currentKey := itemsTree.GetCurrentKey()
+		item, err := itemsTree.GetCurrentValue(ctx)
+		if err != nil {
+			return err
+		}
+		payload, okPayload := any(item.Data).(map[string]any)
+		if !okPayload || payload == nil {
+			payload = map[string]any{}
+		}
+		if isRepoScopedLTMPayload(payload) {
+			payloadScopeID := strings.TrimSpace(fmt.Sprint(payload["scope_id"]))
+			if payloadScopeID == "" {
+				payloadScopeID = strings.TrimSpace(fmt.Sprint(payload["scopeID"]))
+			}
+			if payloadScopeID == "" {
+				payloadScopeID = strings.TrimSpace(fmt.Sprint(payload["repository_hint"]))
+			}
+			if strings.EqualFold(payloadScopeID, scopeID) {
+				payload = touchLTMLifecycleForRepoAccess(payload, now)
+				item.Data = payload
+				if _, err := itemsTree.UpdateCurrentItem(ctx, currentKey.Key, item); err != nil {
+					return err
+				}
+			}
+		}
+		ok, err = itemsTree.Next(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func updateLTMMemoryLifecycleState(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], itemID string, relevanceScore int) error {
 	if ctx == nil || kb == nil || strings.TrimSpace(itemID) == "" {
 		return nil
@@ -839,54 +941,57 @@ func updateLTMMemoryLifecycleState(ctx context.Context, kb *memory.KnowledgeBase
 			if payload == nil {
 				payload = map[string]any{}
 			}
-			accessCount := 1
-			if existingCount, ok := payload["lifecycle_access_count"].(int); ok {
-				accessCount = existingCount + 1
-				payload["lifecycle_access_count"] = accessCount
-			} else if existingCount, ok := payload["lifecycle_access_count"].(int64); ok {
-				accessCount = int(existingCount) + 1
-				payload["lifecycle_access_count"] = accessCount
-			} else if existingCount, ok := payload["lifecycle_access_count"].(float64); ok {
-				accessCount = int(existingCount) + 1
-				payload["lifecycle_access_count"] = accessCount
-			} else {
-				payload["lifecycle_access_count"] = accessCount
+			now := time.Now()
+			payload = touchLTMLifecycleForRepoAccess(payload, now)
+			if !isRepoScopedLTMPayload(payload) {
+				accessCount := 1
+				if existingCount, ok := payload["lifecycle_access_count"].(int); ok {
+					accessCount = existingCount + 1
+					payload["lifecycle_access_count"] = accessCount
+				} else if existingCount, ok := payload["lifecycle_access_count"].(int64); ok {
+					accessCount = int(existingCount) + 1
+					payload["lifecycle_access_count"] = accessCount
+				} else if existingCount, ok := payload["lifecycle_access_count"].(float64); ok {
+					accessCount = int(existingCount) + 1
+					payload["lifecycle_access_count"] = accessCount
+				} else {
+					payload["lifecycle_access_count"] = accessCount
+				}
+				lastUsedAt := now.UnixMilli()
+				if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(int64); ok {
+					lastUsedAt = existingLastUsedAt
+				} else if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(int); ok {
+					lastUsedAt = int64(existingLastUsedAt)
+				} else if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(float64); ok {
+					lastUsedAt = int64(existingLastUsedAt)
+				}
+				recordedAt := now.UnixMilli()
+				if existingRecordedAt, ok := payload["recorded_at"].(int64); ok {
+					recordedAt = existingRecordedAt
+				} else if existingRecordedAt, ok := payload["recorded_at"].(int); ok {
+					recordedAt = int64(existingRecordedAt)
+				} else if existingRecordedAt, ok := payload["recorded_at"].(float64); ok {
+					recordedAt = int64(existingRecordedAt)
+				}
+				lastUsedDays := 0
+				if now.UnixMilli() > lastUsedAt {
+					lastUsedDays = int((now.UnixMilli() - lastUsedAt) / int64(24*time.Hour/time.Millisecond))
+				}
+				ageDays := 0
+				if now.UnixMilli() > recordedAt {
+					ageDays = int((now.UnixMilli() - recordedAt) / int64(24*time.Hour/time.Millisecond))
+				}
+				scopeValid := true
+				if existingScopeValid, ok := payload["scope_valid"].(bool); ok {
+					scopeValid = existingScopeValid
+				}
+				status := evaluateLTMLifecycleStatus(lastUsedDays, ageDays, accessCount, relevanceScore, scopeValid)
+				payload["lifecycle_last_used_at"] = now.UnixMilli()
+				payload["lifecycle_last_evaluated_at"] = now.UnixMilli()
+				payload["updated_at"] = now.UnixMilli()
+				payload["status"] = status.State
+				payload["lifecycle_status"] = status.State
 			}
-			now := time.Now().UnixMilli()
-			lastUsedAt := now
-			if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(int64); ok {
-				lastUsedAt = existingLastUsedAt
-			} else if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(int); ok {
-				lastUsedAt = int64(existingLastUsedAt)
-			} else if existingLastUsedAt, ok := payload["lifecycle_last_used_at"].(float64); ok {
-				lastUsedAt = int64(existingLastUsedAt)
-			}
-			recordedAt := now
-			if existingRecordedAt, ok := payload["recorded_at"].(int64); ok {
-				recordedAt = existingRecordedAt
-			} else if existingRecordedAt, ok := payload["recorded_at"].(int); ok {
-				recordedAt = int64(existingRecordedAt)
-			} else if existingRecordedAt, ok := payload["recorded_at"].(float64); ok {
-				recordedAt = int64(existingRecordedAt)
-			}
-			lastUsedDays := 0
-			if now > lastUsedAt {
-				lastUsedDays = int((now - lastUsedAt) / int64(24*time.Hour/time.Millisecond))
-			}
-			ageDays := 0
-			if now > recordedAt {
-				ageDays = int((now - recordedAt) / int64(24*time.Hour/time.Millisecond))
-			}
-			scopeValid := true
-			if existingScopeValid, ok := payload["scope_valid"].(bool); ok {
-				scopeValid = existingScopeValid
-			}
-			status := evaluateLTMLifecycleStatus(lastUsedDays, ageDays, accessCount, relevanceScore, scopeValid)
-			payload["lifecycle_last_used_at"] = now
-			payload["lifecycle_last_evaluated_at"] = now
-			payload["updated_at"] = now
-			payload["status"] = status.State
-			payload["lifecycle_status"] = status.State
 			item.Data = payload
 			_, err = itemsTree.UpdateCurrentItem(ctx, currentKey.Key, item)
 			return err
@@ -1350,6 +1455,11 @@ func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
 		ltm, err := a.systemDB.OpenKnowledgeBase(ctx, a.Memory.LongTermMemoryName(), tx, a.brain, embedder, false, true)
 		if err != nil {
 			return err
+		}
+		if scopeID := strings.TrimSpace(mem.RepositoryHint); scopeID != "" {
+			if err := touchRepoScopedLTMLifecycleState(ctx, ltm, scopeID, time.Now()); err != nil {
+				log.Warn("CopilotAgent: failed to refresh repo lifecycle state during coding memory persistence", "repo", scopeID, "error", err)
+			}
 		}
 
 		canonicalPayload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
@@ -3098,6 +3208,14 @@ func (a *CopilotAgent) getLTMSemanticContext(ctx context.Context, query string) 
 				}
 				targets := buildLTMRetrievalTargets(query, payload, a.getActiveRepoHint(ctx))
 				targets = filterLTMRetrievalTargets(targets, lifecycleSignal)
+				for _, target := range targets {
+					if strings.EqualFold(target.ScopeType, "repo") && strings.TrimSpace(target.ScopeID) != "" {
+						if err := touchRepoScopedLTMLifecycleState(ctx, kb, target.ScopeID, time.Now()); err != nil {
+							log.Warn("CopilotAgent: failed to refresh repo lifecycle state", "repo", target.ScopeID, "error", err)
+						}
+						break
+					}
+				}
 				var allHits []memory.KBDigestHit
 				for _, target := range targets {
 					queries := []string{query}

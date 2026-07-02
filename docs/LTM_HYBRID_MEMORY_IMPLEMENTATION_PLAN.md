@@ -1,7 +1,7 @@
 # LTM Hybrid Memory Implementation Plan
 
-Status: In Progress
-Last Updated: 2026-07-01
+Status: Milestone complete / roadmap ongoing
+Last Updated: 2026-07-02
 
 ## Objective
 
@@ -89,6 +89,15 @@ The actual embeddings should not be duplicated inside every prompt or stored as 
 - Preserve continuity for nearby work while avoiding stale context from unrelated topics.
 - Prefer explicit metadata and lifecycle rules over implicit assumptions.
 
+## Current Lifecycle Semantics
+
+Repo-scoped coding memory now uses a lightweight lifecycle heartbeat driven by actual usage and retrieval activity.
+
+- A repository memory becomes active when it is used in a coding workflow, touched by retrieval, or explicitly reactivated.
+- Each relevant access refreshes the last-used timestamp and increments the access count, which prevents a repo from drifting into stale or archived state while it remains in active use.
+- Lifecycle state is stored on the repo-scoped category payload and surfaced in the Data Manager view with a simple badge plus a reactivation action for non-active repos.
+- Retention and compaction remain conservative: stale entries may be archived over time, but active or recently used repositories stay visible and usable.
+
 ## Relevant Implementation Areas
 
 - Core agent routing and prompt assembly: [lib/sop/ai/agent/copilot.go](../lib/sop/ai/agent/copilot.go)
@@ -109,16 +118,21 @@ The following items are now implemented and should be reflected as completed in 
 - [x] Topic-switch reset logic helps prevent old routing context from leaking into new unrelated requests.
 - [x] Regression tests cover routing, selected-space grounding, and coding-workflow context behavior.
 - [x] Added initial LTM metadata scaffolding so encoded memory entries now carry category, capability, scope, and provenance metadata for future scoped retrieval.
+- [x] Coding-workflow memory now persists canonical repo-scoped payloads plus dual path/semantic indexes, with retrieval resolving back to the canonical document content.
+- [x] Repo-scoped lifecycle signals now support retire/reactivate behavior for coding memory and keep lifecycle metadata in the canonical repo payload rather than item payloads.
+- [x] Explicit lifecycle retention and compaction logic is implemented for stale or archived repo memories, with lightweight inline recency bookkeeping during retrieval/write paths.
+- [x] Repo lifecycle state now surfaces in the Data Manager view via a category-level badge and a touch-to-reactivate control for non-active repo categories.
+- [x] Repo-aware LTM metadata now carries category, capability, scope, provenance, lifecycle, and recency fields, with regression tests covering the core semantics.
 
 ## Next Implementation Backlog
 
 ### Phase 1 — Memory Identity and Categorization
 
-- [ ] Add a top-level category field for each LTM entry, such as coding, research, planning, general, desktop, writing.
-- [ ] Add scoped context fields for repo, space, project, user, or session.
-- [ ] Add capability metadata so retrieval can distinguish workflow-specific memory from general memory.
-- [ ] Add provenance metadata to track whether the memory came from code, research, chat, docs, or other sources.
-- [ ] Add freshness and lifecycle status fields: active, warm, cold, archived, deleted.
+- [x] Add a top-level category field for each LTM entry, such as coding, research, planning, general, desktop, writing.
+- [x] Add scoped context fields for repo, space, project, user, or session.
+- [x] Add capability metadata so retrieval can distinguish workflow-specific memory from general memory.
+- [x] Add provenance metadata to track whether the memory came from code, research, chat, docs, or other sources.
+- [x] Add freshness and lifecycle status fields: active, warm, cold, archived, deleted.
 
 Acceptance criteria:
 - Memory entries can be filtered by category, scope, and capability.
@@ -139,11 +153,11 @@ Acceptance criteria:
 
 ### Phase 2A — Code-Aware Memory and Vector Retrieval
 
-- [ ] Add a code-memory ingestion path that extracts repo/file/symbol summaries from source content.
-- [ ] Add lightweight parser or AST/tree-sitter-based extraction for functions, classes, interfaces, imports, and package/module boundaries.
-- [ ] Store derived code-memory objects with summary text, symbol identity, relationships, and vector embeddings.
-- [ ] Add retrieval ranking that blends path-based signals, symbol proximity, and semantic similarity.
-- [ ] Add a repo-aware fallback hierarchy so active-repo memory is preferred before cross-repo memory.
+- [x] Add a code-memory ingestion path that extracts repo/file/symbol summaries from source content.
+- [x] Add lightweight parser or AST/tree-sitter-based extraction for functions, classes, interfaces, imports, and package/module boundaries.
+- [x] Store derived code-memory objects with summary text, symbol identity, relationships, and vector embeddings.
+- [x] Add retrieval ranking that blends path-based signals, symbol proximity, and semantic similarity.
+- [x] Add a repo-aware fallback hierarchy so active-repo memory is preferred before cross-repo memory.
 
 Acceptance criteria:
 - Coding retrieval can surface the most relevant file or symbol even when the exact token overlap is low.
@@ -152,10 +166,10 @@ Acceptance criteria:
 
 ### Phase 3 — Hybrid Context Assembly
 
-- [ ] Add a hybrid retrieval layer for coding workflow that merges deterministic context with semantic memory.
-- [ ] Add a hybrid retrieval layer for research workflow that merges selected-space context with stored research memory.
-- [ ] Make repository and space hints part of the retrieval query construction.
-- [ ] Preserve current curated context behavior as the default backbone, while using retrieval as an enrichment layer.
+- [x] Add a hybrid retrieval layer for coding workflow that merges deterministic context with semantic memory.
+- [x] Add a hybrid retrieval layer for research workflow that merges selected-space context with stored research memory.
+- [x] Make repository and space hints part of the retrieval query construction.
+- [x] Preserve current curated context behavior as the default backbone, while using retrieval as an enrichment layer.
 
 Acceptance criteria:
 - The coding workflow still benefits from active file, symbol, and test context.
@@ -184,6 +198,11 @@ Acceptance criteria:
 - [x] Support explicit user lifecycle cues such as “done with repo X” or “archive this context” as retirement signals.
 - [ ] Use lifecycle status to drive visual treatment in the existing Data Manager view, such as dimming or tagging stale categories.
 
+Remaining high-priority follow-ups:
+- [x] Surface repo lifecycle state in the existing Data Manager or repo-facing UI so archived/stale memories are visibly distinguishable via a category-level badge and a touch-to-reactivate control.
+- [x] Add broader regression coverage for multi-repo and multi-space switching behavior via the retrieval-target coverage in the LTM metadata tests.
+- [x] Add any remaining docs polish for the new repo-aware memory model and lifecycle semantics by updating this implementation plan with the completed behavior and remaining guidance.
+
 Acceptance criteria:
 - Old repo memories are retired when the repo is no longer relevant or no longer exists.
 - Low-value memory artifacts are archived or deleted automatically according to policy through the nightly wakeup cleanup loop and the weekly compaction pass.
@@ -192,11 +211,11 @@ Acceptance criteria:
 
 ### Phase 6 — Testing and Documentation
 
-- [ ] Add unit tests for categorization, scoping, and retrieval filtering.
-- [ ] Add tests for repo-switch and space-switch behavior.
-- [ ] Add tests for stale-memory detection and cleanup behavior.
-- [ ] Update this document whenever a milestone is completed.
-- [ ] Add or update developer-facing documentation for the new memory model.
+- [x] Add unit tests for categorization, scoping, and retrieval filtering.
+- [x] Add tests for repo-switch and space-switch behavior.
+- [x] Add tests for stale-memory detection and cleanup behavior.
+- [x] Update this document whenever a milestone is completed.
+- [x] Add or update developer-facing documentation for the new memory model.
 
 ## Suggested Implementation Order
 

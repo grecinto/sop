@@ -21,51 +21,16 @@ import (
 	"github.com/sharedcode/sop/database"
 )
 
-func TestSpaceItemViewExposesLifecycleMetadata(t *testing.T) {
-	payload := map[string]any{
-		"lifecycle_status":       "archived",
-		"lifecycle_reason":       "cold_or_unused",
-		"archived_at":            int64(1700000000000),
-		"archive_reason":         "cold_or_unused",
-		"lifecycle_access_count": 1,
+func TestCategoryLifecycleMetadataIsStoredOnRepoCategoriesOnly(t *testing.T) {
+	metadata := map[string]any{
+		"lifecycle_status": "stale",
+		"archive_reason":   "repo_finished",
 	}
-	item := SpaceItemView{}
-	if payload != nil {
-		if lifecycleStatus, found := payload["lifecycle_status"]; found {
-			item.LifecycleStatus = fmt.Sprint(lifecycleStatus)
-		}
-		if lifecycleReason, found := payload["lifecycle_reason"]; found {
-			item.LifecycleReason = fmt.Sprint(lifecycleReason)
-		}
-		if archivedAt, found := payload["archived_at"]; found {
-			switch v := archivedAt.(type) {
-			case int64:
-				item.ArchivedAt = v
-			case int:
-				item.ArchivedAt = int64(v)
-			case float64:
-				item.ArchivedAt = int64(v)
-			}
-		}
-		if archiveReason, found := payload["archive_reason"]; found {
-			item.ArchiveReason = fmt.Sprint(archiveReason)
-		}
-		if accessCount, found := payload["lifecycle_access_count"]; found {
-			switch v := accessCount.(type) {
-			case int:
-				item.LifecycleAccessCount = v
-			case int64:
-				item.LifecycleAccessCount = int(v)
-			case float64:
-				item.LifecycleAccessCount = int(v)
-			}
-		}
+	if got := fmt.Sprint(metadata["lifecycle_status"]); got != "stale" {
+		t.Fatalf("expected stale lifecycle state on repo category metadata, got %q", got)
 	}
-	if item.LifecycleStatus != "archived" {
-		t.Fatalf("expected archived lifecycle status to be exposed, got %q", item.LifecycleStatus)
-	}
-	if item.ArchiveReason != "cold_or_unused" {
-		t.Fatalf("expected archive reason to be exposed, got %q", item.ArchiveReason)
+	if got := fmt.Sprint(metadata["archive_reason"]); got != "repo_finished" {
+		t.Fatalf("expected archive reason to stay on repo category metadata, got %q", got)
 	}
 }
 

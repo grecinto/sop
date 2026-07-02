@@ -223,6 +223,19 @@ func TestLifecycleOverrideInputsAreNotRendered(t *testing.T) {
 	}
 }
 
+func TestCategoryTreeRendersLifecycleCue(t *testing.T) {
+	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("failed to read template: %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "renderCategoryLifecycleBadge") {
+		t.Fatalf("expected category tree lifecycle badge renderer in template")
+	}
+}
+
 func TestSourceLinkPopupTemplateUsesEscapedAttributes(t *testing.T) {
 	templatePath := filepath.Join(".", "templates", "scripts_part01.html")
 	content, err := os.ReadFile(templatePath)

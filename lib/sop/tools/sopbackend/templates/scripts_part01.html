@@ -2510,6 +2510,30 @@
 
         // Recursively render tree
         const treeRoot = document.querySelector('#kb-category-tree');
+        function renderCategoryLifecycleBadge(cat) {
+            if (!cat) return null;
+            const metadata = (cat.metadata && typeof cat.metadata === 'object') ? cat.metadata : {};
+            const lifecycleStatus = (metadata.lifecycle_status || metadata.lifecycleStatus || '').toString().trim().toLowerCase();
+            const isActive = !lifecycleStatus || lifecycleStatus === 'active';
+            const badgeText = isActive ? 'Active' : (lifecycleStatus === 'stale' ? 'Stale' : (lifecycleStatus === 'archived' || lifecycleStatus === 'retired' || lifecycleStatus === 'inactive' ? 'Archived' : lifecycleStatus.charAt(0).toUpperCase() + lifecycleStatus.slice(1)));
+            const badgeColor = isActive ? '#2f855a' : (lifecycleStatus === 'stale' ? '#8a6d3b' : '#8b3a3a');
+            const badgeTitle = isActive ? 'Repository category is active' : (lifecycleStatus === 'stale' ? 'Repository category is stale' : 'Repository category is archived');
+            const badge = document.createElement('span');
+            badge.textContent = badgeText;
+            badge.title = badgeTitle;
+            badge.style.marginLeft = '6px';
+            badge.style.padding = '1px 6px';
+            badge.style.borderRadius = '999px';
+            badge.style.fontSize = '0.7em';
+            badge.style.fontWeight = '700';
+            badge.style.color = '#fff';
+            badge.style.backgroundColor = badgeColor;
+            badge.style.display = 'inline-flex';
+            badge.style.alignItems = 'center';
+            badge.style.whiteSpace = 'nowrap';
+            return badge;
+        }
+
         function renderTreeNodes(catList, container, depth=0) {
             catList.forEach(cat => {
                 const li = document.createElement('li');
@@ -2545,6 +2569,8 @@
                 titleSpan.style.overflow = 'hidden';
                 titleSpan.style.textOverflow = 'ellipsis';
                 titleSpan.title = cat.name;
+
+                const badge = renderCategoryLifecycleBadge(cat);
 
                 const childrenContainer = document.createElement('ul');
                 childrenContainer.style.listStyle = 'none';
@@ -2617,6 +2643,9 @@
                 titleContainer.style.overflow = 'hidden';
                 titleContainer.appendChild(arrowSpan);
                 titleContainer.appendChild(titleSpan);
+                if (badge) {
+                    titleContainer.appendChild(badge);
+                }
                 if (!isReadOnlyKB) {
                     titleContainer.appendChild(addSubBtn);
                 }
@@ -2679,7 +2708,41 @@
             treeRoot.parentNode.appendChild(pagingWrap);
         }
 
-        window.fetchItemsForCategory = async function(spaceName, categoryId, categoryName, liElement, catObj, offset = 0, limit = (window._currentLimit || 50), lastCatId = "", lastItemId = "") {
+        window.reactivateCategoryLifecycle = async function(cat, spaceName, categoryLabel, currentOffset = 0, currentLimit = (window._currentLimit || 50), lastCatId = "", lastItemId = "") {
+        if (!cat || !spaceName) return;
+        const metadata = cat.metadata && typeof cat.metadata === 'object' ? { ...cat.metadata } : {};
+        metadata.lifecycle_status = 'active';
+        metadata.status = 'active';
+        metadata.archive_reason = '';
+        metadata.lifecycle_reason = 'reactivated';
+
+        try {
+            const res = await authFetch(`/api/spaces/category/add?name=${encodeURIComponent(spaceName)}&database=${encodeURIComponent(currentDatabase)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: cat.id,
+                    name: cat.name,
+                    description: cat.description || '',
+                    metadata: metadata
+                })
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                showAlert(errText || 'Failed to reactivate repository state.', null, 'Reactivation Failed', 'red');
+                return;
+            }
+
+            showAlert(`"${categoryLabel || cat.name}" is now active.`, () => {
+                window.fetchItemsForCategory(spaceName, cat.id, categoryLabel || cat.name, null, { ...cat, metadata }, currentOffset, currentLimit, lastCatId, lastItemId);
+            }, 'Repository Reactivated', 'green');
+        } catch (err) {
+            showAlert('Network error: ' + err.message, null, 'Reactivation Failed', 'red');
+        }
+    };
+
+    window.fetchItemsForCategory = async function(spaceName, categoryId, categoryName, liElement, catObj, offset = 0, limit = (window._currentLimit || 50), lastCatId = "", lastItemId = "") {
             window._lastFetchItemsArgs = { spaceName, categoryId, categoryName, liElement, catObj, offset, limit, lastCatId, lastItemId };
             window._currentSelectedCategoryName = categoryName;
             document.querySelectorAll('#kb-category-tree li').forEach(li => {
@@ -2777,6 +2840,50 @@
                     };
                     headerTitle.appendChild(delBtn);
                 }
+
+                const categoryMeta = (catObj && catObj.metadata && typeof catObj.metadata === 'object') ? catObj.metadata : {};
+                const categoryLifecycleStatus = (categoryMeta.lifecycle_status || categoryMeta.lifecycleStatus || '').toString().trim().toLowerCase();
+                const isCategoryActive = !categoryLifecycleStatus || categoryLifecycleStatus === 'active';
+                const categoryBadgeText = isCategoryActive ? 'Active' : (categoryLifecycleStatus === 'stale' ? 'Stale' : (categoryLifecycleStatus === 'archived' || categoryLifecycleStatus === 'retired' || categoryLifecycleStatus === 'inactive' ? 'Archived' : categoryLifecycleStatus.charAt(0).toUpperCase() + categoryLifecycleStatus.slice(1)));
+                const categoryBadgeColor = isCategoryActive ? '#2f855a' : (categoryLifecycleStatus === 'stale' ? '#8a6d3b' : '#8b3a3a');
+                const categoryBadgeTitle = isCategoryActive ? 'Repository category is active' : (categoryLifecycleStatus === 'stale' ? 'Repository category is stale' : 'Repository category is archived');
+                const categoryBadge = document.createElement('span');
+                categoryBadge.textContent = categoryBadgeText;
+                categoryBadge.title = categoryBadgeTitle;
+                categoryBadge.style.marginLeft = '10px';
+                categoryBadge.style.display = 'inline-flex';
+                categoryBadge.style.alignItems = 'center';
+                categoryBadge.style.padding = '3px 8px';
+                categoryBadge.style.borderRadius = '999px';
+                categoryBadge.style.fontSize = '0.75em';
+                categoryBadge.style.fontWeight = '700';
+                categoryBadge.style.color = '#fff';
+                categoryBadge.style.backgroundColor = categoryBadgeColor;
+                categoryBadge.style.textTransform = 'uppercase';
+                headerTitle.appendChild(categoryBadge);
+
+                if (!isReadOnlyKB && !isCategoryActive) {
+                    const touchBtn = document.createElement('span');
+                    touchBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0a1 1 0 0 1 1 1v7.086l1.293-1.293a1 1 0 0 1 1.414 1.414l-3 3a1 1 0 0 1-1.414 0l-3-3A1 1 0 1 1 4.293 5.793L5.586 7.086V1a1 1 0 0 1 1-1zm-5 13a1 1 0 0 1 1 1v1h8v-1a1 1 0 1 1 2 0v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1a1 1 0 0 1 1-1z"/></svg>';
+                    touchBtn.title = 'Reactivate repository state';
+                    touchBtn.style.marginLeft = '8px';
+                    touchBtn.style.cursor = 'pointer';
+                    touchBtn.style.display = 'inline-flex';
+                    touchBtn.style.alignItems = 'center';
+                    touchBtn.style.color = '#2f855a';
+                    touchBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        showConfirm(
+                            'Proceed to reactivate the repository category and return it to an active state?',
+                            () => window.reactivateCategoryLifecycle(catObj, spaceName, categoryName, offset, limit, lastCatId, lastItemId),
+                            null,
+                            'Reactivate Repository',
+                            'Proceed',
+                            'Cancel'
+                        );
+                    };
+                    headerTitle.appendChild(touchBtn);
+                }
             }
 
 // UI logic for Add Item button used to be here, moved back to actionButtons render logic.
@@ -2864,13 +2971,6 @@
                             displayCatName = catObj.name;
                         }
                     }
-                    const lifecycleStatus = (t.lifecycle_status || t.lifecycleStatus || (t.data && (t.data.lifecycle_status || t.data.lifecycleStatus)) || '').toString().toLowerCase();
-                    const lifecycleReason = (t.lifecycle_reason || t.lifecycleReason || (t.data && (t.data.lifecycle_reason || t.data.lifecycleReason)) || '').toString();
-                    const archiveReason = (t.archive_reason || t.archiveReason || (t.data && (t.data.archive_reason || t.data.archiveReason)) || '').toString();
-                    const isArchived = lifecycleStatus === 'archived' || lifecycleStatus === 'retired' || lifecycleStatus === 'inactive';
-                    const lifecycleBadgeText = isArchived ? 'Archived' : (lifecycleStatus === 'stale' ? 'Stale' : (lifecycleStatus ? lifecycleStatus.charAt(0).toUpperCase() + lifecycleStatus.slice(1) : ''));
-                    const lifecycleBadgeColor = isArchived ? '#8b3a3a' : (lifecycleStatus === 'stale' ? '#8a6d3b' : '#4c6ef5');
-                    const lifecycleBadgeTitle = isArchived ? (archiveReason || lifecycleReason || 'Archived by lifecycle policy') : (lifecycleReason || 'Lifecycle status');
                     const docLinkHref = primaryDocID ? window.buildDocViewerURL(primaryDocID, t.text || '') : "";
                     const categoryAttr = JSON.stringify(currCatName || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
                     const itemRef = window.getItemPreviewReference(t);
@@ -2932,11 +3032,6 @@
                                 ${(!categoryId || categoryName === 'All Items') ? `
                                 <div style="font-size: 0.75em; font-weight: 600; color: #fff; background-color: #5b6ed1; padding: 3px 8px; border-radius: 12px; text-transform: uppercase;">
                                     ${displayCatName}
-                                </div>
-                                ` : ''}
-                                ${lifecycleBadgeText ? `
-                                <div title="${window.escapeHTML(lifecycleBadgeTitle)}" style="font-size: 0.75em; font-weight: 600; color: #fff; background-color: ${lifecycleBadgeColor}; padding: 3px 8px; border-radius: 12px; text-transform: uppercase;">
-                                    ${window.escapeHTML(lifecycleBadgeText)}
                                 </div>
                                 ` : ''}
                             </div>
