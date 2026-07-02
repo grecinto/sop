@@ -145,16 +145,27 @@ type CodingWorkflowExecutionState struct {
 	UpdatedAt       int64
 }
 
+type ResearchWorkflowState struct {
+	LastPrompt              string
+	SuccessfulCategories    []string
+	SuccessfulCategoryPaths []string
+	SuccessfulItems         []string
+	SuccessfulItemPaths     []string
+	LastResearchSummary     string
+	UpdatedAt               int64
+}
+
 type ShortTermMemory struct {
-	Threads             map[sop.UUID]*ConversationThread
-	Order               []sop.UUID // Maintains the sequence of threads
-	CurrentThreadID     sop.UUID   // The currently active thread
-	RuntimeCaveats      []RuntimeCaveat
-	LastRoutingState    *TaskContextClassification
-	LastMRUSnapshot     []MRUItem
-	LastRecipeSnapshot  []RecipeItem
-	LastCarryoverState  *ai.CarryoverState
-	CodingWorkflowState *CodingWorkflowExecutionState
+	Threads               map[sop.UUID]*ConversationThread
+	Order                 []sop.UUID // Maintains the sequence of threads
+	CurrentThreadID       sop.UUID   // The currently active thread
+	RuntimeCaveats        []RuntimeCaveat
+	LastRoutingState      *TaskContextClassification
+	LastMRUSnapshot       []MRUItem
+	LastRecipeSnapshot    []RecipeItem
+	LastCarryoverState    *ai.CarryoverState
+	CodingWorkflowState   *CodingWorkflowExecutionState
+	ResearchWorkflowState *ResearchWorkflowState
 }
 
 // NewShortTermMemory initializes the memory structure.
@@ -388,6 +399,36 @@ func (stm *ShortTermMemory) GetCodingWorkflowState() *CodingWorkflowExecutionSta
 	cloned.DependencyFiles = append([]string(nil), stm.CodingWorkflowState.DependencyFiles...)
 	cloned.RelatedFiles = append([]string(nil), stm.CodingWorkflowState.RelatedFiles...)
 	cloned.TestFiles = append([]string(nil), stm.CodingWorkflowState.TestFiles...)
+	return cloned
+}
+
+func (stm *ShortTermMemory) SetResearchWorkflowState(state *ResearchWorkflowState) {
+	if stm == nil {
+		return
+	}
+	if state == nil {
+		stm.ResearchWorkflowState = nil
+		return
+	}
+	cloned := &ResearchWorkflowState{}
+	*cloned = *state
+	cloned.SuccessfulCategories = append([]string(nil), state.SuccessfulCategories...)
+	cloned.SuccessfulCategoryPaths = append([]string(nil), state.SuccessfulCategoryPaths...)
+	cloned.SuccessfulItems = append([]string(nil), state.SuccessfulItems...)
+	cloned.SuccessfulItemPaths = append([]string(nil), state.SuccessfulItemPaths...)
+	stm.ResearchWorkflowState = cloned
+}
+
+func (stm *ShortTermMemory) GetResearchWorkflowState() *ResearchWorkflowState {
+	if stm == nil || stm.ResearchWorkflowState == nil {
+		return nil
+	}
+	cloned := &ResearchWorkflowState{}
+	*cloned = *stm.ResearchWorkflowState
+	cloned.SuccessfulCategories = append([]string(nil), stm.ResearchWorkflowState.SuccessfulCategories...)
+	cloned.SuccessfulCategoryPaths = append([]string(nil), stm.ResearchWorkflowState.SuccessfulCategoryPaths...)
+	cloned.SuccessfulItems = append([]string(nil), stm.ResearchWorkflowState.SuccessfulItems...)
+	cloned.SuccessfulItemPaths = append([]string(nil), stm.ResearchWorkflowState.SuccessfulItemPaths...)
 	return cloned
 }
 

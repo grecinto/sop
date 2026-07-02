@@ -48,8 +48,11 @@ type ContextPack struct {
 	RepositorySummary     string
 	RepositoryDiffPreview string
 	RecentCodingMemory    string
+	PriorPaths            []string
 	TaskType              string
 	ContinuationSummary   string
+	ExpertiseSummary      string
+	ExpertiseSources      []string
 }
 
 // Patch describes a targeted file edit.
@@ -104,6 +107,18 @@ type ContextManager interface {
 // Planner produces a structured execution plan for a task based on the assembled context.
 type Planner interface {
 	Plan(Task, RunState, ContextPack) ([]string, error)
+}
+
+// ExpertiseRetriever produces a short, high-signal guidance capsule for a task.
+type ExpertiseRetriever interface {
+	Retrieve(Task, RunState, ContextPack) (ExpertiseCapsule, error)
+}
+
+// ExpertiseCapsule carries a compact guidance summary that can be injected near the point of action.
+type ExpertiseCapsule struct {
+	Summary  string
+	Category string
+	Sources  []string
 }
 
 // RepoIndexer provides lightweight repository metadata.
@@ -176,6 +191,7 @@ type Orchestrator struct {
 	Policy               SafetyPolicy
 	TestRunner           TestRunner
 	Planner              Planner
+	ExpertiseRetriever   ExpertiseRetriever
 	MemorySink           func(CodingMemory)
 	ContinuitySink       func(ContinuitySignal)
 	MaxIterations        int
@@ -221,6 +237,9 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if o.Planner == nil {
 		o.Planner = &DefaultPlanner{}
 	}
+	if o.ExpertiseRetriever == nil {
+		o.ExpertiseRetriever = &DefaultExpertiseRetriever{}
+	}
 
 	pack, err := o.ContextManager.BuildContext(task, task.State)
 	if err != nil {
@@ -230,6 +249,18 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		if memoryValues, err := o.Memory.Load("coding-memory"); err == nil {
 			if recent, ok := memoryValues["coding_memory"]; ok {
 				pack.RecentCodingMemory = recent
+			}
+		}
+		if memoryValues, err := o.Memory.Load("coding-workflow-paths"); err == nil {
+			if priorPaths, ok := memoryValues["prior_paths"]; ok {
+				pack.PriorPaths = mergePathHints(pack.PriorPaths, parsePriorPaths(priorPaths))
+			}
+		}
+	}
+	if len(pack.PriorPaths) > 0 {
+		for _, path := range pack.PriorPaths {
+			if path != "" && !contains(pack.RelatedFiles, path) {
+				pack.RelatedFiles = append(pack.RelatedFiles, path)
 			}
 		}
 	}
@@ -244,6 +275,12 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	}
 	if pack.RepositorySummary != "" {
 		pack.RepositorySummary = fmt.Sprintf("%s; target=%s", pack.RepositorySummary, strings.TrimSpace(task.ActiveFile))
+	}
+	if expertise, err := o.ExpertiseRetriever.Retrieve(task, task.State, pack); err == nil {
+		pack.ExpertiseSummary = expertise.Summary
+		pack.ExpertiseSources = expertise.Sources
+	} else {
+		_ = err
 	}
 	if changed, err := o.ChangedFileInspector.ListChangedFiles(task, task.State); err == nil {
 		pack.RelatedFiles = append(pack.RelatedFiles, changed...)
@@ -367,6 +404,9 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		if err := o.Memory.Save("coding-memory", memoryValues); err != nil {
 			return ExecutionResult{}, fmt.Errorf("persist coding memory: %w", err)
 		}
+		if err := persistRepositoryPathMemory(o.Memory, task, pack); err != nil {
+			return ExecutionResult{}, fmt.Errorf("persist repository path memory: %w", err)
+		}
 		return ExecutionResult{AppliedPatches: applied, ContextPack: pack, Message: message, TaskType: pack.TaskType, Plan: []string{}, ResumedFromState: pack.ResumedFromState}, nil
 	}
 	memoryValues := map[string]string{"description": task.Description, "active_file": task.ActiveFile}
@@ -377,6 +417,9 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		return ExecutionResult{}, fmt.Errorf("persist memory: %w", err)
 	}
 	message := "context assembled"
+	if pack.ExpertiseSummary != "" {
+		message = fmt.Sprintf("%s; expertise: %s", message, pack.ExpertiseSummary)
+	}
 	if task.Description != "" {
 		switch pack.TaskType {
 		case "planning":
@@ -396,7 +439,46 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if generatedPlan, err := o.Planner.Plan(task, task.State, pack); err == nil {
 		plan = generatedPlan
 	}
+	if err := persistRepositoryPathMemory(o.Memory, task, pack); err != nil {
+		return ExecutionResult{}, fmt.Errorf("persist repository path memory: %w", err)
+	}
 	return ExecutionResult{ContextPack: pack, Message: message, TaskType: pack.TaskType, Plan: plan, ResumedFromState: pack.ResumedFromState}, nil
+}
+
+// DefaultExpertiseRetriever produces concise, high-signal guidance for coding, QA, and review-oriented tasks.
+type DefaultExpertiseRetriever struct{}
+
+func (d *DefaultExpertiseRetriever) Retrieve(task Task, state RunState, pack ContextPack) (ExpertiseCapsule, error) {
+	_ = state
+	description := strings.ToLower(strings.TrimSpace(task.Description))
+	category := "coding"
+	summaryParts := []string{}
+
+	switch {
+	case strings.Contains(description, "review") || strings.Contains(description, "qa") || strings.Contains(description, "test"):
+		category = "qa"
+		summaryParts = append(summaryParts, "Review the change for correctness, regressions, and edge cases.")
+		summaryParts = append(summaryParts, "Prefer focused tests or checks that prove the behavior you intend to preserve.")
+	case strings.Contains(description, "implement") || strings.Contains(description, "fix") || strings.Contains(description, "patch") || strings.Contains(description, "refactor") || pack.TaskType == "code":
+		summaryParts = append(summaryParts, "Best practice: keep the edit focused, preserve interfaces, and validate behavior with targeted tests.")
+	default:
+		summaryParts = append(summaryParts, "Best practice: make the change explicit, keep the scope tight, and validate assumptions before concluding.")
+	}
+	if pack.ActiveFile != "" {
+		summaryParts = append(summaryParts, fmt.Sprintf("For %s, inspect the affected path and confirm related coverage before finalizing.", pack.ActiveFile))
+	}
+	if pack.TaskType == "planning" {
+		summaryParts = append(summaryParts, "When moving from design to implementation, capture the acceptance criteria and the likely test seams.")
+	}
+
+	sources := []string{"local:default_expertise"}
+	if category == "qa" {
+		sources = append(sources, "local:qa_guidance")
+	} else {
+		sources = append(sources, "local:coding_guidance")
+	}
+
+	return ExpertiseCapsule{Summary: strings.Join(summaryParts, " "), Category: category, Sources: sources}, nil
 }
 
 // DefaultContextManager reads the active file and nearby test files.
@@ -644,7 +726,11 @@ type DefaultPlanner struct{}
 
 func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]string, error) {
 	_ = state
-	plan := []string{"inspect relevant files"}
+	plan := []string{}
+	if strings.TrimSpace(pack.ExpertiseSummary) != "" {
+		plan = append(plan, "gather grounding from the selected Space and expertise guidance")
+	}
+	plan = append(plan, "inspect relevant files")
 	if task.Description != "" {
 		plan = append(plan, fmt.Sprintf("reason about %q", task.Description))
 	}
@@ -674,6 +760,10 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]st
 		plan = append(plan, fmt.Sprintf("edit active file %s", task.ActiveFile))
 		plan = append(plan, "define the expected behavior")
 		plan = append(plan, "draft or review a focused test case")
+	}
+	if len(pack.PriorPaths) > 0 {
+		plan = append(plan, "reuse prior repository paths")
+		plan = append(plan, fmt.Sprintf("prior repository paths: %s", strings.Join(pack.PriorPaths, ",")))
 	}
 	if len(pack.Symbols) > 0 {
 		plan = append(plan, fmt.Sprintf("focus on symbols %s", strings.Join(pack.Symbols, ",")))
@@ -894,6 +984,82 @@ func (m *InMemorySessionMemory) Load(key string) (map[string]string, error) {
 		return nil, fmt.Errorf("memory not found")
 	}
 	return values, nil
+}
+
+func persistRepositoryPathMemory(memory SessionMemory, task Task, pack ContextPack) error {
+	if memory == nil {
+		return nil
+	}
+	paths := collectRepositoryPathHints(task, pack)
+	if len(paths) == 0 {
+		return nil
+	}
+	return memory.Save("coding-workflow-paths", map[string]string{"prior_paths": strings.Join(paths, ",")})
+}
+
+func collectRepositoryPathHints(task Task, pack ContextPack) []string {
+	candidates := []string{}
+	appendIfPath := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		value = filepath.ToSlash(strings.TrimPrefix(value, "./"))
+		if value == "." {
+			return
+		}
+		if !contains(candidates, value) {
+			candidates = append(candidates, value)
+		}
+	}
+	appendIfPath(task.ActiveFile)
+	for _, path := range pack.PriorPaths {
+		appendIfPath(path)
+	}
+	for _, path := range pack.RelatedFiles {
+		appendIfPath(path)
+	}
+	for _, path := range pack.DependencyFiles {
+		appendIfPath(path)
+	}
+	for _, path := range pack.TestFiles {
+		appendIfPath(path)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	return candidates
+}
+
+func mergePathHints(existing []string, incoming []string) []string {
+	merged := append([]string(nil), existing...)
+	for _, candidate := range incoming {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		candidate = filepath.ToSlash(strings.TrimPrefix(candidate, "./"))
+		if candidate == "." {
+			continue
+		}
+		if !contains(merged, candidate) {
+			merged = append(merged, candidate)
+		}
+	}
+	return merged
+}
+
+func parsePriorPaths(value string) []string {
+	parts := strings.Split(value, ",")
+	parsed := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		parsed = append(parsed, filepath.ToSlash(strings.TrimPrefix(trimmed, "./")))
+	}
+	return parsed
 }
 
 func fileExists(path string) bool {

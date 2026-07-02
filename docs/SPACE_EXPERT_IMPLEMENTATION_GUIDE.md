@@ -303,6 +303,24 @@ A source store is not meant to become a permanent primary storage object. It is 
 
 This keeps the primary Space workflow clean while still giving users a low-friction way to accumulate raw source material before turning it into curated expert knowledge.
 
+## Current status and next tasks
+
+### Completed in this pass
+- [x] Documented a balanced coding-workflow operating model that favors design-first implementation while treating TDD as an assistive companion.
+- [x] Documented late-bound expertise retrieval for coding workflows so the Ask flow stays lean and expertise is consulted near the point of code generation or patching.
+- [x] Defined domain-neutral expertise categories including coding best practices, QA/testing practices, code review standards, and implementation quality heuristics.
+- [x] Aligned the capability with subscription positioning as a premium value layer for higher-quality engineering assistance.
+- [x] Recorded the explicit-state rule: workflow inputs and state must be passed through explicit parameters rather than via ambient context or hidden runtime state.
+- [x] Documented the entitlement model: expertise retrieval should be exposed as a plan- or subscription-gated capability, with premium users receiving expert grounding and non-entitled users falling back to standard Ask behavior.
+
+### Immediate next implementation tasks
+- [x] Implement late-bound expertise retrieval in the coding workflow path so expertise is consulted only before code generation or patching.
+- [ ] Add focused retrieval of short, high-signal expertise capsules from one or more relevant Spaces or knowledge bases.
+- [ ] Support domain-neutral expertise sources for coding, QA, and code review guidance.
+- [ ] Introduce subscription or entitlement gating for a premium expert-coding mode.
+- [ ] Add observability and usage metrics for retrieval hit rate, quality, and adoption.
+- [ ] Add product copy and onboarding for the premium experience.
+
 ## Recommended implementation phases
 
 ### Phase 1: Blob storage foundation

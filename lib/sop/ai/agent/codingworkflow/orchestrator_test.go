@@ -78,6 +78,48 @@ func TestDefaultPlannerBuildsExecutionPlan(t *testing.T) {
 	}
 }
 
+func TestOrchestratorReusesPersistedRepositoryPathMemory(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "parser.go"), []byte("package main\n\nfunc Parse() string { return \"ok\" }\n"), 0o644); err != nil {
+		t.Fatalf("write parser.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "parser_test.go"), []byte("package main\n\nimport \"testing\"\n\nfunc TestParse(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatalf("write parser_test.go: %v", err)
+	}
+
+	orchestrator := &Orchestrator{ContextManager: &DefaultContextManager{}, Planner: &DefaultPlanner{}, RepoIndexer: &DefaultRepoIndexer{}, PatchEngine: &DefaultPatchEngine{}, ChangedFileInspector: &GitRepoInspector{}, DiffPreviewer: &DefaultDiffPreviewer{}, RepoSearcher: &FileSearchAdapter{}, RepoInspector: &GitRepoInspector{}, Memory: NewInMemorySessionMemory(), Policy: &DefaultSafetyPolicy{}, TestRunner: &DefaultTestRunner{}}
+	if _, err := orchestrator.Execute(Task{WorkingDir: tmpDir, ActiveFile: "parser.go", Description: "implement parser"}); err != nil {
+		t.Fatalf("first execute returned error: %v", err)
+	}
+	result, err := orchestrator.Execute(Task{WorkingDir: tmpDir, ActiveFile: "parser.go", Description: "continue parser work"})
+	if err != nil {
+		t.Fatalf("second execute returned error: %v", err)
+	}
+	if len(result.ContextPack.PriorPaths) == 0 {
+		t.Fatalf("expected prior path hints to be loaded from persisted memory, got %#v", result.ContextPack.PriorPaths)
+	}
+	if !contains(result.ContextPack.PriorPaths, "parser.go") {
+		t.Fatalf("expected prior path hints to include parser.go, got %v", result.ContextPack.PriorPaths)
+	}
+	joined := strings.Join(result.Plan, " ")
+	if !strings.Contains(joined, "reuse prior repository paths") {
+		t.Fatalf("expected plan to mention prior repository paths, got %q", joined)
+	}
+}
+
+func TestDefaultPlannerAddsGroundingStepWhenExpertiseGuidanceExists(t *testing.T) {
+	planner := &DefaultPlanner{}
+	pack := ContextPack{ActiveFile: "main.go", ExpertiseSummary: "Actionable generation guidance: research the selected Space first"}
+	plan, err := planner.Plan(Task{WorkingDir: ".", ActiveFile: "main.go", Description: "implement parser"}, RunState{}, pack)
+	if err != nil {
+		t.Fatalf("Plan returned error: %v", err)
+	}
+	joined := strings.Join(plan, " ")
+	if !strings.Contains(joined, "gather grounding") {
+		t.Fatalf("expected plan to include a grounding step, got %q", joined)
+	}
+}
+
 func TestDefaultContextManagerBuildsGeneralContextWithoutActiveFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	manager := &DefaultContextManager{}
@@ -142,6 +184,21 @@ func TestDefaultContextManagerClassifiesImplementationAfterPlanningIntent(t *tes
 	}
 	if pack.TaskType != "code" {
 		t.Fatalf("expected implementation handoff to resolve to code mode, got %q", pack.TaskType)
+	}
+}
+
+func TestDefaultExpertiseRetrieverBuildsFocusedGuidanceForCodeTasks(t *testing.T) {
+	retriever := &DefaultExpertiseRetriever{}
+	capsule, err := retriever.Retrieve(Task{WorkingDir: ".", Description: "implement a parser and add coverage"}, RunState{}, ContextPack{TaskType: "code", ActiveFile: "parser.go"})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if capsule.Summary == "" {
+		t.Fatalf("expected a non-empty expertise summary")
+	}
+	lower := strings.ToLower(capsule.Summary)
+	if !strings.Contains(lower, "tests") && !strings.Contains(lower, "best practice") {
+		t.Fatalf("expected guidance to mention testing or best-practice advice, got %q", capsule.Summary)
 	}
 }
 

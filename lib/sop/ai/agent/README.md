@@ -84,6 +84,16 @@ The coding workflow should follow a balanced operating model:
 *   **Design first**: understand the requirement, shape the change, and make the plan explicit before editing files.
 *   **TDD as an assistive companion**: when a change involves implementation detail, draft or review a focused test case to help steer the design without making tests a hard gate.
 *   **Keep the loop practical**: use tests to clarify expectations, reveal edge cases, and support iteration, but do not force a rigid test-first blocker for every small change.
+*   **Explicit state only**: pass workflow inputs and state through explicit parameters such as Task, RunState, and ContextPack rather than using ambient context or hidden runtime state.
+*   **Entitlement-gated access**: make late-bound expertise retrieval available as a capability that is gated by plan or entitlement, so premium users can activate expert grounding while free users fall back to normal Ask behavior.
+
+### Late-bound expertise retrieval for coding workflows
+The Ask flow should stay lean and conversational during early reasoning, then optionally consult a Coding Space only when the model is about to generate code, patch files, or take action.
+*   **Late binding**: expertise retrieval happens near the generation step rather than at the very start of the conversation.
+*   **Focused signal**: the retrieval should be narrow and high-signal, based on the current task, repo context, and active file or artifact.
+*   **Coding Space as expertise**: the Coding Space can hold repo best practices, reusable patterns, and implementation guidance that improves the quality of generated code without overloading the base prompt.
+*   **Domain-neutral expertise**: the same late-bound expertise layer can also carry reusable engineering guidance such as coding best practices, QA and testing practices, code review standards, and implementation quality heuristics.
+*   **Future multi-KB selection**: the same mechanism can later support selecting one, two, or more relevant spaces or KBs dynamically, so the system stays grounded without diluting the reasoning with too much irrelevant context.
 
 ### 8. Dual-Layer Memory Architecture
 The agent is designed with a cognitive memory model that separates transient context from persistent knowledge.

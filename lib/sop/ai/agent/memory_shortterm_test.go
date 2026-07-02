@@ -82,3 +82,21 @@ func TestShortTermMemory_ResetProjectionForTopicSwitch(t *testing.T) {
 		t.Fatalf("expected carryover state reset on topic switch, got %+v", got)
 	}
 }
+
+func TestShortTermMemory_SetResearchWorkflowStateClones(t *testing.T) {
+	stm := NewShortTermMemory()
+	state := &ResearchWorkflowState{LastPrompt: "implement parser", SuccessfulCategoryPaths: []string{"Engineering/Code"}, SuccessfulItemPaths: []string{"Engineering/Code/Parsing"}}
+	stm.SetResearchWorkflowState(state)
+
+	state.LastPrompt = "changed"
+	state.SuccessfulCategoryPaths[0] = "changed"
+	state.SuccessfulItemPaths[0] = "changed"
+
+	got := stm.GetResearchWorkflowState()
+	if got == nil || got.LastPrompt != "implement parser" {
+		t.Fatalf("expected research workflow state to be cloned, got %+v", got)
+	}
+	if len(got.SuccessfulCategoryPaths) != 1 || got.SuccessfulCategoryPaths[0] != "Engineering/Code" {
+		t.Fatalf("expected category paths to be cloned, got %+v", got.SuccessfulCategoryPaths)
+	}
+}

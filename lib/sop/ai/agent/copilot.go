@@ -37,6 +37,9 @@ import (
 const (
 	MaxMRUSize            = 20
 	MaxExchangesInHistory = 20
+	LTMFlushWindow        = 5 * time.Minute
+	LTMFlushMaxCUDItems   = 5000
+	LTMFlushMaxReadItems  = 5000
 	// selectedSpaceReinforcementWindow is a TTL for selected-space expert framing.
 	// We only fully re-inject the Space guidance when the current Space has not been
 	// reinforced recently, otherwise we keep the prompt compact for continuity.
@@ -505,6 +508,19 @@ func normalizeMRUScope(scope string) string {
 	}
 }
 
+func shouldFlushLTMBufferedWrites(now time.Time, lastFlush time.Time, pendingCUDCount int, pendingReadCount int) bool {
+	if pendingCUDCount <= 0 && pendingReadCount <= 0 {
+		return false
+	}
+	if lastFlush.IsZero() {
+		return false
+	}
+	if pendingCUDCount >= LTMFlushMaxCUDItems || pendingReadCount >= LTMFlushMaxReadItems {
+		return true
+	}
+	return now.Sub(lastFlush) >= LTMFlushWindow
+}
+
 func (a *CopilotAgent) recordCodingMemory(mem cw.CodingMemory) {
 	if a == nil {
 		return
@@ -830,6 +846,9 @@ func WithCodingWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOptio
 			if orchestrator.Policy == nil {
 				orchestrator.Policy = &cw.DefaultSafetyPolicy{}
 			}
+			if orchestrator.ExpertiseRetriever == nil {
+				orchestrator.ExpertiseRetriever = a
+			}
 		}
 		a.capabilityRegistry.RegisterAtFront(cw.NewCapability(orchestrator))
 	}
@@ -840,6 +859,361 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 		return
 	}
 	a.capabilityRegistry = capabilities.NewRegistry(desktop.NewCapability(), stores.NewCapability(), spaces.NewCapability())
+}
+
+func buildCodingWorkflowExpertiseQuery(task cw.Task, pack cw.ContextPack) string {
+	parts := []string{}
+	if strings.TrimSpace(task.Description) != "" {
+		parts = append(parts, strings.TrimSpace(task.Description))
+	}
+	if strings.TrimSpace(pack.TaskType) != "" {
+		parts = append(parts, fmt.Sprintf("task type: %s", strings.TrimSpace(pack.TaskType)))
+	}
+	if strings.TrimSpace(pack.ActiveFile) != "" {
+		parts = append(parts, fmt.Sprintf("active file: %s", strings.TrimSpace(pack.ActiveFile)))
+	}
+	if len(pack.Symbols) > 0 {
+		parts = append(parts, fmt.Sprintf("symbols: %s", strings.Join(pack.Symbols, ", ")))
+	}
+	if len(pack.DependencyFiles) > 0 {
+		parts = append(parts, fmt.Sprintf("dependencies: %s", strings.Join(pack.DependencyFiles, ", ")))
+	}
+	if len(pack.PriorPaths) > 0 {
+		parts = append(parts, fmt.Sprintf("prior paths: %s", strings.Join(pack.PriorPaths, ", ")))
+	}
+	if len(parts) == 0 {
+		return "coding best practices for implementation and testing"
+	}
+	return strings.Join(parts, " | ")
+}
+
+func selectExpertiseKnowledgeBaseCandidates(query string, available []string) []string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	seen := make(map[string]struct{})
+	ordered := make([]string, 0, len(available)+2)
+	push := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		ordered = append(ordered, name)
+	}
+	push(ai.DefaultKBName)
+	if query != "" {
+		for _, name := range available {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			lower := strings.ToLower(name)
+			if strings.Contains(lower, "parser") || strings.Contains(lower, "code") || strings.Contains(lower, "engineering") || strings.Contains(lower, "dev") || strings.Contains(lower, "testing") || strings.Contains(lower, "qa") || strings.Contains(lower, "review") {
+				push(name)
+			}
+		}
+		for _, name := range available {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			lower := strings.ToLower(name)
+			if lower == ai.DefaultKBName {
+				continue
+			}
+			if strings.Contains(lower, "guide") || strings.Contains(lower, "playbook") || strings.Contains(lower, "pattern") || strings.Contains(lower, "best") || strings.Contains(lower, "practice") || strings.Contains(lower, "workflow") {
+				push(name)
+			}
+		}
+		for _, name := range available {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			lower := strings.ToLower(name)
+			if lower == ai.DefaultKBName {
+				continue
+			}
+			if strings.Contains(query, "parser") && strings.Contains(lower, "parser") {
+				push(name)
+			}
+			if strings.Contains(query, "test") && strings.Contains(lower, "test") {
+				push(name)
+			}
+			if strings.Contains(query, "bug") && strings.Contains(lower, "bug") {
+				push(name)
+			}
+			if strings.Contains(query, "review") && strings.Contains(lower, "review") {
+				push(name)
+			}
+		}
+	}
+	for _, name := range available {
+		push(name)
+	}
+	return ordered
+}
+
+func buildSelectedSpaceGenerationGuidance(systemPrompt, purpose, query string) string {
+	systemPrompt = strings.TrimSpace(systemPrompt)
+	purpose = strings.TrimSpace(purpose)
+	query = strings.ToLower(strings.TrimSpace(query))
+
+	parts := make([]string, 0, 3)
+	if systemPrompt != "" {
+		parts = append(parts, fmt.Sprintf("persona: %s", systemPrompt))
+	}
+	if purpose != "" {
+		parts = append(parts, fmt.Sprintf("purpose: %s", purpose))
+	}
+	if strings.Contains(query, "test") || strings.Contains(query, "coverage") || strings.Contains(query, "parser") || strings.Contains(query, "implement") || strings.Contains(query, "bug") || strings.Contains(query, "fix") {
+		parts = append(parts, "for code changes, prefer minimal diffs, add tests where appropriate, and surface uncertainties")
+	}
+	parts = append(parts, "before answering, generating code, or acting, first research the selected Space by using the prompt and prior Ask turns to generate focused nested categories, then read the most relevant items/thoughts in those branches rather than consuming the entire Space")
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Actionable generation guidance: %s", strings.Join(parts, " | "))
+}
+
+func buildSelectedSpaceResearchMemoryHints(query string, state *ResearchWorkflowState) string {
+	query = strings.TrimSpace(query)
+	if state == nil {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	if strings.TrimSpace(state.LastPrompt) != "" {
+		parts = append(parts, fmt.Sprintf("recent prompt: %s", strings.TrimSpace(state.LastPrompt)))
+	}
+	if len(state.SuccessfulCategoryPaths) > 0 {
+		parts = append(parts, fmt.Sprintf("prior successful category paths: %s", strings.Join(filterResearchMemoryValues(state.SuccessfulCategoryPaths), ", ")))
+	} else if len(state.SuccessfulCategories) > 0 {
+		parts = append(parts, fmt.Sprintf("prior successful categories: %s", strings.Join(filterResearchMemoryValues(state.SuccessfulCategories), ", ")))
+	}
+	if len(state.SuccessfulItemPaths) > 0 {
+		parts = append(parts, fmt.Sprintf("prior successful item paths: %s", strings.Join(filterResearchMemoryValues(state.SuccessfulItemPaths), ", ")))
+	} else if len(state.SuccessfulItems) > 0 {
+		parts = append(parts, fmt.Sprintf("prior successful items: %s", strings.Join(filterResearchMemoryValues(state.SuccessfulItems), ", ")))
+	}
+	if strings.TrimSpace(state.LastResearchSummary) != "" {
+		parts = append(parts, fmt.Sprintf("recent research summary: %s", strings.TrimSpace(state.LastResearchSummary)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	if query != "" {
+		parts = append(parts, fmt.Sprintf("for the current ask %q, prioritize branches and items that match these prior successes", query))
+	}
+	return fmt.Sprintf("Research memory hints: %s", strings.Join(parts, " | "))
+}
+
+func buildSelectedSpaceResearchQueries(query, kbName string, state *ResearchWorkflowState) []string {
+	base := []string{}
+	query = strings.TrimSpace(query)
+	kbName = strings.TrimSpace(kbName)
+	if query != "" {
+		base = append(base, query)
+	}
+	if kbName != "" {
+		base = append(base, kbName)
+	}
+	if state == nil {
+		return base
+	}
+	for _, category := range filterResearchMemoryValues(state.SuccessfulCategoryPaths) {
+		if category != "" && !containsString(base, category) {
+			base = append(base, category)
+		}
+	}
+	for _, category := range filterResearchMemoryValues(state.SuccessfulCategories) {
+		if category != "" && !containsString(base, category) {
+			base = append(base, category)
+		}
+	}
+	for _, item := range filterResearchMemoryValues(state.SuccessfulItemPaths) {
+		if item != "" && !containsString(base, item) {
+			base = append(base, item)
+		}
+	}
+	for _, item := range filterResearchMemoryValues(state.SuccessfulItems) {
+		if item != "" && !containsString(base, item) {
+			base = append(base, item)
+		}
+	}
+	if query != "" {
+		for _, value := range filterResearchMemoryValues(state.SuccessfulCategories) {
+			if value != "" {
+				base = append(base, query+" "+value)
+			}
+		}
+		for _, value := range filterResearchMemoryValues(state.SuccessfulItems) {
+			if value != "" {
+				base = append(base, query+" "+value)
+			}
+		}
+	}
+	return base
+}
+
+func filterResearchMemoryValues(values []string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	return filtered
+}
+
+func joinSelectedSpaceExpertiseSections(parts []string) string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		filtered = append(filtered, trimmed)
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+	return strings.Join(filtered, " | ")
+}
+
+func (a *CopilotAgent) Retrieve(task cw.Task, state cw.RunState, pack cw.ContextPack) (cw.ExpertiseCapsule, error) {
+	return a.retrieveCodingWorkflowExpertise(context.Background(), task, state, pack)
+}
+
+func (a *CopilotAgent) hasExpertiseEntitlement(state cw.RunState) bool {
+	if a == nil {
+		return false
+	}
+	if state.Metadata == nil {
+		return false
+	}
+
+	for _, key := range []string{"expertise_enabled", "expertise_retrieval_enabled", "premium_expertise", "entitlement_expertise_retrieval", "entitlement:expertise_retrieval"} {
+		if value, ok := state.Metadata[key]; ok {
+			normalized := strings.ToLower(strings.TrimSpace(value))
+			if normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "on" || normalized == "enabled" {
+				return true
+			}
+			if normalized == "false" || normalized == "0" || normalized == "no" || normalized == "off" || normalized == "disabled" {
+				return false
+			}
+		}
+	}
+	if value, ok := state.Metadata["subscription_features"]; ok {
+		for _, feature := range strings.Split(value, ",") {
+			feature = strings.ToLower(strings.TrimSpace(feature))
+			if feature == "expertise_retrieval" || feature == "premium_expertise" || feature == "expertise" {
+				return true
+			}
+		}
+	}
+	if value, ok := state.Metadata["subscription_plan"]; ok {
+		plan := strings.ToLower(strings.TrimSpace(value))
+		return plan == "premium" || plan == "pro" || plan == "enterprise" || plan == "team"
+	}
+	return false
+}
+
+func (a *CopilotAgent) retrieveCodingWorkflowExpertise(ctx context.Context, task cw.Task, state cw.RunState, pack cw.ContextPack) (cw.ExpertiseCapsule, error) {
+	if a == nil {
+		return cw.ExpertiseCapsule{}, fmt.Errorf("agent is nil")
+	}
+	if !a.hasExpertiseEntitlement(state) {
+		return cw.ExpertiseCapsule{}, nil
+	}
+	if a.systemDB == nil {
+		return cw.ExpertiseCapsule{}, fmt.Errorf("system database is nil")
+	}
+	query := buildCodingWorkflowExpertiseQuery(task, pack)
+	if strings.TrimSpace(query) == "" {
+		return cw.ExpertiseCapsule{}, fmt.Errorf("empty expertise query")
+	}
+	tx, err := a.systemDB.BeginTransaction(ctx, sop.ForReading)
+	if err != nil {
+		return cw.ExpertiseCapsule{}, fmt.Errorf("begin expertise tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var embedder ai.Embeddings
+	if a.service != nil && a.service.Domain() != nil && a.service.Domain().Embedder() != nil {
+		embedder = a.service.Domain().Embedder()
+	}
+
+	selectedSpaceSections := []string{}
+	if p := ai.GetSessionPayload(ctx); p != nil && len(p.SelectedKBs) > 0 {
+		for _, kbRef := range p.SelectedKBs {
+			name := strings.TrimSpace(kbRef.Name)
+			if name == "" {
+				continue
+			}
+			if section := a.selectedSpaceExpertiseSection(ctx, name, query); section != "" {
+				selectedSpaceSections = append(selectedSpaceSections, section)
+			}
+		}
+	}
+
+	availableKBs := []string{ai.DefaultKBName}
+	if tx != nil {
+		if stores, err := tx.GetStores(ctx); err == nil {
+			for _, store := range stores {
+				if strings.HasSuffix(store, "/sys_config") {
+					name := strings.TrimSuffix(store, "/sys_config")
+					if strings.TrimSpace(name) != "" {
+						availableKBs = append(availableKBs, name)
+					}
+				}
+			}
+		}
+	}
+	candidates := selectExpertiseKnowledgeBaseCandidates(query, availableKBs)
+	results := make([]string, 0, 6)
+	sources := make([]string, 0, len(candidates))
+	for _, kbName := range candidates {
+		kbName = strings.TrimSpace(kbName)
+		if kbName == "" {
+			continue
+		}
+		kb, err := a.systemDB.OpenKnowledgeBase(ctx, kbName, tx, a.brain, embedder, false)
+		if err != nil {
+			continue
+		}
+		searchReq := memory.SearchRequest[map[string]any]{Text: query, Limit: 3}
+		batch, err := kb.Search(ctx, []memory.SearchRequest[map[string]any]{searchReq})
+		if err != nil || len(batch) == 0 || len(batch[0]) == 0 {
+			continue
+		}
+		for _, hit := range batch[0] {
+			text := extractHitText(hit.Payload)
+			if strings.TrimSpace(text) != "" {
+				results = append(results, text)
+				if len(results) >= 6 {
+					break
+				}
+			}
+		}
+		sources = append(sources, kbName)
+		if len(results) >= 6 {
+			break
+		}
+	}
+	if len(results) == 0 && len(selectedSpaceSections) == 0 {
+		return cw.ExpertiseCapsule{}, nil
+	}
+	if len(results) == 0 {
+		return cw.ExpertiseCapsule{Summary: joinSelectedSpaceExpertiseSections(selectedSpaceSections), Category: "selected-space", Sources: sources}, nil
+	}
+	if len(selectedSpaceSections) == 0 {
+		return cw.ExpertiseCapsule{Summary: strings.Join(results, " | "), Category: "kb", Sources: sources}, nil
+	}
+	return cw.ExpertiseCapsule{Summary: joinSelectedSpaceExpertiseSections(append([]string{strings.Join(results, " | ")}, selectedSpaceSections...)), Category: "kb+selected-space", Sources: sources}, nil
 }
 
 // NewCopilotAgent creates a new instance of CopilotAgent.
@@ -2796,9 +3170,11 @@ func (a *CopilotAgent) selectedSpaceBriefDigestHits(ctx context.Context, query s
 		return nil
 	}
 
-	queries := []string{strings.TrimSpace(query)}
-	if strings.TrimSpace(query) != "" {
-		queries = append(queries, kbRef.Name+" "+query)
+	queries := buildSelectedSpaceResearchQueries(query, kbRef.Name, nil)
+	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		if state := a.service.session.Memory.GetResearchWorkflowState(); state != nil {
+			queries = buildSelectedSpaceResearchQueries(query, kbRef.Name, state)
+		}
 	}
 	if len(queries) == 0 {
 		return nil
@@ -2851,9 +3227,11 @@ func (a *CopilotAgent) selectedSpaceDigestContext(ctx context.Context, query str
 		return ""
 	}
 
-	queries := []string{strings.TrimSpace(query)}
-	if strings.TrimSpace(query) != "" {
-		queries = append(queries, kbRef.Name+" "+query)
+	queries := buildSelectedSpaceResearchQueries(query, kbRef.Name, nil)
+	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		if state := a.service.session.Memory.GetResearchWorkflowState(); state != nil {
+			queries = buildSelectedSpaceResearchQueries(query, kbRef.Name, state)
+		}
 	}
 	if len(queries) == 0 {
 		return ""
@@ -2875,6 +3253,55 @@ func (a *CopilotAgent) selectedSpaceDigestContext(ctx context.Context, query str
 		lines = append(lines, fmt.Sprintf("- (Score: %.2f) %s", hit.Score, hit.Text))
 	}
 	return "Digest highlights:\n" + strings.Join(lines, "\n")
+}
+
+func (a *CopilotAgent) selectedSpaceExpertiseSection(ctx context.Context, kbName string, query string) string {
+	if a == nil || strings.TrimSpace(kbName) == "" {
+		return ""
+	}
+	kbRef := ai.ArtifactReference{Name: kbName}
+	parts := []string{}
+	var systemPrompt, purpose string
+	var researchHints string
+	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		if state := a.service.session.Memory.GetResearchWorkflowState(); state != nil {
+			researchHints = buildSelectedSpaceResearchMemoryHints(query, state)
+		}
+	}
+	if configText := a.selectedSpaceConfigContext(ctx, kbRef); configText != "" {
+		parts = append(parts, configText)
+		for _, line := range strings.Split(configText, "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(line, "SystemPrompt:"):
+				systemPrompt = strings.TrimSpace(strings.TrimPrefix(line, "SystemPrompt:"))
+			case strings.HasPrefix(line, "Description:"):
+				purpose = strings.TrimSpace(strings.TrimPrefix(line, "Description:"))
+			}
+		}
+	}
+	if briefText := a.selectedSpaceStructuredBriefContext(ctx, query, kbRef); briefText != "" {
+		parts = append(parts, briefText)
+		for _, line := range strings.Split(briefText, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Purpose:") {
+				purpose = strings.TrimSpace(strings.TrimPrefix(line, "Purpose:"))
+			}
+		}
+	}
+	if digestText := a.selectedSpaceDigestContext(ctx, query, kbRef); digestText != "" {
+		parts = append(parts, digestText)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	if guidance := buildSelectedSpaceGenerationGuidance(systemPrompt, purpose, query); guidance != "" {
+		parts = append([]string{guidance}, parts...)
+	}
+	if researchHints != "" {
+		parts = append(parts, researchHints)
+	}
+	return fmt.Sprintf("selected space %q guidance: %s", kbName, strings.Join(parts, " | "))
 }
 
 func (a *CopilotAgent) isContinuationPromptContext(taskClassification ...TaskContextClassification) bool {

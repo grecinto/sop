@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
@@ -58,6 +59,22 @@ func TestWithCodingWorkflowCapabilityWiresMemorySinkToAgentSession(t *testing.T)
 	}
 	if _, ok := agent.GetMRUCategory("CODING_WORKFLOW_LAST"); !ok {
 		t.Fatal("expected coding workflow result to populate MRU")
+	}
+}
+
+func TestShouldFlushLTMBufferedWritesUsesWindowOrCount(t *testing.T) {
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	if shouldFlushLTMBufferedWrites(now, time.Time{}, 1, 0) {
+		t.Fatal("expected empty last-flush time to defer flushing")
+	}
+	if !shouldFlushLTMBufferedWrites(now, now.Add(-6*time.Minute), 1, 0) {
+		t.Fatal("expected time-window flush after the configured interval")
+	}
+	if !shouldFlushLTMBufferedWrites(now, now.Add(-1*time.Minute), LTMFlushMaxCUDItems, 0) {
+		t.Fatal("expected count-threshold flush when the pending CUD count reaches the max")
+	}
+	if !shouldFlushLTMBufferedWrites(now, now.Add(-1*time.Minute), 0, LTMFlushMaxReadItems) {
+		t.Fatal("expected count-threshold flush when the pending read count reaches the max")
 	}
 }
 
