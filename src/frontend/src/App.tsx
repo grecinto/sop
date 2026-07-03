@@ -647,7 +647,6 @@ export default function App() {
 
   const isStarterActive = account.billingStatus === 'active' && account.plan === 'starter';
   const isStarterPending = account.billingStatus === 'pending' && account.plan === 'starter';
-  const isPreviewVisible = account.plan === 'starter' || account.plan === 'hq';
   const shouldShowInstallPanel = showInstallStep || isStarterActive || checkoutComplete;
   const canResumeCheckout = Boolean(account.checkoutUrl) && (account.billingStatus === 'pending' || Boolean(account.failureReason));
   const billingStatusTitle = account.billingStatus === 'active'
@@ -909,73 +908,39 @@ export default function App() {
         <div className="hero-grid">
           <div>
             <p className="eyebrow">SOP Cloud</p>
-            <h1 className="hero-title">Launch the local agent, manage your account, and grow into the next experience.</h1>
+            <h1 className="hero-title">Your AI copilot for Stores, Spaces, and Knowledge Bases</h1>
             <p className="hero-copy">
-              This product surface is designed for self-serve onboarding and subscription management. It is intentionally separate from the Data Manager so each experience stays focused on its own workflow.
+              Work with an AI copilot built for intelligent automation, AI-native databases, and knowledge workflows. The Starter Kit gives you access to Stores, Spaces, and Knowledge Bases with support for Anthropic, GPT, and Gemini.
             </p>
             <div className="hero-actions">
-              <a className="button button-primary" href="/site/docs">View product docs</a>
-              <a className="button button-secondary" href="/app">Open Data Manager</a>
+              <a className="button button-primary" href="/site/subscribe">Create account</a>
+              <a className="button button-secondary" href="/site/subscribe">View Starter Kit</a>
             </div>
           </div>
 
           <div className="hero-side">
             <div className="plan-card">
               <p className="eyebrow">Starter Kit</p>
-              <h3>Local Agent</h3>
-              <div className="price">$5/mo</div>
-              <p>Download the local agent and begin working from your own machine.</p>
-              <a className="button button-secondary" href="/site/docs">See plan features</a>
-              <span className="badge">Trial access included</span>
+              <h3>AI copilot + AI database</h3>
+              <div className="price">$10/mo</div>
+              <p>Includes AI copilot access, Stores and Spaces, Knowledge Base workflows, and rich automation for coding and code review.</p>
+              <ul className="feature-list">
+                <li>Supports Anthropic, GPT, and Gemini</li>
+                <li>Pre-built Knowledge Bases for coding and code review</li>
+                <li>Self registration and subscription management</li>
+              </ul>
             </div>
-            <div className="plan-card">
-              <p className="eyebrow">Next plan</p>
-              <h3>HQ + Local Agent</h3>
-              <p>Coming soon as a richer experience for admins and advanced teams.</p>
-              <a className="button button-secondary" href="/site/docs">See plan features</a>
-              <span className="badge">Preview available</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="section-row">
-          <div className="info-card">
-            <h4>Fast onboarding</h4>
-            <p>Create an account, pick a plan, and start using the local agent with a guided flow.</p>
-          </div>
-          <div className="info-card">
-            <h4>Account control</h4>
-            <p>Return later to view plan status, manage subscriptions, or unregister cleanly.</p>
-          </div>
-          <div className="info-card">
-            <h4>Separate product surface</h4>
-            <p>The Data Manager remains lightweight and operational while this site stays product-first.</p>
           </div>
         </div>
       </section>
 
       <section className="hero-card secondary-card">
-        <div className="pricing-strip">
-          <div className="pricing-card highlighted">
-            <p className="eyebrow">Starter Kit</p>
-            <h3>Try the local agent</h3>
-            <div className="price">$5/mo after the first month</div>
-            <p>Simple onboarding, local-agent install, and a clear path to the full SOP experience.</p>
-          </div>
-          <div className="pricing-card">
-            <p className="eyebrow">HQ + Local Agent</p>
-            <h3>For teams and admins</h3>
-            <div className="price">Coming soon</div>
-            <p>Preview the richer experience before it becomes generally available.</p>
-          </div>
-        </div>
-
         <div className="stack-grid">
           <div className="form-panel">
             <h2>{isStarterActive ? 'Your Starter Kit is active' : isStarterPending ? 'Your Starter Kit checkout is pending' : 'Start your Starter Kit'}</h2>
             <p className="muted-copy">
               {isStarterActive
-                ? `Welcome back, ${account.name || 'there'}. Your starter plan is active and ready for local-agent setup.`
+                ? `Welcome back, ${account.name || 'there'}. Your starter plan is active and ready to use.`
                 : isStarterPending
                   ? `Welcome back, ${account.name || 'there'}. Your starter checkout is pending payment confirmation.`
                   : 'Register your account and begin the guided starter experience.'}
@@ -1008,8 +973,8 @@ export default function App() {
                 <strong>{isStarterActive ? 'Starter Kit' : isStarterPending ? 'Starter Kit (pending)' : 'No active plan'}</strong>
               </div>
               <div>
-                <span className="summary-label">Trial</span>
-                <strong>{isStarterActive ? 'Active for the first month' : isStarterPending ? 'Waiting for payment confirmation' : 'Not started'}</strong>
+                <span className="summary-label">Included</span>
+                <strong>AI copilot, Stores, Spaces, Knowledge Bases</strong>
               </div>
             </div>
 
@@ -1079,14 +1044,6 @@ export default function App() {
                 <button type="button" className="button button-secondary" onClick={handleDownload} disabled={isSubmitting}>
                   {isSubmitting ? 'Preparing…' : 'Download local agent'}
                 </button>
-              </div>
-            ) : null}
-
-            {isPreviewVisible ? (
-              <div className="preview-box">
-                <h4>Next: HQ + Local Agent</h4>
-                <p>Admins and advanced teams can preview the richer experience while regular users stay on the starter path.</p>
-                <a className="button button-secondary" href="/app/hq">Preview HQ experience</a>
               </div>
             ) : null}
           </div>

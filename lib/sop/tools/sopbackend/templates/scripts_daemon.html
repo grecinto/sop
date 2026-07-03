@@ -68,8 +68,15 @@
                     throw new Error(`Failed to get bootstrap secret: ${secretResponse.status}`);
                 }
 
-                const secretData = await secretResponse.json();
-                const bootstrapSecret = secretData.bootstrap_secret;
+                let secretData = null;
+                try {
+                    secretData = await secretResponse.json();
+                } catch (parseError) {
+                    console.debug('[DaemonAuth] Bootstrap secret response was not valid JSON', parseError);
+                    throw new Error('Bootstrap secret response was not valid JSON');
+                }
+
+                const bootstrapSecret = secretData && secretData.bootstrap_secret;
 
                 if (!bootstrapSecret) {
                     throw new Error('Bootstrap secret is empty');

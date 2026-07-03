@@ -65,7 +65,7 @@ When editing this repo, follow these conventions:
 
 ## Running and testing the new site
 
-The new product site lives in [src](src) and is run through the standalone backend entrypoint in [src/backend/site](src/backend/site). This is the dedicated launcher for the React site experience. The legacy Data Manager remains launched through the dedicated root launcher at [tools/httpserver](tools/httpserver), which invokes [lib/sop/tools/httpserver](lib/sop/tools/httpserver).
+The new product site lives in [src](src) and is run through the standalone backend entrypoint in [src/backend/site](src/backend/site). This is the dedicated launcher for the React site experience. The legacy Data Manager remains launched directly from [lib/sop/tools/httpserver](lib/sop/tools/httpserver).
 
 ### Start the site locally
 

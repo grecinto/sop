@@ -91,7 +91,7 @@ tools/electron-app/
 ├── start.sh            # Automated setup script
 └── README.md           # Detailed documentation
 
-tools/httpserver/
+lib/sop/tools/httpserver/
 ├── main.go             # HTTP server with /chat route
 ├── templates/
 │   ├── chat.html       # Minimal chat-only UI
@@ -103,7 +103,7 @@ tools/httpserver/
 
 1. **Make changes to backend** (Go code):
    ```bash
-   cd tools/httpserver
+   cd lib/sop/tools/httpserver
    go build
    # Restart Electron app
    ```
