@@ -427,6 +427,9 @@ func TestHandleUIHandoffReturnsWelcomeContextAndStoresSessionInfo(t *testing.T) 
 	if !strings.Contains(strings.ToLower(resp.WelcomeContext), "local") {
 		t.Fatalf("welcome context should describe the local RAG experience, got %q", resp.WelcomeContext)
 	}
+	if !strings.Contains(resp.WelcomeContext, "Shell-style commands") || !strings.Contains(resp.WelcomeContext, "ls") || !strings.Contains(resp.WelcomeContext, "/list_tools") {
+		t.Fatalf("welcome context should include shell-command guidance, got %q", resp.WelcomeContext)
+	}
 
 	daemonSessionStore.mu.Lock()
 	ctx, ok := daemonSessionStore.data[ctxKey]

@@ -1,6 +1,7 @@
 package sopbackend
 
 import (
+	"context"
 	"encoding/json"
 	"html/template"
 	"io/fs"
@@ -133,6 +134,39 @@ func (r *UIRouter) handleHQLoginPage(w http.ResponseWriter, req *http.Request) {
 		loginURL += "&message=" + url.QueryEscape(message)
 	}
 	http.Redirect(w, req, loginURL, http.StatusFound)
+}
+
+// runtimeSwitchEnabledForContext is the single RBAC gate for the chat runtime toggle.
+// It intentionally uses the policy layer rather than feature flags so the UI stays aligned
+// with the same authorization rules that govern the rest of the app.
+func runtimeSwitchEnabledForContext(ctx context.Context) bool {
+	auth := sop.GetAuthFromContext(ctx)
+	if auth.IsSystem {
+		return true
+	}
+	for _, role := range auth.Roles {
+		if sop.IsAdminRole(role) {
+			return true
+		}
+	}
+	if userID := strings.TrimSpace(auth.UserID); userID != "" {
+		if strings.EqualFold(userID, "root") {
+			return true
+		}
+		cfg := GetConfig()
+		if user, ok, err := cfg.findUserRecord(ctx, userID); err == nil && ok && user != nil {
+			if sop.IsAdminRole(user.Role) || strings.EqualFold(user.Role, sop.RoleSystemAdmin) {
+				return true
+			}
+		}
+	}
+	return sop.Authorize(ctx, sop.ResourceAccess{
+		Visibility: sop.VisibilityPrivate,
+		Roles: map[string][]string{
+			sop.RoleSystemAdmin: {string(sop.ActionWrite)},
+			sop.RoleAdmin:       {string(sop.ActionWrite)},
+		},
+	}, sop.ActionWrite)
 }
 
 func (r *UIRouter) handleIndex(w http.ResponseWriter, req *http.Request) {
@@ -335,16 +369,8 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		}
 	}
 
-	// Compute runtime switch enabled based on user's subscription features
-	runtimeSwitchEnabled := false
-	if user, ok, err := cfg.findUserRecord(req.Context(), username); err == nil && ok && user != nil {
-		for _, feature := range user.SubscriptionFeatures {
-			if strings.TrimSpace(strings.ToLower(feature)) == "hq_runtime" {
-				runtimeSwitchEnabled = true
-				break
-			}
-		}
-	}
+	// Only users with the corresponding RBAC permission should be able to toggle between HQ and local workflow.
+	runtimeSwitchEnabled := runtimeSwitchEnabledForContext(req.Context())
 
 	return map[string]any{
 		"Version":                sop.Version,

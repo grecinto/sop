@@ -1,12 +1,15 @@
 package sopbackend
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop"
 )
 
 func TestUIRouterRegistersLoginRoute(t *testing.T) {
@@ -72,5 +75,30 @@ func TestUIRouterRedirectsLogoutToLogin(t *testing.T) {
 	}
 	if got := rec.Header().Get("Location"); got != "/login" {
 		t.Fatalf("expected logout redirect target to be /login, got %q", got)
+	}
+}
+
+func TestRuntimeSwitchEnabledForContextAllowsSystemAdmin(t *testing.T) {
+	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{Roles: []string{sop.RoleSystemAdmin}})
+	if !runtimeSwitchEnabledForContext(ctx) {
+		t.Fatal("expected system admin to enable runtime switching")
+	}
+}
+
+func TestRuntimeSwitchEnabledForContextUsesStoredAdminRole(t *testing.T) {
+	oldConfig := config
+	config = Config{Users: []UserRecord{{Username: "alice", Role: sop.RoleSystemAdmin}}}
+	t.Cleanup(func() { config = oldConfig })
+
+	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "alice"})
+	if !runtimeSwitchEnabledForContext(ctx) {
+		t.Fatal("expected stored system admin role to enable runtime switching")
+	}
+}
+
+func TestRuntimeSwitchEnabledForContextRejectsRegularUser(t *testing.T) {
+	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{Roles: []string{"User"}})
+	if runtimeSwitchEnabledForContext(ctx) {
+		t.Fatal("expected regular user to keep runtime switching disabled")
 	}
 }

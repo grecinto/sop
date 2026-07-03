@@ -8,7 +8,7 @@ import (
 )
 
 func templatePath(parts ...string) string {
-	return filepath.Join(append([]string{"..", "httpserver", "templates"}, parts...)...)
+	return filepath.Join(append([]string{"templates"}, parts...)...)
 }
 
 func TestMediaPreviewRendererIsDefinedInTemplate(t *testing.T) {
@@ -167,5 +167,47 @@ func TestChatWidgetSupportsPinnedFloatingMode(t *testing.T) {
 	}
 	if !strings.Contains(scriptsContent, "sop_chat_runtime") {
 		t.Fatalf("expected chat runtime persistence in %s", scriptsPath)
+	}
+}
+
+func TestChatRuntimeSelectionKeepsFormatSelectorVisibleForLocalRuntime(t *testing.T) {
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if strings.Contains(scriptsContent, "formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';") {
+		t.Fatalf("expected local runtime to keep the format selector visible in %s", scriptsPath)
+	}
+}
+
+func TestRefreshSpacesListHidesDomainSelectWhenEmpty(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read dashboard script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "if (!kbs || kbs.length === 0) {") {
+		t.Fatalf("expected refreshSpacesList to include the empty-space branch in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "domainSelect.style.display = 'none';") {
+		t.Fatalf("expected refreshSpacesList to hide the domain select when no spaces are available in %s", scriptsPath)
+	}
+}
+
+func TestChatRuntimeWelcomeContextRequestsHQContextForHQRuntime(t *testing.T) {
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if strings.Contains(scriptsContent, "if (runtimeMode !== 'local') {\n                return null;\n            }") {
+		t.Fatalf("expected HQ runtime welcome-context flow to avoid returning early before the HQ request in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "const response = await authFetch('/api/ai/test-connection'") {
+		t.Fatalf("expected HQ runtime welcome-context flow to call the HQ test-connection endpoint in %s", scriptsPath)
 	}
 }

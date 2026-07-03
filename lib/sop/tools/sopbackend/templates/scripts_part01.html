@@ -1239,6 +1239,10 @@
             if (kbList) {
                 kbList.innerHTML = '<li>No Spaces found</li>';
             }
+            if (domainSelect) {
+                domainSelect.style.display = 'none';
+                domainSelect.setAttribute('aria-hidden', 'true');
+            }
             return;
         }
 

@@ -35,10 +35,6 @@
     }
 
     function shouldLocalDaemonOnly() {
-        // If user has hq_runtime feature, runtime switching is enabled
-        if (hasFeature('hq_runtime') || hasFeature('daemon_runtime')) {
-            return false;
-        }
         return !RUNTIME_SWITCH_ENABLED;
     }
 
@@ -104,11 +100,16 @@
             }
         }
         if (domainSelect) {
-            domainSelect.style.display = 'inline-block';
-            domainSelect.removeAttribute('aria-hidden');
+            const hasOptions = Array.from(domainSelect.options).some(option => option.value && option.value !== '' && option.getAttribute('data-dynamic') === 'true');
+            domainSelect.style.display = hasOptions ? 'inline-block' : 'none';
+            if (hasOptions) {
+                domainSelect.removeAttribute('aria-hidden');
+            } else {
+                domainSelect.setAttribute('aria-hidden', 'true');
+            }
         }
         if (formatSelect) {
-            formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
+            formatSelect.style.display = 'inline-block';
         }
         updateLocalAgentControls();
         updateChatFloaterButton();
@@ -151,11 +152,16 @@
             input.style.display = (!shouldLocalDaemonOnly() || runtime === 'hq') ? 'none' : 'inline-block';
         }
         if (domainSelect) {
-            domainSelect.style.display = 'inline-block';
-            domainSelect.removeAttribute('aria-hidden');
+            const hasOptions = Array.from(domainSelect.options).some(option => option.value && option.value !== '' && option.getAttribute('data-dynamic') === 'true');
+            domainSelect.style.display = hasOptions ? 'inline-block' : 'none';
+            if (hasOptions) {
+                domainSelect.removeAttribute('aria-hidden');
+            } else {
+                domainSelect.setAttribute('aria-hidden', 'true');
+            }
         }
         if (formatSelect) {
-            formatSelect.style.display = runtime === 'hq' ? 'inline-block' : 'none';
+            formatSelect.style.display = 'inline-block';
         }
         updateLocalAgentControls();
         updateChatFloaterButton();
@@ -203,10 +209,6 @@
 
     async function requestRuntimeWelcomeContext(runtimeMode) {
         try {
-            if (runtimeMode !== 'local') {
-                return null;
-            }
-
             if (runtimeMode === 'local') {
                 const response = await daemonFetch('/api/handoff', {
                     method: 'POST',
