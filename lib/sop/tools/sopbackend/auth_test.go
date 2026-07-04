@@ -509,7 +509,63 @@ func TestHandleSubscriptionUpdate_PersistsPlanChange(t *testing.T) {
 	}
 }
 
+func TestHasConfigFileOnDisk_UsesCachedProvisioningState(t *testing.T) {
+	resetProvisioningCompletionCache()
+	defer resetProvisioningCompletionCache()
+
+	config = Config{}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	defer os.Chdir(oldWd)
+
+	config.ConfigFile = filepath.Join(tmpDir, "config.json")
+	if HasConfigFileOnDisk() {
+		t.Fatal("expected no config file to be detected before provisioning completes")
+	}
+
+	markProvisioningComplete()
+	if !HasConfigFileOnDisk() {
+		t.Fatal("expected cached provisioning state to report config availability")
+	}
+}
+
+func TestHasConfigFileOnDisk_CachesProvisioningStateAfterCheckingConfigFile(t *testing.T) {
+	resetProvisioningCompletionCache()
+	defer resetProvisioningCompletionCache()
+
+	config = Config{}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	defer os.Chdir(oldWd)
+
+	config.ConfigFile = filepath.Join(tmpDir, "config.json")
+	if err := os.WriteFile(config.ConfigFile, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if !HasConfigFileOnDisk() {
+		t.Fatal("expected config file to be detected")
+	}
+	if !provisioningCompleteCache.Load() {
+		t.Fatal("expected provisioning-complete cache to be set after checking config file")
+	}
+}
+
 func TestHandleRoot_RedirectsToSetupWizardWhenExplicitConfigIsMissing(t *testing.T) {
+	resetProvisioningCompletionCache()
+	defer resetProvisioningCompletionCache()
 	config = Config{}
 	oldWd, err := os.Getwd()
 	if err != nil {
@@ -584,6 +640,8 @@ func TestFindExistingConfigFile_IgnoresPackageLocalConfigWhenCwdHasNone(t *testi
 }
 
 func TestHandleRoot_RedirectsToSetupWizardWhenConfigIsEmpty(t *testing.T) {
+	resetProvisioningCompletionCache()
+	defer resetProvisioningCompletionCache()
 	config = Config{}
 	config.ConfigFile = filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(config.ConfigFile, []byte("{}"), 0o644); err != nil {
@@ -604,6 +662,8 @@ func TestHandleRoot_RedirectsToSetupWizardWhenConfigIsEmpty(t *testing.T) {
 }
 
 func TestHandleRoot_ShowsLoginPageWhenConfigExists(t *testing.T) {
+	resetProvisioningCompletionCache()
+	defer resetProvisioningCompletionCache()
 	config = Config{}
 	config.ConfigFile = filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(config.ConfigFile, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {

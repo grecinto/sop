@@ -229,6 +229,8 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	markProvisioningComplete()
+
 	// 8. Reload Agents
 	if err := initAgents(context.Background()); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to initialize agents: %v", err), http.StatusInternalServerError)

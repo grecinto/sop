@@ -110,13 +110,18 @@ func (r *UIRouter) handleLoginPage(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	returnTo := req.URL.Query().Get("return")
+	defaultReturnURL := "/app"
+	if provisioningCompleteCache.Load() {
+		defaultReturnURL = "/site/"
+	}
 	if returnTo == "" {
-		returnTo = "/app"
+		returnTo = defaultReturnURL
 	}
 	data := map[string]any{
-		"Version":   sop.Version,
-		"ReturnTo":  returnTo,
-		"HQBaseURL": strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")),
+		"Version":          sop.Version,
+		"ReturnTo":         returnTo,
+		"DefaultReturnURL": defaultReturnURL,
+		"HQBaseURL":        strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")),
 	}
 	if err := r.executeTemplateWithFallback(w, data, "login.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

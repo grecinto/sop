@@ -89,7 +89,7 @@
       
       // Parse URL parameters
       var urlParams = new URLSearchParams(window.location.search);
-      var returnUrl = urlParams.get('return') || '/app';
+      var returnUrl = urlParams.get('return') || "{{ .DefaultReturnURL }}";
       var message = urlParams.get('message');
       
       // Display session message if present
@@ -136,7 +136,6 @@
               window.daemonAuth.markSubscriptionCheckCompleted();
             }
             
-            // Redirect to return URL or default /app
             window.location.assign(returnUrl);
           } else {
             throw new Error('No access token returned by the server');

@@ -1291,6 +1291,13 @@
                 loadingModal.style.display = 'none';
             }
 
+            try {
+                localStorage.setItem('sop_provisioning_done', '1');
+                sessionStorage.setItem('sop_provisioning_done', '1');
+            } catch (e) {
+                console.warn('Unable to cache provisioning completion flag', e);
+            }
+
               // 6. Enter the app with the session established above unless a port
               // change requires the user to restart the server first.
             resetSetupForm();
@@ -1298,10 +1305,11 @@
             const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
             if (port && port != parseInt(currentPort)) {
                  const hostname = window.location.hostname;
-                 const newUrl = `${window.location.protocol}//${hostname}:${port}`;
+                 const newUrl = `${window.location.protocol}//${hostname}:${port}/site/`;
                  showAlert(`Setup Complete! IMPORTANT: You changed the port to ${port}. Please RESTART the server manually, then open: ${newUrl}`, null);
-            } else {            
-                  window.location.assign('/app');
+                 window.location.assign(newUrl);
+            } else {
+                  window.location.assign('/site/');
             }
         })
         .catch(err => {

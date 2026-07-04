@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,16 @@ import (
 // DatabaseConfig holds configuration for a single SOP database
 
 // Config holds the server configuration
+
+var provisioningCompleteCache atomic.Bool
+
+func markProvisioningComplete() {
+	provisioningCompleteCache.Store(true)
+}
+
+func resetProvisioningCompletionCache() {
+	provisioningCompleteCache.Store(false)
+}
 
 func candidateConfigPaths() []string {
 	return CandidateConfigPaths(config.ConfigFile)
@@ -318,15 +329,26 @@ func GetDBOptions(ctx context.Context, dbName string) (sop.DatabaseOptions, erro
 }
 
 func HasConfigFileOnDisk() bool {
+	if provisioningCompleteCache.Load() {
+		return true
+	}
 	path := FindExistingConfigFile()
 	if path == "" {
+		resetProvisioningCompletionCache()
 		return false
 	}
 	cfg, err := loadConfigFromDisk(path)
 	if err != nil {
+		resetProvisioningCompletionCache()
 		return false
 	}
-	return len(cfg.Databases) > 0 || cfg.SystemDB != nil
+	provisioned := len(cfg.Databases) > 0 || cfg.SystemDB != nil
+	if provisioned {
+		markProvisioningComplete()
+	} else {
+		resetProvisioningCompletionCache()
+	}
+	return provisioned
 }
 
 type RuntimeRefreshResponse struct {

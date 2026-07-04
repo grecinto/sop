@@ -143,7 +143,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(r, user))
 }
 
 func clearSessionCookies(w http.ResponseWriter) {
@@ -202,7 +202,7 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "logged out"})
 }
 
-func buildUserResponsePayload(user *sopbackend.UserRecord) map[string]any {
+func buildUserResponsePayload(r *http.Request, user *sopbackend.UserRecord) map[string]any {
 	if user == nil {
 		return map[string]any{"status": "ok", "user": map[string]any{}}
 	}
@@ -269,20 +269,27 @@ func buildUserResponsePayload(user *sopbackend.UserRecord) map[string]any {
 		})
 	}
 
+	authCtx := sop.AuthContext{}
+	if r != nil {
+		authCtx = sop.GetAuthFromContext(r.Context())
+	}
+	canAccessDataManager := authCtx.IsSystem || strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root")
+
 	return map[string]any{
 		"status": "ok",
 		"user": map[string]any{
-			"username":          user.Username,
-			"role":              user.Role,
-			"email":             user.Email.Plaintext(),
-			"subscription_plan": user.SubscriptionPlan,
-			"billing_status":    user.BillingStatus,
-			"billing":           billing,
-			"payments":          payments,
-			"subscriptions":     subscriptions,
-			"status":            user.Status,
-			"created_at":        user.CreatedAt,
-			"updated_at":        user.UpdatedAt,
+			"username":                user.Username,
+			"role":                    user.Role,
+			"email":                   user.Email.Plaintext(),
+			"subscription_plan":       user.SubscriptionPlan,
+			"billing_status":          user.BillingStatus,
+			"billing":                 billing,
+			"payments":                payments,
+			"subscriptions":           subscriptions,
+			"status":                  user.Status,
+			"created_at":              user.CreatedAt,
+			"updated_at":              user.UpdatedAt,
+			"can_access_data_manager": canAccessDataManager,
 		},
 	}
 }
@@ -312,7 +319,7 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(r, user))
 }
 
 func HandleStatus(w http.ResponseWriter, r *http.Request) {
@@ -340,7 +347,7 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(r, user))
 }
 
 func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
@@ -382,7 +389,7 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(updated))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(r, updated))
 }
 
 func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {

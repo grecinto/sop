@@ -1926,6 +1926,9 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 			if normalizeUsername(c.Users[i].Username) == normalizeUsername(event.UserID) {
 				c.Users[i].SubscriptionPlan = user.SubscriptionPlan
 				c.Users[i].BillingStatus = user.BillingStatus
+				c.Users[i].LastWebhookEvent = user.LastWebhookEvent
+				c.Users[i].LastWebhookAt = user.LastWebhookAt
+				c.Users[i].FailureReason = user.FailureReason
 				c.Users[i].UpdatedAt = user.UpdatedAt
 				break
 			}
@@ -1977,6 +1980,9 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 			if normalizeUsername(c.Users[i].Username) == normalizeUsername(event.UserID) {
 				c.Users[i].SubscriptionPlan = user.SubscriptionPlan
 				c.Users[i].BillingStatus = user.BillingStatus
+				c.Users[i].LastWebhookEvent = user.LastWebhookEvent
+				c.Users[i].LastWebhookAt = user.LastWebhookAt
+				c.Users[i].FailureReason = user.FailureReason
 				c.Users[i].UpdatedAt = user.UpdatedAt
 				break
 			}

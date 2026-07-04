@@ -364,6 +364,8 @@ func TestWithAuth_RejectsExpiredSessionToken(t *testing.T) {
 }
 
 func TestWithAuth_AllowsRequestWhenConfigFileIsMissing(t *testing.T) {
+	resetProvisioningCompletionCache()
+	defer resetProvisioningCompletionCache()
 	withIsolatedSessionStore(t)
 	config = Config{SystemDB: config.SystemDB}
 	defer func() { config = Config{} }()

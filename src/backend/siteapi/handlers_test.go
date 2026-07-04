@@ -401,8 +401,8 @@ func TestHandleStatusIncludesBillingDetails(t *testing.T) {
 	if payload.User.Billing.LastWebhookEvent != "checkout.session.expired" {
 		t.Fatalf("last webhook event = %q, want %q", payload.User.Billing.LastWebhookEvent, "checkout.session.expired")
 	}
-	if payload.User.Billing.FailureReason == "" {
-		t.Fatal("expected failure reason in billing payload")
+	if payload.User.Billing.FailureReason != "checkout session expired" {
+		t.Fatalf("failure reason = %q, want %q", payload.User.Billing.FailureReason, "checkout session expired")
 	}
 }
 

@@ -21,10 +21,12 @@ type SubscriptionSummary = {
 type AccountState = {
   name: string;
   email: string;
+  role: string;
   plan: Plan;
   billingStatus: BillingStatus;
   trialActive: boolean;
   isAuthenticated: boolean;
+  isSystemAdmin: boolean;
   checkoutUrl: string;
   lastWebhookEvent: string;
   failureReason: string;
@@ -36,10 +38,12 @@ type AccountState = {
 const emptyState: AccountState = {
   name: '',
   email: '',
+  role: '',
   plan: 'none',
   billingStatus: 'inactive',
   trialActive: false,
   isAuthenticated: false,
+  isSystemAdmin: false,
   checkoutUrl: '',
   lastWebhookEvent: '',
   failureReason: '',
@@ -50,13 +54,16 @@ const emptyState: AccountState = {
 
 const DRAFT_STORAGE_KEY = 'sop-cloud-site-draft';
 const ACCOUNT_STATE_STORAGE_KEY = 'sop-cloud-site-account-state';
+const PROVISIONING_DONE_STORAGE_KEY = 'sop_provisioning_done';
 
 type PersistedAccountState = {
   name: string;
   email: string;
+  role: string;
   plan: Plan;
   billingStatus: BillingStatus;
   isAuthenticated: boolean;
+  isSystemAdmin: boolean;
   checkoutUrl: string;
   lastWebhookEvent: string;
   failureReason: string;
@@ -84,6 +91,17 @@ function loadDraftState(): { name: string; email: string } {
   }
 }
 
+function loadProvisioningDoneFlag(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(PROVISIONING_DONE_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function loadPersistedAccountState(): PersistedAccountState | null {
   if (typeof window === 'undefined') {
     return null;
@@ -100,9 +118,11 @@ function loadPersistedAccountState(): PersistedAccountState | null {
     return {
       name: parsed.name ?? '',
       email: parsed.email ?? '',
+      role: normalizeRole(parsed.role),
       plan: normalizePlan(parsed.plan),
       billingStatus: normalizeBillingStatus(parsed.billingStatus),
       isAuthenticated: Boolean(parsed.isAuthenticated),
+      isSystemAdmin: Boolean(parsed.isSystemAdmin) || isSystemAdminRole(parsed.role),
       checkoutUrl: parsed.checkoutUrl ?? '',
       lastWebhookEvent: parsed.lastWebhookEvent ?? '',
       failureReason: parsed.failureReason ?? '',
@@ -124,9 +144,11 @@ function persistAccountState(account: AccountState) {
     JSON.stringify({
       name: account.name,
       email: account.email,
+      role: account.role,
       plan: account.plan,
       billingStatus: account.billingStatus,
       isAuthenticated: account.isAuthenticated,
+      isSystemAdmin: account.isSystemAdmin,
       checkoutUrl: account.checkoutUrl,
       lastWebhookEvent: account.lastWebhookEvent,
       failureReason: account.failureReason,
@@ -169,6 +191,29 @@ function normalizeBillingStatus(value: string | undefined): BillingStatus {
     return 'pending';
   }
   return 'inactive';
+}
+
+function normalizeRole(value: string | undefined): string {
+  const role = (value ?? '').trim();
+  if (!role) {
+    return '';
+  }
+  const normalized = role.toLowerCase();
+  if (normalized === 'systemadmin' || normalized === 'system admin') {
+    return 'SystemAdmin';
+  }
+  if (normalized === 'admin') {
+    return 'Admin';
+  }
+  if (normalized === 'user') {
+    return 'User';
+  }
+  return role;
+}
+
+function isSystemAdminRole(role: string | undefined): boolean {
+  const normalized = (role ?? '').trim().toLowerCase();
+  return normalized === 'systemadmin' || normalized === 'system admin';
 }
 
 function slugify(value: string): string {
@@ -228,13 +273,17 @@ async function loadAccountFromServer(): Promise<AccountState> {
   const plan = normalizePlan(user.subscription_plan);
   const billingStatus = normalizeBillingStatus(user.billing_status);
   const billing = user.billing ?? {};
+  const role = normalizeRole(user.role);
+  const canAccessDataManager = Boolean(user.can_access_data_manager) || isSystemAdminRole(role);
   return {
     name: user.username ?? '',
     email: user.email ?? '',
+    role,
     plan,
     billingStatus,
     trialActive: billingStatus === 'active' && plan === 'starter',
     isAuthenticated: true,
+    isSystemAdmin: canAccessDataManager,
     checkoutUrl: billing.checkout_url ?? '',
     lastWebhookEvent: billing.last_webhook_event ?? '',
     failureReason: billing.failure_reason ?? '',
@@ -355,16 +404,20 @@ export default function App() {
   const [checkoutComplete, setCheckoutComplete] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [provisioningDone, setProvisioningDone] = useState(false);
 
   useEffect(() => {
     const draft = loadDraftState();
     const persisted = loadPersistedAccountState();
+    setProvisioningDone(loadProvisioningDoneFlag());
     setName(draft.name);
     setEmail(draft.email);
     if (persisted && persisted.isAuthenticated) {
       const restored: AccountState = {
         ...emptyState,
         ...persisted,
+        role: persisted.role,
+        isSystemAdmin: persisted.isSystemAdmin || isSystemAdminRole(persisted.role),
         trialActive: persisted.billingStatus === 'active' && persisted.plan === 'starter',
       };
       setAccount(restored);
@@ -380,6 +433,8 @@ export default function App() {
           ...nextAccount,
           name: nextAccount.name || persisted?.name || draft.name,
           email: nextAccount.email || persisted?.email || draft.email,
+          role: nextAccount.role || persisted?.role || '',
+          isSystemAdmin: nextAccount.isSystemAdmin || isSystemAdminRole(nextAccount.role || persisted?.role),
           trialActive: nextAccount.billingStatus === 'active' && nextAccount.plan === 'starter',
         };
         setAccount(resolvedAccount);
@@ -433,10 +488,12 @@ export default function App() {
         ...nextAccount,
         name: name.trim(),
         email: email.trim(),
+        role: nextAccount.role || 'User',
         plan: nextAccount.plan || 'starter',
         billingStatus: nextAccount.billingStatus || 'pending',
         trialActive: nextAccount.billingStatus === 'active',
         isAuthenticated: true,
+        isSystemAdmin: nextAccount.isSystemAdmin || isSystemAdminRole(nextAccount.role),
         checkoutUrl: nextAccount.checkoutUrl || '',
         lastWebhookEvent: nextAccount.lastWebhookEvent || '',
         failureReason: nextAccount.failureReason || '',
@@ -597,6 +654,8 @@ export default function App() {
         ...synced,
         name: synced.name || name.trim(),
         email: synced.email || email.trim(),
+        role: synced.role || '',
+        isSystemAdmin: synced.isSystemAdmin || isSystemAdminRole(synced.role),
         trialActive: synced.billingStatus === 'active' && synced.plan === 'starter',
       };
       setAccount(resolvedAccount);
@@ -647,6 +706,7 @@ export default function App() {
 
   const isStarterActive = account.billingStatus === 'active' && account.plan === 'starter';
   const isStarterPending = account.billingStatus === 'pending' && account.plan === 'starter';
+  const canLaunchDataManager = account.isSystemAdmin;
   const shouldShowInstallPanel = showInstallStep || isStarterActive || checkoutComplete;
   const canResumeCheckout = Boolean(account.checkoutUrl) && (account.billingStatus === 'pending' || Boolean(account.failureReason));
   const billingStatusTitle = account.billingStatus === 'active'
@@ -657,12 +717,14 @@ export default function App() {
         ? 'Checkout needs attention'
         : 'Not subscribed';
   const billingStatusBody = account.billingStatus === 'active'
-    ? 'Your Starter Kit is active and ready to use.'
+    ? 'Your AI Copilot access is active and ready to use.'
     : account.billingStatus === 'pending'
       ? 'Your subscription is waiting for payment confirmation.'
       : account.failureReason
         ? `The last checkout ended with: ${account.failureReason}.` 
         : 'No active subscription is currently in place.';
+  const isSetupCompleteRedirect = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('setup') === 'complete';
+  const shouldShowDashboard = (account.isAuthenticated || provisioningDone || isSetupCompleteRedirect) && view === 'home';
 
   if (view === 'subscribe') {
     return (
@@ -677,9 +739,9 @@ export default function App() {
           <div className="checkout-grid">
             <div className="checkout-card">
               <p className="eyebrow">Secure checkout</p>
-              <h2>Start your Northstar Starter Kit subscription</h2>
+              <h2>Start your Northstar AI Copilot access</h2>
               <p className="muted-copy">
-                Your card is handled securely and we only need the minimum information required to start the monthly subscription. An active subscription unlocks licensed use of the Northstar AI polyglot library in the supported runtimes, including the bundled service-side experiences that enforce subscription-bound security tokens.
+                In v1, the offer is simple: one access path to the Northstar AI Copilot experience, with Stores and Spaces that make it easier to organize work, inspect how the AI handled a repository, and review multi-turn workflows.
               </p>
               <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
                 Visit <strong>ai-northstar.com</strong> for the public product site and onboarding experience.
@@ -725,7 +787,7 @@ export default function App() {
               <div className="summary-list">
                 <div>
                   <span className="summary-label">Plan</span>
-                  <strong>Starter Kit</strong>
+                  <strong>AI Copilot access</strong>
                 </div>
                 <div>
                   <span className="summary-label">Billing</span>
@@ -733,7 +795,7 @@ export default function App() {
                 </div>
                 <div>
                   <span className="summary-label">Includes</span>
-                  <strong>Local agent access</strong>
+                  <strong>AI Copilot experience</strong>
                 </div>
               </div>
 
@@ -749,7 +811,7 @@ export default function App() {
               {checkoutComplete ? (
                 <div className="success-banner">
                   <h4>Subscription confirmed</h4>
-                  <p>Your Starter Kit is active, your access to the Northstar AI polyglot library is now enabled, and the local-agent download step is ready.</p>
+                  <p>Your AI Copilot access is active, and the local-agent download step is ready so you can start working with the product right away.</p>
                   <p className="muted-copy" style={{ marginTop: '0.75rem' }}>Public site: <strong>ai-northstar.com</strong></p>
                 </div>
               ) : (
@@ -781,14 +843,14 @@ export default function App() {
         <section className="hero-card docs-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
-            <a className="button button-primary" href="/site/subscribe">Start Starter Kit</a>
+            <a className="button button-primary" href="/site/subscribe">Start AI Copilot access</a>
           </div>
 
           <div className="docs-intro">
             <p className="eyebrow">Product documentation</p>
-            <h1 className="hero-title">Learn how Northstar brings local workflows, knowledge bases, and AI guidance together.</h1>
+            <h1 className="hero-title">A modern AI copilot powered by knowledge bases for expert-level automation and coding.</h1>
             <p className="hero-copy">
-              The new site is built for self-service onboarding. It walks users from account creation and plan selection to local-agent installation and the first AI-guided workflow. An active subscription unlocks licensed use of the Northstar AI polyglot library across supported runtimes, while the bundled httpserver and daemon enforce that subscription-bound access for service-side use.
+              Northstar brings knowledge-driven AI to your workflow with local-first privacy. Unlike current AI copilots that store your conversation history on their servers, everything stays on your device. Bring your own API keys for direct control. Load knowledge bases to transform your LLM into a domain expert, visualize your AI interactions with built-in tools, and manage your data locally. Our site only handles login and auth—we don't store your chat history.
             </p>
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
               Public site: <strong>ai-northstar.com</strong>
@@ -797,74 +859,71 @@ export default function App() {
 
           <div className="docs-grid">
             <article className="feature-card">
-              <p className="eyebrow">Starter Kit</p>
-              <h3>What the Starter Kit includes</h3>
+              <p className="eyebrow">Knowledge-driven AI copilot</p>
+              <h3>What makes Northstar different</h3>
               <ul className="feature-list">
-                <li>Account creation, billing management, and a guided onboarding path</li>
-                <li>Local agent download and setup guidance for your machine</li>
-                <li>AI copilot access for prompts, summaries, and step-by-step guidance</li>
+                <li>Load knowledge bases to turn your LLM into a domain expert—medical, mechanical, coding, or any field</li>
+                <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots</li>
+                <li>Built-in data visualization to review and understand your AI workflows</li>
+                <li>Generate higher-quality code that follows architecture best practices and coding standards</li>
               </ul>
-              <a className="button button-secondary" href="/site/subscribe">Choose Starter Kit</a>
+              <a className="button button-secondary" href="/site/subscribe">Get started</a>
             </article>
 
             <article className="feature-card">
-              <p className="eyebrow">HQ + Local Agent</p>
-              <h3>Built for advanced teams</h3>
+              <p className="eyebrow">Local-first privacy</p>
+              <h3>Your conversation history stays on your device</h3>
               <ul className="feature-list">
-                <li>Admin-ready workflows for shared knowledge and larger operating contexts</li>
-                <li>Richer operational views that build on the local-agent foundation</li>
-                <li>Early access to the HQ experience for internal evaluation and rollout planning</li>
+                <li>Bring your own API keys for direct control over your LLM provider</li>
+                <li>We don't store your conversation history—everything stays local on your device</li>
+                <li>Our site only handles login and auth—no chat data stored on our servers</li>
+                <li>Built-in visualization tools to review your AI workflows locally</li>
               </ul>
-              <a className="button button-secondary" href="/app/hq">Preview HQ experience</a>
             </article>
           </div>
 
           <div className="docs-grid docs-grid-wide">
             <article className="feature-card">
-              <p className="eyebrow">How the experience works</p>
-              <h3>Local agent + AI copilot</h3>
-              <p className="muted-copy">
-                The local agent handles tasks on the user&apos;s machine while the AI copilot explains the workflow, organizes context, and helps the user decide what to do next. Together they create a practical loop: the copilot suggests the action, and the agent carries it out close to the data.
-              </p>
+              <p className="eyebrow">Better coding workflows</p>
+              <h3>Concrete improvements to your daily work</h3>
               <div className="capability-list">
                 <div>
-                  <strong>Local agent</strong>
-                  <p>Runs on your computer, keeps local workflows close to the source, and supports installation and setup.</p>
+                  <strong>Pair programming</strong>
+                  <p>Code alongside an AI that understands architecture patterns and best practices from your knowledge base.</p>
                 </div>
                 <div>
-                  <strong>AI copilot</strong>
-                  <p>Provides the product-facing guidance, planning, and context for the workflow experience.</p>
+                  <strong>Expert code reviews</strong>
+                  <p>Get reviews that check against your coding standards and architectural guidelines, not just generic rules.</p>
                 </div>
                 <div>
-                  <strong>Pairing model</strong>
-                  <p>The copilot suggests the next action and the local agent carries it out where it matters most.</p>
+                  <strong>Task automation</strong>
+                  <p>Automate repetitive work with an AI that knows your domain, cutting down SDLC and delivering better results.</p>
                 </div>
               </div>
             </article>
 
             <article className="feature-card">
-              <p className="eyebrow">Site capabilities</p>
-              <h3>What you can do on the site</h3>
+              <p className="eyebrow">Real-world use cases</p>
+              <h3>From domain experts to practical automation</h3>
               <ul className="feature-list">
-                <li>Create an account and start the guided onboarding experience</li>
-                <li>Choose a plan, manage billing, and keep your subscription current</li>
-                <li>Download and set up the local agent for your preferred environment</li>
-                <li>Unsubscribe or unregister cleanly when you no longer need the service</li>
+                <li>Load medical knowledge bases so your LLM answers questions like a doctor</li>
+                <li>Turn your AI into a mechanic, lawyer, or any expert with the right knowledge base</li>
+                <li>Let the LLM manage your data in Spaces, or manage it yourself—both benefit from semantic search</li>
+                <li>Review multi-turn AI workflows to see how knowledge was applied to your project</li>
               </ul>
             </article>
           </div>
 
           <article className="feature-card">
-            <p className="eyebrow">Polyglot AI library</p>
-            <h3>Northstar AI is available across languages</h3>
+            <p className="eyebrow">The complete experience</p>
+            <h3>Knowledge bases, local privacy, and expert AI</h3>
             <p className="muted-copy">
-              Once your subscription is active, you are licensed to use the Northstar AI polyglot library from C#, Rust, Java, Python, and Go. The shared ai/memory package and KnowledgeBase APIs let teams build memory, retrieval, and knowledge workflows for end-user applications and for microservices that need a consistent integration surface, and the bundled httpserver and daemon enforce that subscription-bound access for service-side use.
+              Current AI copilots can't do this: load domain expertise, keep your conversation history on your device, and provide built-in visualization. Other copilots store your chat history on their servers. Northstar keeps everything local—bring your own API keys, and our site only handles auth. Your conversation history stays on your device.
             </p>
             <ul className="feature-list">
-              <li>Your active plan unlocks the polyglot library in the supported runtimes.</li>
-              <li>Use the same KnowledgeBase concepts from Go, Python, Java, C#, or Rust.</li>
-              <li>Integrate directly from end-user applications or access the same capabilities through microservices endpoints.</li>
-              <li>Keep your AI experience consistent across desktop, server, and cloud deployments.</li>
+              <li>Knowledge bases transform your LLM into a domain expert with higher-quality output.</li>
+              <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots.</li>
+              <li>Built-in data visualization and semantic search make your AI workflows easy to review locally.</li>
             </ul>
           </article>
 
@@ -879,30 +938,109 @@ export default function App() {
             <div className="journey-step">
               <span className="journey-number">2</span>
               <div>
-                <h3>Choose a plan</h3>
-                <p>Pick the Starter Kit for a simple entry point or preview the HQ path for advanced workflows.</p>
+                <h3>Load knowledge bases</h3>
+                <p>Turn your LLM into a domain expert by loading knowledge bases for any field—coding, medicine, mechanics, or more.</p>
               </div>
             </div>
             <div className="journey-step">
               <span className="journey-number">3</span>
               <div>
-                <h3>Install and pair</h3>
-                <p>Download the local agent and let the AI copilot guide the next actions for your workflow.</p>
+                <h3>Automate with expert AI</h3>
+                <p>Let the knowledge-guided AI copilot generate better code, review work, and automate tasks at an expert level.</p>
               </div>
             </div>
           </div>
 
           <div className="docs-comparison">
             <article className="feature-card comparison-card">
-              <p className="eyebrow">Starter Kit</p>
-              <h3>Best for getting started</h3>
-              <p className="muted-copy">A straightforward path to account setup, local-agent installation, and guided product use.</p>
+              <p className="eyebrow">Knowledge-driven AI</p>
+              <h3>Go beyond current AI copilots</h3>
+              <p className="muted-copy">Turn your LLM into a domain expert with knowledge bases. Generate higher-quality code and get expert answers.</p>
             </article>
             <article className="feature-card comparison-card">
-              <p className="eyebrow">HQ + Local Agent</p>
-              <h3>Best for advanced teams</h3>
-              <p className="muted-copy">A preview path for richer admin and team workflows that build on the same local-agent foundation.</p>
+              <p className="eyebrow">Shorter SDLC</p>
+              <h3>Cut development time</h3>
+              <p className="muted-copy">Knowledge-guided workflows automate tasks at an expert level, following best practices and architectural patterns.</p>
             </article>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (shouldShowDashboard) {
+    return (
+      <main className="app-shell">
+        <section className="hero-card">
+          <div className="hero-grid">
+            <div>
+              <p className="eyebrow">Northstar workspace</p>
+              <h1 className="hero-title">Welcome back to the new site dashboard</h1>
+              <p className="hero-copy">
+                Setup is complete. Review your account, keep your subscription current, and open the SOP Data Manager whenever you need the admin-level operational view.
+              </p>
+              <div className="hero-actions">
+                {canLaunchDataManager ? (
+                  <a className="button button-primary" href="/app">Open SOP Data Manager</a>
+                ) : null}
+                <a className="button button-secondary" href="/site/docs">View product docs</a>
+              </div>
+            </div>
+
+            <div className="hero-side">
+              <div className="plan-card">
+                <p className="eyebrow">Account overview</p>
+                <h3>{account.name || 'Your account'}</h3>
+                <p>{account.email || 'Your email will appear here once the account is linked.'}</p>
+                <div className="summary-list">
+                  <div>
+                    <span className="summary-label">Status</span>
+                    <strong>{account.isAuthenticated ? 'Signed in' : 'Pending sign-in'}</strong>
+                  </div>
+                  <div>
+                    <span className="summary-label">Plan</span>
+                    <strong>{account.plan === 'starter' ? 'AI Copilot access' : account.plan === 'hq' ? 'HQ' : 'Not subscribed'}</strong>
+                  </div>
+                  <div>
+                    <span className="summary-label">Access</span>
+                    <strong>{canLaunchDataManager ? 'Admin access' : 'Standard user'}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="hero-card secondary-card">
+          <div className="stack-grid">
+            <div className="form-panel">
+              <h2>Next steps</h2>
+              <p className="muted-copy">
+                Continue with local-agent setup, review your subscription, or open the SOP Data Manager when you need deeper operator controls.
+              </p>
+              <div className="action-row">
+                <a className="button button-secondary" href="/site/subscribe">Review subscription</a>
+                <a className="button button-secondary" href="/site/docs">Product docs</a>
+              </div>
+            </div>
+
+            <div className="summary-panel">
+              <h3>Workspace summary</h3>
+              <div className="summary-list">
+                <div>
+                  <span className="summary-label">Subscription</span>
+                  <strong>{isStarterActive ? 'Active' : isStarterPending ? 'Pending' : 'Not subscribed'}</strong>
+                </div>
+                <div>
+                  <span className="summary-label">Local agent</span>
+                  <strong>{isStarterActive ? 'Ready to download' : 'Pending activation'}</strong>
+                </div>
+                <div>
+                  <span className="summary-label">Data Manager</span>
+                  <strong>{canLaunchDataManager ? 'Available to open' : 'Admin access required'}</strong>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </main>
@@ -915,9 +1053,9 @@ export default function App() {
         <div className="hero-grid">
           <div>
             <p className="eyebrow">Northstar</p>
-            <h1 className="hero-title">Turn scattered knowledge into guided AI workflows</h1>
+            <h1 className="hero-title">A modern AI copilot powered by knowledge bases</h1>
             <p className="hero-copy">
-              Northstar gives teams a local-first way to organize Stores, Spaces, and Knowledge Bases, then pair them with an AI copilot that can guide work, summarize context, and help move projects forward without losing control of the data.
+              Unlike current AI copilots that store your conversation history on their servers, Northstar keeps everything on your device. Bring your own API keys for direct control. Load knowledge bases to turn your LLM into a domain expert, get higher-quality code, and manage your data locally with built-in visualization. We don't store your chat history—our site only handles auth.
             </p>
             <div className="hero-actions">
               <a className="button button-primary" href="/site/subscribe">Create account</a>
@@ -927,14 +1065,16 @@ export default function App() {
 
           <div className="hero-side">
             <div className="plan-card">
-              <p className="eyebrow">Starter Kit</p>
-              <h3>Guided onboarding for local-first AI work</h3>
+              <p className="eyebrow">AI Copilot access</p>
+              <h3>Knowledge-driven AI for smarter automation and coding</h3>
               <div className="price">$5/month</div>
-              <p>Start with a simple setup path that covers account creation, subscription management, local-agent installation, and the first AI-enabled workflows.</p>
+              <p>One simple plan unlocks the modern AI copilot experience with knowledge base capabilities that current AI copilots don't have.</p>
               <ul className="feature-list">
-                <li>Local agent access for hands-on workflows on your machine</li>
-                <li>AI copilot support for prompts, summaries, and next-step guidance</li>
-                <li>Pre-built Knowledge Base patterns for coding and review tasks</li>
+                <li>Load knowledge bases to turn your LLM into a domain expert in any field</li>
+                <li>Bring your own API keys—we don't store your conversation history on our servers</li>
+                <li>Built-in data visualization to review your AI workflows</li>
+                <li>Generate higher-quality code that adheres to architecture and coding best practices</li>
+                <li>Everything stored locally on your device, not on our servers</li>
               </ul>
             </div>
           </div>
@@ -944,12 +1084,12 @@ export default function App() {
       <section className="hero-card secondary-card">
         <div className="stack-grid">
           <div className="form-panel">
-            <h2>{isStarterActive ? 'Your Starter Kit is active' : isStarterPending ? 'Your Starter Kit checkout is pending' : 'Start your Starter Kit'}</h2>
+            <h2>{isStarterActive ? 'Your AI Copilot access is active' : isStarterPending ? 'Your AI Copilot checkout is pending' : 'Start your AI Copilot access'}</h2>
             <p className="muted-copy">
               {isStarterActive
-                ? `Welcome back, ${account.name || 'there'}. Your Starter Kit is active and ready for local agent setup and guided AI workflows.`
+                ? `Welcome back, ${account.name || 'there'}. Your AI Copilot access is active and ready for local agent setup and guided AI workflows.`
                 : isStarterPending
-                  ? `Welcome back, ${account.name || 'there'}. Your Starter Kit checkout is pending payment confirmation.`
+                  ? `Welcome back, ${account.name || 'there'}. Your AI Copilot checkout is pending payment confirmation.`
                   : 'Create your account to start with guided onboarding, a local agent download, and a practical first workflow.'}
             </p>
             <form className="form-stack" onSubmit={handleStart}>
@@ -962,7 +1102,7 @@ export default function App() {
                 <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="alex@example.com" />
               </label>
               <button type="submit" className="button button-primary" disabled={isSubmitting}>
-                {isStarterActive ? 'Update account' : isSubmitting ? 'Working…' : 'Start Starter Kit'}
+                {isStarterActive ? 'Update account' : isSubmitting ? 'Working…' : 'Start AI Copilot access'}
               </button>
             </form>
             {statusMessage ? <p className="muted-copy">{statusMessage}</p> : null}
@@ -973,15 +1113,15 @@ export default function App() {
             <div className="summary-list">
               <div>
                 <span className="summary-label">Status</span>
-                <strong>{isStarterActive ? 'Starter Kit active' : isStarterPending ? 'Checkout pending' : 'Not subscribed'}</strong>
+                <strong>{isStarterActive ? 'AI Copilot access active' : isStarterPending ? 'Checkout pending' : 'Not subscribed'}</strong>
               </div>
               <div>
                 <span className="summary-label">Plan</span>
-                <strong>{isStarterActive ? 'Starter Kit' : isStarterPending ? 'Starter Kit (pending)' : 'No active plan'}</strong>
+                <strong>{isStarterActive ? 'AI Copilot access' : isStarterPending ? 'AI Copilot access (pending)' : 'No active access'}</strong>
               </div>
               <div>
                 <span className="summary-label">Included</span>
-                <strong>AI copilot, Stores, Spaces, Knowledge Bases</strong>
+                <strong>AI Copilot, Stores, Spaces, local memory</strong>
               </div>
             </div>
 
@@ -1047,7 +1187,7 @@ export default function App() {
             {shouldShowInstallPanel ? (
               <div className="preview-box install-box">
                 <h4>Next step: install the local agent</h4>
-                <p>Your subscription is active, so the local agent is ready to install. Download it from the official SOP releases page and pair it with the AI copilot to launch the host-side workflow.</p>
+                <p>Your AI Copilot access is active, so the local agent is ready to install. Download it from the official SOP releases page and pair it with the AI copilot to launch the host-side workflow.</p>
                 <button type="button" className="button button-secondary" onClick={handleDownload} disabled={isSubmitting}>
                   {isSubmitting ? 'Preparing…' : 'Download local agent'}
                 </button>
