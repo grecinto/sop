@@ -172,20 +172,6 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	if req.Port > 0 {
 		config.Port = req.Port
 	}
-	if req.RootPassword != "" {
-		rootRole := sop.RoleAdmin
-		rootFeatures := []string(nil)
-		if strings.TrimSpace(req.SystemAdminBootstrapSecret) != "" {
-			if err := validateSetupWizardSystemAdminSecret(req.SystemAdminBootstrapSecret); err == nil {
-				rootRole = sop.RoleSystemAdmin
-				rootFeatures = []string{"hq_runtime", "daemon_runtime"}
-			}
-		}
-		if err := ensureRootUserFromPassword(req.RootPassword, rootRole, rootFeatures); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to seed root user: %v", err), http.StatusInternalServerError)
-			return
-		}
-	}
 
 	// 4. Setup System DB (I/O)
 	ctx := r.Context()
@@ -212,13 +198,38 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	// Append valid DBs
 	config.Databases = append(config.Databases, newDBs...)
 
-	// 6. Save Config File (Disk)
+	// 6. Seed the root user into the now-configured system-backed store as part of provisioning.
+	if req.RootPassword != "" {
+		rootRole := sop.RoleAdmin
+		rootFeatures := []string(nil)
+		if strings.TrimSpace(req.SystemAdminBootstrapSecret) != "" {
+			if err := validateSetupWizardSystemAdminSecret(req.SystemAdminBootstrapSecret); err == nil {
+				rootRole = sop.RoleSystemAdmin
+				rootFeatures = []string{"hq_runtime", "daemon_runtime"}
+			}
+		}
+		if err := ensureRootUserFromPassword(req.RootPassword, rootRole, rootFeatures); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to seed root user: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := config.ensureProvisionedUsersStore(ctx); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to initialize users store: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err := config.syncUsersStoreFromConfig(ctx); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to persist users store: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// 7. Save Config File (Disk)
 	if err := saveConfig(); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to write config file: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// 7. Reload Agents
+	// 8. Reload Agents
 	if err := initAgents(context.Background()); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to initialize agents: %v", err), http.StatusInternalServerError)
 		return
@@ -435,25 +446,21 @@ func setupSystemDB(ctx context.Context, req *SaveConfigRequest) (*DatabaseConfig
 	}
 
 	shouldSetup := true
-	if req.UseSharedBrain {
-		if hasDBOptions && hasRegHashMod {
-			shouldSetup = false
-			log.Info(fmt.Sprintf("Shared Brain detected at '%s'. Reusing...", req.RegistryPath))
-			existingOpts, err := loadDatabaseOptionsForReuse(req.RegistryPath)
-			if err != nil {
-				return nil, false, fmt.Errorf("shared brain selected but failed to read existing options in '%s': %w", req.RegistryPath, err)
-			}
+	if hasDBOptions || hasRegHashMod {
+		shouldSetup = false
+		log.Info(fmt.Sprintf("Existing system database detected at '%s'. Reusing...", req.RegistryPath))
+		existingOpts, err := loadDatabaseOptionsForReuse(req.RegistryPath)
+		if err != nil {
+			return nil, false, fmt.Errorf("system database exists but failed to read options in '%s': %w", req.RegistryPath, err)
+		}
+		if req.UseSharedBrain {
 			if err := validateSharedDatabaseReuse(existingOpts, sysOpts); err != nil {
 				return nil, false, fmt.Errorf("shared brain compatibility check failed: %w", err)
 			}
-			sysOpts = existingOpts
-		} else {
-			return nil, false, fmt.Errorf("shared brain selected but files missing in '%s'", req.RegistryPath)
 		}
-	} else {
-		if hasDBOptions || hasRegHashMod {
-			return nil, false, fmt.Errorf("destination '%s' already contains System DB files", req.RegistryPath)
-		}
+		sysOpts = existingOpts
+	} else if req.UseSharedBrain {
+		return nil, false, fmt.Errorf("shared brain selected but files missing in '%s'", req.RegistryPath)
 	}
 
 	if shouldSetup {

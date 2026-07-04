@@ -145,6 +145,12 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		if r.URL.Path == "/api/config/save" && r.Method == http.MethodPost {
+			log.Debug("withAuth: allowing initial config save without bearer token", "path", r.URL.Path, "method", r.Method)
+			next(w, r)
+			return
+		}
+
 		log.Debug("withAuth: enforcing bearer-token validation", "path", r.URL.Path, "method", r.Method)
 
 		token := authTokenFromRequest(r)

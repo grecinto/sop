@@ -217,6 +217,39 @@ func TestAuthenticate_UsesUsersStoreAsAuthoritativeSource(t *testing.T) {
 	}
 }
 
+func TestEnsureUserStorePersistsInSystemDB(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	config = Config{SystemDB: &DatabaseConfig{Name: SystemDBName, Path: tmpDir, Mode: "standalone"}}
+
+	firstCfg := Config{}
+	firstStore := firstCfg.ensureUserStore()
+	if firstStore == nil {
+		t.Fatal("ensureUserStore() returned nil")
+	}
+
+	record := &UserRecord{Username: "root", Role: sop.RoleAdmin}
+	if err := firstStore.Save(context.Background(), record); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	secondCfg := Config{}
+	secondStore := secondCfg.ensureUserStore()
+	if secondStore == nil {
+		t.Fatal("second ensureUserStore() returned nil")
+	}
+
+	got, ok, err := secondStore.Get(context.Background(), "root")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !ok || got == nil || got.Username != "root" || got.Role != sop.RoleAdmin {
+		t.Fatalf("Get() returned unexpected user: %+v, ok=%v", got, ok)
+	}
+}
+
 func TestRegisterUser_PersistsToStoreAndAuthenticates(t *testing.T) {
 	oldWD, err := os.Getwd()
 	if err != nil {

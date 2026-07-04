@@ -568,6 +568,160 @@ type UserStore interface {
 	List(ctx context.Context) ([]UserRecord, error)
 }
 
+type SystemUserStore struct {
+	storeName string
+}
+
+func NewSystemUserStore() *SystemUserStore {
+	return &SystemUserStore{storeName: "users"}
+}
+
+func (s *SystemUserStore) Save(ctx context.Context, user *UserRecord) error {
+	if user == nil {
+		return fmt.Errorf("user is nil")
+	}
+	username := normalizeUsername(user.Username)
+	if username == "" {
+		return fmt.Errorf("username is required")
+	}
+
+	db, err := getSystemDB(ctx)
+	if err != nil {
+		return fmt.Errorf("system user store failed to get system db: %w", err)
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		return fmt.Errorf("system user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	options := sop.ConfigureStore(s.storeName, true, 1000, "System users", sop.SmallData, "")
+	options.IsPrimitiveKey = true
+	store, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options)
+	if err != nil {
+		return fmt.Errorf("system user store failed to open/create store: %w", err)
+	}
+	copyUser := *user
+	copyUser.Username = username
+	copyUser.UpdatedAt = time.Now().UTC()
+	if copyUser.CreatedAt.IsZero() {
+		copyUser.CreatedAt = copyUser.UpdatedAt
+	}
+	if _, err := store.Upsert(ctx, username, copyUser); err != nil {
+		return fmt.Errorf("system user store failed to upsert user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("system user store failed to commit: %w", err)
+	}
+	return nil
+}
+
+func (s *SystemUserStore) Get(ctx context.Context, username string) (*UserRecord, bool, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, false, nil
+	}
+
+	db, err := getSystemDB(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("system user store failed to get system db: %w", err)
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForReading, -1)
+	if err != nil {
+		return nil, false, fmt.Errorf("system user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	options := sop.ConfigureStore(s.storeName, true, 1000, "System users", sop.SmallData, "")
+	options.IsPrimitiveKey = true
+	store, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options)
+	if err != nil {
+		return nil, false, fmt.Errorf("system user store failed to open/create store: %w", err)
+	}
+	if found, err := store.Find(ctx, username, true); err != nil {
+		return nil, false, fmt.Errorf("system user store failed to find user: %w", err)
+	} else if !found {
+		return nil, false, nil
+	}
+	value, err := store.GetCurrentValue(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("system user store failed to read user: %w", err)
+	}
+	copyUser := value
+	return &copyUser, true, nil
+}
+
+func (s *SystemUserStore) Delete(ctx context.Context, username string) error {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil
+	}
+
+	db, err := getSystemDB(ctx)
+	if err != nil {
+		return fmt.Errorf("system user store failed to get system db: %w", err)
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		return fmt.Errorf("system user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	options := sop.ConfigureStore(s.storeName, true, 1000, "System users", sop.SmallData, "")
+	options.IsPrimitiveKey = true
+	store, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options)
+	if err != nil {
+		return fmt.Errorf("system user store failed to open/create store: %w", err)
+	}
+	if _, err := store.Remove(ctx, username); err != nil {
+		return fmt.Errorf("system user store failed to remove user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("system user store failed to commit: %w", err)
+	}
+	return nil
+}
+
+func (s *SystemUserStore) List(ctx context.Context) ([]UserRecord, error) {
+	db, err := getSystemDB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("system user store failed to get system db: %w", err)
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForReading, -1)
+	if err != nil {
+		return nil, fmt.Errorf("system user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	options := sop.ConfigureStore(s.storeName, true, 1000, "System users", sop.SmallData, "")
+	options.IsPrimitiveKey = true
+	store, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options)
+	if err != nil {
+		return nil, fmt.Errorf("system user store failed to open/create store: %w", err)
+	}
+	ok, err := store.First(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("system user store failed to seek first user: %w", err)
+	}
+	if !ok {
+		return nil, nil
+	}
+	results := []UserRecord{}
+	for {
+		value, err := store.GetCurrentValue(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("system user store failed to read user: %w", err)
+		}
+		results = append(results, value)
+		if ok, err := store.Next(ctx); err != nil {
+			return nil, fmt.Errorf("system user store failed to iterate users: %w", err)
+		} else if !ok {
+			break
+		}
+	}
+	return results, nil
+}
+
 var userStoreOverride UserStore
 
 // SetUserStoreOverride installs a custom user store for shared auth flows.
@@ -1383,6 +1537,27 @@ func (c *Config) ensureUserStore() UserStore {
 		c.UsersStore = userStoreOverride
 		return c.UsersStore
 	}
+	if c.SystemDB != nil || config.SystemDB != nil {
+		if _, isSystemStore := c.UsersStore.(*SystemUserStore); !isSystemStore {
+			if c.UsersStore != nil {
+				if legacyStore, ok := c.UsersStore.(*UserStoreImpl); ok {
+					users := make([]UserRecord, 0, len(legacyStore.users))
+					for _, user := range legacyStore.users {
+						users = append(users, user)
+					}
+					c.UsersStore = NewSystemUserStore()
+					for i := range users {
+						_ = c.UsersStore.Save(context.Background(), &users[i])
+					}
+				} else {
+					c.UsersStore = NewSystemUserStore()
+				}
+			} else {
+				c.UsersStore = NewSystemUserStore()
+			}
+		}
+		return c.UsersStore
+	}
 	if c.UsersStore != nil {
 		return c.UsersStore
 	}
@@ -1391,24 +1566,34 @@ func (c *Config) ensureUserStore() UserStore {
 }
 
 func (c *Config) syncUsersStoreFromConfig(ctx context.Context) error {
-	if c == nil || len(c.Users) == 0 {
+	if c == nil {
 		return nil
 	}
 	store := c.ensureUserStore()
 	if store == nil {
 		return nil
 	}
-	users, err := store.List(ctx)
-	if err != nil {
-		return err
-	}
-	if len(users) > 0 {
+	if len(c.Users) == 0 {
 		return nil
 	}
 	for i := range c.Users {
 		if err := store.Save(ctx, &c.Users[i]); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *Config) ensureProvisionedUsersStore(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	store := c.ensureUserStore()
+	if store == nil {
+		return nil
+	}
+	if _, err := store.List(ctx); err != nil {
+		return fmt.Errorf("failed to initialize users store: %w", err)
 	}
 	return nil
 }

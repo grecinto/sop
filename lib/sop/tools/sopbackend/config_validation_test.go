@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/sharedcode/sop"
+	aidb "github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/database"
 )
 
 func TestHandleSaveConfig_PersistsRootUserForLogin(t *testing.T) {
@@ -55,6 +57,176 @@ func TestHandleSaveConfig_PersistsRootUserForLogin(t *testing.T) {
 	}
 	if !ok || user == nil || user.Username != "root" {
 		t.Fatalf("Authenticate() = ok=%v user=%v", ok, user)
+	}
+}
+
+func TestHandleSaveConfig_PersistsRootUserIntoSystemUsersStore(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	config = Config{}
+	config.ConfigFile = configFile
+
+	payload := map[string]interface{}{
+		"registry_path": filepath.Join(tmpDir, "system"),
+		"port":          8080,
+		"root_password": "secret123",
+		"system_options": map[string]interface{}{
+			"stores_folders": []string{},
+			"type":           0,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+
+	handleSaveConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	store := config.ensureUserStore()
+	if store == nil {
+		t.Fatal("ensureUserStore() returned nil")
+	}
+	user, ok, err := store.Get(context.Background(), "root")
+	if err != nil {
+		t.Fatalf("store.Get() error = %v", err)
+	}
+	if !ok || user == nil || user.Username != "root" {
+		t.Fatalf("store.Get() = ok=%v user=%v", ok, user)
+	}
+}
+
+func TestWithAuth_AllowsInitialConfigSaveWithoutBearerToken(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	if err := os.WriteFile(configFile, []byte(`{"port":8080}`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	config = Config{}
+	config.ConfigFile = configFile
+
+	called := false
+	handler := WithAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if !called {
+		t.Fatal("expected config save handler to run without bearer token")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status = %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSaveConfig_ReusesExistingSystemDBPath(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	registryPath := filepath.Join(tmpDir, "system")
+	config = Config{}
+	config.ConfigFile = configFile
+
+	if _, err := database.Setup(context.Background(), sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{registryPath}}); err != nil {
+		t.Fatalf("database.Setup() error = %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"registry_path": registryPath,
+		"port":          8080,
+		"root_password": "secret123",
+		"system_options": map[string]interface{}{
+			"stores_folders": []string{},
+			"type":           0,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+
+	handleSaveConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSaveConfig_PersistsRootUserIntoPersistentSystemStore(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	config = Config{}
+	config.ConfigFile = configFile
+
+	payload := map[string]interface{}{
+		"registry_path": filepath.Join(tmpDir, "system"),
+		"port":          8080,
+		"root_password": "secret123",
+		"system_options": map[string]interface{}{
+			"stores_folders": []string{},
+			"type":           0,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+
+	handleSaveConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
+	}
+	if config.SystemDB == nil || config.SystemDB.Path == "" {
+		t.Fatal("handleSaveConfig() did not populate config.SystemDB")
+	}
+
+	opts, err := GetSystemDBOptions(context.Background())
+	if err != nil {
+		t.Fatalf("GetSystemDBOptions() error = %v", err)
+	}
+	db := aidb.NewDatabase(opts)
+	tx, err := db.BeginTransaction(context.Background(), sop.ForReading, -1)
+	if err != nil {
+		t.Fatalf("BeginTransaction() error = %v", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	storeOptions := sop.ConfigureStore("users", true, 1000, "System users", sop.SmallData, "")
+	storeOptions.IsPrimitiveKey = true
+	store, err := database.NewBtree[string, UserRecord](context.Background(), db.Options(), "users", tx, nil, storeOptions)
+	if err != nil {
+		t.Fatalf("NewBtree() error = %v", err)
+	}
+	found, err := store.Find(context.Background(), "root", true)
+	if err != nil {
+		t.Fatalf("Find() error = %v", err)
+	}
+	if !found {
+		t.Fatal("Find() did not find root user in persisted system store")
+	}
+	got, err := store.GetCurrentValue(context.Background())
+	if err != nil {
+		t.Fatalf("GetCurrentValue() error = %v", err)
+	}
+	if got.Username != "root" {
+		t.Fatalf("GetCurrentValue() returned username %q", got.Username)
 	}
 }
 
