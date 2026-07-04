@@ -120,12 +120,15 @@
           if (body && body.access_token) {
             // Store tokens in localStorage so daemon handoff can access them
             localStorage.setItem('sop_access_token', body.access_token);
+            sessionStorage.setItem('sop_access_token', body.access_token);
             if (body.refresh_token) {
               localStorage.setItem('sop_refresh_token', body.refresh_token);
+              sessionStorage.setItem('sop_refresh_token', body.refresh_token);
             }
             // Store user info for daemon handoff
             if (body.user && body.user.username) {
               localStorage.setItem('sop_userId', body.user.username);
+              sessionStorage.setItem('sop_userId', body.user.username);
             }
             
             // Keep the local daemon experience intact after a normal HQ login.

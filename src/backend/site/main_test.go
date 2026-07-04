@@ -68,6 +68,42 @@ func TestConfigureRuntimeEnvironmentSkipsSeedingConfigOnFirstRun(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeConfigPathPrefersCwdConfigOverEnvOverride(t *testing.T) {
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer os.Chdir(oldWd)
+
+	workDir := t.TempDir()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+
+	cwdConfigPath := filepath.Join(workDir, "config.json")
+	if err := os.WriteFile(cwdConfigPath, []byte(`{"databases":[{"name":"cwd"}]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	envConfigPath := filepath.Join(t.TempDir(), "env-config.json")
+	if err := os.WriteFile(envConfigPath, []byte(`{"databases":[{"name":"env"}]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("SOP_CONFIG_FILE", envConfigPath)
+
+	got := resolveRuntimeConfigPath(filepath.Join(workDir, ".sop-data"))
+	want := cwdConfigPath
+	if resolved, err := filepath.EvalSymlinks(got); err == nil {
+		got = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(want); err == nil {
+		want = resolved
+	}
+	if filepath.Clean(got) != filepath.Clean(want) {
+		t.Fatalf("resolveRuntimeConfigPath() = %q, want %q", got, want)
+	}
+}
+
 func TestConfigureRuntimeEnvironmentUsesExistingDataDirConfigWhenPresent(t *testing.T) {
 	oldWd, err := os.Getwd()
 	if err != nil {

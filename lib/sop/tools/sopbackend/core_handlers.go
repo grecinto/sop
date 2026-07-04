@@ -969,6 +969,9 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 	if strings.EqualFold(storeName, sessionStoreName) {
 		return isSystemAdminRoleInContext(ctx)
 	}
+	if strings.EqualFold(storeName, "site_users") {
+		return isSystemAdminRoleInContext(ctx)
+	}
 
 	if strings.HasPrefix(storeName, "stm_") {
 		if isRegularAdminRoleInContext(ctx) {

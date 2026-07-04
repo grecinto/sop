@@ -677,9 +677,12 @@ export default function App() {
           <div className="checkout-grid">
             <div className="checkout-card">
               <p className="eyebrow">Secure checkout</p>
-              <h2>Start your Starter Kit subscription</h2>
+              <h2>Start your Northstar Starter Kit subscription</h2>
               <p className="muted-copy">
-                Your card is handled securely and we only need the minimum information required to start the monthly subscription. An active subscription unlocks licensed use of the SOP AI polyglot library in the supported runtimes, including the bundled service-side experiences that enforce subscription-bound security tokens.
+                Your card is handled securely and we only need the minimum information required to start the monthly subscription. An active subscription unlocks licensed use of the Northstar AI polyglot library in the supported runtimes, including the bundled service-side experiences that enforce subscription-bound security tokens.
+              </p>
+              <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
+                Visit <strong>ai-northstar.com</strong> for the public product site and onboarding experience.
               </p>
 
               {canResumeCheckout ? (
@@ -746,7 +749,8 @@ export default function App() {
               {checkoutComplete ? (
                 <div className="success-banner">
                   <h4>Subscription confirmed</h4>
-                  <p>Your Starter Kit is active, your access to the SOP AI polyglot library is now enabled, and the local-agent download step is ready.</p>
+                  <p>Your Starter Kit is active, your access to the Northstar AI polyglot library is now enabled, and the local-agent download step is ready.</p>
+                  <p className="muted-copy" style={{ marginTop: '0.75rem' }}>Public site: <strong>ai-northstar.com</strong></p>
                 </div>
               ) : (
                 <div className="preview-box">
@@ -782,31 +786,34 @@ export default function App() {
 
           <div className="docs-intro">
             <p className="eyebrow">Product documentation</p>
-            <h1 className="hero-title">See what the SOP Cloud experience includes, from the local agent to the AI copilot.</h1>
+            <h1 className="hero-title">Learn how Northstar brings local workflows, knowledge bases, and AI guidance together.</h1>
             <p className="hero-copy">
-              The new site is designed for self-service onboarding. It lets users register, choose a plan, manage their subscription, and understand how the local agent and the AI copilot work together. An active subscription unlocks licensed use of the SOP AI polyglot library across supported runtimes, and the bundled httpserver and daemon enforce that subscription-bound access for service-side use.
+              The new site is built for self-service onboarding. It walks users from account creation and plan selection to local-agent installation and the first AI-guided workflow. An active subscription unlocks licensed use of the Northstar AI polyglot library across supported runtimes, while the bundled httpserver and daemon enforce that subscription-bound access for service-side use.
+            </p>
+            <p className="hero-copy" style={{ marginTop: '1rem' }}>
+              Public site: <strong>ai-northstar.com</strong>
             </p>
           </div>
 
           <div className="docs-grid">
             <article className="feature-card">
               <p className="eyebrow">Starter Kit</p>
-              <h3>What is included</h3>
+              <h3>What the Starter Kit includes</h3>
               <ul className="feature-list">
+                <li>Account creation, billing management, and a guided onboarding path</li>
                 <li>Local agent download and setup guidance for your machine</li>
-                <li>AI copilot access for prompts, summaries, and guided workflows</li>
-                <li>Simple account management for registration, subscription changes, and unregistering</li>
+                <li>AI copilot access for prompts, summaries, and step-by-step guidance</li>
               </ul>
               <a className="button button-secondary" href="/site/subscribe">Choose Starter Kit</a>
             </article>
 
             <article className="feature-card">
               <p className="eyebrow">HQ + Local Agent</p>
-              <h3>Planned for advanced teams</h3>
+              <h3>Built for advanced teams</h3>
               <ul className="feature-list">
-                <li>Broader team-focused workflows for admins and power users</li>
+                <li>Admin-ready workflows for shared knowledge and larger operating contexts</li>
                 <li>Richer operational views that build on the local-agent foundation</li>
-                <li>Preview access for internal testing before wider rollout</li>
+                <li>Early access to the HQ experience for internal evaluation and rollout planning</li>
               </ul>
               <a className="button button-secondary" href="/app/hq">Preview HQ experience</a>
             </article>
@@ -817,7 +824,7 @@ export default function App() {
               <p className="eyebrow">How the experience works</p>
               <h3>Local agent + AI copilot</h3>
               <p className="muted-copy">
-                The local agent handles tasks on the user&apos;s machine, while the AI copilot orchestrates the workflow, explains the next step, and helps users stay in control. They work best together because the copilot can suggest an action and the local agent can execute it close to the data.
+                The local agent handles tasks on the user&apos;s machine while the AI copilot explains the workflow, organizes context, and helps the user decide what to do next. Together they create a practical loop: the copilot suggests the action, and the agent carries it out close to the data.
               </p>
               <div className="capability-list">
                 <div>
@@ -837,21 +844,21 @@ export default function App() {
 
             <article className="feature-card">
               <p className="eyebrow">Site capabilities</p>
-              <h3>User actions available on the site</h3>
+              <h3>What you can do on the site</h3>
               <ul className="feature-list">
-                <li>Register a new account and create a starter profile</li>
-                <li>Sign up for a subscription plan and move into the guided onboarding flow</li>
-                <li>Unsubscribe from the active plan when you no longer need it</li>
-                <li>Unregister your account and remove the site-side identity cleanly</li>
+                <li>Create an account and start the guided onboarding experience</li>
+                <li>Choose a plan, manage billing, and keep your subscription current</li>
+                <li>Download and set up the local agent for your preferred environment</li>
+                <li>Unsubscribe or unregister cleanly when you no longer need the service</li>
               </ul>
             </article>
           </div>
 
           <article className="feature-card">
             <p className="eyebrow">Polyglot AI library</p>
-            <h3>SOP AI is available across languages</h3>
+            <h3>Northstar AI is available across languages</h3>
             <p className="muted-copy">
-              Once your subscription is active, you are licensed to use the SOP AI polyglot library from C#, Rust, Java, Python, and Go. The shared ai/memory package and KnowledgeBase APIs let teams build memory, retrieval, and knowledge workflows for end-user applications and for microservices that need a consistent integration surface, and the bundled httpserver and daemon enforce that subscription-bound access for service-side use.
+              Once your subscription is active, you are licensed to use the Northstar AI polyglot library from C#, Rust, Java, Python, and Go. The shared ai/memory package and KnowledgeBase APIs let teams build memory, retrieval, and knowledge workflows for end-user applications and for microservices that need a consistent integration surface, and the bundled httpserver and daemon enforce that subscription-bound access for service-side use.
             </p>
             <ul className="feature-list">
               <li>Your active plan unlocks the polyglot library in the supported runtimes.</li>
@@ -907,27 +914,27 @@ export default function App() {
       <section className="hero-card">
         <div className="hero-grid">
           <div>
-            <p className="eyebrow">SOP Cloud</p>
-            <h1 className="hero-title">Your AI copilot for Stores, Spaces, and Knowledge Bases</h1>
+            <p className="eyebrow">Northstar</p>
+            <h1 className="hero-title">Turn scattered knowledge into guided AI workflows</h1>
             <p className="hero-copy">
-              Work with an AI copilot built for intelligent automation, AI-native databases, and knowledge workflows. The Starter Kit gives you access to Stores, Spaces, and Knowledge Bases with support for Anthropic, GPT, and Gemini.
+              Northstar gives teams a local-first way to organize Stores, Spaces, and Knowledge Bases, then pair them with an AI copilot that can guide work, summarize context, and help move projects forward without losing control of the data.
             </p>
             <div className="hero-actions">
               <a className="button button-primary" href="/site/subscribe">Create account</a>
-              <a className="button button-secondary" href="/site/subscribe">View Starter Kit</a>
+              <a className="button button-secondary" href="/site/docs">View product docs</a>
             </div>
           </div>
 
           <div className="hero-side">
             <div className="plan-card">
               <p className="eyebrow">Starter Kit</p>
-              <h3>AI copilot + AI database</h3>
-              <div className="price">$10/mo</div>
-              <p>Includes AI copilot access, Stores and Spaces, Knowledge Base workflows, and rich automation for coding and code review.</p>
+              <h3>Guided onboarding for local-first AI work</h3>
+              <div className="price">$5/month</div>
+              <p>Start with a simple setup path that covers account creation, subscription management, local-agent installation, and the first AI-enabled workflows.</p>
               <ul className="feature-list">
-                <li>Supports Anthropic, GPT, and Gemini</li>
-                <li>Pre-built Knowledge Bases for coding and code review</li>
-                <li>Self registration and subscription management</li>
+                <li>Local agent access for hands-on workflows on your machine</li>
+                <li>AI copilot support for prompts, summaries, and next-step guidance</li>
+                <li>Pre-built Knowledge Base patterns for coding and review tasks</li>
               </ul>
             </div>
           </div>
@@ -940,10 +947,10 @@ export default function App() {
             <h2>{isStarterActive ? 'Your Starter Kit is active' : isStarterPending ? 'Your Starter Kit checkout is pending' : 'Start your Starter Kit'}</h2>
             <p className="muted-copy">
               {isStarterActive
-                ? `Welcome back, ${account.name || 'there'}. Your starter plan is active and ready to use.`
+                ? `Welcome back, ${account.name || 'there'}. Your Starter Kit is active and ready for local agent setup and guided AI workflows.`
                 : isStarterPending
-                  ? `Welcome back, ${account.name || 'there'}. Your starter checkout is pending payment confirmation.`
-                  : 'Register your account and begin the guided starter experience.'}
+                  ? `Welcome back, ${account.name || 'there'}. Your Starter Kit checkout is pending payment confirmation.`
+                  : 'Create your account to start with guided onboarding, a local agent download, and a practical first workflow.'}
             </p>
             <form className="form-stack" onSubmit={handleStart}>
               <label>

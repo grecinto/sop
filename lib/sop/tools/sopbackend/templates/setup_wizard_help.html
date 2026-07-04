@@ -1,0 +1,48 @@
+{{define "setup_wizard_help_modal"}}
+<div id="setup-wizard-help-modal" class="modal" style="display: none; z-index: 11000;">
+    <div class="modal-content" style="max-width: 760px; width: min(92vw, 760px); border: 1px solid var(--border-color);">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <span id="setup-wizard-help-title">Setup help</span>
+            <span style="cursor:pointer; font-size: 20px;" onclick="closeSetupWizardHelp()">&times;</span>
+        </div>
+        <div class="modal-body" style="line-height: 1.5;">
+            <div id="setup-wizard-help-body">
+                <div id="setup-wizard-help-step-1" style="display: none;">
+                    <p><strong>What this page does</strong></p>
+                    <ul>
+                        <li>Choose the name and storage location for your first user database.</li>
+                        <li>Use the default values if you are trying the setup flow for the first time.</li>
+                        <li>Only enable advanced options if you already understand erasure coding and storage layout.</li>
+                    </ul>
+                    <p><strong>Tip</strong></p>
+                    <p>Review the defaults and change them to match your environment before you continue, especially the database folder location and any storage paths you want to use.</p>
+                </div>
+                <div id="setup-wizard-help-step-2" style="display: none;">
+                    <p><strong>What this page does</strong></p>
+                    <ul>
+                        <li>Set the system database path and server port for this environment.</li>
+                        <li>Choose whether this setup should use a clustered or standalone mode.</li>
+                        <li>Use the advanced section only if you need custom registry or partition settings.</li>
+                    </ul>
+                    <p><strong>Tip</strong></p>
+                    <p>This page is only about initializing the system database for the environment you are creating right now.</p>
+                </div>
+                <div id="setup-wizard-help-step-3" style="display: none;">
+                    <p><strong>What this page does</strong></p>
+                    <ul>
+                        <li>Review the values you entered for the user database and system configuration.</li>
+                        <li>Set the initial root password and optional AI provider settings.</li>
+                        <li>Finish the setup once everything looks correct.</li>
+                    </ul>
+                    <p><strong>Tip</strong></p>
+                    <p>Use this page to confirm the values before you continue. You can always return to the previous step if you need to adjust something.</p>
+                </div>
+            </div>
+            <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px;">
+                <button type="button" onclick="closeSetupWizardHelp()" style="background: var(--sidebar-bg); color: var(--text-color); border: 1px solid var(--border-color);">Close</button>
+                <button type="button" onclick="closeSetupWizardHelp(); openUIModal('setup-wizard');" style="background: var(--active-bg); color: white; border: none;">Back to Setup Wizard</button>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}

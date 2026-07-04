@@ -112,14 +112,14 @@ func resolveRuntimeConfigPath(dataDir string) string {
 	}
 
 	candidates := []string{}
-	if envPath := strings.TrimSpace(os.Getenv("SOP_CONFIG_FILE")); envPath != "" {
-		candidates = append(candidates, envPath)
-	}
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates,
 			filepath.Join(cwd, "config.json"),
 			filepath.Join(cwd, ".sop-data", "config.json"),
 		)
+	}
+	if envPath := strings.TrimSpace(os.Getenv("SOP_CONFIG_FILE")); envPath != "" {
+		candidates = append(candidates, envPath)
 	}
 	candidates = append(candidates, filepath.Join(resolvedDataDir, "config.json"))
 

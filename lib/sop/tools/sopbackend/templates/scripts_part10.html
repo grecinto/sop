@@ -533,6 +533,41 @@
         }
     });
 
+    function showSetupWizardHelp(step = currentWizardStep) {
+        const helpModal = document.getElementById('setup-wizard-help-modal');
+        const helpTitle = document.getElementById('setup-wizard-help-title');
+        const helpBody = document.getElementById('setup-wizard-help-body');
+        if (!helpModal || !helpTitle || !helpBody) return;
+
+        const stepNumber = Number(step) || 1;
+        const titles = {
+            1: 'Step 1: Create Your First Database',
+            2: 'Step 2: System Configuration',
+            3: 'Step 3: Review and Finish'
+        };
+
+        helpTitle.textContent = titles[stepNumber] || 'Setup Wizard Help';
+        document.querySelectorAll('[id^="setup-wizard-help-step-"]').forEach(el => {
+            el.style.display = 'none';
+        });
+        const stepContent = document.getElementById(`setup-wizard-help-step-${stepNumber}`);
+        if (stepContent) {
+            stepContent.style.display = 'block';
+        } else {
+            helpBody.innerHTML = '<p>Help content is not available for this step.</p>';
+        }
+        helpModal.style.display = 'flex';
+        closeUIModal('setup-wizard');
+    }
+
+    function closeSetupWizardHelp() {
+        const helpModal = document.getElementById('setup-wizard-help-modal');
+        if (helpModal) {
+            helpModal.style.display = 'none';
+        }
+        openUIModal('setup-wizard');
+    }
+
     function showSetupWizard() {
         openUIModal('setup-wizard');
         
@@ -567,23 +602,31 @@
         }
 
         // Update Buttons
-        document.getElementById('wizard-prev').style.visibility = currentWizardStep === 1 ? 'hidden' : 'visible';
+        const prevBtn = document.getElementById('wizard-prev');
+        if (prevBtn) prevBtn.style.visibility = currentWizardStep === 1 ? 'hidden' : 'visible';
+
+        const skipBtn = document.getElementById('wizard-skip');
+        if (skipBtn) {
+            skipBtn.style.display = currentWizardStep === 1 ? 'inline-block' : 'none';
+        }
+
         const nextBtn = document.getElementById('wizard-next');
-        nextBtn.textContent = currentWizardStep === 3 ? 'Finish' : 'Next';
-        nextBtn.title = currentWizardStep === 3 ? 'Click "Finish" to create the configuration and initialize the databases.' : '';
+        if (nextBtn) {
+            nextBtn.textContent = currentWizardStep === 3 ? 'Finish' : 'Next';
+            nextBtn.title = currentWizardStep === 3 ? 'Click "Finish" to create the configuration and initialize the databases.' : '';
+            nextBtn.onclick = wizardNext;
+        }
 
         // Update Help Link based on Step
         const helpLink = document.getElementById('wizard-help-link');
         if (helpLink) {
-            if (currentWizardStep === 3) {
-                // Step 3: Language Bindings (Integration)
-                helpLink.href = "https://github.com/sharedcode/sop/blob/main/docs/installation/LANGUAGE_BINDINGS.md";
-                helpLink.title = "Read the Integration Tutorial";
-            } else {
-                // Step 1 & 2: Setup/Config Concepts
-                helpLink.href = "https://github.com/sharedcode/sop/blob/main/docs/installation/DATA_MANAGER_SETUP.md";
-                helpLink.title = "Read the Setup Guide";
-            }
+            helpLink.title = currentWizardStep === 3
+                ? 'Open help for the final review step'
+                : `Open help for step ${currentWizardStep}`;
+            helpLink.onclick = (event) => {
+                event.preventDefault();
+                showSetupWizardHelp(currentWizardStep);
+            };
         }
 
         // Populate Summary on Step 3
@@ -622,6 +665,13 @@
             `;
             
             document.getElementById('setup-summary').innerHTML = summaryHtml;
+        }
+    }
+
+    function wizardSkipUserDb() {
+        if (currentWizardStep === 1) {
+            currentWizardStep++;
+            updateWizardStep();
         }
     }
 
@@ -1137,9 +1187,15 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: 'root', password: rootPassword })
                 });
+                const loginBody = await loginRes.json().catch(() => null);
                 if (!loginRes.ok) {
-                    const text = await loginRes.text();
+                    const text = loginBody && (loginBody.error || loginBody.message)
+                        ? (loginBody.error || loginBody.message)
+                        : await loginRes.text();
                     throw new Error(text || 'auto-login failed');
+                }
+                if (!storeSessionTokens(loginBody)) {
+                    throw new Error('Auto-login succeeded but did not return an access token.');
                 }
             } catch (e) {
                 throw new Error(`Auto-login after setup failed: ${e.message || e}`);

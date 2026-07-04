@@ -45,6 +45,17 @@ Keep the boundary clear:
 - The current retention behavior is conservative: a memory item stays active while it is recent and relevant, becomes archived once it is deemed stale, and is removed from the store once the weekly compaction pass observes it has been archived long enough.
 - In the Data Manager, lifecycle state is now surfaced directly on space-item cards so archived or stale entries are visibly labeled and can be distinguished from active content without opening the item details.
 
+## Simple store migration
+
+For operational moves, the simplest supported story is a file-folder migration:
+
+1. Stop the app.
+2. Backup the relevant store directories and configuration files.
+3. Copy the store folders to the target environment, keeping the same layout and paths.
+4. Start the app against the copied data and verify startup, authentication, session handling, and basic store access.
+
+This is a good default because SOP data is stored in filesystem-backed stores and the migration is effectively a copy of those directories. It is straightforward, low-risk, and easy to rollback if needed.
+
 ## Design conventions
 
 - Prefer explicit request structs and explicit parameters over context-based state passing.

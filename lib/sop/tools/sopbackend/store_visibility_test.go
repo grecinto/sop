@@ -27,6 +27,8 @@ func TestShouldExposeStoreInUI_HidesInternalStores(t *testing.T) {
 		{name: "sessions hidden for non-admin", store: "sessions", userID: "alice", exposed: false},
 		{name: "sessions hidden for admin", store: "sessions", userID: "root", isAdmin: true, exposed: false},
 		{name: "sessions visible for system admin", store: "sessions", userID: "root", isSystemAdmin: true, exposed: true},
+		{name: "site users hidden for admin", store: "site_users", userID: "root", isAdmin: true, exposed: false},
+		{name: "site users visible for system admin", store: "site_users", userID: "root", isSystemAdmin: true, exposed: true},
 		{name: "admin own stm hidden", store: "stm_root", userID: "root", isAdmin: true, exposed: false},
 		{name: "system admin own stm visible", store: "stm_root", userID: "root", isSystemAdmin: true, exposed: true},
 	}

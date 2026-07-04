@@ -69,6 +69,11 @@
         
         const storesFolders = document.getElementById(`${prefix}-stores-folders`).value.trim();
 
+        const hasUserDbInput = Boolean(name || path || storesFolders || conn);
+        if (!hasUserDbInput) {
+            return null;
+        }
+
         if (!name) return "Database Name is required";
         
         if (isAdvanced) {

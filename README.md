@@ -33,6 +33,17 @@ The repository uses a module replacement in [go.mod](go.mod) to point at the sha
 - Internal entitlement and licensing design details for the new site, bundled Data Manager, and future bindings are documented in [docs/ENTITLEMENT_ARCHITECTURE.md](docs/ENTITLEMENT_ARCHITECTURE.md).
 - The next monitorability milestone is to standardize the shared /healthz, /readyz, and /metrics contract across the site backend, httpserver, and daemon for Prometheus integration.
 
+### Simple store migration
+
+Because SOP is file-based and stores are effectively folders on disk, a simple and safe migration path is to treat each store as a portable data directory:
+
+1. Stop the running application.
+2. Create a backup of the relevant store folders and configuration files.
+3. Copy the store folders to the target environment, preserving their relative paths.
+4. Start the application against the copied data and verify startup, login, session recovery, and basic CRUD operations.
+
+This approach is appropriate for same-version or compatible-version moves and is the simplest operational story for a file-based runtime. It is also easy to rollback by restoring the previous folder copy.
+
 ### Operations and observability
 
 Each runtime entrypoint exposes a consistent monitorability surface:

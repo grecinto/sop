@@ -69,10 +69,31 @@
         localStorage.removeItem('sop_refresh_token');
         localStorage.removeItem('sop_session_token');
         localStorage.removeItem('access_token');
+        localStorage.removeItem('sop_userId');
         sessionStorage.removeItem('sop_access_token');
         sessionStorage.removeItem('sop_refresh_token');
         sessionStorage.removeItem('sop_session_token');
         sessionStorage.removeItem('access_token');
+        sessionStorage.removeItem('sop_userId');
+    }
+
+    function storeSessionTokens(body) {
+        if (!body || typeof body !== 'object') return false;
+        const accessToken = body.access_token || body.accessToken || '';
+        if (accessToken) {
+            localStorage.setItem('sop_access_token', accessToken);
+            sessionStorage.setItem('sop_access_token', accessToken);
+        }
+        const refreshToken = body.refresh_token || body.refreshToken || '';
+        if (refreshToken) {
+            localStorage.setItem('sop_refresh_token', refreshToken);
+            sessionStorage.setItem('sop_refresh_token', refreshToken);
+        }
+        if (body.user && body.user.username) {
+            localStorage.setItem('sop_userId', body.user.username);
+            sessionStorage.setItem('sop_userId', body.user.username);
+        }
+        return Boolean(accessToken);
     }
 
     function getStoredSessionToken() {
@@ -738,20 +759,23 @@
     document.addEventListener('keyup', function(event) {
         const wizard = document.getElementById('setup-wizard');
         if (wizard && wizard.style.display !== 'none' && wizard.style.display !== '') {
-            // Ensure no other modal is covering it (simple check)
-            if(document.getElementById('global-alert-modal').style.display === 'flex') return;
-            if(document.getElementById('global-confirm-modal').style.display === 'flex') return;
+            const alertModal = document.getElementById('global-alert-modal');
+            const confirmModal = document.getElementById('global-confirm-modal');
+            if (alertModal && alertModal.style.display === 'flex') return;
+            if (confirmModal && confirmModal.style.display === 'flex') return;
             
             if (event.key === "Escape") {
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 wizardCancel();
             } else if (event.key === "Enter") {
-                // On page 3 (Finish), support Enter key to complete setup
+                const target = event.target || {};
+                const tagName = (target.tagName || '').toUpperCase();
+                const isEditable = tagName === 'TEXTAREA' || tagName === 'INPUT' || tagName === 'SELECT';
+                if (isEditable && !['button', 'a'].includes(tagName)) {
+                    return;
+                }
                 if (typeof currentWizardStep !== 'undefined' && currentWizardStep === 3) {
-                    // Don't trigger if user is typing in a textarea
-                    if (event.target.tagName === 'TEXTAREA') return;
-                    
                     event.preventDefault();
                     event.stopImmediatePropagation();
                     wizardNext();
