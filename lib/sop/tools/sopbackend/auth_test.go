@@ -202,17 +202,17 @@ func TestSaveAndLoadConfig_PersistsRootUserCredentials(t *testing.T) {
 	}
 }
 
-func TestAuthenticate_LegacyRootPasswordFallback(t *testing.T) {
+func TestAuthenticate_UsesUsersStoreAsAuthoritativeSource(t *testing.T) {
 	cfg := Config{RootPassword: SecuredString("legacy-secret")}
 
 	ok, user, err := cfg.Authenticate("root", "legacy-secret")
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	if !ok {
-		t.Fatal("Authenticate() = false, want true")
+	if ok {
+		t.Fatal("Authenticate() = true, want false when no users-store record exists")
 	}
-	if user == nil || user.Username != "root" || user.Role != sop.RoleAdmin {
+	if user != nil {
 		t.Fatalf("Authenticate() returned unexpected user: %+v", user)
 	}
 }

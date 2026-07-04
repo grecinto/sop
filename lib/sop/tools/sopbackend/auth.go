@@ -1390,6 +1390,29 @@ func (c *Config) ensureUserStore() UserStore {
 	return c.UsersStore
 }
 
+func (c *Config) syncUsersStoreFromConfig(ctx context.Context) error {
+	if c == nil || len(c.Users) == 0 {
+		return nil
+	}
+	store := c.ensureUserStore()
+	if store == nil {
+		return nil
+	}
+	users, err := store.List(ctx)
+	if err != nil {
+		return err
+	}
+	if len(users) > 0 {
+		return nil
+	}
+	for i := range c.Users {
+		if err := store.Save(ctx, &c.Users[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *Config) ensureSubscriptionStore() SubscriptionStore {
 	if c.SubscriptionsStore != nil {
 		return c.SubscriptionsStore
@@ -1411,6 +1434,9 @@ func (c *Config) findUserRecord(ctx context.Context, username string) (*UserReco
 	if username == "" {
 		return nil, false, nil
 	}
+	if err := c.syncUsersStoreFromConfig(ctx); err != nil {
+		return nil, false, err
+	}
 	if store := c.UsersStore; store != nil {
 		user, ok, err := store.Get(ctx, username)
 		if err != nil {
@@ -1419,13 +1445,6 @@ func (c *Config) findUserRecord(ctx context.Context, username string) (*UserReco
 		if ok {
 			return user, true, nil
 		}
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) != username {
-			continue
-		}
-		user := c.Users[i]
-		return &user, true, nil
 	}
 	return nil, false, nil
 }

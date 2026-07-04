@@ -570,6 +570,7 @@
 
     function showSetupWizard() {
         openUIModal('setup-wizard');
+        skipUserDbProvisioning = false;
         
         // Initialize User DB EC Container if empty
         const container = document.getElementById('setup-db-ec-container');
@@ -668,8 +669,80 @@
         }
     }
 
+    function populateStep1Defaults() {
+        // Auto-populate System DB Manual Fields from User DB
+        document.getElementById('setup-sys-type').value = document.getElementById('setup-db-type').value;
+        document.getElementById('setup-sys-conn').value = document.getElementById('setup-db-conn').value;
+        document.getElementById('setup-sys-registry-hash-mod').value = document.getElementById('setup-db-registry-hash-mod').value;
+
+        // Build a system database path from the configured system DB name.
+        const systemDbName = (typeof SYSTEM_DB_NAME === 'string' && SYSTEM_DB_NAME.trim()) ? SYSTEM_DB_NAME : 'system';
+        const buildSystemDbPath = (path) => {
+            if (!path) return `/tmp/sop_data/${systemDbName}`;
+            const isWin = path.includes('\\');
+            const sep = isWin ? '\\' : '/';
+            const parts = path.split(sep).filter(p => p.length > 0);
+            if (parts.length === 0) return `/tmp/sop_data/${systemDbName}`;
+            parts.pop();
+            parts.push(systemDbName);
+            return (path.startsWith(sep) ? sep : '') + parts.join(sep);
+        };
+
+        const dbStores = document.getElementById('setup-db-stores-folders').value;
+        if (dbStores) {
+            const paths = dbStores.split(',').map(s => s.trim());
+            const sysPaths = paths.map(p => buildSystemDbPath(p));
+            document.getElementById('setup-sys-stores-folders').value = sysPaths.join(', ');
+        }
+
+        const dbPath = document.getElementById('setup-db-path').value;
+        // Only auto-populate if NOT using Enterprise Brain (Auto or Manual)
+        const entToggle = document.getElementById('setup-sys-use-enterprise');
+        const manualEntToggle = document.getElementById('setup-sys-use-manual-enterprise');
+        const isUsingEnterprise = (entToggle && entToggle.checked) || (manualEntToggle && manualEntToggle.checked);
+
+        if (!isUsingEnterprise) {
+            document.getElementById('setup-reg-path').value = buildSystemDbPath(dbPath || document.getElementById('setup-reg-path').value);
+        }
+
+        toggleSetupConnectionField('sys');
+
+        // Auto-populate System DB EC Container from User DB (Max 4)
+        const dbErasureConfigs = collectEcConfigs('setup-db-ec-container');
+        const sysContainer = document.getElementById('setup-sys-ec-container');
+        // Clear existing EC entries (keep helper text)
+        sysContainer.querySelectorAll('.ec-entry').forEach(e => e.remove());
+
+        if (dbErasureConfigs && dbErasureConfigs.length > 0) {
+            const limit = 4;
+            const toAdd = dbErasureConfigs.slice(0, limit);
+            toAdd.forEach(item => {
+                addErasureConfigRow('setup-sys-ec-container');
+                const newEntry = sysContainer.lastElementChild;
+                if (newEntry) {
+                    newEntry.querySelector('.ec-key').value = item.key;
+                    newEntry.querySelector('.ec-data').value = item.data_chunks;
+                    newEntry.querySelector('.ec-parity').value = item.parity_chunks;
+                    if (item.base_paths) {
+                        // Copy base paths directly without modification (User Request)
+                        const sysBasePaths = item.base_paths;
+                        newEntry.querySelector('.ec-paths').value = sysBasePaths.join(', ');
+                    }
+                }
+            });
+        } else {
+            // Ensure at least one empty row if none exists?
+            // No, user might not want EC. But generally System DB might need it if matched.
+            if (sysContainer.querySelectorAll('.ec-entry').length === 0) {
+                addErasureConfigRow('setup-sys-ec-container');
+            }
+        }
+    }
+
     function wizardSkipUserDb() {
         if (currentWizardStep === 1) {
+            skipUserDbProvisioning = true;
+            populateStep1Defaults();
             currentWizardStep++;
             updateWizardStep();
         }
@@ -679,81 +752,13 @@
         if (currentWizardStep < 3) {
             // Validation
             if (currentWizardStep === 1) { // Was 2: User DB
+                skipUserDbProvisioning = false;
+
                 // Unified Validation
                 const err = validateDbForm('setup-db');
                 if (err) return showAlert(err);
 
-                const name = document.getElementById('setup-db-name').value;
-                const path = document.getElementById('setup-db-path').value;
-                // if (!name || !path) return showAlert("Database Name and Path are required"); // Replaced by validateDbForm
-                
-                // Auto-populate System DB Manual Fields from User DB
-                document.getElementById('setup-sys-type').value = document.getElementById('setup-db-type').value;
-                document.getElementById('setup-sys-conn').value = document.getElementById('setup-db-conn').value;
-                document.getElementById('setup-sys-registry-hash-mod').value = document.getElementById('setup-db-registry-hash-mod').value;
-                
-                // Build a system database path from the configured system DB name.
-                const systemDbName = (typeof SYSTEM_DB_NAME === 'string' && SYSTEM_DB_NAME.trim()) ? SYSTEM_DB_NAME : 'system';
-                const buildSystemDbPath = (path) => {
-                    if (!path) return `/tmp/sop_data/${systemDbName}`;
-                    const isWin = path.includes('\\');
-                    const sep = isWin ? '\\' : '/';
-                    const parts = path.split(sep).filter(p => p.length > 0);
-                    if (parts.length === 0) return `/tmp/sop_data/${systemDbName}`;
-                    parts.pop();
-                    parts.push(systemDbName);
-                    return (path.startsWith(sep) ? sep : '') + parts.join(sep);
-                };
-
-                const dbStores = document.getElementById('setup-db-stores-folders').value;
-                if (dbStores) {
-                    const paths = dbStores.split(',').map(s => s.trim());
-                    const sysPaths = paths.map(p => buildSystemDbPath(p));
-                    document.getElementById('setup-sys-stores-folders').value = sysPaths.join(', ');
-                }
-                
-                const dbPath = document.getElementById('setup-db-path').value;
-                // Only auto-populate if NOT using Enterprise Brain (Auto or Manual)
-                const entToggle = document.getElementById('setup-sys-use-enterprise');
-                const manualEntToggle = document.getElementById('setup-sys-use-manual-enterprise');
-                const isUsingEnterprise = (entToggle && entToggle.checked) || (manualEntToggle && manualEntToggle.checked);
-                
-                if (!isUsingEnterprise) {
-                    document.getElementById('setup-reg-path').value = buildSystemDbPath(dbPath || document.getElementById('setup-reg-path').value);
-                }
-
-                toggleSetupConnectionField('sys');
-
-                // Auto-populate System DB EC Container from User DB (Max 4)
-                 const dbErasureConfigs = collectEcConfigs('setup-db-ec-container');
-                 const sysContainer = document.getElementById('setup-sys-ec-container');
-                 // Clear existing EC entries (keep helper text)
-                 sysContainer.querySelectorAll('.ec-entry').forEach(e => e.remove());
-
-                 if (dbErasureConfigs && dbErasureConfigs.length > 0) {
-                     const limit = 4;
-                     const toAdd = dbErasureConfigs.slice(0, limit);
-                     toAdd.forEach(item => {
-                         addErasureConfigRow('setup-sys-ec-container');
-                         const newEntry = sysContainer.lastElementChild;
-                         if (newEntry) {
-                             newEntry.querySelector('.ec-key').value = item.key;
-                             newEntry.querySelector('.ec-data').value = item.data_chunks;
-                             newEntry.querySelector('.ec-parity').value = item.parity_chunks;
-                             if (item.base_paths) {
-                                  // Copy base paths directly without modification (User Request)
-                                  const sysBasePaths = item.base_paths;
-                                  newEntry.querySelector('.ec-paths').value = sysBasePaths.join(', ');
-                             }
-                         }
-                     });
-                 } else {
-                     // Ensure at least one empty row if none exists ? 
-                     // No, user might not want EC. But generally System DB might need it if matched.
-                     if (sysContainer.querySelectorAll('.ec-entry').length === 0) {
-                        addErasureConfigRow('setup-sys-ec-container');
-                     }
-                 }
+                populateStep1Defaults();
 
             } else if (currentWizardStep === 2) { // Was 1: System Config
                  const manualEntToggle = document.getElementById('setup-sys-use-manual-enterprise');
@@ -891,6 +896,7 @@
         if (manualDBToggle) manualDBToggle.checked = false;
         
         // Reset Step
+        skipUserDbProvisioning = false;
         currentWizardStep = 1;
         updateWizardStep();
     }
@@ -1089,14 +1095,17 @@
             userOptions.erasure_config = userEcMap;
         }
 
-        const userDBRequest = {
-            name: dbName,
-            path: dbPath,
-            use_shared_db: manualDBToggle ? manualDBToggle.checked : false,
-            populate_demo: populateDemo,
-            populate_medical: populateMedical,
-            options: userOptions
-        };
+        const databases = [];
+        if (!skipUserDbProvisioning) {
+            databases.push({
+                name: dbName,
+                path: dbPath,
+                use_shared_db: manualDBToggle ? manualDBToggle.checked : false,
+                populate_demo: populateDemo,
+                populate_medical: populateMedical,
+                options: userOptions
+            });
+        }
 
         // --- Save AI config to local browser storage (BYOK) ---
         const aiConfig = {
@@ -1127,7 +1136,7 @@
             embedder_api_key: eApiKey,
             use_shared_brain: manualEntToggle ? manualEntToggle.checked : false,
             system_options: systemOptions,
-            databases: [ userDBRequest ]
+            databases: databases
         };
 
         // UI Loading State (Synchronous wait for the heavy DBs)

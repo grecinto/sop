@@ -96,7 +96,15 @@ func ensureRootUserFromPassword(password string, role string, features []string)
 		features = nil
 	}
 
-	return config.SetUserWithFeatures("root", password, role, features)
+	if err := config.SetUserWithFeatures("root", password, role, features); err != nil {
+		return err
+	}
+	if userStore := config.ensureUserStore(); userStore != nil {
+		if user, ok, err := userStore.Get(context.Background(), rootUsername); err == nil && ok && user != nil {
+			return nil
+		}
+	}
+	return nil
 }
 
 func normalizeRedisConnection(cfg *sop.RedisCacheConfig) string {

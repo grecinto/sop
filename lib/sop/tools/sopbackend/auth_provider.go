@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sharedcode/sop"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -44,10 +43,6 @@ func (p *LocalAuthProvider) Authenticate(ctx context.Context, username, password
 			return true, user, nil
 		}
 		return false, nil, nil
-	}
-
-	if strings.EqualFold(username, "root") && strings.TrimSpace(p.cfg.RootPassword.Plaintext()) != "" && strings.TrimSpace(password) == strings.TrimSpace(p.cfg.RootPassword.Plaintext()) {
-		return true, &UserRecord{Username: "root", Role: sop.RoleAdmin}, nil
 	}
 
 	return false, nil, nil
