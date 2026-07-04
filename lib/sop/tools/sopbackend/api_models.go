@@ -8,12 +8,13 @@ import (
 
 // AddSpaceCategoryRequest defines the JSON payload required to create a new Category in a Space.
 type AddSpaceCategoryRequest struct {
-	ID          string         `json:"id,omitempty"`
-	Name        string         `json:"name"`
-	Path        string         `json:"path,omitempty"`
-	Description string         `json:"description"`
-	ParentID    string         `json:"parent_id,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	ID                      string         `json:"id,omitempty"`
+	Name                    string         `json:"name"`
+	Path                    string         `json:"path,omitempty"`
+	Description             string         `json:"description"`
+	ParentID                string         `json:"parent_id,omitempty"`
+	Metadata                map[string]any `json:"metadata,omitempty"`
+	DontAddToCategoryByPath *bool          `json:"dont_add_to_category_by_path,omitempty"`
 }
 
 // AddSpaceItemRequest defines the JSON payload required to add a new Item to a Space.

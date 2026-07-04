@@ -318,8 +318,10 @@ func handleAddSpaceCategory(w http.ResponseWriter, r *http.Request) {
 			cat.CenterVector = vec
 		}
 
-		_, err = categoriesTree.UpdateCurrentItem(ctx, targetID, cat)
-		if err != nil {
+		if err := kb.UpsertCategories(ctx, []memory.UpsertCategoryParam{{
+			Category:                cat,
+			DontAddToCategoryByPath: req.DontAddToCategoryByPath,
+		}}); err != nil {
 			http.Error(w, "Failed to update category: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -368,11 +370,14 @@ func handleAddSpaceCategory(w http.ResponseWriter, r *http.Request) {
 			Metadata:        cloneDataMap(req.Metadata),
 		}
 
-		id, err = kb.Store.AddCategory(ctx, cat)
-		if err != nil {
+		if err := kb.UpsertCategories(ctx, []memory.UpsertCategoryParam{{
+			Category:                cat,
+			DontAddToCategoryByPath: req.DontAddToCategoryByPath,
+		}}); err != nil {
 			http.Error(w, "Failed to add category: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		id = cat.ID
 	}
 
 	if err := trans.Commit(ctx); err != nil {

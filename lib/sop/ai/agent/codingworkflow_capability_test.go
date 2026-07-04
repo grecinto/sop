@@ -210,6 +210,26 @@ func TestBuildCodingMemoryLTMThoughtsAttachesCanonicalDocumentReference(t *testi
 	}
 }
 
+func TestShouldVectorizeLTMIndexEntryOnlyForSemanticKind(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry codingMemoryLTMIndexEntry
+		want  bool
+	}{
+		{name: "semantic", entry: codingMemoryLTMIndexEntry{Kind: "semantic"}, want: true},
+		{name: "path", entry: codingMemoryLTMIndexEntry{Kind: "path"}, want: false},
+		{name: "code_structure", entry: codingMemoryLTMIndexEntry{Kind: "code_structure"}, want: false},
+		{name: "case-insensitive", entry: codingMemoryLTMIndexEntry{Kind: "SEMANTIC"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldVectorizeLTMIndexEntry(tt.entry); got != tt.want {
+				t.Fatalf("shouldVectorizeLTMIndexEntry(%q) = %v, want %v", tt.entry.Kind, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildCodingMemoryLTMPayloadStoresLifecycleMetadataForRepoState(t *testing.T) {
 	mem := cw.CodingMemory{Description: "fix parser", Outcome: "patched parser", RepositoryHint: "sop-cloud"}
 	payload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)

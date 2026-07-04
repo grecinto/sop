@@ -15,9 +15,10 @@ import (
 // ============================================================================
 
 type UpsertCategoryParam struct {
-	ParentPaths []string   `json:"parent_paths"` // Declarative DAG routing (e.g. ["Root/Engineering", "Root/DevOps"])
-	ParentIDs   []sop.UUID `json:"parent_ids"`   // Explicit DAG routing fallback
-	Category    *Category  `json:"category"`     // Pointer to the Category to upsert
+	ParentPaths             []string   `json:"parent_paths"`                           // Declarative DAG routing (e.g. ["Root/Engineering", "Root/DevOps"])
+	ParentIDs               []sop.UUID `json:"parent_ids"`                             // Explicit DAG routing fallback
+	Category                *Category  `json:"category"`                               // Pointer to the Category to upsert
+	DontAddToCategoryByPath *bool      `json:"dont_add_to_category_by_path,omitempty"` // Optional; nil/false preserves the default path-index behavior, true opts out and removes the path entry
 }
 
 type UpsertItemParam[T any] struct {
@@ -113,7 +114,19 @@ func (kb *KnowledgeBase[T]) UpsertCategories(ctx context.Context, params []Upser
 		if path == "" {
 			path = p.Category.Name
 		}
-		if path != "" {
+		dontAddToCategoryByPath := false
+		if p.DontAddToCategoryByPath != nil {
+			dontAddToCategoryByPath = *p.DontAddToCategoryByPath
+		}
+		if dontAddToCategoryByPath {
+			if path != "" {
+				if foundPath, _ := catsByPath.Find(ctx, path, false); foundPath {
+					if _, err := catsByPath.Remove(ctx, path); err != nil {
+						return err
+					}
+				}
+			}
+		} else if path != "" {
 			foundPath, _ := catsByPath.Find(ctx, path, false)
 			if foundPath {
 				_, err = catsByPath.Update(ctx, path, p.Category.ID)

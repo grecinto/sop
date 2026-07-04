@@ -145,6 +145,70 @@ func TestBatchCategories(t *testing.T) {
 	}
 }
 
+func TestUpsertCategoriesCanSkipCategoryByPathIndex(t *testing.T) {
+	ctx := context.Background()
+	s := prepareTestStore()
+	kb := &KnowledgeBase[string]{Store: s}
+
+	catID := sop.NewUUID()
+	dontIndex := true
+	if err := kb.UpsertCategories(ctx, []UpsertCategoryParam{{
+		Category:                &Category{ID: catID, Name: "SemanticOnly", Path: "SemanticOnly"},
+		DontAddToCategoryByPath: &dontIndex,
+	}}); err != nil {
+		t.Fatalf("UpsertCategories failed: %v", err)
+	}
+
+	catsByPath, err := s.CategoriesByPath(ctx)
+	if err != nil {
+		t.Fatalf("CategoriesByPath failed: %v", err)
+	}
+	if found, _ := catsByPath.Find(ctx, "SemanticOnly", false); found {
+		t.Fatalf("expected category path entry to be skipped when opted out")
+	}
+
+	catsTree, err := s.Categories(ctx)
+	if err != nil {
+		t.Fatalf("Categories failed: %v", err)
+	}
+	if found, _ := catsTree.Find(ctx, catID, false); !found {
+		t.Fatalf("expected category to still be stored in the main category tree")
+	}
+}
+
+func TestUpsertCategoriesRemovesExistingCategoryByPathWhenOptedOut(t *testing.T) {
+	ctx := context.Background()
+	s := prepareTestStore()
+	kb := &KnowledgeBase[string]{Store: s}
+
+	catID := sop.NewUUID()
+	if err := kb.UpsertCategories(ctx, []UpsertCategoryParam{{
+		Category: &Category{ID: catID, Name: "SemanticOnly", Path: "SemanticOnly"},
+	}}); err != nil {
+		t.Fatalf("initial UpsertCategories failed: %v", err)
+	}
+
+	catsByPath, err := s.CategoriesByPath(ctx)
+	if err != nil {
+		t.Fatalf("CategoriesByPath failed: %v", err)
+	}
+	if found, _ := catsByPath.Find(ctx, "SemanticOnly", false); !found {
+		t.Fatalf("expected initial path index entry to exist")
+	}
+
+	dontIndex := true
+	if err := kb.UpsertCategories(ctx, []UpsertCategoryParam{{
+		Category:                &Category{ID: catID, Name: "SemanticOnly", Path: "SemanticOnly"},
+		DontAddToCategoryByPath: &dontIndex,
+	}}); err != nil {
+		t.Fatalf("second UpsertCategories failed: %v", err)
+	}
+
+	if found, _ := catsByPath.Find(ctx, "SemanticOnly", false); found {
+		t.Fatalf("expected category path entry to be removed when opted out on upsert")
+	}
+}
+
 func TestDeleteCategories_RemovesPathAndDistanceIndexes(t *testing.T) {
 	ctx := context.Background()
 	s := prepareTestStore()

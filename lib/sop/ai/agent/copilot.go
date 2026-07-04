@@ -654,6 +654,10 @@ type codingMemoryLTMIndexEntry struct {
 	Payload      map[string]any
 }
 
+func shouldVectorizeLTMIndexEntry(entry codingMemoryLTMIndexEntry) bool {
+	return strings.EqualFold(strings.TrimSpace(entry.Kind), "semantic")
+}
+
 func buildCodingMemoryLTMPayloadAndIndexes(mem cw.CodingMemory) (map[string]any, []codingMemoryLTMIndexEntry) {
 	docID := sop.NewUUID()
 	scopeType := "repo"
@@ -1715,7 +1719,9 @@ func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
 			if err != nil {
 				return err
 			}
-			categoryIDs = append(categoryIDs, categoryID)
+			if shouldVectorizeLTMIndexEntry(entry) {
+				categoryIDs = append(categoryIDs, categoryID)
+			}
 		}
 		if len(categoryIDs) == 0 {
 			return nil
