@@ -61,6 +61,17 @@ func TestNewCopilotAgentRegistersSpacesCapability(t *testing.T) {
 	}
 }
 
+func TestNewCopilotAgentRegistersCodingWorkflowCapabilityByDefault(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	cap, ok := ag.capabilityRegistry.Resolve("fix this bug in the repository", capabilities.RoutingState{Domain: "Desktop"})
+	if !ok {
+		t.Fatal("expected coding workflow capability to be registered by default")
+	}
+	if cap.ID() != "coding_workflow" {
+		t.Fatalf("expected coding workflow capability id %q, got %q", "coding_workflow", cap.ID())
+	}
+}
+
 func TestNewCopilotAgentAppliesCapabilityOptions(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil, WithCapability(&stubCapability{id: "stores", name: "Stores", context: "option context"}))
 	cap, ok := ag.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: "Stores"})

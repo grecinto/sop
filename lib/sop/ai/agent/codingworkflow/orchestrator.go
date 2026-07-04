@@ -2,10 +2,12 @@ package codingworkflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	ts "github.com/smacker/go-tree-sitter"
@@ -61,6 +63,10 @@ type ContextPack struct {
 	ContinuationSummary   string
 	ExpertiseSummary      string
 	ExpertiseSources      []string
+	Provider              string
+	ProviderSource        string
+	ProviderModel         string
+	VisualizationSummary  string
 }
 
 // Patch describes a targeted file edit.
@@ -86,6 +92,9 @@ type CodingMemory struct {
 	NextStep       string
 	RepositoryHint string
 	Plan           []string
+	// AST/Tree-sitter structural information for semantic category paths
+	StructuralPath string   // e.g., "sop-cloud/ai/agent/Execute"
+	ASTLeafNodes   []string // e.g., ["Execute", "BuildContext"]
 }
 
 // ContinuitySignal is a lightweight, capability-scoped signal that can later be consumed
@@ -165,6 +174,37 @@ type SessionMemory interface {
 	Load(string) (map[string]string, error)
 }
 
+// KnowledgeBaseRetriever reads grounded guidance from repository docs and knowledge files.
+type KnowledgeBaseRetriever interface {
+	Retrieve(Task, RunState, ContextPack) (ExpertiseCapsule, error)
+}
+
+// ProviderRouter resolves the active LLM provider and source for a workflow run.
+type ProviderRouter interface {
+	Resolve(Task, RunState, ContextPack) (ProviderSelection, error)
+}
+
+// ProviderSelection captures the active provider and source used for a workflow run.
+type ProviderSelection struct {
+	Provider string
+	Source   string
+	Model    string
+}
+
+// EvaluationCase captures a single evaluation scenario for a workflow.
+type EvaluationCase struct {
+	Name           string
+	Task           Task
+	ExpectContains string
+}
+
+// EvaluationResult captures the pass/fail outcome of an evaluation case.
+type EvaluationResult struct {
+	Name    string
+	Passed  bool
+	Message string
+}
+
 // SafetyPolicy controls whether a task is allowed to mutate files.
 type SafetyPolicy interface {
 	Allow(Task, RunState) error
@@ -188,21 +228,25 @@ type TestResult struct {
 // end-user daemon or host-side RAG runtime. HQ/site-server deployments should not rely
 // on this capability surface unless they explicitly opt into a local-execution adapter.
 type Orchestrator struct {
-	ContextManager       ContextManager
-	RepoIndexer          RepoIndexer
-	PatchEngine          PatchEngine
-	ChangedFileInspector ChangedFileInspector
-	DiffPreviewer        DiffPreviewer
-	RepoSearcher         RepoSearcher
-	RepoInspector        RepoInspector
-	Memory               SessionMemory
-	Policy               SafetyPolicy
-	TestRunner           TestRunner
-	Planner              Planner
-	ExpertiseRetriever   ExpertiseRetriever
-	MemorySink           func(CodingMemory)
-	ContinuitySink       func(ContinuitySignal)
-	MaxIterations        int
+	ContextManager         ContextManager
+	RepoIndexer            RepoIndexer
+	PatchEngine            PatchEngine
+	ChangedFileInspector   ChangedFileInspector
+	DiffPreviewer          DiffPreviewer
+	RepoSearcher           RepoSearcher
+	RepoInspector          RepoInspector
+	Memory                 SessionMemory
+	Policy                 SafetyPolicy
+	TestRunner             TestRunner
+	Planner                Planner
+	ExpertiseRetriever     ExpertiseRetriever
+	KnowledgeBaseRetriever KnowledgeBaseRetriever
+	ProviderRouter         ProviderRouter
+	MemorySink             func(CodingMemory)
+	ContinuitySink         func(ContinuitySignal)
+	GrammarRegistry        *GrammarRegistry
+	OrchestrationBackend   OrchestrationBackend
+	MaxIterations          int
 }
 
 // Execute builds context, applies an optional patch, persists lightweight memory, and
@@ -225,7 +269,11 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		o.PatchEngine = &DefaultPatchEngine{}
 	}
 	if o.Memory == nil {
-		o.Memory = NewInMemorySessionMemory()
+		if path := strings.TrimSpace(os.Getenv("SOP_CODING_WORKFLOW_MEMORY_PATH")); path != "" {
+			o.Memory = NewFileSessionMemory(path)
+		} else {
+			o.Memory = NewInMemorySessionMemory()
+		}
 	}
 	if o.ChangedFileInspector == nil {
 		o.ChangedFileInspector = &GitRepoInspector{}
@@ -247,6 +295,21 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	}
 	if o.ExpertiseRetriever == nil {
 		o.ExpertiseRetriever = &DefaultExpertiseRetriever{}
+	}
+	if o.KnowledgeBaseRetriever == nil {
+		o.KnowledgeBaseRetriever = &DefaultKnowledgeBaseRetriever{}
+	}
+	if o.ProviderRouter == nil {
+		o.ProviderRouter = &DefaultProviderRouter{}
+	}
+	if o.GrammarRegistry == nil {
+		o.GrammarRegistry = NewGrammarRegistry()
+	}
+	if o.OrchestrationBackend == nil {
+		backend, err := NewOrchestrationBackend(os.Getenv("SOP_CODING_ORCHESTRATION_BACKEND"), nil)
+		if err == nil && backend != nil {
+			o.OrchestrationBackend = backend
+		}
 	}
 
 	pack, err := o.ContextManager.BuildContext(task, task.State)
@@ -285,10 +348,36 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		pack.RepositorySummary = fmt.Sprintf("%s; target=%s", pack.RepositorySummary, strings.TrimSpace(task.ActiveFile))
 	}
 	if expertise, err := o.ExpertiseRetriever.Retrieve(task, task.State, pack); err == nil {
-		pack.ExpertiseSummary = expertise.Summary
-		pack.ExpertiseSources = expertise.Sources
+		if strings.TrimSpace(expertise.Summary) != "" {
+			pack.ExpertiseSummary = expertise.Summary
+			pack.ExpertiseSources = expertise.Sources
+		}
 	} else {
 		_ = err
+	}
+	if kb, err := o.KnowledgeBaseRetriever.Retrieve(task, task.State, pack); err == nil {
+		if strings.TrimSpace(kb.Summary) != "" {
+			if strings.TrimSpace(pack.ExpertiseSummary) != "" {
+				pack.ExpertiseSummary = strings.TrimSpace(pack.ExpertiseSummary) + " | " + strings.TrimSpace(kb.Summary)
+			} else {
+				pack.ExpertiseSummary = kb.Summary
+			}
+			pack.ExpertiseSources = append(pack.ExpertiseSources, kb.Sources...)
+		}
+	} else {
+		_ = err
+	}
+	if provider, err := o.ProviderRouter.Resolve(task, task.State, pack); err == nil {
+		pack.Provider = provider.Provider
+		pack.ProviderSource = provider.Source
+		pack.ProviderModel = provider.Model
+	} else {
+		_ = err
+	}
+	if memorySummary, ok := o.Memory.(*FileSessionMemory); ok {
+		if summary, err := memorySummary.BuildVisualizationSummary(); err == nil {
+			pack.VisualizationSummary = summary
+		}
 	}
 	if changed, err := o.ChangedFileInspector.ListChangedFiles(task, task.State); err == nil {
 		pack.RelatedFiles = append(pack.RelatedFiles, changed...)
@@ -380,6 +469,8 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 			Outcome:        message,
 			TestStatus:     "passed",
 			RepositoryHint: pack.RepositorySummary,
+			StructuralPath: pack.StructuralPath,
+			ASTLeafNodes:   pack.ASTLeafNodes,
 		}
 		if !lastTestResult.Passed {
 			codingMemory.TestStatus = "failed"
@@ -431,6 +522,18 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if pack.ExpertiseSummary != "" {
 		message = fmt.Sprintf("%s; expertise: %s", message, pack.ExpertiseSummary)
 	}
+	if pack.Provider != "" {
+		message = fmt.Sprintf("%s; provider: %s", message, pack.Provider)
+	}
+	if o.OrchestrationBackend != nil {
+		message = fmt.Sprintf("%s; orchestration: %s", message, o.OrchestrationBackend.Describe(task, pack))
+	}
+	if task.ActiveFile != "" || pack.ActiveFile != "" {
+		message = fmt.Sprintf("%s; active_file: %s", message, strings.TrimSpace(pack.ActiveFile))
+	}
+	if pack.VisualizationSummary != "" {
+		message = fmt.Sprintf("%s; visualization: %s", message, pack.VisualizationSummary)
+	}
 	if task.Description != "" {
 		switch pack.TaskType {
 		case "planning":
@@ -442,6 +545,9 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		default:
 			message = fmt.Sprintf("context assembled for %q; next step: inspect or edit the relevant files", task.Description)
 		}
+	}
+	if o.OrchestrationBackend != nil {
+		message = fmt.Sprintf("%s; orchestration: %s", message, o.OrchestrationBackend.Describe(task, pack))
 	}
 	if pack.RecentCodingMemory != "" {
 		message = fmt.Sprintf("%s; recent coding memory: %s", message, pack.RecentCodingMemory)
@@ -1022,6 +1128,212 @@ func (m *InMemorySessionMemory) Load(key string) (map[string]string, error) {
 	return values, nil
 }
 
+// FileSessionMemory persists workflow state to a local JSON file for local-host workflows.
+type FileSessionMemory struct {
+	path string
+}
+
+func NewFileSessionMemory(path string) *FileSessionMemory {
+	return &FileSessionMemory{path: path}
+}
+
+func (m *FileSessionMemory) Save(key string, values map[string]string) error {
+	if m.path == "" {
+		return fmt.Errorf("memory path is required")
+	}
+	payload := map[string]map[string]string{}
+	if existing, err := m.loadAll(); err == nil {
+		payload = existing
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	payload[key] = values
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return os.WriteFile(m.path, data, 0o644)
+}
+
+func (m *FileSessionMemory) Load(key string) (map[string]string, error) {
+	payload, err := m.loadAll()
+	if err != nil {
+		return nil, err
+	}
+	values, exists := payload[key]
+	if !exists {
+		return nil, fmt.Errorf("memory not found")
+	}
+	return values, nil
+}
+
+func (m *FileSessionMemory) BuildVisualizationSummary() (string, error) {
+	payload, err := m.loadAll()
+	if err != nil {
+		return "", err
+	}
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := []string{"local workflow history"}
+	for _, key := range keys {
+		values := payload[key]
+		if len(values) == 0 {
+			continue
+		}
+		entries := make([]string, 0, len(values))
+		for k, v := range values {
+			entries = append(entries, fmt.Sprintf("%s=%s", k, v))
+		}
+		sort.Strings(entries)
+		parts = append(parts, fmt.Sprintf("%s:%s", key, strings.Join(entries, ";")))
+	}
+	if len(parts) == 1 {
+		return "local workflow history: no entries yet", nil
+	}
+	return strings.Join(parts, " | "), nil
+}
+
+func (m *FileSessionMemory) loadAll() (map[string]map[string]string, error) {
+	if m.path == "" {
+		return nil, fmt.Errorf("memory path is required")
+	}
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]map[string]string{}, nil
+		}
+		return nil, err
+	}
+	payload := map[string]map[string]string{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+// DefaultKnowledgeBaseRetriever reads repository docs and knowledge files to create grounded guidance.
+type DefaultKnowledgeBaseRetriever struct{}
+
+func (d *DefaultKnowledgeBaseRetriever) Retrieve(task Task, state RunState, pack ContextPack) (ExpertiseCapsule, error) {
+	_ = state
+	_ = pack
+	workingDir := task.WorkingDir
+	if workingDir == "" {
+		workingDir = "."
+	}
+	queryTerms := []string{}
+	for _, part := range strings.Fields(strings.ToLower(strings.TrimSpace(task.Description))) {
+		if part == "" {
+			continue
+		}
+		queryTerms = append(queryTerms, strings.Trim(part, "\"'.,:;()[]{}"))
+	}
+	if task.ActiveFile != "" {
+		queryTerms = append(queryTerms, strings.TrimSuffix(strings.ToLower(filepath.Base(task.ActiveFile)), filepath.Ext(task.ActiveFile)))
+	}
+	seen := map[string]bool{}
+	var terms []string
+	for _, term := range queryTerms {
+		if term != "" && !seen[term] {
+			seen[term] = true
+			terms = append(terms, term)
+		}
+	}
+	matches := []string{}
+	sources := []string{}
+	_ = filepath.WalkDir(workingDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d == nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".md" && ext != ".txt" {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		text := strings.ToLower(string(content))
+		if len(terms) == 0 {
+			return nil
+		}
+		matched := false
+		for _, term := range terms {
+			if term != "" && strings.Contains(text, term) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil
+		}
+		relPath, err := filepath.Rel(workingDir, path)
+		if err != nil {
+			relPath = path
+		}
+		relPath = filepath.ToSlash(relPath)
+		matches = append(matches, strings.TrimSpace(string(content)))
+		sources = append(sources, relPath)
+		return nil
+	})
+	if len(matches) == 0 {
+		return ExpertiseCapsule{Summary: "No knowledge-base guidance was found for this task.", Category: "coding", Sources: []string{"local:knowledge_base"}}, nil
+	}
+	summary := fmt.Sprintf("Knowledge-base guidance available from %d source(s): %s", len(matches), strings.Join(sources, ", "))
+	return ExpertiseCapsule{Summary: summary, Category: "coding", Sources: sources}, nil
+}
+
+// DefaultProviderRouter resolves a provider using environment-backed BYO API key settings.
+type DefaultProviderRouter struct{}
+
+func (d *DefaultProviderRouter) Resolve(task Task, state RunState, pack ContextPack) (ProviderSelection, error) {
+	_ = task
+	_ = state
+	_ = pack
+	if provider, ok := os.LookupEnv("OPENAI_API_KEY"); ok && provider != "" {
+		return ProviderSelection{Provider: "openai", Source: "env", Model: "gpt-4o-mini"}, nil
+	}
+	if provider, ok := os.LookupEnv("ANTHROPIC_API_KEY"); ok && provider != "" {
+		return ProviderSelection{Provider: "anthropic", Source: "env", Model: "claude-3-5-sonnet-latest"}, nil
+	}
+	if provider, ok := os.LookupEnv("GOOGLE_API_KEY"); ok && provider != "" {
+		return ProviderSelection{Provider: "google", Source: "env", Model: "gemini-2.0-flash"}, nil
+	}
+	return ProviderSelection{Provider: "openai", Source: "default", Model: "gpt-4o-mini"}, nil
+}
+
+// RunEvaluationSuite executes a lightweight evaluation harness for the workflow.
+func RunEvaluationSuite(orchestrator *Orchestrator, cases []EvaluationCase) []EvaluationResult {
+	results := make([]EvaluationResult, 0, len(cases))
+	for _, c := range cases {
+		if orchestrator == nil {
+			results = append(results, EvaluationResult{Name: c.Name, Passed: false, Message: "orchestrator is required"})
+			continue
+		}
+		result, err := orchestrator.Execute(c.Task)
+		if err != nil {
+			results = append(results, EvaluationResult{Name: c.Name, Passed: false, Message: err.Error()})
+			continue
+		}
+		message := strings.ToLower(strings.TrimSpace(result.Message))
+		passed := true
+		if c.ExpectContains != "" && !strings.Contains(message, strings.ToLower(strings.TrimSpace(c.ExpectContains))) {
+			passed = false
+		}
+		results = append(results, EvaluationResult{Name: c.Name, Passed: passed, Message: result.Message})
+	}
+	return results
+}
+
 func persistRepositoryPathMemory(memory SessionMemory, task Task, pack ContextPack) error {
 	if memory == nil {
 		return nil
@@ -1134,22 +1446,56 @@ func inferSymbolName(input string) string {
 	return candidate
 }
 
+func extensionToLanguage(ext string) string {
+	switch ext {
+	case ".go":
+		return "go"
+	case ".py":
+		return "python"
+	case ".js":
+		return "javascript"
+	case ".ts":
+		return "typescript"
+	default:
+		return ""
+	}
+}
+
 func collectASTLeafNodes(content, workingDir, activeFile string) ([]string, string) {
 	if strings.TrimSpace(content) == "" {
 		return nil, ""
 	}
-	parser := ts.NewParser()
-	parser.SetLanguage(golang.GetLanguage())
-	tree, err := parser.ParseCtx(context.Background(), nil, []byte(content))
-	if err != nil || tree == nil {
-		return nil, ""
+
+	// V1: Use enhanced tree-sitter parser with multi-language support
+	ext := filepath.Ext(activeFile)
+	lang := extensionToLanguage(ext)
+	if lang == "" {
+		lang = "go"
 	}
-	root := tree.RootNode()
-	if root == nil {
+
+	tsParser := NewTreeSitterParser(lang)
+	leaves, err := tsParser.ParseSymbols(content)
+	if err != nil || len(leaves) == 0 {
+		// Fallback to legacy parsing
+		leaves = collectSymbolsLegacy(content)
+	}
+
+	if len(leaves) == 0 {
 		return nil, ""
 	}
 
-	leaves := []string{}
+	// Keep the original structural path logic
+	parser := ts.NewParser()
+	parser.SetLanguage(golang.GetLanguage())
+	tree, treeErr := parser.ParseCtx(context.Background(), nil, []byte(content))
+	if treeErr != nil || tree == nil {
+		return leaves, ""
+	}
+	root := tree.RootNode()
+	if root == nil {
+		return leaves, ""
+	}
+
 	var walk func(node *ts.Node)
 	walk = func(node *ts.Node) {
 		if node == nil {
@@ -1208,6 +1554,10 @@ func extractASTLeafName(node *ts.Node, source []byte) string {
 		}
 	}
 	return ""
+}
+
+func collectSymbolsLegacy(content string) []string {
+	return collectSymbols(content)
 }
 
 func collectSymbols(content string) []string {

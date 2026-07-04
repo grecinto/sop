@@ -309,6 +309,83 @@ func TestDefaultContextManagerIncludesNestedRepositoryFiles(t *testing.T) {
 	}
 }
 
+func TestDefaultKnowledgeBaseRetrieverFindsRelevantDocs(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "docs", "parser-guide.md"), []byte("# Parser guide\n\nUse the parser carefully when editing syntax trees."), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+
+	retriever := &DefaultKnowledgeBaseRetriever{}
+	capsule, err := retriever.Retrieve(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "fix parser logic"}, RunState{}, ContextPack{})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if capsule.Summary == "" {
+		t.Fatalf("expected a non-empty knowledge base summary")
+	}
+	if !strings.Contains(strings.ToLower(capsule.Summary), "parser") {
+		t.Fatalf("expected summary to mention parser, got %q", capsule.Summary)
+	}
+	if len(capsule.Sources) == 0 {
+		t.Fatalf("expected at least one knowledge source")
+	}
+}
+
+func TestFileSessionMemoryPersistsToDiskAndBuildsSummary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.json")
+	memory := NewFileSessionMemory(path)
+	if err := memory.Save("latest-task", map[string]string{"description": "fix parser"}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	loaded, err := memory.Load("latest-task")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if loaded["description"] != "fix parser" {
+		t.Fatalf("expected persisted description, got %q", loaded["description"])
+	}
+	summary, err := memory.BuildVisualizationSummary()
+	if err != nil {
+		t.Fatalf("BuildVisualizationSummary returned error: %v", err)
+	}
+	if !strings.Contains(summary, "fix parser") {
+		t.Fatalf("expected visualization summary to include the persisted task, got %q", summary)
+	}
+}
+
+func TestDefaultProviderRouterResolvesBYOProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	router := &DefaultProviderRouter{}
+	selection, err := router.Resolve(Task{}, RunState{}, ContextPack{})
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if selection.Provider != "openai" {
+		t.Fatalf("expected openai provider, got %q", selection.Provider)
+	}
+	if selection.Source != "env" {
+		t.Fatalf("expected env-backed source, got %q", selection.Source)
+	}
+}
+
+func TestRunEvaluationSuiteReportsResults(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n\nfunc Hello() string { return \"hi\" }\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	orchestrator := &Orchestrator{ContextManager: &DefaultContextManager{}, Planner: &DefaultPlanner{}, RepoIndexer: &DefaultRepoIndexer{}, PatchEngine: &DefaultPatchEngine{}, ChangedFileInspector: &GitRepoInspector{}, DiffPreviewer: &DefaultDiffPreviewer{}, RepoSearcher: &FileSearchAdapter{}, RepoInspector: &GitRepoInspector{}, Memory: NewInMemorySessionMemory(), Policy: &DefaultSafetyPolicy{}, TestRunner: &DefaultTestRunner{}}
+	results := RunEvaluationSuite(orchestrator, []EvaluationCase{{Name: "context-only", Task: Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "inspect hello"}, ExpectContains: "context assembled"}})
+	if len(results) != 1 {
+		t.Fatalf("expected one evaluation result, got %d", len(results))
+	}
+	if !results[0].Passed {
+		t.Fatalf("expected evaluation to pass, got %#v", results[0])
+	}
+}
+
 func TestDefaultTestRunnerSelectsTargetedTests(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module example.com/demo\n"), 0o644); err != nil {

@@ -18,6 +18,23 @@ type SubscriptionSummary = {
   planCode: string;
 };
 
+type WorkflowOutcome = {
+  message: string;
+  task_type: string;
+  plan: string[];
+  active_file?: string;
+  repository_summary?: string;
+  provider?: string;
+  provider_source?: string;
+  provider_model?: string;
+  expertise_summary?: string;
+  expertise_sources?: string[];
+  visualization_summary?: string;
+  related_files?: string[];
+  test_files?: string[];
+  applied_patches: number;
+};
+
 type AccountState = {
   name: string;
   email: string;
@@ -405,6 +422,9 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [provisioningDone, setProvisioningDone] = useState(false);
+  const [workflowPrompt, setWorkflowPrompt] = useState('Inspect the site backend implementation');
+  const [workflowOutcome, setWorkflowOutcome] = useState<WorkflowOutcome | null>(null);
+  const [isRunningWorkflow, setIsRunningWorkflow] = useState(false);
 
   useEffect(() => {
     const draft = loadDraftState();
@@ -682,6 +702,37 @@ export default function App() {
     }
   };
 
+  const handleRunWorkflow = async () => {
+    if (!workflowPrompt.trim()) {
+      return;
+    }
+    setIsRunningWorkflow(true);
+    setWorkflowOutcome(null);
+    try {
+      const response = await fetch('/api/coding-workflow/execute', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          working_dir: '/Volumes/T7/sop-cloud',
+          active_file: 'src/backend/site/main.go',
+          description: workflowPrompt.trim(),
+          mode: 'code',
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.error || payload?.message || 'Workflow request failed.');
+      }
+      setWorkflowOutcome(payload as WorkflowOutcome);
+      setStatusMessage('Workflow run completed.');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Workflow run failed.');
+    } finally {
+      setIsRunningWorkflow(false);
+    }
+  };
+
   const handleLogout = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
@@ -853,6 +904,9 @@ export default function App() {
               Northstar brings knowledge-driven AI to your workflow with local-first privacy. Unlike current AI copilots that store your conversation history on their servers, everything stays on your device. Bring your own API keys for direct control. Load knowledge bases to transform your LLM into a domain expert, visualize your AI interactions with built-in tools, and manage your data locally. Our site only handles login and auth—we don't store your chat history.
             </p>
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
+              <strong>Real-time vector search on your machine.</strong> Other AI copilots run overnight K-Means clustering in their data centers to optimize code search. Northstar uses semantic category trees that work instantly—no waiting, no HQ processing, just real-time intelligence on your local device.
+            </p>
+            <p className="hero-copy" style={{ marginTop: '1rem' }}>
               Public site: <strong>ai-northstar.com</strong>
             </p>
           </div>
@@ -864,6 +918,8 @@ export default function App() {
               <ul className="feature-list">
                 <li>Load knowledge bases to turn your LLM into a domain expert—medical, mechanical, coding, or any field</li>
                 <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots</li>
+                <li>Real-time vector database that runs on your machine—no overnight optimization, no data center processing</li>
+                <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
                 <li>Built-in data visualization to review and understand your AI workflows</li>
                 <li>Generate higher-quality code that follows architecture best practices and coding standards</li>
               </ul>
@@ -871,12 +927,14 @@ export default function App() {
             </article>
 
             <article className="feature-card">
-              <p className="eyebrow">Local-first privacy</p>
-              <h3>Your conversation history stays on your device</h3>
+              <p className="eyebrow">Real-time intelligence on your machine</p>
+              <h3>Full AI copilot power without the data center</h3>
               <ul className="feature-list">
-                <li>Bring your own API keys for direct control over your LLM provider</li>
+                <li>Vector database runs in real-time on your local machine—no overnight K-Means optimization needed</li>
+                <li>Other copilots send your code to data centers for clustering and search—ours works instantly on-device</li>
+                <li>Semantic M-Way tree buckets organize code by concepts: error-handling, retry-logic, data-persistence</li>
+                <li>Three-index strategy: file paths (O(1)), code structure (O(1)), semantic concepts (O(D log N))</li>
                 <li>We don't store your conversation history—everything stays local on your device</li>
-                <li>Our site only handles login and auth—no chat data stored on our servers</li>
                 <li>Built-in visualization tools to review your AI workflows locally</li>
               </ul>
             </article>
@@ -916,12 +974,15 @@ export default function App() {
 
           <article className="feature-card">
             <p className="eyebrow">The complete experience</p>
-            <h3>Knowledge bases, local privacy, and expert AI</h3>
+            <h3>Knowledge bases, local privacy, and real-time AI</h3>
             <p className="muted-copy">
-              Current AI copilots can't do this: load domain expertise, keep your conversation history on your device, and provide built-in visualization. Other copilots store your chat history on their servers. Northstar keeps everything local—bring your own API keys, and our site only handles auth. Your conversation history stays on your device.
+              Current AI copilots can't do this: load domain expertise, keep your conversation history on your device, AND run intelligent code search in real-time without data center processing. Codex, Cursor, and GitHub Copilot send your code to their servers for overnight K-Means optimization. Northstar uses semantic category trees that work instantly on your machine.
             </p>
             <ul className="feature-list">
               <li>Knowledge bases transform your LLM into a domain expert with higher-quality output.</li>
+              <li>Real-time vector database runs on your local machine—no overnight clustering, no HQ processing delays.</li>
+              <li>Semantic M-Way tree buckets organize millions of code snippets for instant intelligent search.</li>
+              <li>Three-index approach: file paths (exact), code structure (package/class/method), semantic concepts (fuzzy).</li>
               <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots.</li>
               <li>Built-in data visualization and semantic search make your AI workflows easy to review locally.</li>
             </ul>
@@ -952,6 +1013,11 @@ export default function App() {
           </div>
 
           <div className="docs-comparison">
+            <article className="feature-card comparison-card">
+              <p className="eyebrow">Real-time on your machine</p>
+              <h3>No overnight optimization, no data center delays</h3>
+              <p className="muted-copy">Other AI copilots run K-Means clustering overnight in their data centers. Northstar uses semantic category trees for instant intelligent search—everything runs in real-time on your local device.</p>
+            </article>
             <article className="feature-card comparison-card">
               <p className="eyebrow">Knowledge-driven AI</p>
               <h3>Go beyond current AI copilots</h3>
@@ -1055,7 +1121,10 @@ export default function App() {
             <p className="eyebrow">Northstar</p>
             <h1 className="hero-title">A modern AI copilot powered by knowledge bases</h1>
             <p className="hero-copy">
-              Unlike current AI copilots that store your conversation history on their servers, Northstar keeps everything on your device. Bring your own API keys for direct control. Load knowledge bases to turn your LLM into a domain expert, get higher-quality code, and manage your data locally with built-in visualization. We don't store your chat history—our site only handles auth.
+              Unlike current AI copilots that store your conversation history on their servers and run overnight optimization in data centers, Northstar keeps everything on your device with real-time intelligence. Bring your own API keys for direct control. Load knowledge bases to turn your LLM into a domain expert, get higher-quality code, and manage your data locally with built-in visualization. We don't store your chat history—our site only handles auth.
+            </p>
+            <p className="hero-copy" style={{ marginTop: '1rem' }}>
+              <strong>Full AI copilot features, zero data center processing.</strong> Other copilots need overnight K-Means clustering at HQ. Ours uses semantic category trees that work instantly on your machine.
             </p>
             <div className="hero-actions">
               <a className="button button-primary" href="/site/subscribe">Create account</a>
@@ -1068,9 +1137,11 @@ export default function App() {
               <p className="eyebrow">AI Copilot access</p>
               <h3>Knowledge-driven AI for smarter automation and coding</h3>
               <div className="price">$5/month</div>
-              <p>One simple plan unlocks the modern AI copilot experience with knowledge base capabilities that current AI copilots don't have.</p>
+              <p>One simple plan unlocks the modern AI copilot experience with knowledge base capabilities and real-time vector search that current AI copilots don't have.</p>
               <ul className="feature-list">
                 <li>Load knowledge bases to turn your LLM into a domain expert in any field</li>
+                <li>Real-time vector database on your machine—no overnight optimization or HQ processing</li>
+                <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
                 <li>Bring your own API keys—we don't store your conversation history on our servers</li>
                 <li>Built-in data visualization to review your AI workflows</li>
                 <li>Generate higher-quality code that adheres to architecture and coding best practices</li>
@@ -1182,6 +1253,46 @@ export default function App() {
               <button type="button" className="button button-secondary danger" onClick={handleUnregister} disabled={isSubmitting}>
                 Unregister
               </button>
+            </div>
+
+            <div className="preview-box" style={{ marginTop: '1rem' }}>
+              <h4>Try the coding workflow</h4>
+              <p>Send a task to the local workflow engine and review the structured response it returns.</p>
+              <textarea
+                value={workflowPrompt}
+                onChange={(event) => setWorkflowPrompt(event.target.value)}
+                rows={3}
+                placeholder="Describe the task you want the workflow to inspect"
+                style={{ width: '100%', marginBottom: '0.75rem', padding: '0.7rem', borderRadius: '0.5rem', border: '1px solid #d0d7e2' }}
+              />
+              <div className="action-row">
+                <button type="button" className="button button-secondary" onClick={handleRunWorkflow} disabled={isRunningWorkflow || !workflowPrompt.trim()}>
+                  {isRunningWorkflow ? 'Running…' : 'Run workflow'}
+                </button>
+              </div>
+              {workflowOutcome ? (
+                <div style={{ marginTop: '0.75rem', fontSize: '0.95rem' }}>
+                  <strong>{workflowOutcome.message}</strong>
+                  <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>
+                    Task: {workflowOutcome.task_type || 'unknown'} · Applied patches: {workflowOutcome.applied_patches}
+                  </div>
+                  {workflowOutcome.repository_summary ? (
+                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Repo: {workflowOutcome.repository_summary}</div>
+                  ) : null}
+                  {workflowOutcome.expertise_summary ? (
+                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Expertise: {workflowOutcome.expertise_summary}</div>
+                  ) : null}
+                  {workflowOutcome.visualization_summary ? (
+                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Visualization: {workflowOutcome.visualization_summary}</div>
+                  ) : null}
+                  {workflowOutcome.related_files && workflowOutcome.related_files.length > 0 ? (
+                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Related files: {workflowOutcome.related_files.slice(0, 5).join(', ')}</div>
+                  ) : null}
+                  {workflowOutcome.test_files && workflowOutcome.test_files.length > 0 ? (
+                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Tests: {workflowOutcome.test_files.join(', ')}</div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             {shouldShowInstallPanel ? (

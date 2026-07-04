@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	siteaccount "github.com/grecinto/sop-cloud/src/backend/siteaccount"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -157,6 +158,9 @@ func configureRuntimeEnvironment(dataDir string) {
 	if err := os.Setenv("SOP_DATA_DIR", resolvedDataDir); err != nil {
 		log.Printf("failed to set SOP_DATA_DIR env var: %v", err)
 	}
+	if err := os.Setenv("SOP_CODING_WORKFLOW_MEMORY_PATH", filepath.Join(resolvedDataDir, "coding-workflow-memory.json")); err != nil {
+		log.Printf("failed to set SOP_CODING_WORKFLOW_MEMORY_PATH env var: %v", err)
+	}
 
 	configPath := resolveRuntimeConfigPath(resolvedDataDir)
 	sopbackend.SetConfigFile(configPath)
@@ -182,7 +186,96 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
 	sopbackend.RegisterAllHandlers(mux)
 	siteaccount.InstallSopbackendUserStoreOverride()
 	mux.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
+	mux.HandleFunc("/api/coding-workflow/execute", handleCodingWorkflowExecution)
 	registerFrontendHandler(mux, frontendDir)
+}
+
+type codingWorkflowRequest struct {
+	WorkingDir       string            `json:"working_dir"`
+	ActiveFile       string            `json:"active_file"`
+	Description      string            `json:"description"`
+	AllowDestructive bool              `json:"allow_destructive"`
+	Patch            *cw.Patch         `json:"patch,omitempty"`
+	Patches          []*cw.Patch       `json:"patches,omitempty"`
+	Metadata         map[string]string `json:"metadata,omitempty"`
+	Mode             string            `json:"mode,omitempty"`
+}
+
+type codingWorkflowResponse struct {
+	Message              string   `json:"message"`
+	TaskType             string   `json:"task_type"`
+	Plan                 []string `json:"plan,omitempty"`
+	ActiveFile           string   `json:"active_file,omitempty"`
+	RepositorySummary    string   `json:"repository_summary,omitempty"`
+	Provider             string   `json:"provider,omitempty"`
+	ProviderSource       string   `json:"provider_source,omitempty"`
+	ProviderModel        string   `json:"provider_model,omitempty"`
+	ExpertiseSummary     string   `json:"expertise_summary,omitempty"`
+	ExpertiseSources     []string `json:"expertise_sources,omitempty"`
+	VisualizationSummary string   `json:"visualization_summary,omitempty"`
+	RelatedFiles         []string `json:"related_files,omitempty"`
+	TestFiles            []string `json:"test_files,omitempty"`
+	AppliedPatches       int      `json:"applied_patches"`
+}
+
+func handleCodingWorkflowExecution(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req codingWorkflowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	state := cw.RunState{Metadata: map[string]string{}}
+	if req.Metadata != nil {
+		state.Metadata = req.Metadata
+	}
+	if strings.TrimSpace(req.Mode) != "" {
+		state.Metadata["mode"] = req.Mode
+	}
+
+	task := cw.Task{
+		WorkingDir:       req.WorkingDir,
+		ActiveFile:       req.ActiveFile,
+		Description:      req.Description,
+		Patch:            req.Patch,
+		Patches:          req.Patches,
+		AllowDestructive: req.AllowDestructive,
+		State:            state,
+	}
+	orchestrator := &cw.Orchestrator{
+		Policy:        &cw.DefaultSafetyPolicy{},
+		MaxIterations: 3,
+	}
+	result, err := orchestrator.Execute(task)
+	if err != nil {
+		log.Printf("coding workflow execution failed: %v", err)
+		http.Error(w, fmt.Sprintf("workflow execution failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	resp := codingWorkflowResponse{
+		Message:              result.Message,
+		TaskType:             result.TaskType,
+		Plan:                 result.Plan,
+		ActiveFile:           result.ContextPack.ActiveFile,
+		RepositorySummary:    result.ContextPack.RepositorySummary,
+		Provider:             result.ContextPack.Provider,
+		ProviderSource:       result.ContextPack.ProviderSource,
+		ProviderModel:        result.ContextPack.ProviderModel,
+		ExpertiseSummary:     result.ContextPack.ExpertiseSummary,
+		ExpertiseSources:     result.ContextPack.ExpertiseSources,
+		VisualizationSummary: result.ContextPack.VisualizationSummary,
+		RelatedFiles:         result.ContextPack.RelatedFiles,
+		TestFiles:            result.ContextPack.TestFiles,
+		AppliedPatches:       len(result.AppliedPatches),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func handleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {

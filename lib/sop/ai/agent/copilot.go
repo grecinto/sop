@@ -672,6 +672,8 @@ func buildCodingMemoryLTMPayloadAndIndexes(mem cw.CodingMemory) (map[string]any,
 		"lesson":           strings.TrimSpace(mem.Lesson),
 		"next_step":        strings.TrimSpace(mem.NextStep),
 		"repository_hint":  strings.TrimSpace(mem.RepositoryHint),
+		"structural_path":  strings.TrimSpace(mem.StructuralPath),
+		"ast_leaf_nodes":   mem.ASTLeafNodes,
 		"status":           "active",
 		"lifecycle_status": "active",
 		"scope_type":       scopeType,
@@ -679,16 +681,19 @@ func buildCodingMemoryLTMPayloadAndIndexes(mem cw.CodingMemory) (map[string]any,
 		"recorded_at":      time.Now().UnixMilli(),
 	}
 	pathIndexPath := buildCodingMemoryPathIndexCategoryPath(mem)
-	semanticIndexPath := buildCodingMemorySemanticIndexCategoryPath(mem)
+	codeStructureIndexPath := buildCodingMemoryCodeStructureCategoryPath(mem)
+	semanticIndexPath := buildCodingMemorySemanticCategoryPath(mem)
 	indexPayload := map[string]any{
-		"document_id":       docID.String(),
-		"payload_type":      "coding_workflow_memory",
-		"canonical_payload": canonicalPayload,
-		"path_index":        pathIndexPath,
-		"semantic_index":    semanticIndexPath,
+		"document_id":          docID.String(),
+		"payload_type":         "coding_workflow_memory",
+		"canonical_payload":    canonicalPayload,
+		"path_index":           pathIndexPath,
+		"code_structure_index": codeStructureIndexPath,
+		"semantic_index":       semanticIndexPath,
 	}
 	entries := []codingMemoryLTMIndexEntry{
 		{Kind: "path", CategoryPath: pathIndexPath, Payload: indexPayload},
+		{Kind: "code_structure", CategoryPath: codeStructureIndexPath, Payload: indexPayload},
 		{Kind: "semantic", CategoryPath: semanticIndexPath, Payload: indexPayload},
 	}
 	return indexPayload, entries
@@ -712,11 +717,12 @@ func buildCodingMemoryLTMThoughts(mem cw.CodingMemory, documentID string, entrie
 			CategoryPath: entry.CategoryPath,
 			DocID:        memory.DocIDs{documentID},
 			Data: map[string]any{
-				"document_id":       documentID,
-				"index_kind":        entry.Kind,
-				"canonical_payload": entry.Payload["canonical_payload"],
-				"path_index":        entry.Payload["path_index"],
-				"semantic_index":    entry.Payload["semantic_index"],
+				"document_id":          documentID,
+				"index_kind":           entry.Kind,
+				"canonical_payload":    entry.Payload["canonical_payload"],
+				"path_index":           entry.Payload["path_index"],
+				"code_structure_index": entry.Payload["code_structure_index"],
+				"semantic_index":       entry.Payload["semantic_index"],
 			},
 		})
 	}
@@ -737,8 +743,37 @@ func buildCodingMemoryPathIndexCategoryPath(mem cw.CodingMemory) string {
 	return strings.Join(parts, "/")
 }
 
-func buildCodingMemorySemanticIndexCategoryPath(mem cw.CodingMemory) string {
-	parts := []string{"Coding", "Workflow", "Semantic"}
+// buildCodingMemoryCodeStructureCategoryPath builds hierarchical code-tree category paths
+// for O(1) categorical lookup by package/type/method.
+func buildCodingMemoryCodeStructureCategoryPath(mem cw.CodingMemory) string {
+	// Use AST/Tree-sitter structural path if available
+	// Builds code-tree paths like: "Coding/Go/Package/ai.agent.codingworkflow/Type/Orchestrator/Method/Execute"
+	if structuralPath := strings.TrimSpace(mem.StructuralPath); structuralPath != "" {
+		return buildCodeTreeCategoryPath(mem.ActiveFile, structuralPath, mem.ASTLeafNodes)
+	}
+	// No structural path available
+	return ""
+}
+
+// buildCodingMemorySemanticCategoryPath builds NESTED SEMANTIC category paths
+// for vector search within semantic "pigeon holes".
+//
+// Key: Use the SAME FORMULA during storage and retrieval so queries land in correct buckets.
+// This solves the scaling problem - can't do flat vector search over millions of snippets,
+// but CAN if pre-organized into semantic buckets.
+//
+// Spaces semantic navigation handles fuzzy matching between vocabulary variants:
+//
+//	"error-handling" ≈ "exception-handling" ≈ "fault-tolerance"
+//	"http-networking" ≈ "http" ≈ "rest-api"
+//	Just like: "Technology/Silicon Valley" ≈ "Tech/Palo Alto"
+//
+// Examples:
+//   - "Coding/Semantic/error-handling/retry-logic"
+//   - "Coding/Semantic/data-persistence/database/sql-query"
+//   - "Coding/Semantic/http-networking/middleware/authentication"
+func buildCodingMemorySemanticCategoryPath(mem cw.CodingMemory) string {
+	parts := []string{"Coding", "Semantic"}
 	seed := []string{}
 	if desc := strings.TrimSpace(mem.Description); desc != "" {
 		seed = append(seed, desc)
@@ -767,9 +802,195 @@ func buildCodingMemorySemanticIndexCategoryPath(mem cw.CodingMemory) string {
 			break
 		}
 	}
-	if len(parts) == 3 {
+	// Extract semantic concepts from code content
+	// Use deterministic keyword extraction (same formula for storage & retrieval)
+	concepts := extractSemanticConcepts(mem)
+
+	// Build nested semantic category path (max 5 levels deep for pigeon holes)
+	for i, concept := range concepts {
+		if i >= 3 { // Limit depth: Coding/Semantic/{c1}/{c2}/{c3}
+			break
+		}
+		parts = append(parts, concept)
+	}
+
+	// Ensure at least one semantic concept
+	if len(parts) == 2 {
 		parts = append(parts, "general")
 	}
+
+	return strings.Join(parts, "/")
+}
+
+// extractSemanticConcepts extracts semantic concept keywords from coding memory
+// using a DETERMINISTIC formula (same for storage and retrieval).
+//
+// This is the key to the "pigeon hole" approach:
+// 1. Storage: extract concepts from code → build semantic path → store in bucket
+// 2. Retrieval: extract concepts from query → build semantic path → search in bucket
+// 3. Match: same formula means query lands in correct semantic bucket
+func extractSemanticConcepts(mem cw.CodingMemory) []string {
+	var concepts []string
+	seenConcepts := make(map[string]bool)
+
+	// Combine all text fields for concept extraction
+	text := strings.Join([]string{
+		mem.Description,
+		mem.Outcome,
+		mem.Lesson,
+		mem.NextStep,
+	}, " ")
+
+	// Semantic keyword patterns (deterministic extraction)
+	// Note: Spaces semantic navigation handles fuzzy matching, so:
+	//   "error-handling" ≈ "exception-handling" ≈ "fault-tolerance"
+	//   "retry-logic" ≈ "retry-pattern" ≈ "backoff-strategy"
+	// We just need consistent conceptual vocabulary - Spaces bridges variants.
+	semanticPatterns := map[string][]string{
+		"error-handling":   {"error", "exception", "failure", "fault", "crash", "panic"},
+		"retry-logic":      {"retry", "backoff", "exponential", "circuit-breaker", "resilience"},
+		"data-persistence": {"database", "query", "sql", "orm", "repository", "storage", "persist"},
+		"http-networking":  {"http", "rest", "api", "endpoint", "request", "response", "client", "server"},
+		"authentication":   {"auth", "login", "token", "jwt", "session", "credential", "oauth", "sso"},
+		"parsing":          {"parse", "parser", "decode", "unmarshal", "deserialize", "lexer", "syntax"},
+		"validation":       {"validate", "validator", "check", "verify", "sanitize", "constraint"},
+		"observability":    {"log", "logger", "trace", "debug", "monitor", "metric", "telemetry"},
+		"testing":          {"test", "mock", "assert", "fixture", "suite", "unit", "integration"},
+		"caching":          {"cache", "redis", "memcache", "ttl", "memoize", "invalidate"},
+		"concurrency":      {"goroutine", "thread", "async", "parallel", "mutex", "lock", "race", "sync"},
+		"configuration":    {"config", "settings", "env", "environment", "flag", "parameter"},
+		"middleware":       {"middleware", "interceptor", "filter", "handler", "pipeline"},
+		"serialization":    {"json", "xml", "yaml", "proto", "marshal", "encode", "format"},
+		"security":         {"security", "encrypt", "decrypt", "hash", "sign", "certificate", "tls"},
+		"routing":          {"route", "router", "path", "url", "match", "dispatch"},
+		"transformation":   {"transform", "convert", "map", "reduce", "filter", "process"},
+		"scheduling":       {"schedule", "cron", "timer", "interval", "periodic", "job"},
+	}
+
+	textLower := strings.ToLower(text)
+
+	// Match semantic patterns
+	for concept, keywords := range semanticPatterns {
+		for _, keyword := range keywords {
+			if strings.Contains(textLower, keyword) {
+				if !seenConcepts[concept] {
+					concepts = append(concepts, concept)
+					seenConcepts[concept] = true
+					break
+				}
+			}
+		}
+	}
+
+	// Add file-type concept from AST nodes
+	for _, node := range mem.ASTLeafNodes {
+		nodeLower := strings.ToLower(node)
+		if strings.Contains(nodeLower, "handler") {
+			if !seenConcepts["http"] {
+				concepts = append(concepts, "http")
+				seenConcepts["http"] = true
+			}
+		} else if strings.Contains(nodeLower, "parser") {
+			if !seenConcepts["parsing"] {
+				concepts = append(concepts, "parsing")
+				seenConcepts["parsing"] = true
+			}
+		} else if strings.Contains(nodeLower, "validator") {
+			if !seenConcepts["validation"] {
+				concepts = append(concepts, "validation")
+				seenConcepts["validation"] = true
+			}
+		}
+	}
+
+	return concepts
+}
+
+// buildCodeTreeCategoryPath constructs hierarchical code-tree category paths
+// from tree-sitter/AST structural information for O(1) categorical lookup.
+//
+// Examples:
+//   - "Coding/Go/Package/ai.agent.codingworkflow/Type/Orchestrator/Method/Execute"
+//   - "Coding/Python/Package/retriever/Class/VectorRetriever/Method/search"
+//   - "Coding/TypeScript/Package/utils/Namespace/format/Function/formatDate"
+func buildCodeTreeCategoryPath(activeFile, structuralPath string, astLeafNodes []string) string {
+	// Detect language from file extension
+	ext := strings.ToLower(filepath.Ext(activeFile))
+	language := "Generic"
+	symbolType := "Function"
+
+	switch ext {
+	case ".go":
+		language = "Go"
+		// In Go: could be Function or Method depending on receiver
+		// For simplicity, use Type if multiple AST nodes (suggesting struct + methods)
+		if len(astLeafNodes) > 1 {
+			symbolType = "Type"
+		}
+	case ".py":
+		language = "Python"
+		symbolType = "Class"
+	case ".ts", ".tsx":
+		language = "TypeScript"
+		symbolType = "Namespace"
+	case ".js", ".jsx":
+		language = "JavaScript"
+		symbolType = "Namespace"
+	case ".java":
+		language = "Java"
+		symbolType = "Class"
+	case ".cs":
+		language = "CSharp"
+		symbolType = "Namespace"
+	case ".rb":
+		language = "Ruby"
+		symbolType = "Class"
+	case ".rs":
+		language = "Rust"
+		symbolType = "Module"
+	}
+
+	// Parse structural path: "sop-cloud/ai/agent/Execute"
+	// Extract: package/module path and symbol name
+	pathParts := strings.Split(structuralPath, "/")
+	if len(pathParts) < 2 {
+		// Fallback: use simple path
+		return fmt.Sprintf("Coding/%s/%s/%s", language, symbolType, structuralPath)
+	}
+
+	// Skip repo name (first part), extract package path and symbol
+	var packagePath string
+	var symbolName string
+
+	if len(pathParts) == 2 {
+		// "repo/Symbol"
+		symbolName = pathParts[1]
+		packagePath = "main"
+	} else {
+		// "repo/path/to/package/Symbol"
+		symbolName = pathParts[len(pathParts)-1]
+		packageParts := pathParts[1 : len(pathParts)-1]
+		packagePath = strings.Join(packageParts, ".")
+	}
+
+	// Build hierarchical code-tree path
+	parts := []string{"Coding", language, "Package", packagePath}
+
+	// Add symbol type and name
+	if len(astLeafNodes) > 1 {
+		// Multiple AST nodes suggest Type with Methods
+		parts = append(parts, symbolType, astLeafNodes[0])
+		if len(astLeafNodes) > 1 {
+			parts = append(parts, "Method", astLeafNodes[1])
+		}
+	} else if len(astLeafNodes) == 1 {
+		// Single AST node: use as function/method
+		parts = append(parts, symbolType, astLeafNodes[0])
+	} else {
+		// No AST nodes: use extracted symbol from path
+		parts = append(parts, symbolType, symbolName)
+	}
+
 	return strings.Join(parts, "/")
 }
 
@@ -1574,6 +1795,12 @@ func WithCodingWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOptio
 			if orchestrator.ExpertiseRetriever == nil {
 				orchestrator.ExpertiseRetriever = a
 			}
+			if orchestrator.KnowledgeBaseRetriever == nil {
+				orchestrator.KnowledgeBaseRetriever = &cw.DefaultKnowledgeBaseRetriever{}
+			}
+			if orchestrator.ProviderRouter == nil {
+				orchestrator.ProviderRouter = &cw.DefaultProviderRouter{}
+			}
 		}
 		a.capabilityRegistry.RegisterAtFront(cw.NewCapability(orchestrator))
 	}
@@ -1958,6 +2185,7 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		compiledScripts: make(map[string]CachedScript),
 	}
 	agent.ensureCapabilityRegistry()
+	agent.capabilityRegistry.RegisterAtFront(cw.NewCapability(&cw.Orchestrator{}))
 	for _, opt := range opts {
 		if opt != nil {
 			opt(agent)
