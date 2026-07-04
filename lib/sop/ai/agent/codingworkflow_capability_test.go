@@ -153,6 +153,8 @@ func TestBuildCodingMemoryLTMPayloadBuildsCanonicalDocumentAndTwoIndexes(t *test
 		Lesson:         "keep the parser behavior focused",
 		NextStep:       "add a regression test",
 		RepositoryHint: "sop-cloud",
+		StructuralPath: "sop-cloud/ai/parser/Parse",
+		ASTLeafNodes:   []string{"Parse", "ParseExpression"},
 	}
 
 	payload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
@@ -165,11 +167,14 @@ func TestBuildCodingMemoryLTMPayloadBuildsCanonicalDocumentAndTwoIndexes(t *test
 	if got := payload["semantic_index"]; got == "" {
 		t.Fatal("expected semantic index to be populated")
 	}
-	if len(entries) != 2 {
-		t.Fatalf("expected two index entries, got %d", len(entries))
+	if got := payload["code_structure_index"]; got == "" {
+		t.Fatal("expected code_structure index to be populated")
 	}
-	if entries[0].CategoryPath == entries[1].CategoryPath {
-		t.Fatal("expected the path-based and semantic index routes to differ")
+	if len(entries) != 3 {
+		t.Fatalf("expected three index entries (path, code_structure, semantic), got %d", len(entries))
+	}
+	if entries[0].CategoryPath == entries[1].CategoryPath && entries[1].CategoryPath == entries[2].CategoryPath {
+		t.Fatal("expected the three index routes to differ")
 	}
 	if entries[0].Payload["document_id"] != entries[1].Payload["document_id"] {
 		t.Fatal("expected both index entries to point at the same canonical document")
@@ -192,8 +197,8 @@ func TestBuildCodingMemoryLTMThoughtsAttachesCanonicalDocumentReference(t *testi
 	}
 	payload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
 	thoughts := buildCodingMemoryLTMThoughts(mem, payload["document_id"].(string), entries)
-	if len(thoughts) != 2 {
-		t.Fatalf("expected two thoughts, got %d", len(thoughts))
+	if len(thoughts) != 3 {
+		t.Fatalf("expected three thoughts (path, code_structure, semantic), got %d", len(thoughts))
 	}
 	for _, thought := range thoughts {
 		if len(thought.DocID) != 1 || thought.DocID[0] != payload["document_id"].(string) {

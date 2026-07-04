@@ -2185,7 +2185,14 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		compiledScripts: make(map[string]CachedScript),
 	}
 	agent.ensureCapabilityRegistry()
-	agent.capabilityRegistry.RegisterAtFront(cw.NewCapability(&cw.Orchestrator{}))
+	// Wire default coding workflow orchestrator with MemorySink for LTM integration
+	orchestrator := &cw.Orchestrator{}
+	orchestrator.MemorySink = func(mem cw.CodingMemory) {
+		if agent != nil {
+			agent.recordCodingMemory(mem)
+		}
+	}
+	agent.capabilityRegistry.RegisterAtFront(cw.NewCapability(orchestrator))
 	for _, opt := range opts {
 		if opt != nil {
 			opt(agent)
