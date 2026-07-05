@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/sharedcode/sop"
 
 	siteaccount "github.com/grecinto/sop-cloud/src/backend/siteaccount"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
@@ -183,11 +186,81 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
 	// The shared SOP UI/backend is also mounted here so site-admin/root users can manage
 	// the hosted environment through the same shared handlers used by the standalone httpserver/daemon.
 	siteaccount.InstallSopbackendUserStoreOverride()
-	sopbackend.RegisterAllHandlers(mux)
+	sopbackend.RegisterAllHandlersWithoutRoot(mux)
+	siteaccount.RegisterHandlers(mux)
 	siteaccount.InstallSopbackendUserStoreOverride()
 	mux.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
 	mux.HandleFunc("/api/coding-workflow/execute", handleCodingWorkflowExecution)
 	registerFrontendHandler(mux, frontendDir)
+	mux.HandleFunc("/", handleRootRedirect)
+}
+
+type siteAppAccessHandler struct {
+	next http.Handler
+}
+
+func (h *siteAppAccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/") {
+		wrapped := sopbackend.WithAuth(func(w http.ResponseWriter, r *http.Request) {
+			auth := sop.GetAuthFromContext(r.Context())
+			if isSiteAdminAuthContext(auth) {
+				h.next.ServeHTTP(w, r)
+				return
+			}
+			if hasActiveSiteSubscription(r.Context(), auth) {
+				http.Redirect(w, r, "http://127.0.0.1:9090", http.StatusFound)
+				return
+			}
+			http.Error(w, "access denied", http.StatusForbidden)
+		})
+		wrapped(w, r)
+		return
+	}
+	h.next.ServeHTTP(w, r)
+}
+
+func newSiteAppAccessHandler(mux *http.ServeMux) http.Handler {
+	return &siteAppAccessHandler{next: sopbackend.NewObservabilityHandler(mux)}
+}
+
+func isSiteAdminAuthContext(auth sop.AuthContext) bool {
+	for _, role := range auth.Roles {
+		if sop.IsAdminRole(role) || strings.EqualFold(role, sop.RoleSystemAdmin) {
+			return true
+		}
+	}
+	return auth.IsSystem || strings.EqualFold(strings.TrimSpace(auth.UserID), "root")
+}
+
+func hasActiveSiteSubscription(ctx context.Context, auth sop.AuthContext) bool {
+	if plan := strings.ToLower(strings.TrimSpace(auth.SubscriptionPlan)); plan != "" && plan != "none" {
+		return true
+	}
+	if userID := strings.TrimSpace(auth.UserID); userID != "" {
+		cfg := sopbackend.GetConfig()
+		user, ok, err := cfg.FindUserRecord(ctx, userID)
+		if err == nil && ok && user != nil {
+			plan := strings.ToLower(strings.TrimSpace(user.SubscriptionPlan))
+			return plan != "" && plan != "none"
+		}
+	}
+	return false
+}
+
+func handleAppProxy(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/app" || r.URL.Path == "/app/" {
+		http.Redirect(w, r, "/site/", http.StatusFound)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func handleRootRedirect(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		http.Redirect(w, r, "/site/", http.StatusFound)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 type codingWorkflowRequest struct {
@@ -324,9 +397,13 @@ func handleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {
 
 func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
 	mux.HandleFunc("/site", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		w.Header().Set("Pragma", "no-cache")
 		http.ServeFile(w, r, path.Join(frontendDir, "index.html"))
 	})
 	mux.HandleFunc("/site/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		w.Header().Set("Pragma", "no-cache")
 		assetPath, spa := resolveFrontendAssetPath(r.URL.Path)
 		if spa {
 			http.ServeFile(w, r, path.Join(frontendDir, "index.html"))
@@ -358,7 +435,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Printf("site backend listening on %s", addr)
-	if err := http.ListenAndServe(addr, sopbackend.NewObservabilityHandler(mux)); err != nil {
+	if err := http.ListenAndServe(addr, newSiteAppAccessHandler(mux)); err != nil {
 		panic(fmt.Sprintf("listen failed: %v", err))
 	}
 }

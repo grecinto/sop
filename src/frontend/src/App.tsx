@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 
 type Plan = 'starter' | 'hq' | 'none';
-type ViewMode = 'home' | 'subscribe' | 'docs';
+type ViewMode = 'home' | 'subscribe' | 'docs' | 'success' | 'cancel';
 
 type BillingStatus = 'inactive' | 'pending' | 'active';
 
@@ -16,23 +16,6 @@ type SubscriptionSummary = {
   id: string;
   status: string;
   planCode: string;
-};
-
-type WorkflowOutcome = {
-  message: string;
-  task_type: string;
-  plan: string[];
-  active_file?: string;
-  repository_summary?: string;
-  provider?: string;
-  provider_source?: string;
-  provider_model?: string;
-  expertise_summary?: string;
-  expertise_sources?: string[];
-  visualization_summary?: string;
-  related_files?: string[];
-  test_files?: string[];
-  applied_patches: number;
 };
 
 type AccountState = {
@@ -177,6 +160,12 @@ function persistAccountState(account: AccountState) {
 }
 
 function resolveView(pathname: string): ViewMode {
+  if (pathname.startsWith('/site/subscribe/success')) {
+    return 'success';
+  }
+  if (pathname.startsWith('/site/subscribe/cancel')) {
+    return 'cancel';
+  }
   if (pathname.startsWith('/site/subscribe')) {
     return 'subscribe';
   }
@@ -310,7 +299,16 @@ async function loadAccountFromServer(): Promise<AccountState> {
   };
 }
 
-async function ensureAuthenticatedAccount(name: string, email: string): Promise<AccountState> {
+async function getHumanProofChallenge(): Promise<string> {
+  const response = await fetch('/api/auth/human-proof/challenge', { credentials: 'include' });
+  if (!response.ok) {
+    throw new Error('Unable to start the verification step.');
+  }
+  const payload = await response.json();
+  return typeof payload?.challenge === 'string' ? payload.challenge : '';
+}
+
+async function ensureAuthenticatedAccount(name: string, email: string, humanProofToken: string): Promise<AccountState> {
   const username = buildUsername(name, email);
   const password = buildPassword(email);
 
@@ -336,11 +334,19 @@ async function ensureAuthenticatedAccount(name: string, email: string): Promise<
         email,
         role: 'user',
         subscription_plan: 'starter',
+        request_origin: 'human',
+        human_proof: humanProofToken,
       }),
     });
 
     if (!registerResponse.ok && registerResponse.status !== 409) {
-      throw new Error('Unable to create your account.');
+      const registerPayload = await registerResponse.json().catch(() => null);
+      const registerMessage = registerPayload?.message || registerPayload?.error || 'Unable to create your account.';
+      throw new Error(registerMessage);
+    }
+
+    if (registerResponse.status === 409) {
+      throw new Error('An account with this email already exists. If you created an account before, please clear your browser data and try again, or contact support.');
     }
 
     const followUpLoginResponse = await fetch('/api/site/auth/login', {
@@ -350,7 +356,9 @@ async function ensureAuthenticatedAccount(name: string, email: string): Promise<
       body: JSON.stringify({ username, password }),
     });
     if (!followUpLoginResponse.ok) {
-      throw new Error('Unable to sign in after account creation.');
+      const followUpPayload = await followUpLoginResponse.json().catch(() => null);
+      const followUpMessage = followUpPayload?.message || followUpPayload?.error || 'Unable to sign in after account creation.';
+      throw new Error(followUpMessage);
     }
   }
 
@@ -365,10 +373,10 @@ async function updateSubscriptionPlan(plan: Plan): Promise<AccountState> {
   return loadAccountFromServer();
 }
 
-async function createCheckoutSession(plan: Plan): Promise<{ url: string; status: string }> {
+async function createCheckoutSession(plan: Plan, humanProofToken: string): Promise<{ url: string; status: string }> {
   const payload = await fetchJSON('/api/auth/checkout', {
     method: 'POST',
-    body: JSON.stringify({ plan }),
+    body: JSON.stringify({ plan, request_origin: 'human', human_proof: humanProofToken }),
   });
   return {
     url: payload?.checkout?.url || '',
@@ -414,17 +422,10 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [showInstallStep, setShowInstallStep] = useState(false);
   const [view, setView] = useState<ViewMode>(() => resolveView(typeof window === 'undefined' ? '/' : window.location.pathname));
-  const [cardName, setCardName] = useState('');
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardExpiry, setCardExpiry] = useState('');
-  const [cardCVC, setCardCVC] = useState('');
   const [checkoutComplete, setCheckoutComplete] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [provisioningDone, setProvisioningDone] = useState(false);
-  const [workflowPrompt, setWorkflowPrompt] = useState('Inspect the site backend implementation');
-  const [workflowOutcome, setWorkflowOutcome] = useState<WorkflowOutcome | null>(null);
-  const [isRunningWorkflow, setIsRunningWorkflow] = useState(false);
 
   useEffect(() => {
     const draft = loadDraftState();
@@ -494,56 +495,15 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  const handleStart = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!name.trim() || !email.trim()) {
-      return;
-    }
-
+  const handleSubscription = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
     try {
-      const nextAccount = await ensureAuthenticatedAccount(name.trim(), email.trim());
-      const accountWithState = {
-        ...nextAccount,
-        name: name.trim(),
-        email: email.trim(),
-        role: nextAccount.role || 'User',
-        plan: nextAccount.plan || 'starter',
-        billingStatus: nextAccount.billingStatus || 'pending',
-        trialActive: nextAccount.billingStatus === 'active',
-        isAuthenticated: true,
-        isSystemAdmin: nextAccount.isSystemAdmin || isSystemAdminRole(nextAccount.role),
-        checkoutUrl: nextAccount.checkoutUrl || '',
-        lastWebhookEvent: nextAccount.lastWebhookEvent || '',
-        failureReason: nextAccount.failureReason || '',
-        lastWebhookAt: nextAccount.lastWebhookAt || '',
-      };
-      setAccount(accountWithState);
-      setShowInstallStep(accountWithState.billingStatus === 'active');
-      setView('home');
-      setStatusMessage(
-        accountWithState.billingStatus === 'active'
-          ? 'Your account is now connected to the backend and your starter plan is active.'
-          : 'Your account is connected. Your starter subscription is pending payment confirmation.'
-      );
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Unable to sync your account.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleSubscription = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!cardName.trim() || !cardNumber.trim() || !cardExpiry.trim() || !cardCVC.trim()) {
-      return;
-    }
-
-    setIsSubmitting(true);
-    setStatusMessage('');
-    try {
-      const nextAccount = await ensureAuthenticatedAccount(account.name || name.trim(), account.email || email.trim());
+      const token = await getHumanProofChallenge();
+      const nextAccount = await ensureAuthenticatedAccount(account.name || name.trim(), account.email || email.trim(), token);
+      if (!nextAccount.isAuthenticated) {
+        throw new Error('Please sign in or create an account before continuing.');
+      }
       if (nextAccount.billingStatus === 'pending' && nextAccount.checkoutUrl) {
         setAccount({
           ...nextAccount,
@@ -560,7 +520,7 @@ export default function App() {
         window.location.assign(nextAccount.checkoutUrl);
         return;
       }
-      const checkout = await createCheckoutSession('starter');
+      const checkout = await createCheckoutSession('starter', token);
       if (checkout.url) {
         setAccount({
           ...nextAccount,
@@ -646,10 +606,6 @@ export default function App() {
       }
       setName('');
       setEmail('');
-      setCardName('');
-      setCardNumber('');
-      setCardExpiry('');
-      setCardCVC('');
       setCheckoutComplete(false);
       setShowInstallStep(false);
       setStatusMessage('Your account has been removed.');
@@ -702,37 +658,6 @@ export default function App() {
     }
   };
 
-  const handleRunWorkflow = async () => {
-    if (!workflowPrompt.trim()) {
-      return;
-    }
-    setIsRunningWorkflow(true);
-    setWorkflowOutcome(null);
-    try {
-      const response = await fetch('/api/coding-workflow/execute', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          working_dir: '/Volumes/T7/sop-cloud',
-          active_file: 'src/backend/site/main.go',
-          description: workflowPrompt.trim(),
-          mode: 'code',
-        }),
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(payload?.error || payload?.message || 'Workflow request failed.');
-      }
-      setWorkflowOutcome(payload as WorkflowOutcome);
-      setStatusMessage('Workflow run completed.');
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Workflow run failed.');
-    } finally {
-      setIsRunningWorkflow(false);
-    }
-  };
-
   const handleLogout = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
@@ -741,10 +666,6 @@ export default function App() {
       setAccount(emptyState);
       setName('');
       setEmail('');
-      setCardName('');
-      setCardNumber('');
-      setCardExpiry('');
-      setCardCVC('');
       setCheckoutComplete(false);
       setShowInstallStep(false);
       setStatusMessage('You have been signed out.');
@@ -758,6 +679,7 @@ export default function App() {
   const isStarterActive = account.billingStatus === 'active' && account.plan === 'starter';
   const isStarterPending = account.billingStatus === 'pending' && account.plan === 'starter';
   const canLaunchDataManager = account.isSystemAdmin;
+  const canAccessLocalDaemon = Boolean(account.isAuthenticated) && !account.isSystemAdmin && account.plan !== 'none';
   const shouldShowInstallPanel = showInstallStep || isStarterActive || checkoutComplete;
   const canResumeCheckout = Boolean(account.checkoutUrl) && (account.billingStatus === 'pending' || Boolean(account.failureReason));
   const billingStatusTitle = account.billingStatus === 'active'
@@ -784,7 +706,6 @@ export default function App() {
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
             <a className="button button-secondary" href="/site/docs">View product docs</a>
-            <a className="button button-primary" href="/app">Open Data Manager</a>
           </div>
 
           <div className="checkout-grid">
@@ -792,7 +713,10 @@ export default function App() {
               <p className="eyebrow">Secure checkout</p>
               <h2>Start your Northstar AI Copilot access</h2>
               <p className="muted-copy">
-                In v1, the offer is simple: one access path to the Northstar AI Copilot experience, with Stores and Spaces that make it easier to organize work, inspect how the AI handled a repository, and review multi-turn workflows.
+                The offer is simple: one access path to the Northstar AI Copilot experience, with Stores and Spaces that make it easier to organize work, inspect how the AI handled a repository, and review multi-turn workflows.
+              </p>
+              <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
+                Your first month is free. After that, billing starts at $5/month and you can cancel anytime.
               </p>
               <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
                 Visit <strong>ai-northstar.com</strong> for the public product site and onboarding experience.
@@ -808,47 +732,46 @@ export default function App() {
                 </div>
               ) : null}
 
-              <form className="form-stack" onSubmit={handleSubscription}>
-                <label>
-                  Cardholder name
-                  <input value={cardName} onChange={(event) => setCardName(event.target.value)} placeholder="Alex Rivera" />
-                </label>
-                <label>
-                  Card number
-                  <input value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} placeholder="4242 4242 4242 4242" />
-                </label>
-                <div className="inline-fields">
-                  <label>
-                    Expiry
-                    <input value={cardExpiry} onChange={(event) => setCardExpiry(event.target.value)} placeholder="12/30" />
-                  </label>
-                  <label>
-                    CVC
-                    <input value={cardCVC} onChange={(event) => setCardCVC(event.target.value)} placeholder="123" />
-                  </label>
-                </div>
-                <button type="submit" className="button button-primary" disabled={isSubmitting}>
-                  {isSubmitting ? 'Working…' : 'Complete subscription'}
+              <div className="form-stack">
+                <p className="muted-copy">
+                  Continue securely through Stripe to complete your subscription. You will be redirected to a hosted checkout page to enter your payment details.
+                </p>
+                <button type="button" className="button button-primary" onClick={() => { void handleSubscription(); }} disabled={isSubmitting}>
+                  {isSubmitting ? 'Working…' : 'Subscribe with Stripe'}
                 </button>
-              </form>
+              </div>
             </div>
 
             <div className="checkout-card summary-card">
-              <h3>Order summary</h3>
+              <h3>{account.isAuthenticated ? 'Choose a plan' : 'Order summary'}</h3>
               <div className="summary-list">
                 <div>
                   <span className="summary-label">Plan</span>
-                  <strong>AI Copilot access</strong>
+                  <strong>{account.isAuthenticated ? 'Available plans for your account' : 'AI Copilot access'}</strong>
                 </div>
                 <div>
                   <span className="summary-label">Billing</span>
-                  <strong>$5/month</strong>
+                  <strong>{account.isAuthenticated ? 'Select from the options below' : '$5/month'}</strong>
                 </div>
                 <div>
                   <span className="summary-label">Includes</span>
-                  <strong>AI Copilot experience</strong>
+                  <strong>{account.isAuthenticated ? 'Knowledge bases, local workflow, and AI Copilot access' : 'AI Copilot experience'}</strong>
                 </div>
               </div>
+
+              {account.isAuthenticated ? (
+                <div className="preview-box" style={{ marginTop: '0.75rem' }}>
+                  <h4>Available plan</h4>
+                  <div className="form-stack">
+                    <div className="preview-box" style={{ padding: '0.75rem', marginBottom: '0.5rem' }}>
+                      <strong>Starter</strong>
+                      <p className="muted-copy" style={{ marginTop: '0.25rem' }}>AI Copilot access for local workflows and knowledge-driven automation.</p>
+                      <p className="muted-copy">First month free • $5/month after that</p>
+                      <p className="muted-copy">Cancel anytime</p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               {statusMessage ? <p className="muted-copy">{statusMessage}</p> : null}
 
@@ -881,6 +804,107 @@ export default function App() {
                   </button>
                 </div>
               ) : null}
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (view === 'success') {
+    return (
+      <main className="app-shell">
+        <section className="hero-card subscription-shell">
+          <div className="hero-actions">
+            <a className="button button-secondary" href="/site/">Back to overview</a>
+            <a className="button button-primary" href="/site/subscribe">Manage subscription</a>
+          </div>
+
+          <div className="checkout-grid">
+            <div className="checkout-card">
+              <p className="eyebrow">Payment complete</p>
+              <h2>Your Northstar AI Copilot subscription is on the way</h2>
+              <p className="muted-copy">
+                Your checkout was completed successfully. We are confirming your subscription and will activate your access as soon as the billing state is updated.
+              </p>
+              <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
+                If your account is already active, you can continue to the dashboard immediately. If not, we will refresh your status shortly.
+              </p>
+              <div className="form-stack" style={{ marginTop: '1rem' }}>
+                <a className="button button-primary" href="/site/">Continue to dashboard</a>
+                <a className="button button-secondary" href="/site/subscribe">View subscription options</a>
+              </div>
+            </div>
+
+            <div className="checkout-card summary-card">
+              <h3>What happens next</h3>
+              <div className="summary-list">
+                <div>
+                  <span className="summary-label">Status</span>
+                  <strong>{account.billingStatus === 'active' ? 'Active' : 'Confirming'}</strong>
+                </div>
+                <div>
+                  <span className="summary-label">Access</span>
+                  <strong>{account.plan === 'starter' ? 'Northstar AI Copilot access' : 'Subscription pending'}</strong>
+                </div>
+                <div>
+                  <span className="summary-label">Support</span>
+                  <strong>Need help? Contact support.</strong>
+                </div>
+              </div>
+              <div className="preview-box" style={{ marginTop: '0.75rem' }}>
+                <h4>Billing status</h4>
+                <p>{account.billingStatus === 'active' ? 'Your subscription is active and ready for use.' : 'We are still confirming your subscription with the billing provider.'}</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (view === 'cancel') {
+    return (
+      <main className="app-shell">
+        <section className="hero-card subscription-shell">
+          <div className="hero-actions">
+            <a className="button button-secondary" href="/site/">Back to overview</a>
+            <a className="button button-primary" href="/site/subscribe">Try checkout again</a>
+          </div>
+
+          <div className="checkout-grid">
+            <div className="checkout-card">
+              <p className="eyebrow">Checkout cancelled</p>
+              <h2>No problem — you can try again anytime</h2>
+              <p className="muted-copy">
+                Your checkout was cancelled before payment was completed. Your account remains available, and you can restart the subscription process whenever you are ready.
+              </p>
+              <div className="form-stack" style={{ marginTop: '1rem' }}>
+                <a className="button button-primary" href="/site/subscribe">Retry subscription</a>
+                <a className="button button-secondary" href="/site/">Return home</a>
+              </div>
+            </div>
+
+            <div className="checkout-card summary-card">
+              <h3>What you can do next</h3>
+              <div className="summary-list">
+                <div>
+                  <span className="summary-label">Next step</span>
+                  <strong>Restart checkout</strong>
+                </div>
+                <div>
+                  <span className="summary-label">Plan</span>
+                  <strong>Northstar AI Copilot Starter</strong>
+                </div>
+                <div>
+                  <span className="summary-label">Billing</span>
+                  <strong>First month free • $5/month after</strong>
+                </div>
+              </div>
+              <div className="preview-box" style={{ marginTop: '0.75rem' }}>
+                <h4>Need help?</h4>
+                <p>If you ran into an issue during payment, you can retry checkout or contact support for assistance.</p>
+              </div>
             </div>
           </div>
         </section>
@@ -1049,6 +1073,9 @@ export default function App() {
                 {canLaunchDataManager ? (
                   <a className="button button-primary" href="/app">Open SOP Data Manager</a>
                 ) : null}
+                {canAccessLocalDaemon ? (
+                  <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
+                ) : null}
                 <a className="button button-secondary" href="/site/docs">View product docs</a>
               </div>
             </div>
@@ -1127,7 +1154,7 @@ export default function App() {
               <strong>Full AI copilot features, zero data center processing.</strong> Other copilots need overnight K-Means clustering at HQ. Ours uses semantic category trees that work instantly on your machine.
             </p>
             <div className="hero-actions">
-              <a className="button button-primary" href="/site/subscribe">Create account</a>
+              <a className="button button-primary" href="/site/subscribe">Subscribe</a>
               <a className="button button-secondary" href="/site/docs">View product docs</a>
             </div>
           </div>
@@ -1145,7 +1172,7 @@ export default function App() {
                 <li>Bring your own API keys—we don't store your conversation history on our servers</li>
                 <li>Built-in data visualization to review your AI workflows</li>
                 <li>Generate higher-quality code that adheres to architecture and coding best practices</li>
-                <li>Everything stored locally on your device, not on our servers</li>
+                <li>Everything stored locally on your device (data privacy)</li>
               </ul>
             </div>
           </div>
@@ -1154,32 +1181,7 @@ export default function App() {
 
       <section className="hero-card secondary-card">
         <div className="stack-grid">
-          <div className="form-panel">
-            <h2>{isStarterActive ? 'Your AI Copilot access is active' : isStarterPending ? 'Your AI Copilot checkout is pending' : 'Start your AI Copilot access'}</h2>
-            <p className="muted-copy">
-              {isStarterActive
-                ? `Welcome back, ${account.name || 'there'}. Your AI Copilot access is active and ready for local agent setup and guided AI workflows.`
-                : isStarterPending
-                  ? `Welcome back, ${account.name || 'there'}. Your AI Copilot checkout is pending payment confirmation.`
-                  : 'Create your account to start with guided onboarding, a local agent download, and a practical first workflow.'}
-            </p>
-            <form className="form-stack" onSubmit={handleStart}>
-              <label>
-                Name
-                <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex Rivera" />
-              </label>
-              <label>
-                Email
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="alex@example.com" />
-              </label>
-              <button type="submit" className="button button-primary" disabled={isSubmitting}>
-                {isStarterActive ? 'Update account' : isSubmitting ? 'Working…' : 'Start AI Copilot access'}
-              </button>
-            </form>
-            {statusMessage ? <p className="muted-copy">{statusMessage}</p> : null}
-          </div>
-
-          <div className="summary-panel">
+          <div className="summary-panel" style={{ gridColumn: '1 / -1' }}>
             <h3>Account summary</h3>
             <div className="summary-list">
               <div>
@@ -1192,17 +1194,10 @@ export default function App() {
               </div>
               <div>
                 <span className="summary-label">Included</span>
-                <strong>AI Copilot, Stores, Spaces, local memory</strong>
+                <strong>AI Copilot, Knowledge Bases, Data Stores</strong>
               </div>
             </div>
 
-            <div className="status-card">
-              <div className="status-pill">{account.isAuthenticated ? 'Signed in' : 'Not signed in'}</div>
-              <div className="status-details">
-                <strong>{account.name || 'No account linked yet'}</strong>
-                <span>{account.email || 'Create an account to start the guided flow'}</span>
-              </div>
-            </div>
 
             {account.payments.length > 0 ? (
               <div className="preview-box">
@@ -1216,82 +1211,28 @@ export default function App() {
             ) : null}
 
             <div className="action-row">
-              <button
-                type="button"
-                className="button button-secondary"
-                onClick={() => {
-                  void (async () => {
-                    try {
-                      const refreshed = await loadAccountFromServer();
-                      setAccount(refreshed);
-                      if (refreshed.isAuthenticated) {
-                        setName(refreshed.name || name);
-                        setEmail(refreshed.email || email);
-                        setShowInstallStep(refreshed.billingStatus === 'active' && refreshed.plan === 'starter');
-                        setCheckoutComplete(refreshed.billingStatus === 'active' && refreshed.plan === 'starter');
-                        setStatusMessage('Account status refreshed.');
-                      }
-                    } catch {
-                      setStatusMessage('Unable to refresh account status right now.');
-                    }
-                  })();
-                }}
-                disabled={isSubmitting}
-              >
-                Refresh status
-              </button>
-              <button type="button" className="button button-secondary" onClick={handleLogin} disabled={isSubmitting || !name.trim() || !email.trim()}>
-                Log in
-              </button>
-              <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
-                Log out
-              </button>
-              <a className="button button-secondary" href="/site/subscribe">Go to subscription flow</a>
-              <button type="button" className="button button-secondary" onClick={handleUnsubscribe} disabled={isSubmitting}>
-                Unsubscribe
-              </button>
-              <button type="button" className="button button-secondary danger" onClick={handleUnregister} disabled={isSubmitting}>
-                Unregister
-              </button>
-            </div>
-
-            <div className="preview-box" style={{ marginTop: '1rem' }}>
-              <h4>Try the coding workflow</h4>
-              <p>Send a task to the local workflow engine and review the structured response it returns.</p>
-              <textarea
-                value={workflowPrompt}
-                onChange={(event) => setWorkflowPrompt(event.target.value)}
-                rows={3}
-                placeholder="Describe the task you want the workflow to inspect"
-                style={{ width: '100%', marginBottom: '0.75rem', padding: '0.7rem', borderRadius: '0.5rem', border: '1px solid #d0d7e2' }}
-              />
-              <div className="action-row">
-                <button type="button" className="button button-secondary" onClick={handleRunWorkflow} disabled={isRunningWorkflow || !workflowPrompt.trim()}>
-                  {isRunningWorkflow ? 'Running…' : 'Run workflow'}
+              {!account.isAuthenticated ? (
+                <button type="button" className="button button-secondary" onClick={handleLogin} disabled={isSubmitting || !name.trim() || !email.trim()}>
+                  Log in
                 </button>
-              </div>
-              {workflowOutcome ? (
-                <div style={{ marginTop: '0.75rem', fontSize: '0.95rem' }}>
-                  <strong>{workflowOutcome.message}</strong>
-                  <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>
-                    Task: {workflowOutcome.task_type || 'unknown'} · Applied patches: {workflowOutcome.applied_patches}
-                  </div>
-                  {workflowOutcome.repository_summary ? (
-                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Repo: {workflowOutcome.repository_summary}</div>
-                  ) : null}
-                  {workflowOutcome.expertise_summary ? (
-                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Expertise: {workflowOutcome.expertise_summary}</div>
-                  ) : null}
-                  {workflowOutcome.visualization_summary ? (
-                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Visualization: {workflowOutcome.visualization_summary}</div>
-                  ) : null}
-                  {workflowOutcome.related_files && workflowOutcome.related_files.length > 0 ? (
-                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Related files: {workflowOutcome.related_files.slice(0, 5).join(', ')}</div>
-                  ) : null}
-                  {workflowOutcome.test_files && workflowOutcome.test_files.length > 0 ? (
-                    <div style={{ marginTop: '0.35rem', color: '#4b5563' }}>Tests: {workflowOutcome.test_files.join(', ')}</div>
-                  ) : null}
-                </div>
+              ) : null}
+              {account.isAuthenticated ? (
+                <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
+                  Log out
+                </button>
+              ) : null}
+              {canAccessLocalDaemon ? (
+                <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
+              ) : null}
+              {account.isAuthenticated && account.plan !== 'none' ? (
+                <button type="button" className="button button-secondary" onClick={handleUnsubscribe} disabled={isSubmitting}>
+                  Unsubscribe
+                </button>
+              ) : null}
+              {account.isAuthenticated ? (
+                <button type="button" className="button button-secondary danger" onClick={handleUnregister} disabled={isSubmitting}>
+                  Unregister
+                </button>
               ) : null}
             </div>
 

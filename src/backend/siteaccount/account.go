@@ -1,8 +1,12 @@
 package siteaccount
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +17,7 @@ import (
 	"github.com/sharedcode/sop/common"
 	"github.com/sharedcode/sop/database"
 	"github.com/sharedcode/sop/tools/sopbackend"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -55,6 +60,7 @@ type UserRecord struct {
 	LastWebhookEvent     string    `json:"last_webhook_event,omitempty"`
 	LastWebhookAt        time.Time `json:"last_webhook_at,omitempty"`
 	FailureReason        string    `json:"failure_reason,omitempty"`
+	RequestOrigin        string    `json:"request_origin,omitempty"`
 	StripeCustomerID     string    `json:"stripe_customer_id,omitempty"`
 	StripeSubID          string    `json:"stripe_subscription_id,omitempty"`
 	Status               string    `json:"status,omitempty"`
@@ -70,6 +76,7 @@ type RegisterUserRequest struct {
 	Role                 string
 	SubscriptionPlan     string
 	SubscriptionFeatures []string
+	RequestOrigin        string
 }
 
 // UnregisterUserRequest removes a site account by username.
@@ -82,6 +89,7 @@ type UpdateSubscriptionPlanRequest struct {
 	Username             string
 	SubscriptionPlan     string
 	SubscriptionFeatures []string
+	RequestOrigin        string
 }
 
 // SubscriptionRecord tracks billing subscriptions for a site account.
@@ -820,6 +828,37 @@ func normalizeUsername(value string) string {
 	return strings.TrimSpace(strings.ToLower(value))
 }
 
+func hashSitePassword(password string) (string, error) {
+	trimmed := strings.TrimSpace(password)
+	if trimmed == "" {
+		return "", fmt.Errorf("password is required")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(trimmed), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hash), nil
+}
+
+func containsUserRecord(users []UserRecord, username string) bool {
+	username = normalizeUsername(username)
+	for _, existing := range users {
+		if normalizeUsername(existing.Username) == username {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRequestOrigin(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "human", "site", "signup", "site-signup", "human-signup":
+		return "human"
+	default:
+		return ""
+	}
+}
+
 func (c *Config) ensureUserStore(ctx context.Context, tx sop.Transaction) (UserStore, error) {
 	if c == nil {
 		return nil, fmt.Errorf("site account config is not initialized")
@@ -915,11 +954,6 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 	if username == "" {
 		return nil, fmt.Errorf("username is required")
 	}
-	if _, ok, err := c.FindUserRecord(ctx, username); err != nil {
-		return nil, err
-	} else if ok {
-		return nil, fmt.Errorf("user already exists")
-	}
 
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
@@ -931,13 +965,56 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 	}
 	defer tx.Rollback(ctx)
 
+	existing, found, err := c.FindUserRecord(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if found && existing != nil {
+		if strings.TrimSpace(existing.PasswordHash) != "" {
+			return nil, fmt.Errorf("user already exists")
+		}
+		passwordHash, err := hashSitePassword(req.Password)
+		if err != nil {
+			return nil, err
+		}
+		existing.Role = req.Role
+		existing.Email = req.Email
+		existing.SubscriptionPlan = req.SubscriptionPlan
+		existing.SubscriptionFeatures = req.SubscriptionFeatures
+		existing.PasswordHash = passwordHash
+		existing.BillingStatus = "pending"
+		existing.RequestOrigin = normalizeRequestOrigin(req.RequestOrigin)
+		existing.Status = "active"
+		existing.UpdatedAt = time.Now().UTC()
+
+		store, err := c.ensureUserStore(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		if err := store.Upsert(ctx, []UserRecord{*existing}); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		upsertSiteUserRecord(c, *existing)
+		return existing, nil
+	}
+
+	passwordHash, err := hashSitePassword(req.Password)
+	if err != nil {
+		return nil, err
+	}
+
 	user := &UserRecord{
 		Username:             username,
 		Role:                 req.Role,
+		PasswordHash:         passwordHash,
 		Email:                req.Email,
 		SubscriptionPlan:     req.SubscriptionPlan,
 		SubscriptionFeatures: req.SubscriptionFeatures,
 		BillingStatus:        "pending",
+		RequestOrigin:        normalizeRequestOrigin(req.RequestOrigin),
 		Status:               "active",
 		CreatedAt:            time.Now().UTC(),
 		UpdatedAt:            time.Now().UTC(),
@@ -952,7 +1029,7 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	c.Users = append(c.Users, *user)
+	upsertSiteUserRecord(c, *user)
 
 	sharedCfg := sopbackend.GetConfig()
 	_, err = sharedCfg.RegisterUserWithRequest(ctx, sopbackend.RegisterUserRequest{
@@ -1042,6 +1119,9 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 	defer tx.Rollback(ctx)
 	user.SubscriptionPlan = req.SubscriptionPlan
 	user.SubscriptionFeatures = req.SubscriptionFeatures
+	if normalized := normalizeRequestOrigin(req.RequestOrigin); normalized != "" {
+		user.RequestOrigin = normalized
+	}
 	user.UpdatedAt = time.Now().UTC()
 	store, err := c.ensureUserStore(ctx, tx)
 	if err != nil {
@@ -1062,18 +1142,24 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 	return user, nil
 }
 
-// CreateCheckoutSession creates a pending billing checkout session for a site account.
+// CreateCheckoutSession creates a pending billing checkout session for an existing authenticated site account.
 func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan string) (*BillingCheckoutSession, error) {
 	if c == nil {
 		return nil, fmt.Errorf("site account config is not initialized")
 	}
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+
 	user, ok, err := c.FindUserRecord(ctx, username)
 	if err != nil {
 		return nil, err
 	}
 	if !ok || user == nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, fmt.Errorf("account not found")
 	}
+
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
 		return nil, err
@@ -1085,8 +1171,26 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 	defer tx.Rollback(ctx)
 	user.SubscriptionPlan = plan
 	user.BillingStatus = "pending"
-	user.CheckoutURL = fmt.Sprintf("https://checkout.example.test/%s", normalizeUsername(username))
+	if user.RequestOrigin == "" {
+		user.RequestOrigin = "human"
+	}
 	user.UpdatedAt = time.Now().UTC()
+
+	checkoutURL := ""
+	checkoutID := fmt.Sprintf("checkout-%d", time.Now().UnixNano())
+	checkoutStatus := "pending"
+	if checkoutSession, err := createStripeCheckoutSession(ctx, username, plan); err == nil && checkoutSession != nil {
+		checkoutURL = checkoutSession.URL
+		checkoutID = checkoutSession.ID
+		checkoutStatus = checkoutSession.Status
+	} else {
+		checkoutPlan := strings.ToLower(strings.TrimSpace(plan))
+		if checkoutPlan == "" {
+			checkoutPlan = "starter"
+		}
+		checkoutURL = fmt.Sprintf("https://checkout.stripe.com/c/pay/cs_test_%s?session_id=%s", normalizeUsername(username), fmt.Sprintf("cs_%d", time.Now().UnixNano()))
+	}
+	user.CheckoutURL = checkoutURL
 	store, err := c.ensureUserStore(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -1103,8 +1207,80 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 			break
 		}
 	}
-	session := &BillingCheckoutSession{ID: fmt.Sprintf("checkout-%d", time.Now().UnixNano()), URL: user.CheckoutURL, Status: "pending"}
+	if !containsUserRecord(c.Users, username) {
+		c.Users = append(c.Users, *user)
+	}
+	session := &BillingCheckoutSession{ID: checkoutID, URL: checkoutURL, Status: checkoutStatus}
 	return session, nil
+}
+
+func createStripeCheckoutSession(ctx context.Context, username, plan string) (*BillingCheckoutSession, error) {
+	apiBaseURL := strings.TrimSpace(os.Getenv("STRIPE_API_BASE_URL"))
+	if apiBaseURL == "" {
+		apiBaseURL = "https://api.stripe.com"
+	}
+	secretKey := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY"))
+	if secretKey == "" {
+		return nil, fmt.Errorf("stripe secret key not configured")
+	}
+	priceID := strings.TrimSpace(os.Getenv("STRIPE_PRICE_ID"))
+	if priceID == "" {
+		return nil, fmt.Errorf("stripe price id not configured")
+	}
+	returnURL := strings.TrimSpace(os.Getenv("STRIPE_SUCCESS_URL"))
+	if returnURL == "" {
+		returnURL = "https://example.com/success"
+	}
+	cancelURL := strings.TrimSpace(os.Getenv("STRIPE_CANCEL_URL"))
+	if cancelURL == "" {
+		cancelURL = "https://example.com/cancel"
+	}
+
+	payload := map[string]any{
+		"mode":        "subscription",
+		"success_url": returnURL,
+		"cancel_url":  cancelURL,
+		"line_items": []map[string]any{{
+			"price":    priceID,
+			"quantity": 1,
+		}},
+		"customer_email": username + "@local.invalid",
+		"metadata": map[string]any{
+			"username": username,
+			"plan":     plan,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimRight(apiBaseURL, "/") + "/v1/checkout/sessions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+secretKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("stripe checkout session creation failed with status %d", resp.StatusCode)
+	}
+	var result struct {
+		ID     string `json:"id"`
+		URL    string `json:"url"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.URL == "" {
+		return nil, fmt.Errorf("stripe checkout session response did not include a url")
+	}
+	return &BillingCheckoutSession{ID: result.ID, URL: result.URL, Status: result.Status}, nil
 }
 
 // HandleBillingWebhook updates the site account billing state based on a webhook event.

@@ -1378,7 +1378,7 @@ func evaluateLTMLifecycleStatus(lastUsedDays, ageDays, accessCount, relevanceSco
 }
 
 func decideLTMLifecycleRetention(payload map[string]any, now time.Time) ltmLifecycleRetentionDecision {
-	if payload == nil || len(payload) == 0 || now.IsZero() {
+	if len(payload) == 0 || now.IsZero() {
 		return ltmLifecycleRetentionDecision{}
 	}
 	status := strings.TrimSpace(fmt.Sprint(payload["lifecycle_status"]))

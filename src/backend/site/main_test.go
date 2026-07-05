@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -194,7 +195,7 @@ func TestSiteBackendDaemonBootstrapEndpointReturnsBootstrapSecret(t *testing.T) 
 	}
 }
 
-func TestSiteBackendRedirectsRootToSharedUIWhenNoConfigExists(t *testing.T) {
+func TestSiteBackendRedirectsRootToLandingPageWhenNoConfigExists(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
 		t.Fatalf("failed to write test frontend asset: %v", err)
@@ -208,14 +209,14 @@ func TestSiteBackendRedirectsRootToSharedUIWhenNoConfigExists(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusFound {
-		t.Fatalf("expected root request to redirect to shared UI, got %d", rec.Code)
+		t.Fatalf("expected root request to redirect to landing page, got %d", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/app" {
-		t.Fatalf("expected redirect to /app, got %q", got)
+	if got := rec.Header().Get("Location"); got != "/site/" {
+		t.Fatalf("expected redirect to /site/, got %q", got)
 	}
 }
 
-func TestSiteBackendRedirectsRootToSharedUIEvenWhenConfigExists(t *testing.T) {
+func TestSiteBackendRedirectsRootToLandingPageEvenWhenConfigExists(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
 		t.Fatalf("failed to write test frontend asset: %v", err)
@@ -239,10 +240,43 @@ func TestSiteBackendRedirectsRootToSharedUIEvenWhenConfigExists(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusFound {
-		t.Fatalf("expected root request to redirect to shared UI even when config exists, got %d", rec.Code)
+		t.Fatalf("expected root request to redirect to landing page even when config exists, got %d", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/app" {
-		t.Fatalf("expected redirect to /app, got %q", got)
+	if got := rec.Header().Get("Location"); got != "/site/" {
+		t.Fatalf("expected redirect to /site/, got %q", got)
+	}
+}
+
+func TestSiteBackendBlocksAppAccessForUnsubscribedUsers(t *testing.T) {
+	frontendDir := t.TempDir()
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, frontendDir)
+
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "bob", Roles: []string{sop.RoleUser}}))
+	rec := httptest.NewRecorder()
+	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden status for unsubscribed user, got %d", rec.Code)
+	}
+}
+
+func TestSiteBackendRedirectsSubscribedUsersToLocalDaemon(t *testing.T) {
+	frontendDir := t.TempDir()
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, frontendDir)
+
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}, SubscriptionPlan: "starter"}))
+	rec := httptest.NewRecorder()
+	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected redirect status for subscribed user, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "http://127.0.0.1:9090" {
+		t.Fatalf("expected redirect to local daemon URL, got %q", got)
 	}
 }
 
@@ -281,6 +315,48 @@ func TestSiteBackendRegistersSharedUIRoutes(t *testing.T) {
 		if rec.Code == http.StatusNotFound {
 			t.Fatalf("expected %s to be handled by the shared UI routes, got 404", path)
 		}
+	}
+}
+
+func TestSiteBackendRegistersCheckoutEndpoint(t *testing.T) {
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/checkout", strings.NewReader(`{"plan":"starter"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/auth/checkout to be registered, got 404")
+	}
+}
+
+func TestSiteBackendRegistersAccountCreationEndpoint(t *testing.T) {
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"username":"tester","password":"secret","email":"tester@example.com","role":"User"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("expected /api/auth/register to be registered, got 404")
+	}
+}
+
+func TestSiteBackendRejectsCheckoutForAnonymousUsers(t *testing.T) {
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/checkout", strings.NewReader(`{"plan":"starter"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected anonymous checkout to be rejected, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "authentication required before checkout") {
+		t.Fatalf("expected checkout response body to mention authentication requirement, got %q", body)
 	}
 }
 

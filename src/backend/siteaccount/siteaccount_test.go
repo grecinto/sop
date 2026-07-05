@@ -2,6 +2,7 @@ package siteaccount
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,95 @@ func resetSiteAccountDBForTest(t *testing.T) {
 	})
 }
 
+func TestHandleRegisterRequiresHumanProof(t *testing.T) {
+	SetConfig(NewConfig())
+	body := `{"username":"human-proof-user","password":"secret123","email":"human-proof@example.com","role":"user","subscription_plan":"starter"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	HandleRegister(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("HandleRegister() status = %d, want %d, body=%s", rr.Code, http.StatusForbidden, rr.Body.String())
+	}
+}
+
+func TestHandleHumanProofChallengeReturnsCaptchaPrompt(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/human-proof/challenge", nil)
+	rr := httptest.NewRecorder()
+
+	HandleHumanProofChallenge(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleHumanProofChallenge() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var payload struct {
+		Challenge string `json:"challenge"`
+		Prompt    string `json:"prompt"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode challenge payload: %v", err)
+	}
+	if payload.Challenge == "" {
+		t.Fatal("expected a challenge token in the response")
+	}
+	if payload.Prompt == "" {
+		t.Fatal("expected a captcha prompt in the response")
+	}
+}
+
+func TestValidateHumanProofAllowsReuseBeforeExpiry(t *testing.T) {
+	rr := httptest.NewRecorder()
+	challenge := issueHumanProofChallenge(rr)
+	if challenge == "" {
+		t.Fatal("issueHumanProofChallenge() returned an empty challenge")
+	}
+	cookies := rr.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("issueHumanProofChallenge() did not set a challenge cookie")
+	}
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/register", nil)
+	req1.AddCookie(cookies[0])
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/register", nil)
+	req2.AddCookie(cookies[0])
+
+	if !validateHumanProof(req1, challenge) {
+		t.Fatal("first validation should succeed")
+	}
+	if !validateHumanProof(req2, challenge) {
+		t.Fatal("second validation should also succeed before the challenge expires")
+	}
+}
+
+func TestHandleCheckoutSessionAcceptsStripeProofWithoutHumanProof(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-checkout-stripe")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "stripe-checkout@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	body := `{"plan":"starter","stripe_payment_id":"pi_123","stripe_session_id":"cs_123","stripe_customer_id":"cus_123","stripe_subscription_id":"sub_123"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/checkout", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: username, Roles: []string{sop.RoleUser}}))
+	rr := httptest.NewRecorder()
+
+	HandleCheckoutSession(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleCheckoutSession() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
 func TestHandleLoginSetsSessionCookies(t *testing.T) {
 	cfg := NewConfig()
 	username := uniqueTestUsername(t, "site-login-user")
@@ -110,6 +200,101 @@ func TestHandleLoginSetsSessionCookies(t *testing.T) {
 	}
 }
 
+func TestRegisterUserWithRequestRepairsExistingAccountWithoutHash(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-repair-user")
+	initial := UserRecord{Username: username, Role: "user", Email: "repair@example.com", BillingStatus: "pending", Status: "active"}
+	if _, err := cfg.ensureUserStore(context.Background(), nil); err == nil {
+		// no-op: ensure the test uses the in-memory config path
+	}
+	cfg.Users = append(cfg.Users, initial)
+
+	user, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "repair@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	})
+	if err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+	if user == nil {
+		t.Fatal("RegisterUserWithRequest() returned nil user")
+	}
+	if strings.TrimSpace(user.PasswordHash) == "" {
+		t.Fatal("expected RegisterUserWithRequest() to repair the missing password hash")
+	}
+}
+
+func TestCreateCheckoutSessionUsesStripeHostedCheckoutURL(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-stripe-checkout")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "stripe-url@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	session, err := cfg.CreateCheckoutSession(context.Background(), username, "starter")
+	if err != nil {
+		t.Fatalf("CreateCheckoutSession() error = %v", err)
+	}
+	if session == nil || session.URL == "" {
+		t.Fatal("CreateCheckoutSession() returned empty checkout URL")
+	}
+	if !strings.HasPrefix(session.URL, "https://checkout.stripe.com/") {
+		t.Fatalf("CreateCheckoutSession() URL = %q, want Stripe-hosted checkout URL", session.URL)
+	}
+}
+
+func TestCreateCheckoutSessionUsesConfiguredStripeAPI(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-stripe-api")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "stripe-api@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	var gotAuthHeader, gotBody string
+	stripeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthHeader = r.Header.Get("Authorization")
+		gotBody = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"cs_test_123","url":"https://checkout.stripe.com/c/pay/test_session","status":"open"}`))
+	}))
+	defer stripeServer.Close()
+
+	t.Setenv("STRIPE_SECRET_KEY", "sk_test_123")
+	t.Setenv("STRIPE_PRICE_ID", "price_test_123")
+	t.Setenv("STRIPE_SUCCESS_URL", "https://example.com/success")
+	t.Setenv("STRIPE_CANCEL_URL", "https://example.com/cancel")
+	t.Setenv("STRIPE_API_BASE_URL", stripeServer.URL)
+
+	session, err := cfg.CreateCheckoutSession(context.Background(), username, "starter")
+	if err != nil {
+		t.Fatalf("CreateCheckoutSession() error = %v", err)
+	}
+	if session == nil || session.URL != "https://checkout.stripe.com/c/pay/test_session" {
+		t.Fatalf("CreateCheckoutSession() URL = %q, want Stripe API provided URL", session.URL)
+	}
+	if !strings.HasPrefix(gotAuthHeader, "Bearer ") {
+		t.Fatalf("expected Stripe Authorization header to be set, got %q", gotAuthHeader)
+	}
+	if !strings.Contains(gotBody, "/v1/checkout/sessions") {
+		t.Fatalf("expected Stripe checkout endpoint to be called, got %q", gotBody)
+	}
+}
+
 func TestRegisterUserWithRequestPersistsUserAndBillingState(t *testing.T) {
 	cfg := NewConfig()
 	username := uniqueTestUsername(t, "site-account-user")
@@ -139,6 +324,28 @@ func TestRegisterUserWithRequestPersistsUserAndBillingState(t *testing.T) {
 	}
 	if found.Username != username {
 		t.Fatalf("FindUserRecord() username = %q, want %q", found.Username, username)
+	}
+}
+
+func TestRegisterUserWithRequestPersistsHumanOrigin(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-account-human")
+	user, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "human@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+		RequestOrigin:    "human",
+	})
+	if err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+	if user == nil {
+		t.Fatal("RegisterUserWithRequest() returned nil user")
+	}
+	if user.RequestOrigin != "human" {
+		t.Fatalf("RequestOrigin = %q, want %q", user.RequestOrigin, "human")
 	}
 }
 

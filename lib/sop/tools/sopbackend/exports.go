@@ -318,9 +318,23 @@ func RegisterSwaggerHandlers(mux *http.ServeMux, basePath string) {
 	})
 }
 
-// RegisterAllHandlers registers all backend API handlers on the provided mux
+// RegisterAllHandlers registers all backend API handlers on the provided mux.
 func RegisterAllHandlers(mux *http.ServeMux) {
-	RegisterUIRoutes(mux)
+	RegisterAllHandlersWithOptions(mux, true)
+}
+
+// RegisterAllHandlersWithoutRoot registers all backend API handlers without mounting the shared UI root redirect.
+func RegisterAllHandlersWithoutRoot(mux *http.ServeMux) {
+	RegisterAllHandlersWithOptions(mux, false)
+}
+
+// RegisterAllHandlersWithOptions registers all backend API handlers with optional root routing support.
+func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
+	if includeRoot {
+		RegisterUIRoutes(mux)
+	} else {
+		RegisterUIRoutesWithoutRoot(mux)
+	}
 	RegisterSwaggerHandlers(mux, "")
 
 	mux.HandleFunc("/admin/users", WithAuth(handleAdminUsersPage))
