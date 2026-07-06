@@ -115,7 +115,6 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
-	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -631,7 +630,7 @@ func (h *DaemonAuthHandler) storeRetrievedArtifacts(ctx context.Context, artifac
 		metadata["origin"] = "hq"
 		metadata["retrieved_at"] = time.Now().UTC().Format(time.RFC3339)
 
-		artifactRef := ai.ExtractArtifactReference(metadata["artifact_ref"])
+		artifactRef := agent.ExtractArtifactReference(metadata["artifact_ref"])
 		if artifactRef.Name != "" || artifactRef.DatabaseName != "" || artifactRef.Type != "" {
 			if err := agent.PromoteKnowledgeArtifact(
 				ctx,

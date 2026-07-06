@@ -8,6 +8,8 @@ import (
 )
 
 func TestCollectSharedMemoryArtifactsSkipsEmptyPayload(t *testing.T) {
+	withIsolatedSystemDB(t)
+
 	artifacts, err := collectSharedMemoryArtifacts(context.Background())
 	if err != nil {
 		t.Fatalf("collectSharedMemoryArtifacts returned error: %v", err)

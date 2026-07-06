@@ -9,11 +9,13 @@ import (
 	"fmt"
 	log "log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/adapters/redis"
+	"github.com/sharedcode/sop/cache"
 	"github.com/sharedcode/sop/fs"
 )
 
@@ -28,7 +30,7 @@ func getDataPath() string {
 	if s := os.Getenv("datapath"); s != "" {
 		return s
 	}
-	return "/Users/grecinto/sop_data"
+	return filepath.Join(os.TempDir(), "sop_data")
 }
 
 var dataPath = getDataPath()
@@ -92,7 +94,11 @@ func initErasureCoding() {
 	}
 	fs.SetGlobalErasureConfig(ec)
 
-	// Register L2 Cache Redis.
+	// Register standalone and Redis L2 cache factories. Tests that need replication can use the
+	// in-memory cache when Redis is unavailable.
+	sop.RegisterL2CacheFactory(sop.InMemory, func(sop.TransactionOptions) sop.L2Cache {
+		return cache.NewL2InMemoryCache()
+	})
 	sop.RegisterL2CacheFactory(sop.Redis, redis.NewClient)
 }
 
@@ -111,24 +117,26 @@ func TestMain(m *testing.M) {
 	l := log.New(log.NewJSONHandler(os.Stdout, &log.HandlerOptions{Level: log.LevelInfo}))
 	log.SetDefault(l)
 
-	// Initialize Redis-backed components.
+	// Initialize Redis-backed components when available. The integration suite can also run in
+	// standalone mode with the in-memory cache factory registered above.
 	conn, err := redis.OpenConnection(redisConfig)
 	if err != nil {
-		log.Error("Failed to open Redis connection", "error", err)
-		os.Exit(1)
+		log.Warn("Redis unavailable; continuing in standalone mode", "error", err)
+	} else {
+		_ = conn.Client.FlushDB(context.Background())
 	}
 
 	// Initialize erasure coding for replication tests.
 	initErasureCoding()
 
 	// Ensure base folders exist for both replication (disk1, disk2), EC defaults (disk4..disk7),
-	// and an isolated set for specialized integration tests (disk8..disk13).
+	// and an isolated set for specialized integration tests (disk8..disk13), including their
+	// transaction-log directories.
 	for i := 1; i <= 13; i++ {
-		_ = os.MkdirAll(fmt.Sprintf("%s%cdisk%d", dataPath, os.PathSeparator, i), 0o755)
+		base := fmt.Sprintf("%s%cdisk%d", dataPath, os.PathSeparator, i)
+		_ = os.MkdirAll(base, 0o755)
+		_ = os.MkdirAll(filepath.Join(base, "translogs"), 0o755)
 	}
-
-	// Clear Redis cache between runs to avoid cross-test contamination.
-	_ = conn.Client.FlushDB(context.Background())
 
 	// Shorten default node cache to keep tests snappy.
 	testDefaultCacheConfig = sop.GetDefaultCacheConfig()

@@ -17,6 +17,8 @@ import (
 )
 
 func TestDaemonRequireAuthPropagatesUserRoleToContext(t *testing.T) {
+	withIsolatedSystemDB(t)
+
 	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute)}
 	ctx := context.Background()
 	token, _, err := h.sessionStore.CreateSession(ctx, "alice", sop.RoleAdmin)
@@ -48,6 +50,7 @@ func TestDaemonRequireAuthPropagatesUserRoleToContext(t *testing.T) {
 }
 
 func TestHandleBootstrapUsesCurrentBootstrapSecretFromDisk(t *testing.T) {
+	withIsolatedSystemDB(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	h := &DaemonAuthHandler{
@@ -74,6 +77,8 @@ func TestHandleBootstrapUsesCurrentBootstrapSecretFromDisk(t *testing.T) {
 }
 
 func TestHandleBootstrapAcceptsSignedBootstrapToken(t *testing.T) {
+	withIsolatedSystemDB(t)
+
 	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute)}
 	accessToken, _, err := h.sessionStore.CreateSession(context.Background(), "alice", "daemon-user")
 	if err != nil {
@@ -99,6 +104,8 @@ func TestHandleBootstrapAcceptsSignedBootstrapToken(t *testing.T) {
 }
 
 func TestRequireAuthAcceptsHQSignedTokens(t *testing.T) {
+	withIsolatedSystemDB(t)
+
 	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute), hqSigningSecret: "hq-secret"}
 	token, err := h.signHQAccessToken("hq-user", "daemon-user", []string{"ask", "memory"}, time.Now().Add(5*time.Minute), "hq-token-1")
 	if err != nil {
@@ -129,6 +136,8 @@ func TestRequireAuthAcceptsHQSignedTokens(t *testing.T) {
 }
 
 func TestHandleHQAuthIssuesDaemonTokensForSignedHQToken(t *testing.T) {
+	withIsolatedSystemDB(t)
+
 	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute), hqSigningSecret: "hq-secret"}
 	token, err := h.signHQAccessToken("hq-user", "daemon-user", []string{"ask", "memory"}, time.Now().Add(5*time.Minute), "hq-token-2")
 	if err != nil {
@@ -154,6 +163,8 @@ func TestHandleHQAuthIssuesDaemonTokensForSignedHQToken(t *testing.T) {
 }
 
 func TestSyncWithHQReturnsNilForValidHandler(t *testing.T) {
+	withIsolatedSystemDB(t)
+
 	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute)}
 	if err := h.syncWithHQ(context.Background()); err != nil {
 		t.Fatalf("syncWithHQ() error = %v", err)

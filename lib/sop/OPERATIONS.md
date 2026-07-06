@@ -107,6 +107,8 @@ If you are already running an application that owns the SOP configuration, call 
 2. Restart or reload the relevant SOP service/process if it had to be restarted during the failure window, so it reopens the restored paths cleanly.
 3. Continue monitoring logs and metrics for follow-up failures, especially if a second drive fails before redundancy is fully restored.
 
+> TODO: Before going live, run a quick non-production recovery rehearsal for a real drive replacement/reinstate cycle so the operational steps are proven end to end.
+
 ## Backup & Restore
 
 ### Hybrid Backend (`incfs`)

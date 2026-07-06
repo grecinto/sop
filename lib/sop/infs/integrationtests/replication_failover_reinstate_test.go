@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
-	"github.com/sharedcode/sop/adapters/redis"
 	"github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/infs"
 )
@@ -94,6 +93,7 @@ func sanitizeIsolatedReplicationBases(t *testing.T) {
 	bases := []string{activeBaseFolder(), passiveBaseFolder()}
 	for _, base := range bases {
 		_ = os.MkdirAll(base, 0o755)
+		_ = os.MkdirAll(filepath.Join(base, "translogs"), 0o755)
 		_ = os.Chmod(base, 0o755)
 		// Remove any stores other than our status/commit log artifacts.
 		entries, _ := os.ReadDir(base)
@@ -115,9 +115,7 @@ func sanitizeIsolatedReplicationBases(t *testing.T) {
 func Test_EC_Failover_Reinstate_FastForward_Short(t *testing.T) {
 	ctx := context.Background()
 
-	// Ensure clean L2 and status files to avoid cross-test influence.
-	conn, _ := redis.OpenConnection(redisConfig)
-	_ = conn.Client.FlushDB(ctx)
+	// Ensure clean status files to avoid cross-test influence.
 	cleanupReplicationStatusFiles()
 
 	// Use dedicated replication base folders and EC disks for this test to avoid cross-test contamination.
@@ -144,7 +142,7 @@ func Test_EC_Failover_Reinstate_FastForward_Short(t *testing.T) {
 		RegistryHashModValue: fs.MinimumModValue,
 		StoresFolders:        isolatedStores,
 		ErasureConfig:        isolatedEC,
-		CacheType:            sop.Redis,
+		CacheType:            sop.InMemory,
 	}
 
 	// Use a unique table name for isolated tests to avoid cross-suite collisions.
@@ -224,7 +222,7 @@ func Test_EC_Failover_Reinstate_FastForward_Short(t *testing.T) {
 	restoreRegistryPermissions(t, table)
 	restoreStoreInfoPermissions(t, table)
 	reinstateErr := make(chan error, 1)
-	go func() { reinstateErr <- infs.ReinstateFailedDrives(ctx, isolatedStores, sop.Redis) }()
+	go func() { reinstateErr <- infs.ReinstateFailedDrives(ctx, isolatedStores, sop.InMemory) }()
 
 	// Detect immediate reinstate failures (fail fast with clearer error).
 	select {
@@ -360,6 +358,157 @@ func Test_EC_Failover_Reinstate_FastForward_Short(t *testing.T) {
 	}
 
 	// Note: we intentionally skip simulating another failover here to keep the integration test deterministic and fast.
+}
+
+func Test_EC_FullLifecycle_Reinstate_RebuildsShardsAndPreservesData(t *testing.T) {
+	ctx := context.Background()
+
+	cleanupReplicationStatusFiles()
+
+	isolatedStores := []string{
+		fmt.Sprintf("%s%cdisk8", dataPath, os.PathSeparator),
+		fmt.Sprintf("%s%cdisk9", dataPath, os.PathSeparator),
+	}
+	isolatedEC := map[string]sop.ErasureCodingConfig{
+		"": {
+			DataShardsCount:   2,
+			ParityShardsCount: 2,
+			BaseFolderPathsAcrossDrives: []string{
+				fmt.Sprintf("%s%cdisk10", dataPath, os.PathSeparator),
+				fmt.Sprintf("%s%cdisk11", dataPath, os.PathSeparator),
+				fmt.Sprintf("%s%cdisk12", dataPath, os.PathSeparator),
+				fmt.Sprintf("%s%cdisk13", dataPath, os.PathSeparator),
+			},
+			RepairCorruptedShards: true,
+		},
+	}
+	to := sop.TransactionOptions{
+		Mode:                 sop.ForWriting,
+		MaxTime:              -1,
+		RegistryHashModValue: fs.MinimumModValue,
+		StoresFolders:        isolatedStores,
+		ErasureConfig:        isolatedEC,
+		CacheType:            sop.InMemory,
+	}
+
+	table := "ec_full_lifecycle_it"
+	sanitizeIsolatedReplicationBases(t)
+	cleanupStoreEverywhere(table)
+	cleanupECShards(table)
+	cleanupStoreRepository(table, isolatedStores)
+
+	if err := ensureStoreExists(ctx, to, table); err != nil {
+		t.Fatalf("ensure store exists: %v", err)
+	}
+
+	trans, err := infs.NewTransactionWithReplication(ctx, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = trans.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b, err := infs.OpenBtreeWithReplication[int, string](ctx, table, trans, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 40; i++ {
+		if ok, err := b.Upsert(ctx, i, fmt.Sprintf("payload-%02d", i)); !ok || err != nil {
+			t.Fatalf("upsert %d: %v", i, err)
+		}
+	}
+	if err := trans.Commit(ctx); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+
+	// Simulate a lost EC member drive by removing the store contents from one EC member path.
+	failedDrive := fmt.Sprintf("%s%cdisk10", dataPath, os.PathSeparator)
+	failedStorePath := filepath.Join(failedDrive, table)
+	if err := os.RemoveAll(failedStorePath); err != nil {
+		t.Fatalf("remove failed drive store path: %v", err)
+	}
+
+	// Data should still be readable because the remaining EC shards are sufficient for reconstruction.
+	gotBeforeReinstate := readAll(ctx, to, table, t)
+	if len(gotBeforeReinstate) != 40 {
+		t.Fatalf("expected 40 items before reinstate, got %d", len(gotBeforeReinstate))
+	}
+	for i := 1; i <= 40; i++ {
+		want := fmt.Sprintf("payload-%02d", i)
+		if got, ok := gotBeforeReinstate[i]; !ok || got != want {
+			t.Fatalf("item %d mismatch before reinstate: got=%q want=%q", i, got, want)
+		}
+	}
+
+	// Force replication into the failed-to-replicate state so the public reinstate API can run.
+	makePassiveRegistryReadOnly(t, table)
+	makePassiveStoreInfoReadOnly(t, table)
+	failTx, err := infs.NewTransactionWithReplication(ctx, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = failTx.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	failB, err := infs.OpenBtreeWithReplication[int, string](ctx, table, failTx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = failB.Upsert(ctx, 999, "failover-trigger")
+	_ = failTx.Commit(ctx)
+	if err := waitForFailedFlagTrue(3 * time.Second); err != nil {
+		t.Fatalf("expected FailedToReplicate after simulated failure: %v", err)
+	}
+	restoreRegistryPermissions(t, table)
+	restoreStoreInfoPermissions(t, table)
+
+	if err := os.MkdirAll(failedStorePath, 0o755); err != nil {
+		t.Fatalf("recreate failed drive store path: %v", err)
+	}
+	if err := infs.ReinstateFailedDrives(ctx, isolatedStores, sop.InMemory); err != nil {
+		t.Fatalf("reinstate failed: %v", err)
+	}
+	if err := waitForFailedFlagFalse(5 * time.Second); err != nil {
+		t.Fatalf("expected FailedToReplicate=false after reinstate: %v", err)
+	}
+
+	gotAfterReinstate := readAll(ctx, to, table, t)
+	if len(gotAfterReinstate) != 41 {
+		t.Fatalf("expected 41 items after reinstate, got %d", len(gotAfterReinstate))
+	}
+	for i := 1; i <= 40; i++ {
+		want := fmt.Sprintf("payload-%02d", i)
+		if got, ok := gotAfterReinstate[i]; !ok || got != want {
+			t.Fatalf("item %d mismatch after reinstate: got=%q want=%q", i, got, want)
+		}
+	}
+	if got, ok := gotAfterReinstate[999]; !ok || got != "failover-trigger" {
+		t.Fatalf("item 999 mismatch after reinstate: got=%q want=%q", got, "failover-trigger")
+	}
+
+	for _, drive := range []string{"disk10", "disk11", "disk12", "disk13"} {
+		drivePath := fmt.Sprintf("%s%c%s", dataPath, os.PathSeparator, drive)
+		storeDir := filepath.Join(drivePath, table)
+		if _, err := os.Stat(storeDir); err != nil {
+			t.Fatalf("expected EC shard directory for %s at %s: %v", drive, storeDir, err)
+		}
+		count := 0
+		err := filepath.WalkDir(storeDir, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if !d.IsDir() {
+				count++
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk EC shard directory for %s: %v", drive, err)
+		}
+		if count == 0 {
+			t.Fatalf("expected shard files under %s after reinstate", storeDir)
+		}
+	}
 }
 
 func readAll(ctx context.Context, to sop.TransactionOptions, table string, t *testing.T) map[int]string {

@@ -16,7 +16,7 @@ func TestAssetBlueprintRegistry(t *testing.T) {
 		Description: "A test asset for unit tests",
 		Endpoints:   []string{"/api/test_assets"},
 		Actions:     []Action{ActionRead, ActionWrite},
-		Evaluator: func(ctx context.Context, entitlementCtx EntitlementContext, action Action) bool {
+		Evaluator: func(ctx context.Context, entitlementCtx EntitlementContext, action Action, evalState *RBACEvaluationState) bool {
 			return true
 		},
 	}
