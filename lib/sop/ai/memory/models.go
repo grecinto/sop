@@ -28,6 +28,8 @@ type KnowledgeBaseConfig struct {
 	// or in decoupled RAG references mode where Item.Data points to the canonical large Document(MD).
 	DocumentMode      bool `json:"document_mode,omitempty"`
 	TextSearchEnabled bool `json:"text_search_enabled,omitempty"` // Controls if keyword/BM25 search is indexed and available
+	// AutoShareToDaemons controls whether this Space should be automatically pushed to daemons during sync
+	AutoShareToDaemons bool `json:"auto_share_to_daemons,omitempty"`
 }
 
 // DocIDs stores one or more source document references for an item.
@@ -147,6 +149,9 @@ type Category struct {
 	VectorHash       string           `json:"vector_hash,omitempty"`       // Hash of EmbedderName + Content to deduplicate vectorization
 	EmbeddingText    string           `json:"embedding_text,omitempty"`    // Compact semantic text used to derive category-level embeddings
 	EmbeddingVersion string           `json:"embedding_version,omitempty"` // Version of the embedder/contract used for this category
+	// AutoShareToDaemons controls whether artifacts in this category should be shared to daemons during HQ sync
+	// Only applicable for HQ LTM categories, controlled by SystemAdmin role
+	AutoShareToDaemons *bool `json:"auto_share_to_daemons,omitempty"` // nil=default(true), false=never share, true=always share
 }
 
 // VectorKey is the key for the Vectors B-Tree. It dictates how vectors are sorted

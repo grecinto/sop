@@ -27,6 +27,7 @@ type hqSyncBatch struct {
 	SessionID string `json:"session_id"`
 	UserID    string `json:"user_id"`
 	DaemonID  string `json:"daemon_id"`
+	DaemonURL string `json:"daemon_url"` // NEW: Daemon's callback URL for HQ→daemon communication
 	Timestamp string `json:"timestamp"`
 
 	SharedMeta struct {
@@ -94,6 +95,23 @@ func HandleHQSync(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(batch.UserID)
 	if userID == "" {
 		userID = "daemon"
+	}
+
+	// Register daemon in the fleet registry
+	if batch.DaemonURL != "" {
+		registry := GetDaemonRegistry()
+		registry.Register(daemonID, batch.DaemonURL, userID)
+		log.Debug("HQ sync: daemon registered",
+			"daemon_id", daemonID,
+			"daemon_url", batch.DaemonURL,
+		)
+
+		// Automatically push all auto-federated Spaces to this daemon
+		go func() {
+			if err := autoShareSpacesToDaemon(context.Background(), daemonID, batch.DaemonURL); err != nil {
+				log.Warn("HQ sync: failed to auto-share Spaces to daemon", "daemon_id", daemonID, "error", err)
+			}
+		}()
 	}
 
 	log.Info("HQ sync: received batch",
@@ -422,7 +440,14 @@ func retrieveSharedMemoryArtifacts(ctx context.Context, query string, limit int)
 		return nil, fmt.Errorf("retrieve shared memory: %w", err)
 	}
 
-	// Convert hits to artifacts
+	// Load category auto-share settings to filter artifacts
+	categoryAutoShare, err := loadCategoryAutoShareSettings(ctx, db, sharedMemoryKBName)
+	if err != nil {
+		log.Warn("HQ retrieve: failed to load category auto-share settings, defaulting to share all", "error", err)
+		// Continue with all artifacts if we can't load settings
+	}
+
+	// Convert hits to artifacts, filtering by category auto-share settings
 	var artifacts []hqArtifact
 	for _, hit := range hits {
 		text := ""
@@ -444,6 +469,12 @@ func retrieveSharedMemoryArtifacts(ctx context.Context, query string, limit int)
 			}
 		}
 
+		// Check if this category should be shared to daemons
+		if !shouldShareCategoryToDaemons(category, categoryAutoShare) {
+			log.Debug("HQ retrieve: filtering category from daemon sync", "category", category)
+			continue
+		}
+
 		if text != "" {
 			artifacts = append(artifacts, hqArtifact{
 				Text:     text,
@@ -455,4 +486,69 @@ func retrieveSharedMemoryArtifacts(ctx context.Context, query string, limit int)
 	}
 
 	return artifacts, nil
+}
+
+// loadCategoryAutoShareSettings loads category auto-share settings from the knowledge base.
+func loadCategoryAutoShareSettings(ctx context.Context, db *aidb.Database, kbName string) (map[string]bool, error) {
+	tx, err := db.BeginTransaction(ctx, sop.ForReading, -1)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	kb, err := db.OpenKnowledgeBase(ctx, kbName, tx, nil, nil, false)
+	if err != nil {
+		return nil, fmt.Errorf("open knowledge base: %w", err)
+	}
+
+	categories, err := kb.Store.Categories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get categories: %w", err)
+	}
+
+	settings := make(map[string]bool)
+	
+	ok, err := categories.First(ctx)
+	if err != nil || !ok {
+		return settings, nil
+	}
+
+	for {
+		cat, err := categories.GetCurrentValue(ctx)
+		if err != nil {
+			break
+		}
+
+		if cat != nil && cat.Path != "" {
+			// If AutoShareToDaemons is nil, default to true (share by default)
+			// If false, don't share. If true, share.
+			if cat.AutoShareToDaemons != nil && !*cat.AutoShareToDaemons {
+				settings[cat.Path] = false
+			} else {
+				settings[cat.Path] = true
+			}
+		}
+
+		if ok, err := categories.Next(ctx); err != nil || !ok {
+			break
+		}
+	}
+
+	return settings, nil
+}
+
+// shouldShareCategoryToDaemons checks if a category should be shared to daemons.
+// Returns true if category should be shared (default), false otherwise.
+func shouldShareCategoryToDaemons(category string, settings map[string]bool) bool {
+	if settings == nil {
+		return true // Default to sharing if no settings loaded
+	}
+
+	// Check exact match first
+	if share, found := settings[category]; found {
+		return share
+	}
+
+	// Default to sharing if category not found in settings
+	return true
 }

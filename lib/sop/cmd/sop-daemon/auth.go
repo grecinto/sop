@@ -172,6 +172,7 @@ type hqSyncBatch struct {
 	SessionID  string `json:"session_id,omitempty"`
 	UserID     string `json:"user_id,omitempty"`
 	DaemonID   string `json:"daemon_id,omitempty"`
+	DaemonURL  string `json:"daemon_url,omitempty"` // Callback URL for HQ→daemon communication
 	Timestamp  string `json:"timestamp"`
 	SharedMeta struct {
 		Enabled    bool   `json:"enabled"`
@@ -477,11 +478,20 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 	if h == nil || h.sessionStore == nil {
 		return nil
 	}
+
+	daemonID := "local-daemon"
+	if storedID := strings.TrimSpace(os.Getenv("SOP_DAEMON_ID")); storedID != "" {
+		daemonID = storedID
+	}
+
+	daemonURL := getDaemonCallbackURL()
+
 	batch := hqSyncBatch{
 		Kind:      "shared_memory_sync",
 		SessionID: "daemon-sync",
 		UserID:    "daemon",
-		DaemonID:  "local-daemon",
+		DaemonID:  daemonID,
+		DaemonURL: daemonURL,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -539,6 +549,20 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// getDaemonCallbackURL returns the URL where this daemon can be reached by HQ.
+// Priority: SOP_DAEMON_CALLBACK_URL env var > derive from listen address
+func getDaemonCallbackURL() string {
+	// Check explicit callback URL first
+	if url := strings.TrimSpace(os.Getenv("SOP_DAEMON_CALLBACK_URL")); url != "" {
+		return url
+	}
+
+	// Try to derive from listen address (if available)
+	// For now, return empty string if not explicitly set
+	// HQ will know daemon exists but can't push to it
+	return ""
 }
 
 // pullFromHQ retrieves relevant artifacts from HQ and stores them locally.

@@ -626,6 +626,18 @@ func trySharedMemoryContext(ctx context.Context, query, userID string) (string, 
 		return "", err
 	}
 
+	// Also check federated Spaces
+	spaceContext, err := retrieveFederatedSpaceContext(ctx, query, 3)
+	if err != nil {
+		log.Printf("daemon research: failed to retrieve federated Space context: %v", err)
+	} else if strings.TrimSpace(spaceContext) != "" {
+		if strings.TrimSpace(context) != "" {
+			context = context + "\n\n" + spaceContext
+		} else {
+			context = spaceContext
+		}
+	}
+
 	if strings.TrimSpace(context) == "" {
 		return "", nil
 	}
@@ -665,7 +677,28 @@ func promoteSharedMemoryArtifactForAsk(ctx context.Context, query, answer string
 		Metadata:    metadata,
 	}
 
-	return PromoteFederatedArtifact(ctx, artifact)
+	// Promote to local shared memory
+	if err := PromoteFederatedArtifact(ctx, artifact); err != nil {
+		return err
+	}
+
+	// Also push derived content from any federated Spaces back to HQ
+	if shouldShare && payload != nil && payload.SessionID != "" {
+		federatedSpaces := GetFederatedSpaces()
+		for _, space := range federatedSpaces {
+			// If the query appears to be related to a federated Space, push derived content
+			if strings.Contains(strings.ToLower(query), strings.ToLower(space.SpaceName)) {
+				if err := pushSpaceContentToHQ(ctx, space.SpaceName, answer, string(category)); err != nil {
+					log.Printf("daemon push: failed to send Space-derived content to HQ: %v", err)
+				} else {
+					log.Printf("daemon push: sent Space-derived content to HQ from %s", space.SpaceName)
+				}
+				break
+			}
+		}
+	}
+
+	return nil
 }
 
 func sharedMemoryDatabase() (*aidb.Database, error) {

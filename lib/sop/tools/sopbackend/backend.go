@@ -219,6 +219,20 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/spaces/config", WithAuth(handleSaveSpaceConfig))
 	mux.HandleFunc("/api/tasks/status", WithAuth(handleGetTaskStatus))
 
+	// Space Federation Endpoints
+	mux.HandleFunc("/api/space/auto-share", WithAuth(HandleSetSpaceAutoShare))
+	mux.HandleFunc("/api/space/auto-shared", WithAuth(HandleListAutoSharedSpaces))
+	mux.HandleFunc("/api/space/push", WithAuth(HandleHQPushSpace))
+	mux.HandleFunc("/api/space/reshare", WithAuth(HandleHQReshareSpace))
+
+	// LTM Category Auto-Share Endpoints (SA only)
+	mux.HandleFunc("/api/ltm/category/auto-share", WithAuth(HandleSetCategoryAutoShare))
+	mux.HandleFunc("/api/ltm/category/auto-share/list", WithAuth(HandleListCategoryAutoShare))
+	mux.HandleFunc("/api/ltm/category/auto-share/bulk", WithAuth(HandleBulkSetCategoryAutoShare))
+
+	// Daemon Sync Endpoints
+	mux.HandleFunc("/api/daemon/hq-sync", HandleHQSync)
+
 	// Configuration Endpoints
 	mux.HandleFunc("/api/config/save", WithAuth(handleSaveConfig))
 	mux.HandleFunc("/api/db/init", WithAuth(handleInitDatabase))
