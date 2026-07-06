@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html/template"
@@ -11,9 +12,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sharedcode/sop"
@@ -219,8 +222,10 @@ func main() {
 	sopbackend.RegisterSwaggerHandlers(http.DefaultServeMux, "")
 	sopbackend.RegisterMonitorabilityHandlers(http.DefaultServeMux)
 
-	// Start shared background services
-	sopbackend.StartBackgroundService(sopbackend.DefaultSessionCleanupInterval(), 2*time.Hour)
+	// Start shared background services with host-shutdown awareness.
+	hostCtx, stopHost := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopHost()
+	sopbackend.StartBackgroundServiceWithContext(hostCtx, sopbackend.DefaultSessionCleanupInterval(), 2*time.Hour)
 
 	// Start Server
 	addr := fmt.Sprintf(":%d", config.Port)
@@ -249,7 +254,16 @@ func main() {
 		})
 	}
 
-	if err := http.ListenAndServe(addr, sopbackend.NewObservabilityHandler(handler)); err != nil {
+	server := &http.Server{Addr: addr, Handler: sopbackend.NewObservabilityHandler(handler)}
+	go func() {
+		<-hostCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Error("graceful shutdown failed", "error", err)
+		}
+	}()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error(err.Error())
 	}
 }

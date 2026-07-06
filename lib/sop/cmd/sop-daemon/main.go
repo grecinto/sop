@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -11,10 +12,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sharedcode/sop/ai"
@@ -186,6 +189,10 @@ func main() {
 	}
 
 	// Register all sopbackend handlers (provides full backend API)
+	hostCtx, stopHost := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopHost()
+	sopbackend.StartBackgroundServiceWithContext(hostCtx, sopbackend.DefaultSessionCleanupInterval(), 2*time.Hour)
+
 	mux := http.NewServeMux()
 	sopbackend.RegisterAllHandlers(mux)
 	sopbackend.RegisterMonitorabilityHandlers(mux)
@@ -229,7 +236,16 @@ func main() {
 	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff (authenticated)")
 	log.Printf("Waiting for UI authentication...")
 
-	if err := http.ListenAndServe(addr, sopbackend.NewObservabilityHandler(corsHandler)); err != nil {
+	server := &http.Server{Addr: addr, Handler: sopbackend.NewObservabilityHandler(corsHandler)}
+	go func() {
+		<-hostCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+		}
+	}()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

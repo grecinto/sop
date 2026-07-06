@@ -139,6 +139,166 @@ func TestCreateCheckoutSession_PersistsSubscriptionAndPaymentRecords(t *testing.
 	}
 }
 
+func TestCollectScheduledBilling_ProcessesDueAccountsWithSuccessAndFailure(t *testing.T) {
+	cfg := Config{UsersStore: NewUserStore(), SubscriptionsStore: NewSubscriptionStore(), PaymentsStore: NewPaymentStore()}
+	userA, err := cfg.RegisterUser(context.Background(), "monthly-success", "pw123", "monthly-success@example.com", "user", "starter")
+	if err != nil {
+		t.Fatalf("RegisterUser(success) error = %v", err)
+	}
+	userB, err := cfg.RegisterUser(context.Background(), "monthly-fail", "pw123", "monthly-fail@example.com", "user", "starter")
+	if err != nil {
+		t.Fatalf("RegisterUser(fail) error = %v", err)
+	}
+
+	userA.BillingStatus = "active"
+	userA.BillingNotice = ""
+	userA.UpdatedAt = time.Date(2026, time.July, 1, 9, 0, 0, 0, time.UTC)
+	if err := cfg.ensureUserStore().Save(context.Background(), userA); err != nil {
+		t.Fatalf("Save(success user) error = %v", err)
+	}
+	for i := range cfg.Users {
+		if cfg.Users[i].Username == userA.Username {
+			cfg.Users[i] = *userA
+			break
+		}
+	}
+
+	userB.BillingStatus = "active"
+	userB.BillingNotice = ""
+	userB.UpdatedAt = time.Date(2026, time.July, 1, 9, 0, 0, 0, time.UTC)
+	if err := cfg.ensureUserStore().Save(context.Background(), userB); err != nil {
+		t.Fatalf("Save(fail user) error = %v", err)
+	}
+	for i := range cfg.Users {
+		if cfg.Users[i].Username == userB.Username {
+			cfg.Users[i] = *userB
+			break
+		}
+	}
+
+	if _, err := cfg.SetBillingDay(context.Background(), userA.Username, 15); err != nil {
+		t.Fatalf("SetBillingDay(success) error = %v", err)
+	}
+	if _, err := cfg.SetBillingDay(context.Background(), userB.Username, 15); err != nil {
+		t.Fatalf("SetBillingDay(fail) error = %v", err)
+	}
+
+	if _, err := cfg.SetBillingCollectionMode(context.Background(), userB.Username, "fail"); err != nil {
+		t.Fatalf("SetBillingCollectionMode() error = %v", err)
+	}
+
+	now := time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC)
+	results, err := cfg.CollectScheduledBilling(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("CollectScheduledBilling() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 billing collection results, got %d", len(results))
+	}
+
+	updatedA, ok, err := cfg.FindUserRecord(context.Background(), userA.Username)
+	if err != nil {
+		t.Fatalf("FindUserRecord(success) error = %v", err)
+	}
+	if !ok || updatedA == nil {
+		t.Fatal("FindUserRecord(success) returned no user")
+	}
+	if updatedA.BillingStatus != "active" {
+		t.Fatalf("expected success account to stay active, got %q", updatedA.BillingStatus)
+	}
+
+	updatedB, ok, err := cfg.FindUserRecord(context.Background(), userB.Username)
+	if err != nil {
+		t.Fatalf("FindUserRecord(fail) error = %v", err)
+	}
+	if !ok || updatedB == nil {
+		t.Fatal("FindUserRecord(fail) returned no user")
+	}
+	if updatedB.BillingStatus != "on_hold" {
+		t.Fatalf("expected fail account to be placed on hold, got %q", updatedB.BillingStatus)
+	}
+
+	payments, err := cfg.ensurePaymentStore().ListByUser(context.Background(), userA.Username)
+	if err != nil {
+		t.Fatalf("ListByUser(success payments) error = %v", err)
+	}
+	if len(payments) != 1 {
+		t.Fatalf("expected one payment for success account, got %d", len(payments))
+	}
+	if payments[0].Status != "succeeded" {
+		t.Fatalf("expected success payment status succeeded, got %q", payments[0].Status)
+	}
+
+	failPayments, err := cfg.ensurePaymentStore().ListByUser(context.Background(), userB.Username)
+	if err != nil {
+		t.Fatalf("ListByUser(fail payments) error = %v", err)
+	}
+	if len(failPayments) != 1 {
+		t.Fatalf("expected one payment for fail account, got %d", len(failPayments))
+	}
+	if failPayments[0].Status != "failed" {
+		t.Fatalf("expected fail payment status failed, got %q", failPayments[0].Status)
+	}
+}
+
+func TestCollectScheduledBilling_ResumesFromPersistedCursorAfterFailure(t *testing.T) {
+	cfg := Config{UsersStore: NewUserStore(), SubscriptionsStore: NewSubscriptionStore(), PaymentsStore: NewPaymentStore()}
+	userA, err := cfg.RegisterUser(context.Background(), "resume-a", "pw123", "resume-a@example.com", "user", "starter")
+	if err != nil {
+		t.Fatalf("RegisterUser(A) error = %v", err)
+	}
+	userB, err := cfg.RegisterUser(context.Background(), "resume-b", "pw123", "resume-b@example.com", "user", "starter")
+	if err != nil {
+		t.Fatalf("RegisterUser(B) error = %v", err)
+	}
+
+	for _, user := range []*UserRecord{userA, userB} {
+		user.BillingStatus = "active"
+		user.BillingNotice = ""
+		user.UpdatedAt = time.Date(2026, time.July, 1, 9, 0, 0, 0, time.UTC)
+		if err := cfg.ensureUserStore().Save(context.Background(), user); err != nil {
+			t.Fatalf("Save(%s) error = %v", user.Username, err)
+		}
+		for i := range cfg.Users {
+			if cfg.Users[i].Username == user.Username {
+				cfg.Users[i] = *user
+				break
+			}
+		}
+	}
+	if _, err := cfg.SetBillingDay(context.Background(), userA.Username, 15); err != nil {
+		t.Fatalf("SetBillingDay(A) error = %v", err)
+	}
+	if _, err := cfg.SetBillingDay(context.Background(), userB.Username, 15); err != nil {
+		t.Fatalf("SetBillingDay(B) error = %v", err)
+	}
+
+	userA.BillingCollectionCursor = userA.Username
+	if err := cfg.ensureUserStore().Save(context.Background(), userA); err != nil {
+		t.Fatalf("Save(cursor for A) error = %v", err)
+	}
+	for i := range cfg.Users {
+		if cfg.Users[i].Username == userA.Username {
+			cfg.Users[i].BillingCollectionCursor = userA.Username
+			cfg.Users[i].UpdatedAt = time.Now().UTC()
+			break
+		}
+	}
+
+	now := time.Date(2026, time.July, 15, 12, 0, 0, 0, time.UTC)
+	restartedCfg := Config{UsersStore: cfg.UsersStore, SubscriptionsStore: cfg.SubscriptionsStore, PaymentsStore: cfg.PaymentsStore, Users: cfg.Users}
+	resumedResults, err := restartedCfg.CollectScheduledBilling(context.Background(), now, 1)
+	if err != nil {
+		t.Fatalf("resumed CollectScheduledBilling() error = %v", err)
+	}
+	if len(resumedResults) != 1 {
+		t.Fatalf("expected resumed batch to process one account, got %d", len(resumedResults))
+	}
+	if resumedResults[0]["username"] != userA.Username {
+		t.Fatalf("expected resumed batch to continue with %q, got %#v", userA.Username, resumedResults[0]["username"])
+	}
+}
+
 func TestUnregisterUser_RemovesBillingRecordsForUser(t *testing.T) {
 	cfg := Config{UsersStore: NewUserStore(), SubscriptionsStore: NewSubscriptionStore(), PaymentsStore: NewPaymentStore()}
 	user, err := cfg.RegisterUser(context.Background(), "cleanup-billing", "pw123", "cleanup-billing@example.com", "user", "starter")

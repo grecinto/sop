@@ -5,6 +5,7 @@ import (
 	log "log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sharedcode/sop"
@@ -123,19 +124,29 @@ func registerBuiltinRBACBlueprints() {
 
 // Backend represents the reusable SOP backend that can be used by both httpserver and sop-daemon.
 type Backend struct {
-	Config         *Config
-	ModelCatalog   *ModelCatalog
-	LoadedAgents   map[string]ai.Agent[map[string]any]
-	ActiveSessions *SessionManager
+	Config                   *Config
+	ModelCatalog             *ModelCatalog
+	LoadedAgents             map[string]ai.Agent[map[string]any]
+	ActiveSessions           *SessionManager
+	billingCollectionQueue   chan struct{}
+	billingCollectionMu      sync.Mutex
+	billingCollectionRunning bool
+	billingCollectionStarted bool
+	shutdownCh               chan struct{}
+	shutdownOnce             sync.Once
 }
 
 // NewBackend creates a new backend instance.
 func NewBackend(cfg *Config, catalog *ModelCatalog) *Backend {
 	b := &Backend{
-		Config:         cfg,
-		ModelCatalog:   catalog,
-		LoadedAgents:   make(map[string]ai.Agent[map[string]any]),
-		ActiveSessions: NewSessionManager(100),
+		Config:                   cfg,
+		ModelCatalog:             catalog,
+		LoadedAgents:             make(map[string]ai.Agent[map[string]any]),
+		ActiveSessions:           NewSessionManager(100),
+		billingCollectionQueue:   make(chan struct{}, 1),
+		billingCollectionRunning: false,
+		billingCollectionStarted: false,
+		shutdownCh:               make(chan struct{}),
 	}
 	return b
 }
@@ -248,14 +259,39 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
+	mux.HandleFunc("/api/billing/payment", WithAuth(handleBillingPayment))
+	mux.HandleFunc("/api/billing/status", WithAuth(handleBillingStatus))
+	mux.HandleFunc("/api/billing/daemon-access", WithAuth(handleBillingDaemonAccess))
+	mux.HandleFunc("/api/billing/day", WithAuth(handleBillingDayUpdate))
+	mux.HandleFunc("/api/billing/collection-mode", WithAuth(handleBillingCollectionModeUpdate))
 }
 
 // StartBackgroundService starts the shared background service loop for the backend.
-// It currently handles session cleanup and can host additional periodic work over time.
+// The main loop acts as a lightweight dispatcher and hands off heavier work to dedicated worker goroutines.
 func (b *Backend) StartBackgroundService(interval, ttl time.Duration) {
+	b.StartBackgroundServiceWithContext(context.Background(), interval, ttl)
+}
+
+// StartBackgroundServiceWithContext starts the shared background service loop and stops it when the provided context is canceled.
+func (b *Backend) StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.Duration) {
+	if b == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	b.startBillingCollectionWorker(ctx)
+
 	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		for {
-			time.Sleep(interval)
+			select {
+			case <-ctx.Done():
+				b.StopBackgroundService()
+				return
+			case <-ticker.C:
+			}
 			if b.ActiveSessions != nil {
 				evicted := b.ActiveSessions.RemoveStale(ttl)
 				if evicted > 0 {
@@ -264,13 +300,99 @@ func (b *Backend) StartBackgroundService(interval, ttl time.Duration) {
 			}
 			if currentTokenFacade() != nil {
 				if store, ok := currentTokenFacade().(*SessionStore); ok && store != nil {
-					if _, err := store.collectStaleSessions(context.Background(), 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
+					if _, err := store.collectStaleSessions(ctx, 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
 						log.Warn("background service: failed to collect stale sessions", "error", err)
 					}
 				}
 			}
+			b.triggerBillingCollection()
 		}
 	}()
+}
+
+func (b *Backend) StopBackgroundService() {
+	if b == nil {
+		return
+	}
+	b.shutdownOnce.Do(func() {
+		close(b.shutdownCh)
+	})
+}
+
+func (b *Backend) startBillingCollectionWorker(ctx context.Context) {
+	if b == nil || b.billingCollectionQueue == nil {
+		return
+	}
+
+	b.billingCollectionMu.Lock()
+	if b.billingCollectionStarted {
+		b.billingCollectionMu.Unlock()
+		return
+	}
+	b.billingCollectionStarted = true
+	b.billingCollectionMu.Unlock()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				b.StopBackgroundService()
+				return
+			case <-b.shutdownCh:
+				return
+			case <-b.billingCollectionQueue:
+				b.runBillingCollectionJob(ctx)
+			}
+		}
+	}()
+}
+
+func (b *Backend) triggerBillingCollection() {
+	if b == nil || b.billingCollectionQueue == nil || b.Config == nil {
+		return
+	}
+	select {
+	case b.billingCollectionQueue <- struct{}{}:
+	default:
+	}
+}
+
+func (b *Backend) runBillingCollectionJob(ctx context.Context) {
+	if b == nil || b.Config == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	b.billingCollectionMu.Lock()
+	if b.billingCollectionRunning {
+		b.billingCollectionMu.Unlock()
+		return
+	}
+	b.billingCollectionRunning = true
+	b.billingCollectionMu.Unlock()
+
+	defer func() {
+		b.billingCollectionMu.Lock()
+		b.billingCollectionRunning = false
+		b.billingCollectionMu.Unlock()
+	}()
+
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-b.shutdownCh:
+			cancel()
+		case <-ctx.Done():
+			cancel()
+		}
+	}()
+
+	if _, err := b.Config.CollectScheduledBilling(jobCtx, time.Now().UTC(), 100); err != nil {
+		log.Warn("background service: billing collection failed", "error", err)
+	}
 }
 
 // SyncState synchronizes the backend state with global package variables.

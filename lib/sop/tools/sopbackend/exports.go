@@ -10,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 )
@@ -49,6 +51,20 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 		cfg = ai.NewConfigMap()
 	}
 	ctx = InjectSharedRuntimeContext(ctx, nil, nil)
+
+	if auth := sop.GetAuthFromContext(ctx); auth.UserID != "" {
+		username := normalizeUsername(auth.UserID)
+		if username != "" && username != "root" && username != "ui-client" {
+			if user, ok, err := config.findUserRecord(ctx, username); err == nil && ok && user != nil && strings.EqualFold(user.BillingStatus, "on_hold") {
+				if strings.TrimSpace(user.BillingNotice) == "" {
+					user.BillingNotice = "Your account is on hold because a payment failed or was declined. Resolve billing to restore Copilot and daemon workflows."
+				}
+				return "", fmt.Errorf("copilot access blocked: account is on hold due to payment failure")
+			} else if err != nil {
+				return "", err
+			}
+		}
+	}
 
 	for _, agentID := range []string{"copilot", "sql_core"} {
 		if agentSvc, ok := loadedAgents[agentID]; ok && agentSvc != nil {
@@ -410,12 +426,104 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 	mux.HandleFunc("/api/daemon/acknowledge-space", WithAuth(handleAcknowledgeSpace))
 }
 
-// StartBackgroundService starts the shared background service loop for the backend.
-// It currently handles session cleanup and can host additional periodic work over time.
-func StartBackgroundService(interval, ttl time.Duration) {
+var (
+	billingCollectionQueue   chan struct{}
+	billingCollectionMu      sync.Mutex
+	billingCollectionRunning bool
+	billingCollectionStarted bool
+	billingShutdownCh        chan struct{}
+	billingShutdownOnce      sync.Once
+)
+
+func initBillingCollectionWorker(ctx context.Context) {
+	billingCollectionMu.Lock()
+	defer billingCollectionMu.Unlock()
+	if billingCollectionStarted {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	billingCollectionQueue = make(chan struct{}, 1)
+	billingCollectionStarted = true
+	if billingShutdownCh == nil {
+		billingShutdownCh = make(chan struct{})
+	}
 	go func() {
 		for {
-			time.Sleep(interval)
+			select {
+			case <-ctx.Done():
+				StopBackgroundService()
+				return
+			case <-billingShutdownCh:
+				return
+			case <-billingCollectionQueue:
+			}
+			billingCollectionMu.Lock()
+			if billingCollectionRunning {
+				billingCollectionMu.Unlock()
+				continue
+			}
+			billingCollectionRunning = true
+			billingCollectionMu.Unlock()
+
+			defer func() {
+				billingCollectionMu.Lock()
+				billingCollectionRunning = false
+				billingCollectionMu.Unlock()
+			}()
+
+			jobCtx, cancel := context.WithCancel(ctx)
+			go func() {
+				select {
+				case <-billingShutdownCh:
+					cancel()
+				case <-ctx.Done():
+					cancel()
+				}
+			}()
+
+			if _, err := config.CollectScheduledBilling(jobCtx, time.Now().UTC(), 100); err != nil {
+				log.Warn("background service: billing collection failed", "error", err)
+			}
+		}
+	}()
+}
+
+func triggerBillingCollection(ctx context.Context) {
+	if billingCollectionQueue == nil {
+		initBillingCollectionWorker(ctx)
+	}
+	select {
+	case billingCollectionQueue <- struct{}{}:
+	default:
+	}
+}
+
+// StartBackgroundService starts the shared background service loop for the backend.
+// It currently handles session cleanup and delegates billing work to a separate worker goroutine.
+func StartBackgroundService(interval, ttl time.Duration) {
+	StartBackgroundServiceWithContext(context.Background(), interval, ttl)
+}
+
+// StartBackgroundServiceWithContext starts the shared background service loop and stops it when the provided context is canceled.
+func StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.Duration) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	initBillingCollectionWorker(ctx)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				StopBackgroundService()
+				return
+			case <-billingShutdownCh:
+				return
+			case <-ticker.C:
+			}
 			if activeSessions != nil {
 				evicted := activeSessions.RemoveStale(ttl)
 				if evicted > 0 {
@@ -424,11 +532,18 @@ func StartBackgroundService(interval, ttl time.Duration) {
 			}
 			if currentTokenFacade() != nil {
 				if store, ok := currentTokenFacade().(*SessionStore); ok && store != nil {
-					if _, err := store.collectStaleSessions(context.Background(), 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
+					if _, err := store.collectStaleSessions(ctx, 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
 						log.Warn("background service: failed to collect stale sessions", "error", err)
 					}
 				}
 			}
+			triggerBillingCollection(ctx)
 		}
 	}()
+}
+
+func StopBackgroundService() {
+	billingShutdownOnce.Do(func() {
+		close(billingShutdownCh)
+	})
 }

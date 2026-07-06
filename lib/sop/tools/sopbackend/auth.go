@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,22 +36,28 @@ func getSystemDB(ctx context.Context) (*aidb.Database, error) {
 
 // UserRecord stores minimal credential and role data for the built-in auth model.
 type UserRecord struct {
-	Username             string        `json:"username"`
-	Role                 string        `json:"role"`
-	PasswordHash         SecuredString `json:"password_hash,omitempty"`
-	Email                SecuredString `json:"email,omitempty"`
-	SubscriptionPlan     string        `json:"subscription_plan,omitempty"`
-	SubscriptionFeatures []string      `json:"subscription_features,omitempty"`
-	BillingStatus        string        `json:"billing_status,omitempty"`
-	CheckoutURL          string        `json:"checkout_url,omitempty"`
-	LastWebhookEvent     string        `json:"last_webhook_event,omitempty"`
-	LastWebhookAt        time.Time     `json:"last_webhook_at,omitempty"`
-	FailureReason        string        `json:"failure_reason,omitempty"`
-	StripeCustomerID     SecuredString `json:"stripe_customer_id,omitempty"`
-	StripeSubID          SecuredString `json:"stripe_subscription_id,omitempty"`
-	Status               string        `json:"status,omitempty"`
-	CreatedAt            time.Time     `json:"created_at,omitempty"`
-	UpdatedAt            time.Time     `json:"updated_at,omitempty"`
+	Username                string        `json:"username"`
+	Role                    string        `json:"role"`
+	PasswordHash            SecuredString `json:"password_hash,omitempty"`
+	Email                   SecuredString `json:"email,omitempty"`
+	SubscriptionPlan        string        `json:"subscription_plan,omitempty"`
+	SubscriptionFeatures    []string      `json:"subscription_features,omitempty"`
+	BillingStatus           string        `json:"billing_status,omitempty"`
+	BillingNotice           string        `json:"billing_notice,omitempty"`
+	BillingDayOfMonth       int           `json:"billing_day_of_month,omitempty"`
+	BillingCollectionMode   string        `json:"billing_collection_mode,omitempty"`
+	LastBillingCollectedAt  time.Time     `json:"last_billing_collected_at,omitempty"`
+	NextBillingAt           time.Time     `json:"next_billing_at,omitempty"`
+	BillingCollectionCursor string        `json:"billing_collection_cursor,omitempty"`
+	CheckoutURL             string        `json:"checkout_url,omitempty"`
+	LastWebhookEvent        string        `json:"last_webhook_event,omitempty"`
+	LastWebhookAt           time.Time     `json:"last_webhook_at,omitempty"`
+	FailureReason           string        `json:"failure_reason,omitempty"`
+	StripeCustomerID        SecuredString `json:"stripe_customer_id,omitempty"`
+	StripeSubID             SecuredString `json:"stripe_subscription_id,omitempty"`
+	Status                  string        `json:"status,omitempty"`
+	CreatedAt               time.Time     `json:"created_at,omitempty"`
+	UpdatedAt               time.Time     `json:"updated_at,omitempty"`
 }
 
 type RegisterUserRequest struct {
@@ -1584,6 +1591,45 @@ func (c *Config) syncUsersStoreFromConfig(ctx context.Context) error {
 	return nil
 }
 
+func (c *Config) syncUsersFromStore(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	store := c.ensureUserStore()
+	if store == nil {
+		return nil
+	}
+	persisted, err := store.List(ctx)
+	if err != nil {
+		return err
+	}
+	if len(persisted) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(persisted))
+	merged := make([]UserRecord, 0, len(persisted)+len(c.Users))
+	for _, user := range persisted {
+		normalized := normalizeUsername(user.Username)
+		if normalized == "" {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		merged = append(merged, user)
+	}
+	for _, user := range c.Users {
+		normalized := normalizeUsername(user.Username)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		merged = append(merged, user)
+	}
+	c.Users = merged
+	return nil
+}
+
 func (c *Config) ensureProvisionedUsersStore(ctx context.Context) error {
 	if c == nil {
 		return nil
@@ -1808,6 +1854,330 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 	return user, nil
 }
 
+func (c *Config) SubmitPayment(ctx context.Context, username, plan string, amount float64, currency, status, providerPaymentID, eventID string, occurredAt time.Time) (*PaymentRecord, *UserRecord, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, nil, fmt.Errorf("username is required")
+	}
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	if strings.TrimSpace(plan) == "" {
+		plan = "starter"
+	}
+
+	user, ok, err := c.findUserRecord(ctx, username)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok || user == nil {
+		return nil, nil, fmt.Errorf("user not found")
+	}
+	if strings.TrimSpace(plan) == "" {
+		plan = strings.TrimSpace(user.SubscriptionPlan)
+	}
+	if strings.TrimSpace(plan) == "" {
+		plan = "starter"
+	}
+
+	normalizedStatus := strings.ToLower(strings.TrimSpace(status))
+	paymentStatus := "pending"
+	billingStatus := "pending"
+	billingNotice := ""
+	switch normalizedStatus {
+	case "succeeded", "success", "successful", "completed", "complete", "paid":
+		paymentStatus = "succeeded"
+		billingStatus = "active"
+		billingNotice = "Billing restored. Copilot and daemon workflows are available again."
+	case "declined", "failed", "failure", "error", "expired", "requires_payment_method", "requires_action":
+		paymentStatus = "failed"
+		billingStatus = "on_hold"
+		billingNotice = fmt.Sprintf("Payment failed (%s). Your account is on hold until a successful payment is recorded.", strings.TrimSpace(status))
+	default:
+		paymentStatus = "pending"
+		billingStatus = "pending"
+		billingNotice = "Payment is being processed."
+	}
+
+	user.SubscriptionPlan = strings.TrimSpace(plan)
+	user.BillingStatus = billingStatus
+	user.BillingNotice = billingNotice
+	user.UpdatedAt = occurredAt
+	if billingStatus == "active" {
+		user.FailureReason = ""
+	}
+	if err := c.ensureUserStore().Save(ctx, user); err != nil {
+		return nil, nil, err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == username {
+			c.Users[i].SubscriptionPlan = user.SubscriptionPlan
+			c.Users[i].BillingStatus = user.BillingStatus
+			c.Users[i].BillingNotice = user.BillingNotice
+			c.Users[i].FailureReason = user.FailureReason
+			c.Users[i].UpdatedAt = user.UpdatedAt
+			break
+		}
+	}
+
+	paymentID := strings.TrimSpace(providerPaymentID)
+	if paymentID == "" {
+		paymentID = fmt.Sprintf("pay_%s_%d", username, occurredAt.UnixNano())
+	}
+	payment := PaymentRecord{
+		ID:                paymentID,
+		UserID:            user.Username,
+		SubscriptionID:    fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan))),
+		ProviderPaymentID: paymentID,
+		Amount:            amount,
+		Currency:          strings.TrimSpace(currency),
+		Status:            paymentStatus,
+		ProviderEventID:   strings.TrimSpace(eventID),
+		CreatedAt:         occurredAt,
+		UpdatedAt:         occurredAt,
+	}
+	if err := c.ensurePaymentStore().Save(ctx, &payment); err != nil {
+		return nil, nil, err
+	}
+	c.Payments = append(c.Payments, payment)
+
+	if store := c.ensureSubscriptionStore(); store != nil {
+		subscriptionID := fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan)))
+		subscription := SubscriptionRecord{
+			ID:                 subscriptionID,
+			UserID:             user.Username,
+			PlanCode:           strings.TrimSpace(plan),
+			Status:             map[bool]string{true: "active", false: "pending"}[billingStatus == "active"],
+			CurrentPeriodStart: occurredAt,
+			CurrentPeriodEnd:   occurredAt.AddDate(0, 1, 0),
+			CreatedAt:          occurredAt,
+			UpdatedAt:          occurredAt,
+		}
+		if billingStatus == "on_hold" {
+			subscription.Status = "on_hold"
+		}
+		_ = store.Save(ctx, &subscription)
+		c.Subscriptions = append(c.Subscriptions, subscription)
+	}
+
+	return &payment, user, nil
+}
+
+func (c *Config) SetBillingDay(ctx context.Context, username string, day int) (*UserRecord, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+	if day < 1 || day > 28 {
+		return nil, fmt.Errorf("billing day must be between 1 and 28")
+	}
+
+	user, ok, err := c.findUserRecord(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	user.BillingDayOfMonth = day
+	user.UpdatedAt = time.Now().UTC()
+	if err := c.ensureUserStore().Save(ctx, user); err != nil {
+		return nil, err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == username {
+			c.Users[i].BillingDayOfMonth = user.BillingDayOfMonth
+			c.Users[i].UpdatedAt = user.UpdatedAt
+			break
+		}
+	}
+	return user, nil
+}
+
+func (c *Config) SetBillingCollectionMode(ctx context.Context, username, mode string) (*UserRecord, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "live"
+	}
+	if mode != "live" && mode != "fail" {
+		return nil, fmt.Errorf("unsupported billing collection mode")
+	}
+
+	user, ok, err := c.findUserRecord(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	user.BillingCollectionMode = mode
+	user.UpdatedAt = time.Now().UTC()
+	if err := c.ensureUserStore().Save(ctx, user); err != nil {
+		return nil, err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == username {
+			c.Users[i].BillingCollectionMode = user.BillingCollectionMode
+			c.Users[i].UpdatedAt = user.UpdatedAt
+			break
+		}
+	}
+	return user, nil
+}
+
+func (c *Config) CollectScheduledBilling(ctx context.Context, asOf time.Time, maxBatch int) ([]map[string]any, error) {
+	if asOf.IsZero() {
+		asOf = time.Now().UTC()
+	}
+	if maxBatch <= 0 {
+		maxBatch = 10
+	}
+
+	if err := c.syncUsersStoreFromConfig(ctx); err != nil {
+		return nil, err
+	}
+	if err := c.syncUsersFromStore(ctx); err != nil {
+		return nil, err
+	}
+
+	results := make([]map[string]any, 0)
+	eligible := make([]UserRecord, 0)
+	for _, user := range c.Users {
+		if user.BillingDayOfMonth <= 0 {
+			continue
+		}
+		if !strings.EqualFold(user.SubscriptionPlan, "starter") && !strings.EqualFold(user.SubscriptionPlan, "pro") && !strings.EqualFold(user.SubscriptionPlan, "enterprise") {
+			continue
+		}
+		if user.BillingStatus == "inactive" || user.BillingStatus == "pending" || strings.EqualFold(user.BillingStatus, "on_hold") {
+			continue
+		}
+		if user.BillingDayOfMonth != asOf.Day() {
+			continue
+		}
+		if !user.LastBillingCollectedAt.IsZero() && user.LastBillingCollectedAt.Year() == asOf.Year() && user.LastBillingCollectedAt.Month() == asOf.Month() {
+			continue
+		}
+		eligible = append(eligible, user)
+	}
+
+	sort.SliceStable(eligible, func(i, j int) bool {
+		return normalizeUsername(eligible[i].Username) < normalizeUsername(eligible[j].Username)
+	})
+
+	cursor := ""
+	for i := range eligible {
+		if strings.TrimSpace(eligible[i].BillingCollectionCursor) != "" {
+			cursor = strings.TrimSpace(eligible[i].BillingCollectionCursor)
+			break
+		}
+	}
+	if cursor != "" {
+		ordered := make([]UserRecord, 0, len(eligible))
+		for _, user := range eligible {
+			if normalizeUsername(user.Username) == cursor {
+				ordered = append(ordered, user)
+			}
+		}
+		for _, user := range eligible {
+			if normalizeUsername(user.Username) != cursor {
+				ordered = append(ordered, user)
+			}
+		}
+		eligible = ordered
+	}
+
+	for _, user := range eligible {
+		if len(results) >= maxBatch {
+			break
+		}
+
+		if strings.TrimSpace(user.BillingCollectionCursor) != "" && normalizeUsername(user.Username) != cursor {
+			continue
+		}
+		if strings.TrimSpace(user.BillingCollectionCursor) == "" && cursor != "" && normalizeUsername(user.Username) != cursor {
+			continue
+		}
+
+		windowStart := time.Date(asOf.Year(), asOf.Month(), 1, 0, 0, 0, 0, time.UTC)
+		windowEnd := windowStart.AddDate(0, 1, 0)
+		payments, err := c.ensurePaymentStore().ListByUser(ctx, user.Username)
+		if err == nil {
+			for _, payment := range payments {
+				if payment.CreatedAt.IsZero() {
+					continue
+				}
+				if payment.CreatedAt.Before(windowStart) || !payment.CreatedAt.Before(windowEnd) {
+					continue
+				}
+				if payment.Status == "succeeded" || payment.Status == "failed" {
+					for i := range c.Users {
+						if normalizeUsername(c.Users[i].Username) == user.Username {
+							c.Users[i].LastBillingCollectedAt = asOf
+							c.Users[i].NextBillingAt = asOf.AddDate(0, 1, 0)
+							c.Users[i].BillingCollectionCursor = ""
+							c.Users[i].UpdatedAt = asOf
+							break
+						}
+					}
+					continue
+				}
+			}
+		}
+
+		if strings.TrimSpace(user.BillingCollectionCursor) != "" && normalizeUsername(user.Username) == cursor {
+			// resume the in-flight account from a previous interrupted run
+		} else {
+			user.BillingCollectionCursor = normalizeUsername(user.Username)
+			if err := c.ensureUserStore().Save(ctx, &user); err != nil {
+				continue
+			}
+			for i := range c.Users {
+				if normalizeUsername(c.Users[i].Username) == user.Username {
+					c.Users[i].BillingCollectionCursor = normalizeUsername(user.Username)
+					c.Users[i].UpdatedAt = asOf
+					break
+				}
+			}
+		}
+
+		status := "succeeded"
+		if strings.EqualFold(user.BillingCollectionMode, "fail") {
+			status = "failed"
+		}
+
+		payment, updatedUser, err := c.SubmitPayment(ctx, user.Username, user.SubscriptionPlan, 5.0, "USD", status, fmt.Sprintf("pay_sched_%s_%d", user.Username, asOf.Unix()), fmt.Sprintf("evt_sched_%s_%d", user.Username, asOf.Unix()), asOf)
+		if err != nil {
+			continue
+		}
+		if payment == nil || updatedUser == nil {
+			continue
+		}
+		for i := range c.Users {
+			if normalizeUsername(c.Users[i].Username) == user.Username {
+				c.Users[i].LastBillingCollectedAt = asOf
+				c.Users[i].NextBillingAt = asOf.AddDate(0, 1, 0)
+				c.Users[i].BillingCollectionCursor = ""
+				c.Users[i].UpdatedAt = asOf
+				break
+			}
+		}
+		results = append(results, map[string]any{
+			"username":       user.Username,
+			"status":         payment.Status,
+			"billing_status": updatedUser.BillingStatus,
+			"billing_notice": updatedUser.BillingNotice,
+		})
+	}
+	return results, nil
+}
+
 func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan string) (*BillingCheckoutSession, error) {
 	username = normalizeUsername(username)
 	if username == "" {
@@ -1918,6 +2288,7 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 	if strings.EqualFold(event.EventType, "checkout.session.completed") {
 		user.SubscriptionPlan = plan
 		user.BillingStatus = "active"
+		user.BillingNotice = ""
 		user.UpdatedAt = time.Now().UTC()
 		if err := c.ensureUserStore().Save(ctx, user); err != nil {
 			return err
@@ -1968,6 +2339,7 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 	if strings.EqualFold(event.EventType, "customer.subscription.deleted") || strings.EqualFold(event.EventType, "checkout.session.expired") {
 		user.SubscriptionPlan = "none"
 		user.BillingStatus = "inactive"
+		user.BillingNotice = ""
 		user.FailureReason = "checkout session expired"
 		if strings.EqualFold(event.EventType, "customer.subscription.deleted") {
 			user.FailureReason = "subscription canceled"
@@ -2422,6 +2794,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 			"email":             user.Email.Plaintext(),
 			"subscription_plan": user.SubscriptionPlan,
 			"billing_status":    user.BillingStatus,
+			"billing_notice":    user.BillingNotice,
 		},
 	})
 }
@@ -2459,6 +2832,7 @@ func handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 			"email":             user.Email.Plaintext(),
 			"subscription_plan": user.SubscriptionPlan,
 			"billing_status":    user.BillingStatus,
+			"billing_notice":    user.BillingNotice,
 			"status":            user.Status,
 			"created_at":        user.CreatedAt,
 			"updated_at":        user.UpdatedAt,
@@ -2467,6 +2841,250 @@ func handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSubscriptionUpdate updates a user's subscription plan through the shared runtime auth state.
+func handleBillingPayment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := authenticatedAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req struct {
+		Plan              string  `json:"plan"`
+		Amount            float64 `json:"amount"`
+		Currency          string  `json:"currency"`
+		Status            string  `json:"status"`
+		ProviderPaymentID string  `json:"provider_payment_id"`
+		EventID           string  `json:"event_id"`
+		OccurredAt        string  `json:"occurred_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	occurredAt := time.Now().UTC()
+	if strings.TrimSpace(req.OccurredAt) != "" {
+		if parsed, err := time.Parse(time.RFC3339, req.OccurredAt); err == nil {
+			occurredAt = parsed.UTC()
+		}
+	}
+
+	payment, user, err := config.SubmitPayment(r.Context(), authAccount.Username, req.Plan, req.Amount, req.Currency, req.Status, req.ProviderPaymentID, req.EventID, occurredAt)
+	if err != nil {
+		recordProductMetric("billing_payment_failures")
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if payment == nil || user == nil {
+		recordProductMetric("billing_payment_failures")
+		writeJSONError(w, http.StatusInternalServerError, "payment was not recorded")
+		return
+	}
+
+	recordProductMetric("billing_payment_successes")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"payment": map[string]any{
+			"id":                  payment.ID,
+			"provider_payment_id": payment.ProviderPaymentID,
+			"status":              payment.Status,
+			"amount":              payment.Amount,
+			"currency":            payment.Currency,
+		},
+		"user": map[string]any{
+			"username":          user.Username,
+			"subscription_plan": user.SubscriptionPlan,
+			"billing_status":    user.BillingStatus,
+			"billing_notice":    user.BillingNotice,
+			"updated_at":        user.UpdatedAt,
+		},
+	})
+}
+
+func handleBillingDaemonAccess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := authenticatedAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	user, ok, err := config.findUserRecord(r.Context(), authAccount.Username)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || user == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	allowed := true
+	reason := ""
+	if strings.EqualFold(user.BillingStatus, "on_hold") {
+		allowed = false
+		reason = "account is on hold due to a failed or declined payment"
+		if strings.TrimSpace(user.BillingNotice) != "" {
+			reason = user.BillingNotice
+		}
+	} else if strings.EqualFold(user.BillingStatus, "pending") {
+		reason = "billing is still processing"
+	} else if strings.EqualFold(user.BillingStatus, "inactive") {
+		allowed = false
+		reason = "billing is not active"
+	}
+
+	if allowed && strings.TrimSpace(user.BillingNotice) != "" && strings.Contains(strings.ToLower(user.BillingNotice), "restored") {
+		user.BillingNotice = "Billing restored. Copilot and daemon workflows are available again."
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"allowed": allowed,
+		"reason":  reason,
+		"user": map[string]any{
+			"username":                user.Username,
+			"billing_status":          user.BillingStatus,
+			"billing_notice":          user.BillingNotice,
+			"subscription_plan":       user.SubscriptionPlan,
+			"billing_day_of_month":    user.BillingDayOfMonth,
+			"billing_collection_mode": user.BillingCollectionMode,
+		},
+	})
+}
+
+func handleBillingStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := authenticatedAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	user, ok, err := config.findUserRecord(r.Context(), authAccount.Username)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || user == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	payments, err := config.ensurePaymentStore().ListByUser(r.Context(), authAccount.Username)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"user": map[string]any{
+			"username":          user.Username,
+			"subscription_plan": user.SubscriptionPlan,
+			"billing_status":    user.BillingStatus,
+			"billing_notice":    user.BillingNotice,
+			"failure_reason":    user.FailureReason,
+			"updated_at":        user.UpdatedAt,
+		},
+		"payments": payments,
+	})
+}
+
+func handleBillingDayUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := authenticatedAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req struct {
+		BillingDayOfMonth int `json:"billing_day_of_month"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	updated, err := config.SetBillingDay(r.Context(), authAccount.Username, req.BillingDayOfMonth)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"user": map[string]any{
+			"username":             updated.Username,
+			"billing_day_of_month": updated.BillingDayOfMonth,
+		},
+	})
+}
+
+func handleBillingCollectionModeUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authAccount := authenticatedAccountFromRequest(r)
+	if authAccount.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	updated, err := config.SetBillingCollectionMode(r.Context(), authAccount.Username, req.Mode)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"user": map[string]any{
+			"username":                updated.Username,
+			"billing_collection_mode": updated.BillingCollectionMode,
+		},
+	})
+}
+
 func handleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2511,6 +3129,7 @@ func handleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 			"username":          updated.Username,
 			"subscription_plan": updated.SubscriptionPlan,
 			"billing_status":    updated.BillingStatus,
+			"billing_notice":    updated.BillingNotice,
 			"updated_at":        updated.UpdatedAt,
 		},
 	})
@@ -2661,6 +3280,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 			"username":              user.Username,
 			"role":                  user.Role,
 			"subscription_features": user.SubscriptionFeatures,
+			"billing_status":        user.BillingStatus,
+			"billing_notice":        user.BillingNotice,
 		},
 	})
 }
