@@ -8,6 +8,7 @@ import (
 	"io"
 	log "log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -48,8 +49,10 @@ type hqPushSpaceResponse struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// HandleHQPushSpace allows HQ to push a Space to a specific daemon.
-// This is the HQ-side handler that initiates the push.
+// HandleHQPushSpace is DEPRECATED and should not be used.
+// The federation model has been changed from push-based (HQ→daemon) to pull-based (daemon→HQ).
+// Daemons should call the sync endpoint and pull Spaces listed in the response.
+// This function is kept for backward compatibility but is no longer registered in routes.
 func HandleHQPushSpace(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -101,6 +104,7 @@ func HandleHQPushSpace(w http.ResponseWriter, r *http.Request) {
 			"error", err,
 			"daemon_id", req.DaemonID,
 		)
+		updateSpaceFederationState(req.SpaceName, req.DaemonID, "failed", req.Version)
 		http.Error(w, "Failed to get daemon URL", http.StatusInternalServerError)
 		return
 	}
@@ -136,7 +140,10 @@ func HandleHQPushSpace(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleHQReshareSpace allows HQ to reshare a Space to multiple daemons.
+// HandleHQReshareSpace is DEPRECATED and should not be used.
+// The federation model has been changed from push-based (HQ→daemon) to pull-based (daemon→HQ).
+// Daemons should call the sync endpoint and pull Spaces listed in the response.
+// This function is kept for backward compatibility but is no longer registered in routes.
 func HandleHQReshareSpace(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -309,13 +316,37 @@ func pushSpaceToDaemon(ctx context.Context, daemonURL, spaceName, dbName string,
 }
 
 // getDaemonURL returns the URL for a given daemon ID from the daemon registry.
+// If the daemon has not registered yet, it can fall back to an explicit environment override.
 func getDaemonURL(daemonID string) (string, error) {
 	registry := GetDaemonRegistry()
-	url, found := registry.GetURL(daemonID)
-	if !found {
-		return "", fmt.Errorf("daemon %s not found in registry (may not have synced yet)", daemonID)
+	if url, found := registry.GetURL(daemonID); found && strings.TrimSpace(url) != "" {
+		return url, nil
 	}
-	return url, nil
+
+	if url := daemonURLFromEnv(daemonID); strings.TrimSpace(url) != "" {
+		return url, nil
+	}
+
+	return "", fmt.Errorf("daemon %s not found in registry (may not have synced yet)", daemonID)
+}
+
+func daemonURLFromEnv(daemonID string) string {
+	if strings.TrimSpace(daemonID) == "" {
+		return ""
+	}
+
+	sanitized := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_", "/", "_", " ", "_").Replace(daemonID))
+	candidates := []string{
+		fmt.Sprintf("SOP_DAEMON_%s_URL", sanitized),
+	}
+
+	for _, key := range candidates {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+
+	return ""
 }
 
 // updateSpaceFederationState updates the federation state for a Space-daemon pair.

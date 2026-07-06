@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +15,7 @@ import (
 	"github.com/sharedcode/sop/ai/memory"
 )
 
-// TestSpaceFederationFlow tests the complete HQ→daemon Space push and acknowledgment flow.
+// TestSpaceFederationFlow tests the complete daemon→HQ pull-based Space federation flow.
 func TestSpaceFederationFlow(t *testing.T) {
 	// Set up database configuration
 	oldConfig := config
@@ -39,138 +38,100 @@ func TestSpaceFederationFlow(t *testing.T) {
 		t.Fatalf("failed to populate test Space: %v", err)
 	}
 
-	// Export the Space
-	spaceJSON, err := exportSpaceFromHQ(ctx, dbName, spaceName)
+	// Mark the Space for auto-share
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
 	if err != nil {
-		t.Fatalf("failed to export Space: %v", err)
+		t.Fatalf("failed to begin transaction: %v", err)
 	}
 
+	kb, err := db.OpenKnowledgeBase(ctx, spaceName, tx, nil, nil, false)
+	if err != nil {
+		tx.Rollback(ctx)
+		t.Fatalf("failed to open knowledge base: %v", err)
+	}
+
+	config, err := kb.GetConfig(ctx)
+	if err != nil {
+		tx.Rollback(ctx)
+		t.Fatalf("failed to get config: %v", err)
+	}
+	if config == nil {
+		config = &memory.KnowledgeBaseConfig{}
+	}
+	config.AutoShareToDaemons = true
+	if err := kb.SetConfig(ctx, config); err != nil {
+		tx.Rollback(ctx)
+		t.Fatalf("failed to set config: %v", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+
+	// Test Step 1: Daemon syncs to HQ and receives list of auto-shared Spaces
+	syncReq := map[string]any{
+		"kind":       "SharedMemorySyncV1",
+		"daemon_id":  "test-daemon",
+		"daemon_url": "http://localhost:19999",
+		"user_id":    "test-user",
+		"session_id": "test-session",
+		"timestamp":  "2024-01-01T00:00:00Z",
+		"shared_memory": map[string]any{
+			"enabled":   true,
+			"artifacts": []any{},
+		},
+	}
+
+	syncReqJSON, _ := json.Marshal(syncReq)
+	httpReq := httptest.NewRequest(http.MethodPost, "/api/daemon/hq-sync", bytes.NewReader(syncReqJSON))
+	w := httptest.NewRecorder()
+
+	HandleHQSync(w, httpReq)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("sync request failed with status %d: %s", w.Code, w.Body.String())
+	}
+
+	var syncResp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &syncResp); err != nil {
+		t.Fatalf("failed to parse sync response: %v", err)
+	}
+
+	autoSharedSpaces, ok := syncResp["auto_shared_spaces"].([]any)
+	if !ok || len(autoSharedSpaces) == 0 {
+		t.Fatalf("expected auto_shared_spaces in sync response, got: %v", syncResp)
+	}
+
+	t.Logf("Sync response includes %d auto-shared Spaces", len(autoSharedSpaces))
+
+	// Test Step 2: Daemon pulls the specific Space
+	pullReq := map[string]any{
+		"space_name":    spaceName,
+		"database_name": dbName,
+	}
+
+	pullReqJSON, _ := json.Marshal(pullReq)
+	httpReq = httptest.NewRequest(http.MethodPost, "/api/space/pull", bytes.NewReader(pullReqJSON))
+	w = httptest.NewRecorder()
+
+	HandleDaemonPullSpace(w, httpReq)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("pull request failed with status %d: %s", w.Code, w.Body.String())
+	}
+
+	spaceJSON := w.Body.Bytes()
 	if len(spaceJSON) == 0 {
-		t.Fatal("exported Space JSON is empty")
+		t.Fatal("pulled Space JSON is empty")
 	}
 
 	// Verify the Space can be parsed
 	var spaceData map[string]any
 	if err := json.Unmarshal(spaceJSON, &spaceData); err != nil {
-		t.Fatalf("failed to parse exported Space JSON: %v", err)
+		t.Fatalf("failed to parse pulled Space JSON: %v", err)
 	}
 
-	t.Logf("Exported Space %s with %d bytes", spaceName, len(spaceJSON))
-
-	// Test HandleHQPushSpace
-	req := hqPushSpaceRequest{
-		SpaceName:    spaceName,
-		DatabaseName: dbName,
-		DaemonID:     "test-daemon",
-		Version:      1,
-	}
-
-	reqJSON, _ := json.Marshal(req)
-	httpReq := httptest.NewRequest(http.MethodPost, "/api/daemon/hq-push-space", bytes.NewReader(reqJSON))
-	w := httptest.NewRecorder()
-
-	// Mock daemon URL for testing (will fail to connect, but that's expected)
-	t.Setenv("SOP_DAEMON_TEST_DAEMON_URL", "http://localhost:19999")
-
-	HandleHQPushSpace(w, httpReq)
-
-	// Should fail because daemon isn't running, but the export should work
-	if w.Code != http.StatusInternalServerError {
-		t.Logf("Expected failure due to daemon not running (status=%d)", w.Code)
-	}
-
-	// Check federation state was created
-	state, found := GetSpaceFederationState(spaceName, "test-daemon")
-	if !found {
-		t.Fatal("federation state not created")
-	}
-
-	if state.SpaceName != spaceName {
-		t.Errorf("expected space_name=%s, got %s", spaceName, state.SpaceName)
-	}
-
-	if state.DaemonID != "test-daemon" {
-		t.Errorf("expected daemon_id=test-daemon, got %s", state.DaemonID)
-	}
-
-	if state.Status != "failed" {
-		t.Logf("Expected status=failed (daemon not running), got %s", state.Status)
-	}
-
-	t.Logf("Federation state: %+v", state)
-}
-
-// TestSpaceFederationReshare tests the HQ reshare to multiple daemons.
-func TestSpaceFederationReshare(t *testing.T) {
-	// Set up database configuration
-	oldConfig := config
-	t.Cleanup(func() { config = oldConfig })
-
-	tmpDir := t.TempDir()
-	dbName := "test"
-
-	config = Config{
-		Databases: []DatabaseConfig{{Name: dbName, Path: tmpDir, Mode: "standalone"}},
-	}
-
-	ctx := context.Background()
-	spaceName := "TestReshareSpace"
-
-	// Create and populate the Space
-	db := createTestDB(t, dbName)
-	if err := populateTestSpace(ctx, db, spaceName); err != nil {
-		t.Fatalf("failed to populate test Space: %v", err)
-	}
-
-	// Test reshare to multiple daemons
-	reqPayload := map[string]any{
-		"space_name":    spaceName,
-		"database_name": dbName,
-		"daemon_ids":    []string{"daemon-1", "daemon-2", "daemon-3"},
-		"version":       1,
-	}
-
-	reqJSON, _ := json.Marshal(reqPayload)
-	httpReq := httptest.NewRequest(http.MethodPost, "/api/daemon/hq-reshare-space", bytes.NewReader(reqJSON))
-	w := httptest.NewRecorder()
-
-	HandleHQReshareSpace(w, httpReq)
-
-	// Should complete (even with failures to individual daemons)
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
-	}
-
-	body, _ := io.ReadAll(w.Body)
-	var resp map[string]any
-	if err := json.Unmarshal(body, &resp); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-
-	if resp["status"] != "completed" {
-		t.Errorf("expected status=completed, got %v", resp["status"])
-	}
-
-	results, ok := resp["results"].(map[string]any)
-	if !ok {
-		t.Fatal("results not found in response")
-	}
-
-	if len(results) != 3 {
-		t.Errorf("expected 3 daemon results, got %d", len(results))
-	}
-
-	t.Logf("Reshare results: %+v", results)
-
-	// Check federation states
-	for _, daemonID := range []string{"daemon-1", "daemon-2", "daemon-3"} {
-		state, found := GetSpaceFederationState(spaceName, daemonID)
-		if !found {
-			t.Errorf("federation state not found for %s", daemonID)
-			continue
-		}
-		t.Logf("State for %s: status=%s", daemonID, state.Status)
-	}
+	t.Logf("Successfully pulled Space %s with %d bytes", spaceName, len(spaceJSON))
 }
 
 // TestAcknowledgeSpace tests the acknowledgment handler.

@@ -13,8 +13,47 @@ import (
 	"github.com/sharedcode/sop/ai/database"
 )
 
+var federatedLTMCategoryAllowlist = map[string]struct{}{
+	"workflow_pattern":         {},
+	"anti_pattern":             {},
+	"repair_strategy":          {},
+	"tool_preference":          {},
+	"safety_heuristic":         {},
+	"verified_playbook":        {},
+	"context_gathering":        {},
+	"error_resolution":         {},
+	"performance_optimization": {},
+	"security_pattern":         {},
+	"testing_strategy":         {},
+	"code_quality":             {},
+	"api_design":               {},
+}
+
+func shouldShowCategoryAutoShareControls(authCtx sop.AuthContext, spaceName, categoryPath string, isHQ bool) bool {
+	if !isHQ {
+		return false
+	}
+	if strings.TrimSpace(spaceName) == "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(spaceName), "shared_memory") {
+		return false
+	}
+	if strings.TrimSpace(categoryPath) != "" {
+		if _, ok := federatedLTMCategoryAllowlist[strings.ToLower(strings.TrimSpace(categoryPath))]; !ok {
+			return false
+		}
+	}
+	for _, role := range authCtx.Roles {
+		if sop.IsAdminRole(role) {
+			return true
+		}
+	}
+	return false
+}
+
 // HandleSetCategoryAutoShare toggles the AutoShareToDaemons flag for a Category in HQ LTM.
-// Only accessible by SystemAdmin role.
+// Only accessible by SystemAdmin role and only for federation-eligible categories in shared_memory.
 // POST /api/ltm/category/auto-share
 // Body: {"space_name": "...", "database_name": "...", "category_path": "...", "enabled": true/false}
 func HandleSetCategoryAutoShare(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +96,10 @@ func HandleSetCategoryAutoShare(w http.ResponseWriter, r *http.Request) {
 
 	if req.SpaceName == "" || req.DatabaseName == "" || req.CategoryPath == "" {
 		http.Error(w, "space_name, database_name, and category_path are required", http.StatusBadRequest)
+		return
+	}
+	if !shouldShowCategoryAutoShareControls(authCtx, req.SpaceName, req.CategoryPath, true) {
+		http.Error(w, "Category auto-share controls are not available for this Space or category", http.StatusForbidden)
 		return
 	}
 
@@ -184,6 +227,10 @@ func HandleListCategoryAutoShare(w http.ResponseWriter, r *http.Request) {
 
 	if spaceName == "" || dbName == "" {
 		http.Error(w, "space_name and database_name are required", http.StatusBadRequest)
+		return
+	}
+	if !shouldShowCategoryAutoShareControls(authCtx, spaceName, "", true) {
+		http.Error(w, "Category auto-share controls are not available for this Space", http.StatusForbidden)
 		return
 	}
 
@@ -323,6 +370,10 @@ func HandleBulkSetCategoryAutoShare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "space_name, database_name, and updates are required", http.StatusBadRequest)
 		return
 	}
+	if !shouldShowCategoryAutoShareControls(authCtx, req.SpaceName, "", true) {
+		http.Error(w, "Category auto-share controls are not available for this Space", http.StatusForbidden)
+		return
+	}
 
 	ctx := context.Background()
 	opts, err := GetDBOptions(ctx, req.DatabaseName)
@@ -419,15 +470,7 @@ func HandleBulkSetCategoryAutoShare(w http.ResponseWriter, r *http.Request) {
 }
 
 // getCategoryAutoShareUIVisibility returns whether category auto-share UI should be visible.
-// Only visible to SystemAdmin users on HQ.
-func getCategoryAutoShareUIVisibility(authCtx sop.AuthContext, isHQ bool) bool {
-	if !isHQ {
-		return false // Never show on daemon UI
-	}
-	for _, role := range authCtx.Roles {
-		if sop.IsAdminRole(role) {
-			return true
-		}
-	}
-	return false
+// It is only exposed on HQ for SystemAdmin users and only for federation-eligible LTM categories.
+func getCategoryAutoShareUIVisibility(authCtx sop.AuthContext, spaceName, categoryPath string, isHQ bool) bool {
+	return shouldShowCategoryAutoShareControls(authCtx, spaceName, categoryPath, isHQ)
 }

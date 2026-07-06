@@ -406,8 +406,7 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 	// HQ Federation / Central Memory Endpoints
 	mux.HandleFunc("/api/daemon/hq-sync", WithAuth(HandleHQSync))
 	mux.HandleFunc("/api/daemon/hq-retrieve", WithAuth(HandleHQRetrieve))
-	mux.HandleFunc("/api/daemon/hq-push-space", WithAuth(HandleHQPushSpace))
-	mux.HandleFunc("/api/daemon/hq-reshare-space", WithAuth(HandleHQReshareSpace))
+	mux.HandleFunc("/api/daemon/pull-space", WithAuth(HandleDaemonPullSpace)) // Daemon pulls Space from HQ
 	mux.HandleFunc("/api/daemon/acknowledge-space", WithAuth(handleAcknowledgeSpace))
 }
 

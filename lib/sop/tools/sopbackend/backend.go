@@ -222,8 +222,7 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	// Space Federation Endpoints
 	mux.HandleFunc("/api/space/auto-share", WithAuth(HandleSetSpaceAutoShare))
 	mux.HandleFunc("/api/space/auto-shared", WithAuth(HandleListAutoSharedSpaces))
-	mux.HandleFunc("/api/space/push", WithAuth(HandleHQPushSpace))
-	mux.HandleFunc("/api/space/reshare", WithAuth(HandleHQReshareSpace))
+	mux.HandleFunc("/api/space/pull", WithAuth(HandleDaemonPullSpace)) // Daemon pulls Space from HQ
 
 	// LTM Category Auto-Share Endpoints (SA only)
 	mux.HandleFunc("/api/ltm/category/auto-share", WithAuth(HandleSetCategoryAutoShare))

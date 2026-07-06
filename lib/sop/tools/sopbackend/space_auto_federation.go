@@ -14,23 +14,20 @@ import (
 	"github.com/sharedcode/sop/ai/memory"
 )
 
-// autoShareSpacesToDaemon pushes all Spaces marked with AutoShareToDaemons=true to the specified daemon.
-// This is called automatically when a daemon registers with HQ during sync.
-func autoShareSpacesToDaemon(ctx context.Context, daemonID, daemonURL string) error {
-	if daemonID == "" || daemonURL == "" {
-		return nil
+// listAutoSharedSpacesForDaemon returns all Spaces marked with AutoShareToDaemons=true.
+// Daemons use this list to pull Spaces they don't have yet.
+func listAutoSharedSpacesForDaemon(ctx context.Context) []map[string]string {
+	// Get all configured databases
+	cfg := GetConfig()
+	databases := make([]string, 0, len(cfg.Databases))
+	for _, dbCfg := range cfg.Databases {
+		databases = append(databases, dbCfg.Name)
 	}
 
-	log.Info("Auto-sharing Spaces to daemon", "daemon_id", daemonID, "daemon_url", daemonURL)
-
-	// Get list of all databases (typically "aidb")
-	databases := []string{"aidb"} // TODO: Make this configurable or discover dynamically
-
-	shareCount := 0
+	result := []map[string]string{}
 	for _, dbName := range databases {
 		opts, err := GetDBOptions(ctx, dbName)
 		if err != nil {
-			log.Warn("Auto-share: failed to get DB options", "database", dbName, "error", err)
 			continue
 		}
 
@@ -39,44 +36,21 @@ func autoShareSpacesToDaemon(ctx context.Context, daemonID, daemonURL string) er
 		// List all Spaces in this database
 		spaceNames, err := db.GetDomains(ctx)
 		if err != nil {
-			log.Warn("Auto-share: failed to list Spaces", "database", dbName, "error", err)
 			continue
 		}
 
 		// Check each Space's config for AutoShareToDaemons flag
 		for _, spaceName := range spaceNames {
 			if shouldAutoShare, err := isSpaceAutoShared(ctx, dbName, spaceName); err == nil && shouldAutoShare {
-				log.Info("Auto-sharing Space to daemon", "space_name", spaceName, "daemon_id", daemonID)
-
-				// Export and push the Space
-				spaceJSON, err := exportSpaceFromHQ(ctx, dbName, spaceName)
-				if err != nil {
-					log.Error("Auto-share: failed to export Space", "space_name", spaceName, "error", err)
-					continue
-				}
-
-				if err := pushSpaceToDaemon(ctx, daemonURL, spaceName, dbName, spaceJSON); err != nil {
-					log.Error("Auto-share: failed to push Space to daemon",
-						"space_name", spaceName,
-						"daemon_id", daemonID,
-						"error", err,
-					)
-					updateSpaceFederationState(spaceName, daemonID, "failed", 0)
-					continue
-				}
-
-				updateSpaceFederationState(spaceName, daemonID, "delivered", 0)
-				shareCount++
-				log.Info("Auto-share: successfully pushed Space",
-					"space_name", spaceName,
-					"daemon_id", daemonID,
-				)
+				result = append(result, map[string]string{
+					"space_name":    spaceName,
+					"database_name": dbName,
+				})
 			}
 		}
 	}
 
-	log.Info("Auto-share completed", "daemon_id", daemonID, "spaces_shared", shareCount)
-	return nil
+	return result
 }
 
 // isSpaceAutoShared checks if a Space has AutoShareToDaemons=true in its config.
@@ -116,6 +90,19 @@ func isSpaceAutoShared(ctx context.Context, dbName, spaceName string) (bool, err
 func HandleSetSpaceAutoShare(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authCtx := sop.GetAuthFromContext(r.Context())
+	isAdmin := false
+	for _, role := range authCtx.Roles {
+		if sop.IsAdminRole(role) {
+			isAdmin = true
+			break
+		}
+	}
+	if !isAdmin {
+		http.Error(w, "Forbidden: SystemAdmin role required", http.StatusForbidden)
 		return
 	}
 
@@ -187,39 +174,9 @@ func HandleSetSpaceAutoShare(w http.ResponseWriter, r *http.Request) {
 	action := "disabled"
 	if req.Enabled {
 		action = "enabled"
-
-		// If enabling, trigger immediate push to all registered daemons
-		go func() {
-			registry := GetDaemonRegistry()
-			activeDaemons := registry.ListActive()
-
-			for _, daemon := range activeDaemons {
-				log.Info("Pushing newly auto-shared Space to daemon",
-					"space_name", req.SpaceName,
-					"daemon_id", daemon.DaemonID,
-				)
-
-				spaceJSON, err := exportSpaceFromHQ(context.Background(), req.DatabaseName, req.SpaceName)
-				if err != nil {
-					log.Error("Failed to export Space for auto-share",
-						"space_name", req.SpaceName,
-						"error", err,
-					)
-					continue
-				}
-
-				if err := pushSpaceToDaemon(context.Background(), daemon.DaemonURL, req.SpaceName, req.DatabaseName, spaceJSON); err != nil {
-					log.Error("Failed to push auto-shared Space to daemon",
-						"space_name", req.SpaceName,
-						"daemon_id", daemon.DaemonID,
-						"error", err,
-					)
-					updateSpaceFederationState(req.SpaceName, daemon.DaemonID, "failed", 0)
-				} else {
-					updateSpaceFederationState(req.SpaceName, daemon.DaemonID, "delivered", 0)
-				}
-			}
-		}()
+		log.Info("Space auto-share enabled - will be pulled by daemons on next sync",
+			"space_name", req.SpaceName,
+		)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -296,4 +253,65 @@ func HandleListAutoSharedSpaces(w http.ResponseWriter, r *http.Request) {
 		"auto_shared": autoShared,
 		"count":       len(autoShared),
 	})
+}
+
+// HandleDaemonPullSpace allows a daemon to pull a specific Space from HQ.
+// This is the pull-based federation model where daemon requests Space data.
+func HandleDaemonPullSpace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse request
+	var req struct {
+		SpaceName    string `json:"space_name"`
+		DatabaseName string `json:"database_name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SpaceName == "" || req.DatabaseName == "" {
+		http.Error(w, "space_name and database_name are required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Verify this Space is actually marked for auto-share
+	isAutoShared, err := isSpaceAutoShared(ctx, req.DatabaseName, req.SpaceName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to check Space auto-share status: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !isAutoShared {
+		http.Error(w, "Space is not marked for auto-share", http.StatusForbidden)
+		return
+	}
+
+	// Export the Space
+	spaceJSON, err := exportSpaceFromHQ(ctx, req.DatabaseName, req.SpaceName)
+	if err != nil {
+		log.Error("Failed to export Space for daemon pull",
+			"space_name", req.SpaceName,
+			"error", err,
+		)
+		http.Error(w, fmt.Sprintf("Failed to export Space: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Info("Daemon pulled Space from HQ",
+		"space_name", req.SpaceName,
+		"database", req.DatabaseName,
+		"size_bytes", len(spaceJSON),
+	)
+
+	// Return the Space JSON
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(spaceJSON)
 }

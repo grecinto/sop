@@ -105,13 +105,6 @@ func HandleHQSync(w http.ResponseWriter, r *http.Request) {
 			"daemon_id", daemonID,
 			"daemon_url", batch.DaemonURL,
 		)
-
-		// Automatically push all auto-federated Spaces to this daemon
-		go func() {
-			if err := autoShareSpacesToDaemon(context.Background(), daemonID, batch.DaemonURL); err != nil {
-				log.Warn("HQ sync: failed to auto-share Spaces to daemon", "daemon_id", daemonID, "error", err)
-			}
-		}()
 	}
 
 	log.Info("HQ sync: received batch",
@@ -140,13 +133,17 @@ func HandleHQSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Return success response
+	// Get list of auto-shared Spaces for daemon to pull
+	autoSharedSpaces := listAutoSharedSpacesForDaemon(r.Context())
+
+	// Return success response with auto-shared Spaces list
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":    "accepted",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"daemon_id": daemonID,
+		"status":             "accepted",
+		"timestamp":          time.Now().UTC().Format(time.RFC3339),
+		"daemon_id":          daemonID,
+		"auto_shared_spaces": autoSharedSpaces,
 	})
 }
 
@@ -448,7 +445,7 @@ func retrieveSharedMemoryArtifacts(ctx context.Context, query string, limit int)
 	}
 
 	// Convert hits to artifacts, filtering by category auto-share settings
-	var artifacts []hqArtifact
+	artifacts := make([]hqArtifact, 0)
 	for _, hit := range hits {
 		text := ""
 		category := "shared_memory"

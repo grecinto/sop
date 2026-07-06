@@ -264,7 +264,18 @@ func RetrieveSharedMemory(
 	if len(batch) > 0 && len(batch[0]) > 0 {
 		return batch[0], nil
 	}
-	return fallbackRetrieveSharedMemory(ctx, kb, query, limit)
+
+	fallbackTx, err := db.BeginTransaction(ctx, sop.ForReading)
+	if err != nil {
+		return nil, fmt.Errorf("begin fallback shared-memory read tx: %w", err)
+	}
+	defer fallbackTx.Rollback(ctx)
+
+	fallbackKB, err := db.OpenKnowledgeBase(ctx, kbName, fallbackTx, llm, embedder, false, true)
+	if err != nil {
+		return nil, fmt.Errorf("open fallback shared-memory knowledge base %q: %w", kbName, err)
+	}
+	return fallbackRetrieveSharedMemory(ctx, fallbackKB, query, limit)
 }
 
 func fallbackRetrieveSharedMemory(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], query string, limit int) ([]ai.Hit[map[string]any], error) {
