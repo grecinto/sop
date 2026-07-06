@@ -507,7 +507,7 @@ func loadCategoryAutoShareSettings(ctx context.Context, db *aidb.Database, kbNam
 	}
 
 	settings := make(map[string]bool)
-	
+
 	ok, err := categories.First(ctx)
 	if err != nil || !ok {
 		return settings, nil

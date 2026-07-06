@@ -244,9 +244,9 @@ func HandleListCategoryAutoShare(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if cat != nil {
-			enabled := true    // Default to enabled
-			isDefault := true  // Assume default unless explicitly set
-			
+			enabled := true   // Default to enabled
+			isDefault := true // Assume default unless explicitly set
+
 			if cat.AutoShareToDaemons != nil {
 				enabled = *cat.AutoShareToDaemons
 				isDefault = false
