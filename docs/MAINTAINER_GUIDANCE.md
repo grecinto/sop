@@ -52,3 +52,23 @@ When in doubt, prefer this principle:
 - publish the foundation,
 - keep the differentiated experience private,
 - and document the boundary clearly so future maintainers do not accidentally move product value into the public layer.
+
+## Deployment sizing note for central-brain workloads
+
+For the central-brain feature, size the deployment around the real data path rather than a generic app host baseline. The service handles periodic client sync, ingestion and processing of gathered data, and distribution of derived updates to the clients that need them.
+
+Recommended starting spec for a production rollout:
+
+- 8 vCPU
+- 32 GB RAM
+- 500 GB+ NVMe SSD
+- 1 Gbps uplink
+
+If the workload is heavier or the sync/processing fan-out is sustained, move to:
+
+- 16 vCPU
+- 64 GB RAM
+- 1 TB NVMe SSD
+- 10 Gbps uplink preferred
+
+A single server is reasonable for initial production use, but two servers should be considered if high availability or failover is a requirement.

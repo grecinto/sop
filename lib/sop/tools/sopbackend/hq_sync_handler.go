@@ -187,8 +187,30 @@ func storeSharedMemoryArtifacts(ctx context.Context, batch hqSyncBatch) error {
 		metadata["sync_timestamp"] = strings.TrimSpace(batch.Timestamp)
 		metadata["promoted_at"] = time.Now().UTC().Format(time.RFC3339)
 
-		// Promote to central shared memory
-		if err := agent.PromoteSharedMemoryArtifact(
+		artifactRef := agent.ExtractArtifactReference(metadata["artifact_ref"])
+		if artifactRef.Name != "" || artifactRef.DatabaseName != "" || artifactRef.Type != "" {
+			if err := agent.PromoteKnowledgeArtifact(
+				ctx,
+				db,
+				nil,      // LLM not required for ingestion
+				embedder, // Use configured embedder for vectorization
+				text,
+				artifactRef,
+				artifactRef.Name,
+				category,
+				"daemon",       // scope_type
+				batch.DaemonID, // scope_id
+				metadata,
+			); err != nil {
+				log.Error("HQ sync: failed to promote knowledge artifact",
+					"error", err,
+					"index", i,
+					"daemon_id", batch.DaemonID,
+					"artifact_name", artifactRef.Name,
+				)
+				continue
+			}
+		} else if err := agent.PromoteSharedMemoryArtifact(
 			ctx,
 			db,
 			nil,      // LLM not required for ingestion

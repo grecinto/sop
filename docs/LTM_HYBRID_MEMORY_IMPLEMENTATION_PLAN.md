@@ -65,6 +65,27 @@ Suggested baseline for an initial V1 rollout:
 - 99.9% availability target for the shared-memory service
 - optional managed Redis/Postgres/vector database services for faster retrieval and operational simplicity
 
+### Central-brain deployment sizing guidance
+
+The central-brain path should be sized for steady coordination work rather than a simple web/API host. In practice it includes periodic sync with clients, ingestion and processing of gathered data, and fan-out/distribution of derived updates to the clients that need them.
+
+Recommended starting point for a production deployment:
+
+- 8 vCPU
+- 32 GB RAM
+- 500 GB+ NVMe SSD
+- 1 Gbps uplink
+- one server is reasonable for initial rollout if the workload is moderate
+
+If sync volume, processing load, or client fan-out is high, scale to:
+
+- 16 vCPU
+- 64 GB RAM
+- 1 TB NVMe SSD
+- 10 Gbps uplink preferred
+
+These numbers are more relevant than a generic "vector-only" estimate because the bottlenecks are coordination, background processing, durable storage, and network throughput rather than one lightweight retrieval path.
+
 A GPU is not required for V1 if embeddings are generated on the client side or via a managed embedding service. The main bottlenecks are low-latency retrieval, durable storage, and predictable network bandwidth for syncing KBs and shared patterns.
 
 ## V1 Coding-Workflow Direction
@@ -221,6 +242,8 @@ Acceptance criteria:
 
 - [x] Add a hybrid retrieval layer for coding workflow that merges deterministic context with semantic memory.
 - [x] Add a hybrid retrieval layer for research workflow that merges selected-space context with stored research memory.
+- [x] Add an automatic Space resolver for research prompts so the system can infer the best Space from repo/language/task context when no explicit selection exists.
+- [x] Preserve explicit user selection as the highest-priority signal while keeping resolved Spaces separate from LTM and independently detachable.
 - [x] Make repository and space hints part of the retrieval query construction.
 - [x] Preserve current curated context behavior as the default backbone, while using retrieval as an enrichment layer.
 
@@ -230,10 +253,12 @@ Acceptance criteria:
 
 ### Phase 4 — Multi-Repo and Multi-Space Continuity
 
-- [ ] Support repository switching without losing prior repo memories.
-- [ ] Support selected-space switching while preserving the ability to use recent related research memory.
-- [ ] Track recent scope affinity so the system can prefer the currently active repo or space but still fall back to nearby recent contexts.
-- [ ] Prevent cross-scope contamination when the current task is clearly unrelated.
+- [x] Support repository switching without losing prior repo memories.
+- [x] Support selected-space switching while preserving the ability to use recent related research memory.
+- [x] Track recent scope affinity so the system can prefer the currently active repo or space but still fall back to nearby recent contexts.
+- [x] Prevent cross-scope contamination when the current task is clearly unrelated.
+
+The Space resolver now supports this by preferring the current repo/language context while preserving explicit Space selection, and by treating resolved Spaces as separate artifacts that do not require LTM cleanup when detached or switched.
 
 Acceptance criteria:
 - Switching repos does not cause stale coding memory from another repo to dominate.

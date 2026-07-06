@@ -171,7 +171,11 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Warn("siteaccount.register.failed", "username", req.Username, "error", err.Error())
-		writeJSONError(w, http.StatusConflict, err.Error())
+		status := http.StatusConflict
+		if strings.Contains(strings.ToLower(err.Error()), "early-access seats") {
+			status = http.StatusTooManyRequests
+		}
+		writeJSONError(w, status, err.Error())
 		return
 	}
 	slog.Info("siteaccount.register.success", "username", user.Username, "role", user.Role, "plan", user.SubscriptionPlan)

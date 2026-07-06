@@ -13,6 +13,15 @@ import (
 )
 
 func (a *CopilotAgent) selectedSpaceExpertContextForRouting(ctx context.Context, query string, taskClassification TaskContextClassification) string {
+	// Auto-resolve research sources from task context when appropriate
+	p := ai.GetSessionPayload(ctx)
+	if p != nil && len(p.SelectedKBs) == 0 {
+		resolvedSources := a.ResolveResearchSources(ctx, query, taskClassification)
+		if len(resolvedSources) > 0 {
+			// Temporarily augment the payload with resolved sources
+			p.SelectedKBs = resolvedSources
+		}
+	}
 	return a.selectedSpaceExpertContext(ctx, query, a.isContinuationPromptContext(taskClassification))
 }
 
@@ -30,8 +39,26 @@ func selectedSpaceHasEvidence(configText, briefText, digestText string) bool {
 
 func (a *CopilotAgent) selectedSpaceExpertContext(ctx context.Context, query string, compact bool) string {
 	p := ai.GetSessionPayload(ctx)
-	if p == nil || len(p.SelectedKBs) == 0 {
+	if p == nil {
 		return ""
+	}
+
+	// Auto-resolve research sources if no explicit selection exists
+	if len(p.SelectedKBs) == 0 {
+		// Attempt to resolve from task classification context
+		var taskCtx TaskContextClassification
+		if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+			if routing := a.service.session.Memory.GetRoutingState(); routing != nil {
+				taskCtx = *routing
+			}
+		}
+		resolvedSources := a.ResolveResearchSources(ctx, query, taskCtx)
+		if len(resolvedSources) > 0 {
+			// Temporarily augment the payload with resolved sources
+			p.SelectedKBs = resolvedSources
+		} else {
+			return ""
+		}
 	}
 
 	selectedKey := selectedSpaceContextKey(p.SelectedKBs)

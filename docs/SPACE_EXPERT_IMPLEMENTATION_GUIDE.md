@@ -214,6 +214,21 @@ Prompt instructions should include:
 - mention when information is missing or uncertain,
 - and maintain the correct tone for the domain.
 
+### I. Automatic Space resolution for research grounding
+Research-oriented prompts now support automatic Space selection when the user has not explicitly chosen one.
+
+The resolver follows a simple priority order:
+1. Preserve explicit user selection when one or more Spaces are already chosen.
+2. Infer the most relevant Space from repo/language context, current task intent, and available Space artifacts.
+3. Fall back to LTM only when no suitable Space is confidently identified.
+
+This behavior is intentionally designed to keep Spaces separate from LTM memory. A Space is treated as a first-class, independently attachable expertise source, so switching domains or detaching a Space does not require LTM cleanup or memory churn.
+
+In practice, this means:
+- Copilot can automatically switch to a Go, Python, or other language-specific Space when the active work context suggests it.
+- The selected Space still receives explicit precedence if the user has already chosen one.
+- The system can continue to use LTM as a general fallback without conflating it with the curated Space context.
+
 ---
 
 ## Proposed architecture

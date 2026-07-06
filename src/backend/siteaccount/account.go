@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,8 @@ const (
 	paymentStoreName               = "site_payments"
 	userSubscriptionIndexStoreName = "site_user_subscription_ids"
 	userPaymentIndexStoreName      = "site_user_payment_ids"
+	SiteSeatLimit                  = 500
+	siteSeatLimitEnvVar            = "SOP_SITE_SEAT_LIMIT"
 )
 
 // Config stores the site-specific account state for the React/site app.
@@ -227,6 +230,22 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func getSiteSeatLimit() int {
+	value := strings.TrimSpace(os.Getenv(siteSeatLimitEnvVar))
+	if value == "" {
+		return SiteSeatLimit
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return SiteSeatLimit
+	}
+	return parsed
+}
+
+func buildSiteSeatLimitMessage(limit int) string {
+	return fmt.Sprintf("We intentionally limited early-access seats to %d users while we expand availability. Please try again next week when more seats are available.", limit)
 }
 
 type relationshipIndexEntry struct {
@@ -999,6 +1018,21 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 		}
 		upsertSiteUserRecord(c, *existing)
 		return existing, nil
+	}
+
+	seatLimit := getSiteSeatLimit()
+	if seatLimit > 0 {
+		store, err := c.ensureUserStore(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		users, err := store.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if len(users) >= seatLimit {
+			return nil, fmt.Errorf("%s", buildSiteSeatLimitMessage(seatLimit))
+		}
 	}
 
 	passwordHash, err := hashSitePassword(req.Password)

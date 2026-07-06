@@ -134,6 +134,8 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusInternalServerError
 		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
 			status = http.StatusConflict
+		} else if strings.Contains(strings.ToLower(err.Error()), "early-access seats") {
+			status = http.StatusTooManyRequests
 		}
 		writeJSONError(w, status, err.Error())
 		return

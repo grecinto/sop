@@ -203,6 +203,38 @@ func TestHandleLoginSetsSessionCookies(t *testing.T) {
 	}
 }
 
+func TestRegisterUserWithRequestRejectsWhenSeatLimitReached(t *testing.T) {
+	t.Setenv("SOP_SITE_SEAT_LIMIT", "1")
+	resetSiteAccountDBForTest(t)
+
+	cfg := NewConfig()
+	firstUsername := uniqueTestUsername(t, "site-seat-limit-first")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         firstUsername,
+		Password:         "secret123",
+		Email:            "seat-limit-first@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("first RegisterUserWithRequest() error = %v", err)
+	}
+
+	secondUsername := uniqueTestUsername(t, "site-seat-limit-second")
+	_, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         secondUsername,
+		Password:         "secret123",
+		Email:            "seat-limit-second@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	})
+	if err == nil {
+		t.Fatal("expected second registration to fail when the seat limit is reached")
+	}
+	if !strings.Contains(err.Error(), "early-access seats") {
+		t.Fatalf("expected seat-limit message, got %v", err)
+	}
+}
+
 func TestRegisterUserWithRequestRepairsExistingAccountWithoutHash(t *testing.T) {
 	cfg := NewConfig()
 	username := uniqueTestUsername(t, "site-repair-user")
