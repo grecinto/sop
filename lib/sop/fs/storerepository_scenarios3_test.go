@@ -250,14 +250,17 @@ func TestStoreRepository_Scenarios(t *testing.T) {
 				}
 			}
 		}},
-		{"CopyToPassiveFolders missing registry segment source dir error", func(t *testing.T) {
+		{"CopyToPassiveFolders missing registry segment source dir is skipped", func(t *testing.T) {
 			a, p := t.TempDir(), t.TempDir()
 			rt, _ := NewReplicationTracker(ctx, []string{a, p}, true, mocks.NewMockClient())
 			sr, _ := NewStoreRepository(ctx, rt, nil, mocks.NewMockClient(), 0)
 			store := *sop.NewStoreInfo(sop.StoreOptions{Name: "s1", SlotLength: 10})
 			sr.Add(ctx, store)
-			if err := sr.CopyToPassiveFolders(ctx); err == nil || !strings.Contains(err.Error(), "error reading source directory") {
-				t.Fatalf("expected source directory error, got %v", err)
+			if err := sr.CopyToPassiveFolders(ctx); err != nil {
+				t.Fatalf("expected missing registry source directory to be skipped, got %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(p, store.Name, StoreInfoFilename)); err != nil {
+				t.Fatalf("expected passive storeinfo to be written, got %v", err)
 			}
 		}},
 		{"CopyToPassiveFolders passive target dir create conflict", func(t *testing.T) {

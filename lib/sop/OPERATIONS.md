@@ -45,6 +45,68 @@ Not all errors trigger a failover. SOP distinguishes between transient errors (r
 *   **Logs**: Watch for `[Failover]` tagged logs.
 *   **Metrics**: Monitor the `sop_failover_count` metric (if you have instrumented your application).
 
+## Drive Failure Handling and Reinstatement
+
+When a drive fails, the recovery flow depends on whether the failure affected the Active/Passive metadata path or the EC-backed blob path.
+
+### 1) Replace the failed drive
+
+1. Replace or reformat the failed disk and mount it at the same filesystem path that SOP expects.
+2. Ensure the mount point has the correct ownership and permissions so SOP can read and write the store directories.
+3. If the failed drive was part of an EC-protected blob set, keep the service running in degraded mode if parity is still sufficient. SOP can continue serving reads and writes while data is reconstructed.
+
+### 2) Reinstatement after replacement
+
+After the replacement drive is back online, run reinstate so the passive side is brought back into replication.
+
+The reinstate flow will:
+- copy the registry and StoreRepository metadata into the reinstated passive side,
+- walk the blob data and force reads so Erasure Coding repairs any missing or corrupted shards on the replacement drive, and
+- fast-forward any deltas that arrived while the reinstatement was in progress.
+
+> No manual shard copy is required. The reinstate path reuses the existing EC repair logic rather than copying raw shards.
+
+### 3) Trigger reinstate from the command line
+
+There is no separate `sop-admin` subcommand for this yet. The simplest operational approach is to invoke the public Go API from a small helper binary or from your application process.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "github.com/sharedcode/sop"
+    "github.com/sharedcode/sop/database"
+)
+
+func main() {
+    err := database.ReinstateFailedDrives(context.Background(), sop.DatabaseOptions{
+        StoresFolders: []string{"/srv/sop/drive-a", "/srv/sop/drive-b"},
+        CacheType:     sop.Redis,
+    })
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("reinstate complete")
+}
+```
+
+Run it with:
+
+```bash
+go run ./reinstatement.go
+```
+
+If you are already running an application that owns the SOP configuration, call the same API from that process instead of creating a separate helper.
+
+### 4) What to do after reinstate completes
+
+1. Watch the replication status until the `FailedToReplicate` flag is cleared.
+2. Restart or reload the relevant SOP service/process if it had to be restarted during the failure window, so it reopens the restored paths cleanly.
+3. Continue monitoring logs and metrics for follow-up failures, especially if a second drive fails before redundancy is fully restored.
+
 ## Backup & Restore
 
 ### Hybrid Backend (`incfs`)

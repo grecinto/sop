@@ -80,6 +80,13 @@ func (sr *StoreRepository) CopyToPassiveFolders(ctx context.Context) error {
 				srcDir = filepath.Join(sr.replicationTracker.storesBaseFolders[1], tableName)
 				dstDir = filepath.Join(sr.replicationTracker.storesBaseFolders[0], tableName)
 			}
+
+			// Check if registry directory exists; skip if empty (valid for new stores with no data yet)
+			fio := NewFileIO()
+			if !fio.Exists(ctx, srcDir) {
+				continue // No registry segments to copy for this store
+			}
+
 			if err := copyFilesByExtension(ctx, srcDir, dstDir, registryFileExtension); err != nil {
 				return err
 			}

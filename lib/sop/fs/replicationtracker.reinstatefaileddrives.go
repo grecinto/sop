@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/encoding"
@@ -30,6 +32,9 @@ func (r *replicationTracker) ReinstateFailedDrives(ctx context.Context) error {
 		return err
 	}
 	if err := r.copyStores(ctx); err != nil {
+		return err
+	}
+	if err := r.repairErasureCodingShards(ctx); err != nil {
 		return err
 	}
 	// Consume all Commit logs.
@@ -78,6 +83,125 @@ func (r *replicationTracker) copyStores(ctx context.Context) error {
 		// Copy Store Repositories & Registries to passive folders being reinstated for replication.
 		return sr.CopyToPassiveFolders(ctx)
 	}
+}
+
+// repairErasureCodingShards walks all stores and reads their blob data to trigger EC repair on reinstated drives.
+// This ensures that missing shards are reconstructed using the existing RepairCorruptedShards logic.
+func (r *replicationTracker) repairErasureCodingShards(ctx context.Context) error {
+	// Check if EC is configured
+	ecConfigs := GetGlobalErasureConfig()
+	if len(ecConfigs) == 0 {
+		return nil
+	}
+
+	// Get store repository to enumerate stores
+	sr, err := NewStoreRepository(ctx, r, nil, r.l2Cache, 0)
+	if err != nil {
+		return err
+	}
+
+	stores, err := sr.GetAll(ctx)
+	if err != nil {
+		return err
+	}
+
+	// For each store, walk its blob data to trigger repair
+	for _, storeName := range stores {
+		storeInfo, err := sr.Get(ctx, storeName)
+		if err != nil || len(storeInfo) == 0 {
+			continue
+		}
+
+		si := storeInfo[0]
+		// Get EC config for this store's blob table
+		ecConfig, hasEC := ecConfigs[si.BlobTable]
+		if !hasEC {
+			// Try default EC config
+			ecConfig, hasEC = ecConfigs[""]
+			if !hasEC {
+				continue
+			}
+		}
+
+		// Ensure repair flag is enabled for this sweep
+		if !ecConfig.RepairCorruptedShards {
+			// Temporarily enable repair for this reinstate operation
+			ecConfig.RepairCorruptedShards = true
+		}
+
+		// Create blob store with repair enabled
+		bs, err := NewBlobStoreWithEC(DefaultToFilePath, nil, map[string]sop.ErasureCodingConfig{si.BlobTable: ecConfig})
+		if err != nil {
+			return err
+		}
+		blobStore := bs.(*BlobStoreWithEC)
+
+		// Walk all blob files and read them to trigger repair
+		if err := r.walkAndRepairBlobs(ctx, blobStore, si.BlobTable, ecConfig.BaseFolderPathsAcrossDrives); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// walkAndRepairBlobs walks all blob shard files and reads each blob through the EC GetOne path
+// to trigger reconstruction of missing shards on the reinstated drive.
+func (r *replicationTracker) walkAndRepairBlobs(ctx context.Context, blobStore *BlobStoreWithEC, blobTable string, drives []string) error {
+	// Pick first available drive to scan for blob IDs
+	var scanDrive string
+	for _, drive := range drives {
+		scanDir := filepath.Join(drive, blobTable)
+		if fio := NewFileIO(); fio.Exists(ctx, scanDir) {
+			scanDrive = scanDir
+			break
+		}
+	}
+	if scanDrive == "" {
+		return nil // No blobs to repair
+	}
+
+	// Walk the directory tree and collect blob IDs
+	blobIDs := make(map[sop.UUID]bool)
+	if err := r.collectBlobIDs(ctx, scanDrive, blobIDs); err != nil {
+		return err
+	}
+
+	// Read each blob to trigger EC repair
+	for blobID := range blobIDs {
+		_, _ = blobStore.GetOne(ctx, blobTable, blobID)
+		// Ignore read errors - repair happens on successful decode
+	}
+
+	return nil
+}
+
+// collectBlobIDs recursively walks a directory tree and extracts blob UUIDs from shard filenames.
+func (r *replicationTracker) collectBlobIDs(ctx context.Context, dir string, blobIDs map[sop.UUID]bool) error {
+	fio := NewFileIO()
+	entries, err := fio.ReadDir(ctx, dir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if err := r.collectBlobIDs(ctx, filepath.Join(dir, entry.Name()), blobIDs); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Parse blob UUID from shard filename (format: <uuid>_<shardIndex>)
+		name := entry.Name()
+		if idx := strings.Index(name, "_"); idx > 0 {
+			if blobID, err := sop.ParseUUID(name[:idx]); err == nil {
+				blobIDs[blobID] = true
+			}
+		}
+	}
+
+	return nil
 }
 
 // fastForward reads commit logs, applies changes to passive targets, and deletes each processed log.
