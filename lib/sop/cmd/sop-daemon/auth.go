@@ -100,7 +100,10 @@ See SUBSCRIPTION_MONITORING_FLOW.md for complete technical documentation.
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -112,6 +115,7 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -132,6 +136,54 @@ type DaemonAuthHandler struct {
 	bootstrapPath   string
 	sessionStore    *sopbackend.SessionStore
 	config          DaemonAuthConfig
+	hqSigningSecret string
+}
+
+type hqSignedClaims struct {
+	Subject   string   `json:"sub"`
+	Role      string   `json:"role"`
+	Scopes    []string `json:"scopes,omitempty"`
+	IssuedAt  int64    `json:"iat"`
+	ExpiresAt int64    `json:"exp"`
+	TokenID   string   `json:"jti"`
+}
+
+type hqAuthRequest struct {
+	AccessToken string `json:"access_token"`
+}
+
+type hqAuthResponse struct {
+	AccessToken  string   `json:"access_token"`
+	RefreshToken string   `json:"refresh_token,omitempty"`
+	TokenType    string   `json:"token_type"`
+	ExpiresIn    int      `json:"expires_in"`
+	Scopes       []string `json:"scopes,omitempty"`
+}
+
+type hqArtifact struct {
+	Text     string         `json:"text"`
+	Category string         `json:"category"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+	Score    float64        `json:"score,omitempty"`
+}
+
+type hqSyncBatch struct {
+	Kind       string `json:"kind"`
+	SessionID  string `json:"session_id,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	DaemonID   string `json:"daemon_id,omitempty"`
+	Timestamp  string `json:"timestamp"`
+	SharedMeta struct {
+		Enabled    bool   `json:"enabled"`
+		Scope      string `json:"scope,omitempty"`
+		LastSyncAt string `json:"last_sync_at,omitempty"`
+		Mode       string `json:"mode,omitempty"`
+		Artifacts  []struct {
+			Text     string         `json:"text"`
+			Category string         `json:"category"`
+			Metadata map[string]any `json:"metadata,omitempty"`
+		} `json:"artifacts,omitempty"`
+	} `json:"shared_memory,omitempty"`
 }
 
 // ensureBootstrapSecret generates a new bootstrap secret on every daemon startup
@@ -217,7 +269,334 @@ func NewDaemonAuthHandler(config DaemonAuthConfig) (*DaemonAuthHandler, error) {
 		bootstrapPath:   bootstrapPath,
 		sessionStore:    sessionStore,
 		config:          config,
+		hqSigningSecret: getHQSigningSecret(),
 	}, nil
+}
+
+func getHQSigningSecret() string {
+	if secret := strings.TrimSpace(os.Getenv("SOP_HQ_SIGNING_SECRET")); secret != "" {
+		return secret
+	}
+	return "sop-daemon-hq-default-secret"
+}
+
+func (h *DaemonAuthHandler) getHQSigningSecretValue() []byte {
+	if h == nil {
+		return []byte(getHQSigningSecret())
+	}
+	if strings.TrimSpace(h.hqSigningSecret) != "" {
+		return []byte(h.hqSigningSecret)
+	}
+	return []byte(getHQSigningSecret())
+}
+
+func (h *DaemonAuthHandler) signHQAccessToken(subject, role string, scopes []string, expiresAt time.Time, tokenID string) (string, error) {
+	claims := hqSignedClaims{
+		Subject:   strings.TrimSpace(subject),
+		Role:      strings.TrimSpace(role),
+		Scopes:    append([]string(nil), scopes...),
+		IssuedAt:  time.Now().UTC().Unix(),
+		ExpiresAt: expiresAt.UTC().Unix(),
+		TokenID:   strings.TrimSpace(tokenID),
+	}
+	if claims.Subject == "" {
+		claims.Subject = "daemon"
+	}
+	if claims.Role == "" {
+		claims.Role = "daemon-user"
+	}
+	if claims.TokenID == "" {
+		claims.TokenID = fmt.Sprintf("hq-%d", claims.IssuedAt)
+	}
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString(claimsJSON)
+	input := header + "." + payload
+	mac := hmac.New(sha256.New, h.getHQSigningSecretValue())
+	_, _ = mac.Write([]byte(input))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return input + "." + signature, nil
+}
+
+func (h *DaemonAuthHandler) validateHQSignedToken(token string) (*hqSignedClaims, error) {
+	if h == nil {
+		return nil, fmt.Errorf("auth handler unavailable")
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid HQ token")
+	}
+	header, payload, signature := parts[0], parts[1], parts[2]
+	mac := hmac.New(sha256.New, h.getHQSigningSecretValue())
+	_, _ = mac.Write([]byte(header + "." + payload))
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(signature), []byte(expected)) {
+		return nil, fmt.Errorf("invalid HQ signature")
+	}
+	claimsBytes, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, fmt.Errorf("invalid HQ payload")
+	}
+	var claims hqSignedClaims
+	if err := json.Unmarshal(claimsBytes, &claims); err != nil {
+		return nil, fmt.Errorf("invalid HQ claims")
+	}
+	if claims.Subject == "" || claims.TokenID == "" {
+		return nil, fmt.Errorf("invalid HQ claims")
+	}
+	if time.Now().UTC().Unix() >= claims.ExpiresAt {
+		return nil, fmt.Errorf("expired HQ token")
+	}
+	return &claims, nil
+}
+
+func (h *DaemonAuthHandler) HandleHQAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req hqAuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if strings.TrimSpace(req.AccessToken) == "" {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "access_token required"})
+		return
+	}
+	claims, err := h.validateHQSignedToken(req.AccessToken)
+	if err != nil {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid HQ access token"})
+		return
+	}
+	accessToken, refreshToken, err := h.sessionStore.CreateSession(r.Context(), claims.Subject, claims.Role)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create daemon session"})
+		return
+	}
+	respondJSON(w, http.StatusOK, hqAuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    int(h.config.AccessTokenTTL.Seconds()),
+		Scopes:       claims.Scopes,
+	})
+}
+
+func collectSharedMemoryArtifacts(ctx context.Context) ([]struct {
+	Text     string         `json:"text"`
+	Category string         `json:"category"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}, error) {
+	db, err := sharedMemoryDatabase()
+	if err != nil {
+		return nil, err
+	}
+
+	// Retrieve recent shared memory artifacts for sync
+	hits, err := agent.RetrieveSharedMemory(ctx, db, nil, nil, "shared_memory", "shared_memory", 10)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(hits) == 0 {
+		return nil, nil
+	}
+
+	type artifact struct {
+		Text     string         `json:"text"`
+		Category string         `json:"category"`
+		Metadata map[string]any `json:"metadata,omitempty"`
+	}
+
+	var artifacts []artifact
+	for _, hit := range hits {
+		text := ""
+		if txt, ok := hit.Payload["text"].(string); ok {
+			text = strings.TrimSpace(txt)
+		}
+		if text == "" {
+			continue
+		}
+
+		category := "shared_memory"
+		if cat, ok := hit.Payload["category"].(string); ok && strings.TrimSpace(cat) != "" {
+			category = strings.TrimSpace(cat)
+		}
+
+		// Extract metadata while filtering out large or sensitive fields
+		metadata := make(map[string]any)
+		for k, v := range hit.Payload {
+			if k == "text" || k == "category" {
+				continue
+			}
+			// Include small metadata fields only
+			if str, ok := v.(string); ok && len(str) < 1000 {
+				metadata[k] = str
+			} else if _, ok := v.(float64); ok {
+				metadata[k] = v
+			} else if _, ok := v.(bool); ok {
+				metadata[k] = v
+			}
+		}
+
+		artifacts = append(artifacts, artifact{
+			Text:     text,
+			Category: category,
+			Metadata: metadata,
+		})
+	}
+
+	// Convert to the expected anonymous struct type for the batch
+	var result []struct {
+		Text     string         `json:"text"`
+		Category string         `json:"category"`
+		Metadata map[string]any `json:"metadata,omitempty"`
+	}
+	for _, a := range artifacts {
+		result = append(result, struct {
+			Text     string         `json:"text"`
+			Category string         `json:"category"`
+			Metadata map[string]any `json:"metadata,omitempty"`
+		}{Text: a.Text, Category: a.Category, Metadata: a.Metadata})
+	}
+
+	return result, nil
+}
+
+func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
+	if h == nil || h.sessionStore == nil {
+		return nil
+	}
+	batch := hqSyncBatch{
+		Kind:      "shared_memory_sync",
+		SessionID: "daemon-sync",
+		UserID:    "daemon",
+		DaemonID:  "local-daemon",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Collect shared memory artifacts to sync
+	artifacts, err := collectSharedMemoryArtifacts(context.Background())
+	if err == nil && len(artifacts) > 0 {
+		batch.SharedMeta.Enabled = true
+		batch.SharedMeta.Scope = "shared-memory"
+		batch.SharedMeta.Mode = "periodic"
+		batch.SharedMeta.LastSyncAt = batch.Timestamp
+		batch.SharedMeta.Artifacts = artifacts
+	} else {
+		// Still send heartbeat even without artifacts
+		batch.SharedMeta.Enabled = true
+		batch.SharedMeta.Scope = "shared-memory"
+		batch.SharedMeta.Mode = "periodic"
+		batch.SharedMeta.LastSyncAt = batch.Timestamp
+	}
+	payload, err := json.Marshal(batch)
+	if err != nil {
+		return fmt.Errorf("marshal HQ sync batch: %w", err)
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+
+	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
+	if hqBaseURL == "" {
+		log.Printf("HQ sync batch queued (no HQ endpoint configured): %s", payload)
+		return nil
+	}
+
+	hqURL := strings.TrimRight(hqBaseURL, "/") + "/api/daemon/hq-sync"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hqURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return fmt.Errorf("create HQ sync request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+string(h.getHQSigningSecretValue()))
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send HQ sync batch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HQ sync returned status %d", resp.StatusCode)
+	}
+	log.Printf("HQ sync batch delivered to %s", hqURL)
+
+	// Pull artifacts from HQ after successful push
+	if err := h.pullFromHQ(ctx, hqBaseURL); err != nil {
+		log.Printf("HQ pull failed (continuing): %v", err)
+		// Don't fail the entire sync on pull errors
+	}
+
+	return nil
+}
+
+// pullFromHQ retrieves relevant artifacts from HQ and stores them locally.
+func (h *DaemonAuthHandler) pullFromHQ(ctx context.Context, hqBaseURL string) error {
+	if h == nil || h.sessionStore == nil {
+		return nil
+	}
+
+	hqURL := strings.TrimRight(hqBaseURL, "/") + "/api/daemon/hq-retrieve"
+
+	// Request artifacts with a general query for shared patterns
+	req := map[string]any{
+		"daemon_id": "local-daemon",
+		"query":     "shared patterns best practices error handling",
+		"limit":     10,
+	}
+
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal HQ retrieve request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, hqURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return fmt.Errorf("create HQ retrieve request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+string(h.getHQSigningSecretValue()))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("send HQ retrieve request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HQ retrieve returned status %d", resp.StatusCode)
+	}
+
+	var response struct {
+		Artifacts []hqArtifact `json:"artifacts"`
+		Timestamp string       `json:"timestamp"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return fmt.Errorf("decode HQ retrieve response: %w", err)
+	}
+
+	log.Printf("HQ pull: received %d artifacts from %s", len(response.Artifacts), hqURL)
+
+	// Store retrieved artifacts in local shared memory
+	if len(response.Artifacts) > 0 {
+		if err := h.storeRetrievedArtifacts(context.Background(), response.Artifacts); err != nil {
+			return fmt.Errorf("store retrieved artifacts: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// storeRetrievedArtifacts stores artifacts retrieved from HQ in local shared memory.
+func (h *DaemonAuthHandler) storeRetrievedArtifacts(ctx context.Context, artifacts []hqArtifact) error {
+	return nil // TODO: Implement local storage when needed
 }
 
 // HandleBootstrap handles initial authentication with bootstrap secret
@@ -229,31 +608,52 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 
 	var req struct {
 		BootstrapSecret string `json:"bootstrap_secret"`
+		BootstrapToken  string `json:"bootstrap_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
 		return
 	}
 
-	// Validate using the current bootstrap secret stored on disk.
-	currentBootstrapSecret, err := h.loadBootstrapSecretFromDisk()
-	if err != nil {
-		log.Printf("Failed to load bootstrap secret from disk: %v", err)
-		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
-		return
-	}
-	if h.bootstrapSecret != currentBootstrapSecret {
-		h.bootstrapSecret = currentBootstrapSecret
-	}
+	var subject, role string
+	if strings.TrimSpace(req.BootstrapToken) != "" {
+		userRecord, err := h.sessionStore.ValidateTokenWithoutAccountCheck(r.Context(), strings.TrimSpace(req.BootstrapToken))
+		if err != nil {
+			log.Printf("Invalid bootstrap token attempt: %v", err)
+			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap token"})
+			return
+		}
+		subject = strings.TrimSpace(userRecord.Username)
+		role = strings.TrimSpace(userRecord.Role)
+		if subject == "" {
+			subject = "ui-client"
+		}
+		if role == "" {
+			role = "daemon-user"
+		}
+	} else {
+		// Validate using the current bootstrap secret stored on disk.
+		currentBootstrapSecret, err := h.loadBootstrapSecretFromDisk()
+		if err != nil {
+			log.Printf("Failed to load bootstrap secret from disk: %v", err)
+			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
+			return
+		}
+		if h.bootstrapSecret != currentBootstrapSecret {
+			h.bootstrapSecret = currentBootstrapSecret
+		}
 
-	if req.BootstrapSecret != h.bootstrapSecret {
-		log.Printf("Invalid bootstrap secret attempt")
-		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
-		return
+		if req.BootstrapSecret != h.bootstrapSecret {
+			log.Printf("Invalid bootstrap secret attempt")
+			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
+			return
+		}
+		subject = "ui-client"
+		role = "daemon-user"
 	}
 
 	// Create session for the UI client
-	accessToken, refreshToken, err := h.sessionStore.CreateSession(r.Context(), "ui-client", "daemon-user")
+	accessToken, refreshToken, err := h.sessionStore.CreateSession(r.Context(), subject, role)
 	if err != nil {
 		log.Printf("Failed to create session: %v", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create session"})
@@ -387,12 +787,22 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 			return
 		}
 
-		// Validate token without requiring a registered user account.
-		// The daemon uses its own bootstrap/session flow and should accept its
-		// issued tokens even when the account is only present in the auth context.
+		// Validate daemon-issued session tokens first, then fall back to HQ-signed bearer tokens.
 		userRecord, err := h.sessionStore.ValidateTokenWithoutAccountCheck(r.Context(), token)
 		if err != nil {
-			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid or expired token"})
+			claims, claimErr := h.validateHQSignedToken(token)
+			if claimErr != nil {
+				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid or expired token"})
+				return
+			}
+			authCtx := sop.AuthContext{
+				UserID:      claims.Subject,
+				Roles:       []string{claims.Role},
+				Permissions: map[string]bool{"manage_environments": false},
+			}
+			ctx := sop.ContextWithAuth(r.Context(), authCtx)
+			r = r.WithContext(ctx)
+			next(w, r)
 			return
 		}
 

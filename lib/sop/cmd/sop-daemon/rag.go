@@ -16,6 +16,7 @@ import (
 
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
+	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -542,28 +543,41 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	normalizedQuery := normalizeAgentQuery(req.Query)
+	routingQuery := normalizedQuery
 	payload.CurrentUserQuery = req.Query
 	cfg.Set("payload", payload)
 
+	askQuery := normalizedQuery
+	if sharedContext, err := trySharedMemoryContext(ctx, normalizedQuery, payload.UserID); err == nil && strings.TrimSpace(sharedContext) != "" {
+		cfg.Set("shared_memory_context", sharedContext)
+		cfg.Set("shared_memory_enabled", true)
+	}
+
 	log.Printf("daemon handleAsk: request received query=%q session=%q normalized_query=%q", req.Query, payload.SessionID, normalizedQuery)
 	if hasSharedBackendAgents() {
-		if strings.HasPrefix(normalizedQuery, "/") || !shouldUseShellFallback(normalizedQuery) {
-			answer, err := sopbackend.AskSharedAgent(ctx, normalizedQuery, cfg)
+		if strings.HasPrefix(routingQuery, "/") || !shouldUseShellFallback(routingQuery) {
+			answer, err := sopbackend.AskSharedAgent(ctx, routingQuery, cfg)
 			if err != nil {
 				log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
 				respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
 				return
+			}
+			if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
+				log.Printf("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
 			}
 			log.Printf("daemon handleAsk: completed via shared backend handler query=%q answer_len=%d", req.Query, len(answer))
 			respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
 			return
 		}
 	}
-	if fallbackAnswer, handled, fallbackErr := s.trySimpleShellCommandFallback(normalizedQuery, sessionID); handled {
+	if fallbackAnswer, handled, fallbackErr := s.trySimpleShellCommandFallback(routingQuery, sessionID); handled {
 		if fallbackErr != nil {
 			log.Printf("daemon shell fallback failed: query=%q error=%v", normalizedQuery, fallbackErr)
 			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: fallbackErr.Error()})
 			return
+		}
+		if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, fallbackAnswer, payload); err != nil {
+			log.Printf("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
 		}
 		log.Printf("daemon handleAsk: completed via shell fallback query=%q answer_len=%d", normalizedQuery, len(fallbackAnswer))
 		respondJSON(w, http.StatusOK, AskResponse{Answer: fallbackAnswer})
@@ -571,25 +585,155 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx = sopbackend.InjectSharedRuntimeContext(ctx, nil, nil)
 	if s.service != nil {
-		answer, err := s.service.Ask(ctx, normalizedQuery, cfg)
+		answer, err := s.service.Ask(ctx, askQuery, cfg)
 		if err != nil {
 			log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
 			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
 			return
+		}
+		if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
+			log.Printf("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
 		}
 		log.Printf("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
 		respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
 		return
 	}
 
-	answer, err := sopbackend.AskSharedAgent(ctx, normalizedQuery, cfg)
+	answer, err := sopbackend.AskSharedAgent(ctx, askQuery, cfg)
 	if err != nil {
 		log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
 		respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
 		return
 	}
+	if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
+		log.Printf("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
+	}
 	log.Printf("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
 	respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
+}
+
+func trySharedMemoryContext(ctx context.Context, query, userID string) (string, error) {
+	if strings.TrimSpace(query) == "" {
+		return "", nil
+	}
+
+	queryLower := strings.ToLower(query)
+
+	// Determine relevant categories based on query intent
+	var categories []FederatedContentCategory
+	if strings.Contains(queryLower, "error") || strings.Contains(queryLower, "fix") || strings.Contains(queryLower, "bug") || strings.Contains(queryLower, "failing") {
+		categories = []FederatedContentCategory{CategoryErrorResolution, CategoryRepairStrategy, CategoryAntiPattern}
+	} else if strings.Contains(queryLower, "test") {
+		categories = []FederatedContentCategory{CategoryWorkflowPattern, CategoryToolPreference}
+	} else if strings.Contains(queryLower, "refactor") || strings.Contains(queryLower, "improve") {
+		categories = []FederatedContentCategory{CategoryWorkflowPattern, CategorySafetyHeuristic}
+	} else if strings.Contains(queryLower, "implement") || strings.Contains(queryLower, "create") || strings.Contains(queryLower, "add") {
+		categories = []FederatedContentCategory{CategoryWorkflowPattern, CategoryContextGathering}
+	}
+
+	// Use category-based retrieval for better context
+	context, err := RetrieveFederatedContext(ctx, query, categories, 5)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.TrimSpace(context) == "" {
+		return "", nil
+	}
+
+	return fmt.Sprintf("Relevant patterns from fleet knowledge:\n%s", context), nil
+}
+
+func promoteSharedMemoryArtifactForAsk(ctx context.Context, query, answer string, payload *ai.SessionPayload) error {
+	if strings.TrimSpace(query) == "" || strings.TrimSpace(answer) == "" {
+		return nil
+	}
+
+	queryLower := strings.ToLower(query)
+	answerLower := strings.ToLower(answer)
+
+	// Determine category and confidence based on query/answer patterns
+	var category FederatedContentCategory
+	var confidence float64
+	var shouldShare bool
+
+	// Error resolution patterns (high value)
+	if strings.Contains(queryLower, "error") || strings.Contains(queryLower, "fix") || strings.Contains(queryLower, "bug") {
+		if strings.Contains(answerLower, "fixed") || strings.Contains(answerLower, "resolved") || strings.Contains(answerLower, "corrected") {
+			category = CategoryErrorResolution
+			confidence = 0.85
+			shouldShare = true
+		}
+	}
+
+	// Workflow patterns
+	if strings.Contains(queryLower, "implement") || strings.Contains(queryLower, "create") || strings.Contains(queryLower, "add feature") {
+		if len(answer) > 200 { // Substantial implementation
+			category = CategoryWorkflowPattern
+			confidence = 0.75
+			shouldShare = true
+		}
+	}
+
+	// Test-related patterns
+	if strings.Contains(queryLower, "test") {
+		category = CategoryWorkflowPattern
+		confidence = 0.80
+		shouldShare = true
+	}
+
+	// Refactoring patterns
+	if strings.Contains(queryLower, "refactor") || strings.Contains(queryLower, "improve") {
+		category = CategoryWorkflowPattern
+		confidence = 0.78
+		shouldShare = true
+	}
+
+	// Anti-patterns (errors or failures)
+	if strings.Contains(answerLower, "error") || strings.Contains(answerLower, "failed") || strings.Contains(answerLower, "cannot") {
+		category = CategoryAntiPattern
+		confidence = 0.70
+		shouldShare = true
+	}
+
+	if !shouldShare {
+		// Default: still promote but with lower confidence
+		category = CategoryWorkflowPattern
+		confidence = 0.65
+		shouldShare = len(query) > 20 && len(answer) > 50 // Only if substantial
+	}
+
+	metadata := map[string]any{
+		"source": "daemon_ask",
+	}
+	if payload != nil {
+		if payload.SessionID != "" {
+			metadata["session_id"] = strings.TrimSpace(payload.SessionID)
+		}
+		if payload.UserID != "" {
+			metadata["user_id"] = strings.TrimSpace(payload.UserID)
+		}
+	}
+
+	artifact := FederatedArtifact{
+		Category:    category,
+		Summary:     fmt.Sprintf("Query: %s", truncate(query, 100)),
+		Pattern:     fmt.Sprintf("Approach: %s", truncate(answer, 500)),
+		Context:     "",
+		Confidence:  confidence,
+		ShouldShare: shouldShare,
+		Metadata:    metadata,
+	}
+
+	return PromoteFederatedArtifact(ctx, artifact)
+}
+
+func sharedMemoryDatabase() (*aidb.Database, error) {
+	sysOpts, err := sopbackend.GetSystemDBOptions(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return aidb.NewDatabase(sysOpts), nil
 }
 
 func looksLikeAgentRoutingQuery(query string) bool {

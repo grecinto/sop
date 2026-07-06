@@ -86,15 +86,24 @@
                     throw new Error('Bootstrap secret is empty');
                 }
 
-                // Step 2: Authenticate with daemon using bootstrap secret
+                const bootstrapToken = [
+                    localStorage.getItem('sop_access_token'),
+                    sessionStorage.getItem('sop_access_token'),
+                    localStorage.getItem('access_token'),
+                    sessionStorage.getItem('access_token')
+                ].find(value => typeof value === 'string' && value.trim() !== '');
+
+                const authPayload = bootstrapToken
+                    ? { bootstrap_token: bootstrapToken.trim() }
+                    : { bootstrap_secret: bootstrapSecret };
+
+                // Step 2: Authenticate with daemon using either the current UI session token or the legacy bootstrap secret.
                 const authResponse = await fetch(`${getDaemonBaseURL()}/api/daemon/auth`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        bootstrap_secret: bootstrapSecret
-                    })
+                    body: JSON.stringify(authPayload)
                 });
 
                 if (!authResponse.ok) {

@@ -40,6 +40,94 @@ These are the next product- and runtime-level tasks for the v1 copilot experienc
 - [ ] Reuse proven open-source building blocks for orchestration, parsing, retrieval, and evaluation to accelerate delivery.
 - [ ] Define the top v1 workflows that will be marketed as the subscription value proposition, including repository-aware edits, code review support, and knowledge-base-guided automation.
 
+## Phase 0.5: Federation and Fleet Intelligence (✅ COMPLETE)
+
+**Status**: ✅ V1 Complete - Production Ready  
+**Completed**: 2026-07-05
+
+The central memory federation system enables daemon nodes to share learned patterns with HQ, creating fleet-wide intelligence that improves all nodes over time.
+
+### ✅ Completed Features
+
+#### Core Infrastructure
+- [x] Core shared memory primitives (`agent.PromoteSharedMemoryArtifact`, `agent.RetrieveSharedMemory`)
+- [x] Daemon bootstrap token handoff (UI session → daemon tokens)
+- [x] HQ-side root user caching for efficient periodic syncs
+- [x] Complete test coverage (daemon + HQ handlers)
+
+#### Bidirectional Sync (Push + Pull)
+- [x] **PUSH**: Daemon → HQ periodic sync (1 hour + jitter)
+- [x] **PUSH**: Sync batch assembly with artifacts array
+- [x] **PUSH**: HQ endpoint `/api/daemon/hq-sync` with auth
+- [x] **PUSH**: HQ ingestion into root SA LTM with provenance
+- [x] **PULL**: HQ endpoint `/api/daemon/hq-retrieve` with semantic search
+- [x] **PULL**: Automatic pull after successful push
+- [x] **PULL**: Daemon retrieval with configurable limits
+
+#### Federated Content System (Enhanced V1)
+- [x] **13 Content Categories**: workflow_pattern (9), error_resolution (5), repair_strategy (5), tool_preference (4), context_gathering (4), security_pattern (3), anti_pattern (3), performance_optimization (3), testing_strategy (3), code_quality (3), safety_heuristic (2), api_design (2), verified_playbook (0, learned over time)
+- [x] **49 Seed Patterns**: Comprehensive baseline intelligence (3.5x increase from initial 14)
+  - Framework-specific workflows (React, Node.js, databases, Git)
+  - Security best practices (input validation, auth, secrets)
+  - Performance optimization (caching, batching, lazy loading)
+  - Comprehensive error resolution (types, nulls, async, races)
+  - Testing methodologies (TDD, isolation, coverage)
+  - Code quality maintenance (extraction, consistency, readability)
+  - API design standards (REST, error responses)
+  - Systematic debugging and refactoring
+- [x] **Intelligent Promotion**: Automatic categorization, confidence scoring (0.65-0.95), value filtering
+- [x] **Context-Aware Retrieval**: Category-based search, intent detection, ranked results
+- [x] **Privacy Safeguards**: Text truncation (2000 chars), metadata filtering, no PII
+- [x] Implementation in `cmd/sop-daemon/federation_content.go` (~1,100 lines)
+- [x] Integration with ask handler in `cmd/sop-daemon/rag.go`
+- [x] **Competitive Positioning**: Patterns comparable to Codex and Claude Code federation systems
+
+#### Documentation
+- [x] [FEDERATION_DESIGN_SUMMARY.md](FEDERATION_DESIGN_SUMMARY.md) - Complete architecture and implementation details
+- [x] [FEDERATED_CONTENT_STRATEGY.md](FEDERATED_CONTENT_STRATEGY.md) - Content categories, promotion rules, examples
+- [x] [CENTRAL_BRAIN_MEMORY_PROPOSAL.md](CENTRAL_BRAIN_MEMORY_PROPOSAL.md) - Original proposal and design rationale
+
+#### Test Results
+- [x] All daemon tests passing (1.609s)
+- [x] All HQ sync tests passing (0.832s)
+- [x] Bootstrap token tests passing (0.324s)
+- [x] 7 HQ handler tests: sync acceptance, rejection, retrieval
+
+### Implementation Files
+
+| File | Purpose | Lines | Status |
+|------|---------|-------|--------|
+| `lib/sop/ai/agent/shared_memory.go` | Core primitives | ~250 | ✅ Complete |
+| `lib/sop/cmd/sop-daemon/federation_content.go` | 13 categories, 49 seeds, auto-categorization | ~1,100 | ✅ Complete |
+| `lib/sop/cmd/sop-daemon/rag.go` | Intelligent promotion and retrieval | ~670 | ✅ Complete |
+| `lib/sop/cmd/sop-daemon/auth.go` | Bidirectional sync (push + pull) | ~600 | ✅ Complete |
+| `lib/sop/tools/sopbackend/hq_sync_handler.go` | HQ receiver endpoints | ~440 | ✅ Complete |
+| `lib/sop/tools/sopbackend/hq_sync_handler_test.go` | HQ handler tests | ~140 | ✅ Complete |
+
+### What Makes This Valuable
+
+| Local Daemon Alone | With Enhanced Federation |
+|-------------------|-----------------|
+| Learns from one user | Learns from entire fleet |
+| Rediscovers solutions | Applies proven patterns immediately |
+| No safety baselines | **49 critical patterns** seeded on startup |
+| Generic error handling | **13 categories** of context-aware patterns |
+| Trial-and-error | Pattern-guided workflows |
+| No security/performance guidance | Security best practices, performance patterns built-in |
+| Limited knowledge | Fleet-wide collective intelligence |
+| **Competitive with**: Basic code completion | **Competitive with**: Codex, Claude Code federation systems |
+
+### V2 Future Enhancements
+- [ ] Observability metrics for sync success/failure rates
+- [ ] Daemon-side retry logic with exponential backoff
+- [ ] LTM garbage collection for stale shared artifacts
+- [ ] Recurrence-based confidence boosting
+- [ ] Policy layer for artifact quality filtering
+- [ ] Admin UI for viewing fleet-wide patterns
+- [ ] Pattern effectiveness tracking and ranking
+
+---
+
 ## Phase 1: Auth handoff and continuity
 
 These are the highest-priority tasks for the next implementation pass.

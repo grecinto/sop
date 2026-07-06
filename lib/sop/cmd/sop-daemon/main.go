@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -176,6 +177,14 @@ func main() {
 		ragSvc = rag
 	}
 
+	// Seed initial federated content for fleet-wide intelligence
+	log.Printf("Seeding initial federated content...")
+	if err := SeedInitialFederatedContent(context.Background()); err != nil {
+		log.Printf("Warning: failed to seed federated content: %v", err)
+	} else {
+		log.Printf("Federated content seeded successfully")
+	}
+
 	// Register all sopbackend handlers (provides full backend API)
 	mux := http.NewServeMux()
 	sopbackend.RegisterAllHandlers(mux)
@@ -184,6 +193,7 @@ func main() {
 	// Register daemon authentication endpoints (NO auth required)
 	mux.HandleFunc("/api/daemon/auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleBootstrap)))
 	mux.HandleFunc("/api/daemon/refresh", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleRefresh)))
+	mux.HandleFunc("/api/daemon/hq-auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleHQAuth)))
 
 	// Override/Add daemon-specific handlers WITH authentication
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))
@@ -197,6 +207,8 @@ func main() {
 		}
 		ragSvc.handleAsk(w, r)
 	})))))
+
+	go startHQSyncLoop(authHandler)
 
 	// Wrap all handlers with request logging and CORS support
 	loggingHandler := addLoggingToAll(mux)
@@ -475,6 +487,33 @@ func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, work
 		return "", marshalErr
 	}
 	return string(payload), nil
+}
+
+func startHQSyncLoop(authHandler *DaemonAuthHandler) {
+	if authHandler == nil {
+		return
+	}
+	for {
+		time.Sleep(nextHQSyncDelay(1*time.Hour, 15*time.Minute, time.Now().UnixNano()))
+		syncErr := authHandler.syncWithHQ(context.Background())
+		if syncErr != nil {
+			log.Printf("HQ sync failed: %v", syncErr)
+		}
+	}
+}
+
+func nextHQSyncDelay(baseInterval, jitter time.Duration, seed int64) time.Duration {
+	if baseInterval <= 0 {
+		baseInterval = time.Hour
+	}
+	if jitter < 0 {
+		jitter = 0
+	}
+	if jitter == 0 {
+		return baseInterval
+	}
+	rng := rand.New(rand.NewSource(seed))
+	return baseInterval + time.Duration(rng.Int63n(int64(jitter)))
 }
 
 func handleUIHandoff(w http.ResponseWriter, r *http.Request) {

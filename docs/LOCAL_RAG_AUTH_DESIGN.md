@@ -2,25 +2,28 @@
 
 ## Overview
 
-The UI remains the root controller for user identity. The user logs in through the UI, and that authenticated session is then used to bootstrap the local runtime. The local daemon and the local RAG process are not treated as independent clients with their own login flow; instead, they inherit the UI session through hydrated authentication material.
+The UI remains the root controller for user identity. The user logs in through the UI, and that authenticated session is then used to bootstrap the local runtime. The local daemon and the local RAG process are not treated as independent clients with their own login flow; instead, they inherit the UI session through a secure handoff of a daemon-specific bootstrap credential.
 
-This keeps the local experience aligned with the existing product model while preserving a secure boundary for policy enforcement and limits.
+This keeps the local experience aligned with the existing product model while preserving a secure boundary for policy enforcement and limits. The daemon receives a scoped bootstrap credential from the UI over localhost, exchanges it with HQ for a short-lived daemon sync token pair, and keeps those tokens in memory only.
 
 ## Goals
 
 - Keep the UI as the single entry point for authentication.
 - Let the local daemon and local RAG runtime operate under the same authenticated identity as the UI.
 - Reuse the existing bearer-token and refresh-token model rather than introducing a separate trust model.
+- Use a scoped bootstrap credential for the daemon handoff instead of passing the user’s full session token.
+- Keep daemon sync credentials in memory only, with refresh through the UI when needed.
 - Allow HQ to enforce policy, quotas, and revocation without becoming a second runtime.
 
 ## Core Trust Model
 
 1. The user authenticates in the UI.
-2. The UI receives an access token and a refresh token.
-3. The UI hydrates the local daemon with those tokens over localhost.
-4. The local daemon uses the access token when calling HQ for policy or enforcement checks.
-5. If the access token is near expiry, the daemon uses the refresh token to obtain a new access token.
-6. HQ validates the token and returns policy decisions, limit state, or revocation signals.
+2. The UI requests a daemon-specific bootstrap credential from HQ. This credential is short-lived, scoped to daemon sync, and bound to the current user and daemon identity.
+3. The UI passes that bootstrap credential to the local daemon over localhost.
+4. The local daemon exchanges the bootstrap credential with HQ for a short-lived daemon access token and a refresh token.
+5. The daemon keeps both tokens in memory only and uses the access token when calling HQ for policy or enforcement checks.
+6. If the access token is near expiry, the daemon uses the refresh token to obtain a new access token, or asks the UI to fetch a fresh bootstrap credential and repeat the exchange.
+7. HQ validates the token, checks its scope and revocation state, and returns policy decisions, limit state, or revocation signals.
 
 This makes the local runtime a delegated extension of the UI session rather than an autonomous client.
 
@@ -72,10 +75,11 @@ sequenceDiagram
 ## Security Properties
 
 - No independent local login path is required.
-- The local daemon inherits the UI session identity.
-- Tokens remain short-lived and refreshable.
-- HQ can revoke or deny access centrally.
-- Communication remains local-first for the agent runtime, with HQ only used for policy coordination.
+- The local daemon inherits the UI session identity through a daemon-scoped bootstrap credential.
+- The daemon never stores its sync credentials on disk; the UI only passes them over localhost and the daemon keeps them in memory.
+- The bootstrap credential is short-lived and scope-limited; the daemon’s sync token pair uses the same expiry period for both access and refresh tokens, with a single shared renewal window.
+- HQ can revoke or deny access centrally, including the bootstrap credential and the daemon token pair.
+- Communication remains local-first for the agent runtime, with HQ only used for policy coordination and sync.
 
 ## MFA and session policy
 
@@ -93,25 +97,35 @@ This gives the product a clear security posture while keeping the day-to-day exp
 
 The initial HQ boundary can remain minimal:
 
+- POST /api/daemon/bootstrap
+  - Validate the active UI session.
+  - Issue a short-lived, daemon-scoped bootstrap credential or authorization code for the current user and daemon instance.
+  - Return it to the UI for localhost handoff.
+
+- POST /api/daemon/token
+  - Exchange the bootstrap credential for a daemon access token and refresh token.
+  - Bind the token pair to the daemon identity and the requested sync scope.
+
 - POST /api/policy/check
-  - Validate the supplied access token.
+  - Validate the supplied daemon access token.
   - Return allow/deny and current policy state.
 
 - POST /api/policy/heartbeat
   - Report local runtime activity and usage.
   - Let HQ update enforcement state.
 
-- POST /api/policy/refresh
-  - Exchange a refresh token for a new access token when needed.
+- POST /api/daemon/refresh
+  - Exchange the daemon refresh token for a new daemon access token when needed.
 
-These endpoints can reuse the same bearer-token semantics already used by the UI session layer.
+These endpoints can reuse the same bearer-token semantics already used by the UI session layer, but the daemon flow should use a scoped bootstrap token rather than the user’s full-long-lived session token.
 
 ## Implementation Notes
 
-- The local daemon should accept hydrated tokens from the UI through a local bootstrap channel such as headers, environment variables, or a small local config payload.
+- The local daemon should accept a daemon bootstrap credential from the UI through a local bootstrap channel such as headers, environment variables, or a small local config payload.
+- The daemon should exchange that bootstrap credential with HQ to obtain its own short-lived sync token pair and keep those in memory only.
 - The daemon should not create a second identity model; it should reuse the same session-token validation logic already present in the UI auth layer.
 - HQ should treat the local daemon as a delegated authenticated client, not as a standalone user.
-- The UI remains the root of trust for authentication and renewal.
+- The UI remains the root of trust for authentication and renewal, including the bootstrap handoff and the refresh flow.
 
 ## Planned Product Workflow
 
@@ -122,8 +136,8 @@ The intended product flow is intentionally simple and host-centric:
 3. When local mode is selected, the UI uses the configured local agent URL as the active endpoint when HQ is offline or unavailable.
 4. The local daemon is treated as a manually startable host process: the user or installer starts it explicitly, and the UI connects to it once it is available.
 5. If the daemon is not reachable, the UI notifies the user that the local agent is unavailable and offers a "Reconnect to local agent" action so the user can retry the connection after fixing the local installation or starting the daemon manually.
-6. The UI passes the signed access token, refresh token, and HQ connection context to the daemon over localhost so the daemon can continue using the same authenticated identity without requiring a separate login flow.
-7. In the simple/default mode, the daemon does not create its own session lifecycle; it relies on the client-supplied token and renewal metadata.
+6. The UI passes a daemon bootstrap credential and HQ connection context to the daemon over localhost so the daemon can request its own short-lived sync token pair without requiring a separate login flow.
+7. In the simple/default mode, the daemon does not create its own independent user session; it relies on the bootstrap credential, its daemon access/refresh token pair, and the UI for renewal when needed.
 8. The long-term host integration can optionally let the daemon be registered with the host OS so it can auto-start on login or boot, but the first version only needs reliable manual startup, explicit configuration, and graceful recovery.
 
 This keeps the product straightforward for everyday users while leaving room for richer host-to-HQ integrations later.

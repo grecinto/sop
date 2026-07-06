@@ -402,6 +402,10 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
+
+	// HQ Federation / Central Memory Endpoints
+	mux.HandleFunc("/api/daemon/hq-sync", WithAuth(HandleHQSync))
+	mux.HandleFunc("/api/daemon/hq-retrieve", WithAuth(HandleHQRetrieve))
 }
 
 // StartBackgroundService starts the shared background service loop for the backend.

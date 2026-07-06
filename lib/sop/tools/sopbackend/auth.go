@@ -2693,12 +2693,27 @@ func (s *SessionStore) getStore(ctx context.Context) (btree.BtreeInterface[strin
 		return nil, nil, fmt.Errorf("session store failed to begin transaction: %v", err)
 	}
 
+	exists, err := db.StoreExists(ctx, s.storeName)
+	if err != nil {
+		tx.Rollback(ctx)
+		return nil, nil, fmt.Errorf("session store failed to inspect store existence: %v", err)
+	}
+
+	if exists {
+		store, err := database.OpenBtree[string, SessionRecord](ctx, db.Options(), s.storeName, tx, nil)
+		if err != nil {
+			tx.Rollback(ctx)
+			return nil, nil, fmt.Errorf("session store failed to open existing store: %v", err)
+		}
+		return store, tx, nil
+	}
+
 	options := sop.ConfigureStore(s.storeName, true, 1000, "System sessions", sop.SmallData, "")
 	options.IsPrimitiveKey = true
 	store, err := database.NewBtree[string, SessionRecord](ctx, db.Options(), s.storeName, tx, nil, options)
 	if err != nil {
 		tx.Rollback(ctx)
-		return nil, nil, fmt.Errorf("session store failed to open/create store: %v", err)
+		return nil, nil, fmt.Errorf("session store failed to create store: %v", err)
 	}
 
 	return store, tx, nil

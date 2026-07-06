@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -68,5 +70,92 @@ func TestHandleBootstrapUsesCurrentBootstrapSecretFromDisk(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleBootstrapAcceptsSignedBootstrapToken(t *testing.T) {
+	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute)}
+	accessToken, _, err := h.sessionStore.CreateSession(context.Background(), "alice", "daemon-user")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(fmt.Sprintf(`{"bootstrap_token":"%s"}`, accessToken)))
+	rr := httptest.NewRecorder()
+
+	h.HandleBootstrap(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["access_token"] == "" {
+		t.Fatalf("expected daemon access token in response, got %#v", body)
+	}
+}
+
+func TestRequireAuthAcceptsHQSignedTokens(t *testing.T) {
+	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute), hqSigningSecret: "hq-secret"}
+	token, err := h.signHQAccessToken("hq-user", "daemon-user", []string{"ask", "memory"}, time.Now().Add(5*time.Minute), "hq-token-1")
+	if err != nil {
+		t.Fatalf("sign hq token: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	var gotAuth sop.AuthContext
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = sop.GetAuthFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	h.RequireAuth(next)(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusNoContent, rr.Code, rr.Body.String())
+	}
+	if gotAuth.UserID != "hq-user" {
+		t.Fatalf("expected user id hq-user, got %q", gotAuth.UserID)
+	}
+	if len(gotAuth.Roles) != 1 || gotAuth.Roles[0] != "daemon-user" {
+		t.Fatalf("expected role daemon-user, got %#v", gotAuth.Roles)
+	}
+}
+
+func TestHandleHQAuthIssuesDaemonTokensForSignedHQToken(t *testing.T) {
+	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute), hqSigningSecret: "hq-secret"}
+	token, err := h.signHQAccessToken("hq-user", "daemon-user", []string{"ask", "memory"}, time.Now().Add(5*time.Minute), "hq-token-2")
+	if err != nil {
+		t.Fatalf("sign hq token: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/hq-auth", strings.NewReader(fmt.Sprintf(`{"access_token":"%s"}`, token)))
+	rr := httptest.NewRecorder()
+
+	h.HandleHQAuth(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["access_token"] == "" {
+		t.Fatalf("expected daemon access token in response, got %#v", body)
+	}
+}
+
+func TestSyncWithHQReturnsNilForValidHandler(t *testing.T) {
+	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute)}
+	if err := h.syncWithHQ(context.Background()); err != nil {
+		t.Fatalf("syncWithHQ() error = %v", err)
 	}
 }

@@ -14,6 +14,59 @@ Extend the current long-term memory (LTM) system into a general-purpose, capabil
 
 This plan is intended to be updated as work is completed.
 
+## V1 Shared Central-Memory Scope
+
+For V1, the HQ layer should remain deliberately narrow. The shared layer should only cover the capabilities that are meaningfully shared across nodes and that cannot be supplied well by local-only memory.
+
+The four V1 capabilities to prioritize are:
+
+For V1, the shared central-memory layer should be implemented as a logical scope in the backend handlers that maps to the existing root service-account LTM store. In practice, this means the central-memory path will resolve to the root SA user's LTM, represented by `ltm_root`, while still being treated as a distinct shared-memory scope for routing, policy, and retrieval.
+
+This gives us a minimal, practical architecture:
+- local memory remains the primary runtime memory for private and immediate context
+- central memory is a shared logical layer for promoted patterns and reusable guidance
+- the backing store is the existing root SA LTM for now, which is sufficient to validate the feature end to end
+
+### Implementation requirements
+
+- The shared-memory work must be additive and must not break existing features.
+- Existing local-memory, routing, and workflow flows must continue to work unchanged when the shared layer is absent or unavailable.
+- Central-memory behavior should be opt-in or gracefully degraded so current users are not affected.
+- The initial implementation should preserve backward compatibility with current client and server behavior.
+
+The four V1 capabilities to prioritize are:
+
+1. Shared learned playbooks
+   - promote successful repair, debug, refactor, and verification patterns from many local runs into reusable playbooks
+2. Shared anti-pattern and failure memory
+   - capture recurring mistakes, regressions, and failure modes so future nodes can avoid them
+3. Cross-node retrieval and ranking
+   - allow each client node to ask HQ for the most relevant shared patterns for its current repo, language, task, or domain
+4. Versioned language KB distribution
+   - centrally manage and ship curated KBs for supported stacks such as Go, Python, Rust, and others, then update them centrally for all clients
+
+These capabilities should complement local memory rather than replace it. Local memory remains the home for private context, environment-specific state, and fast local execution. HQ memory is for generalizable, shared intelligence.
+
+## HQ Server and Bandwidth Requirements
+
+V1 requires a modest but reliable HQ service. The shared-memory backend should include:
+
+- an API and ingestion service for local nodes to submit compact signals and retrieve shared patterns
+- a vector retrieval service or embedding-backed search layer
+- durable storage for promoted memory objects, KB payloads, and metadata
+- auth, policy enforcement, logging, and observability
+
+Suggested baseline for an initial V1 rollout:
+
+- 2 x 16-core CPU nodes or equivalent, for roughly 32 vCPU total
+- 64 GB RAM
+- 2 TB NVMe SSD storage for indexes, memory objects, and KB payloads
+- 1 Gbps uplink minimum, 10 Gbps preferred
+- 99.9% availability target for the shared-memory service
+- optional managed Redis/Postgres/vector database services for faster retrieval and operational simplicity
+
+A GPU is not required for V1 if embeddings are generated on the client side or via a managed embedding service. The main bottlenecks are low-latency retrieval, durable storage, and predictable network bandwidth for syncing KBs and shared patterns.
+
 ## V1 Coding-Workflow Direction
 
 For V1, the coding workflow should be built around high-quality repository-aware memory rather than a generic chat memory layer. The system should be able to retrieve the right repo context, remember prior edits and patterns, and ground future work in the active project.
@@ -216,6 +269,20 @@ Acceptance criteria:
 - [x] Add tests for stale-memory detection and cleanup behavior.
 - [x] Update this document whenever a milestone is completed.
 - [x] Add or update developer-facing documentation for the new memory model.
+
+### Phase 7 — HQ Shared-Memory Infrastructure and Rollout
+
+- [ ] Implement shared playbook promotion from local nodes to HQ.
+- [ ] Implement shared anti-pattern and failure-memory promotion and retrieval.
+- [ ] Implement cross-node retrieval and ranking for shared patterns.
+- [ ] Implement versioned language-KB distribution and update pipelines.
+- [ ] Stand up HQ API, storage, auth, logging, and observability for the shared layer.
+- [ ] Define capacity planning, traffic budgets, and scaling rules for the initial rollout.
+
+Acceptance criteria:
+- Shared patterns can be promoted from local usage into HQ and retrieved by future nodes.
+- The HQ service can serve retrieval requests with acceptable latency for the V1 beta audience.
+- Curated KBs can be published centrally and distributed to client nodes without manual per-host updates.
 
 ## Suggested Implementation Order
 
