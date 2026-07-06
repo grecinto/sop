@@ -70,6 +70,13 @@ func (kb *KnowledgeBase[T]) UpsertCategories(ctx context.Context, params []Upser
 		return err
 	}
 
+	// Track parent updates to apply after all categories are processed
+	type parentUpdate struct {
+		parentID sop.UUID
+		childID  sop.UUID
+	}
+	var parentUpdates []parentUpdate
+
 	for _, p := range params {
 		if p.Category == nil {
 			continue
@@ -85,6 +92,18 @@ func (kb *KnowledgeBase[T]) UpsertCategories(ctx context.Context, params []Upser
 
 		parentMap := make(map[sop.UUID]bool)
 		var finalParents []CategoryParent
+
+		// Include ParentIDs already set in the Category
+		if p.Category != nil {
+			for _, parent := range p.Category.ParentIDs {
+				if !parent.ParentID.IsNil() && !parentMap[parent.ParentID] {
+					parentMap[parent.ParentID] = true
+					finalParents = append(finalParents, parent)
+				}
+			}
+		}
+
+		// Add ParentIDs from the parameter
 		for _, pid := range p.ParentIDs {
 			if !parentMap[pid] {
 				parentMap[pid] = true
@@ -98,6 +117,7 @@ func (kb *KnowledgeBase[T]) UpsertCategories(ctx context.Context, params []Upser
 		}
 
 		found, _ := catBtree.Find(ctx, p.Category.ID, false)
+		isNewCategory := !found
 		if found {
 			_, err = catBtree.Update(ctx, p.Category.ID, p.Category)
 			if err != nil {
@@ -107,6 +127,18 @@ func (kb *KnowledgeBase[T]) UpsertCategories(ctx context.Context, params []Upser
 			_, err = catBtree.Add(ctx, p.Category.ID, p.Category)
 			if err != nil {
 				return err
+			}
+		}
+
+		// Queue parent updates for new categories with parents
+		if isNewCategory {
+			for _, parentRel := range finalParents {
+				if !parentRel.ParentID.IsNil() {
+					parentUpdates = append(parentUpdates, parentUpdate{
+						parentID: parentRel.ParentID,
+						childID:  p.Category.ID,
+					})
+				}
 			}
 		}
 
@@ -141,6 +173,29 @@ func (kb *KnowledgeBase[T]) UpsertCategories(ctx context.Context, params []Upser
 			}
 		}
 	}
+
+	// Apply parent updates after all categories have been processed
+	for _, update := range parentUpdates {
+		found, _ := catBtree.Find(ctx, update.parentID, false)
+		if found {
+			parent, _ := catBtree.GetCurrentValue(ctx)
+			if parent != nil {
+				// Check if child is already in parent's ChildrenIDs
+				alreadyChild := false
+				for _, childID := range parent.ChildrenIDs {
+					if childID == update.childID {
+						alreadyChild = true
+						break
+					}
+				}
+				if !alreadyChild {
+					parent.ChildrenIDs = append(parent.ChildrenIDs, update.childID)
+					_, _ = catBtree.Update(ctx, update.parentID, parent)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

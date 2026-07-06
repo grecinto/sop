@@ -68,6 +68,9 @@ func resetSiteAccountDBForTest(t *testing.T) {
 	})
 
 	t.Cleanup(func() {
+		siteAccountDBMu.Lock()
+		siteAccountDBInst = nil
+		siteAccountDBMu.Unlock()
 		_ = os.Chdir(wd)
 		sopbackend.SetConfig(sopbackend.Config{})
 	})
@@ -224,6 +227,49 @@ func TestRegisterUserWithRequestRepairsExistingAccountWithoutHash(t *testing.T) 
 	}
 	if strings.TrimSpace(user.PasswordHash) == "" {
 		t.Fatal("expected RegisterUserWithRequest() to repair the missing password hash")
+	}
+}
+
+func TestUpdateSubscriptionPlanSyncsToSharedBackendAuthUser(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-shared-auth-sync")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "shared-auth-sync@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	updated, err := cfg.UpdateSubscriptionPlanWithRequest(context.Background(), UpdateSubscriptionPlanRequest{
+		Username:             username,
+		SubscriptionPlan:     "hq",
+		SubscriptionFeatures: []string{"copilot", "shared-memory"},
+		RequestOrigin:        "site",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSubscriptionPlanWithRequest() error = %v", err)
+	}
+	if updated == nil || updated.SubscriptionPlan != "hq" {
+		t.Fatalf("UpdateSubscriptionPlanWithRequest() returned %+v", updated)
+	}
+
+	sharedCfg := sopbackend.GetConfig()
+	sharedUser, ok, err := sharedCfg.FindUserRecord(context.Background(), username)
+	if err != nil {
+		t.Fatalf("shared cfg FindUserRecord() error = %v", err)
+	}
+	if !ok || sharedUser == nil {
+		t.Fatalf("shared cfg FindUserRecord() did not find %q", username)
+	}
+	if sharedUser.SubscriptionPlan != "hq" {
+		t.Fatalf("shared user plan = %q, want %q", sharedUser.SubscriptionPlan, "hq")
+	}
+	if !reflect.DeepEqual(sharedUser.SubscriptionFeatures, []string{"copilot", "shared-memory"}) {
+		t.Fatalf("shared user features = %v, want %v", sharedUser.SubscriptionFeatures, []string{"copilot", "shared-memory"})
 	}
 }
 

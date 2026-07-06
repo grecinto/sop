@@ -1929,7 +1929,7 @@ func buildSelectedSpaceGenerationGuidance(systemPrompt, purpose, query string) s
 	if strings.Contains(query, "test") || strings.Contains(query, "coverage") || strings.Contains(query, "parser") || strings.Contains(query, "implement") || strings.Contains(query, "bug") || strings.Contains(query, "fix") {
 		parts = append(parts, "for code changes, prefer minimal diffs, add tests where appropriate, and surface uncertainties")
 	}
-	parts = append(parts, "before answering, generating code, or acting, first research the selected Space by using the prompt and prior Ask turns to generate focused nested categories, then read the most relevant items/thoughts in those branches rather than consuming the entire Space")
+	parts = append(parts, "before answering, generating code, or acting, first research the selected knowledge base/Space or LTM memory by using the prompt and prior Ask turns to generate focused nested categories, then read the most relevant items/thoughts in those branches rather than consuming the entire knowledge source")
 	if len(parts) == 0 {
 		return ""
 	}

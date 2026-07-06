@@ -617,19 +617,8 @@ func trySharedMemoryContext(ctx context.Context, query, userID string) (string, 
 		return "", nil
 	}
 
-	queryLower := strings.ToLower(query)
-
 	// Determine relevant categories based on query intent
-	var categories []FederatedContentCategory
-	if strings.Contains(queryLower, "error") || strings.Contains(queryLower, "fix") || strings.Contains(queryLower, "bug") || strings.Contains(queryLower, "failing") {
-		categories = []FederatedContentCategory{CategoryErrorResolution, CategoryRepairStrategy, CategoryAntiPattern}
-	} else if strings.Contains(queryLower, "test") {
-		categories = []FederatedContentCategory{CategoryWorkflowPattern, CategoryToolPreference}
-	} else if strings.Contains(queryLower, "refactor") || strings.Contains(queryLower, "improve") {
-		categories = []FederatedContentCategory{CategoryWorkflowPattern, CategorySafetyHeuristic}
-	} else if strings.Contains(queryLower, "implement") || strings.Contains(queryLower, "create") || strings.Contains(queryLower, "add") {
-		categories = []FederatedContentCategory{CategoryWorkflowPattern, CategoryContextGathering}
-	}
+	categories := selectRelevantCategories(query)
 
 	// Use category-based retrieval for better context
 	context, err := RetrieveFederatedContext(ctx, query, categories, 5)
@@ -649,58 +638,9 @@ func promoteSharedMemoryArtifactForAsk(ctx context.Context, query, answer string
 		return nil
 	}
 
-	queryLower := strings.ToLower(query)
-	answerLower := strings.ToLower(answer)
-
-	// Determine category and confidence based on query/answer patterns
-	var category FederatedContentCategory
-	var confidence float64
-	var shouldShare bool
-
-	// Error resolution patterns (high value)
-	if strings.Contains(queryLower, "error") || strings.Contains(queryLower, "fix") || strings.Contains(queryLower, "bug") {
-		if strings.Contains(answerLower, "fixed") || strings.Contains(answerLower, "resolved") || strings.Contains(answerLower, "corrected") {
-			category = CategoryErrorResolution
-			confidence = 0.85
-			shouldShare = true
-		}
-	}
-
-	// Workflow patterns
-	if strings.Contains(queryLower, "implement") || strings.Contains(queryLower, "create") || strings.Contains(queryLower, "add feature") {
-		if len(answer) > 200 { // Substantial implementation
-			category = CategoryWorkflowPattern
-			confidence = 0.75
-			shouldShare = true
-		}
-	}
-
-	// Test-related patterns
-	if strings.Contains(queryLower, "test") {
-		category = CategoryWorkflowPattern
-		confidence = 0.80
-		shouldShare = true
-	}
-
-	// Refactoring patterns
-	if strings.Contains(queryLower, "refactor") || strings.Contains(queryLower, "improve") {
-		category = CategoryWorkflowPattern
-		confidence = 0.78
-		shouldShare = true
-	}
-
-	// Anti-patterns (errors or failures)
-	if strings.Contains(answerLower, "error") || strings.Contains(answerLower, "failed") || strings.Contains(answerLower, "cannot") {
-		category = CategoryAntiPattern
-		confidence = 0.70
-		shouldShare = true
-	}
-
+	category, confidence, shouldShare := categorizeFederationArtifact(query, answer)
 	if !shouldShare {
-		// Default: still promote but with lower confidence
-		category = CategoryWorkflowPattern
-		confidence = 0.65
-		shouldShare = len(query) > 20 && len(answer) > 50 // Only if substantial
+		shouldShare = shouldPromoteFederationArtifact(query, answer, category, confidence)
 	}
 
 	metadata := map[string]any{

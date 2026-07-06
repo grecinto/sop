@@ -115,6 +115,7 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -427,19 +428,25 @@ func collectSharedMemoryArtifacts(ctx context.Context) ([]struct {
 			category = strings.TrimSpace(cat)
 		}
 
-		// Extract metadata while filtering out large or sensitive fields
+		// Extract metadata while preserving structured references for knowledge artifacts.
 		metadata := make(map[string]any)
 		for k, v := range hit.Payload {
 			if k == "text" || k == "category" {
 				continue
 			}
-			// Include small metadata fields only
-			if str, ok := v.(string); ok && len(str) < 1000 {
-				metadata[k] = str
-			} else if _, ok := v.(float64); ok {
+			switch typed := v.(type) {
+			case string:
+				if len(typed) < 1000 {
+					metadata[k] = typed
+				}
+			case float64, bool:
 				metadata[k] = v
-			} else if _, ok := v.(bool); ok {
-				metadata[k] = v
+			case map[string]any:
+				metadata[k] = typed
+			case []any:
+				metadata[k] = typed
+			case []string:
+				metadata[k] = typed
 			}
 		}
 
@@ -596,7 +603,74 @@ func (h *DaemonAuthHandler) pullFromHQ(ctx context.Context, hqBaseURL string) er
 
 // storeRetrievedArtifacts stores artifacts retrieved from HQ in local shared memory.
 func (h *DaemonAuthHandler) storeRetrievedArtifacts(ctx context.Context, artifacts []hqArtifact) error {
-	return nil // TODO: Implement local storage when needed
+	if len(artifacts) == 0 {
+		return nil
+	}
+
+	db, err := sharedMemoryDatabase()
+	if err != nil {
+		return fmt.Errorf("get shared memory database: %w", err)
+	}
+
+	for _, artifact := range artifacts {
+		text := strings.TrimSpace(artifact.Text)
+		if text == "" {
+			continue
+		}
+
+		category := strings.TrimSpace(artifact.Category)
+		if category == "" {
+			category = "shared_memory"
+		}
+
+		// Enrich metadata with HQ origin
+		metadata := artifact.Metadata
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		metadata["origin"] = "hq"
+		metadata["retrieved_at"] = time.Now().UTC().Format(time.RFC3339)
+
+		artifactRef := ai.ExtractArtifactReference(metadata["artifact_ref"])
+		if artifactRef.Name != "" || artifactRef.DatabaseName != "" || artifactRef.Type != "" {
+			if err := agent.PromoteKnowledgeArtifact(
+				ctx,
+				db,
+				nil, // LLM not required
+				nil, // Embedder handled by PromoteKnowledgeArtifact
+				text,
+				artifactRef,
+				artifactRef.Name,
+				category,
+				"daemon",
+				"hq-federation",
+				metadata,
+			); err != nil {
+				log.Printf("Failed to store retrieved artifact: %v", err)
+				// Continue with remaining artifacts instead of failing completely
+			}
+			continue
+		}
+
+		// Store in local shared memory for immediate reuse
+		if err := agent.PromoteSharedMemoryArtifact(
+			ctx,
+			db,
+			nil, // LLM not required
+			nil, // Embedder handled by PromoteSharedMemoryArtifact
+			text,
+			"shared_memory",
+			category,
+			"daemon",
+			"hq-federation",
+			metadata,
+		); err != nil {
+			log.Printf("Failed to store retrieved artifact: %v", err)
+			// Continue with remaining artifacts instead of failing completely
+		}
+	}
+
+	return nil
 }
 
 // HandleBootstrap handles initial authentication with bootstrap secret

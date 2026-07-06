@@ -145,6 +145,86 @@ func buildArtifactText(artifact FederatedArtifact) string {
 	return strings.Join(parts, "\n")
 }
 
+// selectRelevantCategories maps a user query to the most relevant federated categories.
+func selectRelevantCategories(query string) []FederatedContentCategory {
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	if queryLower == "" {
+		return nil
+	}
+
+	switch {
+	case strings.Contains(queryLower, "security"), strings.Contains(queryLower, "auth"), strings.Contains(queryLower, "secret"), strings.Contains(queryLower, "token"), strings.Contains(queryLower, "permission"), strings.Contains(queryLower, "vulner"):
+		return []FederatedContentCategory{CategorySecurityPattern, CategorySafetyHeuristic}
+	case strings.Contains(queryLower, "slow"), strings.Contains(queryLower, "performance"), strings.Contains(queryLower, "latency"), strings.Contains(queryLower, "cache"), strings.Contains(queryLower, "optimiz"):
+		return []FederatedContentCategory{CategoryPerformanceOptimization, CategoryToolPreference}
+	case strings.Contains(queryLower, "test"), strings.Contains(queryLower, "coverage"):
+		return []FederatedContentCategory{CategoryTestingStrategy, CategoryWorkflowPattern}
+	case strings.Contains(queryLower, "error"), strings.Contains(queryLower, "fix"), strings.Contains(queryLower, "bug"), strings.Contains(queryLower, "failing"):
+		return []FederatedContentCategory{CategoryErrorResolution, CategoryRepairStrategy, CategoryAntiPattern}
+	case strings.Contains(queryLower, "refactor"), strings.Contains(queryLower, "improve"), strings.Contains(queryLower, "clean"):
+		return []FederatedContentCategory{CategoryWorkflowPattern, CategoryCodeQuality, CategorySafetyHeuristic}
+	case strings.Contains(queryLower, "api"), strings.Contains(queryLower, "endpoint"), strings.Contains(queryLower, "route"), strings.Contains(queryLower, "rest"):
+		return []FederatedContentCategory{CategoryAPIDesign, CategoryWorkflowPattern}
+	case strings.Contains(queryLower, "implement"), strings.Contains(queryLower, "create"), strings.Contains(queryLower, "add"), strings.Contains(queryLower, "feature"):
+		return []FederatedContentCategory{CategoryWorkflowPattern, CategoryContextGathering}
+	default:
+		return []FederatedContentCategory{CategoryWorkflowPattern}
+	}
+}
+
+// categorizeFederationArtifact classifies a successful interaction into a federated category.
+func categorizeFederationArtifact(query, answer string) (FederatedContentCategory, float64, bool) {
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	answerLower := strings.ToLower(strings.TrimSpace(answer))
+	if queryLower == "" || answerLower == "" {
+		return CategoryWorkflowPattern, 0.65, false
+	}
+
+	switch {
+	case strings.Contains(queryLower, "error") || strings.Contains(queryLower, "fix") || strings.Contains(queryLower, "bug"):
+		if strings.Contains(answerLower, "fixed") || strings.Contains(answerLower, "resolved") || strings.Contains(answerLower, "corrected") {
+			return CategoryErrorResolution, 0.85, true
+		}
+	case strings.Contains(queryLower, "implement") || strings.Contains(queryLower, "create") || strings.Contains(queryLower, "add feature"):
+		if len(answer) > 200 {
+			return CategoryWorkflowPattern, 0.75, true
+		}
+	case strings.Contains(queryLower, "test"):
+		return CategoryTestingStrategy, 0.80, true
+	case strings.Contains(queryLower, "refactor") || strings.Contains(queryLower, "improve"):
+		return CategoryWorkflowPattern, 0.78, true
+	case strings.Contains(answerLower, "error") || strings.Contains(answerLower, "failed") || strings.Contains(answerLower, "cannot"):
+		return CategoryAntiPattern, 0.70, true
+	}
+
+	if len(query) > 20 && len(answer) > 50 {
+		return CategoryWorkflowPattern, 0.65, true
+	}
+
+	return CategoryWorkflowPattern, 0.65, false
+}
+
+// shouldPromoteFederationArtifact decides whether a candidate artifact is valuable enough to share.
+func shouldPromoteFederationArtifact(query, answer string, category FederatedContentCategory, confidence float64) bool {
+	if strings.TrimSpace(query) == "" || strings.TrimSpace(answer) == "" {
+		return false
+	}
+	if confidence < defaultPromotionConfig.MinConfidence {
+		return false
+	}
+	if len(answer) < 20 {
+		return false
+	}
+	if len(query) < 4 && len(answer) < 50 {
+		return false
+	}
+	if strings.Contains(strings.ToLower(answer), "i don't know") || strings.Contains(strings.ToLower(answer), "not sure") {
+		return false
+	}
+	_ = category
+	return true
+}
+
 // SeedInitialFederatedContent creates high-value initial patterns for the fleet.
 // This should be called on daemon startup to ensure baseline intelligence.
 func SeedInitialFederatedContent(ctx context.Context) error {

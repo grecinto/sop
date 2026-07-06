@@ -1139,6 +1139,16 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 			break
 		}
 	}
+
+	sharedCfg := sopbackend.GetConfig()
+	if _, err := sharedCfg.UpdateSubscriptionPlanWithRequest(ctx, sopbackend.UpdateSubscriptionPlanRequest{
+		Username:             username,
+		SubscriptionPlan:     req.SubscriptionPlan,
+		SubscriptionFeatures: append([]string(nil), req.SubscriptionFeatures...),
+	}); err != nil {
+		return nil, err
+	}
+	sopbackend.SetConfig(sharedCfg)
 	return user, nil
 }
 

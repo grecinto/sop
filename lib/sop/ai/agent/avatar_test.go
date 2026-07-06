@@ -178,7 +178,7 @@ func TestBuildAvatarPrompt_UsesRoutingGateContinuityForCompactExpertContext(t *t
 	if strings.Contains(prompt, "SystemPrompt: You are the Medical Expert.") {
 		t.Fatalf("expected continuity routing to keep selected-space system prompt compact, got: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Continuing with the selected knowledge Space \"medical\"") {
+	if !strings.Contains(prompt, "Continuing with the selected knowledge base/Space \"medical\" or LTM memory") {
 		t.Fatalf("expected continuity routing to preserve compact expert framing, got: %s", prompt)
 	}
 }
@@ -221,7 +221,7 @@ func TestBuildAvatarPrompt_DoesNotRepeatSelectedSpaceSystemPromptOnContinuation(
 	if strings.Contains(secondPrompt, "SystemPrompt: You are the Medical Expert.") {
 		t.Fatalf("expected continuation avatar prompt to avoid repeating the selected-space system prompt, got: %s", secondPrompt)
 	}
-	if !strings.Contains(secondPrompt, "Continuing with the selected knowledge Space \"medical\"") {
+	if !strings.Contains(secondPrompt, "Continuing with the selected knowledge base/Space \"medical\" or LTM memory") {
 		t.Fatalf("expected continuation avatar prompt to retain compact expert framing, got: %s", secondPrompt)
 	}
 }

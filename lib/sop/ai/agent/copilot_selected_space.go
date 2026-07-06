@@ -88,23 +88,23 @@ func (a *CopilotAgent) selectedSpaceExpertContext(ctx context.Context, query str
 
 	if compact {
 		if len(selected) == 1 {
-			return fmt.Sprintf("Selected Space Expert Context:\nContinuing with the selected knowledge Space %q. Maintain that Space's expert framing, answer from its guidance, and clearly say when the requested information is not present in that Space.", selected[0])
+			return fmt.Sprintf("Selected Space Expert Context:\nContinuing with the selected knowledge base/Space %q or LTM memory. Maintain that knowledge source's expert framing when it is relevant, otherwise draw from LTM memory, and clearly say when the requested information is not present in either source.", selected[0])
 		}
-		return fmt.Sprintf("Selected Space Expert Context:\nContinuing with the selected knowledge Spaces %s. Maintain their expert framing, answer from their guidance, and clearly say when the requested information is not present in those Spaces.", strings.Join(selected, ", "))
+		return fmt.Sprintf("Selected Space Expert Context:\nContinuing with the selected knowledge base/Spaces %s or LTM memory. Maintain their expert framing when it is relevant, otherwise draw from LTM memory, and clearly say when the requested information is not present in either source.", strings.Join(selected, ", "))
 	}
 
 	if len(sections) == 0 {
 		if len(selected) == 1 {
-			return fmt.Sprintf("Selected Space Expert Context:\nExpert grounding active: treat the selected knowledge Space %q as your primary source of truth for this request. Prefer grounded answers over generic speculation, and clearly say when the requested information is not present in that Space.", selected[0])
+			return fmt.Sprintf("Selected Space Expert Context:\nExpert grounding active: treat the selected knowledge base/Space %q or LTM memory as the available grounding source for this request. Prefer the selected knowledge base/Space when it is relevant and otherwise use LTM memory, and clearly say when the requested information is not present in either source.", selected[0])
 		}
-		return fmt.Sprintf("Selected Space Expert Context:\nExpert grounding active: treat the selected knowledge Spaces %s as your primary sources of truth for this request. Prefer grounded answers over generic speculation, and clearly say when the requested information is not present in those Spaces.", strings.Join(selected, ", "))
+		return "Selected Space Expert Context:\nExpert grounding active: treat the selected knowledge base/Space or LTM memory as the available grounding source for this request. Prefer the selected knowledge base/Space when it is relevant and otherwise use LTM memory, and clearly say when the requested information is not present in either source."
 	}
 
 	var intro string
 	if len(selected) == 1 {
-		intro = fmt.Sprintf("Expert grounding active: treat the selected knowledge Space %q as your primary source of truth for this request. Prefer grounded answers over generic speculation, and clearly say when the requested information is not present in that Space.", selected[0])
+		intro = fmt.Sprintf("Expert grounding active: treat the selected knowledge base/Space %q or LTM memory as the available grounding source for this request. Prefer the selected knowledge base/Space when it is relevant and otherwise use LTM memory, and clearly say when the requested information is not present in either source.", selected[0])
 	} else {
-		intro = fmt.Sprintf("Expert grounding active: treat the selected knowledge Spaces %s as your primary sources of truth for this request. Prefer grounded answers over generic speculation, and clearly say when the requested information is not present in those Spaces.", strings.Join(selected, ", "))
+		intro = "Expert grounding active: treat the selected knowledge base/Space or LTM memory as the available grounding source for this request. Prefer the selected knowledge base/Space when it is relevant and otherwise use LTM memory, and clearly say when the requested information is not present in either source."
 	}
 
 	return "Selected Space Expert Context:\n" + intro + "\n\n" + strings.Join(sections, "\n\n")
@@ -174,7 +174,7 @@ func (a *CopilotAgent) selectedSpaceStructuredBriefContext(ctx context.Context, 
 		purpose = strings.TrimSpace(cfg.SystemPrompt)
 	}
 	if purpose == "" {
-		purpose = fmt.Sprintf("Use the %q Space as the authoritative grounding source for the current request.", kbRef.Name)
+		purpose = fmt.Sprintf("Use the %q knowledge base/Space as the authoritative grounding source when it is relevant; otherwise rely on LTM memory for the current request.", kbRef.Name)
 	}
 
 	var categories []string
@@ -219,11 +219,12 @@ func (a *CopilotAgent) selectedSpaceStructuredBriefContext(ctx context.Context, 
 		"Use conservative language when the evidence is limited.",
 	}
 	researchWorkflow := []string{
-		"Investigate the Space methodically by treating categories as semantic anchors: start with the top-level categories, then drill into nested categories and subcategories as needed.",
-		"Use search_space first, based on the formulated semantic categories at each level, to find the most relevant content before broad browsing.",
+		"Investigate the selected knowledge base/Space or LTM memory methodically by treating categories as semantic anchors: start with the top-level categories, then drill into nested categories and subcategories as needed.",
+		"Use search_space first when a selected Space is available, based on the formulated semantic categories at each level, to find the most relevant content before broad browsing.",
 		"Use list_space_categories as a fallback when semantic search does not yield enough structure, and use list_space_items to inspect items within a category once a promising branch is identified.",
+		"If the selected Space is not the best fit, fall back to LTM memory and gather evidence from the most relevant remembered guidance before answering.",
 		"Formulate and compare candidate categories for the prompt, then hunt for the most relevant category branches before answering.",
-		"Treat the Space as a hierarchy of knowledge: categories -> subcategories -> items/thoughts; gather evidence from the most specific relevant branch before answering.",
+		"Treat the available knowledge source as a hierarchy of knowledge: categories -> subcategories -> items/thoughts; gather evidence from the most specific relevant branch before answering.",
 		"If the query is broad, first identify the likely semantic branches, then gather and synthesize evidence from those branches.",
 	}
 

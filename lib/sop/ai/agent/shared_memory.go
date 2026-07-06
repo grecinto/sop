@@ -92,6 +92,134 @@ func PromoteSharedMemoryArtifact(
 	return nil
 }
 
+// PromoteKnowledgeArtifact stores a compact artifact into a named knowledge-base entry.
+// When an artifact reference is present, the content becomes selectable as a research source
+// through the existing selected-space/knowledge-base flow.
+func PromoteKnowledgeArtifact(
+	ctx context.Context,
+	db *aidb.Database,
+	llm ai.Generator,
+	embedder ai.Embeddings,
+	text string,
+	artifactRef ai.ArtifactReference,
+	kbName, category, scopeType, scopeID string,
+	payload map[string]any,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if db == nil {
+		return fmt.Errorf("shared memory database is required")
+	}
+	if strings.TrimSpace(kbName) == "" {
+		kbName = strings.TrimSpace(artifactRef.Name)
+	}
+	if strings.TrimSpace(kbName) == "" {
+		kbName = defaultSharedMemoryKBName
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload = copySharedMemoryPayload(payload)
+	payload["knowledge_artifact"] = true
+	payload["artifact_name"] = strings.TrimSpace(artifactRef.Name)
+	payload["artifact_type"] = string(artifactRef.Type)
+	payload["artifact_db_name"] = strings.TrimSpace(artifactRef.DatabaseName)
+	payload["artifact_ref"] = artifactReferencePayload(artifactRef)
+	return PromoteSharedMemoryArtifact(ctx, db, llm, embedder, text, kbName, category, scopeType, scopeID, payload)
+}
+
+// ExtractArtifactReference parses an artifact reference from a generic payload value.
+func ExtractArtifactReference(value any) ai.ArtifactReference {
+	switch ref := value.(type) {
+	case ai.ArtifactReference:
+		return ref
+	case *ai.ArtifactReference:
+		if ref != nil {
+			return *ref
+		}
+	}
+
+	if payload, ok := value.(map[string]any); ok {
+		if nested, ok := payload["artifact_ref"]; ok {
+			return ExtractArtifactReference(nested)
+		}
+		return extractArtifactReferenceFromMap(payload)
+	}
+
+	if payload, ok := value.(map[string]string); ok {
+		return extractArtifactReferenceFromMapString(payload)
+	}
+	return ai.ArtifactReference{}
+}
+
+func extractArtifactReferenceFromMap(payload map[string]any) ai.ArtifactReference {
+	if len(payload) == 0 {
+		return ai.ArtifactReference{}
+	}
+	ref := ai.ArtifactReference{}
+	if name, ok := payload["name"].(string); ok {
+		ref.Name = strings.TrimSpace(name)
+	}
+	if ref.Name == "" {
+		if name, ok := payload["artifact_name"].(string); ok {
+			ref.Name = strings.TrimSpace(name)
+		}
+	}
+	if dbName, ok := payload["db_name"].(string); ok {
+		ref.DatabaseName = strings.TrimSpace(dbName)
+	}
+	if ref.DatabaseName == "" {
+		if dbName, ok := payload["artifact_db_name"].(string); ok {
+			ref.DatabaseName = strings.TrimSpace(dbName)
+		}
+	}
+	if artifactType, ok := payload["type"].(string); ok {
+		ref.Type = ai.ArtifactType(strings.TrimSpace(artifactType))
+	}
+	if ref.Type == "" {
+		if artifactType, ok := payload["artifact_type"].(string); ok {
+			ref.Type = ai.ArtifactType(strings.TrimSpace(artifactType))
+		}
+	}
+	return ref
+}
+
+func extractArtifactReferenceFromMapString(payload map[string]string) ai.ArtifactReference {
+	if len(payload) == 0 {
+		return ai.ArtifactReference{}
+	}
+	ref := ai.ArtifactReference{}
+	if name := strings.TrimSpace(payload["name"]); name != "" {
+		ref.Name = name
+	} else if name := strings.TrimSpace(payload["artifact_name"]); name != "" {
+		ref.Name = name
+	}
+	if dbName := strings.TrimSpace(payload["db_name"]); dbName != "" {
+		ref.DatabaseName = dbName
+	} else if dbName := strings.TrimSpace(payload["artifact_db_name"]); dbName != "" {
+		ref.DatabaseName = dbName
+	}
+	if artifactType := strings.TrimSpace(payload["type"]); artifactType != "" {
+		ref.Type = ai.ArtifactType(artifactType)
+	} else if artifactType := strings.TrimSpace(payload["artifact_type"]); artifactType != "" {
+		ref.Type = ai.ArtifactType(artifactType)
+	}
+	return ref
+}
+
+func artifactReferencePayload(ref ai.ArtifactReference) map[string]any {
+	if ref.Name == "" && ref.DatabaseName == "" && ref.Type == "" {
+		return nil
+	}
+	payload := map[string]any{
+		"name":    strings.TrimSpace(ref.Name),
+		"type":    string(ref.Type),
+		"db_name": strings.TrimSpace(ref.DatabaseName),
+	}
+	return payload
+}
+
 // RetrieveSharedMemory returns the most relevant shared artifacts for a query.
 func RetrieveSharedMemory(
 	ctx context.Context,

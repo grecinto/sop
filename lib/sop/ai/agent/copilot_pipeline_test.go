@@ -898,7 +898,7 @@ func TestBuildSystemPrompt_IncludesSelectedSpaceExpertInstructions(t *testing.T)
 	if !strings.Contains(prompt, "Selected Space Expert Context") {
 		t.Fatalf("expected selected-space guidance in prompt, got: %s", prompt)
 	}
-	if !strings.Contains(focusedContext, "Continuing with the selected knowledge Space") {
+	if !strings.Contains(focusedContext, "Continuing with the selected knowledge base/Space") {
 		t.Fatalf("expected Omni cold start to use compact selected-space guidance, got: %s", prompt)
 	}
 	if strings.Contains(focusedContext, "SystemPrompt: You are the Medical Expert.") {

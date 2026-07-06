@@ -1,8 +1,14 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/ai/memory"
 )
 
 func TestBuildSelectedSpaceResearchContextPartsUsesPriorSuccesses(t *testing.T) {
@@ -40,5 +46,39 @@ func TestSelectedSpaceHasEvidenceRequiresRealGroundingSignals(t *testing.T) {
 	}
 	if !selectedSpaceHasEvidence("", "", "Digest highlights:\n- relevant clause") {
 		t.Fatal("expected selected-space digest to count as evidence")
+	}
+}
+
+func TestBuildSystemPromptMentionsLTMOrSelectedKBAsKnowledgeSources(t *testing.T) {
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ctx := context.Background()
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	kb, err := sysDB.OpenKnowledgeBase(ctx, "medical", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("open kb: %v", err)
+	}
+	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{SystemPrompt: "You are the Medical Expert."}); err != nil {
+		t.Fatalf("set kb config: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	ag := NewCopilotAgent(Config{}, nil, sysDB)
+	promptCtx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		CurrentDB: SystemDBName,
+		SelectedKBs: []ai.ArtifactReference{{
+			Name:         "medical",
+			Type:         ai.ArtifactTypeSpace,
+			DatabaseName: SystemDBName,
+		}},
+	})
+
+	prompt := ag.buildSystemPrompt(promptCtx, "Explain the diagnosis guidance", TaskContextClassification{})
+	if !strings.Contains(prompt, "selected knowledge base/Space") || !strings.Contains(prompt, "LTM memory") {
+		t.Fatalf("expected prompt to describe the knowledge source as either LTM or a selected knowledge base/Space, got: %s", prompt)
 	}
 }
