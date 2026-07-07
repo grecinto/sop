@@ -47,6 +47,9 @@ func materializeCacheValue(node any, nodeTarget any) any {
 		}
 		return nodeTarget
 	}
+	if nodeTarget == node {
+		return node
+	}
 	if materializer, ok := node.(cacheMaterializer); ok && materializer.CopyTo(nodeTarget) {
 		return nodeTarget
 	}

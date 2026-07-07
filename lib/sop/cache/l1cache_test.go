@@ -40,6 +40,21 @@ func TestL1CacheGetNodeFromMRU_DoesNotReturnMismatchedGenericNodeType(t *testing
 	}
 }
 
+func TestL1CacheGetNodeFromMRU_ReturnsConstructedNodeForMatchingTargetType(t *testing.T) {
+	c := NewL1Cache(nil, 1, 2)
+	ctx := context.Background()
+	cachedNode := &btree.Node[string, string]{ID: sop.NewUUID(), Version: 1}
+	c.SetNodeToMRU(ctx, cachedNode.ID, cachedNode, time.Minute)
+
+	handle := sop.NewHandle(cachedNode.ID)
+	handle.Version = cachedNode.Version
+	target := cachedNode
+
+	if got := c.GetNodeFromMRU(handle, target); got != cachedNode {
+		t.Fatalf("expected cached constructed node to be returned directly, got %T", got)
+	}
+}
+
 func BenchmarkL1CacheGetNodeFromMRU(b *testing.B) {
 	c := NewL1Cache(nil, 1, 2)
 	ctx := context.Background()

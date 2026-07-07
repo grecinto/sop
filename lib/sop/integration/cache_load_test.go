@@ -49,6 +49,12 @@ type loadReport struct {
 	ProfileDir    string         `json:"profile_dir,omitempty"`
 }
 
+const (
+	loadTreeCount    = 10
+	loadItemsPerTree = 400
+	loadReadsPerTree = 3
+)
+
 type memorySample struct {
 	ElapsedMs int64   `json:"elapsed_ms"`
 	HeapAlloc float64 `json:"heap_alloc_mb"`
@@ -300,14 +306,16 @@ func seedStore(ctx context.Context, cfg sop.DatabaseOptions, storeName string, i
 		return err
 	}
 	defer tx.Close()
-	store, err := database.NewBtree[string, string](ctx, config, storeName, tx, compareStrings)
-	if err != nil {
-		return err
-	}
-	for i := 0; i < itemCount; i++ {
-		key := fmt.Sprintf("key-%06d", i)
-		if _, err := store.Add(ctx, key, fmt.Sprintf("value-%06d", i)); err != nil {
+	for treeIndex := 0; treeIndex < loadTreeCount; treeIndex++ {
+		store, err := database.NewBtree[string, string](ctx, config, loadTreeName(storeName, treeIndex), tx, compareStrings)
+		if err != nil {
 			return err
+		}
+		for i := 0; i < itemCount; i++ {
+			key := fmt.Sprintf("key-%02d-%06d", treeIndex, i)
+			if _, err := store.Add(ctx, key, fmt.Sprintf("value-%02d-%06d", treeIndex, i)); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit(ctx)
@@ -323,21 +331,88 @@ func runWorkerOperation(ctx context.Context, cfg sop.DatabaseOptions, storeName 
 		return err
 	}
 	defer tx.Close()
-	store, err := database.NewBtree[string, string](ctx, config, storeName, tx, compareStrings)
+
+	activeTreeIndex := (workerID + op) % loadTreeCount
+	activeTreeName := loadTreeName(storeName, activeTreeIndex)
+	activeStore, err := database.NewBtree[string, string](ctx, config, activeTreeName, tx, compareStrings)
 	if err != nil {
 		tx.Rollback(ctx)
 		return err
 	}
-	key := fmt.Sprintf("%s-%d-%d", storeName, workerID, op%200)
-	if _, err := store.Upsert(ctx, key, fmt.Sprintf("value-%d-%d", workerID, op)); err != nil {
+	activeKey := fmt.Sprintf("key-%02d-%06d", activeTreeIndex, (op+workerID)%loadItemsPerTree)
+	if _, err := activeStore.Upsert(ctx, activeKey, fmt.Sprintf("value-%d-%d", workerID, op)); err != nil {
 		tx.Rollback(ctx)
 		return err
 	}
-	if _, err := store.Find(ctx, key, false); err != nil {
+	if _, err := activeStore.Find(ctx, activeKey, false); err != nil {
 		tx.Rollback(ctx)
 		return err
+	}
+	if _, err := activeStore.GetCurrentValue(ctx); err != nil {
+		tx.Rollback(ctx)
+		return err
+	}
+
+	for _, target := range loadReadTargets(storeName, workerID, op) {
+		store, err := database.NewBtree[string, string](ctx, config, target.treeName, tx, compareStrings)
+		if err != nil {
+			tx.Rollback(ctx)
+			return err
+		}
+		for _, key := range target.keys {
+			if _, err := store.Find(ctx, key, false); err != nil {
+				tx.Rollback(ctx)
+				return err
+			}
+			if _, err := store.GetCurrentValue(ctx); err != nil {
+				tx.Rollback(ctx)
+				return err
+			}
+		}
 	}
 	return tx.Commit(ctx)
+}
+
+func loadTreeName(baseName string, treeIndex int) string {
+	return fmt.Sprintf("%s_tree_%02d", baseName, treeIndex)
+}
+
+func loadReadTargets(baseName string, workerID int, op int) []struct {
+	treeName string
+	keys     []string
+} {
+	targets := make([]struct {
+		treeName string
+		keys     []string
+	}, loadReadsPerTree)
+	for i := 0; i < loadReadsPerTree; i++ {
+		treeIndex := (workerID + op + i) % loadTreeCount
+		treeName := loadTreeName(baseName, treeIndex)
+		offsets := []int{(op + i) % loadItemsPerTree, (op + i + 1) % loadItemsPerTree, (op + i + 2) % loadItemsPerTree}
+		keys := make([]string, len(offsets))
+		for j, offset := range offsets {
+			keys[j] = fmt.Sprintf("key-%02d-%06d", treeIndex, offset)
+		}
+		targets[i] = struct {
+			treeName string
+			keys     []string
+		}{treeName: treeName, keys: keys}
+	}
+	return targets
+}
+
+func TestLoadTreeNamesAreDistinct(t *testing.T) {
+	names := make([]string, 0, loadTreeCount)
+	for i := 0; i < loadTreeCount; i++ {
+		names = append(names, loadTreeName("loadstore", i))
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if _, ok := seen[name]; ok {
+			t.Fatalf("expected distinct tree name, got duplicate %q", name)
+		}
+		seen[name] = struct{}{}
+	}
 }
 
 func databaseTypeName(mode sop.DatabaseType) string {

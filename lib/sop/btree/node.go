@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
+	goccyjson "github.com/goccy/go-json"
 	"github.com/sharedcode/sop"
-	"github.com/sharedcode/sop/encoding"
 )
 
 // MetaDataType specifies metadata fields such as ID and Version.
@@ -72,7 +72,7 @@ func (n *Node[TK, TV]) MarshalJSON() ([]byte, error) {
 		Version     int32          `json:"Version"`
 		ChildrenIDs []sop.UUID     `json:"ChildrenIDs,omitempty"`
 	}
-	return encoding.Marshal(nodeData{
+	return goccyjson.Marshal(nodeData{
 		ID:          n.ID,
 		ParentID:    n.ParentID,
 		Slots:       n.Slots[:n.Count],
@@ -102,7 +102,7 @@ func (n *Node[TK, TV]) UnmarshalJSON(data []byte) error {
 		nd.ChildrenIDs = n.ChildrenIDs[:0]
 	}
 
-	if err := encoding.Unmarshal(data, &nd); err != nil {
+	if err := goccyjson.Unmarshal(data, &nd); err != nil {
 		return err
 	}
 
