@@ -275,6 +275,9 @@ The StoreOption field (**IsValueDataInNodeSegment**) defaults to false, which is
 
 Of course, you have to do fine tuning as there are tradeoffs :), determine what works best in your particular situation. As there are quite a few "knobs" you can tweak in SOP to achieve what you want. See below discussions for more details in this area.
 
+### Cache optimization notes
+Use Go's pprof tool to profile memory utilization and use integration tests that create real memory utilization load and pressure. The tests should work with the tool to generate useful reports for analysis.
+
 ## Data Partitioning
 * SOP in File System has the following to address data partitioning:
   - Vertical partitioning (per B-tree/table) is built-in, you can take advantage of this by specifying different drives set in the "storesFolders" & "EC config" of the TransactionOptionsWithReplication. For example, use a different "storesFolders" value & an entry in EC config params (map) for B-tree "store1" and another set for "store2".

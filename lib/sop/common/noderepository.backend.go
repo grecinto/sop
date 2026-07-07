@@ -157,7 +157,9 @@ func (nr *nodeRepositoryBackend) get(ctx context.Context, logicalID sop.UUID, ta
 	if ba, err = nr.transaction.blobStore.GetOne(ctx, nr.storeInfo.BlobTable, nodeID); err != nil {
 		return nil, err
 	}
-	encoding.BlobMarshaler.Unmarshal(ba, target)
+	if err := encoding.BlobMarshaler.Unmarshal(ba, target); err != nil {
+		return nil, err
+	}
 	target.(btree.MetaDataType).SetVersion(h[0].IDs[0].Version)
 
 	// Put to cache layer this node since it got fetched from blob store.

@@ -3,7 +3,7 @@
 package encoding
 
 import (
-	"encoding/json"
+	goccyjson "github.com/goccy/go-json"
 )
 
 // Marshaler defines methods to marshal/unmarshal values to/from byte slices.
@@ -22,20 +22,21 @@ var BlobMarshaler = DefaultMarshaler
 
 type defaultMarshaler struct{}
 
-// NewMarshaler returns a Marshaler implemented with the standard library JSON package.
-// JSON is chosen as default for its streaming capabilities useful for large value payloads.
+// NewMarshaler returns a Marshaler implemented with the goccy/go-json package.
+// It preserves the same API as the standard library while reducing allocations for
+// the hot node and value serialization paths used by the B-tree and repository layers.
 func NewMarshaler() Marshaler {
 	return &defaultMarshaler{}
 }
 
 // Marshal encodes any object to a byte slice.
 func (m defaultMarshaler) Marshal(v any) ([]byte, error) {
-	return json.Marshal(v)
+	return goccyjson.Marshal(v)
 }
 
 // Unmarshal decodes a byte slice back to its object type.
 func (m defaultMarshaler) Unmarshal(data []byte, v any) error {
-	return json.Unmarshal(data, v)
+	return goccyjson.Unmarshal(data, v)
 }
 
 // Marshal is a generic helper that marshals values and passes through byte slices without copying.

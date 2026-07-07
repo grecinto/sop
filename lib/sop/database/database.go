@@ -202,7 +202,7 @@ func ValidateOptions(config sop.DatabaseOptions) (sop.DatabaseOptions, error) {
 		if c == nil {
 			// Auto register InMemory L2 Cache.
 			sop.RegisterL2CacheFactory(sop.InMemory, func(options sop.TransactionOptions) sop.L2Cache {
-				return cache.NewL2InMemoryCache()
+				return cache.NewStandaloneL2InMemoryCache()
 			})
 		}
 	}

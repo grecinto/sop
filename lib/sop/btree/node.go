@@ -147,6 +147,61 @@ func (n *Node[TK, TV]) SetVersion(v int32) {
 	n.Version = v
 }
 
+// CopyTo copies this node into an existing destination node, reusing any pre-allocated
+// backing slices on the destination when possible.
+func (n *Node[TK, TV]) CopyTo(dst any) bool {
+	if n == nil || dst == nil {
+		return false
+	}
+	target, ok := dst.(*Node[TK, TV])
+	if !ok || target == nil {
+		return false
+	}
+
+	target.ID = n.ID
+	target.ParentID = n.ParentID
+	target.Count = n.Count
+	target.Version = n.Version
+	target.indexOfNode = n.indexOfNode
+
+	if len(n.Slots) == 0 {
+		target.Slots = nil
+	} else if cap(target.Slots) >= len(n.Slots) {
+		target.Slots = target.Slots[:len(n.Slots)]
+	} else {
+		target.Slots = make([]Item[TK, TV], len(n.Slots))
+	}
+	copy(target.Slots, n.Slots)
+
+	if len(n.ChildrenIDs) == 0 {
+		target.ChildrenIDs = nil
+	} else if cap(target.ChildrenIDs) >= len(n.ChildrenIDs) {
+		target.ChildrenIDs = target.ChildrenIDs[:len(n.ChildrenIDs)]
+	} else {
+		target.ChildrenIDs = make([]sop.UUID, len(n.ChildrenIDs))
+	}
+	copy(target.ChildrenIDs, n.ChildrenIDs)
+	return true
+}
+
+// Clone returns a deep copy of the node, preserving the current slot capacity while
+// copying the contents of the slots and child IDs.
+func (n *Node[TK, TV]) Clone() *Node[TK, TV] {
+	if n == nil {
+		return nil
+	}
+	clone := &Node[TK, TV]{}
+	if !n.CopyTo(clone) {
+		return nil
+	}
+	return clone
+}
+
+// CloneMetaData returns a metadata-safe clone of the node for cache use.
+func (n *Node[TK, TV]) CloneMetaData() MetaDataType {
+	return n.Clone()
+}
+
 // newNode creates a new node.
 func newNode[TK Ordered, TV any](slotCount int) *Node[TK, TV] {
 	return &Node[TK, TV]{
