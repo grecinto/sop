@@ -1,0 +1,12 @@
+# Generated runtime artifacts and local state
+storelist.txt
+**/storelist.txt
+**/sessions/
+**/shared_memory/
+**/system_daemon_registry/
+**/site_payments/
+**/site_subscriptions/
+**/site_user_payment_ids/
+**/site_user_subscription_ids/
+**/site_users/
+**/fs.test
