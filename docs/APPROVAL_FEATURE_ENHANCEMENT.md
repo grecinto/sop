@@ -15,6 +15,20 @@ The approval feature has been enhanced from "approval-aware" to "approval-driven
 5. **Consistent UX**: Standardized approval pattern across all sensitive operations
 6. **Session Auto-Approval**: Added "Always allow for this session" feature for full automation
 
+## Repository / Folder Selection for Approval Flows
+
+When a shell or coding action needs a working directory, the approval flow now tries to infer the intended repository automatically and, when needed, asks the user to confirm it.
+
+### How it works
+
+1. If the request already includes a working directory, that value is preserved.
+2. If not, the system looks for nearby git repositories from the current context and parent folders.
+3. If one repo is found, it is used automatically.
+4. If multiple repos are found, the approval modal shows them as a selectable list and allows the user to enter a custom folder.
+5. If no repo can be inferred, the modal asks the user to choose or enter the target folder before proceeding.
+
+This applies to both desktop automation shell commands and coding-workflow patch approvals.
+
 ## Session-Based Auto-Approval 🚀
 
 ### Overview

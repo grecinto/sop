@@ -1934,6 +1934,10 @@
             const denyBtn = document.getElementById('action-approval-deny-btn');
             const sessionCheckbox = document.getElementById('action-approval-session-checkbox');
             const typeLabelEl = document.getElementById('action-approval-type-label');
+            const workingDirSection = document.getElementById('action-approval-working-dir-section');
+            const workingDirHelp = document.getElementById('action-approval-working-dir-help');
+            const workingDirSelect = document.getElementById('action-approval-working-dir-select');
+            const workingDirInput = document.getElementById('action-approval-working-dir-input');
             const terminalModeRadio = document.getElementById('execution-mode-terminal');
             const backgroundModeRadio = document.getElementById('execution-mode-background');
             const suggestionBox = document.getElementById('execution-mode-suggestion');
@@ -1945,6 +1949,8 @@
             const reasoning = payload.reasoning || payload.approval_reason || 'This action requires your approval.';
             const requiresPassword = payload.requires_password_prompt || false;
             const workingDir = payload.working_dir || '';
+            const workingDirCandidates = Array.isArray(payload.working_dir_candidates) ? payload.working_dir_candidates : [];
+            const promptForWorkingDir = payload.working_dir_prompt_required === true;
             
             // Set type-specific label
             let typeLabel = 'these actions';
@@ -1969,6 +1975,32 @@
                 passwordNoteEl.style.display = 'block';
             } else {
                 passwordNoteEl.style.display = 'none';
+            }
+
+            if (promptForWorkingDir) {
+                workingDirSection.style.display = 'block';
+                workingDirHelp.textContent = workingDirCandidates.length > 1
+                    ? 'Multiple repositories were detected. Choose the one you want to use.'
+                    : 'No repository was inferred. Choose or enter the folder to use.';
+                workingDirSelect.innerHTML = '<option value="">Select a repository...</option>';
+                if (workingDirCandidates.length > 0) {
+                    workingDirCandidates.forEach((candidate) => {
+                        const option = document.createElement('option');
+                        option.value = candidate;
+                        option.textContent = candidate;
+                        if (candidate === workingDir) {
+                            option.selected = true;
+                        }
+                        workingDirSelect.appendChild(option);
+                    });
+                    workingDirSelect.style.display = 'block';
+                } else {
+                    workingDirSelect.style.display = 'none';
+                }
+                workingDirInput.value = workingDir;
+                workingDirInput.placeholder = workingDirCandidates.length > 0 ? 'Or enter a different folder path' : 'Enter the repository folder path';
+            } else {
+                workingDirSection.style.display = 'none';
             }
             
             // Show/hide execution mode section (only for shell commands)
@@ -1998,6 +2030,14 @@
             const handleAllow = () => {
                 const rememberForSession = sessionCheckbox.checked;
                 const executionMode = terminalModeRadio.checked ? 'terminal' : 'background';
+                if (promptForWorkingDir) {
+                    const chosenWorkingDir = (workingDirSelect.value || workingDirInput.value || '').trim();
+                    if (!chosenWorkingDir) {
+                        alert('Please choose or enter the repository folder before continuing.');
+                        return;
+                    }
+                    payload.working_dir = chosenWorkingDir;
+                }
                 
                 if (rememberForSession) {
                     setSessionApproval(actionType, true);

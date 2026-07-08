@@ -212,11 +212,14 @@ type SafetyPolicy interface {
 
 // ApprovalRequiredError is returned when a task requires user approval.
 type ApprovalRequiredError struct {
-	ActionType    string
-	Reasoning     string
-	FilePath      string
-	PatchSummary  string
-	RequiresInput bool
+	ActionType               string
+	Reasoning                string
+	FilePath                 string
+	PatchSummary             string
+	RequiresInput            bool
+	WorkingDir               string
+	WorkingDirCandidates     []string
+	WorkingDirPromptRequired bool
 }
 
 func (e *ApprovalRequiredError) Error() string {
@@ -237,6 +240,15 @@ func (e *ApprovalRequiredError) ToActionPayload() map[string]any {
 	}
 	if e.RequiresInput {
 		payload["requires_input"] = true
+	}
+	if e.WorkingDir != "" {
+		payload["working_dir"] = e.WorkingDir
+	}
+	if len(e.WorkingDirCandidates) > 0 {
+		payload["working_dir_candidates"] = e.WorkingDirCandidates
+	}
+	if e.WorkingDirPromptRequired {
+		payload["working_dir_prompt_required"] = true
 	}
 	return payload
 }
@@ -1140,12 +1152,84 @@ func (d *DefaultSafetyPolicy) Allow(task Task, state RunState) error {
 		patchSummary = fmt.Sprintf("Apply %d patches", len(task.Patches))
 	}
 
-	return &ApprovalRequiredError{
-		ActionType:   "coding_workflow_patch",
-		Reasoning:    "This coding task will modify files in your repository. Please review and approve the changes.",
-		FilePath:     filePath,
-		PatchSummary: patchSummary,
+	workingDirCandidates := []string{}
+	if task.WorkingDir != "" {
+		workingDirCandidates = discoverWorkingDirCandidates(task.WorkingDir)
+	} else {
+		workingDirCandidates = discoverWorkingDirCandidates(".")
 	}
+	promptRequired := task.WorkingDir == "" && len(workingDirCandidates) > 1
+	return &ApprovalRequiredError{
+		ActionType:               "coding_workflow_patch",
+		Reasoning:                "This coding task will modify files in your repository. Please review and approve the changes.",
+		FilePath:                 filePath,
+		PatchSummary:             patchSummary,
+		WorkingDir:               task.WorkingDir,
+		WorkingDirCandidates:     workingDirCandidates,
+		WorkingDirPromptRequired: promptRequired,
+	}
+}
+
+func discoverWorkingDirCandidates(startDir string) []string {
+	if strings.TrimSpace(startDir) == "" {
+		startDir = "."
+	}
+	seen := map[string]bool{}
+	candidates := []string{}
+	addCandidate := func(dir string) {
+		trimmed := strings.TrimSpace(dir)
+		if trimmed == "" {
+			return
+		}
+		cleaned := filepath.Clean(trimmed)
+		if cleaned == "." {
+			if cwd, err := os.Getwd(); err == nil {
+				cleaned = filepath.Clean(cwd)
+			}
+		}
+		if cleaned == "" || cleaned == string(filepath.Separator) {
+			return
+		}
+		if seen[cleaned] {
+			return
+		}
+		if info, err := os.Stat(filepath.Join(cleaned, ".git")); err == nil && info.IsDir() {
+			seen[cleaned] = true
+			candidates = append(candidates, cleaned)
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		addCandidate(cwd)
+	}
+	addCandidate(startDir)
+	for _, seed := range []string{startDir, "."} {
+		current := seed
+		if strings.TrimSpace(current) == "" {
+			current = "."
+		}
+		if current == "." {
+			if cwd, err := os.Getwd(); err == nil {
+				current = cwd
+			}
+		}
+		for {
+			addCandidate(current)
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			if entries, err := os.ReadDir(parent); err == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() || entry.Name() == ".git" {
+						continue
+					}
+					addCandidate(filepath.Join(parent, entry.Name()))
+				}
+			}
+			current = parent
+		}
+	}
+	return candidates
 }
 
 // InMemorySessionMemory stores values in memory for the current process.

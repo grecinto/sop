@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1334,6 +1335,72 @@ func shellQuote(value string) string {
 	return strconv.Quote(value)
 }
 
+func discoverWorkingDirCandidates(startDir string) []string {
+	if strings.TrimSpace(startDir) == "" {
+		startDir = "."
+	}
+
+	seen := map[string]bool{}
+	candidates := []string{}
+	addCandidate := func(dir string) {
+		trimmed := strings.TrimSpace(dir)
+		if trimmed == "" {
+			return
+		}
+		cleaned := filepath.Clean(trimmed)
+		if cleaned == "." {
+			if cwd, err := os.Getwd(); err == nil {
+				cleaned = filepath.Clean(cwd)
+			}
+		}
+		if cleaned == "" || cleaned == string(filepath.Separator) {
+			return
+		}
+		if seen[cleaned] {
+			return
+		}
+		if info, err := os.Stat(filepath.Join(cleaned, ".git")); err == nil && info.IsDir() {
+			seen[cleaned] = true
+			candidates = append(candidates, cleaned)
+		}
+	}
+
+	if cwd, err := os.Getwd(); err == nil {
+		addCandidate(cwd)
+	}
+	addCandidate(startDir)
+
+	for _, seed := range []string{startDir, "."} {
+		current := seed
+		if strings.TrimSpace(current) == "" {
+			current = "."
+		}
+		if current == "." {
+			if cwd, err := os.Getwd(); err == nil {
+				current = cwd
+			}
+		}
+		for {
+			addCandidate(current)
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			if entries, err := os.ReadDir(parent); err == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() || entry.Name() == ".git" {
+						continue
+					}
+					addCandidate(filepath.Join(parent, entry.Name()))
+				}
+			}
+			current = parent
+		}
+	}
+
+	return candidates
+}
+
 func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[string]any, command, defaultReasoning, defaultWorkingDir string, defaultTimeoutSeconds int) (string, error) {
 	reasoningRaw, _ := args["reasoning"]
 	reasoning, _ := reasoningRaw.(string)
@@ -1343,8 +1410,23 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 
 	workingDirRaw, _ := args["working_dir"]
 	workingDir, _ := workingDirRaw.(string)
-	if workingDir == "" {
+	workingDirPromptRequired := false
+	candidateDirs := []string{}
+	if strings.TrimSpace(workingDir) == "" {
 		workingDir = defaultWorkingDir
+		candidateDirs = discoverWorkingDirCandidates(workingDir)
+		if len(candidateDirs) == 0 {
+			workingDirPromptRequired = true
+		} else if len(candidateDirs) > 1 {
+			workingDirPromptRequired = true
+		} else if strings.TrimSpace(workingDir) == "" {
+			workingDir = candidateDirs[0]
+		}
+		if strings.TrimSpace(workingDir) == "" && len(candidateDirs) > 0 {
+			workingDir = candidateDirs[0]
+		}
+	} else {
+		candidateDirs = discoverWorkingDirCandidates(workingDir)
 	}
 
 	timeoutSeconds := defaultTimeoutSeconds
@@ -1390,14 +1472,16 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 	approvalReason := determineApprovalReason(command, reasoning, requiresApproval, requiresPasswordPrompt)
 
 	payload := map[string]any{
-		"action_type":              "local_shell_execution",
-		"command":                  command,
-		"reasoning":                reasoning,
-		"working_dir":              workingDir,
-		"timeout_seconds":          timeoutSeconds,
-		"requires_approval":        requiresApproval,
-		"requires_password_prompt": requiresPasswordPrompt,
-		"approval_reason":          approvalReason,
+		"action_type":                 "local_shell_execution",
+		"command":                     command,
+		"reasoning":                   reasoning,
+		"working_dir":                 workingDir,
+		"working_dir_candidates":      candidateDirs,
+		"working_dir_prompt_required": workingDirPromptRequired,
+		"timeout_seconds":             timeoutSeconds,
+		"requires_approval":           requiresApproval,
+		"requires_password_prompt":    requiresPasswordPrompt,
+		"approval_reason":             approvalReason,
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
