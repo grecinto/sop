@@ -96,3 +96,22 @@ The throttling logic is now instrumented with cached load state and exposed thro
 - `sop_federation_global_tokens`: line chart for global token headroom; alert when it drops below 10 for 5 minutes.
 - `sop_http_requests_total` and `sop_http_response_status_total`: support panels for correlating traffic spikes with throttling behavior.
 - Future throttle decision counters: add a counter such as `sop_federation_throttle_decisions_total{reason="..."}` so dashboards can show blocked vs allowed sync decisions over time.
+
+## Beyond V1 improvements
+Once the initial federation path is stable, the next improvements should focus on making the control plane more expressive and the runtime more resilient:
+
+- Move from simple static thresholds to policy-driven throttling with per-daemon classes, per-tenant quotas, or workload-aware priority bands.
+- Add richer queue and backlog metrics such as queue depth by priority, age of oldest pending item, and estimated drain time.
+- Introduce a more explicit backpressure model for burst traffic, including adaptive windowing and smoother rate shaping rather than coarse on/off throttling.
+- Add stronger conflict resolution and replay semantics so repeated syncs or partial failures are handled deterministically.
+- Expand monitoring beyond the current load metrics to include sync latency, stream usage, retry volume, and failure reasons by category.
+- Consider a worker-pool or channel-driven pipeline if the system grows beyond the current bounded fleet and batch-based model.
+
+## Phase 2 implementation checklist
+A practical next step for the team can be tracked as a short checklist:
+
+1. Add per-daemon and per-tenant quota support in the HQ-side limiter.
+2. Expose queue-age, backlog size, and retry counters in the metrics surface.
+3. Introduce a throttle decision counter that records allowed vs blocked vs moderate-load outcomes.
+4. Add replay and conflict-resolution handling for partial sync failures.
+5. Evaluate a worker-pool pipeline only after fleet size and throughput data justify the added complexity.

@@ -387,6 +387,15 @@ The current system is intentionally simple rather than fully policy-driven. It k
 
 A more advanced lifecycle policy with TTL, decay, merge semantics, and category-specific retention is planned for future iterations.
 
+### Beyond V1 improvements
+Beyond V1, the federation layer can evolve in a few focused ways:
+
+- Introduce policy-driven sync controls with richer quotas, priority tiers, and service-class awareness instead of relying on simple load thresholds.
+- Add richer backlog and health signals such as queue age, pending item count by category, and estimated sync drain time.
+- Improve resilience with deterministic replay, conflict resolution, and better handling of partial sync failures.
+- Expand observability to include per-category sync activity, retry ratios, and path-specific latency so operators can reason about bottlenecks quickly.
+- Move toward a more scalable worker-based pipeline if the fleet or sync volume outgrows the current bounded batch model.
+
 ---
 
 ## Privacy & Safety

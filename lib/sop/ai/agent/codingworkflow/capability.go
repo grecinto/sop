@@ -1,6 +1,7 @@
 package codingworkflow
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -100,6 +101,14 @@ func (c *Capability) Run(query string, state capabilities.RoutingState) (capabil
 	}
 	result, err := c.Orchestrator.Execute(task)
 	if err != nil {
+		// Check if this is an approval requirement
+		if approvalErr, ok := err.(*ApprovalRequiredError); ok {
+			// Return structured approval payload that can be emitted as ACTION_REQUIRED
+			return capabilities.CapabilityResult{
+				Summary: approvalErr.Error(),
+				Data:    approvalErr.ToActionPayload(),
+			}, fmt.Errorf("<<<ACTION_REQUIRED:%s>>>", mustMarshalJSON(approvalErr.ToActionPayload()))
+		}
 		return capabilities.CapabilityResult{}, err
 	}
 	data := map[string]any{"message": result.Message, "applied_patches": len(result.AppliedPatches), "task_type": result.TaskType, "plan": result.Plan, "resumed_from_state": result.ResumedFromState, "active_file": result.ContextPack.ActiveFile, "working_dir": result.ContextPack.WorkingDir}
@@ -154,4 +163,12 @@ func inferActiveFile(query string) string {
 		}
 	}
 	return ""
+}
+
+func mustMarshalJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }

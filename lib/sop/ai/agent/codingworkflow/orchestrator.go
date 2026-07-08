@@ -210,6 +210,37 @@ type SafetyPolicy interface {
 	Allow(Task, RunState) error
 }
 
+// ApprovalRequiredError is returned when a task requires user approval.
+type ApprovalRequiredError struct {
+	ActionType    string
+	Reasoning     string
+	FilePath      string
+	PatchSummary  string
+	RequiresInput bool
+}
+
+func (e *ApprovalRequiredError) Error() string {
+	return fmt.Sprintf("approval required: %s", e.Reasoning)
+}
+
+func (e *ApprovalRequiredError) ToActionPayload() map[string]any {
+	payload := map[string]any{
+		"action_type":       e.ActionType,
+		"reasoning":         e.Reasoning,
+		"requires_approval": true,
+	}
+	if e.FilePath != "" {
+		payload["file_path"] = e.FilePath
+	}
+	if e.PatchSummary != "" {
+		payload["statement"] = e.PatchSummary
+	}
+	if e.RequiresInput {
+		payload["requires_input"] = true
+	}
+	return payload
+}
+
 // TestRunner executes repository tests and returns a concise result for the workflow loop.
 type TestRunner interface {
 	Run(Task, RunState) (TestResult, error)
@@ -1097,7 +1128,24 @@ func (d *DefaultSafetyPolicy) Allow(task Task, state RunState) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("patch execution requires explicit approval")
+
+	// Build approval requirement
+	filePath := ""
+	patchSummary := ""
+	if task.Patch != nil {
+		filePath = task.Patch.FilePath
+		patchSummary = fmt.Sprintf("Apply patch to %s", task.Patch.FilePath)
+	} else if len(task.Patches) > 0 {
+		filePath = task.Patches[0].FilePath
+		patchSummary = fmt.Sprintf("Apply %d patches", len(task.Patches))
+	}
+
+	return &ApprovalRequiredError{
+		ActionType:   "coding_workflow_patch",
+		Reasoning:    "This coding task will modify files in your repository. Please review and approve the changes.",
+		FilePath:     filePath,
+		PatchSummary: patchSummary,
+	}
 }
 
 // InMemorySessionMemory stores values in memory for the current process.

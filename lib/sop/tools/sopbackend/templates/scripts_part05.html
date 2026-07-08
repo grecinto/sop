@@ -1472,6 +1472,20 @@
                 const fallbackSpan = ensureAssistantContentBlock();
                 await appendAssistantTextPayload(fallbackSpan, fallbackText);
             }
+        } else if (normalizedEvent.type === 'action_required') {
+            handled = true;
+            flushRecords();
+            try {
+                const result = await showActionApprovalModal(normalizedEvent.payload);
+                if (result.approved) {
+                    await executeApprovedAction(result.payload, result.autoApproved);
+                } else {
+                    appendChatMessage('ai', '❌ Action denied by user.');
+                }
+            } catch (err) {
+                console.error('[UI approval] approval modal error', err);
+                appendChatMessage('ai', `⚠️ Approval process failed: ${err.message}`);
+            }
         }
 
         if (!handled && normalizedEvent.type !== 'message' && normalizedEvent.payload !== undefined) {
@@ -1800,6 +1814,211 @@
              if (currentAiMsgId) {
                  updateHeaderFeedbackVisibility(true);
              }
+        }
+    }
+
+    let _currentApprovalPayload = null;
+    let _currentApprovalResolve = null;
+    let _currentApprovalReject = null;
+    let _sessionApprovals = {}; // Track auto-approvals: { action_type: true }
+
+    function isSessionApproved(actionType) {
+        return _sessionApprovals[actionType] === true;
+    }
+
+    function setSessionApproval(actionType, approved) {
+        if (approved) {
+            _sessionApprovals[actionType] = true;
+            console.log(`[Session Approvals] Auto-approve enabled for: ${actionType}`);
+        } else {
+            delete _sessionApprovals[actionType];
+            console.log(`[Session Approvals] Auto-approve disabled for: ${actionType}`);
+        }
+        updateSessionApprovalIndicator();
+    }
+
+    window.clearSessionApprovals = function() {
+        _sessionApprovals = {};
+        console.log('[Session Approvals] All auto-approvals cleared');
+        updateSessionApprovalIndicator();
+        appendChatMessage('ai', '🔄 Session approvals cleared. You will be prompted for all sensitive operations again.');
+    };
+
+    window.showSessionApprovalStatus = function() {
+        const types = Object.keys(_sessionApprovals);
+        if (types.length === 0) {
+            appendChatMessage('ai', 'ℹ️ No session approvals are currently active.');
+            return;
+        }
+        
+        const typeLabels = types.map(t => {
+            if (t === 'local_shell_execution') return '**Shell Commands**';
+            if (t === 'coding_workflow_patch') return '**Code Patches**';
+            return `**${t}**`;
+        }).join(', ');
+        
+        appendChatMessage('ai', `🚀 **Auto-Approve Active**\n\nThe following operations are auto-approved for this session:\n- ${typeLabels}\n\nThese will execute without prompting until you reload the page or click "Clear Session Approvals".`);
+    };
+
+    function updateSessionApprovalIndicator() {
+        const types = Object.keys(_sessionApprovals);
+        const indicator = document.getElementById('session-approval-indicator');
+        if (types.length > 0) {
+            if (indicator) {
+                indicator.style.display = 'inline-flex';
+                const typeLabels = types.map(t => {
+                    if (t === 'local_shell_execution') return 'Shell Commands';
+                    if (t === 'coding_workflow_patch') return 'Code Patches';
+                    return t;
+                }).join(', ');
+                indicator.setAttribute('title', `Auto-approving: ${typeLabels}`);
+            }
+        } else {
+            if (indicator) indicator.style.display = 'none';
+        }
+    }
+
+    async function showActionApprovalModal(payload) {
+        const actionType = payload.action_type || 'action';
+        
+        // Check if this action type is auto-approved for this session
+        if (isSessionApproved(actionType)) {
+            console.log(`[Session Approvals] Auto-approving ${actionType}`);
+            return { approved: true, payload, autoApproved: true };
+        }
+        return new Promise((resolve, reject) => {
+            _currentApprovalPayload = payload;
+            _currentApprovalResolve = resolve;
+            _currentApprovalReject = reject;
+
+            const modal = document.getElementById('action-approval-modal');
+            const reasonEl = document.getElementById('action-approval-reason');
+            const commandEl = document.getElementById('action-approval-command');
+            const detailsEl = document.getElementById('action-approval-details');
+            const passwordNoteEl = document.getElementById('action-approval-password-note');
+            const allowBtn = document.getElementById('action-approval-allow-btn');
+            const denyBtn = document.getElementById('action-approval-deny-btn');
+            const sessionCheckbox = document.getElementById('action-approval-session-checkbox');
+            const typeLabelEl = document.getElementById('action-approval-type-label');
+
+            // Populate modal content
+            const command = payload.command || payload.statement || payload.action || '';
+            const reasoning = payload.reasoning || payload.approval_reason || 'This action requires your approval.';
+            const requiresPassword = payload.requires_password_prompt || false;
+            const workingDir = payload.working_dir || '';
+            
+            // Set type-specific label
+            let typeLabel = 'these actions';
+            if (actionType === 'local_shell_execution') {
+                typeLabel = 'shell commands';
+            } else if (actionType === 'coding_workflow_patch') {
+                typeLabel = 'code patches';
+            }
+            typeLabelEl.textContent = typeLabel;
+
+            reasonEl.textContent = reasoning;
+            commandEl.textContent = command;
+
+            if (workingDir) {
+                detailsEl.style.display = 'block';
+                detailsEl.innerHTML = `<strong>Working Directory:</strong> ${workingDir}`;
+            } else {
+                detailsEl.style.display = 'none';
+            }
+
+            if (requiresPassword) {
+                passwordNoteEl.style.display = 'block';
+            } else {
+                passwordNoteEl.style.display = 'none';
+            }
+            
+            // Reset session checkbox state
+            sessionCheckbox.checked = false;
+
+            // Wire up buttons
+            const handleAllow = () => {
+                const rememberForSession = sessionCheckbox.checked;
+                if (rememberForSession) {
+                    setSessionApproval(actionType, true);
+                }
+                
+                modal.style.display = 'none';
+                allowBtn.removeEventListener('click', handleAllow);
+                denyBtn.removeEventListener('click', handleDeny);
+                document.removeEventListener('keydown', handleKeydown);
+                if (_currentApprovalResolve) {
+                    _currentApprovalResolve({ approved: true, payload, sessionApproval: rememberForSession });
+                }
+            };
+
+            const handleDeny = () => {
+                modal.style.display = 'none';
+                allowBtn.removeEventListener('click', handleAllow);
+                denyBtn.removeEventListener('click', handleDeny);
+                document.removeEventListener('keydown', handleKeydown);
+                if (_currentApprovalResolve) {
+                    _currentApprovalResolve({ approved: false, payload });
+                }
+            };
+
+            const handleKeydown = (e) => {
+                if (e.key === 'Escape') {
+                    handleDeny();
+                } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    handleAllow();
+                }
+            };
+
+            allowBtn.addEventListener('click', handleAllow);
+            denyBtn.addEventListener('click', handleDeny);
+            document.addEventListener('keydown', handleKeydown);
+
+            modal.style.display = 'flex';
+        });
+    }
+
+    async function executeApprovedAction(payload, autoApproved = false) {
+        const actionType = payload.action_type || '';
+        const command = payload.command || payload.statement || '';
+        
+        if (actionType === 'local_shell_execution') {
+            try {
+                const req = {
+                    command: command,
+                    reasoning: payload.reasoning || '',
+                    working_dir: payload.working_dir || '',
+                    timeout_seconds: payload.timeout_seconds || 600
+                };
+
+                const res = await fetch(getDaemonBaseURL().replace(/\/$/, '') + '/api/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(req)
+                });
+                
+                if (!res.ok) {
+                    const txt = await res.text();
+                    throw new Error("HTTP " + res.status + ": " + txt);
+                }
+                
+                const data = await res.json();
+                const approvalBadge = autoApproved ? ' 🚀 *(auto-approved)*' : '';
+                let outputMsg = `✅ **Local Command Executed**${approvalBadge}\n\nCommand: \`${command}\`\n`;
+                if (data.stdout) outputMsg += `\n**Output:**\n\`\`\`\n${data.stdout}\n\`\`\`\n`;
+                if (data.stderr) outputMsg += `\n**Errors:**\n\`\`\`\n${data.stderr}\n\`\`\`\n`;
+                if (data.error) outputMsg += `\n**Error:** ${data.error}\n`;
+                outputMsg += `\nExit Code: ${data.exit_code}`;
+                
+                appendChatMessage('ai', outputMsg);
+                return data;
+            } catch (err) {
+                const errorMsg = `❌ **Command Execution Failed**\n\nCommand: \`${command}\`\n\nError: ${err.message}\n\nIs the SOP Desktop Daemon running on port 9090?`;
+                appendChatMessage('ai', errorMsg);
+                throw err;
+            }
+        } else {
+            const approvalBadge = autoApproved ? ' 🚀 *(auto-approved)*' : '';
+            appendChatMessage('ai', `Action approved${approvalBadge} but execution handler not implemented for type: ${actionType}`);
         }
     }
 
