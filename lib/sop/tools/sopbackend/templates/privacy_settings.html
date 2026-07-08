@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Settings - Fleet Learning</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+            color: #333;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding-bottom: 30px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .section:last-child {
+            border-bottom: none;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+        }
+        .setting-info {
+            flex: 1;
+        }
+        .setting-label {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        .setting-description {
+            font-size: 13px;
+            color: #666;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 26px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #4CAF50;
+        }
+        input:checked + .slider:before {
+            transform: translateX(24px);
+        }
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 12px;
+            margin-top: 15px;
+        }
+        .category-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+        .category-item input[type="checkbox"] {
+            margin-right: 10px;
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .category-item label {
+            cursor: pointer;
+            font-size: 14px;
+            user-select: none;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .status-enabled {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .status-disabled {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .status-private {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+        .button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .button-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        .button-primary:hover {
+            background: #45a049;
+        }
+        .button-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        .button-secondary:hover {
+            background: #d0d0d0;
+        }
+        .button-danger {
+            background: #f44336;
+            color: white;
+        }
+        .button-danger:hover {
+            background: #da190b;
+        }
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .info-box-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #1976D2;
+        }
+        .info-box-text {
+            font-size: 14px;
+            color: #555;
+        }
+        .policy-selector {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .policy-card {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .policy-card:hover {
+            border-color: #4CAF50;
+        }
+        .policy-card.selected {
+            border-color: #4CAF50;
+            background: #f1f8f4;
+        }
+        .policy-card-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .policy-card-description {
+            font-size: 13px;
+            color: #666;
+        }
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+        }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            background: #4CAF50;
+            color: white;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            display: none;
+            z-index: 1000;
+        }
+        .notification.show {
+            display: block;
+            animation: slideIn 0.3s;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(400px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Privacy Settings</h1>
+        <p class="subtitle">Control how your daemon participates in fleet learning</p>
+
+        <div class="info-box">
+            <div class="info-box-title">Local Learning Always On</div>
+            <div class="info-box-text">
+                Your daemon learns from your experiences either way—stored locally for future runs. 
+                These settings only control optional cross-daemon sharing with automatic PII detection and privacy governance.
+            </div>
+        </div>
+
+        <!-- Global Fleet Learning Toggle -->
+        <div class="section">
+            <div class="section-title">Fleet Learning Participation</div>
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Enable Fleet Learning</div>
+                    <div class="setting-description">Share operational patterns with privacy filtering, PII detection, and full transparency</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="globalShare" checked onchange="updateGlobalShare()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div id="currentStatus" style="margin-top: 10px;">
+                <span class="status-badge status-enabled">Fleet Learning: Enabled</span>
+            </div>
+        </div>
+
+        <!-- Private Session Mode -->
+        <div class="section">
+            <div class="section-title">Private Session Mode</div>
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Private Session</div>
+                    <div class="setting-description">Temporarily disable all sharing—local learning continues</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="privateSession" onchange="updatePrivateSession()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Privacy Policy -->
+        <div class="section">
+            <div class="section-title">Privacy Policy</div>
+            <div class="setting-description" style="margin-bottom: 15px;">
+                Choose how strictly content is filtered before sharing
+            </div>
+            <div class="policy-selector">
+                <div class="policy-card selected" data-policy="balanced" onclick="selectPolicy('balanced')">
+                    <div class="policy-card-title">⚖️ Balanced (Recommended)</div>
+                    <div class="policy-card-description">Auto-share safe categories with PII checks</div>
+                </div>
+                <div class="policy-card" data-policy="strict" onclick="selectPolicy('strict')">
+                    <div class="policy-card-title">🔒 Strict</div>
+                    <div class="policy-card-description">Manual approval for everything</div>
+                </div>
+                <div class="policy-card" data-policy="open" onclick="selectPolicy('open')">
+                    <div class="policy-card-title">🚀 Open</div>
+                    <div class="policy-card-description">Auto-share all enabled categories</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Category Preferences -->
+        <div class="section">
+            <div class="section-title">Category Preferences</div>
+            <div class="setting-description" style="margin-bottom: 15px;">
+                Choose which types of patterns to share with the fleet
+            </div>
+            <div class="category-grid" id="categoryGrid">
+                <!-- Populated by JavaScript -->
+            </div>
+        </div>
+
+        <!-- Additional Options -->
+        <div class="section">
+            <div class="section-title">Additional Options</div>
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Auto-redact PII</div>
+                    <div class="setting-description">Automatically replace detected PII with placeholders</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="autoRedact" checked onchange="updateSettings()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Require Approval</div>
+                    <div class="setting-description">Manually review all content before sharing</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="requireApproval" onchange="updateSettings()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <button class="button button-primary" onclick="saveSettings()">Save Settings</button>
+            <button class="button button-secondary" onclick="loadSettings()">Reset to Saved</button>
+            <a href="/privacy/audit" class="button button-secondary">View Audit Log</a>
+            <a href="/privacy/approval-queue" class="button button-secondary">Approval Queue</a>
+        </div>
+    </div>
+
+    <div class="notification" id="notification">Settings saved successfully!</div>
+
+    <script>
+        const categories = {
+            'workflow_pattern': { enabled: true, label: 'Workflow Patterns' },
+            'anti_pattern': { enabled: true, label: 'Anti-Patterns' },
+            'repair_strategy': { enabled: true, label: 'Repair Strategies' },
+            'tool_preference': { enabled: true, label: 'Tool Preferences' },
+            'performance_optimization': { enabled: true, label: 'Performance Optimization' },
+            'testing_strategy': { enabled: true, label: 'Testing Strategies' },
+            'error_resolution': { enabled: true, label: 'Error Resolution' },
+            'security_pattern': { enabled: false, label: 'Security Patterns' },
+            'code_quality': { enabled: true, label: 'Code Quality' },
+            'api_design': { enabled: true, label: 'API Design' },
+            'safety_heuristic': { enabled: true, label: 'Safety Heuristics' },
+            'verified_playbook': { enabled: true, label: 'Verified Playbooks' },
+            'context_gathering': { enabled: true, label: 'Context Gathering' }
+        };
+
+        function renderCategories() {
+            const grid = document.getElementById('categoryGrid');
+            grid.innerHTML = '';
+            
+            for (const [key, data] of Object.entries(categories)) {
+                const item = document.createElement('div');
+                item.className = 'category-item';
+                item.innerHTML = `
+                    <input type="checkbox" id="cat_${key}" ${data.enabled ? 'checked' : ''} onchange="updateSettings()">
+                    <label for="cat_${key}">${data.label}</label>
+                `;
+                grid.appendChild(item);
+            }
+        }
+
+        function selectPolicy(policy) {
+            document.querySelectorAll('.policy-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            document.querySelector(`[data-policy="${policy}"]`).classList.add('selected');
+            
+            // Update settings based on policy
+            if (policy === 'strict') {
+                document.getElementById('requireApproval').checked = true;
+            } else {
+                document.getElementById('requireApproval').checked = false;
+            }
+        }
+
+        function updateGlobalShare() {
+            const enabled = document.getElementById('globalShare').checked;
+            const status = document.getElementById('currentStatus');
+            
+            if (enabled) {
+                status.innerHTML = '<span class="status-badge status-enabled">Fleet Learning: Enabled</span>';
+            } else {
+                status.innerHTML = '<span class="status-badge status-disabled">Fleet Learning: Disabled</span>';
+            }
+        }
+
+        function updatePrivateSession() {
+            const enabled = document.getElementById('privateSession').checked;
+            const status = document.getElementById('currentStatus');
+            
+            if (enabled) {
+                status.innerHTML = '<span class="status-badge status-private">Private Session: Active</span>';
+            } else {
+                updateGlobalShare();
+            }
+        }
+
+        function updateSettings() {
+            // Settings updated locally, save on "Save Settings" click
+        }
+
+        async function saveSettings() {
+            const settings = {
+                global_share_enabled: document.getElementById('globalShare').checked,
+                private_session_mode: document.getElementById('privateSession').checked,
+                auto_redact_pii: document.getElementById('autoRedact').checked,
+                require_approval: document.getElementById('requireApproval').checked,
+                policy_type: document.querySelector('.policy-card.selected').dataset.policy,
+                category_preferences: {}
+            };
+
+            // Collect category preferences
+            for (const key of Object.keys(categories)) {
+                settings.category_preferences[key] = document.getElementById(`cat_${key}`).checked;
+            }
+
+            try {
+                const response = await fetch('/api/daemon/privacy/settings/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+
+                if (response.ok) {
+                    showNotification('Settings saved successfully!');
+                } else {
+                    showNotification('Failed to save settings', 'error');
+                }
+            } catch (error) {
+                console.error('Save error:', error);
+                showNotification('Failed to save settings', 'error');
+            }
+        }
+
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/daemon/privacy/settings');
+                if (response.ok) {
+                    const settings = await response.json();
+                    
+                    document.getElementById('globalShare').checked = settings.global_share_enabled;
+                    document.getElementById('privateSession').checked = settings.private_session_mode;
+                    document.getElementById('autoRedact').checked = settings.auto_redact_pii;
+                    document.getElementById('requireApproval').checked = settings.require_approval;
+                    
+                    // Update policy
+                    selectPolicy(settings.policy_type || 'balanced');
+                    
+                    // Update categories
+                    for (const [key, enabled] of Object.entries(settings.category_preferences || {})) {
+                        const checkbox = document.getElementById(`cat_${key}`);
+                        if (checkbox) checkbox.checked = enabled;
+                    }
+                    
+                    updateGlobalShare();
+                    showNotification('Settings loaded');
+                }
+            } catch (error) {
+                console.error('Load error:', error);
+            }
+        }
+
+        function showNotification(message, type = 'success') {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.style.background = type === 'error' ? '#f44336' : '#4CAF50';
+            notification.classList.add('show');
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+        }
+
+        // Initialize
+        renderCategories();
+        loadSettings();
+    </script>
+</body>
+</html>

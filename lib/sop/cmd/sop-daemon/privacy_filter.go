@@ -210,14 +210,14 @@ type ApprovalQueue struct {
 
 // ApprovalItem represents content awaiting approval.
 type ApprovalItem struct {
-	ID               string                `json:"id"`
-	Category         string                `json:"category"`
-	OriginalContent  string                `json:"original_content"`
-	RedactedContent  string                `json:"redacted_content,omitempty"`
-	PIIMatches       []privacy.PIIMatch    `json:"pii_matches,omitempty"`
-	Reason           string                `json:"reason"`
-	CreatedAt        time.Time             `json:"created_at"`
-	UserID           string                `json:"user_id"`
+	ID              string             `json:"id"`
+	Category        string             `json:"category"`
+	OriginalContent string             `json:"original_content"`
+	RedactedContent string             `json:"redacted_content,omitempty"`
+	PIIMatches      []privacy.PIIMatch `json:"pii_matches,omitempty"`
+	Reason          string             `json:"reason"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UserID          string             `json:"user_id"`
 }
 
 var globalApprovalQueue = &ApprovalQueue{

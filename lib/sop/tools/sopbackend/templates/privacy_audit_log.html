@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Audit Log - Fleet Learning</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+            color: #333;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .filters {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 8px;
+        }
+        .filter-group {
+            flex: 1;
+        }
+        .filter-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #666;
+            margin-bottom: 6px;
+        }
+        .filter-select, .filter-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            font-size: 13px;
+            color: #666;
+        }
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .log-table th {
+            text-align: left;
+            padding: 12px;
+            background: #f5f5f5;
+            font-weight: 600;
+            font-size: 13px;
+            color: #666;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .log-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 14px;
+        }
+        .log-table tr:hover {
+            background: #fafafa;
+        }
+        .action-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .action-allow {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .action-block {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .action-redact {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+        .action-pending {
+            background: #e3f2fd;
+            color: #1976D2;
+        }
+        .reason-cell {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: #666;
+            font-size: 13px;
+        }
+        .timestamp {
+            color: #999;
+            font-size: 13px;
+        }
+        .category-tag {
+            background: #e3f2fd;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #1976D2;
+        }
+        .button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .button-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        .button-secondary:hover {
+            background: #d0d0d0;
+        }
+        .header-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .pagination {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 25px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Privacy Audit Log</h1>
+        <p class="subtitle">Complete transparency of all privacy filtering decisions</p>
+
+        <div class="header-actions">
+            <a href="/privacy/settings" class="button button-secondary">← Privacy Settings</a>
+            <div style="display: flex; gap: 10px;">
+                <button class="button button-secondary" onclick="loadAuditLog()">🔄 Refresh</button>
+                <button class="button button-secondary" onclick="exportLog()">📥 Export</button>
+            </div>
+        </div>
+
+        <!-- Statistics -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="totalItems">0</div>
+                <div class="stat-label">Total Filtered</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="allowedItems">0</div>
+                <div class="stat-label">Allowed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="blockedItems">0</div>
+                <div class="stat-label">Blocked</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="redactedItems">0</div>
+                <div class="stat-label">Redacted</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="piiDetections">0</div>
+                <div class="stat-label">PII Detections</div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+            <div class="filter-group">
+                <div class="filter-label">Action</div>
+                <select class="filter-select" id="filterAction" onchange="applyFilters()">
+                    <option value="">All Actions</option>
+                    <option value="allow">Allow</option>
+                    <option value="block">Block</option>
+                    <option value="redact">Redact</option>
+                    <option value="pending">Pending</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <div class="filter-label">Category</div>
+                <select class="filter-select" id="filterCategory" onchange="applyFilters()">
+                    <option value="">All Categories</option>
+                    <option value="workflow_pattern">Workflow Pattern</option>
+                    <option value="error_resolution">Error Resolution</option>
+                    <option value="repair_strategy">Repair Strategy</option>
+                    <option value="security_pattern">Security Pattern</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <div class="filter-label">Date Range</div>
+                <select class="filter-select" id="filterDate" onchange="applyFilters()">
+                    <option value="all">All Time</option>
+                    <option value="today">Today</option>
+                    <option value="week">Last 7 Days</option>
+                    <option value="month">Last 30 Days</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <div class="filter-label">Search</div>
+                <input type="text" class="filter-input" id="filterSearch" placeholder="Search reason..." oninput="applyFilters()">
+            </div>
+        </div>
+
+        <!-- Log Table -->
+        <div id="logContainer">
+            <table class="log-table" id="logTable">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Category</th>
+                        <th>Action</th>
+                        <th>Reason</th>
+                        <th>PII</th>
+                    </tr>
+                </thead>
+                <tbody id="logTableBody">
+                    <!-- Populated by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="pagination" id="pagination">
+            <!-- Populated by JavaScript -->
+        </div>
+    </div>
+
+    <script>
+        let auditLog = [];
+        let filteredLog = [];
+        let currentPage = 1;
+        const itemsPerPage = 50;
+
+        async function loadAuditLog() {
+            try {
+                const response = await fetch('/api/daemon/privacy/audit');
+                if (!response.ok) throw new Error('Failed to load audit log');
+                
+                auditLog = await response.json();
+                applyFilters();
+                updateStats();
+            } catch (error) {
+                console.error('Load error:', error);
+            }
+        }
+
+        function applyFilters() {
+            const actionFilter = document.getElementById('filterAction').value;
+            const categoryFilter = document.getElementById('filterCategory').value;
+            const dateFilter = document.getElementById('filterDate').value;
+            const searchText = document.getElementById('filterSearch').value.toLowerCase();
+
+            filteredLog = auditLog.filter(entry => {
+                // Action filter
+                if (actionFilter && entry.action !== actionFilter) return false;
+                
+                // Category filter
+                if (categoryFilter && entry.category !== categoryFilter) return false;
+                
+                // Date filter
+                if (dateFilter !== 'all') {
+                    const entryDate = new Date(entry.timestamp);
+                    const now = new Date();
+                    const daysDiff = (now - entryDate) / (1000 * 60 * 60 * 24);
+                    
+                    if (dateFilter === 'today' && daysDiff > 1) return false;
+                    if (dateFilter === 'week' && daysDiff > 7) return false;
+                    if (dateFilter === 'month' && daysDiff > 30) return false;
+                }
+                
+                // Search filter
+                if (searchText && !entry.reason.toLowerCase().includes(searchText)) return false;
+                
+                return true;
+            });
+
+            currentPage = 1;
+            renderLog();
+        }
+
+        function renderLog() {
+            const tbody = document.getElementById('logTableBody');
+            const container = document.getElementById('logContainer');
+            
+            if (filteredLog.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📋</div>
+                        <div>No audit log entries found</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const start = (currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const pageEntries = filteredLog.slice(start, end);
+
+            tbody.innerHTML = '';
+            pageEntries.forEach(entry => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="timestamp">${formatTimestamp(entry.timestamp)}</td>
+                    <td><span class="category-tag">${formatCategory(entry.category)}</span></td>
+                    <td><span class="action-badge action-${entry.action}">${entry.action.toUpperCase()}</span></td>
+                    <td class="reason-cell" title="${entry.reason}">${entry.reason}</td>
+                    <td>${entry.pii_count > 0 ? `⚠️ ${entry.pii_count}` : '—'}</td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            renderPagination();
+        }
+
+        function renderPagination() {
+            const totalPages = Math.ceil(filteredLog.length / itemsPerPage);
+            const pagination = document.getElementById('pagination');
+            
+            if (totalPages <= 1) {
+                pagination.innerHTML = '';
+                return;
+            }
+
+            let html = '';
+            if (currentPage > 1) {
+                html += '<button class="button button-secondary" onclick="changePage(' + (currentPage - 1) + ')">← Previous</button>';
+            }
+            
+            html += `<span style="padding: 8px 16px; color: #666;">Page ${currentPage} of ${totalPages}</span>`;
+            
+            if (currentPage < totalPages) {
+                html += '<button class="button button-secondary" onclick="changePage(' + (currentPage + 1) + ')">Next →</button>';
+            }
+            
+            pagination.innerHTML = html;
+        }
+
+        function changePage(page) {
+            currentPage = page;
+            renderLog();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function updateStats() {
+            const stats = {
+                total: auditLog.length,
+                allowed: 0,
+                blocked: 0,
+                redacted: 0,
+                pii: 0
+            };
+
+            auditLog.forEach(entry => {
+                switch (entry.action) {
+                    case 'allow': stats.allowed++; break;
+                    case 'block': stats.blocked++; break;
+                    case 'redact': stats.redacted++; break;
+                }
+                if (entry.pii_count > 0) stats.pii += entry.pii_count;
+            });
+
+            document.getElementById('totalItems').textContent = stats.total;
+            document.getElementById('allowedItems').textContent = stats.allowed;
+            document.getElementById('blockedItems').textContent = stats.blocked;
+            document.getElementById('redactedItems').textContent = stats.redacted;
+            document.getElementById('piiDetections').textContent = stats.pii;
+        }
+
+        function formatCategory(category) {
+            return category.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        }
+
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleString();
+        }
+
+        function exportLog() {
+            const dataStr = JSON.stringify(filteredLog, null, 2);
+            const dataBlob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `privacy_audit_log_${new Date().toISOString().split('T')[0]}.json`;
+            link.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Initialize
+        loadAuditLog();
+        
+        // Auto-refresh every 60 seconds
+        setInterval(loadAuditLog, 60000);
+    </script>
+</body>
+</html>

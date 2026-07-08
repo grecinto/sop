@@ -98,7 +98,7 @@ func (q *SyncQueue) Enqueue(text, category string, metadata map[string]any) erro
 	// Apply privacy filter before queueing
 	ctx := context.Background()
 	userID := "daemon-user" // TODO: Get actual user ID from context
-	
+
 	filterResult, err := filterContentBeforeShare(ctx, category, text, userID)
 	if err != nil {
 		log.Printf("Privacy filter error: %v", err)

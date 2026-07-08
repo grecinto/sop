@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Approval Queue - Fleet Learning</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+            color: #333;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+        .item-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            background: #fafafa;
+        }
+        .item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .item-title {
+            font-weight: 600;
+            font-size: 16px;
+            color: #333;
+        }
+        .item-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .badge-category {
+            background: #e3f2fd;
+            color: #1976D2;
+        }
+        .badge-pii {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+        .badge-warning {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .content-preview {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .pii-highlight {
+            background: #fff59d;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+        .redacted-text {
+            background: #ffccbc;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: 600;
+        }
+        .item-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .button-approve {
+            background: #4CAF50;
+            color: white;
+        }
+        .button-approve:hover {
+            background: #45a049;
+        }
+        .button-reject {
+            background: #f44336;
+            color: white;
+        }
+        .button-reject:hover {
+            background: #da190b;
+        }
+        .button-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        .button-secondary:hover {
+            background: #d0d0d0;
+        }
+        .pii-info {
+            background: #fff8e1;
+            border-left: 4px solid #ffc107;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .pii-list {
+            margin-top: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .pii-tag {
+            background: #ffcc80;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .batch-actions {
+            position: sticky;
+            top: 20px;
+            background: white;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .batch-actions-label {
+            font-weight: 500;
+            margin-right: auto;
+        }
+        .header-actions {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Approval Queue</h1>
+        <p class="subtitle">Review content before sharing with fleet learning</p>
+
+        <div class="header-actions">
+            <a href="/privacy/settings" class="button button-secondary">← Privacy Settings</a>
+            <button class="button button-secondary" onclick="loadQueue()">🔄 Refresh</button>
+        </div>
+
+        <div id="queueContainer">
+            <div class="empty-state">
+                <div class="empty-state-icon">✓</div>
+                <div>No items pending approval</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadQueue() {
+            try {
+                const response = await fetch('/api/daemon/privacy/approval-queue');
+                if (!response.ok) throw new Error('Failed to load queue');
+                
+                const items = await response.json();
+                const container = document.getElementById('queueContainer');
+                
+                if (items.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">✓</div>
+                            <div>No items pending approval</div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = '';
+                items.forEach(item => renderItem(item));
+            } catch (error) {
+                console.error('Load error:', error);
+            }
+        }
+
+        function renderItem(item) {
+            const container = document.getElementById('queueContainer');
+            const card = document.createElement('div');
+            card.className = 'item-card';
+            card.id = `item-${item.id}`;
+            
+            const hasPII = item.pii_matches && item.pii_matches.length > 0;
+            const displayContent = item.redacted_content || item.original_content;
+            
+            card.innerHTML = `
+                <div class="item-header">
+                    <div class="item-title">Pending Approval</div>
+                    <span class="badge badge-category">${formatCategory(item.category)}</span>
+                </div>
+                
+                <div class="item-meta">
+                    <span>⏰ ${formatTimestamp(item.created_at)}</span>
+                    ${hasPII ? '<span class="badge badge-pii">PII Detected</span>' : ''}
+                    ${item.reason ? `<span class="badge badge-warning">${item.reason}</span>` : ''}
+                </div>
+                
+                ${hasPII ? renderPIIInfo(item.pii_matches) : ''}
+                
+                <div class="content-preview">${highlightPII(displayContent, item.pii_matches)}</div>
+                
+                <div class="item-actions">
+                    <button class="button button-approve" onclick="approveItem('${item.id}')">✓ Approve & Share</button>
+                    <button class="button button-reject" onclick="rejectItem('${item.id}')">✗ Reject</button>
+                    ${item.redacted_content ? '<button class="button button-secondary" onclick="showOriginal(\'' + item.id + '\')">👁 View Original</button>' : ''}
+                </div>
+            `;
+            
+            container.appendChild(card);
+        }
+
+        function renderPIIInfo(piiMatches) {
+            if (!piiMatches || piiMatches.length === 0) return '';
+            
+            const types = [...new Set(piiMatches.map(m => m.type))];
+            const tags = types.map(type => `<span class="pii-tag">${formatPIIType(type)}</span>`).join('');
+            
+            return `
+                <div class="pii-info">
+                    <strong>⚠️ PII Detected:</strong> ${piiMatches.length} match(es)
+                    <div class="pii-list">${tags}</div>
+                </div>
+            `;
+        }
+
+        function highlightPII(content, piiMatches) {
+            if (!content) return '';
+            if (!piiMatches || piiMatches.length === 0) return escapeHtml(content);
+            
+            // For redacted content, highlight the redaction markers
+            return escapeHtml(content).replace(/\[(EMAIL|PHONE|SSN|IP_ADDRESS|API_KEY|CREDIT_CARD|AWS_KEY|GITHUB_TOKEN|PRIVATE_KEY|PASSWORD|BEARER_TOKEN|JWT_TOKEN|REDACTED)\]/g, 
+                '<span class="redacted-text">$&</span>');
+        }
+
+        function formatCategory(category) {
+            return category.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        }
+
+        function formatPIIType(type) {
+            return type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        }
+
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes} min ago`;
+            if (minutes < 1440) return `${Math.floor(minutes / 60)} hours ago`;
+            return date.toLocaleDateString();
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function approveItem(id) {
+            try {
+                const response = await fetch('/api/daemon/privacy/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id })
+                });
+                
+                if (response.ok) {
+                    document.getElementById(`item-${id}`).remove();
+                    if (document.querySelectorAll('.item-card').length === 0) {
+                        loadQueue();
+                    }
+                }
+            } catch (error) {
+                console.error('Approve error:', error);
+            }
+        }
+
+        async function rejectItem(id) {
+            if (!confirm('Reject this item? It will not be shared.')) return;
+            
+            try {
+                const response = await fetch('/api/daemon/privacy/reject', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id })
+                });
+                
+                if (response.ok) {
+                    document.getElementById(`item-${id}`).remove();
+                    if (document.querySelectorAll('.item-card').length === 0) {
+                        loadQueue();
+                    }
+                }
+            } catch (error) {
+                console.error('Reject error:', error);
+            }
+        }
+
+        function showOriginal(id) {
+            alert('Original content viewer not yet implemented');
+        }
+
+        // Initialize
+        loadQueue();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadQueue, 30000);
+    </script>
+</body>
+</html>

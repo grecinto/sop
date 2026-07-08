@@ -20,16 +20,16 @@ const (
 
 // PrivacySettings holds user privacy preferences for fleet learning.
 type PrivacySettings struct {
-	UserID               string                  `json:"user_id"`
-	GlobalShareEnabled   bool                    `json:"global_share_enabled"`
-	PolicyType           PolicyType              `json:"policy_type"`
-	CategoryPreferences  map[string]bool         `json:"category_preferences"`
-	PrivateSessionMode   bool                    `json:"private_session_mode"`
-	RequireApproval      bool                    `json:"require_approval"`
-	AutoRedactPII        bool                    `json:"auto_redact_pii"`
-	CustomPIIPatterns    map[string]string       `json:"custom_pii_patterns,omitempty"`
-	CreatedAt            time.Time               `json:"created_at"`
-	UpdatedAt            time.Time               `json:"updated_at"`
+	UserID              string            `json:"user_id"`
+	GlobalShareEnabled  bool              `json:"global_share_enabled"`
+	PolicyType          PolicyType        `json:"policy_type"`
+	CategoryPreferences map[string]bool   `json:"category_preferences"`
+	PrivateSessionMode  bool              `json:"private_session_mode"`
+	RequireApproval     bool              `json:"require_approval"`
+	AutoRedactPII       bool              `json:"auto_redact_pii"`
+	CustomPIIPatterns   map[string]string `json:"custom_pii_patterns,omitempty"`
+	CreatedAt           time.Time         `json:"created_at"`
+	UpdatedAt           time.Time         `json:"updated_at"`
 }
 
 // NewDefaultPrivacySettings creates default privacy settings for a user.
@@ -156,24 +156,24 @@ func GetDefaultCategories() map[string]bool {
 
 // AuditLogEntry records a privacy filter decision.
 type AuditLogEntry struct {
-	Timestamp    time.Time         `json:"timestamp"`
-	UserID       string            `json:"user_id"`
-	Category     string            `json:"category"`
-	Action       string            `json:"action"` // "allowed", "blocked", "pending", "redacted"
-	Reason       string            `json:"reason"`
-	ContentHash  string            `json:"content_hash"`
-	PIIDetected  []string          `json:"pii_detected,omitempty"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
+	Timestamp   time.Time         `json:"timestamp"`
+	UserID      string            `json:"user_id"`
+	Category    string            `json:"category"`
+	Action      string            `json:"action"` // "allowed", "blocked", "pending", "redacted"
+	Reason      string            `json:"reason"`
+	ContentHash string            `json:"content_hash"`
+	PIIDetected []string          `json:"pii_detected,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // NewAuditLogEntry creates a new audit log entry.
 func NewAuditLogEntry(userID, category, action, reason string) *AuditLogEntry {
 	return &AuditLogEntry{
-		Timestamp:   time.Now().UTC(),
-		UserID:      userID,
-		Category:    category,
-		Action:      action,
-		Reason:      reason,
-		Metadata:    make(map[string]string),
+		Timestamp: time.Now().UTC(),
+		UserID:    userID,
+		Category:  category,
+		Action:    action,
+		Reason:    reason,
+		Metadata:  make(map[string]string),
 	}
 }

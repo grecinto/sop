@@ -210,7 +210,7 @@ func main() {
 		log.Printf("Warning: failed to initialize privacy filter: %v", err)
 	} else {
 		settings := getPrivacySettings()
-		log.Printf("Privacy filter initialized (fleet_learning=%v, policy=%s)", 
+		log.Printf("Privacy filter initialized (fleet_learning=%v, policy=%s)",
 			settings.GlobalShareEnabled, settings.PolicyType)
 	}
 
@@ -246,6 +246,8 @@ func main() {
 	mux.HandleFunc("/api/daemon/privacy/approval-queue", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleGetApprovalQueue))))
 	mux.HandleFunc("/api/daemon/privacy/approve", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleApproveItem))))
 	mux.HandleFunc("/api/daemon/privacy/reject", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleRejectItem))))
+	mux.HandleFunc("/api/daemon/privacy/apply-template", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleApplyPolicyTemplate))))
+	mux.HandleFunc("/api/daemon/privacy/advanced-settings", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleAdvancedSettings))))
 
 	// Override/Add daemon-specific handlers WITH authentication
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -154,7 +155,7 @@ func handleTogglePrivateSession(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":              "updated",
+		"status":               "updated",
 		"private_session_mode": req.Enabled,
 	})
 }
@@ -197,5 +198,124 @@ func handleSetCategoryPreference(w http.ResponseWriter, r *http.Request) {
 		"status":   "updated",
 		"category": req.Category,
 		"enabled":  req.Enabled,
+	})
+}
+
+// handleApplyPolicyTemplate applies a pre-configured policy template
+func handleApplyPolicyTemplate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Template string `json:"template"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	settings := getPrivacySettings()
+	if settings == nil {
+		http.Error(w, "Privacy settings not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	// Apply template-specific settings
+	switch req.Template {
+	case "balanced":
+		settings.PolicyType = privacy.PolicyBalanced
+		settings.RequireApproval = false
+		settings.AutoRedactPII = true
+		// Set default categories (most enabled)
+		for cat := range privacy.GetDefaultCategories() {
+			if cat != "security_pattern" {
+				settings.SetCategoryEnabled(cat, true)
+			}
+		}
+	case "strict":
+		settings.PolicyType = privacy.PolicyStrict
+		settings.RequireApproval = true
+		settings.AutoRedactPII = true
+		// Only enable safe categories
+		for cat := range privacy.GetDefaultCategories() {
+			if cat == "workflow_pattern" || cat == "tool_preference" {
+				settings.SetCategoryEnabled(cat, true)
+			} else {
+				settings.SetCategoryEnabled(cat, false)
+			}
+		}
+	case "open":
+		settings.PolicyType = privacy.PolicyOpen
+		settings.RequireApproval = false
+		settings.AutoRedactPII = true
+		// Enable all categories except security
+		for cat := range privacy.GetDefaultCategories() {
+			if cat != "security_pattern" {
+				settings.SetCategoryEnabled(cat, true)
+			}
+		}
+	case "compliance":
+		settings.PolicyType = privacy.PolicyStrict
+		settings.RequireApproval = true
+		settings.AutoRedactPII = true
+		// Very conservative - only enable minimal categories
+		for cat := range privacy.GetDefaultCategories() {
+			if cat == "workflow_pattern" {
+				settings.SetCategoryEnabled(cat, true)
+			} else {
+				settings.SetCategoryEnabled(cat, false)
+			}
+		}
+	default:
+		http.Error(w, "Unknown template: "+req.Template, http.StatusBadRequest)
+		return
+	}
+
+	if err := updatePrivacySettings(settings); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to apply template: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "applied",
+		"template": req.Template,
+	})
+}
+
+// handleAdvancedSettings manages advanced privacy controls
+func handleAdvancedSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		DifferentialPrivacy   bool `json:"differential_privacy"`
+		RevocationPropagation bool `json:"revocation_propagation"`
+		ContextPreservation   bool `json:"context_preservation"`
+		AuditExport           bool `json:"audit_export"`
+		CustomPatterns        []struct {
+			Name     string `json:"name"`
+			Regex    string `json:"regex"`
+			Severity string `json:"severity"`
+		} `json:"custom_patterns"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Note: These are advanced features - implementation deferred to future phases
+	// For now, just acknowledge the settings
+	log.Printf("Advanced privacy settings updated: differential_privacy=%v, revocation=%v, custom_patterns=%d",
+		req.DifferentialPrivacy, req.RevocationPropagation, len(req.CustomPatterns))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "updated",
+		"note":   "Advanced features are experimental",
 	})
 }

@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Dashboard - Fleet Learning</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 1400px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+            color: #333;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .big-stat {
+            font-size: 48px;
+            font-weight: 600;
+            color: #4CAF50;
+            margin: 20px 0;
+        }
+        .stat-description {
+            font-size: 14px;
+            color: #666;
+        }
+        .progress-bar {
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #4CAF50;
+            transition: width 0.3s;
+        }
+        .category-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .category-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .category-item:last-child {
+            border-bottom: none;
+        }
+        .category-name {
+            font-size: 14px;
+            color: #333;
+        }
+        .category-count {
+            font-size: 14px;
+            font-weight: 600;
+            color: #4CAF50;
+        }
+        .timeline {
+            margin-top: 20px;
+        }
+        .timeline-item {
+            display: flex;
+            gap: 15px;
+            padding: 15px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .timeline-item:last-child {
+            border-bottom: none;
+        }
+        .timeline-icon {
+            font-size: 24px;
+            width: 40px;
+            text-align: center;
+        }
+        .timeline-content {
+            flex: 1;
+        }
+        .timeline-title {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        .timeline-meta {
+            font-size: 13px;
+            color: #999;
+        }
+        .chart-container {
+            height: 200px;
+            margin-top: 20px;
+            position: relative;
+        }
+        .chart-bar {
+            position: absolute;
+            bottom: 0;
+            background: #4CAF50;
+            border-radius: 4px 4px 0 0;
+            transition: height 0.3s;
+        }
+        .chart-label {
+            position: absolute;
+            bottom: -25px;
+            font-size: 12px;
+            color: #666;
+            width: 100%;
+            text-align: center;
+        }
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .status-active {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .status-private {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+        .status-paused {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .pulse {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .button-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        .button-primary:hover {
+            background: #45a049;
+        }
+        .button-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        .button-secondary:hover {
+            background: #d0d0d0;
+        }
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Privacy & Fleet Learning Dashboard</h1>
+        <p class="subtitle">Complete transparency of your privacy governance and contribution summary</p>
+
+        <div class="actions">
+            <a href="/privacy/settings" class="button button-secondary">⚙️ Privacy Settings</a>
+            <a href="/privacy/audit" class="button button-secondary">📋 Audit Log</a>
+            <a href="/privacy/approval-queue" class="button button-secondary">✓ Approval Queue</a>
+            <button class="button button-secondary" onclick="loadDashboard()">🔄 Refresh</button>
+        </div>
+
+        <!-- Status Overview -->
+        <div class="dashboard-grid">
+            <div class="card">
+                <div class="card-title">Fleet Learning Status</div>
+                <div id="statusIndicator" class="status-indicator status-active">
+                    <span class="pulse"></span>
+                    <span>Active</span>
+                </div>
+                <div style="margin-top: 20px;">
+                    <div class="stat-description">Local learning continues regardless of participation</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Contribution Summary</div>
+                <div class="big-stat" id="totalContributions">0</div>
+                <div class="stat-description">Patterns shared with fleet this month</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="contributionProgress" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Privacy Filter</div>
+                <div class="big-stat" id="filteredItems">0</div>
+                <div class="stat-description">Items filtered (PII/privacy checks)</div>
+            </div>
+        </div>
+
+        <!-- Detailed Stats -->
+        <div class="dashboard-grid">
+            <div class="card">
+                <div class="card-title">Filter Actions (Last 30 Days)</div>
+                <ul class="category-list">
+                    <li class="category-item">
+                        <span class="category-name">✓ Allowed (shared)</span>
+                        <span class="category-count" id="allowedCount">0</span>
+                    </li>
+                    <li class="category-item">
+                        <span class="category-name">✏️ Redacted (PII removed)</span>
+                        <span class="category-count" id="redactedCount">0</span>
+                    </li>
+                    <li class="category-item">
+                        <span class="category-name">⏸️ Pending Approval</span>
+                        <span class="category-count" id="pendingCount">0</span>
+                    </li>
+                    <li class="category-item">
+                        <span class="category-name">✗ Blocked (kept local)</span>
+                        <span class="category-count" id="blockedCount">0</span>
+                    </li>
+                    <li class="category-item">
+                        <span class="category-name">⚠️ PII Detections</span>
+                        <span class="category-count" id="piiCount">0</span>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Top Shared Categories</div>
+                <ul class="category-list" id="topCategories">
+                    <!-- Populated by JavaScript -->
+                </ul>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Activity Timeline</div>
+                <div class="chart-container" id="activityChart">
+                    <!-- Simple bar chart -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="card" style="margin-top: 20px;">
+            <div class="card-title">Recent Activity</div>
+            <div class="timeline" id="recentActivity">
+                <!-- Populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadDashboard() {
+            try {
+                // Load settings
+                const settingsRes = await fetch('/api/daemon/privacy/settings');
+                const settings = await settingsRes.json();
+                
+                // Load audit log
+                const auditRes = await fetch('/api/daemon/privacy/audit');
+                const auditLog = await auditRes.json();
+                
+                // Load approval queue
+                const queueRes = await fetch('/api/daemon/privacy/approval-queue');
+                const queue = await queueRes.json();
+                
+                updateStatus(settings);
+                updateStats(auditLog, queue);
+                updateCategoryBreakdown(auditLog);
+                updateTimeline(auditLog);
+                updateActivityChart(auditLog);
+            } catch (error) {
+                console.error('Dashboard load error:', error);
+            }
+        }
+
+        function updateStatus(settings) {
+            const indicator = document.getElementById('statusIndicator');
+            
+            if (settings.private_session_mode) {
+                indicator.className = 'status-indicator status-private';
+                indicator.innerHTML = '<span class="pulse"></span><span>Private Session</span>';
+            } else if (!settings.global_share_enabled) {
+                indicator.className = 'status-indicator status-paused';
+                indicator.innerHTML = '<span class="pulse"></span><span>Paused</span>';
+            } else {
+                indicator.className = 'status-indicator status-active';
+                indicator.innerHTML = '<span class="pulse"></span><span>Active</span>';
+            }
+        }
+
+        function updateStats(auditLog, queue) {
+            const last30Days = auditLog.filter(entry => {
+                const entryDate = new Date(entry.timestamp);
+                const now = new Date();
+                const daysDiff = (now - entryDate) / (1000 * 60 * 60 * 24);
+                return daysDiff <= 30;
+            });
+
+            const allowed = last30Days.filter(e => e.action === 'allow').length;
+            const redacted = last30Days.filter(e => e.action === 'redact').length;
+            const blocked = last30Days.filter(e => e.action === 'block').length;
+            const piiTotal = last30Days.reduce((sum, e) => sum + (e.pii_count || 0), 0);
+            
+            document.getElementById('totalContributions').textContent = allowed + redacted;
+            document.getElementById('filteredItems').textContent = last30Days.length;
+            document.getElementById('allowedCount').textContent = allowed;
+            document.getElementById('redactedCount').textContent = redacted;
+            document.getElementById('pendingCount').textContent = queue.length;
+            document.getElementById('blockedCount').textContent = blocked;
+            document.getElementById('piiCount').textContent = piiTotal;
+            
+            // Update progress bar (example: out of 100 target)
+            const progress = Math.min((allowed + redacted) / 100 * 100, 100);
+            document.getElementById('contributionProgress').style.width = progress + '%';
+        }
+
+        function updateCategoryBreakdown(auditLog) {
+            const categoryCounts = {};
+            auditLog.filter(e => e.action === 'allow' || e.action === 'redact').forEach(entry => {
+                categoryCounts[entry.category] = (categoryCounts[entry.category] || 0) + 1;
+            });
+
+            const sorted = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+            const container = document.getElementById('topCategories');
+            
+            container.innerHTML = sorted.length === 0 
+                ? '<li class="category-item"><span class="category-name">No contributions yet</span></li>'
+                : sorted.map(([cat, count]) => `
+                    <li class="category-item">
+                        <span class="category-name">${formatCategory(cat)}</span>
+                        <span class="category-count">${count}</span>
+                    </li>
+                `).join('');
+        }
+
+        function updateTimeline(auditLog) {
+            const recent = auditLog.slice(-5).reverse();
+            const container = document.getElementById('recentActivity');
+            
+            if (recent.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: #999; padding: 20px;">No recent activity</div>';
+                return;
+            }
+
+            container.innerHTML = recent.map(entry => {
+                const icon = {
+                    allow: '✓',
+                    block: '✗',
+                    redact: '✏️',
+                    pending: '⏸️'
+                }[entry.action] || '•';
+                
+                return `
+                    <div class="timeline-item">
+                        <div class="timeline-icon">${icon}</div>
+                        <div class="timeline-content">
+                            <div class="timeline-title">${formatCategory(entry.category)} — ${entry.action.toUpperCase()}</div>
+                            <div class="timeline-meta">${formatTimestamp(entry.timestamp)} • ${entry.reason}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function updateActivityChart(auditLog) {
+            // Simple 7-day bar chart
+            const days = 7;
+            const counts = new Array(days).fill(0);
+            const now = new Date();
+            
+            auditLog.forEach(entry => {
+                const entryDate = new Date(entry.timestamp);
+                const daysDiff = Math.floor((now - entryDate) / (1000 * 60 * 60 * 24));
+                if (daysDiff < days && (entry.action === 'allow' || entry.action === 'redact')) {
+                    counts[days - 1 - daysDiff]++;
+                }
+            });
+
+            const maxCount = Math.max(...counts, 1);
+            const container = document.getElementById('activityChart');
+            const barWidth = 100 / days;
+            
+            container.innerHTML = counts.map((count, i) => {
+                const height = (count / maxCount * 100).toFixed(0);
+                const date = new Date(now);
+                date.setDate(date.getDate() - (days - 1 - i));
+                const label = date.toLocaleDateString('en-US', { weekday: 'short' });
+                
+                return `
+                    <div class="chart-bar" style="left: ${i * barWidth}%; width: ${barWidth * 0.8}%; height: ${height}%">
+                    </div>
+                    <div class="chart-label" style="left: ${i * barWidth}%; width: ${barWidth}%">${label}</div>
+                `;
+            }).join('');
+        }
+
+        function formatCategory(category) {
+            return category.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        }
+
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes} min ago`;
+            if (minutes < 1440) return `${Math.floor(minutes / 60)} hours ago`;
+            return date.toLocaleDateString();
+        }
+
+        // Initialize
+        loadDashboard();
+        
+        // Auto-refresh every 60 seconds
+        setInterval(loadDashboard, 60000);
+    </script>
+</body>
+</html>

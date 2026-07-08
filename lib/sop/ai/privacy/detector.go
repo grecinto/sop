@@ -14,18 +14,18 @@ type PIIDetector struct {
 type PIIType string
 
 const (
-	PIITypeEmail          PIIType = "email"
-	PIITypePhone          PIIType = "phone"
-	PIITypeSSN            PIIType = "ssn"
-	PIITypeIPAddress      PIIType = "ip_address"
-	PIITypeAPIKey         PIIType = "api_key"
-	PIITypeCreditCard     PIIType = "credit_card"
-	PIITypeAWSKey         PIIType = "aws_key"
-	PIITypeGitHubToken    PIIType = "github_token"
-	PIITypePrivateKey     PIIType = "private_key"
-	PIITypePassword       PIIType = "password"
-	PIITypeBearerToken    PIIType = "bearer_token"
-	PIITypeJWT            PIIType = "jwt"
+	PIITypeEmail       PIIType = "email"
+	PIITypePhone       PIIType = "phone"
+	PIITypeSSN         PIIType = "ssn"
+	PIITypeIPAddress   PIIType = "ip_address"
+	PIITypeAPIKey      PIIType = "api_key"
+	PIITypeCreditCard  PIIType = "credit_card"
+	PIITypeAWSKey      PIIType = "aws_key"
+	PIITypeGitHubToken PIIType = "github_token"
+	PIITypePrivateKey  PIIType = "private_key"
+	PIITypePassword    PIIType = "password"
+	PIITypeBearerToken PIIType = "bearer_token"
+	PIITypeJWT         PIIType = "jwt"
 )
 
 // PIIMatch represents a detected PII instance.

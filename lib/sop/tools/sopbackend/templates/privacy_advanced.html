@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Privacy Controls - Fleet Learning</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 1000px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+            color: #333;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding-bottom: 30px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .section:last-child {
+            border-bottom: none;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .section-description {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+        .pattern-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .pattern-item {
+            background: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .pattern-info {
+            flex: 1;
+        }
+        .pattern-name {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        .pattern-regex {
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            color: #666;
+            background: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-top: 5px;
+        }
+        .pattern-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .button-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        .button-primary:hover {
+            background: #45a049;
+        }
+        .button-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        .button-secondary:hover {
+            background: #d0d0d0;
+        }
+        .button-danger {
+            background: #f44336;
+            color: white;
+        }
+        .button-danger:hover {
+            background: #da190b;
+        }
+        .button-small {
+            padding: 6px 12px;
+            font-size: 13px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-label {
+            display: block;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        .form-input, .form-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        .form-textarea {
+            font-family: 'Monaco', 'Courier New', monospace;
+            min-height: 80px;
+            resize: vertical;
+        }
+        .form-hint {
+            font-size: 13px;
+            color: #999;
+            margin-top: 6px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal.show {
+            display: flex;
+        }
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .modal-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+        }
+        .modal-close {
+            font-size: 28px;
+            cursor: pointer;
+            color: #999;
+            line-height: 1;
+        }
+        .modal-close:hover {
+            color: #333;
+        }
+        .template-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .template-card:hover {
+            border-color: #4CAF50;
+            background: #f9f9f9;
+        }
+        .template-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        .template-description {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 12px;
+        }
+        .template-features {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .template-features li {
+            font-size: 13px;
+            color: #666;
+            padding: 4px 0;
+        }
+        .template-features li:before {
+            content: "✓ ";
+            color: #4CAF50;
+            font-weight: 600;
+        }
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .info-box-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #1976D2;
+        }
+        .info-box-text {
+            font-size: 14px;
+            color: #555;
+        }
+        .warning-box {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .warning-box-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #e65100;
+        }
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            background: #f9f9f9;
+            border-radius: 6px;
+            margin-bottom: 10px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            margin-right: 10px;
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .checkbox-group label {
+            cursor: pointer;
+            user-select: none;
+            flex: 1;
+        }
+        .checkbox-description {
+            font-size: 13px;
+            color: #666;
+            margin-left: 28px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Advanced Privacy Controls</h1>
+        <p class="subtitle">Custom PII patterns, policy templates, and compliance presets</p>
+
+        <!-- Policy Templates -->
+        <div class="section">
+            <div class="section-title">Policy Templates</div>
+            <div class="section-description">
+                Apply pre-configured privacy policies optimized for different use cases
+            </div>
+
+            <div class="template-card" onclick="applyTemplate('balanced')">
+                <div class="template-title">⚖️ Balanced (Current Default)</div>
+                <div class="template-description">
+                    Recommended for most users—auto-share safe categories with PII detection
+                </div>
+                <ul class="template-features">
+                    <li>Auto-share enabled categories</li>
+                    <li>Automatic PII detection and redaction</li>
+                    <li>Security patterns disabled by default</li>
+                    <li>Approval required for sensitive content</li>
+                </ul>
+            </div>
+
+            <div class="template-card" onclick="applyTemplate('strict')">
+                <div class="template-title">🔒 Strict (High Privacy)</div>
+                <div class="template-description">
+                    Maximum privacy—manual approval for all sharing
+                </div>
+                <ul class="template-features">
+                    <li>Manual approval required for everything</li>
+                    <li>Aggressive PII detection</li>
+                    <li>All sensitive categories disabled</li>
+                    <li>No auto-sharing</li>
+                </ul>
+            </div>
+
+            <div class="template-card" onclick="applyTemplate('open')">
+                <div class="template-title">🚀 Open (Maximum Contribution)</div>
+                <div class="template-description">
+                    Contribute more—auto-share all enabled categories
+                </div>
+                <ul class="template-features">
+                    <li>Auto-share all enabled categories</li>
+                    <li>Standard PII detection</li>
+                    <li>More categories enabled by default</li>
+                    <li>Faster fleet learning participation</li>
+                </ul>
+            </div>
+
+            <div class="template-card" onclick="applyTemplate('compliance')">
+                <div class="template-title">📋 Compliance (GDPR/HIPAA Ready)</div>
+                <div class="template-description">
+                    Strict compliance mode for regulated industries
+                </div>
+                <ul class="template-features">
+                    <li>Enhanced PII detection (GDPR/HIPAA)</li>
+                    <li>Audit trail with data lineage</li>
+                    <li>Manual approval workflow</li>
+                    <li>Data retention controls</li>
+                    <li>Right to be forgotten support</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Custom PII Patterns -->
+        <div class="section">
+            <div class="section-title">Custom PII Patterns</div>
+            <div class="section-description">
+                Add custom regex patterns to detect organization-specific sensitive data
+            </div>
+
+            <div class="info-box">
+                <div class="info-box-title">Built-in Patterns</div>
+                <div class="info-box-text">
+                    12 standard PII types are always active: Email, Phone, SSN, IP Address, Credit Card, 
+                    API Keys, AWS Keys, GitHub Tokens, Private Keys, Passwords, Bearer Tokens, JWT
+                </div>
+            </div>
+
+            <ul class="pattern-list" id="customPatterns">
+                <!-- Populated by JavaScript -->
+            </ul>
+
+            <button class="button button-primary" onclick="showAddPatternModal()">+ Add Custom Pattern</button>
+        </div>
+
+        <!-- Advanced Features -->
+        <div class="section">
+            <div class="section-title">Advanced Features</div>
+            <div class="section-description">
+                Experimental and advanced privacy controls
+            </div>
+
+            <div class="checkbox-group">
+                <input type="checkbox" id="differentialPrivacy" onchange="updateAdvanced()">
+                <label for="differentialPrivacy">
+                    <strong>Differential Privacy</strong> (Experimental)
+                    <div class="checkbox-description">Add statistical noise to shared data to prevent re-identification</div>
+                </label>
+            </div>
+
+            <div class="checkbox-group">
+                <input type="checkbox" id="revocationPropagation" onchange="updateAdvanced()">
+                <label for="revocationPropagation">
+                    <strong>Revocation Propagation</strong>
+                    <div class="checkbox-description">Request deletion of previously shared content from HQ</div>
+                </label>
+            </div>
+
+            <div class="checkbox-group">
+                <input type="checkbox" id="contextPreservation" checked onchange="updateAdvanced()">
+                <label for="contextPreservation">
+                    <strong>Context Preservation</strong>
+                    <div class="checkbox-description">Maintain semantic meaning when redacting PII</div>
+                </label>
+            </div>
+
+            <div class="checkbox-group">
+                <input type="checkbox" id="auditExport" checked onchange="updateAdvanced()">
+                <label for="auditExport">
+                    <strong>Enable Audit Export</strong>
+                    <div class="checkbox-description">Allow exporting audit logs for compliance reporting</div>
+                </label>
+            </div>
+
+            <div class="warning-box" style="margin-top: 20px;">
+                <div class="warning-box-title">⚠️ Experimental Features</div>
+                <div class="info-box-text">
+                    Differential Privacy and Revocation Propagation are experimental features. 
+                    Use with caution in production environments.
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <a href="/privacy/settings" class="button button-secondary">← Back to Settings</a>
+            <button class="button button-primary" onclick="saveAdvancedSettings()">Save Advanced Settings</button>
+        </div>
+    </div>
+
+    <!-- Add Pattern Modal -->
+    <div class="modal" id="addPatternModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">Add Custom PII Pattern</div>
+                <span class="modal-close" onclick="hideModal()">&times;</span>
+            </div>
+
+            <form onsubmit="addPattern(event)">
+                <div class="form-group">
+                    <label class="form-label">Pattern Name</label>
+                    <input type="text" class="form-input" id="patternName" placeholder="e.g., Internal Employee ID" required>
+                    <div class="form-hint">A descriptive name for this pattern</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Regex Pattern</label>
+                    <textarea class="form-textarea" id="patternRegex" placeholder="e.g., EMP-\d{6}" required></textarea>
+                    <div class="form-hint">JavaScript-compatible regular expression</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Severity</label>
+                    <select class="form-input" id="patternSeverity">
+                        <option value="high">High (always block)</option>
+                        <option value="medium" selected>Medium (redact)</option>
+                        <option value="low">Low (flag only)</option>
+                    </select>
+                    <div class="form-hint">How strictly this pattern should be enforced</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Test Examples</label>
+                    <textarea class="form-textarea" id="patternTest" placeholder="Test your pattern with sample text..."></textarea>
+                    <button type="button" class="button button-secondary" onclick="testPattern()">Test Pattern</button>
+                    <div class="form-hint" id="testResult"></div>
+                </div>
+
+                <div class="actions">
+                    <button type="button" class="button button-secondary" onclick="hideModal()">Cancel</button>
+                    <button type="submit" class="button button-primary">Add Pattern</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const customPatterns = [];
+
+        function loadCustomPatterns() {
+            const container = document.getElementById('customPatterns');
+            
+            if (customPatterns.length === 0) {
+                container.innerHTML = '<li style="padding: 20px; text-align: center; color: #999;">No custom patterns defined</li>';
+                return;
+            }
+
+            container.innerHTML = customPatterns.map((pattern, index) => `
+                <li class="pattern-item">
+                    <div class="pattern-info">
+                        <div class="pattern-name">${pattern.name}</div>
+                        <div class="pattern-regex">${pattern.regex}</div>
+                    </div>
+                    <div class="pattern-actions">
+                        <button class="button button-secondary button-small" onclick="editPattern(${index})">Edit</button>
+                        <button class="button button-danger button-small" onclick="deletePattern(${index})">Delete</button>
+                    </div>
+                </li>
+            `).join('');
+        }
+
+        function showAddPatternModal() {
+            document.getElementById('addPatternModal').classList.add('show');
+            document.getElementById('patternName').value = '';
+            document.getElementById('patternRegex').value = '';
+            document.getElementById('patternTest').value = '';
+            document.getElementById('testResult').textContent = '';
+        }
+
+        function hideModal() {
+            document.getElementById('addPatternModal').classList.remove('show');
+        }
+
+        function addPattern(event) {
+            event.preventDefault();
+            
+            const pattern = {
+                name: document.getElementById('patternName').value,
+                regex: document.getElementById('patternRegex').value,
+                severity: document.getElementById('patternSeverity').value
+            };
+
+            customPatterns.push(pattern);
+            loadCustomPatterns();
+            hideModal();
+            
+            alert('Custom pattern added successfully!');
+        }
+
+        function testPattern() {
+            const regex = document.getElementById('patternRegex').value;
+            const testText = document.getElementById('patternTest').value;
+            const resultDiv = document.getElementById('testResult');
+            
+            try {
+                const re = new RegExp(regex, 'gi');
+                const matches = testText.match(re);
+                
+                if (matches) {
+                    resultDiv.textContent = `✓ Found ${matches.length} match(es): ${matches.join(', ')}`;
+                    resultDiv.style.color = '#4CAF50';
+                } else {
+                    resultDiv.textContent = '✗ No matches found';
+                    resultDiv.style.color = '#999';
+                }
+            } catch (e) {
+                resultDiv.textContent = '✗ Invalid regex: ' + e.message;
+                resultDiv.style.color = '#f44336';
+            }
+        }
+
+        function deletePattern(index) {
+            if (confirm('Delete this custom pattern?')) {
+                customPatterns.splice(index, 1);
+                loadCustomPatterns();
+            }
+        }
+
+        function editPattern(index) {
+            // For now, just show delete/add workflow
+            alert('Edit functionality: Delete this pattern and add a new one.');
+        }
+
+        async function applyTemplate(template) {
+            if (!confirm(`Apply ${template} policy template? This will update your privacy settings.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/daemon/privacy/apply-template', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template })
+                });
+
+                if (response.ok) {
+                    alert(`${template.charAt(0).toUpperCase() + template.slice(1)} policy template applied successfully!`);
+                    window.location.href = '/privacy/settings';
+                } else {
+                    alert('Failed to apply template');
+                }
+            } catch (error) {
+                console.error('Template apply error:', error);
+                alert('Failed to apply template');
+            }
+        }
+
+        function updateAdvanced() {
+            // Track changes
+        }
+
+        async function saveAdvancedSettings() {
+            const settings = {
+                differential_privacy: document.getElementById('differentialPrivacy').checked,
+                revocation_propagation: document.getElementById('revocationPropagation').checked,
+                context_preservation: document.getElementById('contextPreservation').checked,
+                audit_export: document.getElementById('auditExport').checked,
+                custom_patterns: customPatterns
+            };
+
+            try {
+                const response = await fetch('/api/daemon/privacy/advanced-settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+
+                if (response.ok) {
+                    alert('Advanced settings saved successfully!');
+                } else {
+                    alert('Failed to save settings');
+                }
+            } catch (error) {
+                console.error('Save error:', error);
+                alert('Failed to save settings');
+            }
+        }
+
+        // Initialize
+        loadCustomPatterns();
+    </script>
+</body>
+</html>

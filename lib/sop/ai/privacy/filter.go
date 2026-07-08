@@ -19,12 +19,12 @@ const (
 
 // FilterResult contains the outcome of privacy filtering.
 type FilterResult struct {
-	Action          FilterAction      `json:"action"`
-	Reason          string            `json:"reason"`
-	RedactedContent string            `json:"redacted_content,omitempty"`
-	PIIMatches      []PIIMatch        `json:"pii_matches,omitempty"`
-	RequiresApproval bool             `json:"requires_approval"`
-	Metadata        map[string]string `json:"metadata,omitempty"`
+	Action           FilterAction      `json:"action"`
+	Reason           string            `json:"reason"`
+	RedactedContent  string            `json:"redacted_content,omitempty"`
+	PIIMatches       []PIIMatch        `json:"pii_matches,omitempty"`
+	RequiresApproval bool              `json:"requires_approval"`
+	Metadata         map[string]string `json:"metadata,omitempty"`
 }
 
 // NewFilterResult creates a new filter result.
@@ -107,12 +107,12 @@ func (f *PrivacyFilter) FilterBeforeShare(ctx context.Context, category string, 
 			if settings.AutoRedactPII {
 				redactedContent := f.Detector.Redact(content)
 				result := &FilterResult{
-					Action:          FilterActionRedact,
-					Reason:          "high-severity PII detected and redacted",
-					RedactedContent: redactedContent,
-					PIIMatches:      piiMatches,
+					Action:           FilterActionRedact,
+					Reason:           "high-severity PII detected and redacted",
+					RedactedContent:  redactedContent,
+					PIIMatches:       piiMatches,
 					RequiresApproval: settings.RequireApproval,
-					Metadata:        make(map[string]string),
+					Metadata:         make(map[string]string),
 				}
 				result.Metadata["pii_count"] = fmt.Sprintf("%d", len(piiMatches))
 				f.logAudit(ctx, userID, category, result, content)
@@ -128,11 +128,11 @@ func (f *PrivacyFilter) FilterBeforeShare(ctx context.Context, category string, 
 
 			// Block if auto-redact disabled
 			result := &FilterResult{
-				Action:          FilterActionBlock,
-				Reason:          "high-severity PII detected",
-				PIIMatches:      piiMatches,
+				Action:           FilterActionBlock,
+				Reason:           "high-severity PII detected",
+				PIIMatches:       piiMatches,
 				RequiresApproval: false,
-				Metadata:        make(map[string]string),
+				Metadata:         make(map[string]string),
 			}
 			result.Metadata["pii_count"] = fmt.Sprintf("%d", len(piiMatches))
 			f.logAudit(ctx, userID, category, result, content)
@@ -143,12 +143,12 @@ func (f *PrivacyFilter) FilterBeforeShare(ctx context.Context, category string, 
 		if settings.AutoRedactPII {
 			redactedContent := f.Detector.Redact(content)
 			result := &FilterResult{
-				Action:          FilterActionRedact,
-				Reason:          "PII detected and redacted",
-				RedactedContent: redactedContent,
-				PIIMatches:      piiMatches,
+				Action:           FilterActionRedact,
+				Reason:           "PII detected and redacted",
+				RedactedContent:  redactedContent,
+				PIIMatches:       piiMatches,
 				RequiresApproval: settings.RequireApproval,
-				Metadata:        make(map[string]string),
+				Metadata:         make(map[string]string),
 			}
 			result.Metadata["pii_count"] = fmt.Sprintf("%d", len(piiMatches))
 			f.logAudit(ctx, userID, category, result, content)
@@ -164,10 +164,10 @@ func (f *PrivacyFilter) FilterBeforeShare(ctx context.Context, category string, 
 	// 5. Check if manual approval required (based on policy)
 	if settings.RequireApproval {
 		result := &FilterResult{
-			Action:          FilterActionPending,
-			Reason:          "manual approval required by policy",
+			Action:           FilterActionPending,
+			Reason:           "manual approval required by policy",
 			RequiresApproval: true,
-			Metadata:        make(map[string]string),
+			Metadata:         make(map[string]string),
 		}
 		f.logAudit(ctx, userID, category, result, content)
 		return result, nil
@@ -176,10 +176,10 @@ func (f *PrivacyFilter) FilterBeforeShare(ctx context.Context, category string, 
 	// Check for sensitive keywords
 	if ContainsSensitiveKeywords(content) {
 		result := &FilterResult{
-			Action:          FilterActionPending,
-			Reason:          "sensitive keywords detected",
+			Action:           FilterActionPending,
+			Reason:           "sensitive keywords detected",
 			RequiresApproval: true,
-			Metadata:        make(map[string]string),
+			Metadata:         make(map[string]string),
 		}
 		result.Metadata["sensitive_keywords"] = "detected"
 		f.logAudit(ctx, userID, category, result, content)
