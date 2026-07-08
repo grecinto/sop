@@ -19,6 +19,8 @@ import (
 var (
 	cachedRootUser   *UserRecord
 	cachedRootUserMu sync.RWMutex
+	hqRateLimiter    *RateLimiter
+	hqRateLimiterMu  sync.Mutex
 )
 
 // hqSyncBatch represents a sync payload from a local daemon to HQ.
@@ -49,6 +51,20 @@ const (
 	// sharedMemoryKBName is the knowledge base name for central shared memory.
 	sharedMemoryKBName = "shared_memory"
 )
+
+// getHQRateLimiter returns the global HQ rate limiter instance.
+func getHQRateLimiter() *RateLimiter {
+	hqRateLimiterMu.Lock()
+	defer hqRateLimiterMu.Unlock()
+
+	if hqRateLimiter == nil {
+		hqRateLimiter = NewRateLimiter()
+		log.Info("HQ rate limiter initialized",
+			"per_daemon_rate", hqRateLimiter.perDaemonRate,
+			"global_rate", hqRateLimiter.globalRate)
+	}
+	return hqRateLimiter
+}
 
 // HandleHQSync receives shared memory sync batches from local daemons and stores
 // them into the central/root SA LTM for fleet-wide retrieval.
@@ -90,6 +106,29 @@ func HandleHQSync(w http.ResponseWriter, r *http.Request) {
 	daemonID := strings.TrimSpace(batch.DaemonID)
 	if daemonID == "" {
 		daemonID = "unknown-daemon"
+	}
+
+	// Check rate limits
+	rateLimiter := getHQRateLimiter()
+	allowed, retryAfter, reason := rateLimiter.Allow(daemonID)
+	if !allowed {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())))
+		w.Header().Set("X-RateLimit-Reason", reason)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+
+		log.Warn("HQ sync: rate limit exceeded",
+			"daemon_id", daemonID,
+			"reason", reason,
+			"retry_after", retryAfter)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":               "rate limit exceeded",
+			"reason":              reason,
+			"retry_after_seconds": int(retryAfter.Seconds()),
+			"daemon_id":           daemonID,
+		})
+		return
 	}
 
 	userID := strings.TrimSpace(batch.UserID)
@@ -346,6 +385,29 @@ func HandleHQRetrieve(w http.ResponseWriter, r *http.Request) {
 		daemonID = "unknown-daemon"
 	}
 
+	// Check rate limits
+	rateLimiter := getHQRateLimiter()
+	allowed, retryAfter, reason := rateLimiter.Allow(daemonID)
+	if !allowed {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryAfter.Seconds())))
+		w.Header().Set("X-RateLimit-Reason", reason)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+
+		log.Warn("HQ retrieve: rate limit exceeded",
+			"daemon_id", daemonID,
+			"reason", reason,
+			"retry_after", retryAfter)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":               "rate limit exceeded",
+			"reason":              reason,
+			"retry_after_seconds": int(retryAfter.Seconds()),
+			"daemon_id":           daemonID,
+		})
+		return
+	}
+
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
 		// Return empty result for empty query
@@ -398,10 +460,12 @@ func HandleHQRetrieve(w http.ResponseWriter, r *http.Request) {
 
 // retrieveSharedMemoryArtifacts retrieves relevant artifacts from the root SA's LTM.
 func retrieveSharedMemoryArtifacts(ctx context.Context, query string, limit int) ([]hqArtifact, error) {
-	// Get or cache the root SA user
+	// Get or cache the root SA user. If it is unavailable in a fresh environment,
+	// return an empty set rather than surfacing a 500 to the caller.
 	rootUser, err := getRootUserForSharedMemory(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get root SA user: %w", err)
+		log.Warn("HQ retrieve: root SA user unavailable, returning empty results", "error", err)
+		return []hqArtifact{}, nil
 	}
 
 	// Create auth context as the root SA user
@@ -415,7 +479,8 @@ func retrieveSharedMemoryArtifacts(ctx context.Context, query string, limit int)
 	// Get system database options
 	sysOpts, err := GetSystemDBOptions(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get system database options: %w", err)
+		log.Warn("HQ retrieve: system database unavailable, returning empty results", "error", err)
+		return []hqArtifact{}, nil
 	}
 
 	db := aidb.NewDatabase(sysOpts)
@@ -434,7 +499,8 @@ func retrieveSharedMemoryArtifacts(ctx context.Context, query string, limit int)
 		limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("retrieve shared memory: %w", err)
+		log.Warn("HQ retrieve: shared-memory retrieval failed, returning empty results", "error", err)
+		return []hqArtifact{}, nil
 	}
 
 	// Load category auto-share settings to filter artifacts

@@ -239,3 +239,49 @@ func TestHandleHQRetrieveAcceptsEmptyQuery(t *testing.T) {
 		t.Fatalf("expected empty artifacts for empty query, got %d", len(response.Artifacts))
 	}
 }
+
+func TestHandleHQSyncRateLimitsExcessRequests(t *testing.T) {
+	t.Setenv("SOP_HQ_RATE_LIMITING_ENABLED", "true")
+	t.Setenv("SOP_HQ_PER_DAEMON_RATE", "60")
+	t.Setenv("SOP_HQ_PER_DAEMON_BURST", "1")
+	t.Setenv("SOP_HQ_GLOBAL_RATE", "1000")
+	t.Setenv("SOP_HQ_GLOBAL_BURST", "1")
+
+	hqRateLimiterMu.Lock()
+	hqRateLimiter = nil
+	hqRateLimiterMu.Unlock()
+
+	batch := map[string]any{
+		"kind":      "shared_memory_sync",
+		"daemon_id": "rate-limit-daemon",
+		"shared_memory": map[string]any{
+			"enabled":   true,
+			"artifacts": []map[string]any{},
+		},
+	}
+
+	body, err := json.Marshal(batch)
+	if err != nil {
+		t.Fatalf("marshal batch: %v", err)
+	}
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/daemon/hq-sync", strings.NewReader(string(body)))
+	firstRR := httptest.NewRecorder()
+	HandleHQSync(firstRR, firstReq)
+	if firstRR.Code != http.StatusOK {
+		t.Fatalf("expected first sync to be accepted, got %d with body: %s", firstRR.Code, firstRR.Body.String())
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/daemon/hq-sync", strings.NewReader(string(body)))
+	secondRR := httptest.NewRecorder()
+	HandleHQSync(secondRR, secondReq)
+	if secondRR.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected second sync to be rate limited, got %d with body: %s", secondRR.Code, secondRR.Body.String())
+	}
+	if got := secondRR.Header().Get("Retry-After"); got == "" {
+		t.Fatalf("expected Retry-After header on rate limited response")
+	}
+	if got := secondRR.Header().Get("X-RateLimit-Reason"); got == "" {
+		t.Fatalf("expected X-RateLimit-Reason header on rate limited response")
+	}
+}

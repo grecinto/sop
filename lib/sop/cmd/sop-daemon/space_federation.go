@@ -110,7 +110,9 @@ func handleReceiveSpaceFromHQ(w http.ResponseWriter, r *http.Request) {
 
 // importSpaceFromHQ imports a Space received from HQ into the local database.
 func importSpaceFromHQ(ctx context.Context, dbName, spaceName string, spaceData []byte) error {
-	db, err := sharedMemoryDatabase()
+	ctx = normalizeContext(ctx)
+
+	db, err := sharedMemoryDatabase(ctx)
 	if err != nil {
 		return fmt.Errorf("get database: %w", err)
 	}
@@ -190,6 +192,8 @@ func acknowledgeSpaceReceipt(spaceName, dbName string) {
 
 // retrieveFederatedSpaceContext retrieves context from federated Spaces during research phase.
 func retrieveFederatedSpaceContext(ctx context.Context, query string, limit int) (string, error) {
+	ctx = normalizeContext(ctx)
+
 	federatedSpacesMu.RLock()
 	spaceNames := make([]string, 0, len(federatedSpaces))
 	for name := range federatedSpaces {
@@ -201,7 +205,7 @@ func retrieveFederatedSpaceContext(ctx context.Context, query string, limit int)
 		return "", nil
 	}
 
-	db, err := sharedMemoryDatabase()
+	db, err := sharedMemoryDatabase(ctx)
 	if err != nil {
 		return "", fmt.Errorf("get database: %w", err)
 	}

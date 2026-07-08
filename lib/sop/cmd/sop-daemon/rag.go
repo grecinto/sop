@@ -701,12 +701,21 @@ func promoteSharedMemoryArtifactForAsk(ctx context.Context, query, answer string
 	return nil
 }
 
-func sharedMemoryDatabase() (*aidb.Database, error) {
-	sysOpts, err := sopbackend.GetSystemDBOptions(context.Background())
+func sharedMemoryDatabase(ctx context.Context) (*aidb.Database, error) {
+	ctx = normalizeContext(ctx)
+
+	sysOpts, err := sopbackend.GetSystemDBOptions(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return aidb.NewDatabase(sysOpts), nil
+}
+
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func looksLikeAgentRoutingQuery(query string) bool {

@@ -28,6 +28,19 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
+var (
+	globalSyncQueue *SyncQueue
+	syncQueueOnce   sync.Once
+)
+
+// GetGlobalSyncQueue returns the global sync queue instance.
+func GetGlobalSyncQueue() *SyncQueue {
+	syncQueueOnce.Do(func() {
+		globalSyncQueue = NewSyncQueue()
+	})
+	return globalSyncQueue
+}
+
 type ExecuteRequest struct {
 	Command string `json:"command"`
 }
@@ -511,7 +524,11 @@ func startHQSyncLoop(authHandler *DaemonAuthHandler) {
 		return
 	}
 	for {
-		time.Sleep(nextHQSyncDelay(1*time.Hour, 15*time.Minute, time.Now().UnixNano()))
+		// Use adaptive delay from sync queue
+		delay := authHandler.syncQueue.GetNextSyncDelay()
+		log.Printf("HQ sync: waiting %s until next attempt", delay)
+		time.Sleep(delay)
+
 		syncErr := authHandler.syncWithHQ(context.Background())
 		if syncErr != nil {
 			log.Printf("HQ sync failed: %v", syncErr)

@@ -107,10 +107,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,6 +139,7 @@ type DaemonAuthHandler struct {
 	sessionStore    *sopbackend.SessionStore
 	config          DaemonAuthConfig
 	hqSigningSecret string
+	syncQueue       *SyncQueue
 }
 
 type hqSignedClaims struct {
@@ -271,6 +274,7 @@ func NewDaemonAuthHandler(config DaemonAuthConfig) (*DaemonAuthHandler, error) {
 		sessionStore:    sessionStore,
 		config:          config,
 		hqSigningSecret: getHQSigningSecret(),
+		syncQueue:       GetGlobalSyncQueue(),
 	}, nil
 }
 
@@ -392,7 +396,8 @@ func collectSharedMemoryArtifacts(ctx context.Context) ([]struct {
 	Category string         `json:"category"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }, error) {
-	db, err := sharedMemoryDatabase()
+	ctx = normalizeContext(ctx)
+	db, err := sharedMemoryDatabase(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -475,8 +480,55 @@ func collectSharedMemoryArtifacts(ctx context.Context) ([]struct {
 }
 
 func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
-	if h == nil || h.sessionStore == nil {
+	if h == nil || h.sessionStore == nil || h.syncQueue == nil {
 		return nil
+	}
+
+	// Check if sync should be attempted (circuit breaker)
+	shouldAttempt, reason := h.syncQueue.ShouldAttemptSync()
+	if !shouldAttempt {
+		log.Printf("HQ sync skipped: %s", reason)
+		return nil
+	}
+
+	// Log metrics before sync
+	metrics := h.syncQueue.GetMetrics()
+	log.Printf("HQ sync metrics: queue_depth=%d, state=%s, consecutive_failures=%d",
+		metrics["queue_depth"], metrics["circuit_state"], metrics["consecutive_failures"])
+
+	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
+	if hqBaseURL == "" {
+		log.Printf("HQ sync skipped (no HQ endpoint configured)")
+		return nil
+	}
+
+	// Dequeue batch from sync queue
+	batchSize := h.syncQueue.GetBatchSize()
+	queuedArtifacts := h.syncQueue.DequeueBatch(batchSize)
+
+	if len(queuedArtifacts) == 0 {
+		// No artifacts to sync, send heartbeat only
+		log.Printf("HQ sync: no artifacts queued, sending heartbeat only")
+		return h.sendHQHeartbeat(ctx, hqBaseURL)
+	}
+
+	// Convert queued artifacts to batch format
+	artifacts := make([]struct {
+		Text     string         `json:"text"`
+		Category string         `json:"category"`
+		Metadata map[string]any `json:"metadata,omitempty"`
+	}, 0, len(queuedArtifacts))
+
+	for _, qa := range queuedArtifacts {
+		artifacts = append(artifacts, struct {
+			Text     string         `json:"text"`
+			Category string         `json:"category"`
+			Metadata map[string]any `json:"metadata,omitempty"`
+		}{
+			Text:     qa.Text,
+			Category: qa.Category,
+			Metadata: qa.Metadata,
+		})
 	}
 
 	daemonID := "local-daemon"
@@ -495,52 +547,63 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Collect shared memory artifacts to sync
-	artifacts, err := collectSharedMemoryArtifacts(context.Background())
-	if err == nil && len(artifacts) > 0 {
-		batch.SharedMeta.Enabled = true
-		batch.SharedMeta.Scope = "shared-memory"
-		batch.SharedMeta.Mode = "periodic"
-		batch.SharedMeta.LastSyncAt = batch.Timestamp
-		batch.SharedMeta.Artifacts = artifacts
-	} else {
-		// Still send heartbeat even without artifacts
-		batch.SharedMeta.Enabled = true
-		batch.SharedMeta.Scope = "shared-memory"
-		batch.SharedMeta.Mode = "periodic"
-		batch.SharedMeta.LastSyncAt = batch.Timestamp
-	}
+	batch.SharedMeta.Enabled = true
+	batch.SharedMeta.Scope = "shared-memory"
+	batch.SharedMeta.Mode = "queued"
+	batch.SharedMeta.LastSyncAt = batch.Timestamp
+	batch.SharedMeta.Artifacts = artifacts
+
 	payload, err := json.Marshal(batch)
 	if err != nil {
 		return fmt.Errorf("marshal HQ sync batch: %w", err)
 	}
-	if len(payload) == 0 {
-		return nil
-	}
-
-	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
-	if hqBaseURL == "" {
-		log.Printf("HQ sync batch queued (no HQ endpoint configured): %s", payload)
-		return nil
-	}
 
 	hqURL := strings.TrimRight(hqBaseURL, "/") + "/api/daemon/hq-sync"
+
+	// Record sync attempt
+	h.syncQueue.RecordSyncAttempt()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hqURL, strings.NewReader(string(payload)))
 	if err != nil {
+		h.syncQueue.RecordSyncFailure(0)
 		return fmt.Errorf("create HQ sync request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+string(h.getHQSigningSecretValue()))
-	client := &http.Client{Timeout: 10 * time.Second}
+
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		h.syncQueue.RecordSyncFailure(0)
 		return fmt.Errorf("send HQ sync batch: %w", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Special handling for rate limit responses
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+			reason := resp.Header.Get("X-RateLimit-Reason")
+
+			h.syncQueue.RecordSyncFailure(resp.StatusCode)
+
+			log.Printf("HQ sync rate limited: %s (retry after %s)", reason, retryAfter)
+			return fmt.Errorf("HQ sync rate limited: %s (retry after %s)", reason, retryAfter)
+		}
+
+		h.syncQueue.RecordSyncFailure(resp.StatusCode)
+
+		// Try to parse error body
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		if len(bodyBytes) > 0 {
+			return fmt.Errorf("HQ sync returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
 		return fmt.Errorf("HQ sync returned status %d", resp.StatusCode)
 	}
-	log.Printf("HQ sync batch delivered to %s", hqURL)
+
+	// Record success
+	h.syncQueue.RecordSyncSuccess()
+	log.Printf("HQ sync successful: delivered %d artifacts to %s", len(artifacts), hqURL)
 
 	// Pull artifacts from HQ after successful push
 	if err := h.pullFromHQ(ctx, hqBaseURL); err != nil {
@@ -548,6 +611,72 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 		// Don't fail the entire sync on pull errors
 	}
 
+	return nil
+}
+
+// parseRetryAfter parses the Retry-After header value.
+func parseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+
+	// Try parsing as seconds
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+
+	// Try parsing as HTTP date (not implemented for simplicity)
+	return 0
+}
+
+// sendHQHeartbeat sends a heartbeat to HQ with no artifacts.
+func (h *DaemonAuthHandler) sendHQHeartbeat(ctx context.Context, hqBaseURL string) error {
+	daemonID := "local-daemon"
+	if storedID := strings.TrimSpace(os.Getenv("SOP_DAEMON_ID")); storedID != "" {
+		daemonID = storedID
+	}
+
+	daemonURL := getDaemonCallbackURL()
+
+	batch := hqSyncBatch{
+		Kind:      "shared_memory_sync",
+		SessionID: "daemon-sync",
+		UserID:    "daemon",
+		DaemonID:  daemonID,
+		DaemonURL: daemonURL,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	batch.SharedMeta.Enabled = true
+	batch.SharedMeta.Scope = "shared-memory"
+	batch.SharedMeta.Mode = "heartbeat"
+	batch.SharedMeta.LastSyncAt = batch.Timestamp
+
+	payload, err := json.Marshal(batch)
+	if err != nil {
+		return fmt.Errorf("marshal HQ heartbeat: %w", err)
+	}
+
+	hqURL := strings.TrimRight(hqBaseURL, "/") + "/api/daemon/hq-sync"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hqURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return fmt.Errorf("create HQ heartbeat request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+string(h.getHQSigningSecretValue()))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send HQ heartbeat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HQ heartbeat returned status %d", resp.StatusCode)
+	}
+
+	log.Printf("HQ heartbeat sent to %s", hqURL)
 	return nil
 }
 
@@ -616,7 +745,7 @@ func (h *DaemonAuthHandler) pullFromHQ(ctx context.Context, hqBaseURL string) er
 
 	// Store retrieved artifacts in local shared memory
 	if len(response.Artifacts) > 0 {
-		if err := h.storeRetrievedArtifacts(context.Background(), response.Artifacts); err != nil {
+		if err := h.storeRetrievedArtifacts(ctx, response.Artifacts); err != nil {
 			return fmt.Errorf("store retrieved artifacts: %w", err)
 		}
 	}
@@ -630,7 +759,7 @@ func (h *DaemonAuthHandler) storeRetrievedArtifacts(ctx context.Context, artifac
 		return nil
 	}
 
-	db, err := sharedMemoryDatabase()
+	db, err := sharedMemoryDatabase(ctx)
 	if err != nil {
 		return fmt.Errorf("get shared memory database: %w", err)
 	}

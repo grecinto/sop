@@ -270,6 +270,19 @@ These seed patterns provide baseline intelligence before any fleet learning occu
 - **Medium confidence**: 0.70-0.84 (promoted with filtering)
 - **Below threshold**: Not promoted
 
+### Lifecycle of a promoted artifact
+
+A shared-memory artifact passes through a simple lifecycle before it becomes useful across the fleet:
+
+1. **Candidate generation**: A daemon produces a compact pattern from a successful interaction.
+2. **Classification**: The artifact is assigned to a category.
+3. **Quality gate**: Confidence, length, and generality checks decide whether it is worth keeping.
+4. **Local promotion**: Approved artifacts are inserted into the daemon's local shared-memory knowledge base.
+5. **Periodic sync**: The daemon sends recent artifacts to HQ.
+6. **Fleet retrieval**: Other daemons can pull relevant artifacts by query and category.
+
+This lifecycle is intentionally conservative. It favors useful, generalized guidance over noisy or one-off content.
+
 ### Confidence Scoring by Query Type
 
 | Query Type | Category | Base Confidence | Conditions |
@@ -286,9 +299,10 @@ These seed patterns provide baseline intelligence before any fleet learning occu
 - Text truncated at limit to keep artifacts compact
 - Longer context must be summarized
 
-### Recurrence (V1)
-- **V1 approach**: Promote immediately (recurrence=1)
-- **Future**: Track recurrence at HQ, only store patterns seen multiple times
+### Recurrence and deduplication (V1)
+- **V1 approach**: Promote immediately once quality gates pass; no explicit recurrence-based suppression is implemented yet.
+- **Current behavior**: The system reduces noise through category filtering, confidence thresholds, compact summaries, and privacy-safe metadata.
+- **Future**: Add semantic deduplication, recurrence boosting, merge/update semantics, and stale-pattern decay at HQ.
 
 ---
 
@@ -327,15 +341,41 @@ Pattern: For type errors: 1) Identify expected vs actual types...
 ## Sync Flow
 
 ### Push (Daemon → HQ)
-1. **On every successful ask**: Analyze query/answer and promote if meets thresholds
-2. **Periodic batch sync**: Every ~1 hour, send promoted artifacts to HQ
-3. **HQ storage**: Artifacts stored in root SA's LTM (`ltm_root` knowledge base)
+1. **On successful local work**: The daemon analyzes the interaction and promotes a compact artifact if it passes thresholds.
+2. **Periodic batch sync**: Every ~1 hour, the daemon gathers recent shared-memory artifacts and sends them to HQ.
+3. **HQ storage**: Artifacts are stored in the root SA's LTM (`ltm_root` knowledge base) with provenance metadata.
 
 ### Pull (HQ → Daemon)
-1. **After successful push**: Daemon requests relevant artifacts from HQ
-2. **Query**: "shared patterns best practices error handling" (broad query)
-3. **Limit**: Up to 10 artifacts per sync
-4. **Local storage**: Retrieved artifacts available for immediate use
+1. **After successful push**: The daemon requests relevant artifacts from HQ.
+2. **Query**: A broad semantic query such as "shared patterns best practices error handling".
+3. **Limit**: Up to 10 artifacts per pull request, capped at 50.
+4. **Local storage**: Retrieved artifacts are available for immediate local use and can be reused in later asks.
+### Batching and throttling strategy
+
+The current implementation uses a conservative batch-sync model:
+
+- artifacts are buffered locally and sent in batches,
+- sync cadence is periodic rather than real-time,
+- payload size is intentionally kept modest.
+
+For higher traffic, the next step is to make this adaptive:
+
+- **Scale up** when HQ is healthy and backlog is low: slightly larger batches and faster cadence.
+- **Scale down** when HQ is slow or failing: smaller batches, slower cadence, and exponential backoff.
+- **Apply back-pressure** by queueing pending artifacts locally and draining them in bounded chunks.
+- **Add safety rails** such as per-daemon rate limits, max in-flight syncs, and circuit-breaker behavior on repeated failures.
+
+This provides a clear path from the current batch model to a more resilient high-volume sync system without requiring a full streaming architecture immediately.
+### Capacity and retention notes
+
+The current system is intentionally simple rather than fully policy-driven. It keeps the memory layer useful by enforcing:
+
+- a minimum confidence threshold,
+- short artifact length,
+- category-aware retrieval,
+- and conservative sync volume.
+
+A more advanced lifecycle policy with TTL, decay, merge semantics, and category-specific retention is planned for future iterations.
 
 ---
 
@@ -400,6 +440,7 @@ The federated content system succeeds when:
 ## Future Enhancements
 
 ### V2 Features
+- **Adaptive throttling and queued sync**: Scale daemon/HQ sync up or down based on health, load, and back-pressure
 - **Recurrence tracking**: Only promote patterns seen N+ times
 - **Confidence decay**: Lower confidence for stale patterns
 - **Category-specific retention**: Different TTLs per category
@@ -437,6 +478,7 @@ The federated content system succeeds when:
 - [x] **Bidirectional Sync** (push to HQ, pull from HQ)
 - [x] Complete test coverage (daemon + HQ handlers)
 - [x] Comprehensive documentation
+- [x] Lifecycle, limits, deduplication, and batching/throttling documentation
 
 ### Test Results
 

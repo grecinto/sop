@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -79,6 +80,8 @@ type FederatedArtifact struct {
 
 // PromoteFederatedArtifact stores a structured artifact in the shared memory system.
 func PromoteFederatedArtifact(ctx context.Context, artifact FederatedArtifact) error {
+	ctx = normalizeContext(ctx)
+
 	if !artifact.ShouldShare {
 		return nil
 	}
@@ -87,7 +90,7 @@ func PromoteFederatedArtifact(ctx context.Context, artifact FederatedArtifact) e
 		return nil // Below confidence threshold
 	}
 
-	db, err := sharedMemoryDatabase()
+	db, err := sharedMemoryDatabase(ctx)
 	if err != nil {
 		return err
 	}
@@ -112,7 +115,8 @@ func PromoteFederatedArtifact(ctx context.Context, artifact FederatedArtifact) e
 	metadata["promoted_at"] = time.Now().UTC().Format(time.RFC3339)
 	metadata["version"] = "v1"
 
-	return agent.PromoteSharedMemoryArtifact(
+	// Store in local shared memory
+	err = agent.PromoteSharedMemoryArtifact(
 		ctx,
 		db,
 		nil, // LLM not required
@@ -124,6 +128,20 @@ func PromoteFederatedArtifact(ctx context.Context, artifact FederatedArtifact) e
 		"local-daemon",
 		metadata,
 	)
+	if err != nil {
+		return err
+	}
+
+	// Also enqueue for sync to HQ
+	syncQueue := GetGlobalSyncQueue()
+	if syncQueue != nil {
+		if err := syncQueue.Enqueue(text, string(artifact.Category), metadata); err != nil {
+			log.Printf("Failed to enqueue artifact for HQ sync: %v", err)
+			// Don't fail promotion if enqueue fails
+		}
+	}
+
+	return nil
 }
 
 // buildArtifactText creates a compact text representation of the artifact.
@@ -943,11 +961,13 @@ func truncate(s string, maxLen int) string {
 
 // RetrieveFederatedContext retrieves relevant federated knowledge for a query.
 func RetrieveFederatedContext(ctx context.Context, query string, categories []FederatedContentCategory, limit int) (string, error) {
+	ctx = normalizeContext(ctx)
+
 	if strings.TrimSpace(query) == "" {
 		return "", nil
 	}
 
-	db, err := sharedMemoryDatabase()
+	db, err := sharedMemoryDatabase(ctx)
 	if err != nil {
 		return "", err
 	}
