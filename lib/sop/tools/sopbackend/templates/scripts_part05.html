@@ -1478,7 +1478,7 @@
             try {
                 const result = await showActionApprovalModal(normalizedEvent.payload);
                 if (result.approved) {
-                    await executeApprovedAction(result.payload, result.autoApproved);
+                    await executeApprovedAction(result.payload, result.autoApproved, result.executionMode || 'background');
                 } else {
                     appendChatMessage('ai', '❌ Action denied by user.');
                 }
@@ -1878,6 +1878,40 @@
         }
     }
 
+    function shouldUseTerminal(command) {
+        const lower = command.toLowerCase().trim();
+        const interactivePatterns = [
+            'sudo', 'su ', 'ssh', 'scp', 'vim', 'vi ', 'nano', 'emacs',
+            'less', 'more', 'top', 'htop', 'tail -f', 'watch',
+            'docker exec -it', 'kubectl exec -it', 'python -i',
+            'psql', 'mysql', 'redis-cli'
+        ];
+        return interactivePatterns.some(pattern => lower.includes(pattern));
+    }
+
+    function getTerminalSuggestion(command) {
+        const lower = command.toLowerCase();
+        if (lower.includes('sudo') || lower.includes('su ')) {
+            return 'This command requires password input - terminal window recommended';
+        }
+        if (lower.includes('ssh') || lower.includes('scp')) {
+            return 'SSH commands may require password or interaction';
+        }
+        if (lower.includes('vim') || lower.includes('nano') || lower.includes('emacs')) {
+            return 'Text editors require interactive terminal window';
+        }
+        if (lower.includes('less') || lower.includes('more')) {
+            return 'Pagers work better in terminal window';
+        }
+        if (lower.includes('top') || lower.includes('htop') || lower.includes('watch')) {
+            return 'Monitoring tools work better in terminal window';
+        }
+        if (lower.includes('tail -f')) {
+            return 'Log following is easier to view in terminal window';
+        }
+        return 'This command may work better in a terminal window';
+    }
+
     async function showActionApprovalModal(payload) {
         const actionType = payload.action_type || 'action';
         
@@ -1900,6 +1934,11 @@
             const denyBtn = document.getElementById('action-approval-deny-btn');
             const sessionCheckbox = document.getElementById('action-approval-session-checkbox');
             const typeLabelEl = document.getElementById('action-approval-type-label');
+            const terminalModeRadio = document.getElementById('execution-mode-terminal');
+            const backgroundModeRadio = document.getElementById('execution-mode-background');
+            const suggestionBox = document.getElementById('execution-mode-suggestion');
+            const suggestionText = document.getElementById('execution-mode-suggestion-text');
+            const executionModeSection = document.getElementById('action-approval-execution-mode');
 
             // Populate modal content
             const command = payload.command || payload.statement || payload.action || '';
@@ -1932,12 +1971,34 @@
                 passwordNoteEl.style.display = 'none';
             }
             
+            // Show/hide execution mode section (only for shell commands)
+            if (actionType === 'local_shell_execution' && command) {
+                executionModeSection.style.display = 'block';
+                
+                // Smart default: suggest terminal for interactive commands
+                const needsTerminal = shouldUseTerminal(command);
+                if (needsTerminal) {
+                    terminalModeRadio.checked = true;
+                    backgroundModeRadio.checked = false;
+                    suggestionBox.style.display = 'block';
+                    suggestionText.textContent = getTerminalSuggestion(command);
+                } else {
+                    terminalModeRadio.checked = false;
+                    backgroundModeRadio.checked = true;
+                    suggestionBox.style.display = 'none';
+                }
+            } else {
+                executionModeSection.style.display = 'none';
+            }
+            
             // Reset session checkbox state
             sessionCheckbox.checked = false;
 
             // Wire up buttons
             const handleAllow = () => {
                 const rememberForSession = sessionCheckbox.checked;
+                const executionMode = terminalModeRadio.checked ? 'terminal' : 'background';
+                
                 if (rememberForSession) {
                     setSessionApproval(actionType, true);
                 }
@@ -1947,7 +2008,12 @@
                 denyBtn.removeEventListener('click', handleDeny);
                 document.removeEventListener('keydown', handleKeydown);
                 if (_currentApprovalResolve) {
-                    _currentApprovalResolve({ approved: true, payload, sessionApproval: rememberForSession });
+                    _currentApprovalResolve({ 
+                        approved: true, 
+                        payload, 
+                        sessionApproval: rememberForSession,
+                        executionMode: executionMode
+                    });
                 }
             };
 
@@ -1977,7 +2043,7 @@
         });
     }
 
-    async function executeApprovedAction(payload, autoApproved = false) {
+    async function executeApprovedAction(payload, autoApproved = false, executionMode = 'background') {
         const actionType = payload.action_type || '';
         const command = payload.command || payload.statement || '';
         
@@ -1987,7 +2053,8 @@
                     command: command,
                     reasoning: payload.reasoning || '',
                     working_dir: payload.working_dir || '',
-                    timeout_seconds: payload.timeout_seconds || 600
+                    timeout_seconds: payload.timeout_seconds || 600,
+                    execution_mode: executionMode
                 };
 
                 const res = await fetch(getDaemonBaseURL().replace(/\/$/, '') + '/api/execute', {
@@ -2002,12 +2069,31 @@
                 }
                 
                 const data = await res.json();
+                
+                // Handle terminal launch
+                if (data.launched_in_terminal) {
+                    const approvalBadge = autoApproved ? ' 🚀 *(auto-approved)*' : '';
+                    const modeLabel = executionMode === 'terminal' ? '🖥️ Terminal' : '⚡ Background';
+                    let outputMsg = `✅ **Command Launched in Terminal** ${modeLabel}${approvalBadge}\n\nCommand: \`${command}\`\n\n`;
+                    outputMsg += 'The command is running in a visible terminal window. Check your system for the terminal window to see output and provide input if needed.';
+                    if (data.suggestion) {
+                        outputMsg += `\n\n💡 *${data.suggestion}*`;
+                    }
+                    appendChatMessage('ai', outputMsg);
+                    return data;
+                }
+                
+                // Handle background execution
                 const approvalBadge = autoApproved ? ' 🚀 *(auto-approved)*' : '';
-                let outputMsg = `✅ **Local Command Executed**${approvalBadge}\n\nCommand: \`${command}\`\n`;
+                const modeLabel = executionMode === 'terminal' ? '🖥️ Terminal' : '⚡ Background';
+                let outputMsg = `✅ **Local Command Executed** ${modeLabel}${approvalBadge}\n\nCommand: \`${command}\`\n`;
                 if (data.stdout) outputMsg += `\n**Output:**\n\`\`\`\n${data.stdout}\n\`\`\`\n`;
                 if (data.stderr) outputMsg += `\n**Errors:**\n\`\`\`\n${data.stderr}\n\`\`\`\n`;
                 if (data.error) outputMsg += `\n**Error:** ${data.error}\n`;
                 outputMsg += `\nExit Code: ${data.exit_code}`;
+                if (data.suggestion) {
+                    outputMsg += `\n\n💡 **Tip:** ${data.suggestion}`;
+                }
                 
                 appendChatMessage('ai', outputMsg);
                 return data;

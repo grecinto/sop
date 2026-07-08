@@ -42,14 +42,20 @@ func GetGlobalSyncQueue() *SyncQueue {
 }
 
 type ExecuteRequest struct {
-	Command string `json:"command"`
+	Command        string `json:"command"`
+	WorkingDir     string `json:"working_dir,omitempty"`
+	Reasoning      string `json:"reasoning,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	ExecutionMode  string `json:"execution_mode,omitempty"` // "background" or "terminal"
 }
 
 type ExecuteResponse struct {
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode int    `json:"exit_code"`
-	Error    string `json:"error,omitempty"`
+	Stdout             string `json:"stdout"`
+	Stderr             string `json:"stderr"`
+	ExitCode           int    `json:"exit_code"`
+	Error              string `json:"error,omitempty"`
+	LaunchedInTerminal bool   `json:"launched_in_terminal,omitempty"`
+	Suggestion         string `json:"suggestion,omitempty"`
 }
 
 type UIHandoffRequest struct {
@@ -636,13 +642,47 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Executing command: %s", req.Command)
+	// Determine execution mode
+	executionMode := req.ExecutionMode
+	if executionMode == "" {
+		// Auto-detect if not specified
+		if shouldUseTerminal(req.Command) {
+			executionMode = "terminal"
+		} else {
+			executionMode = "background"
+		}
+	}
 
+	log.Printf("Executing command in %s mode: %s", executionMode, req.Command)
+
+	// Terminal mode: launch visible terminal window
+	if executionMode == "terminal" {
+		if err := launchInTerminal(req.Command, req.WorkingDir); err != nil {
+			log.Printf("Failed to launch terminal, falling back to background: %v", err)
+			// Fall back to background execution
+			executionMode = "background"
+		} else {
+			log.Printf("Command launched in terminal successfully")
+			resp := ExecuteResponse{
+				Stdout:             "Command launched in terminal window.",
+				ExitCode:           0,
+				LaunchedInTerminal: true,
+			}
+			respondJSON(w, http.StatusOK, resp)
+			return
+		}
+	}
+
+	// Background mode: capture output and return
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd", "/C", req.Command)
 	} else {
 		cmd = exec.Command("sh", "-c", req.Command)
+	}
+
+	if req.WorkingDir != "" {
+		cmd.Dir = req.WorkingDir
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -654,6 +694,11 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 	resp := ExecuteResponse{
 		Stdout: stdout.String(),
 		Stderr: stderr.String(),
+	}
+
+	// Add suggestion if command would work better in terminal
+	if shouldUseTerminal(req.Command) && executionMode == "background" {
+		resp.Suggestion = getTerminalSuggestion(req.Command)
 	}
 
 	if err != nil {
