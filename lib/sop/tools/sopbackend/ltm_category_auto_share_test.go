@@ -25,7 +25,27 @@ func TestShouldShowCategoryAutoShareControls(t *testing.T) {
 		t.Fatal("expected controls to be hidden for non-admin users")
 	}
 
-	if shouldShowCategoryAutoShareControls(authCtx, "shared_memory", "workflow_pattern", false) {
-		t.Fatal("expected controls to be hidden outside HQ")
+	if !shouldShowCategoryAutoShareControls(authCtx, "shared_memory", "workflow_pattern", false) {
+		t.Fatal("expected controls to be visible in local daemon/UI for eligible categories")
+	}
+}
+
+func TestAnnotateCategoryAutoShareVisibility(t *testing.T) {
+	authCtx := sop.AuthContext{Roles: []string{sop.RoleSystemAdmin}}
+	category := map[string]any{"path": "workflow_pattern"}
+
+	annotateCategoryAutoShareVisibility(category, authCtx, "shared_memory", true)
+
+	visible, ok := category["show_category_auto_share_controls"].(bool)
+	if !ok || !visible {
+		t.Fatal("expected eligible category to expose auto-share controls")
+	}
+
+	category["path"] = "debug_logs"
+	annotateCategoryAutoShareVisibility(category, authCtx, "shared_memory", true)
+
+	visible, ok = category["show_category_auto_share_controls"].(bool)
+	if !ok || visible {
+		t.Fatal("expected non-eligible category to hide auto-share controls")
 	}
 }

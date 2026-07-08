@@ -68,6 +68,11 @@ func (r *UIRouter) RegisterWithOptions(mux *http.ServeMux, includeRoot bool) {
 		mux.HandleFunc("/", r.handleRoot)
 	}
 	mux.HandleFunc("/login", r.handleLoginPage)
+	mux.HandleFunc("/privacy/settings", RequireAuth(HandlePrivacySettingsPage))
+	mux.HandleFunc("/privacy/audit", RequireAuth(HandlePrivacyAuditLogPage))
+	mux.HandleFunc("/privacy/approval-queue", RequireAuth(HandlePrivacyApprovalQueuePage))
+	mux.HandleFunc("/privacy/dashboard", RequireAuth(HandlePrivacyDashboardPage))
+	mux.HandleFunc("/privacy/advanced", RequireAuth(HandlePrivacyAdvancedPage))
 	mux.HandleFunc("/hq-login", r.handleHQLoginPage)
 	mux.HandleFunc("/app", RequireAuth(r.handleIndex))
 	mux.HandleFunc("/app/subscribe", RequireAuth(r.handleSubscribe))

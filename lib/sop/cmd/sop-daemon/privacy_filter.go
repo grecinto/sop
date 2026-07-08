@@ -20,23 +20,25 @@ var (
 	auditLogPath          string
 )
 
+type noopAuditLogger struct{}
+
+func (noopAuditLogger) Log(ctx context.Context, entry *privacy.AuditLogEntry) error {
+	return nil
+}
+
 // initPrivacyFilter initializes the privacy filter for the daemon.
 func initPrivacyFilter(daemonDataDir string) error {
 	auditLogPath = filepath.Join(daemonDataDir, "privacy_audit.jsonl")
+
+	_, err := ensurePrivacyFilterInitialized()
+	if err != nil {
+		return err
+	}
 
 	settings := getPrivacySettings()
 	if settings == nil {
 		return fmt.Errorf("privacy settings not initialized")
 	}
-
-	detector := privacy.NewPIIDetector()
-	auditLog := &FileAuditLogger{LogPath: auditLogPath}
-
-	filter := privacy.NewPrivacyFilter(settings, detector, auditLog)
-
-	globalPrivacyFilterMu.Lock()
-	globalPrivacyFilter = filter
-	globalPrivacyFilterMu.Unlock()
 
 	log.Info("privacy filter initialized",
 		"global_share_enabled", settings.GlobalShareEnabled,
@@ -45,6 +47,35 @@ func initPrivacyFilter(daemonDataDir string) error {
 	)
 
 	return nil
+}
+
+func ensurePrivacyFilterInitialized() (*privacy.PrivacyFilter, error) {
+	if filter := getPrivacyFilter(); filter != nil {
+		return filter, nil
+	}
+
+	settings := getPrivacySettings()
+	if settings == nil {
+		settings = privacy.NewDefaultPrivacySettings("daemon-user")
+		globalPrivacySettingsMu.Lock()
+		globalPrivacySettings = settings
+		globalPrivacySettingsMu.Unlock()
+	}
+
+	detector := privacy.NewPIIDetector()
+	var auditLog privacy.AuditLogger
+	if auditLogPath != "" {
+		auditLog = &FileAuditLogger{LogPath: auditLogPath}
+	} else {
+		auditLog = noopAuditLogger{}
+	}
+
+	filter := privacy.NewPrivacyFilter(settings, detector, auditLog)
+	globalPrivacyFilterMu.Lock()
+	globalPrivacyFilter = filter
+	globalPrivacyFilterMu.Unlock()
+
+	return filter, nil
 }
 
 // getPrivacyFilter returns the global privacy filter (thread-safe).
@@ -65,9 +96,9 @@ func updatePrivacyFilter(settings *privacy.PrivacySettings) {
 // filterContentBeforeShare applies privacy filtering before sharing content to HQ.
 // This is the daemon-side enforcement point for outbound content.
 func filterContentBeforeShare(ctx context.Context, category string, content string, userID string) (*privacy.FilterResult, error) {
-	filter := getPrivacyFilter()
-	if filter == nil {
-		return nil, fmt.Errorf("privacy filter not initialized")
+	filter, err := ensurePrivacyFilterInitialized()
+	if err != nil {
+		return nil, err
 	}
 
 	result, err := filter.FilterBeforeShare(ctx, category, content, userID)
@@ -89,9 +120,9 @@ func filterContentBeforeShare(ctx context.Context, category string, content stri
 
 // filterBatchBeforeShare applies privacy filtering to multiple items.
 func filterBatchBeforeShare(ctx context.Context, category string, items []string, userID string) ([]*privacy.FilterResult, error) {
-	filter := getPrivacyFilter()
-	if filter == nil {
-		return nil, fmt.Errorf("privacy filter not initialized")
+	filter, err := ensurePrivacyFilterInitialized()
+	if err != nil {
+		return nil, err
 	}
 
 	results, err := filter.FilterBatch(ctx, category, items, userID)

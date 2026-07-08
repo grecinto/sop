@@ -2215,6 +2215,53 @@
             sysLabel.appendChild(vectorField);
         }
 
+        const showCategoryControls = !!(cat && cat.show_category_auto_share_controls);
+        let categorySharingToggle = null;
+        const categoryPath = (cat && cat.path && String(cat.path).trim()) || (cat && cat.name && String(cat.name).trim()) || '';
+        const sharingControls = document.createElement('div');
+        sharingControls.style.marginTop = '15px';
+        sharingControls.style.padding = '10px 12px';
+        sharingControls.style.border = '1px solid var(--border-color)';
+        sharingControls.style.borderRadius = '6px';
+        sharingControls.style.background = 'rgba(91,110,209,0.06)';
+        sharingControls.style.display = showCategoryControls ? 'block' : 'none';
+        if (showCategoryControls) {
+            const sharingTitle = document.createElement('div');
+            sharingTitle.innerText = 'Privacy / federation controls';
+            sharingTitle.style.fontSize = '0.9em';
+            sharingTitle.style.fontWeight = '600';
+            sharingTitle.style.marginBottom = '6px';
+            sharingTitle.style.color = 'var(--text-color)';
+
+            const sharingLabel = document.createElement('label');
+            sharingLabel.style.display = 'flex';
+            sharingLabel.style.alignItems = 'center';
+            sharingLabel.style.gap = '8px';
+            sharingLabel.style.cursor = 'pointer';
+            sharingLabel.style.fontSize = '0.9em';
+            sharingLabel.style.color = 'var(--text-color)';
+
+            categorySharingToggle = document.createElement('input');
+            categorySharingToggle.type = 'checkbox';
+            categorySharingToggle.checked = cat.auto_share_to_daemons !== false;
+
+            const sharingText = document.createElement('span');
+            sharingText.innerText = 'Allow this category to be auto-shared to daemons';
+
+            sharingLabel.appendChild(categorySharingToggle);
+            sharingLabel.appendChild(sharingText);
+
+            const sharingNote = document.createElement('div');
+            sharingNote.innerText = 'These controls are only available for eligible shared-memory categories.';
+            sharingNote.style.marginTop = '6px';
+            sharingNote.style.fontSize = '0.8em';
+            sharingNote.style.color = 'var(--text-muted)';
+
+            sharingControls.appendChild(sharingTitle);
+            sharingControls.appendChild(sharingLabel);
+            sharingControls.appendChild(sharingNote);
+        }
+
         // Action Buttons
         const actionContainer = document.createElement('div');
         actionContainer.style.textAlign = 'right';
@@ -2275,6 +2322,7 @@
         modal.appendChild(descLabel);
         modal.appendChild(descInput);
         if (extraInfo) modal.appendChild(sysLabel);
+        modal.appendChild(sharingControls);
         modal.appendChild(actionContainer);
         
         overlay.appendChild(modal);

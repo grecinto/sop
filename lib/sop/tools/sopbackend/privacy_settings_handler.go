@@ -16,8 +16,19 @@ func InitPrivacyTemplates(templatesDir string) error {
 	return err
 }
 
+func ensurePrivacyTemplates() error {
+	if privacyTemplates != nil {
+		return nil
+	}
+	return InitPrivacyTemplates(sharedTemplateDir())
+}
+
 // HandlePrivacySettingsPage serves the privacy settings UI page
 func HandlePrivacySettingsPage(w http.ResponseWriter, r *http.Request) {
+	if err := ensurePrivacyTemplates(); err != nil {
+		http.Error(w, "Failed to initialize privacy templates", http.StatusInternalServerError)
+		return
+	}
 	if err := privacyTemplates.ExecuteTemplate(w, "privacy_settings.html", nil); err != nil {
 		http.Error(w, "Failed to render template", http.StatusInternalServerError)
 		return
@@ -26,6 +37,10 @@ func HandlePrivacySettingsPage(w http.ResponseWriter, r *http.Request) {
 
 // HandlePrivacyAuditLogPage serves the privacy audit log viewer
 func HandlePrivacyAuditLogPage(w http.ResponseWriter, r *http.Request) {
+	if err := ensurePrivacyTemplates(); err != nil {
+		http.Error(w, "Failed to initialize privacy templates", http.StatusInternalServerError)
+		return
+	}
 	if err := privacyTemplates.ExecuteTemplate(w, "privacy_audit_log.html", nil); err != nil {
 		http.Error(w, "Failed to render template", http.StatusInternalServerError)
 		return
@@ -34,6 +49,10 @@ func HandlePrivacyAuditLogPage(w http.ResponseWriter, r *http.Request) {
 
 // HandlePrivacyApprovalQueuePage serves the approval queue UI page
 func HandlePrivacyApprovalQueuePage(w http.ResponseWriter, r *http.Request) {
+	if err := ensurePrivacyTemplates(); err != nil {
+		http.Error(w, "Failed to initialize privacy templates", http.StatusInternalServerError)
+		return
+	}
 	if err := privacyTemplates.ExecuteTemplate(w, "privacy_approval_queue.html", nil); err != nil {
 		http.Error(w, "Failed to render template", http.StatusInternalServerError)
 		return
@@ -42,6 +61,10 @@ func HandlePrivacyApprovalQueuePage(w http.ResponseWriter, r *http.Request) {
 
 // HandlePrivacyDashboardPage serves the privacy dashboard UI page
 func HandlePrivacyDashboardPage(w http.ResponseWriter, r *http.Request) {
+	if err := ensurePrivacyTemplates(); err != nil {
+		http.Error(w, "Failed to initialize privacy templates", http.StatusInternalServerError)
+		return
+	}
 	if err := privacyTemplates.ExecuteTemplate(w, "privacy_dashboard.html", nil); err != nil {
 		http.Error(w, "Failed to render template", http.StatusInternalServerError)
 		return
@@ -50,6 +73,10 @@ func HandlePrivacyDashboardPage(w http.ResponseWriter, r *http.Request) {
 
 // HandlePrivacyAdvancedPage serves the advanced privacy controls UI page
 func HandlePrivacyAdvancedPage(w http.ResponseWriter, r *http.Request) {
+	if err := ensurePrivacyTemplates(); err != nil {
+		http.Error(w, "Failed to initialize privacy templates", http.StatusInternalServerError)
+		return
+	}
 	if err := privacyTemplates.ExecuteTemplate(w, "privacy_advanced.html", nil); err != nil {
 		http.Error(w, "Failed to render template", http.StatusInternalServerError)
 		return

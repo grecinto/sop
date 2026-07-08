@@ -30,9 +30,6 @@ var federatedLTMCategoryAllowlist = map[string]struct{}{
 }
 
 func shouldShowCategoryAutoShareControls(authCtx sop.AuthContext, spaceName, categoryPath string, isHQ bool) bool {
-	if !isHQ {
-		return false
-	}
 	if strings.TrimSpace(spaceName) == "" {
 		return false
 	}
@@ -43,6 +40,9 @@ func shouldShowCategoryAutoShareControls(authCtx sop.AuthContext, spaceName, cat
 		if _, ok := federatedLTMCategoryAllowlist[strings.ToLower(strings.TrimSpace(categoryPath))]; !ok {
 			return false
 		}
+	}
+	if !isHQ {
+		return true
 	}
 	for _, role := range authCtx.Roles {
 		if sop.IsAdminRole(role) {
@@ -473,4 +473,18 @@ func HandleBulkSetCategoryAutoShare(w http.ResponseWriter, r *http.Request) {
 // It is only exposed on HQ for SystemAdmin users and only for federation-eligible LTM categories.
 func getCategoryAutoShareUIVisibility(authCtx sop.AuthContext, spaceName, categoryPath string, isHQ bool) bool {
 	return shouldShowCategoryAutoShareControls(authCtx, spaceName, categoryPath, isHQ)
+}
+
+func annotateCategoryAutoShareVisibility(category map[string]any, authCtx sop.AuthContext, spaceName string, isHQ bool) {
+	if category == nil {
+		return
+	}
+
+	path, _ := category["path"].(string)
+	if path == "" {
+		if name, ok := category["name"].(string); ok {
+			path = name
+		}
+	}
+	category["show_category_auto_share_controls"] = getCategoryAutoShareUIVisibility(authCtx, spaceName, path, isHQ)
 }

@@ -114,6 +114,16 @@ npm run build
 - Visit the subscription page at http://localhost:8081/site/subscribe
 - Optionally call the API directly with curl for registration and account lookup
 
+### Privacy governance UI (daemon-backed)
+
+The privacy governance experience is now wired into the shared backend routes for local daemon usage:
+
+- /privacy/settings — settings and policy controls
+- /privacy/audit — audit-log transparency view
+- /privacy/approval-queue — manual review queue
+- /privacy/dashboard — overview and contribution summary
+- /privacy/advanced — advanced policy and custom pattern controls
+
 The current overlay compiles successfully; a representative verification command is:
 
 ```bash

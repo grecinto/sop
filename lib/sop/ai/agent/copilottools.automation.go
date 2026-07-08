@@ -1413,17 +1413,16 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 	workingDirPromptRequired := false
 	candidateDirs := []string{}
 	if strings.TrimSpace(workingDir) == "" {
-		workingDir = defaultWorkingDir
-		candidateDirs = discoverWorkingDirCandidates(workingDir)
-		if len(candidateDirs) == 0 {
-			workingDirPromptRequired = true
-		} else if len(candidateDirs) > 1 {
-			workingDirPromptRequired = true
-		} else if strings.TrimSpace(workingDir) == "" {
-			workingDir = candidateDirs[0]
-		}
-		if strings.TrimSpace(workingDir) == "" && len(candidateDirs) > 0 {
-			workingDir = candidateDirs[0]
+		if strings.TrimSpace(defaultWorkingDir) != "" {
+			workingDir = defaultWorkingDir
+			candidateDirs = discoverWorkingDirCandidates(workingDir)
+			if len(candidateDirs) == 0 {
+				workingDirPromptRequired = true
+			} else if len(candidateDirs) > 1 {
+				workingDirPromptRequired = true
+			} else {
+				workingDir = candidateDirs[0]
+			}
 		}
 	} else {
 		candidateDirs = discoverWorkingDirCandidates(workingDir)

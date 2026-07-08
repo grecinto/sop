@@ -79,12 +79,13 @@ func handleListSpaceCategories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	categories := make([]map[string]any, len(catList))
+	authCtx := sop.GetAuthFromContext(ctx)
 	for i, cat := range catList {
 		children := cat.ChildrenIDs
 		if len(children) == 0 {
 			children = make([]sop.UUID, 0)
 		}
-		categories[i] = map[string]any{
+		categoryMap := map[string]any{
 			"id":            cat.ID.String(),
 			"name":          cat.Name,
 			"path":          cat.Path,
@@ -95,6 +96,8 @@ func handleListSpaceCategories(w http.ResponseWriter, r *http.Request) {
 			"center_vector": cat.CenterVector,
 			"metadata":      cloneDataMap(cat.Metadata),
 		}
+		annotateCategoryAutoShareVisibility(categoryMap, authCtx, storeName, true)
+		categories[i] = categoryMap
 	}
 
 	if categories == nil {
