@@ -39,6 +39,16 @@ const (
 	CircuitHalfOpen
 )
 
+// SyncThrottleControl is a hint from HQ about how aggressively the daemon should sync.
+type SyncThrottleControl struct {
+	Allowed             bool   `json:"allowed"`
+	Reason              string `json:"reason,omitempty"`
+	SyncIntervalSeconds int    `json:"sync_interval_seconds,omitempty"`
+	BatchSize           int    `json:"batch_size,omitempty"`
+	MaxQueueDepth       int    `json:"max_queue_depth,omitempty"`
+	PriorityBoost       bool   `json:"priority_boost,omitempty"`
+}
+
 // SyncQueue manages artifact queueing, throttling, and circuit breaking for HQ sync.
 type SyncQueue struct {
 	mu                      sync.Mutex
@@ -54,6 +64,7 @@ type SyncQueue struct {
 	baseSyncInterval        time.Duration
 	maxBackoffDuration      time.Duration
 	circuitBreakerThreshold int
+	throttleControl         *SyncThrottleControl
 
 	// Metrics
 	totalPromoted      int64
@@ -293,6 +304,14 @@ func (q *SyncQueue) ShouldAttemptSync() (bool, string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	if q.throttleControl != nil && !q.throttleControl.Allowed {
+		reason := q.throttleControl.Reason
+		if reason == "" {
+			reason = "HQ denied sync"
+		}
+		return false, fmt.Sprintf("HQ throttle block: %s", reason)
+	}
+
 	// Check circuit breaker state
 	switch q.circuitState {
 	case CircuitOpen:
@@ -320,10 +339,34 @@ func (q *SyncQueue) ShouldAttemptSync() (bool, string) {
 	return true, "unknown state"
 }
 
+// ApplyThrottleControl applies an HQ-provided throttle hint to the daemon.
+func (q *SyncQueue) ApplyThrottleControl(control *SyncThrottleControl) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.throttleControl = control
+	if control == nil {
+		return
+	}
+	if control.MaxQueueDepth > 0 {
+		q.maxDepth = control.MaxQueueDepth
+	}
+	if control.SyncIntervalSeconds > 0 {
+		q.baseSyncInterval = time.Duration(control.SyncIntervalSeconds) * time.Second
+	}
+	if control.BatchSize > 0 {
+		q.maxDepth = max(q.maxDepth, control.BatchSize)
+	}
+}
+
 // GetNextSyncDelay returns the delay until the next sync attempt.
 func (q *SyncQueue) GetNextSyncDelay() time.Duration {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	if q.throttleControl != nil && q.throttleControl.SyncIntervalSeconds > 0 {
+		return time.Duration(q.throttleControl.SyncIntervalSeconds) * time.Second
+	}
 
 	if !getEnvBool("SOP_ADAPTIVE_THROTTLING_ENABLED", true) {
 		// Adaptive throttling disabled, use base interval with jitter
@@ -348,6 +391,10 @@ func (q *SyncQueue) GetNextSyncDelay() time.Duration {
 func (q *SyncQueue) GetBatchSize() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	if q.throttleControl != nil && q.throttleControl.BatchSize > 0 {
+		return q.throttleControl.BatchSize
+	}
 
 	maxBatchSize := getEnvInt("SOP_MAX_BATCH_SIZE", 50)
 

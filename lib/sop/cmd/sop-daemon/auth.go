@@ -509,6 +509,14 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 			log.Printf("Federation poll failed (continuing with batch sync): %v", err)
 			// Continue with normal batch sync on poll failure
 		} else {
+			if pollResp.Throttle != nil {
+				h.syncQueue.ApplyThrottleControl(pollResp.Throttle)
+				if !pollResp.Throttle.Allowed {
+					log.Printf("HQ sync throttled: %s", pollResp.Throttle.Reason)
+					return nil
+				}
+			}
+
 			// Check if we have any local artifacts to push
 			queueDepth := len(h.syncQueue.queue)
 

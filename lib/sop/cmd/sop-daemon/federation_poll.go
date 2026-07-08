@@ -38,11 +38,12 @@ type federationPollRequest struct {
 
 // federationPollResponse represents the poll response from HQ.
 type federationPollResponse struct {
-	CurrentCursor  string    `json:"current_cursor"`
-	HasDelta       bool      `json:"has_delta"`
-	DeltaCount     int       `json:"delta_count,omitempty"`
-	StreamEndpoint string    `json:"stream_endpoint,omitempty"`
-	Timestamp      time.Time `json:"timestamp"`
+	CurrentCursor  string               `json:"current_cursor"`
+	HasDelta       bool                 `json:"has_delta"`
+	DeltaCount     int                  `json:"delta_count,omitempty"`
+	StreamEndpoint string               `json:"stream_endpoint,omitempty"`
+	Throttle       *SyncThrottleControl `json:"throttle,omitempty"`
+	Timestamp      time.Time            `json:"timestamp"`
 }
 
 // Poll checks HQ for federation changes since the last cursor.

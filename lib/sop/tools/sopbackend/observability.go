@@ -181,6 +181,19 @@ func HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("# HELP sop_ha_status HA status for the active/passive deployment\n"))
 	_, _ = w.Write([]byte("# TYPE sop_ha_status gauge\n"))
 	_, _ = w.Write([]byte(fmt.Sprintf("sop_ha_status{mode=\"%s\",enabled=\"%t\"} 1\n", sanitizeMetricLabel(fmt.Sprintf("%v", haStatus["mode"])), haStatus["enabled"].(bool))))
+
+	if limiter := getHQRateLimiter(); limiter != nil {
+		metrics := limiter.GetCachedLoadMetrics()
+		_, _ = w.Write([]byte("# HELP sop_federation_load_percent Current HQ federation load percentage\n"))
+		_, _ = w.Write([]byte("# TYPE sop_federation_load_percent gauge\n"))
+		_, _ = w.Write([]byte(fmt.Sprintf("sop_federation_load_percent %0.6f\n", metrics["load_percent"].(float64))))
+		_, _ = w.Write([]byte("# HELP sop_federation_active_daemons Number of active daemons tracked by the HQ rate limiter\n"))
+		_, _ = w.Write([]byte("# TYPE sop_federation_active_daemons gauge\n"))
+		_, _ = w.Write([]byte(fmt.Sprintf("sop_federation_active_daemons %v\n", metrics["active_daemons"].(int))))
+		_, _ = w.Write([]byte("# HELP sop_federation_global_tokens Available tokens in the HQ-wide global federation rate limiter bucket\n"))
+		_, _ = w.Write([]byte("# TYPE sop_federation_global_tokens gauge\n"))
+		_, _ = w.Write([]byte(fmt.Sprintf("sop_federation_global_tokens %0.6f\n", metrics["global_tokens"].(float64))))
+	}
 }
 
 func collectHAStatus() map[string]any {

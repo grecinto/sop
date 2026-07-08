@@ -17,6 +17,9 @@ This enhancement adds a hybrid poll+stream architecture for daemon-to-HQ federat
 - `POST /api/daemon/federation/poll`
 - Lightweight change detection
 - Returns current cursor and delta status
+- Returns a federation whisper payload that can throttle sync frequency and batch size
+- Whisper decisions are computed dynamically from cached rate limiter metrics (load percentage >90% blocks sync, >75% moderates it)
+- Cached metrics are updated after token consumption for zero-overhead external monitoring
 - Avoids transferring full payloads during polling
 
 **Cursor integration** ([lib/sop/tools/sopbackend/hq_sync_handler.go](lib/sop/tools/sopbackend/hq_sync_handler.go))
@@ -53,6 +56,20 @@ This enhancement adds a hybrid poll+stream architecture for daemon-to-HQ federat
 
 ## How it works
 
+### Monitoring and CloudWatch follow-up
+The poll endpoint now contributes to the same observability surface as the rest of the backend. The immediate next step is to visualize the new federation values in CloudWatch:
+
+- `sop_federation_load_percent` for HQ saturation
+- `sop_federation_active_daemons` for fleet size and concurrency
+- `sop_federation_global_tokens` for available global rate-limiter headroom
+- HTTP request and status metrics to correlate spikes with throttling
+
+Suggested alarm thresholds are:
+
+- load percent above 0.90 for 5 minutes
+- global tokens below 10 for 5 minutes
+- sustained throttling above 20% of poll requests for 10 minutes
+
 ### Normal flow (no changes)
 1. Daemon wakes up after 1 hour
 2. Polls HQ with its last known cursor
@@ -68,6 +85,16 @@ This enhancement adds a hybrid poll+stream architecture for daemon-to-HQ federat
 4. HQ responds: `has_delta=true, stream_endpoint=/api/daemon/federation/stream`
 5. Daemon proceeds with batch sync to both push local artifacts and pull new ones
 6. Daemon updates its cursor after successful sync
+
+### Federation whisper behavior
+The daemon does not treat the poll response as a hard command. Instead it applies a simple decision algorithm:
+
+1. If HQ marks sync as disallowed, the daemon skips the sync attempt and preserves the local queue.
+2. If HQ supplies a suggested interval, that value becomes the next sync delay; otherwise the daemon falls back to its adaptive delay.
+3. If HQ supplies a batch size, that value becomes the effective batch size; otherwise the daemon uses its existing adaptive batching logic.
+4. If HQ supplies a queue-depth hint, the daemon uses it to bound local buffering; otherwise the default queue limit remains in effect.
+
+This gives HQ a lightweight control plane while keeping the system daemon-initiated, conservative, and non-blocking.
 
 ### Backward compatibility
 - Poll is best-effort, not required
@@ -104,6 +131,9 @@ This enhancement adds a hybrid poll+stream architecture for daemon-to-HQ federat
 - Federation sync remains non-blocking
 - Never interferes with AI Copilot workflows
 - Degrades gracefully under failures
+
+### V1 scaling posture
+The design targets up to 500 daemons for V1. That limit is intentionally conservative and appropriate for the current daemon-led, throttled model. Beyond that threshold, expansion should follow observed demand and production telemetry rather than speculative over-provisioning.
 
 ## Current limitations and future work
 

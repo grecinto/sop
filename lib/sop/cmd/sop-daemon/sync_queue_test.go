@@ -74,3 +74,29 @@ func TestSyncQueueAdaptiveDelayShortensAfterSuccesses(t *testing.T) {
 		t.Fatalf("expected adaptive delay to shrink after consecutive successes, got %s", delay)
 	}
 }
+
+func TestSyncQueueAppliesThrottleControlFromHQ(t *testing.T) {
+	q := NewSyncQueue()
+	q.ApplyThrottleControl(&SyncThrottleControl{
+		Allowed:             false,
+		Reason:              "maintenance",
+		SyncIntervalSeconds: 1800,
+		BatchSize:           3,
+	})
+
+	allowed, reason := q.ShouldAttemptSync()
+	if allowed {
+		t.Fatalf("expected sync to be blocked by HQ throttle hint")
+	}
+	if reason == "" {
+		t.Fatalf("expected throttle reason to be returned")
+	}
+
+	if got := q.GetBatchSize(); got != 3 {
+		t.Fatalf("expected batch size 3 from HQ throttle hint, got %d", got)
+	}
+
+	if got := q.GetNextSyncDelay(); got != 30*time.Minute {
+		t.Fatalf("expected sync delay 30m from HQ throttle hint, got %s", got)
+	}
+}

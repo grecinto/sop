@@ -94,4 +94,13 @@ func TestObservabilityHandlerRecordsRequestsAndExposesMetrics(t *testing.T) {
 	if !strings.Contains(body, "sop_ha_status") {
 		t.Fatalf("expected metrics payload to include HA metric, got %q", body)
 	}
+	if !strings.Contains(body, "sop_federation_load_percent") {
+		t.Fatalf("expected metrics payload to include federation load metric, got %q", body)
+	}
+	if !strings.Contains(body, "sop_federation_active_daemons") {
+		t.Fatalf("expected metrics payload to include federation daemon count metric, got %q", body)
+	}
+	if !strings.Contains(body, "sop_federation_global_tokens") {
+		t.Fatalf("expected metrics payload to include federation global token metric, got %q", body)
+	}
 }

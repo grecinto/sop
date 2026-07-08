@@ -366,9 +366,16 @@ For higher traffic, the system remains adaptive:
 - **Scale up** when HQ is healthy and backlog is low: slightly larger batches and faster cadence.
 - **Scale down** when HQ is slow or failing: smaller batches, slower cadence, and exponential backoff.
 - **Apply back-pressure** by queueing pending artifacts locally and draining them in bounded chunks.
+- **Use a federation whisper**: HQ can return a lightweight control object in the poll response to tell the daemon whether sync is allowed, how often to try again, and what batch size to use. Throttle decisions are computed dynamically from cached rate limiter metrics (load percentage, active daemons, global token availability) that are updated after every token consumption.
 - **Add safety rails** such as per-daemon rate limits, max in-flight syncs, and circuit-breaker behavior on repeated failures.
 
 This approach keeps the system simple and resilient while allowing a future transition to more aggressive streaming when the workload justifies it.
+
+### Capacity and scaling posture
+For V1, the federation layer is intentionally designed for a bounded fleet footprint of up to 500 daemons. In that range, the existing tapering mechanisms—jittered wakeups, adaptive backoff, bounded batching, deduplication, and HQ-side throttling—are sufficient to keep sync traffic smooth and predictable.
+
+Beyond 500 daemons, scaling should be driven by real fleet demand and observed load rather than over-engineering the initial design. The system can scale by increasing HQ capacity, tuning limits, and adding more aggressive control-plane policies only when usage justifies it.
+
 ### Capacity and retention notes
 
 The current system is intentionally simple rather than fully policy-driven. It keeps the memory layer useful by enforcing:

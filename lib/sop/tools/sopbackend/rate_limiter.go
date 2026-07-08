@@ -21,6 +21,12 @@ type RateLimiter struct {
 	globalBurst      int // max burst globally
 	cleanupInterval  time.Duration
 	lastCleanup      time.Time
+
+	// Cached load metrics for external monitoring
+	cachedLoadPercent   float64
+	cachedActiveDaemons int
+	cachedGlobalTokens  float64
+	lastMetricsUpdate   time.Time
 }
 
 // tokenBucket implements a simple token bucket algorithm.
@@ -103,6 +109,9 @@ func (rl *RateLimiter) Allow(daemonID string) (bool, time.Duration, string) {
 	bucket.requestCount++
 	bucket.lastRequest = time.Now()
 
+	// Update cached metrics for lightweight external polling
+	rl.updateCachedMetrics()
+
 	return true, 0, "allowed"
 }
 
@@ -178,6 +187,45 @@ func (rl *RateLimiter) GetMetrics() map[string]interface{} {
 	metrics["per_daemon_stats"] = perDaemonStats
 
 	return metrics
+}
+
+// updateCachedMetrics refreshes the cached load state for external monitoring.
+// Called automatically after token consumption. Must be called with rl.mu held.
+func (rl *RateLimiter) updateCachedMetrics() {
+	rl.cachedActiveDaemons = len(rl.perDaemonBuckets)
+	rl.lastMetricsUpdate = time.Now()
+
+	if rl.globalBucket != nil {
+		rl.cachedGlobalTokens = rl.globalBucket.tokens
+		// Load = 1.0 - (available_tokens / burst_capacity)
+		if rl.globalBurst > 0 {
+			rl.cachedLoadPercent = 1.0 - (rl.globalBucket.tokens / float64(rl.globalBurst))
+			if rl.cachedLoadPercent < 0.0 {
+				rl.cachedLoadPercent = 0.0
+			}
+			if rl.cachedLoadPercent > 1.0 {
+				rl.cachedLoadPercent = 1.0
+			}
+		}
+	}
+}
+
+// GetCachedLoadMetrics returns lightweight cached load state for external monitoring.
+// This is optimized for frequent polling by monitoring tools.
+func (rl *RateLimiter) GetCachedLoadMetrics() map[string]interface{} {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	return map[string]interface{}{
+		"load_percent":     rl.cachedLoadPercent,
+		"active_daemons":   rl.cachedActiveDaemons,
+		"global_tokens":    rl.cachedGlobalTokens,
+		"last_update":      rl.lastMetricsUpdate.Format(time.RFC3339),
+		"per_daemon_rate":  rl.perDaemonRate,
+		"per_daemon_burst": rl.perDaemonBurst,
+		"global_rate":      rl.globalRate,
+		"global_burst":     rl.globalBurst,
+	}
 }
 
 // RateLimitMiddleware returns an HTTP middleware that enforces rate limits.

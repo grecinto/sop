@@ -140,6 +140,11 @@ func TestHandleHQSyncAcceptsEmptyArtifacts(t *testing.T) {
 }
 
 func TestHandleHQRetrieveAcceptsQuery(t *testing.T) {
+	// Reset rate limiter for fresh test
+	hqRateLimiterMu.Lock()
+	hqRateLimiter = nil
+	hqRateLimiterMu.Unlock()
+
 	// Setup config with root user
 	config = Config{UsersStore: NewUserStore()}
 	rootUser := &UserRecord{
@@ -198,6 +203,11 @@ func TestHandleHQRetrieveRejectsNonPost(t *testing.T) {
 }
 
 func TestHandleHQRetrieveAcceptsEmptyQuery(t *testing.T) {
+	// Reset rate limiter for fresh test
+	hqRateLimiterMu.Lock()
+	hqRateLimiter = nil
+	hqRateLimiterMu.Unlock()
+
 	// Setup config with root user
 	config = Config{UsersStore: NewUserStore()}
 	rootUser := &UserRecord{
