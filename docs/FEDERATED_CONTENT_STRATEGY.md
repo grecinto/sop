@@ -1,14 +1,14 @@
 # Federated Content Strategy
 
-**Status**: Enhanced V1 - Production Ready  
-**Last Updated**: 2026-07-05  
+**Status**: Enhanced V2 - Production Ready  
+**Last Updated**: 2026-07-07  
 **Seed Patterns**: 49 high-value patterns across 13 categories
 
 ## Overview
 
 This document describes the federated learning content strategy for the daemon fleet - what knowledge gets shared, how it's categorized, and how it improves the collective intelligence of all nodes.
 
-This enhanced V1 implementation now includes **49 seed patterns** covering performance optimization, security, testing, code quality, API design, and comprehensive error resolution - making it competitive with leading code assistant federation systems like Codex and Claude Code.
+This enhanced V2 implementation now includes **49 seed patterns** covering performance optimization, security, testing, code quality, API design, and comprehensive error resolution - making it competitive with leading code assistant federation systems like Codex and Claude Code. It also adds a hybrid federation sync path: daemons still initiate syncs, but they first poll HQ hourly for change detection and then use best-effort streaming when a delta is detected, falling back to adaptive batch sync when needed.
 
 ## Core Principle
 
@@ -278,7 +278,7 @@ A shared-memory artifact passes through a simple lifecycle before it becomes use
 2. **Classification**: The artifact is assigned to a category.
 3. **Quality gate**: Confidence, length, and generality checks decide whether it is worth keeping.
 4. **Local promotion**: Approved artifacts are inserted into the daemon's local shared-memory knowledge base.
-5. **Periodic sync**: The daemon sends recent artifacts to HQ.
+5. **Hybrid sync**: The daemon polls HQ about once per hour to detect whether new federation content exists, then either starts a best-effort stream or falls back to adaptive batch sync.
 6. **Fleet retrieval**: Other daemons can pull relevant artifacts by query and category.
 
 This lifecycle is intentionally conservative. It favors useful, generalized guidance over noisy or one-off content.
@@ -342,30 +342,33 @@ Pattern: For type errors: 1) Identify expected vs actual types...
 
 ### Push (Daemon → HQ)
 1. **On successful local work**: The daemon analyzes the interaction and promotes a compact artifact if it passes thresholds.
-2. **Periodic batch sync**: Every ~1 hour, the daemon gathers recent shared-memory artifacts and sends them to HQ.
-3. **HQ storage**: Artifacts are stored in the root SA's LTM (`ltm_root` knowledge base) with provenance metadata.
+2. **Daemon-initiated polling**: Every ~1 hour, the daemon polls HQ using a lightweight cursor-based request to detect whether new federation content exists.
+3. **Best-effort stream or batch fallback**: If HQ reports a delta, the daemon may start a background stream for fast delivery; if streaming is unavailable, suppressed for workload reasons, or fails, it falls back to the existing adaptive batch sync path.
+4. **HQ storage**: Artifacts are stored in the root SA's LTM (`ltm_root` knowledge base) with provenance metadata.
 
 ### Pull (HQ → Daemon)
-1. **After successful push**: The daemon requests relevant artifacts from HQ.
+1. **After successful sync**: The daemon requests relevant artifacts from HQ.
 2. **Query**: A broad semantic query such as "shared patterns best practices error handling".
 3. **Limit**: Up to 10 artifacts per pull request, capped at 50.
 4. **Local storage**: Retrieved artifacts are available for immediate local use and can be reused in later asks.
+
 ### Batching and throttling strategy
 
-The current implementation uses a conservative batch-sync model:
+The current implementation uses a hybrid sync model that is intentionally conservative and non-blocking:
 
 - artifacts are buffered locally and sent in batches,
-- sync cadence is periodic rather than real-time,
-- payload size is intentionally kept modest.
+- sync cadence is driven by hourly polling plus adaptive backoff,
+- payload size is intentionally kept modest,
+- and the sync path is best-effort so it does not interfere with the daemon's primary Copilot workflow.
 
-For higher traffic, the next step is to make this adaptive:
+For higher traffic, the system remains adaptive:
 
 - **Scale up** when HQ is healthy and backlog is low: slightly larger batches and faster cadence.
 - **Scale down** when HQ is slow or failing: smaller batches, slower cadence, and exponential backoff.
 - **Apply back-pressure** by queueing pending artifacts locally and draining them in bounded chunks.
 - **Add safety rails** such as per-daemon rate limits, max in-flight syncs, and circuit-breaker behavior on repeated failures.
 
-This provides a clear path from the current batch model to a more resilient high-volume sync system without requiring a full streaming architecture immediately.
+This approach keeps the system simple and resilient while allowing a future transition to more aggressive streaming when the workload justifies it.
 ### Capacity and retention notes
 
 The current system is intentionally simple rather than fully policy-driven. It keeps the memory layer useful by enforcing:
@@ -440,6 +443,7 @@ The federated content system succeeds when:
 ## Future Enhancements
 
 ### V2 Features
+- **Hybrid polling and streaming**: Hourly polling detects changes quickly while best-effort streaming accelerates propagation when a delta exists
 - **Adaptive throttling and queued sync**: Scale daemon/HQ sync up or down based on health, load, and back-pressure
 - **Recurrence tracking**: Only promote patterns seen N+ times
 - **Confidence decay**: Lower confidence for stale patterns
@@ -463,8 +467,8 @@ The federated content system succeeds when:
 
 ## Implementation Status
 
-**Status**: ✅ Enhanced V1 Complete - Production Ready  
-**Completed**: 2026-07-05
+**Status**: ✅ Enhanced V2 Complete - Production Ready  
+**Completed**: 2026-07-07
 
 ### ✅ Implemented Features
 
@@ -476,6 +480,8 @@ The federated content system succeeds when:
 - [x] **Privacy Safeguards** (truncation, metadata filtering, no PII)
 - [x] **Context Injection** with category tags for better understanding
 - [x] **Bidirectional Sync** (push to HQ, pull from HQ)
+- [x] **Hybrid Polling** (hourly change detection using lightweight cursor-based polling)
+- [x] **Best-Effort Streaming Design** (stream when a delta exists, fall back to batch sync)
 - [x] Complete test coverage (daemon + HQ handlers)
 - [x] Comprehensive documentation
 - [x] Lifecycle, limits, deduplication, and batching/throttling documentation

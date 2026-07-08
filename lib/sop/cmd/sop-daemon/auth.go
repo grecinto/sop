@@ -140,6 +140,7 @@ type DaemonAuthHandler struct {
 	config          DaemonAuthConfig
 	hqSigningSecret string
 	syncQueue       *SyncQueue
+	pollClient      *FederationPollClient
 }
 
 type hqSignedClaims struct {
@@ -268,6 +269,16 @@ func NewDaemonAuthHandler(config DaemonAuthConfig) (*DaemonAuthHandler, error) {
 	sessionStore := sopbackend.NewSessionStore(config.AccessTokenTTL)
 	// TODO: Set refreshTTL once sopbackend exports it or provides setter
 
+	// Initialize poll client if HQ is configured
+	var pollClient *FederationPollClient
+	if hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")); hqBaseURL != "" {
+		daemonID := "local-daemon"
+		if storedID := strings.TrimSpace(os.Getenv("SOP_DAEMON_ID")); storedID != "" {
+			daemonID = storedID
+		}
+		pollClient = NewFederationPollClient(hqBaseURL, daemonID)
+	}
+
 	return &DaemonAuthHandler{
 		bootstrapSecret: bootstrapSecret,
 		bootstrapPath:   bootstrapPath,
@@ -275,6 +286,7 @@ func NewDaemonAuthHandler(config DaemonAuthConfig) (*DaemonAuthHandler, error) {
 		config:          config,
 		hqSigningSecret: getHQSigningSecret(),
 		syncQueue:       GetGlobalSyncQueue(),
+		pollClient:      pollClient,
 	}, nil
 }
 
@@ -484,7 +496,35 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 		return nil
 	}
 
-	// Check if sync should be attempted (circuit breaker)
+	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
+	if hqBaseURL == "" {
+		log.Printf("HQ sync skipped (no HQ endpoint configured)")
+		return nil
+	}
+
+	// Step 1: Poll HQ for changes if poll client is available
+	if h.pollClient != nil {
+		pollResp, err := h.pollClient.Poll(ctx)
+		if err != nil {
+			log.Printf("Federation poll failed (continuing with batch sync): %v", err)
+			// Continue with normal batch sync on poll failure
+		} else {
+			// Check if we have any local artifacts to push
+			queueDepth := len(h.syncQueue.queue)
+
+			// If no delta from HQ and no local artifacts, skip sync
+			if !pollResp.HasDelta && queueDepth == 0 {
+				log.Printf("HQ sync: no changes detected (cursor=%s, queue_depth=0)",
+					pollResp.CurrentCursor)
+				return nil
+			}
+
+			log.Printf("HQ sync: proceeding (has_delta=%v, queue_depth=%d)",
+				pollResp.HasDelta, queueDepth)
+		}
+	}
+
+	// Step 2: Check circuit breaker
 	shouldAttempt, reason := h.syncQueue.ShouldAttemptSync()
 	if !shouldAttempt {
 		log.Printf("HQ sync skipped: %s", reason)
@@ -496,13 +536,7 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 	log.Printf("HQ sync metrics: queue_depth=%d, state=%s, consecutive_failures=%d",
 		metrics["queue_depth"], metrics["circuit_state"], metrics["consecutive_failures"])
 
-	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
-	if hqBaseURL == "" {
-		log.Printf("HQ sync skipped (no HQ endpoint configured)")
-		return nil
-	}
-
-	// Dequeue batch from sync queue
+	// Step 3: Dequeue batch from sync queue
 	batchSize := h.syncQueue.GetBatchSize()
 	queuedArtifacts := h.syncQueue.DequeueBatch(batchSize)
 

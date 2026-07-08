@@ -294,6 +294,13 @@ func storeSharedMemoryArtifacts(ctx context.Context, batch hqSyncBatch) error {
 		)
 	}
 
+	// Increment federation cursor after successful storage
+	cursor := GetGlobalFederationCursor()
+	newCursor := cursor.IncrementVersion()
+	log.Debug("HQ sync: federation cursor incremented",
+		"new_cursor", newCursor,
+		"daemon_id", batch.DaemonID)
+
 	return nil
 }
 

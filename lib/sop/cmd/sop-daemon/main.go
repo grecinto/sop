@@ -524,9 +524,15 @@ func startHQSyncLoop(authHandler *DaemonAuthHandler) {
 		return
 	}
 	for {
-		// Use adaptive delay from sync queue
-		delay := authHandler.syncQueue.GetNextSyncDelay()
-		log.Printf("HQ sync: waiting %s until next attempt", delay)
+		// Use poll interval if poll client is available, otherwise use adaptive delay
+		var delay time.Duration
+		if authHandler.pollClient != nil {
+			delay = authHandler.pollClient.GetPollInterval()
+			log.Printf("HQ sync: waiting %s until next poll", delay)
+		} else {
+			delay = authHandler.syncQueue.GetNextSyncDelay()
+			log.Printf("HQ sync: waiting %s until next attempt", delay)
+		}
 		time.Sleep(delay)
 
 		syncErr := authHandler.syncWithHQ(context.Background())
