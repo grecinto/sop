@@ -1,4 +1,4 @@
-# SOP Cloud Private Overlay
+# A privacy first modern AI copilot powered by knowledge bases
 
 This repository is a private overlay built on top of the shared public SOP implementation. The public upstream code remains the canonical source for the generic AI, database, memory, and runtime layers, while this repository keeps the private or deployment-specific behavior local.
 

@@ -1,8 +1,12 @@
 # LTM Category Auto-Share Implementation Summary
 
+> **Related Documentation**: This document describes HQ-level category controls. For comprehensive daemon-level privacy governance, user opt-out controls, and PII detection, see [Fleet Learning Privacy Governance](FLEET_LEARNING_PRIVACY_GOVERNANCE.md).
+
 ## Overview
 
 This feature allows System Administrators to control which HQ LTM (Long-Term Memory) categories are shared to daemons during sync operations. This provides fine-grained filtering of knowledge that flows from HQ to daemons in the field.
+
+**Privacy Model**: This is the HQ-side allowlist control. Daemon-level privacy filtering (user opt-out, PII detection, approval queues) happens before content reaches HQ. HQ then applies category-level distribution controls before resharing to other daemons.
 
 ## Problem Statement
 

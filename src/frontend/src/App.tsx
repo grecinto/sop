@@ -923,9 +923,12 @@ export default function App() {
 
           <div className="docs-intro">
             <p className="eyebrow">Product documentation</p>
-            <h1 className="hero-title">A modern AI copilot powered by knowledge bases for expert-level automation and coding.</h1>
+            <h1 className="hero-title">A privacy first modern AI copilot powered by knowledge bases for expert-level automation and coding.</h1>
             <p className="hero-copy">
               Northstar brings knowledge-driven AI to your workflow with local-first privacy. Unlike current AI copilots that store your conversation history on their servers, everything stays on your device. Bring your own API keys for direct control. Load knowledge bases to transform your LLM into a domain expert, visualize your AI interactions with built-in tools, and manage your data locally. Our site only handles login and auth—we don't store your chat history.
+            </p>
+            <p className="hero-copy" style={{ marginTop: '1rem' }}>
+              <strong>Privacy-first fleet learning with PII detection.</strong> Your daemon learns from you either way—stored locally for future runs. Optionally share patterns with automatic PII detection, privacy governance, and full transparency: see exactly what's shared through auditable UI visualization. Per-category opt-in/opt-out controls. Your data, your control, fully auditable.
             </p>
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
               <strong>Real-time vector search on your machine.</strong> Other AI copilots run overnight K-Means clustering in their data centers to optimize code search. Northstar uses semantic category trees that work instantly—no waiting, no HQ processing, just real-time intelligence on your local device.
@@ -944,7 +947,8 @@ export default function App() {
                 <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots</li>
                 <li>Real-time vector database that runs on your machine—no overnight optimization, no data center processing</li>
                 <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
-                <li>Built-in data visualization to review and understand your AI workflows</li>
+                <li>Privacy-first fleet learning—respects PII with automatic detection, privacy governance, and user opt-in/opt-out policies</li>
+                <li>Built-in auditable visualization—see exactly what's shared, when, and why with full transparency</li>
                 <li>Generate higher-quality code that follows architecture best practices and coding standards</li>
               </ul>
               <a className="button button-secondary" href="/site/subscribe">Get started</a>
@@ -958,8 +962,9 @@ export default function App() {
                 <li>Other copilots send your code to data centers for clustering and search—ours works instantly on-device</li>
                 <li>Semantic M-Way tree buckets organize code by concepts: error-handling, retry-logic, data-persistence</li>
                 <li>Three-index strategy: file paths (O(1)), code structure (O(1)), semantic concepts (O(D log N))</li>
+                <li>Privacy governance with PII detection—respects privacy concerns with automatic filtering and user controls</li>
                 <li>We don't store your conversation history—everything stays local on your device</li>
-                <li>Built-in visualization tools to review your AI workflows locally</li>
+                <li>Built-in auditable visualization—full transparency on AI workflows and fleet participation</li>
               </ul>
             </article>
           </div>
@@ -1000,15 +1005,16 @@ export default function App() {
             <p className="eyebrow">The complete experience</p>
             <h3>Knowledge bases, local privacy, and real-time AI</h3>
             <p className="muted-copy">
-              Current AI copilots can't do this: load domain expertise, keep your conversation history on your device, AND run intelligent code search in real-time without data center processing. Codex, Cursor, and GitHub Copilot send your code to their servers for overnight K-Means optimization. Northstar uses semantic category trees that work instantly on your machine.
+              Current AI copilots can't do this: load domain expertise, keep your conversation history on your device, AND run intelligent code search in real-time without data center processing. Codex, Cursor, and GitHub Copilot send your code to their servers for overnight K-Means optimization. Northstar uses semantic category trees that work instantly on your machine—with privacy governance that respects PII and gives you full auditable control.
             </p>
             <ul className="feature-list">
               <li>Knowledge bases transform your LLM into a domain expert with higher-quality output.</li>
               <li>Real-time vector database runs on your local machine—no overnight clustering, no HQ processing delays.</li>
               <li>Semantic M-Way tree buckets organize millions of code snippets for instant intelligent search.</li>
               <li>Three-index approach: file paths (exact), code structure (package/class/method), semantic concepts (fuzzy).</li>
+              <li>Privacy governance with PII detection—respects privacy concerns with automatic filtering and user opt-in/opt-out policies.</li>
               <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots.</li>
-              <li>Built-in data visualization and semantic search make your AI workflows easy to review locally.</li>
+              <li>Built-in auditable visualization—full transparency on data flows and exactly what's shared.</li>
             </ul>
           </article>
 
@@ -1146,9 +1152,12 @@ export default function App() {
         <div className="hero-grid">
           <div>
             <p className="eyebrow">Northstar</p>
-            <h1 className="hero-title">A modern AI copilot powered by knowledge bases</h1>
+            <h1 className="hero-title">A privacy first modern AI copilot powered by knowledge bases</h1>
             <p className="hero-copy">
               Unlike current AI copilots that store your conversation history on their servers and run overnight optimization in data centers, Northstar keeps everything on your device with real-time intelligence. Bring your own API keys for direct control. Load knowledge bases to turn your LLM into a domain expert, get higher-quality code, and manage your data locally with built-in visualization. We don't store your chat history—our site only handles auth.
+            </p>
+            <p className="hero-copy" style={{ marginTop: '1rem' }}>
+              <strong>Privacy-first fleet learning with PII detection and governance.</strong> Your daemon learns locally either way. Optionally share patterns with automatic PII detection, privacy governance, and full auditable transparency—see exactly what's shared with per-category opt-in/opt-out controls.
             </p>
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
               <strong>Full AI copilot features, zero data center processing.</strong> Other copilots need overnight K-Means clustering at HQ. Ours uses semantic category trees that work instantly on your machine.
@@ -1169,8 +1178,10 @@ export default function App() {
                 <li>Load knowledge bases to turn your LLM into a domain expert in any field</li>
                 <li>Real-time vector database on your machine—no overnight optimization or HQ processing</li>
                 <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
+                <li>Privacy-first fleet learning—PII detection, privacy governance, and per-category opt-in/opt-out controls</li>
+                <li>Full transparency with auditable UI—see exactly what's shared, when, and why with complete visibility</li>
                 <li>Bring your own API keys—we don't store your conversation history on our servers</li>
-                <li>Built-in data visualization to review your AI workflows</li>
+                <li>Built-in data visualization to review your AI workflows and fleet participation</li>
                 <li>Generate higher-quality code that adheres to architecture and coding best practices</li>
                 <li>Everything stored locally on your device (data privacy)</li>
               </ul>

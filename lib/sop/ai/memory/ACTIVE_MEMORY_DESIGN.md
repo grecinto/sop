@@ -118,6 +118,113 @@ Beyond the current carry-over path (session memory, MRU replay, and direct promp
 The injection timing for caveats should not be hardcoded as a purely static rule. The LLM should be allowed to recommend when caveat guidance should be surfaced.
 
 **Proposed policy:**
+
+## Privacy Governance for Fleet Learning
+
+The daemon has **three tiers of learning**:
+
+1. **Local Learning (Always On)**: Daemon learns from its own experiences, stores in local LTM, improves future runs. Always enabled regardless of fleet settings. No privacy concerns (data never leaves daemon).
+
+2. **Fleet Sharing Outbound (Optional)**: Share local learnings with HQ → other daemons. Privacy controls apply here.
+
+3. **Fleet Sharing Inbound (Optional)**: Receive pre-vetted learnings from other daemons. Accelerates learning beyond local experience.
+
+**Privacy Scope**: Controls enforce user consent for optional fleet participation (#2 and #3). Local learning (#1) is foundational and always-on.
+
+### Privacy Architecture Principles
+
+1. **Filter at the Edge**: Privacy enforcement happens at the daemon (where data originates) before content reaches HQ.
+2. **Opt-In by Default**: Users participate in fleet learning by default but have granular opt-out controls.
+3. **Zero HQ Impact**: Privacy filtering runs locally on daemons with no performance impact on central infrastructure.
+4. **Transparent by Design**: Users see what's shared, when, and with whom through UI indicators and audit logs.
+
+### Privacy Filter Pipeline
+
+**Daemon-Level Filtering (Before HQ Push):**
+1. Global user opt-out check
+2. Category-specific opt-out check
+3. Private session mode check
+4. PII detection (always runs)
+5. User approval requirement check
+
+**Implementation Location:**
+- Core filter logic: `lib/sop/ai/privacy/`
+- Daemon enforcement: `lib/sop/cmd/sop-daemon/privacy_filter.go`
+- Backend UI: `lib/sop/tools/sopbackend/privacy_settings_handler.go`
+
+### User Controls
+
+**Global Settings (Fleet Participation Only):**
+- Opt-in/opt-out of fleet learning (does not affect local learning)
+- Per-category sharing preferences
+- Private session mode toggle
+- Review-before-share option
+
+**Default Category Sharing (Opt-In for Fleet):**
+- workflow_pattern ✓
+- anti_pattern ✓
+- repair_strategy ✓
+- tool_preference ✓
+- performance_optimization ✓
+- testing_strategy ✓
+- error_resolution ✓
+- security_pattern ✗ (disabled by default)
+- code_quality ✓
+- api_design ✓
+
+### What Gets Shared
+
+**Always Learned Locally:**
+- Everything the daemon experiences is learned and stored in local LTM
+- Available immediately in future sessions
+- No privacy concerns (never leaves daemon)
+
+**Optionally Shared to Fleet (After Privacy Filter):**
+- Operational patterns and solutions
+- Repair strategies and workarounds
+- Tool preferences and configurations
+- Performance insights
+- Testing approaches
+
+**Never Shared to Fleet:**
+- Conversation transcripts
+- Personal information (PII)
+- Private session content
+- Raw prompts and responses
+- User-specific context
+- User-specific context
+
+### PII Detection
+
+**Automatic Detection Patterns:**
+- Email addresses
+- Phone numbers
+- Social Security Numbers
+- IP addresses
+- API keys and tokens
+- Credit card numbers
+- Custom patterns (configurable)
+
+**Action on Detection:**
+- Block sharing (default)
+- Queue for manual review
+- Auto-redact and share
+
+### Trust Model
+
+**Daemon Responsibilities:**
+- Filter all outbound content
+- Enforce user preferences
+- Detect and block PII
+- Maintain local audit log
+
+**HQ Responsibilities:**
+- Aggregate pre-vetted content
+- Apply category-level distribution controls
+- Track provenance and usage
+- Handle revocation requests
+
+For complete implementation details, see [Fleet Learning Privacy Governance](/Volumes/T7/sop-cloud/docs/FLEET_LEARNING_PRIVACY_GOVERNANCE.md).
 - The LLM may emit caveat events with structured metadata, including severity, scope, and a recommended re-injection interval.
 - The runtime can then use that metadata to decide whether a caveat should be injected immediately, re-injected on the next turn, or scheduled for a later periodic sweep.
 - This gives the system a hybrid behavior: deterministic carry-over for high-signal continuity, plus LLM-guided timing for adaptive relevance.

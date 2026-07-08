@@ -199,6 +199,21 @@ func main() {
 		ragSvc = rag
 	}
 
+	// Initialize privacy configuration and filter
+	daemonDataDir := filepath.Dir(resolvedConfig)
+	if err := initPrivacyConfig(daemonDataDir); err != nil {
+		log.Printf("Warning: failed to initialize privacy config: %v", err)
+	} else {
+		log.Printf("Privacy configuration initialized")
+	}
+	if err := initPrivacyFilter(daemonDataDir); err != nil {
+		log.Printf("Warning: failed to initialize privacy filter: %v", err)
+	} else {
+		settings := getPrivacySettings()
+		log.Printf("Privacy filter initialized (fleet_learning=%v, policy=%s)", 
+			settings.GlobalShareEnabled, settings.PolicyType)
+	}
+
 	// Seed initial federated content for fleet-wide intelligence
 	log.Printf("Seeding initial federated content...")
 	if err := SeedInitialFederatedContent(context.Background()); err != nil {
@@ -221,6 +236,16 @@ func main() {
 	mux.HandleFunc("/api/daemon/refresh", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleRefresh)))
 	mux.HandleFunc("/api/daemon/hq-auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleHQAuth)))
 	mux.HandleFunc("/api/daemon/receive-space", handleOptionsAndCORS(http.HandlerFunc(handleReceiveSpaceFromHQ)))
+
+	// Privacy governance endpoints WITH authentication
+	mux.HandleFunc("/api/daemon/privacy/settings", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleGetPrivacySettings))))
+	mux.HandleFunc("/api/daemon/privacy/settings/update", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleUpdatePrivacySettings))))
+	mux.HandleFunc("/api/daemon/privacy/session/toggle", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleTogglePrivateSession))))
+	mux.HandleFunc("/api/daemon/privacy/category", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleSetCategoryPreference))))
+	mux.HandleFunc("/api/daemon/privacy/audit", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleGetAuditLog))))
+	mux.HandleFunc("/api/daemon/privacy/approval-queue", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleGetApprovalQueue))))
+	mux.HandleFunc("/api/daemon/privacy/approve", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleApproveItem))))
+	mux.HandleFunc("/api/daemon/privacy/reject", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleRejectItem))))
 
 	// Override/Add daemon-specific handlers WITH authentication
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))

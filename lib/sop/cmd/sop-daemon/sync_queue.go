@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/rand"
@@ -87,11 +88,60 @@ func NewSyncQueue() *SyncQueue {
 	}
 }
 
-// Enqueue adds an artifact to the sync queue with deduplication and priority assignment.
+// Enqueue adds an artifact to the sync queue with privacy filtering, deduplication and priority assignment.
 func (q *SyncQueue) Enqueue(text, category string, metadata map[string]any) error {
 	if !getEnvBool("SOP_SYNC_QUEUE_ENABLED", true) {
 		// Queue disabled, skip
 		return nil
+	}
+
+	// Apply privacy filter before queueing
+	ctx := context.Background()
+	userID := "daemon-user" // TODO: Get actual user ID from context
+	
+	filterResult, err := filterContentBeforeShare(ctx, category, text, userID)
+	if err != nil {
+		log.Printf("Privacy filter error: %v", err)
+		return err
+	}
+
+	// Handle filter decision
+	switch filterResult.Action {
+	case "block":
+		// Content blocked by privacy filter
+		log.Printf("Content blocked by privacy filter: %s", filterResult.Reason)
+		return nil // Not an error, just blocked
+
+	case "pending":
+		// Content requires manual approval
+		log.Printf("Content pending approval: %s", filterResult.Reason)
+		// Add to approval queue instead of sync queue
+		globalApprovalQueue.AddToApprovalQueue(ApprovalItem{
+			ID:              generateApprovalID(),
+			Category:        category,
+			OriginalContent: text,
+			RedactedContent: filterResult.RedactedContent,
+			PIIMatches:      filterResult.PIIMatches,
+			Reason:          filterResult.Reason,
+			CreatedAt:       time.Now().UTC(),
+			UserID:          userID,
+		})
+		return nil
+
+	case "redact":
+		// Use redacted content for sharing
+		if filterResult.RedactedContent != "" {
+			text = filterResult.RedactedContent
+			if metadata == nil {
+				metadata = make(map[string]any)
+			}
+			metadata["privacy_redacted"] = true
+			metadata["pii_count"] = len(filterResult.PIIMatches)
+		}
+
+	case "allow":
+		// Content approved for sharing as-is
+		// Continue with normal flow
 	}
 
 	q.mu.Lock()
@@ -496,6 +546,10 @@ func circuitStateString(state CircuitState) string {
 func addJitter(duration time.Duration, jitterFraction float64) time.Duration {
 	jitter := time.Duration(rand.Float64() * jitterFraction * float64(duration))
 	return duration + jitter
+}
+
+func generateApprovalID() string {
+	return fmt.Sprintf("approval-%d-%d", time.Now().Unix(), rand.Intn(10000))
 }
 
 func min(a, b int) int {
