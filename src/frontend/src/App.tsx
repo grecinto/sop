@@ -674,7 +674,9 @@ export default function App() {
     setIsSubmitting(true);
     setStatusMessage('');
     try {
-      if (!account.isAuthenticated) {
+      const serverAccount = await loadAccountFromServer();
+      const resolvedAuthAccount = mergeAccountWithFallback(serverAccount, account, name, email);
+      if (!resolvedAuthAccount.isAuthenticated) {
         if (!password.trim()) {
           throw new Error('Please choose a password to continue.');
         }
@@ -683,8 +685,8 @@ export default function App() {
         }
       }
       const token = await getHumanProofChallenge();
-      const nextAccount = account.isAuthenticated
-        ? account
+      const nextAccount = resolvedAuthAccount.isAuthenticated
+        ? resolvedAuthAccount
         : await ensureAuthenticatedAccount(account.name || name.trim(), account.email || email.trim(), password.trim(), token);
       if (!nextAccount.isAuthenticated) {
         throw new Error('Please sign in or create an account before continuing.');
@@ -789,7 +791,7 @@ export default function App() {
         lastWebhookAt: '',
       }));
       setCheckoutComplete(false);
-      setStatusMessage('You have been unsubscribed from the starter plan.');
+      setStatusMessage('Your subscription has been canceled. Your site account remains available for sign-in.');
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to unsubscribe right now.');
     } finally {
@@ -1174,6 +1176,9 @@ export default function App() {
               </p>
               <div className="form-stack" style={{ marginTop: '1rem' }}>
                 <a className="button button-primary" href="/site/">Continue to dashboard</a>
+                <button type="button" className="button button-secondary" onClick={() => { void handleDownload(); }} disabled={isSubmitting || account.billingStatus !== 'active'}>
+                  {isSubmitting ? 'Preparing…' : 'Download sop-daemon'}
+                </button>
                 <a className="button button-secondary" href="/site/subscribe">View subscription options</a>
               </div>
             </div>
@@ -1572,6 +1577,44 @@ export default function App() {
               </div>
             </div>
 
+            <div className="preview-box" style={{ marginTop: '1rem' }}>
+              <div className="stack-grid" style={{ gap: '0.75rem' }}>
+                <div>
+                  <h4 style={{ marginTop: 0, marginBottom: '0.25rem' }}>Account management</h4>
+                  <p className="muted-copy" style={{ margin: 0 }}>Manage sign-in, billing, and local access from one place.</p>
+                </div>
+                <div className="action-row">
+                  {!account.isAuthenticated ? (
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() => { void handleLogin(); }}
+                      disabled={isSubmitting}
+                    >
+                      Log in
+                    </button>
+                  ) : null}
+                  {account.isAuthenticated ? (
+                    <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
+                      Log out
+                    </button>
+                  ) : null}
+                  {canAccessLocalDaemon ? (
+                    <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
+                  ) : null}
+                  {account.isAuthenticated && account.plan !== 'none' ? (
+                    <button type="button" className="button button-secondary" onClick={handleUnsubscribe} disabled={isSubmitting}>
+                      Unsubscribe
+                    </button>
+                  ) : null}
+                  {account.isAuthenticated ? (
+                    <button type="button" className="button button-secondary danger" onClick={handleUnregister} disabled={isSubmitting}>
+                      Unregister
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
 
             {account.payments.length > 0 ? (
               <div className="preview-box">
@@ -1600,36 +1643,6 @@ export default function App() {
             )}
 
             {statusMessage ? <p className="muted-copy" style={{ marginTop: '0.75rem' }}>{statusMessage}</p> : null}
-            <div className="action-row">
-              {!account.isAuthenticated ? (
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  onClick={() => { void handleLogin(); }}
-                  disabled={isSubmitting}
-                >
-                  Log in
-                </button>
-              ) : null}
-              {account.isAuthenticated ? (
-                <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
-                  Log out
-                </button>
-              ) : null}
-              {canAccessLocalDaemon ? (
-                <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
-              ) : null}
-              {account.isAuthenticated && account.plan !== 'none' ? (
-                <button type="button" className="button button-secondary" onClick={handleUnsubscribe} disabled={isSubmitting}>
-                  Unsubscribe
-                </button>
-              ) : null}
-              {account.isAuthenticated ? (
-                <button type="button" className="button button-secondary danger" onClick={handleUnregister} disabled={isSubmitting}>
-                  Unregister
-                </button>
-              ) : null}
-            </div>
 
             {shouldShowInstallPanel ? (
               <div className="preview-box install-box">

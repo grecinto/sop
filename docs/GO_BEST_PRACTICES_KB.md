@@ -132,3 +132,26 @@ For a first trial, focus on these high-value areas:
 - concurrency patterns
 - slice/map usage
 - simple, idiomatic tests
+
+---
+
+## Related: KB Quality Improvement Initiative
+
+This KB is part of a broader effort to make expertise **enforced** rather than just **available**. 
+
+**Current limitation**: The KB provides patterns, but there's no validation that generated code actually follows them.
+
+**Planned improvements** (see [KB_EXPERTISE_QUALITY_IMPROVEMENT.md](KB_EXPERTISE_QUALITY_IMPROVEMENT.md)):
+- Post-generation validator that checks code against these patterns
+- Automatic revision loop when violations are detected
+- Inline citations showing which pattern was applied
+- Historical tracking of which patterns lead to successful outcomes
+- User feedback loop to improve pattern effectiveness over time
+
+**What this means for this KB**:
+- Patterns here will become **quality gates** for code generation
+- The system will learn which patterns work best for different Go tasks
+- Users will see explicit attribution: `// Pattern: error-handling from Go KB`
+- Poor-performing patterns will be automatically flagged and refined
+
+This transforms the KB from a reference doc into an active quality enforcement layer — which is the competitive edge needed for a $5/month subscription to be compelling.

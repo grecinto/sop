@@ -969,17 +969,25 @@ func TestOrchestratorEmitsStructuredContinuitySignal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if len(received) != 1 {
-		t.Fatalf("expected one continuity signal, got %d", len(received))
+	if len(received) != 2 {
+		t.Fatalf("expected two continuity signals (validation + task_outcome), got %d", len(received))
+	}
+	// First signal should be validation outcome
+	if received[0].Kind != "validation_outcome" {
+		t.Fatalf("expected first signal to be validation_outcome, got %q", received[0].Kind)
 	}
 	if received[0].CapabilityID != CapabilityID {
 		t.Fatalf("expected capability id %q, got %q", CapabilityID, received[0].CapabilityID)
 	}
-	if received[0].Kind != "task_outcome" {
-		t.Fatalf("expected task_outcome kind, got %q", received[0].Kind)
+	// Second signal should be task outcome
+	if received[1].CapabilityID != CapabilityID {
+		t.Fatalf("expected capability id %q, got %q", CapabilityID, received[1].CapabilityID)
 	}
-	if !strings.Contains(received[0].Summary, "update greeting text") {
-		t.Fatalf("expected summary to include task description, got %q", received[0].Summary)
+	if received[1].Kind != "task_outcome" {
+		t.Fatalf("expected task_outcome kind, got %q", received[1].Kind)
+	}
+	if !strings.Contains(received[1].Summary, "update greeting text") {
+		t.Fatalf("expected task outcome summary to include task description, got %q", received[1].Summary)
 	}
 }
 

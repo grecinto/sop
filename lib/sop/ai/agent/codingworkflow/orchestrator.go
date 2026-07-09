@@ -63,6 +63,7 @@ type ContextPack struct {
 	ContinuationSummary   string
 	ExpertiseSummary      string
 	ExpertiseSources      []string
+	ExpertiseCapsule      ExpertiseCapsule // full expertise capsule for validation
 	Provider              string
 	ProviderSource        string
 	ProviderModel         string
@@ -95,6 +96,11 @@ type CodingMemory struct {
 	// AST/Tree-sitter structural information for semantic category paths
 	StructuralPath string   // e.g., "sop-cloud/ai/agent/Execute"
 	ASTLeafNodes   []string // e.g., ["Execute", "BuildContext"]
+	// KB expertise tracking (Phase 1 enhancement)
+	KBsUsed         []string // which knowledge bases were consulted
+	RulesApplied    []string // which specific rules/patterns were applied
+	ComplianceScore float64  // 0.0-1.0, how well output matched KB rules
+	RevisionCount   int      // how many validation revisions were needed
 }
 
 // ContinuitySignal is a lightweight, capability-scoped signal that can later be consumed
@@ -114,6 +120,11 @@ type ExecutionResult struct {
 	TaskType         string
 	Plan             []string
 	ResumedFromState bool
+	// Validation and KB tracking (Phase 1 enhancement)
+	ValidationResult ValidationResult // validation outcome
+	RevisionAttempts int              // number of revision loops
+	KBsConsulted     []string         // which KBs were used for expertise
+	RulesApplied     []string         // which specific rules were referenced
 }
 
 // ContextManager builds a concise context pack for a task.
@@ -289,6 +300,7 @@ type Orchestrator struct {
 	ContinuitySink         func(ContinuitySignal)
 	GrammarRegistry        *GrammarRegistry
 	OrchestrationBackend   OrchestrationBackend
+	ValidationOrchestrator *ValidationOrchestrator // Phase 1: KB expertise enforcement
 	MaxIterations          int
 }
 
@@ -345,6 +357,12 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if o.ProviderRouter == nil {
 		o.ProviderRouter = &DefaultProviderRouter{}
 	}
+	if o.ValidationOrchestrator == nil {
+		// Initialize with default configuration: strict mode enabled for KB enforcement
+		validator := NewValidator(DefaultValidatorConfig())
+		citationConfig := DefaultCitationConfig()
+		o.ValidationOrchestrator = NewValidationOrchestrator(validator, citationConfig)
+	}
 	if o.GrammarRegistry == nil {
 		o.GrammarRegistry = NewGrammarRegistry()
 	}
@@ -394,6 +412,7 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		if strings.TrimSpace(expertise.Summary) != "" {
 			pack.ExpertiseSummary = expertise.Summary
 			pack.ExpertiseSources = expertise.Sources
+			pack.ExpertiseCapsule = expertise // store full capsule for validation
 		}
 	} else {
 		_ = err
@@ -451,6 +470,46 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if len(task.Patches) > 0 {
 		patches = append(patches, task.Patches...)
 	}
+
+	// Phase 1: Validate and enrich patches with KB expertise enforcement
+	var validationResult ValidationResult
+	var revisionAttempts int
+	if len(patches) > 0 && o.ValidationOrchestrator != nil && pack.ExpertiseCapsule.Summary != "" {
+		// Validation is enabled and we have expertise to validate against
+		finalPatches, vResult, attempts, err := o.ValidationOrchestrator.ValidateAndEnrich(
+			patches,
+			pack.ExpertiseCapsule,
+			task.Description,
+			nil, // no revision callback in orchestrator (revisions handled externally)
+		)
+		if err == nil {
+			patches = finalPatches
+			validationResult = vResult
+			revisionAttempts = attempts
+			// Observability: log validation outcome
+			if o.ContinuitySink != nil {
+				status := "passed"
+				if !vResult.Passed {
+					status = "failed"
+				}
+				o.ContinuitySink(ContinuitySignal{
+					CapabilityID: CapabilityID,
+					Kind:         "validation_outcome",
+					Summary:      fmt.Sprintf("KB validation %s: %.0f%% compliance, %d violations, %d revisions", status, vResult.ComplianceScore*100, len(vResult.Violations), attempts),
+					Metadata: map[string]string{
+						"status":           status,
+						"compliance_score": fmt.Sprintf("%.2f", vResult.ComplianceScore),
+						"violations":       fmt.Sprintf("%d", len(vResult.Violations)),
+						"revision_attempts": fmt.Sprintf("%d", attempts),
+						"rules_checked":    fmt.Sprintf("%d", len(vResult.RulesChecked)),
+					},
+				})
+			}
+		}
+		// Note: validation errors are logged but don't block execution
+		// This ensures the system degrades gracefully if validation fails
+	}
+
 	if len(patches) > 0 {
 		if _, err := o.ensureTestCoverage(task, pack); err != nil {
 			return ExecutionResult{}, fmt.Errorf("prepare tests: %w", err)
@@ -540,8 +599,22 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 				},
 			})
 		}
+		// Persist coding memory with KB tracking fields
+		memoryStr := fmt.Sprintf("description=%s; outcome=%s; files=%s; status=%s", codingMemory.Description, codingMemory.Outcome, strings.Join(codingMemory.FilesTouched, ","), codingMemory.TestStatus)
+		if len(codingMemory.KBsUsed) > 0 {
+			memoryStr += fmt.Sprintf("; kbs=%s", strings.Join(codingMemory.KBsUsed, ","))
+		}
+		if len(codingMemory.RulesApplied) > 0 {
+			memoryStr += fmt.Sprintf("; rules=%s", strings.Join(codingMemory.RulesApplied, ","))
+		}
+		if codingMemory.ComplianceScore > 0 {
+			memoryStr += fmt.Sprintf("; compliance=%.0f%%", codingMemory.ComplianceScore*100)
+		}
+		if codingMemory.RevisionCount > 0 {
+			memoryStr += fmt.Sprintf("; revisions=%d", codingMemory.RevisionCount)
+		}
 		memoryValues := map[string]string{
-			"coding_memory": fmt.Sprintf("description=%s; outcome=%s; files=%s; status=%s", codingMemory.Description, codingMemory.Outcome, strings.Join(codingMemory.FilesTouched, ","), codingMemory.TestStatus),
+			"coding_memory": memoryStr,
 		}
 		if err := o.Memory.Save("coding-memory", memoryValues); err != nil {
 			return ExecutionResult{}, fmt.Errorf("persist coding memory: %w", err)
@@ -602,7 +675,17 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if err := persistRepositoryPathMemory(o.Memory, task, pack); err != nil {
 		return ExecutionResult{}, fmt.Errorf("persist repository path memory: %w", err)
 	}
-	return ExecutionResult{ContextPack: pack, Message: message, TaskType: pack.TaskType, Plan: plan, ResumedFromState: pack.ResumedFromState}, nil
+	return ExecutionResult{
+		ContextPack:      pack,
+		Message:          message,
+		TaskType:         pack.TaskType,
+		Plan:             plan,
+		ResumedFromState: pack.ResumedFromState,
+		ValidationResult: validationResult,
+		RevisionAttempts: revisionAttempts,
+		KBsConsulted:     ExtractKBNamesFromExpertise(pack.ExpertiseCapsule),
+		RulesApplied:     validationResult.RulesChecked,
+	}, nil
 }
 
 // DefaultExpertiseRetriever produces concise, high-signal guidance for coding, QA, and review-oriented tasks.

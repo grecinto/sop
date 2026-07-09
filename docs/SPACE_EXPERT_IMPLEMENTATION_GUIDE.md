@@ -336,6 +336,45 @@ This keeps the primary Space workflow clean while still giving users a low-frict
 - [ ] Add observability and usage metrics for retrieval hit rate, quality, and adoption.
 - [ ] Add product copy and onboarding for the premium experience.
 
+### KB Quality & Expertise Enforcement (New Priority)
+**Goal**: Transform KB from "searchable docs" to "automatic expert layer" that enforces quality
+
+See detailed plan: [KB_EXPERTISE_QUALITY_IMPROVEMENT.md](KB_EXPERTISE_QUALITY_IMPROVEMENT.md)
+
+**Phase 1: Enforcement & Validation (Critical)**
+- [ ] Implement post-generation pattern validator for error handling, test structure, naming
+- [ ] Add automatic revision loop when code violates KB rules
+- [ ] Add inline grounding citations (e.g., `// Pattern: error-handling-v2 from Engineering KB`)
+- [ ] Track compliance score in CodingMemory
+- [ ] Limit revision attempts to prevent loops
+
+**Phase 2: Selection Intelligence (High Priority)**
+- [ ] Build task classifier to map task description → KB candidates with confidence scores
+- [ ] Implement historical success tracking (task type + KB → outcome)
+- [ ] Add automatic KB expansion when initial retrieval is sparse
+- [ ] Support multi-KB blending when expertise overlaps
+- [ ] Expose KB effectiveness query API
+
+**Phase 3: Feedback & Learning (Medium Priority)**
+- [ ] Extend CodingMemory with KBsUsed, RulesApplied, ComplianceScore
+- [ ] Implement KB effectiveness scoring (success rate per KB per task type)
+- [ ] Add user feedback capture (thumbs up/down) linked to KB usage
+- [ ] Build automatic KB pruning for rules with <30% success rate
+- [ ] Create KB quality metrics dashboard in Data Manager
+
+**Phase 4: User Experience (Medium Priority)**
+- [ ] Implement zero-config automatic KB selection mode
+- [ ] Add expertise dashboard UI showing KBs consulted, rules applied, confidence
+- [ ] Add explanation UI: "I used X pattern because task mentioned Y"
+- [ ] Add refinement controls: "apply stricter adherence", "use different expertise"
+- [ ] Make inline annotations toggleable
+
+**Success Metrics**:
+- 70%+ generated code passes validation without revision
+- 85%+ task classifier accuracy for KB selection
+- 90%+ outcomes linked to specific KBs and rules
+- KB effectiveness scores correlate with user feedback (r > 0.7)
+
 ## Recommended implementation phases
 
 ### Phase 1: Blob storage foundation

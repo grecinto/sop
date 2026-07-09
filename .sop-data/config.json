@@ -1,0 +1,61 @@
+{
+    "port": 8080,
+    "databases": [
+        {
+            "name": "dev_db",
+            "path": "/tmp/sop_data/db",
+            "stores_folders": [
+                "/tmp/sop_data/db"
+            ],
+            "mode": "standalone",
+            "redis": "",
+            "erasure_configs": [
+                {
+                    "key": "",
+                    "data_chunks": 1,
+                    "parity_chunks": 1,
+                    "base_paths": [
+                        "/tmp/sop_data/db1",
+                        "/tmp/sop_data/db2"
+                    ]
+                }
+            ]
+        }
+    ],
+    "pageSize": 0,
+    "system_db": {
+        "name": "system",
+        "path": "/tmp/sop_data/system",
+        "mode": "standalone",
+        "redis": "",
+        "is_system": true,
+        "erasure_configs": [
+            {
+                "key": "",
+                "data_chunks": 1,
+                "parity_chunks": 1,
+                "base_paths": [
+                    "/tmp/sop_data/sdb1",
+                    "/tmp/sop_data/sdb2"
+                ]
+            }
+        ]
+    },
+    "users": [
+        {
+            "username": "root",
+            "role": "SystemAdmin",
+            "password_hash": "enc:v1:c/p9E4daojPnR49ng5UjYTBP9yblK8fT7EAJTaKnlU3fLdYTRPRC+tc7ww0Sgffe1W5VHFqR2Um4656ia/JbOF1oeZIv4cGQk6aLA7pY68Ewo06ljyVmEg==",
+            "subscription_features": [
+                "hq_runtime",
+                "daemon_runtime"
+            ],
+            "last_billing_collected_at": "0001-01-01T00:00:00Z",
+            "next_billing_at": "0001-01-01T00:00:00Z",
+            "last_webhook_at": "0001-01-01T00:00:00Z",
+            "status": "active",
+            "created_at": "0001-01-01T00:00:00Z",
+            "updated_at": "0001-01-01T00:00:00Z"
+        }
+    ]
+}

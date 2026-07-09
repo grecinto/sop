@@ -1665,6 +1665,19 @@ func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
 		payload["lesson"] = strings.TrimSpace(mem.Lesson)
 		payload["next_step"] = strings.TrimSpace(mem.NextStep)
 		payload["recorded_at"] = time.Now().UnixMilli()
+		// Phase 1: KB expertise tracking
+		if len(mem.KBsUsed) > 0 {
+			payload["kbs_used"] = mem.KBsUsed
+		}
+		if len(mem.RulesApplied) > 0 {
+			payload["rules_applied"] = mem.RulesApplied
+		}
+		if mem.ComplianceScore > 0 {
+			payload["compliance_score"] = mem.ComplianceScore
+		}
+		if mem.RevisionCount > 0 {
+			payload["revision_count"] = mem.RevisionCount
+		}
 
 		tx, err := a.systemDB.BeginTransaction(ctx, sop.ForWriting)
 		if err != nil {
