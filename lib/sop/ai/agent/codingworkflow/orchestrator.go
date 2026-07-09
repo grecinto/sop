@@ -733,14 +733,14 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if err := persistRepositoryPathMemory(o.Memory, task, pack); err != nil {
 		return ExecutionResult{}, fmt.Errorf("persist repository path memory: %w", err)
 	}
-	
+
 	// Phase 4: Generate human-readable explanation of KB selection and impact
 	explanation := ""
 	if o.ExplanationGenerator != nil && taskClassification.TaskType != "" {
 		kbsUsed := ExtractKBNamesFromExpertise(pack.ExpertiseCapsule)
 		rulesApplied := validationResult.RulesChecked
 		complianceScore := validationResult.ComplianceScore
-		
+
 		explanation = o.ExplanationGenerator.GenerateFullExplanation(
 			taskClassification,
 			kbsUsed,
@@ -750,7 +750,7 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 			complianceScore,
 		)
 	}
-	
+
 	return ExecutionResult{
 		ContextPack:      pack,
 		Message:          message,

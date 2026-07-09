@@ -227,6 +227,20 @@ func (t *KBEffectivenessTracker) GetPoorPerformers(minUsageCount int, maxSuccess
 	return poorPerformers
 }
 
+// GetAllRecords returns all KB effectiveness records
+func (t *KBEffectivenessTracker) GetAllRecords() []KBEffectiveness {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	records := make([]KBEffectiveness, 0, len(t.data))
+	for _, entry := range t.data {
+		copy := *entry
+		records = append(records, copy)
+	}
+
+	return records
+}
+
 // Save persists the effectiveness data to disk
 func (t *KBEffectivenessTracker) Save() error {
 	t.mu.RLock()
