@@ -4,6 +4,8 @@ import (
 	"context"
 	log "log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	aidb "github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/ai/memory"
 )
 
 const (
@@ -134,6 +137,11 @@ type Backend struct {
 	billingCollectionStarted bool
 	shutdownCh               chan struct{}
 	shutdownOnce             sync.Once
+	
+	// KB Quality Management
+	KBEffectivenessTracker *memory.KBEffectivenessTracker
+	KBQualityAPI           *memory.KBQualityAPI
+	KBQualityJob           *memory.QualityCheckJob
 }
 
 // NewBackend creates a new backend instance.
@@ -148,6 +156,10 @@ func NewBackend(cfg *Config, catalog *ModelCatalog) *Backend {
 		billingCollectionStarted: false,
 		shutdownCh:               make(chan struct{}),
 	}
+	
+	// Initialize KB Quality Management
+	b.initKBQuality()
+	
 	return b
 }
 
@@ -172,6 +184,80 @@ func (b *Backend) Initialize(ctx context.Context) error {
 
 	return nil
 }
+
+// initKBQuality initializes the KB Quality Management system.
+func (b *Backend) initKBQuality() {
+	// Determine storage path for KB effectiveness data
+	dataPath := b.getKBEffectivenessPath()
+	
+	// Initialize tracker with auto-save enabled
+	tracker, err := memory.NewKBEffectivenessTracker(dataPath, true)
+	if err != nil {
+		log.Warn("Failed to initialize KB effectiveness tracker", "error", err, "path", dataPath)
+		return
+	}
+	
+	b.KBEffectivenessTracker = tracker
+	
+	// Initialize quality analyzer with default thresholds
+	thresholds := memory.DefaultPruningThresholds()
+	b.KBQualityAPI = memory.NewKBQualityAPI(tracker, thresholds)
+	
+	// Initialize background quality check job (24h interval, no auto-prune)
+	jobConfig := memory.DefaultQualityCheckConfig()
+	jobConfig.Interval = 24 * time.Hour
+	jobConfig.AutoPrune = false // Safety: require manual pruning
+	jobConfig.NotifyOnCritical = true
+	jobConfig.NotifyCallback = func(notification memory.QualityNotification) {
+		// Log critical KB quality issues
+		log.Warn("KB Quality Alert", 
+			"title", notification.Title,
+			"message", notification.Message,
+			"severity", notification.Severity,
+			"kb_name", notification.KBName,
+			"task_type", notification.TaskType)
+	}
+	
+	b.KBQualityJob = memory.NewQualityCheckJob(tracker, jobConfig)
+	b.KBQualityAPI.SetQualityJob(b.KBQualityJob)
+	
+	// Start background job
+	b.KBQualityJob.Start()
+	
+	log.Info("KB Quality Management initialized", "path", dataPath)
+}
+
+// getKBEffectivenessPath determines where to store KB effectiveness data.
+func (b *Backend) getKBEffectivenessPath() string {
+	// Prefer SystemDB path if available
+	if b.Config.SystemDB != nil && b.Config.SystemDB.Path != "" {
+		return filepath.Join(b.Config.SystemDB.Path, "kb_effectiveness.json")
+	}
+	
+	// Fall back to first database path
+	if len(b.Config.Databases) > 0 && b.Config.Databases[0].Path != "" {
+		baseDir := filepath.Dir(b.Config.Databases[0].Path)
+		return filepath.Join(baseDir, "kb_effectiveness.json")
+	}
+	
+	// Last resort: temp directory
+	return filepath.Join(os.TempDir(), "sop_kb_effectiveness.json")
+}
+
+// StopKBQuality gracefully stops the KB quality background job.
+func (b *Backend) StopKBQuality() {
+	if b.KBQualityJob != nil {
+		b.KBQualityJob.Stop()
+		log.Info("KB Quality Management stopped")
+	}
+	
+	if b.KBEffectivenessTracker != nil {
+		if err := b.KBEffectivenessTracker.Close(); err != nil {
+			log.Warn("Failed to close KB effectiveness tracker", "error", err)
+		}
+	}
+}
+
 
 // RegisterHandlers registers the shared runtime API handlers for the platform on the provided mux.
 func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
@@ -264,6 +350,11 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/billing/daemon-access", WithAuth(handleBillingDaemonAccess))
 	mux.HandleFunc("/api/billing/day", WithAuth(handleBillingDayUpdate))
 	mux.HandleFunc("/api/billing/collection-mode", WithAuth(handleBillingCollectionModeUpdate))
+	
+	// KB Quality Management Endpoints
+	if b.KBQualityAPI != nil {
+		b.KBQualityAPI.RegisterRoutes(mux)
+	}
 }
 
 // StartBackgroundService starts the shared background service loop for the backend.
@@ -316,6 +407,7 @@ func (b *Backend) StopBackgroundService() {
 	}
 	b.shutdownOnce.Do(func() {
 		close(b.shutdownCh)
+		b.StopKBQuality()
 	})
 }
 
