@@ -340,10 +340,10 @@ The validation orchestrator has been successfully integrated into the main orche
 ## Phase 3: Feedback & Learning - � IN PROGRESS (Backend 60% Complete)
 
 **Goal**: System improves over time based on real outcomes  
-**Timeline**: Backend 1-2 weeks, Frontend 2-3 weeks  
+**Timeline**: Backend complete in 2 weeks, Frontend 2-3 weeks remaining  
 **Priority**: Medium
 
-**Backend Status**: Outcome linkage & pruning analysis complete, user feedback & auto-execution pending frontend
+**Backend Status**: ✅ All backend components complete - quality jobs, admin API, CLI tooling
 
 ### Outcome Linkage - ✅ COMPLETE (Phase 1)
 - [x] Update `lib/sop/ai/agent/codingworkflow/orchestrator.go`
@@ -380,9 +380,33 @@ The validation orchestrator has been successfully integrated into the main orche
   - [x] `kb-admin prune` - execute pruning with dry-run
   - [x] `kb-admin list` - list all records (table/json/csv)
   - [x] `kb-admin export` - export to JSON
-- [ ] Integrate pruning into background job
-  - [ ] Auto-flag critical performers
-  - [ ] Send admin notifications/alerts
+
+### Background Quality Jobs - ✅ COMPLETE (NEW)
+- [x] Create `lib/sop/ai/memory/kb_quality_job.go`
+  - [x] QualityCheckJob for periodic analysis
+  - [x] Configurable intervals (default: 24h)
+  - [x] Auto-pruning mode with safety toggle
+  - [x] Notification system for critical issues
+  - [x] NotificationFunc callback for custom alerting
+  - [x] Manual trigger via RunNow()
+  - [x] GetLastReport() for status queries
+- [x] Create test suite (8 tests, all passing)
+- [x] Integration example in `example_integration_test.go`
+
+### Admin REST API - ✅ COMPLETE (NEW)
+- [x] Create `lib/sop/ai/memory/kb_quality_api.go`
+  - [x] `/api/kb/quality/report` - Full quality report (JSON/text)
+  - [x] `/api/kb/quality/analyze` - Analysis with severity filtering
+  - [x] `/api/kb/quality/candidates` - Critical pruning candidates
+  - [x] `/api/kb/effectiveness/all` - All KB records
+  - [x] `/api/kb/effectiveness/best` - Top performers by task
+  - [x] `/api/kb/effectiveness/poor` - Poor performers query
+  - [x] `/api/kb/effectiveness/kb` - Specific KB details
+  - [x] `/api/kb/quality/trigger` - Manual quality check trigger
+  - [x] `/api/kb/quality/status` - Job status and last run
+- [x] Create test suite (15 tests, all passing)
+- [x] RegisterRoutes() for easy integration
+- [x] Full HTTP handler implementation
 
 ### User Feedback Capture - 📋 PLANNED (Requires Frontend)
 - [ ] Create backend endpoint: `/api/copilot/feedback`
@@ -409,12 +433,14 @@ The validation orchestrator has been successfully integrated into the main orche
   - [ ] Disable/enable KB toggle
 
 ### Success Metrics (Phase 3)
-- [x] 100% of outcomes linked to specific KBs and rules (Phase 1 complete)
-- [x] Effectiveness scoring system operational (Phase 2 complete)
-- [x] Admin tooling can identify poor-performing KBs (Phase 3 backend complete)
-- [ ] User feedback system captures 50%+ of generations
-- [ ] Effectiveness scores correlate with user feedback (r > 0.7)
-- [ ] At least 5 KBs flagged and reviewed in first month
+- [x] 100% of outcomes linked to specific KBs and rules (Phase 1)
+- [x] Effectiveness scoring system operational (Phase 2)
+- [x] Admin tooling can identify poor-performing KBs (Phase 3)
+- [x] Background jobs perform automated quality analysis (Phase 3)
+- [x] REST API exposes all quality metrics for dashboards (Phase 3)
+- [ ] User feedback system captures 50%+ of generations (requires frontend)
+- [ ] Effectiveness scores correlate with user feedback (r > 0.7) (requires frontend)
+- [ ] At least 5 KBs flagged and reviewed in first month (requires production use)
 
 ---
 

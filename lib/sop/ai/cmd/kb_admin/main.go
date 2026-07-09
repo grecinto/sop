@@ -73,28 +73,28 @@ func runReport(args []string) {
 	threshold := fs.Float64("threshold", 0.30, "Success rate threshold for flagging")
 	minUses := fs.Int("min-uses", 10, "Minimum uses before flagging")
 	inactiveDays := fs.Int("inactive-days", 90, "Days of inactivity threshold")
-	
+
 	fs.Parse(args)
-	
+
 	tracker, err := loadTracker(*dataPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	thresholds := memory.PruningThresholds{
 		MinimumUses:      *minUses,
 		SuccessRateBelow: *threshold,
 		InactivityDays:   *inactiveDays,
 	}
-	
+
 	analyzer := memory.NewPruningAnalyzer(tracker, thresholds)
 	report, err := analyzer.Analyze()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error analyzing data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	formatted := analyzer.FormatReport(report)
 	fmt.Print(formatted)
 }
@@ -105,67 +105,67 @@ func runAnalyze(args []string) {
 	threshold := fs.Float64("threshold", 0.30, "Success rate threshold for flagging")
 	minUses := fs.Int("min-uses", 10, "Minimum uses before flagging")
 	showAll := fs.Bool("all", false, "Show all candidates (not just critical)")
-	
+
 	fs.Parse(args)
-	
+
 	tracker, err := loadTracker(*dataPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	thresholds := memory.PruningThresholds{
 		MinimumUses:      *minUses,
 		SuccessRateBelow: *threshold,
 		InactivityDays:   90,
 	}
-	
+
 	analyzer := memory.NewPruningAnalyzer(tracker, thresholds)
 	report, err := analyzer.Analyze()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error analyzing data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	fmt.Println("🔍 ANALYSIS RESULTS")
 	fmt.Println("─────────────────────────────────────────────────────")
-	fmt.Printf("Total KBs: %d | Active: %d | Stale: %d\n", 
+	fmt.Printf("Total KBs: %d | Active: %d | Stale: %d\n",
 		report.TotalKBs, report.ActiveKBs, report.StaleKBs)
 	fmt.Printf("Average Success Rate: %.1f%%\n\n", report.AverageSuccessRate*100)
-	
+
 	if len(report.PoorPerformers) == 0 {
 		fmt.Println("✓ No poor performers identified")
 		return
 	}
-	
+
 	criticalCount := 0
 	warningCount := 0
-	
+
 	for _, candidate := range report.PoorPerformers {
 		if !*showAll && candidate.Severity != "critical" {
 			continue
 		}
-		
+
 		if candidate.Severity == "critical" {
 			criticalCount++
 		} else if candidate.Severity == "warning" {
 			warningCount++
 		}
-		
+
 		icon := "ℹ️ "
 		if candidate.Severity == "critical" {
 			icon = "❌"
 		} else if candidate.Severity == "warning" {
 			icon = "⚠️ "
 		}
-		
+
 		fmt.Printf("%s %s [%s]\n", icon, candidate.KBName, candidate.TaskType)
 		fmt.Printf("   Success: %.1f%% | Uses: %d | Last Used: %d days ago\n",
 			candidate.SuccessRate*100, candidate.TotalUses, candidate.DaysSinceUse)
 		fmt.Printf("   Issue: %s\n", candidate.Reason)
 		fmt.Printf("   Action: %s\n\n", candidate.Recommendation)
 	}
-	
+
 	fmt.Printf("Summary: %d critical, %d warnings\n", criticalCount, warningCount)
 }
 
@@ -174,32 +174,32 @@ func runPrune(args []string) {
 	dataPath := fs.String("data", getDefaultDataPath(), "Path to KB effectiveness data file")
 	dryRun := fs.Bool("dry-run", true, "Show what would be pruned without making changes")
 	execute := fs.Bool("execute", false, "Actually execute pruning (disables dry-run)")
-	
+
 	fs.Parse(args)
-	
+
 	if *execute {
 		*dryRun = false
 	}
-	
+
 	tracker, err := loadTracker(*dataPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	analyzer := memory.NewPruningAnalyzer(tracker, memory.DefaultPruningThresholds())
-	
+
 	pruned, err := analyzer.ExecutePruning(*dryRun)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error executing pruning: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	if len(pruned) == 0 {
 		fmt.Println("✓ No KBs need pruning")
 		return
 	}
-	
+
 	if *dryRun {
 		fmt.Println("🔍 DRY RUN - The following KBs would be pruned:")
 		fmt.Println("─────────────────────────────────────────────────────")
@@ -207,13 +207,13 @@ func runPrune(args []string) {
 		fmt.Println("✂️  PRUNING - The following KBs have been marked:")
 		fmt.Println("─────────────────────────────────────────────────────")
 	}
-	
+
 	for i, kb := range pruned {
 		fmt.Printf("%d. %s\n", i+1, kb)
 	}
-	
+
 	fmt.Printf("\nTotal: %d KB(s)\n", len(pruned))
-	
+
 	if *dryRun {
 		fmt.Println("\nTo execute pruning, run: kb-admin prune --execute")
 	}
@@ -224,22 +224,22 @@ func runList(args []string) {
 	dataPath := fs.String("data", getDefaultDataPath(), "Path to KB effectiveness data file")
 	format := fs.String("format", "table", "Output format: table, json, csv")
 	sortBy := fs.String("sort", "name", "Sort by: name, success, uses, recent")
-	
+
 	fs.Parse(args)
-	
+
 	tracker, err := loadTracker(*dataPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	records := tracker.GetAllRecords()
-	
+
 	if len(records) == 0 {
 		fmt.Println("No KB effectiveness records found")
 		return
 	}
-	
+
 	// Sort records
 	switch *sortBy {
 	case "success":
@@ -249,7 +249,7 @@ func runList(args []string) {
 	case "recent":
 		// Would need custom sorting - omitted for brevity
 	}
-	
+
 	switch *format {
 	case "json":
 		outputJSON(records)
@@ -264,28 +264,28 @@ func runExport(args []string) {
 	fs := flag.NewFlagSet("export", flag.ExitOnError)
 	dataPath := fs.String("data", getDefaultDataPath(), "Path to KB effectiveness data file")
 	output := fs.String("output", "kb_export.json", "Output file path")
-	
+
 	fs.Parse(args)
-	
+
 	tracker, err := loadTracker(*dataPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	records := tracker.GetAllRecords()
-	
+
 	data, err := json.MarshalIndent(records, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error marshaling data: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	if err := os.WriteFile(*output, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing output: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	fmt.Printf("✓ Exported %d records to %s\n", len(records), *output)
 }
 
@@ -293,13 +293,13 @@ func loadTracker(dataPath string) (*memory.KBEffectivenessTracker, error) {
 	if dataPath == "" {
 		return nil, fmt.Errorf("data path not specified")
 	}
-	
+
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(dataPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
-	
+
 	// CLI tool doesn't need auto-save
 	return memory.NewKBEffectivenessTracker(dataPath, false)
 }
@@ -313,7 +313,7 @@ func getDefaultDataPath() string {
 			return sopDir
 		}
 	}
-	
+
 	// Fall back to current directory
 	return "./kb_effectiveness.json"
 }
@@ -321,21 +321,21 @@ func getDefaultDataPath() string {
 func outputTable(records []memory.KBEffectiveness) {
 	fmt.Println("KB EFFECTIVENESS RECORDS")
 	fmt.Println("─────────────────────────────────────────────────────────────────────────────")
-	fmt.Printf("%-30s %-15s %8s %8s %10s %12s\n", 
+	fmt.Printf("%-30s %-15s %8s %8s %10s %12s\n",
 		"KB Name", "Task Type", "Success", "Failure", "Score", "Last Used")
 	fmt.Println("─────────────────────────────────────────────────────────────────────────────")
-	
+
 	for _, record := range records {
 		lastUsed := "never"
 		if !record.LastUsed.IsZero() {
 			lastUsed = record.LastUsed.Format("2006-01-02")
 		}
-		
+
 		kbName := record.KBName
 		if len(kbName) > 28 {
 			kbName = kbName[:25] + "..."
 		}
-		
+
 		fmt.Printf("%-30s %-15s %8d %8d %9.1f%% %12s\n",
 			kbName,
 			record.TaskType,
@@ -345,7 +345,7 @@ func outputTable(records []memory.KBEffectiveness) {
 			lastUsed,
 		)
 	}
-	
+
 	fmt.Println("─────────────────────────────────────────────────────────────────────────────")
 	fmt.Printf("Total records: %d\n", len(records))
 }
@@ -366,9 +366,9 @@ func outputCSV(records []memory.KBEffectiveness) {
 		if !record.LastUsed.IsZero() {
 			lastUsed = record.LastUsed.Format("2006-01-02")
 		}
-		
+
 		kbName := strings.ReplaceAll(record.KBName, ",", ";")
-		
+
 		fmt.Printf("%s,%s,%d,%d,%.2f,%s\n",
 			kbName,
 			record.TaskType,
