@@ -294,6 +294,10 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/feedback", WithAuth(handleAIFeedback))
 	mux.HandleFunc("/api/scripts/execute", WithAuth(handleExecuteScript))
 
+	// KB Refinement Endpoints
+	mux.HandleFunc("/api/ai/chat/revalidate", WithAuth(HandleKBRevalidate))
+	mux.HandleFunc("/api/ai/kb/alternatives", WithAuth(HandleKBAlternatives))
+
 	// Knowledge Base Endpoints
 	mux.HandleFunc("/api/source-store/digest", WithAuth(handleDigestSourceStore))
 	mux.HandleFunc("/api/spaces/categories", WithAuth(handleListSpaceCategories))

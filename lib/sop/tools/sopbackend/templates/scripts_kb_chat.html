@@ -67,6 +67,48 @@ function attachKBFeedbackToMessage(messageId, kbMetadata) {
         `;
         feedbackContainer.appendChild(explanationSection);
     }
+    
+    // Add refinement controls
+    const refinementSection = document.createElement('div');
+    refinementSection.className = 'kb-refinement-section';
+    refinementSection.innerHTML = `
+        <div class="kb-refinement-toggle">
+            <button class="kb-refinement-toggle-btn" onclick="toggleKBRefinementControls('${messageId}')">
+                <span class="kb-refinement-icon">⚙️</span>
+                <span class="kb-refinement-text">Refinement Options</span>
+                <span class="kb-refinement-arrow">▼</span>
+            </button>
+        </div>
+        <div class="kb-refinement-controls" id="kb-refinement-${messageId}" style="display: none;">
+            <button class="kb-refinement-btn kb-refinement-stricter" 
+                    onclick="applyStricterValidation('${messageId}')" 
+                    title="Re-validate with stricter quality standards">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2 L12 22 M2 12 L22 12"></path>
+                </svg>
+                Apply Stricter
+            </button>
+            <button class="kb-refinement-btn kb-refinement-alternative" 
+                    onclick="tryDifferentSpace('${messageId}')" 
+                    title="Suggest alternative Spaces for this task">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="1 4 1 10 7 10"></polyline>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                </svg>
+                Try Different Space
+            </button>
+            <button class="kb-refinement-btn kb-refinement-disable" 
+                    onclick="disableSpaceForSession('${messageId}')" 
+                    title="Temporarily disable this Space for current session">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                </svg>
+                Disable Space
+            </button>
+        </div>
+    `;
+    feedbackContainer.appendChild(refinementSection);
 
     // Insert feedback section at the end of the message
     messageEl.appendChild(feedbackContainer);
@@ -487,6 +529,105 @@ if (!document.getElementById('kb-chat-styles')) {
         .kb-citations-hidden .kb-citation {
             display: none;
         }
+
+        /* Refinement Controls */
+        .kb-refinement-section {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color, #e0e0e0);
+        }
+
+        .kb-refinement-toggle {
+            margin-bottom: 8px;
+        }
+
+        .kb-refinement-toggle-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-muted, #666);
+            padding: 4px 0;
+            transition: color 0.2s;
+        }
+
+        .kb-refinement-toggle-btn:hover {
+            color: var(--text-color, #333);
+        }
+
+        .kb-refinement-icon {
+            font-size: 14px;
+        }
+
+        .kb-refinement-arrow {
+            margin-left: auto;
+            font-size: 10px;
+        }
+
+        .kb-refinement-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 8px 0;
+        }
+
+        .kb-refinement-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border: 1px solid var(--border-color, #e0e0e0);
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--text-color, #333);
+            transition: all 0.2s;
+        }
+
+        .kb-refinement-btn:hover {
+            background: var(--input-bg, #f9f9f9);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .kb-refinement-btn svg {
+            flex-shrink: 0;
+        }
+
+        .kb-refinement-stricter:hover {
+            border-color: #2196F3;
+            color: #2196F3;
+        }
+
+        .kb-refinement-alternative:hover {
+            border-color: #4CAF50;
+            color: #4CAF50;
+        }
+
+        .kb-refinement-disable:hover {
+            border-color: #f44336;
+            color: #f44336;
+        }
+
+        @media (max-width: 768px) {
+            .kb-feedback-section {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .kb-refinement-controls {
+                flex-direction: column;
+            }
+
+            .kb-refinement-btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
     `;
     document.head.appendChild(style);
 }
@@ -724,6 +865,186 @@ function showToast(message, type = 'info') {
 }
 
 // ============================================================================
+// Refinement Controls
+// ============================================================================
+
+// Session-scoped Space blocklist
+window.kbSessionBlocklist = window.kbSessionBlocklist || new Set();
+
+/**
+ * Toggle refinement controls visibility
+ */
+function toggleKBRefinementControls(messageId) {
+    const controls = document.getElementById(`kb-refinement-${messageId}`);
+    const arrow = document.querySelector(`#kb-refinement-${messageId}`).previousElementSibling.querySelector('.kb-refinement-arrow');
+    
+    if (controls.style.display === 'none') {
+        controls.style.display = 'flex';
+        arrow.textContent = '▲';
+    } else {
+        controls.style.display = 'none';
+        arrow.textContent = '▼';
+    }
+}
+
+/**
+ * Apply stricter validation for a message
+ */
+async function applyStricterValidation(messageId) {
+    const metadata = window.kbMetadataStore.get(messageId);
+    if (!metadata) {
+        showToast('⚠️ No Space metadata found', 'error');
+        return;
+    }
+    
+    // Show loading
+    showToast('🔄 Re-validating with stricter standards...', 'info');
+    
+    try {
+        // Get the original message content
+        const messageEl = document.getElementById(messageId);
+        if (!messageEl) {
+            throw new Error('Message element not found');
+        }
+        
+        // Extract the prompt/task from the message
+        const taskText = extractTaskFromMessage(messageEl);
+        if (!taskText) {
+            throw new Error('Could not extract task from message');
+        }
+        
+        // Re-submit with strict mode flag
+        const url = getRuntimeRequestTarget('/api/ai/chat/revalidate');
+        const headers = { 'Content-Type': 'application/json' };
+        applyRuntimeAuthHeaders(headers, '/api/ai/chat/revalidate');
+        
+        const payload = {
+            message_id: messageId,
+            task: taskText,
+            kb_name: metadata.kbs_used[0],
+            strict_mode: true
+        };
+        
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(payload),
+            credentials: 'same-origin'
+        });
+        
+        if (!response.ok) {
+            throw new Error('Revalidation failed: ' + response.statusText);
+        }
+        
+        const result = await response.json();
+        showToast('✅ Stricter validation applied', 'success');
+        
+        // Optionally show results
+        if (result.validation_passed) {
+            showToast('✅ Passed strict validation!', 'success');
+        } else {
+            showToast('⚠️ Failed strict validation', 'warning');
+        }
+        
+    } catch (error) {
+        console.error('[Refinement] Stricter validation failed:', error);
+        showToast('❌ Could not apply stricter validation', 'error');
+    }
+}
+
+/**
+ * Try different Space for a message
+ */
+async function tryDifferentSpace(messageId) {
+    const metadata = window.kbMetadataStore.get(messageId);
+    if (!metadata) {
+        showToast('⚠️ No Space metadata found', 'error');
+        return;
+    }
+    
+    showToast('🔄 Finding alternative Spaces...', 'info');
+    
+    try {
+        const url = getRuntimeRequestTarget('/api/ai/kb/alternatives');
+        const headers = { 'Content-Type': 'application/json' };
+        applyRuntimeAuthHeaders(headers, '/api/ai/kb/alternatives');
+        
+        const payload = {
+            task_type: metadata.task_type || 'general',
+            current_kb: metadata.kbs_used[0],
+            excluded_kbs: [...window.kbSessionBlocklist]
+        };
+        
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(payload),
+            credentials: 'same-origin'
+        });
+        
+        if (!response.ok) {
+            throw new Error('Alternative search failed: ' + response.statusText);
+        }
+        
+        const result = await response.json();
+        
+        if (result.alternatives && result.alternatives.length > 0) {
+            const altList = result.alternatives.map(alt => 
+                `• ${alt.name} (${(alt.confidence * 100).toFixed(0)}% confidence)`
+            ).join('\n');
+            showToast(`✅ Alternative Spaces:\n${altList}`, 'success');
+        } else {
+            showToast('ℹ️ No alternative Spaces found', 'info');
+        }
+        
+    } catch (error) {
+        console.error('[Refinement] Alternative search failed:', error);
+        showToast('❌ Could not find alternatives', 'error');
+    }
+}
+
+/**
+ * Disable Space for current session
+ */
+function disableSpaceForSession(messageId) {
+    const metadata = window.kbMetadataStore.get(messageId);
+    if (!metadata || !metadata.kbs_used || metadata.kbs_used.length === 0) {
+        showToast('⚠️ No Space metadata found', 'error');
+        return;
+    }
+    
+    const spaceName = metadata.kbs_used[0];
+    
+    if (!confirm(`Disable "${spaceName}" for the rest of this session?\n\nThis Space will not be used until you refresh the page.`)) {
+        return;
+    }
+    
+    // Add to blocklist
+    window.kbSessionBlocklist.add(spaceName);
+    
+    showToast(`🚫 "${spaceName}" disabled for session`, 'warning');
+    
+    // Track analytics
+    if (window.trackEvent) {
+        trackEvent('kb_space_disabled', { space: spaceName });
+    }
+}
+
+/**
+ * Extract task text from message element (helper)
+ */
+function extractTaskFromMessage(messageEl) {
+    // Try to find user message content
+    const userMsg = messageEl.querySelector('.user-message-content');
+    if (userMsg) {
+        return userMsg.textContent.trim();
+    }
+    
+    // Fallback: get text content
+    return messageEl.textContent.trim().substring(0, 500);
+}
+
+// ============================================================================
 // Initialization
 // ============================================================================
 
@@ -747,6 +1068,12 @@ window.showKBSettingsPanel = showKBSettingsPanel;
 window.hideKBSettingsPanel = hideKBSettingsPanel;
 window.loadKBSettings = loadKBSettings;
 window.toggleCitationVisibility = toggleCitationVisibility;
+
+// Expose refinement functions to global scope
+window.toggleKBRefinementControls = toggleKBRefinementControls;
+window.applyStricterValidation = applyStricterValidation;
+window.tryDifferentSpace = tryDifferentSpace;
+window.disableSpaceForSession = disableSpaceForSession;
 
 console.log('[KB Chat] Space Quality chat integration loaded');
 </script>

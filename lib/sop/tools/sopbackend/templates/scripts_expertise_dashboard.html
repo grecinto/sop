@@ -1,0 +1,397 @@
+{{define "scripts_expertise_dashboard"}}
+<script>
+// Expertise Dashboard - Session-scoped Space usage tracking and reporting
+
+// Track session KB usage statistics
+window.expertiseSession = window.expertiseSession || {
+    messages: [],
+    spacesUsed: new Set(),
+    taskTypes: {},
+    totalRules: 0,
+    startTime: Date.now()
+};
+
+/**
+ * Record KB usage for a message (called when metadata is attached)
+ */
+function recordExpertiseUsage(messageId, kbMetadata) {
+    const timestamp = Date.now();
+    
+    // Build expertise record
+    const record = {
+        messageId: messageId,
+        timestamp: timestamp,
+        spaces: kbMetadata.kbs_used || [],
+        taskType: kbMetadata.task_type || 'unknown',
+        explanation: kbMetadata.explanation || '',
+        rulesApplied: kbMetadata.rules_applied || 0,
+        confidence: kbMetadata.confidence || 0,
+        revisionAttempts: kbMetadata.revision_attempts || 0
+    };
+    
+    // Add to session
+    window.expertiseSession.messages.push(record);
+    
+    // Track unique spaces
+    record.spaces.forEach(space => {
+        window.expertiseSession.spacesUsed.add(space);
+    });
+    
+    // Track task types
+    const taskType = record.taskType;
+    if (!window.expertiseSession.taskTypes[taskType]) {
+        window.expertiseSession.taskTypes[taskType] = 0;
+    }
+    window.expertiseSession.taskTypes[taskType]++;
+    
+    // Track rules
+    window.expertiseSession.totalRules += record.rulesApplied;
+    
+    // Update dashboard badge if visible
+    updateExpertiseBadge();
+}
+
+/**
+ * Open Expertise Dashboard
+ */
+function openExpertiseDashboard() {
+    const modal = document.getElementById('expertise-dashboard-modal');
+    if (!modal) {
+        console.error('[Expertise Dashboard] Modal not found');
+        return;
+    }
+    
+    // Populate dashboard with current session data
+    populateExpertiseDashboard();
+    
+    // Show modal
+    modal.style.display = 'flex';
+    
+    // Track analytics
+    if (window.trackEvent) {
+        trackEvent('expertise_dashboard_opened', { messages: window.expertiseSession.messages.length });
+    }
+}
+
+/**
+ * Close Expertise Dashboard
+ */
+function closeExpertiseDashboard() {
+    const modal = document.getElementById('expertise-dashboard-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+/**
+ * Populate dashboard with session data
+ */
+function populateExpertiseDashboard() {
+    const session = window.expertiseSession;
+    
+    // Summary stats
+    document.getElementById('expertise-spaces-count').textContent = session.spacesUsed.size;
+    document.getElementById('expertise-messages-count').textContent = session.messages.length;
+    document.getElementById('expertise-rules-count').textContent = session.totalRules;
+    
+    // Average confidence
+    if (session.messages.length > 0) {
+        const avgConfidence = session.messages
+            .filter(m => m.confidence > 0)
+            .reduce((sum, m) => sum + m.confidence, 0) / session.messages.length;
+        document.getElementById('expertise-confidence-avg').textContent = 
+            avgConfidence > 0 ? (avgConfidence * 100).toFixed(0) + '%' : '-';
+    } else {
+        document.getElementById('expertise-confidence-avg').textContent = '-';
+    }
+    
+    // Task types
+    const taskTypesContainer = document.getElementById('expertise-task-types');
+    taskTypesContainer.innerHTML = '';
+    for (const [taskType, count] of Object.entries(session.taskTypes)) {
+        const badge = document.createElement('div');
+        badge.className = 'expertise-task-badge';
+        badge.innerHTML = `
+            <span>${formatTaskType(taskType)}</span>
+            <span class="badge-count">${count}</span>
+        `;
+        taskTypesContainer.appendChild(badge);
+    }
+    
+    // Space usage (with counts)
+    const spaceUsageContainer = document.getElementById('expertise-space-usage');
+    spaceUsageContainer.innerHTML = '';
+    
+    // Count usage per space
+    const spaceCounts = {};
+    session.messages.forEach(msg => {
+        msg.spaces.forEach(space => {
+            spaceCounts[space] = (spaceCounts[space] || 0) + 1;
+        });
+    });
+    
+    // Sort by usage
+    const sortedSpaces = Object.entries(spaceCounts).sort((a, b) => b[1] - a[1]);
+    sortedSpaces.forEach(([space, count]) => {
+        const badge = document.createElement('div');
+        badge.className = 'expertise-space-badge';
+        badge.innerHTML = `
+            <span>📚 ${space}</span>
+            <span class="badge-count">${count}</span>
+        `;
+        spaceUsageContainer.appendChild(badge);
+    });
+    
+    // Recent messages (limit to last 10)
+    const messageListContainer = document.getElementById('expertise-message-list');
+    messageListContainer.innerHTML = '';
+    
+    const recentMessages = session.messages.slice(-10).reverse();
+    if (recentMessages.length === 0) {
+        messageListContainer.innerHTML = '<p style="text-align: center; color: #999;">No expertise usage in this session yet.</p>';
+        return;
+    }
+    
+    recentMessages.forEach(msg => {
+        const messageItem = document.createElement('div');
+        messageItem.className = 'expertise-message-item';
+        
+        const timeAgo = formatTimeAgo(msg.timestamp);
+        const confidenceLevel = getConfidenceLevel(msg.confidence);
+        const confidenceClass = confidenceLevel === 'High' ? 'high' : 
+                               confidenceLevel === 'Medium' ? 'medium' : 'low';
+        
+        messageItem.innerHTML = `
+            <div class="expertise-message-header">
+                <div class="expertise-message-spaces">🧠 ${msg.spaces.join(', ')}</div>
+                <div class="expertise-message-timestamp">${timeAgo}</div>
+            </div>
+            <div class="expertise-message-task">
+                <strong>Task:</strong> ${formatTaskType(msg.taskType)}
+            </div>
+            ${msg.confidence > 0 ? `
+                <div class="expertise-message-confidence ${confidenceClass}">
+                    ${confidenceLevel} Confidence (${(msg.confidence * 100).toFixed(0)}%)
+                </div>
+            ` : ''}
+            ${msg.revisionAttempts > 0 ? `
+                <div style="margin-top: 8px; font-size: 12px; color: #f57c00;">
+                    ⚠️ ${msg.revisionAttempts} revision${msg.revisionAttempts > 1 ? 's' : ''}
+                </div>
+            ` : ''}
+        `;
+        
+        messageListContainer.appendChild(messageItem);
+    });
+}
+
+/**
+ * Export expertise report
+ */
+function exportExpertiseReport(format) {
+    const session = window.expertiseSession;
+    
+    if (format === 'markdown') {
+        const markdown = generateMarkdownReport(session);
+        downloadFile('expertise-report.md', markdown, 'text/markdown');
+        showToast('✅ Markdown report downloaded');
+    } else if (format === 'json') {
+        const json = JSON.stringify(session, null, 2);
+        downloadFile('expertise-report.json', json, 'application/json');
+        showToast('✅ JSON report downloaded');
+    }
+    
+    // Track analytics
+    if (window.trackEvent) {
+        trackEvent('expertise_report_exported', { format: format });
+    }
+}
+
+/**
+ * Generate markdown report
+ */
+function generateMarkdownReport(session) {
+    const sessionDuration = formatDuration(Date.now() - session.startTime);
+    
+    let md = `# Session Expertise Report\n\n`;
+    md += `**Generated:** ${new Date().toLocaleString()}\n`;
+    md += `**Session Duration:** ${sessionDuration}\n\n`;
+    
+    md += `## Summary\n\n`;
+    md += `- **Spaces Used:** ${session.spacesUsed.size}\n`;
+    md += `- **Messages with Expertise:** ${session.messages.length}\n`;
+    md += `- **Total Rules Applied:** ${session.totalRules}\n\n`;
+    
+    md += `## Task Types\n\n`;
+    for (const [taskType, count] of Object.entries(session.taskTypes)) {
+        md += `- **${formatTaskType(taskType)}:** ${count} message${count > 1 ? 's' : ''}\n`;
+    }
+    md += `\n`;
+    
+    md += `## Space Usage\n\n`;
+    const spaceCounts = {};
+    session.messages.forEach(msg => {
+        msg.spaces.forEach(space => {
+            spaceCounts[space] = (spaceCounts[space] || 0) + 1;
+        });
+    });
+    const sortedSpaces = Object.entries(spaceCounts).sort((a, b) => b[1] - a[1]);
+    sortedSpaces.forEach(([space, count]) => {
+        md += `- **${space}:** ${count} time${count > 1 ? 's' : ''}\n`;
+    });
+    md += `\n`;
+    
+    md += `## Message Details\n\n`;
+    session.messages.forEach((msg, idx) => {
+        md += `### Message ${idx + 1}\n\n`;
+        md += `- **Timestamp:** ${new Date(msg.timestamp).toLocaleString()}\n`;
+        md += `- **Spaces:** ${msg.spaces.join(', ')}\n`;
+        md += `- **Task Type:** ${formatTaskType(msg.taskType)}\n`;
+        if (msg.confidence > 0) {
+            md += `- **Confidence:** ${(msg.confidence * 100).toFixed(0)}%\n`;
+        }
+        if (msg.rulesApplied > 0) {
+            md += `- **Rules Applied:** ${msg.rulesApplied}\n`;
+        }
+        if (msg.revisionAttempts > 0) {
+            md += `- **Revision Attempts:** ${msg.revisionAttempts}\n`;
+        }
+        if (msg.explanation) {
+            md += `\n**Explanation:**\n${msg.explanation}\n`;
+        }
+        md += `\n`;
+    });
+    
+    return md;
+}
+
+/**
+ * Clear expertise session data
+ */
+function clearExpertiseSession() {
+    if (!confirm('Clear all session expertise data? This cannot be undone.')) {
+        return;
+    }
+    
+    window.expertiseSession = {
+        messages: [],
+        spacesUsed: new Set(),
+        taskTypes: {},
+        totalRules: 0,
+        startTime: Date.now()
+    };
+    
+    // Clear metadata store
+    window.kbMetadataStore.clear();
+    
+    // Refresh dashboard
+    populateExpertiseDashboard();
+    updateExpertiseBadge();
+    
+    showToast('✅ Session expertise data cleared');
+    
+    // Track analytics
+    if (window.trackEvent) {
+        trackEvent('expertise_session_cleared');
+    }
+}
+
+/**
+ * Update expertise badge (shows count)
+ */
+function updateExpertiseBadge() {
+    const badge = document.getElementById('expertise-badge');
+    if (!badge) return;
+    
+    const count = window.expertiseSession.messages.length;
+    badge.textContent = count > 0 ? count : '';
+    badge.style.display = count > 0 ? 'inline-flex' : 'none';
+}
+
+/**
+ * Download file helper
+ */
+function downloadFile(filename, content, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Format task type for display
+ */
+function formatTaskType(taskType) {
+    if (!taskType || taskType === 'unknown') return 'General';
+    return taskType.split('_').map(word => 
+        word.charAt(0).toUpperCase() + word.slice(1)
+    ).join(' ');
+}
+
+/**
+ * Get confidence level label
+ */
+function getConfidenceLevel(confidence) {
+    if (confidence >= 0.7) return 'High';
+    if (confidence >= 0.4) return 'Medium';
+    return 'Low';
+}
+
+/**
+ * Format time ago
+ */
+function formatTimeAgo(timestamp) {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+/**
+ * Format duration
+ */
+function formatDuration(ms) {
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
+}
+
+// Initialize expertise tracking when KB metadata is attached
+const originalAttachKBFeedback = window.attachKBFeedbackToMessage;
+if (originalAttachKBFeedback) {
+    window.attachKBFeedbackToMessage = function(messageId, kbMetadata) {
+        // Call original function
+        originalAttachKBFeedback(messageId, kbMetadata);
+        
+        // Record expertise usage
+        recordExpertiseUsage(messageId, kbMetadata);
+    };
+}
+
+// Keyboard shortcut: Ctrl+Shift+E to open expertise dashboard
+document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'E') {
+        e.preventDefault();
+        openExpertiseDashboard();
+    }
+});
+
+// Expose functions to global scope
+window.openExpertiseDashboard = openExpertiseDashboard;
+window.closeExpertiseDashboard = closeExpertiseDashboard;
+window.exportExpertiseReport = exportExpertiseReport;
+window.clearExpertiseSession = clearExpertiseSession;
+window.recordExpertiseUsage = recordExpertiseUsage;
+
+console.log('[Expertise Dashboard] Loaded - Press Ctrl+Shift+E to open');
+</script>
+{{end}}

@@ -280,6 +280,10 @@
             <input type="hidden" id="agent-select" value="copilot">
         </div>
         <div class="chat-controls">
+            <button type="button" id="expertise-dashboard-btn" class="expertise-dashboard-btn" onclick="event.stopPropagation(); openExpertiseDashboard()" title="Expertise Dashboard (Ctrl+Shift+E)" style="display: inline-flex; font-size: 12px; align-items: center; gap: 4px; position: relative;">
+                📊
+                <span id="expertise-badge" class="expertise-badge" style="display: none; position: absolute; top: -6px; right: -6px; background: #f44336; color: white; font-size: 10px; font-weight: bold; padding: 2px 5px; border-radius: 10px; min-width: 16px; text-align: center;"></span>
+            </button>
             <button type="button" id="kb-settings-btn" class="kb-settings-btn" onclick="event.stopPropagation(); showKBSettingsPanel()" title="Space Settings" style="display: inline-flex; font-size: 12px; align-items: center; gap: 4px;">🧠</button>
             <button type="button" id="chat-floater-btn" class="pip-btn" onclick="event.stopPropagation(); openChatPiP()" title="Open AI chat in a floating window" style="display: inline-flex; font-size: 12px;">⧉</button>
             <button type="button" id="chat-reset-btn" class="reset-btn" onclick="resetChatPosition(true)" title="Reset Position" style="font-size: 12px;">&#x21ba;</button>
