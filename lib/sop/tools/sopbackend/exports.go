@@ -425,7 +425,7 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 	mux.HandleFunc("/api/daemon/hq-retrieve", WithAuth(HandleHQRetrieve))
 	mux.HandleFunc("/api/daemon/pull-space", WithAuth(HandleDaemonPullSpace)) // Daemon pulls Space from HQ
 	mux.HandleFunc("/api/daemon/acknowledge-space", WithAuth(handleAcknowledgeSpace))
-	
+
 	// KB Quality Management Endpoints
 	initKBQuality()
 	if kbQualityAPI != nil {
@@ -569,20 +569,20 @@ func initKBQuality() {
 	kbQualityInitOnce.Do(func() {
 		// Determine storage path for KB effectiveness data
 		dataPath := getKBEffectivenessPath()
-		
+
 		// Initialize tracker with auto-save enabled
 		tracker, err := memory.NewKBEffectivenessTracker(dataPath, true)
 		if err != nil {
 			log.Warn("Failed to initialize KB effectiveness tracker", "error", err, "path", dataPath)
 			return
 		}
-		
+
 		kbEffectivenessTracker = tracker
-		
+
 		// Initialize quality analyzer with default thresholds
 		thresholds := memory.DefaultPruningThresholds()
 		kbQualityAPI = memory.NewKBQualityAPI(tracker, thresholds)
-		
+
 		// Initialize background quality check job (24h interval, no auto-prune)
 		jobConfig := memory.DefaultQualityCheckConfig()
 		jobConfig.Interval = 24 * time.Hour
@@ -590,20 +590,20 @@ func initKBQuality() {
 		jobConfig.NotifyOnCritical = true
 		jobConfig.NotifyCallback = func(notification memory.QualityNotification) {
 			// Log critical KB quality issues
-			log.Warn("KB Quality Alert", 
+			log.Warn("KB Quality Alert",
 				"title", notification.Title,
 				"message", notification.Message,
 				"severity", notification.Severity,
 				"kb_name", notification.KBName,
 				"task_type", notification.TaskType)
 		}
-		
+
 		kbQualityJob = memory.NewQualityCheckJob(tracker, jobConfig)
 		kbQualityAPI.SetQualityJob(kbQualityJob)
-		
+
 		// Start background job
 		kbQualityJob.Start()
-		
+
 		log.Info("KB Quality Management initialized", "path", dataPath)
 	})
 }
@@ -614,13 +614,13 @@ func getKBEffectivenessPath() string {
 	if config.SystemDB != nil && config.SystemDB.Path != "" {
 		return filepath.Join(config.SystemDB.Path, "kb_effectiveness.json")
 	}
-	
+
 	// Fall back to first database path
 	if len(config.Databases) > 0 && config.Databases[0].Path != "" {
 		baseDir := filepath.Dir(config.Databases[0].Path)
 		return filepath.Join(baseDir, "kb_effectiveness.json")
 	}
-	
+
 	// Last resort: temp directory
 	return filepath.Join(os.TempDir(), "sop_kb_effectiveness.json")
 }
@@ -631,11 +631,10 @@ func stopKBQuality() {
 		kbQualityJob.Stop()
 		log.Info("KB Quality Management stopped")
 	}
-	
+
 	if kbEffectivenessTracker != nil {
 		if err := kbEffectivenessTracker.Close(); err != nil {
 			log.Warn("Failed to close KB effectiveness tracker", "error", err)
 		}
 	}
 }
-

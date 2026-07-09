@@ -1,0 +1,374 @@
+{{define "scripts_kb_quality"}}
+<script>
+// KB Quality Dashboard JavaScript
+
+let kbQualityData = null;
+let kbJobStatus = null;
+
+// Initialize dashboard on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadKBQualityDashboard();
+});
+
+async function loadKBQualityDashboard() {
+    try {
+        showLoading(true);
+        
+        // Fetch quality report and job status in parallel
+        const [reportData, jobData] = await Promise.all([
+            fetchKBQualityReport(),
+            fetchJobStatus()
+        ]);
+        
+        kbQualityData = reportData;
+        kbJobStatus = jobData;
+        
+        renderDashboard();
+        showLoading(false);
+    } catch (error) {
+        console.error('Failed to load KB quality dashboard:', error);
+        showError('Failed to load dashboard data: ' + error.message);
+        showLoading(false);
+    }
+}
+
+async function fetchKBQualityReport() {
+    const url = getRuntimeRequestTarget('/api/kb/quality/report?format=json');
+    const headers = { 'Content-Type': 'application/json' };
+    applyRuntimeAuthHeaders(headers, '/api/kb/quality/report');
+    
+    const response = await fetch(url, {
+        method: 'GET',
+        headers: headers,
+        credentials: 'same-origin'
+    });
+    
+    if (!response.ok) {
+        throw new Error('Failed to fetch quality report: ' + response.statusText);
+    }
+    
+    return await response.json();
+}
+
+async function fetchJobStatus() {
+    try {
+        const url = getRuntimeRequestTarget('/api/kb/quality/status');
+        const headers = { 'Content-Type': 'application/json' };
+        applyRuntimeAuthHeaders(headers, '/api/kb/quality/status');
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: headers,
+            credentials: 'same-origin'
+        });
+        
+        if (!response.ok) {
+            return null; // Job status endpoint may not be available if no job configured
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.warn('Failed to fetch job status:', error);
+        return null;
+    }
+}
+
+function renderDashboard() {
+    if (!kbQualityData) return;
+    
+    // Render overview stats
+    renderOverviewStats();
+    
+    // Render top performers
+    renderTopPerformers();
+    
+    // Render poor performers
+    renderPoorPerformers();
+    
+    // Render job status if available
+    if (kbJobStatus) {
+        renderJobStatus();
+    }
+}
+
+function renderOverviewStats() {
+    const data = kbQualityData;
+    
+    // Total KBs
+    const totalKBs = data.total_kbs || 0;
+    document.getElementById('stat-total-kbs').textContent = totalKBs;
+    
+    // Average success rate
+    const avgSuccess = data.average_success_rate || 0;
+    const avgSuccessPercent = (avgSuccess * 100).toFixed(1);
+    const avgSuccessEl = document.getElementById('stat-avg-success');
+    avgSuccessEl.textContent = avgSuccessPercent + '%';
+    
+    // Update color based on performance
+    avgSuccessEl.className = 'big-stat';
+    if (avgSuccess < 0.5) {
+        avgSuccessEl.classList.add('critical');
+    } else if (avgSuccess < 0.7) {
+        avgSuccessEl.classList.add('warning');
+    }
+    
+    // Progress bar
+    document.getElementById('progress-avg-success').style.width = avgSuccessPercent + '%';
+    
+    // Critical issues (poor performers with success rate < 30%)
+    const criticalCount = (data.poor_performers || []).filter(kb => 
+        kb.effectiveness_score < 0.3
+    ).length;
+    document.getElementById('stat-critical').textContent = criticalCount;
+    
+    // Total uses
+    let totalUses = 0;
+    if (data.top_performers) {
+        totalUses = data.top_performers.reduce((sum, kb) => 
+            sum + (kb.success_count || 0) + (kb.failure_count || 0), 0
+        );
+    }
+    if (data.poor_performers) {
+        totalUses += data.poor_performers.reduce((sum, kb) => 
+            sum + (kb.success_count || 0) + (kb.failure_count || 0), 0
+        );
+    }
+    document.getElementById('stat-total-uses').textContent = totalUses.toLocaleString();
+}
+
+function renderTopPerformers() {
+    const list = document.getElementById('top-performers-list');
+    const topPerformers = kbQualityData.top_performers || [];
+    
+    if (topPerformers.length === 0) {
+        list.innerHTML = '<li class="empty-state">No top performers yet</li>';
+        return;
+    }
+    
+    list.innerHTML = '';
+    
+    // Show top 10
+    topPerformers.slice(0, 10).forEach(kb => {
+        const li = document.createElement('li');
+        li.className = 'kb-item';
+        
+        const info = document.createElement('div');
+        const name = document.createElement('div');
+        name.className = 'kb-name';
+        name.textContent = kb.kb_name || 'Unknown';
+        
+        const taskType = document.createElement('div');
+        taskType.className = 'kb-task-type';
+        taskType.textContent = kb.task_type || 'general';
+        
+        info.appendChild(name);
+        info.appendChild(taskType);
+        
+        const score = document.createElement('div');
+        score.className = 'kb-score';
+        const successRate = ((kb.effectiveness_score || 0) * 100).toFixed(0);
+        score.textContent = successRate + '%';
+        
+        const uses = document.createElement('div');
+        uses.className = 'stat-description';
+        uses.style.fontSize = '12px';
+        uses.style.marginTop = '4px';
+        const totalUses = (kb.success_count || 0) + (kb.failure_count || 0);
+        uses.textContent = totalUses + ' uses';
+        
+        li.appendChild(info);
+        const scoreContainer = document.createElement('div');
+        scoreContainer.style.textAlign = 'right';
+        scoreContainer.appendChild(score);
+        scoreContainer.appendChild(uses);
+        li.appendChild(scoreContainer);
+        
+        list.appendChild(li);
+    });
+}
+
+function renderPoorPerformers() {
+    const list = document.getElementById('poor-performers-list');
+    const poorPerformers = kbQualityData.poor_performers || [];
+    
+    if (poorPerformers.length === 0) {
+        list.innerHTML = '<li class="empty-state">No issues found ✓</li>';
+        return;
+    }
+    
+    list.innerHTML = '';
+    
+    // Show all poor performers
+    poorPerformers.forEach(kb => {
+        const li = document.createElement('li');
+        li.className = 'kb-item';
+        
+        const info = document.createElement('div');
+        const name = document.createElement('div');
+        name.className = 'kb-name';
+        name.textContent = kb.kb_name || 'Unknown';
+        
+        const taskType = document.createElement('div');
+        taskType.className = 'kb-task-type';
+        taskType.textContent = (kb.task_type || 'general') + ' • ' + kb.reason;
+        
+        info.appendChild(name);
+        info.appendChild(taskType);
+        
+        const score = document.createElement('div');
+        const successRate = ((kb.effectiveness_score || 0) * 100).toFixed(0);
+        
+        score.className = 'kb-score';
+        if (kb.effectiveness_score < 0.3) {
+            score.classList.add('critical');
+        } else {
+            score.classList.add('warning');
+        }
+        score.textContent = successRate + '%';
+        
+        const uses = document.createElement('div');
+        uses.className = 'stat-description';
+        uses.style.fontSize = '12px';
+        uses.style.marginTop = '4px';
+        const totalUses = (kb.success_count || 0) + (kb.failure_count || 0);
+        uses.textContent = totalUses + ' uses';
+        
+        li.appendChild(info);
+        const scoreContainer = document.createElement('div');
+        scoreContainer.style.textAlign = 'right';
+        scoreContainer.appendChild(score);
+        scoreContainer.appendChild(uses);
+        li.appendChild(scoreContainer);
+        
+        list.appendChild(li);
+    });
+}
+
+function renderJobStatus() {
+    if (!kbJobStatus) return;
+    
+    const jobStatusEl = document.getElementById('job-status');
+    jobStatusEl.style.display = 'block';
+    
+    // Last run time
+    const lastRunEl = document.getElementById('job-last-run');
+    if (kbJobStatus.last_run) {
+        const lastRun = new Date(kbJobStatus.last_run);
+        lastRunEl.textContent = lastRun.toLocaleString();
+    } else {
+        lastRunEl.textContent = 'Never';
+    }
+    
+    // Next run time
+    const nextRunEl = document.getElementById('job-next-run');
+    if (kbJobStatus.next_run) {
+        const nextRun = new Date(kbJobStatus.next_run);
+        nextRunEl.textContent = nextRun.toLocaleString();
+    } else {
+        nextRunEl.textContent = 'Not scheduled';
+    }
+}
+
+async function triggerQualityCheck() {
+    try {
+        const btn = event.target;
+        btn.disabled = true;
+        btn.textContent = 'Running check...';
+        
+        const url = getRuntimeRequestTarget('/api/kb/quality/trigger');
+        const headers = { 'Content-Type': 'application/json' };
+        applyRuntimeAuthHeaders(headers, '/api/kb/quality/trigger');
+        
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: headers,
+            credentials: 'same-origin'
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to trigger quality check: ' + response.statusText);
+        }
+        
+        const result = await response.json();
+        
+        // Wait a moment for the check to complete
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // Reload dashboard data
+        await loadKBQualityDashboard();
+        
+        showAlert('Quality check completed successfully', null, 'Success', 'green');
+    } catch (error) {
+        console.error('Failed to trigger quality check:', error);
+        showAlert('Failed to trigger quality check: ' + error.message, null, 'Error', 'red');
+    } finally {
+        const btn = event.target;
+        btn.disabled = false;
+        btn.textContent = 'Run Quality Check Now';
+    }
+}
+
+async function downloadReport() {
+    try {
+        const url = getRuntimeRequestTarget('/api/kb/quality/report?format=text');
+        const headers = { 'Content-Type': 'application/json' };
+        applyRuntimeAuthHeaders(headers, '/api/kb/quality/report');
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: headers,
+            credentials: 'same-origin'
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to download report: ' + response.statusText);
+        }
+        
+        const reportText = await response.text();
+        
+        // Create download link
+        const blob = new Blob([reportText], { type: 'text/plain' });
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = 'kb_quality_report_' + new Date().toISOString().split('T')[0] + '.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(downloadUrl);
+        
+        showAlert('Report downloaded successfully', null, 'Success', 'green');
+    } catch (error) {
+        console.error('Failed to download report:', error);
+        showAlert('Failed to download report: ' + error.message, null, 'Error', 'red');
+    }
+}
+
+async function refreshDashboard() {
+    await loadKBQualityDashboard();
+    showAlert('Dashboard refreshed', null, 'Success', 'green');
+}
+
+function showLoading(show) {
+    document.getElementById('kb-quality-loading').style.display = show ? 'block' : 'none';
+    document.getElementById('kb-quality-content').style.display = show ? 'none' : 'block';
+}
+
+function showError(message) {
+    const container = document.querySelector('.kb-quality-container');
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'empty-state';
+    errorDiv.innerHTML = '<h3>Error</h3><p>' + message + '</p>';
+    container.appendChild(errorDiv);
+}
+
+// Helper function to show alerts (uses existing showAlert from scripts_part01 if available)
+function showAlert(message, details, title, color) {
+    if (typeof window.showAlert === 'function') {
+        window.showAlert(message, details, title, color);
+    } else {
+        alert(title ? title + ': ' + message : message);
+    }
+}
+</script>
+{{end}}

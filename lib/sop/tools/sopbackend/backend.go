@@ -137,7 +137,7 @@ type Backend struct {
 	billingCollectionStarted bool
 	shutdownCh               chan struct{}
 	shutdownOnce             sync.Once
-	
+
 	// KB Quality Management
 	KBEffectivenessTracker *memory.KBEffectivenessTracker
 	KBQualityAPI           *memory.KBQualityAPI
@@ -156,10 +156,10 @@ func NewBackend(cfg *Config, catalog *ModelCatalog) *Backend {
 		billingCollectionStarted: false,
 		shutdownCh:               make(chan struct{}),
 	}
-	
+
 	// Initialize KB Quality Management
 	b.initKBQuality()
-	
+
 	return b
 }
 
@@ -189,20 +189,20 @@ func (b *Backend) Initialize(ctx context.Context) error {
 func (b *Backend) initKBQuality() {
 	// Determine storage path for KB effectiveness data
 	dataPath := b.getKBEffectivenessPath()
-	
+
 	// Initialize tracker with auto-save enabled
 	tracker, err := memory.NewKBEffectivenessTracker(dataPath, true)
 	if err != nil {
 		log.Warn("Failed to initialize KB effectiveness tracker", "error", err, "path", dataPath)
 		return
 	}
-	
+
 	b.KBEffectivenessTracker = tracker
-	
+
 	// Initialize quality analyzer with default thresholds
 	thresholds := memory.DefaultPruningThresholds()
 	b.KBQualityAPI = memory.NewKBQualityAPI(tracker, thresholds)
-	
+
 	// Initialize background quality check job (24h interval, no auto-prune)
 	jobConfig := memory.DefaultQualityCheckConfig()
 	jobConfig.Interval = 24 * time.Hour
@@ -210,20 +210,20 @@ func (b *Backend) initKBQuality() {
 	jobConfig.NotifyOnCritical = true
 	jobConfig.NotifyCallback = func(notification memory.QualityNotification) {
 		// Log critical KB quality issues
-		log.Warn("KB Quality Alert", 
+		log.Warn("KB Quality Alert",
 			"title", notification.Title,
 			"message", notification.Message,
 			"severity", notification.Severity,
 			"kb_name", notification.KBName,
 			"task_type", notification.TaskType)
 	}
-	
+
 	b.KBQualityJob = memory.NewQualityCheckJob(tracker, jobConfig)
 	b.KBQualityAPI.SetQualityJob(b.KBQualityJob)
-	
+
 	// Start background job
 	b.KBQualityJob.Start()
-	
+
 	log.Info("KB Quality Management initialized", "path", dataPath)
 }
 
@@ -233,13 +233,13 @@ func (b *Backend) getKBEffectivenessPath() string {
 	if b.Config.SystemDB != nil && b.Config.SystemDB.Path != "" {
 		return filepath.Join(b.Config.SystemDB.Path, "kb_effectiveness.json")
 	}
-	
+
 	// Fall back to first database path
 	if len(b.Config.Databases) > 0 && b.Config.Databases[0].Path != "" {
 		baseDir := filepath.Dir(b.Config.Databases[0].Path)
 		return filepath.Join(baseDir, "kb_effectiveness.json")
 	}
-	
+
 	// Last resort: temp directory
 	return filepath.Join(os.TempDir(), "sop_kb_effectiveness.json")
 }
@@ -250,14 +250,13 @@ func (b *Backend) StopKBQuality() {
 		b.KBQualityJob.Stop()
 		log.Info("KB Quality Management stopped")
 	}
-	
+
 	if b.KBEffectivenessTracker != nil {
 		if err := b.KBEffectivenessTracker.Close(); err != nil {
 			log.Warn("Failed to close KB effectiveness tracker", "error", err)
 		}
 	}
 }
-
 
 // RegisterHandlers registers the shared runtime API handlers for the platform on the provided mux.
 func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
@@ -350,7 +349,7 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/billing/daemon-access", WithAuth(handleBillingDaemonAccess))
 	mux.HandleFunc("/api/billing/day", WithAuth(handleBillingDayUpdate))
 	mux.HandleFunc("/api/billing/collection-mode", WithAuth(handleBillingCollectionModeUpdate))
-	
+
 	// KB Quality Management Endpoints
 	if b.KBQualityAPI != nil {
 		b.KBQualityAPI.RegisterRoutes(mux)

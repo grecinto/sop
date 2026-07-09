@@ -11,7 +11,7 @@ func TestKBQualityEndpointsRegistered(t *testing.T) {
 	// Setup: Register all handlers
 	mux := http.NewServeMux()
 	RegisterAllHandlers(mux)
-	
+
 	// Test KB Quality endpoints
 	endpoints := []string{
 		"/api/kb/quality/report",
@@ -24,14 +24,14 @@ func TestKBQualityEndpointsRegistered(t *testing.T) {
 		"/api/kb/quality/trigger",
 		"/api/kb/quality/status",
 	}
-	
+
 	for _, endpoint := range endpoints {
 		t.Run(endpoint, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, endpoint, nil)
 			w := httptest.NewRecorder()
-			
+
 			mux.ServeHTTP(w, req)
-			
+
 			// Should not return 404 (endpoint exists)
 			// May return 401 (auth required) or 405 (wrong method) which is fine
 			if w.Code == http.StatusNotFound {
@@ -45,21 +45,21 @@ func TestKBQualityEndpointsRegistered(t *testing.T) {
 func TestKBQualityReportEndpoint(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterAllHandlers(mux)
-	
+
 	// Test JSON format
 	req := httptest.NewRequest(http.MethodGet, "/api/kb/quality/report?format=json", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	
+
 	if w.Code != http.StatusOK {
 		t.Logf("Report endpoint returned status %d (may require auth)", w.Code)
 	}
-	
+
 	// Test text format
 	req = httptest.NewRequest(http.MethodGet, "/api/kb/quality/report?format=text", nil)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	
+
 	if w.Code != http.StatusOK {
 		t.Logf("Report endpoint returned status %d (may require auth)", w.Code)
 	}
@@ -69,18 +69,17 @@ func TestKBQualityReportEndpoint(t *testing.T) {
 func TestKBQualityInitialization(t *testing.T) {
 	// Initialize (safe to call multiple times due to sync.Once)
 	initKBQuality()
-	
+
 	// Verify components are initialized
 	if kbEffectivenessTracker == nil {
 		t.Error("KB effectiveness tracker not initialized")
 	}
-	
+
 	if kbQualityAPI == nil {
 		t.Error("KB quality API not initialized")
 	}
-	
+
 	if kbQualityJob == nil {
 		t.Error("KB quality job not initialized")
 	}
 }
-
