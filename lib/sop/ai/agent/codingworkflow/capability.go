@@ -111,7 +111,20 @@ func (c *Capability) Run(query string, state capabilities.RoutingState) (capabil
 		}
 		return capabilities.CapabilityResult{}, err
 	}
-	data := map[string]any{"message": result.Message, "applied_patches": len(result.AppliedPatches), "task_type": result.TaskType, "plan": result.Plan, "resumed_from_state": result.ResumedFromState, "active_file": result.ContextPack.ActiveFile, "working_dir": result.ContextPack.WorkingDir}
+	data := map[string]any{
+		"message":            result.Message,
+		"applied_patches":    len(result.AppliedPatches),
+		"task_type":          result.TaskType,
+		"plan":               result.Plan,
+		"resumed_from_state": result.ResumedFromState,
+		"active_file":        result.ContextPack.ActiveFile,
+		"working_dir":        result.ContextPack.WorkingDir,
+		// Phase 4: KB metadata for frontend display
+		"kbs_used":          result.KBsConsulted,
+		"rules_applied":     result.RulesApplied,
+		"explanation":       result.Explanation,
+		"revision_attempts": result.RevisionAttempts,
+	}
 	if c.Orchestrator != nil {
 		data["continuity_signal"] = "task_outcome"
 	}

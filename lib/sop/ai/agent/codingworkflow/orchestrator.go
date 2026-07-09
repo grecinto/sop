@@ -751,7 +751,7 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		)
 	}
 
-	return ExecutionResult{
+	result := ExecutionResult{
 		ContextPack:      pack,
 		Message:          message,
 		TaskType:         pack.TaskType,
@@ -762,7 +762,50 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		KBsConsulted:     ExtractKBNamesFromExpertise(pack.ExpertiseCapsule),
 		RulesApplied:     validationResult.RulesChecked,
 		Explanation:      explanation,
-	}, nil
+	}
+
+	// Phase 4: Append KB metadata as HTML comment for frontend parsing
+	// This enables feedback buttons and explanation display in the chat UI
+	if len(result.KBsConsulted) > 0 || result.Explanation != "" {
+		metadataJSON := buildKBMetadataJSON(result)
+		if metadataJSON != "" {
+			result.Message = result.Message + "\n\n<!-- KB_METADATA: " + metadataJSON + " -->"
+		}
+	}
+
+	return result, nil
+}
+
+// buildKBMetadataJSON creates a compact JSON string for KB metadata
+// This is embedded in the response as an HTML comment for frontend parsing
+func buildKBMetadataJSON(result ExecutionResult) string {
+	metadata := map[string]any{}
+
+	if len(result.KBsConsulted) > 0 {
+		metadata["kbs_used"] = result.KBsConsulted
+	}
+	if len(result.RulesApplied) > 0 {
+		metadata["rules_applied"] = result.RulesApplied
+	}
+	if result.Explanation != "" {
+		metadata["explanation"] = result.Explanation
+	}
+	if result.RevisionAttempts > 0 {
+		metadata["revision_attempts"] = result.RevisionAttempts
+	}
+	if result.TaskType != "" {
+		metadata["task_type"] = result.TaskType
+	}
+
+	if len(metadata) == 0 {
+		return ""
+	}
+
+	jsonBytes, err := json.Marshal(metadata)
+	if err != nil {
+		return ""
+	}
+	return string(jsonBytes)
 }
 
 // DefaultExpertiseRetriever produces concise, high-signal guidance for coding, QA, and review-oriented tasks.

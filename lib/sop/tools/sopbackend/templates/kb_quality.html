@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KB Quality Dashboard - SOP Data Manager</title>
+    <title>Space Quality Dashboard - SOP Data Manager</title>
     {{template "styles"}}
     <style>
         body {
@@ -200,8 +200,8 @@
 <body>
     <div class="kb-quality-container">
         <div class="kb-header">
-            <h1>KB Quality Dashboard</h1>
-            <p class="kb-subtitle">Monitor and improve Knowledge Base effectiveness across all Spaces</p>
+            <h1>Space Quality Dashboard</h1>
+            <p class="kb-subtitle">Monitor and improve Space effectiveness across all contexts</p>
         </div>
 
         <div id="kb-quality-loading" class="loading-spinner">
@@ -212,7 +212,7 @@
             <!-- Overview Stats -->
             <div class="dashboard-grid">
                 <div class="kb-card">
-                    <div class="kb-card-title">Total KBs Tracked</div>
+                    <div class="kb-card-title">Total Spaces Tracked</div>
                     <div class="big-stat" id="stat-total-kbs">0</div>
                     <div class="stat-description">Across all task types</div>
                 </div>
@@ -228,7 +228,7 @@
                 <div class="kb-card">
                     <div class="kb-card-title">Critical Issues</div>
                     <div class="big-stat critical" id="stat-critical">0</div>
-                    <div class="stat-description">KBs requiring immediate attention</div>
+                    <div class="stat-description">Spaces requiring immediate attention</div>
                 </div>
 
                 <div class="kb-card">

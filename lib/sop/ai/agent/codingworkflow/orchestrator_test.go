@@ -1042,3 +1042,80 @@ func TestOrchestratorPreservesTaskClassificationAndPlanInResult(t *testing.T) {
 		t.Fatal("expected resumed state flag to be set when continuation metadata is present")
 	}
 }
+
+func TestOrchestratorEmbedsKBMetadataInResponse(t *testing.T) {
+	tmpDir := t.TempDir()
+	activePath := filepath.Join(tmpDir, "parser.go")
+	if err := os.WriteFile(activePath, []byte("package main\n\nfunc Parse() {}\n"), 0o644); err != nil {
+		t.Fatalf("write active file: %v", err)
+	}
+
+	// Create orchestrator with expertise and explanation generator
+	explainer := &ExplanationGenerator{}
+	orchestrator := &Orchestrator{
+		ContextManager: &DefaultContextManager{},
+		RepoIndexer:    &DefaultRepoIndexer{},
+		ExpertiseRetriever: &mockExpertiseRetriever{
+			capsule: ExpertiseCapsule{
+				Summary:  "Best practice: validate all inputs",
+				Category: "coding",
+				Sources:  []string{"kb:go-best-practices"},
+			},
+		},
+		ExplanationGenerator: explainer,
+		ValidationOrchestrator: NewValidationOrchestrator(
+			NewValidator(ValidatorConfig{StrictMode: false}),
+			CitationConfig{
+				Enabled: true,
+				Format:  "comment",
+			},
+		),
+	}
+
+	result, err := orchestrator.Execute(Task{
+		WorkingDir:  tmpDir,
+		ActiveFile:  "parser.go",
+		Description: "implement parser validation",
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	// Verify KB metadata is embedded in the message
+	if !strings.Contains(result.Message, "<!-- KB_METADATA:") {
+		t.Fatalf("expected KB metadata HTML comment in message, got: %q", result.Message)
+	}
+
+	// Verify metadata contains expected fields
+	if !strings.Contains(result.Message, "kbs_used") {
+		t.Error("expected kbs_used field in KB metadata")
+	}
+	if !strings.Contains(result.Message, "explanation") {
+		t.Error("expected explanation field in KB metadata")
+	}
+	if !strings.Contains(result.Message, "task_type") {
+		t.Error("expected task_type field in KB metadata")
+	}
+
+	// Verify metadata is valid JSON
+	metadataStart := strings.Index(result.Message, "<!-- KB_METADATA:")
+	metadataEnd := strings.Index(result.Message[metadataStart:], "-->")
+	if metadataEnd == -1 {
+		t.Fatal("KB metadata HTML comment not properly closed")
+	}
+	metadataJSON := strings.TrimSpace(result.Message[metadataStart+len("<!-- KB_METADATA:") : metadataStart+metadataEnd])
+
+	// Simple check that it looks like JSON
+	if !strings.HasPrefix(metadataJSON, "{") || !strings.HasSuffix(metadataJSON, "}") {
+		t.Errorf("KB metadata doesn't look like valid JSON: %q", metadataJSON)
+	}
+}
+
+// mockExpertiseRetriever returns a fixed expertise capsule for testing
+type mockExpertiseRetriever struct {
+	capsule ExpertiseCapsule
+}
+
+func (m *mockExpertiseRetriever) Retrieve(Task, RunState, ContextPack) (ExpertiseCapsule, error) {
+	return m.capsule, nil
+}

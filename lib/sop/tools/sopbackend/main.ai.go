@@ -1214,6 +1214,9 @@ func handleAIFeedback(w http.ResponseWriter, r *http.Request) {
 		Agent       string `json:"agent"`
 		UserID      string `json:"user_id"`
 		SessionID   string `json:"session_id"`
+		// KB Quality fields (optional)
+		KBName   string `json:"kb_name"`
+		TaskType string `json:"task_type"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1316,6 +1319,26 @@ func handleAIFeedback(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			log.Info("Feedback ingested to active memory", "id", id)
+		}
+	}
+
+	// 6.5. Record KB Effectiveness (if KB metadata present)
+	if req.KBName != "" {
+		taskType := strings.ToLower(strings.TrimSpace(req.TaskType))
+		if taskType == "" {
+			taskType = "general"
+		}
+		success := req.Type == "positive"
+
+		// Get KB effectiveness tracker
+		if tracker := GetKBEffectivenessTracker(); tracker != nil {
+			// Use compliance score of 1.0 for positive feedback, 0.0 for negative
+			complianceScore := 0.0
+			if success {
+				complianceScore = 1.0
+			}
+			tracker.RecordOutcome(taskType, req.KBName, success, complianceScore)
+			log.Info("KB effectiveness recorded", "kb", req.KBName, "task", taskType, "success", success)
 		}
 	}
 

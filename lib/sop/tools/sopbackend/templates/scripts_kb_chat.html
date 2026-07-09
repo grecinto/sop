@@ -1,0 +1,753 @@
+{{define "scripts_kb_chat"}}
+<script>
+// KB Quality Integration for Chat
+// Adds feedback buttons and explanation display to chat messages with KB-generated code
+
+// Store KB metadata per message ID for feedback submission
+window.kbMetadataStore = window.kbMetadataStore || new Map();
+
+/**
+ * Attach KB feedback buttons to a chat message
+ * @param {string} messageId - The chat message ID
+ * @param {Object} kbMetadata - KB usage metadata {kbs_used, task_type, explanation, rules_applied}
+ */
+function attachKBFeedbackToMessage(messageId, kbMetadata) {
+    if (!messageId || !kbMetadata || !kbMetadata.kbs_used || kbMetadata.kbs_used.length === 0) {
+        return; // No KB used, skip feedback
+    }
+
+    // Store metadata for later feedback submission
+    window.kbMetadataStore.set(messageId, kbMetadata);
+
+    const messageEl = document.getElementById(messageId);
+    if (!messageEl) {
+        console.warn('[Space Chat] Message element not found:', messageId);
+        return;
+    }
+
+    // Check if feedback already attached
+    if (messageEl.querySelector('.kb-feedback-container')) {
+        return;
+    }
+
+    // Create feedback container
+    const feedbackContainer = document.createElement('div');
+    feedbackContainer.className = 'kb-feedback-container';
+    feedbackContainer.innerHTML = `
+        <div class="kb-feedback-section">
+            <div class="kb-feedback-label">
+                <span class="kb-icon">🧠</span>
+                <span class="kb-text">Space Used: <strong>${kbMetadata.kbs_used.join(', ')}</strong></span>
+            </div>
+            <div class="kb-feedback-buttons">
+                <button class="kb-feedback-btn kb-feedback-positive" onclick="submitKBFeedback('${messageId}', 'positive')" title="This Space was helpful">
+                    <span class="kb-feedback-icon">👍</span>
+                    <span class="kb-feedback-text">Helpful</span>
+                </button>
+                <button class="kb-feedback-btn kb-feedback-negative" onclick="submitKBFeedback('${messageId}', 'negative')" title="This Space needs improvement">
+                    <span class="kb-feedback-icon">👎</span>
+                    <span class="kb-feedback-text">Needs Work</span>
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Add explanation section if available
+    if (kbMetadata.explanation && kbMetadata.explanation.trim() !== '') {
+        const explanationSection = document.createElement('details');
+        explanationSection.className = 'kb-explanation-section';
+        explanationSection.innerHTML = `
+            <summary class="kb-explanation-summary">
+                <span class="kb-explanation-icon">💡</span>
+                <span class="kb-explanation-text">How I used expertise</span>
+            </summary>
+            <div class="kb-explanation-content">
+                ${formatKBExplanation(kbMetadata.explanation)}
+            </div>
+        `;
+        feedbackContainer.appendChild(explanationSection);
+    }
+
+    // Insert feedback section at the end of the message
+    messageEl.appendChild(feedbackContainer);
+}
+
+/**
+ * Format KB explanation with markdown-style rendering
+ * @param {string} explanation - Raw explanation text
+ * @returns {string} HTML-formatted explanation
+ */
+function formatKBExplanation(explanation) {
+    if (!explanation) return '';
+    
+    // Simple markdown-like formatting
+    let html = explanation
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')  // Bold
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')              // Italic
+        .replace(/`(.*?)`/g, '<code>$1</code>')            // Code
+        .replace(/\n\n/g, '</p><p>')                        // Paragraphs
+        .replace(/\n/g, '<br>');                            // Line breaks
+    
+    return '<p>' + html + '</p>';
+}
+
+/**
+ * Submit KB feedback to the backend
+ * @param {string} messageId - The chat message ID
+ * @param {string} feedbackType - 'positive' or 'negative'
+ */
+async function submitKBFeedback(messageId, feedbackType) {
+    const metadata = window.kbMetadataStore.get(messageId);
+    if (!metadata || !metadata.kbs_used || metadata.kbs_used.length === 0) {
+        console.warn('[Space Chat] No Space metadata found for message:', messageId);
+        return;
+    }
+
+    const btn = event.target.closest('.kb-feedback-btn');
+    if (!btn) return;
+
+    // Visual feedback: disable buttons
+    const container = btn.closest('.kb-feedback-buttons');
+    if (container) {
+        const allBtns = container.querySelectorAll('.kb-feedback-btn');
+        allBtns.forEach(b => {
+            b.disabled = true;
+            b.style.opacity = '0.5';
+        });
+    }
+
+    // Highlight selected button
+    btn.style.opacity = '1';
+    btn.style.transform = 'scale(1.1)';
+
+    try {
+        const url = getRuntimeRequestTarget('/api/ai/feedback');
+        const headers = { 'Content-Type': 'application/json' };
+        applyRuntimeAuthHeaders(headers, '/api/ai/feedback');
+
+        const payload = {
+            msgId: messageId,
+            type: feedbackType,
+            user_id: typeof currentUserID !== 'undefined' ? currentUserID : '',
+            session_id: typeof currentSessionID !== 'undefined' ? currentSessionID : '',
+            // KB Quality fields
+            kb_name: metadata.kbs_used[0], // Use primary KB
+            task_type: metadata.task_type || 'general'
+        };
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(payload),
+            credentials: 'same-origin'
+        });
+
+        if (!response.ok) {
+            throw new Error('Feedback submission failed: ' + response.statusText);
+        }
+
+        const result = await response.json();
+        console.log('[Space Chat] Feedback submitted successfully:', result);
+
+        // Show success message
+        if (typeof showAlert === 'function') {
+            showAlert('Thanks for your feedback!', null, 'Space Feedback', 'green');
+        } else {
+            // Fallback: show inline success message
+            const successMsg = document.createElement('span');
+            successMsg.className = 'kb-feedback-success';
+            successMsg.textContent = ' ✓ Thanks!';
+            successMsg.style.color = 'var(--success-bg)';
+            successMsg.style.marginLeft = '8px';
+            btn.appendChild(successMsg);
+        }
+
+    } catch (error) {
+        console.error('[Space Chat] Failed to submit feedback:', error);
+        
+        // Re-enable buttons on error
+        if (container) {
+            const allBtns = container.querySelectorAll('.kb-feedback-btn');
+            allBtns.forEach(b => {
+                b.disabled = false;
+                b.style.opacity = '1';
+                b.style.transform = 'scale(1)';
+            });
+        }
+
+        if (typeof showAlert === 'function') {
+            showAlert('Failed to submit feedback: ' + error.message, null, 'Error', 'red');
+        }
+    }
+}
+
+/**
+ * Parse KB metadata from AI response (if present in special format)
+ * This function looks for KB metadata markers in the response
+ * @param {string} response - AI response text
+ * @returns {Object|null} KB metadata or null
+ */
+function parseKBMetadataFromResponse(response) {
+    if (!response) return null;
+
+    // Look for KB metadata markers (e.g., <!-- KB_METADATA: {...} -->)
+    const metadataMatch = response.match(/<!--\s*KB_METADATA:\s*(\{.*?\})\s*-->/s);
+    if (metadataMatch && metadataMatch[1]) {
+        try {
+            return JSON.parse(metadataMatch[1]);
+        } catch (e) {
+            console.warn('[Space Chat] Failed to parse Space metadata:', e);
+            return null;
+        }
+    }
+
+    // Alternative: Look for JSON block at the end
+    const jsonMatch = response.match(/\n\n```json\n(\{[\s\S]*?"kbs_used"[\s\S]*?\})\n```\s*$/);
+    if (jsonMatch && jsonMatch[1]) {
+        try {
+            return JSON.parse(jsonMatch[1]);
+        } catch (e) {
+            console.warn('[Space Chat] Failed to parse Space metadata JSON:', e);
+            return null;
+        }
+    }
+
+    return null;
+}
+
+// CSS Styles for KB Feedback (inject into page)
+if (!document.getElementById('kb-chat-styles')) {
+    const style = document.createElement('style');
+    style.id = 'kb-chat-styles';
+    style.textContent = `
+        .kb-feedback-container {
+            margin-top: 12px;
+            padding: 12px;
+            background: var(--input-bg, #f9f9f9);
+            border: 1px solid var(--border-color, #e0e0e0);
+            border-radius: 6px;
+        }
+
+        .kb-feedback-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .kb-feedback-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-muted, #666);
+        }
+
+        .kb-icon {
+            font-size: 16px;
+        }
+
+        .kb-text strong {
+            color: var(--text-color, #333);
+        }
+
+        .kb-feedback-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .kb-feedback-btn {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 6px 12px;
+            border: 1px solid var(--border-color, #e0e0e0);
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .kb-feedback-btn:hover:not(:disabled) {
+            background: var(--input-bg, #f9f9f9);
+            transform: scale(1.05);
+        }
+
+        .kb-feedback-btn:disabled {
+            cursor: not-allowed;
+        }
+
+        .kb-feedback-positive:hover:not(:disabled) {
+            border-color: var(--success-bg, #4CAF50);
+        }
+
+        .kb-feedback-negative:hover:not(:disabled) {
+            border-color: #ff9800;
+        }
+
+        .kb-feedback-icon {
+            font-size: 14px;
+        }
+
+        .kb-explanation-section {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color, #e0e0e0);
+        }
+
+        .kb-explanation-summary {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-color, #333);
+            list-style: none;
+        }
+
+        .kb-explanation-summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .kb-explanation-icon {
+            font-size: 16px;
+        }
+
+        .kb-explanation-content {
+            margin-top: 8px;
+            padding: 8px 0;
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-muted, #666);
+        }
+
+        .kb-explanation-content p {
+            margin: 0 0 8px 0;
+        }
+
+        .kb-explanation-content p:last-child {
+            margin-bottom: 0;
+        }
+
+        .kb-explanation-content code {
+            background: var(--input-bg, #f5f5f5);
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+
+        .kb-explanation-content strong {
+            color: var(--text-color, #333);
+        }
+
+        /* KB Settings Panel */
+        .kb-settings-panel {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--card-bg, white);
+            border: 1px solid var(--border-color, #e0e0e0);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 24px;
+            width: 90%;
+            max-width: 500px;
+            z-index: 10000;
+        }
+
+        .kb-settings-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            z-index: 9999;
+        }
+
+        .kb-settings-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color, #e0e0e0);
+        }
+
+        .kb-settings-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-color, #333);
+        }
+
+        .kb-settings-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text-muted, #666);
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+        }
+
+        .kb-settings-close:hover {
+            background: var(--input-bg, #f5f5f5);
+        }
+
+        .kb-setting-item {
+            margin-bottom: 20px;
+        }
+
+        .kb-setting-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .kb-setting-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-color, #333);
+        }
+
+        .kb-setting-description {
+            font-size: 12px;
+            color: var(--text-muted, #666);
+            line-height: 1.5;
+        }
+
+        .kb-toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .kb-toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .kb-toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: 0.3s;
+            border-radius: 24px;
+        }
+
+        .kb-toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        .kb-toggle-switch input:checked + .kb-toggle-slider {
+            background-color: var(--primary-color, #007bff);
+        }
+
+        .kb-toggle-switch input:checked + .kb-toggle-slider:before {
+            transform: translateX(20px);
+        }
+
+        .kb-setting-keyboard-hint {
+            display: inline-block;
+            background: var(--input-bg, #f5f5f5);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: monospace;
+            color: var(--text-muted, #666);
+            margin-left: 8px;
+        }
+
+        /* Citation visibility toggle */
+        .kb-citations-hidden .kb-citation {
+            display: none;
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+// ============================================================================
+// KB Settings Management
+// ============================================================================
+
+const KB_SETTINGS_KEY = 'kb_quality_settings';
+
+/**
+ * Default KB Quality settings
+ */
+const defaultKBSettings = {
+    autoSelectSpaces: true,        // Auto-select Spaces based on task type
+    showCitations: true,            // Show KB attribution comments in code
+    explanationVerbosity: 'standard', // 'minimal', 'standard', 'detailed'
+    feedbackPromptFrequency: 'normal' // 'minimal', 'normal', 'frequent'
+};
+
+/**
+ * Load KB settings from localStorage
+ */
+function loadKBSettings() {
+    try {
+        const stored = localStorage.getItem(KB_SETTINGS_KEY);
+        if (stored) {
+            return { ...defaultKBSettings, ...JSON.parse(stored) };
+        }
+    } catch (e) {
+        console.warn('[Space Settings] Failed to load settings:', e);
+    }
+    return { ...defaultKBSettings };
+}
+
+/**
+ * Save KB settings to localStorage
+ */
+function saveKBSettings(settings) {
+    try {
+        localStorage.setItem(KB_SETTINGS_KEY, JSON.stringify(settings));
+        console.log('[Space Settings] Settings saved:', settings);
+        applyCitationVisibility(settings.showCitations);
+        return true;
+    } catch (e) {
+        console.error('[Space Settings] Failed to save settings:', e);
+        return false;
+    }
+}
+
+/**
+ * Apply citation visibility setting to the page
+ */
+function applyCitationVisibility(showCitations) {
+    if (showCitations) {
+        document.body.classList.remove('kb-citations-hidden');
+    } else {
+        document.body.classList.add('kb-citations-hidden');
+    }
+}
+
+/**
+ * Toggle citation visibility (keyboard shortcut)
+ */
+function toggleCitationVisibility() {
+    const settings = loadKBSettings();
+    settings.showCitations = !settings.showCitations;
+    saveKBSettings(settings);
+    
+    // Show toast notification
+    const message = settings.showCitations 
+        ? '✅ Space citations are now visible' 
+        : '🙈 Space citations are now hidden';
+    showToast(message, 'info');
+}
+
+/**
+ * Show KB settings panel
+ */
+function showKBSettingsPanel() {
+    const settings = loadKBSettings();
+    
+    // Create overlay
+    let overlay = document.getElementById('kb-settings-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'kb-settings-overlay';
+        overlay.className = 'kb-settings-overlay';
+        overlay.onclick = hideKBSettingsPanel;
+        document.body.appendChild(overlay);
+    }
+    
+    // Create panel
+    let panel = document.getElementById('kb-settings-panel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'kb-settings-panel';
+        panel.className = 'kb-settings-panel';
+        document.body.appendChild(panel);
+    }
+    
+    panel.innerHTML = `
+        <div class="kb-settings-header">
+            <div class="kb-settings-title">🧠 Space Settings</div>
+            <button class="kb-settings-close" onclick="hideKBSettingsPanel()">×</button>
+        </div>
+        
+        <div class="kb-setting-item">
+            <div class="kb-setting-label">
+                <span class="kb-setting-name">Auto-select Spaces</span>
+                <label class="kb-toggle-switch">
+                    <input type="checkbox" id="kb-setting-auto-select" 
+                           ${settings.autoSelectSpaces ? 'checked' : ''}>
+                    <span class="kb-toggle-slider"></span>
+                </label>
+            </div>
+            <div class="kb-setting-description">
+                Automatically pick the best Spaces for each task. When off, you'll select Spaces manually.
+            </div>
+        </div>
+        
+        <div class="kb-setting-item">
+            <div class="kb-setting-label">
+                <span class="kb-setting-name">
+                    Show Citations in Code
+                    <span class="kb-setting-keyboard-hint">Ctrl+Shift+K</span>
+                </span>
+                <label class="kb-toggle-switch">
+                    <input type="checkbox" id="kb-setting-citations" 
+                           ${settings.showCitations ? 'checked' : ''}>
+                    <span class="kb-toggle-slider"></span>
+                </label>
+            </div>
+            <div class="kb-setting-description">
+                Display inline comments showing which Space patterns influenced the code. Toggle with keyboard shortcut.
+            </div>
+        </div>
+        
+        <div class="kb-setting-item">
+            <div class="kb-setting-label">
+                <span class="kb-setting-name">Explanation Detail</span>
+            </div>
+            <div class="kb-setting-description">
+                <select id="kb-setting-verbosity" style="width: 100%; padding: 8px; border: 1px solid var(--border-color, #e0e0e0); border-radius: 4px; background: var(--input-bg, white); color: var(--text-color, #333); font-size: 13px;">
+                    <option value="minimal" ${settings.explanationVerbosity === 'minimal' ? 'selected' : ''}>Minimal - Just the basics</option>
+                    <option value="standard" ${settings.explanationVerbosity === 'standard' ? 'selected' : ''}>Standard - Balanced detail (default)</option>
+                    <option value="detailed" ${settings.explanationVerbosity === 'detailed' ? 'selected' : ''}>Detailed - Full reasoning</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="kb-setting-item" style="margin-bottom: 0;">
+            <div class="kb-setting-label">
+                <span class="kb-setting-name">Feedback Prompts</span>
+            </div>
+            <div class="kb-setting-description">
+                <select id="kb-setting-feedback-frequency" style="width: 100%; padding: 8px; border: 1px solid var(--border-color, #e0e0e0); border-radius: 4px; background: var(--input-bg, white); color: var(--text-color, #333); font-size: 13px;">
+                    <option value="minimal" ${settings.feedbackPromptFrequency === 'minimal' ? 'selected' : ''}>Minimal - Rarely prompt</option>
+                    <option value="normal" ${settings.feedbackPromptFrequency === 'normal' ? 'selected' : ''}>Normal - Balanced (default)</option>
+                    <option value="frequent" ${settings.feedbackPromptFrequency === 'frequent' ? 'selected' : ''}>Frequent - Ask often</option>
+                </select>
+            </div>
+        </div>
+    `;
+    
+    // Show panel and overlay
+    overlay.style.display = 'block';
+    panel.style.display = 'block';
+    
+    // Attach event listeners
+    document.getElementById('kb-setting-auto-select').onchange = function() {
+        settings.autoSelectSpaces = this.checked;
+        saveKBSettings(settings);
+    };
+    
+    document.getElementById('kb-setting-citations').onchange = function() {
+        settings.showCitations = this.checked;
+        saveKBSettings(settings);
+    };
+    
+    document.getElementById('kb-setting-verbosity').onchange = function() {
+        settings.explanationVerbosity = this.value;
+        saveKBSettings(settings);
+    };
+    
+    document.getElementById('kb-setting-feedback-frequency').onchange = function() {
+        settings.feedbackPromptFrequency = this.value;
+        saveKBSettings(settings);
+    };
+}
+
+/**
+ * Hide KB settings panel
+ */
+function hideKBSettingsPanel() {
+    const overlay = document.getElementById('kb-settings-overlay');
+    const panel = document.getElementById('kb-settings-panel');
+    if (overlay) overlay.style.display = 'none';
+    if (panel) panel.style.display = 'none';
+}
+
+/**
+ * Show toast notification
+ */
+function showToast(message, type = 'info') {
+    // Create toast if needed
+    let toast = document.getElementById('kb-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'kb-toast';
+        toast.style.cssText = `
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: var(--card-bg, white);
+            border: 1px solid var(--border-color, #e0e0e0);
+            border-radius: 6px;
+            padding: 12px 16px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            font-size: 14px;
+            z-index: 10001;
+            opacity: 0;
+            transition: opacity 0.3s;
+            max-width: 300px;
+        `;
+        document.body.appendChild(toast);
+    }
+    
+    toast.textContent = message;
+    toast.style.opacity = '1';
+    
+    setTimeout(() => {
+        toast.style.opacity = '0';
+    }, 2500);
+}
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+// Load settings on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const settings = loadKBSettings();
+    applyCitationVisibility(settings.showCitations);
+    console.log('[Space Settings] Loaded settings:', settings);
+});
+
+// Register keyboard shortcut: Ctrl+Shift+K to toggle citations
+document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.shiftKey && e.key === 'K') {
+        e.preventDefault();
+        toggleCitationVisibility();
+    }
+});
+
+// Expose settings functions to global scope
+window.showKBSettingsPanel = showKBSettingsPanel;
+window.hideKBSettingsPanel = hideKBSettingsPanel;
+window.loadKBSettings = loadKBSettings;
+window.toggleCitationVisibility = toggleCitationVisibility;
+
+console.log('[KB Chat] Space Quality chat integration loaded');
+</script>
+{{end}}
