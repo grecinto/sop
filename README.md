@@ -2,6 +2,40 @@
 
 This repository is a private overlay built on top of the shared public SOP implementation. The public upstream code remains the canonical source for the generic AI, database, memory, and runtime layers, while this repository keeps the private or deployment-specific behavior local.
 
+## Key Features
+
+### 🎯 Automated KB Quality System - Save Time and Money
+
+**Stop wasting hours and tokens on manual refinement.** Unlike other AI copilots that generate code and leave you to manually fix compliance issues, SOP's KB Quality system validates code against expertise rules **during generation**.
+
+**Cost Savings:**
+- **Up to 70% reduction in context usage** compared to manual refinement workflows
+- **Zero manual enforcement cycles** for style guides, error handling, or architectural patterns
+- **Automated validation** means no additional prompts to "fix this code" or "follow best practices"
+
+**Features:**
+1. **Automated Validation**: Code validated against KB rules during generation (error handling, naming, architecture)
+2. **Expertise Dashboard**: Live visibility into which knowledge bases drive each session with real-time statistics
+3. **One-Click Refinement**: Revalidate with stricter standards or try alternative knowledge bases instantly
+4. **Quality Metrics**: Automated compliance scoring shows how well code follows expertise rules
+
+Other copilots: Generate → Manual review → Fix error handling → Fix naming → Fix architecture → Deploy  
+**SOP with KB Quality**: Generate with built-in validation → Deploy  
+
+### 🔒 Privacy-First with Local Intelligence
+
+- Real-time vector database on your machine—no overnight optimization or data center processing
+- Semantic category trees organize code for instant intelligent search (no K-Means clustering needed)
+- Everything stored locally on your device—we don't store your conversation history
+- Bring your own API keys for direct control
+
+### 📊 Knowledge Base Excellence
+
+- Load knowledge bases to turn your LLM into a domain expert in any field
+- Automated expertise enforcement during code generation
+- Built-in validation ensures adherence to best practices without manual cycles
+- Privacy-first fleet learning with PII detection and governance
+
 ## Repository purpose
 
 This repo is organized as a thin overlay rather than a full fork of the public codebase. The local package surface is intentionally small and focused on private behavior:

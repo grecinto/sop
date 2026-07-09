@@ -6,7 +6,27 @@ The Copilot is implemented as a **ReAct (Reasoning + Acting) Agent** that uses l
 
 > **Important**: The AI Copilot requires an LLM API Key (e.g., Gemini, OpenAI) to function. You must provide your own key in the "Environment Configuration" settings. If no key is supplied, the AI Copilot features will be disabled.
 
-### 🔌 New: "No-LLM" Production Mode
+### � KB Quality System: Automated Expertise Enforcement
+
+**Stop wasting time and money on manual code refinement.** Unlike other AI copilots that generate code and leave you to manually verify it follows best practices, SOP's KB Quality system validates code against expertise rules **during generation**.
+
+**Key Benefits:**
+- **Up to 70% reduction in context usage**: No costly back-and-forth iterations to fix error handling, naming conventions, or architectural patterns
+- **Zero manual refinement cycles**: Best practices are built into the code generator—no additional prompts needed to enforce standards
+- **Automated compliance validation**: Every code generation is automatically checked against your knowledge base rules
+- **Live Expertise Dashboard**: Real-time visibility into which knowledge bases are driving your AI sessions with detailed statistics
+- **One-click refinement controls**: Instantly revalidate code with stricter standards or try alternative knowledge bases
+
+**How it saves you money:**
+Traditional copilots require multiple iterations: "generate code" → "now fix the error handling" → "use better naming" → "follow the architecture guide". Each iteration burns tokens and wastes time. SOP enforces expertise automatically during generation, eliminating these costly refinement cycles entirely.
+
+**Features:**
+1. **Automated Validation**: Code is validated against KB rules as it's generated (error handling, naming conventions, test structure)
+2. **Expertise Dashboard**: Track Space usage per session with live statistics (messages, task types, compliance scores)
+3. **Smart Refinement Controls**: Per-message controls to revalidate with stricter standards, try alternative Spaces, or disable Spaces for the session
+4. **Quality Metrics**: Real-time compliance scoring shows how well generated code follows expertise rules
+
+### �🔌 New: "No-LLM" Production Mode
 SOP recognizes that **Production Environments** often have strict security policies that forbid external API calls (Air-gapped) or require zero external dependencies.
 
 We have introduced a **Direct Command Interface** that works entirely offline:

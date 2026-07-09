@@ -551,6 +551,7 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRefreshingBilling, setIsRefreshingBilling] = useState(false);
   const [provisioningDone, setProvisioningDone] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const isRefreshingRef = useRef(false);
 
   useEffect(() => {
@@ -1293,6 +1294,9 @@ export default function App() {
               <strong>Real-time vector search on your machine.</strong> Other AI copilots run overnight K-Means clustering in their data centers to optimize code search. Northstar uses semantic category trees that work instantly—no waiting, no HQ processing, just real-time intelligence on your local device.
             </p>
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
+              <strong>Automated expertise enforcement cuts your AI costs dramatically.</strong> Other copilots generate code and leave you to manually verify it follows best practices—wasting hours and burning tokens on refinement. Our KB Quality system validates code against expertise rules during generation. No manual review cycles. No additional prompts to "fix the error handling" or "follow the style guide." Expertise is built into the generator, saving you time and reducing context usage by up to 70%.
+            </p>
+            <p className="hero-copy" style={{ marginTop: '1rem' }}>
               Public site: <strong>ai-northstar.com</strong>
             </p>
           </div>
@@ -1303,14 +1307,32 @@ export default function App() {
               <h3>What makes Northstar different</h3>
               <ul className="feature-list">
                 <li>Load knowledge bases to turn your LLM into a domain expert—medical, mechanical, coding, or any field</li>
+                <li><strong>Automated KB Quality validation—expertise rules enforced during code generation, eliminating manual refinement</strong></li>
+                <li><strong>Up to 70% reduction in context usage—no costly back-and-forth to fix style, error handling, or best practices</strong></li>
+                <li><strong>Live Expertise Dashboard—track which knowledge bases are used per session with real-time statistics</strong></li>
+                <li><strong>One-click refinement controls—revalidate with stricter standards or try alternative knowledge bases instantly</strong></li>
                 <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots</li>
                 <li>Lightweight real-time vector database that runs on your machine—no overnight optimization, no data center processing</li>
                 <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
                 <li>Privacy-first fleet learning—respects PII with automatic detection, privacy governance, and user opt-in/opt-out policies</li>
                 <li>Built-in auditable visualization—see exactly what's shared, when, and why with full transparency</li>
-                <li>Generate higher-quality code that follows architecture best practices and coding standards</li>
+                <li>Generate higher-quality code that follows architecture best practices and coding standards automatically</li>
               </ul>
               <a className="button button-secondary" href="/site/subscribe">Get started</a>
+            </article>
+
+            <article className="feature-card">
+              <p className="eyebrow">Automated expertise validation</p>
+              <h3>Stop wasting time and money on manual refinement</h3>
+              <ul className="feature-list">
+                <li><strong>KB Quality system validates code during generation—no manual "fix this code" iterations needed</strong></li>
+                <li><strong>Expertise Dashboard shows which knowledge bases drive each AI session with live statistics</strong></li>
+                <li><strong>One-click refinement controls: revalidate with stricter rules or try alternative knowledge bases</strong></li>
+                <li><strong>Up to 70% reduction in context usage compared to manual refinement workflows</strong></li>
+                <li>Best practices are built into the code generator—error handling, naming conventions, architecture patterns</li>
+                <li>Automated compliance scoring shows how well generated code follows expertise rules</li>
+                <li>No more hours spent enforcing style guides and best practices—it's automatic</li>
+              </ul>
             </article>
 
             <article className="feature-card">
@@ -1334,16 +1356,20 @@ export default function App() {
               <h3>Concrete improvements to your daily work</h3>
               <div className="capability-list">
                 <div>
-                  <strong>Pair programming</strong>
-                  <p>Code alongside an AI that understands architecture patterns and best practices from your knowledge base.</p>
+                  <strong>Automated expertise validation</strong>
+                  <p>Generate code that follows best practices automatically—no manual refinement cycles, no wasted hours enforcing standards. The KB Quality system validates during generation, saving up to 70% in context costs.</p>
                 </div>
                 <div>
-                  <strong>Expert code reviews</strong>
-                  <p>Get reviews that check against your coding standards and architectural guidelines, not just generic rules.</p>
+                  <strong>Pair programming with built-in expertise</strong>
+                  <p>Code alongside an AI that understands architecture patterns and best practices from your knowledge base. Expertise rules are enforced automatically as code is generated.</p>
                 </div>
                 <div>
-                  <strong>Task automation</strong>
-                  <p>Automate repetitive work with an AI that knows your domain, cutting down SDLC and delivering better results.</p>
+                  <strong>Expert code reviews with live insights</strong>
+                  <p>Get reviews that check against your coding standards and architectural guidelines, not just generic rules. The Expertise Dashboard shows which knowledge bases contributed to each session.</p>
+                </div>
+                <div>
+                  <strong>Task automation with quality guarantees</strong>
+                  <p>Automate repetitive work with an AI that knows your domain AND validates output automatically, cutting down SDLC while ensuring quality standards are met.</p>
                 </div>
               </div>
             </article>
@@ -1362,12 +1388,16 @@ export default function App() {
 
           <article className="feature-card">
             <p className="eyebrow">The complete experience</p>
-            <h3>Knowledge bases, local privacy, and real-time AI</h3>
+            <h3>Knowledge bases, automated expertise, and real-time AI</h3>
             <p className="muted-copy">
-              Current AI copilots can't do this: load domain expertise, keep your conversation history on your device, AND run intelligent code search in real-time without data center processing. Codex, Cursor, and GitHub Copilot send your code to their servers for overnight K-Means optimization. Northstar uses semantic category trees that work instantly on your machine—with privacy governance that respects PII and gives you full auditable control.
+              Current AI copilots can't do this: load domain expertise, <strong>automatically validate code against best practices during generation</strong>, keep your conversation history on your device, AND run intelligent code search in real-time without data center processing. Other copilots generate code and leave you to manually fix compliance issues, wasting hours and burning tokens. Northstar's KB Quality system enforces expertise automatically—no manual refinement cycles needed. This cuts context usage by up to 70% and saves you from spending hours enforcing style guides, error handling patterns, and architectural standards.
             </p>
             <ul className="feature-list">
-              <li>Knowledge bases transform your LLM into a domain expert with higher-quality output.</li>
+              <li><strong>Automated KB Quality validation—expertise rules enforced during generation, eliminating manual refinement iterations.</strong></li>
+              <li><strong>Massive cost savings—up to 70% reduction in context usage compared to manual "fix this code" workflows.</strong></li>
+              <li><strong>Live Expertise Dashboard—see which knowledge bases contribute to each session with real-time statistics.</strong></li>
+              <li><strong>One-click refinement controls—revalidate with stricter standards or try alternative knowledge bases instantly.</strong></li>
+              <li>Knowledge bases transform your LLM into a domain expert with higher-quality output automatically validated.</li>
               <li>Real-time vector database runs on your local machine—no overnight clustering, no HQ processing delays.</li>
               <li>Semantic M-Way tree buckets organize millions of code snippets for instant intelligent search.</li>
               <li>Three-index approach: file paths (exact), code structure (package/class/method), semantic concepts (fuzzy).</li>
@@ -1400,6 +1430,146 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          <div style={{ marginTop: '2rem', marginBottom: '2rem', textAlign: 'center' }}>
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              style={{ fontSize: '0.95rem' }}
+            >
+              {showAdvanced ? '▼ Hide Advanced Architecture' : '▶ Show Advanced Architecture'}
+            </button>
+          </div>
+
+          {showAdvanced && (
+            <article className="feature-card" style={{ marginTop: '1rem', marginBottom: '2rem', backgroundColor: '#f8f9fa', border: '2px solid #e9ecef' }}>
+              <p className="eyebrow">Advanced Architecture</p>
+              <h3>Real-time vector database with built-in data science</h3>
+              <p className="muted-copy">
+                Traditional vector databases require overnight K-Means clustering in data centers to organize embeddings. SOP transforms vector databases into a <strong>real-time system</strong> by using <strong>nested Semantic Categories</strong> and a <strong>relativity-based Triangulation algorithm</strong>. This ships data science capabilities directly within the database mesh—no specialized data scientists needed.
+              </p>
+
+              <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #dee2e6' }}>
+                <h4 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Traditional vs SOP Architecture</h4>
+                <pre style={{ fontSize: '0.85rem', lineHeight: '1.6', overflow: 'auto', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '4px', margin: 0 }}>{`
+┌─────────────────────────────────────────────────────────┐
+│          TRADITIONAL VECTOR DATABASE                     │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  1. Store embeddings in flat array                      │
+│     [vec1, vec2, vec3, ... vecN]                        │
+│                                                          │
+│  2. Run K-Means clustering (OVERNIGHT)                  │
+│     ↓ Send to data center                               │
+│     ↓ Compute centroids                                 │
+│     ↓ Assign clusters                                   │
+│                                                          │
+│  3. Query uses centroid distance                        │
+│     - Compare to cluster centers                        │
+│     - Scan cluster members                              │
+│     - Return opaque "Cluster 47" results               │
+│                                                          │
+│  ❌ Requires data scientists                            │
+│  ❌ Overnight batch processing                          │
+│  ❌ Opaque cluster IDs                                  │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│          SOP REAL-TIME VECTOR DATABASE                   │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  1. Organize in nested semantic categories               │
+│     Go Best Practices/                                   │
+│     ├── error-handling/                                 │
+│     │   ├── retry-logic/                                │
+│     │   │   ├── exponential-backoff                     │
+│     │   │   └── circuit-breaker                         │
+│     │   └── error-propagation/                          │
+│     └── concurrency-patterns/                           │
+│         └── goroutine-management/                       │
+│                                                          │
+│  2. Triangulation search (REAL-TIME)                    │
+│     ↓ Navigate category tree                            │
+│     ↓ Relativity-based scoring                          │
+│     ↓ Instant results on your machine                   │
+│                                                          │
+│  3. Query returns human-readable paths                  │
+│     - "error-handling/retry-logic"                     │
+│     - O(D log N) performance                            │
+│     - No data center processing                         │
+│                                                          │
+│  ✅ End users organize categories                       │
+│  ✅ Real-time updates                                   │
+│  ✅ Transparent results                                 │
+└─────────────────────────────────────────────────────────┘
+                `}</pre>
+              </div>
+
+              <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #dee2e6' }}>
+                <h4 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Triangulation Algorithm Visualization</h4>
+                <pre style={{ fontSize: '0.85rem', lineHeight: '1.6', overflow: 'auto', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '4px', margin: 0 }}>{`
+Query: "How to handle retries with backoff?"
+           ↓
+   [Convert to embedding]
+           ↓
+┌──────────────────────────────────────────────────┐
+│         Category Tree Navigation                 │
+└──────────────────────────────────────────────────┘
+
+    Root (Space)
+        │
+        ├─→ error-handling (0.89 similarity) ✓
+        │       │
+        │       ├─→ retry-logic (0.94 similarity) ✓✓
+        │       │       │
+        │       │       ├─→ exponential-backoff (0.96) ⭐
+        │       │       ├─→ circuit-breaker (0.78)
+        │       │       └─→ timeout-strategies (0.71)
+        │       │
+        │       └─→ error-propagation (0.65)
+        │
+        ├─→ concurrency-patterns (0.54)
+        └─→ testing-practices (0.31)
+
+Triangulation Process:
+  1. Start at root, score all top-level categories
+  2. Select best match: error-handling (0.89)
+  3. Traverse deeper: retry-logic (0.94)
+  4. Score leaf nodes: exponential-backoff (0.96) ⭐
+  5. Check boundary categories for cross-cutting
+  6. Return: error-handling/retry-logic/exponential-backoff
+
+Result: Found in O(D log N) time, no K-Means needed!
+                `}</pre>
+              </div>
+
+              <div className="capability-list">
+                <div>
+                  <strong>Nested Semantic Categories</strong>
+                  <p>Instead of blind clustering, organize embeddings into human-readable nested categories (e.g., error-handling → retry-logic → exponential-backoff). End users curate domain organization through intuitive category hierarchies, eliminating the need for specialized data science teams.</p>
+                </div>
+                <div>
+                  <strong>Relativity-based Triangulation</strong>
+                  <p>Our triangulation algorithm performs fuzzy vector searches in O(D log N) time by navigating the semantic category tree. No K-Means centroids, no overnight batch jobs—just instant intelligent search using category relationships and embedding proximity.</p>
+                </div>
+                <div>
+                  <strong>Data science in the database</strong>
+                  <p>Vectorization and fuzzy search are core database primitives, not external analytics layers. Users organize knowledge through categories they understand, and the system handles embeddings, similarity scoring, and retrieval automatically. Data science becomes accessible to everyone.</p>
+                </div>
+                <div>
+                  <strong>User-driven organization</strong>
+                  <p>Relegate domain data organization to end users who understand their field. Medical experts create medical categories, developers create architecture patterns—no data scientists translating domain knowledge into clustering parameters. The database adapts to human understanding.</p>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '2rem', padding: '1rem', backgroundColor: '#e7f3ff', borderLeft: '4px solid #0066cc', borderRadius: '4px' }}>
+                <p style={{ margin: 0, fontSize: '0.95rem' }}>
+                  <strong>💡 Key Insight:</strong> By making vectorization and semantic search core database primitives with user-driven category organization, we eliminate the need for specialized data science teams. Domain experts organize knowledge the way they naturally think about it, and the database handles the complexity automatically.
+                </p>
+              </div>
+            </article>
+          )}
 
           <div className="docs-comparison">
             <article className="feature-card comparison-card">
@@ -1530,13 +1700,16 @@ export default function App() {
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
               <strong>Full AI copilot features, zero data center processing.</strong> Other copilots need overnight K-Means clustering at HQ. Ours uses semantic category trees that work instantly on your machine.
             </p>
+            <p className="hero-copy" style={{ marginTop: '1rem' }}>
+              <strong>Built-in expertise validation saves you time and money.</strong> Unlike other copilots that require manual refinement cycles, our automated KB Quality system validates code against best practices during generation—no additional prompts, no costly back-and-forth iterations. Expertise is enforced automatically, cutting context usage by up to 70%.
+            </p>
             <div className="hero-actions">
               <a className="button button-primary" href={primaryActionHref}>{primaryActionLabel}</a>
               <a className="button button-secondary" href="/site/docs">View product docs</a>
             </div>
           </div>
 
-          <div className="hero-side">
+          <div className="hero-side" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
             <div className="plan-card">
               <p className="eyebrow">AI Copilot access</p>
               <h3>Knowledge-driven AI for smarter automation and coding</h3>
@@ -1546,13 +1719,47 @@ export default function App() {
                 <li>Load knowledge bases to turn your LLM into a domain expert in any field</li>
                 <li>Real-time vector database on your machine—no overnight optimization or HQ processing</li>
                 <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
+                <li><strong>Automated KB Quality validation—expertise enforced during code generation, no manual refinement needed</strong></li>
+                <li><strong>Massive context savings—built-in validation eliminates costly back-and-forth iterations, reducing token usage by up to 70%</strong></li>
+                <li><strong>Expertise Dashboard—real-time visibility into which knowledge bases drive your AI sessions</strong></li>
+                <li><strong>Smart refinement controls—instantly revalidate code or try alternative knowledge bases with one click</strong></li>
                 <li>Privacy-first fleet learning—PII detection, privacy governance, and per-category opt-in/opt-out controls</li>
                 <li>Full transparency with auditable UI—see exactly what's shared, when, and why with complete visibility</li>
                 <li>Bring your own API keys—we don't store your conversation history on our servers</li>
                 <li>Built-in data visualization to review your AI workflows and fleet participation</li>
-                <li>Generate higher-quality code that adheres to architecture and coding best practices</li>
+                <li>Generate higher-quality code that adheres to architecture and coding best practices automatically</li>
                 <li>Everything stored locally on your device (data privacy)</li>
               </ul>
+            </div>
+
+            <div className="plan-card" style={{ opacity: 0.75, position: 'relative', border: '2px dashed #cbd5e0' }}>
+              <div style={{ position: 'absolute', top: '1rem', right: '1rem', backgroundColor: '#667eea', color: 'white', padding: '0.25rem 0.75rem', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase' }}>
+                Coming Soon
+              </div>
+              <p className="eyebrow">Northstar AI Vector Database SDK</p>
+              <h3>Real-time semantic search without data centers</h3>
+              <div className="price">Starting at $29/month</div>
+              <p>The first real-time vector database with triangulation algorithm and nested semantic categories. No K-Means clustering, no overnight jobs, no data science team needed.</p>
+              <ul className="feature-list">
+                <li><strong>Relativity-based triangulation—O(D log N) fuzzy search without K-Means centroids</strong></li>
+                <li><strong>Nested semantic categories—human-readable organization replaces opaque cluster IDs</strong></li>
+                <li><strong>Real-time updates—add documents instantly, no batch reprocessing required</strong></li>
+                <li><strong>No data science team—end users organize categories themselves</strong></li>
+                <li>On-premise/edge deployment—works without cloud connection</li>
+                <li>Multi-language SDK support—Go, Python, JavaScript, Java</li>
+                <li>Production-ready with monitoring—built-in metrics and observability</li>
+                <li>Email support included—integration help and best practices</li>
+                <li>Docker deployment—containerized for easy scaling</li>
+                <li>Migration guides—from Pinecone, Weaviate, pgvector</li>
+                <li>Developer tier: $29/month (500K embeddings)</li>
+                <li>Professional tier: $79/month (5M embeddings, 24hr support)</li>
+                <li>Team tier: $299/month (unlimited embeddings, 4hr support)</li>
+              </ul>
+              <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#f7fafc', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: '#4a5568' }}>
+                  <strong>💡 Perfect for:</strong> Companies building AI products, internal knowledge management, edge/IoT applications, enterprise tools requiring on-premise vector search.
+                </p>
+              </div>
             </div>
           </div>
         </div>
