@@ -49,7 +49,7 @@ func DefaultTaskClassifier() *TaskClassifier {
 // Classify analyzes a task and returns classification with KB recommendations
 func (tc *TaskClassifier) Classify(taskDescription, activeFile string, workingDir string) TaskClassification {
 	signals := []string{}
-	
+
 	// Extract file type signals
 	fileExt := ""
 	if activeFile != "" {
@@ -58,23 +58,23 @@ func (tc *TaskClassifier) Classify(taskDescription, activeFile string, workingDi
 			signals = append(signals, "file_ext:"+fileExt)
 		}
 	}
-	
+
 	// Normalize task description for analysis
 	desc := strings.ToLower(taskDescription)
 	words := strings.Fields(desc)
-	
+
 	// Extract keyword signals
 	keywords := tc.extractKeywords(desc)
 	for _, kw := range keywords {
 		signals = append(signals, "keyword:"+kw)
 	}
-	
+
 	// Classify task type based on signals
 	taskType, confidence := tc.classifyTaskType(desc, fileExt, keywords)
-	
+
 	// Generate KB candidates based on task type and signals
 	kbs := tc.recommendKBs(taskType, fileExt, keywords, words)
-	
+
 	// Filter by minimum confidence
 	filteredKBs := []KBCandidate{}
 	for _, kb := range kbs {
@@ -82,7 +82,7 @@ func (tc *TaskClassifier) Classify(taskDescription, activeFile string, workingDi
 			filteredKBs = append(filteredKBs, kb)
 		}
 	}
-	
+
 	return TaskClassification{
 		TaskType:   taskType,
 		Confidence: confidence,
@@ -94,7 +94,7 @@ func (tc *TaskClassifier) Classify(taskDescription, activeFile string, workingDi
 // extractKeywords extracts significant keywords from task description
 func (tc *TaskClassifier) extractKeywords(desc string) []string {
 	keywords := []string{}
-	
+
 	// Task type keywords
 	taskKeywords := map[string]bool{
 		"implement": true, "add": true, "create": true, "build": true, "write": true,
@@ -104,7 +104,7 @@ func (tc *TaskClassifier) extractKeywords(desc string) []string {
 		"document": true, "comment": true, "explain": true,
 		"design": true, "architecture": true, "structure": true,
 	}
-	
+
 	// Domain keywords
 	domainKeywords := map[string]bool{
 		"error": true, "handler": true, "api": true, "endpoint": true,
@@ -115,7 +115,7 @@ func (tc *TaskClassifier) extractKeywords(desc string) []string {
 		"auth": true, "permission": true, "security": true,
 		"concurrent": true, "parallel": true, "goroutine": true,
 	}
-	
+
 	words := strings.Fields(desc)
 	for _, word := range words {
 		clean := strings.Trim(word, ".,;:!?")
@@ -123,7 +123,7 @@ func (tc *TaskClassifier) extractKeywords(desc string) []string {
 			keywords = append(keywords, clean)
 		}
 	}
-	
+
 	return keywords
 }
 
@@ -137,7 +137,7 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 		TaskTypeDocumentation:  0.0,
 		TaskTypeArchitecture:   0.0,
 	}
-	
+
 	// Score based on keywords
 	for _, kw := range keywords {
 		switch kw {
@@ -155,7 +155,7 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 			scores[TaskTypeArchitecture] += 0.3
 		}
 	}
-	
+
 	// Score based on file extension
 	if fileExt == ".go" && strings.Contains(desc, "test") {
 		scores[TaskTypeTesting] += 0.2
@@ -166,7 +166,7 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 	if fileExt == ".md" || fileExt == ".txt" {
 		scores[TaskTypeDocumentation] += 0.2
 	}
-	
+
 	// Score based on description patterns
 	if strings.Contains(desc, "error") && (strings.Contains(desc, "fix") || strings.Contains(desc, "debug")) {
 		scores[TaskTypeDebugging] += 0.2
@@ -174,7 +174,7 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 	if strings.Contains(desc, "update") || strings.Contains(desc, "modify") {
 		scores[TaskTypeRefactoring] += 0.1
 	}
-	
+
 	// Find highest score
 	maxScore := 0.0
 	maxType := TaskTypeUnknown
@@ -184,25 +184,25 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 			maxType = taskType
 		}
 	}
-	
+
 	// Default to implementation if unclear
 	if maxScore < 0.3 {
 		return TaskTypeImplementation, 0.5
 	}
-	
+
 	// Normalize confidence to 0.0-1.0 range
 	confidence := maxScore
 	if confidence > 1.0 {
 		confidence = 1.0
 	}
-	
+
 	return maxType, confidence
 }
 
 // recommendKBs generates ranked KB recommendations
 func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywords []string, words []string) []KBCandidate {
 	candidates := []KBCandidate{}
-	
+
 	// Always recommend language-specific best practices
 	if fileExt == ".go" || containsString(words, "go") || containsString(words, "golang") {
 		candidates = append(candidates, KBCandidate{
@@ -211,7 +211,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 			Reason:     "Go language file or task",
 		})
 	}
-	
+
 	// Task-type specific recommendations
 	switch taskType {
 	case TaskTypeImplementation:
@@ -227,7 +227,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 				Reason:     "Go implementation requires proper error handling",
 			})
 		}
-	
+
 	case TaskTypeDebugging:
 		candidates = append(candidates, KBCandidate{
 			Name:       "debugging_guide",
@@ -241,7 +241,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 				Reason:     "Error-related debugging",
 			})
 		}
-	
+
 	case TaskTypeTesting:
 		candidates = append(candidates, KBCandidate{
 			Name:       "testing_patterns",
@@ -255,7 +255,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 				Reason:     "Go testing best practices",
 			})
 		}
-	
+
 	case TaskTypeRefactoring:
 		candidates = append(candidates, KBCandidate{
 			Name:       "refactoring_patterns",
@@ -267,7 +267,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 			Confidence: 0.6,
 			Reason:     "Refactoring may involve architectural improvements",
 		})
-	
+
 	case TaskTypeArchitecture:
 		candidates = append(candidates, KBCandidate{
 			Name:       "architecture_patterns",
@@ -280,7 +280,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 			Reason:     "System design guidance for architecture work",
 		})
 	}
-	
+
 	// Domain-specific recommendations based on keywords
 	if containsAnyString(keywords, []string{"api", "endpoint", "http", "server"}) {
 		candidates = append(candidates, KBCandidate{
@@ -289,7 +289,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 			Reason:     "API-related task",
 		})
 	}
-	
+
 	if containsAnyString(keywords, []string{"database", "sql", "query"}) {
 		candidates = append(candidates, KBCandidate{
 			Name:       "database_patterns",
@@ -297,7 +297,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 			Reason:     "Database-related task",
 		})
 	}
-	
+
 	if containsAnyString(keywords, []string{"parser", "lexer", "ast"}) {
 		candidates = append(candidates, KBCandidate{
 			Name:       "parser_implementation_guide",
@@ -305,7 +305,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 			Reason:     "Parser/compiler task",
 		})
 	}
-	
+
 	if containsAnyString(keywords, []string{"concurrent", "parallel", "goroutine"}) {
 		candidates = append(candidates, KBCandidate{
 			Name:       "concurrency_patterns",
@@ -313,7 +313,7 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 			Reason:     "Concurrency-related task",
 		})
 	}
-	
+
 	if containsAnyString(keywords, []string{"auth", "permission", "security"}) {
 		candidates = append(candidates, KBCandidate{
 			Name:       "security_guide",
@@ -321,10 +321,10 @@ func (tc *TaskClassifier) recommendKBs(taskType TaskType, fileExt string, keywor
 			Reason:     "Security-related task",
 		})
 	}
-	
+
 	// Sort by confidence (highest first)
 	sortKBCandidates(candidates)
-	
+
 	return candidates
 }
 

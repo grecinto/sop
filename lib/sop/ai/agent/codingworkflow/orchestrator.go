@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sharedcode/sop/ai/memory"
 	ts "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
-	"github.com/sharedcode/sop/ai/memory"
 )
 
 // RunState carries explicit arguments and state for a workflow execution.
@@ -126,6 +126,8 @@ type ExecutionResult struct {
 	RevisionAttempts int              // number of revision loops
 	KBsConsulted     []string         // which KBs were used for expertise
 	RulesApplied     []string         // which specific rules were referenced
+	// Phase 4: UX improvements
+	Explanation string // human-readable explanation of KB selection and impact
 }
 
 // ContextManager builds a concise context pack for a task.
@@ -301,9 +303,10 @@ type Orchestrator struct {
 	ContinuitySink         func(ContinuitySignal)
 	GrammarRegistry        *GrammarRegistry
 	OrchestrationBackend   OrchestrationBackend
-	ValidationOrchestrator *ValidationOrchestrator              // Phase 1: KB expertise enforcement
-	TaskClassifier         *TaskClassifier                      // Phase 2: automatic KB selection
-	KBEffectiveness        *memory.KBEffectivenessTracker       // Phase 2: historical success tracking
+	ValidationOrchestrator *ValidationOrchestrator        // Phase 1: KB expertise enforcement
+	TaskClassifier         *TaskClassifier                // Phase 2: automatic KB selection
+	KBEffectiveness        *memory.KBEffectivenessTracker // Phase 2: historical success tracking
+	ExplanationGenerator   *ExplanationGenerator          // Phase 4: explain KB selection and impact
 	MaxIterations          int
 }
 
@@ -370,6 +373,10 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		// Phase 2: Initialize task classifier for automatic KB selection
 		o.TaskClassifier = DefaultTaskClassifier()
 	}
+	if o.ExplanationGenerator == nil {
+		// Phase 4: Initialize explanation generator for user-facing KB explanations
+		o.ExplanationGenerator = DefaultExplanationGenerator()
+	}
 	// Note: KBEffectiveness is optional and should be provided by the orchestrator creator
 	// if historical tracking is desired (requires persistence path)
 	if o.GrammarRegistry == nil {
@@ -417,13 +424,13 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if pack.RepositorySummary != "" {
 		pack.RepositorySummary = fmt.Sprintf("%s; target=%s", pack.RepositorySummary, strings.TrimSpace(task.ActiveFile))
 	}
-	
+
 	// Phase 2: Classify task for intelligent KB selection
 	var taskClassification TaskClassification
 	if o.TaskClassifier != nil {
 		taskClassification = o.TaskClassifier.Classify(task.Description, task.ActiveFile, task.WorkingDir)
 		pack.TaskType = string(taskClassification.TaskType)
-		
+
 		// Log classification for observability
 		if o.ContinuitySink != nil {
 			kbNames := []string{}
@@ -442,7 +449,7 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 			})
 		}
 	}
-	
+
 	if expertise, err := o.ExpertiseRetriever.Retrieve(task, task.State, pack); err == nil {
 		if strings.TrimSpace(expertise.Summary) != "" {
 			pack.ExpertiseSummary = expertise.Summary
@@ -634,7 +641,7 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 				},
 			})
 		}
-		
+
 		// Phase 2: Record outcome to KB effectiveness tracker
 		if o.KBEffectiveness != nil && len(codingMemory.KBsUsed) > 0 {
 			// Determine success based on test status and compliance score
@@ -643,13 +650,13 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 			if taskType == "" {
 				taskType = "implementation" // Default if not classified
 			}
-			
+
 			// Record effectiveness for each KB used
 			for _, kbName := range codingMemory.KBsUsed {
 				o.KBEffectiveness.RecordOutcome(taskType, kbName, success, codingMemory.ComplianceScore)
 			}
 		}
-		
+
 		// Persist coding memory with KB tracking fields
 		memoryStr := fmt.Sprintf("description=%s; outcome=%s; files=%s; status=%s", codingMemory.Description, codingMemory.Outcome, strings.Join(codingMemory.FilesTouched, ","), codingMemory.TestStatus)
 		if len(codingMemory.KBsUsed) > 0 {
@@ -726,6 +733,24 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if err := persistRepositoryPathMemory(o.Memory, task, pack); err != nil {
 		return ExecutionResult{}, fmt.Errorf("persist repository path memory: %w", err)
 	}
+	
+	// Phase 4: Generate human-readable explanation of KB selection and impact
+	explanation := ""
+	if o.ExplanationGenerator != nil && taskClassification.TaskType != "" {
+		kbsUsed := ExtractKBNamesFromExpertise(pack.ExpertiseCapsule)
+		rulesApplied := validationResult.RulesChecked
+		complianceScore := validationResult.ComplianceScore
+		
+		explanation = o.ExplanationGenerator.GenerateFullExplanation(
+			taskClassification,
+			kbsUsed,
+			rulesApplied,
+			validationResult,
+			revisionAttempts,
+			complianceScore,
+		)
+	}
+	
 	return ExecutionResult{
 		ContextPack:      pack,
 		Message:          message,
@@ -736,6 +761,7 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		RevisionAttempts: revisionAttempts,
 		KBsConsulted:     ExtractKBNamesFromExpertise(pack.ExpertiseCapsule),
 		RulesApplied:     validationResult.RulesChecked,
+		Explanation:      explanation,
 	}, nil
 }
 

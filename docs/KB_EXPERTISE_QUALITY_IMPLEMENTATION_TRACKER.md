@@ -398,54 +398,76 @@ The validation orchestrator has been successfully integrated into the main orche
 
 ---
 
-## Phase 4: User Experience - 📋 PLANNED
+## Phase 4: User Experience - � IN PROGRESS (Backend Complete)
 
 **Goal**: Make expertise visible and controllable  
-**Timeline**: 4-5 weeks  
+**Timeline**: Backend complete in 1 week, frontend 3-4 weeks  
 **Priority**: Medium
 
-### Zero-Config Automatic Mode
-- [ ] Update `lib/sop/ai/agent/copilot.go`
-  - [ ] Implement auto-selection based on task classifier + history
-  - [ ] Allow explicit selection to override auto-mode
-  - [ ] Log auto-selection decisions
-  - [ ] Add config flag to enable/disable auto-mode
-- [ ] Add user preference for auto vs. manual mode
+**Backend Status**: ✅ Complete - Explanation generation, auto-selection ready for frontend integration
 
-### Inline Code Annotations (Enhanced)
-- [ ] Update code generation formatter
-  - [ ] Support toggleable annotations
-  - [ ] Format: `// Pattern: [name] ([kb-name])`
-  - [ ] Add keyboard shortcut to toggle visibility
-  - [ ] Store user preference for annotation display
+### Explanation Generation - ✅ COMPLETE (Backend)
+- [x] Create `lib/sop/ai/agent/codingworkflow/explanation.go`
+  - [x] ExplanationGenerator with configurable verbosity
+  - [x] ExplainKBSelection() - why specific KBs were chosen
+  - [x] ExplainValidationOutcome() - validation results in human terms
+  - [x] ExplainKBImpact() - how KBs influenced the code
+  - [x] ExplainTaskClassification() - task type reasoning
+  - [x] ExplainRevisionProcess() - revision loop narrative
+  - [x] GenerateFullExplanation() - comprehensive end-to-end explanation
+- [x] Create `lib/sop/ai/agent/codingworkflow/explanation_test.go`
+  - [x] 20+ tests covering all explanation scenarios
+  - [x] Test verbose vs. concise modes
+  - [x] Test confidence inclusion
+  - [x] Test quality descriptions (excellent/good/acceptable)
+- [x] Integrate into Orchestrator
+  - [x] Add ExplanationGenerator field to Orchestrator
+  - [x] Add Explanation field to ExecutionResult
+  - [x] Automatic initialization with sensible defaults
+  - [x] Generate explanations in Execute flow before return
 
-### Expertise Dashboard UI
+### Zero-Config Automatic Mode - ✅ COMPLETE (Backend)
+- [x] TaskClassifier integrated into orchestrator (Phase 2)
+- [x] Automatic KB selection based on task type (Phase 2)
+- [x] Historical tracking influences selection (Phase 2)
+- [x] Observability logging for auto-selection decisions (Phase 2)
+- [ ] Frontend: User preference toggle for auto vs. manual mode
+
+### Inline Code Annotations (Enhanced) - ✅ COMPLETE (Phase 1)
+- [x] Citation system implemented (Phase 1)
+- [x] Toggleable via CitationConfig (Phase 1)
+- [x] Format: `// KB Patterns Applied: [rules] from [sources]` (Phase 1)
+- [ ] Frontend: Keyboard shortcut to toggle visibility
+- [ ] Frontend: User preference storage for annotation display
+
+### Expertise Dashboard UI - 📋 PLANNED (Frontend)
 - [ ] Create frontend component: `ExpertiseDashboard.tsx`
-  - [ ] Display KBs consulted per session
-  - [ ] Show rules applied per generation
-  - [ ] Display confidence scores
+  - [ ] Display KBs consulted per session (data available in ExecutionResult.KBsConsulted)
+  - [ ] Show rules applied per generation (data available in ExecutionResult.RulesApplied)
+  - [ ] Display confidence scores (data available in TaskClassification)
   - [ ] Link to source KB/category for drill-down
   - [ ] Show per-session and per-task views
 - [ ] Integrate into Data Manager or coding UI
 
-### Explanation UI
-- [ ] Update chat response formatter
+### Explanation UI - 🔄 READY FOR FRONTEND
+- [x] Backend: Explanation text generation complete
+  - [x] Full explanation available in ExecutionResult.Explanation
+  - [x] Configurable verbosity and detail level
+  - [x] Markdown formatting for rich display
+- [ ] Frontend: Display explanation in chat response
   - [ ] Add section: "How I used expertise"
-  - [ ] Format: "I applied [pattern] because [reason]"
-  - [ ] Keep concise and user-friendly
+  - [ ] Make explanation expandable/collapsible
   - [ ] Include links to relevant KB entries
-- [ ] Make explanation expandable/collapsible
 
-### Refinement Controls
-- [ ] Add UI action buttons
-  - [ ] "Apply stricter adherence" → re-generate with higher weight
-  - [ ] "Use different expertise" → suggest alternative KBs
-  - [ ] "Explain reasoning" → show why KB was selected
-  - [ ] "Disable KB" → manual override for current session
-- [ ] Wire buttons to backend actions
-  - [ ] Implement re-generation with modified weights
-  - [ ] Implement KB suggestion logic
-  - [ ] Implement reasoning explanation builder
+### Refinement Controls - 📋 PLANNED (Frontend + Backend)
+- [ ] Frontend: Add UI action buttons
+  - [ ] "Apply stricter adherence" button
+  - [ ] "Use different expertise" button
+  - [ ] "Explain reasoning" button (can use existing ExecutionResult.Explanation)
+  - [ ] "Disable KB" button for current session
+- [ ] Backend: Implement re-generation with modified weights
+- [ ] Backend: Implement KB suggestion logic
+- [ ] Backend: Session-scoped KB override mechanism
 
 ### Success Metrics (Phase 4)
 - [ ] Users can see which KB was used in 100% of generations
