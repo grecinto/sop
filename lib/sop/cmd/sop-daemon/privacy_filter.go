@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	log "log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,10 +39,10 @@ func initPrivacyFilter(daemonDataDir string) error {
 		return fmt.Errorf("privacy settings not initialized")
 	}
 
-	log.Info("privacy filter initialized",
-		"global_share_enabled", settings.GlobalShareEnabled,
-		"policy_type", settings.PolicyType,
-		"auto_redact_pii", settings.AutoRedactPII,
+	logVerbose("privacy filter initialized global_share_enabled=%t policy_type=%s auto_redact_pii=%t",
+		settings.GlobalShareEnabled,
+		settings.PolicyType,
+		settings.AutoRedactPII,
 	)
 
 	return nil
@@ -106,13 +105,13 @@ func filterContentBeforeShare(ctx context.Context, category string, content stri
 		return nil, fmt.Errorf("privacy filter error: %w", err)
 	}
 
-	// Log filter decision
-	log.Info("privacy filter result",
-		"action", result.Action,
-		"reason", result.Reason,
-		"category", category,
-		"has_pii", len(result.PIIMatches) > 0,
-		"requires_approval", result.RequiresApproval,
+	// Log filter decision at verbose level to avoid noisy per-request output.
+	logVerbose("privacy filter result action=%s reason=%q category=%s has_pii=%t requires_approval=%t",
+		result.Action,
+		result.Reason,
+		category,
+		len(result.PIIMatches) > 0,
+		result.RequiresApproval,
 	)
 
 	return result, nil
@@ -130,15 +129,15 @@ func filterBatchBeforeShare(ctx context.Context, category string, items []string
 		return nil, fmt.Errorf("batch privacy filter error: %w", err)
 	}
 
-	// Generate summary for logging
+	// Generate summary for logging at verbose level.
 	summary := privacy.GenerateSummary(results)
-	log.Info("privacy filter batch summary",
-		"total_items", summary.TotalItems,
-		"allowed", summary.Allowed,
-		"blocked", summary.Blocked,
-		"pending", summary.Pending,
-		"redacted", summary.Redacted,
-		"pii_detected", summary.PIIDetected,
+	logVerbose("privacy filter batch summary total_items=%d allowed=%d blocked=%d pending=%d redacted=%d pii_detected=%d",
+		summary.TotalItems,
+		summary.Allowed,
+		summary.Blocked,
+		summary.Pending,
+		summary.Redacted,
+		summary.PIIDetected,
 	)
 
 	return results, nil

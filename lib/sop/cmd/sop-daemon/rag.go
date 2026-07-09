@@ -553,7 +553,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		cfg.Set("shared_memory_enabled", true)
 	}
 
-	log.Printf("daemon handleAsk: request received query=%q session=%q normalized_query=%q", req.Query, payload.SessionID, normalizedQuery)
+	logVerbose("daemon handleAsk: request received query=%q session=%q normalized_query=%q", req.Query, payload.SessionID, normalizedQuery)
 	if hasSharedBackendAgents() {
 		if strings.HasPrefix(routingQuery, "/") || !shouldUseShellFallback(routingQuery) {
 			answer, err := sopbackend.AskSharedAgent(ctx, routingQuery, cfg)
@@ -563,9 +563,9 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
-				log.Printf("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
+				logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
 			}
-			log.Printf("daemon handleAsk: completed via shared backend handler query=%q answer_len=%d", req.Query, len(answer))
+			logVerbose("daemon handleAsk: completed via shared backend handler query=%q answer_len=%d", req.Query, len(answer))
 			respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
 			return
 		}
@@ -577,9 +577,9 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, fallbackAnswer, payload); err != nil {
-			log.Printf("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
+			logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
 		}
-		log.Printf("daemon handleAsk: completed via shell fallback query=%q answer_len=%d", normalizedQuery, len(fallbackAnswer))
+		logVerbose("daemon handleAsk: completed via shell fallback query=%q answer_len=%d", normalizedQuery, len(fallbackAnswer))
 		respondJSON(w, http.StatusOK, AskResponse{Answer: fallbackAnswer})
 		return
 	}
@@ -592,9 +592,9 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
-			log.Printf("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
+			logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
 		}
-		log.Printf("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
+		logVerbose("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
 		respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
 		return
 	}
@@ -606,9 +606,9 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
-		log.Printf("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
+		logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
 	}
-	log.Printf("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
+	logVerbose("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
 	respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
 }
 

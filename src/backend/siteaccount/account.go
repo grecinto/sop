@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -53,29 +54,34 @@ type Config struct {
 
 // UserRecord stores minimal account, billing, and role data for the site app.
 type UserRecord struct {
-	Username                string    `json:"username"`
-	Role                    string    `json:"role"`
-	PasswordHash            string    `json:"password_hash,omitempty"`
-	Email                   string    `json:"email,omitempty"`
-	SubscriptionPlan        string    `json:"subscription_plan,omitempty"`
-	SubscriptionFeatures    []string  `json:"subscription_features,omitempty"`
-	BillingStatus           string    `json:"billing_status,omitempty"`
-	CheckoutURL             string    `json:"checkout_url,omitempty"`
-	StripeCheckoutSessionID string    `json:"stripe_checkout_session_id,omitempty"`
-	LastWebhookEvent        string    `json:"last_webhook_event,omitempty"`
-	LastWebhookAt           time.Time `json:"last_webhook_at,omitempty"`
-	FailureReason           string    `json:"failure_reason,omitempty"`
-	RequestOrigin           string    `json:"request_origin,omitempty"`
-	StripeCustomerID        string    `json:"stripe_customer_id,omitempty"`
-	StripeSubID             string    `json:"stripe_subscription_id,omitempty"`
-	Status                  string    `json:"status,omitempty"`
-	CreatedAt               time.Time `json:"created_at,omitempty"`
-	UpdatedAt               time.Time `json:"updated_at,omitempty"`
+	Username                    string    `json:"username"`
+	FullName                    string    `json:"full_name,omitempty"`
+	Role                        string    `json:"role"`
+	PasswordHash                string    `json:"password_hash,omitempty"`
+	Email                       string    `json:"email,omitempty"`
+	SubscriptionPlan            string    `json:"subscription_plan,omitempty"`
+	SubscriptionFeatures        []string  `json:"subscription_features,omitempty"`
+	BillingStatus               string    `json:"billing_status,omitempty"`
+	CheckoutURL                 string    `json:"checkout_url,omitempty"`
+	PendingCheckoutSessionID    string    `json:"pending_checkout_session_id,omitempty"`
+	StripeCheckoutSessionID     string    `json:"stripe_checkout_session_id,omitempty"`
+	LastWebhookEvent            string    `json:"last_webhook_event,omitempty"`
+	LastWebhookAt               time.Time `json:"last_webhook_at,omitempty"`
+	LastPingAt                  time.Time `json:"last_ping_at,omitempty"`
+	PendingCheckoutPingDeadline time.Time `json:"pending_checkout_ping_deadline,omitempty"`
+	FailureReason               string    `json:"failure_reason,omitempty"`
+	RequestOrigin               string    `json:"request_origin,omitempty"`
+	StripeCustomerID            string    `json:"stripe_customer_id,omitempty"`
+	StripeSubID                 string    `json:"stripe_subscription_id,omitempty"`
+	Status                      string    `json:"status,omitempty"`
+	CreatedAt                   time.Time `json:"created_at,omitempty"`
+	UpdatedAt                   time.Time `json:"updated_at,omitempty"`
 }
 
 // RegisterUserRequest is the explicit registration contract for site account flows.
 type RegisterUserRequest struct {
 	Username             string
+	FullName             string
 	Password             string
 	Email                string
 	Role                 string
@@ -966,6 +972,132 @@ func (c *Config) FindUserRecord(ctx context.Context, username string) (*UserReco
 	return nil, false, nil
 }
 
+func generatePendingCheckoutSessionID() string {
+	return fmt.Sprintf("pending-checkout-%d", time.Now().UnixNano())
+}
+
+// FindUserRecordByPendingCheckoutSession returns a site user by the backend-issued pending checkout session ID.
+func (c *Config) FindUserRecordByPendingCheckoutSession(ctx context.Context, checkoutSessionID string) (*UserRecord, bool, error) {
+	if c == nil {
+		return nil, false, nil
+	}
+	checkoutSessionID = strings.TrimSpace(checkoutSessionID)
+	if checkoutSessionID == "" {
+		return nil, false, nil
+	}
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForReading, -1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(ctx)
+	store, err := c.ensureUserStore(ctx, tx)
+	if err != nil {
+		return nil, false, err
+	}
+	if store != nil {
+		users, err := store.List(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		for i := range users {
+			if strings.EqualFold(strings.TrimSpace(users[i].PendingCheckoutSessionID), checkoutSessionID) {
+				copyUser := users[i]
+				return &copyUser, true, nil
+			}
+		}
+	}
+	for i := range c.Users {
+		if strings.EqualFold(strings.TrimSpace(c.Users[i].PendingCheckoutSessionID), checkoutSessionID) {
+			copyUser := c.Users[i]
+			return &copyUser, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// FindUserRecordByCheckoutSession returns a site user by either the backend-issued pending checkout session ID or the Stripe checkout session ID.
+func (c *Config) FindUserRecordByCheckoutSession(ctx context.Context, checkoutSessionID string) (*UserRecord, bool, error) {
+	user, ok, err := c.FindUserRecordByPendingCheckoutSession(ctx, checkoutSessionID)
+	if err != nil || ok || user != nil {
+		return user, ok, err
+	}
+	if c == nil {
+		return nil, false, nil
+	}
+	checkoutSessionID = strings.TrimSpace(checkoutSessionID)
+	if checkoutSessionID == "" {
+		return nil, false, nil
+	}
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForReading, -1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(ctx)
+	store, err := c.ensureUserStore(ctx, tx)
+	if err != nil {
+		return nil, false, err
+	}
+	if store != nil {
+		users, err := store.List(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		for i := range users {
+			if strings.EqualFold(strings.TrimSpace(users[i].StripeCheckoutSessionID), checkoutSessionID) {
+				copyUser := users[i]
+				return &copyUser, true, nil
+			}
+		}
+	}
+	for i := range c.Users {
+		if strings.EqualFold(strings.TrimSpace(c.Users[i].StripeCheckoutSessionID), checkoutSessionID) {
+			copyUser := c.Users[i]
+			return &copyUser, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// UpsertUserRecord persists a site user record and keeps the in-memory cache in sync.
+func (c *Config) UpsertUserRecord(ctx context.Context, user *UserRecord) error {
+	if c == nil {
+		return fmt.Errorf("site account config is not initialized")
+	}
+	if user == nil {
+		return fmt.Errorf("user is required")
+	}
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	store, err := c.ensureUserStore(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	upsertSiteUserRecord(c, *user)
+	return nil
+}
+
 // RegisterUserWithRequest creates a site account and keeps the shared backend auth user in sync.
 func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRequest) (*UserRecord, error) {
 	if c == nil {
@@ -1044,6 +1176,7 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 
 	user := &UserRecord{
 		Username:             username,
+		FullName:             strings.TrimSpace(req.FullName),
 		Role:                 req.Role,
 		PasswordHash:         passwordHash,
 		Email:                req.Email,
@@ -1070,6 +1203,7 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 	sharedCfg := sopbackend.GetConfig()
 	_, err = sharedCfg.RegisterUserWithRequest(ctx, sopbackend.RegisterUserRequest{
 		Username:             username,
+		FullName:             req.FullName,
 		Password:             req.Password,
 		Email:                req.Email,
 		Role:                 req.Role,
@@ -1324,8 +1458,8 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 		providedEmail = strings.TrimSpace(user.Email)
 	}
 
+	pendingCheckoutSessionID := generatePendingCheckoutSessionID()
 	checkoutURL := ""
-	checkoutID := fmt.Sprintf("checkout-%d", time.Now().UnixNano())
 	checkoutStatus := "pending"
 	checkoutSession, err := createStripeCheckoutSession(ctx, username, providedEmail, plan)
 	if err != nil {
@@ -1333,11 +1467,11 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 	}
 	if checkoutSession != nil {
 		checkoutURL = checkoutSession.URL
-		checkoutID = checkoutSession.ID
 		checkoutStatus = checkoutSession.Status
+		user.StripeCheckoutSessionID = checkoutSession.ID
 	}
 	user.CheckoutURL = checkoutURL
-	user.StripeCheckoutSessionID = checkoutID
+	user.PendingCheckoutSessionID = pendingCheckoutSessionID
 	store, err := c.ensureUserStore(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -1357,7 +1491,7 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 	if !containsUserRecord(c.Users, username) {
 		c.Users = append(c.Users, *user)
 	}
-	session := &BillingCheckoutSession{ID: checkoutID, URL: checkoutURL, Status: checkoutStatus}
+	session := &BillingCheckoutSession{ID: pendingCheckoutSessionID, URL: checkoutURL, Status: checkoutStatus}
 	return session, nil
 }
 
@@ -1497,6 +1631,7 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 	if c == nil {
 		return fmt.Errorf("site account config is not initialized")
 	}
+	slog.Info("siteaccount.stripe.sync.start", "username", username)
 	user, ok, err := c.FindUserRecord(ctx, username)
 	if err != nil {
 		return err
@@ -1521,6 +1656,7 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 
 	// If we have a checkout session ID, retrieve it from Stripe to get subscription details
 	if user.StripeCheckoutSessionID != "" && user.StripeSubID == "" {
+		slog.Info("siteaccount.stripe.sync.checkout_session", "username", username, "checkout_session_id", user.StripeCheckoutSessionID)
 		sessionURL := fmt.Sprintf("%s/v1/checkout/sessions/%s?expand[]=subscription", strings.TrimRight(apiBaseURL, "/"), user.StripeCheckoutSessionID)
 		req, err := http.NewRequestWithContext(ctx, "GET", sessionURL, nil)
 		if err != nil {
@@ -1560,6 +1696,7 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 
 	// Try querying by customer ID if we have it but no subscription ID
 	if user.StripeSubID == "" && user.StripeCustomerID != "" {
+		slog.Info("siteaccount.stripe.sync.customer_subscriptions", "username", username, "customer_id", user.StripeCustomerID)
 		// Query customer's subscriptions
 		subscriptionsURL := fmt.Sprintf("%s/v1/subscriptions?customer=%s&limit=1", strings.TrimRight(apiBaseURL, "/"), user.StripeCustomerID)
 		req, err := http.NewRequestWithContext(ctx, "GET", subscriptionsURL, nil)
@@ -1590,6 +1727,7 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 
 	// If we have a subscription ID, check the subscription status directly
 	if user.StripeSubID != "" {
+		slog.Info("siteaccount.stripe.sync.subscription", "username", username, "subscription_id", user.StripeSubID)
 		subscriptionURL := fmt.Sprintf("%s/v1/subscriptions/%s", strings.TrimRight(apiBaseURL, "/"), user.StripeSubID)
 		req, err := http.NewRequestWithContext(ctx, "GET", subscriptionURL, nil)
 		if err != nil {
@@ -1617,6 +1755,7 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 			return c.activateUserBilling(ctx, user, username)
 		}
 	}
+	slog.Info("siteaccount.stripe.sync.complete", "username", username, "billing_status", user.BillingStatus)
 	return nil
 }
 

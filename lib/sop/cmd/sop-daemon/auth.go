@@ -498,7 +498,7 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 
 	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
 	if hqBaseURL == "" {
-		log.Printf("HQ sync skipped (no HQ endpoint configured)")
+		logVerbose("HQ sync skipped (no HQ endpoint configured)")
 		return nil
 	}
 
@@ -522,13 +522,11 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 
 			// If no delta from HQ and no local artifacts, skip sync
 			if !pollResp.HasDelta && queueDepth == 0 {
-				log.Printf("HQ sync: no changes detected (cursor=%s, queue_depth=0)",
-					pollResp.CurrentCursor)
+				logVerbose("HQ sync: no changes detected (cursor=%s, queue_depth=0)", pollResp.CurrentCursor)
 				return nil
 			}
 
-			log.Printf("HQ sync: proceeding (has_delta=%v, queue_depth=%d)",
-				pollResp.HasDelta, queueDepth)
+			logVerbose("HQ sync: proceeding (has_delta=%v, queue_depth=%d)", pollResp.HasDelta, queueDepth)
 		}
 	}
 
@@ -541,7 +539,7 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 
 	// Log metrics before sync
 	metrics := h.syncQueue.GetMetrics()
-	log.Printf("HQ sync metrics: queue_depth=%d, state=%s, consecutive_failures=%d",
+	logVerbose("HQ sync metrics: queue_depth=%d, state=%s, consecutive_failures=%d",
 		metrics["queue_depth"], metrics["circuit_state"], metrics["consecutive_failures"])
 
 	// Step 3: Dequeue batch from sync queue
@@ -550,7 +548,7 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 
 	if len(queuedArtifacts) == 0 {
 		// No artifacts to sync, send heartbeat only
-		log.Printf("HQ sync: no artifacts queued, sending heartbeat only")
+		logVerbose("HQ sync: no artifacts queued, sending heartbeat only")
 		return h.sendHQHeartbeat(ctx, hqBaseURL)
 	}
 
@@ -645,7 +643,7 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 
 	// Record success
 	h.syncQueue.RecordSyncSuccess()
-	log.Printf("HQ sync successful: delivered %d artifacts to %s", len(artifacts), hqURL)
+	logVerbose("HQ sync successful: delivered %d artifacts to %s", len(artifacts), hqURL)
 
 	// Pull artifacts from HQ after successful push
 	if err := h.pullFromHQ(ctx, hqBaseURL); err != nil {
@@ -718,7 +716,7 @@ func (h *DaemonAuthHandler) sendHQHeartbeat(ctx context.Context, hqBaseURL strin
 		return fmt.Errorf("HQ heartbeat returned status %d", resp.StatusCode)
 	}
 
-	log.Printf("HQ heartbeat sent to %s", hqURL)
+	logVerbose("HQ heartbeat sent to %s", hqURL)
 	return nil
 }
 

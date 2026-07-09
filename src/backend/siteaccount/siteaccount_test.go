@@ -92,6 +92,32 @@ func TestHandleRegisterRequiresHumanProof(t *testing.T) {
 	}
 }
 
+func TestHandleRegisterStoresFullName(t *testing.T) {
+	SetConfig(NewConfig())
+	body := `{"username":"full-name-user","password":"secret123","email":"full-name@example.com","role":"user","subscription_plan":"starter","full_name":"Ada Lovelace"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	HandleRegister(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("HandleRegister() status = %d, want %d, body=%s", rr.Code, http.StatusCreated, rr.Body.String())
+	}
+
+	cfg := GetConfig()
+	user, ok, err := cfg.FindUserRecord(context.Background(), "full-name-user")
+	if err != nil {
+		t.Fatalf("FindUserRecord() error = %v", err)
+	}
+	if !ok || user == nil {
+		t.Fatal("expected registered user to be retrievable")
+	}
+	if user.FullName != "Ada Lovelace" {
+		t.Fatalf("FullName = %q, want %q", user.FullName, "Ada Lovelace")
+	}
+}
+
 func TestHandleHumanProofChallengeReturnsCaptchaPrompt(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/auth/human-proof/challenge", nil)
 	rr := httptest.NewRecorder()
@@ -212,6 +238,87 @@ func TestHandleStatusAcceptsSessionCookieWithoutConfigFile(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("HandleStatus() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
+func TestHandlePingExtendsPendingBillingHeartbeat(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-ping")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "ping@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/ping", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: username, Roles: []string{sop.RoleUser}}))
+	rr := httptest.NewRecorder()
+
+	HandlePing(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandlePing() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	updated, ok, err := cfg.FindUserRecord(context.Background(), username)
+	if err != nil {
+		t.Fatalf("FindUserRecord() error = %v", err)
+	}
+	if !ok || updated == nil {
+		t.Fatal("FindUserRecord() did not find updated user")
+	}
+	if updated.LastPingAt.IsZero() {
+		t.Fatal("expected ping timestamp to be recorded")
+	}
+	if updated.PendingCheckoutPingDeadline.IsZero() {
+		t.Fatal("expected pending checkout ping deadline to be extended")
+	}
+	if updated.PendingCheckoutPingDeadline.Before(updated.LastPingAt) {
+		t.Fatalf("expected deadline %s to be after last ping %s", updated.PendingCheckoutPingDeadline, updated.LastPingAt)
+	}
+}
+
+func TestHandleRecoverPendingCheckoutUsesCheckoutSessionID(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-recover")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "recover@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	user, ok, err := cfg.FindUserRecord(context.Background(), username)
+	if err != nil {
+		t.Fatalf("FindUserRecord() error = %v", err)
+	}
+	if !ok || user == nil {
+		t.Fatal("FindUserRecord() did not find created user")
+	}
+	user.BillingStatus = "pending"
+	user.PendingCheckoutSessionID = "pending-checkout-123"
+	user.StripeCheckoutSessionID = "cs_test_recover"
+	user.CheckoutURL = "https://example.com/checkout"
+	if err := cfg.UpsertUserRecord(context.Background(), user); err != nil {
+		t.Fatalf("UpsertUserRecord() error = %v", err)
+	}
+
+	body := `{"checkout_session_id":"pending-checkout-123"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/pending-checkout/recover", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	HandleRecoverPendingCheckout(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleRecoverPendingCheckout() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
 }
 

@@ -62,6 +62,7 @@ type UserRecord struct {
 
 type RegisterUserRequest struct {
 	Username             string
+	FullName             string
 	Password             string
 	Email                string
 	Role                 string
@@ -1396,6 +1397,14 @@ func sessionTTL() time.Duration {
 		return time.Duration(config.SessionTokenTTLMinutes) * time.Minute
 	}
 	return defaultSessionTTL
+}
+
+// RevokeToken invalidates a stored session token so it can no longer be used to authenticate requests.
+func RevokeToken(ctx context.Context, token string) {
+	if token == "" {
+		return
+	}
+	currentTokenFacade().RevokeToken(ctx, token)
 }
 
 // CreateSession issues a shared backend access/refresh token pair for the given user.

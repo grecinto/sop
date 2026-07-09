@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -33,12 +34,15 @@ func RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/password", withSiteAuth(HandleChangePassword))
 	mux.HandleFunc("/api/auth/checkout", withSiteAuth(HandleCheckoutSession))
 	mux.HandleFunc("/api/auth/download", withSiteAuth(HandleDownloadAsset))
+	mux.HandleFunc("/api/auth/ping", withSiteAuth(HandlePing))
+	mux.HandleFunc("/api/auth/pending-checkout/recover", HandleRecoverPendingCheckout)
 	mux.HandleFunc("/api/auth/webhooks/billing", HandleBillingWebhook)
 	mux.HandleFunc("/api/auth/unregister", withSiteAuth(HandleUnregister))
 }
 
 type registerUserRequest struct {
 	Username         string `json:"username"`
+	FullName         string `json:"full_name,omitempty"`
 	Password         string `json:"password"`
 	Email            string `json:"email"`
 	Role             string `json:"role"`
@@ -195,6 +199,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	cfg := GetConfig()
 	user, err := cfg.RegisterUserWithRequest(r.Context(), RegisterUserRequest{
 		Username:         req.Username,
+		FullName:         req.FullName,
 		Password:         req.Password,
 		Email:            req.Email,
 		Role:             req.Role,
@@ -263,6 +268,26 @@ func setSessionCookies(w http.ResponseWriter, accessToken, refreshToken string, 
 func clearSessionCookies(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: "sop_access_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	http.SetCookie(w, &http.Cookie{Name: "sop_refresh_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+}
+
+func revokeSessionTokensFromRequest(ctx context.Context, r *http.Request) {
+	tokens := make([]string, 0, 2)
+	if token := strings.TrimSpace(sopbackend.AuthTokenFromRequest(r)); token != "" {
+		tokens = append(tokens, token)
+	}
+	if cookie, err := r.Cookie("sop_refresh_token"); err == nil {
+		if refreshToken := strings.TrimSpace(cookie.Value); refreshToken != "" {
+			tokens = append(tokens, refreshToken)
+		}
+	}
+	slog.Info("siteaccount.logout.revoking_tokens", "path", r.URL.Path, "token_count", len(tokens), "remote_addr", r.RemoteAddr)
+	for _, token := range tokens {
+		if token == "" {
+			continue
+		}
+		sopbackend.RevokeToken(ctx, token)
+		slog.Info("siteaccount.logout.revoked_token", "path", r.URL.Path, "token_prefix", shortTokenPrefix(token), "remote_addr", r.RemoteAddr)
+	}
 }
 
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
@@ -390,6 +415,7 @@ func HandleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
+	revokeSessionTokensFromRequest(r.Context(), r)
 	clearSessionCookies(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -411,6 +437,7 @@ func buildUserResponsePayload(user *UserRecord) map[string]any {
 		"status": "ok",
 		"user": map[string]any{
 			"username":          user.Username,
+			"full_name":         user.FullName,
 			"role":              user.Role,
 			"email":             user.Email,
 			"subscription_plan": user.SubscriptionPlan,
@@ -456,7 +483,7 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 
 func HandleStatus(w http.ResponseWriter, r *http.Request) {
 	account := currentAccountFromRequest(r)
-	slog.Info("siteaccount.status.request", "path", r.URL.Path, "username", account.Username, "auth_roles", strings.Join(account.Roles, ","), "remote_addr", r.RemoteAddr)
+	slog.Debug("siteaccount.status.request", "path", r.URL.Path, "username", account.Username, "auth_roles", strings.Join(account.Roles, ","), "remote_addr", r.RemoteAddr)
 	if account.Username == "" {
 		slog.Warn("siteaccount.status.unauthenticated", "path", r.URL.Path)
 		writeJSONError(w, http.StatusUnauthorized, "authentication required")
@@ -485,6 +512,125 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
+}
+
+func HandlePing(w http.ResponseWriter, r *http.Request) {
+	account := currentAccountFromRequest(r)
+	slog.Info("siteaccount.ping.request", "username", account.Username, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+	if account.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	cfg := GetConfig()
+	user, ok, err := cfg.FindUserRecord(r.Context(), account.Username)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || user == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if strings.EqualFold(user.BillingStatus, "pending") {
+		slog.Info("siteaccount.ping.sync_pending_billing", "username", account.Username, "checkout_session_id", user.StripeCheckoutSessionID, "pending_checkout_id", user.PendingCheckoutSessionID)
+		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), account.Username)
+		refreshedUser, ok, err := cfg.FindUserRecord(r.Context(), account.Username)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !ok || refreshedUser == nil {
+			writeJSONError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		user = refreshedUser
+		if !strings.EqualFold(user.BillingStatus, "pending") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "billing_status": user.BillingStatus})
+			return
+		}
+		now := time.Now().UTC()
+		if user.PendingCheckoutPingDeadline.IsZero() {
+			user.PendingCheckoutPingDeadline = now.Add(30 * time.Second)
+		} else {
+			user.PendingCheckoutPingDeadline = user.PendingCheckoutPingDeadline.Add(15 * time.Second)
+			if user.PendingCheckoutPingDeadline.Before(now.Add(30 * time.Second)) {
+				user.PendingCheckoutPingDeadline = now.Add(30 * time.Second)
+			}
+		}
+		user.LastPingAt = now
+		user.UpdatedAt = now
+		if err := cfg.UpsertUserRecord(r.Context(), user); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "billing_status": user.BillingStatus})
+}
+
+func HandleRecoverPendingCheckout(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		CheckoutSessionID string `json:"checkout_session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	checkoutSessionID := strings.TrimSpace(req.CheckoutSessionID)
+	if checkoutSessionID == "" {
+		checkoutSessionID = strings.TrimSpace(r.URL.Query().Get("checkout_session_id"))
+	}
+	if checkoutSessionID == "" {
+		writeJSONError(w, http.StatusBadRequest, "checkout session id is required")
+		return
+	}
+
+	cfg := GetConfig()
+	user, ok, err := cfg.FindUserRecordByCheckoutSession(r.Context(), checkoutSessionID)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok || user == nil {
+		writeJSONError(w, http.StatusNotFound, "pending checkout not found")
+		return
+	}
+
+	if strings.EqualFold(user.BillingStatus, "pending") {
+		slog.Info("siteaccount.recover.sync_pending_billing", "username", user.Username, "checkout_session_id", user.StripeCheckoutSessionID, "pending_checkout_id", user.PendingCheckoutSessionID)
+		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), user.Username)
+		refreshedUser, ok, err := cfg.FindUserRecord(r.Context(), user.Username)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !ok || refreshedUser == nil {
+			writeJSONError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		user = refreshedUser
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "user": map[string]any{
+		"username":          user.Username,
+		"role":              user.Role,
+		"email":             user.Email,
+		"subscription_plan": user.SubscriptionPlan,
+		"billing_status":    user.BillingStatus,
+		"billing": map[string]any{
+			"checkout_url":                   user.CheckoutURL,
+			"last_webhook_event":             user.LastWebhookEvent,
+			"failure_reason":                 user.FailureReason,
+			"last_webhook_at":                user.LastWebhookAt,
+			"last_ping_at":                   user.LastPingAt,
+			"pending_checkout_ping_deadline": user.PendingCheckoutPingDeadline,
+		},
+	}})
 }
 
 func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
@@ -657,18 +803,49 @@ func HandleBillingWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
+
+	var payload struct {
 		EventType string `json:"event_type"`
 		EventID   string `json:"event_id"`
 		UserID    string `json:"user_id"`
 		Plan      string `json:"plan"`
+		ID        string `json:"id"`
+		Type      string `json:"type"`
+		Data      struct {
+			Object map[string]any `json:"object"`
+		} `json:"data"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	eventType := strings.TrimSpace(payload.EventType)
+	if eventType == "" {
+		eventType = strings.TrimSpace(payload.Type)
+	}
+	eventID := strings.TrimSpace(payload.EventID)
+	if eventID == "" {
+		eventID = strings.TrimSpace(payload.ID)
+	}
+	userID := strings.TrimSpace(payload.UserID)
+	plan := strings.TrimSpace(payload.Plan)
+	if userID == "" {
+		if metadata, ok := payload.Data.Object["metadata"].(map[string]any); ok {
+			if usernameValue, ok := metadata["username"].(string); ok {
+				userID = strings.TrimSpace(usernameValue)
+			}
+		}
+	}
+	if plan == "" {
+		if metadata, ok := payload.Data.Object["metadata"].(map[string]any); ok {
+			if planValue, ok := metadata["plan"].(string); ok {
+				plan = strings.TrimSpace(planValue)
+			}
+		}
+	}
 	cfg := GetConfig()
-	if err := cfg.HandleBillingWebhook(r.Context(), BillingWebhookEvent{EventType: req.EventType, EventID: req.EventID, UserID: req.UserID, Plan: req.Plan}); err != nil {
+	if err := cfg.HandleBillingWebhook(r.Context(), BillingWebhookEvent{EventType: eventType, EventID: eventID, UserID: userID, Plan: plan}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

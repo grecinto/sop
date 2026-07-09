@@ -106,6 +106,24 @@ var daemonSessionStore = struct {
 
 var localRuntimeConfigPath string
 
+const daemonVerboseLoggingEnv = "SOP_DAEMON_VERBOSE"
+
+func shouldLogVerbose() bool {
+	value := strings.TrimSpace(os.Getenv(daemonVerboseLoggingEnv))
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func logVerbose(format string, args ...any) {
+	if shouldLogVerbose() {
+		log.Printf(format, args...)
+	}
+}
+
 func main() {
 	port := flag.Int("port", 9090, "Port to run the local SOP daemon on")
 	configPath := flag.String("config", "", "Path to the SOP daemon configuration file")
@@ -280,7 +298,7 @@ func main() {
 		log.Printf("Official RAG endpoint disabled")
 	}
 	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff (authenticated)")
-	log.Printf("Waiting for UI authentication...")
+	logVerbose("Waiting for UI authentication...")
 
 	server := &http.Server{Addr: addr, Handler: sopbackend.NewObservabilityHandler(corsHandler)}
 	go func() {
@@ -312,15 +330,19 @@ func addLoggingToAll(handler http.Handler) http.Handler {
 		wrapped := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 		isDBOptions := r.URL.Path == "/api/db/options"
-		if isDBOptions {
-			log.Printf("[daemon-dboptions] request database=%q from=%s auth=%t", r.URL.Query().Get("database"), r.RemoteAddr, authHeader != "")
+		if shouldLogVerbose() {
+			if isDBOptions {
+				log.Printf("[daemon-dboptions] request database=%q from=%s auth=%t", r.URL.Query().Get("database"), r.RemoteAddr, authHeader != "")
+			}
+			log.Printf("[daemon-request] %s %s from=%s auth=%t", r.Method, r.URL.RequestURI(), r.RemoteAddr, authHeader != "")
 		}
-		log.Printf("[daemon-request] %s %s from=%s auth=%t", r.Method, r.URL.RequestURI(), r.RemoteAddr, authHeader != "")
 		handler.ServeHTTP(wrapped, r)
-		if isDBOptions {
-			log.Printf("[daemon-dboptions] completed database=%q status=%d duration=%s", r.URL.Query().Get("database"), wrapped.statusCode, time.Since(start))
+		if shouldLogVerbose() {
+			if isDBOptions {
+				log.Printf("[daemon-dboptions] completed database=%q status=%d duration=%s", r.URL.Query().Get("database"), wrapped.statusCode, time.Since(start))
+			}
+			log.Printf("[daemon-request] completed %s %s status=%d duration=%s", r.Method, r.URL.RequestURI(), wrapped.statusCode, time.Since(start))
 		}
-		log.Printf("[daemon-request] completed %s %s status=%d duration=%s", r.Method, r.URL.RequestURI(), wrapped.statusCode, time.Since(start))
 	})
 }
 

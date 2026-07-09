@@ -253,6 +253,43 @@ func TestHandleLoginSetsSessionCookies(t *testing.T) {
 	}
 }
 
+func TestHandleBillingWebhookAcceptsStripeEventPayload(t *testing.T) {
+	mux := http.NewServeMux()
+	sopbackend.RegisterAllHandlers(mux)
+	RegisterHandlers(mux)
+
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"username":"stripe-webhook-user","password":"secret123","email":"stripe-webhook@example.com","role":"user","subscription_plan":"starter"}`))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerRec := httptest.NewRecorder()
+	mux.ServeHTTP(registerRec, registerReq)
+	if registerRec.Code != http.StatusCreated {
+		t.Fatalf("expected register to return %d, got %d", http.StatusCreated, registerRec.Code)
+	}
+
+	webhookReq := httptest.NewRequest(http.MethodPost, "/api/auth/webhooks/billing", strings.NewReader(`{"id":"evt_test_123","type":"checkout.session.completed","data":{"object":{"metadata":{"username":"stripe-webhook-user","plan":"starter"}}}}`))
+	webhookReq.Header.Set("Content-Type", "application/json")
+	webhookRec := httptest.NewRecorder()
+	mux.ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusOK {
+		t.Fatalf("expected webhook to return %d, got %d body=%s", http.StatusOK, webhookRec.Code, webhookRec.Body.String())
+	}
+
+	cfg := sopbackend.GetConfig()
+	user, ok, err := cfg.FindUserRecord(context.Background(), "stripe-webhook-user")
+	if err != nil {
+		t.Fatalf("FindUserRecord() error = %v", err)
+	}
+	if !ok || user == nil {
+		t.Fatal("FindUserRecord() did not find user")
+	}
+	if user.BillingStatus != "active" {
+		t.Fatalf("billing status = %q, want %q", user.BillingStatus, "active")
+	}
+	if user.SubscriptionPlan != "starter" {
+		t.Fatalf("subscription plan = %q, want %q", user.SubscriptionPlan, "starter")
+	}
+}
+
 func TestHandleDownloadReturnsSignedArtifactForActiveSubscribers(t *testing.T) {
 	t.Setenv("SOP_DOWNLOAD_URL", "https://cdn.example.com/releases/sop-daemon.tar.gz")
 

@@ -1231,7 +1231,7 @@ func handleGetDBOptions(w http.ResponseWriter, r *http.Request) {
 		log.Error("db-options encode failed", "database", dbName, "error", err)
 		return
 	}
-	log.Info("db-options served", "database", dbName, "payload", dbOpts)
+	log.Debug("db-options served", "database", dbName, "payload", dbOpts)
 }
 
 // handleGetStoreInfo handles retrieval of store metadata.

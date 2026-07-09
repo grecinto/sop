@@ -145,10 +145,10 @@ func main() {
 				log.Warn(fmt.Sprintf("Configuration file '%s' does not define a usable database setup.", targetConfigPath))
 			}
 		} else {
-			log.Info(fmt.Sprintf("Configuration file exists but does not define a usable setup: %s", targetConfigPath))
+			log.Debug(fmt.Sprintf("Configuration file exists but does not define a usable setup: %s", targetConfigPath))
 		}
 	} else {
-		log.Info(fmt.Sprintf("No configuration file found; using defaults: %s", targetConfigPath))
+		log.Debug(fmt.Sprintf("No configuration file found; using defaults: %s", targetConfigPath))
 	}
 
 	// Path validation and warning checks

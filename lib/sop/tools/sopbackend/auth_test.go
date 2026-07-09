@@ -98,6 +98,24 @@ func TestSessionStoreGCResumesFromLastProcessedKey(t *testing.T) {
 	}
 }
 
+func TestRevokeTokenInvalidatesSessionToken(t *testing.T) {
+	store := NewSessionStore(time.Minute)
+	ctx := context.Background()
+	accessToken, refreshToken, err := store.CreateSession(ctx, "alice", sop.RoleUser)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	RevokeToken(ctx, accessToken)
+
+	if _, err := store.ValidateToken(ctx, accessToken); err == nil {
+		t.Fatalf("ValidateToken(%q) succeeded after revoke, want error", accessToken)
+	}
+	if _, err := store.ValidateToken(ctx, refreshToken); err == nil {
+		t.Fatalf("ValidateToken(%q) succeeded after revoke, want error", refreshToken)
+	}
+}
+
 func TestShouldExposeStoreInRBAC_AllowsGlobalSessionsStoreForSystemAdmin(t *testing.T) {
 	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root", Roles: []string{sop.RoleSystemAdmin}})
 	if !shouldExposeStoreInRBAC(ctx, sessionStoreName) {

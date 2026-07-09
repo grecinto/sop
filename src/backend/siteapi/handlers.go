@@ -198,6 +198,24 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tokens := make([]string, 0, 2)
+	if token := strings.TrimSpace(sopbackend.AuthTokenFromRequest(r)); token != "" {
+		tokens = append(tokens, token)
+	}
+	if cookie, err := r.Cookie("sop_refresh_token"); err == nil {
+		if refreshToken := strings.TrimSpace(cookie.Value); refreshToken != "" {
+			tokens = append(tokens, refreshToken)
+		}
+	}
+	fmt.Printf("siteapi.logout.revoking_tokens path=%s token_count=%d remote_addr=%s\n", r.URL.Path, len(tokens), r.RemoteAddr)
+	for _, token := range tokens {
+		if token == "" {
+			continue
+		}
+		sopbackend.RevokeToken(r.Context(), token)
+		fmt.Printf("siteapi.logout.revoked_token path=%s token_prefix=%s remote_addr=%s\n", r.URL.Path, token[:min(len(token), 8)], r.RemoteAddr)
+	}
+
 	clearSessionCookies(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -488,19 +506,49 @@ func HandleBillingWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
+	var payload struct {
 		EventType string `json:"event_type"`
 		EventID   string `json:"event_id"`
 		UserID    string `json:"user_id"`
 		Plan      string `json:"plan"`
+		ID        string `json:"id"`
+		Type      string `json:"type"`
+		Data      struct {
+			Object map[string]any `json:"object"`
+		} `json:"data"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	eventType := strings.TrimSpace(payload.EventType)
+	if eventType == "" {
+		eventType = strings.TrimSpace(payload.Type)
+	}
+	eventID := strings.TrimSpace(payload.EventID)
+	if eventID == "" {
+		eventID = strings.TrimSpace(payload.ID)
+	}
+	userID := strings.TrimSpace(payload.UserID)
+	plan := strings.TrimSpace(payload.Plan)
+	if userID == "" {
+		if metadata, ok := payload.Data.Object["metadata"].(map[string]any); ok {
+			if usernameValue, ok := metadata["username"].(string); ok {
+				userID = strings.TrimSpace(usernameValue)
+			}
+		}
+	}
+	if plan == "" {
+		if metadata, ok := payload.Data.Object["metadata"].(map[string]any); ok {
+			if planValue, ok := metadata["plan"].(string); ok {
+				plan = strings.TrimSpace(planValue)
+			}
+		}
+	}
+
 	cfg := sopbackend.GetConfig()
-	if err := cfg.HandleBillingWebhook(r.Context(), sopbackend.BillingWebhookEvent{EventType: req.EventType, EventID: req.EventID, UserID: req.UserID, Plan: req.Plan}); err != nil {
+	if err := cfg.HandleBillingWebhook(r.Context(), sopbackend.BillingWebhookEvent{EventType: eventType, EventID: eventID, UserID: userID, Plan: plan}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

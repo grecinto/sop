@@ -138,7 +138,7 @@ func handleAIChat(w http.ResponseWriter, r *http.Request) {
 	agentSvc, sessionMu := lockSession(req, blueprint)
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
-	log.Info("HTTP AI Chat Request",
+	log.Debug("HTTP AI Chat Request",
 		"session_id", req.SessionID,
 		"agent", req.Agent,
 		"agent_type", fmt.Sprintf("%T", agentSvc),
@@ -158,7 +158,7 @@ func handleAIChat(w http.ResponseWriter, r *http.Request) {
 
 	llmSettings := resolveLLMSettings(r)
 	ctx, payload, cfg, fullMessage := constructPayload(r.Context(), w, req, llmSettings, sendEvent, rs)
-	log.Info("HTTP AI Chat Payload",
+	log.Debug("HTTP AI Chat Payload",
 		"session_id", req.SessionID,
 		"current_db", payload.CurrentDB,
 		"active_domain", payload.ActiveDomain,
@@ -201,7 +201,7 @@ func handleAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	log.Info("HTTP AI Chat Response",
+	log.Debug("HTTP AI Chat Response",
 		"session_id", req.SessionID,
 		"response_chars", len(response),
 	)
