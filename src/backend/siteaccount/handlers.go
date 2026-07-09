@@ -27,13 +27,14 @@ func RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/human-proof/challenge", HandleHumanProofChallenge)
 	mux.HandleFunc("/api/site/auth/login", HandleLogin)
 	mux.HandleFunc("/api/site/auth/logout", HandleLogout)
-	mux.HandleFunc("/api/auth/me", sopbackend.WithAuth(HandleCurrentUser))
-	mux.HandleFunc("/api/auth/status", sopbackend.WithAuth(HandleStatus))
-	mux.HandleFunc("/api/auth/subscription", sopbackend.WithAuth(HandleSubscriptionUpdate))
-	mux.HandleFunc("/api/auth/checkout", sopbackend.WithAuth(HandleCheckoutSession))
-	mux.HandleFunc("/api/auth/download", sopbackend.WithAuth(HandleDownloadAsset))
+	mux.HandleFunc("/api/auth/me", withSiteAuth(HandleCurrentUser))
+	mux.HandleFunc("/api/auth/status", withSiteAuth(HandleStatus))
+	mux.HandleFunc("/api/auth/subscription", withSiteAuth(HandleSubscriptionUpdate))
+	mux.HandleFunc("/api/auth/password", withSiteAuth(HandleChangePassword))
+	mux.HandleFunc("/api/auth/checkout", withSiteAuth(HandleCheckoutSession))
+	mux.HandleFunc("/api/auth/download", withSiteAuth(HandleDownloadAsset))
 	mux.HandleFunc("/api/auth/webhooks/billing", HandleBillingWebhook)
-	mux.HandleFunc("/api/auth/unregister", sopbackend.WithAuth(HandleUnregister))
+	mux.HandleFunc("/api/auth/unregister", withSiteAuth(HandleUnregister))
 }
 
 type registerUserRequest struct {
@@ -79,6 +80,37 @@ func currentAccountFromRequest(r *http.Request) authAccount {
 		roles = append(roles, role)
 	}
 	return authAccount{Username: username, Roles: roles}
+}
+
+func withSiteAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			next(w, r)
+			return
+		}
+
+		token := sopbackend.AuthTokenFromRequest(r)
+		if strings.TrimSpace(token) == "" {
+			writeJSONError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		cfg := sopbackend.GetConfig()
+		ok, user, err := cfg.AuthenticateBearerToken(r.Context(), token)
+		if err != nil || !ok || user == nil {
+			writeJSONError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		auth := sop.AuthContext{
+			IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
+			Roles:                []string{user.Role},
+			UserID:               user.Username,
+			SubscriptionPlan:     user.SubscriptionPlan,
+			SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+		}
+		next(w, r.WithContext(sop.ContextWithAuth(r.Context(), auth)))
+	}
 }
 
 func generateChallengeToken() string {
@@ -256,26 +288,32 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, findErr.Error())
 		return
 	}
-	if !found || user == nil {
-		slog.Warn("siteaccount.login.user_not_found", "username", normalizeUsername(req.Username))
-		writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
-		return
-	}
 
-	passwordHash := strings.TrimSpace(user.PasswordHash)
+	username := normalizeUsername(req.Username)
+	passwordHash := ""
 	passwordMatches := false
-	if passwordHash != "" {
-		passwordMatches = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) == nil
+	resolvedUser := user
+	if found && user != nil {
+		passwordHash = strings.TrimSpace(user.PasswordHash)
+		if passwordHash != "" {
+			passwordMatches = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) == nil
+		}
+		resolvedUser = user
 	}
 
 	if !passwordMatches {
 		sharedCfg := sopbackend.GetConfig()
-		sharedUser, sharedFound, sharedErr := sharedCfg.FindUserRecord(r.Context(), normalizeUsername(req.Username))
+		sharedUser, sharedFound, sharedErr := sharedCfg.FindUserRecord(r.Context(), username)
 		if sharedErr != nil {
 			writeJSONError(w, http.StatusInternalServerError, sharedErr.Error())
 			return
 		}
 		if sharedFound && sharedUser != nil {
+			resolvedUser = &UserRecord{
+				Username: sharedUser.Username,
+				Role:     sharedUser.Role,
+				Email:    string(sharedUser.Email),
+			}
 			sharedPasswordHash := strings.TrimSpace(sharedUser.PasswordHash.Plaintext())
 			if sharedPasswordHash != "" {
 				passwordMatches = bcrypt.CompareHashAndPassword([]byte(sharedPasswordHash), []byte(req.Password)) == nil
@@ -283,19 +321,19 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !passwordMatches {
-		slog.Warn("siteaccount.login.password_mismatch", "username", normalizeUsername(req.Username), "site_password_hash_present", passwordHash != "")
+	if !passwordMatches || resolvedUser == nil {
+		slog.Warn("siteaccount.login.password_mismatch", "username", username, "site_password_hash_present", passwordHash != "")
 		writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	accessToken, refreshToken, err := sopbackend.CreateSession(r.Context(), user.Username, user.Role)
+	accessToken, refreshToken, err := sopbackend.CreateSession(r.Context(), resolvedUser.Username, resolvedUser.Role)
 	if err != nil {
 		slog.Error("siteaccount.login.session_create_failed", "username", user.Username, "role", user.Role, "error", err.Error())
 		writeJSONError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
-	slog.Info("siteaccount.login.session_created", "username", user.Username, "role", user.Role, "access_token_prefix", shortTokenPrefix(accessToken))
+	slog.Info("siteaccount.login.session_created", "username", resolvedUser.Username, "role", resolvedUser.Role, "access_token_prefix", shortTokenPrefix(accessToken))
 	setSessionCookies(w, accessToken, refreshToken, r.TLS != nil)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -401,6 +439,16 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	// Sync billing status from Stripe if pending (fallback for missed webhooks)
+	if user.BillingStatus == "pending" {
+		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), account.Username)
+		// Re-fetch user after potential sync
+		user, ok, err = cfg.FindUserRecord(r.Context(), account.Username)
+		if err != nil || !ok || user == nil {
+			writeJSONError(w, http.StatusInternalServerError, "unable to refresh user state")
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
@@ -423,6 +471,16 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok || user == nil {
 		writeJSONError(w, http.StatusNotFound, "user not found")
 		return
+	}
+	// Sync billing status from Stripe if pending (fallback for missed webhooks)
+	if user.BillingStatus == "pending" {
+		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), account.Username)
+		// Re-fetch user after potential sync
+		user, ok, err = cfg.FindUserRecord(r.Context(), account.Username)
+		if err != nil || !ok || user == nil {
+			writeJSONError(w, http.StatusInternalServerError, "unable to refresh user state")
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -454,6 +512,31 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(updated))
 }
 
+func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
+	account := currentAccountFromRequest(r)
+	if account.Username == "" {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	cfg := GetConfig()
+	updated, err := cfg.ChangePasswordWithRequest(r.Context(), ChangePasswordRequest{Username: account.Username, CurrentPassword: req.CurrentPassword, NewPassword: req.NewPassword})
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(updated))
+}
+
 func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 	account := currentAccountFromRequest(r)
 	username := strings.TrimSpace(account.Username)
@@ -465,6 +548,8 @@ func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Plan                 string `json:"plan"`
+		Name                 string `json:"name"`
+		Email                string `json:"email"`
 		RequestOrigin        string `json:"request_origin"`
 		HumanProof           string `json:"human_proof"`
 		StripePaymentID      string `json:"stripe_payment_id"`
@@ -504,7 +589,7 @@ func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 	session := &BillingCheckoutSession{}
 	if req.StripePaymentID == "" && req.StripeSessionID == "" {
 		slog.Info("siteaccount.checkout.creating_session", "username", username, "plan", req.Plan)
-		createdSession, err := cfg.CreateCheckoutSession(r.Context(), username, req.Plan)
+		createdSession, err := cfg.CreateCheckoutSession(r.Context(), username, req.Plan, req.Email)
 		if err != nil {
 			slog.Error("siteaccount.checkout.create_session_failed", "username", username, "plan", req.Plan, "error", err.Error())
 			writeJSONError(w, http.StatusInternalServerError, err.Error())

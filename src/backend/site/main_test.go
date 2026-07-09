@@ -105,6 +105,39 @@ func TestResolveRuntimeConfigPathPrefersCwdConfigOverEnvOverride(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeConfigPathIgnoresRepoSharedConfigWhenNoRuntimeConfigExists(t *testing.T) {
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	defer os.Chdir(oldWd)
+
+	workDir := t.TempDir()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+
+	workspaceConfigPath := filepath.Join(workDir, "lib", "sop", "tools", "httpserver", "config.json")
+	if err := os.MkdirAll(filepath.Dir(workspaceConfigPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(workspaceConfigPath, []byte(`{"users":[{"username":"root"}]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got := resolveRuntimeConfigPath(filepath.Join(workDir, ".sop-data"))
+	want := filepath.Join(workDir, ".sop-data", "config.json")
+	if resolved, err := filepath.EvalSymlinks(got); err == nil {
+		got = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(want); err == nil {
+		want = resolved
+	}
+	if filepath.Clean(got) != filepath.Clean(want) {
+		t.Fatalf("resolveRuntimeConfigPath() = %q, want %q", got, want)
+	}
+}
+
 func TestConfigureRuntimeEnvironmentUsesExistingDataDirConfigWhenPresent(t *testing.T) {
 	oldWd, err := os.Getwd()
 	if err != nil {
@@ -195,7 +228,7 @@ func TestSiteBackendDaemonBootstrapEndpointReturnsBootstrapSecret(t *testing.T) 
 	}
 }
 
-func TestSiteBackendRedirectsRootToLandingPageWhenNoConfigExists(t *testing.T) {
+func TestSiteBackendRedirectsRootToSetupWizardWhenNoConfigExists(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
 		t.Fatalf("failed to write test frontend asset: %v", err)
@@ -206,17 +239,35 @@ func TestSiteBackendRedirectsRootToLandingPageWhenNoConfigExists(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
+	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusFound {
-		t.Fatalf("expected root request to redirect to landing page, got %d", rec.Code)
+		t.Fatalf("expected root request to redirect to setup wizard, got %d", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/site/" {
-		t.Fatalf("expected redirect to /site/, got %q", got)
+	if got := rec.Header().Get("Location"); got != "/app" {
+		t.Fatalf("expected root request to redirect to /app, got %q", got)
 	}
 }
 
-func TestSiteBackendRedirectsRootToLandingPageEvenWhenConfigExists(t *testing.T) {
+func TestSiteBackendAllowsSetupWizardAtAppPathWhenNoConfigExists(t *testing.T) {
+	frontendDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
+		t.Fatalf("failed to write test frontend asset: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, frontendDir)
+
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	rec := httptest.NewRecorder()
+	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusForbidden {
+		t.Fatalf("expected /app to be allowed during first-run setup, got forbidden")
+	}
+}
+
+func TestSiteBackendServesFrontendAtRootEvenWhenConfigExists(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
 		t.Fatalf("failed to write test frontend asset: %v", err)
@@ -239,11 +290,11 @@ func TestSiteBackendRedirectsRootToLandingPageEvenWhenConfigExists(t *testing.T)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected root request to redirect to landing page even when config exists, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected root request to serve the landing page even when config exists, got %d", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/site/" {
-		t.Fatalf("expected redirect to /site/, got %q", got)
+	if body := rec.Body.String(); !strings.Contains(body, "site") {
+		t.Fatalf("expected root response body to contain the site markup, got %q", body)
 	}
 }
 
@@ -355,7 +406,7 @@ func TestSiteBackendRejectsCheckoutForAnonymousUsers(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected anonymous checkout to be rejected, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "authentication required before checkout") {
+	if body := rec.Body.String(); !strings.Contains(body, "authentication required") {
 		t.Fatalf("expected checkout response body to mention authentication requirement, got %q", body)
 	}
 }

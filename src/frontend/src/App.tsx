@@ -135,8 +135,19 @@ function loadPersistedAccountState(): PersistedAccountState | null {
   }
 }
 
+function clearPersistedAccountState() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.localStorage.removeItem(ACCOUNT_STATE_STORAGE_KEY);
+}
+
 function persistAccountState(account: AccountState) {
   if (typeof window === 'undefined') {
+    return;
+  }
+  if (!account.isAuthenticated) {
+    clearPersistedAccountState();
     return;
   }
   window.localStorage.setItem(
@@ -231,14 +242,33 @@ function slugify(value: string): string {
     .slice(0, 24) || 'sop-user';
 }
 
-function buildUsername(name: string, email: string): string {
-  const base = slugify(name || email || 'sop-user');
-  const suffix = (email || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-  return suffix ? `${base}-${suffix.slice(0, 8)}` : base;
+function createTemporarySuffix(): string {
+  const randomSource = typeof globalThis !== 'undefined' && typeof globalThis.crypto !== 'undefined' && typeof globalThis.crypto.randomUUID === 'function'
+    ? globalThis.crypto
+    : null;
+  if (randomSource) {
+    return randomSource.randomUUID().replace(/-/g, '').slice(0, 12);
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function buildPassword(email: string): string {
-  return `sop-${(email || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'site'}`;
+function buildUsername(name: string, email: string): string {
+  const trimmedName = (name || '').trim();
+  const trimmedEmail = (email || '').trim();
+  if (trimmedName) {
+    if (trimmedName.includes('@')) {
+      return trimmedName;
+    }
+    if (trimmedName === 'root' || trimmedName.toLowerCase() === 'sa' || trimmedName.toLowerCase() === 'systemadmin' || trimmedName.toLowerCase() === 'system admin') {
+      return trimmedName;
+    }
+    if (!trimmedEmail) {
+      return trimmedName;
+    }
+  }
+  const base = slugify(trimmedName || trimmedEmail || `guest-${createTemporarySuffix()}`);
+  const suffix = trimmedEmail.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return suffix ? `${base}-${suffix.slice(0, 8)}` : `${base}-${createTemporarySuffix().slice(0, 8)}`;
 }
 
 async function fetchJSON(url: string, init: RequestInit = {}): Promise<any> {
@@ -299,6 +329,17 @@ async function loadAccountFromServer(): Promise<AccountState> {
   };
 }
 
+function mergeAccountWithFallback(nextAccount: AccountState, fallback: AccountState, draftName: string, draftEmail: string): AccountState {
+  return {
+    ...nextAccount,
+    name: nextAccount.name || fallback.name || draftName,
+    email: nextAccount.email || fallback.email || draftEmail,
+    role: nextAccount.role || fallback.role || '',
+    isSystemAdmin: nextAccount.isSystemAdmin || isSystemAdminRole(nextAccount.role || fallback.role),
+    trialActive: nextAccount.billingStatus === 'active' && nextAccount.plan === 'starter',
+  };
+}
+
 async function getHumanProofChallenge(): Promise<string> {
   const response = await fetch('/api/auth/human-proof/challenge', { credentials: 'include' });
   if (!response.ok) {
@@ -308,11 +349,11 @@ async function getHumanProofChallenge(): Promise<string> {
   return typeof payload?.challenge === 'string' ? payload.challenge : '';
 }
 
-async function ensureAuthenticatedAccount(name: string, email: string, humanProofToken: string): Promise<AccountState> {
-  const username = buildUsername(name, email);
-  const password = buildPassword(email);
+async function ensureAuthenticatedAccount(name: string, email: string, password: string, humanProofToken: string): Promise<AccountState> {
+  const username = buildUsername(name.trim() || email.trim(), email.trim() || name.trim());
+  const resolvedEmail = email.trim() || `${username}@sop.local`;
 
-  const loginResponse = await fetch('/api/site/auth/login', {
+  const loginResponse = await fetch('/api/auth/login', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -331,7 +372,7 @@ async function ensureAuthenticatedAccount(name: string, email: string, humanProo
       body: JSON.stringify({
         username,
         password,
-        email,
+        email: resolvedEmail,
         role: 'user',
         subscription_plan: 'starter',
         request_origin: 'human',
@@ -345,11 +386,7 @@ async function ensureAuthenticatedAccount(name: string, email: string, humanProo
       throw new Error(registerMessage);
     }
 
-    if (registerResponse.status === 409) {
-      throw new Error('An account with this email already exists. If you created an account before, please clear your browser data and try again, or contact support.');
-    }
-
-    const followUpLoginResponse = await fetch('/api/site/auth/login', {
+    const followUpLoginResponse = await fetch('/api/auth/login', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -373,10 +410,10 @@ async function updateSubscriptionPlan(plan: Plan): Promise<AccountState> {
   return loadAccountFromServer();
 }
 
-async function createCheckoutSession(plan: Plan, humanProofToken: string): Promise<{ url: string; status: string }> {
+async function createCheckoutSession(plan: Plan, humanProofToken: string, name: string, email: string): Promise<{ url: string; status: string }> {
   const payload = await fetchJSON('/api/auth/checkout', {
     method: 'POST',
-    body: JSON.stringify({ plan, request_origin: 'human', human_proof: humanProofToken }),
+    body: JSON.stringify({ plan, name, email, request_origin: 'human', human_proof: humanProofToken }),
   });
   return {
     url: payload?.checkout?.url || '',
@@ -396,7 +433,7 @@ async function downloadLocalAgent(): Promise<void> {
 }
 
 async function loginWithCredentials(username: string, password: string): Promise<AccountState> {
-  const response = await fetch('/api/site/auth/login', {
+  const response = await fetch('/api/auth/login', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -408,8 +445,19 @@ async function loginWithCredentials(username: string, password: string): Promise
   return loadAccountFromServer();
 }
 
+async function changePassword(currentPassword: string, newPassword: string): Promise<AccountState> {
+  const payload = await fetchJSON('/api/auth/password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+  if (!payload?.user) {
+    throw new Error('Unable to update your password right now.');
+  }
+  return loadAccountFromServer();
+}
+
 async function logoutFromServer(): Promise<void> {
-  await fetch('/api/site/auth/logout', {
+  await fetch('/api/auth/logout', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -420,6 +468,11 @@ export default function App() {
   const [account, setAccount] = useState<AccountState>(emptyState);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
   const [showInstallStep, setShowInstallStep] = useState(false);
   const [view, setView] = useState<ViewMode>(() => resolveView(typeof window === 'undefined' ? '/' : window.location.pathname));
   const [checkoutComplete, setCheckoutComplete] = useState(false);
@@ -465,9 +518,12 @@ export default function App() {
           setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
           setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
           persistAccountState(resolvedAccount);
+        } else {
+          clearPersistedAccountState();
         }
       } catch {
         setAccount(emptyState);
+        clearPersistedAccountState();
       }
     })();
   }, []);
@@ -495,20 +551,72 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !account.isAuthenticated) {
+      return;
+    }
+
+    const shouldPoll = (view === 'success' || view === 'subscribe') && account.plan === 'starter' && account.billingStatus === 'pending';
+    if (!shouldPoll) {
+      return;
+    }
+
+    let isActive = true;
+    const refreshAccount = async () => {
+      try {
+        const nextAccount = await loadAccountFromServer();
+        if (!isActive) {
+          return;
+        }
+        const resolvedAccount = mergeAccountWithFallback(nextAccount, account, name, email);
+        setAccount(resolvedAccount);
+        setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
+        setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
+        if (resolvedAccount.isAuthenticated) {
+          persistAccountState(resolvedAccount);
+        }
+      } catch {
+        // Ignore transient refresh failures while the billing webhook is still settling.
+      }
+    };
+
+    void refreshAccount();
+    const intervalId = window.setInterval(() => {
+      void refreshAccount();
+    }, 5000);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(intervalId);
+    };
+  }, [account.isAuthenticated, account.billingStatus, account.plan, account.name, account.email, email, name, view]);
+
   const handleSubscription = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
     try {
+      if (!account.isAuthenticated) {
+        if (!password.trim()) {
+          throw new Error('Please choose a password to continue.');
+        }
+        if (password.trim() !== confirmPassword.trim()) {
+          throw new Error('Your chosen passwords do not match.');
+        }
+      }
       const token = await getHumanProofChallenge();
-      const nextAccount = await ensureAuthenticatedAccount(account.name || name.trim(), account.email || email.trim(), token);
+      const nextAccount = account.isAuthenticated
+        ? account
+        : await ensureAuthenticatedAccount(account.name || name.trim(), account.email || email.trim(), password.trim(), token);
       if (!nextAccount.isAuthenticated) {
         throw new Error('Please sign in or create an account before continuing.');
       }
+      const effectiveName = nextAccount.name || account.name || name.trim();
+      const effectiveEmail = nextAccount.email || account.email || email.trim();
       if (nextAccount.billingStatus === 'pending' && nextAccount.checkoutUrl) {
         setAccount({
           ...nextAccount,
-          name: nextAccount.name || account.name || name.trim(),
-          email: nextAccount.email || account.email || email.trim(),
+          name: effectiveName,
+          email: effectiveEmail,
           plan: 'starter',
           billingStatus: 'pending',
           trialActive: false,
@@ -520,7 +628,7 @@ export default function App() {
         window.location.assign(nextAccount.checkoutUrl);
         return;
       }
-      const checkout = await createCheckoutSession('starter', token);
+      const checkout = await createCheckoutSession('starter', token, name.trim(), email.trim());
       if (checkout.url) {
         setAccount({
           ...nextAccount,
@@ -569,6 +677,32 @@ export default function App() {
     }
   };
 
+  const handlePasswordChange = async () => {
+    setIsSubmitting(true);
+    setStatusMessage('');
+    try {
+      if (!currentPassword.trim()) {
+        throw new Error('Please enter your current password.');
+      }
+      if (!newPassword.trim()) {
+        throw new Error('Please choose a new password.');
+      }
+      if (newPassword.trim() !== newPasswordConfirm.trim()) {
+        throw new Error('Your new passwords do not match.');
+      }
+      const synced = await changePassword(currentPassword.trim(), newPassword.trim());
+      setAccount(synced);
+      setCurrentPassword('');
+      setNewPassword('');
+      setNewPasswordConfirm('');
+      setStatusMessage('Your password has been updated.');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Unable to update your password right now.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleUnsubscribe = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
@@ -601,6 +735,7 @@ export default function App() {
     try {
       await fetchJSON('/api/auth/unregister', { method: 'POST' });
       setAccount(emptyState);
+      clearPersistedAccountState();
       if (typeof window !== 'undefined') {
         window.localStorage.removeItem(DRAFT_STORAGE_KEY);
       }
@@ -617,23 +752,32 @@ export default function App() {
   };
 
   const handleLogin = async () => {
-    if (!name.trim() || !email.trim()) {
+    const existingIdentity = (name.trim() || account.name || email.trim() || account.email || '').trim();
+    const resolvedUsername = existingIdentity || (typeof window !== 'undefined' ? window.prompt('Enter your username to sign in.') ?? '' : '');
+    if (!resolvedUsername) {
+      setStatusMessage('Please enter your username before signing in.');
       return;
     }
+    const enteredPassword = password.trim() || (typeof window !== 'undefined' ? window.prompt('Enter your password to sign in.') ?? '' : '');
+    if (!enteredPassword.trim()) {
+      setStatusMessage('Please enter your password to sign in.');
+      return;
+    }
+    setPassword(enteredPassword.trim());
     setIsSubmitting(true);
     setStatusMessage('');
     try {
-      const username = buildUsername(name.trim(), email.trim());
-      const password = buildPassword(email.trim());
-      const synced = await loginWithCredentials(username, password);
+      const synced = await loginWithCredentials(resolvedUsername, enteredPassword.trim());
       const resolvedAccount = {
         ...synced,
-        name: synced.name || name.trim(),
-        email: synced.email || email.trim(),
+        name: synced.name || resolvedUsername,
+        email: synced.email || email.trim() || account.email || '',
         role: synced.role || '',
         isSystemAdmin: synced.isSystemAdmin || isSystemAdminRole(synced.role),
         trialActive: synced.billingStatus === 'active' && synced.plan === 'starter',
       };
+      setName(resolvedUsername);
+      setEmail(resolvedAccount.email || '');
       setAccount(resolvedAccount);
       setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
       setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
@@ -664,6 +808,7 @@ export default function App() {
     try {
       await logoutFromServer();
       setAccount(emptyState);
+      clearPersistedAccountState();
       setName('');
       setEmail('');
       setCheckoutComplete(false);
@@ -733,6 +878,60 @@ export default function App() {
               ) : null}
 
               <div className="form-stack">
+                <div className="inline-fields">
+                  <div>
+                    <label htmlFor="subscription-name" className="field-label">Name</label>
+                    <input
+                      id="subscription-name"
+                      className="text-input"
+                      type="text"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      placeholder="Your name"
+                      autoComplete="name"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="subscription-email" className="field-label">Email</label>
+                    <input
+                      id="subscription-email"
+                      className="text-input"
+                      type="email"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      placeholder="you@example.com"
+                      autoComplete="email"
+                    />
+                  </div>
+                </div>
+                {!account.isAuthenticated ? (
+                  <div className="inline-fields">
+                    <div>
+                      <label htmlFor="subscription-password" className="field-label">Password</label>
+                      <input
+                        id="subscription-password"
+                        className="text-input"
+                        type="password"
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                        placeholder="Choose a password"
+                        autoComplete="new-password"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="subscription-password-confirm" className="field-label">Confirm password</label>
+                      <input
+                        id="subscription-password-confirm"
+                        className="text-input"
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(event) => setConfirmPassword(event.target.value)}
+                        placeholder="Re-enter your password"
+                        autoComplete="new-password"
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 <p className="muted-copy">
                   Continue securely through Stripe to complete your subscription. You will be redirected to a hosted checkout page to enter your payment details.
                 </p>
@@ -945,7 +1144,7 @@ export default function App() {
               <ul className="feature-list">
                 <li>Load knowledge bases to turn your LLM into a domain expert—medical, mechanical, coding, or any field</li>
                 <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots</li>
-                <li>Real-time vector database that runs on your machine—no overnight optimization, no data center processing</li>
+                <li>Lightweight real-time vector database that runs on your machine—no overnight optimization, no data center processing</li>
                 <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
                 <li>Privacy-first fleet learning—respects PII with automatic detection, privacy governance, and user opt-in/opt-out policies</li>
                 <li>Built-in auditable visualization—see exactly what's shared, when, and why with full transparency</li>
@@ -1076,8 +1275,11 @@ export default function App() {
                 Setup is complete. Review your account, keep your subscription current, and open the SOP Data Manager whenever you need the admin-level operational view.
               </p>
               <div className="hero-actions">
-                {canLaunchDataManager ? (
-                  <a className="button button-primary" href="/app">Open SOP Data Manager</a>
+                <a className="button button-primary" href="/site/subscribe">Subscribe</a>
+                {account.isAuthenticated ? (
+                  <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
+                    {isSubmitting ? 'Working…' : 'Log out'}
+                  </button>
                 ) : null}
                 {canAccessLocalDaemon ? (
                   <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
@@ -1136,7 +1338,11 @@ export default function App() {
                 </div>
                 <div>
                   <span className="summary-label">Data Manager</span>
-                  <strong>{canLaunchDataManager ? 'Available to open' : 'Admin access required'}</strong>
+                  {canLaunchDataManager ? (
+                    <a href="/app" className="summary-link">Open Data Manager</a>
+                  ) : (
+                    <strong>Admin access required</strong>
+                  )}
                 </div>
               </div>
             </div>
@@ -1221,9 +1427,31 @@ export default function App() {
               </div>
             ) : null}
 
+            {!account.isAuthenticated ? null : (
+              <div className="form-stack" style={{ marginTop: '1rem' }}>
+                <h4>Change password</h4>
+                <label htmlFor="current-password" className="field-label">Current password</label>
+                <input id="current-password" className="text-input" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} placeholder="Current password" autoComplete="current-password" />
+                <label htmlFor="new-password" className="field-label">New password</label>
+                <input id="new-password" className="text-input" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="New password" autoComplete="new-password" />
+                <label htmlFor="new-password-confirm" className="field-label">Confirm new password</label>
+                <input id="new-password-confirm" className="text-input" type="password" value={newPasswordConfirm} onChange={(event) => setNewPasswordConfirm(event.target.value)} placeholder="Confirm new password" autoComplete="new-password" />
+                <button type="button" className="button button-secondary" onClick={handlePasswordChange} disabled={isSubmitting}>
+                  {isSubmitting ? 'Working…' : 'Update password'}
+                </button>
+              </div>
+            )}
+
+            {statusMessage ? <p className="muted-copy" style={{ marginTop: '0.75rem' }}>{statusMessage}</p> : null}
+
             <div className="action-row">
               {!account.isAuthenticated ? (
-                <button type="button" className="button button-secondary" onClick={handleLogin} disabled={isSubmitting || !name.trim() || !email.trim()}>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => { void handleLogin(); }}
+                  disabled={isSubmitting}
+                >
                   Log in
                 </button>
               ) : null}

@@ -116,14 +116,14 @@ func resolveRuntimeConfigPath(dataDir string) string {
 	}
 
 	candidates := []string{}
+	if envPath := strings.TrimSpace(os.Getenv("SOP_CONFIG_FILE")); envPath != "" {
+		candidates = append(candidates, envPath)
+	}
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates,
 			filepath.Join(cwd, "config.json"),
 			filepath.Join(cwd, ".sop-data", "config.json"),
 		)
-	}
-	if envPath := strings.TrimSpace(os.Getenv("SOP_CONFIG_FILE")); envPath != "" {
-		candidates = append(candidates, envPath)
 	}
 	candidates = append(candidates, filepath.Join(resolvedDataDir, "config.json"))
 
@@ -192,7 +192,6 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
 	mux.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
 	mux.HandleFunc("/api/coding-workflow/execute", handleCodingWorkflowExecution)
 	registerFrontendHandler(mux, frontendDir)
-	mux.HandleFunc("/", handleRootRedirect)
 }
 
 type siteAppAccessHandler struct {
@@ -201,6 +200,15 @@ type siteAppAccessHandler struct {
 
 func (h *siteAppAccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/") {
+		// Routing contract for the new site:
+		// - If no runtime config exists (or the provisioning-complete cache says the environment is not ready),
+		//   route the user to the shared SetupWizard so SA can provision the site.
+		// - Once config is present and the environment is provisioned, show the landing page experience
+		//   so visitors can log in or subscribe.
+		if !sopbackend.HasConfigFileOnDisk() {
+			h.next.ServeHTTP(w, r)
+			return
+		}
 		wrapped := sopbackend.WithAuth(func(w http.ResponseWriter, r *http.Request) {
 			auth := sop.GetAuthFromContext(r.Context())
 			if isSiteAdminAuthContext(auth) {
@@ -255,12 +263,23 @@ func handleAppProxy(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-func handleRootRedirect(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" {
-		http.Redirect(w, r, "/site/", http.StatusFound)
+func serveFrontendAsset(w http.ResponseWriter, r *http.Request, frontendDir string) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	assetPath, spa := resolveFrontendAssetPath(r.URL.Path)
+	if spa {
+		http.ServeFile(w, r, path.Join(frontendDir, "index.html"))
 		return
 	}
-	http.NotFound(w, r)
+	if assetPath == "" {
+		assetPath = "index.html"
+	}
+	pathToServe := path.Join(frontendDir, assetPath)
+	if _, err := os.Stat(pathToServe); err == nil {
+		http.ServeFile(w, r, pathToServe)
+		return
+	}
+	http.ServeFile(w, r, path.Join(frontendDir, "index.html"))
 }
 
 type codingWorkflowRequest struct {
@@ -396,29 +415,21 @@ func handleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
-	mux.HandleFunc("/site", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		w.Header().Set("Pragma", "no-cache")
-		http.ServeFile(w, r, path.Join(frontendDir, "index.html"))
-	})
-	mux.HandleFunc("/site/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		w.Header().Set("Pragma", "no-cache")
-		assetPath, spa := resolveFrontendAssetPath(r.URL.Path)
-		if spa {
-			http.ServeFile(w, r, path.Join(frontendDir, "index.html"))
+	frontendHandler := func(w http.ResponseWriter, r *http.Request) {
+		// Routing contract for the new site:
+		// - If no runtime config exists (or provisioning is not complete), redirect to /app so the
+		//   shared SetupWizard can provision the site as SA.
+		// - If config is present and provisioning is complete, serve the landing page so visitors can
+		//   log in or subscribe.
+		if r.URL.Path == "/" && !sopbackend.HasConfigFileOnDisk() {
+			http.Redirect(w, r, "/app", http.StatusFound)
 			return
 		}
-		if assetPath == "" {
-			assetPath = "index.html"
-		}
-		pathToServe := path.Join(frontendDir, assetPath)
-		if _, err := os.Stat(pathToServe); err == nil {
-			http.ServeFile(w, r, pathToServe)
-			return
-		}
-		http.ServeFile(w, r, path.Join(frontendDir, "index.html"))
-	})
+		serveFrontendAsset(w, r, frontendDir)
+	}
+	mux.HandleFunc("/", frontendHandler)
+	mux.HandleFunc("/site", frontendHandler)
+	mux.HandleFunc("/site/", frontendHandler)
 }
 
 func main() {

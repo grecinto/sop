@@ -98,6 +98,8 @@ body {
 .summary-list { display: grid; gap: 0.8rem; margin-top: 1rem; }
 .summary-list > div { display: flex; justify-content: space-between; gap: 1rem; padding-bottom: 0.45rem; border-bottom: 1px solid var(--border); }
 .summary-label { color: var(--text-muted); }
+.summary-link { color: var(--accent); font-weight: 600; text-decoration: none; }
+.summary-link:hover { text-decoration: underline; }
 .action-row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1rem; }
 .danger { border-color: rgba(248,113,113,0.4); color: #b91c1c; }
 .preview-box { margin-top: 1rem; background: rgba(125, 211, 252, 0.12); border: 1px solid rgba(125, 211, 252, 0.25); border-radius: 16px; padding: 1rem; }
@@ -112,6 +114,11 @@ body {
 .subscription-shell { max-width: 1100px; margin: 0 auto; }
 .checkout-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 1.25rem; margin-top: 1rem; }
 .inline-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.inline-fields > div { min-width: 0; }
+.inline-fields .text-input,
+.inline-fields input {
+  width: 100%;
+}
 .summary-card { align-self: start; }
 .success-banner { margin-top: 1rem; background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.3); border-radius: 16px; padding: 1rem; }
 .success-banner h4 { margin-top: 0; margin-bottom: 0.35rem; }

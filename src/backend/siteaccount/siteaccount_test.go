@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func uniqueTestUsername(t *testing.T, prefix string) string {
@@ -139,6 +141,80 @@ func TestValidateHumanProofAllowsReuseBeforeExpiry(t *testing.T) {
 	}
 }
 
+func TestHandleChangePasswordUpdatesStoredPassword(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	SetConfig(NewConfig())
+	cfg := GetConfig()
+	username := uniqueTestUsername(t, "site-password-change")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "old-secret-123",
+		Email:            "password-change@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	body := `{"current_password":"old-secret-123","new_password":"new-secret-456"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: username, Roles: []string{sop.RoleUser}}))
+	rr := httptest.NewRecorder()
+
+	HandleChangePassword(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleChangePassword() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	updated, ok, err := cfg.FindUserRecord(context.Background(), username)
+	if err != nil {
+		t.Fatalf("FindUserRecord() error = %v", err)
+	}
+	if !ok || updated == nil {
+		t.Fatal("FindUserRecord() did not find updated user")
+	}
+	if updated.PasswordHash == "" {
+		t.Fatal("expected password hash to be stored")
+	}
+	if bcrypt.CompareHashAndPassword([]byte(updated.PasswordHash), []byte("new-secret-456")) != nil {
+		t.Fatal("expected new password to be accepted")
+	}
+	if bcrypt.CompareHashAndPassword([]byte(updated.PasswordHash), []byte("old-secret-123")) == nil {
+		t.Fatal("expected old password to be rejected after change")
+	}
+}
+
+func TestHandleStatusAcceptsSessionCookieWithoutConfigFile(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-status-cookie")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "status-cookie@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	accessToken, _, err := sopbackend.CreateSession(context.Background(), username, "user")
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req.AddCookie(&http.Cookie{Name: "sop_access_token", Value: accessToken})
+	rr := httptest.NewRecorder()
+
+	withSiteAuth(HandleStatus)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleStatus() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
 func TestHandleCheckoutSessionAcceptsStripeProofWithoutHumanProof(t *testing.T) {
 	cfg := NewConfig()
 	username := uniqueTestUsername(t, "site-checkout-stripe")
@@ -235,6 +311,42 @@ func TestRegisterUserWithRequestRejectsWhenSeatLimitReached(t *testing.T) {
 	}
 }
 
+func TestRegisterUserWithRequestRecoversWhenSharedAuthUserAlreadyExists(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-recover-user")
+	sharedCfg := sopbackend.GetConfig()
+	if _, err := sharedCfg.RegisterUserWithRequest(context.Background(), sopbackend.RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "recover@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("pre-seeding shared auth user failed: %v", err)
+	}
+
+	user, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "recover@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	})
+	if err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+	if user == nil {
+		t.Fatal("RegisterUserWithRequest() returned nil user")
+	}
+	if _, ok, err := cfg.FindUserRecord(context.Background(), username); err != nil {
+		t.Fatalf("FindUserRecord() error = %v", err)
+	} else if !ok {
+		t.Fatal("expected site account to be present after recovering from shared-auth duplication")
+	}
+}
+
 func TestRegisterUserWithRequestRepairsExistingAccountWithoutHash(t *testing.T) {
 	cfg := NewConfig()
 	username := uniqueTestUsername(t, "site-repair-user")
@@ -318,6 +430,20 @@ func TestCreateCheckoutSessionUsesStripeHostedCheckoutURL(t *testing.T) {
 		t.Fatalf("RegisterUserWithRequest() error = %v", err)
 	}
 
+	var gotBody string
+	stripeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = r.URL.String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"cs_test_123","url":"https://checkout.stripe.com/c/pay/test_session","status":"open"}`))
+	}))
+	defer stripeServer.Close()
+
+	t.Setenv("STRIPE_SECRET_KEY", "sk_test_123")
+	t.Setenv("STRIPE_PRICE_ID", "price_test_123")
+	t.Setenv("STRIPE_SUCCESS_URL", "https://example.com/success")
+	t.Setenv("STRIPE_CANCEL_URL", "https://example.com/cancel")
+	t.Setenv("STRIPE_API_BASE_URL", stripeServer.URL)
+
 	session, err := cfg.CreateCheckoutSession(context.Background(), username, "starter")
 	if err != nil {
 		t.Fatalf("CreateCheckoutSession() error = %v", err)
@@ -327,6 +453,98 @@ func TestCreateCheckoutSessionUsesStripeHostedCheckoutURL(t *testing.T) {
 	}
 	if !strings.HasPrefix(session.URL, "https://checkout.stripe.com/") {
 		t.Fatalf("CreateCheckoutSession() URL = %q, want Stripe-hosted checkout URL", session.URL)
+	}
+	if !strings.Contains(gotBody, "/v1/checkout/sessions") {
+		t.Fatalf("expected Stripe checkout endpoint to be called, got %q", gotBody)
+	}
+}
+
+func TestCreateCheckoutSessionReturnsConfigurationErrorWhenStripeIsMissing(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-stripe-missing")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "stripe-missing@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	t.Setenv("STRIPE_SECRET_KEY", "")
+	t.Setenv("STRIPE_PRICE_ID", "")
+
+	_, err := cfg.CreateCheckoutSession(context.Background(), username, "starter")
+	if err == nil {
+		t.Fatal("CreateCheckoutSession() error = nil, want configuration error")
+	}
+	if !strings.Contains(err.Error(), "stripe secret key not configured") {
+		t.Fatalf("CreateCheckoutSession() error = %v, want configuration error", err)
+	}
+}
+
+func TestCreateCheckoutSessionUsesProvidedEmailForStripeCheckout(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-stripe-email")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	var payloadBody string
+	stripeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		payloadBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"cs_test_123","url":"https://checkout.stripe.com/c/pay/test_session","status":"open"}`))
+	}))
+	defer stripeServer.Close()
+
+	t.Setenv("STRIPE_SECRET_KEY", "sk_test_123")
+	t.Setenv("STRIPE_PRICE_ID", "price_test_123")
+	t.Setenv("STRIPE_SUCCESS_URL", "https://example.com/success")
+	t.Setenv("STRIPE_CANCEL_URL", "https://example.com/cancel")
+	t.Setenv("STRIPE_API_BASE_URL", stripeServer.URL)
+
+	_, err := cfg.CreateCheckoutSession(context.Background(), username, "starter", "stripe-user@example.com")
+	if err != nil {
+		t.Fatalf("CreateCheckoutSession() error = %v", err)
+	}
+	if !strings.Contains(payloadBody, "customer_email=stripe-user%40example.com") {
+		t.Fatalf("expected Stripe checkout request to use the provided email, got %q", payloadBody)
+	}
+}
+
+func TestCreateCheckoutSessionRejectsProductIDInStripePriceConfig(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-stripe-product-id")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "stripe-product@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	t.Setenv("STRIPE_SECRET_KEY", "sk_test_123")
+	t.Setenv("STRIPE_PRICE_ID", "prod_UpNZqXLxm9mHMv")
+	t.Setenv("STRIPE_SUCCESS_URL", "https://example.com/success")
+	t.Setenv("STRIPE_CANCEL_URL", "https://example.com/cancel")
+
+	_, err := cfg.CreateCheckoutSession(context.Background(), username, "starter")
+	if err == nil {
+		t.Fatal("CreateCheckoutSession() error = nil, want price-id validation error")
+	}
+	if !strings.Contains(err.Error(), "price id") || !strings.Contains(err.Error(), "price_") {
+		t.Fatalf("CreateCheckoutSession() error = %v, want Stripe price-id validation error", err)
 	}
 }
 
@@ -347,6 +565,10 @@ func TestCreateCheckoutSessionUsesConfiguredStripeAPI(t *testing.T) {
 	stripeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuthHeader = r.Header.Get("Authorization")
 		gotBody = r.URL.String()
+		payload, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(payload), "customer_email") {
+			gotBody += "|" + string(payload)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"cs_test_123","url":"https://checkout.stripe.com/c/pay/test_session","status":"open"}`))
 	}))
@@ -370,6 +592,9 @@ func TestCreateCheckoutSessionUsesConfiguredStripeAPI(t *testing.T) {
 	}
 	if !strings.Contains(gotBody, "/v1/checkout/sessions") {
 		t.Fatalf("expected Stripe checkout endpoint to be called, got %q", gotBody)
+	}
+	if !strings.Contains(gotBody, "customer_email=stripe-api%40example.com") {
+		t.Fatalf("expected Stripe checkout request to use the account email, got %q", gotBody)
 	}
 }
 

@@ -1,11 +1,12 @@
 package siteaccount
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -52,23 +53,24 @@ type Config struct {
 
 // UserRecord stores minimal account, billing, and role data for the site app.
 type UserRecord struct {
-	Username             string    `json:"username"`
-	Role                 string    `json:"role"`
-	PasswordHash         string    `json:"password_hash,omitempty"`
-	Email                string    `json:"email,omitempty"`
-	SubscriptionPlan     string    `json:"subscription_plan,omitempty"`
-	SubscriptionFeatures []string  `json:"subscription_features,omitempty"`
-	BillingStatus        string    `json:"billing_status,omitempty"`
-	CheckoutURL          string    `json:"checkout_url,omitempty"`
-	LastWebhookEvent     string    `json:"last_webhook_event,omitempty"`
-	LastWebhookAt        time.Time `json:"last_webhook_at,omitempty"`
-	FailureReason        string    `json:"failure_reason,omitempty"`
-	RequestOrigin        string    `json:"request_origin,omitempty"`
-	StripeCustomerID     string    `json:"stripe_customer_id,omitempty"`
-	StripeSubID          string    `json:"stripe_subscription_id,omitempty"`
-	Status               string    `json:"status,omitempty"`
-	CreatedAt            time.Time `json:"created_at,omitempty"`
-	UpdatedAt            time.Time `json:"updated_at,omitempty"`
+	Username                string    `json:"username"`
+	Role                    string    `json:"role"`
+	PasswordHash            string    `json:"password_hash,omitempty"`
+	Email                   string    `json:"email,omitempty"`
+	SubscriptionPlan        string    `json:"subscription_plan,omitempty"`
+	SubscriptionFeatures    []string  `json:"subscription_features,omitempty"`
+	BillingStatus           string    `json:"billing_status,omitempty"`
+	CheckoutURL             string    `json:"checkout_url,omitempty"`
+	StripeCheckoutSessionID string    `json:"stripe_checkout_session_id,omitempty"`
+	LastWebhookEvent        string    `json:"last_webhook_event,omitempty"`
+	LastWebhookAt           time.Time `json:"last_webhook_at,omitempty"`
+	FailureReason           string    `json:"failure_reason,omitempty"`
+	RequestOrigin           string    `json:"request_origin,omitempty"`
+	StripeCustomerID        string    `json:"stripe_customer_id,omitempty"`
+	StripeSubID             string    `json:"stripe_subscription_id,omitempty"`
+	Status                  string    `json:"status,omitempty"`
+	CreatedAt               time.Time `json:"created_at,omitempty"`
+	UpdatedAt               time.Time `json:"updated_at,omitempty"`
 }
 
 // RegisterUserRequest is the explicit registration contract for site account flows.
@@ -1075,6 +1077,12 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 		SubscriptionFeatures: req.SubscriptionFeatures,
 	})
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			// A shared-auth record may already exist from a prior retry or partial registration.
+			// Keep the site account creation successful and rely on login to authenticate the user.
+			sopbackend.SetConfig(sharedCfg)
+			return user, nil
+		}
 		return nil, err
 	}
 	sopbackend.SetConfig(sharedCfg)
@@ -1124,6 +1132,94 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 	_ = sharedCfg.UnregisterUserWithRequest(ctx, sopbackend.UnregisterUserRequest{Username: username})
 	sopbackend.SetConfig(sharedCfg)
 	return nil
+}
+
+// ChangePasswordRequest updates a site's stored password.
+type ChangePasswordRequest struct {
+	Username        string
+	CurrentPassword string
+	NewPassword     string
+}
+
+// ChangePasswordWithRequest updates a site's stored password and syncs the shared backend auth record.
+func (c *Config) ChangePasswordWithRequest(ctx context.Context, req ChangePasswordRequest) (*UserRecord, error) {
+	if c == nil {
+		return nil, fmt.Errorf("site account config is not initialized")
+	}
+	username := normalizeUsername(req.Username)
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+	currentPassword := strings.TrimSpace(req.CurrentPassword)
+	newPassword := strings.TrimSpace(req.NewPassword)
+	if currentPassword == "" || newPassword == "" {
+		return nil, fmt.Errorf("current and new passwords are required")
+	}
+	user, ok, err := c.FindUserRecord(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || user == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+	if user.PasswordHash == "" {
+		return nil, fmt.Errorf("password is not set")
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(currentPassword)) != nil {
+		return nil, fmt.Errorf("current password is incorrect")
+	}
+	passwordHash, err := hashSitePassword(newPassword)
+	if err != nil {
+		return nil, err
+	}
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	user.PasswordHash = passwordHash
+	user.UpdatedAt = time.Now().UTC()
+	store, err := c.ensureUserStore(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == username {
+			c.Users[i] = *user
+			break
+		}
+	}
+	sharedCfg := sopbackend.GetConfig()
+	if sharedUser, ok, findErr := sharedCfg.FindUserRecord(ctx, username); findErr == nil && ok && sharedUser != nil {
+		sharedUser.PasswordHash = sopbackend.SecuredString(passwordHash)
+		sharedUser.Email = sopbackend.SecuredString(strings.TrimSpace(user.Email))
+		sharedUser.Role = strings.TrimSpace(user.Role)
+		sharedUser.SubscriptionPlan = user.SubscriptionPlan
+		sharedUser.UpdatedAt = time.Now().UTC()
+		if store := sharedCfg.UsersStore; store != nil {
+			if err := store.Save(ctx, sharedUser); err != nil {
+				return nil, err
+			}
+		}
+		for i := range sharedCfg.Users {
+			if normalizeUsername(sharedCfg.Users[i].Username) == username {
+				sharedCfg.Users[i] = *sharedUser
+				break
+			}
+		}
+	}
+	sopbackend.SetConfig(sharedCfg)
+	return user, nil
 }
 
 // UpdateSubscriptionPlanWithRequest updates a site's stored subscription plan.
@@ -1187,7 +1283,7 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 }
 
 // CreateCheckoutSession creates a pending billing checkout session for an existing authenticated site account.
-func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan string) (*BillingCheckoutSession, error) {
+func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan string, opts ...string) (*BillingCheckoutSession, error) {
 	if c == nil {
 		return nil, fmt.Errorf("site account config is not initialized")
 	}
@@ -1220,21 +1316,28 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 	}
 	user.UpdatedAt = time.Now().UTC()
 
+	providedEmail := ""
+	if len(opts) > 0 {
+		providedEmail = strings.TrimSpace(opts[0])
+	}
+	if providedEmail == "" {
+		providedEmail = strings.TrimSpace(user.Email)
+	}
+
 	checkoutURL := ""
 	checkoutID := fmt.Sprintf("checkout-%d", time.Now().UnixNano())
 	checkoutStatus := "pending"
-	if checkoutSession, err := createStripeCheckoutSession(ctx, username, plan); err == nil && checkoutSession != nil {
+	checkoutSession, err := createStripeCheckoutSession(ctx, username, providedEmail, plan)
+	if err != nil {
+		return nil, err
+	}
+	if checkoutSession != nil {
 		checkoutURL = checkoutSession.URL
 		checkoutID = checkoutSession.ID
 		checkoutStatus = checkoutSession.Status
-	} else {
-		checkoutPlan := strings.ToLower(strings.TrimSpace(plan))
-		if checkoutPlan == "" {
-			checkoutPlan = "starter"
-		}
-		checkoutURL = fmt.Sprintf("https://checkout.stripe.com/c/pay/cs_test_%s?session_id=%s", normalizeUsername(username), fmt.Sprintf("cs_%d", time.Now().UnixNano()))
 	}
 	user.CheckoutURL = checkoutURL
+	user.StripeCheckoutSessionID = checkoutID
 	store, err := c.ensureUserStore(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -1258,7 +1361,7 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 	return session, nil
 }
 
-func createStripeCheckoutSession(ctx context.Context, username, plan string) (*BillingCheckoutSession, error) {
+func createStripeCheckoutSession(ctx context.Context, username, email, plan string) (*BillingCheckoutSession, error) {
 	apiBaseURL := strings.TrimSpace(os.Getenv("STRIPE_API_BASE_URL"))
 	if apiBaseURL == "" {
 		apiBaseURL = "https://api.stripe.com"
@@ -1271,6 +1374,9 @@ func createStripeCheckoutSession(ctx context.Context, username, plan string) (*B
 	if priceID == "" {
 		return nil, fmt.Errorf("stripe price id not configured")
 	}
+	if !strings.HasPrefix(priceID, "price_") {
+		return nil, fmt.Errorf("stripe price id must be a recurring price id like price_123, got %q", priceID)
+	}
 	returnURL := strings.TrimSpace(os.Getenv("STRIPE_SUCCESS_URL"))
 	if returnURL == "" {
 		returnURL = "https://example.com/success"
@@ -1280,37 +1386,44 @@ func createStripeCheckoutSession(ctx context.Context, username, plan string) (*B
 		cancelURL = "https://example.com/cancel"
 	}
 
-	payload := map[string]any{
-		"mode":        "subscription",
-		"success_url": returnURL,
-		"cancel_url":  cancelURL,
-		"line_items": []map[string]any{{
-			"price":    priceID,
-			"quantity": 1,
-		}},
-		"customer_email": username + "@local.invalid",
-		"metadata": map[string]any{
-			"username": username,
-			"plan":     plan,
-		},
+	customerEmail := strings.TrimSpace(os.Getenv("STRIPE_CUSTOMER_EMAIL"))
+	if customerEmail == "" {
+		customerEmail = strings.TrimSpace(email)
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
+	if customerEmail == "" {
+		customerEmail = username
 	}
+	form := url.Values{}
+	form.Set("mode", "subscription")
+	form.Set("success_url", returnURL)
+	form.Set("cancel_url", cancelURL)
+	form.Set("line_items[0][price]", priceID)
+	form.Set("line_items[0][quantity]", "1")
+	form.Set("customer_email", customerEmail)
+	form.Set("metadata[username]", username)
+	form.Set("metadata[plan]", plan)
+	body := form.Encode()
 	endpoint := strings.TrimRight(apiBaseURL, "/") + "/v1/checkout/sessions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+secretKey)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, readErr
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		responseBody := strings.TrimSpace(string(bodyBytes))
+		if responseBody != "" {
+			return nil, fmt.Errorf("stripe checkout session creation failed with status %d: %s", resp.StatusCode, responseBody)
+		}
 		return nil, fmt.Errorf("stripe checkout session creation failed with status %d", resp.StatusCode)
 	}
 	var result struct {
@@ -1318,7 +1431,7 @@ func createStripeCheckoutSession(ctx context.Context, username, plan string) (*B
 		URL    string `json:"url"`
 		Status string `json:"status"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		return nil, err
 	}
 	if result.URL == "" {
@@ -1371,6 +1484,168 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 	}
 	for i := range c.Users {
 		if normalizeUsername(c.Users[i].Username) == normalizeUsername(event.UserID) {
+			c.Users[i] = *user
+			break
+		}
+	}
+	return nil
+}
+
+// SyncSubscriptionStatusFromStripe polls Stripe to verify the subscription status for a user with pending billing.
+// This is a fallback for when webhooks are missed (e.g. backend was down or unreachable).
+func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username string) error {
+	if c == nil {
+		return fmt.Errorf("site account config is not initialized")
+	}
+	user, ok, err := c.FindUserRecord(ctx, username)
+	if err != nil {
+		return err
+	}
+	if !ok || user == nil {
+		return fmt.Errorf("user not found")
+	}
+	// Only sync if billing is pending
+	if user.BillingStatus != "pending" {
+		return nil
+	}
+
+	secretKey := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY"))
+	if secretKey == "" {
+		return fmt.Errorf("STRIPE_SECRET_KEY not configured")
+	}
+
+	apiBaseURL := strings.TrimSpace(os.Getenv("STRIPE_API_BASE_URL"))
+	if apiBaseURL == "" {
+		apiBaseURL = "https://api.stripe.com"
+	}
+
+	// If we have a checkout session ID, retrieve it from Stripe to get subscription details
+	if user.StripeCheckoutSessionID != "" && user.StripeSubID == "" {
+		sessionURL := fmt.Sprintf("%s/v1/checkout/sessions/%s?expand[]=subscription", strings.TrimRight(apiBaseURL, "/"), user.StripeCheckoutSessionID)
+		req, err := http.NewRequestWithContext(ctx, "GET", sessionURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+secretKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == 200 {
+			var session struct {
+				ID           string `json:"id"`
+				Status       string `json:"status"`
+				Customer     string `json:"customer"`
+				Subscription struct {
+					ID     string `json:"id"`
+					Status string `json:"status"`
+				} `json:"subscription"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&session); err == nil {
+				// Store the customer and subscription IDs for future queries
+				if session.Customer != "" {
+					user.StripeCustomerID = session.Customer
+				}
+				if session.Subscription.ID != "" {
+					user.StripeSubID = session.Subscription.ID
+				}
+				// If the checkout session is complete and subscription is active, activate billing
+				if session.Status == "complete" && (session.Subscription.Status == "active" || session.Subscription.Status == "trialing") {
+					return c.activateUserBilling(ctx, user, username)
+				}
+			}
+		}
+	}
+
+	// Try querying by customer ID if we have it but no subscription ID
+	if user.StripeSubID == "" && user.StripeCustomerID != "" {
+		// Query customer's subscriptions
+		subscriptionsURL := fmt.Sprintf("%s/v1/subscriptions?customer=%s&limit=1", strings.TrimRight(apiBaseURL, "/"), user.StripeCustomerID)
+		req, err := http.NewRequestWithContext(ctx, "GET", subscriptionsURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+secretKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == 200 {
+			var result struct {
+				Data []struct {
+					ID     string `json:"id"`
+					Status string `json:"status"`
+				} `json:"data"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && len(result.Data) > 0 {
+				user.StripeSubID = result.Data[0].ID
+				if result.Data[0].Status == "active" || result.Data[0].Status == "trialing" {
+					return c.activateUserBilling(ctx, user, username)
+				}
+			}
+		}
+	}
+
+	// If we have a subscription ID, check the subscription status directly
+	if user.StripeSubID != "" {
+		subscriptionURL := fmt.Sprintf("%s/v1/subscriptions/%s", strings.TrimRight(apiBaseURL, "/"), user.StripeSubID)
+		req, err := http.NewRequestWithContext(ctx, "GET", subscriptionURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+secretKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			// Subscription not found or error - don't update
+			return nil
+		}
+		var subscription struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&subscription); err != nil {
+			return err
+		}
+		// If the subscription is active on Stripe, update local billing state
+		if subscription.Status == "active" || subscription.Status == "trialing" {
+			return c.activateUserBilling(ctx, user, username)
+		}
+	}
+	return nil
+}
+
+func (c *Config) activateUserBilling(ctx context.Context, user *UserRecord, username string) error {
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	user.BillingStatus = "active"
+	user.LastWebhookEvent = "subscription.synced"
+	user.LastWebhookAt = time.Now().UTC()
+	user.UpdatedAt = time.Now().UTC()
+	store, err := c.ensureUserStore(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	for i := range c.Users {
+		if normalizeUsername(c.Users[i].Username) == normalizeUsername(username) {
 			c.Users[i] = *user
 			break
 		}
