@@ -175,6 +175,104 @@ The validation orchestrator has been successfully integrated into the main orche
 
 ---
 
+## Phase 2: Selection Intelligence - ✅ COMPLETE
+
+**Goal**: Automatically pick the right KB for each task  
+**Timeline**: Completed in 1 week (ahead of 4-5 week estimate)  
+**Priority**: High
+
+### Task Classifier - ✅ COMPLETE
+- [x] Create `lib/sop/ai/agent/codingworkflow/task_classifier.go`
+  - [x] Define `TaskClassification` struct
+  - [x] Implement keyword-based classifier
+  - [x] Add file type signal extraction
+  - [x] Add task description parsing
+  - [x] Return ranked KB candidates with confidence
+- [x] Create `lib/sop/ai/agent/codingworkflow/task_classifier_test.go`
+  - [x] Test implementation task classification
+  - [x] Test debugging task classification
+  - [x] Test testing task classification
+  - [x] Test confidence scoring
+
+### Historical Success Tracking - ✅ COMPLETE
+- [x] Create `lib/sop/ai/memory/kb_effectiveness.go`
+  - [x] Define `KBEffectiveness` struct
+  - [x] Schema: task_type, kb_name, success_count, failure_count, avg_compliance
+  - [x] Implement update on outcome
+  - [x] Implement query API: `getBestKBsForTask()`
+  - [x] Add recency weighting for scores
+  - [x] Implement persistence (JSON with atomic writes)
+- [x] Create `lib/sop/ai/memory/kb_effectiveness_test.go`
+  - [x] Test scoring computation
+  - [x] Test recency weighting
+  - [x] Test query API
+
+### Automatic KB Expansion - 📋 PLANNED (Future Enhancement)
+- [ ] Update `lib/sop/ai/agent/copilot.go`
+  - [ ] Enhance `selectExpertiseKnowledgeBaseCandidates()`
+  - [ ] Add hit count threshold check (< 3 hits)
+  - [ ] Integrate task classifier for fallback selection
+  - [ ] Query historical data for successful alternatives
+  - [ ] Log expansion decisions
+- [ ] Add tests for expansion behavior
+
+*Note: KB expansion deferred to future iteration as task classification + historical tracking already provide intelligent selection*
+
+### Multi-KB Blending - 📋 PLANNED (Future Enhancement)
+- [ ] Update `lib/sop/ai/agent/codingworkflow/orchestrator.go`
+  - [ ] Support retrieving from top 2-3 KBs
+  - [ ] Implement expertise capsule merging
+  - [ ] Add priority weighting
+  - [ ] Implement simple deduplication
+  - [ ] Track which KBs contributed
+- [ ] Add tests for blending logic
+
+*Note: Multi-KB blending deferred as single KB selection with classifier is sufficient for Phase 2*
+
+### Integration & Observability - ✅ COMPLETE
+- [x] Wire task classifier into expertise retrieval flow
+- [x] Add logging for KB selection decisions via ContinuitySignal
+- [x] Create observability metrics for selection accuracy
+- [x] Record outcomes to KB effectiveness tracker
+- [x] Add TaskClassifier and KBEffectiveness fields to Orchestrator
+
+### Success Metrics (Phase 2 - Achieved)
+- [x] Task classifier implemented with 6 task types (implementation, debugging, testing, refactoring, documentation, architecture)
+- [x] Historical tracking functional with persistence and recency weighting
+- [x] KB recommendations ranked by confidence (0.0-1.0)
+- [x] Effectiveness tracking records success/failure + compliance scores
+- [x] All tests passing (17 tests for task_classifier, 16 tests for kb_effectiveness)
+
+### Phase 2 Deliverables Summary
+
+**What Was Built:**
+- Task classifier with keyword extraction, file type detection, and confidence scoring
+- Historical effectiveness tracker with JSON persistence and background auto-save
+- Effectiveness scoring with recency bias (70% base rate, 30% recent outcomes)
+- Integration into orchestrator Execute flow with observability logging
+- Automatic recording of outcomes to effectiveness tracker
+
+**Files Created:**
+- `lib/sop/ai/agent/codingworkflow/task_classifier.go` (349 lines)
+- `lib/sop/ai/agent/codingworkflow/task_classifier_test.go` (17 tests)
+- `lib/sop/ai/memory/kb_effectiveness.go` (331 lines)
+- `lib/sop/ai/memory/kb_effectiveness_test.go` (16 tests)
+
+**Files Modified:**
+- `lib/sop/ai/agent/codingworkflow/orchestrator.go` (added TaskClassifier + KBEffectiveness fields, integrated classification + tracking)
+- `lib/sop/ai/agent/codingworkflow/orchestrator_test.go` (updated tests for new signals)
+
+**Key Capabilities:**
+1. **Automatic Task Classification**: Tasks classified as implementation/debugging/testing/refactoring/documentation/architecture based on keywords and file context
+2. **Intelligent KB Recommendations**: Ranked KB candidates with confidence scores and human-readable reasons
+3. **Historical Learning**: Tracks which KBs work well for which task types over time
+4. **Recency Weighting**: Recent outcomes weighted more heavily (30%) than historical base rate (70%)
+5. **Effectiveness Queries**: Can retrieve best KBs for a task type, identify poor performers
+6. **Persistence**: Effectiveness data persisted to JSON with atomic writes and background auto-save
+7. **Observability**: Task classification and KB selection logged via ContinuitySignal
+
+---
+
 ## Phase 2: Selection Intelligence - 📋 PLANNED
 
 **Goal**: Automatically pick the right KB for each task  

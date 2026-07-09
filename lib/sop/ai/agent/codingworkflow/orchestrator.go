@@ -12,6 +12,7 @@ import (
 
 	ts "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/sharedcode/sop/ai/memory"
 )
 
 // RunState carries explicit arguments and state for a workflow execution.
@@ -300,7 +301,9 @@ type Orchestrator struct {
 	ContinuitySink         func(ContinuitySignal)
 	GrammarRegistry        *GrammarRegistry
 	OrchestrationBackend   OrchestrationBackend
-	ValidationOrchestrator *ValidationOrchestrator // Phase 1: KB expertise enforcement
+	ValidationOrchestrator *ValidationOrchestrator              // Phase 1: KB expertise enforcement
+	TaskClassifier         *TaskClassifier                      // Phase 2: automatic KB selection
+	KBEffectiveness        *memory.KBEffectivenessTracker       // Phase 2: historical success tracking
 	MaxIterations          int
 }
 
@@ -363,6 +366,12 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		citationConfig := DefaultCitationConfig()
 		o.ValidationOrchestrator = NewValidationOrchestrator(validator, citationConfig)
 	}
+	if o.TaskClassifier == nil {
+		// Phase 2: Initialize task classifier for automatic KB selection
+		o.TaskClassifier = DefaultTaskClassifier()
+	}
+	// Note: KBEffectiveness is optional and should be provided by the orchestrator creator
+	// if historical tracking is desired (requires persistence path)
 	if o.GrammarRegistry == nil {
 		o.GrammarRegistry = NewGrammarRegistry()
 	}
@@ -408,6 +417,32 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if pack.RepositorySummary != "" {
 		pack.RepositorySummary = fmt.Sprintf("%s; target=%s", pack.RepositorySummary, strings.TrimSpace(task.ActiveFile))
 	}
+	
+	// Phase 2: Classify task for intelligent KB selection
+	var taskClassification TaskClassification
+	if o.TaskClassifier != nil {
+		taskClassification = o.TaskClassifier.Classify(task.Description, task.ActiveFile, task.WorkingDir)
+		pack.TaskType = string(taskClassification.TaskType)
+		
+		// Log classification for observability
+		if o.ContinuitySink != nil {
+			kbNames := []string{}
+			for _, kb := range taskClassification.KBs {
+				kbNames = append(kbNames, fmt.Sprintf("%s(%.0f%%)", kb.Name, kb.Confidence*100))
+			}
+			o.ContinuitySink(ContinuitySignal{
+				CapabilityID: CapabilityID,
+				Kind:         "task_classification",
+				Summary:      fmt.Sprintf("Task classified as %s (%.0f%% confidence), recommended KBs: %s", taskClassification.TaskType, taskClassification.Confidence*100, strings.Join(kbNames, ", ")),
+				Metadata: map[string]string{
+					"task_type":  string(taskClassification.TaskType),
+					"confidence": fmt.Sprintf("%.2f", taskClassification.Confidence),
+					"kb_count":   fmt.Sprintf("%d", len(taskClassification.KBs)),
+				},
+			})
+		}
+	}
+	
 	if expertise, err := o.ExpertiseRetriever.Retrieve(task, task.State, pack); err == nil {
 		if strings.TrimSpace(expertise.Summary) != "" {
 			pack.ExpertiseSummary = expertise.Summary
@@ -497,11 +532,11 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 					Kind:         "validation_outcome",
 					Summary:      fmt.Sprintf("KB validation %s: %.0f%% compliance, %d violations, %d revisions", status, vResult.ComplianceScore*100, len(vResult.Violations), attempts),
 					Metadata: map[string]string{
-						"status":           status,
-						"compliance_score": fmt.Sprintf("%.2f", vResult.ComplianceScore),
-						"violations":       fmt.Sprintf("%d", len(vResult.Violations)),
+						"status":            status,
+						"compliance_score":  fmt.Sprintf("%.2f", vResult.ComplianceScore),
+						"violations":        fmt.Sprintf("%d", len(vResult.Violations)),
 						"revision_attempts": fmt.Sprintf("%d", attempts),
-						"rules_checked":    fmt.Sprintf("%d", len(vResult.RulesChecked)),
+						"rules_checked":     fmt.Sprintf("%d", len(vResult.RulesChecked)),
 					},
 				})
 			}
@@ -599,6 +634,22 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 				},
 			})
 		}
+		
+		// Phase 2: Record outcome to KB effectiveness tracker
+		if o.KBEffectiveness != nil && len(codingMemory.KBsUsed) > 0 {
+			// Determine success based on test status and compliance score
+			success := codingMemory.TestStatus == "passed" && codingMemory.ComplianceScore >= 0.7
+			taskType := pack.TaskType
+			if taskType == "" {
+				taskType = "implementation" // Default if not classified
+			}
+			
+			// Record effectiveness for each KB used
+			for _, kbName := range codingMemory.KBsUsed {
+				o.KBEffectiveness.RecordOutcome(taskType, kbName, success, codingMemory.ComplianceScore)
+			}
+		}
+		
 		// Persist coding memory with KB tracking fields
 		memoryStr := fmt.Sprintf("description=%s; outcome=%s; files=%s; status=%s", codingMemory.Description, codingMemory.Outcome, strings.Join(codingMemory.FilesTouched, ","), codingMemory.TestStatus)
 		if len(codingMemory.KBsUsed) > 0 {
