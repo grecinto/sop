@@ -82,6 +82,43 @@ You get the corrected code on the first try.
 
 ---
 
+## Subscriber-Only: Import a KB JSON File into a Space
+
+This workflow is available to subscribed users who want to bring their own curated expertise into Spaces.
+
+### When to Use It
+
+Use this flow when you want to:
+- Seed a Space with your own coding standards, architecture guidance, or product playbooks
+- Import a curated Knowledge Base export that was generated from Markdown or another source
+- Make that knowledge available to the copilot during coding, review, and research tasks
+
+### What the Import Needs
+
+The file you import must be a Space-compatible Knowledge Base JSON artifact. Plain Markdown is not enough by itself; it should first be compiled or exported into the import format expected by the Space ingestion flow.
+
+### Import Steps
+
+1. Open the Data Manager or the Space view in your app.
+2. Create a new Space or select an existing one as the destination.
+3. Click the Import JSON action.
+4. Choose the Knowledge Base JSON file you prepared.
+5. Confirm the import and wait for the Space contents to load.
+6. Start a coding or research workflow and let the copilot use the imported expertise.
+
+### Best Practices
+
+- Keep the imported KB focused on a clear domain or team need
+- Use consistent categories and concise, high-signal items
+- Re-import updated JSON after you revise the underlying guidance
+- Validate the imported content in a small test Space before using it broadly
+
+### Note for Subscribers
+
+This import path is part of the premium experience because it enables organization-specific and domain-specific expert knowledge to become first-class context for coding workflows. Built-in Spaces still work for general use, but importing your own KB JSON is how you turn curated guidance into reusable expertise inside a Space.
+
+---
+
 ## Giving Feedback
 
 Help Spaces learn what works for you:
@@ -153,6 +190,18 @@ Compliance: 100% (all rules satisfied)
 ---
 
 ## Advanced Usage
+
+### Importing a KB JSON File onto a Space
+
+If you have a curated Knowledge Base export, you can import it into a Space so the copilot can use it as domain expertise during coding, research, and review tasks.
+
+Typical workflow:
+1. Generate or export your Knowledge Base as a JSON artifact
+2. Open the Space view and choose Import JSON
+3. Select the JSON file and import it into the target Space
+4. Use the Space in future AI-assisted work
+
+This is especially useful for teams that want policy, architecture, coding standards, or domain guidance to become part of the AI workflow automatically.
 
 ### Manual Space Selection (Coming Soon)
 
