@@ -10,3 +10,4 @@ storelist.txt
 **/site_user_subscription_ids/
 **/site_users/
 **/fs.test
+.sop-data/config.json
