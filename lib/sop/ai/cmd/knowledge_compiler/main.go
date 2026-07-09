@@ -600,12 +600,23 @@ func parseUnlinkedFiles(repoRoot string) {
 				}
 			}
 
+			// For curated/bundled mode, load full content for self-contained distribution
+			var content string
+			if singleFileMode {
+				if sourceBytes, err := os.ReadFile(absPath); err == nil {
+					content = string(sourceBytes)
+				} else {
+					fmt.Printf("Warning: Could not read document content for %s: %v\n", absPath, err)
+				}
+			}
+
 			doc := &memory.Document{
 				ID:          docID,
 				Title:       title,
 				URL:         urlVal,
+				Source:      relPath,
 				ContentType: "text/markdown",
-				Content:     "", // Omitted from physical DB storage because we referenced its filesystem URL
+				Content:     content,
 			}
 			allDocuments = append(allDocuments, doc)
 
@@ -690,12 +701,23 @@ func parseOneMarkdownFile(repoRoot string, file string) {
 		}
 	}
 
+	// For curated/bundled mode, load full content for self-contained distribution
+	var content string
+	if singleFileMode {
+		if sourceBytes, err := os.ReadFile(absPath); err == nil {
+			content = string(sourceBytes)
+		} else {
+			fmt.Printf("Warning: Could not read document content for %s: %v\n", absPath, err)
+		}
+	}
+
 	doc := &memory.Document{
 		ID:          docID,
 		Title:       title,
 		URL:         urlVal,
+		Source:      relPath,
 		ContentType: "text/markdown",
-		Content:     "",
+		Content:     content,
 	}
 	allDocuments = append(allDocuments, doc)
 
@@ -796,6 +818,119 @@ func buildKnowledgeBaseConfig(desc, systemPrompt string, documentMode bool) *mem
 	}
 }
 
+// discoverReferencedDocuments parses all Item Sources and loads referenced .md files
+func discoverReferencedDocuments(repoRoot string) {
+	seenFiles := make(map[string]bool)
+
+	// Scan all chunks for Sources references
+	for _, chunk := range allChunks {
+		for _, source := range chunk.Sources {
+			// Check if source is a .md file path (not URL)
+			if strings.HasSuffix(strings.ToLower(source), ".md") &&
+				!strings.HasPrefix(source, "http") {
+
+				// Try multiple path resolution strategies
+				var absPath string
+
+				// Strategy 1: Absolute path
+				if filepath.IsAbs(source) {
+					absPath = source
+				} else {
+					// Strategy 2: Relative to repoRoot
+					sourcePath := filepath.Join(repoRoot, source)
+					if _, err := os.Stat(sourcePath); err == nil {
+						absPath, _ = filepath.Abs(sourcePath)
+					} else {
+						// Strategy 3: Try parent of repoRoot (for nested go.work cases)
+						parentRoot := filepath.Dir(repoRoot)
+						sourcePath = filepath.Join(parentRoot, source)
+						if _, err := os.Stat(sourcePath); err == nil {
+							absPath, _ = filepath.Abs(sourcePath)
+						} else {
+							// Strategy 4: Try grandparent (for deeply nested modules)
+							grandparentRoot := filepath.Dir(parentRoot)
+							sourcePath = filepath.Join(grandparentRoot, source)
+							if _, err := os.Stat(sourcePath); err == nil {
+								absPath, _ = filepath.Abs(sourcePath)
+							}
+						}
+					}
+				}
+
+				if absPath == "" {
+					fmt.Printf("Warning: Referenced document not found: %s\n", source)
+					continue
+				}
+
+				if seenFiles[absPath] {
+					continue
+				}
+				seenFiles[absPath] = true
+
+				// Load document content
+				content, err := os.ReadFile(absPath)
+				if err != nil {
+					fmt.Printf("Warning: Could not read document %s: %v\n", source, err)
+					continue
+				}
+
+				docID := sop.NewUUID()
+				title := strings.TrimSuffix(filepath.Base(absPath), filepath.Ext(absPath))
+				title = strings.ReplaceAll(title, "_", " ")
+
+				// Use repoRoot's parent if we found file there
+				refRoot := repoRoot
+				if !strings.HasPrefix(absPath, repoRoot) {
+					refRoot = filepath.Dir(repoRoot)
+				}
+				relPath, _ := filepath.Rel(refRoot, absPath)
+
+				doc := &memory.Document{
+					ID:          docID,
+					Title:       title,
+					Source:      source,
+					URL:         "file://" + relPath,
+					ContentType: "text/markdown",
+					Content:     string(content),
+				}
+				allDocuments = append(allDocuments, doc)
+
+				fmt.Printf("Bundled referenced document: %s (%d bytes)\n",
+					source, len(content))
+			}
+		}
+	}
+}
+
+// updateSourcesToDocumentTitles maps file paths to document titles for cleaner references
+func updateSourcesToDocumentTitles() {
+	// Build map from source path/URL to document title
+	docPathToTitle := make(map[string]string)
+	for _, doc := range allDocuments {
+		if doc.Source != "" {
+			docPathToTitle[doc.Source] = doc.Title
+		}
+		if doc.URL != "" {
+			docPathToTitle[doc.URL] = doc.Title
+		}
+	}
+
+	// Update chunk sources to use document titles
+	for i := range allChunks {
+		updatedSources := make([]string, 0, len(allChunks[i].Sources))
+		for _, source := range allChunks[i].Sources {
+			// Try to find matching document title
+			if title, ok := docPathToTitle[source]; ok {
+				updatedSources = append(updatedSources, title)
+			} else {
+				// Keep original (likely a URL)
+				updatedSources = append(updatedSources, source)
+			}
+		}
+		allChunks[i].Sources = updatedSources
+	}
+}
+
 func main() {
 	flag.StringVar(&baseURL, "base-url", "", "Base URL for documents")
 	flag.StringVar(&description, "desc", "", "Optional description to persist on the generated KB config")
@@ -811,6 +946,14 @@ func main() {
 	if curatedMode {
 		fmt.Printf("Compiling single markdown file: %s\n", inputFile)
 		parseOneMarkdownFile(repoRoot, inputFile)
+
+		// Discover and load referenced documents from Sources
+		fmt.Println("Discovering referenced documents from Sources...")
+		discoverReferencedDocuments(repoRoot)
+
+		// Update sources to use document titles
+		fmt.Println("Updating source references to document titles...")
+		updateSourcesToDocumentTitles()
 	} else {
 		fmt.Println("Sweeping unlinked Markdown files...")
 		parseUnlinkedFiles(repoRoot)
@@ -879,8 +1022,11 @@ func main() {
 		systemPrompt = string(personaBytes)
 	}
 
+	// DocumentMode should be true for curated KBs with embedded documents
+	enableDocMode := len(allDocuments) > 0 && singleFileMode
+
 	outObj := memory.ExportData[map[string]any]{
-		Config:     buildKnowledgeBaseConfig(description, systemPrompt, baseURL != ""),
+		Config:     buildKnowledgeBaseConfig(description, systemPrompt, enableDocMode),
 		Categories: categories,
 		Documents:  allDocuments,
 		Items:      exportItems,

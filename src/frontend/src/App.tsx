@@ -1425,6 +1425,18 @@ export default function App() {
             <div className="journey-step">
               <span className="journey-number">3</span>
               <div>
+                <h3>Import KB JSON into Spaces</h3>
+                <p>
+                  Compile your curated markdown knowledge bases into JSON format and import them into Spaces for AI-assisted development. 
+                  Run <code>sop kb-compile --input path/to/kb.md --output kb.json</code> to generate the JSON, 
+                  then use the Spaces Import feature to load it. The KB compiler validates structure, extracts metadata, 
+                  and prepares content for semantic search and RAG workflows.
+                </p>
+              </div>
+            </div>
+            <div className="journey-step">
+              <span className="journey-number">4</span>
+              <div>
                 <h3>Automate with expert AI</h3>
                 <p>Let the knowledge-guided AI copilot generate better code, review work, and automate tasks at an expert level.</p>
               </div>

@@ -331,6 +331,30 @@ func TestSiteBackendRedirectsSubscribedUsersToLocalDaemon(t *testing.T) {
 	}
 }
 
+func TestSiteBackendUsesRBACPermissionForAppAccess(t *testing.T) {
+	frontendDir := t.TempDir()
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, frontendDir)
+
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{
+		UserID: "alice",
+		Roles:  []string{sop.RoleUser},
+		Permissions: map[string]bool{
+			siteAppPermissionName: true,
+		},
+	}))
+	rec := httptest.NewRecorder()
+	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expected RBAC-authorized app access to redirect, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "http://127.0.0.1:9090" {
+		t.Fatalf("expected RBAC-authorized app access to redirect to local daemon URL, got %q", got)
+	}
+}
+
 func TestSiteBackendServesSiteFrontendRoutes(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {

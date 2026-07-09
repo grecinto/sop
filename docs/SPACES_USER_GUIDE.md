@@ -93,25 +93,81 @@ Use this flow when you want to:
 - Import a curated Knowledge Base export that was generated from Markdown or another source
 - Make that knowledge available to the copilot during coding, review, and research tasks
 
-### What the Import Needs
+### Preparing Your Knowledge Base
 
-The file you import must be a Space-compatible Knowledge Base JSON artifact. Plain Markdown is not enough by itself; it should first be compiled or exported into the import format expected by the Space ingestion flow.
+**Step 1: Author Curated Markdown**
+
+Create a structured Markdown file using the Item block format:
+
+```markdown
+# Coding Best Practices
+## Go
+
+- Item: Use structured error handling
+  Summary: Return errors explicitly and wrap with context.
+  Summary: Use fmt.Errorf with %w for error wrapping.
+  Body:
+  Go does not use exceptions. Return errors explicitly,
+  check them early, and wrap them with context using
+  fmt.Errorf with %w. Never ignore errors with _.
+  Sources: https://go.dev/doc/effective_go
+```
+
+**Step 2: Compile to Self-Contained JSON Bundle**
+
+Use the Knowledge Base Compiler to convert your Markdown into a portable JSON bundle:
+
+```bash
+go run ./lib/sop/ai/cmd/knowledge_compiler/main.go -input my_kb.md
+```
+
+The compiler automatically:
+- ✅ Extracts categories from headings (# ## ###)
+- ✅ Parses Item blocks into retrievable knowledge items
+- ✅ Discovers referenced documents from Sources fields
+- ✅ Embeds full document content into the bundle
+- ✅ Creates a self-contained JSON file ready for import
+
+**What Gets Bundled:**
+- All Item blocks as retrievable knowledge
+- Full content of any .md files referenced in Sources
+- Category hierarchy and metadata
+- Everything needed for offline use
+
+**Result:** One `.json` file that works anywhere, no external dependencies.
 
 ### Import Steps
 
 1. Open the Data Manager or the Space view in your app.
 2. Create a new Space or select an existing one as the destination.
-3. Click the Import JSON action.
-4. Choose the Knowledge Base JSON file you prepared.
+3. Click the **Import JSON** action.
+4. Choose the Knowledge Base JSON file (compiled bundle).
 5. Confirm the import and wait for the Space contents to load.
 6. Start a coding or research workflow and let the copilot use the imported expertise.
 
+**What Happens During Import:**
+- Items are indexed for semantic search (3-6 items per query)
+- Referenced documents are stored in the Space's document store
+- Categories are organized for efficient retrieval
+- Everything works offline once imported
+
 ### Best Practices
 
-- Keep the imported KB focused on a clear domain or team need
-- Use consistent categories and concise, high-signal items
-- Re-import updated JSON after you revise the underlying guidance
-- Validate the imported content in a small test Space before using it broadly
+**For Markdown Authoring:**
+- Keep Items focused on one concept each
+- Use 1-5 Summary lines per Item (for semantic matching)
+- Put detailed examples in the Body
+- Reference supporting docs in Sources (they'll be auto-bundled)
+
+**For Bundle Compilation:**
+- Run compiler after updating source Markdown
+- Test bundles in a small Space before broad distribution
+- Keep category depth to 2-3 levels for best retrieval
+
+**For Space Import:**
+- Keep imported KB focused on a clear domain
+- Re-import updated JSON after revising source
+- Give feedback to tune Space effectiveness
 
 ### Note for Subscribers
 
@@ -195,11 +251,26 @@ Compliance: 100% (all rules satisfied)
 
 If you have a curated Knowledge Base export, you can import it into a Space so the copilot can use it as domain expertise during coding, research, and review tasks.
 
-Typical workflow:
-1. Generate or export your Knowledge Base as a JSON artifact
-2. Open the Space view and choose Import JSON
-3. Select the JSON file and import it into the target Space
-4. Use the Space in future AI-assisted work
+**Complete Workflow:**
+
+1. **Author:** Create structured Markdown with Item blocks
+2. **Compile:** Run Knowledge Base Compiler to generate self-contained JSON
+   ```bash
+   go run ./lib/sop/ai/cmd/knowledge_compiler/main.go -input my_kb.md
+   ```
+3. **Import:** Open Space view, choose Import JSON, select the bundle
+4. **Use:** Space automatically applies during AI-assisted coding
+
+**Bundle Contents:**
+- **Items:** Retrievable knowledge (3-6 per query via semantic search)
+- **Documents:** Full source docs for detailed context on demand
+- **Categories:** Organized hierarchy for efficient navigation
+
+**Why Bundled Documents Matter:**
+- Items provide quick facts (optimized for retrieval)
+- Documents provide deep learning (full guides, examples, tutorials)
+- Progressive disclosure: summary → detail as needed
+- Fully self-contained: no external file dependencies
 
 This is especially useful for teams that want policy, architecture, coding standards, or domain guidance to become part of the AI workflow automatically.
 

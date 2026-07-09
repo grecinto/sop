@@ -15,6 +15,7 @@ import (
 	"github.com/sharedcode/sop"
 
 	siteaccount "github.com/grecinto/sop-cloud/src/backend/siteaccount"
+	"github.com/grecinto/sop-cloud/src/backend/siteapp"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -200,28 +201,24 @@ type siteAppAccessHandler struct {
 
 func (h *siteAppAccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/") {
-		// Routing contract for the new site:
-		// - If no runtime config exists (or the provisioning-complete cache says the environment is not ready),
-		//   route the user to the shared SetupWizard so SA can provision the site.
-		// - Once config is present and the environment is provisioned, show the landing page experience
-		//   so visitors can log in or subscribe.
-		if !sopbackend.HasConfigFileOnDisk() {
-			h.next.ServeHTTP(w, r)
-			return
-		}
-		wrapped := sopbackend.WithAuth(func(w http.ResponseWriter, r *http.Request) {
-			auth := sop.GetAuthFromContext(r.Context())
-			if isSiteAdminAuthContext(auth) {
+		auth := sop.GetAuthFromContext(r.Context())
+		if auth.UserID == "" && len(auth.Roles) == 0 && !auth.IsSystem {
+			if !sopbackend.HasConfigFileOnDisk() {
 				h.next.ServeHTTP(w, r)
 				return
 			}
-			if hasActiveSiteSubscription(r.Context(), auth) {
-				http.Redirect(w, r, "http://127.0.0.1:9090", http.StatusFound)
-				return
-			}
-			http.Error(w, "access denied", http.StatusForbidden)
-		})
-		wrapped(w, r)
+			h.next.ServeHTTP(w, r)
+			return
+		}
+		if isSiteAdminAuthContext(auth) {
+			h.next.ServeHTTP(w, r)
+			return
+		}
+		if hasActiveSiteSubscription(r.Context(), auth) {
+			http.Redirect(w, r, "http://127.0.0.1:9090", http.StatusFound)
+			return
+		}
+		http.Error(w, "access denied", http.StatusForbidden)
 		return
 	}
 	h.next.ServeHTTP(w, r)
@@ -241,19 +238,15 @@ func isSiteAdminAuthContext(auth sop.AuthContext) bool {
 }
 
 func hasActiveSiteSubscription(ctx context.Context, auth sop.AuthContext) bool {
-	if plan := strings.ToLower(strings.TrimSpace(auth.SubscriptionPlan)); plan != "" && plan != "none" {
-		return true
-	}
-	if userID := strings.TrimSpace(auth.UserID); userID != "" {
-		cfg := sopbackend.GetConfig()
-		user, ok, err := cfg.FindUserRecord(ctx, userID)
-		if err == nil && ok && user != nil {
-			plan := strings.ToLower(strings.TrimSpace(user.SubscriptionPlan))
-			return plan != "" && plan != "none"
-		}
-	}
-	return false
+	_ = ctx
+	return siteAppAccessAllowed(auth)
 }
+
+func siteAppAccessAllowed(auth sop.AuthContext) bool {
+	return siteapp.HasSiteAppAccess(auth)
+}
+
+const siteAppPermissionName = siteapp.PermissionSiteAppAccess
 
 func handleAppProxy(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/app" || r.URL.Path == "/app/" {

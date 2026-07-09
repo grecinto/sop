@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/grecinto/sop-cloud/src/backend/siteapp"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
 	"golang.org/x/crypto/bcrypt"
@@ -113,6 +114,7 @@ func withSiteAuth(next http.HandlerFunc) http.HandlerFunc {
 			SubscriptionPlan:     user.SubscriptionPlan,
 			SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
 		}
+		auth.Permissions = map[string]bool{siteapp.PermissionSiteAppAccess: siteapp.HasSiteAppAccess(auth)}
 		next(w, r.WithContext(sop.ContextWithAuth(r.Context(), auth)))
 	}
 }
@@ -219,7 +221,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	SetConfig(cfg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user, r.Context()))
 }
 
 func parseLoginRequest(r *http.Request) (struct {
@@ -422,7 +424,7 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "logged out"})
 }
 
-func buildUserResponsePayload(user *UserRecord) map[string]any {
+func buildUserResponsePayload(user *UserRecord, ctx context.Context) map[string]any {
 	if user == nil {
 		return map[string]any{"status": "ok", "user": map[string]any{}}
 	}
@@ -433,20 +435,36 @@ func buildUserResponsePayload(user *UserRecord) map[string]any {
 		"last_webhook_event": user.LastWebhookEvent,
 		"failure_reason":     user.FailureReason,
 	}
+	authCtx := sop.GetAuthFromContext(ctx)
+	canAccessDataManager := authCtx.IsSystem
+	for _, role := range authCtx.Roles {
+		if sop.IsAdminRole(role) || strings.EqualFold(role, sop.RoleSystemAdmin) {
+			canAccessDataManager = true
+			break
+		}
+	}
+	if user != nil && strings.EqualFold(strings.TrimSpace(user.Username), "root") {
+		canAccessDataManager = true
+	}
+	permissions := map[string]bool{
+		siteapp.PermissionSiteAppAccess: siteapp.HasSiteAppAccess(authCtx),
+	}
 	return map[string]any{
 		"status": "ok",
 		"user": map[string]any{
-			"username":          user.Username,
-			"full_name":         user.FullName,
-			"role":              user.Role,
-			"email":             user.Email,
-			"subscription_plan": user.SubscriptionPlan,
-			"billing_status":    user.BillingStatus,
-			"billing":           billing,
-			"request_origin":    user.RequestOrigin,
-			"status":            user.Status,
-			"created_at":        user.CreatedAt,
-			"updated_at":        user.UpdatedAt,
+			"username":                user.Username,
+			"full_name":               user.FullName,
+			"role":                    user.Role,
+			"email":                   user.Email,
+			"subscription_plan":       user.SubscriptionPlan,
+			"billing_status":          user.BillingStatus,
+			"billing":                 billing,
+			"request_origin":          user.RequestOrigin,
+			"status":                  user.Status,
+			"created_at":              user.CreatedAt,
+			"updated_at":              user.UpdatedAt,
+			"can_access_data_manager": canAccessDataManager,
+			"permissions":             permissions,
 		},
 	}
 }
@@ -478,7 +496,7 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user, r.Context()))
 }
 
 func HandleStatus(w http.ResponseWriter, r *http.Request) {
@@ -511,7 +529,7 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user, r.Context()))
 }
 
 func HandlePing(w http.ResponseWriter, r *http.Request) {
@@ -655,7 +673,7 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(updated))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(updated, r.Context()))
 }
 
 func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -680,7 +698,7 @@ func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(updated))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(updated, r.Context()))
 }
 
 func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
