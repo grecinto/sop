@@ -22,10 +22,12 @@ WORKDIR /app
 ENV PORT=8081 \
     SOP_CLOUD_DATA_DIR=/var/lib/sop-cloud \
     FRONTEND_DIR=/app/frontend/dist \
+    DOCS_DIR=/app/docs \
     datapath=/var/lib/sop-cloud
 
 COPY --from=build /out/sop-site /app/sop-site
 COPY src/frontend/dist /app/frontend/dist
+COPY src/docs-site/build /app/docs
 
 EXPOSE 8081
 

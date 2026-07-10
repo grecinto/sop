@@ -363,33 +363,33 @@ Result: Found in O(D log N) time, no K-Means needed!
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│          TRADITIONAL VECTOR DATABASE                     │
+│          TRADITIONAL VECTOR DATABASE                    │
 ├─────────────────────────────────────────────────────────┤
-│                                                          │
+│                                                         │
 │  1. Store embeddings in flat array                      │
 │     [vec1, vec2, vec3, ... vecN]                        │
-│                                                          │
+│                                                         │
 │  2. Run K-Means clustering (OVERNIGHT)                  │
 │     ↓ Send to data center                               │
 │     ↓ Compute centroids                                 │
 │     ↓ Assign clusters                                   │
-│                                                          │
+│                                                         │
 │  3. Query uses centroid distance                        │
 │     - Compare to cluster centers                        │
 │     - Scan cluster members                              │
-│     - Return opaque "Cluster 47" results               │
-│                                                          │
+│     - Return opaque "Cluster 47" results                │
+│                                                         │
 │  ❌ Requires data scientists                            │
 │  ❌ Overnight batch processing                          │
 │  ❌ Opaque cluster IDs                                  │
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
-│          SOP REAL-TIME VECTOR DATABASE                   │
+│          SOP REAL-TIME VECTOR DATABASE                  │
 ├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. Organize in nested semantic categories               │
-│     Go Best Practices/                                   │
+│                                                         │
+│  1. Organize in nested semantic categories              │
+│     Go Best Practices/                                  │
 │     ├── error-handling/                                 │
 │     │   ├── retry-logic/                                │
 │     │   │   ├── exponential-backoff                     │
@@ -397,17 +397,17 @@ Result: Found in O(D log N) time, no K-Means needed!
 │     │   └── error-propagation/                          │
 │     └── concurrency-patterns/                           │
 │         └── goroutine-management/                       │
-│                                                          │
+│                                                         │
 │  2. Triangulation search (REAL-TIME)                    │
 │     ↓ Navigate category tree                            │
 │     ↓ Relativity-based scoring                          │
 │     ↓ Instant results on your machine                   │
-│                                                          │
+│                                                         │
 │  3. Query returns human-readable paths                  │
-│     - "error-handling/retry-logic"                     │
+│     - "error-handling/retry-logic"                      │
 │     - O(D log N) performance                            │
 │     - No data center processing                         │
-│                                                          │
+│                                                         │
 │  ✅ End users organize categories                       │
 │  ✅ Real-time updates                                   │
 │  ✅ Transparent results                                 │

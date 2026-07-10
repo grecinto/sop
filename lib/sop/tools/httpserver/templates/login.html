@@ -6,16 +6,44 @@
   <title>SOP Login</title>
   <style>
     :root {
-      color-scheme: dark;
-      --bg: #09111d;
-      --panel: #101c2c;
-      --panel-border: #223247;
-      --text: #edf4ff;
-      --muted: #b7c3d8;
-      --accent: #4f8cff;
-      --accent-2: #7cb8ff;
-      --danger: #ff7b7b;
+      color-scheme: light dark;
+      /* Light mode */
+      --bg: #f5f8ff;
+      --panel: #ffffff;
+      --panel-border: rgba(8, 17, 31, 0.12);
+      --text: #08111f;
+      --muted: #4d6079;
+      --accent: #2563eb;
+      --accent-2: #38bdf8;
+      --danger: #dc3545;
+      --gradient-1: rgba(37, 99, 235, 0.08);
+      --gradient-2: rgba(56, 189, 248, 0.08);
+      --card-bg: rgba(255, 255, 255, 0.95);
+      --card-shadow: rgba(15, 23, 42, 0.12);
+      --input-bg: rgba(255, 255, 255, 0.95);
+      --button-text: #ffffff;
     }
+    
+    @media (prefers-color-scheme: dark) {
+      :root {
+        /* Dark mode */
+        --bg: #09111d;
+        --panel: #101c2c;
+        --panel-border: #223247;
+        --text: #edf4ff;
+        --muted: #b7c3d8;
+        --accent: #4f8cff;
+        --accent-2: #7cb8ff;
+        --danger: #ff7b7b;
+        --gradient-1: rgba(79, 140, 255, 0.08);
+        --gradient-2: rgba(124, 184, 255, 0.08);
+        --card-bg: rgba(16, 28, 44, 0.94);
+        --card-shadow: rgba(0, 0, 0, 0.35);
+        --input-bg: #0d1727;
+        --button-text: #05101e;
+      }
+    }
+    
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -24,17 +52,17 @@
       place-items: center;
       font-family: Arial, Helvetica, sans-serif;
       background:
-        linear-gradient(135deg, rgba(79, 140, 255, 0.08), transparent 25%),
-        linear-gradient(315deg, rgba(124, 184, 255, 0.08), transparent 35%),
+        linear-gradient(135deg, var(--gradient-1), transparent 25%),
+        linear-gradient(315deg, var(--gradient-2), transparent 35%),
         var(--bg);
       color: var(--text);
     }
     .card {
       width: min(420px, calc(100vw - 24px));
-      background: rgba(16, 28, 44, 0.94);
+      background: var(--card-bg);
       border: 1px solid var(--panel-border);
       border-radius: 18px;
-      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 20px 45px var(--card-shadow);
       padding: 24px;
     }
     h1 { margin: 0 0 8px; font-size: 1.7rem; }
@@ -45,7 +73,7 @@
       width: 100%;
       border-radius: 10px;
       border: 1px solid var(--panel-border);
-      background: #0d1727;
+      background: var(--input-bg);
       color: var(--text);
       padding: 10px 12px;
       font-size: 1rem;
@@ -57,7 +85,7 @@
       font-weight: 700;
       cursor: pointer;
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      color: #05101e;
+      color: var(--button-text);
     }
     button:hover { filter: brightness(1.05); }
     .muted { color: var(--muted); font-size: 0.95rem; }

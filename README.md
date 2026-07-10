@@ -112,21 +112,34 @@ When editing this repo, follow these conventions:
 
 The new product site lives in [src](src) and is run through the standalone backend entrypoint in [src/backend/site](src/backend/site). This is the dedicated launcher for the React site experience. The legacy Data Manager remains launched directly from [lib/sop/tools/httpserver](lib/sop/tools/httpserver).
 
+**Documentation**: The site includes Docusaurus-powered technical documentation at `/docs/` that covers SDK architecture, vector database design, and AI platform features. Documentation requires authentication and is served as static files by the Go backend alongside the React frontend.
+
 ### Start the site locally
 
 ```bash
 cd /Volumes/T7/sop-cloud
+
+# Build the React frontend
 cd src/frontend
 npm install
 npm run build
+
+# Build the Docusaurus documentation
+cd ../docs-site
+npm install
+npm run build
+
+# Start the backend (serves both frontend and docs)
 cd ../..
-PORT=8081 go run ./src/backend/site
+PORT=8080 go run ./src/backend/site
 ```
 
 Then open:
 
-- http://localhost:8081/site/
-- http://localhost:8081/site/subscribe
+- http://localhost:8080/ - Landing page
+- http://localhost:8080/site/ - Site routes
+- http://localhost:8080/site/subscribe - Subscription page
+- http://localhost:8080/docs/ - Documentation (requires authentication)
 
 ### Verify the site backend
 
@@ -137,15 +150,21 @@ go test ./src/backend/site ./src/backend/siteapi
 ### Rebuild the frontend
 
 ```bash
+# Rebuild React frontend
 cd src/frontend
+npm run build
+
+# Rebuild Docusaurus documentation
+cd ../docs-site
 npm run build
 ```
 
 ### Quick smoke tests
 
-- Open the landing page at http://localhost:8081/site/
+- Open the landing page at http://localhost:8080/site/
 - Submit the starter form to create or update an account
-- Visit the subscription page at http://localhost:8081/site/subscribe
+- Visit the subscription page at http://localhost:8080/site/subscribe
+- View the documentation at http://localhost:8080/docs/ (requires authentication)
 - Optionally call the API directly with curl for registration and account lookup
 
 ### Privacy governance UI (daemon-backed)
@@ -932,12 +951,3 @@ SOP builds a fast, decentralized coordination layer using Redis only for ephemer
 In **Clustered Mode**, SOP uses Redis to coordinate transactions across multiple nodes. This allows many machines to participate in data management for the same Database/B-Tree files on disk while maintaining ACID guarantees.
 
 **Note**: The database files generated in Standalone and Clustered modes are fully compatible. You can switch between modes as needed but make sure if switching to Standalone mode, that there is only one process that writes to the database files.
-
-## Community & support
-- Issues: https://github.com/sharedcode/sop/issues
-- Discussions: https://github.com/sharedcode/sop/discussions (design/usage topics)
-
-## Contributing & license
-- Contributing guide: see CONTRIBUTING.md
-- Code of Conduct: see CODE_OF_CONDUCT.md
-- License: MIT, see LICENSE
