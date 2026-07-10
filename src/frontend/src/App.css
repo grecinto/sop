@@ -135,10 +135,17 @@ body {
 .capability-list p { margin: 0.25rem 0 0; color: var(--text-muted); }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; background: rgba(37, 99, 235, 0.12); color: var(--accent); border-radius: 0.35rem; padding: 0.12rem 0.35rem; }
 .docs-journey { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
-.journey-step { background: var(--surface-muted); border: 1px solid var(--border); border-radius: 18px; padding: 1rem; display: flex; gap: 0.8rem; align-items: flex-start; }
+.journey-step { background: var(--surface-muted); border: 1px solid var(--border); border-radius: 18px; padding: 1rem; display: flex; gap: 0.8rem; align-items: flex-start; min-width: 0; }
 .journey-number { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border-radius: 999px; background: rgba(125, 211, 252, 0.2); color: var(--accent-soft); font-weight: 700; }
+.journey-step > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .journey-step h3 { margin: 0 0 0.3rem; }
-.journey-step p { margin: 0; color: var(--text-muted); }
+.journey-step p { margin: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.journey-details { margin-top: 0.75rem; padding: 1rem 1.05rem; border: 1px solid var(--border); border-radius: 18px; background: var(--surface-muted); box-shadow: inset 0 1px 0 rgba(255,255,255,0.35); }
+[data-theme='dark'] .journey-details { box-shadow: inset 0 1px 0 rgba(255,255,255,0.08); }
+.journey-details summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+.journey-details-content { margin-top: 0.7rem; display: grid; gap: 0.75rem; color: var(--text-muted); }
+.journey-details-content p { color: var(--text-muted); }
+.journey-details-content pre { margin: 0; padding: 0.75rem; background: var(--surface-strong); color: var(--text); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
 .docs-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .comparison-card { min-height: 100%; }
 

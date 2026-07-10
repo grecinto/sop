@@ -547,6 +547,7 @@ export default function App() {
   const [showInstallStep, setShowInstallStep] = useState(false);
   const [view, setView] = useState<ViewMode>(() => resolveView(typeof window === 'undefined' ? '/' : window.location.pathname));
   const [checkoutComplete, setCheckoutComplete] = useState(false);
+  const [expandedImportDetails, setExpandedImportDetails] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRefreshingBilling, setIsRefreshingBilling] = useState(false);
@@ -991,7 +992,7 @@ export default function App() {
               <p className="eyebrow">Secure checkout</p>
               <h2>Start your Northstar AI Copilot access</h2>
               <p className="muted-copy">
-                The offer is simple: one access path to the Northstar AI Copilot experience, with Stores and Spaces that make it easier to organize work, inspect how the AI handled a repository, and review multi-turn workflows.
+                The offer is simple: one access path to the Northstar AI Copilot experience, with Stores and Spaces that make it easier to organize work, inspect how the AI handled a repository, and review multi-turn workflows. It also includes prebuilt Coding Best Practices for five languages — Golang, C#, Rust, Java, and Python — so you can jump straight into a richer Copilot workflow from day one.
               </p>
               <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
                 Your first month is free. After that, billing starts at $5/month and you can cancel anytime.
@@ -1296,6 +1297,9 @@ export default function App() {
               <strong>Automated expertise enforcement cuts your AI costs dramatically.</strong> Other copilots generate code and leave you to manually verify it follows best practices—wasting hours and burning tokens on refinement. Our KB Quality system validates code against expertise rules during generation. No manual review cycles. No additional prompts to "fix the error handling" or "follow the style guide." Expertise is built into the generator, saving you time and reducing context usage by up to 70%.
             </p>
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
+              The experience also includes a live Expertise Dashboard to show which knowledge bases influenced each session, plus one-click refinement controls so you can revalidate with stricter standards or switch knowledge bases instantly.
+            </p>
+            <p className="hero-copy" style={{ marginTop: '1rem' }}>
               Public site: <strong>ai-northstar.com</strong>
             </p>
           </div>
@@ -1385,26 +1389,15 @@ export default function App() {
             </article>
           </div>
 
-          <article className="feature-card">
-            <p className="eyebrow">The complete experience</p>
-            <h3>Knowledge bases, automated expertise, and real-time AI</h3>
-            <p className="muted-copy">
-              Current AI copilots can't do this: load domain expertise, <strong>automatically validate code against best practices during generation</strong>, keep your conversation history on your device, AND run intelligent code search in real-time without data center processing. Other copilots generate code and leave you to manually fix compliance issues, wasting hours and burning tokens. Northstar's KB Quality system enforces expertise automatically—no manual refinement cycles needed. This cuts context usage by up to 70% and saves you from spending hours enforcing style guides, error handling patterns, and architectural standards.
-            </p>
-            <ul className="feature-list">
-              <li><strong>Automated KB Quality validation—expertise rules enforced during generation, eliminating manual refinement iterations.</strong></li>
-              <li><strong>Massive cost savings—up to 70% reduction in context usage compared to manual "fix this code" workflows.</strong></li>
-              <li><strong>Live Expertise Dashboard—see which knowledge bases contribute to each session with real-time statistics.</strong></li>
-              <li><strong>One-click refinement controls—revalidate with stricter standards or try alternative knowledge bases instantly.</strong></li>
-              <li>Knowledge bases transform your LLM into a domain expert with higher-quality output automatically validated.</li>
-              <li>Real-time vector database runs on your local machine—no overnight clustering, no HQ processing delays.</li>
-              <li>Semantic M-Way tree buckets organize millions of code snippets for instant intelligent search.</li>
-              <li>Three-index approach: file paths (exact), code structure (package/class/method), semantic concepts (fuzzy).</li>
-              <li>Privacy governance with PII detection—respects privacy concerns with automatic filtering and user opt-in/opt-out policies.</li>
-              <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots.</li>
-              <li>Built-in auditable visualization—full transparency on data flows and exactly what's shared.</li>
-            </ul>
-          </article>
+          <div style={{ marginTop: '1rem', marginBottom: '2rem' }}>
+            <div className="feature-card">
+              <p className="eyebrow">Knowledge workflow</p>
+              <h3>Curate knowledge and bring it into Spaces</h3>
+              <p className="muted-copy">
+                Organize your knowledge in markdown, turn it into importable JSON, and bring it into Spaces so your AI can work from it directly.
+              </p>
+            </div>
+          </div>
 
           <div className="docs-journey">
             <div className="journey-step">
@@ -1426,257 +1419,55 @@ export default function App() {
               <div>
                 <h3>Import KB JSON into Spaces</h3>
                 <p>
-                  Compile your curated markdown knowledge bases into JSON format and import them into Spaces for AI-assisted development. 
-                  Run <code>go run ./ai/cmd/knowledge_compiler -input path/to/kb.md</code> to generate the JSON, 
-                  then use the Spaces Import feature to load it. The KB compiler validates structure, extracts metadata, 
-                  and prepares content for semantic search and RAG workflows.
+                  Compile your curated markdown knowledge bases into JSON format and import them into Spaces for AI-assisted development.
                 </p>
-                <p style={{ marginTop: '0.75rem' }}>
-                  For the supported authoring format, structure the markdown with <strong>#</strong>, <strong>##</strong>, and optional <strong>###</strong> headings to define semantic categories, then place each knowledge entry as an explicit item block beneath the most relevant heading. Each block should include a short title, 1–5 <code>Summary:</code> lines, a <code>Body:</code> section, and <code>Source:</code> or <code>Sources:</code> provenance. A short paragraph directly under a category heading becomes the category description.
-                </p>
-                <p style={{ marginTop: '0.75rem' }}>
-                  A practical workflow is: start with the curation contract in <code>lib/sop/ai/KB_CURATION_MANIFEST.md</code>, draft one curated markdown file, then run the KB compiler to generate the importable JSON. The compiler expects a curated markdown input file via <code>-input</code>, and the generated JSON is what you import into Spaces.
-                </p>
-                <p style={{ marginTop: '0.75rem' }}>
-                  Example structure:
-                </p>
-                <pre style={{ marginTop: '0.5rem', padding: '0.75rem', backgroundColor: '#f8f9fa', borderRadius: '6px', overflowX: 'auto', fontSize: '0.85rem' }}>{`# Platform Foundations
-
-## Architecture
-
-This category covers backend topology and system design.
-
-- Item: Filesystem and hybrid backend model
-  Summary: SOP supports a filesystem backend and a hybrid metadata backend.
-  Body:
-  The system can operate with a filesystem-first model or a hybrid model for larger deployments.
-  Sources: ARCHITECTURE.md, README.md
-`}</pre>
-                <p style={{ marginTop: '0.75rem' }}>
-                  Follow the manifest closely, keep the taxonomy bounded, merge duplicates, and keep each item concise, factual, and provenance-backed so the compiler can turn your markdown into a clean Import JSON artifact.
-                </p>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  style={{ marginTop: '0.75rem', padding: '0.6rem 0.9rem' }}
+                  onClick={() => setExpandedImportDetails((value) => !value)}
+                >
+                  {expandedImportDetails ? 'Hide full content' : 'Show full content'}
+                </button>
               </div>
             </div>
             <div className="journey-step">
               <span className="journey-number">4</span>
               <div>
                 <h3>Automate with expert AI</h3>
-                <p>Let the knowledge-guided AI copilot generate better code, review work, and automate tasks at an expert level.</p>
+                <p>Turn your AI or LLM into an expert for your domain and use it to generate better code, review work, and automate tasks with deeper context and stronger guidance.</p>
               </div>
             </div>
           </div>
 
-          <article className="feature-card" style={{ marginTop: '1rem', marginBottom: '2rem' }}>
-            <p className="eyebrow">Subscribed user documentation</p>
-            <h3>Knowledge Base and Space curation workflow</h3>
-            <p className="muted-copy">
-              This workflow is part of the subscribed user-facing product documentation. It shows how to curate markdown, compile it into importable JSON, and bring that knowledge into Spaces.
-            </p>
-            <div className="journey-step" style={{ marginTop: '1rem', background: 'transparent', border: '1px solid var(--border)' }}>
-              <span className="journey-number">3</span>
-              <div>
-                <h3>Import KB JSON into Spaces</h3>
+          {expandedImportDetails ? (
+            <div className="journey-details" style={{ marginTop: '1rem', marginBottom: '2rem' }}>
+              <div className="journey-details-content">
                 <p>
-                  Compile your curated markdown knowledge bases into JSON format and import them into Spaces for AI-assisted development. 
-                  Run <code>go run ./ai/cmd/knowledge_compiler -input path/to/kb.md</code> to generate the JSON, 
-                  then use the Spaces Import feature to load it. The KB compiler validates structure, extracts metadata, 
-                  and prepares content for semantic search and RAG workflows.
+                  Use the knowledge-base curation manifest as your guide. It tells your AI assistant how to structure the markdown file so the content is organized, consistent, and ready to import.
                 </p>
-                <p style={{ marginTop: '0.75rem' }}>
-                  For the supported authoring format, structure the markdown with <strong>#</strong>, <strong>##</strong>, and optional <strong>###</strong> headings to define semantic categories, then place each knowledge entry as an explicit item block beneath the most relevant heading. Each block should include a short title, 1–5 <code>Summary:</code> lines, a <code>Body:</code> section, and <code>Source:</code> or <code>Sources:</code> provenance. A short paragraph directly under a category heading becomes the category description.
+                <p>
+                  In practice, you can ask your AI assistant to follow the instructions in <a href="/kb/KB_CURATION_MANIFEST.md" style={{ color: 'var(--accent)', fontWeight: 600 }}>KB_CURATION_MANIFEST.md</a> and create a knowledge-base markdown file for you. Once that file is ready, you can compile it into importable JSON and bring it into Spaces.
                 </p>
-                <p style={{ marginTop: '0.75rem' }}>
-                  A practical workflow is: start with the curation contract in <code>lib/sop/ai/KB_CURATION_MANIFEST.md</code>, draft one curated markdown file, then run the KB compiler to generate the importable JSON. The compiler expects a curated markdown input file via <code>-input</code>, and the generated JSON is what you import into Spaces.
-                </p>
-                <p style={{ marginTop: '0.75rem' }}>
-                  Example structure:
-                </p>
-                <pre style={{ marginTop: '0.5rem', padding: '0.75rem', backgroundColor: '#f8f9fa', borderRadius: '6px', overflowX: 'auto', fontSize: '0.85rem' }}>{`# Platform Foundations
+                <p>Example structure:</p>
+                <pre>{`# Platform Foundations
 
 ## Architecture
 
-This category covers backend topology and system design.
+This section explains the system design.
 
 - Item: Filesystem and hybrid backend model
-  Summary: SOP supports a filesystem backend and a hybrid metadata backend.
+  Summary: The platform supports a filesystem-first approach and a hybrid metadata model.
   Body:
-  The system can operate with a filesystem-first model or a hybrid model for larger deployments.
-  Sources: ARCHITECTURE.md, README.md
+  This setup works well for both small deployments and larger environments.
+  Sources: Architecture notes, product docs
 `}</pre>
-                <p style={{ marginTop: '0.75rem' }}>
-                  Follow the manifest closely, keep the taxonomy bounded, merge duplicates, and keep each item concise, factual, and provenance-backed so the compiler can turn your markdown into a clean Import JSON artifact.
+                <p>
+                  Keep the content clear, concise, and fact-based, and let the manifest guide the structure so the import process stays simple.
                 </p>
               </div>
             </div>
-          </article>
-
-          <article id="sdk-documentation" className="feature-card" style={{ marginTop: '1rem', marginBottom: '2rem', backgroundColor: '#f8f9fa', border: '2px solid #e9ecef' }}>
-            <p className="eyebrow">SDK documentation</p>
-            <h3>Public SDK documentation preview: vector database architecture and AI database platform</h3>
-            <p className="muted-copy">
-              This section focuses on the SDK story itself: the new vector database architecture, the comparison to legacy centroid-based systems, and the AI database platform that powers it.
-            </p>
-            <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
-              Traditional vector databases require overnight K-Means clustering in data centers to organize embeddings. The new SDK architecture replaces that with <strong>nested semantic categories</strong> and a <strong>relativity-based Triangulation algorithm</strong>, turning vectorization into a <strong>general-purpose infrastructure capability</strong> that is usable through the <strong>UI, API, LLM management, or tool calls</strong>.
-            </p>
-
-            <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #dee2e6' }}>
-              <h4 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Traditional vs SOP Architecture</h4>
-              <pre style={{ fontSize: '0.85rem', lineHeight: '1.6', overflow: 'auto', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '4px', margin: 0 }}>{`
-┌─────────────────────────────────────────────────────────┐
-│          TRADITIONAL VECTOR DATABASE                     │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. Store embeddings in flat array                      │
-│     [vec1, vec2, vec3, ... vecN]                        │
-│                                                          │
-│  2. Run K-Means clustering (OVERNIGHT)                  │
-│     ↓ Send to data center                               │
-│     ↓ Compute centroids                                 │
-│     ↓ Assign clusters                                   │
-│                                                          │
-│  3. Query uses centroid distance                        │
-│     - Compare to cluster centers                        │
-│     - Scan cluster members                              │
-│     - Return opaque "Cluster 47" results               │
-│                                                          │
-│  ❌ Requires data scientists                            │
-│  ❌ Overnight batch processing                          │
-│  ❌ Opaque cluster IDs                                  │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│          SOP REAL-TIME VECTOR DATABASE                   │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  1. Organize in nested semantic categories               │
-│     Go Best Practices/                                   │
-│     ├── error-handling/                                 │
-│     │   ├── retry-logic/                                │
-│     │   │   ├── exponential-backoff                     │
-│     │   │   └── circuit-breaker                         │
-│     │   └── error-propagation/                          │
-│     └── concurrency-patterns/                           │
-│         └── goroutine-management/                       │
-│                                                          │
-│  2. Triangulation search (REAL-TIME)                    │
-│     ↓ Navigate category tree                            │
-│     ↓ Relativity-based scoring                          │
-│     ↓ Instant results on your machine                   │
-│                                                          │
-│  3. Query returns human-readable paths                  │
-│     - "error-handling/retry-logic"                     │
-│     - O(D log N) performance                            │
-│     - No data center processing                         │
-│                                                          │
-│  ✅ End users organize categories                       │
-│  ✅ Real-time updates                                   │
-│  ✅ Transparent results                                 │
-└─────────────────────────────────────────────────────────┘
-                `}</pre>
-            </div>
-
-            <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #dee2e6' }}>
-              <h4 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Triangulation Algorithm Visualization</h4>
-              <pre style={{ fontSize: '0.85rem', lineHeight: '1.6', overflow: 'auto', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '4px', margin: 0 }}>{`
-Query: "How to handle retries with backoff?"
-           ↓
-   [Convert to embedding]
-           ↓
-┌──────────────────────────────────────────────────┐
-│         Category Tree Navigation                 │
-└──────────────────────────────────────────────────┘
-
-    Root (Space)
-        │
-        ├─→ error-handling (0.89 similarity) ✓
-        │       │
-        │       ├─→ retry-logic (0.94 similarity) ✓✓
-        │       │       │
-        │       │       ├─→ exponential-backoff (0.96) ⭐
-        │       │       ├─→ circuit-breaker (0.78)
-        │       │       └─→ timeout-strategies (0.71)
-        │       │
-        │       └─→ error-propagation (0.65)
-        │
-        ├─→ concurrency-patterns (0.54)
-        └─→ testing-practices (0.31)
-
-Triangulation Process:
-  1. Start at root, score all top-level categories
-  2. Select best match: error-handling (0.89)
-  3. Traverse deeper: retry-logic (0.94)
-  4. Score leaf nodes: exponential-backoff (0.96) ⭐
-  5. Check boundary categories for cross-cutting
-  6. Return: error-handling/retry-logic/exponential-backoff
-
-Result: Found in O(D log N) time, no K-Means needed!
-                `}</pre>
-            </div>
-
-            <div className="capability-list">
-              <div>
-                <strong>Nested Semantic Categories</strong>
-                <p>Instead of blind clustering, organize embeddings into human-readable nested categories (e.g., error-handling → retry-logic → exponential-backoff). End users curate domain organization through intuitive category hierarchies, eliminating the need for specialized data science teams.</p>
-              </div>
-              <div>
-                <strong>Relativity-based Triangulation</strong>
-                <p>Our triangulation algorithm performs fuzzy vector searches in O(D log N) time by navigating the semantic category tree. No K-Means centroids, no overnight batch jobs—just instant intelligent search using category relationships and embedding proximity.</p>
-              </div>
-              <div>
-                <strong>Data science in the database</strong>
-                <p>Vectorization and fuzzy search are core database primitives, not external analytics layers. Users organize knowledge through categories they understand, and the system handles embeddings, similarity scoring, and retrieval automatically. Data scientists are no longer required; domain experts become the curators of the structure.</p>
-              </div>
-              <div>
-                <strong>User-driven organization</strong>
-                <p>Domain experts own the taxonomy of their field. Medical experts create medical categories, developers create architecture patterns, and the system adapts instantly to human understanding—without the need for data scientists to translate knowledge into batch clustering jobs.</p>
-              </div>
-            </div>
-
-            <div style={{ marginTop: '2rem', padding: '1rem', backgroundColor: '#e7f3ff', borderLeft: '4px solid #0066cc', borderRadius: '4px' }}>
-              <p style={{ margin: 0, fontSize: '0.95rem' }}>
-                <strong>💡 Key Insight:</strong> By making vectorization and semantic search core database primitives with user-driven category organization, we eliminate the need for specialized data science teams. The relativity-based Triangulation architecture solves the infrastructure problem elegantly, while domain experts organize knowledge the way they naturally think about it and the system handles retrieval automatically through the UI, API, LLM management, or tool calls.
-              </p>
-            </div>
-          </article>
-
-          <article className="feature-card" style={{ marginTop: '1rem', marginBottom: '2rem' }}>
-            <p className="eyebrow">AI database platform</p>
-            <h3>Lightweight, fast, and purpose-built for AI workloads</h3>
-            <p className="muted-copy">
-              Northstar includes an AI database that is deliberately lightweight and just right for the needs of modern AI systems. It is built around <strong>ACID transactional B-trees</strong> for dependable updates, strong consistency, and efficient record handling, without the overhead of a heavyweight enterprise database.
-            </p>
-            <div className="capability-list" style={{ marginTop: '1rem' }}>
-              <div>
-                <strong>ACID transactions</strong>
-                <p>Reliable, transactional data operations for AI pipelines, knowledge updates, and workflow state changes—without sacrificing speed.</p>
-              </div>
-              <div>
-                <strong>Fast and optimal by design</strong>
-                <p>The engine is tuned to be lightweight, efficient, and practical for AI-centric data platforms, keeping the stack simple and responsive.</p>
-              </div>
-              <div>
-                <strong>Built-in software replication with erasure coding</strong>
-                <p>Data durability and resilience are handled natively through software replication and erasure coding, supporting dependable operation at different scales.</p>
-              </div>
-              <div>
-                <strong>Supports large data types</strong>
-                <p>From structured knowledge to large blobs and media files, the platform is designed to handle the broader data needs of AI applications and rich content workflows.</p>
-              </div>
-              <div>
-                <strong>Built-in L1/L2 caching</strong>
-                <p>High-performance caching is part of the platform design, reducing latency and making repeated AI access patterns faster and more efficient.</p>
-              </div>
-              <div>
-                <strong>Swarm computing architecture</strong>
-                <p>The system is designed for collaborative, distributed execution patterns that scale naturally across nodes in the cluster while staying coordinated and lightweight.</p>
-              </div>
-              <div>
-                <strong>Pheromone-based minimal coordination</strong>
-                <p>Intelligent coordination is achieved through lightweight pheromone-inspired signaling, enabling fully autonomous operation in the cluster where serverless means every node acts as a server, with only light coordination where needed.</p>
-              </div>
-            </div>
-          </article>
+          ) : null}
 
           <div className="docs-comparison">
             <article className="feature-card comparison-card">
@@ -1759,7 +1550,7 @@ Result: Found in O(D log N) time, no K-Means needed!
                 </p>
                 <div className="action-row">
                   <a className="button button-secondary" href={secondaryActionHref}>{secondaryActionLabel}</a>
-                  <a className="button button-secondary" href="/site/docs">Product docs</a>
+                  <a className="button button-secondary" href="/docs/">Documentation</a>
                 </div>
               </div>
 
@@ -1813,7 +1604,7 @@ Result: Found in O(D log N) time, no K-Means needed!
             <div className="hero-actions">
               <a className="button button-primary" href={primaryActionHref}>{primaryActionLabel}</a>
               <a className="button button-secondary" href="/site/docs">View product docs</a>
-              <a className="button button-secondary" href="/site/docs#sdk-documentation">Coming soon</a>
+              <a className="button button-secondary" href="/docs/sdk/intro">Coming soon</a>
             </div>
           </div>
 

@@ -1,0 +1,9 @@
+{
+  "name": "sop-cloud-monorepo",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix src/frontend run build && npm --prefix src/docs-site run build",
+    "build:frontend": "npm --prefix src/frontend run build",
+    "build:docs": "npm --prefix src/docs-site run build"
+  }
+}

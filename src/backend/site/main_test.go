@@ -51,6 +51,42 @@ func TestDefaultFrontendDirUsesSourceTreePath(t *testing.T) {
 	}
 }
 
+func TestDefaultKnowledgeManifestPathUsesSourceTreePath(t *testing.T) {
+	t.Setenv("SOP_KB_CURATION_MANIFEST_PATH", "")
+
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+
+	want := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "..", "lib", "sop", "ai", "KB_CURATION_MANIFEST.md"))
+	if got := defaultKnowledgeManifestPath(); got != want {
+		t.Fatalf("defaultKnowledgeManifestPath() = %q, want %q", got, want)
+	}
+}
+
+func TestServeKnowledgeAssetServesMarkdownFromKnowledgeBaseDir(t *testing.T) {
+	baseDir := t.TempDir()
+	manifestPath := filepath.Join(baseDir, "KB_CURATION_MANIFEST.md")
+	if err := os.WriteFile(manifestPath, []byte("# Manifest\n\nThis is a test manifest."), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/kb/KB_CURATION_MANIFEST.md", nil)
+	rec := httptest.NewRecorder()
+	serveKnowledgeAsset(rec, req, baseDir)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if contentType := rec.Header().Get("Content-Type"); contentType != "text/markdown; charset=utf-8" {
+		t.Fatalf("expected markdown content type, got %q", contentType)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "This is a test manifest") {
+		t.Fatalf("expected manifest content in response body, got %q", body)
+	}
+}
+
 func TestDefaultDataDirUsesContainerOverride(t *testing.T) {
 	want := filepath.Join(t.TempDir(), "site-data")
 	t.Setenv("SOP_CLOUD_DATA_DIR", want)
@@ -180,7 +216,7 @@ func TestConfigureRuntimeEnvironmentUsesExistingDataDirConfigWhenPresent(t *test
 func TestSiteBackendDaemonBootstrapEndpointReturnsJsonErrorWhenBootstrapFileIsMissing(t *testing.T) {
 	frontendDir := t.TempDir()
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
 
@@ -202,7 +238,7 @@ func TestSiteBackendDaemonBootstrapEndpointReturnsJsonErrorWhenBootstrapFileIsMi
 func TestSiteBackendDaemonBootstrapEndpointReturnsBootstrapSecret(t *testing.T) {
 	frontendDir := t.TempDir()
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	configRoot := filepath.Join(t.TempDir(), "config", "sop")
 	if err := os.MkdirAll(configRoot, 0o755); err != nil {
@@ -235,7 +271,7 @@ func TestSiteBackendRedirectsRootToSetupWizardWhenNoConfigExists(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -256,7 +292,7 @@ func TestSiteBackendAllowsSetupWizardAtAppPathWhenNoConfigExists(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/app", nil)
 	rec := httptest.NewRecorder()
@@ -284,7 +320,7 @@ func TestSiteBackendServesFrontendAtRootEvenWhenConfigExists(t *testing.T) {
 	defer os.Unsetenv("SOP_CLOUD_DATA_DIR")
 
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -301,7 +337,7 @@ func TestSiteBackendServesFrontendAtRootEvenWhenConfigExists(t *testing.T) {
 func TestSiteBackendBlocksAppAccessForUnsubscribedUsers(t *testing.T) {
 	frontendDir := t.TempDir()
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/app", nil)
 	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "bob", Roles: []string{sop.RoleUser}}))
@@ -316,7 +352,7 @@ func TestSiteBackendBlocksAppAccessForUnsubscribedUsers(t *testing.T) {
 func TestSiteBackendRedirectsSubscribedUsersToLocalDaemon(t *testing.T) {
 	frontendDir := t.TempDir()
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/app", nil)
 	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}, SubscriptionPlan: "starter"}))
@@ -334,7 +370,7 @@ func TestSiteBackendRedirectsSubscribedUsersToLocalDaemon(t *testing.T) {
 func TestSiteBackendUsesRBACPermissionForAppAccess(t *testing.T) {
 	frontendDir := t.TempDir()
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/app", nil)
 	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{
@@ -362,7 +398,7 @@ func TestSiteBackendServesSiteFrontendRoutes(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
 
 	for _, path := range []string{"/site/", "/site/subscribe"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -380,7 +416,7 @@ func TestSiteBackendServesSiteFrontendRoutes(t *testing.T) {
 
 func TestSiteBackendRegistersSharedUIRoutes(t *testing.T) {
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, t.TempDir())
+	registerSiteHandlers(mux, t.TempDir(), t.TempDir())
 
 	for _, path := range []string{"/login", "/app", "/app/subscribe"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -395,7 +431,7 @@ func TestSiteBackendRegistersSharedUIRoutes(t *testing.T) {
 
 func TestSiteBackendRegistersCheckoutEndpoint(t *testing.T) {
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, t.TempDir())
+	registerSiteHandlers(mux, t.TempDir(), t.TempDir())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/checkout", strings.NewReader(`{"plan":"starter"}`))
 	rec := httptest.NewRecorder()
@@ -408,7 +444,7 @@ func TestSiteBackendRegistersCheckoutEndpoint(t *testing.T) {
 
 func TestSiteBackendRegistersAccountCreationEndpoint(t *testing.T) {
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, t.TempDir())
+	registerSiteHandlers(mux, t.TempDir(), t.TempDir())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"username":"tester","password":"secret","email":"tester@example.com","role":"User"}`))
 	rec := httptest.NewRecorder()
@@ -421,7 +457,7 @@ func TestSiteBackendRegistersAccountCreationEndpoint(t *testing.T) {
 
 func TestSiteBackendRejectsCheckoutForAnonymousUsers(t *testing.T) {
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, t.TempDir())
+	registerSiteHandlers(mux, t.TempDir(), t.TempDir())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/checkout", strings.NewReader(`{"plan":"starter"}`))
 	rec := httptest.NewRecorder()
@@ -437,7 +473,7 @@ func TestSiteBackendRejectsCheckoutForAnonymousUsers(t *testing.T) {
 
 func TestSiteBackendExposesSwaggerEndpoints(t *testing.T) {
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, t.TempDir())
+	registerSiteHandlers(mux, t.TempDir(), t.TempDir())
 
 	t.Run("swagger json", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/swagger.json", nil)

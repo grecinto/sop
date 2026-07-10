@@ -69,6 +69,88 @@ func defaultFrontendDir() string {
 	return filepath.Clean("./src/frontend/dist")
 }
 
+func defaultDocsDir() string {
+	if dir := strings.TrimSpace(os.Getenv("DOCS_DIR")); dir != "" {
+		return dir
+	}
+
+	_, filename, _, ok := runtime.Caller(0)
+	if ok {
+		candidate := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "docs-site", "build"))
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	return filepath.Clean("./src/docs-site/build")
+}
+
+func defaultKnowledgeManifestPath() string {
+	if path := strings.TrimSpace(os.Getenv("SOP_KB_CURATION_MANIFEST_PATH")); path != "" {
+		return path
+	}
+
+	_, filename, _, ok := runtime.Caller(0)
+	if ok {
+		candidate := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "..", "lib", "sop", "ai", "KB_CURATION_MANIFEST.md"))
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	return filepath.Clean("./lib/sop/ai/KB_CURATION_MANIFEST.md")
+}
+
+func resolveKnowledgeAssetPath(requestPath string) (string, bool) {
+	trimmed := strings.TrimSpace(requestPath)
+	if trimmed == "" || trimmed == "/" || trimmed == "/kb" {
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, "/kb/") {
+		trimmed = strings.TrimPrefix(trimmed, "/kb/")
+	} else if strings.HasPrefix(trimmed, "/kb") {
+		trimmed = strings.TrimPrefix(trimmed, "/kb")
+	}
+	trimmed = strings.TrimPrefix(trimmed, "/")
+	if trimmed == "" {
+		return "", false
+	}
+	cleaned := path.Clean(trimmed)
+	if cleaned == "." || strings.HasPrefix(cleaned, "..") {
+		return "", false
+	}
+	return cleaned, true
+}
+
+func serveKnowledgeAsset(w http.ResponseWriter, r *http.Request, knowledgeBaseDir string) {
+	assetPath, ok := resolveKnowledgeAssetPath(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	baseDir := filepath.Clean(knowledgeBaseDir)
+	targetPath := filepath.Clean(filepath.Join(baseDir, assetPath))
+	relPath, err := filepath.Rel(baseDir, targetPath)
+	if err != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
+		http.NotFound(w, r)
+		return
+	}
+
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	contentType := http.DetectContentType(data)
+	if strings.HasSuffix(strings.ToLower(targetPath), ".md") {
+		contentType = "text/markdown; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", contentType)
+	_, _ = w.Write(data)
+}
+
 func defaultDataDir() string {
 	if dir := strings.TrimSpace(os.Getenv("SOP_CLOUD_DATA_DIR")); dir != "" {
 		return dir
@@ -178,7 +260,7 @@ func configureRuntimeEnvironment(dataDir string) {
 	}
 }
 
-func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
+func registerSiteHandlers(mux *http.ServeMux, frontendDir, docsDir string) {
 	if mux == nil {
 		return
 	}
@@ -193,6 +275,7 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir string) {
 	mux.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
 	mux.HandleFunc("/api/coding-workflow/execute", handleCodingWorkflowExecution)
 	registerFrontendHandler(mux, frontendDir)
+	registerDocsHandler(mux, docsDir)
 }
 
 type siteAppAccessHandler struct {
@@ -273,6 +356,36 @@ func serveFrontendAsset(w http.ResponseWriter, r *http.Request, frontendDir stri
 		return
 	}
 	http.ServeFile(w, r, path.Join(frontendDir, "index.html"))
+}
+
+func serveDocsAsset(w http.ResponseWriter, r *http.Request, docsDir string) {
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	// Remove /docs prefix from path
+	assetPath := strings.TrimPrefix(r.URL.Path, "/docs")
+	if assetPath == "" || assetPath == "/" || assetPath == "/intro" || assetPath == "/intro/" || assetPath == "/intro/index.html" || assetPath == "/intro.html" {
+		http.Redirect(w, r, "/docs/sdk/intro", http.StatusFound)
+		return
+	}
+	assetPath = path.Clean(assetPath)
+	pathToServe := path.Join(docsDir, assetPath)
+
+	// Check if file exists
+	if info, err := os.Stat(pathToServe); err == nil {
+		// If it's a directory, serve index.html from it
+		if info.IsDir() {
+			indexPath := path.Join(pathToServe, "index.html")
+			if _, err := os.Stat(indexPath); err == nil {
+				http.ServeFile(w, r, indexPath)
+				return
+			}
+		}
+		// Serve the file
+		http.ServeFile(w, r, pathToServe)
+		return
+	}
+
+	// If file not found, serve root index.html for SPA routing
+	http.ServeFile(w, r, path.Join(docsDir, "index.html"))
 }
 
 type codingWorkflowRequest struct {
@@ -425,13 +538,40 @@ func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
 	mux.HandleFunc("/site/", frontendHandler)
 }
 
+func registerDocsHandler(mux *http.ServeMux, docsDir string) {
+	docsHandler := func(w http.ResponseWriter, r *http.Request) {
+		// Authentication is enforced by siteAppAccessHandler wrapper
+		// Docs are only accessible to authenticated users
+		serveDocsAsset(w, r, docsDir)
+	}
+	mux.HandleFunc("/docs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/docs" {
+			http.Redirect(w, r, "/docs/", http.StatusFound)
+			return
+		}
+		docsHandler(w, r)
+	})
+	mux.HandleFunc("/docs/", docsHandler)
+	mux.HandleFunc("/kb", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/kb" {
+			http.Redirect(w, r, "/kb/", http.StatusFound)
+			return
+		}
+		serveKnowledgeAsset(w, r, filepath.Dir(defaultKnowledgeManifestPath()))
+	})
+	mux.HandleFunc("/kb/", func(w http.ResponseWriter, r *http.Request) {
+		serveKnowledgeAsset(w, r, filepath.Dir(defaultKnowledgeManifestPath()))
+	})
+}
+
 func main() {
 	dataDir := defaultDataDir()
 	configureRuntimeEnvironment(dataDir)
 	frontendDir := defaultFrontendDir()
+	docsDir := defaultDocsDir()
 
 	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir)
+	registerSiteHandlers(mux, frontendDir, docsDir)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -439,6 +579,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Printf("site backend listening on %s", addr)
+	log.Printf("frontend: %s, docs: %s", frontendDir, docsDir)
 	if err := http.ListenAndServe(addr, newSiteAppAccessHandler(mux)); err != nil {
 		panic(fmt.Sprintf("listen failed: %v", err))
 	}
