@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -32,6 +33,56 @@ var (
 	globalSyncQueue *SyncQueue
 	syncQueueOnce   sync.Once
 )
+
+func shouldPrintHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--h" || arg == "-help" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func printDaemonHelpTo(w io.Writer) {
+	resolvedPath, err := resolveDaemonConfigLocation("", nil)
+	if err != nil {
+		resolvedPath = "(unable to resolve)"
+	}
+
+	fmt.Fprintf(w, `SOP daemon
+
+Usage:
+  sop-daemon [flags]
+
+Config file:
+  %s
+
+Flags:
+  -config string
+        Path to the SOP daemon configuration file. If omitted, the daemon will look in the user config directory and fall back to the current working directory.
+  -print-config-path
+        Print the resolved daemon config path and exit.
+  -port int
+        Port to run the local SOP daemon on (default 9090)
+  -rate-limit-max-requests int
+        Maximum local requests per session before enforcement kicks in (default 20)
+  -rate-limit-window duration
+        Rate limit window for local daemon requests (default 1m0s)
+  -access-token-ttl duration
+        Access token expiry duration (default 15m0s)
+  -refresh-token-ttl duration
+        Refresh token expiry duration (2 days default) (default 48h0m0s)
+
+Examples:
+  sop-daemon --print-config-path
+  sop-daemon --config ~/.config/sop/config.json
+  sop-daemon --help
+`, resolvedPath)
+}
+
+func printDaemonHelp() {
+	printDaemonHelpTo(os.Stdout)
+}
 
 // GetGlobalSyncQueue returns the global sync queue instance.
 func GetGlobalSyncQueue() *SyncQueue {
@@ -127,14 +178,35 @@ func logVerbose(format string, args ...any) {
 func main() {
 	port := flag.Int("port", 9090, "Port to run the local SOP daemon on")
 	configPath := flag.String("config", "", "Path to the SOP daemon configuration file")
+	printConfigPath := flag.Bool("print-config-path", false, "Print the resolved daemon config path and exit")
 	policyMaxRequests := flag.Int("rate-limit-max-requests", 20, "Maximum local requests per session before enforcement kicks in")
 	policyWindow := flag.Duration("rate-limit-window", time.Minute, "Rate limit window for local daemon requests")
 	accessTokenTTL := flag.Duration("access-token-ttl", 15*time.Minute, "Access token expiry duration")
 	refreshTokenTTL := flag.Duration("refresh-token-ttl", 48*time.Hour, "Refresh token expiry duration (2 days default)")
-	flag.Parse()
+	if shouldPrintHelp(os.Args[1:]) {
+		printDaemonHelp()
+		return
+	}
+
+	flag.CommandLine.Init(flag.CommandLine.Name(), flag.ContinueOnError)
+	flag.CommandLine.SetOutput(os.Stdout)
+	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printDaemonHelp()
+			return
+		}
+		log.Fatalf("Failed to parse flags: %v", err)
+	}
 
 	// Keep the daemon-specific command executor hook, but let sopbackend own the shared bootstrap.
 	sharedagent.SetLocalCommandExecutor(runLocalCommand)
+
+	if *printConfigPath {
+		if _, err := resolveDaemonConfigLocation(*configPath, os.Stdout); err != nil {
+			log.Fatalf("Failed to resolve daemon config: %v", err)
+		}
+		return
+	}
 
 	// Load configuration using sopbackend
 	resolvedConfig, created, err := ensureConfigPath(*configPath)

@@ -551,7 +551,6 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRefreshingBilling, setIsRefreshingBilling] = useState(false);
   const [provisioningDone, setProvisioningDone] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const isRefreshingRef = useRef(false);
 
   useEffect(() => {
@@ -1291,7 +1290,7 @@ export default function App() {
               <strong>Privacy-first fleet learning with PII detection.</strong> Your daemon learns from you either way—stored locally for future runs. Optionally share patterns with automatic PII detection, privacy governance, and full transparency: see exactly what's shared through auditable UI visualization. Per-category opt-in/opt-out controls. Your data, your control, fully auditable.
             </p>
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
-              <strong>Real-time vector search on your machine.</strong> Other AI copilots run overnight K-Means clustering in their data centers to optimize code search. Northstar uses semantic category trees that work instantly—no waiting, no HQ processing, just real-time intelligence on your local device.
+              <strong>Real-time vector search on your machine.</strong> Other AI copilots run overnight K-Means clustering in their data centers to optimize code search. Northstar uses nested semantic categories plus a relativity-based Triangulation algorithm to make vectorization a general-purpose infrastructure layer—no waiting, no HQ processing, just real-time intelligence on your local device. It is usable through the UI, the API, LLM management, or tool calls, and it leaves domain users to organize knowledge in the way their world naturally works.
             </p>
             <p className="hero-copy" style={{ marginTop: '1rem' }}>
               <strong>Automated expertise enforcement cuts your AI costs dramatically.</strong> Other copilots generate code and leave you to manually verify it follows best practices—wasting hours and burning tokens on refinement. Our KB Quality system validates code against expertise rules during generation. No manual review cycles. No additional prompts to "fix the error handling" or "follow the style guide." Expertise is built into the generator, saving you time and reducing context usage by up to 70%.
@@ -1428,9 +1427,33 @@ export default function App() {
                 <h3>Import KB JSON into Spaces</h3>
                 <p>
                   Compile your curated markdown knowledge bases into JSON format and import them into Spaces for AI-assisted development. 
-                  Run <code>sop kb-compile --input path/to/kb.md --output kb.json</code> to generate the JSON, 
+                  Run <code>go run ./ai/cmd/knowledge_compiler -input path/to/kb.md</code> to generate the JSON, 
                   then use the Spaces Import feature to load it. The KB compiler validates structure, extracts metadata, 
                   and prepares content for semantic search and RAG workflows.
+                </p>
+                <p style={{ marginTop: '0.75rem' }}>
+                  For the supported authoring format, structure the markdown with <strong>#</strong>, <strong>##</strong>, and optional <strong>###</strong> headings to define semantic categories, then place each knowledge entry as an explicit item block beneath the most relevant heading. Each block should include a short title, 1–5 <code>Summary:</code> lines, a <code>Body:</code> section, and <code>Source:</code> or <code>Sources:</code> provenance. A short paragraph directly under a category heading becomes the category description.
+                </p>
+                <p style={{ marginTop: '0.75rem' }}>
+                  A practical workflow is: start with the curation contract in <code>lib/sop/ai/KB_CURATION_MANIFEST.md</code>, draft one curated markdown file, then run the KB compiler to generate the importable JSON. The compiler expects a curated markdown input file via <code>-input</code>, and the generated JSON is what you import into Spaces.
+                </p>
+                <p style={{ marginTop: '0.75rem' }}>
+                  Example structure:
+                </p>
+                <pre style={{ marginTop: '0.5rem', padding: '0.75rem', backgroundColor: '#f8f9fa', borderRadius: '6px', overflowX: 'auto', fontSize: '0.85rem' }}>{`# Platform Foundations
+
+## Architecture
+
+This category covers backend topology and system design.
+
+- Item: Filesystem and hybrid backend model
+  Summary: SOP supports a filesystem backend and a hybrid metadata backend.
+  Body:
+  The system can operate with a filesystem-first model or a hybrid model for larger deployments.
+  Sources: ARCHITECTURE.md, README.md
+`}</pre>
+                <p style={{ marginTop: '0.75rem' }}>
+                  Follow the manifest closely, keep the taxonomy bounded, merge duplicates, and keep each item concise, factual, and provenance-backed so the compiler can turn your markdown into a clean Import JSON artifact.
                 </p>
               </div>
             </div>
@@ -1443,28 +1466,63 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ marginTop: '2rem', marginBottom: '2rem', textAlign: 'center' }}>
-            <button
-              type="button"
-              className="button button-secondary"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              style={{ fontSize: '0.95rem' }}
-            >
-              {showAdvanced ? '▼ Hide Advanced Architecture' : '▶ Show Advanced Architecture'}
-            </button>
-          </div>
+          <article className="feature-card" style={{ marginTop: '1rem', marginBottom: '2rem' }}>
+            <p className="eyebrow">Subscribed user documentation</p>
+            <h3>Knowledge Base and Space curation workflow</h3>
+            <p className="muted-copy">
+              This workflow is part of the subscribed user-facing product documentation. It shows how to curate markdown, compile it into importable JSON, and bring that knowledge into Spaces.
+            </p>
+            <div className="journey-step" style={{ marginTop: '1rem', background: 'transparent', border: '1px solid var(--border)' }}>
+              <span className="journey-number">3</span>
+              <div>
+                <h3>Import KB JSON into Spaces</h3>
+                <p>
+                  Compile your curated markdown knowledge bases into JSON format and import them into Spaces for AI-assisted development. 
+                  Run <code>go run ./ai/cmd/knowledge_compiler -input path/to/kb.md</code> to generate the JSON, 
+                  then use the Spaces Import feature to load it. The KB compiler validates structure, extracts metadata, 
+                  and prepares content for semantic search and RAG workflows.
+                </p>
+                <p style={{ marginTop: '0.75rem' }}>
+                  For the supported authoring format, structure the markdown with <strong>#</strong>, <strong>##</strong>, and optional <strong>###</strong> headings to define semantic categories, then place each knowledge entry as an explicit item block beneath the most relevant heading. Each block should include a short title, 1–5 <code>Summary:</code> lines, a <code>Body:</code> section, and <code>Source:</code> or <code>Sources:</code> provenance. A short paragraph directly under a category heading becomes the category description.
+                </p>
+                <p style={{ marginTop: '0.75rem' }}>
+                  A practical workflow is: start with the curation contract in <code>lib/sop/ai/KB_CURATION_MANIFEST.md</code>, draft one curated markdown file, then run the KB compiler to generate the importable JSON. The compiler expects a curated markdown input file via <code>-input</code>, and the generated JSON is what you import into Spaces.
+                </p>
+                <p style={{ marginTop: '0.75rem' }}>
+                  Example structure:
+                </p>
+                <pre style={{ marginTop: '0.5rem', padding: '0.75rem', backgroundColor: '#f8f9fa', borderRadius: '6px', overflowX: 'auto', fontSize: '0.85rem' }}>{`# Platform Foundations
 
-          {showAdvanced && (
-            <article className="feature-card" style={{ marginTop: '1rem', marginBottom: '2rem', backgroundColor: '#f8f9fa', border: '2px solid #e9ecef' }}>
-              <p className="eyebrow">Advanced Architecture</p>
-              <h3>Real-time vector database with built-in data science</h3>
-              <p className="muted-copy">
-                Traditional vector databases require overnight K-Means clustering in data centers to organize embeddings. SOP transforms vector databases into a <strong>real-time system</strong> by using <strong>nested Semantic Categories</strong> and a <strong>relativity-based Triangulation algorithm</strong>. This ships data science capabilities directly within the database mesh—no specialized data scientists needed.
-              </p>
+## Architecture
 
-              <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #dee2e6' }}>
-                <h4 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Traditional vs SOP Architecture</h4>
-                <pre style={{ fontSize: '0.85rem', lineHeight: '1.6', overflow: 'auto', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '4px', margin: 0 }}>{`
+This category covers backend topology and system design.
+
+- Item: Filesystem and hybrid backend model
+  Summary: SOP supports a filesystem backend and a hybrid metadata backend.
+  Body:
+  The system can operate with a filesystem-first model or a hybrid model for larger deployments.
+  Sources: ARCHITECTURE.md, README.md
+`}</pre>
+                <p style={{ marginTop: '0.75rem' }}>
+                  Follow the manifest closely, keep the taxonomy bounded, merge duplicates, and keep each item concise, factual, and provenance-backed so the compiler can turn your markdown into a clean Import JSON artifact.
+                </p>
+              </div>
+            </div>
+          </article>
+
+          <article id="sdk-documentation" className="feature-card" style={{ marginTop: '1rem', marginBottom: '2rem', backgroundColor: '#f8f9fa', border: '2px solid #e9ecef' }}>
+            <p className="eyebrow">SDK documentation</p>
+            <h3>Public SDK documentation preview: vector database architecture and AI database platform</h3>
+            <p className="muted-copy">
+              This section focuses on the SDK story itself: the new vector database architecture, the comparison to legacy centroid-based systems, and the AI database platform that powers it.
+            </p>
+            <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
+              Traditional vector databases require overnight K-Means clustering in data centers to organize embeddings. The new SDK architecture replaces that with <strong>nested semantic categories</strong> and a <strong>relativity-based Triangulation algorithm</strong>, turning vectorization into a <strong>general-purpose infrastructure capability</strong> that is usable through the <strong>UI, API, LLM management, or tool calls</strong>.
+            </p>
+
+            <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #dee2e6' }}>
+              <h4 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Traditional vs SOP Architecture</h4>
+              <pre style={{ fontSize: '0.85rem', lineHeight: '1.6', overflow: 'auto', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '4px', margin: 0 }}>{`
 ┌─────────────────────────────────────────────────────────┐
 │          TRADITIONAL VECTOR DATABASE                     │
 ├─────────────────────────────────────────────────────────┤
@@ -1516,11 +1574,11 @@ export default function App() {
 │  ✅ Transparent results                                 │
 └─────────────────────────────────────────────────────────┘
                 `}</pre>
-              </div>
+            </div>
 
-              <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #dee2e6' }}>
-                <h4 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Triangulation Algorithm Visualization</h4>
-                <pre style={{ fontSize: '0.85rem', lineHeight: '1.6', overflow: 'auto', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '4px', margin: 0 }}>{`
+            <div style={{ marginTop: '2rem', marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #dee2e6' }}>
+              <h4 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>Triangulation Algorithm Visualization</h4>
+              <pre style={{ fontSize: '0.85rem', lineHeight: '1.6', overflow: 'auto', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '4px', margin: 0 }}>{`
 Query: "How to handle retries with backoff?"
            ↓
    [Convert to embedding]
@@ -1554,34 +1612,71 @@ Triangulation Process:
 
 Result: Found in O(D log N) time, no K-Means needed!
                 `}</pre>
-              </div>
+            </div>
 
-              <div className="capability-list">
-                <div>
-                  <strong>Nested Semantic Categories</strong>
-                  <p>Instead of blind clustering, organize embeddings into human-readable nested categories (e.g., error-handling → retry-logic → exponential-backoff). End users curate domain organization through intuitive category hierarchies, eliminating the need for specialized data science teams.</p>
-                </div>
-                <div>
-                  <strong>Relativity-based Triangulation</strong>
-                  <p>Our triangulation algorithm performs fuzzy vector searches in O(D log N) time by navigating the semantic category tree. No K-Means centroids, no overnight batch jobs—just instant intelligent search using category relationships and embedding proximity.</p>
-                </div>
-                <div>
-                  <strong>Data science in the database</strong>
-                  <p>Vectorization and fuzzy search are core database primitives, not external analytics layers. Users organize knowledge through categories they understand, and the system handles embeddings, similarity scoring, and retrieval automatically. Data science becomes accessible to everyone.</p>
-                </div>
-                <div>
-                  <strong>User-driven organization</strong>
-                  <p>Relegate domain data organization to end users who understand their field. Medical experts create medical categories, developers create architecture patterns—no data scientists translating domain knowledge into clustering parameters. The database adapts to human understanding.</p>
-                </div>
+            <div className="capability-list">
+              <div>
+                <strong>Nested Semantic Categories</strong>
+                <p>Instead of blind clustering, organize embeddings into human-readable nested categories (e.g., error-handling → retry-logic → exponential-backoff). End users curate domain organization through intuitive category hierarchies, eliminating the need for specialized data science teams.</p>
               </div>
+              <div>
+                <strong>Relativity-based Triangulation</strong>
+                <p>Our triangulation algorithm performs fuzzy vector searches in O(D log N) time by navigating the semantic category tree. No K-Means centroids, no overnight batch jobs—just instant intelligent search using category relationships and embedding proximity.</p>
+              </div>
+              <div>
+                <strong>Data science in the database</strong>
+                <p>Vectorization and fuzzy search are core database primitives, not external analytics layers. Users organize knowledge through categories they understand, and the system handles embeddings, similarity scoring, and retrieval automatically. Data scientists are no longer required; domain experts become the curators of the structure.</p>
+              </div>
+              <div>
+                <strong>User-driven organization</strong>
+                <p>Domain experts own the taxonomy of their field. Medical experts create medical categories, developers create architecture patterns, and the system adapts instantly to human understanding—without the need for data scientists to translate knowledge into batch clustering jobs.</p>
+              </div>
+            </div>
 
-              <div style={{ marginTop: '2rem', padding: '1rem', backgroundColor: '#e7f3ff', borderLeft: '4px solid #0066cc', borderRadius: '4px' }}>
-                <p style={{ margin: 0, fontSize: '0.95rem' }}>
-                  <strong>💡 Key Insight:</strong> By making vectorization and semantic search core database primitives with user-driven category organization, we eliminate the need for specialized data science teams. Domain experts organize knowledge the way they naturally think about it, and the database handles the complexity automatically.
-                </p>
+            <div style={{ marginTop: '2rem', padding: '1rem', backgroundColor: '#e7f3ff', borderLeft: '4px solid #0066cc', borderRadius: '4px' }}>
+              <p style={{ margin: 0, fontSize: '0.95rem' }}>
+                <strong>💡 Key Insight:</strong> By making vectorization and semantic search core database primitives with user-driven category organization, we eliminate the need for specialized data science teams. The relativity-based Triangulation architecture solves the infrastructure problem elegantly, while domain experts organize knowledge the way they naturally think about it and the system handles retrieval automatically through the UI, API, LLM management, or tool calls.
+              </p>
+            </div>
+          </article>
+
+          <article className="feature-card" style={{ marginTop: '1rem', marginBottom: '2rem' }}>
+            <p className="eyebrow">AI database platform</p>
+            <h3>Lightweight, fast, and purpose-built for AI workloads</h3>
+            <p className="muted-copy">
+              Northstar includes an AI database that is deliberately lightweight and just right for the needs of modern AI systems. It is built around <strong>ACID transactional B-trees</strong> for dependable updates, strong consistency, and efficient record handling, without the overhead of a heavyweight enterprise database.
+            </p>
+            <div className="capability-list" style={{ marginTop: '1rem' }}>
+              <div>
+                <strong>ACID transactions</strong>
+                <p>Reliable, transactional data operations for AI pipelines, knowledge updates, and workflow state changes—without sacrificing speed.</p>
               </div>
-            </article>
-          )}
+              <div>
+                <strong>Fast and optimal by design</strong>
+                <p>The engine is tuned to be lightweight, efficient, and practical for AI-centric data platforms, keeping the stack simple and responsive.</p>
+              </div>
+              <div>
+                <strong>Built-in software replication with erasure coding</strong>
+                <p>Data durability and resilience are handled natively through software replication and erasure coding, supporting dependable operation at different scales.</p>
+              </div>
+              <div>
+                <strong>Supports large data types</strong>
+                <p>From structured knowledge to large blobs and media files, the platform is designed to handle the broader data needs of AI applications and rich content workflows.</p>
+              </div>
+              <div>
+                <strong>Built-in L1/L2 caching</strong>
+                <p>High-performance caching is part of the platform design, reducing latency and making repeated AI access patterns faster and more efficient.</p>
+              </div>
+              <div>
+                <strong>Swarm computing architecture</strong>
+                <p>The system is designed for collaborative, distributed execution patterns that scale naturally across nodes in the cluster while staying coordinated and lightweight.</p>
+              </div>
+              <div>
+                <strong>Pheromone-based minimal coordination</strong>
+                <p>Intelligent coordination is achieved through lightweight pheromone-inspired signaling, enabling fully autonomous operation in the cluster where serverless means every node acts as a server, with only light coordination where needed.</p>
+              </div>
+            </div>
+          </article>
 
           <div className="docs-comparison">
             <article className="feature-card comparison-card">
@@ -1718,6 +1813,7 @@ Result: Found in O(D log N) time, no K-Means needed!
             <div className="hero-actions">
               <a className="button button-primary" href={primaryActionHref}>{primaryActionLabel}</a>
               <a className="button button-secondary" href="/site/docs">View product docs</a>
+              <a className="button button-secondary" href="/site/docs#sdk-documentation">Coming soon</a>
             </div>
           </div>
 
@@ -1744,35 +1840,6 @@ Result: Found in O(D log N) time, no K-Means needed!
               </ul>
             </div>
 
-            <div className="plan-card" style={{ opacity: 0.75, position: 'relative', border: '2px dashed #cbd5e0' }}>
-              <div style={{ position: 'absolute', top: '1rem', right: '1rem', backgroundColor: '#667eea', color: 'white', padding: '0.25rem 0.75rem', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase' }}>
-                Coming Soon
-              </div>
-              <p className="eyebrow">Northstar AI Vector Database SDK</p>
-              <h3>Real-time semantic search without data centers</h3>
-              <div className="price">Starting at $29/month</div>
-              <p>The first real-time vector database with triangulation algorithm and nested semantic categories. No K-Means clustering, no overnight jobs, no data science team needed.</p>
-              <ul className="feature-list">
-                <li><strong>Relativity-based triangulation—O(D log N) fuzzy search without K-Means centroids</strong></li>
-                <li><strong>Nested semantic categories—human-readable organization replaces opaque cluster IDs</strong></li>
-                <li><strong>Real-time updates—add documents instantly, no batch reprocessing required</strong></li>
-                <li><strong>No data science team—end users organize categories themselves</strong></li>
-                <li>On-premise/edge deployment—works without cloud connection</li>
-                <li>Multi-language SDK support—Go, Python, JavaScript, Java</li>
-                <li>Production-ready with monitoring—built-in metrics and observability</li>
-                <li>Email support included—integration help and best practices</li>
-                <li>Docker deployment—containerized for easy scaling</li>
-                <li>Migration guides—from Pinecone, Weaviate, pgvector</li>
-                <li>Developer tier: $29/month (500K embeddings)</li>
-                <li>Professional tier: $79/month (5M embeddings, 24hr support)</li>
-                <li>Team tier: $299/month (unlimited embeddings, 4hr support)</li>
-              </ul>
-              <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#f7fafc', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
-                <p style={{ margin: 0, fontSize: '0.85rem', color: '#4a5568' }}>
-                  <strong>💡 Perfect for:</strong> Companies building AI products, internal knowledge management, edge/IoT applications, enterprise tools requiring on-premise vector search.
-                </p>
-              </div>
-            </div>
           </div>
         </div>
       </section>

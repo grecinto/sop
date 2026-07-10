@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -45,10 +46,13 @@ func isValidDaemonConfig(configPath string) bool {
 	return config.SystemDB != nil && config.SystemDB.Path != ""
 }
 
-func ensureConfigPath(explicitPath string) (string, bool, error) {
+func resolveDaemonConfigLocation(explicitPath string, out io.Writer) (string, error) {
 	if strings.TrimSpace(explicitPath) != "" {
 		resolved := resolveConfigPath(explicitPath)
-		return resolved, false, nil
+		if out != nil {
+			fmt.Fprintln(out, resolved)
+		}
+		return resolved, nil
 	}
 
 	candidates := []string{}
@@ -70,7 +74,10 @@ func ensureConfigPath(explicitPath string) (string, bool, error) {
 		}
 		if _, err := os.Stat(candidate); err == nil {
 			if isValidDaemonConfig(candidate) {
-				return candidate, false, nil
+				if out != nil {
+					fmt.Fprintln(out, candidate)
+				}
+				return candidate, nil
 			}
 			log.Printf("Found invalid daemon config at %s, will recreate with proper structure", candidate)
 			defaultPath = candidate
@@ -88,11 +95,34 @@ func ensureConfigPath(explicitPath string) (string, bool, error) {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(defaultPath), 0o755); err != nil {
+	if out != nil {
+		fmt.Fprintln(out, defaultPath)
+	}
+	return defaultPath, nil
+}
+
+func ensureConfigPath(explicitPath string) (string, bool, error) {
+	resolvedPath, err := resolveDaemonConfigLocation(explicitPath, nil)
+	if err != nil {
+		return "", false, err
+	}
+
+	if strings.TrimSpace(explicitPath) != "" {
+		return resolvedPath, false, nil
+	}
+
+	if _, err := os.Stat(resolvedPath); err == nil {
+		if isValidDaemonConfig(resolvedPath) {
+			return resolvedPath, false, nil
+		}
+		log.Printf("Found invalid daemon config at %s, will recreate with proper structure", resolvedPath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
 		return "", false, fmt.Errorf("create config directory: %w", err)
 	}
 
-	systemDBPath := filepath.Join(filepath.Dir(defaultPath), "system")
+	systemDBPath := filepath.Join(filepath.Dir(resolvedPath), "system")
 	bootstrap := fmt.Sprintf(`{
   "port": 9090,
   "system_db": {
@@ -106,12 +136,12 @@ func ensureConfigPath(explicitPath string) (string, bool, error) {
   "production_mode": true
 }
 `, systemDBPath)
-	if err := os.WriteFile(defaultPath, []byte(bootstrap), 0o644); err != nil {
+	if err := os.WriteFile(resolvedPath, []byte(bootstrap), 0o644); err != nil {
 		return "", false, fmt.Errorf("write default config: %w", err)
 	}
 
-	log.Printf("Created default daemon config at %s with standalone SystemDB", defaultPath)
-	return defaultPath, true, nil
+	log.Printf("Created default daemon config at %s with standalone SystemDB", resolvedPath)
+	return resolvedPath, true, nil
 }
 
 type AskRequest struct {

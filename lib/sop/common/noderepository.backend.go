@@ -57,8 +57,10 @@ type nodeRepositoryBackend struct {
 }
 
 const (
-	readNodesMruMinCapacity = 8
-	readNodesMruMaxCapacity = 12
+	// readNodesMruMinCapacity is the minimum capacity for the per-transaction read nodes cache.
+	readNodesMruMinCapacity = 16
+	// readNodesMruMaxCapacity is the maximum capacity for the per-transaction read nodes cache.
+	readNodesMruMaxCapacity = 32
 )
 
 // NewNodeRepository initializes caches and wiring for a store's node repository.

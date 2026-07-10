@@ -103,6 +103,32 @@ func TestBuildImportSpaceRequestFromPreloadUsesMultipartPayload(t *testing.T) {
 	}
 }
 
+func TestHandlePreloadSpaceSkipsSOPPreloadWhenDisabled(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	config = Config{
+		Databases:           []DatabaseConfig{{Name: "testdb", Path: filepath.Join(t.TempDir(), "db")}},
+		DisableSOPKBPreload: true,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/spaces/preload", strings.NewReader(`{"template_id":"SOP","database_name":"testdb"}`))
+	rec := httptest.NewRecorder()
+
+	handlePreloadSpace(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got, ok := resp["disabled"].(bool); !ok || !got {
+		t.Fatalf("expected disabled=true in preload response, got %#v", resp)
+	}
+}
+
 func TestHandlePreloadSpaceReturnsTaskIDForBackgroundPreload(t *testing.T) {
 	oldConfig := config
 	defer func() { config = oldConfig }()

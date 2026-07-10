@@ -506,6 +506,17 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if config.DisableSOPKBPreload && (strings.EqualFold(req.TemplateID, ai.DefaultKBName) || req.TemplateID == "SOP") {
+		log.Info("SOP preload disabled by configuration", "template_id", req.TemplateID, "database_name", req.DatabaseName)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"success":  true,
+			"disabled": true,
+			"message":  "SOP KB preload is disabled by configuration",
+		})
+		return
+	}
+
 	var actualPath string
 	searchRoots := []string{}
 	if cwd, err := os.Getwd(); err == nil {

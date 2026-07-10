@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sharedcode/sop"
@@ -75,6 +77,71 @@ func TestBuildExportItems_UsesBaseURLForSourcesWhenConfigured(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected sources: got %v, want %v", got, want)
+	}
+}
+
+func TestHelpTextOnlyDocumentsSupportedWorkflow(t *testing.T) {
+	var stdout bytes.Buffer
+	printCompilerHelp(&stdout)
+	output := stdout.String()
+	if strings.Contains(output, "sweep") || strings.Contains(output, "sweeping") || strings.Contains(output, "walk") || strings.Contains(output, "folder") {
+		t.Fatalf("help output should not advertise folder-walk behavior, got %q", output)
+	}
+	if !strings.Contains(output, "-base-url") || !strings.Contains(output, "-desc") || !strings.Contains(output, "-input") {
+		t.Fatalf("help output should document the supported CLI flags, got %q", output)
+	}
+}
+
+func TestBuildExportItemsUsesDocumentIDForUploadedDocuments(t *testing.T) {
+	oldBaseURL := baseURL
+	baseURL = ""
+	defer func() { baseURL = oldBaseURL }()
+
+	catGraphMap = make(map[string]*memory.Category)
+	docID := sop.NewUUID()
+	chunks := []KnowledgeChunk{{
+		ID:          "uploaded_item_1",
+		Category:    "AI & Knowledge Systems / Embedders",
+		Title:       "Uploaded doc sample",
+		Summaries:   []string{"Summary one"},
+		Description: "Full explanation body.",
+		Sources:     []string{"README.md"},
+		DocumentID:  docID,
+		Explicit:    true,
+	}}
+
+	exportItems := buildExportItems(chunks)
+	if len(exportItems[0].DocID) != 1 {
+		t.Fatalf("expected exactly one document reference, got %d", len(exportItems[0].DocID))
+	}
+	if exportItems[0].DocID[0] != docID.String() {
+		t.Fatalf("expected uploaded document ID %q, got %q", docID.String(), exportItems[0].DocID[0])
+	}
+}
+
+func TestBuildExportItemsUsesSourceURLsForExternalDocuments(t *testing.T) {
+	oldBaseURL := baseURL
+	baseURL = "https://docs.example.com"
+	defer func() { baseURL = oldBaseURL }()
+
+	catGraphMap = make(map[string]*memory.Category)
+	chunks := []KnowledgeChunk{{
+		ID:          "external_item_1",
+		Category:    "AI & Knowledge Systems / Embedders",
+		Title:       "External doc sample",
+		Summaries:   []string{"Summary one"},
+		Description: "Full explanation body.",
+		Sources:     []string{"guide/intro.md"},
+		Explicit:    true,
+	}}
+
+	exportItems := buildExportItems(chunks)
+	if len(exportItems[0].DocID) != 1 {
+		t.Fatalf("expected exactly one document reference, got %d", len(exportItems[0].DocID))
+	}
+	want := "https://docs.example.com/guide/intro.md"
+	if exportItems[0].DocID[0] != want {
+		t.Fatalf("expected external document URL %q, got %q", want, exportItems[0].DocID[0])
 	}
 }
 

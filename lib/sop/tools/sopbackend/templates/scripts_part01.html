@@ -966,7 +966,8 @@
                         
                         // Missing SOP KB is acceptable for daemon/local runtime; treat it as informational only.
                         const runtimeMode = getCurrentRuntimeMode();
-                        if (databases && databases.length > 0 && !spaces.includes("SOP") && runtimeMode !== 'local') {
+                        const sopPreloadDisabled = Boolean((payload && payload.disable_sop_kb_preload) || (payload && payload.config && payload.config.disable_sop_kb_preload) || window.__sopDisableSopKbPreload);
+                        if (databases && databases.length > 0 && !spaces.includes("SOP") && runtimeMode !== 'local' && !sopPreloadDisabled) {
                             warnings.push("• SOP KB (KnowledgeBase) Space is missing from the System Database.");
                         }
 

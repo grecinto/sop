@@ -53,11 +53,12 @@ type Config struct {
 	ObfuscationMode string `json:"obfuscation_mode,omitempty"`
 
 	// Legacy/CLI fields - Ignored in JSON to keep config clean
-	DatabasePath string `json:"-"`
-	Mode         string `json:"-"`
-	ConfigFile   string `json:"-"`
-	RedisURL     string `json:"-"`
-	DisableAuth  bool   `json:"-"` // Disable authentication (for local daemon)
+	DatabasePath        string `json:"-"`
+	Mode                string `json:"-"`
+	ConfigFile          string `json:"-"`
+	RedisURL            string `json:"-"`
+	DisableAuth         bool   `json:"-"` // Disable authentication (for local daemon)
+	DisableSOPKBPreload bool   `json:"disable_sop_kb_preload,omitempty"`
 }
 
 // Package-level global variables used by handler functions

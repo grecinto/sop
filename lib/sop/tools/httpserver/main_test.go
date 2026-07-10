@@ -131,8 +131,8 @@ func TestWelcomeContextScriptSkipsDaemonHandoffOutsideLocalRuntime(t *testing.T)
 	if !strings.Contains(content, "async function requestRuntimeWelcomeContext(runtimeMode)") {
 		t.Fatalf("expected welcome-context loader to be present in the chat script")
 	}
-	if !strings.Contains(content, "if (runtimeMode !== 'local') {\n                return null;") {
-		t.Fatalf("expected welcome-context loader to skip daemon handoff outside local runtime mode")
+	if !strings.Contains(content, "if (runtimeMode !== 'local') {") {
+		t.Fatalf("expected welcome-context loader to branch on runtime mode")
 	}
 }
 

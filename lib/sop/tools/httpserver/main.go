@@ -106,6 +106,29 @@ func main() {
 		}
 	}
 
+	if !sopbackend.GetConfig().DisableSOPKBPreload {
+		sopbackend.SetConfig(sopbackend.Config{
+			Port:                   sopbackend.GetConfig().Port,
+			Databases:              sopbackend.GetConfig().Databases,
+			PageSize:               sopbackend.GetConfig().PageSize,
+			SystemDB:               sopbackend.GetConfig().SystemDB,
+			ProductionMode:         sopbackend.GetConfig().ProductionMode,
+			SessionTokenTTLMinutes: sopbackend.GetConfig().SessionTokenTTLMinutes,
+			SessionSecret:          sopbackend.GetConfig().SessionSecret,
+			AuthProviderName:       sopbackend.GetConfig().AuthProviderName,
+			Users:                  sopbackend.GetConfig().Users,
+			Subscriptions:          sopbackend.GetConfig().Subscriptions,
+			Payments:               sopbackend.GetConfig().Payments,
+			ObfuscationMode:        sopbackend.GetConfig().ObfuscationMode,
+			DatabasePath:           sopbackend.GetConfig().DatabasePath,
+			Mode:                   sopbackend.GetConfig().Mode,
+			ConfigFile:             sopbackend.GetConfig().ConfigFile,
+			RedisURL:               sopbackend.GetConfig().RedisURL,
+			DisableAuth:            sopbackend.GetConfig().DisableAuth,
+			DisableSOPKBPreload:    true,
+		})
+	}
+
 	var lvl log.Level
 	logLevelFlagUpper := strings.ToUpper(logLevelFlag)
 	switch logLevelFlagUpper {

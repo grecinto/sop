@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -104,6 +105,35 @@ var baseURL string
 var description string
 var inputFile string
 var singleFileMode bool
+
+func printCompilerHelp(w io.Writer) {
+	if w == nil {
+		w = os.Stdout
+	}
+	fmt.Fprintf(w, `Knowledge Compiler
+
+Usage:
+  go run ./ai/cmd/knowledge_compiler/main.go [flags]
+
+Supported workflow:
+  - Compile a curated markdown KB file supplied with -input
+  - Use -base-url to make document references resolve to external URLs
+  - Use -desc to set the generated KB description
+
+Flags:
+  -base-url string
+        Base URL used to resolve external document references.
+  -desc string
+        Optional description persisted on the generated KB config.
+  -input string
+        Path to a curated markdown file to compile.
+  -prefix string
+        Prefix removed from generated category names.
+
+Notes:
+  The compiler only supports the curated markdown input workflow via -input.
+`)
+}
 
 func parseMarkdownToTree(filePath string, defaultTitle string) *Section {
 	absPath, err := filepath.Abs(filePath)
@@ -296,12 +326,18 @@ func buildExportItems(chunks []KnowledgeChunk) []memory.ExportItem[map[string]an
 		cat := getCat(catKey)
 		summaries := chunk.Summaries
 		sources := normalizeSourceURLs(chunk.Sources)
+		var docIDs memory.DocIDs
+		if chunk.DocumentID != sop.NilUUID {
+			docIDs = memory.DocIDs{chunk.DocumentID.String()}
+		} else {
+			docIDs = memory.DocIDs(sources)
+		}
 		if len(summaries) == 0 && chunk.Title != "" {
 			summaries = []string{chunk.Title}
 		}
 		exportItems = append(exportItems, memory.ExportItem[map[string]any]{
 			CategoryPath: cat.ID.String(),
-			DocID:        memory.DocIDs(sources),
+			DocID:        docIDs,
 			Data: map[string]any{
 				"title":         chunk.Title,
 				"text":          chunk.Title,
@@ -932,6 +968,9 @@ func updateSourcesToDocumentTitles() {
 }
 
 func main() {
+	flag.Usage = func() {
+		printCompilerHelp(os.Stdout)
+	}
 	flag.StringVar(&baseURL, "base-url", "", "Base URL for documents")
 	flag.StringVar(&description, "desc", "", "Optional description to persist on the generated KB config")
 	flag.StringVar(&prefix, "prefix", "", "Prefix to remove from category names")
@@ -942,67 +981,21 @@ func main() {
 	resetCompilerState()
 	repoRoot := findRepoRoot()
 
-	curatedMode := inputFile != ""
-	if curatedMode {
-		fmt.Printf("Compiling single markdown file: %s\n", inputFile)
-		parseOneMarkdownFile(repoRoot, inputFile)
-
-		// Discover and load referenced documents from Sources
-		fmt.Println("Discovering referenced documents from Sources...")
-		discoverReferencedDocuments(repoRoot)
-
-		// Update sources to use document titles
-		fmt.Println("Updating source references to document titles...")
-		updateSourcesToDocumentTitles()
-	} else {
-		fmt.Println("Sweeping unlinked Markdown files...")
-		parseUnlinkedFiles(repoRoot)
+	if inputFile == "" {
+		fmt.Println("No input file provided; please supply -input with the curated markdown KB file to compile.")
+		return
 	}
 
-	if !curatedMode {
-		fmt.Println("Rolling up single-item sub-categories...")
-		changed := true
-		for changed {
-			changed = false
-			itemsPerCat := make(map[string][]int)
-			for i, chunk := range allChunks {
-				itemsPerCat[chunk.Category] = append(itemsPerCat[chunk.Category], i)
-			}
+	fmt.Printf("Compiling single markdown file: %s\n", inputFile)
+	parseOneMarkdownFile(repoRoot, inputFile)
 
-			for catPath, indices := range itemsPerCat {
-				if len(indices) == 1 && strings.Contains(catPath, "/") {
-					hasChildren := false
-					for otherCat := range itemsPerCat {
-						if strings.HasPrefix(otherCat, catPath+"/") {
-							hasChildren = true
-							break
-						}
-					}
+	// Discover and load referenced documents from Sources
+	fmt.Println("Discovering referenced documents from Sources...")
+	discoverReferencedDocuments(repoRoot)
 
-					if !hasChildren {
-						parts := strings.Split(catPath, "/")
-						parentPath := strings.Join(parts[:len(parts)-1], "/")
-
-						idx := indices[0]
-						if allChunks[idx].Explicit {
-							continue
-						}
-
-						// Ensure the original ## header name is not lost when flattening
-						headerName := parts[len(parts)-1]
-						if len(allChunks[idx].Summaries) > 0 && !strings.HasPrefix(allChunks[idx].Summaries[0], headerName) {
-							if allChunks[idx].Summaries[0] != headerName {
-								allChunks[idx].Summaries[0] = headerName + " - " + allChunks[idx].Summaries[0]
-							}
-						}
-
-						allChunks[idx].Category = parentPath
-						changed = true
-					}
-				}
-			}
-		}
-	}
+	// Update sources to use document titles
+	fmt.Println("Updating source references to document titles...")
+	updateSourcesToDocumentTitles()
 
 	exportItems := buildExportItems(allChunks)
 
