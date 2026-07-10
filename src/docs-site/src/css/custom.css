@@ -1,0 +1,175 @@
+/**
+ * Custom styles to match the main site design
+ * Using the same color palette and fonts from the React frontend
+ */
+
+:root {
+  /* Match the React app's color scheme */
+  --ifm-color-primary: #2563eb;
+  --ifm-color-primary-dark: #1d4ed8;
+  --ifm-color-primary-darker: #1e40af;
+  --ifm-color-primary-darkest: #1e3a8a;
+  --ifm-color-primary-light: #3b82f6;
+  --ifm-color-primary-lighter: #60a5fa;
+  --ifm-color-primary-lightest: #93c5fd;
+  
+  /* Use Inter font to match the site */
+  --ifm-font-family-base: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  
+  /* Background colors matching React app */
+  --ifm-background-color: #f5f8ff;
+  --ifm-background-surface-color: rgba(255, 255, 255, 0.95);
+  
+  /* Code and syntax highlighting */
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(37, 99, 235, 0.1);
+  
+  /* Card and container styling */
+  --ifm-card-background-color: rgba(255, 255, 255, 0.95);
+  --ifm-card-border-radius: 24px;
+  
+  /* Links */
+  --ifm-link-color: #2563eb;
+  --ifm-link-hover-color: #1d4ed8;
+  
+  /* Navbar */
+  --ifm-navbar-background-color: rgba(255, 255, 255, 0.95);
+  --ifm-navbar-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  
+  /* Footer */
+  --ifm-footer-background-color: #08111f;
+  --ifm-footer-color: #dce7f5;
+  --ifm-footer-link-color: #38bdf8;
+  
+  /* Text colors */
+  --ifm-color-content: #08111f;
+  --ifm-color-content-secondary: #4d6079;
+}
+
+/* Dark mode to match React app's dark theme */
+[data-theme='dark'] {
+  --ifm-color-primary: #38bdf8;
+  --ifm-color-primary-dark: #0ea5e9;
+  --ifm-color-primary-darker: #0284c7;
+  --ifm-color-primary-darkest: #0369a1;
+  --ifm-color-primary-light: #7dd3fc;
+  --ifm-color-primary-lighter: #bae6fd;
+  --ifm-color-primary-lightest: #e0f2fe;
+  
+  /* Dark background matching React app */
+  --ifm-background-color: #07111f;
+  --ifm-background-surface-color: rgba(255, 255, 255, 0.08);
+  
+  /* Dark card styling */
+  --ifm-card-background-color: rgba(255, 255, 255, 0.08);
+  
+  /* Dark navbar */
+  --ifm-navbar-background-color: rgba(255, 255, 255, 0.08);
+  --ifm-navbar-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  
+  /* Dark code highlighting */
+  --docusaurus-highlighted-code-line-bg: rgba(56, 189, 248, 0.1);
+  
+  /* Dark text colors */
+  --ifm-color-content: #f7f9fc;
+  --ifm-color-content-secondary: #dce7f5;
+  
+  /* Dark footer */
+  --ifm-footer-background-color: #0d1b2e;
+}
+
+/* Apply gradient background like the main site */
+html[data-theme='light'] {
+  background: linear-gradient(135deg, #f5f8ff 0%, #eef4ff 100%);
+}
+
+html[data-theme='dark'] {
+  background: linear-gradient(135deg, #07111f 0%, #0d1b2e 100%);
+}
+
+/* Style cards to match the React app */
+.card {
+  border-radius: 24px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.12);
+  border: 1px solid rgba(8, 17, 31, 0.12);
+}
+
+[data-theme='dark'] .card {
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/* Button styles to match */
+.button {
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.button--primary {
+  background: linear-gradient(90deg, #38bdf8, #2563eb);
+  border: none;
+}
+
+.button--secondary {
+  background: rgba(8, 17, 31, 0.06);
+  border: 1px solid rgba(8, 17, 31, 0.12);
+}
+
+[data-theme='dark'] .button--secondary {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/* Code blocks */
+pre {
+  border-radius: 12px;
+}
+
+.ascii-diagram {
+  margin: 1.25rem 0 1.5rem;
+  padding: 1rem;
+  border-radius: 14px;
+  background: rgba(8, 17, 31, 0.04);
+  border: 1px solid rgba(8, 17, 31, 0.12);
+  overflow-x: auto;
+}
+
+[data-theme='dark'] .ascii-diagram {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.ascii-diagram pre {
+  margin: 0;
+  padding: 0;
+  font-family: ui-monospace, "SFMono-Regular", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--ifm-color-content);
+}
+
+/* Navbar styling */
+.navbar {
+  backdrop-filter: blur(10px);
+}
+
+/* Documentation content */
+.markdown h1, .markdown h2, .markdown h3 {
+  font-weight: 700;
+}
+
+/* Sidebar */
+.menu__link {
+  border-radius: 8px;
+}
+
+.menu__link--active {
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--ifm-color-primary);
+}
+
+[data-theme='dark'] .menu__link--active {
+  background: rgba(56, 189, 248, 0.1);
+}
