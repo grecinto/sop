@@ -26,26 +26,22 @@ type L2InMemoryCache struct {
 	standalone bool
 }
 
-// DefaultStandaloneInMemoryCacheShardCapacity is the per-shard entry ceiling for the standalone in-memory L2 cache.
-var DefaultStandaloneInMemoryCacheShardCapacity = 64
-
-// DefaultInMemoryCacheShardCapacity is the default per-shard entry ceiling used for the in-memory cache.
+// DefaultInMemoryCacheShardCapacity is the default per-shard entry ceiling for the in-memory L2 cache.
+// In standalone mode, L1 is intentionally smaller while L2 carries the broader hot-node working set.
+// With 256 shards, this provides a total capacity of 256,000 entries (1000 × 256).
 var DefaultInMemoryCacheShardCapacity = 1000
 
 func NewL2InMemoryCache() sop.L2Cache {
 	return newL2InMemoryCache(false)
 }
 
-// NewStandaloneL2InMemoryCache creates a smaller in-memory L2 cache suitable for standalone processes.
+// NewStandaloneL2InMemoryCache creates an in-memory L2 cache suitable for standalone processes.
 func NewStandaloneL2InMemoryCache() sop.L2Cache {
 	return newL2InMemoryCache(true)
 }
 
 func newL2InMemoryCache(standalone bool) sop.L2Cache {
 	capacity := DefaultInMemoryCacheShardCapacity
-	if standalone {
-		capacity = DefaultStandaloneInMemoryCacheShardCapacity
-	}
 	return &L2InMemoryCache{
 		data:       newShardedMap(capacity),
 		locks:      newShardedMap(capacity),
