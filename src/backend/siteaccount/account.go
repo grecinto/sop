@@ -1937,18 +1937,24 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 	slog.Info("siteaccount.stripe.sync.start", "username", username)
 	user, ok, err := c.FindUserRecord(ctx, username)
 	if err != nil {
+		slog.Error("siteaccount.stripe.sync.find_user_error", "username", username, "error", err)
 		return err
 	}
 	if !ok || user == nil {
+		slog.Warn("siteaccount.stripe.sync.user_not_found", "username", username)
 		return fmt.Errorf("user not found")
 	}
 	// Only sync if billing is pending
 	if user.BillingStatus != "pending" {
+		slog.Info("siteaccount.stripe.sync.not_pending", "username", username, "billing_status", user.BillingStatus)
 		return nil
 	}
 
+	slog.Info("siteaccount.stripe.sync.user_state", "username", username, "checkout_session_id", user.StripeCheckoutSessionID, "pending_checkout_id", user.PendingCheckoutSessionID, "customer_id", user.StripeCustomerID, "subscription_id", user.StripeSubID)
+
 	secretKey := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY"))
 	if secretKey == "" {
+		slog.Error("siteaccount.stripe.sync.no_secret_key", "username", username)
 		return fmt.Errorf("STRIPE_SECRET_KEY not configured")
 	}
 
@@ -1963,14 +1969,17 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 		sessionURL := fmt.Sprintf("%s/v1/checkout/sessions/%s?expand[]=subscription", strings.TrimRight(apiBaseURL, "/"), user.StripeCheckoutSessionID)
 		req, err := http.NewRequestWithContext(ctx, "GET", sessionURL, nil)
 		if err != nil {
+			slog.Error("siteaccount.stripe.sync.checkout_session_request_error", "username", username, "error", err)
 			return err
 		}
 		req.Header.Set("Authorization", "Bearer "+secretKey)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
+			slog.Error("siteaccount.stripe.sync.checkout_session_http_error", "username", username, "error", err)
 			return err
 		}
 		defer resp.Body.Close()
+		slog.Info("siteaccount.stripe.sync.checkout_session_response", "username", username, "status", resp.StatusCode)
 		if resp.StatusCode == 200 {
 			var session struct {
 				ID           string `json:"id"`
@@ -1982,6 +1991,7 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 				} `json:"subscription"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&session); err == nil {
+				slog.Info("siteaccount.stripe.sync.checkout_session_data", "username", username, "session_status", session.Status, "subscription_id", session.Subscription.ID, "subscription_status", session.Subscription.Status, "customer", session.Customer)
 				// Store the customer and subscription IDs for future queries
 				if session.Customer != "" {
 					user.StripeCustomerID = session.Customer
@@ -1991,10 +2001,19 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 				}
 				// If the checkout session is complete and subscription is active, activate billing
 				if session.Status == "complete" && (session.Subscription.Status == "active" || session.Subscription.Status == "trialing") {
+					slog.Info("siteaccount.stripe.sync.activating_billing", "username", username)
 					return c.activateUserBilling(ctx, user, username)
+				} else {
+					slog.Info("siteaccount.stripe.sync.not_ready_to_activate", "username", username, "session_status", session.Status, "subscription_status", session.Subscription.Status)
 				}
+			} else {
+				slog.Error("siteaccount.stripe.sync.checkout_session_decode_error", "username", username, "error", err)
 			}
+		} else {
+			slog.Warn("siteaccount.stripe.sync.checkout_session_non_200", "username", username, "status", resp.StatusCode)
 		}
+	} else {
+		slog.Info("siteaccount.stripe.sync.skipping_checkout_session", "username", username, "has_checkout_id", user.StripeCheckoutSessionID != "", "has_sub_id", user.StripeSubID != "")
 	}
 
 	// Try querying by customer ID if we have it but no subscription ID
@@ -2063,12 +2082,15 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 }
 
 func (c *Config) activateUserBilling(ctx context.Context, user *UserRecord, username string) error {
+	slog.Info("siteaccount.activate_billing.start", "username", username, "current_status", user.BillingStatus)
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
+		slog.Error("siteaccount.activate_billing.db_error", "username", username, "error", err)
 		return err
 	}
 	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
 	if err != nil {
+		slog.Error("siteaccount.activate_billing.tx_error", "username", username, "error", err)
 		return err
 	}
 	defer tx.Rollback(ctx)
@@ -2076,21 +2098,28 @@ func (c *Config) activateUserBilling(ctx context.Context, user *UserRecord, user
 	user.LastWebhookEvent = "subscription.synced"
 	user.LastWebhookAt = time.Now().UTC()
 	user.UpdatedAt = time.Now().UTC()
+	slog.Info("siteaccount.activate_billing.updating", "username", username, "new_status", user.BillingStatus)
 	store, err := c.ensureUserStore(ctx, tx)
 	if err != nil {
+		slog.Error("siteaccount.activate_billing.store_error", "username", username, "error", err)
 		return err
 	}
 	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
+		slog.Error("siteaccount.activate_billing.upsert_error", "username", username, "error", err)
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
+		slog.Error("siteaccount.activate_billing.commit_error", "username", username, "error", err)
 		return err
 	}
+	slog.Info("siteaccount.activate_billing.db_committed", "username", username)
 	for i := range c.Users {
 		if normalizeUsername(c.Users[i].Username) == normalizeUsername(username) {
 			c.Users[i] = *user
+			slog.Info("siteaccount.activate_billing.cache_updated", "username", username, "cache_status", c.Users[i].BillingStatus)
 			break
 		}
 	}
+	slog.Info("siteaccount.activate_billing.success", "username", username, "billing_status", user.BillingStatus)
 	return nil
 }

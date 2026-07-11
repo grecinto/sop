@@ -214,6 +214,9 @@ function resolveView(pathname: string): ViewMode {
   if (pathname.startsWith('/site/subscribe/success')) {
     return 'success';
   }
+  if (pathname.startsWith('/site/subscribe/fail')) {
+    return 'cancel';
+  }
   if (pathname.startsWith('/site/subscribe/cancel')) {
     return 'cancel';
   }
@@ -374,7 +377,10 @@ async function recoverPendingCheckout(sessionID: string): Promise<AccountState |
       return null;
     }
     const payload = await response.json();
-    const user = payload?.user ?? {};
+    const user = payload?.user;
+    if (!user || typeof user !== 'object') {
+      return null;
+    }
     const plan = normalizePlan(user.subscription_plan);
     const billingStatus = normalizeBillingStatus(user.billing_status);
     const billing = user.billing ?? {};
@@ -387,7 +393,7 @@ async function recoverPendingCheckout(sessionID: string): Promise<AccountState |
       plan,
       billingStatus,
       trialActive: billingStatus === 'active' && plan === 'starter',
-      isAuthenticated: true,
+      isAuthenticated: Boolean(user.username),
       isSystemAdmin: canAccessDataManager,
       checkoutUrl: billing.checkout_url ?? '',
       lastWebhookEvent: billing.last_webhook_event ?? '',
@@ -413,15 +419,6 @@ async function loadAccountFromServer(): Promise<AccountState> {
   const billing = user.billing ?? {};
   const role = normalizeRole(user.role);
   const canAccessDataManager = Boolean(user.can_access_data_manager) || isSystemAdminRole(role);
-  
-  console.log('DEBUG loadAccountFromServer:', {
-    username: user.username,
-    rawRole: user.role,
-    normalizedRole: role,
-    canAccessDataManagerFromBackend: user.can_access_data_manager,
-    isSystemAdminRoleCheck: isSystemAdminRole(role),
-    finalCanAccessDataManager: canAccessDataManager
-  });
   
   return {
     name: user.username ?? '',
@@ -600,6 +597,7 @@ export default function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => resolveThemePreference());
   const [expandedImportDetails, setExpandedImportDetails] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  const [isStatusError, setIsStatusError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRefreshingBilling, setIsRefreshingBilling] = useState(false);
   const [provisioningDone, setProvisioningDone] = useState(false);
@@ -776,9 +774,13 @@ export default function App() {
   const handleSubscription = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
+    setIsStatusError(false);
     try {
       const serverAccount = await loadAccountFromServer();
+      console.log('[handleSubscription] server account:', serverAccount);
       const resolvedAuthAccount = mergeAccountWithFallback(serverAccount, account, name, email);
+      console.log('[handleSubscription] resolved auth account:', resolvedAuthAccount);
+      console.log('[handleSubscription] form name:', name.trim(), 'form email:', email.trim());
       if (!resolvedAuthAccount.isAuthenticated) {
         if (!password.trim()) {
           throw new Error('Please choose a password to continue.');
@@ -796,10 +798,12 @@ export default function App() {
       }
       const effectiveName = nextAccount.name || account.name || name.trim();
       const effectiveEmail = nextAccount.email || account.email || email.trim();
+      console.log('[handleSubscription] calling createCheckoutSession');
       const checkout = await createCheckoutSession('starter', token, effectiveName, effectiveEmail);
+      console.log('[handleSubscription] checkout session created:', checkout);
       if (checkout.url) {
         persistPendingCheckoutSessionID(checkout.id);
-        setAccount({
+        const pendingAccount: AccountState = {
           ...nextAccount,
           name: nextAccount.name || account.name || name.trim(),
           email: nextAccount.email || account.email || email.trim(),
@@ -811,7 +815,9 @@ export default function App() {
           lastWebhookEvent: '',
           failureReason: '',
           lastWebhookAt: '',
-        });
+        };
+        setAccount(pendingAccount);
+        persistAccountState(pendingAccount);
         setShowInstallStep(false);
         setCheckoutComplete(false);
         setStatusMessage('We are sending you to checkout. Your starter plan will activate after payment confirmation.');
@@ -825,7 +831,7 @@ export default function App() {
       if (synced.billingStatus !== 'pending') {
         clearPendingCheckoutSessionID();
       }
-      setAccount({
+      const activeAccount: AccountState = {
         ...nextAccount,
         name: nextAccount.name || account.name || name.trim(),
         email: nextAccount.email || account.email || email.trim(),
@@ -837,7 +843,9 @@ export default function App() {
         lastWebhookEvent: '',
         failureReason: '',
         lastWebhookAt: '',
-      });
+      };
+      setAccount(activeAccount);
+      persistAccountState(activeAccount);
       setShowInstallStep(synced.billingStatus === 'active');
       setCheckoutComplete(synced.billingStatus === 'active');
       setStatusMessage(
@@ -846,7 +854,11 @@ export default function App() {
           : 'Your starter subscription is pending confirmation.'
       );
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Unable to complete the subscription.');
+      console.error('[handleSubscription] Error caught:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unable to complete the subscription.';
+      console.error('[handleSubscription] Setting error message:', errorMessage);
+      setStatusMessage(errorMessage);
+      setIsStatusError(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -857,6 +869,7 @@ export default function App() {
       const confirmed = window.confirm('Cancel your Northstar subscription?');
       if (!confirmed) {
         setStatusMessage('Subscription cancellation was skipped.');
+        setIsStatusError(false);
         return;
       }
     }
@@ -867,6 +880,7 @@ export default function App() {
 
     setIsSubmitting(true);
     setStatusMessage('');
+    setIsStatusError(false);
     try {
       const synced = await updateSubscriptionPlan('none', { unregister: shouldRemoveAccount });
       clearPendingCheckoutSessionID();
@@ -884,6 +898,7 @@ export default function App() {
         setCheckoutComplete(false);
         setShowInstallStep(false);
         setStatusMessage('Your subscription was canceled and your account was removed from the site.');
+        setIsStatusError(false);
         return;
       }
       if (!synced) {
@@ -903,8 +918,10 @@ export default function App() {
       }));
       setCheckoutComplete(false);
       setStatusMessage('Your subscription has been canceled. Your site account remains available for sign-in.');
+      setIsStatusError(false);
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to unsubscribe right now.');
+      setIsStatusError(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -913,6 +930,7 @@ export default function App() {
   const handleUnregister = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
+    setIsStatusError(false);
     try {
       await fetchJSON('/api/auth/unregister', { method: 'POST' });
       setAccount(emptyState);
@@ -926,8 +944,10 @@ export default function App() {
       setCheckoutComplete(false);
       setShowInstallStep(false);
       setStatusMessage('Your account has been removed.');
+      setIsStatusError(false);
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to remove the account.');
+      setIsStatusError(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -938,16 +958,19 @@ export default function App() {
     const resolvedUsername = existingIdentity || (typeof window !== 'undefined' ? window.prompt('Enter your username to sign in.') ?? '' : '');
     if (!resolvedUsername) {
       setStatusMessage('Please enter your username before signing in.');
+      setIsStatusError(true);
       return;
     }
     const enteredPassword = password.trim() || (typeof window !== 'undefined' ? window.prompt('Enter your password to sign in.') ?? '' : '');
     if (!enteredPassword.trim()) {
       setStatusMessage('Please enter your password to sign in.');
+      setIsStatusError(true);
       return;
     }
     setPassword(enteredPassword.trim());
     setIsSubmitting(true);
     setStatusMessage('');
+    setIsStatusError(false);
     try {
       const synced = await loginWithCredentials(resolvedUsername, enteredPassword.trim());
       const resolvedAccount = {
@@ -965,8 +988,10 @@ export default function App() {
       setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
       setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
       setStatusMessage(resolvedAccount.isAuthenticated ? 'Signed in successfully.' : 'Signed in.');
+      setIsStatusError(false);
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to sign in right now.');
+      setIsStatusError(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -975,11 +1000,14 @@ export default function App() {
   const handleDownload = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
+    setIsStatusError(false);
     try {
       await downloadLocalAgent();
       setStatusMessage('Opening the local-agent download link.');
+      setIsStatusError(false);
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to start the download right now.');
+      setIsStatusError(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -1024,10 +1052,25 @@ export default function App() {
     try {
       const pendingCheckoutSessionID = loadPendingCheckoutSessionID();
       let resolvedAccount = mergeAccountWithFallback(await loadAccountFromServer(), account, name, email);
+
+      if (!resolvedAccount.isAuthenticated && account.isAuthenticated) {
+        resolvedAccount = {
+          ...resolvedAccount,
+          ...account,
+          isAuthenticated: true,
+        };
+      }
+
+      if (resolvedAccount.billingStatus === 'pending') {
+        await pingPendingCheckout();
+        const refreshedAccount = await loadAccountFromServer();
+        resolvedAccount = mergeAccountWithFallback(refreshedAccount, resolvedAccount, name, email);
+      }
+
       if (pendingCheckoutSessionID) {
         const recoveredAccount = await recoverPendingCheckout(pendingCheckoutSessionID);
         if (recoveredAccount) {
-          resolvedAccount = mergeAccountWithFallback(recoveredAccount, account, name, email);
+          resolvedAccount = mergeAccountWithFallback(recoveredAccount, resolvedAccount, name, email);
         }
       }
 
@@ -1036,9 +1079,6 @@ export default function App() {
       setEmail(resolvedAccount.email || email);
       setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
       setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
-      if (resolvedAccount.billingStatus === 'pending') {
-        void pingPendingCheckout();
-      }
       if (resolvedAccount.isAuthenticated) {
         persistAccountState(resolvedAccount);
       }
@@ -1065,12 +1105,6 @@ export default function App() {
   const primaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
   const primaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Unsubscribe' : 'Subscribe';
   
-  console.log('DEBUG button render:', {
-    accountIsSystemAdmin: account.isSystemAdmin,
-    canLaunchDataManager,
-    primaryActionHref,
-    primaryActionLabel
-  });
   const secondaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
   const secondaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Manage subscription' : 'Review subscription';
   const shouldShowInstallPanel = showInstallStep || isStarterActive || checkoutComplete;
@@ -1265,7 +1299,11 @@ export default function App() {
                 </div>
               ) : null}
 
-              {statusMessage ? <p className="muted-copy">{statusMessage}</p> : null}
+              {statusMessage ? (
+                <p className="muted-copy" style={{ color: isStatusError ? '#e74c3c' : undefined, fontWeight: isStatusError ? '500' : undefined }}>
+                  {statusMessage}
+                </p>
+              ) : null}
 
               {account.isAuthenticated ? (
                 <div className="preview-box">
@@ -1315,12 +1353,8 @@ export default function App() {
   }
 
   if (view === 'success') {
-    return (
-      <main className="app-shell">
-        <div className="page-toolbar">
-          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
-        </div>
-        <section className="hero-card subscription-shell">
+    return renderPageShell(
+      <section className="hero-card subscription-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
             <a className="button button-primary" href="/site/subscribe">Manage subscription</a>
@@ -1380,17 +1414,12 @@ export default function App() {
             </div>
           </div>
         </section>
-      </main>
     );
   }
 
   if (view === 'cancel') {
-    return (
-      <main className="app-shell">
-        <div className="page-toolbar">
-          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
-        </div>
-        <section className="hero-card subscription-shell">
+    return renderPageShell(
+      <section className="hero-card subscription-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
             <a className="button button-primary" href="/site/subscribe">Try checkout again</a>
@@ -1432,7 +1461,6 @@ export default function App() {
             </div>
           </div>
         </section>
-      </main>
     );
   }
 
@@ -1836,7 +1864,11 @@ This section explains the system design.
                 </div>
               ) : null}
 
-              {statusMessage ? <p className="muted-copy" style={{ marginTop: '0.75rem' }}>{statusMessage}</p> : null}
+              {statusMessage ? (
+                <p className="muted-copy" style={{ marginTop: '0.75rem', color: isStatusError ? '#e74c3c' : undefined, fontWeight: isStatusError ? '500' : undefined }}>
+                  {statusMessage}
+                </p>
+              ) : null}
 
               {shouldShowInstallPanel ? (
                 <div className="preview-box install-box">

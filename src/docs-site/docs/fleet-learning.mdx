@@ -110,22 +110,26 @@ This reduces the need for deep data-science talent, shortens the path to value, 
 
 ### Why this approach is more sustainable
 
-- Lower infrastructure cost and fewer vendor dependencies.
-- Less operational overhead because there is no separate vector cluster to manage.
-- Lower energy demand because the workload stays lightweight and local.
-- Better alignment with privacy-first deployment: the data stays close to the user environment.
-- Reduced dependence on specialized data-science teams, which lowers hiring pressure and overall AI operating spend for companies.
+- Lower infrastructure spend: there is no need to maintain a separate managed vector cluster or pay for always-on cloud capacity.
+- No data-center idle load: vector indexing and retrieval stay on the user host instead of drawing power for cooling, lighting, and standby infrastructure.
+- Less network transmission overhead: embeddings and retrieval traffic stay local, avoiding the energy cost of repeatedly moving large vector payloads across the internet.
+- Better use of existing hardware: local workloads reuse the compute already running for the user’s normal work instead of requiring dedicated cloud resources for background indexing.
+- Lower operational burden: the architecture removes the need to operate and monitor a remote vector service and its background optimization jobs.
+- Stronger privacy posture: sensitive content stays close to the user environment, reducing exposure and simplifying compliance expectations.
+- Fewer security layers to maintain: keeping the vector store embedded reduces the need for extra cloud-only controls around data movement and storage.
+- Lower organizational overhead: teams do not need to rely on specialized ML operators just to keep retrieval and indexing working.
+- More predictable cost profile: the system scales with local usage patterns rather than requiring continuous cloud spend for peak or idle capacity.
 
 ## How federation works in practice
 
-The federation model is intentionally narrow:
+The federation model is intentionally narrow. At the federation boundary, we do not transmit raw documents or full workspace context. We share only approved, privacy-safe signals and metadata that describe a pattern, category, or outcome, with enough structure for another Copilot to improve its guidance without receiving the original content.
 
 1. A workspace learns from its own local activity.
 2. It evaluates whether a pattern is useful, safe, and relevant.
-3. If the user has opted in, only the approved signal is shared.
+3. If the user has opted in, only an approved, scrubbed signal is shared.
 4. The receiving environment can use that signal to improve guidance without needing the full underlying context.
 
-This approach is meant to be transparent and auditable. Teams can understand what was shared, why it was shared, and how it influenced the experience.
+This approach is meant to be transparent and auditable at the local layer. In the local daemon and UI, the user has complete visibility into federation activity/data, with the data organized clearly and surfaced through high-level summaries and direct control knobs for review and management.
 
 ## Transparency and user ownership
 

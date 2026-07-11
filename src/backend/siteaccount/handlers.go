@@ -517,6 +517,7 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	slog.Info("siteaccount.status.user_found", "username", account.Username, "billing_status_before_sync", user.BillingStatus)
 	// Sync billing status from Stripe if pending (fallback for missed webhooks)
 	if user.BillingStatus == "pending" {
 		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), account.Username)
@@ -526,7 +527,9 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusInternalServerError, "unable to refresh user state")
 			return
 		}
+		slog.Info("siteaccount.status.user_after_sync", "username", account.Username, "billing_status_after_sync", user.BillingStatus)
 	}
+	slog.Info("siteaccount.status.response", "username", account.Username, "final_billing_status", user.BillingStatus)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user, r.Context()))
@@ -549,6 +552,7 @@ func HandlePing(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	slog.Info("siteaccount.ping.user_found", "username", account.Username, "billing_status", user.BillingStatus)
 	if strings.EqualFold(user.BillingStatus, "pending") {
 		slog.Info("siteaccount.ping.sync_pending_billing", "username", account.Username, "checkout_session_id", user.StripeCheckoutSessionID, "pending_checkout_id", user.PendingCheckoutSessionID)
 		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), account.Username)
@@ -562,7 +566,9 @@ func HandlePing(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user = refreshedUser
+		slog.Info("siteaccount.ping.user_after_sync", "username", account.Username, "billing_status_after_sync", user.BillingStatus)
 		if !strings.EqualFold(user.BillingStatus, "pending") {
+			slog.Info("siteaccount.ping.status_changed_to_active", "username", account.Username, "new_status", user.BillingStatus)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "billing_status": user.BillingStatus})
@@ -584,6 +590,7 @@ func HandlePing(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	slog.Info("siteaccount.ping.final_response", "username", account.Username, "billing_status", user.BillingStatus)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "billing_status": user.BillingStatus})
@@ -613,7 +620,9 @@ func HandleRecoverPendingCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || user == nil {
-		writeJSONError(w, http.StatusNotFound, "pending checkout not found")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "user": nil})
 		return
 	}
 
@@ -750,6 +759,14 @@ func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "account not found")
 		return
 	}
+
+	// Prevent creating a new checkout session if user already has an active subscription
+	if req.StripePaymentID == "" && req.StripeSessionID == "" && user.BillingStatus == "active" {
+		slog.Warn("siteaccount.checkout.already_active", "username", username, "current_plan", user.SubscriptionPlan, "requested_plan", req.Plan)
+		writeJSONError(w, http.StatusConflict, "You already have an active subscription. Please cancel your current subscription before starting a new one.")
+		return
+	}
+
 	if req.StripePaymentID == "" && req.StripeSessionID == "" {
 		if !validateHumanProof(r, req.HumanProof) {
 			slog.Warn("siteaccount.checkout.human_proof_missing", "username", username, "plan", req.Plan)

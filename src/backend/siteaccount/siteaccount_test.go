@@ -403,6 +403,21 @@ func TestHandleRecoverPendingCheckoutUsesCheckoutSessionID(t *testing.T) {
 	}
 }
 
+func TestHandleRecoverPendingCheckoutReturnsOkForUnknownCheckoutSession(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/pending-checkout/recover", strings.NewReader(`{"checkout_session_id":"missing-checkout"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	HandleRecoverPendingCheckout(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleRecoverPendingCheckout() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"status":"ok"`) {
+		t.Fatalf("expected success response body, got %s", rr.Body.String())
+	}
+}
+
 func TestHandleCheckoutSessionAcceptsStripeProofWithoutHumanProof(t *testing.T) {
 	cfg := NewConfig()
 	username := uniqueTestUsername(t, "site-checkout-stripe")
@@ -426,6 +441,44 @@ func TestHandleCheckoutSessionAcceptsStripeProofWithoutHumanProof(t *testing.T) 
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("HandleCheckoutSession() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
+func TestHandleCheckoutSessionRejectsActiveSubscriptionUser(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-active-sub")
+	user, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "active-sub@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	})
+	if err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	// Activate the user's subscription
+	user.BillingStatus = "active"
+	user.StripeSubID = "sub_existing_123"
+	if err := cfg.UpsertUserRecord(context.Background(), user); err != nil {
+		t.Fatalf("UpsertUserRecord() error = %v", err)
+	}
+
+	// Attempt to create a new checkout session
+	body := `{"plan":"starter"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/checkout", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: username, Roles: []string{sop.RoleUser}}))
+	rr := httptest.NewRecorder()
+
+	HandleCheckoutSession(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("HandleCheckoutSession() status = %d, want %d (Conflict), body=%s", rr.Code, http.StatusConflict, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "already have an active subscription") {
+		t.Fatalf("expected 'already have an active subscription' error, got %s", rr.Body.String())
 	}
 }
 

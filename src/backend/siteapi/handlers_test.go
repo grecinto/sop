@@ -75,6 +75,21 @@ func TestHandleRegisterReturnsFriendlyUsernameTakenMessage(t *testing.T) {
 	}
 }
 
+func TestPendingCheckoutRecoverRouteIsRegistered(t *testing.T) {
+	mux := http.NewServeMux()
+	sopbackend.RegisterAllHandlers(mux)
+	RegisterHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/pending-checkout/recover", strings.NewReader(`{"checkout_session_id":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected pending checkout recover route to return %d for missing session id, got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleLogoutClearsSessionCookies(t *testing.T) {
 	mux := http.NewServeMux()
 	sopbackend.RegisterAllHandlers(mux)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grecinto/sop-cloud/src/backend/siteaccount"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -30,6 +31,8 @@ func RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/subscription", sopbackend.WithAuth(HandleSubscriptionUpdate))
 	mux.HandleFunc("/api/auth/checkout", sopbackend.WithAuth(HandleCheckoutSession))
 	mux.HandleFunc("/api/auth/download", sopbackend.WithAuth(HandleDownloadAsset))
+	mux.HandleFunc("/api/auth/ping", sopbackend.WithAuth(siteaccount.HandlePing))
+	mux.HandleFunc("/api/auth/pending-checkout/recover", sopbackend.WithAuth(siteaccount.HandleRecoverPendingCheckout))
 	mux.HandleFunc("/api/auth/webhooks/billing", HandleBillingWebhook)
 	mux.HandleFunc("/api/auth/unregister", sopbackend.WithAuth(HandleUnregister))
 }
