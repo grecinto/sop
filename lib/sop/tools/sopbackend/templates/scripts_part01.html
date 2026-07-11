@@ -2409,15 +2409,25 @@
     // We defer rendering the space-specific tool buttons (edit, export, delete)
     // until we've fetched the categories and grabbed this space's specific RBAC object
 
-    if (!await closeDetail()) return;
-
-    columnWidths = [];
-    columnsInitialized = false;
-
+    // Update sidebar selection immediately to provide visual feedback
     document.querySelectorAll('#sidebar li').forEach(el => el.classList.remove('active'));
     if (element) {
         element.classList.add('active');
     }
+
+    if (!await closeDetail()) {
+        // User cancelled - restore previous selection if possible
+        currentStore = currentStore.replace('/data', ''); // normalize
+        const prevElement = document.querySelector(`#sidebar li[data-space-name="${currentStore}"]`);
+        if (prevElement) {
+            document.querySelectorAll('#sidebar li').forEach(el => el.classList.remove('active'));
+            prevElement.classList.add('active');
+        }
+        return;
+    }
+
+    columnWidths = [];
+    columnsInitialized = false;
 
     document.getElementById('current-store-title').textContent = name;
     const grid = document.getElementById('data-grid');
@@ -3253,8 +3263,25 @@ function isProtectedSystemStoreName(storeName, dbObj = null) {
 async function selectStore(name, element, force = false) {
         if (currentStore === name && !force) return;
 
+        // Update sidebar selection immediately to provide visual feedback
+        document.querySelectorAll('#sidebar li').forEach(el => {
+            el.classList.remove('active');
+        });
+        if (element) element.classList.add('active');
+
         // Close detail panel as it may be showing data from previous store
-        if (!await closeDetail()) return;
+        if (!await closeDetail()) {
+            // User cancelled - restore previous selection if possible
+            const prevStoreName = currentStore;
+            if (prevStoreName) {
+                const prevElement = document.querySelector(`#sidebar li[data-store-name="${prevStoreName}"]`);
+                if (prevElement) {
+                    document.querySelectorAll('#sidebar li').forEach(el => el.classList.remove('active'));
+                    prevElement.classList.add('active');
+                }
+            }
+            return;
+        }
 
         currentStore = name;
         localStorage.setItem('sop_current_store', name);
@@ -3278,9 +3305,6 @@ async function selectStore(name, element, force = false) {
             if (el) el.style.display = ''; // revert inline hide
         });
         
-        // Highlight active
-        document.querySelectorAll('#sidebar li').forEach(el => el.classList.remove('active'));
-        element.classList.add('active');
 
         const dbObj = availableDatabases && currentDatabase ? availableDatabases.find(d => d.name === currentDatabase) : null;
         const isSystem = (dbObj && dbObj.is_system) || currentDatabase === 'system' || currentDatabase === SYSTEM_DB_NAME;

@@ -562,6 +562,91 @@ func TestRegisterUserWithRequestRepairsExistingAccountWithoutHash(t *testing.T) 
 	}
 }
 
+func TestUnregisterUserWithRequestRemovesBillingRecordsAndUserStore(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-unregister-billing")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "billing-unregister@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	db, err := getSiteAccountDB(context.Background())
+	if err != nil {
+		t.Fatalf("getSiteAccountDB() error = %v", err)
+	}
+	tx, err := db.BeginTransaction(context.Background(), sop.ForWriting, -1)
+	if err != nil {
+		t.Fatalf("BeginTransaction() error = %v", err)
+	}
+	subscriptionStore, err := cfg.ensureSubscriptionStore(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionStore() error = %v", err)
+	}
+	paymentStore, err := cfg.ensurePaymentStore(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("ensurePaymentStore() error = %v", err)
+	}
+	if err := subscriptionStore.Upsert(context.Background(), []SubscriptionRecord{{ID: "sub-1", UserID: username, PlanCode: "starter", Status: "active"}}); err != nil {
+		t.Fatalf("subscriptionStore.Upsert() error = %v", err)
+	}
+	if err := paymentStore.Upsert(context.Background(), []PaymentRecord{{ID: "pay-1", UserID: username, SubscriptionID: "sub-1", Amount: 500, Currency: "USD", Status: "succeeded"}}); err != nil {
+		t.Fatalf("paymentStore.Upsert() error = %v", err)
+	}
+	if err := tx.Commit(context.Background()); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+
+	if err := cfg.UnregisterUserWithRequest(context.Background(), UnregisterUserRequest{Username: username}); err != nil {
+		t.Fatalf("UnregisterUserWithRequest() error = %v", err)
+	}
+
+	if _, ok, err := cfg.FindUserRecord(context.Background(), username); err != nil {
+		t.Fatalf("FindUserRecord() error = %v", err)
+	} else if ok {
+		t.Fatalf("expected user %q to be removed", username)
+	}
+	if len(cfg.Subscriptions) != 0 {
+		t.Fatalf("cfg.Subscriptions = %v, want empty slice", cfg.Subscriptions)
+	}
+	if len(cfg.Payments) != 0 {
+		t.Fatalf("cfg.Payments = %v, want empty slice", cfg.Payments)
+	}
+
+	db, err = getSiteAccountDB(context.Background())
+	if err != nil {
+		t.Fatalf("getSiteAccountDB(second) error = %v", err)
+	}
+	tx, err = db.BeginTransaction(context.Background(), sop.ForReading, -1)
+	if err != nil {
+		t.Fatalf("BeginTransaction(read) error = %v", err)
+	}
+	subscriptionStore, err = cfg.ensureSubscriptionStore(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionStore(read) error = %v", err)
+	}
+	paymentStore, err = cfg.ensurePaymentStore(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("ensurePaymentStore(read) error = %v", err)
+	}
+	if subscriptions, err := subscriptionStore.List(context.Background()); err != nil {
+		t.Fatalf("subscriptionStore.List() error = %v", err)
+	} else if len(subscriptions) != 0 {
+		t.Fatalf("subscriptionStore.List() = %v, want empty slice", subscriptions)
+	}
+	if payments, err := paymentStore.List(context.Background()); err != nil {
+		t.Fatalf("paymentStore.List() error = %v", err)
+	} else if len(payments) != 0 {
+		t.Fatalf("paymentStore.List() = %v, want empty slice", payments)
+	}
+	_ = tx.Rollback(context.Background())
+}
+
 func TestUpdateSubscriptionPlanSyncsToSharedBackendAuthUser(t *testing.T) {
 	resetSiteAccountDBForTest(t)
 	cfg := NewConfig()

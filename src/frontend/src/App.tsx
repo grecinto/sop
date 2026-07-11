@@ -413,6 +413,16 @@ async function loadAccountFromServer(): Promise<AccountState> {
   const billing = user.billing ?? {};
   const role = normalizeRole(user.role);
   const canAccessDataManager = Boolean(user.can_access_data_manager) || isSystemAdminRole(role);
+  
+  console.log('DEBUG loadAccountFromServer:', {
+    username: user.username,
+    rawRole: user.role,
+    normalizedRole: role,
+    canAccessDataManagerFromBackend: user.can_access_data_manager,
+    isSystemAdminRoleCheck: isSystemAdminRole(role),
+    finalCanAccessDataManager: canAccessDataManager
+  });
+  
   return {
     name: user.username ?? '',
     email: user.email ?? '',
@@ -507,11 +517,14 @@ async function ensureAuthenticatedAccount(name: string, email: string, password:
   return loadAccountFromServer();
 }
 
-async function updateSubscriptionPlan(plan: Plan): Promise<AccountState> {
-  await fetchJSON('/api/auth/subscription', {
+async function updateSubscriptionPlan(plan: Plan, options: { unregister?: boolean } = {}): Promise<AccountState | null> {
+  const payload = await fetchJSON('/api/auth/subscription', {
     method: 'POST',
-    body: JSON.stringify({ plan }),
+    body: JSON.stringify({ plan, unregister: Boolean(options.unregister) }),
   });
+  if (payload?.unregistered) {
+    return null;
+  }
   return loadAccountFromServer();
 }
 
@@ -806,6 +819,9 @@ export default function App() {
         return;
       }
       const synced = await updateSubscriptionPlan('starter');
+      if (!synced) {
+        throw new Error('Your account is no longer available to update.');
+      }
       if (synced.billingStatus !== 'pending') {
         clearPendingCheckoutSessionID();
       }
@@ -837,11 +853,42 @@ export default function App() {
   };
 
   const handleUnsubscribe = async () => {
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm('Cancel your Northstar subscription?');
+      if (!confirmed) {
+        setStatusMessage('Subscription cancellation was skipped.');
+        return;
+      }
+    }
+
+    const shouldRemoveAccount = typeof window !== 'undefined'
+      ? window.confirm('Also remove your account from the site and sign you out?')
+      : false;
+
     setIsSubmitting(true);
     setStatusMessage('');
     try {
-      const synced = await updateSubscriptionPlan('none');
+      const synced = await updateSubscriptionPlan('none', { unregister: shouldRemoveAccount });
       clearPendingCheckoutSessionID();
+      if (shouldRemoveAccount) {
+        setAccount(emptyState);
+        clearPersistedAccountState();
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+          window.location.assign('/site/');
+        }
+        setName('');
+        setEmail('');
+        setPassword('');
+        setConfirmPassword('');
+        setCheckoutComplete(false);
+        setShowInstallStep(false);
+        setStatusMessage('Your subscription was canceled and your account was removed from the site.');
+        return;
+      }
+      if (!synced) {
+        throw new Error('Your account is no longer available to update.');
+      }
       setAccount((current) => ({
         ...current,
         ...synced,
@@ -1013,11 +1060,19 @@ export default function App() {
   const isStarterActive = account.billingStatus === 'active' && account.plan === 'starter';
   const isStarterPending = account.billingStatus === 'pending' && account.plan === 'starter';
   const canLaunchDataManager = account.isSystemAdmin;
+  const hasSubscription = Boolean(account.isAuthenticated && account.plan !== 'none');
   const canAccessLocalDaemon = Boolean(account.isAuthenticated) && !account.isSystemAdmin && account.plan !== 'none';
   const primaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
-  const primaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : 'Subscribe';
+  const primaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Unsubscribe' : 'Subscribe';
+  
+  console.log('DEBUG button render:', {
+    accountIsSystemAdmin: account.isSystemAdmin,
+    canLaunchDataManager,
+    primaryActionHref,
+    primaryActionLabel
+  });
   const secondaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
-  const secondaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : 'Review subscription';
+  const secondaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Manage subscription' : 'Review subscription';
   const shouldShowInstallPanel = showInstallStep || isStarterActive || checkoutComplete;
   const canResumeCheckout = Boolean(account.checkoutUrl) && (account.billingStatus === 'pending' || Boolean(account.failureReason));
   const billingStatusTitle = account.billingStatus === 'active'
@@ -1038,14 +1093,37 @@ export default function App() {
   const isSetupCompleteRedirect = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('setup') === 'complete';
   const shouldShowDashboard = (account.isAuthenticated || provisioningDone || isSetupCompleteRedirect) && view === 'home';
   const toggleTheme = () => setThemeMode((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'));
+  const renderGreenEarthBadge = (inline = false) => (
+    <div className="page-toolbar-left">
+      <a
+        className={`green-earth-badge${inline ? ' green-earth-badge-inline' : ''}`}
+        href="/docs/fleet-learning#embedded-setup-vector-database-runs-on-the-user-host"
+        aria-label="Green earth technology"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2a10 10 0 1 0 10 10A10.01 10.01 0 0 0 12 2Zm0 2a7.99 7.99 0 0 1 6.97 4.03A8.38 8.38 0 0 0 14.5 8.5c-1.2 0-2.3.34-3.27.94A6.96 6.96 0 0 1 12 4Zm-3.8 3.3a6.97 6.97 0 0 1 2.5-.8c.4 0 .79.04 1.17.12a8.53 8.53 0 0 0-1.87 2.2A6.97 6.97 0 0 1 8.2 7.3Zm-1.4 2.74A6.98 6.98 0 0 1 11 6.03c.2.43.36.89.46 1.37A9.2 9.2 0 0 0 7.8 10.04Zm10.79 3.8a8.25 8.25 0 0 1-2.97 2.57 6.95 6.95 0 0 1-4.5-.53c.76-.81 1.3-1.78 1.59-2.87a10.05 10.05 0 0 0 4.24 1.07c.56 0 1.1-.05 1.64-.24Zm-2.76 4.12a7.94 7.94 0 0 1-5.57-.95 8.35 8.35 0 0 0 2.47-1.7c.74-.77 1.24-1.77 1.56-2.9a8.95 8.95 0 0 1 1.54 5.55Z" />
+          <path d="M6.5 14.5a7.93 7.93 0 0 0 4.1 2.2 9.42 9.42 0 0 0-.7-2.1 8.16 8.16 0 0 0-3.4-.1Z" />
+        </svg>
+        <div>
+          <strong>Green Earth Tech</strong>
+          <span>Local-first AI</span>
+        </div>
+      </a>
+    </div>
+  );
+  const renderPageShell = (content: JSX.Element, inlineBadge = false) => (
+    <main className="app-shell">
+      <div className="page-toolbar">
+        {renderGreenEarthBadge(inlineBadge)}
+        <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
+      </div>
+      {content}
+    </main>
+  );
 
   if (view === 'subscribe') {
-    return (
-      <main className="app-shell">
-        <div className="page-toolbar">
-          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
-        </div>
-        <section className="hero-card subscription-shell">
+    return renderPageShell(
+      <section className="hero-card subscription-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
             <a className="button button-secondary" href="/site/docs">Product docs</a>
@@ -1079,32 +1157,41 @@ export default function App() {
               ) : null}
 
               <div className="form-stack">
-                <div className="inline-fields">
-                  <div>
-                    <label htmlFor="subscription-name" className="field-label">Username</label>
-                    <input
-                      id="subscription-name"
-                      className="text-input"
-                      type="text"
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                      placeholder="Choose a username"
-                      autoComplete="username"
-                    />
+                {!account.isAuthenticated ? (
+                  <div className="inline-fields">
+                    <div>
+                      <label htmlFor="subscription-name" className="field-label">Username</label>
+                      <input
+                        id="subscription-name"
+                        className="text-input"
+                        type="text"
+                        value={name}
+                        onChange={(event) => setName(event.target.value)}
+                        placeholder="Choose a username"
+                        autoComplete="username"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="subscription-email" className="field-label">Email</label>
+                      <input
+                        id="subscription-email"
+                        className="text-input"
+                        type="email"
+                        value={email}
+                        onChange={(event) => setEmail(event.target.value)}
+                        placeholder="you@example.com"
+                        autoComplete="email"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label htmlFor="subscription-email" className="field-label">Email</label>
-                    <input
-                      id="subscription-email"
-                      className="text-input"
-                      type="email"
-                      value={email}
-                      onChange={(event) => setEmail(event.target.value)}
-                      placeholder="you@example.com"
-                      autoComplete="email"
-                    />
+                ) : (
+                  <div className="preview-box" style={{ padding: '0.85rem 1rem' }}>
+                    <strong>Signed in as {account.name || 'your account'}</strong>
+                    <p className="muted-copy" style={{ marginTop: '0.3rem' }}>
+                      We will use your existing account details and take you straight to Stripe checkout.
+                    </p>
                   </div>
-                </div>
+                )}
                 {!account.isAuthenticated ? (
                   <div className="inline-fields">
                     <div>
@@ -1136,8 +1223,13 @@ export default function App() {
                 <p className="muted-copy">
                   Continue securely through Stripe to complete your subscription. You will be redirected to a hosted checkout page to enter your payment details.
                 </p>
-                <button type="button" className="button button-primary" onClick={() => { void handleSubscription(); }} disabled={isSubmitting}>
-                  {isSubmitting ? 'Working…' : 'Subscribe with Stripe'}
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => { if (hasSubscription) { void handleUnsubscribe(); } else { void handleSubscription(); } }}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? 'Working…' : hasSubscription ? 'Unsubscribe' : 'Subscribe with Stripe'}
                 </button>
               </div>
             </div>
@@ -1219,7 +1311,6 @@ export default function App() {
             </div>
           </div>
         </section>
-      </main>
     );
   }
 
@@ -1346,12 +1437,8 @@ export default function App() {
   }
 
   if (view === 'docs') {
-    return (
-      <main className="app-shell">
-        <div className="page-toolbar">
-          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
-        </div>
-        <section className="hero-card docs-shell">
+    return renderPageShell(
+      <section className="hero-card docs-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
             <a className="button button-primary" href="/site/subscribe">Start AI Copilot access</a>
@@ -1563,16 +1650,12 @@ This section explains the system design.
             </article>
           </div>
         </section>
-      </main>
     );
   }
 
   if (shouldShowDashboard) {
-    return (
-      <main className="app-shell">
-        <div className="page-toolbar">
-          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
-        </div>
+    return renderPageShell(
+      <>
         <section className="hero-card">
           <div className="hero-grid">
             <div>
@@ -1657,15 +1740,11 @@ This section explains the system design.
             </div>
           </section>
         ) : null}
-      </main>
+      </>
     );
   }
 
-  return (
-    <main className="app-shell">
-      <div className="page-toolbar">
-        <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
-      </div>
+  return renderPageShell(
       <section className="hero-card">
         <div className="hero-grid">
           <div className="hero-content">
@@ -1797,7 +1876,5 @@ This section explains the system design.
           </div>
         </div>
       </section>
-
-    </main>
-  );
+    );
 }

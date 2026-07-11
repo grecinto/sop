@@ -1,63 +1,36 @@
 package sopbackend
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
 
-// TestKBQualityDashboardEndpoint verifies the KB Quality dashboard is accessible.
-func TestKBQualityDashboardEndpoint(t *testing.T) {
-	mux := http.NewServeMux()
-	RegisterAllHandlers(mux)
-
-	// Test GET request (should work or require auth)
-	req := httptest.NewRequest(http.MethodGet, "/kb-quality", nil)
-	w := httptest.NewRecorder()
-
-	mux.ServeHTTP(w, req)
-
-	// Should not return 404 (endpoint exists)
-	// May return 401 (auth required) which is fine, or 200 if no auth
-	if w.Code == http.StatusNotFound {
-		t.Errorf("/kb-quality endpoint not found (got 404)")
+func TestSpaceQualitySidebarLinkActivatesShellView(t *testing.T) {
+	body, err := os.ReadFile("templates/sidebar.html")
+	if err != nil {
+		t.Fatalf("failed to read sidebar template: %v", err)
 	}
-
-	t.Logf("KB Quality endpoint returned status %d", w.Code)
-}
-
-// TestKBQualityDashboardHandler tests the handler directly.
-func TestKBQualityDashboardHandler(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/kb-quality", nil)
-	w := httptest.NewRecorder()
-
-	HandleKBQualityDashboardPage(w, req)
-
-	// Should return 200 and HTML content
-	if w.Code != http.StatusOK {
-		t.Logf("KB Quality handler returned status %d (may need template setup)", w.Code)
+	if !strings.Contains(string(body), `id="sidebar-kb-quality-link"`) {
+		t.Fatalf("expected sidebar template to contain the Space Quality link")
 	}
-
-	// Check if response contains HTML indicators
-	body := w.Body.String()
-	if w.Code == http.StatusOK {
-		if len(body) == 0 {
-			t.Error("KB Quality handler returned empty body")
-		}
+	if !strings.Contains(string(body), `selectKBQuality(this)`) {
+		t.Fatalf("expected sidebar template to wire the Space Quality link to the native selection function")
 	}
 }
 
-func TestKBQualityDashboardHandlerRendersTemplate(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/kb-quality", nil)
-	w := httptest.NewRecorder()
-
-	HandleKBQualityDashboardPage(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected KB quality dashboard to render with status 200, got %d and body %q", w.Code, w.Body.String())
+func TestSpaceQualityShellScriptUsesNativeDataManagerPattern(t *testing.T) {
+	body, err := os.ReadFile("templates/scripts_kb_quality.html")
+	if err != nil {
+		t.Fatalf("failed to read KB quality script template: %v", err)
 	}
-	if got := w.Body.String(); !strings.Contains(got, "Space Quality Dashboard") {
-		t.Fatalf("expected response body to contain dashboard title, got %q", got)
+	if !strings.Contains(string(body), "function selectKBQuality(element)") {
+		t.Fatalf("expected shell script to define selectKBQuality function")
+	}
+	if !strings.Contains(string(body), "renderKBQualityDashboard()") {
+		t.Fatalf("expected shell script to render dashboard in the main pane")
+	}
+	if !strings.Contains(string(body), "data-grid") {
+		t.Fatalf("expected shell script to use the data-grid element like other Data Manager views")
 	}
 }

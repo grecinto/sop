@@ -385,7 +385,8 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Plan string `json:"plan"`
+		Plan       string `json:"plan"`
+		Unregister bool   `json:"unregister"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
@@ -393,6 +394,20 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := sopbackend.GetConfig()
+	if req.Unregister && strings.EqualFold(strings.TrimSpace(req.Plan), "none") {
+		if err := cfg.UnregisterUserWithRequest(r.Context(), sopbackend.UnregisterUserRequest{Username: authAccount.Username}); err != nil {
+			sopbackend.RecordProductMetric("site_auth_subscription_failures")
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		sopbackend.RecordProductMetric("site_auth_subscription_requests")
+		sopbackend.SetConfig(cfg)
+		clearSessionCookies(w)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "subscription canceled and account removed", "unregistered": true})
+		return
+	}
 	updated, err := cfg.UpdateSubscriptionPlanWithRequest(r.Context(), sopbackend.UpdateSubscriptionPlanRequest{
 		Username:         authAccount.Username,
 		SubscriptionPlan: req.Plan,

@@ -5,14 +5,144 @@
 let kbQualityData = null;
 let kbJobStatus = null;
 
-// Initialize dashboard on page load
-document.addEventListener('DOMContentLoaded', function() {
+function selectKBQuality(element) {
+    // Clear the real store selection state used by the main navigation handlers.
+    currentStore = null;
+    currentStoreInfo = null;
+    if (typeof window !== 'undefined') {
+        window.currentStore = null;
+        window.currentStoreInfo = null;
+    }
+
+    // Clear other selections
+    document.querySelectorAll('#sidebar li').forEach(li => li.classList.remove('active'));
+    if (element) element.classList.add('active');
+
+    // Hide detail panel
+    const detailPanel = document.getElementById('detail-panel');
+    if (detailPanel) detailPanel.style.display = 'none';
+
+    // Hide toolbar and pagination
+    const toolbar = document.getElementById('toolbar');
+    if (toolbar) toolbar.style.display = 'none';
+    const pagination = document.getElementById('pagination');
+    if (pagination) pagination.style.display = 'none';
+    const paginationTop = document.getElementById('pagination-top');
+    if (paginationTop) paginationTop.style.display = 'none';
+
+    // Update title
+    const titleEl = document.getElementById('current-store-title');
+    if (titleEl) titleEl.textContent = 'Space Quality';
+
+    // Hide action buttons
+    const buttons = ['btn-code-store', 'btn-edit-store', 'btn-edit-kb', 'btn-export-kb', 
+                     'btn-import-kb', 'btn-add-kb-category', 'btn-add-space-item', 
+                     'btn-delete-kb', 'btn-view-store', 'btn-edit-cel', 'btn-delete-store'];
+    buttons.forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.style.display = 'none';
+    });
+
+    // Render quality dashboard in main pane
+    renderKBQualityDashboard();
+}
+
+function renderKBQualityDashboard() {
+    const dataGrid = document.getElementById('data-grid');
+    if (!dataGrid) return;
+
+    dataGrid.innerHTML = `
+        <div class="kb-quality-container" style="width: 100%; max-width: none; margin: 0; box-sizing: border-box; padding-right: 8px;">
+            <div class="kb-header" style="margin-bottom: 30px;">
+                <p style="color: var(--text-muted); font-size: 14px;">Monitor and improve Space effectiveness across all contexts</p>
+            </div>
+
+            <div id="kb-quality-loading" class="loading-spinner" style="text-align: center; padding: 40px;">
+                <div>Loading quality metrics...</div>
+            </div>
+
+            <div id="kb-quality-content" style="display: none;">
+                <div class="kb-card-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: start; margin-bottom: 24px;">
+                    <div class="kb-card" style="background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); min-height: 140px; display: flex; flex-direction: column; justify-content: space-between; height: 100%; box-sizing: border-box;">
+                        <div style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: var(--text-color);">Total Spaces Tracked</div>
+                        <div style="font-size: 48px; font-weight: 600; color: var(--success-bg); margin: 20px 0 10px 0;" id="stat-total-kbs">0</div>
+                        <div style="font-size: 14px; color: var(--text-muted);">Across all task types</div>
+                    </div>
+
+                    <div class="kb-card" style="background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); min-height: 140px; display: flex; flex-direction: column; justify-content: space-between; height: 100%; box-sizing: border-box;">
+                        <div style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: var(--text-color);">Average Success Rate</div>
+                        <div style="font-size: 48px; font-weight: 600; color: var(--success-bg); margin: 20px 0 10px 0;" id="stat-avg-success">0%</div>
+                        <div style="height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden; margin: 10px 0;">
+                            <div style="height: 100%; background: var(--success-bg); transition: width 0.3s; width: 0%;" id="progress-avg-success"></div>
+                        </div>
+                    </div>
+
+                    <div class="kb-card" style="background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); min-height: 140px; display: flex; flex-direction: column; justify-content: space-between; height: 100%; box-sizing: border-box;">
+                        <div style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: var(--text-color);">Critical Issues</div>
+                        <div style="font-size: 48px; font-weight: 600; color: #f44336; margin: 20px 0 10px 0;" id="stat-critical">0</div>
+                        <div style="font-size: 14px; color: var(--text-muted);">Spaces requiring immediate attention</div>
+                    </div>
+
+                    <div class="kb-card" style="background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); min-height: 140px; display: flex; flex-direction: column; justify-content: space-between; height: 100%; box-sizing: border-box;">
+                        <div style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: var(--text-color);">Total Uses (All Time)</div>
+                        <div style="font-size: 48px; font-weight: 600; color: var(--success-bg); margin: 20px 0 10px 0;" id="stat-total-uses">0</div>
+                        <div style="font-size: 14px; color: var(--text-muted);">Successful + Failed generations</div>
+                    </div>
+                </div>
+
+                <div class="kb-card-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: start; margin-bottom: 24px;">
+                    <div class="kb-card" style="background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); height: 100%; box-sizing: border-box;">
+                        <div style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: var(--text-color);">Top Performers 🏆</div>
+                        <ul style="list-style: none; padding: 0; margin: 0; max-height: 400px; overflow-y: auto;" id="top-performers-list">
+                            <li style="padding: 12px 0; border-bottom: 1px solid var(--border-color);">No data available</li>
+                        </ul>
+                    </div>
+
+                    <div class="kb-card" style="background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); height: 100%; box-sizing: border-box;">
+                        <div style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: var(--text-color);">Needs Review ⚠️</div>
+                        <ul style="list-style: none; padding: 0; margin: 0; max-height: 400px; overflow-y: auto;" id="poor-performers-list">
+                            <li style="padding: 12px 0; border-bottom: 1px solid var(--border-color);">No data available</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="kb-card" style="background: var(--input-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);">
+                    <div style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: var(--text-color);">Actions</div>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button onclick="triggerQualityCheck()" style="padding: 8px 16px; background: var(--button-bg); color: var(--button-text); border: none; border-radius: 4px; cursor: pointer;">Run Quality Check Now</button>
+                        <button onclick="downloadReport()" style="padding: 8px 16px; background: var(--sidebar-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Download Full Report</button>
+                        <button onclick="refreshQualityDashboard()" style="padding: 8px 16px; background: var(--sidebar-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Refresh Data</button>
+                    </div>
+
+                    <div id="job-status" style="display: none; background: var(--pre-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 15px; margin-top: 20px;">
+                        <div style="font-size: 14px; font-weight: 600; margin-bottom: 10px;">Background Job Status</div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span style="color: var(--text-muted); font-size: 13px;">Last Run:</span>
+                            <span style="font-weight: 600; color: var(--text-color); font-size: 13px;" id="job-last-run">Never</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: var(--text-muted); font-size: 13px;">Next Run:</span>
+                            <span style="font-weight: 600; color: var(--text-color); font-size: 13px;" id="job-next-run">Unknown</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Load dashboard data
     loadKBQualityDashboard();
-});
+}
 
 async function loadKBQualityDashboard() {
+    const loadingEl = document.getElementById('kb-quality-loading');
+    const contentEl = document.getElementById('kb-quality-content');
+    
+    if (!loadingEl || !contentEl) return;
+    
     try {
-        showLoading(true);
+        loadingEl.style.display = 'block';
+        contentEl.style.display = 'none';
         
         // Fetch quality report and job status in parallel
         const [reportData, jobData] = await Promise.all([
@@ -24,12 +154,19 @@ async function loadKBQualityDashboard() {
         kbJobStatus = jobData;
         
         renderDashboard();
-        showLoading(false);
+        
+        loadingEl.style.display = 'none';
+        contentEl.style.display = 'block';
     } catch (error) {
         console.error('Failed to load KB quality dashboard:', error);
-        showError('Failed to load dashboard data: ' + error.message);
-        showLoading(false);
+        if (loadingEl) loadingEl.innerHTML = '<div style="color: var(--danger-color);">Failed to load dashboard data: ' + error.message + '</div>';
     }
+}
+
+function refreshQualityDashboard() {
+    loadKBQualityDashboard().then(() => {
+        if (typeof showAlert === 'function') showAlert('Dashboard refreshed', null, 'Success', 'green');
+    });
 }
 
 async function fetchKBQualityReport() {
@@ -269,11 +406,13 @@ function renderJobStatus() {
     }
 }
 
-async function triggerQualityCheck() {
+async function triggerQualityCheck(event) {
     try {
-        const btn = event.target;
-        btn.disabled = true;
-        btn.textContent = 'Running check...';
+        const btn = event?.target || document.querySelector('.kb-btn-primary');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Running check...';
+        }
         
         const url = getRuntimeRequestTarget('/api/kb/quality/trigger');
         const headers = { 'Content-Type': 'application/json' };
@@ -302,9 +441,11 @@ async function triggerQualityCheck() {
         console.error('Failed to trigger quality check:', error);
         showAlert('Failed to trigger quality check: ' + error.message, null, 'Error', 'red');
     } finally {
-        const btn = event.target;
-        btn.disabled = false;
-        btn.textContent = 'Run Quality Check Now';
+        const btn = event?.target || document.querySelector('.kb-btn-primary');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Run Quality Check Now';
+        }
     }
 }
 

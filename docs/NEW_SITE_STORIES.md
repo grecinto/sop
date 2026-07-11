@@ -81,6 +81,7 @@ Acceptance criteria:
 - The $5/month price point should feel justified by practical, repeated value rather than by broad AI hype—specifically: full AI copilot features without data center delays.
 - The initial implementation can use the current backend user record and session model rather than introducing a parallel identity stack.
 - Billing integration can be mocked or stubbed at first, but the UI should already reflect the eventual subscription and account-state model.
+- If unsubscribe volume becomes high due to turnover, we can later evaluate an asynchronous cancellation workflow or lightweight outbox/worker pattern to keep the experience resilient as scale increases.
 - The new React site/app is a separate website experience for subscriptions and self-service onboarding. It runs from the standalone site backend and is not launched from the SOP Data Manager apps.
 - sopbackend remains the shared runtime/business-logic layer used by the SOP Data Manager apps and the standalone site backend when needed.
 - The existing Data Manager experience stays intact as a separate operational UI surface served by the SOP Data Manager apps (daemon/httpserver).

@@ -35,6 +35,7 @@
 <div id="resizer"></div>
 
 <div id="main">
+    <div id="app-shell-content" style="display:block;">
     <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
         <h1 id="current-store-title" style="margin: 0; text-transform: capitalize;">Select Store or Context Space</h1>
         <button id="btn-code-store" onclick="showGeneratedCode()" style="display:none; background-color: transparent; color: var(--text-color); padding: 4px; border: none; cursor: pointer;" title="Generate Code">
@@ -182,6 +183,7 @@
             </svg>
         </button>
     </div>
+</div>
 </div>
 
 <div id="detail-resizer"></div>
@@ -1071,6 +1073,7 @@
 {{template "scripts_part11" .}}
 {{template "scripts_daemon" .}}
 {{template "scripts_kb_chat" .}}
+{{template "scripts_kb_quality" .}}
 
 <div id="setup-loading-modal" class="modal" style="display: none; z-index: 10000; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); align-items: center; justify-content: center;">
     <div style="background: var(--bg-color); padding: 40px; border-radius: 8px; text-align: center; border: 1px solid var(--border-color); width: 80%; max-width: 500px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); display: flex; flex-direction: column; align-items: center;">

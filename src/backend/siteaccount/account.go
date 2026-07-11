@@ -1456,18 +1456,88 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 		return err
 	}
 	defer tx.Rollback(ctx)
-	store, err := c.ensureUserStore(ctx, tx)
+
+	userStore, err := c.ensureUserStore(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if store != nil {
-		if err := store.Delete(ctx, []string{username}); err != nil {
+	if userStore != nil {
+		if err := userStore.Delete(ctx, []string{username}); err != nil {
 			return err
 		}
 	}
+
+	subscriptionStore, err := c.ensureSubscriptionStore(ctx, tx)
+	if err != nil {
+		return err
+	}
+	paymentStore, err := c.ensurePaymentStore(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	subscriptionIDs := make([]string, 0)
+	if subscriptionStore != nil {
+		userSubscriptions, err := subscriptionStore.FetchByUser(ctx, []string{username})
+		if err != nil {
+			return err
+		}
+		for _, entry := range userSubscriptions {
+			for _, subscription := range entry.Value {
+				if strings.TrimSpace(subscription.ID) != "" {
+					subscriptionIDs = append(subscriptionIDs, subscription.ID)
+				}
+			}
+		}
+		if len(subscriptionIDs) > 0 {
+			if err := subscriptionStore.Delete(ctx, subscriptionIDs); err != nil {
+				return err
+			}
+			userSubscriptionIndexStore, err := c.ensureUserSubscriptionIndexStore(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if userSubscriptionIndexStore != nil {
+				if err := userSubscriptionIndexStore.Delete(ctx, []UserEntityIDs{{Username: username, EntityIDs: subscriptionIDs}}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	paymentIDs := make([]string, 0)
+	if paymentStore != nil {
+		userPayments, err := paymentStore.FetchByUser(ctx, []string{username})
+		if err != nil {
+			return err
+		}
+		for _, entry := range userPayments {
+			for _, payment := range entry.Value {
+				if strings.TrimSpace(payment.ID) != "" {
+					paymentIDs = append(paymentIDs, payment.ID)
+				}
+			}
+		}
+		if len(paymentIDs) > 0 {
+			if err := paymentStore.Delete(ctx, paymentIDs); err != nil {
+				return err
+			}
+			userPaymentIndexStore, err := c.ensureUserPaymentIndexStore(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if userPaymentIndexStore != nil {
+				if err := userPaymentIndexStore.Delete(ctx, []UserEntityIDs{{Username: username, EntityIDs: paymentIDs}}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+
 	filteredUsers := c.Users[:0]
 	for _, existing := range c.Users {
 		if normalizeUsername(existing.Username) == username {
@@ -1476,6 +1546,24 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 		filteredUsers = append(filteredUsers, existing)
 	}
 	c.Users = filteredUsers
+
+	filteredSubscriptions := c.Subscriptions[:0]
+	for _, existing := range c.Subscriptions {
+		if normalizeUsername(existing.UserID) == username {
+			continue
+		}
+		filteredSubscriptions = append(filteredSubscriptions, existing)
+	}
+	c.Subscriptions = filteredSubscriptions
+
+	filteredPayments := c.Payments[:0]
+	for _, existing := range c.Payments {
+		if normalizeUsername(existing.UserID) == username {
+			continue
+		}
+		filteredPayments = append(filteredPayments, existing)
+	}
+	c.Payments = filteredPayments
 
 	sharedCfg := sopbackend.GetConfig()
 	_ = sharedCfg.UnregisterUserWithRequest(ctx, sopbackend.UnregisterUserRequest{Username: username})

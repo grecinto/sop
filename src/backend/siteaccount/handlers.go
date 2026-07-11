@@ -660,12 +660,25 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Plan          string `json:"plan"`
 		RequestOrigin string `json:"request_origin"`
+		Unregister    bool   `json:"unregister"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	cfg := GetConfig()
+	if req.Unregister && strings.EqualFold(strings.TrimSpace(req.Plan), "none") {
+		if err := cfg.UnregisterUserWithRequest(r.Context(), UnregisterUserRequest{Username: account.Username}); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		revokeSessionTokensFromRequest(r.Context(), r)
+		clearSessionCookies(w)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "subscription canceled and account removed", "unregistered": true})
+		return
+	}
 	updated, err := cfg.UpdateSubscriptionPlanWithRequest(r.Context(), UpdateSubscriptionPlanRequest{Username: account.Username, SubscriptionPlan: req.Plan, RequestOrigin: req.RequestOrigin})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())

@@ -161,6 +161,7 @@ These are the highest-priority tasks for the next implementation pass.
 - [x] Redirect the user to a signed-out experience after unregistering.
 - [x] Add a second plan entry for the future HQ + Local Agent experience.
 - [x] Mark the second plan as unavailable for regular users while keeping it visible for admin testing.
+- [ ] If unsubscribe volume grows significantly with customer turnover, evaluate a future asynchronous cancellation workflow or lightweight outbox/worker pattern for scale and resilience.
 
 ## Phase 5: Architecture and packaging
 - [x] Create a dedicated React frontend package for the new site/app.

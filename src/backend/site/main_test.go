@@ -14,6 +14,28 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
+func TestApplySopbackendPreloadPolicyDisablesPreloadByDefault(t *testing.T) {
+	sopbackend.SetConfig(sopbackend.Config{})
+	defer sopbackend.SetConfig(sopbackend.Config{})
+
+	applySopbackendPreloadPolicy()
+
+	if !sopbackend.GetConfig().DisableSOPKBPreload {
+		t.Fatalf("expected DisableSOPKBPreload to be enabled")
+	}
+}
+
+func TestApplySopbackendPreloadPolicyPreservesExistingFlag(t *testing.T) {
+	sopbackend.SetConfig(sopbackend.Config{DisableSOPKBPreload: true})
+	defer sopbackend.SetConfig(sopbackend.Config{})
+
+	applySopbackendPreloadPolicy()
+
+	if !sopbackend.GetConfig().DisableSOPKBPreload {
+		t.Fatalf("expected existing DisableSOPKBPreload flag to remain enabled")
+	}
+}
+
 func TestResolveFrontendAssetPath(t *testing.T) {
 	tests := []struct {
 		name     string

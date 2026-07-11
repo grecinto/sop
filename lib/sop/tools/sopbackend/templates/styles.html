@@ -112,6 +112,10 @@
         li:hover { background: var(--hover-bg); }
         .truncate-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         li.active { background: var(--active-bg); color: var(--active-text); }
+        .sidebar-nav-link { transition: background-color 0.2s ease, color 0.2s ease; }
+        .sidebar-nav-link:hover { background: var(--hover-bg); color: var(--text-color); }
+        .active-sidebar-nav { background: var(--active-bg) !important; color: var(--active-text) !important; font-weight: 600; }
+        .active-sidebar-nav:hover { background: var(--active-bg) !important; color: var(--active-text) !important; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; table-layout: fixed; border: 1px solid var(--border-color); }
         th, td { text-align: left; padding: 6px 12px; border: 1px solid var(--border-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         th { position: relative; background-color: var(--table-header-bg); text-transform: capitalize; }

@@ -572,9 +572,38 @@ func registerDocsHandler(mux *http.ServeMux, docsDir string) {
 	})
 }
 
+func applySopbackendPreloadPolicy() {
+	cfg := sopbackend.GetConfig()
+	if cfg.DisableSOPKBPreload {
+		return
+	}
+
+	sopbackend.SetConfig(sopbackend.Config{
+		Port:                   cfg.Port,
+		Databases:              cfg.Databases,
+		PageSize:               cfg.PageSize,
+		SystemDB:               cfg.SystemDB,
+		ProductionMode:         cfg.ProductionMode,
+		SessionTokenTTLMinutes: cfg.SessionTokenTTLMinutes,
+		SessionSecret:          cfg.SessionSecret,
+		AuthProviderName:       cfg.AuthProviderName,
+		Users:                  cfg.Users,
+		Subscriptions:          cfg.Subscriptions,
+		Payments:               cfg.Payments,
+		ObfuscationMode:        cfg.ObfuscationMode,
+		DatabasePath:           cfg.DatabasePath,
+		Mode:                   cfg.Mode,
+		ConfigFile:             cfg.ConfigFile,
+		RedisURL:               cfg.RedisURL,
+		DisableAuth:            cfg.DisableAuth,
+		DisableSOPKBPreload:    true,
+	})
+}
+
 func main() {
 	dataDir := defaultDataDir()
 	configureRuntimeEnvironment(dataDir)
+	applySopbackendPreloadPolicy()
 	frontendDir := defaultFrontendDir()
 	docsDir := defaultDocsDir()
 
