@@ -250,6 +250,65 @@ The evolution of LTM is driven by the following goals:
 *   **Operational Safety:** Keep memory bounded, partitioned, and explainable enough to debug and govern.
 *   **Skill Acquisition:** Allow curated Knowledge Bases to be absorbed into LTM as reusable expertise so the AI can accumulate multiple durable competencies over time.
 
+### 9.5. Planned Categorizer Architecture for Storage and Retrieval
+To close the gap between our current semantic retrieval and the quality levels we want, the next iteration should introduce a first-class categorization layer that is shared by both storage and retrieval.
+
+**Design goal:**
+- Use a consistent categorizer for both write-time storage and read-time retrieval so the same conceptual boundaries are applied in both directions.
+- Make the categorizer aware of the current taxonomy so it can propose categories that fit the existing path graph instead of inventing disconnected labels.
+- Allow deep-domain experts to override the default behavior with a domain-specific categorizer when the taxonomy is not obvious to a general model.
+
+**Proposed components:**
+1. **Default Categorizer (General):**
+   - A general-purpose categorizer that can be driven by an LLM, lightweight rules, or a hybrid strategy.
+   - Suitable for common cases where the category is obvious or where a broad taxonomy is sufficient.
+2. **Domain Categorizer (Pluggable):**
+   - A developer-supplied categorizer that can encode domain-specific rules, taxonomy, and naming conventions.
+   - This is the key ingredient for high-precision retrieval in deep verticals (for example finance, healthcare, legal, ops, or internal product taxonomy).
+3. **Taxonomy Context Provider:**
+   - The categorizer should receive a compact, read-only view of the current category taxonomy, ideally rooted in the path index (`CategoriesByPath`).
+   - This makes the categorizer aware of existing parent/child branches and helps it avoid duplicate or inconsistent categories.
+4. **Categorizer Mode:**
+   - The categorizer should explicitly know whether it is being used for storage, retrieval, or both.
+   - This lets the system tune prompts, confidence thresholds, and fallback behavior differently for write-time classification versus read-time routing.
+5. **Category Confidence + Fallbacks:**
+   - Every categorization should produce a category plus confidence or evidence.
+   - Low-confidence predictions should fall back to the existing semantic path or a broader parent category instead of forcing a brittle leaf assignment.
+
+**Expected impact:**
+- Storage and retrieval should share a common conceptual vocabulary.
+- Category drift between ingestion and lookup should drop significantly.
+- Generative categorization should become more stable because the model sees the current taxonomy rather than a blind or overly broad context window.
+- Deep-domain accuracy should improve because the system can rely on domain experts to define the taxonomy rather than forcing everything through a one-size-fits-all model.
+
+### 9.6. LLM-Assisted Categorization Loop
+The system should support an LLM-driven categorization path as a general mechanism for both storage and retrieval.
+
+**Write path (storage):**
+- When a new thought or document arrives, the system can ask the categorizer to assign a category path.
+- If the confidence is high, that category is stored as the primary route.
+- If confidence is low, the system can keep the broader parent category and let semantic matching refine it later.
+
+**Read path (retrieval):**
+- When a query arrives, the system can use the categorizer to infer likely category paths before doing vector retrieval.
+- The retrieval path should use the predicted category to prune or re-rank candidate categories rather than relying only on raw semantic similarity.
+
+**Batch-assisted policy:**
+- For a batch of related inputs, the categorizer may optionally consult an LLM to propose a set of consistent categories for the group.
+- This is especially useful when the input set is ambiguous, emerging, or spans multiple subtopics.
+- The LLM should receive the current taxonomy context so it can suggest categories that fit the existing hierarchy rather than inventing disconnected labels.
+
+**General policy:**
+- Use deterministic or embedding-based routing as a fast path when confidence is already high.
+- Use LLM assistance when the domain is ambiguous or when the taxonomy is richer than a simple keyword match.
+- Preserve compatibility with developer-supplied categorizers so the system can shift to the most suitable strategy per domain.
+
+**Why this matters:**
+- It gives us a reusable general categorizer interface for both ingestion and query routing.
+- It creates an explicit path for LLM-based category prediction without hard-coding it only into the storage flow.
+- It allows the system to use the current taxonomy as a guardrail for LLM suggestions, improving consistency and reducing category drift.
+- It sets up the architecture needed to reach retrieval quality that is at par with or better than general-purpose vector databases in real-world domains.
+
 ## Component Architecture (Engine Level)
 
 ### 1. ShortTermMemory (STM - Scratchpad)

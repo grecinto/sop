@@ -175,6 +175,7 @@ type SearchRequest[T any] struct {
 	Text                   string
 	Vector                 []float32
 	CategoryPath           string
+	CategoryPaths          []string
 	CategoryVector         []float32
 	Limit                  int
 	Filter                 func(T) bool

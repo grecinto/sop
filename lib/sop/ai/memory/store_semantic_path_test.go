@@ -320,3 +320,47 @@ func TestSemanticCategoryByPath_ReturnsSingleBestCandidate(t *testing.T) {
 		t.Fatalf("expected both tied leaves to remain, got %+v", candidates)
 	}
 }
+
+func TestSemanticCategoryByPart_PrioritizesExactDistanceMatch(t *testing.T) {
+	ctx := context.Background()
+	cats := inmemory.NewBtree[sop.UUID, *Category](true)
+	dist := inmemory.NewBtree[DistanceKey, byte](false)
+
+	s := NewStore[string]("semantic_kb", nil,
+		cats.Btree,
+		inmemory.NewBtree[string, sop.UUID](false).Btree,
+		dist.Btree,
+		inmemory.NewBtree[VectorKey, Vector](false).Btree,
+		inmemory.NewBtree[ItemKey, Item[string]](false).Btree,
+		inmemory.NewBtree[sop.UUID, Document](false).Btree,
+	).(*store[string])
+	s.SetDomainReference([]float32{0.0, 0.0, 0.0})
+
+	parent := &Category{ID: sop.NewUUID(), Name: "Parent", CenterVector: []float32{0.0, 0.0, 0.0}}
+	exact := &Category{ID: sop.NewUUID(), Name: "Exact", CenterVector: []float32{0.8, 0.0, 0.0}, ParentIDs: []CategoryParent{{ParentID: parent.ID}}}
+	nearby := &Category{ID: sop.NewUUID(), Name: "Nearby", CenterVector: []float32{0.4, 0.0, 0.0}, ParentIDs: []CategoryParent{{ParentID: parent.ID}}}
+
+	for _, cat := range []*Category{parent, exact, nearby} {
+		if _, err := s.AddCategory(ctx, cat); err != nil {
+			t.Fatalf("AddCategory(%s) failed: %v", cat.Name, err)
+		}
+	}
+
+	if ok, err := dist.Btree.Add(ctx, DistanceKey{ParentID: parent.ID, Distance: 0.4, ID: nearby.ID}, 0); err != nil || !ok {
+		t.Fatalf("add nearby distance entry failed: ok=%v err=%v", ok, err)
+	}
+	if ok, err := dist.Btree.Add(ctx, DistanceKey{ParentID: parent.ID, Distance: 0.5, ID: exact.ID}, 0); err != nil || !ok {
+		t.Fatalf("add exact distance entry failed: ok=%v err=%v", ok, err)
+	}
+
+	candidates, err := s.semanticCategoryByPart(ctx, parent.ID, parent.CenterVector, []float32{0.5, 0.0, 0.0})
+	if err != nil {
+		t.Fatalf("semanticCategoryByPart failed: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+	if candidates[0] == nil || candidates[0].ID != exact.ID {
+		t.Fatalf("expected exact match to be returned first, got %+v", candidates)
+	}
+}

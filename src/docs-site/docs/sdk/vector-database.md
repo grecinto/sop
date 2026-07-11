@@ -1,5 +1,11 @@
 # Vector Database Architecture
 
+## A new real-time vector database
+
+The new vector database removes the traditional K-Means, centroid, and overnight optimization pipeline. Instead of clustering embeddings offline and then querying a batch-optimized index, it supports real-time retrieval directly on the live data graph and category hierarchy.
+
+That means the system is not limited by the cost and latency of centroid-based index maintenance. It scales with available hardware, keeps updates immediate, and returns results in real time.
+
 ## Traditional vs Northstar Architecture
 
 <div class="ascii-diagram">
@@ -98,6 +104,17 @@ Result: Found in O(D log N) time, no K-Means needed!
 
 ## Key Features
 
+### Swarm-style distributed retrieval
+
+SOP’s retrieval design is built around independent nodes that can collaborate without depending on a single centralized controller. In practice, that means:
+
+- **No single point of failure** for retrieval and memory operations
+- **Elastic scale** by adding more nodes rather than depending on one large index service
+- **Real-time operation** for copilots and agent systems that need fast, local access to knowledge
+- **Better resilience** for enterprise deployments that need continuity even when a node is unavailable
+
+This is a major advantage over traditional vector store designs that rely on a central index service for scale and availability.
+
 ### Nested Semantic Categories
 
 Embeddings are organized into human-readable nested categories (e.g., error-handling → retry-logic → exponential-backoff). Domain experts curate the organization through category hierarchies instead of relying on automated clustering algorithms.
@@ -105,6 +122,8 @@ Embeddings are organized into human-readable nested categories (e.g., error-hand
 ### Relativity-based Triangulation
 
 The triangulation algorithm performs fuzzy vector searches in O(D log N) time by navigating the semantic category tree. This eliminates K-Means centroids and overnight batch processing, using category relationships and embedding proximity for instant search.
+
+The result is a real-time vector database architecture that does not depend on centroid re-computation, cluster rebalancing, or offline optimization jobs to stay useful.
 
 ### Vectorization as database primitive
 

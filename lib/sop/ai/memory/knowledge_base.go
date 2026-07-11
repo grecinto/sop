@@ -247,22 +247,120 @@ func hydrateSearchHitsWithDocumentContent[T any](ctx context.Context, kb *Knowle
 	}
 }
 
-func mergeSearchHits[T any](semanticHits, textHits []ai.Hit[T]) []ai.Hit[T] {
-	seen := make(map[string]struct{}, len(semanticHits)+len(textHits))
-	merged := make([]ai.Hit[T], 0, len(semanticHits)+len(textHits))
+func parentCategoryPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Split(trimmed, "/")
+	if len(parts) <= 1 {
+		return ""
+	}
+	parentParts := parts[:len(parts)-1]
+	return strings.Join(parentParts, "/")
+}
 
-	for _, hit := range append(append([]ai.Hit[T]{}, semanticHits...), textHits...) {
-		key := fmt.Sprintf("%v", hit.ID)
-		if hit.DocID != nil {
-			key = fmt.Sprintf("%v:%v", hit.DocID, hit.ID)
-		}
-		if _, ok := seen[key]; ok {
+func mergeSearchHits[T any](existing, incoming []ai.Hit[T]) []ai.Hit[T] {
+	merged := make([]ai.Hit[T], 0, len(existing)+len(incoming))
+	merged = append(merged, existing...)
+	seen := make(map[string]int, len(merged))
+	for i, hit := range merged {
+		seen[searchHitIdentity(hit)] = i
+	}
+
+	for _, hit := range incoming {
+		key := searchHitIdentity(hit)
+		if idx, ok := seen[key]; ok {
+			current := &merged[idx]
+			if hit.Score > current.Score {
+				current.Score = hit.Score
+			} else {
+				current.Score += 0.01
+			}
+			if strings.TrimSpace(current.ID) == "" && strings.TrimSpace(hit.ID) != "" {
+				current.ID = hit.ID
+			}
+			if len(current.DocID) == 0 && len(hit.DocID) > 0 {
+				current.DocID = append([]string(nil), hit.DocID...)
+			}
+			if current.DocumentContent == "" && hit.DocumentContent != "" {
+				current.DocumentContent = hit.DocumentContent
+			}
+			if current.SourceLabel == "" && hit.SourceLabel != "" {
+				current.SourceLabel = hit.SourceLabel
+			}
 			continue
 		}
-		seen[key] = struct{}{}
+		seen[key] = len(merged)
 		merged = append(merged, hit)
 	}
 	return merged
+}
+
+func searchHitIdentity[T any](hit ai.Hit[T]) string {
+	if strings.TrimSpace(hit.ID) != "" {
+		return "id:" + hit.ID
+	}
+	if len(hit.DocID) > 0 {
+		return "docid:" + strings.Join(hit.DocID, "|")
+	}
+	return "payload:" + fmt.Sprintf("%T:%v", hit.Payload, hit.Payload)
+}
+
+func searchHitEvidence[T any](hit *ai.Hit[T], queryText string, pathHints []string) (lexical int, pathMatches int) {
+	if hit == nil {
+		return 0, 0
+	}
+	payloadText := payloadTextForHit(hit)
+	if strings.TrimSpace(queryText) != "" {
+		queryTokens := tokenizeSearchText(queryText)
+		payloadTokens := tokenizeSearchText(payloadText)
+		seen := make(map[string]struct{}, len(queryTokens))
+		for _, q := range queryTokens {
+			seen[q] = struct{}{}
+		}
+		for _, p := range payloadTokens {
+			if _, ok := seen[p]; ok {
+				lexical++
+			}
+		}
+	}
+	for _, path := range pathHints {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(payloadText), strings.ToLower(path)) {
+			pathMatches++
+		}
+	}
+	return lexical, pathMatches
+}
+
+func tokenizeSearchText(text string) []string {
+	trimmed := normalize(text)
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.Fields(trimmed)
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
+}
+
+func payloadTextForHit[T any](hit *ai.Hit[T]) string {
+	if hit == nil {
+		return ""
+	}
+	if payload, ok := any(hit.Payload).(string); ok {
+		return payload
+	}
+	if payload, ok := any(hit.Payload).(map[string]any); ok {
+		if text, ok := payload["text"].(string); ok {
+			return text
+		}
+	}
+	return fmt.Sprintf("%v", hit.Payload)
 }
 
 func searchOptionsSummary[T any](opts *SearchOptions[T]) []any {
@@ -270,6 +368,41 @@ func searchOptionsSummary[T any](opts *SearchOptions[T]) []any {
 		return []any{"limit", 0, "category_path", "", "has_filter", false}
 	}
 	return []any{"limit", opts.Limit, "category_path", opts.CategoryPath, "has_filter", opts.Filter != nil}
+}
+
+func containsCategory(cats []*Category, target *Category) bool {
+	if target == nil {
+		return false
+	}
+	for _, cat := range cats {
+		if cat == nil {
+			continue
+		}
+		if cat.ID == target.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueCategoryPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 // Search provides one reusable entry point for single or batch retrieval.
@@ -288,9 +421,18 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 	for _, req := range requests {
 		var candidates []*Category
 
-		// Step 1: If CategoryPath specified, try CategoryByPath then CategoryByDistance
+		// Step 1: If CategoryPath(s) specified, try CategoryByPath then CategoryByDistance
+		categoryPaths := make([]string, 0, 1+len(req.CategoryPaths))
 		if strings.TrimSpace(req.CategoryPath) != "" {
-			cats, err := kb.findCategoryByPath(ctx, req.CategoryPath)
+			categoryPaths = append(categoryPaths, req.CategoryPath)
+		}
+		for _, path := range req.CategoryPaths {
+			if strings.TrimSpace(path) != "" {
+				categoryPaths = append(categoryPaths, path)
+			}
+		}
+		for _, path := range uniqueCategoryPaths(categoryPaths) {
+			cats, err := kb.findCategoryByPath(ctx, path)
 			if err != nil {
 				return nil, err
 			}
@@ -301,6 +443,61 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 
 		// Step 2: If no category yet and Text present, use CategoryText embedding to get resolved in CategoryByDistance + TextSearch categories. (BOTH)
 		if len(candidates) == 0 && strings.TrimSpace(req.Text) != "" {
+			if kb.Manager != nil && kb.Manager.retrievalRouter != nil {
+				if catName, err := kb.Manager.Categorize(req.Text, CategorizeOptions{Mode: CategorizerModeRetrieval}); err == nil && strings.TrimSpace(catName) != "" {
+					if cat, err := kb.Manager.EnsureCategory(ctx, catName); err == nil && cat != sop.NilUUID {
+						cats, err := kb.Store.Categories(ctx)
+						if err == nil {
+							if found, _ := cats.Find(ctx, cat, false); found {
+								if current, err := cats.GetCurrentValue(ctx); err == nil && current != nil {
+									candidates = append(candidates, current)
+								}
+							}
+						}
+					}
+				}
+			}
+			if kb.Manager != nil {
+				if confCat, ok := kb.Manager.categorizer.(ConfidenceCategorizer); ok {
+					if res, err := confCat.CategorizeWithConfidence(req.Text, CategorizeOptions{Mode: CategorizerModeRetrieval}); err == nil && strings.TrimSpace(res.Category) != "" {
+						if res.Confidence >= 0.7 {
+							if cat, err := kb.Manager.EnsureCategory(ctx, res.Category); err == nil && cat != sop.NilUUID {
+								cats, err := kb.Store.Categories(ctx)
+								if err == nil {
+									if found, _ := cats.Find(ctx, cat, false); found {
+										if current, err := cats.GetCurrentValue(ctx); err == nil && current != nil {
+											candidates = append(candidates, current)
+										}
+									}
+								}
+							}
+						} else if parent := parentCategoryPath(res.Category); parent != "" {
+							if cat, err := kb.Manager.EnsureCategory(ctx, parent); err == nil && cat != sop.NilUUID {
+								cats, err := kb.Store.Categories(ctx)
+								if err == nil {
+									if found, _ := cats.Find(ctx, cat, false); found {
+										if current, err := cats.GetCurrentValue(ctx); err == nil && current != nil {
+											candidates = append(candidates, current)
+										}
+									}
+								}
+							}
+						}
+					}
+				} else if catName, err := kb.Manager.Categorize(req.Text, CategorizeOptions{Mode: CategorizerModeRetrieval}); err == nil && strings.TrimSpace(catName) != "" {
+					if cat, err := kb.Manager.EnsureCategory(ctx, catName); err == nil && cat != sop.NilUUID {
+						cats, err := kb.Store.Categories(ctx)
+						if err == nil {
+							if found, _ := cats.Find(ctx, cat, false); found {
+								if current, err := cats.GetCurrentValue(ctx); err == nil && current != nil {
+									candidates = append(candidates, current)
+								}
+							}
+						}
+					}
+				}
+			}
+
 			// Use CategoryText embedding to get resolved in CategoryByDistance
 			if kb.Manager != nil && kb.Manager.embedder != nil {
 				vecs, err := embed.CategoryTexts(ctx, kb.Manager.embedder, []string{normalize(req.Text)})
@@ -336,6 +533,43 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 		var hits []ai.Hit[T]
 
 		candidates = uniqueCategories(candidates)
+		pathHints := make([]string, 0)
+		if kb.Manager != nil && kb.Manager.retrievalRouter != nil && len(candidates) > 0 {
+			pathNames := make([]string, 0, len(candidates))
+			for _, cat := range candidates {
+				if cat != nil {
+					if strings.TrimSpace(cat.Path) != "" {
+						pathNames = append(pathNames, cat.Path)
+					} else if strings.TrimSpace(cat.Name) != "" {
+						pathNames = append(pathNames, cat.Name)
+					}
+				}
+			}
+			if len(pathNames) > 0 {
+				orderedPaths := kb.Manager.retrievalRouter.RankedPaths(pathNames)
+				if len(orderedPaths) > 0 {
+					ordered := make([]*Category, 0, len(candidates))
+					for _, path := range orderedPaths {
+						for _, cat := range candidates {
+							if cat == nil {
+								continue
+							}
+							if strings.TrimSpace(cat.Path) == path || strings.TrimSpace(cat.Name) == path {
+								ordered = append(ordered, cat)
+								break
+							}
+						}
+					}
+					for _, cat := range candidates {
+						if cat != nil && !containsCategory(ordered, cat) {
+							ordered = append(ordered, cat)
+						}
+					}
+					candidates = ordered
+				}
+			}
+			pathHints = append(pathHints, pathNames...)
+		}
 		for _, cat := range candidates {
 			catOpts := &SearchOptions[T]{
 				Limit:          req.Limit,
@@ -360,18 +594,40 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 					catHits[i].Score = catHits[i].Score - (categoryDist * 0.1)
 				}
 			}
-
-			hits = append(hits, catHits...)
+			hits = mergeSearchHits(hits, catHits)
 		}
 
 		if req.IncludeDocumentContent {
 			hydrateSearchHitsWithDocumentContent(ctx, kb, hits)
 		}
+		if kb.Manager != nil && kb.Manager.retrievalRouter != nil && len(candidates) > 0 {
+			for _, cat := range candidates {
+				if cat == nil {
+					continue
+				}
+				if strings.TrimSpace(cat.Path) != "" {
+					kb.Manager.retrievalRouter.NotePath(cat.Path)
+				} else if strings.TrimSpace(cat.Name) != "" {
+					kb.Manager.retrievalRouter.NotePath(cat.Name)
+				}
+			}
+		}
 
-		// Step 5: Sort by adjusted scores (category distance + item score)
+		// Step 5: Sort by evidence-first ranking: lexical overlap and path agreement outrank weak vector-only matches.
 		if len(hits) > 1 {
 			sort.Slice(hits, func(i, j int) bool {
-				return hits[i].Score > hits[j].Score
+				lexI, pathI := searchHitEvidence(&hits[i], req.Text, pathHints)
+				lexJ, pathJ := searchHitEvidence(&hits[j], req.Text, pathHints)
+				if lexI != lexJ {
+					return lexI > lexJ
+				}
+				if pathI != pathJ {
+					return pathI > pathJ
+				}
+				if hits[i].Score == hits[j].Score {
+					return hits[i].ID < hits[j].ID
+				}
+				return hits[i].Score < hits[j].Score
 			})
 		}
 
@@ -385,13 +641,14 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 
 // Thought represents the individual entity of data in a batch categorization execution.
 type Thought[T any] struct {
-	Summaries    []string
-	CategoryPath string
-	DocID        DocIDs
-	Data         T
-	Vectors      [][]float32
-	Positions    []VectorKey
-	VectorHash   string
+	Summaries     []string
+	CategoryPath  string
+	CategoryPaths []string
+	DocID         DocIDs
+	Data          T
+	Vectors       [][]float32
+	Positions     []VectorKey
+	VectorHash    string
 }
 
 // IngestThoughts securely categorizes and stores an array of thoughts, optimizing latency
@@ -425,10 +682,24 @@ func (kb *KnowledgeBase[T]) IngestThoughts(ctx context.Context, thoughts []Thoug
 
 	var uncategorizedIdx []int
 	var uncategorizedTexts []string
+	resolvedCategoryPaths := make([][]string, len(thoughts))
 
 	// 2. Evaluate if we need to categorize
 	for i, thought := range thoughts {
-		if thought.CategoryPath != "" {
+		explicitPaths := make([]string, 0, 1+len(thought.CategoryPaths))
+		if strings.TrimSpace(thought.CategoryPath) != "" {
+			explicitPaths = append(explicitPaths, thought.CategoryPath)
+		}
+		for _, path := range thought.CategoryPaths {
+			if strings.TrimSpace(path) != "" {
+				explicitPaths = append(explicitPaths, path)
+			}
+		}
+		explicitPaths = uniqueCategoryPaths(explicitPaths)
+		if len(explicitPaths) > 0 {
+			resolvedCategoryPaths[i] = explicitPaths
+			thoughts[i].CategoryPath = explicitPaths[0]
+			thoughts[i].CategoryPaths = append([]string(nil), explicitPaths[1:]...)
 			continue // Already formally categorized
 		}
 
@@ -436,8 +707,16 @@ func (kb *KnowledgeBase[T]) IngestThoughts(ctx context.Context, thoughts []Thoug
 		if kb.MaxMathCategoryDistance > 0 && len(thought.Vectors) > 0 {
 			closest, dist, err := kb.Manager.FindClosestCategory(ctx, thought.Vectors[0])
 			if err == nil && closest != nil && dist <= kb.MaxMathCategoryDistance {
-				thoughts[i].CategoryPath = closest.Name
+				resolvedCategoryPaths[i] = []string{closest.Path}
+				thoughts[i].CategoryPath = closest.Path
 				categorizedByMath = true
+			}
+			if !categorizedByMath && kb.Manager != nil {
+				if catName, err := kb.Manager.Categorize(strings.Join(thought.Summaries, " "), CategorizeOptions{Mode: CategorizerModeStorage, PersonaContext: persona}); err == nil && strings.TrimSpace(catName) != "" {
+					resolvedCategoryPaths[i] = []string{catName}
+					thoughts[i].CategoryPath = catName
+					categorizedByMath = true
+				}
 			}
 		}
 
@@ -452,16 +731,56 @@ func (kb *KnowledgeBase[T]) IngestThoughts(ctx context.Context, thoughts []Thoug
 		}
 	}
 
-	// 3. Batch Fallback to LLM Pristine Cataloging
+	// 3. Batch Fallback to categorizer-based classification
 	if len(uncategorizedTexts) > 0 {
-		generated, err := kb.Manager.GenerateCategories(ctx, uncategorizedTexts, persona)
-		if err != nil {
-			return err
+		var generatedPaths [][]string
+		if multiCatManager, ok := any(kb.Manager).(interface {
+			CategorizeManyCandidates(texts []string, opts CategorizeOptions) ([][]CategorizerCandidate, error)
+		}); ok {
+			candidatesByText, err := multiCatManager.CategorizeManyCandidates(uncategorizedTexts, CategorizeOptions{Mode: CategorizerModeStorage, PersonaContext: persona})
+			if err != nil {
+				return err
+			}
+			generatedPaths = make([][]string, len(candidatesByText))
+			for idx, candidates := range candidatesByText {
+				paths := make([]string, 0, len(candidates))
+				for _, candidate := range candidates {
+					if strings.TrimSpace(candidate.Category) == "" {
+						continue
+					}
+					if containsString(paths, candidate.Category) {
+						continue
+					}
+					paths = append(paths, candidate.Category)
+				}
+				if len(paths) == 0 {
+					if catName, err := kb.Manager.Categorize(uncategorizedTexts[idx], CategorizeOptions{Mode: CategorizerModeStorage, PersonaContext: persona}); err == nil && strings.TrimSpace(catName) != "" {
+						paths = []string{catName}
+					}
+				}
+				generatedPaths[idx] = uniqueCategoryPaths(paths)
+			}
+		} else {
+			generated, err := kb.Manager.CategorizeMany(uncategorizedTexts, CategorizeOptions{Mode: CategorizerModeStorage, PersonaContext: persona})
+			if err != nil {
+				return err
+			}
+			generatedPaths = make([][]string, len(generated))
+			for idx, category := range generated {
+				if strings.TrimSpace(category) != "" {
+					generatedPaths[idx] = []string{category}
+				}
+			}
 		}
 
 		// Re-align the generated outputs with the original array
 		for idx, origIdx := range uncategorizedIdx {
-			thoughts[origIdx].CategoryPath = generated[idx]
+			if len(generatedPaths[idx]) == 0 {
+				continue
+			}
+			resolvedCategoryPaths[origIdx] = generatedPaths[idx]
+			thoughts[origIdx].CategoryPath = generatedPaths[idx][0]
+			thoughts[origIdx].CategoryPaths = append([]string(nil), generatedPaths[idx][1:]...)
 		}
 	}
 
@@ -504,39 +823,13 @@ func (kb *KnowledgeBase[T]) IngestThoughts(ctx context.Context, thoughts []Thoug
 	}
 
 	for i, thought := range thoughts {
-		cat, exists := catCache[thought.CategoryPath]
-		if !exists {
-			catID, err := kb.Manager.EnsureCategory(ctx, thought.CategoryPath)
-			if err != nil {
-				return err
-			}
-			// Retrieve the full category object
-			cats, err := kb.Store.Categories(ctx)
-			if err != nil {
-				return err
-			}
-			found, err := cats.Find(ctx, catID, false)
-			if err != nil {
-				return err
-			}
-			if !found {
-				return fmt.Errorf("category not found after ensuring: %v", catID)
-			}
-			cat, err = cats.GetCurrentValue(ctx)
-			if err != nil {
-				return err
-			}
-
-			// Initialize CenterVector if empty - must use CategoryTexts (classification space)
-			if len(cat.CenterVector) == 0 && kb.Manager != nil && kb.Manager.embedder != nil {
-				catVecs, err := embed.CategoryTexts(ctx, kb.Manager.embedder, []string{normalize(cat.Name)})
-				if err == nil && len(catVecs) > 0 && len(catVecs[0]) > 0 {
-					cat.CenterVector = catVecs[0]
-					// Update the category in the store
-					cats.UpdateCurrentItem(ctx, cat.ID, cat)
-				}
-			}
-			catCache[thought.CategoryPath] = cat
+		chosenPaths := resolvedCategoryPaths[i]
+		if len(chosenPaths) == 0 {
+			chosenPaths = []string{thought.CategoryPath}
+		}
+		chosenPaths = uniqueCategoryPaths(chosenPaths)
+		if len(chosenPaths) == 0 {
+			chosenPaths = []string{"uncategorized"}
 		}
 
 		item := Item[T]{
@@ -551,9 +844,46 @@ func (kb *KnowledgeBase[T]) IngestThoughts(ctx context.Context, thoughts []Thoug
 		// Use pre-batched classification vectors
 		classificationVecs := thoughtClassificationVecs[i]
 
-		err := kb.Store.UpsertByCategoryID(ctx, cat.ID, cat.CenterVector, item, thought.Vectors, classificationVecs)
-		if err != nil {
-			return err
+		for _, catPath := range chosenPaths {
+			cat, exists := catCache[catPath]
+			if !exists {
+				catID, err := kb.Manager.EnsureCategory(ctx, catPath)
+				if err != nil {
+					return err
+				}
+				// Retrieve the full category object
+				cats, err := kb.Store.Categories(ctx)
+				if err != nil {
+					return err
+				}
+				found, err := cats.Find(ctx, catID, false)
+				if err != nil {
+					return err
+				}
+				if !found {
+					return fmt.Errorf("category not found after ensuring: %v", catID)
+				}
+				cat, err = cats.GetCurrentValue(ctx)
+				if err != nil {
+					return err
+				}
+
+				// Initialize CenterVector if empty - must use CategoryTexts (classification space)
+				if len(cat.CenterVector) == 0 && kb.Manager != nil && kb.Manager.embedder != nil {
+					catVecs, err := embed.CategoryTexts(ctx, kb.Manager.embedder, []string{normalize(cat.Name)})
+					if err == nil && len(catVecs) > 0 && len(catVecs[0]) > 0 {
+						cat.CenterVector = catVecs[0]
+						// Update the category in the store
+						cats.UpdateCurrentItem(ctx, cat.ID, cat)
+					}
+				}
+				catCache[catPath] = cat
+			}
+
+			err := kb.Store.UpsertByCategoryID(ctx, cat.ID, cat.CenterVector, item, thought.Vectors, classificationVecs)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -10,20 +10,21 @@ import (
 )
 
 type KnowledgeBaseConfig struct {
-	Type                string            `json:"type,omitempty"`
-	IsPersona           bool              `json:"is_persona,omitempty"`
-	IsExclusive         bool              `json:"is_exclusive,omitempty"`
-	Description         string            `json:"description,omitempty"`
-	SystemPrompt        string            `json:"system_prompt,omitempty"`
-	Embedder            string            `json:"embedder,omitempty"`
-	EmbedderDimension   int               `json:"embedder_dimension,omitempty"`
-	AllowAutoEnrichment bool              `json:"allowAutoEnrichment,omitempty"`
-	AllowedTools        []string          `json:"allowed_tools,omitempty"`
-	ToolQueries         []PathSearchParam `json:"tool_queries,omitempty"`
-	LastModified        int64             `json:"last_modified,omitempty"`   // Unix timestamp
-	LastVectorized      int64             `json:"last_vectorized,omitempty"` // Unix timestamp
-	RoutingPrefix       string            `json:"routing_prefix,omitempty"`
-	DomainReference     []float32         `json:"domain_reference,omitempty"`
+	Type                string             `json:"type,omitempty"`
+	IsPersona           bool               `json:"is_persona,omitempty"`
+	IsExclusive         bool               `json:"is_exclusive,omitempty"`
+	Description         string             `json:"description,omitempty"`
+	SystemPrompt        string             `json:"system_prompt,omitempty"`
+	Embedder            string             `json:"embedder,omitempty"`
+	EmbedderDimension   int                `json:"embedder_dimension,omitempty"`
+	AllowAutoEnrichment bool               `json:"allowAutoEnrichment,omitempty"`
+	AllowedTools        []string           `json:"allowed_tools,omitempty"`
+	ToolQueries         []PathSearchParam  `json:"tool_queries,omitempty"`
+	LastModified        int64              `json:"last_modified,omitempty"`   // Unix timestamp
+	LastVectorized      int64              `json:"last_vectorized,omitempty"` // Unix timestamp
+	RoutingPrefix       string             `json:"routing_prefix,omitempty"`
+	DomainReference     []float32          `json:"domain_reference,omitempty"`
+	CategorizerConfig   *CategorizerConfig `json:"categorizer_config,omitempty"`
 	// DocumentMode flags whether this KB operates in traditional payload mode (Item.Data holds data),
 	// or in decoupled RAG references mode where Item.Data points to the canonical large Document(MD).
 	DocumentMode      bool `json:"document_mode,omitempty"`
@@ -34,6 +35,13 @@ type KnowledgeBaseConfig struct {
 
 // DocIDs stores one or more source document references for an item.
 // It accepts both a single string and a JSON array, which keeps older exports compatible.
+type CategorizerConfig struct {
+	Type     string                    `json:"type,omitempty"`
+	Default  map[string]any            `json:"default,omitempty"`
+	ByDomain map[string]map[string]any `json:"by_domain,omitempty"`
+	Fallback string                    `json:"fallback,omitempty"`
+}
+
 type DocIDs []string
 
 func (d DocIDs) First() string {

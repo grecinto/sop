@@ -601,8 +601,9 @@ func (s *store[T]) semanticCategoryByPart(ctx context.Context, parentID sop.UUID
 	}
 
 	type candidateScore struct {
-		cat  *Category
-		dist float32
+		cat   *Category
+		dist  float32
+		exact bool
 	}
 
 	var result []*Category
@@ -614,79 +615,95 @@ func (s *store[T]) semanticCategoryByPart(ctx context.Context, parentID sop.UUID
 		return nil, err
 	}
 
-	// Scan a neighbourhood of up to 5 entries before and after the cursor position.
-	// We peek backwards first then scan forward, collecting candidates.
 	const scanWindow = 5
-	backSteps := 0
+	var scores []candidateScore
+	seen := map[sop.UUID]struct{}{}
+
+	addCandidate := func() error {
+		currKey := s.categoriesByDistance.GetCurrentKey()
+		if currKey.Key.ParentID.Compare(parentID) != 0 || currKey.Key.ID.IsNil() {
+			return nil
+		}
+		if _, exists := seen[currKey.Key.ID]; exists {
+			return nil
+		}
+		found, err := s.categories.Find(ctx, currKey.Key.ID, false)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+		cat, err := s.categories.GetCurrentValue(ctx)
+		if err != nil {
+			return err
+		}
+		if cat == nil {
+			return nil
+		}
+		actualDist := dist
+		if len(cat.CenterVector) > 0 {
+			actualDist = Distance(partVector, cat.CenterVector, true)
+		}
+		seen[currKey.Key.ID] = struct{}{}
+		isExactDistance := math.Abs(float64(currKey.Key.Distance-dist)) <= 1e-6
+		scores = append(scores, candidateScore{cat: cat, dist: actualDist, exact: isExactDistance})
+		return nil
+	}
+
+	// Gather the current item plus the previous and next neighborhood, then rank by
+	// actual distance and exact-distance matches. This ensures the closest neighbors
+	// are preferred even when the scan order is not the same as the distance order.
+	startKey := s.categoriesByDistance.GetCurrentKey().Key
+	if err := addCandidate(); err != nil {
+		return nil, err
+	}
+
 	for i := 0; i < scanWindow; i++ {
 		ok, err := s.categoriesByDistance.Previous(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if !ok || s.categoriesByDistance.GetCurrentKey().Key.ParentID.Compare(parentID) != 0 {
-			if ok {
-				s.categoriesByDistance.Next(ctx)
-			} else {
-				s.categoriesByDistance.First(ctx)
-			}
+		if !ok {
 			break
 		}
-		backSteps++
+		currKey := s.categoriesByDistance.GetCurrentKey()
+		if currKey.Key.ParentID.Compare(parentID) != 0 {
+			s.categoriesByDistance.Next(ctx)
+			break
+		}
+		if err := addCandidate(); err != nil {
+			return nil, err
+		}
 	}
 
-	maxForward := backSteps + 1 + scanWindow
-	var scores []candidateScore
-	seen := map[sop.UUID]struct{}{}
-	for i := 0; i < maxForward; i++ {
+	if _, err := s.categoriesByDistance.Find(ctx, startKey, false); err != nil {
+		return nil, err
+	}
+	if err := addCandidate(); err != nil {
+		return nil, err
+	}
+	for i := 0; i < scanWindow; i++ {
+		ok, err := s.categoriesByDistance.Next(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			break
+		}
 		currKey := s.categoriesByDistance.GetCurrentKey()
 		if currKey.Key.ParentID.Compare(parentID) != 0 {
 			break
 		}
-		if currKey.Key.ID.IsNil() {
-			if ok, err := s.categoriesByDistance.Next(ctx); !ok || err != nil {
-				if err != nil {
-					return nil, err
-				}
-				break
-			}
-			continue
-		}
-		if _, exists := seen[currKey.Key.ID]; exists {
-			if ok, err := s.categoriesByDistance.Next(ctx); !ok || err != nil {
-				if err != nil {
-					return nil, err
-				}
-				break
-			}
-			continue
-		}
-		found, err := s.categories.Find(ctx, currKey.Key.ID, false)
-		if err != nil {
+		if err := addCandidate(); err != nil {
 			return nil, err
-		}
-		if found {
-			cat, err := s.categories.GetCurrentValue(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if cat != nil {
-				actualDist := dist
-				if len(cat.CenterVector) > 0 {
-					actualDist = Distance(partVector, cat.CenterVector, true)
-				}
-				seen[currKey.Key.ID] = struct{}{}
-				scores = append(scores, candidateScore{cat: cat, dist: actualDist})
-			}
-		}
-		if ok, err := s.categoriesByDistance.Next(ctx); !ok || err != nil {
-			if err != nil {
-				return nil, err
-			}
-			break
 		}
 	}
 	if len(scores) > 1 {
 		sort.Slice(scores, func(i, j int) bool {
+			if scores[i].exact != scores[j].exact {
+				return scores[i].exact
+			}
 			if scores[i].dist == scores[j].dist {
 				return scores[i].cat.ID.Compare(scores[j].cat.ID) < 0
 			}
