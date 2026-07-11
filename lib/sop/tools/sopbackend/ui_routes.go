@@ -28,13 +28,38 @@ type UIRouter struct {
 
 // NewUIRouter builds a router that loads templates from the provided filesystem.
 func NewUIRouter(templateFS fs.FS, pattern string) *UIRouter {
+	router := &UIRouter{}
 	if templateFS == nil {
 		templateFS = osDirFS(sharedTemplateDir())
 	}
 	if pattern == "" {
 		pattern = "*.html"
 	}
-	return &UIRouter{TemplateFS: templateFS, Pattern: pattern}
+	router.TemplateFS = templateFS
+	router.Pattern = pattern
+	_ = router.ensureTemplates()
+	return router
+}
+
+func (r *UIRouter) ensureTemplates() error {
+	if r == nil {
+		return os.ErrInvalid
+	}
+	if r.Templates != nil {
+		return nil
+	}
+	if r.TemplateFS == nil {
+		r.TemplateFS = osDirFS(sharedTemplateDir())
+	}
+	if r.Pattern == "" {
+		r.Pattern = "*.html"
+	}
+	tmpl, err := template.ParseFS(r.TemplateFS, r.Pattern)
+	if err != nil {
+		return err
+	}
+	r.Templates = tmpl
+	return nil
 }
 
 // Register wires the shared platform UI routes onto the provided mux.
@@ -49,20 +74,16 @@ func (r *UIRouter) RegisterWithOptions(mux *http.ServeMux, includeRoot bool) {
 	if r == nil || mux == nil {
 		return
 	}
-	if r.Templates == nil {
-		tmpl, err := template.ParseFS(r.TemplateFS, r.Pattern)
-		if err != nil {
-			mux.HandleFunc("/login", func(w http.ResponseWriter, req *http.Request) {
-				http.Error(w, "template load failed", http.StatusInternalServerError)
+	if err := r.ensureTemplates(); err != nil {
+		mux.HandleFunc("/login", func(w http.ResponseWriter, req *http.Request) {
+			http.Error(w, "template load failed", http.StatusInternalServerError)
+		})
+		if includeRoot {
+			mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+				http.Redirect(w, req, "/app", http.StatusFound)
 			})
-			if includeRoot {
-				mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-					http.Redirect(w, req, "/app", http.StatusFound)
-				})
-			}
-			return
 		}
-		r.Templates = tmpl
+		return
 	}
 	if includeRoot {
 		mux.HandleFunc("/", r.handleRoot)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -211,6 +212,13 @@ func TestConfigureRuntimeEnvironmentUsesExistingDataDirConfigWhenPresent(t *test
 	if filepath.Clean(gotPath) != filepath.Clean(wantPath) {
 		t.Fatalf("expected runtime to use existing config at %q, got %q", filepath.Clean(wantPath), filepath.Clean(gotPath))
 	}
+}
+
+func TestStartSiteBackgroundServicesStartsCleanupLoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startSiteBackgroundServices(ctx)
 }
 
 func TestSiteBackendDaemonBootstrapEndpointReturnsJsonErrorWhenBootstrapFileIsMissing(t *testing.T) {

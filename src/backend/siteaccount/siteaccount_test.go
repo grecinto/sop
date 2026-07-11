@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,15 +59,27 @@ func resetSiteAccountDBForTest(t *testing.T) {
 		t.Fatalf("Chdir() error = %v", err)
 	}
 
+	systemDBPath := filepath.Join(t.TempDir(), "system-db")
+	userDBPath := filepath.Join(t.TempDir(), "user-db")
+	if err := os.MkdirAll(systemDBPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(systemDBPath) error = %v", err)
+	}
+	if err := os.MkdirAll(userDBPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(userDBPath) error = %v", err)
+	}
+
 	sopbackend.SetConfig(sopbackend.Config{
-		Mode:     "clustered",
-		RedisURL: "192.168.1.89:6379",
+		Mode: "standalone",
 		SystemDB: &sopbackend.DatabaseConfig{
-			Name:     sopbackend.SystemDBName,
-			Path:     t.TempDir(),
-			Mode:     "clustered",
-			RedisURL: "192.168.1.89:6379",
+			Name: sopbackend.SystemDBName,
+			Path: systemDBPath,
+			Mode: "standalone",
 		},
+		Databases: []sopbackend.DatabaseConfig{{
+			Name: "userdb",
+			Path: userDBPath,
+			Mode: "standalone",
+		}},
 	})
 
 	t.Cleanup(func() {
@@ -78,7 +91,62 @@ func resetSiteAccountDBForTest(t *testing.T) {
 	})
 }
 
+func TestResetSiteAccountDBForTestUsesStandaloneStorage(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+
+	db, err := getSiteAccountDB(context.Background())
+	if err != nil {
+		t.Fatalf("getSiteAccountDB() error = %v", err)
+	}
+
+	opts := db.Options()
+	if opts.Type != sop.Standalone {
+		t.Fatalf("db type = %v, want %v", opts.Type, sop.Standalone)
+	}
+}
+
+func TestGetSiteAccountDBUsesConfiguredUserDatabase(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+
+	systemDBPath := filepath.Join(t.TempDir(), "system-db")
+	userDBPath := filepath.Join(t.TempDir(), "user-db")
+	if err := os.MkdirAll(systemDBPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(systemDBPath) error = %v", err)
+	}
+	if err := os.MkdirAll(userDBPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(userDBPath) error = %v", err)
+	}
+
+	sopbackend.SetConfig(sopbackend.Config{
+		Mode: "standalone",
+		SystemDB: &sopbackend.DatabaseConfig{
+			Name: sopbackend.SystemDBName,
+			Path: systemDBPath,
+			Mode: "standalone",
+		},
+		Databases: []sopbackend.DatabaseConfig{{
+			Name: "userdb",
+			Path: userDBPath,
+			Mode: "standalone",
+		}},
+	})
+
+	db, err := getSiteAccountDB(context.Background())
+	if err != nil {
+		t.Fatalf("getSiteAccountDB() error = %v", err)
+	}
+
+	opts := db.Options()
+	if len(opts.StoresFolders) == 0 {
+		t.Fatal("expected site account database options to contain a store folder")
+	}
+	if got := opts.StoresFolders[0]; got != userDBPath {
+		t.Fatalf("expected site account DB to use user database path %q, got %q", userDBPath, got)
+	}
+}
+
 func TestHandleRegisterRequiresHumanProof(t *testing.T) {
+	resetSiteAccountDBForTest(t)
 	SetConfig(NewConfig())
 	body := `{"username":"human-proof-user","password":"secret123","email":"human-proof@example.com","role":"user","subscription_plan":"starter"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(body))
@@ -93,10 +161,23 @@ func TestHandleRegisterRequiresHumanProof(t *testing.T) {
 }
 
 func TestHandleRegisterStoresFullName(t *testing.T) {
+	resetSiteAccountDBForTest(t)
 	SetConfig(NewConfig())
-	body := `{"username":"full-name-user","password":"secret123","email":"full-name@example.com","role":"user","subscription_plan":"starter","full_name":"Ada Lovelace"}`
+
+	challengeRecorder := httptest.NewRecorder()
+	challenge := issueHumanProofChallenge(challengeRecorder)
+	if challenge == "" {
+		t.Fatal("issueHumanProofChallenge() returned an empty challenge")
+	}
+	cookies := challengeRecorder.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("issueHumanProofChallenge() did not set a challenge cookie")
+	}
+
+	body := fmt.Sprintf(`{"username":"full-name-user","password":"secret123","email":"full-name@example.com","role":"user","subscription_plan":"starter","full_name":"Ada Lovelace","human_proof":"%s"}`, challenge)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookies[0])
 	rr := httptest.NewRecorder()
 
 	HandleRegister(rr, req)
@@ -756,6 +837,46 @@ func TestRegisterUserWithRequestPersistsHumanOrigin(t *testing.T) {
 	}
 	if user.RequestOrigin != "human" {
 		t.Fatalf("RequestOrigin = %q, want %q", user.RequestOrigin, "human")
+	}
+}
+
+func TestRegisterUserWithRequestSeedsDefaultProductCatalog(t *testing.T) {
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "site-account-products")
+	_, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "products@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	})
+	if err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	db, err := getSiteAccountDB(context.Background())
+	if err != nil {
+		t.Fatalf("getSiteAccountDB() error = %v", err)
+	}
+	tx, err := db.BeginTransaction(context.Background(), sop.ForReading, -1)
+	if err != nil {
+		t.Fatalf("BeginTransaction() error = %v", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	store, err := newProductStore(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("newProductStore() error = %v", err)
+	}
+	products, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("store.List() error = %v", err)
+	}
+	if len(products) == 0 {
+		t.Fatal("expected a default product to be seeded")
+	}
+	if products[0].Code != "ai-copilot-starter" {
+		t.Fatalf("unexpected seeded product code = %q", products[0].Code)
 	}
 }
 

@@ -132,12 +132,14 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		sopbackend.RecordProductMetric("site_auth_register_failures")
 		status := http.StatusInternalServerError
-		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+		message := err.Error()
+		if strings.Contains(strings.ToLower(err.Error()), "already exists") || strings.Contains(strings.ToLower(err.Error()), "already taken") {
 			status = http.StatusConflict
+			message = "username is not available (already taken)."
 		} else if strings.Contains(strings.ToLower(err.Error()), "early-access seats") {
 			status = http.StatusTooManyRequests
 		}
-		writeJSONError(w, status, err.Error())
+		writeJSONError(w, status, message)
 		return
 	}
 	sopbackend.RecordProductMetric("site_auth_register_requests")

@@ -3,6 +3,7 @@ package sopbackend
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -44,5 +45,19 @@ func TestKBQualityDashboardHandler(t *testing.T) {
 		if len(body) == 0 {
 			t.Error("KB Quality handler returned empty body")
 		}
+	}
+}
+
+func TestKBQualityDashboardHandlerRendersTemplate(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/kb-quality", nil)
+	w := httptest.NewRecorder()
+
+	HandleKBQualityDashboardPage(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected KB quality dashboard to render with status 200, got %d and body %q", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); !strings.Contains(got, "Space Quality Dashboard") {
+		t.Fatalf("expected response body to contain dashboard title, got %q", got)
 	}
 }

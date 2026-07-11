@@ -1,6 +1,6 @@
 # Vector Database Architecture
 
-## Traditional vs SOP Architecture
+## Traditional vs Northstar Architecture
 
 <div class="ascii-diagram">
 <pre>
@@ -27,7 +27,7 @@
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
-│          SOP REAL-TIME VECTOR DATABASE                  │
+│          NORTHSTAR REAL-TIME VECTOR DATABASE            │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
 │  1. Organize in nested semantic categories              │

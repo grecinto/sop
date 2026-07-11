@@ -57,6 +57,33 @@ const ACCOUNT_STATE_STORAGE_KEY = 'sop-cloud-site-account-state';
 const PROVISIONING_DONE_STORAGE_KEY = 'sop_provisioning_done';
 const SIGNED_OUT_STORAGE_KEY = 'sop-site-signed-out';
 const PENDING_CHECKOUT_SESSION_STORAGE_KEY = 'sop-cloud-site-pending-checkout-session';
+const THEME_STORAGE_KEY = 'theme';
+
+type ThemeMode = 'light' | 'dark';
+
+function resolveThemePreference(): ThemeMode {
+  if (typeof window === 'undefined') {
+    return 'light';
+  }
+  try {
+    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (storedTheme === 'light' || storedTheme === 'dark') {
+      return storedTheme;
+    }
+  } catch {
+    // Fall back to the system preference.
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyThemePreference(theme: ThemeMode) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  document.documentElement.setAttribute('data-theme', theme);
+  document.documentElement.style.colorScheme = theme;
+  document.body.setAttribute('data-theme', theme);
+}
 
 function loadDraftState(): { name: string; email: string } {
   if (typeof window === 'undefined') {
@@ -268,20 +295,25 @@ function createTemporarySuffix(): string {
 function buildUsername(name: string, email: string): string {
   const trimmedName = (name || '').trim();
   const trimmedEmail = (email || '').trim();
+  if (trimmedName.includes('@')) {
+    return trimmedName;
+  }
+  if (trimmedName === 'root' || trimmedName.toLowerCase() === 'sa' || trimmedName.toLowerCase() === 'systemadmin' || trimmedName.toLowerCase() === 'system admin') {
+    return trimmedName;
+  }
   if (trimmedName) {
-    if (trimmedName.includes('@')) {
-      return trimmedName;
-    }
-    if (trimmedName === 'root' || trimmedName.toLowerCase() === 'sa' || trimmedName.toLowerCase() === 'systemadmin' || trimmedName.toLowerCase() === 'system admin') {
-      return trimmedName;
-    }
-    if (!trimmedEmail) {
-      return trimmedName;
+    const baseName = slugify(trimmedName);
+    if (baseName && baseName !== 'sop-user') {
+      return baseName;
     }
   }
-  const base = slugify(trimmedName || trimmedEmail || `guest-${createTemporarySuffix()}`);
-  const suffix = trimmedEmail.toLowerCase().replace(/[^a-z0-9]+/g, '');
-  return suffix ? `${base}-${suffix.slice(0, 8)}` : `${base}-${createTemporarySuffix().slice(0, 8)}`;
+  if (trimmedEmail) {
+    const emailBase = slugify(trimmedEmail.split('@')[0] || trimmedEmail);
+    if (emailBase && emailBase !== 'sop-user') {
+      return emailBase;
+    }
+  }
+  return `guest-${createTemporarySuffix()}`;
 }
 
 async function fetchJSON(url: string, init: RequestInit = {}): Promise<any> {
@@ -450,7 +482,10 @@ async function ensureAuthenticatedAccount(name: string, email: string, password:
       }),
     });
 
-    if (!registerResponse.ok && registerResponse.status !== 409) {
+    if (!registerResponse.ok) {
+      if (registerResponse.status === 409) {
+        throw new Error('username is not available (already taken).');
+      }
       const registerPayload = await registerResponse.json().catch(() => null);
       const registerMessage = registerPayload?.message || registerPayload?.error || 'Unable to create your account.';
       throw new Error(registerMessage);
@@ -516,17 +551,6 @@ async function loginWithCredentials(username: string, password: string): Promise
   return loadAccountFromServer();
 }
 
-async function changePassword(currentPassword: string, newPassword: string): Promise<AccountState> {
-  const payload = await fetchJSON('/api/auth/password', {
-    method: 'POST',
-    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
-  });
-  if (!payload?.user) {
-    throw new Error('Unable to update your password right now.');
-  }
-  return loadAccountFromServer();
-}
-
 async function logoutFromServer(): Promise<void> {
   await fetch('/api/auth/logout', {
     method: 'POST',
@@ -535,24 +559,92 @@ async function logoutFromServer(): Promise<void> {
   });
 }
 
+function ThemeToggle({ theme, onToggle }: { theme: ThemeMode; onToggle: () => void }) {
+  const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={onToggle}
+      aria-label={label}
+      title={label}
+    >
+      <span aria-hidden="true">{theme === 'dark' ? '☀︎' : '☾'}</span>
+      <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+    </button>
+  );
+}
+
 export default function App() {
   const [account, setAccount] = useState<AccountState>(emptyState);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
   const [showInstallStep, setShowInstallStep] = useState(false);
   const [view, setView] = useState<ViewMode>(() => resolveView(typeof window === 'undefined' ? '/' : window.location.pathname));
   const [checkoutComplete, setCheckoutComplete] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => resolveThemePreference());
   const [expandedImportDetails, setExpandedImportDetails] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRefreshingBilling, setIsRefreshingBilling] = useState(false);
   const [provisioningDone, setProvisioningDone] = useState(false);
   const isRefreshingRef = useRef(false);
+
+  useEffect(() => {
+    applyThemePreference(themeMode);
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+      } catch {
+        // Ignore storage failures when theme persistence is unavailable.
+      }
+    }
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const syncFromSystemPreference = () => {
+      try {
+        const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+        if (storedTheme === 'light' || storedTheme === 'dark') {
+          return;
+        }
+      } catch {
+        // Ignore storage failures during sync.
+      }
+      setThemeMode(mediaQuery.matches ? 'dark' : 'light');
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== THEME_STORAGE_KEY) {
+        return;
+      }
+      if (event.newValue === 'light' || event.newValue === 'dark') {
+        setThemeMode(event.newValue);
+      } else {
+        syncFromSystemPreference();
+      }
+    };
+    syncFromSystemPreference();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', syncFromSystemPreference);
+    } else {
+      mediaQuery.addListener(syncFromSystemPreference);
+    }
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', syncFromSystemPreference);
+      } else {
+        mediaQuery.removeListener(syncFromSystemPreference);
+      }
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   useEffect(() => {
     const pendingLogout = consumeLogoutPendingFlag();
@@ -565,9 +657,6 @@ export default function App() {
       setEmail('');
       setPassword('');
       setConfirmPassword('');
-      setCurrentPassword('');
-      setNewPassword('');
-      setNewPasswordConfirm('');
       setShowInstallStep(false);
       setCheckoutComplete(false);
       return;
@@ -747,32 +836,6 @@ export default function App() {
     }
   };
 
-  const handlePasswordChange = async () => {
-    setIsSubmitting(true);
-    setStatusMessage('');
-    try {
-      if (!currentPassword.trim()) {
-        throw new Error('Please enter your current password.');
-      }
-      if (!newPassword.trim()) {
-        throw new Error('Please choose a new password.');
-      }
-      if (newPassword.trim() !== newPasswordConfirm.trim()) {
-        throw new Error('Your new passwords do not match.');
-      }
-      const synced = await changePassword(currentPassword.trim(), newPassword.trim());
-      setAccount(synced);
-      setCurrentPassword('');
-      setNewPassword('');
-      setNewPasswordConfirm('');
-      setStatusMessage('Your password has been updated.');
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Unable to update your password right now.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   const handleUnsubscribe = async () => {
     setIsSubmitting(true);
     setStatusMessage('');
@@ -897,9 +960,6 @@ export default function App() {
       setEmail('');
       setPassword('');
       setConfirmPassword('');
-      setCurrentPassword('');
-      setNewPassword('');
-      setNewPasswordConfirm('');
       setCheckoutComplete(false);
       setShowInstallStep(false);
       setStatusMessage('You have been signed out.');
@@ -977,14 +1037,18 @@ export default function App() {
 
   const isSetupCompleteRedirect = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('setup') === 'complete';
   const shouldShowDashboard = (account.isAuthenticated || provisioningDone || isSetupCompleteRedirect) && view === 'home';
+  const toggleTheme = () => setThemeMode((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'));
 
   if (view === 'subscribe') {
     return (
       <main className="app-shell">
+        <div className="page-toolbar">
+          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
+        </div>
         <section className="hero-card subscription-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
-            <a className="button button-secondary" href="/site/docs">View product docs</a>
+            <a className="button button-secondary" href="/site/docs">Product docs</a>
           </div>
 
           <div className="checkout-grid">
@@ -996,6 +1060,9 @@ export default function App() {
               </p>
               <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
                 Your first month is free. After that, billing starts at $5/month and you can cancel anytime.
+              </p>
+              <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
+                The subscription also includes the Data Manager, where you can inspect workflows, review knowledge base activity, and use built-in visualization and studio-style controls for managing data, knowledge bases, and workspace context.
               </p>
               <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
                 Visit <strong>ai-northstar.com</strong> for the public product site and onboarding experience.
@@ -1143,7 +1210,7 @@ export default function App() {
               {shouldShowInstallPanel ? (
                 <div className="preview-box install-box">
                   <h4>Install the local agent</h4>
-                  <p>Download the local agent from the official SOP releases page to run the host-side workflow on your own machine. The agent pairs with the AI copilot so you can move from setup to guided execution.</p>
+                  <p>Download the local agent from the official Northstar releases page to run the host-side workflow on your own machine. The agent pairs with the AI copilot so you can move from setup to guided execution.</p>
                   <button type="button" className="button button-secondary" onClick={handleDownload} disabled={isSubmitting}>
                     {isSubmitting ? 'Preparing…' : 'Download local agent'}
                   </button>
@@ -1159,6 +1226,9 @@ export default function App() {
   if (view === 'success') {
     return (
       <main className="app-shell">
+        <div className="page-toolbar">
+          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
+        </div>
         <section className="hero-card subscription-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
@@ -1226,6 +1296,9 @@ export default function App() {
   if (view === 'cancel') {
     return (
       <main className="app-shell">
+        <div className="page-toolbar">
+          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
+        </div>
         <section className="hero-card subscription-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
@@ -1275,6 +1348,9 @@ export default function App() {
   if (view === 'docs') {
     return (
       <main className="app-shell">
+        <div className="page-toolbar">
+          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
+        </div>
         <section className="hero-card docs-shell">
           <div className="hero-actions">
             <a className="button button-secondary" href="/site/">Back to overview</a>
@@ -1447,7 +1523,7 @@ export default function App() {
                   Use the knowledge-base curation manifest as your guide. It tells your AI assistant how to structure the markdown file so the content is organized, consistent, and ready to import.
                 </p>
                 <p>
-                  In practice, you can ask your AI assistant to follow the instructions in <a href="/kb/KB_CURATION_MANIFEST.md" style={{ color: 'var(--accent)', fontWeight: 600 }}>KB_CURATION_MANIFEST.md</a> and create a knowledge-base markdown file for you. Once that file is ready, you can compile it into importable JSON and bring it into Spaces.
+                  In practice, you can ask your AI assistant to follow the instructions similar to <a href="/kb/KB_CURATION_MANIFEST.md" style={{ color: 'var(--accent)', fontWeight: 600 }}>KB_CURATION_MANIFEST.md</a> and create a knowledge-base markdown file for you. Once that file is ready, you can compile it into importable JSON and bring it into Spaces.
                 </p>
                 <p>Example structure:</p>
                 <pre>{`# Platform Foundations
@@ -1494,13 +1570,16 @@ This section explains the system design.
   if (shouldShowDashboard) {
     return (
       <main className="app-shell">
+        <div className="page-toolbar">
+          <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
+        </div>
         <section className="hero-card">
           <div className="hero-grid">
             <div>
               <p className="eyebrow">Northstar workspace</p>
               <h1 className="hero-title">Welcome back to the new site dashboard</h1>
               <p className="hero-copy">
-                Setup is complete. Review your account, keep your subscription current, and open the SOP Data Manager whenever you need the admin-level operational view.
+                Setup is complete. Review your account, keep your subscription current, and open the Northstar Data Manager whenever you need the admin-level operational view.
               </p>
               <div className="hero-actions">
                 <a className="button button-primary" href={primaryActionHref}>{primaryActionLabel}</a>
@@ -1512,7 +1591,7 @@ This section explains the system design.
                 {canAccessLocalDaemon ? (
                   <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
                 ) : null}
-                <a className="button button-secondary" href="/site/docs">View product docs</a>
+                <a className="button button-secondary" href="/site/docs">Product docs</a>
               </div>
             </div>
 
@@ -1546,7 +1625,7 @@ This section explains the system design.
               <div className="form-panel">
                 <h2>Next steps</h2>
                 <p className="muted-copy">
-                  Continue with local-agent setup, review your subscription, or open the SOP Data Manager when you need deeper operator controls.
+                  Continue with local-agent setup, review your subscription, or open the Northstar Data Manager when you need deeper operator controls.
                 </p>
                 <div className="action-row">
                   <a className="button button-secondary" href={secondaryActionHref}>{secondaryActionLabel}</a>
@@ -1584,27 +1663,111 @@ This section explains the system design.
 
   return (
     <main className="app-shell">
+      <div className="page-toolbar">
+        <ThemeToggle theme={themeMode} onToggle={toggleTheme} />
+      </div>
       <section className="hero-card">
         <div className="hero-grid">
-          <div>
+          <div className="hero-content">
             <p className="eyebrow">Northstar</p>
             <h1 className="hero-title">A privacy first modern AI copilot powered by knowledge bases</h1>
-            <p className="hero-copy">
+            <p className="hero-copy" style={{ marginTop: '-1rem' }}>
               Unlike current AI copilots that store your conversation history on their servers and run overnight optimization in data centers, Northstar keeps everything on your device with real-time intelligence. Bring your own API keys for direct control. Load knowledge bases to turn your LLM into a domain expert, get higher-quality code, and manage your data locally with built-in visualization. We don't store your chat history—our site only handles auth.
             </p>
-            <p className="hero-copy" style={{ marginTop: '1rem' }}>
+            <p className="hero-copy" style={{ marginTop: '-1rem' }}>
               <strong>Privacy-first fleet learning with PII detection and governance.</strong> Your daemon learns locally either way. Optionally share patterns with automatic PII detection, privacy governance, and full auditable transparency—see exactly what's shared with per-category opt-in/opt-out controls.
             </p>
-            <p className="hero-copy" style={{ marginTop: '1rem' }}>
+            <p className="hero-copy" style={{ marginTop: '-1rem' }}>
               <strong>Full AI copilot features, zero data center processing.</strong> Other copilots need overnight K-Means clustering at HQ. Ours uses semantic category trees that work instantly on your machine.
             </p>
-            <p className="hero-copy" style={{ marginTop: '1rem' }}>
+            <p className="hero-copy" style={{ marginTop: '-1rem' }}>
               <strong>Built-in expertise validation saves you time and money.</strong> Unlike other copilots that require manual refinement cycles, our automated KB Quality system validates code against best practices during generation—no additional prompts, no costly back-and-forth iterations. Expertise is enforced automatically, cutting context usage by up to 70%.
             </p>
-            <div className="hero-actions">
+            <div className="hero-actions" style={{ marginTop: '-1rem' }}>
               <a className="button button-primary" href={primaryActionHref}>{primaryActionLabel}</a>
-              <a className="button button-secondary" href="/site/docs">View product docs</a>
+              <a className="button button-secondary" href="/site/docs">Product docs</a>
+              <a className="button button-secondary" href="/docs/fleet-learning">Fleet Learning</a>
               <a className="button button-secondary" href="/docs/sdk/intro">Coming soon</a>
+            </div>
+
+            <div className="summary-panel hero-summary">
+              <h3>Account summary</h3>
+              <div className="summary-list">
+                <div>
+                  <span className="summary-label">Status</span>
+                  <strong>{isStarterActive ? 'AI Copilot access active' : isStarterPending ? 'Checkout pending' : 'Not subscribed'}</strong>
+                </div>
+                <div>
+                  <span className="summary-label">Plan</span>
+                  <strong>{isStarterActive ? 'AI Copilot access' : isStarterPending ? 'AI Copilot access (pending)' : 'No active access'}</strong>
+                </div>
+                <div>
+                  <span className="summary-label">Included</span>
+                  <strong>AI Copilot, Knowledge Bases, Data Stores</strong>
+                </div>
+              </div>
+
+              <div className="preview-box" style={{ marginTop: '1rem' }}>
+                <div className="stack-grid" style={{ gap: '0.75rem' }}>
+                  <div>
+                    <h4 style={{ marginTop: 0, marginBottom: '0.25rem' }}>Account management</h4>
+                    <p className="muted-copy" style={{ margin: 0 }}>Manage sign-in, billing, and local access from one place.</p>
+                  </div>
+                  <div className="action-row">
+                    {!account.isAuthenticated ? (
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        onClick={() => { void handleLogin(); }}
+                        disabled={isSubmitting}
+                      >
+                        Log in
+                      </button>
+                    ) : null}
+                    {account.isAuthenticated ? (
+                      <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
+                        Log out
+                      </button>
+                    ) : null}
+                    {canAccessLocalDaemon ? (
+                      <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
+                    ) : null}
+                    {account.isAuthenticated && account.plan !== 'none' ? (
+                      <button type="button" className="button button-secondary" onClick={handleUnsubscribe} disabled={isSubmitting}>
+                        Unsubscribe
+                      </button>
+                    ) : null}
+                    {account.isAuthenticated ? (
+                      <button type="button" className="button button-secondary danger" onClick={handleUnregister} disabled={isSubmitting}>
+                        Unregister
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+
+              {account.payments.length > 0 ? (
+                <div className="preview-box">
+                  <h4>Most recent payment</h4>
+                  <p>
+                    {account.payments[0].status === 'succeeded'
+                      ? `Paid ${account.payments[0].amount} ${account.payments[0].currency || 'USD'} for ${account.subscriptions[0]?.planCode || 'your plan'}.`
+                      : `Payment status: ${account.payments[0].status}.`}
+                  </p>
+                </div>
+              ) : null}
+
+              {statusMessage ? <p className="muted-copy" style={{ marginTop: '0.75rem' }}>{statusMessage}</p> : null}
+
+              {shouldShowInstallPanel ? (
+                <div className="preview-box install-box">
+                  <h4>Next step: install the local agent</h4>
+                  <p>Your AI Copilot access is active, so the local agent is ready to install. Download it from the official Northstar releases page and pair it with the AI copilot to launch the host-side workflow.</p>
+                  <button type="button" className="button button-secondary" onClick={handleDownload} disabled={isSubmitting}>
+                    {isSubmitting ? 'Preparing…' : 'Download local agent'}
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -1635,104 +1798,6 @@ This section explains the system design.
         </div>
       </section>
 
-      <section className="hero-card secondary-card">
-        <div className="stack-grid">
-          <div className="summary-panel" style={{ gridColumn: '1 / -1' }}>
-            <h3>Account summary</h3>
-            <div className="summary-list">
-              <div>
-                <span className="summary-label">Status</span>
-                <strong>{isStarterActive ? 'AI Copilot access active' : isStarterPending ? 'Checkout pending' : 'Not subscribed'}</strong>
-              </div>
-              <div>
-                <span className="summary-label">Plan</span>
-                <strong>{isStarterActive ? 'AI Copilot access' : isStarterPending ? 'AI Copilot access (pending)' : 'No active access'}</strong>
-              </div>
-              <div>
-                <span className="summary-label">Included</span>
-                <strong>AI Copilot, Knowledge Bases, Data Stores</strong>
-              </div>
-            </div>
-
-            <div className="preview-box" style={{ marginTop: '1rem' }}>
-              <div className="stack-grid" style={{ gap: '0.75rem' }}>
-                <div>
-                  <h4 style={{ marginTop: 0, marginBottom: '0.25rem' }}>Account management</h4>
-                  <p className="muted-copy" style={{ margin: 0 }}>Manage sign-in, billing, and local access from one place.</p>
-                </div>
-                <div className="action-row">
-                  {!account.isAuthenticated ? (
-                    <button
-                      type="button"
-                      className="button button-secondary"
-                      onClick={() => { void handleLogin(); }}
-                      disabled={isSubmitting}
-                    >
-                      Log in
-                    </button>
-                  ) : null}
-                  {account.isAuthenticated ? (
-                    <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
-                      Log out
-                    </button>
-                  ) : null}
-                  {canAccessLocalDaemon ? (
-                    <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
-                  ) : null}
-                  {account.isAuthenticated && account.plan !== 'none' ? (
-                    <button type="button" className="button button-secondary" onClick={handleUnsubscribe} disabled={isSubmitting}>
-                      Unsubscribe
-                    </button>
-                  ) : null}
-                  {account.isAuthenticated ? (
-                    <button type="button" className="button button-secondary danger" onClick={handleUnregister} disabled={isSubmitting}>
-                      Unregister
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-
-            {account.payments.length > 0 ? (
-              <div className="preview-box">
-                <h4>Most recent payment</h4>
-                <p>
-                  {account.payments[0].status === 'succeeded'
-                    ? `Paid ${account.payments[0].amount} ${account.payments[0].currency || 'USD'} for ${account.subscriptions[0]?.planCode || 'your plan'}.`
-                    : `Payment status: ${account.payments[0].status}.`}
-                </p>
-              </div>
-            ) : null}
-
-            {!account.isAuthenticated ? null : (
-              <div className="form-stack" style={{ marginTop: '1rem' }}>
-                <h4>Change password</h4>
-                <label htmlFor="current-password" className="field-label">Current password</label>
-                <input id="current-password" className="text-input" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} placeholder="Current password" autoComplete="current-password" />
-                <label htmlFor="new-password" className="field-label">New password</label>
-                <input id="new-password" className="text-input" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="New password" autoComplete="new-password" />
-                <label htmlFor="new-password-confirm" className="field-label">Confirm new password</label>
-                <input id="new-password-confirm" className="text-input" type="password" value={newPasswordConfirm} onChange={(event) => setNewPasswordConfirm(event.target.value)} placeholder="Confirm new password" autoComplete="new-password" />
-                <button type="button" className="button button-secondary" onClick={handlePasswordChange} disabled={isSubmitting}>
-                  {isSubmitting ? 'Working…' : 'Update password'}
-                </button>
-              </div>
-            )}
-
-            {statusMessage ? <p className="muted-copy" style={{ marginTop: '0.75rem' }}>{statusMessage}</p> : null}
-
-            {shouldShowInstallPanel ? (
-              <div className="preview-box install-box">
-                <h4>Next step: install the local agent</h4>
-                <p>Your AI Copilot access is active, so the local agent is ready to install. Download it from the official SOP releases page and pair it with the AI copilot to launch the host-side workflow.</p>
-                <button type="button" className="button button-secondary" onClick={handleDownload} disabled={isSubmitting}>
-                  {isSubmitting ? 'Preparing…' : 'Download local agent'}
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </section>
     </main>
   );
 }

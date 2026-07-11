@@ -185,3 +185,17 @@ flowchart TD
 - The current implementation uses the user name as the primary lookup key for the user store and the record ID for subscription/payment stores.
 - The relationships are currently enforced by application logic rather than by a relational database schema.
 - The site account store is currently a key/value persistence layer, not a fully normalized relational model.
+
+## Database ownership guidance
+
+For HQ, the product/account domain should prefer the user database for user-owned state. The system database remains the home for platform control data such as sessions, RBAC, entitlements, and runtime policy.
+
+In practice:
+
+- site_users, subscriptions, and payments belong to the user database.
+- system-level control records remain in the system database.
+- scripts may live in either database depending on ownership:
+  - system/runtime scripts remain in the system database
+  - user or workflow scripts belong in the user database
+
+Fleet learning and federation data are currently product-facing workflow state rather than platform control state. In the current design, they should be treated as user/database-domain content and stored in the user database unless a later requirement makes a separate system-owned control store necessary.

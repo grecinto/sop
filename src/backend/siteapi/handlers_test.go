@@ -41,6 +41,40 @@ func TestHandleRegisterExposesSiteFlowMetric(t *testing.T) {
 	}
 }
 
+func TestHandleRegisterReturnsFriendlyUsernameTakenMessage(t *testing.T) {
+	mux := http.NewServeMux()
+	sopbackend.RegisterAllHandlers(mux)
+	RegisterHandlers(mux)
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"username":"taken-user","password":"secret123","email":"taken@example.com","role":"user","subscription_plan":"starter"}`))
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstRec := httptest.NewRecorder()
+	mux.ServeHTTP(firstRec, firstReq)
+	if firstRec.Code != http.StatusCreated {
+		t.Fatalf("expected first register to return %d, got %d", http.StatusCreated, firstRec.Code)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(`{"username":"taken-user","password":"secret123","email":"taken@example.com","role":"user","subscription_plan":"starter"}`))
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondRec := httptest.NewRecorder()
+	mux.ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusConflict {
+		t.Fatalf("expected second register to return %d, got %d", http.StatusConflict, secondRec.Code)
+	}
+
+	var payload struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	want := "username is not available (already taken)."
+	if payload.Message != want || payload.Error != want {
+		t.Fatalf("unexpected registration error message: message=%q error=%q want %q", payload.Message, payload.Error, want)
+	}
+}
+
 func TestHandleLogoutClearsSessionCookies(t *testing.T) {
 	mux := http.NewServeMux()
 	sopbackend.RegisterAllHandlers(mux)

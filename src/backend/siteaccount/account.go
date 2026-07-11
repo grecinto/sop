@@ -34,6 +34,7 @@ const (
 	userStoreName                  = "site_users"
 	subscriptionStoreName          = "site_subscriptions"
 	paymentStoreName               = "site_payments"
+	productStoreName               = "site_products"
 	userSubscriptionIndexStoreName = "site_user_subscription_ids"
 	userPaymentIndexStoreName      = "site_user_payment_ids"
 	SiteSeatLimit                  = 500
@@ -45,9 +46,11 @@ type Config struct {
 	Users                      []UserRecord
 	Subscriptions              []SubscriptionRecord
 	Payments                   []PaymentRecord
+	Products                   []ProductRecord
 	UsersStore                 UserStore
 	SubscriptionsStore         SubscriptionStore
 	PaymentsStore              PaymentStore
+	ProductsStore              ProductStore
 	UserSubscriptionIndexStore UserSubscriptionStore
 	UserPaymentIndexStore      UserPaymentStore
 }
@@ -131,6 +134,21 @@ type PaymentRecord struct {
 	UpdatedAt         time.Time `json:"updated_at,omitempty"`
 }
 
+// ProductRecord stores the catalog of available products and plans.
+type ProductRecord struct {
+	ID          string    `json:"id"`
+	Code        string    `json:"code"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Category    string    `json:"category"`
+	PriceCents  int       `json:"price_cents"`
+	Currency    string    `json:"currency"`
+	Interval    string    `json:"interval"`
+	Active      bool      `json:"active"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+}
+
 // BillingCheckoutSession is the site-specific checkout payload.
 type BillingCheckoutSession struct {
 	ID     string
@@ -170,6 +188,14 @@ type PaymentStore interface {
 	Delete(ctx context.Context, ids []string) error
 	FetchByUser(ctx context.Context, username []string) ([]sop.KeyValuePair[string, []PaymentRecord], error)
 	List(ctx context.Context) ([]PaymentRecord, error)
+}
+
+// ProductStore persists product catalog entries.
+type ProductStore interface {
+	Upsert(ctx context.Context, products []ProductRecord) error
+	Fetch(ctx context.Context, ids []string) ([]ProductRecord, error)
+	Delete(ctx context.Context, ids []string) error
+	List(ctx context.Context) ([]ProductRecord, error)
 }
 
 type UserEntityIDs struct {
@@ -215,12 +241,53 @@ func getSiteAccountDB(ctx context.Context) (*aidb.Database, error) {
 		return siteAccountDBInst, nil
 	}
 
-	dbOpts, err := sopbackend.GetSystemDBOptions(ctx)
+	dbOpts, err := resolveSiteAccountDBOptions(ctx)
 	if err != nil {
 		return nil, err
 	}
 	siteAccountDBInst = aidb.NewDatabase(dbOpts)
 	return siteAccountDBInst, nil
+}
+
+func resolveSiteAccountDBOptions(ctx context.Context) (sop.DatabaseOptions, error) {
+	cfg := sopbackend.GetConfig()
+	for i := range cfg.Databases {
+		dbCfg := cfg.Databases[i]
+		if dbCfg.IsSystem || strings.EqualFold(dbCfg.Name, sopbackend.SystemDBName) || strings.TrimSpace(dbCfg.Path) == "" {
+			continue
+		}
+		return getDBOptionsFromConfig(ctx, &dbCfg)
+	}
+	if cfg.SystemDB != nil {
+		return getDBOptionsFromConfig(ctx, cfg.SystemDB)
+	}
+	return sopbackend.GetSystemDBOptions(ctx)
+}
+
+func getDBOptionsFromConfig(ctx context.Context, db *sopbackend.DatabaseConfig) (sop.DatabaseOptions, error) {
+	if db == nil {
+		return sop.DatabaseOptions{}, fmt.Errorf("database config is nil")
+	}
+
+	if loadedOpts, err := database.GetOptions(ctx, db.Path); err == nil {
+		if db.Mode == "clustered" {
+			loadedOpts.Type = sop.Clustered
+			loadedOpts.CacheType = sop.Redis
+			loadedOpts.RedisConfig = &sop.RedisCacheConfig{Address: db.RedisURL}
+		}
+		return loadedOpts, nil
+	}
+
+	opts := sop.DatabaseOptions{
+		Type:          sop.Standalone,
+		StoresFolders: []string{db.Path},
+	}
+	if db.Mode == "clustered" {
+		opts.Type = sop.Clustered
+		opts.CacheType = sop.Redis
+		opts.RedisConfig = &sop.RedisCacheConfig{Address: db.RedisURL}
+	}
+	return opts, nil
 }
 
 func newStringKeyedStore[T any](ctx context.Context, db *aidb.Database, tx sop.Transaction, storeName string) (btree.BtreeInterface[string, T], error) {
@@ -687,6 +754,113 @@ func newPaymentStore(ctx context.Context, tx sop.Transaction) (*paymentStoreImpl
 	return &paymentStoreImpl{storeName: paymentStoreName, tx: tx, tree: store}, nil
 }
 
+type productStoreImpl struct {
+	storeName string
+	tx        sop.Transaction
+	tree      btree.BtreeInterface[string, ProductRecord]
+}
+
+func newProductStore(ctx context.Context, tx sop.Transaction) (*productStoreImpl, error) {
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		return nil, fmt.Errorf("transaction is required")
+	}
+	store, err := newStringKeyedStore[ProductRecord](ctx, db, tx, productStoreName)
+	if err != nil {
+		return nil, err
+	}
+	return &productStoreImpl{storeName: productStoreName, tx: tx, tree: store}, nil
+}
+
+func (s *productStoreImpl) Upsert(ctx context.Context, products []ProductRecord) error {
+	if s == nil || s.tree == nil {
+		return fmt.Errorf("product store is not initialized")
+	}
+	for _, product := range products {
+		id := strings.TrimSpace(product.ID)
+		if id == "" {
+			continue
+		}
+		copyProduct := product
+		copyProduct.UpdatedAt = time.Now().UTC()
+		if copyProduct.CreatedAt.IsZero() {
+			copyProduct.CreatedAt = copyProduct.UpdatedAt
+		}
+		if _, err := s.tree.Upsert(ctx, id, copyProduct); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *productStoreImpl) Fetch(ctx context.Context, ids []string) ([]ProductRecord, error) {
+	if s == nil || s.tree == nil {
+		return nil, nil
+	}
+	results := make([]ProductRecord, 0, len(ids))
+	for _, id := range ids {
+		normalized := strings.TrimSpace(id)
+		if normalized == "" {
+			continue
+		}
+		found, err := s.tree.Find(ctx, normalized, true)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		value, err := s.tree.GetCurrentValue(ctx)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, value)
+	}
+	return results, nil
+}
+
+func (s *productStoreImpl) Delete(ctx context.Context, ids []string) error {
+	if s == nil || s.tree == nil {
+		return nil
+	}
+	for _, id := range ids {
+		normalized := strings.TrimSpace(id)
+		if normalized == "" {
+			continue
+		}
+		if _, err := s.tree.Remove(ctx, normalized); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *productStoreImpl) List(ctx context.Context) ([]ProductRecord, error) {
+	if s == nil || s.tree == nil {
+		return nil, nil
+	}
+	results := make([]ProductRecord, 0, s.tree.Count())
+	ok, err := s.tree.First(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for ok {
+		value, err := s.tree.GetCurrentValue(ctx)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, value)
+		ok, err = s.tree.Next(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
+}
+
 func (s *paymentStoreImpl) Upsert(ctx context.Context, payments []PaymentRecord) error {
 	if s == nil || s.tree == nil {
 		return fmt.Errorf("payment store is not initialized")
@@ -916,6 +1090,16 @@ func (c *Config) ensurePaymentStore(ctx context.Context, tx sop.Transaction) (Pa
 	return newPaymentStore(ctx, tx)
 }
 
+func (c *Config) ensureProductStore(ctx context.Context, tx sop.Transaction) (ProductStore, error) {
+	if c == nil {
+		return nil, fmt.Errorf("site account config is not initialized")
+	}
+	if tx == nil {
+		return nil, fmt.Errorf("transaction is required")
+	}
+	return newProductStore(ctx, tx)
+}
+
 func (c *Config) ensureUserSubscriptionIndexStore(ctx context.Context, tx sop.Transaction) (UserSubscriptionStore, error) {
 	if c == nil {
 		return nil, fmt.Errorf("site account config is not initialized")
@@ -1099,6 +1283,34 @@ func (c *Config) UpsertUserRecord(ctx context.Context, user *UserRecord) error {
 }
 
 // RegisterUserWithRequest creates a site account and keeps the shared backend auth user in sync.
+func seedDefaultProducts(ctx context.Context, tx sop.Transaction) error {
+	store, err := newProductStore(ctx, tx)
+	if err != nil {
+		return err
+	}
+	products, err := store.List(ctx)
+	if err != nil {
+		return err
+	}
+	if len(products) > 0 {
+		return nil
+	}
+	product := ProductRecord{
+		ID:          "prod_ai_copilot_starter",
+		Code:        "ai-copilot-starter",
+		Name:        "Northstar AI Copilot",
+		Description: "Current AI Copilot plan with unlimited local agent access and shared workspace features.",
+		Category:    "ai",
+		PriceCents:  500,
+		Currency:    "USD",
+		Interval:    "month",
+		Active:      true,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	return store.Upsert(ctx, []ProductRecord{product})
+}
+
 func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRequest) (*UserRecord, error) {
 	if c == nil {
 		return nil, fmt.Errorf("site account config is not initialized")
@@ -1193,6 +1405,9 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 		return nil, err
 	}
 	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
+		return nil, err
+	}
+	if err := seedDefaultProducts(ctx, tx); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

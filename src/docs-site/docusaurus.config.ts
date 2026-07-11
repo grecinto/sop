@@ -14,6 +14,10 @@ const config: Config = {
     v4: true, // Improve compatibility with the upcoming Docusaurus v4
   },
 
+  markdown: {
+    mermaid: true,
+  },
+
   // Set the production url of your site here
   url: 'https://localhost',
   // Set the /<baseUrl>/ pathname under which your site is served
@@ -51,6 +55,8 @@ const config: Config = {
     ],
   ],
 
+  themes: ['@docusaurus/theme-mermaid'],
+
   themeConfig: {
     // Replace with your project's social card
     image: 'img/docusaurus-social-card.jpg',
@@ -64,7 +70,13 @@ const config: Config = {
         src: 'img/logo.svg',
         href: '#',
       },
-      items: [],
+      items: [
+        {
+          type: 'html',
+          value: '<a class="navbar__link" href="/site/">Back to Overview</a>',
+          position: 'right',
+        },
+      ],
       hideOnScroll: false,
     },
     footer: {

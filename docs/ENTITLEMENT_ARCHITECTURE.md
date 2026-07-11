@@ -140,6 +140,7 @@ The user-facing error can be simple, but internally the implementation should pr
 - include a small metrics surface for entitlement checks, token issuance, and failed authorization attempts
 - keep a clear distinction between account existence and account entitlement; both matter
 - for the release-ready billing model, store subscriptions and payments separately from the user identity record so multiple products and plans can be supported cleanly
+- keep a clear split between system-owned control state and user-owned product state: system DB for sessions, RBAC, entitlements, and runtime policy; user DB for account identity, billing, product workflow artifacts, and user-scoped scripts
 
 ## Rollout plan
 

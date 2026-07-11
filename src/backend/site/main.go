@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/sharedcode/sop"
 
@@ -538,6 +539,13 @@ func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
 	mux.HandleFunc("/site/", frontendHandler)
 }
 
+func startSiteBackgroundServices(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go sopbackend.StartBackgroundServiceWithContext(ctx, sopbackend.DefaultSessionCleanupInterval(), 2*time.Hour)
+}
+
 func registerDocsHandler(mux *http.ServeMux, docsDir string) {
 	docsHandler := func(w http.ResponseWriter, r *http.Request) {
 		// Authentication is enforced by siteAppAccessHandler wrapper
@@ -569,6 +577,10 @@ func main() {
 	configureRuntimeEnvironment(dataDir)
 	frontendDir := defaultFrontendDir()
 	docsDir := defaultDocsDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startSiteBackgroundServices(ctx)
 
 	mux := http.NewServeMux()
 	registerSiteHandlers(mux, frontendDir, docsDir)
