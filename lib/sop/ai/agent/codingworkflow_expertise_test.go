@@ -94,7 +94,7 @@ func TestBuildSelectedSpaceResearchMemoryHintsUsesPriorCategoriesAndItems(t *tes
 }
 
 func TestBuildSelectedSpaceResearchQueriesUsesPriorMemory(t *testing.T) {
-	queries := buildSelectedSpaceResearchQueries("implement parser", "parser-space", &ResearchWorkflowState{SuccessfulCategoryPaths: []string{"Engineering/Code"}, SuccessfulItemPaths: []string{"Engineering/Code/Parsing"}})
+	queries := buildSelectedSpaceResearchQueries("implement parser", "parser-space", &ResearchWorkflowState{SuccessfulCategoryPaths: []string{"Engineering/Code"}, SuccessfulItemPaths: []string{"Engineering/Code/Parsing"}}, nil)
 	if len(queries) == 0 {
 		t.Fatalf("expected research queries to be generated")
 	}
@@ -103,5 +103,18 @@ func TestBuildSelectedSpaceResearchQueriesUsesPriorMemory(t *testing.T) {
 	}
 	if !containsString(queries, "Engineering/Code/Parsing") {
 		t.Fatalf("expected prior item path to become a research query, got %v", queries)
+	}
+}
+
+func TestBuildSelectedSpaceResearchQueriesUsesCategorizerCandidates(t *testing.T) {
+	queries := buildSelectedSpaceResearchQueries("implement parser", "parser-space", nil, []string{"Engineering/Code", "Engineering/Parsing"})
+	if len(queries) == 0 {
+		t.Fatalf("expected research queries to be generated")
+	}
+	if queries[0] != "Engineering/Code" {
+		t.Fatalf("expected categorizer path to be first, got %v", queries)
+	}
+	if !containsString(queries, "Engineering/Parsing") {
+		t.Fatalf("expected categorizer path to be retained, got %v", queries)
 	}
 }

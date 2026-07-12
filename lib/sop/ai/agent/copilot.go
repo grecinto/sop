@@ -1957,10 +1957,15 @@ func buildSelectedSpaceResearchMemoryHints(query string, state *ResearchWorkflow
 	return fmt.Sprintf("Research memory hints: %s", strings.Join(parts, " | "))
 }
 
-func buildSelectedSpaceResearchQueries(query, kbName string, state *ResearchWorkflowState) []string {
+func buildSelectedSpaceResearchQueries(query, kbName string, state *ResearchWorkflowState, categorizerPaths []string) []string {
 	base := []string{}
 	query = strings.TrimSpace(query)
 	kbName = strings.TrimSpace(kbName)
+	for _, category := range filterResearchMemoryValues(categorizerPaths) {
+		if category != "" && !containsString(base, category) {
+			base = append(base, category)
+		}
+	}
 	if query != "" {
 		base = append(base, query)
 	}

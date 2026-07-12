@@ -56,7 +56,15 @@ func (a *CopilotAgent) BulkUpsertCategories(ctx context.Context, args BulkUpsert
 		return result, err
 	}
 
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return result, err
+	}
+	if err := a.refreshCategoryVectorsForMutation(ctx, db, args.KBName, collectCategoryIDsFromCategoryParams(args.Parameters), embedder); err != nil {
+		result.Failed = len(args.Parameters)
+		result.Errors = append(result.Errors, SpaceBulkOperationError{Index: 0, Message: fmt.Sprintf("category vector refresh failed: %v", err)})
+		result.Duration = time.Since(start)
+		return result, err
+	}
 	result.Processed = len(args.Parameters)
 	result.Success = true
 	result.Duration = time.Since(start)
@@ -115,7 +123,9 @@ func (a *CopilotAgent) BulkDeleteCategories(ctx context.Context, args BulkDelete
 		return result, err
 	}
 
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return result, err
+	}
 	result.Processed = len(args.CategoryIDs)
 	result.Success = true
 	result.Duration = time.Since(start)
@@ -174,7 +184,15 @@ func (a *CopilotAgent) BulkUpsertItems(ctx context.Context, args BulkUpsertItems
 		return result, err
 	}
 
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return result, err
+	}
+	if err := a.refreshCategoryVectorsForMutation(ctx, db, args.KBName, a.resolveCategoryIDsForItemMutation(ctx, kb, args.Parameters), embedder); err != nil {
+		result.Failed = len(args.Parameters)
+		result.Errors = append(result.Errors, SpaceBulkOperationError{Index: 0, Message: fmt.Sprintf("category vector refresh failed: %v", err)})
+		result.Duration = time.Since(start)
+		return result, err
+	}
 	result.Processed = len(args.Parameters)
 	result.Success = true
 	result.Duration = time.Since(start)
@@ -237,7 +255,9 @@ func (a *CopilotAgent) BulkDeleteItems(ctx context.Context, args BulkDeleteItems
 		return result, err
 	}
 
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return result, err
+	}
 	result.Processed = len(args.ItemIDs)
 	result.Success = true
 	result.Duration = time.Since(start)

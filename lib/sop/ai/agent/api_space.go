@@ -196,7 +196,12 @@ func (a *CopilotAgent) UpsertCategory(ctx context.Context, args UpsertCategoryAr
 	if err != nil {
 		return "", err
 	}
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	if err := a.refreshCategoryVectorsForMutation(ctx, db, args.KBName, collectCategoryIDsFromCategoryParams([]memory.UpsertCategoryParam{args.Parameter}), embedder); err != nil {
+		return "", err
+	}
 	return "Category upserted.", nil
 }
 
@@ -229,7 +234,9 @@ func (a *CopilotAgent) DeleteCategory(ctx context.Context, args DeleteCategoryAr
 	if err != nil {
 		return "", err
 	}
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
 	return "Category deleted.", nil
 }
 
@@ -302,7 +309,12 @@ func (a *CopilotAgent) UpsertItem(ctx context.Context, args UpsertItemArgs) (str
 	if err != nil {
 		return "", err
 	}
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	if err := a.refreshCategoryVectorsForMutation(ctx, db, args.KBName, a.resolveCategoryIDsForItemMutation(ctx, kb, []memory.UpsertItemParam[map[string]any]{args.Parameter}), embedder); err != nil {
+		return "", err
+	}
 	return "Item upserted.", nil
 }
 
@@ -336,7 +348,9 @@ func (a *CopilotAgent) DeleteItem(ctx context.Context, args DeleteItemArgs) (str
 	if err != nil {
 		return "", err
 	}
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
 	return "Item deleted.", nil
 }
 

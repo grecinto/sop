@@ -63,6 +63,12 @@ flowchart LR
 
 This is the preferred model: the vector database lives inside the AI Copilot runtime on the user host, and vectorization is simply part of the normal database operation that powers retrieval. There is no separate data center requirement and no dedicated optimization cluster needed for the core experience.
 
+### Why this storage model stays real-time
+
+The key advantage is not just that the system stores vectors, but that it stores them in a category-aware, graph-friendly structure that supports live updates and fast routing. Content is organized into meaningful branches, the same underlying item can be surfaced through multiple relevant paths, and retrieval can merge those signals without duplicating the user-visible result. That keeps the system responsive for Copilot and agent workflows in the moment.
+
+This is also why the design is much more practical than trying to force the same workload into SQLite, Postgres, or similar relational engines. A relational model would need heavy join-heavy traversal, index churn, and repeated re-ranking work just to emulate this behavior. On a local host, that quickly turns retrieval into an index-maintenance problem rather than a real-time service. The embedded architecture keeps the hot path close to the data structure that actually powers search, so it can stay low-latency and predictable under live usage.
+
 ### Benchmark PoC: retrieval quality using industry-style vector DB metrics
 
 To validate this architecture as a concrete proof of concept, we run a standalone retrieval benchmark that mirrors the evaluation approach commonly used by vector databases such as Milvus and Pinecone: top-k retrieval quality, precision at rank, recall at rank, mean reciprocal rank, and nDCG at rank 3. The benchmark uses a deterministic, privacy-safe dataset and evaluates both exact and fuzzy retrieval behavior over nested categories.
