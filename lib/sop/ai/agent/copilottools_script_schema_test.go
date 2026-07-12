@@ -131,6 +131,21 @@ func TestStoresAndSpacesInstructions_AreRichEnoughForToolContext(t *testing.T) {
 	}
 }
 
+func TestSpacesInstructionsDoNotExposeCategorizerPolicyShape(t *testing.T) {
+	combinedSpaces := strings.Join([]string{UpdateSpaceConfigInstruction, ReadSpaceConfigInstruction}, "\n")
+	for _, check := range []string{"routing rules", "system prompts", "persona settings", "enabled tool access"} {
+		if !strings.Contains(combinedSpaces, check) {
+			t.Fatalf("expected Space config guidance to mention %q\nInstructions: %s", check, combinedSpaces)
+		}
+	}
+	if strings.Contains(combinedSpaces, "categorizer_config") || strings.Contains(combinedSpaces, "categorizer policy") {
+		t.Fatalf("expected Space config guidance to hide categorizer policy details\nInstructions: %s", combinedSpaces)
+	}
+	if strings.Contains(updateSpaceConfigArgsSchema, "categorizer_config") {
+		t.Fatalf("expected config schema to hide categorizer_config\nSchema: %s", updateSpaceConfigArgsSchema)
+	}
+}
+
 func TestScriptCreationSchemasRequireExplicitDatabase(t *testing.T) {
 	checks := map[string]string{
 		"create_script": createScriptArgsSchema,

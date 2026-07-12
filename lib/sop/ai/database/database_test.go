@@ -17,6 +17,62 @@ import (
 	core "github.com/sharedcode/sop/database"
 )
 
+func TestAIDatabase_OpenKnowledgeBase_RehydratesCategorizerFromConfig(t *testing.T) {
+	storagePath := t.TempDir()
+
+	db := database.NewDatabase(core.DatabaseOptions{
+		StoresFolders: []string{storagePath},
+	})
+
+	ctx := context.Background()
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+
+	kb, err := db.OpenKnowledgeBase(ctx, "coding_kb", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("OpenKnowledgeBase failed: %v", err)
+	}
+
+	cfg := &memory.KnowledgeBaseConfig{
+		CategorizerConfig: &memory.CategorizerConfig{
+			Type: "rule",
+			Default: map[string]any{
+				"categories": []any{map[string]any{"path": "Coding Best Practices/Go", "keywords": []any{"go", "golang", "context"}}},
+			},
+			Fallback: "uncategorized",
+		},
+	}
+	if err := kb.SetConfig(ctx, cfg); err != nil {
+		t.Fatalf("SetConfig failed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	reopenTx, err := db.BeginTransaction(ctx, sop.ForReading)
+	if err != nil {
+		t.Fatalf("BeginTransaction reopen failed: %v", err)
+	}
+	defer reopenTx.Rollback(ctx)
+
+	reopened, err := db.OpenKnowledgeBase(ctx, "coding_kb", reopenTx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("OpenKnowledgeBase reopen failed: %v", err)
+	}
+	if reopened.Manager == nil {
+		t.Fatal("expected reopened KB manager")
+	}
+	category, err := reopened.Manager.Categorize("go context cancellation", memory.CategorizeOptions{Mode: memory.CategorizerModeRetrieval})
+	if err != nil {
+		t.Fatalf("expected categorizer to be active after reopen, got err %v", err)
+	}
+	if category != "Coding Best Practices/Go" {
+		t.Fatalf("expected reopened KB to route to Go best practices, got %q", category)
+	}
+}
+
 func TestAIDatabase_RemoveKnowledgeBase_RemovesAllDomainStores(t *testing.T) {
 	storagePath := t.TempDir()
 

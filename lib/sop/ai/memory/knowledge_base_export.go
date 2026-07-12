@@ -11,12 +11,17 @@ import (
 	"github.com/sharedcode/sop"
 )
 
+type ImportJSONOptions struct {
+	BootstrapCategorizerIfMissing bool
+}
+
 // ExportData	defines	the	structure	of	the	KnowledgeBase	JSON	payload.
 type ExportData[T any] struct {
-	Config     *KnowledgeBaseConfig `json:"config,omitempty"`
-	Categories []*Category          `json:"categories"`
-	Documents  []*Document          `json:"documents,omitempty"`
-	Items      []ExportItem[T]      `json:"items"`
+	Config            *KnowledgeBaseConfig `json:"config,omitempty"`
+	CategorizerBundle *CategorizerBundle   `json:"categorizer_bundle,omitempty"`
+	Categories        []*Category          `json:"categories"`
+	Documents         []*Document          `json:"documents,omitempty"`
+	Items             []ExportItem[T]      `json:"items"`
 }
 
 // ExportItem	dictates	what	fields	from	the	item	are	serialized.
@@ -65,6 +70,29 @@ func (kb *KnowledgeBase[T]) ExportJSON(ctx context.Context, writer io.Writer) er
 	}
 
 	if hasConfig {
+		io.WriteString(writer, ",\n")
+	}
+
+	cfg, err := kb.GetConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.CategorizerConfig != nil {
+		bundle := &CategorizerBundle{
+			ID:      strings.TrimSpace(cfg.CategorizerRef),
+			Version: "1",
+			Kind:    strings.TrimSpace(cfg.CategorizerConfig.Type),
+			Config:  cfg.CategorizerConfig,
+			Source:  "embedded",
+		}
+		if bundle.ID == "" {
+			bundle.ID = fmt.Sprintf("%s-categorizer", kb.Store.Name())
+		}
+		if bundle.Kind == "" {
+			bundle.Kind = "rule"
+		}
+		io.WriteString(writer, "\"categorizer_bundle\":")
+		encoder.Encode(bundle)
 		io.WriteString(writer, ",\n")
 	}
 
@@ -130,8 +158,66 @@ func (kb *KnowledgeBase[T]) ExportJSON(ctx context.Context, writer io.Writer) er
 	return nil
 }
 
+func buildBootstrapCategorizerConfig(categories []Category) *CategorizerConfig {
+	if len(categories) == 0 {
+		return nil
+	}
+	seenPaths := make(map[string]struct{}, len(categories))
+	entries := make([]any, 0, len(categories))
+	for _, cat := range categories {
+		path := strings.TrimSpace(cat.Path)
+		name := strings.TrimSpace(cat.Name)
+		if path == "" {
+			path = name
+		}
+		if path == "" {
+			continue
+		}
+		if _, ok := seenPaths[path]; ok {
+			continue
+		}
+		seenPaths[path] = struct{}{}
+
+		keywords := make([]string, 0, 4)
+		for _, part := range strings.Split(path, "/") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			keywords = append(keywords, strings.ToLower(part))
+		}
+		if name != "" {
+			keywords = append(keywords, strings.ToLower(name))
+		}
+		if len(keywords) == 0 {
+			continue
+		}
+		sanitized := make([]string, 0, len(keywords))
+		seenKeywords := make(map[string]struct{}, len(keywords))
+		for _, kw := range keywords {
+			if kw == "" {
+				continue
+			}
+			if _, ok := seenKeywords[kw]; ok {
+				continue
+			}
+			seenKeywords[kw] = struct{}{}
+			sanitized = append(sanitized, kw)
+		}
+		entries = append(entries, map[string]any{"path": path, "keywords": sanitized})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return &CategorizerConfig{Type: "rule", Default: map[string]any{"categories": entries}, Fallback: "uncategorized"}
+}
+
 // ImportJSON	deserializes	a	JSON	stream	and	ingests	it	into	the	KnowledgeBase.
 func (kb *KnowledgeBase[T]) ImportJSON(ctx context.Context, reader io.Reader, persona string, onEnrich ...func(*ExportItem[T])) error {
+	return kb.ImportJSONWithOptions(ctx, reader, persona, ImportJSONOptions{}, onEnrich...)
+}
+
+func (kb *KnowledgeBase[T]) ImportJSONWithOptions(ctx context.Context, reader io.Reader, persona string, opts ImportJSONOptions, onEnrich ...func(*ExportItem[T])) error {
 	decoder := json.NewDecoder(reader)
 
 	//	Read	opening	'{'
@@ -154,6 +240,7 @@ func (kb *KnowledgeBase[T]) ImportJSON(ctx context.Context, reader io.Reader, pe
 	uuidMap := make(map[sop.UUID]sop.UUID)
 
 	hasMissingVectors := false
+	importedCategories := make([]Category, 0)
 
 	for decoder.More() {
 		t, err := decoder.Token()
@@ -176,6 +263,24 @@ func (kb *KnowledgeBase[T]) ImportJSON(ctx context.Context, reader io.Reader, pe
 			}
 			continue
 		}
+		if key == "categorizer_bundle" {
+			var bundle CategorizerBundle
+			if err := decoder.Decode(&bundle); err != nil {
+				return fmt.Errorf("decode categorizer bundle: %w", err)
+			}
+			if cfg, err := kb.GetConfig(ctx); err == nil && cfg != nil {
+				if bundle.ID != "" {
+					cfg.CategorizerRef = bundle.ID
+				}
+				if bundle.Config != nil {
+					cfg.CategorizerConfig = bundle.Config
+				}
+				if err := kb.SetConfig(ctx, cfg); err != nil {
+					return fmt.Errorf("restore categorizer bundle config: %w", err)
+				}
+			}
+			continue
+		}
 		if key == "categories" {
 			//	Read	opening	'['
 			if _, err := decoder.Token(); err != nil { //	'['
@@ -186,6 +291,7 @@ func (kb *KnowledgeBase[T]) ImportJSON(ctx context.Context, reader io.Reader, pe
 				if err := decoder.Decode(&c); err != nil {
 					return err
 				}
+				importedCategories = append(importedCategories, c)
 				if len(c.CenterVector) == 0 {
 					hasMissingVectors = true
 				}
@@ -366,12 +472,22 @@ func (kb *KnowledgeBase[T]) ImportJSON(ctx context.Context, reader io.Reader, pe
 		return err
 	}
 	if cfg, err := kb.GetConfig(ctx); err == nil && cfg != nil {
+		if opts.BootstrapCategorizerIfMissing && cfg.CategorizerConfig == nil && strings.TrimSpace(cfg.CategorizerRef) == "" && len(importedCategories) > 0 {
+			if generated := buildBootstrapCategorizerConfig(importedCategories); generated != nil {
+				cfg.CategorizerConfig = generated
+				if err := kb.SetConfig(ctx, cfg); err != nil {
+					return fmt.Errorf("bootstrap categorizer config: %w", err)
+				}
+			}
+		}
 		now := time.Now().Unix()
 		cfg.LastModified = now
 		if !hasMissingVectors {
 			cfg.LastVectorized = now
 		}
-		kb.SetConfig(ctx, cfg)
+		if err := kb.SetConfig(ctx, cfg); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -834,80 +834,103 @@ func buildCodingMemorySemanticCategoryPath(mem cw.CodingMemory) string {
 // 2. Retrieval: extract concepts from query → build semantic path → search in bucket
 // 3. Match: same formula means query lands in correct semantic bucket
 func extractSemanticConcepts(mem cw.CodingMemory) []string {
-	var concepts []string
-	seenConcepts := make(map[string]bool)
-
-	// Combine all text fields for concept extraction
 	text := strings.Join([]string{
 		mem.Description,
 		mem.Outcome,
 		mem.Lesson,
 		mem.NextStep,
 	}, " ")
+	concepts := extractSemanticConceptsFromText(text)
+	for _, node := range mem.ASTLeafNodes {
+		nodeLower := strings.ToLower(node)
+		if strings.Contains(nodeLower, "handler") {
+			if !containsString(concepts, "http") {
+				concepts = append(concepts, "http")
+			}
+		} else if strings.Contains(nodeLower, "parser") {
+			if !containsString(concepts, "parsing") {
+				concepts = append(concepts, "parsing")
+			}
+		} else if strings.Contains(nodeLower, "validator") {
+			if !containsString(concepts, "validation") {
+				concepts = append(concepts, "validation")
+			}
+		}
+	}
+	return concepts
+}
+
+func extractSemanticConceptsFromText(text string) []string {
+	var concepts []string
+	seenConcepts := make(map[string]bool)
 
 	// Semantic keyword patterns (deterministic extraction)
 	// Note: Spaces semantic navigation handles fuzzy matching, so:
 	//   "error-handling" ≈ "exception-handling" ≈ "fault-tolerance"
 	//   "retry-logic" ≈ "retry-pattern" ≈ "backoff-strategy"
 	// We just need consistent conceptual vocabulary - Spaces bridges variants.
-	semanticPatterns := map[string][]string{
-		"error-handling":   {"error", "exception", "failure", "fault", "crash", "panic"},
-		"retry-logic":      {"retry", "backoff", "exponential", "circuit-breaker", "resilience"},
-		"data-persistence": {"database", "query", "sql", "orm", "repository", "storage", "persist"},
-		"http-networking":  {"http", "rest", "api", "endpoint", "request", "response", "client", "server"},
-		"authentication":   {"auth", "login", "token", "jwt", "session", "credential", "oauth", "sso"},
-		"parsing":          {"parse", "parser", "decode", "unmarshal", "deserialize", "lexer", "syntax"},
-		"validation":       {"validate", "validator", "check", "verify", "sanitize", "constraint"},
-		"observability":    {"log", "logger", "trace", "debug", "monitor", "metric", "telemetry"},
-		"testing":          {"test", "mock", "assert", "fixture", "suite", "unit", "integration"},
-		"caching":          {"cache", "redis", "memcache", "ttl", "memoize", "invalidate"},
-		"concurrency":      {"goroutine", "thread", "async", "parallel", "mutex", "lock", "race", "sync"},
-		"configuration":    {"config", "settings", "env", "environment", "flag", "parameter"},
-		"middleware":       {"middleware", "interceptor", "filter", "handler", "pipeline"},
-		"serialization":    {"json", "xml", "yaml", "proto", "marshal", "encode", "format"},
-		"security":         {"security", "encrypt", "decrypt", "hash", "sign", "certificate", "tls"},
-		"routing":          {"route", "router", "path", "url", "match", "dispatch"},
-		"transformation":   {"transform", "convert", "map", "reduce", "filter", "process"},
-		"scheduling":       {"schedule", "cron", "timer", "interval", "periodic", "job"},
+	semanticPatterns := []struct {
+		concept  string
+		keywords []string
+	}{
+		{concept: "parsing", keywords: []string{"parse", "parser", "decode", "unmarshal", "deserialize", "lexer", "syntax"}},
+		{concept: "retry-logic", keywords: []string{"retry", "backoff", "exponential", "circuit-breaker", "resilience"}},
+		{concept: "error-handling", keywords: []string{"error", "exception", "failure", "fault", "crash", "panic"}},
+		{concept: "data-persistence", keywords: []string{"database", "query", "sql", "orm", "repository", "storage", "persist"}},
+		{concept: "http-networking", keywords: []string{"http", "rest", "api", "endpoint", "request", "response", "client", "server"}},
+		{concept: "authentication", keywords: []string{"auth", "login", "token", "jwt", "session", "credential", "oauth", "sso"}},
+		{concept: "validation", keywords: []string{"validate", "validator", "check", "verify", "sanitize", "constraint"}},
+		{concept: "observability", keywords: []string{"log", "logger", "trace", "debug", "monitor", "metric", "telemetry"}},
+		{concept: "testing", keywords: []string{"test", "mock", "assert", "fixture", "suite", "unit", "integration"}},
+		{concept: "caching", keywords: []string{"cache", "redis", "memcache", "ttl", "memoize", "invalidate"}},
+		{concept: "concurrency", keywords: []string{"goroutine", "thread", "async", "parallel", "mutex", "lock", "race", "sync"}},
+		{concept: "configuration", keywords: []string{"config", "settings", "env", "environment", "flag", "parameter"}},
+		{concept: "middleware", keywords: []string{"middleware", "interceptor", "filter", "handler", "pipeline"}},
+		{concept: "serialization", keywords: []string{"json", "xml", "yaml", "proto", "marshal", "encode", "format"}},
+		{concept: "security", keywords: []string{"security", "encrypt", "decrypt", "hash", "sign", "certificate", "tls"}},
+		{concept: "routing", keywords: []string{"route", "router", "path", "url", "match", "dispatch"}},
+		{concept: "transformation", keywords: []string{"transform", "convert", "map", "reduce", "filter", "process"}},
+		{concept: "scheduling", keywords: []string{"schedule", "cron", "timer", "interval", "periodic", "job"}},
 	}
 
 	textLower := strings.ToLower(text)
 
 	// Match semantic patterns
-	for concept, keywords := range semanticPatterns {
-		for _, keyword := range keywords {
+	for _, pattern := range semanticPatterns {
+		for _, keyword := range pattern.keywords {
 			if strings.Contains(textLower, keyword) {
-				if !seenConcepts[concept] {
-					concepts = append(concepts, concept)
-					seenConcepts[concept] = true
+				if !seenConcepts[pattern.concept] {
+					concepts = append(concepts, pattern.concept)
+					seenConcepts[pattern.concept] = true
 					break
 				}
 			}
 		}
 	}
 
-	// Add file-type concept from AST nodes
-	for _, node := range mem.ASTLeafNodes {
-		nodeLower := strings.ToLower(node)
-		if strings.Contains(nodeLower, "handler") {
-			if !seenConcepts["http"] {
-				concepts = append(concepts, "http")
-				seenConcepts["http"] = true
-			}
-		} else if strings.Contains(nodeLower, "parser") {
-			if !seenConcepts["parsing"] {
-				concepts = append(concepts, "parsing")
-				seenConcepts["parsing"] = true
-			}
-		} else if strings.Contains(nodeLower, "validator") {
-			if !seenConcepts["validation"] {
-				concepts = append(concepts, "validation")
-				seenConcepts["validation"] = true
-			}
-		}
-	}
-
 	return concepts
+}
+
+func buildSemanticResearchPaths(query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	concepts := extractSemanticConceptsFromText(query)
+	if len(concepts) == 0 {
+		return nil
+	}
+	parts := []string{"Coding", "Semantic"}
+	for _, concept := range concepts {
+		if len(parts) >= 5 {
+			break
+		}
+		parts = append(parts, concept)
+	}
+	if len(parts) <= 2 {
+		return nil
+	}
+	return []string{strings.Join(parts, "/")}
 }
 
 // buildCodeTreeCategoryPath constructs hierarchical code-tree category paths
@@ -1843,6 +1866,12 @@ func buildCodingWorkflowExpertiseQuery(task cw.Task, pack cw.ContextPack) string
 	if strings.TrimSpace(pack.ActiveFile) != "" {
 		parts = append(parts, fmt.Sprintf("active file: %s", strings.TrimSpace(pack.ActiveFile)))
 	}
+	if language := inferCodingWorkflowLanguage(pack.ActiveFile); language != "" {
+		parts = append(parts, fmt.Sprintf("language: %s", language))
+	}
+	if subArea := inferCodingWorkflowSubArea(pack); subArea != "" {
+		parts = append(parts, fmt.Sprintf("sub-area: %s", subArea))
+	}
 	if len(pack.Symbols) > 0 {
 		parts = append(parts, fmt.Sprintf("symbols: %s", strings.Join(pack.Symbols, ", ")))
 	}
@@ -1856,6 +1885,105 @@ func buildCodingWorkflowExpertiseQuery(task cw.Task, pack cw.ContextPack) string
 		return "coding best practices for implementation and testing"
 	}
 	return strings.Join(parts, " | ")
+}
+
+func inferCodingWorkflowLanguage(activeFile string) string {
+	activeFile = strings.TrimSpace(activeFile)
+	if activeFile == "" {
+		return ""
+	}
+	ext := strings.ToLower(filepath.Ext(activeFile))
+	switch ext {
+	case ".go":
+		return "go"
+	case ".py":
+		return "python"
+	case ".ts", ".tsx":
+		return "typescript"
+	case ".js", ".jsx":
+		return "javascript"
+	case ".java":
+		return "java"
+	case ".cs":
+		return "csharp"
+	case ".rs":
+		return "rust"
+	case ".rb":
+		return "ruby"
+	case ".php":
+		return "php"
+	case ".swift":
+		return "swift"
+	case ".kt":
+		return "kotlin"
+	default:
+		return ""
+	}
+}
+
+func inferCodingWorkflowSubArea(pack cw.ContextPack) string {
+	candidates := make([]string, 0, 4)
+	for _, leaf := range pack.ASTLeafNodes {
+		leaf = strings.TrimSpace(leaf)
+		if leaf == "" {
+			continue
+		}
+		leafLower := strings.ToLower(leaf)
+		switch {
+		case strings.Contains(leafLower, "parser"):
+			candidates = append(candidates, "parser")
+		case strings.Contains(leafLower, "validator"):
+			candidates = append(candidates, "validation")
+		case strings.Contains(leafLower, "handler"):
+			candidates = append(candidates, "http")
+		case strings.Contains(leafLower, "test"):
+			candidates = append(candidates, "testing")
+		case strings.Contains(leafLower, "retry"):
+			candidates = append(candidates, "retry")
+		case strings.Contains(leafLower, "cache"):
+			candidates = append(candidates, "caching")
+		}
+	}
+	if len(candidates) == 0 {
+		if strings.TrimSpace(pack.StructuralPath) != "" {
+			parts := strings.Split(pack.StructuralPath, "/")
+			for _, part := range parts {
+				part = strings.TrimSpace(strings.ToLower(part))
+				if part == "" {
+					continue
+				}
+				if part == "repo" || part == "src" || part == "lib" || part == "app" || part == "code" {
+					continue
+				}
+				candidates = append(candidates, part)
+				if len(candidates) >= 2 {
+					break
+				}
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	return strings.Join(uniqueStrings(candidates), ",")
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func selectExpertiseKnowledgeBaseCandidates(query string, available []string) []string {
@@ -1961,9 +2089,9 @@ func buildSelectedSpaceResearchQueries(query, kbName string, state *ResearchWork
 	base := []string{}
 	query = strings.TrimSpace(query)
 	kbName = strings.TrimSpace(kbName)
-	for _, category := range filterResearchMemoryValues(categorizerPaths) {
-		if category != "" && !containsString(base, category) {
-			base = append(base, category)
+	for _, semanticPath := range buildSemanticResearchPaths(query) {
+		if semanticPath != "" && !containsString(base, semanticPath) {
+			base = append(base, semanticPath)
 		}
 	}
 	if query != "" {
@@ -2152,6 +2280,9 @@ func (a *CopilotAgent) retrieveCodingWorkflowExpertise(ctx context.Context, task
 			continue
 		}
 		searchReq := memory.SearchRequest[map[string]any]{Text: query, Limit: 3}
+		if semanticPaths := buildSemanticResearchPaths(query); len(semanticPaths) > 0 {
+			searchReq.CategoryPaths = append([]string(nil), semanticPaths...)
+		}
 		batch, err := kb.Search(ctx, []memory.SearchRequest[map[string]any]{searchReq})
 		if err != nil || len(batch) == 0 || len(batch[0]) == 0 {
 			continue

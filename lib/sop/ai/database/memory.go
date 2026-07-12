@@ -186,6 +186,12 @@ func (db *Database) OpenKnowledgeBase(
 	}
 
 	cfg, _ := kb.GetConfig(ctx)
+	if kb.Manager != nil {
+		kb.Manager.SetKnowledgeBase(kb)
+		if cfg != nil && cfg.CategorizerConfig != nil {
+			_ = kb.Manager.ConfigureFromKnowledgeBaseConfig(cfg)
+		}
+	}
 
 	useTextSearch := false
 	if cfg != nil {

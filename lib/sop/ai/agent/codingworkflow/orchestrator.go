@@ -425,11 +425,13 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 		pack.RepositorySummary = fmt.Sprintf("%s; target=%s", pack.RepositorySummary, strings.TrimSpace(task.ActiveFile))
 	}
 
-	// Phase 2: Classify task for intelligent KB selection
+	// Phase 2: Classify task for intelligent KB selection while preserving the workflow-level task type
 	var taskClassification TaskClassification
 	if o.TaskClassifier != nil {
 		taskClassification = o.TaskClassifier.Classify(task.Description, task.ActiveFile, task.WorkingDir)
-		pack.TaskType = string(taskClassification.TaskType)
+		if pack.TaskType == "" {
+			pack.TaskType = string(taskClassification.TaskType)
+		}
 
 		// Log classification for observability
 		if o.ContinuitySink != nil {

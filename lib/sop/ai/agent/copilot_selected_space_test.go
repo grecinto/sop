@@ -82,3 +82,40 @@ func TestBuildSystemPromptMentionsLTMOrSelectedKBAsKnowledgeSources(t *testing.T
 		t.Fatalf("expected prompt to describe the knowledge source as either LTM or a selected knowledge base/Space, got: %s", prompt)
 	}
 }
+
+func TestSelectedSpaceConfigContextHidesCategorizerPolicySummary(t *testing.T) {
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ctx := context.Background()
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	kb, err := sysDB.OpenKnowledgeBase(ctx, "policy_space", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("open kb: %v", err)
+	}
+	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{
+		Description: "Policy space",
+		CategorizerConfig: &memory.CategorizerConfig{
+			Type: "rule",
+			Default: map[string]any{
+				"categories": []any{map[string]any{"path": "Coding Best Practices/Go", "keywords": []any{"go", "context"}}},
+			},
+			Fallback: "uncategorized",
+		},
+	}); err != nil {
+		t.Fatalf("set kb config: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	ag := NewCopilotAgent(Config{}, nil, sysDB)
+	contextText := ag.selectedSpaceConfigContext(ctx, ai.ArtifactReference{Name: "policy_space", DatabaseName: SystemDBName})
+	if contextText == "" {
+		t.Fatal("expected selected-space config context")
+	}
+	if strings.Contains(contextText, "Categorizer") || strings.Contains(contextText, "rule") || strings.Contains(contextText, "Coding Best Practices/Go") {
+		t.Fatalf("expected selected-space config to hide categorizer policy details, got: %s", contextText)
+	}
+}

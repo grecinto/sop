@@ -24,6 +24,7 @@ type KnowledgeBaseConfig struct {
 	LastVectorized      int64              `json:"last_vectorized,omitempty"` // Unix timestamp
 	RoutingPrefix       string             `json:"routing_prefix,omitempty"`
 	DomainReference     []float32          `json:"domain_reference,omitempty"`
+	CategorizerRef      string             `json:"categorizer_ref,omitempty"`
 	CategorizerConfig   *CategorizerConfig `json:"categorizer_config,omitempty"`
 	// DocumentMode flags whether this KB operates in traditional payload mode (Item.Data holds data),
 	// or in decoupled RAG references mode where Item.Data points to the canonical large Document(MD).
@@ -40,6 +41,14 @@ type CategorizerConfig struct {
 	Default  map[string]any            `json:"default,omitempty"`
 	ByDomain map[string]map[string]any `json:"by_domain,omitempty"`
 	Fallback string                    `json:"fallback,omitempty"`
+}
+
+type CategorizerBundle struct {
+	ID      string             `json:"id,omitempty"`
+	Version string             `json:"version,omitempty"`
+	Kind    string             `json:"kind,omitempty"`
+	Config  *CategorizerConfig `json:"config,omitempty"`
+	Source  string             `json:"source,omitempty"`
 }
 
 type DocIDs []string

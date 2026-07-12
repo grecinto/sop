@@ -288,11 +288,10 @@ func (a *CopilotAgent) selectedSpaceBriefDigestHits(ctx context.Context, query s
 		return nil
 	}
 
-	categorizerPaths := a.categorizerCandidatePathsForResearch(ctx, query, kbRef.Name)
-	queries := buildSelectedSpaceResearchQueries(query, kbRef.Name, nil, categorizerPaths)
+	queries := buildSelectedSpaceResearchQueries(query, kbRef.Name, nil, nil)
 	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
 		if state := a.service.session.Memory.GetResearchWorkflowState(); state != nil {
-			queries = buildSelectedSpaceResearchQueries(query, kbRef.Name, state, categorizerPaths)
+			queries = buildSelectedSpaceResearchQueries(query, kbRef.Name, state, nil)
 		}
 	}
 	if len(queries) == 0 {
@@ -346,11 +345,10 @@ func (a *CopilotAgent) selectedSpaceDigestContext(ctx context.Context, query str
 		return ""
 	}
 
-	categorizerPaths := a.categorizerCandidatePathsForResearch(ctx, query, kbRef.Name)
-	queries := buildSelectedSpaceResearchQueries(query, kbRef.Name, nil, categorizerPaths)
+	queries := buildSelectedSpaceResearchQueries(query, kbRef.Name, nil, nil)
 	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
 		if state := a.service.session.Memory.GetResearchWorkflowState(); state != nil {
-			queries = buildSelectedSpaceResearchQueries(query, kbRef.Name, state, categorizerPaths)
+			queries = buildSelectedSpaceResearchQueries(query, kbRef.Name, state, nil)
 		}
 	}
 	if len(queries) == 0 {
@@ -373,35 +371,6 @@ func (a *CopilotAgent) selectedSpaceDigestContext(ctx context.Context, query str
 		lines = append(lines, fmt.Sprintf("- (Score: %.2f) %s", hit.Score, hit.Text))
 	}
 	return "Digest highlights:\n" + strings.Join(lines, "\n")
-}
-
-func (a *CopilotAgent) categorizerCandidatePathsForResearch(ctx context.Context, query, kbName string) []string {
-	if a == nil || strings.TrimSpace(query) == "" || strings.TrimSpace(kbName) == "" {
-		return nil
-	}
-	if a.systemDB == nil {
-		return nil
-	}
-	tx, err := a.systemDB.BeginTransaction(ctx, sop.ForReading)
-	if err != nil {
-		return nil
-	}
-	defer tx.Rollback(ctx)
-	kb, err := a.systemDB.OpenKnowledgeBase(ctx, kbName, tx, a.brain, nil, false)
-	if err != nil || kb == nil || kb.Manager == nil {
-		return nil
-	}
-	cands, err := kb.Manager.CategorizeCandidates(query, memory.CategorizeOptions{Mode: memory.CategorizerModeRetrieval})
-	if err != nil || len(cands) == 0 {
-		return nil
-	}
-	paths := make([]string, 0, len(cands))
-	for _, cand := range cands {
-		if strings.TrimSpace(cand.Category) != "" {
-			paths = append(paths, cand.Category)
-		}
-	}
-	return paths
 }
 
 func (a *CopilotAgent) selectedSpaceExpertiseSection(ctx context.Context, kbName string, query string) string {

@@ -256,7 +256,7 @@ func (c *RuleBasedCategorizer) CategorizeCandidates(text string, opts Categorize
 			continue
 		}
 		confidence := 0.5 + (score * 0.4)
-		if len(strings.Fields(normalizedText)) <= 1 && depth > 1 {
+		if depth > 1 && shouldPenalizeSingleTokenInput(normalizedText) {
 			confidence = 0.45
 		}
 		if confidence > 0.95 {
@@ -355,24 +355,21 @@ func (c *RuleBasedCategorizer) CategorizeManyWithConfidence(texts []string, opts
 }
 
 func normalizeCategorizerText(text string) string {
-	trimmed := strings.ToLower(strings.TrimSpace(text))
-	if trimmed == "" {
-		return ""
+	return NormalizeCategoryToken(text)
+}
+
+func shouldPenalizeSingleTokenInput(text string) bool {
+	tokens := strings.Fields(text)
+	if len(tokens) != 1 {
+		return false
 	}
-	var b strings.Builder
-	for _, r := range trimmed {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '/', r == '-', r == '_', r == ' ':
-			b.WriteRune(' ')
-		default:
-			b.WriteRune(' ')
+	for _, r := range tokens[0] {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
 		}
+		return false
 	}
-	return strings.Join(strings.Fields(b.String()), " ")
+	return true
 }
 
 func splitCategoryPath(path string) []string {
@@ -1170,6 +1167,8 @@ func (m *MemoryManager[T]) ConfigureFromKnowledgeBaseConfig(cfg *KnowledgeBaseCo
 		defaultCat = NewRuleBasedCategorizerFromConfig(cfg.CategorizerConfig)
 	}
 	registry := NewCategorizerRegistry(defaultCat)
+	m.SetCategorizer(defaultCat)
+	m.SetCategorizerRegistry(registry)
 	if cfg.CategorizerConfig.ByDomain != nil {
 		for domain, raw := range cfg.CategorizerConfig.ByDomain {
 			if raw == nil {

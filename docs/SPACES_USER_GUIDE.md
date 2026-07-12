@@ -251,6 +251,35 @@ Compliance: 100% (all rules satisfied)
 
 If you have a curated Knowledge Base export, you can import it into a Space so the copilot can use it as domain expertise during coding, research, and review tasks.
 
+#### Categorizer support in phase 1
+
+Phase 1 now preserves and rehydrates a Space's categorizer policy during JSON import/export. If the exported KB config includes a `categorizer_config` block, the imported Space restores that policy and uses it for routing and retrieval.
+
+For the planned v1 general-purpose categorizer design, see [CATEGORIZER_V1_DESIGN_PLAN.md](CATEGORIZER_V1_DESIGN_PLAN.md). The v1 direction is an in-process, taxonomy-aware categorizer that uses embeddings plus category structure rather than an external dependency.
+
+This is intended for domain-specific Spaces such as the coding best-practices KB:
+- rule-based mappings can route queries into the right category branches,
+- the imported Space can use the same routing policy during research and Copilot consumption,
+- and the behavior is backward-compatible with older JSON exports that do not include categorizer config.
+
+Example shape:
+
+```json
+{
+  "config": {
+    "categorizer_config": {
+      "type": "rule",
+      "default": {
+        "categories": [
+          { "path": "Coding Best Practices/Go", "keywords": ["go", "golang", "context"] }
+        ]
+      },
+      "fallback": "uncategorized"
+    }
+  }
+}
+```
+
 **Complete Workflow:**
 
 1. **Author:** Create structured Markdown with Item blocks
@@ -265,6 +294,7 @@ If you have a curated Knowledge Base export, you can import it into a Space so t
 - **Items:** Retrievable knowledge (3-6 per query via semantic search)
 - **Documents:** Full source docs for detailed context on demand
 - **Categories:** Organized hierarchy for efficient navigation
+- **Categorizer policy (phase 1):** Optional routing rules that are restored with the Space and used by the runtime for retrieval and workflow routing
 
 **Why Bundled Documents Matter:**
 - Items provide quick facts (optimized for retrieval)

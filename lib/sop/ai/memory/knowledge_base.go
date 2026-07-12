@@ -1023,6 +1023,14 @@ func (kb *KnowledgeBase[T]) SetConfig(ctx context.Context, config *KnowledgeBase
 	_, err = itemsBtree.Upsert(ctx, nilKey, configItem)
 	if err == nil {
 		kb.configCache = config
+		if kb.Manager != nil {
+			kb.Manager.SetKnowledgeBase(kb)
+			if config != nil && config.CategorizerConfig != nil {
+				if configureErr := kb.Manager.ConfigureFromKnowledgeBaseConfig(config); configureErr != nil {
+					return configureErr
+				}
+			}
+		}
 	}
 	return err
 }

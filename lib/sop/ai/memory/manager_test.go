@@ -222,6 +222,18 @@ func TestRuleBasedCategorizer_CategorizeCandidatesReturnsMultiplePaths(t *testin
 	}
 }
 
+func TestRuleBasedCategorizer_PreservesNonLatinTokensForLocalization(t *testing.T) {
+	cat := NewRuleBasedCategorizer([]RuleCategory{{Path: "安全/认证", Keywords: []string{"认证", "登录"}}}, "uncategorized")
+
+	res, err := cat.CategorizeWithConfidence("登录认证流程", CategorizeOptions{Mode: CategorizerModeRetrieval})
+	if err != nil {
+		t.Fatalf("CategorizeWithConfidence failed: %v", err)
+	}
+	if res.Category != "安全/认证" {
+		t.Fatalf("expected localized category to be preserved, got %q", res.Category)
+	}
+}
+
 func TestMemoryManager_UsesConfidenceAwareCategorizer(t *testing.T) {
 	mgr := NewMemoryManager[string](nil, &MockLLM{}, &MockEmbedder{})
 	mgr.SetCategorizer(&staticCategorizer{})

@@ -31,6 +31,16 @@ func TestBuildCodingWorkflowExpertiseQueryIncludesPriorPaths(t *testing.T) {
 	}
 }
 
+func TestBuildCodingWorkflowExpertiseQueryIncludesLanguageAndSubArea(t *testing.T) {
+	query := buildCodingWorkflowExpertiseQuery(cw.Task{Description: "implement parser", ActiveFile: "parser.go"}, cw.ContextPack{TaskType: "code", ActiveFile: "parser.go", StructuralPath: "repo/parser/Parse", ASTLeafNodes: []string{"Parse"}})
+	if !strings.Contains(query, "language: go") {
+		t.Fatalf("expected query to include detected language, got %q", query)
+	}
+	if !strings.Contains(query, "sub-area: parser") {
+		t.Fatalf("expected query to include detected sub-area, got %q", query)
+	}
+}
+
 func TestSelectExpertiseKnowledgeBaseCandidatesPrioritizesDefaultAndRelevantNames(t *testing.T) {
 	candidates := selectExpertiseKnowledgeBaseCandidates("implement parser", []string{"SOP", "parser-guidance", "medical"})
 	if len(candidates) == 0 {
@@ -106,15 +116,39 @@ func TestBuildSelectedSpaceResearchQueriesUsesPriorMemory(t *testing.T) {
 	}
 }
 
-func TestBuildSelectedSpaceResearchQueriesUsesCategorizerCandidates(t *testing.T) {
+func TestBuildSelectedSpaceResearchQueriesUsesNestedCategorySignalsInsteadOfCategorizerPaths(t *testing.T) {
 	queries := buildSelectedSpaceResearchQueries("implement parser", "parser-space", nil, []string{"Engineering/Code", "Engineering/Parsing"})
 	if len(queries) == 0 {
 		t.Fatalf("expected research queries to be generated")
 	}
-	if queries[0] != "Engineering/Code" {
-		t.Fatalf("expected categorizer path to be first, got %v", queries)
+	if containsString(queries, "Engineering/Code") {
+		t.Fatalf("expected categorizer-style path to be ignored, got %v", queries)
 	}
-	if !containsString(queries, "Engineering/Parsing") {
-		t.Fatalf("expected categorizer path to be retained, got %v", queries)
+	if containsString(queries, "Engineering/Parsing") {
+		t.Fatalf("expected categorizer-style path to be ignored, got %v", queries)
+	}
+	joined := strings.Join(queries, " ")
+	if !strings.Contains(joined, "Coding/Semantic") {
+		t.Fatalf("expected nested semantic category path to be included, got %v", queries)
+	}
+	if !strings.Contains(joined, "parsing") {
+		t.Fatalf("expected parsing concept to be included, got %v", queries)
+	}
+}
+
+func TestBuildSelectedSpaceResearchQueriesUsesSemanticCodePaths(t *testing.T) {
+	queries := buildSelectedSpaceResearchQueries("implement parser and add retry logic", "parser-space", nil, nil)
+	if len(queries) == 0 {
+		t.Fatalf("expected research queries to be generated")
+	}
+	joined := strings.Join(queries, " ")
+	if !strings.Contains(joined, "Coding/Semantic") {
+		t.Fatalf("expected semantic code path prefix to be included, got %v", queries)
+	}
+	if !strings.Contains(joined, "parsing") {
+		t.Fatalf("expected parsing concept to be included, got %v", queries)
+	}
+	if !strings.Contains(joined, "retry-logic") {
+		t.Fatalf("expected retry concept to be included, got %v", queries)
 	}
 }
