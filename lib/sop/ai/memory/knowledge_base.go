@@ -237,6 +237,59 @@ func (kb *KnowledgeBase[T]) findCategoriesByTextSearch(ctx context.Context, text
 	return nil, nil
 }
 
+func (kb *KnowledgeBase[T]) searchTextWithinCategory(ctx context.Context, category *Category, text string, limit int) ([]ai.Hit[T], error) {
+	if kb == nil || kb.Store == nil || category == nil || category.ID.IsNil() || strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+
+	s, ok := kb.Store.(*store[T])
+	if !ok || s == nil || s.textIndex == nil {
+		return nil, nil
+	}
+
+	searchResults, err := s.textIndex.Search(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+
+	hits := make([]ai.Hit[T], 0, len(searchResults))
+	for _, res := range searchResults {
+		if limit > 0 && len(hits) >= limit {
+			break
+		}
+		parts := strings.Split(res.DocID, ",")
+		if len(parts) != 2 {
+			continue
+		}
+		catID, err := sop.ParseUUID(parts[0])
+		if err != nil || catID.Compare(category.ID) != 0 {
+			continue
+		}
+		itemID, err := sop.ParseUUID(parts[1])
+		if err != nil {
+			continue
+		}
+
+		itemKey := ItemKey{CategoryID: category.ID, ItemID: itemID}
+		foundItem, err := s.items.Find(ctx, itemKey, false)
+		if err != nil || !foundItem {
+			continue
+		}
+		item, err := s.items.GetCurrentValue(ctx)
+		if err != nil || item.ID.IsNil() {
+			continue
+		}
+
+		hits = append(hits, ai.Hit[T]{
+			ID:      item.ID.String(),
+			DocID:   item.DocID,
+			Score:   float32(res.Score),
+			Payload: item.Data,
+		})
+	}
+	return hits, nil
+}
+
 func hydrateSearchHitsWithDocumentContent[T any](ctx context.Context, kb *KnowledgeBase[T], hits []ai.Hit[T]) {
 	if kb == nil || kb.Store == nil {
 		return
@@ -324,16 +377,73 @@ func searchHitEvidence[T any](hit *ai.Hit[T], queryText string, pathHints []stri
 				lexical++
 			}
 		}
-	}
-	for _, path := range pathHints {
-		if strings.TrimSpace(path) == "" {
-			continue
+		for _, path := range pathHints {
+			if strings.TrimSpace(path) == "" {
+				continue
+			}
+			pathTokens := tokenizeSearchText(path)
+			for _, token := range pathTokens {
+				if _, ok := seen[token]; ok {
+					pathMatches++
+					break
+				}
+			}
 		}
-		if strings.Contains(strings.ToLower(payloadText), strings.ToLower(path)) {
-			pathMatches++
+	}
+	if pathMatches == 0 {
+		for _, path := range pathHints {
+			if strings.TrimSpace(path) == "" {
+				continue
+			}
+			if strings.Contains(strings.ToLower(payloadText), strings.ToLower(path)) {
+				pathMatches++
+			}
 		}
 	}
 	return lexical, pathMatches
+}
+
+func boostSearchHitScore[T any](hit ai.Hit[T], queryText string, pathHints []string) ai.Hit[T] {
+	lexical, pathMatches := searchHitEvidence(&hit, queryText, pathHints)
+	if lexical > 0 || pathMatches > 0 {
+		boost := float32(lexical)*0.12 + float32(pathMatches)*0.08
+		hit.Score = hit.Score - boost
+	}
+	return hit
+}
+
+func categorySpecificityBoost(category *Category) float32 {
+	if category == nil {
+		return 0
+	}
+	depth := 1
+	if strings.TrimSpace(category.Path) != "" {
+		depth += strings.Count(category.Path, "/")
+	}
+	if len(category.ParentIDs) > 0 {
+		depth += len(category.ParentIDs)
+	}
+	return float32(depth) * 0.01
+}
+
+func applyCategorySpecificityBoost[T any](hits []ai.Hit[T], category *Category) {
+	boost := categorySpecificityBoost(category)
+	if boost <= 0 || len(hits) == 0 {
+		return
+	}
+	for i := range hits {
+		hits[i].Score = hits[i].Score - boost
+	}
+}
+
+func applyCategoryPositionPenalty[T any](hits []ai.Hit[T], candidateIndex int) {
+	if len(hits) == 0 || candidateIndex <= 0 {
+		return
+	}
+	penalty := float32(candidateIndex) * 0.01
+	for i := range hits {
+		hits[i].Score = hits[i].Score - penalty
+	}
 }
 
 func tokenizeSearchText(text string) []string {
@@ -383,6 +493,47 @@ func containsCategory(cats []*Category, target *Category) bool {
 		}
 	}
 	return false
+}
+
+func appendParentCategories[T any](ctx context.Context, cats []*Category, seen map[sop.UUID]struct{}, out *[]*Category, store *store[T]) {
+	if store == nil {
+		return
+	}
+
+	var walk func([]*Category, int)
+	walk = func(current []*Category, depth int) {
+		if len(current) == 0 || depth >= 4 {
+			return
+		}
+		var next []*Category
+		for _, cat := range current {
+			if cat == nil || cat.ID.IsNil() {
+				continue
+			}
+			for _, parent := range cat.ParentIDs {
+				if parent.ParentID.IsNil() {
+					continue
+				}
+				if _, ok := seen[parent.ParentID]; ok {
+					continue
+				}
+				seen[parent.ParentID] = struct{}{}
+				found, err := store.categories.Find(ctx, parent.ParentID, false)
+				if err != nil || !found {
+					continue
+				}
+				parentCat, err := store.categories.GetCurrentValue(ctx)
+				if err != nil || parentCat == nil || parentCat.ID.IsNil() {
+					continue
+				}
+				*out = append(*out, parentCat)
+				next = append(next, parentCat)
+			}
+		}
+		walk(next, depth+1)
+	}
+
+	walk(cats, 0)
 }
 
 func uniqueCategoryPaths(paths []string) []string {
@@ -570,7 +721,7 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 			}
 			pathHints = append(pathHints, pathNames...)
 		}
-		for _, cat := range candidates {
+		for catIndex, cat := range candidates {
 			catOpts := &SearchOptions[T]{
 				Limit:          req.Limit,
 				CategoryVector: cat.CenterVector,
@@ -582,6 +733,13 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 			}
 
 			if len(catHits) == 0 {
+				if strings.TrimSpace(req.Text) != "" {
+					catTextHits, err := kb.searchTextWithinCategory(ctx, cat, req.Text, req.Limit)
+					if err != nil {
+						return nil, err
+					}
+					hits = mergeSearchHits(hits, catTextHits)
+				}
 				continue
 			}
 
@@ -594,7 +752,83 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 					catHits[i].Score = catHits[i].Score - (categoryDist * 0.1)
 				}
 			}
+			applyCategorySpecificityBoost(catHits, cat)
+			applyCategoryPositionPenalty(catHits, catIndex)
 			hits = mergeSearchHits(hits, catHits)
+
+			if strings.TrimSpace(req.Text) != "" {
+				catTextHits, err := kb.searchTextWithinCategory(ctx, cat, req.Text, req.Limit)
+				if err != nil {
+					return nil, err
+				}
+				applyCategorySpecificityBoost(catTextHits, cat)
+				hits = mergeSearchHits(hits, catTextHits)
+			}
+		}
+
+		if len(hits) == 0 && len(candidates) > 0 && strings.TrimSpace(req.Text) != "" {
+			seenParents := make(map[sop.UUID]struct{}, len(candidates))
+			for _, cat := range candidates {
+				if cat != nil && !cat.ID.IsNil() {
+					seenParents[cat.ID] = struct{}{}
+				}
+			}
+			var parentCandidates []*Category
+			if store, ok := kb.Store.(*store[T]); ok {
+				appendParentCategories(ctx, candidates, seenParents, &parentCandidates, store)
+			}
+			for _, parent := range parentCandidates {
+				if parent == nil || parent.ID.IsNil() || containsCategory(candidates, parent) {
+					continue
+				}
+				catHits, err := kb.Store.QueryItems(ctx, queryVector, parent, &SearchOptions[T]{Limit: req.Limit, CategoryVector: parent.CenterVector, Filter: req.Filter})
+				if err != nil {
+					return nil, err
+				}
+				applyCategorySpecificityBoost(catHits, parent)
+				applyCategoryPositionPenalty(catHits, len(candidates))
+				hits = mergeSearchHits(hits, catHits)
+				if len(catHits) == 0 {
+					catTextHits, err := kb.searchTextWithinCategory(ctx, parent, req.Text, req.Limit)
+					if err != nil {
+						return nil, err
+					}
+					applyCategorySpecificityBoost(catTextHits, parent)
+					applyCategoryPositionPenalty(catTextHits, len(candidates))
+					hits = mergeSearchHits(hits, catTextHits)
+				}
+			}
+		}
+
+		if len(hits) == 0 && len(candidates) > 0 {
+			fallbackVector := queryVector
+			if len(fallbackVector) == 0 && strings.TrimSpace(req.Text) != "" && kb.Manager != nil && kb.Manager.embedder != nil {
+				vecs, err := embed.QueryTexts(ctx, kb.Manager.embedder, []string{normalize(req.Text)})
+				if err == nil && len(vecs) > 0 {
+					fallbackVector = vecs[0]
+				}
+			}
+			if len(fallbackVector) > 0 {
+				fallbackCat, _, err := kb.Store.FindClosestCategory(ctx, fallbackVector)
+				if err == nil && fallbackCat != nil && !containsCategory(candidates, fallbackCat) {
+					catHits, err := kb.Store.QueryItems(ctx, fallbackVector, fallbackCat, &SearchOptions[T]{Limit: req.Limit, CategoryVector: fallbackCat.CenterVector, Filter: req.Filter})
+					if err != nil {
+						return nil, err
+					}
+					applyCategorySpecificityBoost(catHits, fallbackCat)
+					applyCategoryPositionPenalty(catHits, len(candidates)+1)
+					hits = mergeSearchHits(hits, catHits)
+					if len(catHits) == 0 && strings.TrimSpace(req.Text) != "" {
+						catTextHits, err := kb.searchTextWithinCategory(ctx, fallbackCat, req.Text, req.Limit)
+						if err != nil {
+							return nil, err
+						}
+						applyCategorySpecificityBoost(catTextHits, fallbackCat)
+						applyCategoryPositionPenalty(catTextHits, len(candidates)+1)
+						hits = mergeSearchHits(hits, catTextHits)
+					}
+				}
+			}
 		}
 
 		if req.IncludeDocumentContent {
@@ -615,6 +849,9 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 
 		// Step 5: Sort by evidence-first ranking: lexical overlap and path agreement outrank weak vector-only matches.
 		if len(hits) > 1 {
+			for i := range hits {
+				hits[i] = boostSearchHitScore(hits[i], req.Text, pathHints)
+			}
 			sort.Slice(hits, func(i, j int) bool {
 				lexI, pathI := searchHitEvidence(&hits[i], req.Text, pathHints)
 				lexJ, pathJ := searchHitEvidence(&hits[j], req.Text, pathHints)

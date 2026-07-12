@@ -26,9 +26,9 @@ For this direction, AST/tree-sitter-style structure is a first-class V1 capabili
 - [ ] Add repo-aware context assembly that selects the active file, nearest symbol, nearby tests, and relevant package/module context.
 - [ ] Add a deterministic patch and edit layer that can apply targeted edits, show diffs, and support safe rollback.
 - [ ] Add a test-and-fix loop that runs relevant tests, parses failures, and iterates until success or a bounded stop condition.
-- [ ] Add code-aware retrieval using lightweight parsing or AST/tree-sitter support for symbols, imports, and call relationships.
-- [ ] Add hybrid retrieval that combines deterministic context, path-based structure, and semantic memory for repo-specific recall.
-- [ ] Add persistent coding memory for repo/file/symbol summaries, relationships, embeddings, and lifecycle state.
+- [x] Add code-aware retrieval using lightweight parsing or AST/tree-sitter support for symbols, imports, and call relationships.
+- [x] Add hybrid retrieval that combines deterministic context, path-based structure, and semantic memory for repo-specific recall.
+- [x] Add persistent coding memory for repo/file/symbol summaries, relationships, embeddings, and lifecycle state.
 - [ ] Add explicit workflow tracing so the user can see what context was selected, what changed, and what was validated.
 - [ ] Add safety controls for destructive operations, including preview, approval, and rollback paths.
 

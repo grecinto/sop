@@ -334,6 +334,28 @@ func TestDefaultKnowledgeBaseRetrieverFindsRelevantDocs(t *testing.T) {
 	}
 }
 
+func TestDefaultKnowledgeBaseRetrieverMatchesMorphologicalVariants(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "docs", "syntax-notes.md"), []byte("# Syntax notes\n\nThis guide explains how a parser should behave when handling tokens."), 0o644); err != nil {
+		t.Fatalf("write guide: %v", err)
+	}
+
+	retriever := &DefaultKnowledgeBaseRetriever{}
+	capsule, err := retriever.Retrieve(Task{WorkingDir: tmpDir, ActiveFile: "main.go", Description: "fix parsing behavior"}, RunState{}, ContextPack{})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if len(capsule.Sources) == 0 {
+		t.Fatalf("expected to retrieve a matching doc for parsing behavior, got %#v", capsule)
+	}
+	if !strings.Contains(strings.ToLower(capsule.Summary), "parsing") && !strings.Contains(strings.ToLower(capsule.Summary), "parser") {
+		t.Fatalf("expected summary to mention the matching parsing/parser guidance, got %q", capsule.Summary)
+	}
+}
+
 func TestFileSessionMemoryPersistsToDiskAndBuildsSummary(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.json")
 	memory := NewFileSessionMemory(path)

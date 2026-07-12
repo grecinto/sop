@@ -143,6 +143,32 @@ func TestFormatLearnedKnowledgeHitUsesCanonicalDocumentSourceLabel(t *testing.T)
 	}
 }
 
+func TestBuildCodingMemoryLTMPayloadBuildsThreeIndexRoutesWithoutStructuralPath(t *testing.T) {
+	mem := cw.CodingMemory{Description: "fix parser", ActiveFile: "parser.go"}
+	_, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
+	if len(entries) != 3 {
+		t.Fatalf("expected three index entries, got %d", len(entries))
+	}
+	for _, want := range []string{"path", "semantic"} {
+		found := false
+		for _, entry := range entries {
+			if entry.Kind == want {
+				found = true
+				if strings.TrimSpace(entry.CategoryPath) == "" {
+					t.Fatalf("expected a non-empty %s index path, got %#v", want, entry.CategoryPath)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected %s index entry", want)
+		}
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected three index entries, got %d", len(entries))
+	}
+}
+
 func TestBuildCodingMemoryLTMPayloadBuildsCanonicalDocumentAndTwoIndexes(t *testing.T) {
 	mem := cw.CodingMemory{
 		Description:    "fix parser",
@@ -227,6 +253,23 @@ func TestShouldVectorizeLTMIndexEntryOnlyForSemanticKind(t *testing.T) {
 				t.Fatalf("shouldVectorizeLTMIndexEntry(%q) = %v, want %v", tt.entry.Kind, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildCodingMemoryLTMPayloadOnlyVectorizesSemanticIndexEntry(t *testing.T) {
+	mem := cw.CodingMemory{Description: "fix parser", ActiveFile: "parser.go", RepositoryHint: "sop-cloud"}
+	_, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
+	vectorized := 0
+	for _, entry := range entries {
+		if shouldVectorizeLTMIndexEntry(entry) {
+			vectorized++
+		}
+	}
+	if vectorized != 1 {
+		t.Fatalf("expected exactly one vectorized index entry, got %d", vectorized)
+	}
+	if !shouldVectorizeLTMIndexEntry(entries[2]) {
+		t.Fatalf("expected the semantic index entry to be vectorized, got %+v", entries[2])
 	}
 }
 

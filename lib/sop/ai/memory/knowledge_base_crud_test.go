@@ -508,6 +508,101 @@ func TestRefreshSemanticVectors_RebuildsEmptyDistanceIndex(t *testing.T) {
 	}
 }
 
+func TestKnowledgeBase_SearchByPath_MatchesTokenOverlapAndCaseInsensitiveText(t *testing.T) {
+	ctx := context.Background()
+	cats := inmemory.NewBtree[sop.UUID, *Category](true)
+	vecs := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+	pathTree := inmemory.NewBtree[string, sop.UUID](false)
+	distTree := inmemory.NewBtree[DistanceKey, byte](false)
+	docsTree := inmemory.NewBtree[sop.UUID, Document](false)
+
+	s := NewStore[string]("semantic_kb_overlap", nil, cats.Btree, pathTree.Btree, distTree.Btree, vecs.Btree, items.Btree, docsTree.Btree).(*store[string])
+	kb := &KnowledgeBase[string]{
+		Store:   s,
+		Manager: NewMemoryManager[string](s, &MockLLM{}, &MockPlaybookEmbedder{}),
+	}
+
+	catID := sop.NewUUID()
+	itemID := sop.NewUUID()
+	cats.Btree.Add(ctx, catID, &Category{ID: catID, Name: "Architecture", Path: "Architecture", CenterVector: []float32{0, 0, 1}})
+	pathTree.Btree.Add(ctx, "Architecture", catID)
+	items.Btree.Add(ctx, ItemKey{CategoryID: catID, ItemID: itemID}, Item[string]{ID: itemID, CategoryID: catID, Summaries: []string{"Architecture guidance for new B-tree"}})
+
+	res, err := kb.SearchByPath(ctx, []PathSearchParam{{CategoryPath: "Architecture", SearchText: "guidance"}})
+	if err != nil {
+		t.Fatalf("SearchByPath failed: %v", err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("expected 1 overlap-match result, got %d", len(res))
+	}
+}
+
+func TestKnowledgeBase_SearchByPath_MatchesMultiWordQueries(t *testing.T) {
+	ctx := context.Background()
+	cats := inmemory.NewBtree[sop.UUID, *Category](true)
+	vecs := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+	pathTree := inmemory.NewBtree[string, sop.UUID](false)
+	distTree := inmemory.NewBtree[DistanceKey, byte](false)
+	docsTree := inmemory.NewBtree[sop.UUID, Document](false)
+
+	s := NewStore[string]("semantic_kb_multiword", nil, cats.Btree, pathTree.Btree, distTree.Btree, vecs.Btree, items.Btree, docsTree.Btree).(*store[string])
+	kb := &KnowledgeBase[string]{
+		Store:   s,
+		Manager: NewMemoryManager[string](s, &MockLLM{}, &MockPlaybookEmbedder{}),
+	}
+
+	catID := sop.NewUUID()
+	itemID := sop.NewUUID()
+	cats.Btree.Add(ctx, catID, &Category{ID: catID, Name: "Architecture", Path: "Architecture", CenterVector: []float32{0, 0, 1}})
+	pathTree.Btree.Add(ctx, "Architecture", catID)
+	items.Btree.Add(ctx, ItemKey{CategoryID: catID, ItemID: itemID}, Item[string]{ID: itemID, CategoryID: catID, Summaries: []string{"guidance for deployment rollout"}})
+
+	res, err := kb.SearchByPath(ctx, []PathSearchParam{{CategoryPath: "Architecture", SearchText: "deployment rollout"}})
+	if err != nil {
+		t.Fatalf("SearchByPath failed: %v", err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("expected 1 multi-word overlap match, got %d", len(res))
+	}
+}
+
+func TestKnowledgeBase_SearchByPath_RanksStrongerTokenOverlapAheadOfWeakerMatches(t *testing.T) {
+	ctx := context.Background()
+	cats := inmemory.NewBtree[sop.UUID, *Category](true)
+	vecs := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+	pathTree := inmemory.NewBtree[string, sop.UUID](false)
+	distTree := inmemory.NewBtree[DistanceKey, byte](false)
+	docsTree := inmemory.NewBtree[sop.UUID, Document](false)
+
+	s := NewStore[string]("semantic_kb_ranking", nil, cats.Btree, pathTree.Btree, distTree.Btree, vecs.Btree, items.Btree, docsTree.Btree).(*store[string])
+	kb := &KnowledgeBase[string]{
+		Store:   s,
+		Manager: NewMemoryManager[string](s, &MockLLM{}, &MockPlaybookEmbedder{}),
+	}
+
+	catID := sop.NewUUID()
+	weakID := sop.NewUUID()
+	strongID := sop.NewUUID()
+	cats.Btree.Add(ctx, catID, &Category{ID: catID, Name: "Architecture", Path: "Architecture", CenterVector: []float32{0, 0, 1}})
+	pathTree.Btree.Add(ctx, "Architecture", catID)
+	items.Btree.Add(ctx, ItemKey{CategoryID: catID, ItemID: weakID}, Item[string]{ID: weakID, CategoryID: catID, Summaries: []string{"deployment plan"}})
+	items.Btree.Add(ctx, ItemKey{CategoryID: catID, ItemID: strongID}, Item[string]{ID: strongID, CategoryID: catID, Summaries: []string{"deployment rollout plan"}})
+
+	res, err := kb.SearchByPath(ctx, []PathSearchParam{{CategoryPath: "Architecture", SearchText: "deployment rollout"}})
+	if err != nil {
+		t.Fatalf("SearchByPath failed: %v", err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(res))
+	}
+	if res[0].ID != strongID {
+		t.Fatalf("expected stronger token-overlap summary to rank first, got %#v", res)
+	}
+}
+
 func TestKnowledgeBase_SearchByPath_PrefixMatchesSummaries(t *testing.T) {
 	ctx := context.Background()
 	cats := inmemory.NewBtree[sop.UUID, *Category](true)

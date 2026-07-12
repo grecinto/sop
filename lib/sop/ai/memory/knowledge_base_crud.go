@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	log "log/slog"
+	"sort"
 	"strings"
 
 	"github.com/sharedcode/sop"
@@ -697,34 +698,31 @@ func refreshSemanticVectors[T any](ctx context.Context, kb *KnowledgeBase[T]) er
 	return nil
 }
 
-func refreshSemanticVectorsInWriteTx[T any](ctx context.Context, kb *KnowledgeBase[T]) error {
-	if kb == nil || kb.Manager == nil || kb.Manager.embedder == nil {
-		return nil
-	}
-
-	store, ok := kb.Store.(*store[T])
-	if !ok || store == nil || store.db == nil {
-		return nil
-	}
-
-	writeTx, err := store.db.BeginTransaction(ctx, sop.ForWriting)
-	if err != nil {
-		return err
-	}
-	defer writeTx.Rollback(ctx)
-
-	refreshedKB, err := store.db.OpenKnowledgeBase(ctx, kb.Name(), writeTx, kb.Manager.llm, kb.Manager.embedder, false, true)
-	if err != nil {
-		return err
-	}
-	if err := refreshSemanticVectors(ctx, refreshedKB); err != nil {
-		return err
-	}
-	return writeTx.Commit(ctx)
-}
-
 func convertToVectors(ctx context.Context, catPath string, embedder ai.Embeddings) ([][]float32, error) {
 	return CategoryPathVectors(ctx, catPath, embedder)
+}
+
+func containsTokenOverlap(text, query string) bool {
+	return countTokenMatches(text, query) > 0
+}
+
+func countTokenMatches(text, query string) int {
+	textTokens := tokenizeSearchText(text)
+	queryTokens := tokenizeSearchText(query)
+	if len(textTokens) == 0 || len(queryTokens) == 0 {
+		return 0
+	}
+	seen := make(map[string]struct{}, len(queryTokens))
+	for _, token := range queryTokens {
+		seen[token] = struct{}{}
+	}
+	matches := 0
+	for _, token := range textTokens {
+		if _, ok := seen[token]; ok {
+			matches++
+		}
+	}
+	return matches
 }
 
 // SearchByPath performs hierarchical category path search with dual-mode operation:
@@ -811,6 +809,10 @@ func (kb *KnowledgeBase[T]) SearchByPath(ctx context.Context, params []PathSearc
 
 		log.Info("SearchByPath leaf item scan", "category_path", param.CategoryPath, "search_text", param.SearchText, "selected_cat_id", catID, "item_scan_started", ok)
 		matchCount := 0
+		var scored []struct {
+			item  Item[T]
+			score int
+		}
 		for ok {
 			itemReq := itemsTree.GetCurrentKey()
 			if itemReq.Key.ItemID.IsNil() {
@@ -821,16 +823,56 @@ func (kb *KnowledgeBase[T]) SearchByPath(ctx context.Context, params []PathSearc
 			}
 
 			item, err := itemsTree.GetCurrentValue(ctx)
-			matched := err == nil && len(item.Summaries) > 0 && strings.HasPrefix(item.Summaries[0], param.SearchText)
+			matched := false
+			score := 0
+			if err == nil && len(item.Summaries) > 0 {
+				searchText := normalize(strings.TrimSpace(param.SearchText))
+				for _, summary := range item.Summaries {
+					if strings.TrimSpace(summary) == "" {
+						continue
+					}
+					summaryText := normalize(strings.TrimSpace(summary))
+					if searchText == "" {
+						matched = true
+						score = 1
+						break
+					}
+					if strings.HasPrefix(summaryText, searchText) {
+						matched = true
+						score = 2
+						break
+					}
+					if containsTokenOverlap(summaryText, searchText) {
+						matched = true
+						score = countTokenMatches(summaryText, searchText)
+						if score < 1 {
+							score = 1
+						}
+						break
+					}
+				}
+			}
 			if matched {
 				matchCount++
-				log.Info("SearchByPath leaf item matched", "category_path", param.CategoryPath, "selected_cat_id", catID, "item_id", itemReq.Key.ItemID, "summary_prefix", item.Summaries[0], "search_text", param.SearchText)
-				results = append(results, item)
+				log.Info("SearchByPath leaf item matched", "category_path", param.CategoryPath, "selected_cat_id", catID, "item_id", itemReq.Key.ItemID, "summary_prefix", item.Summaries[0], "search_text", param.SearchText, "match_score", score)
+				scored = append(scored, struct {
+					item  Item[T]
+					score int
+				}{item: item, score: score})
 			} else {
 				log.Debug("SearchByPath leaf item skipped", "category_path", param.CategoryPath, "selected_cat_id", catID, "item_id", itemReq.Key.ItemID, "summary_count", len(item.Summaries), "search_text", param.SearchText)
 			}
 
 			ok, _ = itemsTree.Next(ctx)
+		}
+		sort.Slice(scored, func(i, j int) bool {
+			if scored[i].score != scored[j].score {
+				return scored[i].score > scored[j].score
+			}
+			return len(scored[i].item.Summaries) > 0 && len(scored[j].item.Summaries) > 0 && strings.ToLower(scored[i].item.Summaries[0]) < strings.ToLower(scored[j].item.Summaries[0])
+		})
+		for _, entry := range scored {
+			results = append(results, entry.item)
 		}
 		log.Info("SearchByPath leaf item summary", "category_path", param.CategoryPath, "selected_cat_id", catID, "match_count", matchCount, "result_count", len(results))
 	}

@@ -4,15 +4,19 @@
 
 Ship a strong, in-process categorizer for Spaces and KnowledgeBases as the v1 default path. The categorizer should be able to assign incoming content to the most relevant sub-category in a Space taxonomy using semantic signals, taxonomy structure, and lightweight lexical matching.
 
-This v1 should not require any external application or customer-managed dependency. It should be packaged with the product and work out of the box when a Space has a taxonomy.
+This v1 should not require any external application or customer-managed dependency. It should be packaged with the product and work out of the box when a Space has a taxonomy. The goal is to make well-organized Spaces immediately useful for Research, Coding workflow, manual exploration, and enrichment workflows such as turning an LLM into a specialist for a Mechanic or support KB.
+
+From a product perspective, this is not just a separate categorizer feature. It is the default organization and routing layer that improves the existing KnowledgeBase Search APIs used by Research and the coding workflow.
 
 ## Goals for v1
 
 - Provide a generally useful categorizer that works well for ordinary knowledge and support content.
+- Make the default categorizer useful for end-user-authored Spaces with a clear taxonomy.
 - Use the Space taxonomy as the primary decision scaffold.
 - Keep the implementation fully in-process and deterministic enough to debug.
 - Improve retrieval and workflow routing quality without making the categorizer a fragile or user-visible feature.
 - Preserve compatibility with the existing categorizer interface and config model.
+- Let the categorizer improve Research, Coding workflow, and manual browsing experiences without requiring a separate setup step.
 
 ## Non-goals for v1
 
@@ -78,6 +82,22 @@ This protects retrieval quality and avoids overcommitting to a bad label.
 
 ## Runtime integration plan
 
+### Primary use cases
+
+The v1 categorizer should serve three main product experiences:
+
+1. Research and Coding workflow
+   - classify incoming knowledge into the most relevant sub-category before retrieval and routing happen
+   - help Space-backed expertise become more precise for coding, review, testing, and analysis tasks
+
+2. Manual user research
+   - let a user browse or query a Space using a taxonomy that is already structured and meaningful
+   - make the Space feel more like a curated knowledge base instead of a flat collection of items
+
+3. Enrichment and specialist-mode workflows
+   - allow the system to turn an LLM into a more capable specialist by grounding it in a well-categorized Space
+   - support scenarios such as a Mechanic KB or support KB where the taxonomy provides the specialist framing
+
 ### Existing interface
 
 The implementation should fit the current categorizer abstraction in the memory runtime:
@@ -85,6 +105,7 @@ The implementation should fit the current categorizer abstraction in the memory 
 - keep the categorizer interface as the runtime contract
 - implement a new in-process categorizer that uses embeddings + taxonomy structure
 - wire it into the existing memory manager configuration path
+- make the result available to the existing KnowledgeBase Search path so Research, coding workflow, and user LLM asks all benefit automatically
 
 This keeps the system compatible with the current code shape and avoids introducing a new dependency path.
 
@@ -110,10 +131,14 @@ The existing config model remains the compatibility surface:
 ### Candidate generation
 
 1. Build an embedding for the input text.
-2. Build embeddings or lightweight text representations for each candidate category path.
-3. Score semantic similarity.
-4. Add lexical and synonym-based evidence.
-5. Promote the best-matching subtree and parent/child paths.
+2. Try the highest-signal retrieval paths first:
+   - exact category-path lookup via CatByPath
+   - semantic category-path matching via the triangulation-based path search
+   - semantic text search on the resolved leaf category when a category is found
+3. If those paths fail to produce strong candidates, fall back to a broader semantic walk over nested categories.
+4. Score semantic similarity.
+5. Add lexical and synonym-based evidence.
+6. Promote the best-matching subtree and parent/child paths.
 
 ### Decision rule
 
@@ -121,6 +146,14 @@ The system should prefer the highest-scoring path that is both:
 
 - semantically relevant
 - structurally valid under the Space taxonomy
+
+The retrieval flow should be ordered as:
+
+1. exact CatByPath match
+2. high-quality semantic category-path match
+3. semantic text search on the resolved leaf category
+4. parent-category fallback when the leaf category has no hits
+5. nested semantic category walk plus lexical strengthening as the fallback path
 
 If several siblings are close, use the path with the strongest combined evidence and the best fit to the current context.
 
@@ -173,4 +206,4 @@ Ship v1 as a strong, in-process, taxonomy-aware categorizer built from:
 - lexical evidence for precision
 - confidence-based fallback
 
-That provides a practical, high-quality default categorizer without introducing customer-facing runtime dependencies.
+Use it as the default routing and organization layer behind the existing KnowledgeBase Search APIs. That gives Research, Coding workflow, and user LLM asks a stronger built-in experience without introducing a separate customer-facing feature surface.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/sharedcode/sop/ai/memory"
 	ts "github.com/smacker/go-tree-sitter"
@@ -1577,13 +1578,15 @@ func (d *DefaultKnowledgeBaseRetriever) Retrieve(task Task, state RunState, pack
 	seen := map[string]bool{}
 	var terms []string
 	for _, term := range queryTerms {
-		if term != "" && !seen[term] {
-			seen[term] = true
+		clean := normalizeKnowledgeBaseSearchTerm(term)
+		if clean != "" && !seen[clean] {
+			seen[clean] = true
 			terms = append(terms, term)
 		}
 	}
 	matches := []string{}
 	sources := []string{}
+	matchedLabels := []string{}
 	_ = filepath.WalkDir(workingDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d == nil {
 			return nil
@@ -1599,18 +1602,11 @@ func (d *DefaultKnowledgeBaseRetriever) Retrieve(task Task, state RunState, pack
 		if err != nil {
 			return nil
 		}
-		text := strings.ToLower(string(content))
 		if len(terms) == 0 {
 			return nil
 		}
-		matched := false
-		for _, term := range terms {
-			if term != "" && strings.Contains(text, term) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		matchedTerms := documentMatchesKnowledgeBaseTerms(string(content), terms)
+		if len(matchedTerms) == 0 {
 			return nil
 		}
 		relPath, err := filepath.Rel(workingDir, path)
@@ -1620,13 +1616,100 @@ func (d *DefaultKnowledgeBaseRetriever) Retrieve(task Task, state RunState, pack
 		relPath = filepath.ToSlash(relPath)
 		matches = append(matches, strings.TrimSpace(string(content)))
 		sources = append(sources, relPath)
+		matchedLabels = append(matchedLabels, matchedTerms...)
 		return nil
 	})
 	if len(matches) == 0 {
 		return ExpertiseCapsule{Summary: "No knowledge-base guidance was found for this task.", Category: "coding", Sources: []string{"local:knowledge_base"}}, nil
 	}
-	summary := fmt.Sprintf("Knowledge-base guidance available from %d source(s): %s", len(matches), strings.Join(sources, ", "))
+	labelSummary := strings.Join(uniqueStrings(matchedLabels), ", ")
+	if labelSummary == "" {
+		labelSummary = "task terms"
+	}
+	summary := fmt.Sprintf("Knowledge-base guidance available from %d source(s) matching %s: %s", len(matches), labelSummary, strings.Join(sources, ", "))
 	return ExpertiseCapsule{Summary: summary, Category: "coding", Sources: sources}, nil
+}
+
+func normalizeKnowledgeBaseSearchTerm(term string) string {
+	term = strings.ToLower(strings.TrimSpace(term))
+	term = strings.Trim(term, "\"'.,:;()[]{}")
+	var builder strings.Builder
+	for _, r := range term {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			builder.WriteRune(r)
+		}
+	}
+	term = builder.String()
+	if term == "" {
+		return ""
+	}
+	for _, suffix := range []string{"ing", "ed", "er", "ers", "es", "s", "tion", "tions", "ment", "ments", "y"} {
+		if strings.HasSuffix(term, suffix) && len(term) > len(suffix)+1 {
+			term = strings.TrimSuffix(term, suffix)
+			break
+		}
+	}
+	if strings.HasSuffix(term, "e") && len(term) > 2 {
+		term = strings.TrimSuffix(term, "e")
+	}
+	return term
+}
+
+func documentMatchesKnowledgeBaseTerms(content string, terms []string) []string {
+	if len(terms) == 0 {
+		return nil
+	}
+	var matched []string
+	for _, term := range terms {
+		if term == "" {
+			continue
+		}
+		if contentMatchesKnowledgeBaseTerm(content, term) {
+			matched = append(matched, term)
+		}
+	}
+	return uniqueStrings(matched)
+}
+
+func contentMatchesKnowledgeBaseTerm(content string, term string) bool {
+	contentTerms := strings.FieldsFunc(normalizeKnowledgeBaseSearchText(content), func(r rune) bool { return unicode.IsSpace(r) })
+	for _, contentTerm := range contentTerms {
+		if contentTerm == "" {
+			continue
+		}
+		if contentTerm == term || strings.HasPrefix(contentTerm, term) || strings.HasPrefix(term, contentTerm) || normalizeKnowledgeBaseSearchTerm(contentTerm) == term || normalizeKnowledgeBaseSearchTerm(contentTerm) == normalizeKnowledgeBaseSearchTerm(term) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeKnowledgeBaseSearchText(text string) string {
+	var builder strings.Builder
+	for _, r := range strings.ToLower(text) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			builder.WriteRune(r)
+		} else {
+			builder.WriteRune(' ')
+		}
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 // DefaultProviderRouter resolves a provider using environment-backed BYO API key settings.

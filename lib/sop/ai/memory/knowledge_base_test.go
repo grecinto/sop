@@ -230,6 +230,25 @@ func TestStaticKnowledgeBase(t *testing.T) {
 	}
 }
 
+func TestSearchHitEvidence_UsesPathHintQueryOverlap(t *testing.T) {
+	hit := &ai.Hit[string]{Payload: "apple pie recipe"}
+	lexical, pathMatches := searchHitEvidence(hit, "fruit", []string{"Fruit"})
+	if lexical != 0 {
+		t.Fatalf("expected no lexical overlap for payload/query mismatch, got %d", lexical)
+	}
+	if pathMatches != 1 {
+		t.Fatalf("expected one path-match point from query/category overlap, got %d", pathMatches)
+	}
+}
+
+func TestBoostSearchHitScore_UsesLexicalAndPathEvidence(t *testing.T) {
+	hit := ai.Hit[string]{Score: 0.9, Payload: "apple pie recipe"}
+	boosted := boostSearchHitScore(hit, "fruit", []string{"Fruit"})
+	if boosted.Score >= 0.9 {
+		t.Fatalf("expected evidence boost to reduce the score, got %.3f", boosted.Score)
+	}
+}
+
 func TestNormalize_NormalizesVectorizationText(t *testing.T) {
 	got := normalize("  A & B / C  ")
 	if got != "a and b c" {
@@ -435,6 +454,51 @@ func TestKnowledgeBase_Search_MergesHitsAcrossMultipleCategoryPaths(t *testing.T
 	}
 }
 
+func TestKnowledgeBase_SearchBoostsHitsWithLexicalAndPathEvidence(t *testing.T) {
+	ctx := context.Background()
+
+	categories := inmemory.NewBtree[sop.UUID, *Category](true)
+	vectors := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+
+	memStore := NewStore[string]("test_kb_evidence_boost", nil, categories.Btree, inmemory.NewBtree[string, sop.UUID](false).Btree, inmemory.NewBtree[DistanceKey, byte](false).Btree, vectors.Btree, items.Btree, inmemory.NewBtree[sop.UUID, Document](false).Btree)
+	ds := memStore.(*store[string])
+	ds.SetTextIndex(&MockTextIndex{})
+
+	kb := KnowledgeBase[string]{
+		Store:   ds,
+		Manager: NewMemoryManager[string](ds, &MockLLM{}, &MockEmbedder{}),
+	}
+
+	cat := &Category{ID: sop.NewUUID(), Name: "Fruit", CenterVector: []float32{0.0, 0.0, 0.0}}
+	if _, err := ds.categories.Add(ctx, cat.ID, cat); err != nil {
+		t.Fatalf("add category failed: %v", err)
+	}
+
+	itemA := Item[string]{ID: sop.NewUUID(), CategoryID: cat.ID, Data: "banana bread recipe", Summaries: []string{"banana"}}
+	itemB := Item[string]{ID: sop.NewUUID(), CategoryID: cat.ID, Data: "apple pie recipe", Summaries: []string{"apple"}}
+	if err := ds.UpsertByCategoryID(ctx, cat.ID, cat.CenterVector, itemA, [][]float32{{0.1, 0.0, 0.0}}, nil); err != nil {
+		t.Fatalf("upsert item A failed: %v", err)
+	}
+	if err := ds.UpsertByCategoryID(ctx, cat.ID, cat.CenterVector, itemB, [][]float32{{0.1, 0.0, 0.0}}, nil); err != nil {
+		t.Fatalf("upsert item B failed: %v", err)
+	}
+
+	batch, err := kb.Search(ctx, []SearchRequest[string]{{Text: "apple", CategoryPath: cat.Name, Vector: []float32{0.0, 0.0, 0.0}, Limit: 5}})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(batch) != 1 || len(batch[0]) != 2 {
+		t.Fatalf("expected both hits, got %#v", batch)
+	}
+	if batch[0][0].Payload != "apple pie recipe" {
+		t.Fatalf("expected the evidence-matching item to rank first, got %#v", batch[0])
+	}
+	if batch[0][0].Score <= batch[0][1].Score {
+		t.Fatalf("expected the evidence-matching item to receive a score boost, got scores %#v", []float32{batch[0][0].Score, batch[0][1].Score})
+	}
+}
+
 func TestKnowledgeBase_Search_RanksLexicalOverlapAheadOfWeakerVectorMatch(t *testing.T) {
 	ctx := context.Background()
 
@@ -475,6 +539,224 @@ func TestKnowledgeBase_Search_RanksLexicalOverlapAheadOfWeakerVectorMatch(t *tes
 	}
 	if batch[0][0].Payload != "apple pie recipe" {
 		t.Fatalf("expected lexical overlap to boost the apple item, got %#v", batch[0])
+	}
+}
+
+func TestKnowledgeBase_SearchRanksSpecificCategoryPathAheadOfBroaderParentCategory(t *testing.T) {
+	ctx := context.Background()
+
+	categories := inmemory.NewBtree[sop.UUID, *Category](true)
+	vectors := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+
+	memStore := NewStore[string]("test_kb_specific_category_ranking", nil, categories.Btree, inmemory.NewBtree[string, sop.UUID](false).Btree, inmemory.NewBtree[DistanceKey, byte](false).Btree, vectors.Btree, items.Btree, inmemory.NewBtree[sop.UUID, Document](false).Btree)
+	ds := memStore.(*store[string])
+	ds.SetTextIndex(&MockTextIndex{})
+
+	kb := KnowledgeBase[string]{
+		Store:   ds,
+		Manager: NewMemoryManager[string](ds, &MockLLM{}, &MockEmbedder{}),
+	}
+
+	child := &Category{ID: sop.NewUUID(), Name: "Fruit", CenterVector: []float32{0.0, 0.0, 0.0}}
+	parent := &Category{ID: sop.NewUUID(), Name: "Food", CenterVector: []float32{0.2, 0.2, 0.2}}
+	for _, cat := range []*Category{child, parent} {
+		if _, err := ds.categories.Add(ctx, cat.ID, cat); err != nil {
+			t.Fatalf("add category failed: %v", err)
+		}
+		if _, err := ds.categoriesByPath.Add(ctx, cat.Name, cat.ID); err != nil {
+			t.Fatalf("add category path failed: %v", err)
+		}
+	}
+
+	childItem := Item[string]{ID: sop.NewUUID(), CategoryID: child.ID, Data: "apple pie recipe", Summaries: []string{"apple"}}
+	parentItem := Item[string]{ID: sop.NewUUID(), CategoryID: parent.ID, Data: "apple crisp recipe", Summaries: []string{"apple"}}
+	if err := ds.UpsertByCategoryID(ctx, child.ID, child.CenterVector, childItem, [][]float32{{0.2, 0.2, 0.2}}, nil); err != nil {
+		t.Fatalf("upsert child item failed: %v", err)
+	}
+	if err := ds.UpsertByCategoryID(ctx, parent.ID, parent.CenterVector, parentItem, [][]float32{{0.0, 0.0, 0.0}}, nil); err != nil {
+		t.Fatalf("upsert parent item failed: %v", err)
+	}
+
+	batch, err := kb.Search(ctx, []SearchRequest[string]{{Text: "apple", CategoryPaths: []string{child.Name, parent.Name}, Vector: []float32{0.0, 0.0, 0.0}, Limit: 5}})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(batch) != 1 || len(batch[0]) != 2 {
+		t.Fatalf("expected both hits, got %#v", batch)
+	}
+	if batch[0][0].Payload != "apple pie recipe" {
+		t.Fatalf("expected the specific child category to rank first, got %#v", batch[0])
+	}
+}
+
+func TestKnowledgeBase_SearchUsesTextFallbackWithinResolvedCategory(t *testing.T) {
+	ctx := context.Background()
+
+	categories := inmemory.NewBtree[sop.UUID, *Category](true)
+	vectors := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+
+	memStore := NewStore[string]("test_kb_text_fallback", nil, categories.Btree, inmemory.NewBtree[string, sop.UUID](false).Btree, inmemory.NewBtree[DistanceKey, byte](false).Btree, vectors.Btree, items.Btree, inmemory.NewBtree[sop.UUID, Document](false).Btree)
+	ds := memStore.(*store[string])
+	ds.SetTextIndex(&MockTextIndex{})
+
+	kb := KnowledgeBase[string]{
+		Store:   ds,
+		Manager: NewMemoryManager[string](ds, &MockLLM{}, &MockEmbedder{}),
+	}
+
+	cat := &Category{ID: sop.NewUUID(), Name: "Fruit", CenterVector: []float32{0.0, 0.0, 0.0}}
+	if _, err := ds.categories.Add(ctx, cat.ID, cat); err != nil {
+		t.Fatalf("add category failed: %v", err)
+	}
+
+	item := Item[string]{ID: sop.NewUUID(), CategoryID: cat.ID, Data: "apple pie recipe"}
+	if err := ds.UpsertByCategoryID(ctx, cat.ID, cat.CenterVector, item, nil, nil); err != nil {
+		t.Fatalf("upsert item failed: %v", err)
+	}
+
+	batch, err := kb.Search(ctx, []SearchRequest[string]{{Text: "apple", CategoryPath: "Fruit", Limit: 10}})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(batch) != 1 || len(batch[0]) != 1 {
+		t.Fatalf("expected a text fallback hit in the resolved category, got %#v", batch)
+	}
+	if batch[0][0].Payload != "apple pie recipe" {
+		t.Fatalf("expected the apple item, got %#v", batch[0][0])
+	}
+}
+
+func TestKnowledgeBase_SearchFallsBackToParentCategoriesWhenLeafHasNoHits(t *testing.T) {
+	ctx := context.Background()
+
+	categories := inmemory.NewBtree[sop.UUID, *Category](true)
+	vectors := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+
+	memStore := NewStore[string]("test_kb_parent_fallback", nil, categories.Btree, inmemory.NewBtree[string, sop.UUID](false).Btree, inmemory.NewBtree[DistanceKey, byte](false).Btree, vectors.Btree, items.Btree, inmemory.NewBtree[sop.UUID, Document](false).Btree)
+	ds := memStore.(*store[string])
+	ds.SetTextIndex(&MockTextIndex{})
+
+	kb := KnowledgeBase[string]{
+		Store:   ds,
+		Manager: NewMemoryManager[string](ds, &MockLLM{}, &MockEmbedder{}),
+	}
+
+	parent := &Category{ID: sop.NewUUID(), Name: "Food", CenterVector: []float32{0.1, 0.1, 0.1}}
+	child := &Category{ID: sop.NewUUID(), Name: "Fruit", CenterVector: []float32{0.0, 0.0, 0.0}, ParentIDs: []CategoryParent{{ParentID: parent.ID}}}
+	if _, err := ds.categories.Add(ctx, parent.ID, parent); err != nil {
+		t.Fatalf("add parent category failed: %v", err)
+	}
+	if _, err := ds.categories.Add(ctx, child.ID, child); err != nil {
+		t.Fatalf("add child category failed: %v", err)
+	}
+	if _, err := ds.categoriesByPath.Add(ctx, child.Name, child.ID); err != nil {
+		t.Fatalf("add child path failed: %v", err)
+	}
+
+	parentItem := Item[string]{ID: sop.NewUUID(), CategoryID: parent.ID, Data: "apple pie recipe"}
+	if err := ds.UpsertByCategoryID(ctx, parent.ID, parent.CenterVector, parentItem, nil, nil); err != nil {
+		t.Fatalf("upsert parent item failed: %v", err)
+	}
+
+	batch, err := kb.Search(ctx, []SearchRequest[string]{{Text: "apple", CategoryPath: "Fruit", Limit: 10}})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(batch) != 1 || len(batch[0]) != 1 {
+		t.Fatalf("expected a fallback hit from the parent category, got %#v", batch)
+	}
+	if batch[0][0].Payload != "apple pie recipe" {
+		t.Fatalf("expected the parent-category item, got %#v", batch[0][0])
+	}
+}
+
+func TestKnowledgeBase_SearchBroadensToClosestCategoryWhenRequestedCategoryMisses(t *testing.T) {
+	ctx := context.Background()
+
+	categories := inmemory.NewBtree[sop.UUID, *Category](true)
+	vectors := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+
+	memStore := NewStore[string]("test_kb_semantic_broaden", nil, categories.Btree, inmemory.NewBtree[string, sop.UUID](false).Btree, inmemory.NewBtree[DistanceKey, byte](false).Btree, vectors.Btree, items.Btree, inmemory.NewBtree[sop.UUID, Document](false).Btree)
+	ds := memStore.(*store[string])
+	ds.SetTextIndex(&MockTextIndex{})
+
+	kb := KnowledgeBase[string]{
+		Store:   ds,
+		Manager: NewMemoryManager[string](ds, &MockLLM{}, &MockEmbedder{}),
+	}
+
+	requested := &Category{ID: sop.NewUUID(), Name: "Fruit", CenterVector: []float32{0.0, 0.0, 0.0}}
+	fallback := &Category{ID: sop.NewUUID(), Name: "Food", CenterVector: []float32{0.2, 0.2, 0.2}}
+	if _, err := ds.categories.Add(ctx, requested.ID, requested); err != nil {
+		t.Fatalf("add requested category failed: %v", err)
+	}
+	if _, err := ds.categories.Add(ctx, fallback.ID, fallback); err != nil {
+		t.Fatalf("add fallback category failed: %v", err)
+	}
+	if _, err := ds.categoriesByPath.Add(ctx, requested.Name, requested.ID); err != nil {
+		t.Fatalf("add requested path failed: %v", err)
+	}
+
+	item := Item[string]{ID: sop.NewUUID(), CategoryID: fallback.ID, Data: "apple pie recipe"}
+	if err := ds.UpsertByCategoryID(ctx, fallback.ID, fallback.CenterVector, item, nil, nil); err != nil {
+		t.Fatalf("upsert item failed: %v", err)
+	}
+
+	batch, err := kb.Search(ctx, []SearchRequest[string]{{Text: "apple", CategoryPath: requested.Name, Vector: []float32{0.2, 0.2, 0.2}, Limit: 10}})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(batch) != 1 || len(batch[0]) != 1 {
+		t.Fatalf("expected a broadened semantic fallback hit, got %#v", batch)
+	}
+	if batch[0][0].Payload != "apple pie recipe" {
+		t.Fatalf("expected the fallback category item, got %#v", batch[0][0])
+	}
+}
+
+func TestKnowledgeBase_SearchFallsBackAcrossAncestorChain(t *testing.T) {
+	ctx := context.Background()
+
+	categories := inmemory.NewBtree[sop.UUID, *Category](true)
+	vectors := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[string]](true)
+
+	memStore := NewStore[string]("test_kb_ancestor_fallback", nil, categories.Btree, inmemory.NewBtree[string, sop.UUID](false).Btree, inmemory.NewBtree[DistanceKey, byte](false).Btree, vectors.Btree, items.Btree, inmemory.NewBtree[sop.UUID, Document](false).Btree)
+	ds := memStore.(*store[string])
+	ds.SetTextIndex(&MockTextIndex{})
+
+	kb := KnowledgeBase[string]{
+		Store:   ds,
+		Manager: NewMemoryManager[string](ds, &MockLLM{}, &MockEmbedder{}),
+	}
+
+	grandparent := &Category{ID: sop.NewUUID(), Name: "Food", CenterVector: []float32{0.3, 0.3, 0.3}}
+	parent := &Category{ID: sop.NewUUID(), Name: "Dessert", CenterVector: []float32{0.2, 0.2, 0.2}, ParentIDs: []CategoryParent{{ParentID: grandparent.ID}}}
+	child := &Category{ID: sop.NewUUID(), Name: "Fruit", CenterVector: []float32{0.1, 0.1, 0.1}, ParentIDs: []CategoryParent{{ParentID: parent.ID}}}
+	for _, cat := range []*Category{grandparent, parent, child} {
+		if _, err := ds.categories.Add(ctx, cat.ID, cat); err != nil {
+			t.Fatalf("add category failed: %v", err)
+		}
+	}
+
+	item := Item[string]{ID: sop.NewUUID(), CategoryID: grandparent.ID, Data: "apple pie recipe"}
+	if err := ds.UpsertByCategoryID(ctx, grandparent.ID, grandparent.CenterVector, item, nil, nil); err != nil {
+		t.Fatalf("upsert grandparent item failed: %v", err)
+	}
+
+	batch, err := kb.Search(ctx, []SearchRequest[string]{{Text: "apple", CategoryPath: child.Name, Limit: 10}})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(batch) != 1 || len(batch[0]) != 1 {
+		t.Fatalf("expected ancestor-chain fallback hit, got %#v", batch)
+	}
+	if batch[0][0].Payload != "apple pie recipe" {
+		t.Fatalf("expected grandparent-category item, got %#v", batch[0][0])
 	}
 }
 
