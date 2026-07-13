@@ -15,18 +15,36 @@ import (
 // V1 Space CRUD & Omni Batched API Parameters
 // ============================================================================
 
+type IndexPopulationMode string
+
+const (
+	IndexPopulationModeFull      IndexPopulationMode = "full"
+	IndexPopulationModeReference IndexPopulationMode = "reference"
+)
+
+func normalizeIndexPopulationMode(mode IndexPopulationMode) IndexPopulationMode {
+	switch strings.ToLower(string(mode)) {
+	case string(IndexPopulationModeReference), "path_only", "path-only", "pathonly", "reference_mode":
+		return IndexPopulationModeReference
+	default:
+		return IndexPopulationModeFull
+	}
+}
+
 type UpsertCategoryParam struct {
-	ParentPaths             []string   `json:"parent_paths"`                           // Declarative DAG routing (e.g. ["Root/Engineering", "Root/DevOps"])
-	ParentIDs               []sop.UUID `json:"parent_ids"`                             // Explicit DAG routing fallback
-	Category                *Category  `json:"category"`                               // Pointer to the Category to upsert
-	DontAddToCategoryByPath *bool      `json:"dont_add_to_category_by_path,omitempty"` // Optional; nil/false preserves the default path-index behavior, true opts out and removes the path entry
+	ParentPaths             []string            `json:"parent_paths"`                           // Declarative DAG routing (e.g. ["Root/Engineering", "Root/DevOps"])
+	ParentIDs               []sop.UUID          `json:"parent_ids"`                             // Explicit DAG routing fallback
+	Category                *Category           `json:"category"`                               // Pointer to the Category to upsert
+	DontAddToCategoryByPath *bool               `json:"dont_add_to_category_by_path,omitempty"` // Optional; nil/false preserves the default path-index behavior, true opts out and removes the path entry
+	IndexPopulationMode     IndexPopulationMode `json:"index_population_mode,omitempty"`        // Optional; full populates the category tree and path index, reference only populates the path index
 }
 
 type UpsertItemParam[T any] struct {
-	CategoryPath string      `json:"category_path"` // e.g. "Root/Engineering/Architecture"
-	CategoryID   sop.UUID    `json:"category_id"`   // Direct ID fallback if path is empty
-	Item         *Item[T]    `json:"item"`          // Pointer to avoid heavy allocation during batch
-	Vectors      [][]float32 `json:"vectors"`       // Optional explicit embeddings
+	CategoryPath        string              `json:"category_path"` // e.g. "Root/Engineering/Architecture"
+	CategoryID          sop.UUID            `json:"category_id"`   // Direct ID fallback if path is empty
+	Item                *Item[T]            `json:"item"`          // Pointer to avoid heavy allocation during batch
+	Vectors             [][]float32         `json:"vectors"`       // Optional explicit embeddings
+	IndexPopulationMode IndexPopulationMode `json:"index_population_mode,omitempty"`
 }
 
 // PathSearchParam specifies a hierarchical category path search.
@@ -117,28 +135,58 @@ func (kb *KnowledgeBase[T]) UpsertCategories(ctx context.Context, params []Upser
 			p.Category.ID = sop.NewUUID()
 		}
 
-		found, _ := catBtree.Find(ctx, p.Category.ID, false)
-		isNewCategory := !found
-		if found {
-			_, err = catBtree.Update(ctx, p.Category.ID, p.Category)
-			if err != nil {
-				return err
+		mode := normalizeIndexPopulationMode(p.IndexPopulationMode)
+		if mode == IndexPopulationModeReference {
+			if found, _ := catBtree.Find(ctx, p.Category.ID, false); found {
+				if cat, err := catBtree.GetCurrentValue(ctx); err == nil && cat != nil {
+					for _, parentRel := range cat.ParentIDs {
+						if parentRel.ParentID.IsNil() {
+							continue
+						}
+						if ok, _ := catBtree.Find(ctx, parentRel.ParentID, false); ok {
+							parentCat, err := catBtree.GetCurrentValue(ctx)
+							if err != nil {
+								continue
+							}
+							filtered := parentCat.ChildrenIDs[:0]
+							for _, childID := range parentCat.ChildrenIDs {
+								if childID != p.Category.ID {
+									filtered = append(filtered, childID)
+								}
+							}
+							parentCat.ChildrenIDs = filtered
+							_, _ = catBtree.UpdateCurrentItem(ctx, parentRel.ParentID, parentCat)
+						}
+					}
+				}
+				if _, err := catBtree.Remove(ctx, p.Category.ID); err != nil {
+					return err
+				}
 			}
 		} else {
-			_, err = catBtree.Add(ctx, p.Category.ID, p.Category)
-			if err != nil {
-				return err
+			found, _ := catBtree.Find(ctx, p.Category.ID, false)
+			isNewCategory := !found
+			if found {
+				_, err = catBtree.Update(ctx, p.Category.ID, p.Category)
+				if err != nil {
+					return err
+				}
+			} else {
+				_, err = catBtree.Add(ctx, p.Category.ID, p.Category)
+				if err != nil {
+					return err
+				}
 			}
-		}
 
-		// Queue parent updates for new categories with parents
-		if isNewCategory {
-			for _, parentRel := range finalParents {
-				if !parentRel.ParentID.IsNil() {
-					parentUpdates = append(parentUpdates, parentUpdate{
-						parentID: parentRel.ParentID,
-						childID:  p.Category.ID,
-					})
+			// Queue parent updates for new categories with parents
+			if isNewCategory {
+				for _, parentRel := range finalParents {
+					if !parentRel.ParentID.IsNil() {
+						parentUpdates = append(parentUpdates, parentUpdate{
+							parentID: parentRel.ParentID,
+							childID:  p.Category.ID,
+						})
+					}
 				}
 			}
 		}
@@ -379,6 +427,10 @@ func (kb *KnowledgeBase[T]) UpsertItems(ctx context.Context, params []UpsertItem
 		}
 
 		if catID.IsNil() {
+			continue
+		}
+		mode := normalizeIndexPopulationMode(p.IndexPopulationMode)
+		if mode == IndexPopulationModeReference {
 			continue
 		}
 		if p.Item.ID.IsNil() {

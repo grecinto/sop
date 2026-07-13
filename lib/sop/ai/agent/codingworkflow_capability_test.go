@@ -236,6 +236,36 @@ func TestBuildCodingMemoryLTMThoughtsAttachesCanonicalDocumentReference(t *testi
 	}
 }
 
+func TestBuildCodingMemoryLTMThoughtsUsesReferenceModeForPathAndCodeStructureIndices(t *testing.T) {
+	mem := cw.CodingMemory{Description: "fix parser", ActiveFile: "parser.go", RepositoryHint: "sop-cloud"}
+	payload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
+	thoughts := buildCodingMemoryLTMThoughts(mem, payload["document_id"].(string), entries)
+	if len(thoughts) != 3 {
+		t.Fatalf("expected three thoughts, got %d", len(thoughts))
+	}
+	wantModes := map[string]memory.IndexPopulationMode{
+		"path":           memory.IndexPopulationModeReference,
+		"code_structure": memory.IndexPopulationModeReference,
+		"semantic":       memory.IndexPopulationModeFull,
+	}
+	for _, thought := range thoughts {
+		kind := ""
+		if thought.Data != nil {
+			if raw, ok := thought.Data["index_kind"].(string); ok {
+				kind = raw
+			}
+		}
+		if kind == "" {
+			continue
+		}
+		if got, ok := wantModes[kind]; !ok {
+			t.Fatalf("unexpected index kind %q", kind)
+		} else if thought.IndexPopulationMode != got {
+			t.Fatalf("thought %q expected mode %q, got %q", kind, got, thought.IndexPopulationMode)
+		}
+	}
+}
+
 func TestShouldVectorizeLTMIndexEntryOnlyForSemanticKind(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -716,10 +716,15 @@ func buildCodingMemoryLTMThoughts(mem cw.CodingMemory, documentID string, entrie
 		if mem.TestStatus != "" {
 			text = fmt.Sprintf("%s\nTests: %s", text, mem.TestStatus)
 		}
+		mode := memory.IndexPopulationModeFull
+		if strings.EqualFold(strings.TrimSpace(entry.Kind), "path") || strings.EqualFold(strings.TrimSpace(entry.Kind), "code_structure") {
+			mode = memory.IndexPopulationModeReference
+		}
 		thoughts = append(thoughts, memory.Thought[map[string]any]{
-			Summaries:    []string{text},
-			CategoryPath: entry.CategoryPath,
-			DocID:        memory.DocIDs{documentID},
+			Summaries:           []string{text},
+			CategoryPath:        entry.CategoryPath,
+			DocID:               memory.DocIDs{documentID},
+			IndexPopulationMode: mode,
 			Data: map[string]any{
 				"document_id":          documentID,
 				"index_kind":           entry.Kind,
@@ -1762,11 +1767,14 @@ func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
 		if len(categoryIDs) == 0 {
 			return nil
 		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		// VectorizeCategories manage its own transaction, thus, it needs to be invoked after commit call above.
 		if err := a.systemDB.VectorizeCategories(ctx, a.Memory.LongTermMemoryName(), a.brain, embedder, 10, categoryIDs); err != nil {
 			return err
 		}
-
-		return tx.Commit(ctx)
+		return nil
 	})
 }
 

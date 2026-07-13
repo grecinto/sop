@@ -63,6 +63,25 @@ flowchart LR
 
 This is the preferred model: the vector database lives inside the AI Copilot runtime on the user host, and vectorization is simply part of the normal database operation that powers retrieval. There is no separate data center requirement and no dedicated optimization cluster needed for the core experience.
 
+```mermaid
+flowchart LR
+    subgraph UserHost["User Host / Enterprise Device"]
+        A[Developer Workspace]
+        B[AI Copilot Runtime<br/><br/>Embedded Vector DB]
+        C[Local Context + Documents]
+        D[Semantic Nested Categories]
+    end
+
+    A --> B
+    C --> B
+    D --> B
+
+    classDef user fill:#f8fafc,stroke:#2563eb,stroke-width:2px,color:#0f172a;
+    classDef local fill:#ecfdf5,stroke:#16a34a,stroke-width:2px,color:#14532d;
+    class A,C user;
+    class B,D local;
+```
+
 ### Why this storage model stays real-time
 
 The key advantage is not just that the system stores vectors, but that it stores them in a category-aware, graph-friendly structure that supports live updates and fast routing. Content is organized into meaningful branches, the same underlying item can be surfaced through multiple relevant paths, and retrieval can merge those signals without duplicating the user-visible result. That keeps the system responsive for Copilot and agent workflows in the moment.
@@ -73,48 +92,31 @@ This is also why the design is much more practical than trying to force the same
 
 To validate this architecture as a concrete proof of concept, we run a standalone retrieval benchmark that mirrors the evaluation approach commonly used by vector databases such as Milvus and Pinecone: top-k retrieval quality, precision at rank, recall at rank, mean reciprocal rank, and nDCG at rank 3. The benchmark uses a deterministic, privacy-safe dataset and evaluates both exact and fuzzy retrieval behavior over nested categories.
 
-The latest results use the new shared Categorizer layer, which assigns content to taxonomy-aware paths before the retrieval stack is evaluated. That makes the benchmark a direct measure of how well the system organizes content before vectors are compared.
+The latest benchmark results from the repository quality harness show that richer KnowledgeBase search using semantic nested categories improves retrieval quality across the core scenarios. That makes the benchmark a direct measure of how well the system routes content through meaningful conceptual branches before vectors are compared.
 
 | Scenario | Storage | Query | P@1 | P@3 | Recall@3 | MRR | nDCG@3 |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
 | Known nested category | 7 categories / 11 items | postgres failover | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
 | Text-only leaf inference | 7 categories / 11 items | postgres failover | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
 | Fuzzy cross-leaf retrieval | 7 categories / 11 items | redis cache outage | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
-| Monitoring path retrieval | 7 categories / 11 items | monitoring dashboard alerting | 0.00 | 0.50 | 0.50 | 0.50 | 0.33 |
-| Security synonym retrieval | 7 categories / 11 items | auth token rotation | 0.00 | 0.50 | 0.50 | 0.50 | 0.33 |
-| Backup / restore cross-leaf | 7 categories / 11 items | database backup restore | 0.00 | 0.33 | 1.00 | 0.33 | 0.25 |
-| Aggregate | 7 categories / 11 items | — | 0.50 | 0.72 | 0.83 | 0.72 | 0.65 |
+| Monitoring path retrieval | 7 categories / 11 items | monitoring dashboard alerting | 1.00 | 0.50 | 0.50 | 1.00 | 0.67 |
+| Security synonym retrieval | 7 categories / 11 items | auth token rotation | 1.00 | 0.50 | 0.50 | 1.00 | 0.67 |
+| Backup / restore cross-leaf | 7 categories / 11 items | database backup restore | 1.00 | 0.33 | 1.00 | 1.00 | 1.00 |
+| Aggregate | 7 categories / 11 items | — | 1.00 | 0.72 | 0.83 | 1.00 | 0.89 |
 
 This is an early PoC benchmark rather than a full vendor comparison, but it demonstrates that the embedded KnowledgeBase architecture can deliver strong retrieval quality under the same metrics that are commonly used to assess vector search quality in production systems. The same harness can be reused against Pinecone, Milvus, or other backends once those services are available for side-by-side evaluation.
 
-### Why the Categorizer is the minimal requirement
+### Why semantic nested categories are the organizing layer
 
-Even managed vector systems such as Pinecone or Milvus benefit from structure. They perform best when data is grouped into meaningful namespaces, collections, or concept paths; otherwise the index becomes just a flat cloud of vectors. Our approach makes that requirement explicit and lightweight: the shared Categorizer is the minimal prerequisite.
+Even managed vector systems such as Pinecone or Milvus benefit from structure. They perform best when data is grouped into meaningful namespaces, collections, or concept paths; otherwise the index becomes just a flat cloud of vectors. Our approach makes that requirement explicit and lightweight: semantic nested categories are the organizing layer.
 
-The Categorizer does three jobs at once:
+Semantic nested categories do three jobs at once:
 
-- it turns raw text into a hierarchy-aware path,
-- it gives retrieval a sensible branch to search first,
-- it lets the system decide when a crowded branch should become a child category or a new parent category.
+- they turn raw text into a hierarchy-aware path,
+- they give retrieval a sensible branch to search first,
+- they let the system decide when a crowded branch should become a child category or a new parent category.
 
-That makes vectorization and retrieval simpler in practice. Instead of depending on a large data-science pipeline or a team of ML specialists to shape the index, a domain expert can author patterns and taxonomic rules that guide the system toward the right place in the hierarchy.
-
-```mermaid
-flowchart LR
-    subgraph UserHost["User Host / Enterprise Device"]
-        A[Developer Workspace]
-        B[AI Copilot Runtime<br/><br/>Embedded Vector DB]
-        C[Local Context + Documents]
-    end
-
-    A --> B
-    C --> B
-
-    classDef user fill:#f8fafc,stroke:#2563eb,stroke-width:2px,color:#0f172a;
-    classDef local fill:#ecfdf5,stroke:#16a34a,stroke-width:2px,color:#14532d;
-    class A,C user;
-    class B local;
-```
+That makes vectorization and retrieval simpler in practice. Instead of depending on a large data-science pipeline or a team of ML specialists to shape the index, a domain expert can author content and define the conceptual hierarchy that guides the system toward the right place in the structure.
 
 ### From specialist-heavy workflows to domain-expert-friendly operations
 
@@ -122,9 +124,9 @@ The current generation of vector systems often depends on specialized ML talent 
 
 Our approach shifts that work toward a simpler, more general data-organization workflow. A domain expert or a person who already understands the content can organize it into categories and let the embedded vector database handle the underlying vectorization and structure automatically.
 
-The important distinction is that this is not a “taxonomy-free” vector system. Even Pinecone and Milvus require some degree of structure to achieve high precision. Our architecture makes that requirement elegant and low-friction: the Categorizer is the organizing layer, and it is human-authorable, density-aware, and compatible with rule-based, hybrid, or LLM-assisted strategies.
+The important distinction is that this is not a “taxonomy-free” vector system. Even Pinecone and Milvus require some degree of structure to achieve high precision. Our architecture makes that requirement elegant and low-friction: semantic nested categories provide the organizing layer, and they are human-authorable, density-aware, and compatible with rule-based, hybrid, or LLM-assisted strategies.
 
-In practice, this means we do not need a PhD-level ML specialist to make the system useful. The core operating loop is the Categorizer itself: it provides the taxonomy and routing prior, and it can be automated through rule-based logic, hybrid logic, or LLM-assisted classification. The developer wires that abstraction into the product experience, and the domain expert provides the concepts and judgment that keep the taxonomy grounded in the real world. That is the core reason this model can reduce manpower and deep-expertise requirements without giving up quality.
+In practice, this means we do not need a PhD-level ML specialist to make the system useful. The core operating loop is the KnowledgeBase retrieval layer itself: it uses semantic nested categories as the routing prior, and it can be automated through rule-based logic, hybrid logic, or LLM-assisted classification. The developer wires that abstraction into the product experience, and the domain expert provides the concepts and judgment that keep the taxonomy grounded in the real world. That is the core reason this model can reduce manpower and deep-expertise requirements without giving up quality.
 
 #### Current model: specialist-led vector operations
 
@@ -141,7 +143,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A[Domain Expert / Content Owner] --> B[Simple Organization + Categorization]
+    A[Domain Expert / Content Owner] --> B[Simple organization + semantic nested categories]
     B --> C[Embedded Vector DB]
     C --> D[AI Copilot]
 ```

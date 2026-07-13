@@ -209,6 +209,66 @@ func TestUpsertCategoriesRemovesExistingCategoryByPathWhenOptedOut(t *testing.T)
 	}
 }
 
+func TestUpsertCategoriesReferenceModeKeepsPathIndexWithoutMaterializingCategory(t *testing.T) {
+	ctx := context.Background()
+	s := prepareTestStore()
+	kb := &KnowledgeBase[string]{Store: s}
+
+	catID := sop.NewUUID()
+	if err := kb.UpsertCategories(ctx, []UpsertCategoryParam{{
+		Category:            &Category{ID: catID, Name: "PathOnlyMode", Path: "PathOnlyMode"},
+		IndexPopulationMode: IndexPopulationModeReference,
+	}}); err != nil {
+		t.Fatalf("UpsertCategories failed: %v", err)
+	}
+
+	catsByPath, err := s.CategoriesByPath(ctx)
+	if err != nil {
+		t.Fatalf("CategoriesByPath failed: %v", err)
+	}
+	if found, _ := catsByPath.Find(ctx, "PathOnlyMode", false); !found {
+		t.Fatalf("expected category path entry to be created in reference mode")
+	}
+
+	catsTree, err := s.Categories(ctx)
+	if err != nil {
+		t.Fatalf("Categories failed: %v", err)
+	}
+	if found, _ := catsTree.Find(ctx, catID, false); found {
+		t.Fatalf("expected category not to be materialized in the main category tree in reference mode")
+	}
+}
+
+func TestUpsertItemsReferenceModeSkipsItemMaterialization(t *testing.T) {
+	ctx := context.Background()
+	s := prepareTestStore()
+	kb := &KnowledgeBase[string]{Store: s}
+
+	catID := sop.NewUUID()
+	if err := kb.UpsertCategories(ctx, []UpsertCategoryParam{{
+		Category: &Category{ID: catID, Name: "Docs", Path: "Docs"},
+	}}); err != nil {
+		t.Fatalf("UpsertCategories failed: %v", err)
+	}
+
+	item := Item[string]{Data: "hello world"}
+	if err := kb.UpsertItems(ctx, []UpsertItemParam[string]{{
+		CategoryID:          catID,
+		Item:                &item,
+		IndexPopulationMode: IndexPopulationModeReference,
+	}}); err != nil {
+		t.Fatalf("UpsertItems failed: %v", err)
+	}
+
+	itemsTree, err := s.Items(ctx)
+	if err != nil {
+		t.Fatalf("Items failed: %v", err)
+	}
+	if found, _ := itemsTree.Find(ctx, ItemKey{CategoryID: catID, ItemID: item.ID}, false); found {
+		t.Fatalf("expected item not to be materialized in reference mode")
+	}
+}
+
 func TestDeleteCategories_RemovesPathAndDistanceIndexes(t *testing.T) {
 	ctx := context.Background()
 	s := prepareTestStore()

@@ -878,14 +878,15 @@ func (kb *KnowledgeBase[T]) Search(ctx context.Context, requests []SearchRequest
 
 // Thought represents the individual entity of data in a batch categorization execution.
 type Thought[T any] struct {
-	Summaries     []string
-	CategoryPath  string
-	CategoryPaths []string
-	DocID         DocIDs
-	Data          T
-	Vectors       [][]float32
-	Positions     []VectorKey
-	VectorHash    string
+	Summaries           []string
+	CategoryPath        string
+	CategoryPaths       []string
+	DocID               DocIDs
+	Data                T
+	Vectors             [][]float32
+	Positions           []VectorKey
+	VectorHash          string
+	IndexPopulationMode IndexPopulationMode
 }
 
 // IngestThoughts securely categorizes and stores an array of thoughts, optimizing latency
@@ -1082,6 +1083,17 @@ func (kb *KnowledgeBase[T]) IngestThoughts(ctx context.Context, thoughts []Thoug
 		classificationVecs := thoughtClassificationVecs[i]
 
 		for _, catPath := range chosenPaths {
+			mode := normalizeIndexPopulationMode(thought.IndexPopulationMode)
+			if mode == IndexPopulationModeReference {
+				if err := kb.UpsertCategories(ctx, []UpsertCategoryParam{{
+					Category:            &Category{ID: sop.NewUUID(), Name: catPath, Path: catPath},
+					IndexPopulationMode: mode,
+				}}); err != nil {
+					return err
+				}
+				continue
+			}
+
 			cat, exists := catCache[catPath]
 			if !exists {
 				catID, err := kb.Manager.EnsureCategory(ctx, catPath)

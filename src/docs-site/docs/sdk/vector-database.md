@@ -53,7 +53,7 @@ That means the system is not limited by the cost and latency of centroid-based i
 │                                                         │
 │  3. Query returns human-readable paths                  │
 │     - "error-handling/retry-logic"                      │
-│     - O(D log N) performance                            │
+│     - O(log N) per-level performance                    │
 │     - No data center processing                         │
 │                                                         │
 │  ✅ End users organize categories                       │
@@ -72,33 +72,38 @@ Query: "How to handle retries with backoff?"
    [Convert to embedding]
            ↓
 ┌──────────────────────────────────────────────────┐
-│         Category Tree Navigation                 │
+│      Domain-Reference Guided Navigation          │
 └──────────────────────────────────────────────────┘
 
-    Root (Space)
-        │
-        ├─→ error-handling (0.89 similarity) ✓
-        │       │
-        │       ├─→ retry-logic (0.94 similarity) ✓✓
-        │       │       │
-        │       │       ├─→ exponential-backoff (0.96) ⭐
-        │       │       ├─→ circuit-breaker (0.78)
-        │       │       └─→ timeout-strategies (0.71)
-        │       │
-        │       └─→ error-propagation (0.65)
-        │
-        ├─→ concurrency-patterns (0.54)
-        └─→ testing-practices (0.31)
+    Domain Reference Vector (KB anchor)
+                │
+                └─→ Find nearest root-level category
+                      by comparing the query to category center vectors
+                      using the domain reference as the initial anchor
+
+                          error-handling
+                              │
+                              └─→ Find nearest child category
+                                  using the parent category center as anchor
+
+                                  retry-logic
+                                      │
+                                      └─→ Find nearest leaf category
+                                          using the child category center as anchor
+
+                                          exponential-backoff
 
 Triangulation Process:
-  1. Start at root, score all top-level categories
-  2. Select best match: error-handling (0.89)
-  3. Traverse deeper: retry-logic (0.94)
-  4. Score leaf nodes: exponential-backoff (0.96) ⭐
-  5. Check boundary categories for cross-cutting
-  6. Return: error-handling/retry-logic/exponential-backoff
+  1. Start from the Domain Reference vector for the Knowledge Base
+  2. Use that anchor to find the nearest root category
+  3. Reuse the selected category center as the next anchor
+  4. Repeat per level to find the nearest child category
+  5. Score the local neighborhood around each matched level
+  6. Return the best path and nearby candidates
 
-Result: Found in O(D log N) time, no K-Means needed!
+Result: Each level is resolved with a fast B-Tree lookup over the
+        category-distance index, giving O(log N) lookup per level
+        with no K-Means rebuilds.
 </pre>
 </div>
 
@@ -113,17 +118,17 @@ SOP’s retrieval design is built around independent nodes that can collaborate 
 - **Real-time operation** for copilots and agent systems that need fast, local access to knowledge
 - **Better resilience** for enterprise deployments that need continuity even when a node is unavailable
 
-This is a major advantage over traditional vector store designs that rely on a central index service for scale and availability.
+This is a major advantage over traditional vector store designs that rely on a central index service for scale and availability. Because the system can distribute storage, routing, and retrieval across many independent nodes, it can scale to very large volumes of data with capacity growing primarily with hardware and node count rather than with a single centralized index.
 
 ### Nested Semantic Categories
 
-Embeddings are organized into human-readable nested categories (e.g., error-handling → retry-logic → exponential-backoff). Domain experts curate the organization through category hierarchies instead of relying on automated clustering algorithms.
+Embeddings are organized into human-readable nested categories (e.g., error-handling → retry-logic → exponential-backoff). The hierarchy can be curated by domain experts, optionally assisted by AI or LLM guidance, and it can also incorporate automated clustering signals when appropriate. The key shift is that category organization is now human-readable, editable, and flexible rather than being locked to a single clustering approach, and there is no heavy optimization process such as K-Means centroid re-optimization, typically done nightly on data center clusters. Vectorization is now equivalent to a typical database update operation.
 
 ### Relativity-based Triangulation
 
-The triangulation algorithm performs fuzzy vector searches in O(D log N) time by navigating the semantic category tree. This eliminates K-Means centroids and overnight batch processing, using category relationships and embedding proximity for instant search.
+The triangulation algorithm performs fuzzy vector searches in O(log N) time per navigation step by navigating the semantic category tree from a domain-reference anchor. It does not start from a flat centroid scan. Instead, it first uses the Knowledge Base's Domain Reference vector to locate the nearest root category, then uses each selected category's center vector as the anchor for the next level.
 
-The result is a real-time vector database architecture that does not depend on centroid re-computation, cluster rebalancing, or offline optimization jobs to stay useful.
+At each level, the runtime computes the distance from the current anchor to the query embedding, uses the category-distance index to jump to the nearest neighborhood in O(log N), and validates a small local window of candidates before selecting the best category. That makes retrieval fast, incremental, and explainable while avoiding the overhead of centroid re-computation or overnight clustering.
 
 ### Vectorization as database primitive
 
@@ -132,6 +137,16 @@ Vectorization and fuzzy search are core database primitives rather than external
 ### User-driven organization
 
 Domain experts define the taxonomy for their field. Medical experts create medical categories, developers create architecture patterns, and the system adapts to human understanding without requiring data scientists to manage batch clustering.
+
+### Lightweight path-based indexing for deterministic workflows
+
+KnowledgeBase writes now support an explicit index-population policy so callers can choose between full semantic materialization and lightweight path-only indexing.
+
+- Full mode preserves the normal behavior: it populates the main category tree, item tree, and the path index.
+- Reference mode populates the path index while skipping the heavier category and item materialization. This is useful for deterministic, path-driven workflows where the caller already knows the target category path.
+- Semantic routes can still use full vectorized indexing, while path-oriented routes can be stored as lightweight references.
+
+In the Go SDK, this is exposed through the index-population options on category and item upserts. That lets the routing layer select a lightweight path-based write for path and code-structure routes, while keeping the semantic route fully vectorized.
 
 ## Technical Summary
 

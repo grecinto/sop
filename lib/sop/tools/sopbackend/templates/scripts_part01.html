@@ -810,6 +810,19 @@
         return runtimeMode === 'hq' && !hasExistingConfig;
     }
 
+    function updateSpaceQualitySidebarVisibility() {
+        const section = document.getElementById('sidebar-kb-quality-section');
+        if (!section) return;
+
+        const dbName = (typeof currentDatabase === 'string' && currentDatabase.trim()) ? currentDatabase.trim() : '';
+        const dbObj = (dbName && Array.isArray(availableDatabases))
+            ? availableDatabases.find(db => db && db.name === dbName)
+            : null;
+        const isSystemDatabase = Boolean(dbObj && dbObj.is_system) || dbName === 'system' || dbName === SYSTEM_DB_NAME;
+
+        section.style.display = isSystemDatabase ? 'none' : 'block';
+    }
+
     // Environment Flags
     // ALLOW_INVALID_MAP_KEY: If true, allows saving a store with Map Key type without
     // requiring an Index Specification or CEL Expression. Controlled by SOP_ALLOW_INVALID_MAP_KEY env var.
@@ -985,6 +998,7 @@
                     }
 
                     openUIModal('database-section', 'block');
+                    updateSpaceQualitySidebarVisibility();
                     
                     // Disable UI elements when no databases exist
                     const btnAddDb = document.getElementById('btn-add-database');
@@ -1021,6 +1035,7 @@
                 }
                 
                 openUIModal('database-section', 'block');
+                updateSpaceQualitySidebarVisibility();
 
                 const userDBs = databases.filter(db => !db.is_system);
                 const systemDBs = databases.filter(db => db.is_system);
@@ -1378,6 +1393,7 @@
 
         currentDatabase = name;
         localStorage.setItem('sop_current_database', name);
+        updateSpaceQualitySidebarVisibility();
 
         const btnAddStore = document.getElementById('btn-add-store');
 
