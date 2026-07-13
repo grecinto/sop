@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,6 +76,103 @@ func TestUIRouterRedirectsLogoutToLogin(t *testing.T) {
 	}
 	if got := rec.Header().Get("Location"); got != "/login" {
 		t.Fatalf("expected logout redirect target to be /login, got %q", got)
+	}
+}
+
+func TestUninstallLocalDaemonServiceRunsSystemdCleanup(t *testing.T) {
+	oldLookPath := lookPathForDaemonUninstall
+	oldRunner := runDaemonUninstallCommand
+	oldServiceUnitPaths := daemonUninstallServiceUnitPaths
+	oldBinaryPaths := daemonUninstallBinaryPaths
+	t.Cleanup(func() {
+		lookPathForDaemonUninstall = oldLookPath
+		runDaemonUninstallCommand = oldRunner
+		daemonUninstallServiceUnitPaths = oldServiceUnitPaths
+		daemonUninstallBinaryPaths = oldBinaryPaths
+	})
+
+	lookPathForDaemonUninstall = func(file string) (string, error) {
+		if file != "systemctl" {
+			t.Fatalf("unexpected lookup for %q", file)
+		}
+		return "/usr/bin/systemctl", nil
+	}
+
+	var calls [][]string
+	runDaemonUninstallCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
+		return exec.Command("sh", "-c", "exit 0")
+	}
+
+	tempDir := t.TempDir()
+	daemonUninstallServiceUnitPaths = []string{filepath.Join(tempDir, "sop-daemon.service")}
+	daemonUninstallBinaryPaths = []string{filepath.Join(tempDir, "sop-daemon")}
+	if err := os.WriteFile(daemonUninstallServiceUnitPaths[0], []byte("unit"), 0o644); err != nil {
+		t.Fatalf("failed to create fake service unit: %v", err)
+	}
+	if err := os.WriteFile(daemonUninstallBinaryPaths[0], []byte("binary"), 0o755); err != nil {
+		t.Fatalf("failed to create fake daemon binary: %v", err)
+	}
+
+	if err := uninstallLocalDaemonService(); err != nil {
+		t.Fatalf("uninstallLocalDaemonService() error = %v", err)
+	}
+
+	if _, err := os.Stat(daemonUninstallServiceUnitPaths[0]); !os.IsNotExist(err) {
+		t.Fatalf("expected service unit to be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(daemonUninstallBinaryPaths[0]); !os.IsNotExist(err) {
+		t.Fatalf("expected daemon binary to be removed, stat err = %v", err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("expected 3 systemctl invocations, got %d", len(calls))
+	}
+	if got := calls[0]; len(got) != 3 || got[0] != "systemctl" || got[1] != "stop" || got[2] != "sop-daemon.service" {
+		t.Fatalf("unexpected first command: %v", got)
+	}
+}
+
+func TestUninstallLocalDaemonServiceIgnoresSystemdFailures(t *testing.T) {
+	oldLookPath := lookPathForDaemonUninstall
+	oldRunner := runDaemonUninstallCommand
+	oldServiceUnitPaths := daemonUninstallServiceUnitPaths
+	oldBinaryPaths := daemonUninstallBinaryPaths
+	t.Cleanup(func() {
+		lookPathForDaemonUninstall = oldLookPath
+		runDaemonUninstallCommand = oldRunner
+		daemonUninstallServiceUnitPaths = oldServiceUnitPaths
+		daemonUninstallBinaryPaths = oldBinaryPaths
+	})
+
+	lookPathForDaemonUninstall = func(file string) (string, error) {
+		if file != "systemctl" {
+			t.Fatalf("unexpected lookup for %q", file)
+		}
+		return "/usr/bin/systemctl", nil
+	}
+
+	runDaemonUninstallCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "exit 1")
+	}
+
+	tempDir := t.TempDir()
+	daemonUninstallServiceUnitPaths = []string{filepath.Join(tempDir, "sop-daemon.service")}
+	daemonUninstallBinaryPaths = []string{filepath.Join(tempDir, "sop-daemon")}
+	if err := os.WriteFile(daemonUninstallServiceUnitPaths[0], []byte("unit"), 0o644); err != nil {
+		t.Fatalf("failed to create fake service unit: %v", err)
+	}
+	if err := os.WriteFile(daemonUninstallBinaryPaths[0], []byte("binary"), 0o755); err != nil {
+		t.Fatalf("failed to create fake daemon binary: %v", err)
+	}
+
+	if err := uninstallLocalDaemonService(); err != nil {
+		t.Fatalf("expected systemd failures to be ignored, got %v", err)
+	}
+	if _, err := os.Stat(daemonUninstallServiceUnitPaths[0]); !os.IsNotExist(err) {
+		t.Fatalf("expected service unit to be removed even when systemd fails, stat err = %v", err)
+	}
+	if _, err := os.Stat(daemonUninstallBinaryPaths[0]); !os.IsNotExist(err) {
+		t.Fatalf("expected daemon binary to be removed even when systemd fails, stat err = %v", err)
 	}
 }
 

@@ -21,6 +21,30 @@ import (
 
 var ErrAgentNotInitialized = errors.New("agent not initialized")
 
+var (
+	backgroundServiceHookMu sync.RWMutex
+	backgroundServiceHooks  []func(context.Context)
+)
+
+// RegisterBackgroundServiceHook registers a callback that runs on each shared background service tick.
+func RegisterBackgroundServiceHook(hook func(context.Context)) {
+	if hook == nil {
+		return
+	}
+	backgroundServiceHookMu.Lock()
+	defer backgroundServiceHookMu.Unlock()
+	backgroundServiceHooks = append(backgroundServiceHooks, hook)
+}
+
+func runBackgroundServiceHooks(ctx context.Context) {
+	backgroundServiceHookMu.RLock()
+	hooks := append([]func(context.Context){}, backgroundServiceHooks...)
+	backgroundServiceHookMu.RUnlock()
+	for _, hook := range hooks {
+		hook(ctx)
+	}
+}
+
 // GetConfig returns a copy of the current configuration
 func GetConfig() Config {
 	return config
@@ -552,6 +576,7 @@ func StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.D
 					}
 				}
 			}
+			runBackgroundServiceHooks(ctx)
 			triggerBillingCollection(ctx)
 		}
 	}()

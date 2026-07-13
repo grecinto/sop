@@ -25,6 +25,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
+	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/database"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -33,6 +34,108 @@ var (
 	globalSyncQueue *SyncQueue
 	syncQueueOnce   sync.Once
 )
+
+type runtimeVectorizationFailurePolicyHandle interface {
+	RecoveryState() runtimeVectorizationRecoveryState
+	RecoveryStates() []runtimeVectorizationRecoveryState
+	NeedsRecovery() bool
+	MarkIgnored(kbName, targetType, targetID string)
+	MarkScheduled(kbName, targetType, targetID string)
+	MarkAbandoned(kbName, targetType, targetID string)
+	MarkRecovered(kbName, targetType, targetID string)
+	RecordRetryAttempt(kbName, targetType, targetID string)
+}
+
+var activeRuntimeVectorizationFailurePolicy runtimeVectorizationFailurePolicyHandle
+
+const vectorizationRecoveryRetryBackoff = 5 * time.Minute
+
+var vectorizationResetExecutor = func(ctx context.Context, kbName string) error {
+	dbOpts, err := sopbackend.GetDBOptions(ctx, "")
+	if err != nil {
+		dbOpts, err = sopbackend.GetSystemDBOptions(ctx)
+	}
+	if err != nil {
+		return fmt.Errorf("resolve database options for semantic index reset: %w", err)
+	}
+
+	db := aidb.NewDatabase(dbOpts)
+	return db.ResetSemanticIndex(ctx, kbName)
+}
+
+var vectorizationRecoveryExecutor = func(ctx context.Context, kbName, targetType, targetID string) error {
+	if strings.TrimSpace(kbName) == "" {
+		return fmt.Errorf("kb name is required")
+	}
+
+	dbOpts, err := sopbackend.GetDBOptions(ctx, "")
+	if err != nil {
+		dbOpts, err = sopbackend.GetSystemDBOptions(ctx)
+	}
+	if err != nil {
+		return fmt.Errorf("resolve database options for recovery: %w", err)
+	}
+
+	db := aidb.NewDatabase(dbOpts)
+	embedder := sopbackend.GetConfiguredEmbedder(nil)
+	llm := sopbackend.GetConfiguredLLM(nil)
+	if embedder == nil {
+		return fmt.Errorf("embedder unavailable for recovery")
+	}
+
+	switch strings.ToLower(strings.TrimSpace(targetType)) {
+	case "category", "categories":
+		if parsedID, err := sop.ParseUUID(targetID); err == nil && parsedID != sop.NilUUID {
+			return db.VectorizeCategories(ctx, kbName, llm, embedder, 50, []sop.UUID{parsedID})
+		}
+		return db.Vectorize(ctx, kbName, llm, embedder, 50)
+	case "item", "items":
+		return db.Vectorize(ctx, kbName, llm, embedder, 50)
+	default:
+		return db.Vectorize(ctx, kbName, llm, embedder, 50)
+	}
+}
+
+func resolveVectorizationRecoveryStateDir(configPath string, cfg sopbackend.Config) string {
+	candidates := []string{}
+	if cfg.VectorizationRecoveryStoragePath != "" {
+		candidates = append(candidates, cfg.VectorizationRecoveryStoragePath)
+	}
+	if strings.TrimSpace(configPath) != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(configPath), "state"))
+	}
+	candidates = append(candidates, filepath.Join(os.TempDir(), "sop", "state"))
+	candidates = append(candidates, filepath.Join(filepath.Dir(configPath), "state"))
+
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		info, err := os.Stat(trimmed)
+		if err == nil {
+			if info.IsDir() {
+				return trimmed
+			}
+			continue
+		}
+		if os.IsNotExist(err) {
+			if parent := filepath.Dir(trimmed); parent != trimmed {
+				if err := os.MkdirAll(trimmed, 0o755); err == nil {
+					return trimmed
+				}
+			}
+		}
+	}
+
+	if strings.TrimSpace(configPath) != "" {
+		fallback := filepath.Join(filepath.Dir(configPath), "state")
+		if err := os.MkdirAll(fallback, 0o755); err == nil {
+			return fallback
+		}
+	}
+	return filepath.Join(os.TempDir(), "sop", "state")
+}
 
 func shouldPrintHelp(args []string) bool {
 	for _, arg := range args {
@@ -128,10 +231,12 @@ type UIHandoffRequest struct {
 }
 
 type UIHandoffResponse struct {
-	Accepted       bool   `json:"accepted"`
-	Message        string `json:"message"`
-	WelcomeContext string `json:"welcome_context,omitempty"`
-	Error          string `json:"error,omitempty"`
+	Accepted       bool                              `json:"accepted"`
+	Message        string                            `json:"message"`
+	WelcomeContext string                            `json:"welcome_context,omitempty"`
+	Error          string                            `json:"error,omitempty"`
+	NeedsRecovery  bool                              `json:"needs_recovery,omitempty"`
+	Recovery       runtimeVectorizationRecoveryState `json:"recovery,omitempty"`
 }
 
 type daemonSessionContext struct {
@@ -217,6 +322,21 @@ func main() {
 		log.Printf("Created initial local daemon config at %s", resolvedConfig)
 	}
 	localRuntimeConfigPath = resolvedConfig
+
+	stateDir := resolveVectorizationRecoveryStateDir(resolvedConfig, sopbackend.GetConfig())
+	policyImpl := newRuntimeVectorizationFailurePolicy(stateDir)
+	activeRuntimeVectorizationFailurePolicy = policyImpl.(runtimeVectorizationFailurePolicyHandle)
+	aidb.RegisterVectorizationFailurePolicy(policyImpl)
+	sopbackend.RegisterBackgroundServiceHook(func(ctx context.Context) {
+		if activeRuntimeVectorizationFailurePolicy == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if count := retryPendingVectorizationRecovery(ctx, false); count > 0 {
+			log.Printf("auto-retried %d pending vectorization recovery target(s)", count)
+		}
+	})
 
 	// Load sopbackend configuration exactly like the httpserver does and initialize it once.
 	policy := sharedagent.AutomationPolicy{
@@ -326,6 +446,7 @@ func main() {
 	mux.HandleFunc("/api/daemon/refresh", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleRefresh)))
 	mux.HandleFunc("/api/daemon/hq-auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleHQAuth)))
 	mux.HandleFunc("/api/daemon/receive-space", handleOptionsAndCORS(http.HandlerFunc(handleReceiveSpaceFromHQ)))
+	mux.HandleFunc("/api/daemon/vectorization/recovery", handleOptionsAndCORS(http.HandlerFunc(handleGetVectorizationRecoveryStatus)))
 
 	// Privacy governance endpoints WITH authentication
 	mux.HandleFunc("/api/daemon/privacy/settings", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleGetPrivacySettings))))
@@ -739,11 +860,207 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 		Accepted:       true,
 		Message:        "handoff accepted",
 		WelcomeContext: buildLocalRAGWelcomeContext(),
+		NeedsRecovery:  currentVectorizationNeedsRecovery(),
+		Recovery:       currentVectorizationRecoveryState(),
 	})
 }
 
 func buildLocalRAGWelcomeContext() string {
-	return "Hello! I am your local <strong>Daemon Assistant</strong>. I'm here to help you work with the local shell and embedded RAG runtime directly from this desktop experience.<br><br>I can help you:<br><ul style=\"color: var(--text-muted); font-size: 0.9em; margin: 0 0 8px 18px; padding: 0; list-style-position: outside;\"><li style=\"margin: 0 0 4px 0; padding: 0;\">run shell commands and inspect command output</li><li style=\"margin: 0 0 4px 0; padding: 0;\">answer questions using the local RAG knowledge you configured</li><li style=\"margin: 0 0 4px 0; padding: 0;\">help you troubleshoot local workflows from the command line</li></ul>Type <strong>/list_tools</strong> to see the built-in SOP commands available in this session.<br><br><em style=\"color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;\">Shell-style commands such as <strong>ls</strong>, <strong>pwd</strong>, and <strong>cd /Volumes</strong> can be run directly in the local shell, and slash-prefixed commands such as <strong>/list_tools</strong> are available for built-in SOP actions.</em><br><em style=\"color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;\">Try asking things like:</em><ul style=\"color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;\"><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Show me the current directory and files\"</li><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Explain how to run the local daemon\"</li><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Help me inspect my local project structure\"</li></ul>"
+	welcomeContext := "Hello! I am your local <strong>Daemon Assistant</strong>. I'm here to help you work with the local shell and embedded RAG runtime directly from this desktop experience.<br><br>I can help you:<br><ul style=\"color: var(--text-muted); font-size: 0.9em; margin: 0 0 8px 18px; padding: 0; list-style-position: outside;\"><li style=\"margin: 0 0 4px 0; padding: 0;\">run shell commands and inspect command output</li><li style=\"margin: 0 0 4px 0; padding: 0;\">answer questions using the local RAG knowledge you configured</li><li style=\"margin: 0 0 4px 0; padding: 0;\">help you troubleshoot local workflows from the command line</li></ul>Type <strong>/list_tools</strong> to see the built-in SOP commands available in this session.<br><br><em style=\"color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;\">Shell-style commands such as <strong>ls</strong>, <strong>pwd</strong>, and <strong>cd /Volumes</strong> can be run directly in the local shell, and slash-prefixed commands such as <strong>/list_tools</strong> are available for built-in SOP actions.</em><br><em style=\"color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;\">Try asking things like:</em><ul style=\"color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;\"><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Show me the current directory and files\"</li><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Explain how to run the local daemon\"</li><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Help me inspect my local project structure\"</li></ul>"
+
+	recovery := currentVectorizationRecoveryState()
+	if recovery.Status != "healthy" && strings.TrimSpace(recovery.Prompt) != "" {
+		statusText := "needs attention"
+		if recovery.Status == "recovered" {
+			statusText = "recovered"
+		} else if recovery.Status == "ignored" {
+			statusText = "ignored"
+		}
+		if recovery.RetryCount > 0 {
+			statusText = fmt.Sprintf("%s • retry %d", statusText, recovery.RetryCount)
+		}
+		if recovery.LastAttemptAt > 0 {
+			statusText = fmt.Sprintf("%s • last attempt %s", statusText, time.Unix(recovery.LastAttemptAt, 0).Format("2006-01-02 15:04:05"))
+		}
+		welcomeContext += fmt.Sprintf("<br><br><strong>Recovery notice:</strong> %s", recovery.Prompt)
+		welcomeContext += fmt.Sprintf("<br><span style=\"color: var(--text-muted); font-size: 0.9em;\">Status: %s</span>", htmlEscape(statusText))
+		welcomeContext += fmt.Sprintf("<br><br><button class=\"recovery-action-button\" data-action=\"recover\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Recover semantic index</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
+		welcomeContext += fmt.Sprintf("<button class=\"recovery-action-button\" data-action=\"clear_and_rebuild\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Clear and rebuild</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
+		welcomeContext += fmt.Sprintf("<button class=\"recovery-action-button\" data-action=\"ignore\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Ignore for now</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
+	}
+	return welcomeContext
+}
+
+func htmlEscape(s string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\"", "&quot;",
+		"'", "&#39;",
+	).Replace(s)
+}
+
+func currentVectorizationRecoveryState() runtimeVectorizationRecoveryState {
+	if activeRuntimeVectorizationFailurePolicy == nil {
+		return runtimeVectorizationRecoveryState{Status: "healthy"}
+	}
+	return activeRuntimeVectorizationFailurePolicy.RecoveryState()
+}
+
+func currentVectorizationNeedsRecovery() bool {
+	if activeRuntimeVectorizationFailurePolicy == nil {
+		return false
+	}
+	return activeRuntimeVectorizationFailurePolicy.NeedsRecovery()
+}
+
+func resetVectorizationIndexForRecovery(ctx context.Context, kbName string) error {
+	return vectorizationResetExecutor(ctx, kbName)
+}
+
+func retryPendingVectorizationRecovery(ctx context.Context, force bool) int {
+	if activeRuntimeVectorizationFailurePolicy == nil {
+		return 0
+	}
+
+	states := activeRuntimeVectorizationFailurePolicy.RecoveryStates()
+	count := 0
+	for _, state := range states {
+		if state.Status == "healthy" || state.Status == "recovered" || state.Status == "ignored" || state.Status == "scheduled" || state.Status == "abandoned" {
+			continue
+		}
+		if !force && state.RetryCount > 0 && state.LastAttemptAt > 0 {
+			if state.NextRetryAt > 0 {
+				if nextRetryAt := time.Unix(state.NextRetryAt, 0); time.Now().Before(nextRetryAt) {
+					continue
+				}
+			} else if elapsed := time.Since(time.Unix(state.LastAttemptAt, 0)); elapsed < vectorizationRecoveryRetryBackoff {
+				continue
+			}
+		}
+		activeRuntimeVectorizationFailurePolicy.RecordRetryAttempt(state.KBName, state.TargetType, state.TargetID)
+		if err := vectorizationRecoveryExecutor(ctx, state.KBName, state.TargetType, state.TargetID); err == nil {
+			activeRuntimeVectorizationFailurePolicy.MarkRecovered(state.KBName, state.TargetType, state.TargetID)
+			count++
+		}
+	}
+	return count
+}
+
+func handleGetVectorizationRecoveryStatus(w http.ResponseWriter, r *http.Request) {
+	payload := map[string]any{
+		"has_recovery":    false,
+		"needs_recovery":  false,
+		"latest":          runtimeVectorizationRecoveryState{},
+		"states":          []runtimeVectorizationRecoveryState{},
+		"action":          "",
+		"updated":         false,
+		"recovered_count": 0,
+		"message":         "",
+		"error":           "",
+	}
+	if r.Method == http.MethodPost {
+		var req struct {
+			Action     string `json:"action"`
+			KBName     string `json:"kb_name"`
+			TargetType string `json:"target_type"`
+			TargetID   string `json:"target_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON body: " + err.Error()})
+			return
+		}
+		if activeRuntimeVectorizationFailurePolicy == nil {
+			respondJSON(w, http.StatusNotFound, map[string]string{"error": "vectorization recovery policy unavailable"})
+			return
+		}
+
+		switch strings.ToLower(strings.TrimSpace(req.Action)) {
+		case "ignore":
+			activeRuntimeVectorizationFailurePolicy.MarkIgnored(req.KBName, req.TargetType, req.TargetID)
+			payload["action"] = "ignore"
+			payload["updated"] = true
+			payload["message"] = "Recovery request ignored for now."
+		case "schedule_retry", "schedule", "retry_later":
+			activeRuntimeVectorizationFailurePolicy.MarkScheduled(req.KBName, req.TargetType, req.TargetID)
+			payload["action"] = "schedule_retry"
+			payload["updated"] = true
+			payload["message"] = "Recovery was scheduled for later."
+		case "give_up", "abandon", "stop":
+			activeRuntimeVectorizationFailurePolicy.MarkAbandoned(req.KBName, req.TargetType, req.TargetID)
+			payload["action"] = "give_up"
+			payload["updated"] = true
+			payload["message"] = "Recovery was abandoned."
+		case "recover", "recovered":
+			activeRuntimeVectorizationFailurePolicy.RecordRetryAttempt(req.KBName, req.TargetType, req.TargetID)
+			if err := vectorizationRecoveryExecutor(r.Context(), req.KBName, req.TargetType, req.TargetID); err != nil {
+				log.Printf("vectorization recovery failed for kb=%s target=%s/%s: %v", req.KBName, req.TargetType, req.TargetID, err)
+				payload["action"] = "recover"
+				payload["error"] = err.Error()
+				payload["updated"] = false
+				payload["message"] = "Recovery attempt failed. The daemon will keep the target marked for follow-up."
+			} else {
+				activeRuntimeVectorizationFailurePolicy.MarkRecovered(req.KBName, req.TargetType, req.TargetID)
+				payload["action"] = "recover"
+				payload["updated"] = true
+				payload["message"] = "Semantic index rebuilt successfully."
+			}
+		case "clear_and_rebuild":
+			activeRuntimeVectorizationFailurePolicy.RecordRetryAttempt(req.KBName, req.TargetType, req.TargetID)
+			if err := resetVectorizationIndexForRecovery(r.Context(), req.KBName); err != nil {
+				log.Printf("vectorization clear-and-rebuild reset failed for kb=%s target=%s/%s: %v", req.KBName, req.TargetType, req.TargetID, err)
+				payload["action"] = "clear_and_rebuild"
+				payload["error"] = err.Error()
+				payload["updated"] = false
+				payload["message"] = "Clear-and-rebuild reset failed. The daemon will keep the target marked for follow-up."
+			} else if err := vectorizationRecoveryExecutor(r.Context(), req.KBName, req.TargetType, req.TargetID); err != nil {
+				log.Printf("vectorization clear-and-rebuild failed for kb=%s target=%s/%s: %v", req.KBName, req.TargetType, req.TargetID, err)
+				payload["action"] = "clear_and_rebuild"
+				payload["error"] = err.Error()
+				payload["updated"] = false
+				payload["message"] = "Clear-and-rebuild failed. The daemon will keep the target marked for follow-up."
+			} else {
+				activeRuntimeVectorizationFailurePolicy.MarkRecovered(req.KBName, req.TargetType, req.TargetID)
+				payload["action"] = "clear_and_rebuild"
+				payload["updated"] = true
+				payload["message"] = "Semantic index cleared and rebuilt successfully."
+			}
+		case "recover_all":
+			states := activeRuntimeVectorizationFailurePolicy.RecoveryStates()
+			count := 0
+			for _, state := range states {
+				if state.Status == "healthy" || state.Status == "recovered" || state.Status == "ignored" || state.Status == "scheduled" || state.Status == "abandoned" {
+					continue
+				}
+				activeRuntimeVectorizationFailurePolicy.RecordRetryAttempt(state.KBName, state.TargetType, state.TargetID)
+				if err := vectorizationRecoveryExecutor(r.Context(), state.KBName, state.TargetType, state.TargetID); err == nil {
+					activeRuntimeVectorizationFailurePolicy.MarkRecovered(state.KBName, state.TargetType, state.TargetID)
+					count++
+				}
+			}
+			payload["action"] = "recover_all"
+			payload["updated"] = true
+			payload["recovered_count"] = count
+			payload["message"] = fmt.Sprintf("Attempted recovery for %d degraded target(s).", count)
+		default:
+			respondJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported action"})
+			return
+		}
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if activeRuntimeVectorizationFailurePolicy != nil {
+		latest := activeRuntimeVectorizationFailurePolicy.RecoveryState()
+		states := activeRuntimeVectorizationFailurePolicy.RecoveryStates()
+		payload["has_recovery"] = latest.Status != "healthy" || len(states) > 0
+		payload["needs_recovery"] = activeRuntimeVectorizationFailurePolicy.NeedsRecovery()
+		payload["latest"] = latest
+		payload["states"] = states
+	}
+	respondJSON(w, http.StatusOK, payload)
 }
 
 func executeHandler(w http.ResponseWriter, r *http.Request) {

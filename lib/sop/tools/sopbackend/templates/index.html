@@ -978,6 +978,12 @@
                 </div>
 
                 <div style="flex: 1 1 0; min-width: 0; background: var(--pre-bg); padding: 10px; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--border-color);">
+                    <label for="setup-vectorization-recovery-storage-path" style="display: block; font-weight: bold; margin-bottom: 4px;">Recovery Storage Path</label>
+                    <input type="text" id="setup-vectorization-recovery-storage-path" placeholder="Optional: /mnt/ssd/sop-recovery" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); box-sizing: border-box;">
+                    <div style="margin-top: 4px; color: var(--text-muted);">Optional folder for the vectorization recovery JSON log. This should be on a separate volume from the data volume for independent/separate I/O and better survival of the recovery data. If unavailable, the daemon uses its local state directory.</div>
+                </div>
+
+                <div style="flex: 1 1 0; min-width: 0; background: var(--pre-bg); padding: 10px; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--border-color);">
                     <label for="setup-system-admin-bootstrap-secret" title="Leave blank to keep the initial root user as Admin. Provide the bootstrap secret configured in the environment to make this initial user as SystemAdmin." style="display: block; font-weight: bold; margin-bottom: 4px; cursor: help;">
                         SystemAdmin Bootstrap Secret
                     </label>

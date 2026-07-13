@@ -15,6 +15,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/ai/model"
 	"github.com/sharedcode/sop/ai/vector"
 	"github.com/sharedcode/sop/btree"
@@ -289,6 +290,143 @@ func (db *Database) RemoveKnowledgeBase(ctx context.Context, name string) error 
 		return fmt.Errorf("knowledge base '%s' not found", name)
 	}
 	return lastErr
+}
+
+// ResetSemanticIndex clears persisted semantic vectors and hashes for the named knowledge base so the next rebuild can recreate them from content.
+func (db *Database) ResetSemanticIndex(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("knowledge base name is required")
+	}
+
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	kb, err := db.OpenKnowledgeBase(ctx, name, tx, nil, nil, false)
+	if err != nil {
+		return err
+	}
+	if err := resetSemanticIndexState(ctx, kb); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func resetSemanticIndexState(ctx context.Context, kb *memory.KnowledgeBase[map[string]any]) error {
+	if kb == nil {
+		return nil
+	}
+
+	cfg, err := kb.GetConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		cfg = &memory.KnowledgeBaseConfig{}
+	}
+	cfg.DomainReference = nil
+	if err := kb.SetConfig(ctx, cfg); err != nil {
+		return err
+	}
+	kb.Store.SetDomainReference(nil)
+
+	cats, err := kb.Store.Categories(ctx)
+	if err != nil {
+		return err
+	}
+	ok, err := cats.First(ctx)
+	if err != nil {
+		return err
+	}
+	for ok {
+		cat, err := cats.GetCurrentValue(ctx)
+		if err != nil {
+			return err
+		}
+		if cat != nil {
+			cat.CenterVector = nil
+			cat.VectorHash = ""
+			cat.EmbeddingText = ""
+			cat.EmbeddingVersion = ""
+			if _, err := cats.UpdateCurrentValue(ctx, cat); err != nil {
+				return err
+			}
+		}
+		ok, err = cats.Next(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	items, err := kb.Store.Items(ctx)
+	if err != nil {
+		return err
+	}
+	vectors, err := kb.Store.Vectors(ctx)
+	if err != nil {
+		return err
+	}
+	ok, err = items.First(ctx)
+	if err != nil {
+		return err
+	}
+	for ok {
+		item, err := items.GetCurrentValue(ctx)
+		if err != nil {
+			return err
+		}
+		for _, pos := range item.Positions {
+			if _, err := vectors.Remove(ctx, pos); err != nil {
+				return err
+			}
+		}
+		item.Positions = nil
+		item.VectorHash = ""
+		item.EmbeddingText = ""
+		item.EmbeddingVersion = ""
+		if _, err := items.UpdateCurrentValue(ctx, item); err != nil {
+			return err
+		}
+		ok, err = items.Next(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	catsByDist, err := kb.Store.CategoriesByDistance(ctx)
+	if err != nil {
+		return err
+	}
+	for {
+		ok, err := catsByDist.First(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			break
+		}
+		if _, err := catsByDist.RemoveCurrentItem(ctx); err != nil {
+			return err
+		}
+	}
+
+	for {
+		ok, err := vectors.First(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			break
+		}
+		if _, err := vectors.RemoveCurrentItem(ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // RemoveVectorStore removes the vector store and its underlying B-Trees.

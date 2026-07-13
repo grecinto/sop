@@ -1,0 +1,18 @@
+[Unit]
+Description=SOP Daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/sop
+Environment=datapath=/var/lib/sop
+ExecStart=/usr/local/bin/sop-daemon --port 9090
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

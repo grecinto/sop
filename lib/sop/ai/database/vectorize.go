@@ -173,8 +173,21 @@ func (db *Database) Vectorize(
 			log.Debug("Vectorizing category", "catID", catID)
 			catVecs, err := embed.CategoryTexts(ctx, embedder, []string{embedText})
 			if err != nil {
-				tx.Rollback(ctx)
-				return err
+				skip, escalate := handleVectorizationFailure(kbName, "category", cat.ID.String(), err)
+				if skip {
+					log.Warn("skipping category vectorization after failure", "kb_name", kbName, "category_id", cat.ID.String(), "error", err)
+					cat.CenterVector = nil
+					cat.VectorHash = ""
+					catBtree.UpdateCurrentItem(ctx, cat.ID, cat)
+				} else if escalate {
+					log.Warn("vectorization failure escalated for category", "kb_name", kbName, "category_id", cat.ID.String(), "error", err)
+					cat.CenterVector = nil
+					cat.VectorHash = ""
+					catBtree.UpdateCurrentItem(ctx, cat.ID, cat)
+				} else {
+					tx.Rollback(ctx)
+					return err
+				}
 			}
 			if len(catVecs) > 0 {
 				if len(cat.CenterVector) > 0 {
@@ -283,14 +296,32 @@ func (db *Database) Vectorize(
 					// Embed as DocumentTexts for item storage (768 dim)
 					allVecs, err := embed.DocumentTexts(ctx, embedder, batchSummaries)
 					if err != nil {
-						tx.Rollback(ctx)
-						return err
+						skip, escalate := handleVectorizationFailure(kbName, "item", "batch", err)
+						if skip {
+							log.Warn("skipping item batch vectorization after failure", "kb_name", kbName, "error", err)
+							break
+						} else if escalate {
+							log.Warn("item batch vectorization failure escalated", "kb_name", kbName, "error", err)
+							break
+						} else {
+							tx.Rollback(ctx)
+							return err
+						}
 					}
 					// Embed as CategoryTexts for classification (256 dim)
 					allClassificationVecs, err := embed.CategoryTexts(ctx, embedder, batchSummaries)
 					if err != nil {
-						tx.Rollback(ctx)
-						return err
+						skip, escalate := handleVectorizationFailure(kbName, "item", "batch", err)
+						if skip {
+							log.Warn("skipping item batch classification vectorization after failure", "kb_name", kbName, "error", err)
+							break
+						} else if escalate {
+							log.Warn("item batch classification vectorization failure escalated", "kb_name", kbName, "error", err)
+							break
+						} else {
+							tx.Rollback(ctx)
+							return err
+						}
 					}
 
 					log.Debug("before batch processing via kb.Store,UpsertByCategoryID")
@@ -303,8 +334,17 @@ func (db *Database) Vectorize(
 
 						err = kb.Store.UpsertByCategoryID(ctx, task.catID, task.centerVec, *task.item, itemVecs, classificationVecs)
 						if err != nil {
-							tx.Rollback(ctx)
-							return err
+							skip, escalate := handleVectorizationFailure(kbName, "item", task.item.ID.String(), err)
+							if skip {
+								log.Warn("skipping item vectorization after failure", "kb_name", kbName, "item_id", task.item.ID.String(), "error", err)
+								continue
+							} else if escalate {
+								log.Warn("item vectorization failure escalated", "kb_name", kbName, "item_id", task.item.ID.String(), "error", err)
+								continue
+							} else {
+								tx.Rollback(ctx)
+								return err
+							}
 						}
 					}
 					log.Debug("after batch processing via kb.Store,UpsertByCategoryID")
@@ -403,14 +443,32 @@ func (db *Database) Vectorize(
 			// Embed as DocumentTexts for item storage (768 dim)
 			allVecs, err := embed.DocumentTexts(ctx, embedder, batchSummaries)
 			if err != nil {
-				tx.Rollback(ctx)
-				return err
+				skip, escalate := handleVectorizationFailure(kbName, "item", "batch", err)
+				if skip {
+					log.Warn("skipping final item batch vectorization after failure", "kb_name", kbName, "error", err)
+					return tx.Commit(ctx)
+				} else if escalate {
+					log.Warn("final item batch vectorization failure escalated", "kb_name", kbName, "error", err)
+					return tx.Commit(ctx)
+				} else {
+					tx.Rollback(ctx)
+					return err
+				}
 			}
 			// Embed as CategoryTexts for classification (256 dim)
 			allClassificationVecs, err := embed.CategoryTexts(ctx, embedder, batchSummaries)
 			if err != nil {
-				tx.Rollback(ctx)
-				return err
+				skip, escalate := handleVectorizationFailure(kbName, "item", "batch", err)
+				if skip {
+					log.Warn("skipping final item batch classification vectorization after failure", "kb_name", kbName, "error", err)
+					return tx.Commit(ctx)
+				} else if escalate {
+					log.Warn("final item batch classification vectorization failure escalated", "kb_name", kbName, "error", err)
+					return tx.Commit(ctx)
+				} else {
+					tx.Rollback(ctx)
+					return err
+				}
 			}
 
 			vecIdx := 0
@@ -422,8 +480,17 @@ func (db *Database) Vectorize(
 
 				err = kb.Store.UpsertByCategoryID(ctx, task.catID, task.centerVec, *task.item, itemVecs, classificationVecs)
 				if err != nil {
-					tx.Rollback(ctx)
-					return err
+					skip, escalate := handleVectorizationFailure(kbName, "item", task.item.ID.String(), err)
+					if skip {
+						log.Warn("skipping final item vectorization after failure", "kb_name", kbName, "item_id", task.item.ID.String(), "error", err)
+						continue
+					} else if escalate {
+						log.Warn("final item vectorization failure escalated", "kb_name", kbName, "item_id", task.item.ID.String(), "error", err)
+						continue
+					} else {
+						tx.Rollback(ctx)
+						return err
+					}
 				}
 			}
 		}
@@ -646,14 +713,32 @@ func (db *Database) VectorizeCategories(
 					// Embed as DocumentTexts for item storage (768 dim)
 					allVecs, err := embed.DocumentTexts(ctx, embedder, batchSummaries)
 					if err != nil {
-						tx.Rollback(ctx)
-						return err
+						skip, escalate := handleVectorizationFailure(kbName, "item", "batch", err)
+						if skip {
+							log.Warn("skipping item batch vectorization after failure", "kb_name", kbName, "error", err)
+							break
+						} else if escalate {
+							log.Warn("item batch vectorization failure escalated", "kb_name", kbName, "error", err)
+							break
+						} else {
+							tx.Rollback(ctx)
+							return err
+						}
 					}
 					// Embed as CategoryTexts for classification (256 dim)
 					allClassificationVecs, err := embed.CategoryTexts(ctx, embedder, batchSummaries)
 					if err != nil {
-						tx.Rollback(ctx)
-						return err
+						skip, escalate := handleVectorizationFailure(kbName, "item", "batch", err)
+						if skip {
+							log.Warn("skipping item batch classification vectorization after failure", "kb_name", kbName, "error", err)
+							break
+						} else if escalate {
+							log.Warn("item batch classification vectorization failure escalated", "kb_name", kbName, "error", err)
+							break
+						} else {
+							tx.Rollback(ctx)
+							return err
+						}
 					}
 
 					log.Debug("before batch processing via kb.Store,UpsertByCategoryID")
@@ -666,8 +751,17 @@ func (db *Database) VectorizeCategories(
 
 						err = kb.Store.UpsertByCategoryID(ctx, task.catID, task.centerVec, *task.item, itemVecs, classificationVecs)
 						if err != nil {
-							tx.Rollback(ctx)
-							return err
+							skip, escalate := handleVectorizationFailure(kbName, "item", task.item.ID.String(), err)
+							if skip {
+								log.Warn("skipping item vectorization after failure", "kb_name", kbName, "item_id", task.item.ID.String(), "error", err)
+								continue
+							} else if escalate {
+								log.Warn("item vectorization failure escalated", "kb_name", kbName, "item_id", task.item.ID.String(), "error", err)
+								continue
+							} else {
+								tx.Rollback(ctx)
+								return err
+							}
 						}
 					}
 					log.Debug("after batch processing via kb.Store,UpsertByCategoryID")
@@ -746,14 +840,32 @@ func (db *Database) VectorizeCategories(
 			// Embed as DocumentTexts for item storage (768 dim)
 			allVecs, err := embed.DocumentTexts(ctx, embedder, batchSummaries)
 			if err != nil {
-				tx.Rollback(ctx)
-				return err
+				skip, escalate := handleVectorizationFailure(kbName, "item", "batch", err)
+				if skip {
+					log.Warn("skipping final item batch vectorization after failure", "kb_name", kbName, "error", err)
+					return tx.Commit(ctx)
+				} else if escalate {
+					log.Warn("final item batch vectorization failure escalated", "kb_name", kbName, "error", err)
+					return tx.Commit(ctx)
+				} else {
+					tx.Rollback(ctx)
+					return err
+				}
 			}
 			// Embed as CategoryTexts for classification (256 dim)
 			allClassificationVecs, err := embed.CategoryTexts(ctx, embedder, batchSummaries)
 			if err != nil {
-				tx.Rollback(ctx)
-				return err
+				skip, escalate := handleVectorizationFailure(kbName, "item", "batch", err)
+				if skip {
+					log.Warn("skipping final item batch classification vectorization after failure", "kb_name", kbName, "error", err)
+					return tx.Commit(ctx)
+				} else if escalate {
+					log.Warn("final item batch classification vectorization failure escalated", "kb_name", kbName, "error", err)
+					return tx.Commit(ctx)
+				} else {
+					tx.Rollback(ctx)
+					return err
+				}
 			}
 
 			vecIdx := 0
@@ -765,8 +877,17 @@ func (db *Database) VectorizeCategories(
 
 				err = kb.Store.UpsertByCategoryID(ctx, task.catID, task.centerVec, *task.item, itemVecs, classificationVecs)
 				if err != nil {
-					tx.Rollback(ctx)
-					return err
+					skip, escalate := handleVectorizationFailure(kbName, "item", task.item.ID.String(), err)
+					if skip {
+						log.Warn("skipping final item vectorization after failure", "kb_name", kbName, "item_id", task.item.ID.String(), "error", err)
+						continue
+					} else if escalate {
+						log.Warn("final item vectorization failure escalated", "kb_name", kbName, "item_id", task.item.ID.String(), "error", err)
+						continue
+					} else {
+						tx.Rollback(ctx)
+						return err
+					}
 				}
 			}
 		}

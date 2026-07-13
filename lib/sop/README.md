@@ -181,6 +181,8 @@ This gives IT and security teams a clear path to adopt SOP in controlled environ
 
 **[Download & Installation Guide](GETTING_STARTED.md)**: The fastest way to get up and running with SOP.
 
+**[Systemd Deployment Guide](docs/installation/SYSTEMD_DEPLOYMENT_GUIDE.md)**: Simple deployment steps for AWS EC2 hosting and end-user daemon installs via a download button and Cloudflare.
+
 ## ⚡ Performance
 
 SOP is designed for high throughput and low latency. Below are benchmark results running on a **2015 MacBook Pro** (Dual-Core Intel Core i5, 8GB RAM) using the built-in benchmark tool (`tools/benchmark`).

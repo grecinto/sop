@@ -3,17 +3,34 @@ package sopbackend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/sharedcode/sop"
 	aidb "github.com/sharedcode/sop/ai/database"
+)
+
+var (
+	lookPathForDaemonUninstall = exec.LookPath
+	runDaemonUninstallCommand  = func(name string, args ...string) *exec.Cmd {
+		return exec.Command(name, args...)
+	}
+	daemonUninstallServiceUnitPaths = []string{
+		"/etc/systemd/system/sop-daemon.service",
+		"/lib/systemd/system/sop-daemon.service",
+	}
+	daemonUninstallBinaryPaths = []string{
+		"/usr/local/bin/sop-daemon",
+		"/opt/sop/bin/sop-daemon",
+	}
 )
 
 // UIRouter serves the shared SOP web UI from the sopbackend package so both
@@ -267,6 +284,9 @@ func (r *UIRouter) handleUnsubscribe(w http.ResponseWriter, req *http.Request) {
 	if userID := strings.TrimSpace(auth.UserID); userID != "" {
 		_, _ = config.UpdateSubscriptionPlan(req.Context(), userID, "none")
 	}
+	if err := uninstallLocalDaemonService(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to uninstall local daemon during unsubscribe: %v\n", err)
+	}
 
 	data := r.landingPageData(req)
 	data["SubscriptionMessage"] = "You have been unsubscribed. You can reactivate the Starter Kit at any time."
@@ -281,6 +301,9 @@ func (r *UIRouter) handleUnregister(w http.ResponseWriter, req *http.Request) {
 	auth := sop.GetAuthFromContext(req.Context())
 	if userID := strings.TrimSpace(auth.UserID); userID != "" {
 		_ = config.UnregisterUser(req.Context(), userID)
+	}
+	if err := uninstallLocalDaemonService(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to uninstall local daemon during unregister: %v\n", err)
 	}
 	clearSessionCookies(w)
 	http.Redirect(w, req, "/login?message=unregistered", http.StatusFound)
@@ -329,6 +352,31 @@ func (r *UIRouter) handleLogout(w http.ResponseWriter, req *http.Request) {
 func clearSessionCookies(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: "sop_access_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	http.SetCookie(w, &http.Cookie{Name: "sop_refresh_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+}
+
+func uninstallLocalDaemonService() error {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		return nil
+	}
+
+	if _, err := lookPathForDaemonUninstall("systemctl"); err == nil {
+		for _, args := range [][]string{{"stop", "sop-daemon.service"}, {"disable", "sop-daemon.service"}, {"daemon-reload"}} {
+			_ = runDaemonUninstallCommand("systemctl", args...).Run()
+		}
+	}
+
+	var cleanupErr error
+	for _, path := range daemonUninstallServiceUnitPaths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) && cleanupErr == nil {
+			cleanupErr = err
+		}
+	}
+	for _, path := range daemonUninstallBinaryPaths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) && cleanupErr == nil {
+			cleanupErr = err
+		}
+	}
+	return cleanupErr
 }
 
 func (r *UIRouter) landingPageData(req *http.Request) map[string]any {

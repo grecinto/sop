@@ -88,6 +88,14 @@ The key advantage is not just that the system stores vectors, but that it stores
 
 This is also why the design is much more practical than trying to force the same workload into SQLite, Postgres, or similar relational engines. A relational model would need heavy join-heavy traversal, index churn, and repeated re-ranking work just to emulate this behavior. On a local host, that quickly turns retrieval into an index-maintenance problem rather than a real-time service. The embedded architecture keeps the hot path close to the data structure that actually powers search, so it can stay low-latency and predictable under live usage.
 
+### Resilient local vectorization and repair
+
+Fleet learning inherits the same durability model as the embedded KnowledgeBase layer. Writes are committed first, and semantic vectorization is treated as a recoverable follow-up step. If a category or item cannot be vectorized immediately, the system stores that target in a repair queue and retries it later instead of blocking the workflow or dropping the update.
+
+That matters for local Copilot and agent workflows because the runtime can continue to learn, retrieve, and reason from the persisted content even when the local embedder or storage path is temporarily unavailable. The repair pass later brings the semantic index back into consistency without requiring manual intervention.
+
+For the daemon on the user host, the policy is intentionally conservative. The first vectorization failures are treated as skip-and-continue events. If the same targets keep failing over time, the daemon escalates to a recovery prompt that asks the user whether to continue ignoring the issue, rebuild the indexes, or clear stale semantic indexes and rebuild them from the persisted content. In non-daemon environments, the SetupWizard can create a recovery disk or folder that hosts a persistent local queue store for pending vectorization work, allowing the system to automate self-healing after restarts and to preserve progress across sessions.
+
 ### Benchmark PoC: retrieval quality using industry-style vector DB metrics
 
 To validate this architecture as a concrete proof of concept, we run a standalone retrieval benchmark that mirrors the evaluation approach commonly used by vector databases such as Milvus and Pinecone: top-k retrieval quality, precision at rank, recall at rank, mean reciprocal rank, and nDCG at rank 3. The benchmark uses a deterministic, privacy-safe dataset and evaluates both exact and fuzzy retrieval behavior over nested categories.

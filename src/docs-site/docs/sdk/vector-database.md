@@ -148,6 +148,25 @@ KnowledgeBase writes now support an explicit index-population policy so callers 
 
 In the Go SDK, this is exposed through the index-population options on category and item upserts. That lets the routing layer select a lightweight path-based write for path and code-structure routes, while keeping the semantic route fully vectorized.
 
+### Resilient vectorization and self-healing repair
+
+The system treats semantic vectorization as a recoverable background capability rather than a hard gate on writes. When a category or item is ingested, the primary data writes are persisted immediately. If semantic vectorization for that target fails, the system records the affected category or item in a repair queue and retries it later instead of losing the update or blocking the rest of the workflow.
+
+This gives the runtime two complementary behaviors:
+
+- Immediate durability: the KnowledgeBase remains usable even when vectorization is temporarily unavailable.
+- Self-healing recovery: failed categories and items are retried automatically using a queued repair pass with backoff, so the semantic index converges over time.
+
+The repair queue is intentionally separate from the live semantic index so that temporary failures do not corrupt the primary content path. That makes the system resilient to local embedder issues, transient storage problems, or partial batch failures without turning every write into a fragile operation.
+
+For daemon and local-host deployments, the failure policy is intentionally user-friendly. The first failures are treated as soft degradations: the content remains available, the semantic index is skipped for that target, and the runtime keeps going. Once a target fails repeatedly, the system escalates to a user-visible recovery prompt that offers three actions:
+
+- Continue ignoring the failure for now.
+- Rebuild the affected semantic indexes.
+- Clear stale semantic indexes and rebuild from the persisted content.
+
+For non-daemon deployments, the SetupWizard can provision a dedicated recovery disk or folder that hosts a durable local store for the repair queue. That store can be implemented as a small B-Tree-backed queue in a separate directory, and it becomes the authority for pending vectorization work so the runtime can automate self-healing even after a restart.
+
 ## Technical Summary
 
 Vectorization and semantic search are database primitives with user-driven category organization. The relativity-based Triangulation architecture handles retrieval automatically through the UI, API, LLM management, or tool calls.

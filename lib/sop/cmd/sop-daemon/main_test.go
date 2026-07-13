@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +82,428 @@ func TestBuildListenAddr(t *testing.T) {
 
 	if got, want := buildListenAddr("0.0.0.0", 8080), "0.0.0.0:8080"; got != want {
 		t.Fatalf("buildListenAddr() = %q, want %q", got, want)
+	}
+}
+
+func TestRetryPendingVectorizationRecoveryHonorsBackoff(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-backoff", os.ErrNotExist)
+	}
+
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	previousHandler := vectorizationRecoveryExecutor
+	called := 0
+	vectorizationRecoveryExecutor = func(ctx context.Context, kbName, targetType, targetID string) error {
+		called++
+		return nil
+	}
+	defer func() { vectorizationRecoveryExecutor = previousHandler }()
+
+	activeRuntimeVectorizationFailurePolicy.RecordRetryAttempt("kb", "category", "cat-backoff")
+
+	if count := retryPendingVectorizationRecovery(context.Background(), false); count != 0 {
+		t.Fatalf("expected backoff to suppress immediate retry, got %d", count)
+	}
+	if called != 0 {
+		t.Fatalf("expected recovery executor to be skipped while backoff is active, got %d calls", called)
+	}
+}
+
+func TestResolveVectorizationRecoveryStateDirUsesConfiguredPathWhenWritable(t *testing.T) {
+	configDir := t.TempDir()
+	customDir := filepath.Join(configDir, "recovery-store")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom dir: %v", err)
+	}
+
+	cfg := sopbackend.Config{VectorizationRecoveryStoragePath: customDir}
+	stateDir := resolveVectorizationRecoveryStateDir(filepath.Join(configDir, "config.json"), cfg)
+	if stateDir != customDir {
+		t.Fatalf("expected configured path %q, got %q", customDir, stateDir)
+	}
+}
+
+func TestResolveVectorizationRecoveryStateDirFallsBackWhenConfiguredPathIsUnavailable(t *testing.T) {
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.json")
+	customDir := filepath.Join(configDir, "recovery-store")
+	if err := os.WriteFile(filepath.Join(customDir), []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	cfg := sopbackend.Config{VectorizationRecoveryStoragePath: customDir}
+	stateDir := resolveVectorizationRecoveryStateDir(configPath, cfg)
+	want := filepath.Join(configDir, "state")
+	if stateDir != want {
+		t.Fatalf("expected fallback path %q, got %q", want, stateDir)
+	}
+}
+
+func TestBuildLocalRAGWelcomeContextIncludesRecoveryActions(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-9", os.ErrNotExist)
+	}
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	t.Cleanup(func() {
+		activeRuntimeVectorizationFailurePolicy = previous
+	})
+
+	contextHTML := buildLocalRAGWelcomeContext()
+	if !strings.Contains(contextHTML, "recovery-action-button") {
+		t.Fatalf("expected recovery action buttons in welcome context, got %q", contextHTML)
+	}
+	if !strings.Contains(contextHTML, `data-action="recover"`) {
+		t.Fatalf("expected recover action metadata in welcome context, got %q", contextHTML)
+	}
+	if !strings.Contains(contextHTML, `data-action="ignore"`) {
+		t.Fatalf("expected ignore action metadata in welcome context, got %q", contextHTML)
+	}
+	if !strings.Contains(contextHTML, `data-action="clear_and_rebuild"`) {
+		t.Fatalf("expected clear-and-rebuild action metadata in welcome context, got %q", contextHTML)
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusClearAndRebuildActionInvokesRecoveryHandler(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-clear", os.ErrNotExist)
+	}
+
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	previousHandler := vectorizationRecoveryExecutor
+	called := false
+	vectorizationRecoveryExecutor = func(ctx context.Context, kbName, targetType, targetID string) error {
+		called = true
+		if kbName != "kb" || targetType != "category" || targetID != "cat-clear" {
+			t.Fatalf("unexpected recovery target: kb=%q targetType=%q targetID=%q", kbName, targetType, targetID)
+		}
+		return nil
+	}
+	defer func() { vectorizationRecoveryExecutor = previousHandler }()
+
+	body := strings.NewReader(`{"action":"clear_and_rebuild","kb_name":"kb","target_type":"category","target_id":"cat-clear"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/vectorization/recovery", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if !called {
+		t.Fatal("expected clear_and_rebuild action to invoke recovery handler")
+	}
+
+	var payload struct {
+		Updated bool   `json:"updated"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode clear-and-rebuild payload: %v", err)
+	}
+	if !payload.Updated {
+		t.Fatal("expected updated flag to be true")
+	}
+	if !strings.Contains(strings.ToLower(payload.Message), "clear") {
+		t.Fatalf("expected clear-and-rebuild message, got %q", payload.Message)
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusReturnsPersistedState(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-4", os.ErrNotExist)
+	}
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	t.Cleanup(func() {
+		activeRuntimeVectorizationFailurePolicy = previous
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/daemon/vectorization/recovery", nil)
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		HasRecovery bool                                `json:"has_recovery"`
+		Latest      runtimeVectorizationRecoveryState   `json:"latest"`
+		States      []runtimeVectorizationRecoveryState `json:"states"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode recovery status payload: %v", err)
+	}
+	if !payload.HasRecovery {
+		t.Fatalf("expected recovery payload to report recovery")
+	}
+	if len(payload.States) == 0 {
+		t.Fatalf("expected recovery states to be listed")
+	}
+	if payload.Latest.TargetID != "cat-4" {
+		t.Fatalf("expected latest target id to be cat-4, got %q", payload.Latest.TargetID)
+	}
+	if payload.Latest.Prompt == "" {
+		t.Fatalf("expected recovery prompt to be present")
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusIncludesNeedsRecoveryFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-8", os.ErrNotExist)
+	}
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	t.Cleanup(func() {
+		activeRuntimeVectorizationFailurePolicy = previous
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/daemon/vectorization/recovery", nil)
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		NeedsRecovery bool `json:"needs_recovery"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode recovery needs payload: %v", err)
+	}
+	if !payload.NeedsRecovery {
+		t.Fatalf("expected needs_recovery to be true")
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusAcceptsRecoveryAction(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-5", os.ErrNotExist)
+	}
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	t.Cleanup(func() {
+		activeRuntimeVectorizationFailurePolicy = previous
+	})
+
+	body := strings.NewReader(`{"action":"ignore","kb_name":"kb","target_type":"category","target_id":"cat-5"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/vectorization/recovery", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Latest runtimeVectorizationRecoveryState `json:"latest"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode recovery action payload: %v", err)
+	}
+	if payload.Latest.Status != "ignored" {
+		t.Fatalf("expected ignored status after action, got %q", payload.Latest.Status)
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusScheduleRetryActionMarksScheduledState(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-schedule", os.ErrNotExist)
+	}
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	t.Cleanup(func() {
+		activeRuntimeVectorizationFailurePolicy = previous
+	})
+
+	body := strings.NewReader(`{"action":"schedule_retry","kb_name":"kb","target_type":"category","target_id":"cat-schedule"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/vectorization/recovery", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Latest  runtimeVectorizationRecoveryState `json:"latest"`
+		Updated bool                              `json:"updated"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode schedule-retry payload: %v", err)
+	}
+	if !payload.Updated {
+		t.Fatal("expected updated flag to be true")
+	}
+	if payload.Latest.Status != "scheduled" {
+		t.Fatalf("expected scheduled status after schedule_retry action, got %q", payload.Latest.Status)
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusGiveUpActionMarksAbandonedState(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-giveup", os.ErrNotExist)
+	}
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	t.Cleanup(func() {
+		activeRuntimeVectorizationFailurePolicy = previous
+	})
+
+	body := strings.NewReader(`{"action":"give_up","kb_name":"kb","target_type":"category","target_id":"cat-giveup"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/vectorization/recovery", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Latest  runtimeVectorizationRecoveryState `json:"latest"`
+		Updated bool                              `json:"updated"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode give-up payload: %v", err)
+	}
+	if !payload.Updated {
+		t.Fatal("expected updated flag to be true")
+	}
+	if payload.Latest.Status != "abandoned" {
+		t.Fatalf("expected abandoned status after give_up action, got %q", payload.Latest.Status)
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusRecoverActionInvokesRecoveryHandler(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-6", os.ErrNotExist)
+	}
+
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	previousHandler := vectorizationRecoveryExecutor
+	called := false
+	vectorizationRecoveryExecutor = func(ctx context.Context, kbName, targetType, targetID string) error {
+		called = true
+		if kbName != "kb" || targetType != "category" || targetID != "cat-6" {
+			t.Fatalf("unexpected recovery target: kb=%q targetType=%q targetID=%q", kbName, targetType, targetID)
+		}
+		return nil
+	}
+	defer func() { vectorizationRecoveryExecutor = previousHandler }()
+
+	body := strings.NewReader(`{"action":"recover","kb_name":"kb","target_type":"category","target_id":"cat-6"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/vectorization/recovery", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if !called {
+		t.Fatal("expected recover action to invoke recovery handler")
+	}
+
+	var payload struct {
+		Latest  runtimeVectorizationRecoveryState `json:"latest"`
+		Updated bool                              `json:"updated"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode recovery action payload: %v", err)
+	}
+	if !payload.Updated {
+		t.Fatal("expected updated flag to be true")
+	}
+	if payload.Latest.Status != "recovered" {
+		t.Fatalf("expected recovered status after recovery action, got %q", payload.Latest.Status)
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusRecoverAllActionRebuildsAllDegradedTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-7", os.ErrNotExist)
+	}
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-8", os.ErrNotExist)
+	}
+
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	previousHandler := vectorizationRecoveryExecutor
+	var attempted []string
+	vectorizationRecoveryExecutor = func(ctx context.Context, kbName, targetType, targetID string) error {
+		attempted = append(attempted, kbName+":"+targetType+":"+targetID)
+		return nil
+	}
+	defer func() { vectorizationRecoveryExecutor = previousHandler }()
+
+	body := strings.NewReader(`{"action":"recover_all"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/vectorization/recovery", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(attempted) != 2 {
+		t.Fatalf("expected recover_all to attempt 2 targets, got %d", len(attempted))
+	}
+
+	var payload struct {
+		RecoveredCount int  `json:"recovered_count"`
+		Updated        bool `json:"updated"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode recovery-all payload: %v", err)
+	}
+	if payload.RecoveredCount != 2 {
+		t.Fatalf("expected recovered_count to be 2, got %d", payload.RecoveredCount)
+	}
+	if !payload.Updated {
+		t.Fatal("expected updated flag to be true")
 	}
 }
 
@@ -399,6 +823,105 @@ func TestRunLocalCommandUsesSessionStateForFollowUpCommands(t *testing.T) {
 	}
 	if !strings.Contains(secondResp.Stdout, "/tmp") {
 		t.Fatalf("expected second command output to reflect session cwd, got %q", secondResp.Stdout)
+	}
+}
+
+func TestRetryPendingVectorizationRecoveryAttemptsPersistedDegradedTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-9", os.ErrNotExist)
+	}
+
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	previousHandler := vectorizationRecoveryExecutor
+	called := false
+	vectorizationRecoveryExecutor = func(ctx context.Context, kbName, targetType, targetID string) error {
+		called = true
+		if kbName != "kb" || targetType != "category" || targetID != "cat-9" {
+			t.Fatalf("unexpected recovery target: kb=%q targetType=%q targetID=%q", kbName, targetType, targetID)
+		}
+		return nil
+	}
+	defer func() { vectorizationRecoveryExecutor = previousHandler }()
+
+	count := retryPendingVectorizationRecovery(context.Background(), true)
+	if count != 1 {
+		t.Fatalf("expected one pending recovery to be retried, got %d", count)
+	}
+	if !called {
+		t.Fatal("expected pending recovery to invoke the recovery executor")
+	}
+
+	state := activeRuntimeVectorizationFailurePolicy.RecoveryState()
+	if state.Status != "recovered" {
+		t.Fatalf("expected recovered status after auto-retry, got %q", state.Status)
+	}
+}
+
+func TestHandleUIHandoffIncludesVectorizationRecoveryState(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-6", os.ErrNotExist)
+	}
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	t.Cleanup(func() {
+		activeRuntimeVectorizationFailurePolicy = previous
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"hello","hq":{"base_url":"http://example.test"}}`))
+	rr := httptest.NewRecorder()
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var resp UIHandoffResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode handoff response: %v", err)
+	}
+	if resp.Recovery.TargetID != "cat-6" {
+		t.Fatalf("expected handoff recovery target id to be cat-6, got %q", resp.Recovery.TargetID)
+	}
+	if resp.Recovery.Prompt == "" {
+		t.Fatalf("expected handoff recovery prompt to be present")
+	}
+}
+
+func TestHandleUIHandoffIncludesRecoveryPromptInWelcomeContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-7", os.ErrNotExist)
+	}
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	t.Cleanup(func() {
+		activeRuntimeVectorizationFailurePolicy = previous
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"hello","hq":{"base_url":"http://example.test"}}`))
+	rr := httptest.NewRecorder()
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var resp UIHandoffResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode handoff response: %v", err)
+	}
+	if !strings.Contains(resp.WelcomeContext, "Vectorization") {
+		t.Fatalf("expected welcome context to mention vectorization recovery, got %q", resp.WelcomeContext)
 	}
 }
 

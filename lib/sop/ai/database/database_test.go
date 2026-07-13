@@ -17,6 +17,116 @@ import (
 	core "github.com/sharedcode/sop/database"
 )
 
+func TestAIDatabase_ResetSemanticIndexClearsStoredVectorsAndHashes(t *testing.T) {
+	storagePath := t.TempDir()
+
+	db := database.NewDatabase(core.DatabaseOptions{
+		StoresFolders: []string{storagePath},
+	})
+
+	ctx := context.Background()
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+
+	kb, err := db.OpenKnowledgeBase(ctx, "reset_kb", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("OpenKnowledgeBase failed: %v", err)
+	}
+
+	catID, err := kb.Store.AddCategory(ctx, &memory.Category{ID: sop.NewUUID(), Name: "Reset", CenterVector: []float32{0.1, 0.2}, VectorHash: "stale"})
+	if err != nil {
+		t.Fatalf("AddCategory failed: %v", err)
+	}
+
+	itemID := sop.NewUUID()
+	item := memory.Item[map[string]any]{
+		ID:         itemID,
+		CategoryID: catID,
+		Data:       map[string]any{"text": "reset me"},
+		Summaries:  []string{"reset me"},
+		VectorHash: "stale-item",
+	}
+	if err := kb.Store.UpsertByCategoryID(ctx, catID, []float32{0.1, 0.2}, item, [][]float32{{1.0, 2.0}}, [][]float32{{0.3, 0.4}}); err != nil {
+		t.Fatalf("UpsertByCategoryID failed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	if err := db.ResetSemanticIndex(ctx, "reset_kb"); err != nil {
+		t.Fatalf("ResetSemanticIndex failed: %v", err)
+	}
+
+	verifyTx, err := db.BeginTransaction(ctx, sop.ForReading)
+	if err != nil {
+		t.Fatalf("BeginTransaction verify failed: %v", err)
+	}
+	defer verifyTx.Rollback(ctx)
+
+	verifyKB, err := db.OpenKnowledgeBase(ctx, "reset_kb", verifyTx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("OpenKnowledgeBase verify failed: %v", err)
+	}
+
+	catTree, err := verifyKB.Store.Categories(ctx)
+	if err != nil {
+		t.Fatalf("Categories failed: %v", err)
+	}
+	if found, err := catTree.Find(ctx, catID, false); err != nil || !found {
+		t.Fatalf("expected category %s to exist after reset, found=%v err=%v", catID, found, err)
+	}
+	cat, err := catTree.GetCurrentValue(ctx)
+	if err != nil {
+		t.Fatalf("GetCurrentValue category failed: %v", err)
+	}
+	if len(cat.CenterVector) != 0 {
+		t.Fatalf("expected category center vector to be cleared, got %v", cat.CenterVector)
+	}
+	if cat.VectorHash != "" {
+		t.Fatalf("expected category vector hash to be cleared, got %q", cat.VectorHash)
+	}
+
+	itemTree, err := verifyKB.Store.Items(ctx)
+	if err != nil {
+		t.Fatalf("Items failed: %v", err)
+	}
+	if found, err := itemTree.Find(ctx, memory.ItemKey{CategoryID: catID, ItemID: itemID}, false); err != nil || !found {
+		t.Fatalf("expected item %s to exist after reset, found=%v err=%v", itemID, found, err)
+	}
+	itemStored, err := itemTree.GetCurrentValue(ctx)
+	if err != nil {
+		t.Fatalf("GetCurrentValue item failed: %v", err)
+	}
+	if len(itemStored.Positions) != 0 {
+		t.Fatalf("expected item positions to be cleared, got %v", itemStored.Positions)
+	}
+	if itemStored.VectorHash != "" {
+		t.Fatalf("expected item vector hash to be cleared, got %q", itemStored.VectorHash)
+	}
+
+	vectorTree, err := verifyKB.Store.Vectors(ctx)
+	if err != nil {
+		t.Fatalf("Vectors failed: %v", err)
+	}
+	found, err := vectorTree.First(ctx)
+	if err != nil {
+		t.Fatalf("Vectors first failed: %v", err)
+	}
+	if found {
+		t.Fatalf("expected no stored vectors after reset")
+	}
+
+	catsByDist, err := verifyKB.Store.CategoriesByDistance(ctx)
+	if err != nil {
+		t.Fatalf("CategoriesByDistance failed: %v", err)
+	}
+	if catsByDist.Count() != 0 {
+		t.Fatalf("expected no distance index entries after reset, got %d", catsByDist.Count())
+	}
+}
+
 func TestAIDatabase_OpenKnowledgeBase_RehydratesCategorizerFromConfig(t *testing.T) {
 	storagePath := t.TempDir()
 

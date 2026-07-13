@@ -41,7 +41,8 @@ type SaveConfigRequest struct {
 	Port         int    `json:"port"`
 	RootPassword string `json:"root_password,omitempty"`
 
-	SystemAdminBootstrapSecret string `json:"system_admin_bootstrap_secret,omitempty"`
+	SystemAdminBootstrapSecret       string `json:"system_admin_bootstrap_secret,omitempty"`
+	VectorizationRecoveryStoragePath string `json:"vectorization_recovery_storage_path,omitempty"`
 
 	UseSharedBrain bool                `json:"use_shared_brain"`
 	SystemOptions  sop.DatabaseOptions `json:"system_options"`
@@ -171,6 +172,11 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	// 3. Update global config settings (Memory)
 	if req.Port > 0 {
 		config.Port = req.Port
+	}
+	if strings.TrimSpace(req.VectorizationRecoveryStoragePath) != "" {
+		config.VectorizationRecoveryStoragePath = sanitizePath(req.VectorizationRecoveryStoragePath)
+	} else {
+		config.VectorizationRecoveryStoragePath = ""
 	}
 
 	// 4. Setup System DB (I/O)

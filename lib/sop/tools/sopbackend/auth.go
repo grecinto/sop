@@ -1219,6 +1219,10 @@ func (s *SessionStore) ValidateTokenWithoutAccountCheck(ctx context.Context, tok
 }
 
 func (s *SessionStore) validateToken(ctx context.Context, token string, requireActiveAccount bool) (*UserRecord, error) {
+	if isTokenRevoked(token) {
+		return nil, fmt.Errorf("invalid session")
+	}
+
 	if claims, err := parseAndVerifySignedAccessToken(token); err == nil {
 		if requireActiveAccount && !isUserAccountActive(ctx, claims.Subject, claims.Role) {
 			return nil, fmt.Errorf("invalid session")
@@ -1298,6 +1302,8 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 }
 
 func (s *SessionStore) RevokeToken(ctx context.Context, token string) {
+	markTokenRevoked(token)
+
 	store, tx, err := s.getStore(ctx)
 	if err != nil {
 		log.Warn("failed to get store for token revocation", "error", err)
@@ -1322,6 +1328,8 @@ func (s *SessionStore) RevokeToken(ctx context.Context, token string) {
 		log.Warn("failed to get token value for revocation", "error", err)
 		return
 	}
+
+	markSessionTokensRevoked(r)
 
 	// Remove both the access and refresh tokens to fully invalidate the session.
 	store.Remove(ctx, r.Token)
@@ -1362,6 +1370,7 @@ func (s *SessionStore) revokeSessionsForUser(ctx context.Context, username strin
 	}
 
 	for _, record := range records {
+		markSessionTokensRevoked(record)
 		if err := removeSessionRecord(ctx, store, record); err != nil {
 			log.Warn("failed to revoke user session", "user", username, "error", err)
 		}
@@ -1372,9 +1381,37 @@ func (s *SessionStore) revokeSessionsForUser(ctx context.Context, username strin
 }
 
 var (
-	tokenFacade     TokenFacade
-	tokenFacadeOnce sync.Once
+	tokenFacade       TokenFacade
+	tokenFacadeOnce   sync.Once
+	revokedTokensMu   sync.RWMutex
+	revokedSessionIDs = make(map[string]struct{})
 )
+
+func isTokenRevoked(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	revokedTokensMu.RLock()
+	defer revokedTokensMu.RUnlock()
+	_, ok := revokedSessionIDs[token]
+	return ok
+}
+
+func markTokenRevoked(token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	revokedTokensMu.Lock()
+	defer revokedTokensMu.Unlock()
+	revokedSessionIDs[token] = struct{}{}
+}
+
+func markSessionTokensRevoked(record SessionRecord) {
+	markTokenRevoked(record.Token)
+	markTokenRevoked(record.RefreshToken)
+}
 
 func currentTokenFacade() TokenFacade {
 	tokenFacadeOnce.Do(func() {

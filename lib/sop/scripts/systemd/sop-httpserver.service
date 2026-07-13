@@ -1,0 +1,19 @@
+[Unit]
+Description=SOP HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/sop
+Environment=datapath=/var/lib/sop
+Environment=SOP_SESSION_SECRET=/etc/sop/session-secret
+ExecStart=/usr/local/bin/sop-httpserver --port 8080 --database /var/lib/sop
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
