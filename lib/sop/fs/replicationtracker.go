@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	log "log/slog"
@@ -56,6 +58,46 @@ func (r *replicationTracker) getReplicationStatusCacheKey() string {
 
 var GlobalReplicationDetails *ReplicationTrackedDetails
 var globalReplicationDetailsLocker sync.RWMutex = sync.RWMutex{}
+
+var recoveryStateCleanupPathMu sync.RWMutex
+var recoveryStateCleanupPath string
+var recoveryStateConfigUpdaterMu sync.RWMutex
+var recoveryStateConfigUpdater func(path string) error
+
+// SetRecoveryStateCleanupPath configures a recovery-state directory that should be
+// removed from the passive side during failover only when it resides on the same
+// underlying drive as the passive folder. This allows a user-selected recovery
+// location on a dedicated drive to remain untouched.
+func SetRecoveryStateCleanupPath(path string) {
+	recoveryStateCleanupPathMu.Lock()
+	defer recoveryStateCleanupPathMu.Unlock()
+	recoveryStateCleanupPath = strings.TrimSpace(path)
+}
+
+// SetRecoveryStateConfigUpdater registers a callback used to persist the updated
+// recovery-state path into configuration after reinstate rewrites it to the
+// passive-drive location.
+func SetRecoveryStateConfigUpdater(updater func(path string) error) {
+	recoveryStateConfigUpdaterMu.Lock()
+	defer recoveryStateConfigUpdaterMu.Unlock()
+	recoveryStateConfigUpdater = updater
+}
+
+func getRecoveryStateCleanupPath() string {
+	recoveryStateCleanupPathMu.RLock()
+	defer recoveryStateCleanupPathMu.RUnlock()
+	return recoveryStateCleanupPath
+}
+
+func persistRecoveryStatePath(path string) error {
+	recoveryStateConfigUpdaterMu.RLock()
+	updater := recoveryStateConfigUpdater
+	recoveryStateConfigUpdaterMu.RUnlock()
+	if updater == nil {
+		return nil
+	}
+	return updater(strings.TrimSpace(path))
+}
 
 // NewReplicationTracker instantiates a tracker for active/passive folders and replication status.
 // It reads persisted status, initializes global in-memory state, and optionally synchronizes with L2 cache.
@@ -130,9 +172,14 @@ func (r *replicationTracker) HandleReplicationRelatedError(ctx context.Context, 
 			return
 		}
 		if err1.Code >= sop.FailoverQualifiedError || err2.Code >= sop.FailoverQualifiedError {
-			log.Warn(fmt.Sprintf("Replication I/O error detected (code=%v). Triggering failover.", err1.Code))
-			// Auto-failover is currently disabled.
-			// r.failover(ctx)
+			if sop.ShouldTriggerFailover(ioError, "", "") {
+				log.Warn(fmt.Sprintf("Replication I/O error detected (code=%v). Triggering failover.", err1.Code))
+				if err := r.failover(ctx); err != nil {
+					log.Warn(fmt.Sprintf("replication failover failed, details: %v", err))
+				}
+			} else {
+				log.Warn(fmt.Sprintf("Replication I/O error detected (code=%v). Failover threshold not reached yet.", err1.Code))
+			}
 		}
 	}
 }
@@ -230,8 +277,102 @@ func (r *replicationTracker) failover(ctx context.Context) error {
 
 	globalReplicationDetailsLocker.Unlock()
 
+	if err := cleanupRecoveryStateOnFailover(r.getPassiveBaseFolder(), r.getActiveBaseFolder()); err != nil {
+		log.Warn(fmt.Sprintf("cleanup recovery state after failover failed, details: %v", err))
+	}
+
 	log.Info(fmt.Sprintf("failover event occurred, newly active folder is, %s", r.getActiveBaseFolder()))
 	return nil
+}
+
+func cleanupRecoveryStateOnFailover(passiveBaseFolder, activeBaseFolder string) error {
+	cleanupPath := getRecoveryStateCleanupPath()
+	if strings.TrimSpace(cleanupPath) == "" {
+		return nil
+	}
+	if strings.TrimSpace(passiveBaseFolder) == "" || strings.TrimSpace(activeBaseFolder) == "" {
+		return nil
+	}
+	if filepath.Clean(cleanupPath) == filepath.Clean(passiveBaseFolder) || filepath.Clean(cleanupPath) == filepath.Clean(activeBaseFolder) {
+		return nil
+	}
+	if !sameDrivePath(cleanupPath, passiveBaseFolder) {
+		return nil
+	}
+	return os.RemoveAll(cleanupPath)
+}
+
+func ensureRecoveryStatePathForPassiveDrive(passiveBaseFolder string) error {
+	configuredPath := getRecoveryStateCleanupPath()
+	if strings.TrimSpace(configuredPath) == "" || strings.TrimSpace(passiveBaseFolder) == "" {
+		return nil
+	}
+	if !sameDrivePath(configuredPath, passiveBaseFolder) {
+		return nil
+	}
+	derivedPath := deriveRecoveryStatePath(configuredPath, passiveBaseFolder)
+	if strings.TrimSpace(derivedPath) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(derivedPath, 0o755); err != nil {
+		return err
+	}
+	SetRecoveryStateCleanupPath(derivedPath)
+	return persistRecoveryStatePath(derivedPath)
+}
+
+func deriveRecoveryStatePath(configuredPath, passiveBaseFolder string) string {
+	cleanConfiguredPath := filepath.Clean(strings.TrimSpace(configuredPath))
+	cleanPassiveBaseFolder := filepath.Clean(strings.TrimSpace(passiveBaseFolder))
+	if cleanConfiguredPath == "" || cleanPassiveBaseFolder == "" {
+		return ""
+	}
+	name := filepath.Base(cleanConfiguredPath)
+	if name == "." || name == string(filepath.Separator) || name == ".." {
+		return cleanPassiveBaseFolder
+	}
+	return filepath.Join(cleanPassiveBaseFolder, name)
+}
+
+func sameDrivePath(pathA, pathB string) bool {
+	if strings.TrimSpace(pathA) == "" || strings.TrimSpace(pathB) == "" {
+		return false
+	}
+	resolvedA, errA := filepath.Abs(pathA)
+	resolvedB, errB := filepath.Abs(pathB)
+	if errA == nil && errB == nil {
+		if deviceA, errA := pathDeviceInfo(resolvedA); errA == nil {
+			if deviceB, errB := pathDeviceInfo(resolvedB); errB == nil {
+				return deviceA == deviceB
+			}
+		}
+	}
+	if volumeA := filepath.VolumeName(resolvedA); volumeA != "" && volumeA == filepath.VolumeName(resolvedB) {
+		return true
+	}
+	return false
+}
+
+func pathDeviceInfo(path string) (uint64, error) {
+	current := path
+	for {
+		info, err := os.Stat(current)
+		if err == nil {
+			if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+				return uint64(stat.Dev), nil
+			}
+			return 0, fmt.Errorf("unsupported stat implementation")
+		}
+		if !os.IsNotExist(err) {
+			return 0, err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return 0, os.ErrNotExist
 }
 
 func (r *replicationTracker) logCommitChanges(ctx context.Context, tid sop.UUID, stores []sop.StoreInfo, newRootNodesHandles, addedNodesHandles, updatedNodesHandles, removedNodesHandles []sop.RegistryPayload[sop.Handle]) error {

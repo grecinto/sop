@@ -1,6 +1,6 @@
 # Vectorization Recovery and Self-Healing Plan
 
-Status: Implemented for V1
+Status: Implemented for V1 (including passive-drive recovery-state rebasing and persisted recovery paths)
 Priority: Complete
 Area: Runtime-agnostic vectorization recovery
 
@@ -50,11 +50,12 @@ Runtime-specific behavior is expressed through a policy interface so the core ve
 - Automatic retry loop with backoff.
 - Threshold-based recovery prompt and user actions.
 - Logging and regression tests for skip-on-failure, escalation, and recovery behavior.
+- SetupWizard-backed recovery storage path selection, defaulting to the passive folder when available, and persistence through config.
+- Passive-drive recovery-state cleanup and rebasing during failover and reinstate.
 
-### Follow-up / out of scope for V1
+### Remaining follow-up / out-of-scope work
 
 - Cross-runtime or fleet-managed repair queues.
-- SetupWizard-backed recovery storage design.
 - Advanced index repair heuristics beyond rebuild and clear-and-rebuild.
 
 ## Implemented Architecture

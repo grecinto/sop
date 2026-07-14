@@ -45,9 +45,57 @@ Not all errors trigger a failover. SOP distinguishes between transient errors (r
 *   **Logs**: Watch for `[Failover]` tagged logs.
 *   **Metrics**: Monitor the `sop_failover_count` metric (if you have instrumented your application).
 
+### CRUD vs. recomputable workflows
+
+The storage-health policy is intentionally not an automatic repair policy for primary CRUD writes.
+
+- Primary CRUD operations (create/update/delete for categories, items, and other data-path writes) should fail fast and surface the error to the caller.
+- Repeated failover-qualified errors for a path should still be counted and used to mark that path degraded or read-only.
+- Higher-level workflows that are recomputable, such as semantic vectorization, may opt into a bounded retry loop only when the shared storage-health policy says auto-retry is still allowed.
+- Read-only or write-protected storage should disable those higher-level retries immediately.
+
+In practice, this means the data layer owns the storage-health state machine, while higher-level workflows decide whether a retry is appropriate for their own semantics.
+
+### Recent failover and recovery-state refinements
+
+The current implementation uses the shared storage-health policy for more than just status reporting:
+
+- Failover-qualified I/O errors are no longer treated as an immediate failover signal on the first occurrence. The storage layer records repeated failures for the affected path and only escalates to failover once the shared threshold is crossed.
+- Irreparable conditions such as read-only, no-device, no-medium, no-space, quota, and similar media or filesystem failures bypass that threshold and fail over immediately because staying on the broken path is unsafe.
+- Recovery-state directories used for vectorization repair are treated as lifecycle-sensitive. During failover they are deleted only when the recovery path clearly belongs to the same drive as the passive folder; otherwise the dedicated recovery location is preserved.
+- During reinstate, SOP can re-base the recovery-state path to the replacement passive drive, update the runtime config, and persist the new location so later recovery and retry flows continue to use the correct folder.
+
+This keeps the policy conservative for primary data-path writes while still allowing recomputable workflows such as semantic vectorization to recover automatically when the storage layer says it is safe to do so.
+
 ## Drive Failure Handling and Reinstatement
 
 When a drive fails, the recovery flow depends on whether the failure affected the Active/Passive metadata path or the EC-backed blob path.
+
+### General degraded-path policy
+
+The shared policy should apply across single-drive, replicated, and EC-backed deployments, and it belongs in the storage/data layer rather than in the UI or agent layer.
+
+1. Treat failover-qualified I/O errors as a first-class degraded-path signal rather than an endless retry loop.
+2. Count repeated failures against the affected path.
+3. Mark the path as degraded once the threshold is crossed.
+4. If the storage layer reports write-protection or read-only behavior, escalate to a read-only state immediately because writes are no longer safe.
+5. Surface the storage-health transition through the daemon recovery/status flow so operators can see it promptly.
+6. Let the storage topology decide the recovery action: replication and EC can use the underlying failover or repair path, while single-drive setups require conservative write-stopping and operator intervention.
+
+The data layer owns the policy and the state machine. Higher layers, including RAG/ReAct flows, the daemon, and application-facing APIs, consume that state and translate it into prompts, warnings, or structured errors. That means a RAG loop can ask the user to intervene, while a B-tree or SQL-style caller can receive an appropriate error and health signal without re-implementing any storage policy logic.
+
+A useful architectural boundary is:
+- **Data layer**: owns storage semantics, degraded/read-only policy, health-state transitions, metadata, and recovery bookkeeping.
+- **Application layer**: owns retries, recovery lifecycle orchestration, end-user alerting/prompting, operator guidance, and action selection for the current workflow.
+
+This split keeps the policy consistent across all data access paths while letting the application layer tailor the experience for background services, UI workflows, and AI-assisted interactions.
+
+The threshold should remain conservative and shared:
+
+- **General threshold**: trigger degraded-state handling after **three consecutive failover-qualified errors** (or three within a short window) for a path.
+- **Read-only escalation**: if the storage layer explicitly indicates read-only or write-protected behavior, transition to read-only immediately regardless of the previous count.
+
+This keeps the policy consistent across all layouts while still respecting the difference in recovery options. A single failure should not be treated as a degraded condition by itself; that is too aggressive for replication and unnecessary for a single drive. The goal is to avoid both flapping and silent data risk while making the recovery decision only once the evidence is strong enough.
 
 ### 1) Replace the failed drive
 

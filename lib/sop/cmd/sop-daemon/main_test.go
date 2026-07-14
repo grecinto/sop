@@ -8,11 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
+	sopfs "github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -75,6 +78,12 @@ func (a *executorAwareAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition
 	return nil, nil
 }
 
+func resetDefaultStorageHealthPolicyForTest(t *testing.T) {
+	t.Helper()
+	restore := sop.SetDefaultStorageHealthPolicy(sop.NewStorageHealthPolicy())
+	t.Cleanup(restore)
+}
+
 func TestBuildListenAddr(t *testing.T) {
 	if got, want := buildListenAddr("127.0.0.1", 9090), "127.0.0.1:9090"; got != want {
 		t.Fatalf("buildListenAddr() = %q, want %q", got, want)
@@ -82,6 +91,92 @@ func TestBuildListenAddr(t *testing.T) {
 
 	if got, want := buildListenAddr("0.0.0.0", 8080), "0.0.0.0:8080"; got != want {
 		t.Fatalf("buildListenAddr() = %q, want %q", got, want)
+	}
+}
+
+func TestCurrentStorageHealthStateUsesSharedPolicyWhenRuntimePolicyIsUnavailable(t *testing.T) {
+	resetDefaultStorageHealthPolicyForTest(t)
+
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = nil
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	policy := sop.DefaultStorageHealthPolicy()
+	policy.RecordFailure("write", "/tmp/shared-store", syscall.EROFS)
+
+	if !currentVectorizationNeedsRecovery() {
+		t.Fatal("expected shared storage-health policy to surface recovery need")
+	}
+
+	state := currentStoragePathRecoveryState()
+	if state.Status != "read_only" {
+		t.Fatalf("expected shared storage-health policy status to be read_only, got %q", state.Status)
+	}
+	if state.Path != "/tmp/shared-store" {
+		t.Fatalf("expected shared storage-health policy path to be preserved, got %q", state.Path)
+	}
+}
+
+func TestCurrentStorageHealthStateFallsBackToSharedPolicyWhenRuntimePolicyHasNoState(t *testing.T) {
+	resetDefaultStorageHealthPolicyForTest(t)
+
+	tmpDir := t.TempDir()
+	runtimePolicy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = runtimePolicy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	policy := sop.DefaultStorageHealthPolicy()
+	policy.RecordFailure("write", "/tmp/shared-store", syscall.EROFS)
+
+	if !currentVectorizationNeedsRecovery() {
+		t.Fatal("expected shared storage-health policy to surface recovery need even when the runtime policy is present but empty")
+	}
+
+	state := currentStoragePathRecoveryState()
+	if state.Status != "read_only" {
+		t.Fatalf("expected shared storage-health policy status to be read_only when the runtime policy has no state, got %q", state.Status)
+	}
+	if state.Path != "/tmp/shared-store" {
+		t.Fatalf("expected shared storage-health policy path to be preserved when the runtime policy has no state, got %q", state.Path)
+	}
+}
+
+func TestHandleUIHandoffIncludesStoragePathRecoveryState(t *testing.T) {
+	resetDefaultStorageHealthPolicyForTest(t)
+
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.RecordStoragePathFailure("write", "/tmp/fake-store", os.ErrNotExist)
+	}
+
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	body := strings.NewReader(`{"query":"hello","hq":{"base_url":"https://example.test"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload UIHandoffResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode handoff payload: %v", err)
+	}
+	if !payload.NeedsRecovery {
+		t.Fatal("expected handoff payload to report storage-path recovery needs")
+	}
+	if payload.StoragePathRecovery.Status != "degraded" {
+		t.Fatalf("expected storage path recovery status to be degraded, got %q", payload.StoragePathRecovery.Status)
+	}
+	if payload.StoragePathRecovery.Path != "/tmp/fake-store" {
+		t.Fatalf("expected storage path recovery path to be preserved, got %q", payload.StoragePathRecovery.Path)
 	}
 }
 
@@ -114,6 +209,56 @@ func TestRetryPendingVectorizationRecoveryHonorsBackoff(t *testing.T) {
 	}
 }
 
+func TestRetryPendingVectorizationRecoverySkipsWhenStorageHealthDisablesAutoRetry(t *testing.T) {
+	resetDefaultStorageHealthPolicyForTest(t)
+
+	tmpDir := t.TempDir()
+	policy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	for i := 0; i < 3; i++ {
+		policy.HandleFailure("kb", "category", "cat-storage-gate", os.ErrNotExist)
+	}
+	policy.RecordStoragePathFailure("write", "/tmp/fake-store", syscall.EROFS)
+
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	previousHandler := vectorizationRecoveryExecutor
+	called := 0
+	vectorizationRecoveryExecutor = func(ctx context.Context, kbName, targetType, targetID string) error {
+		called++
+		return nil
+	}
+	defer func() { vectorizationRecoveryExecutor = previousHandler }()
+
+	if count := retryPendingVectorizationRecovery(context.Background(), false); count != 0 {
+		t.Fatalf("expected storage-health policy to block auto-retry, got %d", count)
+	}
+	if called != 0 {
+		t.Fatalf("expected recovery executor to be skipped when auto-retry is disabled, got %d calls", called)
+	}
+}
+
+func TestStorageHealthAllowsHigherLevelAutoRetryUsesSharedPolicyState(t *testing.T) {
+	resetDefaultStorageHealthPolicyForTest(t)
+
+	tmpDir := t.TempDir()
+	runtimePolicy := newRuntimeVectorizationFailurePolicy(tmpDir)
+	previousPolicy := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = runtimePolicy.(runtimeVectorizationFailurePolicyHandle)
+	defer func() { activeRuntimeVectorizationFailurePolicy = previousPolicy }()
+
+	restore := sop.SetDefaultStorageHealthPolicy(sop.NewStorageHealthPolicy())
+	defer restore()
+
+	policy := sop.DefaultStorageHealthPolicy()
+	policy.RecordFailure("write", "/tmp/shared-store", syscall.EROFS)
+
+	if storageHealthAllowsHigherLevelAutoRetry() {
+		t.Fatal("expected shared storage-health policy to disable higher-level auto-retry for read-only storage")
+	}
+}
+
 func TestResolveVectorizationRecoveryStateDirUsesConfiguredPathWhenWritable(t *testing.T) {
 	configDir := t.TempDir()
 	customDir := filepath.Join(configDir, "recovery-store")
@@ -141,6 +286,47 @@ func TestResolveVectorizationRecoveryStateDirFallsBackWhenConfiguredPathIsUnavai
 	want := filepath.Join(configDir, "state")
 	if stateDir != want {
 		t.Fatalf("expected fallback path %q, got %q", want, stateDir)
+	}
+}
+
+func TestConfigureRecoveryStatePersistenceUpdatesConfigFile(t *testing.T) {
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.json")
+	initialCfg := sopbackend.Config{ConfigFile: configPath, VectorizationRecoveryStoragePath: filepath.Join(configDir, "old-recovery")}
+	sopbackend.SetConfig(initialCfg)
+
+	t.Cleanup(func() {
+		sopfs.SetRecoveryStateConfigUpdater(nil)
+		sopfs.SetRecoveryStateCleanupPath("")
+		sopbackend.SetConfig(sopbackend.Config{})
+	})
+
+	updater := configureRecoveryStatePersistence(initialCfg)
+	if updater == nil {
+		t.Fatal("expected recovery-state persistence hook to be registered")
+	}
+
+	newPath := filepath.Join(configDir, "new-recovery")
+	if err := updater(newPath); err != nil {
+		t.Fatalf("update recovery path: %v", err)
+	}
+
+	cfg := sopbackend.GetConfig()
+	if cfg.VectorizationRecoveryStoragePath != newPath {
+		t.Fatalf("expected config to record %q, got %q", newPath, cfg.VectorizationRecoveryStoragePath)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+
+	var persisted sopbackend.Config
+	if err := json.Unmarshal(contents, &persisted); err != nil {
+		t.Fatalf("decode persisted config: %v", err)
+	}
+	if persisted.VectorizationRecoveryStoragePath != newPath {
+		t.Fatalf("expected persisted config to record %q, got %q", newPath, persisted.VectorizationRecoveryStoragePath)
 	}
 }
 
@@ -294,6 +480,76 @@ func TestHandleVectorizationRecoveryStatusIncludesNeedsRecoveryFlag(t *testing.T
 	}
 	if !payload.NeedsRecovery {
 		t.Fatalf("expected needs_recovery to be true")
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusUsesSharedStorageHealthPolicyWhenRuntimePolicyUnavailable(t *testing.T) {
+	resetDefaultStorageHealthPolicyForTest(t)
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = nil
+	defer func() { activeRuntimeVectorizationFailurePolicy = previous }()
+
+	policy := sop.DefaultStorageHealthPolicy()
+	policy.RecordFailure("write", "/tmp/shared-store", syscall.EROFS)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/daemon/vectorization/recovery", nil)
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		HasRecovery         bool                         `json:"has_recovery"`
+		NeedsRecovery       bool                         `json:"needs_recovery"`
+		StoragePathRecovery runtimeDataPathRecoveryState `json:"storage_path_recovery"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode shared storage-health payload: %v", err)
+	}
+	if !payload.HasRecovery {
+		t.Fatalf("expected shared storage-health policy to mark recovery as present")
+	}
+	if !payload.NeedsRecovery {
+		t.Fatalf("expected shared storage-health policy to require recovery")
+	}
+	if payload.StoragePathRecovery.Status != "read_only" {
+		t.Fatalf("expected shared storage-health policy status to be read_only, got %q", payload.StoragePathRecovery.Status)
+	}
+	if payload.StoragePathRecovery.Path != "/tmp/shared-store" {
+		t.Fatalf("expected shared storage-health policy path to be preserved, got %q", payload.StoragePathRecovery.Path)
+	}
+}
+
+func TestHandleVectorizationRecoveryStatusIncludesAllSharedStoragePathStates(t *testing.T) {
+	resetDefaultStorageHealthPolicyForTest(t)
+
+	previous := activeRuntimeVectorizationFailurePolicy
+	activeRuntimeVectorizationFailurePolicy = nil
+	defer func() { activeRuntimeVectorizationFailurePolicy = previous }()
+
+	policy := sop.DefaultStorageHealthPolicy()
+	policy.RecordFailure("write", "/tmp/first-store", os.ErrNotExist)
+	policy.RecordFailure("write", "/tmp/second-store", syscall.EROFS)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/daemon/vectorization/recovery", nil)
+	rr := httptest.NewRecorder()
+	handleGetVectorizationRecoveryStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleGetVectorizationRecoveryStatus() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		StoragePathStates []runtimeDataPathRecoveryState `json:"storage_path_states"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode shared storage-path state payload: %v", err)
+	}
+	if len(payload.StoragePathStates) != 2 {
+		t.Fatalf("expected 2 shared storage-path states, got %d", len(payload.StoragePathStates))
 	}
 }
 
@@ -832,6 +1088,8 @@ func TestRetryPendingVectorizationRecoveryAttemptsPersistedDegradedTargets(t *te
 	for i := 0; i < 3; i++ {
 		policy.HandleFailure("kb", "category", "cat-9", os.ErrNotExist)
 	}
+
+	resetDefaultStorageHealthPolicyForTest(t)
 
 	previousPolicy := activeRuntimeVectorizationFailurePolicy
 	activeRuntimeVectorizationFailurePolicy = policy.(runtimeVectorizationFailurePolicyHandle)

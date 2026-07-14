@@ -27,6 +27,7 @@ import (
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/database"
+	sopfs "github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -36,6 +37,7 @@ var (
 )
 
 type runtimeVectorizationFailurePolicyHandle interface {
+	aidb.VectorizationFailurePolicy
 	RecoveryState() runtimeVectorizationRecoveryState
 	RecoveryStates() []runtimeVectorizationRecoveryState
 	NeedsRecovery() bool
@@ -44,6 +46,9 @@ type runtimeVectorizationFailurePolicyHandle interface {
 	MarkAbandoned(kbName, targetType, targetID string)
 	MarkRecovered(kbName, targetType, targetID string)
 	RecordRetryAttempt(kbName, targetType, targetID string)
+	RecordStoragePathFailure(operation, targetPath string, err error)
+	StoragePathRecoveryState() runtimeDataPathRecoveryState
+	StoragePathRecoveryStates() []runtimeDataPathRecoveryState
 }
 
 var activeRuntimeVectorizationFailurePolicy runtimeVectorizationFailurePolicyHandle
@@ -94,6 +99,21 @@ var vectorizationRecoveryExecutor = func(ctx context.Context, kbName, targetType
 	default:
 		return db.Vectorize(ctx, kbName, llm, embedder, 50)
 	}
+}
+
+func configureRecoveryStatePersistence(cfg sopbackend.Config) func(path string) error {
+	sopfs.SetRecoveryStateCleanupPath(cfg.VectorizationRecoveryStoragePath)
+	updater := func(path string) error {
+		if strings.TrimSpace(path) == "" {
+			return nil
+		}
+		currentCfg := sopbackend.GetConfig()
+		currentCfg.VectorizationRecoveryStoragePath = path
+		sopbackend.SetConfig(currentCfg)
+		return sopbackend.SaveConfig(currentCfg.ConfigFile, currentCfg)
+	}
+	sopfs.SetRecoveryStateConfigUpdater(updater)
+	return updater
 }
 
 func resolveVectorizationRecoveryStateDir(configPath string, cfg sopbackend.Config) string {
@@ -231,12 +251,13 @@ type UIHandoffRequest struct {
 }
 
 type UIHandoffResponse struct {
-	Accepted       bool                              `json:"accepted"`
-	Message        string                            `json:"message"`
-	WelcomeContext string                            `json:"welcome_context,omitempty"`
-	Error          string                            `json:"error,omitempty"`
-	NeedsRecovery  bool                              `json:"needs_recovery,omitempty"`
-	Recovery       runtimeVectorizationRecoveryState `json:"recovery,omitempty"`
+	Accepted            bool                              `json:"accepted"`
+	Message             string                            `json:"message"`
+	WelcomeContext      string                            `json:"welcome_context,omitempty"`
+	Error               string                            `json:"error,omitempty"`
+	NeedsRecovery       bool                              `json:"needs_recovery,omitempty"`
+	Recovery            runtimeVectorizationRecoveryState `json:"recovery,omitempty"`
+	StoragePathRecovery runtimeDataPathRecoveryState      `json:"storage_path_recovery,omitempty"`
 }
 
 type daemonSessionContext struct {
@@ -325,8 +346,13 @@ func main() {
 
 	stateDir := resolveVectorizationRecoveryStateDir(resolvedConfig, sopbackend.GetConfig())
 	policyImpl := newRuntimeVectorizationFailurePolicy(stateDir)
-	activeRuntimeVectorizationFailurePolicy = policyImpl.(runtimeVectorizationFailurePolicyHandle)
+	activeRuntimeVectorizationFailurePolicy = policyImpl
 	aidb.RegisterVectorizationFailurePolicy(policyImpl)
+	sop.RegisterStoragePathFailureHandler(func(operation, targetPath string, err error) {
+		if activeRuntimeVectorizationFailurePolicy != nil {
+			activeRuntimeVectorizationFailurePolicy.RecordStoragePathFailure(operation, targetPath, err)
+		}
+	})
 	sopbackend.RegisterBackgroundServiceHook(func(ctx context.Context) {
 		if activeRuntimeVectorizationFailurePolicy == nil {
 			return
@@ -352,9 +378,10 @@ func main() {
 	} else {
 		log.Printf("Loaded daemon configuration from: %s", resolvedConfig)
 	}
+	cfg := sopbackend.GetConfig()
+	configureRecoveryStatePersistence(cfg)
 
 	// Auto-provision system DB if it doesn't exist
-	cfg := sopbackend.GetConfig()
 	if cfg.SystemDB != nil {
 		cfg.SystemDB.IsSystem = true
 		if cfg.SystemDB.Path != "" {
@@ -857,11 +884,12 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Accepted UI handoff for session %s", ctxKey)
 	respondJSON(w, http.StatusOK, UIHandoffResponse{
-		Accepted:       true,
-		Message:        "handoff accepted",
-		WelcomeContext: buildLocalRAGWelcomeContext(),
-		NeedsRecovery:  currentVectorizationNeedsRecovery(),
-		Recovery:       currentVectorizationRecoveryState(),
+		Accepted:            true,
+		Message:             "handoff accepted",
+		WelcomeContext:      buildLocalRAGWelcomeContext(),
+		NeedsRecovery:       currentVectorizationNeedsRecovery(),
+		Recovery:            currentVectorizationRecoveryState(),
+		StoragePathRecovery: currentStoragePathRecoveryState(),
 	})
 }
 
@@ -869,7 +897,8 @@ func buildLocalRAGWelcomeContext() string {
 	welcomeContext := "Hello! I am your local <strong>Daemon Assistant</strong>. I'm here to help you work with the local shell and embedded RAG runtime directly from this desktop experience.<br><br>I can help you:<br><ul style=\"color: var(--text-muted); font-size: 0.9em; margin: 0 0 8px 18px; padding: 0; list-style-position: outside;\"><li style=\"margin: 0 0 4px 0; padding: 0;\">run shell commands and inspect command output</li><li style=\"margin: 0 0 4px 0; padding: 0;\">answer questions using the local RAG knowledge you configured</li><li style=\"margin: 0 0 4px 0; padding: 0;\">help you troubleshoot local workflows from the command line</li></ul>Type <strong>/list_tools</strong> to see the built-in SOP commands available in this session.<br><br><em style=\"color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;\">Shell-style commands such as <strong>ls</strong>, <strong>pwd</strong>, and <strong>cd /Volumes</strong> can be run directly in the local shell, and slash-prefixed commands such as <strong>/list_tools</strong> are available for built-in SOP actions.</em><br><em style=\"color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;\">Try asking things like:</em><ul style=\"color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;\"><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Show me the current directory and files\"</li><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Explain how to run the local daemon\"</li><li style=\"margin: 0 0 2px 0; padding: 0;\">\"Help me inspect my local project structure\"</li></ul>"
 
 	recovery := currentVectorizationRecoveryState()
-	if recovery.Status != "healthy" && strings.TrimSpace(recovery.Prompt) != "" {
+	storagePathRecovery := currentStoragePathRecoveryState()
+	if (recovery.Status != "healthy" && strings.TrimSpace(recovery.Prompt) != "") || (storagePathRecovery.Status != "healthy" && strings.TrimSpace(storagePathRecovery.Prompt) != "") {
 		statusText := "needs attention"
 		if recovery.Status == "recovered" {
 			statusText = "recovered"
@@ -882,11 +911,18 @@ func buildLocalRAGWelcomeContext() string {
 		if recovery.LastAttemptAt > 0 {
 			statusText = fmt.Sprintf("%s • last attempt %s", statusText, time.Unix(recovery.LastAttemptAt, 0).Format("2006-01-02 15:04:05"))
 		}
-		welcomeContext += fmt.Sprintf("<br><br><strong>Recovery notice:</strong> %s", recovery.Prompt)
+		if storagePathRecovery.Status != "healthy" && strings.TrimSpace(storagePathRecovery.Prompt) != "" {
+			welcomeContext += fmt.Sprintf("<br><br><strong>Storage notice:</strong> %s", storagePathRecovery.Prompt)
+			welcomeContext += fmt.Sprintf("<br><span style=\"color: var(--text-muted); font-size: 0.9em;\">Path: %s</span>", htmlEscape(storagePathRecovery.Path))
+		} else if recovery.Status != "healthy" && strings.TrimSpace(recovery.Prompt) != "" {
+			welcomeContext += fmt.Sprintf("<br><br><strong>Recovery notice:</strong> %s", recovery.Prompt)
+		}
 		welcomeContext += fmt.Sprintf("<br><span style=\"color: var(--text-muted); font-size: 0.9em;\">Status: %s</span>", htmlEscape(statusText))
-		welcomeContext += fmt.Sprintf("<br><br><button class=\"recovery-action-button\" data-action=\"recover\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Recover semantic index</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
-		welcomeContext += fmt.Sprintf("<button class=\"recovery-action-button\" data-action=\"clear_and_rebuild\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Clear and rebuild</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
-		welcomeContext += fmt.Sprintf("<button class=\"recovery-action-button\" data-action=\"ignore\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Ignore for now</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
+		if recovery.Status != "healthy" && strings.TrimSpace(recovery.Prompt) != "" {
+			welcomeContext += fmt.Sprintf("<br><br><button class=\"recovery-action-button\" data-action=\"recover\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Recover semantic index</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
+			welcomeContext += fmt.Sprintf("<button class=\"recovery-action-button\" data-action=\"clear_and_rebuild\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Clear and rebuild</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
+			welcomeContext += fmt.Sprintf("<button class=\"recovery-action-button\" data-action=\"ignore\" data-kb-name=\"%s\" data-target-type=\"%s\" data-target-id=\"%s\">Ignore for now</button>", htmlEscape(recovery.KBName), htmlEscape(recovery.TargetType), htmlEscape(recovery.TargetID))
+		}
 	}
 	return welcomeContext
 }
@@ -909,10 +945,72 @@ func currentVectorizationRecoveryState() runtimeVectorizationRecoveryState {
 }
 
 func currentVectorizationNeedsRecovery() bool {
-	if activeRuntimeVectorizationFailurePolicy == nil {
-		return false
+	policy := sop.DefaultStorageHealthPolicy()
+	sharedNeedsRecovery := false
+	if policy != nil {
+		states := policy.StoragePathStates()
+		for _, state := range states {
+			if !policy.ShouldAutoRetry(state.Operation, state.Path) {
+				sharedNeedsRecovery = true
+				break
+			}
+		}
 	}
-	return activeRuntimeVectorizationFailurePolicy.NeedsRecovery()
+
+	if activeRuntimeVectorizationFailurePolicy != nil {
+		return activeRuntimeVectorizationFailurePolicy.NeedsRecovery() || sharedNeedsRecovery
+	}
+	return sharedNeedsRecovery
+}
+
+func currentStoragePathRecoveryState() runtimeDataPathRecoveryState {
+	policy := sop.DefaultStorageHealthPolicy()
+	if policy != nil {
+		states := policy.StoragePathStates()
+		if len(states) > 0 {
+			for _, state := range states {
+				if state.Status != sop.StorageHealthHealthy {
+					return newRuntimeDataPathRecoveryStateFromPolicy(state)
+				}
+			}
+		}
+	}
+
+	if activeRuntimeVectorizationFailurePolicy != nil {
+		return activeRuntimeVectorizationFailurePolicy.StoragePathRecoveryState()
+	}
+
+	return runtimeDataPathRecoveryState{Status: "healthy"}
+}
+
+func storageHealthAllowsHigherLevelAutoRetry() bool {
+	policy := sop.DefaultStorageHealthPolicy()
+	if policy != nil {
+		states := policy.StoragePathStates()
+		if len(states) > 0 {
+			for _, state := range states {
+				if !policy.ShouldAutoRetry(state.Operation, state.Path) {
+					return false
+				}
+			}
+			return true
+		}
+	}
+
+	if activeRuntimeVectorizationFailurePolicy != nil {
+		states := activeRuntimeVectorizationFailurePolicy.StoragePathRecoveryStates()
+		if len(states) == 0 {
+			return true
+		}
+		for _, state := range states {
+			if strings.EqualFold(state.Status, "read_only") || (state.NeedsAttention && !state.AutoRetryEnabled) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return true
 }
 
 func resetVectorizationIndexForRecovery(ctx context.Context, kbName string) error {
@@ -921,6 +1019,9 @@ func resetVectorizationIndexForRecovery(ctx context.Context, kbName string) erro
 
 func retryPendingVectorizationRecovery(ctx context.Context, force bool) int {
 	if activeRuntimeVectorizationFailurePolicy == nil {
+		return 0
+	}
+	if !storageHealthAllowsHigherLevelAutoRetry() {
 		return 0
 	}
 
@@ -950,15 +1051,17 @@ func retryPendingVectorizationRecovery(ctx context.Context, force bool) int {
 
 func handleGetVectorizationRecoveryStatus(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{
-		"has_recovery":    false,
-		"needs_recovery":  false,
-		"latest":          runtimeVectorizationRecoveryState{},
-		"states":          []runtimeVectorizationRecoveryState{},
-		"action":          "",
-		"updated":         false,
-		"recovered_count": 0,
-		"message":         "",
-		"error":           "",
+		"has_recovery":          false,
+		"needs_recovery":        false,
+		"latest":                runtimeVectorizationRecoveryState{},
+		"states":                []runtimeVectorizationRecoveryState{},
+		"storage_path_recovery": runtimeDataPathRecoveryState{},
+		"storage_path_states":   []runtimeDataPathRecoveryState{},
+		"action":                "",
+		"updated":               false,
+		"recovered_count":       0,
+		"message":               "",
+		"error":                 "",
 	}
 	if r.Method == http.MethodPost {
 		var req struct {
@@ -1055,10 +1158,33 @@ func handleGetVectorizationRecoveryStatus(w http.ResponseWriter, r *http.Request
 	if activeRuntimeVectorizationFailurePolicy != nil {
 		latest := activeRuntimeVectorizationFailurePolicy.RecoveryState()
 		states := activeRuntimeVectorizationFailurePolicy.RecoveryStates()
-		payload["has_recovery"] = latest.Status != "healthy" || len(states) > 0
+		storagePathRecovery := activeRuntimeVectorizationFailurePolicy.StoragePathRecoveryState()
+		storagePathStates := activeRuntimeVectorizationFailurePolicy.StoragePathRecoveryStates()
+		payload["has_recovery"] = latest.Status != "healthy" || len(states) > 0 || storagePathRecovery.Status != "healthy" || len(storagePathStates) > 0
 		payload["needs_recovery"] = activeRuntimeVectorizationFailurePolicy.NeedsRecovery()
 		payload["latest"] = latest
 		payload["states"] = states
+		payload["storage_path_recovery"] = storagePathRecovery
+		payload["storage_path_states"] = storagePathStates
+	}
+
+	policy := sop.DefaultStorageHealthPolicy()
+	sharedStates := []runtimeDataPathRecoveryState{}
+	if policy != nil {
+		states := policy.StoragePathStates()
+		for _, state := range states {
+			if state.Status != sop.StorageHealthHealthy {
+				sharedStates = append(sharedStates, newRuntimeDataPathRecoveryStateFromPolicy(state))
+			}
+		}
+	}
+	if len(sharedStates) > 0 {
+		payload["has_recovery"] = true
+		payload["needs_recovery"] = true
+		if len(sharedStates) > 0 {
+			payload["storage_path_recovery"] = sharedStates[0]
+		}
+		payload["storage_path_states"] = sharedStates
 	}
 	respondJSON(w, http.StatusOK, payload)
 }

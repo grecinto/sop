@@ -126,6 +126,34 @@ func TestReplicationTracker_Scenarios(t *testing.T) {
 				t.Fatalf("post-sync guard: %v", err)
 			}
 		}},
+		{name: "Failover_RemovesRecoveryStateOnlyWhenSameDrive", run: func(t *testing.T) {
+			ctx := context.Background()
+			cache := mocks.NewMockClient()
+			active := filepath.Join(t.TempDir(), "active")
+			passive := filepath.Join(t.TempDir(), "passive")
+			os.MkdirAll(active, 0o755)
+			os.MkdirAll(passive, 0o755)
+
+			cleanupDir := filepath.Join(passive, "recovery")
+			if err := os.MkdirAll(cleanupDir, 0o755); err != nil {
+				t.Fatalf("mkdir cleanup dir: %v", err)
+			}
+			SetRecoveryStateCleanupPath(cleanupDir)
+			t.Cleanup(func() { SetRecoveryStateCleanupPath("") })
+			globalReplicationDetailsLocker.Lock()
+			GlobalReplicationDetails = nil
+			globalReplicationDetailsLocker.Unlock()
+			rt, err := NewReplicationTracker(ctx, []string{active, passive}, true, cache)
+			if err != nil {
+				t.Fatalf("tracker: %v", err)
+			}
+			if err := rt.failover(ctx); err != nil {
+				t.Fatalf("failover: %v", err)
+			}
+			if _, err := os.Stat(cleanupDir); !os.IsNotExist(err) {
+				t.Fatalf("expected same-drive recovery dir to be removed, stat err=%v", err)
+			}
+		}},
 		{name: "FastForward_SkipsStoreReplication_FirstNil", run: func(t *testing.T) {
 			ctx := context.Background()
 			l2 := mocks.NewMockClient()
@@ -180,6 +208,28 @@ func TestReplicationTracker_Scenarios(t *testing.T) {
 				t.Fatalf("expected FailedToReplicate precondition error")
 			}
 		}},
+		{name: "EnsureRecoveryStatePathForPassiveDrive_UsesUpdater", run: func(t *testing.T) {
+			active := t.TempDir()
+			passive := t.TempDir()
+			SetRecoveryStateCleanupPath(filepath.Join(active, "recovery"))
+			t.Cleanup(func() { SetRecoveryStateCleanupPath("") })
+			var updated string
+			SetRecoveryStateConfigUpdater(func(path string) error {
+				updated = path
+				return nil
+			})
+			t.Cleanup(func() { SetRecoveryStateConfigUpdater(nil) })
+			if err := ensureRecoveryStatePathForPassiveDrive(passive); err != nil {
+				t.Fatalf("ensureRecoveryStatePathForPassiveDrive: %v", err)
+			}
+			want := filepath.Join(passive, "recovery")
+			if updated != want {
+				t.Fatalf("expected config updater to receive %q, got %q", want, updated)
+			}
+			if got := getRecoveryStateCleanupPath(); got != want {
+				t.Fatalf("expected cleanup path %q, got %q", want, got)
+			}
+		}},
 		{name: "ReinstateFailedDrives_HappyFlow", run: func(t *testing.T) {
 			ctx := context.Background()
 			cache := mocks.NewMockClient()
@@ -208,6 +258,40 @@ func TestReplicationTracker_Scenarios(t *testing.T) {
 			}
 			if rt.FailedToReplicate {
 				t.Fatalf("expected flag cleared")
+			}
+		}},
+		{name: "ReinstateFailedDrives_RebasesRecoveryStatePathToPassiveDrive", run: func(t *testing.T) {
+			ctx := context.Background()
+			cache := mocks.NewMockClient()
+			active := t.TempDir()
+			passive := t.TempDir()
+			globalReplicationDetailsLocker.Lock()
+			GlobalReplicationDetails = nil
+			globalReplicationDetailsLocker.Unlock()
+			SetRecoveryStateCleanupPath(filepath.Join(active, "recovery"))
+			t.Cleanup(func() { SetRecoveryStateCleanupPath("") })
+			rt, _ := NewReplicationTracker(ctx, []string{active, passive}, true, cache)
+			rt.FailedToReplicate = true
+			GlobalReplicationDetails.FailedToReplicate = true
+			storeRepo, _ := NewStoreRepository(ctx, rt, nil, cache, 64)
+			store := sop.StoreInfo{Name: "s1", RegistryTable: "c1_r"}
+			_ = storeRepo.Add(ctx, store)
+			regSegDir := filepath.Join(active, store.RegistryTable)
+			os.MkdirAll(regSegDir, 0o755)
+			os.WriteFile(filepath.Join(regSegDir, store.RegistryTable+"-1"+registryFileExtension), []byte("segment"), 0o644)
+			logDir := filepath.Join(active, commitChangesLogFolder)
+			os.MkdirAll(logDir, 0o755)
+			payload, _ := encoding.DefaultMarshaler.Marshal(sop.Tuple[[]sop.StoreInfo, [][]sop.RegistryPayload[sop.Handle]]{First: []sop.StoreInfo{store}, Second: [][]sop.RegistryPayload[sop.Handle]{nil, nil, nil, nil}})
+			os.WriteFile(filepath.Join(logDir, "0001"+logFileExtension), payload, 0o644)
+			if err := rt.ReinstateFailedDrives(ctx); err != nil {
+				t.Fatalf("ReinstateFailedDrives: %v", err)
+			}
+			wantDir := filepath.Join(passive, "recovery")
+			if _, err := os.Stat(wantDir); err != nil {
+				t.Fatalf("expected re-based recovery dir at %s: %v", wantDir, err)
+			}
+			if got := getRecoveryStateCleanupPath(); got != wantDir {
+				t.Fatalf("expected cleanup path %q, got %q", wantDir, got)
 			}
 		}},
 		{name: "ReinstateFailedDrives_FastForwardError", run: func(t *testing.T) {

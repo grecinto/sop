@@ -28,6 +28,9 @@ func (r *replicationTracker) ReinstateFailedDrives(ctx context.Context) error {
 		return fmt.Errorf("replicationTracker.FailedToReplicate is false, ReinstateFailedDrives is valid only if this is true")
 	}
 
+	if err := ensureRecoveryStatePathForPassiveDrive(r.getPassiveBaseFolder()); err != nil {
+		return err
+	}
 	if err := r.startLoggingCommitChanges(ctx); err != nil {
 		return err
 	}
