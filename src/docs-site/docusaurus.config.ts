@@ -73,6 +73,11 @@ const config: Config = {
       items: [
         {
           type: 'html',
+          value: '<a class="navbar__link navbar__green-earth-badge" href="/docs/green-earth-tech">Green Earth Tech</a>',
+          position: 'right',
+        },
+        {
+          type: 'html',
           value: '<a class="navbar__link" href="/site/">Back to Overview</a>',
           position: 'right',
         },

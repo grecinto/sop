@@ -16,6 +16,7 @@ const sidebars: SidebarsConfig = {
   tutorialSidebar: [
     'intro',
     'fleet-learning',
+    'green-earth-tech',
     {
       type: 'category',
       label: 'SDK Documentation',
