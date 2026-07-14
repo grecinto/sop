@@ -983,6 +983,22 @@ func currentStoragePathRecoveryState() runtimeDataPathRecoveryState {
 	return runtimeDataPathRecoveryState{Status: "healthy"}
 }
 
+func newRuntimeDataPathRecoveryStateFromPolicy(state sop.StoragePathHealthState) runtimeDataPathRecoveryState {
+	return runtimeDataPathRecoveryState{
+		Operation:        state.Operation,
+		Path:             state.Path,
+		Count:            state.Count,
+		Status:           string(state.Status),
+		Prompt:           state.Prompt,
+		LastUpdatedAt:    state.LastUpdatedAt,
+		LastError:        state.LastError,
+		SuggestedAction:  state.SuggestedAction,
+		NeedsAttention:   state.NeedsAttention,
+		AutoRetryEnabled: state.AutoRetryEnabled,
+		MaxRetryCount:    state.MaxRetryCount,
+	}
+}
+
 func storageHealthAllowsHigherLevelAutoRetry() bool {
 	policy := sop.DefaultStorageHealthPolicy()
 	if policy != nil {

@@ -399,13 +399,25 @@ func (r *replicationTracker) logCommitChanges(ctx context.Context, tid sop.UUID,
 }
 
 func (r *replicationTracker) getActiveBaseFolder() string {
+	if len(r.storesBaseFolders) == 0 {
+		return ""
+	}
 	if r.ActiveFolderToggler {
+		return r.storesBaseFolders[0]
+	}
+	if len(r.storesBaseFolders) == 1 {
 		return r.storesBaseFolders[0]
 	}
 	return r.storesBaseFolders[1]
 }
 func (r *replicationTracker) getPassiveBaseFolder() string {
+	if len(r.storesBaseFolders) == 0 {
+		return ""
+	}
 	if r.ActiveFolderToggler {
+		if len(r.storesBaseFolders) == 1 {
+			return r.storesBaseFolders[0]
+		}
 		return r.storesBaseFolders[1]
 	}
 	return r.storesBaseFolders[0]

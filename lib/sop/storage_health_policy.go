@@ -59,6 +59,8 @@ func NewStorageHealthPolicy() StorageHealthPolicy {
 var (
 	defaultStorageHealthPolicyMu sync.RWMutex
 	defaultStorageHealthPolicy   StorageHealthPolicy
+	storagePathFailureHandlersMu sync.RWMutex
+	storagePathFailureHandlers   []func(operation, targetPath string, err error)
 )
 
 // DefaultStorageHealthPolicy returns the shared storage-health policy owned by
@@ -91,6 +93,35 @@ func SetDefaultStorageHealthPolicy(policy StorageHealthPolicy) func() {
 		defer defaultStorageHealthPolicyMu.Unlock()
 		defaultStorageHealthPolicy = previous
 	}
+}
+
+// RegisterStoragePathFailureHandler installs a callback that is invoked whenever
+// the shared storage-health policy records a storage path failure.
+func RegisterStoragePathFailureHandler(handler func(operation, targetPath string, err error)) {
+	if handler == nil {
+		return
+	}
+	storagePathFailureHandlersMu.Lock()
+	defer storagePathFailureHandlersMu.Unlock()
+	storagePathFailureHandlers = append(storagePathFailureHandlers, handler)
+}
+
+func notifyStoragePathFailureHandlers(operation, targetPath string, err error) {
+	storagePathFailureHandlersMu.RLock()
+	handlers := append([]func(operation, targetPath string, err error){}, storagePathFailureHandlers...)
+	storagePathFailureHandlersMu.RUnlock()
+	for _, handler := range handlers {
+		if handler != nil {
+			handler(operation, targetPath, err)
+		}
+	}
+}
+
+// ReportStoragePathFailure records a failover-qualified storage-path failure in the
+// shared policy so higher layers can inspect the current health state.
+func ReportStoragePathFailure(operation, targetPath string, err error) {
+	DefaultStorageHealthPolicy().RecordFailure(operation, targetPath, err)
+	notifyStoragePathFailureHandlers(operation, targetPath, err)
 }
 
 func (p *storageHealthPolicy) RecordFailure(operation, targetPath string, err error) {

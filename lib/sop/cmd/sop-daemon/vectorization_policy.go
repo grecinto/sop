@@ -2,24 +2,25 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
-
-	aidb "github.com/sharedcode/sop/ai/database"
 )
 
 // runtimeVectorizationFailurePolicy implements the shared runtime behavior for
 // semantic vectorization failures: the first failure is skipped, repeated
 // failures escalate after a small threshold.
 type runtimeVectorizationFailurePolicy struct {
-	mu       sync.Mutex
-	counts   map[string]int
-	states   map[string]runtimeVectorizationRecoveryState
-	stateDir string
+	mu                sync.Mutex
+	counts            map[string]int
+	states            map[string]runtimeVectorizationRecoveryState
+	storagePathStates map[string]runtimeDataPathRecoveryState
+	stateDir          string
 }
 
 type runtimeVectorizationRecoveryState struct {
@@ -40,16 +41,31 @@ type runtimeVectorizationRecoveryState struct {
 	MaxRetryCount    int    `json:"max_retry_count,omitempty"`
 }
 
-type runtimeVectorizationFailureState struct {
-	Counts map[string]int                               `json:"counts"`
-	States map[string]runtimeVectorizationRecoveryState `json:"states"`
+type runtimeDataPathRecoveryState struct {
+	Operation        string `json:"operation"`
+	Path             string `json:"path"`
+	Count            int    `json:"count"`
+	Status           string `json:"status"`
+	Prompt           string `json:"prompt,omitempty"`
+	LastUpdatedAt    int64  `json:"last_updated_at,omitempty"`
+	LastError        string `json:"last_error,omitempty"`
+	SuggestedAction  string `json:"suggested_action,omitempty"`
+	NeedsAttention   bool   `json:"needs_attention,omitempty"`
+	AutoRetryEnabled bool   `json:"auto_retry_enabled,omitempty"`
+	MaxRetryCount    int    `json:"max_retry_count,omitempty"`
 }
 
-func newRuntimeVectorizationFailurePolicy(stateDir string) aidb.VectorizationFailurePolicy {
+type runtimeVectorizationFailureState struct {
+	Counts            map[string]int                               `json:"counts"`
+	States            map[string]runtimeVectorizationRecoveryState `json:"states"`
+	StoragePathStates map[string]runtimeDataPathRecoveryState      `json:"storage_path_states,omitempty"`
+}
+
+func newRuntimeVectorizationFailurePolicy(stateDir string) runtimeVectorizationFailurePolicyHandle {
 	if strings.TrimSpace(stateDir) == "" {
 		stateDir = os.TempDir()
 	}
-	policy := &runtimeVectorizationFailurePolicy{counts: make(map[string]int), states: make(map[string]runtimeVectorizationRecoveryState), stateDir: stateDir}
+	policy := &runtimeVectorizationFailurePolicy{counts: make(map[string]int), states: make(map[string]runtimeVectorizationRecoveryState), storagePathStates: make(map[string]runtimeDataPathRecoveryState), stateDir: stateDir}
 	policy.load()
 	return policy
 }
@@ -283,6 +299,11 @@ func (p *runtimeVectorizationFailurePolicy) NeedsRecovery() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	for _, state := range p.storagePathStates {
+		if state.Status != "" && state.Status != "healthy" {
+			return true
+		}
+	}
 	for key, count := range p.counts {
 		state := p.currentState(key)
 		if count >= 3 || strings.EqualFold(state.Status, "degraded") || strings.EqualFold(state.Status, "ignored") || strings.EqualFold(state.Status, "scheduled") {
@@ -290,6 +311,74 @@ func (p *runtimeVectorizationFailurePolicy) NeedsRecovery() bool {
 		}
 	}
 	return false
+}
+
+func (p *runtimeVectorizationFailurePolicy) RecordStoragePathFailure(operation, targetPath string, err error) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	key := fmt.Sprintf("storage:%s:%s", strings.TrimSpace(operation), strings.TrimSpace(targetPath))
+	state := runtimeDataPathRecoveryState{Operation: operation, Path: targetPath}
+	if existing, ok := p.storagePathStates[key]; ok {
+		state = existing
+	}
+	state.Count++
+	state.LastUpdatedAt = time.Now().Unix()
+	state.LastError = ""
+	if err != nil {
+		state.LastError = err.Error()
+	}
+	if strings.Contains(strings.ToLower(state.LastError), "read-only") || strings.Contains(strings.ToLower(state.LastError), "readonly") || strings.Contains(strings.ToLower(state.LastError), "write-protected") || errors.Is(err, syscall.EROFS) {
+		state.Status = "read_only"
+		state.NeedsAttention = true
+		state.AutoRetryEnabled = false
+		state.SuggestedAction = "stop_writes"
+		state.MaxRetryCount = 3
+		state.Prompt = fmt.Sprintf("Storage path %s is now read-only during %s; stop writes to this path and inspect the device or mount before recovery.", state.Path, state.Operation)
+	} else {
+		state.Status = "degraded"
+		state.SuggestedAction = "inspect_storage"
+		state.NeedsAttention = state.Count >= 3
+		state.AutoRetryEnabled = state.Count >= 3 && state.Count <= 3
+		state.MaxRetryCount = 3
+		if state.Count >= 3 {
+			state.Prompt = fmt.Sprintf("Storage path %s is repeatedly failing during %s; if a healthy passive replica exists, fail over to it; otherwise stop writes to this path and inspect the device or mount.", state.Path, state.Operation)
+		}
+	}
+	p.storagePathStates[key] = state
+	_ = p.save()
+}
+
+func (p *runtimeVectorizationFailurePolicy) StoragePathRecoveryState() runtimeDataPathRecoveryState {
+	if p == nil {
+		return runtimeDataPathRecoveryState{Status: "healthy"}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, state := range p.storagePathStates {
+		if state.Status != "healthy" {
+			return state
+		}
+	}
+	return runtimeDataPathRecoveryState{Status: "healthy"}
+}
+
+func (p *runtimeVectorizationFailurePolicy) StoragePathRecoveryStates() []runtimeDataPathRecoveryState {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	states := make([]runtimeDataPathRecoveryState, 0, len(p.storagePathStates))
+	for _, state := range p.storagePathStates {
+		if state.Status != "healthy" {
+			states = append(states, state)
+		}
+	}
+	return states
 }
 
 func (p *runtimeVectorizationFailurePolicy) currentState(key string) runtimeVectorizationRecoveryState {
@@ -328,6 +417,12 @@ func (p *runtimeVectorizationFailurePolicy) load() {
 	for key, savedState := range state.States {
 		p.states[key] = savedState
 	}
+	if state.StoragePathStates == nil {
+		state.StoragePathStates = make(map[string]runtimeDataPathRecoveryState)
+	}
+	for key, savedState := range state.StoragePathStates {
+		p.storagePathStates[key] = savedState
+	}
 }
 
 func (p *runtimeVectorizationFailurePolicy) save() error {
@@ -341,7 +436,7 @@ func (p *runtimeVectorizationFailurePolicy) save() error {
 		return err
 	}
 	path := filepath.Join(p.stateDir, "vectorization-failure-state.json")
-	data, err := json.Marshal(runtimeVectorizationFailureState{Counts: p.counts, States: p.states})
+	data, err := json.Marshal(runtimeVectorizationFailureState{Counts: p.counts, States: p.states, StoragePathStates: p.storagePathStates})
 	if err != nil {
 		return err
 	}

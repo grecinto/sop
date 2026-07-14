@@ -360,6 +360,222 @@ func Test_EC_Failover_Reinstate_FastForward_Short(t *testing.T) {
 	// Note: we intentionally skip simulating another failover here to keep the integration test deterministic and fast.
 }
 
+func Test_EC_Failover_Reinstate_HotPathWithConcurrentTransactions(t *testing.T) {
+	ctx := context.Background()
+
+	cleanupReplicationStatusFiles()
+
+	isolatedStores := []string{
+		fmt.Sprintf("%s%cdisk8", dataPath, os.PathSeparator),
+		fmt.Sprintf("%s%cdisk9", dataPath, os.PathSeparator),
+	}
+	to := sop.TransactionOptions{
+		Mode:                 sop.ForWriting,
+		MaxTime:              -1,
+		RegistryHashModValue: fs.MinimumModValue,
+		StoresFolders:        isolatedStores,
+		CacheType:            sop.InMemory,
+	}
+
+	table := "ec_hot_path_concurrency_it"
+	sanitizeIsolatedReplicationBases(t)
+	cleanupStoreEverywhere(table)
+	cleanupStoreRepository(table, isolatedStores)
+	restoreRegistryPermissions(t, table)
+
+	if err := ensureStoreExists(ctx, to, table); err != nil {
+		t.Fatalf("ensure store exists: %v", err)
+	}
+
+	seedTx, err := infs.NewTransactionWithReplication(ctx, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = seedTx.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedB, err := infs.OpenBtreeWithReplication[int, string](ctx, table, seedTx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := seedB.Upsert(ctx, 1, "seed"); !ok || err != nil {
+		t.Fatalf("seed upsert: %v", err)
+	}
+	if err := seedTx.Commit(ctx); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+
+	const failoverWorkers = 3
+	const hotPathWorkers = 2
+	ready := make(chan struct{}, failoverWorkers)
+	release := make(chan struct{})
+	results := make(chan error, failoverWorkers)
+
+	for i := 0; i < failoverWorkers; i++ {
+		go func(workerID int) {
+			tx, err := infs.NewTransactionWithReplication(ctx, to)
+			if err != nil {
+				results <- fmt.Errorf("worker %d create tx: %w", workerID, err)
+				return
+			}
+			if err = tx.Begin(ctx); err != nil {
+				results <- fmt.Errorf("worker %d begin: %w", workerID, err)
+				return
+			}
+			b, err := infs.OpenBtreeWithReplication[int, string](ctx, table, tx, nil)
+			if err != nil {
+				_ = tx.Rollback(ctx)
+				results <- fmt.Errorf("worker %d open btree: %w", workerID, err)
+				return
+			}
+			ready <- struct{}{}
+			<-release
+			if ok, err := b.Upsert(ctx, 100+workerID, fmt.Sprintf("pre-failover-%d", workerID)); !ok || err != nil {
+				_ = tx.Rollback(ctx)
+				results <- fmt.Errorf("worker %d upsert: ok=%v err=%v", workerID, ok, err)
+				return
+			}
+			if err := tx.Commit(ctx); err != nil {
+				results <- fmt.Errorf("worker %d commit: %w", workerID, err)
+				return
+			}
+			results <- nil
+		}(i)
+	}
+
+	for i := 0; i < failoverWorkers; i++ {
+		select {
+		case <-ready:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for failover workers to start")
+		}
+	}
+
+	triggerTx, err := infs.NewTransactionWithReplication(ctx, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = triggerTx.Begin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	triggerB, err := infs.OpenBtreeWithReplication[int, string](ctx, table, triggerTx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := triggerB.Upsert(ctx, 200, "failover-trigger"); !ok || err != nil {
+		t.Fatalf("trigger upsert: ok=%v err=%v", ok, err)
+	}
+	_ = triggerTx.Commit(ctx)
+
+	if err := fs.TriggerFailover(ctx, isolatedStores, true, sop.GetL2Cache(sop.TransactionOptions{CacheType: sop.InMemory})); err != nil {
+		t.Fatalf("TriggerFailover failed: %v", err)
+	}
+	if err := waitForFailedFlagTrue(3 * time.Second); err != nil {
+		t.Fatalf("expected FailedToReplicate after simulated failover: %v", err)
+	}
+
+	close(release)
+
+	for i := 0; i < failoverWorkers; i++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				// Some workers may still succeed or roll back depending on timing; the important part is that
+				// the failover/reinstate path was exercised while transactions were in flight.
+				_ = err
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out waiting for failover worker %d", i)
+		}
+	}
+
+	restoreRegistryPermissions(t, table)
+	restoreStoreInfoPermissions(t, table)
+
+	reinstateErr := make(chan error, 1)
+	go func() {
+		reinstateErr <- infs.ReinstateFailedDrives(ctx, isolatedStores, sop.InMemory)
+	}()
+
+	hotReady := make(chan struct{}, hotPathWorkers)
+	hotRelease := make(chan struct{})
+	hotResults := make(chan error, hotPathWorkers)
+	for i := 0; i < hotPathWorkers; i++ {
+		go func(workerID int) {
+			tx, err := infs.NewTransactionWithReplication(ctx, to)
+			if err != nil {
+				hotResults <- fmt.Errorf("hot worker %d create tx: %w", workerID, err)
+				return
+			}
+			if err = tx.Begin(ctx); err != nil {
+				hotResults <- fmt.Errorf("hot worker %d begin: %w", workerID, err)
+				return
+			}
+			b, err := infs.OpenBtreeWithReplication[int, string](ctx, table, tx, nil)
+			if err != nil {
+				_ = tx.Rollback(ctx)
+				hotResults <- fmt.Errorf("hot worker %d open btree: %w", workerID, err)
+				return
+			}
+			hotReady <- struct{}{}
+			<-hotRelease
+			if ok, err := b.Upsert(ctx, 300+workerID, fmt.Sprintf("hot-path-%d", workerID)); !ok || err != nil {
+				_ = tx.Rollback(ctx)
+				hotResults <- fmt.Errorf("hot worker %d upsert: ok=%v err=%v", workerID, ok, err)
+				return
+			}
+			if err := tx.Commit(ctx); err != nil {
+				hotResults <- fmt.Errorf("hot worker %d commit: %w", workerID, err)
+				return
+			}
+			hotResults <- nil
+		}(i)
+	}
+
+	for i := 0; i < hotPathWorkers; i++ {
+		select {
+		case <-hotReady:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for hot-path workers to start")
+		}
+	}
+	close(hotRelease)
+
+	select {
+	case err := <-reinstateErr:
+		if err != nil {
+			t.Fatalf("reinstate returned error: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for reinstate to complete")
+	}
+
+	for i := 0; i < hotPathWorkers; i++ {
+		select {
+		case err := <-hotResults:
+			if err != nil {
+				t.Fatalf("hot-path worker failed: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out waiting for hot-path worker %d", i)
+		}
+	}
+
+	if err := waitForFailedFlagFalse(5 * time.Second); err != nil {
+		t.Fatalf("expected FailedToReplicate=false after reinstate: %v", err)
+	}
+
+	got := readAll(ctx, to, table, t)
+	for _, key := range []int{1, 100, 101, 102, 200, 300, 301} {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("expected key %d after reinstate, got %v", key, got)
+		}
+	}
+	if got[200] != "failover-trigger" {
+		t.Fatalf("expected failover-trigger value after reinstate, got %q", got[200])
+	}
+}
+
 func Test_EC_FullLifecycle_Reinstate_RebuildsShardsAndPreservesData(t *testing.T) {
 	ctx := context.Background()
 
