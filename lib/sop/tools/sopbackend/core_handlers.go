@@ -1,7 +1,6 @@
 package sopbackend
 
 import (
-	"cmp" // Added
 	"context"
 	"encoding/json"
 	"fmt"
@@ -795,23 +794,13 @@ func handleDatabases(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			comparer := func(a, b string) int {
-				return cmp.Compare(a, b)
-			}
-
-			if _, err = database.NewBtree[string, string](ctx, options, "system_check", tx, comparer); err != nil {
+			if err := ensureBootstrapStore(ctx, config.SystemDB); err != nil {
 				tx.Rollback(ctx)
 				http.Error(w, "Failed to initialize registry: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 
 			tx.Commit(ctx)
-
-			// Clean up the dummy store (best effort)
-			if err := database.RemoveBtree(ctx, options, "system_check"); err != nil {
-				// It's okay if this fails, it's just a clean up.
-				log.Warn(fmt.Sprintf("Cleanup: Failed to remove init store 'system_check': %v", err))
-			}
 		}
 
 		if req.PopulateDemo && shouldSetup {
@@ -987,6 +976,9 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 		return false
 	}
 	if strings.HasSuffix(storeName, "_vecs") || strings.HasSuffix(storeName, "_by_time") {
+		return false
+	}
+	if strings.EqualFold(storeName, bootstrapStoreName) {
 		return false
 	}
 	if strings.EqualFold(storeName, sessionStoreName) {

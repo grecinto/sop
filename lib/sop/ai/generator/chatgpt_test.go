@@ -208,6 +208,55 @@ func TestChatGPTCreateResponses_UsesConfiguredAPIURL(t *testing.T) {
 	}
 }
 
+func TestChatGPTGenerate_SendsImageInputParts(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]any{"content": "ok"}}}, "usage": map[string]any{"total_tokens": 1}})
+	}))
+	defer server.Close()
+
+	gen := &chatgpt{apiKey: "test-key", model: "gpt-4o", apiURL: server.URL + "/v1"}
+	_, err := gen.Generate(context.Background(), "describe this", ai.GenOptions{InputParts: []ai.ContentPart{{Type: "image", MimeType: "image/png", Data: "abc123"}}})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	messages, ok := capturedBody["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("expected one chat message, got %#v", capturedBody["messages"])
+	}
+	userMessage, ok := messages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected user message object, got %#v", messages[0])
+	}
+	content, ok := userMessage["content"].([]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("expected multimodal content array, got %#v", userMessage["content"])
+	}
+	if got := content[0].(map[string]any)["text"]; got != "describe this" {
+		t.Fatalf("expected prompt text part, got %#v", content[0])
+	}
+	imagePart, ok := content[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected image content part, got %#v", content[1])
+	}
+	if got := imagePart["type"]; got != "image_url" {
+		t.Fatalf("expected image_url content part, got %#v", imagePart)
+	}
+	imageURL, ok := imagePart["image_url"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected image_url payload, got %#v", imagePart["image_url"])
+	}
+	if got := imageURL["url"]; got != "data:image/png;base64,abc123" {
+		t.Fatalf("expected base64 image url, got %#v", imageURL["url"])
+	}
+}
+
 func TestChatGPTGenerate_UsesConfiguredAPIURL(t *testing.T) {
 	var capturedPath string
 	var capturedAuth string

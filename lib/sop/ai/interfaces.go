@@ -270,6 +270,15 @@ type AI struct {
 }
 
 // GenOptions configures the generation process.
+type ContentPart struct {
+	Type     string
+	Text     string
+	MimeType string
+	Data     string
+	URL      string
+}
+
+// GenOptions configures the generation process.
 type GenOptions struct {
 	SystemPrompt     string
 	MaxTokens        int
@@ -281,6 +290,8 @@ type GenOptions struct {
 	// ToolCallContinuations carries provider-neutral tool-call/result turns that a
 	// generator can translate into its provider-specific continuation format.
 	ToolCallContinuations []ToolCallContinuation
+	// InputParts carries optional multimodal content that should be supplied alongside the prompt.
+	InputParts []ContentPart
 	// ThinkingLevel controls internal reasoning intensity for Gemini 3.1 Pro (low/medium/high).
 	// Use "low" for strict structured outputs, "high" for creative tasks.
 	ThinkingLevel string

@@ -23,6 +23,7 @@ func TestStoreRBAC_VisibilityRules(t *testing.T) {
 		{name: "sessions visible for system admin", ctx: sop.ContextWithAuth(context.Background(), sop.AuthContext{Roles: []string{sop.RoleSystemAdmin}, UserID: "root"}), store: "sessions", exposed: true},
 		{name: "own stm hidden for admin", ctx: sop.ContextWithAuth(context.Background(), sop.AuthContext{Roles: []string{sop.RoleAdmin}, UserID: "root"}), store: "stm_root", exposed: false},
 		{name: "own stm visible for system admin", ctx: sop.ContextWithAuth(context.Background(), sop.AuthContext{Roles: []string{sop.RoleSystemAdmin}, UserID: "root"}), store: "stm_root", exposed: true},
+		{name: "bootstrap metadata hidden", ctx: sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "alice"}), store: bootstrapStoreName, exposed: false},
 	}
 
 	for _, tc := range cases {

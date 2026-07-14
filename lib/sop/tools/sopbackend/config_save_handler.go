@@ -75,6 +75,47 @@ func validateSetupWizardSystemAdminSecret(secret string) error {
 	return nil
 }
 
+const bootstrapStoreName = "bootstrap_metadata"
+
+func ensureBootstrapStore(ctx context.Context, db *DatabaseConfig) error {
+	target := db
+	if target == nil {
+		target = config.SystemDB
+	}
+	if target == nil {
+		if opts, err := GetSystemDBOptions(ctx); err == nil {
+			return ensureBootstrapStoreInOptions(ctx, opts)
+		}
+		return nil
+	}
+
+	opts, err := GetDBOptionsFromConfig(ctx, target)
+	if err != nil {
+		return err
+	}
+	return ensureBootstrapStoreInOptions(ctx, opts)
+}
+
+func ensureBootstrapStoreInOptions(ctx context.Context, opts sop.DatabaseOptions) error {
+	tx, err := database.BeginTransaction(ctx, opts, sop.ForWriting)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := database.NewBtree[string, string](ctx, opts, bootstrapStoreName, tx, cmp.Compare[string]); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "already exists") || strings.Contains(strings.ToLower(err.Error()), "exists") {
+			return nil
+		}
+		tx.Rollback(ctx)
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
 func ensureRootUserFromPassword(password string, role string, features []string) error {
 	password = strings.TrimSpace(password)
 	if password == "" {
@@ -536,6 +577,10 @@ func setupSystemDB(ctx context.Context, req *SaveConfigRequest) (*DatabaseConfig
 		sysDB.RedisURL = sysOpts.RedisConfig.Address
 	}
 
+	if err := ensureBootstrapStore(ctx, sysDB); err != nil {
+		return nil, false, fmt.Errorf("bootstrap metadata store: %w", err)
+	}
+
 	return sysDB, shouldSetup, nil
 }
 
@@ -630,25 +675,6 @@ func setupUserDBs(ctx context.Context, req *SaveConfigRequest) ([]DatabaseConfig
 				} else {
 					log.Info(fmt.Sprintf("Demo data populated for User DB '%s'", udb.Name))
 				}
-			} else {
-
-				func() {
-					tx, err := database.BeginTransaction(ctx, uOpts, sop.ForWriting)
-					if err != nil {
-						log.Error(fmt.Sprintf("Failed to begin transaction for 'system_check' in User DB '%s': %v", udb.Name, err))
-						return
-					}
-					if _, err := database.NewBtree[string, string](ctx, uOpts, "system_check", tx, cmp.Compare[string]); err != nil {
-						log.Error(fmt.Sprintf("Failed to create 'system_check' store in User DB '%s': %v", udb.Name, err))
-						tx.Rollback(ctx)
-						return
-					}
-					if err := tx.Commit(ctx); err != nil {
-						log.Error(fmt.Sprintf("Failed to commit 'system_check' in User DB '%s': %v", udb.Name, err))
-					} else {
-						log.Info(fmt.Sprintf("'system_check' store created for User DB '%s'", udb.Name))
-					}
-				}()
 			}
 
 		}

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, type MouseEvent } from 'react';
 
 type Plan = 'starter' | 'hq' | 'none';
 type ViewMode = 'home' | 'subscribe' | 'docs' | 'success' | 'cancel';
@@ -1103,6 +1103,20 @@ export default function App() {
   const hasSubscription = Boolean(account.isAuthenticated && account.plan !== 'none');
   const canAccessLocalDaemon = Boolean(account.isAuthenticated) && !account.isSystemAdmin && account.plan !== 'none';
   const primaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
+  const handleOpenDataManager = async (event?: MouseEvent<HTMLAnchorElement>) => {
+    if (event) {
+      event.preventDefault();
+    }
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      await fetchJSON('/api/auth/status', { credentials: 'include' });
+    } catch {
+      // Fall back to the direct navigation below so the app still opens even if the auth probe is transiently unavailable.
+    }
+    window.location.assign('/app');
+  };
   const primaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Unsubscribe' : 'Subscribe';
   
   const secondaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
@@ -1693,7 +1707,17 @@ This section explains the system design.
                 Setup is complete. Review your account, keep your subscription current, and open the Northstar Data Manager whenever you need the admin-level operational view.
               </p>
               <div className="hero-actions">
-                <a className="button button-primary" href={primaryActionHref}>{primaryActionLabel}</a>
+                <a
+                  className="button button-primary"
+                  href={primaryActionHref}
+                  onClick={(event) => {
+                    if (canLaunchDataManager) {
+                      void handleOpenDataManager(event);
+                    }
+                  }}
+                >
+                  {primaryActionLabel}
+                </a>
                 {account.isAuthenticated ? (
                   <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
                     {isSubmitting ? 'Working…' : 'Log out'}
@@ -1739,7 +1763,17 @@ This section explains the system design.
                   Continue with local-agent setup, review your subscription, or open the Northstar Data Manager when you need deeper operator controls.
                 </p>
                 <div className="action-row">
-                  <a className="button button-secondary" href={secondaryActionHref}>{secondaryActionLabel}</a>
+                  <a
+                    className="button button-secondary"
+                    href={secondaryActionHref}
+                    onClick={(event) => {
+                      if (canLaunchDataManager) {
+                        void handleOpenDataManager(event);
+                      }
+                    }}
+                  >
+                    {secondaryActionLabel}
+                  </a>
                   <a className="button button-secondary" href="/docs/">Documentation</a>
                 </div>
               </div>
@@ -1758,7 +1792,7 @@ This section explains the system design.
                   <div>
                     <span className="summary-label">Data Manager</span>
                     {canLaunchDataManager ? (
-                      <a href="/app" className="summary-link">Open Data Manager</a>
+                      <a href="/app" className="summary-link" onClick={(event) => { void handleOpenDataManager(event); }}>Open Data Manager</a>
                     ) : (
                       <strong>Admin access required</strong>
                     )}

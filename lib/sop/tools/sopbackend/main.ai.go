@@ -227,6 +227,7 @@ type aiChatRequest struct {
 	ClientID      string                 `json:"client_id"`
 	Domain        string                 `json:"domain"`
 	SelectedKBs   []ai.ArtifactReference `json:"selected_kbs"`
+	InputParts    []ai.ContentPart       `json:"input_parts"`
 }
 
 func buildAppBaseURL(r *http.Request) string {
@@ -607,6 +608,10 @@ func constructPayload(ctx context.Context, w http.ResponseWriter, req *aiChatReq
 		ClientID:         req.ClientID,
 		SessionID:        req.SessionID,
 		AvatarScope:      avatarScope,
+		Variables:        map[string]any{},
+	}
+	if len(req.InputParts) > 0 {
+		payload.Variables["input_parts"] = req.InputParts
 	}
 	cfg.Set("payload", payload)
 

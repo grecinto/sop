@@ -816,6 +816,12 @@ type geminiPart struct {
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
+	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
+}
+
+type geminiInlineData struct {
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"data,omitempty"`
 }
 
 type geminiTool struct {
@@ -915,10 +921,37 @@ func extractGeminiOutput(resp geminiResponse) (ai.GenOutput, error) {
 func buildGeminiRequest(prompt string, opts ai.GenOptions) geminiRequest {
 	reqBody := geminiRequest{}
 
+	parts := make([]geminiPart, 0, 1+len(opts.InputParts))
 	if strings.TrimSpace(prompt) != "" {
-		reqBody.Contents = append(reqBody.Contents,
-			geminiContent{Role: "user", Parts: []geminiPart{{Text: prompt}}},
-		)
+		parts = append(parts, geminiPart{Text: prompt})
+	}
+	for _, inputPart := range opts.InputParts {
+		switch strings.ToLower(strings.TrimSpace(inputPart.Type)) {
+		case "image", "image_url", "inline_data":
+			mimeType := strings.TrimSpace(inputPart.MimeType)
+			if mimeType == "" {
+				mimeType = "image/png"
+			}
+			data := strings.TrimSpace(inputPart.Data)
+			if data == "" && strings.TrimSpace(inputPart.URL) != "" {
+				if strings.HasPrefix(strings.TrimSpace(inputPart.URL), "data:") {
+					data = strings.TrimPrefix(strings.TrimSpace(inputPart.URL), "data:")
+					if idx := strings.Index(data, ","); idx >= 0 {
+						data = data[idx+1:]
+					}
+				}
+			}
+			if data != "" {
+				parts = append(parts, geminiPart{InlineData: &geminiInlineData{MimeType: mimeType, Data: data}})
+			}
+		case "text":
+			if text := strings.TrimSpace(inputPart.Text); text != "" {
+				parts = append(parts, geminiPart{Text: text})
+			}
+		}
+	}
+	if len(parts) > 0 {
+		reqBody.Contents = append(reqBody.Contents, geminiContent{Role: "user", Parts: parts})
 	}
 
 	for i, continuation := range opts.ToolCallContinuations {

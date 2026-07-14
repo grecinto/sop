@@ -230,6 +230,40 @@ func TestHandleSaveConfig_PersistsRootUserIntoPersistentSystemStore(t *testing.T
 	}
 }
 
+func TestEnsureBootstrapStoreCreatesStoreInSystemDB(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	config = Config{}
+	config.ConfigFile = filepath.Join(tmpDir, "config.json")
+
+	sysDBPath := filepath.Join(tmpDir, "system")
+	if _, err := database.Setup(context.Background(), sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{sysDBPath}}); err != nil {
+		t.Fatalf("database.Setup() error = %v", err)
+	}
+
+	sysDBConfig := &DatabaseConfig{Name: SystemDBName, Path: sysDBPath, Mode: "standalone"}
+	config.SystemDB = sysDBConfig
+
+	if err := ensureBootstrapStore(context.Background(), sysDBConfig); err != nil {
+		t.Fatalf("ensureBootstrapStore() error = %v", err)
+	}
+
+	opts, err := GetDBOptionsFromConfig(context.Background(), sysDBConfig)
+	if err != nil {
+		t.Fatalf("GetDBOptionsFromConfig() error = %v", err)
+	}
+	aiDB := aidb.NewDatabase(opts)
+	exists, err := aiDB.StoreExists(context.Background(), bootstrapStoreName)
+	if err != nil {
+		t.Fatalf("StoreExists() error = %v", err)
+	}
+	if !exists {
+		t.Fatal("expected bootstrap store to exist in the system database")
+	}
+}
+
 func TestHandleSaveConfig_AllowsImmediateSessionCreation(t *testing.T) {
 	withIsolatedSessionStore(t)
 	oldConfig := config

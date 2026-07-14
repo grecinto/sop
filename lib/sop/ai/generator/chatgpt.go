@@ -82,7 +82,45 @@ func (g *chatgpt) Generate(ctx context.Context, prompt string, opts ai.GenOption
 	if systemPrompt := strings.TrimSpace(opts.SystemPrompt); systemPrompt != "" {
 		messages = append(messages, openAIMessage{Role: "system", Content: systemPrompt})
 	}
-	messages = append(messages, openAIMessage{Role: "user", Content: prompt})
+	contentParts := make([]any, 0, 1+len(opts.InputParts))
+	if strings.TrimSpace(prompt) != "" {
+		contentParts = append(contentParts, map[string]any{"type": "text", "text": prompt})
+	}
+	for _, inputPart := range opts.InputParts {
+		switch strings.ToLower(strings.TrimSpace(inputPart.Type)) {
+		case "image", "image_url", "inline_data":
+			mimeType := strings.TrimSpace(inputPart.MimeType)
+			if mimeType == "" {
+				mimeType = "image/png"
+			}
+			data := strings.TrimSpace(inputPart.Data)
+			if data == "" && strings.TrimSpace(inputPart.URL) != "" {
+				data = strings.TrimSpace(inputPart.URL)
+			}
+			if data != "" {
+				if strings.HasPrefix(data, "data:") {
+					contentParts = append(contentParts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": data}})
+				} else if strings.HasPrefix(data, "http://") || strings.HasPrefix(data, "https://") {
+					contentParts = append(contentParts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": data}})
+				} else {
+					contentParts = append(contentParts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:" + mimeType + ";base64," + data}})
+				}
+			}
+		case "text":
+			if text := strings.TrimSpace(inputPart.Text); text != "" {
+				contentParts = append(contentParts, map[string]any{"type": "text", "text": text})
+			}
+		}
+	}
+	if len(opts.InputParts) == 0 {
+		messages = append(messages, openAIMessage{Role: "user", Content: prompt})
+	} else if len(contentParts) == 0 {
+		messages = append(messages, openAIMessage{Role: "user", Content: prompt})
+	} else if len(contentParts) == 1 && strings.TrimSpace(prompt) != "" && strings.TrimSpace(fmt.Sprint(contentParts[0].(map[string]any)["text"])) == strings.TrimSpace(prompt) {
+		messages = append(messages, openAIMessage{Role: "user", Content: prompt})
+	} else {
+		messages = append(messages, openAIMessage{Role: "user", Content: contentParts})
+	}
 
 	reqBody := openAIRequest{
 		Model:       g.model,
@@ -145,8 +183,30 @@ func (g *chatgpt) Generate(ctx context.Context, prompt string, opts ai.GenOption
 	if len(response.Choices) == 0 {
 		return ai.GenOutput{}, fmt.Errorf("no choices returned from openai")
 	}
+	content := response.Choices[0].Message.Content
+	var text string
+	switch v := content.(type) {
+	case string:
+		text = v
+	case []any:
+		for _, part := range v {
+			if m, ok := part.(map[string]any); ok {
+				if partText, ok := m["text"].(string); ok {
+					text += partText
+				}
+			}
+		}
+	case []map[string]any:
+		for _, part := range v {
+			if partText, ok := part["text"].(string); ok {
+				text += partText
+			}
+		}
+	default:
+		text = fmt.Sprintf("%v", content)
+	}
 	return ai.GenOutput{
-		Text:       response.Choices[0].Message.Content,
+		Text:       text,
 		TokensUsed: response.Usage.TotalTokens,
 		Raw:        response,
 	}, nil

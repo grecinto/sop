@@ -96,6 +96,29 @@ func TestBuildGeminiRequest_IncludesGenerationConfigAndTools(t *testing.T) {
 	}
 }
 
+func TestBuildGeminiRequest_IncludesImageParts(t *testing.T) {
+	req := buildGeminiRequest("inspect screenshot", ai.GenOptions{
+		InputParts: []ai.ContentPart{{
+			Type:     "image",
+			MimeType: "image/png",
+			Data:     "abc123",
+		}},
+	})
+
+	if len(req.Contents) != 1 {
+		t.Fatalf("expected one content block, got %#v", req.Contents)
+	}
+	if len(req.Contents[0].Parts) != 2 {
+		t.Fatalf("expected text plus image part, got %#v", req.Contents[0].Parts)
+	}
+	if req.Contents[0].Parts[0].Text != "inspect screenshot" {
+		t.Fatalf("expected prompt text to be preserved, got %#v", req.Contents[0].Parts[0])
+	}
+	if req.Contents[0].Parts[1].InlineData == nil || req.Contents[0].Parts[1].InlineData.MimeType != "image/png" || req.Contents[0].Parts[1].InlineData.Data != "abc123" {
+		t.Fatalf("expected inline image data to be preserved, got %#v", req.Contents[0].Parts[1])
+	}
+}
+
 func TestBuildGeminiRequest_IncludesZeroTemperatureWhenForced(t *testing.T) {
 	req := buildGeminiRequest("find users", ai.GenOptions{
 		Temperature:      0.0,

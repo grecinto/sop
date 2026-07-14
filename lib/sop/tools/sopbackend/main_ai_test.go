@@ -56,6 +56,31 @@ func TestConstructPayload_PreservesRawUserMessage(t *testing.T) {
 	}
 }
 
+func TestConstructPayload_PropagatesInputPartsIntoSessionVariables(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	config = Config{Databases: []DatabaseConfig{{Name: "demo", Path: t.TempDir()}}}
+
+	req := &aiChatRequest{
+		Message:    "inspect screenshot",
+		Database:   "demo",
+		InputParts: []ai.ContentPart{{Type: "image", MimeType: "image/png", Data: "abc123"}},
+	}
+
+	_, payload, _, _ := constructPayload(context.Background(), httptest.NewRecorder(), req, llmSettings{}, func(string, any) {}, nil)
+	if payload == nil {
+		t.Fatal("expected constructPayload to return payload")
+	}
+	if payload.Variables == nil {
+		t.Fatal("expected session variables to be initialized")
+	}
+	gotParts, ok := payload.Variables["input_parts"].([]ai.ContentPart)
+	if !ok || len(gotParts) != 1 || gotParts[0].Data != "abc123" {
+		t.Fatalf("expected image input parts to be propagated, got %#v", payload.Variables["input_parts"])
+	}
+}
+
 func TestLoadAgentFindsCopilotConfigFromToolsWorkingDirectory(t *testing.T) {
 	oldLoadedAgents := loadedAgents
 	loadedAgents = make(map[string]ai.Agent[map[string]any])

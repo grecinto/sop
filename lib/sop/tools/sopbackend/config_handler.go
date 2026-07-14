@@ -2,7 +2,6 @@ package sopbackend
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -548,13 +547,7 @@ func handleInitDatabase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		comparer := func(a, b string) int {
-			return cmp.Compare(a, b)
-		}
-
-		// Open a dummy store to force repository initialization
-		_, err = database.NewBtree[string, string](ctx, options, "system_check", tx, comparer)
-		if err != nil {
+		if err := ensureBootstrapStore(ctx, config.SystemDB); err != nil {
 			tx.Rollback(ctx)
 			http.Error(w, fmt.Sprintf("Failed to initialize database registry: %v", err), http.StatusInternalServerError)
 			return
