@@ -48,18 +48,36 @@ func TestPrintConfigPathFlagPrintsResolvedConfigLocation(t *testing.T) {
 func TestPrintDaemonHelpIncludesResolvedConfigPath(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	var stdout bytes.Buffer
-	printDaemonHelpTo(&stdout)
-
 	resolvedPath, err := resolveDaemonConfigLocation("", nil)
 	if err != nil {
 		t.Fatalf("resolveDaemonConfigLocation() error = %v", err)
 	}
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(resolvedPath, []byte(`{"port":9090}`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	printDaemonHelpTo(&stdout)
+
 	if !strings.Contains(stdout.String(), "Config file:") {
 		t.Fatalf("expected help output to mention the config file, got %q", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), resolvedPath) {
 		t.Fatalf("expected help output to include resolved config path %q, got %q", resolvedPath, stdout.String())
+	}
+}
+
+func TestPrintDaemonHelpOmitsConfigPathWhenConfigFileMissing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	var stdout bytes.Buffer
+	printDaemonHelpTo(&stdout)
+
+	if strings.Contains(stdout.String(), "config.json") {
+		t.Fatalf("expected help output to omit config path when config file is missing, got %q", stdout.String())
 	}
 }
 

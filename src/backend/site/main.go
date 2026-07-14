@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -225,6 +228,47 @@ func resolveRuntimeConfigPath(dataDir string) string {
 		}
 	}
 	return filepath.Join(resolvedDataDir, "config.json")
+}
+
+func shouldPrintHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--h" || arg == "-help" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func printSiteHelpTo(w io.Writer) {
+	resolvedConfigPath := resolveRuntimeConfigPath(defaultDataDir())
+	if strings.TrimSpace(resolvedConfigPath) != "" {
+		if _, err := os.Stat(resolvedConfigPath); err != nil {
+			resolvedConfigPath = ""
+		}
+	}
+
+	var configSection string
+	if strings.TrimSpace(resolvedConfigPath) != "" {
+		configSection = fmt.Sprintf("Config file:\n  %s\n\n", resolvedConfigPath)
+	} else {
+		configSection = "Config file:\n  (not created yet)\n\n"
+	}
+
+	fmt.Fprintf(w, `SOP site backend
+
+Usage:
+  site-backend [flags]
+
+%sFlags:
+  -h, --h
+        Show help and exit.
+  -data-dir string
+        Runtime data directory to use (default: %s)
+`, configSection, defaultDataDir())
+}
+
+func printSiteHelp() {
+	printSiteHelpTo(os.Stdout)
 }
 
 func configureRuntimeEnvironment(dataDir string) {
@@ -601,6 +645,21 @@ func applySopbackendPreloadPolicy() {
 }
 
 func main() {
+	if shouldPrintHelp(os.Args[1:]) {
+		printSiteHelp()
+		return
+	}
+
+	flag.CommandLine.Init(flag.CommandLine.Name(), flag.ContinueOnError)
+	flag.CommandLine.SetOutput(os.Stdout)
+	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printSiteHelp()
+			return
+		}
+		log.Fatalf("failed to parse flags: %v", err)
+	}
+
 	dataDir := defaultDataDir()
 	configureRuntimeEnvironment(dataDir)
 	applySopbackendPreloadPolicy()

@@ -169,7 +169,19 @@ func shouldPrintHelp(args []string) bool {
 func printDaemonHelpTo(w io.Writer) {
 	resolvedPath, err := resolveDaemonConfigLocation("", nil)
 	if err != nil {
-		resolvedPath = "(unable to resolve)"
+		resolvedPath = ""
+	}
+	if strings.TrimSpace(resolvedPath) != "" {
+		if _, statErr := os.Stat(resolvedPath); statErr != nil {
+			resolvedPath = ""
+		}
+	}
+
+	var configSection string
+	if strings.TrimSpace(resolvedPath) != "" {
+		configSection = fmt.Sprintf("Config file:\n  %s\n\n", resolvedPath)
+	} else {
+		configSection = "Config file:\n  (not created yet)\n\n"
 	}
 
 	fmt.Fprintf(w, `SOP daemon
@@ -177,10 +189,7 @@ func printDaemonHelpTo(w io.Writer) {
 Usage:
   sop-daemon [flags]
 
-Config file:
-  %s
-
-Flags:
+%sFlags:
   -config string
         Path to the SOP daemon configuration file. If omitted, the daemon will look in the user config directory and fall back to the current working directory.
   -print-config-path
@@ -198,9 +207,9 @@ Flags:
 
 Examples:
   sop-daemon --print-config-path
-  sop-daemon --config ~/.config/sop/config.json
+  sop-daemon --config <path>
   sop-daemon --help
-`, resolvedPath)
+`, configSection)
 }
 
 func printDaemonHelp() {

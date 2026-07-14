@@ -25,6 +25,53 @@ func TestApplySopbackendPreloadPolicyDisablesPreloadByDefault(t *testing.T) {
 	}
 }
 
+func TestShouldPrintHelpRecognizesHelpFlags(t *testing.T) {
+	if !shouldPrintHelp([]string{"--h"}) {
+		t.Fatal("expected --h to trigger help output")
+	}
+	if !shouldPrintHelp([]string{"--help"}) {
+		t.Fatal("expected --help to trigger help output")
+	}
+	if shouldPrintHelp([]string{"--port", "8081"}) {
+		t.Fatal("expected non-help args to not trigger help output")
+	}
+}
+
+func TestPrintSiteHelpIncludesResolvedConfigPath(t *testing.T) {
+	dataDir := t.TempDir()
+	configPath := filepath.Join(dataDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("SOP_CLOUD_DATA_DIR", dataDir)
+	t.Setenv("SOP_DATA_DIR", dataDir)
+	t.Setenv("SOP_CONFIG_FILE", "")
+
+	var stdout strings.Builder
+	printSiteHelpTo(&stdout)
+
+	got := stdout.String()
+	if !strings.Contains(got, "Config file:") {
+		t.Fatalf("expected help output to include config file section, got %q", got)
+	}
+	if !strings.Contains(got, configPath) {
+		t.Fatalf("expected help output to include resolved config path, got %q", got)
+	}
+}
+
+func TestPrintSiteHelpOmitsConfigPathWhenConfigFileMissing(t *testing.T) {
+	t.Setenv("SOP_CLOUD_DATA_DIR", t.TempDir())
+	t.Setenv("SOP_DATA_DIR", t.TempDir())
+	t.Setenv("SOP_CONFIG_FILE", "")
+
+	var stdout strings.Builder
+	printSiteHelpTo(&stdout)
+
+	if strings.Contains(stdout.String(), "config.json") {
+		t.Fatalf("expected help output to omit config path when config file is missing, got %q", stdout.String())
+	}
+}
+
 func TestApplySopbackendPreloadPolicyPreservesExistingFlag(t *testing.T) {
 	sopbackend.SetConfig(sopbackend.Config{DisableSOPKBPreload: true})
 	defer sopbackend.SetConfig(sopbackend.Config{})
