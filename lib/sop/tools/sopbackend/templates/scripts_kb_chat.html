@@ -16,6 +16,11 @@ function attachKBFeedbackToMessage(messageId, kbMetadata) {
         return; // No KB used, skip feedback
     }
 
+    const settings = loadKBSettings();
+    if (!settings.autoSelectSpaces) {
+        kbMetadata.manualMode = true;
+    }
+
     // Store metadata for later feedback submission
     window.kbMetadataStore.set(messageId, kbMetadata);
 
@@ -51,6 +56,13 @@ function attachKBFeedbackToMessage(messageId, kbMetadata) {
             </div>
         </div>
     `;
+
+    if (!settings.autoSelectSpaces) {
+        const manualNotice = document.createElement('div');
+        manualNotice.className = 'kb-manual-mode-notice';
+        manualNotice.innerHTML = '<span>🧭</span> Manual Space selection is active for this session.';
+        feedbackContainer.appendChild(manualNotice);
+    }
 
     // Add explanation section if available
     if (kbMetadata.explanation && kbMetadata.explanation.trim() !== '') {
@@ -268,6 +280,15 @@ if (!document.getElementById('kb-chat-styles')) {
             background: var(--input-bg, #f9f9f9);
             border: 1px solid var(--border-color, #e0e0e0);
             border-radius: 6px;
+        }
+
+        .kb-manual-mode-notice {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-muted, #666);
         }
 
         .kb-feedback-section {

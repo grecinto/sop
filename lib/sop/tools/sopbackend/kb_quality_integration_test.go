@@ -1,6 +1,8 @@
 package sopbackend
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -81,5 +83,56 @@ func TestKBQualityInitialization(t *testing.T) {
 
 	if kbQualityJob == nil {
 		t.Error("KB quality job not initialized")
+	}
+}
+
+func TestKBQualityFeedbackAndAlternativesFlow(t *testing.T) {
+	tracker := GetKBEffectivenessTracker()
+	if tracker == nil {
+		t.Fatal("expected KB effectiveness tracker")
+	}
+
+	feedbackBody := bytes.NewBufferString(`{"message_id":"msg-flow","kb_name":"go-best-practices","task_type":"implementation","feedback":"positive","user_id":"u1","session_id":"session-1"}`)
+	feedbackReq := httptest.NewRequest(http.MethodPost, "/api/ai/feedback", feedbackBody)
+	feedbackRec := httptest.NewRecorder()
+	HandleKBFeedback(feedbackRec, feedbackReq)
+	if feedbackRec.Code != http.StatusOK {
+		t.Fatalf("feedback endpoint returned %d: %s", feedbackRec.Code, feedbackRec.Body.String())
+	}
+
+	altBody := bytes.NewBufferString(`{"task_type":"implementation","current_kb":"go-best-practices","excluded_kbs":["go-best-practices"]}`)
+	altReq := httptest.NewRequest(http.MethodPost, "/api/ai/kb/alternatives", altBody)
+	altRec := httptest.NewRecorder()
+	HandleKBAlternatives(altRec, altReq)
+	if altRec.Code != http.StatusOK {
+		t.Fatalf("alternatives endpoint returned %d: %s", altRec.Code, altRec.Body.String())
+	}
+
+	var altResp KBAlternativesResponse
+	if err := json.Unmarshal(altRec.Body.Bytes(), &altResp); err != nil {
+		t.Fatalf("decode alternatives response: %v", err)
+	}
+	if altResp.Success && len(altResp.Alternatives) > 0 {
+		// The tracker may return additional KBs depending on stored state, but the flow should remain successful.
+		if altResp.Alternatives[0].Name == "" {
+			t.Fatalf("expected a non-empty alternative name, got %+v", altResp.Alternatives[0])
+		}
+	}
+}
+
+func BenchmarkKBAlternativesEndpoint(b *testing.B) {
+	tracker := GetKBEffectivenessTracker()
+	if tracker == nil {
+		b.Fatal("expected KB effectiveness tracker")
+	}
+
+	payload := bytes.NewBufferString(`{"task_type":"implementation","current_kb":"go-best-practices","excluded_kbs":["go-best-practices"]}`)
+	for i := 0; i < b.N; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/ai/kb/alternatives", payload)
+		rec := httptest.NewRecorder()
+		HandleKBAlternatives(rec, req)
+		if rec.Code != http.StatusOK {
+			b.Fatalf("benchmark request returned %d: %s", rec.Code, rec.Body.String())
+		}
 	}
 }

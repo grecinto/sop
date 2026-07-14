@@ -16,11 +16,12 @@ import (
 
 // KBRevalidateRequest represents a request to re-validate with stricter standards
 type KBRevalidateRequest struct {
-	MessageID  string `json:"message_id"`  // Original message ID
-	Task       string `json:"task"`        // Task description
-	Code       string `json:"code"`        // Code to validate
-	KBName     string `json:"kb_name"`     // KB to validate against
-	StrictMode bool   `json:"strict_mode"` // Enable strict validation
+	MessageID  string `json:"message_id"`          // Original message ID
+	Task       string `json:"task,omitempty"`      // Task description
+	TaskType   string `json:"task_type,omitempty"` // Task type for compatibility
+	Code       string `json:"code"`                // Code to validate
+	KBName     string `json:"kb_name"`             // KB to validate against
+	StrictMode bool   `json:"strict_mode"`         // Enable strict validation
 }
 
 // KBRevalidateResponse represents the validation result
@@ -129,9 +130,10 @@ func HandleKBRevalidate(w http.ResponseWriter, r *http.Request) {
 
 // KBAlternativesRequest represents a request for alternative Spaces
 type KBAlternativesRequest struct {
-	TaskType    string   `json:"task_type"`    // Task classification
-	CurrentKB   string   `json:"current_kb"`   // Currently used KB
-	ExcludedKBs []string `json:"excluded_kbs"` // KBs to exclude (blocklist)
+	TaskType    string   `json:"task_type,omitempty"` // Task classification
+	Task        string   `json:"task,omitempty"`      // Backward-compatible task field
+	CurrentKB   string   `json:"current_kb"`          // Currently used KB
+	ExcludedKBs []string `json:"excluded_kbs"`        // KBs to exclude (blocklist)
 }
 
 // KBAlternative represents an alternative Space suggestion
@@ -166,6 +168,9 @@ func HandleKBAlternatives(w http.ResponseWriter, r *http.Request) {
 
 	// Normalize task type
 	taskType := strings.ToLower(strings.TrimSpace(req.TaskType))
+	if taskType == "" {
+		taskType = strings.ToLower(strings.TrimSpace(req.Task))
+	}
 	if taskType == "" {
 		taskType = "general"
 	}

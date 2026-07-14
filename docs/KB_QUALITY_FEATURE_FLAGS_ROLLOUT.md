@@ -2,6 +2,8 @@
 
 **Purpose:** Safe, incremental rollout of KB Quality features with ability to disable problematic components.
 
+For the production validation checklist, see [KB_QUALITY_PRODUCTION_VALIDATION.md](KB_QUALITY_PRODUCTION_VALIDATION.md).
+
 ---
 
 ## Feature Flag Architecture

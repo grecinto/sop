@@ -504,6 +504,9 @@ A: Click "Needs Work" and add a comment explaining why. This trains the system. 
 **Documentation:**
 - [Architecture Overview](ARCHITECTURE.md)
 - [Space Implementation Guide](SPACE_EXPERT_IMPLEMENTATION_GUIDE.md)
+- [KB Quality User Guide](KB_QUALITY_USER_GUIDE.md)
+- [KB Custom Validators Guide](KB_CUSTOM_VALIDATORS_GUIDE.md)
+- [KB Task Classification Guide](KB_TASK_CLASSIFICATION_GUIDE.md)
 - [KB Quality Remaining Enhancements](KB_QUALITY_REMAINING_ENHANCEMENTS.md)
 
 **Developer Resources:**
