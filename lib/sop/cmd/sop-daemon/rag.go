@@ -155,11 +155,12 @@ type AskRequest struct {
 		UserID    string `json:"user_id"`
 		SessionID string `json:"session_id"`
 	} `json:"hq"`
-	LLMProvider   string `json:"llm_provider,omitempty"`
-	LLMAPIKey     string `json:"llm_api_key,omitempty"`
-	LLMModel      string `json:"llm_model,omitempty"`
-	LLMURL        string `json:"llm_url,omitempty"`
-	ThinkingLevel string `json:"thinking_level,omitempty"`
+	LLMProvider   string           `json:"llm_provider,omitempty"`
+	LLMAPIKey     string           `json:"llm_api_key,omitempty"`
+	LLMModel      string           `json:"llm_model,omitempty"`
+	LLMURL        string           `json:"llm_url,omitempty"`
+	ThinkingLevel string           `json:"thinking_level,omitempty"`
+	InputParts    []ai.ContentPart `json:"input_parts,omitempty"`
 }
 
 type AskResponse struct {
@@ -466,6 +467,10 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		CurrentUserQuery: req.Query,
 		UserID:           strings.TrimSpace(req.HQ.UserID),
 		SessionID:        strings.TrimSpace(req.HQ.SessionID),
+		Variables:        map[string]any{},
+	}
+	if len(req.InputParts) > 0 {
+		payload.Variables["input_parts"] = req.InputParts
 	}
 	if payload.UserID == "" && storedSessionContext.HQUserID != "" {
 		payload.UserID = storedSessionContext.HQUserID

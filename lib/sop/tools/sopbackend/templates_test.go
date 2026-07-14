@@ -182,6 +182,59 @@ func TestChatRuntimeSelectionKeepsFormatSelectorVisibleForLocalRuntime(t *testin
 	}
 }
 
+func TestChatComposerSupportsImageAttachments(t *testing.T) {
+	modalPath := templatePath("modals.html")
+	modalData, err := os.ReadFile(modalPath)
+	if err != nil {
+		t.Fatalf("read chat modal template: %v", err)
+	}
+	modalContent := string(modalData)
+	if !strings.Contains(modalContent, "chat-attachment-input") {
+		t.Fatalf("expected chat composer to expose an attachment input in %s", modalPath)
+	}
+
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "input_parts") {
+		t.Fatalf("expected chat request builder to serialize image attachments as input_parts in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "FileReader") {
+		t.Fatalf("expected chat composer to read selected image files in %s", scriptsPath)
+	}
+}
+
+func TestChatComposerShowsAttachmentPreviewAndFeedback(t *testing.T) {
+	modalPath := templatePath("modals.html")
+	modalData, err := os.ReadFile(modalPath)
+	if err != nil {
+		t.Fatalf("read chat modal template: %v", err)
+	}
+	modalContent := string(modalData)
+	if !strings.Contains(modalContent, "chat-attachment-preview") {
+		t.Fatalf("expected chat composer preview container in %s", modalPath)
+	}
+	if !strings.Contains(modalContent, "chat-attachment-feedback") {
+		t.Fatalf("expected chat composer feedback container in %s", modalPath)
+	}
+
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "renderChatAttachmentPreview") {
+		t.Fatalf("expected attachment preview renderer in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "showChatAttachmentFeedback") {
+		t.Fatalf("expected attachment feedback helper in %s", scriptsPath)
+	}
+}
+
 func TestRefreshSpacesListHidesDomainSelectWhenEmpty(t *testing.T) {
 	scriptsPath := templatePath("scripts_part01.html")
 	scriptsData, err := os.ReadFile(scriptsPath)
@@ -194,6 +247,21 @@ func TestRefreshSpacesListHidesDomainSelectWhenEmpty(t *testing.T) {
 	}
 	if !strings.Contains(scriptsContent, "domainSelect.style.display = 'none';") {
 		t.Fatalf("expected refreshSpacesList to hide the domain select when no spaces are available in %s", scriptsPath)
+	}
+}
+
+func TestChatRuntimeSwitchHandlesLocalDaemonFallbackInTemplate(t *testing.T) {
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "handleRuntimeSwitchReloadError") {
+		t.Fatalf("expected runtime switch to use a resilient reload-error handler in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "Cannot connect to local daemon") {
+		t.Fatalf("expected runtime switch to handle local daemon connection failures gracefully in %s", scriptsPath)
 	}
 }
 

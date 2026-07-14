@@ -85,6 +85,23 @@
         setDaemonBaseURL(input.value);
     }
 
+    function handleRuntimeSwitchReloadError(err, runtime) {
+        console.error('[RuntimeToggle] reloadDatabases failed:', err);
+        const message = err && err.message ? err.message : 'Unknown error';
+        if (runtime === 'local' && message.includes('Cannot connect to local daemon')) {
+            const select = document.getElementById('database-select');
+            if (select) {
+                select.innerHTML = '<option>Local daemon offline</option>';
+            }
+            return;
+        }
+        const errorDiv = document.createElement('div');
+        errorDiv.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #f44336; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; box-shadow: 0 2px 5px rgba(0,0,0,0.2);';
+        errorDiv.textContent = `Runtime switch failed: ${message}`;
+        document.body.appendChild(errorDiv);
+        setTimeout(() => errorDiv.remove(), 4000);
+    }
+
     function setChatRuntimeMode(mode) {
         const runtime = shouldLocalDaemonOnly() ? 'local' : (mode === 'local' ? 'local' : 'hq');
         localStorage.setItem('sop_chat_runtime', runtime);
@@ -126,12 +143,7 @@
         // Reload dashboard to reflect new runtime
         if (typeof window.reloadDatabases === 'function') {
             window.reloadDatabases(true, runtime).catch(err => {
-                console.error('[RuntimeToggle] reloadDatabases failed:', err);
-                const errorDiv = document.createElement('div');
-                errorDiv.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #f44336; color: white; padding: 12px 20px; border-radius: 4px; z-index: 10000; box-shadow: 0 2px 5px rgba(0,0,0,0.2);';
-                errorDiv.textContent = `Runtime switch failed: ${err.message || 'Unknown error'}`;
-                document.body.appendChild(errorDiv);
-                setTimeout(() => errorDiv.remove(), 4000);
+                handleRuntimeSwitchReloadError(err, runtime);
             });
         }
 
@@ -423,15 +435,18 @@
         return value === 'auto' || value === '' ? '' : value;
     }
 
+    let pendingChatAttachments = [];
+
     function updateComposerState() {
         const input = document.getElementById('chat-input');
         const sendBtn = document.getElementById('chat-send-btn');
         if (!sendBtn) return;
 
         const hasText = (input?.value || '').trim() !== '';
+        const hasAttachments = pendingChatAttachments.length > 0;
         const isBusy = !!chatAbortController;
-        sendBtn.disabled = !isBusy && !hasText;
-        sendBtn.title = isBusy ? 'Abort request' : (hasText ? 'Send message' : 'Type a message to send');
+        sendBtn.disabled = !isBusy && !hasText && !hasAttachments;
+        sendBtn.title = isBusy ? 'Abort request' : (hasText || hasAttachments ? 'Send message' : 'Type a message to send');
         sendBtn.setAttribute('aria-label', isBusy ? 'Abort request' : 'Send message');
 
         const icon = sendBtn.querySelector('.chat-send-icon');
@@ -439,6 +454,107 @@
             icon.innerHTML = isBusy
                 ? '<path d="M6 6 18 18"></path><path d="M6 18 18 6"></path>'
                 : '<path d="M4 12h12"></path><path d="m12 4 8 8-8 8"></path>';
+        }
+
+        renderChatAttachmentPreview();
+    }
+
+    function collectChatInputParts() {
+        const parts = [];
+        for (const attachment of pendingChatAttachments) {
+            if (!attachment || !attachment.dataUrl) continue;
+            const mimeType = attachment.mimeType || 'image/png';
+            const data = attachment.dataUrl;
+            parts.push({ Type: 'image', MimeType: mimeType, Data: data });
+        }
+        return parts;
+    }
+
+    function showChatAttachmentFeedback(message, tone = 'info') {
+        const feedback = document.getElementById('chat-attachment-feedback');
+        if (!feedback) return;
+        const palette = {
+            info: { bg: 'var(--hover-bg)', color: 'var(--text-color)', border: '1px solid var(--input-border)' },
+            success: { bg: '#10b98120', color: '#10b981', border: '1px solid #10b981' },
+            error: { bg: '#f43f5e20', color: '#f43f5e', border: '1px solid #f43f5e' }
+        };
+        const style = palette[tone] || palette.info;
+        feedback.textContent = message;
+        feedback.style.display = 'inline-flex';
+        feedback.style.background = style.bg;
+        feedback.style.color = style.color;
+        feedback.style.border = style.border;
+        feedback.setAttribute('data-tone', tone);
+        clearTimeout(window.__sopChatAttachmentFeedbackTimer);
+        window.__sopChatAttachmentFeedbackTimer = setTimeout(() => {
+            feedback.style.display = 'none';
+            feedback.textContent = '';
+        }, 2400);
+    }
+
+    function renderChatAttachmentPreview() {
+        const preview = document.getElementById('chat-attachment-preview');
+        if (!preview) return;
+        if (pendingChatAttachments.length === 0) {
+            preview.style.display = 'none';
+            preview.textContent = '';
+            return;
+        }
+        const label = pendingChatAttachments.length === 1
+            ? pendingChatAttachments[0].fileName || 'image attachment'
+            : `${pendingChatAttachments.length} image attachments`;
+        preview.textContent = `🖼 ${label}`;
+        preview.style.display = 'inline-flex';
+    }
+
+    function resetPendingChatAttachments() {
+        pendingChatAttachments = [];
+        renderChatAttachmentPreview();
+        showChatAttachmentFeedback('', 'info');
+        const input = document.getElementById('chat-attachment-input');
+        if (input) input.value = '';
+    }
+
+    async function handleChatAttachmentSelection(event) {
+        const input = event && event.target ? event.target : document.getElementById('chat-attachment-input');
+        const files = input && input.files ? Array.from(input.files) : [];
+        if (!files.length) {
+            return;
+        }
+        const nextAttachments = [];
+        const rejectedFiles = [];
+        for (const file of files) {
+            if (!file || !/^image\//i.test(file.type)) {
+                rejectedFiles.push(file && file.name ? file.name : 'unknown file');
+                continue;
+            }
+            try {
+                const dataUrl = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result || '');
+                    reader.onerror = () => reject(new Error('Unable to read selected image'));
+                    reader.readAsDataURL(file);
+                });
+                if (!dataUrl) {
+                    rejectedFiles.push(file.name || 'image');
+                    continue;
+                }
+                nextAttachments.push({ fileName: file.name, mimeType: file.type || 'image/png', dataUrl });
+            } catch (err) {
+                rejectedFiles.push(file.name || 'image');
+            }
+        }
+        if (nextAttachments.length > 0) {
+            pendingChatAttachments = pendingChatAttachments.concat(nextAttachments);
+            renderChatAttachmentPreview();
+            updateComposerState();
+            showChatAttachmentFeedback(`Added ${nextAttachments.length} image attachment${nextAttachments.length === 1 ? '' : 's'}.`, 'success');
+        }
+        if (rejectedFiles.length > 0) {
+            showChatAttachmentFeedback(`Skipped unsupported file${rejectedFiles.length === 1 ? '' : 's'}: ${rejectedFiles.join(', ')}`, 'error');
+        }
+        if (input) {
+            input.value = '';
         }
     }
 
@@ -468,7 +584,8 @@
             llm_api_key: apiKey,
             llm_model: model,
             llm_url: baseURL,
-            thinking_level: getSelectedThinkingLevel()
+            thinking_level: getSelectedThinkingLevel(),
+            input_parts: collectChatInputParts()
         };
     }
 
@@ -1637,7 +1754,8 @@
                 session_id: currentSessionID,
                 user_id: currentUserID,
                 domain: payloadDomain,
-                thinking_level: getSelectedThinkingLevel()
+                thinking_level: getSelectedThinkingLevel(),
+                input_parts: collectChatInputParts()
             }),
             fetcher: authFetch,
             runtimeMode: 'hq'
@@ -1774,7 +1892,7 @@
         const agentSelect = document.getElementById('agent-select');
         const agent = agentSelect ? agentSelect.value : 'db_admin';
 
-        if (!message) return;
+        if (!message && pendingChatAttachments.length === 0) return;
 
         if (/^\/clear(?:\s|$)/i.test(message)) {
             clearChatHistory();
@@ -1785,12 +1903,14 @@
             removePendingConfirmationPrompt();
         }
 
+        const displayMessage = message || (pendingChatAttachments.length > 0 ? '[image attachment]' : '');
+
         // Save to history
-        chatHistory.push(message);
+        chatHistory.push(displayMessage);
         historyIndex = -1; // Reset index
 
         // Add User Message
-        appendChatMessage('user', message);
+        appendChatMessage('user', displayMessage);
         input.value = '';
         input.style.height = '40px'; 
         if (sendBtn) sendBtn.disabled = true;
@@ -1849,6 +1969,7 @@
         } finally {
              chatAbortController = null;
              updateComposerState();
+             resetPendingChatAttachments();
              if (currentAiMsgId) {
                  updateHeaderFeedbackVisibility(true);
              }
