@@ -437,6 +437,65 @@
 
     let pendingChatAttachments = [];
 
+    function shouldShowVisionAttachmentControl(provider, model) {
+        const normalizedProvider = String(provider || '').trim().toLowerCase();
+        const normalizedModel = String(model || '').trim().toLowerCase();
+        if (!normalizedProvider && !normalizedModel) {
+            return false;
+        }
+        if (normalizedProvider === 'openai') {
+            return normalizedModel.includes('gpt-4o') || normalizedModel.includes('gpt-4.1') || normalizedModel.includes('gpt-4') || normalizedModel.includes('gpt-5') || normalizedModel.includes('o3') || normalizedModel.includes('o4');
+        }
+        if (normalizedProvider === 'gemini') {
+            return normalizedModel.includes('gemini') || normalizedModel.includes('vision') || normalizedModel.includes('flash') || normalizedModel.includes('pro');
+        }
+        if (normalizedProvider === 'anthropic') {
+            return normalizedModel.includes('claude-3') || normalizedModel.includes('claude-4') || normalizedModel.includes('sonnet') || normalizedModel.includes('haiku') || normalizedModel.includes('vision');
+        }
+        return normalizedModel.includes('vision') || normalizedModel.includes('multimodal') || normalizedModel.includes('image');
+    }
+
+    function setChatAttachmentControlsOpen(isOpen) {
+        const controls = document.getElementById('chat-attachment-controls');
+        const attachmentBtn = controls ? controls.querySelector('.chat-attachment-btn') : null;
+        if (!controls || !attachmentBtn) return;
+        controls.classList.toggle('show', isOpen);
+        controls.setAttribute('data-open', isOpen ? 'true' : 'false');
+        attachmentBtn.style.display = isOpen ? 'inline-flex' : 'none';
+    }
+
+    function toggleChatAttachmentOverflow(event) {
+        const controls = document.getElementById('chat-attachment-controls');
+        const attachmentBtn = controls ? controls.querySelector('.chat-attachment-btn') : null;
+        if (!controls || !attachmentBtn) return;
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        const isOpen = !controls.classList.contains('show');
+        setChatAttachmentControlsOpen(isOpen);
+    }
+
+    function updateChatAttachmentOverflowVisibility() {
+        const controls = document.getElementById('chat-attachment-controls');
+        const trigger = document.getElementById('chat-attachment-more-btn');
+        const attachmentBtn = controls ? controls.querySelector('.chat-attachment-btn') : null;
+        if (!controls || !trigger) return;
+        const aiConfig = typeof getStoredAIConfig === 'function' ? getStoredAIConfig() : {};
+        const providerConfig = typeof normalizeProviderConfig === 'function'
+            ? normalizeProviderConfig(aiConfig.brain_provider || '', aiConfig.brain_model || '')
+            : { provider: aiConfig.brain_provider || '', model: aiConfig.brain_model || '' };
+        const shouldShow = shouldShowVisionAttachmentControl(providerConfig.provider, providerConfig.model);
+        trigger.style.display = shouldShow ? 'inline-flex' : 'none';
+        trigger.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+        if (!shouldShow) {
+            setChatAttachmentControlsOpen(false);
+            return;
+        }
+        const isOpen = controls.classList.contains('show');
+        attachmentBtn && (attachmentBtn.style.display = isOpen ? 'inline-flex' : 'none');
+    }
+
     function updateComposerState() {
         const input = document.getElementById('chat-input');
         const sendBtn = document.getElementById('chat-send-btn');
@@ -457,6 +516,7 @@
         }
 
         renderChatAttachmentPreview();
+        updateChatAttachmentOverflowVisibility();
     }
 
     function collectChatInputParts() {
@@ -547,6 +607,7 @@
         if (nextAttachments.length > 0) {
             pendingChatAttachments = pendingChatAttachments.concat(nextAttachments);
             renderChatAttachmentPreview();
+            setChatAttachmentControlsOpen(true);
             updateComposerState();
             showChatAttachmentFeedback(`Added ${nextAttachments.length} image attachment${nextAttachments.length === 1 ? '' : 's'}.`, 'success');
         }
@@ -557,6 +618,13 @@
             input.value = '';
         }
     }
+
+    window.updateChatAttachmentOverflowVisibility = updateChatAttachmentOverflowVisibility;
+    window.toggleChatAttachmentOverflow = toggleChatAttachmentOverflow;
+
+    document.addEventListener('DOMContentLoaded', () => {
+        updateChatAttachmentOverflowVisibility();
+    });
 
     function buildLocalDaemonHandoffPayload(query) {
         const token = typeof getStoredSessionToken === 'function' ? getStoredSessionToken() : '';

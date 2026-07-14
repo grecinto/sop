@@ -456,9 +456,9 @@
         .chat-input-area { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; padding: 4px; border-top: 0px solid var(--border-color); background: var(--sidebar-bg); }
         .chat-input-row { display: flex; align-items: flex-end; gap: 8px; }
         #chat-input { flex: 1; min-width: 0; height: 60px; resize: vertical; min-height: 40px; max-height: 200px; font-family: var(--chat-font-family); font-size: 13px; line-height: 1.5; font-weight: 400; }
-        .chat-composer-controls { display: flex; flex-direction: column; align-items: stretch; gap: 1px; flex-shrink: 0; justify-content: flex-end; padding-bottom: 1px; }
-        .chat-thinking-dropdown { position: relative; display: inline-flex; align-items: center; }
-        .chat-thinking-trigger { width: 18px; height: 18px; padding: 0; border: none; border-radius: 0; background: transparent; color: var(--text-color); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; position: relative; top: 10px; }
+        .chat-composer-controls { display: flex; flex-direction: column; align-items: stretch; gap: 0; flex-shrink: 0; justify-content: flex-end; padding-bottom: 0; margin-top: 0; }
+        .chat-thinking-dropdown { position: relative; display: inline-flex; align-items: center; justify-content: center; margin-top: 0; line-height: 1; }
+        .chat-thinking-trigger { width: 16px; height: 16px; padding: 0; border: none; border-radius: 0; background: transparent; color: var(--text-color); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; position: relative; top: 4px; margin: 0; line-height: 1; }
         .chat-thinking-trigger:hover { background: transparent; color: var(--active-bg); }
         .chat-thinking-trigger-icon { font-size: 12px; line-height: 1; }
         .chat-thinking-menu { position: absolute; right: 0; bottom: calc(100% + 6px); display: none; flex-direction: column; min-width: 86px; padding: 4px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); box-shadow: 0 8px 20px rgba(0,0,0,0.16); z-index: 20; }
@@ -466,10 +466,14 @@
         .chat-thinking-option { border: none; background: transparent; color: var(--text-color); text-align: left; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 11px; }
         .chat-thinking-option:hover { background: var(--hover-bg); color: var(--active-bg); }
         .chat-thinking-option.active { background: var(--hover-bg); color: var(--active-bg); font-weight: 600; }
-        .chat-send-btn { width: 24px; height: 24px; padding: 0; border: none; border-radius: 999px; background: transparent; color: var(--text-color); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-bottom: 0; position: relative; top: 6px; }
+        .chat-send-btn { width: 20px; height: 20px; padding: 0; border: none; border-radius: 999px; background: transparent; color: var(--text-color); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-bottom: 0; position: relative; top: 0; }
         .chat-send-btn:hover { background: var(--hover-bg); color: var(--active-bg); }
         .chat-send-btn:disabled { opacity: 0.45; cursor: not-allowed; background: transparent; }
-        .chat-attachment-btn { width: 24px; height: 24px; padding: 0; border: none; border-radius: 999px; background: transparent; color: var(--text-color); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-bottom: 0; position: relative; top: 6px; cursor: pointer; }
+        .chat-attachment-controls { display: inline-flex; align-items: center; gap: 0; position: relative; justify-content: center; margin-top: 0; line-height: 1; }
+        .chat-attachment-more-btn { width: 16px; height: 16px; padding: 0; border: none; border-radius: 999px; background: transparent; color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-bottom: 0; position: relative; top: 4px; cursor: pointer; opacity: 0.7; line-height: 1; }
+        .chat-attachment-more-btn:hover { background: transparent; color: var(--active-bg); opacity: 1; }
+        .chat-attachment-btn { width: 20px; height: 20px; padding: 0; border: none; border-radius: 999px; background: transparent; color: var(--text-color); display: none; align-items: center; justify-content: center; flex-shrink: 0; margin-bottom: 0; position: relative; top: 0; cursor: pointer; }
+        .chat-attachment-controls.show .chat-attachment-btn { display: inline-flex; }
         .chat-attachment-btn:hover { background: var(--hover-bg); color: var(--active-bg); }
         .chat-attachment-icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
         .chat-send-icon { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }

@@ -376,6 +376,19 @@
                 </div>
                 <div id="chat-attachment-preview" style="display:none; align-items:center; gap:6px; padding:4px 8px; border:1px solid var(--input-border); border-radius:999px; background:var(--hover-bg); color:var(--text-color); font-size:0.75rem; max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" aria-live="polite"></div>
                 <div id="chat-attachment-feedback" style="display:none; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; font-size:0.75rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" aria-live="polite"></div>
+                <div id="chat-attachment-controls" class="chat-attachment-controls" data-open="false">
+                    <button type="button" id="chat-attachment-more-btn" class="chat-attachment-more-btn" title="More attachment options" aria-label="More attachment options" onclick="toggleChatAttachmentOverflow(event)">
+                        <span aria-hidden="true">…</span>
+                    </button>
+                    <label class="chat-attachment-btn" title="Attach an image" aria-label="Attach an image">
+                        <input id="chat-attachment-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="handleChatAttachmentSelection(event)">
+                        <svg class="chat-attachment-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"></path>
+                            <path d="m8 15 2.5-3 2.3 2.8 1.7-2.1 2.5 3"></path>
+                            <circle cx="9" cy="9" r="1.2"></circle>
+                        </svg>
+                    </label>
+                </div>
                 <div class="chat-thinking-dropdown">
                     <button type="button" id="chat-thinking-trigger" class="chat-thinking-trigger" title="Reasoning level override" aria-label="Reasoning level override" onclick="toggleChatThinkingMenu(event)">
                         <span class="chat-thinking-trigger-icon">⚡</span>
@@ -388,14 +401,6 @@
                     </div>
                     <input type="hidden" id="chat-thinking-select" value="">
                 </div>
-                <label class="chat-attachment-btn" title="Attach an image" aria-label="Attach an image">
-                    <input id="chat-attachment-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="handleChatAttachmentSelection(event)">
-                    <svg class="chat-attachment-icon" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M4 5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"></path>
-                        <path d="m8 15 2.5-3 2.3 2.8 1.7-2.1 2.5 3"></path>
-                        <circle cx="9" cy="9" r="1.2"></circle>
-                    </svg>
-                </label>
                 <button id="chat-send-btn" class="chat-send-btn" onclick="sendChatMessage()" title="Send message" aria-label="Send message">
                     <svg class="chat-send-icon" viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M4 12h12"></path>

@@ -405,6 +405,9 @@
         }
 
         toggleChatSettingsFields();
+        if (typeof window.updateChatAttachmentOverflowVisibility === 'function') {
+            window.updateChatAttachmentOverflowVisibility();
+        }
     }
 
     function syncSetupWizardControlsFromAIConfig(aiConfig) {

@@ -235,6 +235,34 @@ func TestChatComposerShowsAttachmentPreviewAndFeedback(t *testing.T) {
 	}
 }
 
+func TestChatComposerUsesSubtleOverflowTriggerForVisionModels(t *testing.T) {
+	modalPath := templatePath("modals.html")
+	modalData, err := os.ReadFile(modalPath)
+	if err != nil {
+		t.Fatalf("read chat modal template: %v", err)
+	}
+	modalContent := string(modalData)
+	if !strings.Contains(modalContent, "chat-attachment-more-btn") {
+		t.Fatalf("expected chat composer overflow trigger in %s", modalPath)
+	}
+	if !strings.Contains(modalContent, "chat-attachment-controls") {
+		t.Fatalf("expected chat composer attachment controls container in %s", modalPath)
+	}
+
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "toggleChatAttachmentOverflow") {
+		t.Fatalf("expected chat overflow toggle handler in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "shouldShowVisionAttachmentControl") {
+		t.Fatalf("expected visual attachment capability check in %s", scriptsPath)
+	}
+}
+
 func TestRefreshSpacesListHidesDomainSelectWhenEmpty(t *testing.T) {
 	scriptsPath := templatePath("scripts_part01.html")
 	scriptsData, err := os.ReadFile(scriptsPath)
