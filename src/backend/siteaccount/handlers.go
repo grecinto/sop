@@ -17,7 +17,6 @@ import (
 	"github.com/grecinto/sop-cloud/src/backend/siteapp"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/tools/sopbackend"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // RegisterHandlers wires the site account handlers to the site backend mux.
@@ -25,12 +24,14 @@ func RegisterHandlers(mux *http.ServeMux) {
 	if mux == nil {
 		return
 	}
+
 	mux.HandleFunc("/api/auth/register", HandleRegister)
 	mux.HandleFunc("/api/auth/human-proof/challenge", HandleHumanProofChallenge)
-	mux.HandleFunc("/api/site/auth/login", HandleLogin)
+	// Login is handled by sopbackend at /api/auth/login - no site-specific login endpoint needed
 	mux.HandleFunc("/api/site/auth/logout", HandleLogout)
 	mux.HandleFunc("/api/auth/me", withSiteAuth(HandleCurrentUser))
-	mux.HandleFunc("/api/auth/status", withSiteAuth(HandleStatus))
+	// Status endpoint checks config existence BEFORE requiring auth
+	mux.HandleFunc("/api/auth/status", HandleStatus)
 	mux.HandleFunc("/api/auth/subscription", withSiteAuth(HandleSubscriptionUpdate))
 	mux.HandleFunc("/api/auth/password", withSiteAuth(HandleChangePassword))
 	mux.HandleFunc("/api/auth/checkout", withSiteAuth(HandleCheckoutSession))
@@ -224,28 +225,6 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user, r.Context()))
 }
 
-func parseLoginRequest(r *http.Request) (struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}, error) {
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
-		if err := r.ParseForm(); err != nil {
-			return req, err
-		}
-		req.Username = r.FormValue("username")
-		req.Password = r.FormValue("password")
-		return req, nil
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return req, err
-	}
-	return req, nil
-}
-
 func setSessionCookies(w http.ResponseWriter, accessToken, refreshToken string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "sop_access_token",
@@ -290,88 +269,6 @@ func revokeSessionTokensFromRequest(ctx context.Context, r *http.Request) {
 		sopbackend.RevokeToken(ctx, token)
 		slog.Info("siteaccount.logout.revoked_token", "path", r.URL.Path, "token_prefix", shortTokenPrefix(token), "remote_addr", r.RemoteAddr)
 	}
-}
-
-func HandleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	req, err := parseLoginRequest(r)
-	if err != nil {
-		slog.Warn("siteaccount.login.invalid_body", "path", r.URL.Path, "error", err.Error())
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	slog.Info("siteaccount.login.request", "path", r.URL.Path, "username", req.Username, "remote_addr", r.RemoteAddr, "user_agent", r.UserAgent())
-	cfg := GetConfig()
-	if cfg == nil {
-		writeJSONError(w, http.StatusInternalServerError, "auth config unavailable")
-		return
-	}
-
-	user, found, findErr := cfg.FindUserRecord(r.Context(), normalizeUsername(req.Username))
-	if findErr != nil {
-		writeJSONError(w, http.StatusInternalServerError, findErr.Error())
-		return
-	}
-
-	username := normalizeUsername(req.Username)
-	passwordHash := ""
-	passwordMatches := false
-	resolvedUser := user
-	if found && user != nil {
-		passwordHash = strings.TrimSpace(user.PasswordHash)
-		if passwordHash != "" {
-			passwordMatches = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) == nil
-		}
-		resolvedUser = user
-	}
-
-	if !passwordMatches {
-		sharedCfg := sopbackend.GetConfig()
-		sharedUser, sharedFound, sharedErr := sharedCfg.FindUserRecord(r.Context(), username)
-		if sharedErr != nil {
-			writeJSONError(w, http.StatusInternalServerError, sharedErr.Error())
-			return
-		}
-		if sharedFound && sharedUser != nil {
-			resolvedUser = &UserRecord{
-				Username: sharedUser.Username,
-				Role:     sharedUser.Role,
-				Email:    string(sharedUser.Email),
-			}
-			sharedPasswordHash := strings.TrimSpace(sharedUser.PasswordHash.Plaintext())
-			if sharedPasswordHash != "" {
-				passwordMatches = bcrypt.CompareHashAndPassword([]byte(sharedPasswordHash), []byte(req.Password)) == nil
-			}
-		}
-	}
-
-	if !passwordMatches || resolvedUser == nil {
-		slog.Warn("siteaccount.login.password_mismatch", "username", username, "site_password_hash_present", passwordHash != "")
-		writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
-		return
-	}
-
-	accessToken, refreshToken, err := sopbackend.CreateSession(r.Context(), resolvedUser.Username, resolvedUser.Role)
-	if err != nil {
-		slog.Error("siteaccount.login.session_create_failed", "username", user.Username, "role", user.Role, "error", err.Error())
-		writeJSONError(w, http.StatusInternalServerError, "failed to create session")
-		return
-	}
-	slog.Info("siteaccount.login.session_created", "username", resolvedUser.Username, "role", resolvedUser.Role, "access_token_prefix", shortTokenPrefix(accessToken))
-	setSessionCookies(w, accessToken, refreshToken, r.TLS != nil)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":        "ok",
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"token_type":    "Bearer",
-		"user":          map[string]any{"username": user.Username, "role": user.Role},
-	})
 }
 
 func HandleRefresh(w http.ResponseWriter, r *http.Request) {
@@ -500,6 +397,18 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleStatus(w http.ResponseWriter, r *http.Request) {
+	// This must happen BEFORE checking authentication since no users exist yet
+	if !sopbackend.HasConfigFileOnDisk() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"config_provisioned": false,
+		})
+		return
+	}
+
+	// Config exists, now require authentication	}
+
 	account := currentAccountFromRequest(r)
 	slog.Debug("siteaccount.status.request", "path", r.URL.Path, "username", account.Username, "auth_roles", strings.Join(account.Roles, ","), "remote_addr", r.RemoteAddr)
 	if account.Username == "" {
@@ -532,7 +441,10 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 	slog.Info("siteaccount.status.response", "username", account.Username, "final_billing_status", user.BillingStatus)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user, r.Context()))
+	payload := buildUserResponsePayload(user, r.Context())
+	// Add config provisioning status so frontend can detect if Data Manager setup is needed
+	payload["config_provisioned"] = sopbackend.HasConfigFileOnDisk()
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func HandlePing(w http.ResponseWriter, r *http.Request) {

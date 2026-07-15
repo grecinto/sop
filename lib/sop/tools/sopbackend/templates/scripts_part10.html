@@ -1309,11 +1309,12 @@
             const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
             if (port && port != parseInt(currentPort)) {
                  const hostname = window.location.hostname;
-                 const newUrl = `${window.location.protocol}//${hostname}:${port}/site/`;
+                 const newUrl = `${window.location.protocol}//${hostname}:${port}/app`;
                  showAlert(`Setup Complete! IMPORTANT: You changed the port to ${port}. Please RESTART the server manually, then open: ${newUrl}`, null);
                  window.location.assign(newUrl);
             } else {
-                  window.location.assign('/site/');
+                  // Setup complete - stay in Data Manager (user is already logged in)
+                  window.location.reload();
             }
         })
         .catch(err => {

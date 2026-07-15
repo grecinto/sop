@@ -451,22 +451,32 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 	// Only users with the corresponding RBAC permission should be able to toggle between HQ and local workflow.
 	runtimeSwitchEnabled := runtimeSwitchEnabledForContext(req.Context())
 
+	// Setup wizard detection: only pass ConfigFile if it actually exists on disk
+	configFile := ""
+	if cfg.ConfigFile != "" && HasConfigFileOnDisk() {
+		configFile = cfg.ConfigFile
+	}
+
 	return map[string]any{
-		"Version":                sop.Version,
-		"Username":               username,
-		"CurrentPlan":            currentPlan,
-		"CurrentPlanLabel":       planLabel,
-		"CurrentPlanDescription": planDescription,
-		"AvailablePlans":         availablePlans,
-		"CurrentRole":            currentRole,
-		"IsAdmin":                isAdmin,
-		"AdminCapabilities":      adminCapabilities,
-		"ShowSubscribeForm":      false,
-		"ShowDownloadStep":       false,
-		"SubscriptionSuccess":    false,
-		"SubscriptionMessage":    "",
-		"IsUnsubscribed":         false,
-		"RuntimeSwitchEnabled":   runtimeSwitchEnabled,
+		"Version":                 sop.Version,
+		"Username":                username,
+		"CurrentPlan":             currentPlan,
+		"CurrentPlanLabel":        planLabel,
+		"CurrentPlanDescription":  planDescription,
+		"AvailablePlans":          availablePlans,
+		"CurrentRole":             currentRole,
+		"IsAdmin":                 isAdmin,
+		"AdminCapabilities":       adminCapabilities,
+		"ShowSubscribeForm":       false,
+		"ShowDownloadStep":        false,
+		"SubscriptionSuccess":     false,
+		"SubscriptionMessage":     "",
+		"IsUnsubscribed":          false,
+		"RuntimeSwitchEnabled":    runtimeSwitchEnabled,
+		"ConfigFile":              configFile,
+		"DefaultRuntimeMode":      "hq",
+		"SetupWizardAIConfigJSON": r.setupWizardAIConfigJSON(),
+		"ModelCatalogJSON":        r.modelCatalogJSON(),
 	}
 }
 

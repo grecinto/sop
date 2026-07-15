@@ -313,10 +313,20 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir, docsDir string) {
 	// The React site is a separate product website and is hosted by this standalone backend.
 	// The shared SOP UI/backend is also mounted here so site-admin/root users can manage
 	// the hosted environment through the same shared handlers used by the standalone httpserver/daemon.
+	//
+	// Install the site-backed user store ONCE before registering any handlers.
+	// This ensures sopbackend's auth handlers (including /api/auth/login) use the site's
+	// persistent btree user store instead of the default config.json users array.
 	siteaccount.InstallSopbackendUserStoreOverride()
+
+	// Register shared sopbackend handlers (auth, Data Manager, API, etc.)
+	// These handlers automatically use the overridden user store.
 	sopbackend.RegisterAllHandlersWithoutRoot(mux)
+
+	// Register site-specific handlers (billing, subscription, registration, etc.)
 	siteaccount.RegisterHandlers(mux)
-	siteaccount.InstallSopbackendUserStoreOverride()
+
+	// Register additional site-specific handlers
 	mux.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
 	mux.HandleFunc("/api/coding-workflow/execute", handleCodingWorkflowExecution)
 	registerFrontendHandler(mux, frontendDir)

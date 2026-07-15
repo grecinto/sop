@@ -33,6 +33,7 @@ type AccountState = {
   lastWebhookAt: string;
   payments: PaymentSummary[];
   subscriptions: SubscriptionSummary[];
+  configProvisioned: boolean;
 };
 
 const emptyState: AccountState = {
@@ -50,6 +51,7 @@ const emptyState: AccountState = {
   lastWebhookAt: '',
   payments: [],
   subscriptions: [],
+  configProvisioned: false,
 };
 
 const DRAFT_STORAGE_KEY = 'sop-cloud-site-draft';
@@ -401,6 +403,7 @@ async function recoverPendingCheckout(sessionID: string): Promise<AccountState |
       lastWebhookAt: billing.last_webhook_at ?? '',
       payments: [],
       subscriptions: [],
+      configProvisioned: true,
     };
   } catch {
     return null;
@@ -413,12 +416,21 @@ async function loadAccountFromServer(): Promise<AccountState> {
     return emptyState;
   }
   const payload = await response.json();
+  
+  // If config not provisioned, redirect to setup wizard
+  if (payload.config_provisioned === false) {
+    console.info('config not provisioned - redirecting to setup wizard');
+    window.location.assign('/app');
+    return emptyState;
+  }
+  
   const user = payload?.user ?? {};
   const plan = normalizePlan(user.subscription_plan);
   const billingStatus = normalizeBillingStatus(user.billing_status);
   const billing = user.billing ?? {};
   const role = normalizeRole(user.role);
   const canAccessDataManager = Boolean(user.can_access_data_manager) || isSystemAdminRole(role);
+  const configProvisioned = payload?.config_provisioned !== false;
   
   return {
     name: user.username ?? '',
@@ -435,6 +447,7 @@ async function loadAccountFromServer(): Promise<AccountState> {
     lastWebhookAt: billing.last_webhook_at ?? '',
     payments: Array.isArray(user.payments) ? user.payments : [],
     subscriptions: Array.isArray(user.subscriptions) ? user.subscriptions : [],
+    configProvisioned,
   };
 }
 
@@ -1103,7 +1116,9 @@ export default function App() {
   const canLaunchDataManager = account.isSystemAdmin;
   const hasSubscription = Boolean(account.isAuthenticated && account.plan !== 'none');
   const canAccessLocalDaemon = Boolean(account.isAuthenticated) && !account.isSystemAdmin && account.plan !== 'none';
-  const primaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
+  // If backend config not provisioned, primary action should launch setup wizard
+  const needsSetup = account.isAuthenticated && !account.configProvisioned;
+  const primaryActionHref = needsSetup ? '/app' : (canLaunchDataManager ? '/app' : '/site/subscribe');
   const handleOpenDataManager = async (event?: MouseEvent<HTMLAnchorElement>) => {
     if (event) {
       event.preventDefault();
@@ -1118,7 +1133,7 @@ export default function App() {
     }
     window.location.assign('/app');
   };
-  const primaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Unsubscribe' : 'Subscribe';
+  const primaryActionLabel = needsSetup ? 'Setup Data Manager' : (canLaunchDataManager ? 'Open Data Manager' : (hasSubscription ? 'Unsubscribe' : 'Subscribe'));
   
   const secondaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
   const secondaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Manage subscription' : 'Review subscription';
