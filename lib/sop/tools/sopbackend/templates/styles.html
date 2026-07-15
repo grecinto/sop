@@ -350,6 +350,7 @@
             align-items: center;
             gap: 4px;
             flex-shrink: 0;
+            position: relative;
         }
 
         .chat-controls button {
@@ -365,6 +366,96 @@
         .chat-controls button:hover {
             color: var(--text-color);
             background: none;
+        }
+
+        .chat-header-more-controls {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .chat-header-more-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            padding: 0 4px;
+            font-size: 14px;
+            line-height: 1;
+        }
+
+        .chat-header-more-btn:hover {
+            background: var(--hover-bg);
+        }
+
+        .chat-header-more-menu {
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 0;
+            display: none;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 172px;
+            padding: 4px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-color);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
+            z-index: 1201;
+        }
+
+        .chat-header-more-menu.open {
+            display: flex;
+        }
+
+        .chat-header-more-menu button {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 6px;
+            padding: 7px 8px;
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-color);
+            font-size: 12px;
+            font-weight: 500;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .chat-header-more-menu button:hover {
+            background: var(--hover-bg);
+            color: var(--text-color);
+        }
+
+        .chat-header-menu-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            flex-shrink: 0;
+        }
+
+        .expertise-dashboard-btn {
+            position: relative;
+        }
+
+        .expertise-dashboard-btn .expertise-badge {
+            position: absolute;
+            top: 3px;
+            right: 6px;
+            background: #f44336;
+            color: white;
+            font-size: 9px;
+            font-weight: bold;
+            padding: 2px 4px;
+            border-radius: 999px;
+            min-width: 12px;
+            text-align: center;
+            line-height: 1;
         }
 
         body.sop-chat-floater-mode {

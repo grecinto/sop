@@ -13,6 +13,73 @@
     <title>SOP Data Manager</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     {{template "styles"}}
+    <script>
+    function clampHashModValue(input) {
+        if (!input) return;
+        const raw = input.value.trim();
+        const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
+        const min = Math.max(0, Number.parseInt(input.min || '0', 10));
+        const max = Number.parseInt(input.max || '0', 10);
+        let next = Number.isNaN(parsed) ? 0 : parsed;
+        next = Math.max(min, next);
+        if (max > 0 && next > max) {
+            next = max;
+        }
+        input.value = String(next);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function applyHashModStep(input, delta) {
+        if (!input) return;
+        const raw = input.value.trim();
+        let current = 0;
+        if (raw !== '') {
+            const parsed = Number.parseInt(raw, 10);
+            if (!Number.isNaN(parsed)) {
+                current = parsed;
+            }
+        }
+
+        const min = Math.max(0, Number.parseInt(input.min || '0', 10));
+        const max = Number.parseInt(input.max || '0', 10);
+        let next = 0;
+        if (delta > 0) {
+            next = current <= 0 ? 250 : current * 2;
+        } else if (delta < 0) {
+            next = current <= 250 ? 0 : Math.floor(current / 2);
+        }
+
+        if (next < min) {
+            next = min;
+        }
+        if (max > 0 && next > max) {
+            next = max;
+        }
+        input.value = String(next);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function attachHashModArrowHandling() {
+        const selectors = ['#new-db-registry-hash-mod', '#setup-db-registry-hash-mod', '#setup-sys-registry-hash-mod'];
+        selectors.forEach((selector) => {
+            const input = document.querySelector(selector);
+            if (!input) return;
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    applyHashModStep(input, 1);
+                } else if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    applyHashModStep(input, -1);
+                }
+            });
+            input.addEventListener('input', () => clampHashModValue(input));
+            input.addEventListener('change', () => clampHashModValue(input));
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', attachHashModArrowHandling);
+    </script>
 </head>
 <body>
 {{if .DaemonRuntimeEnabled}}
@@ -601,7 +668,7 @@
                         <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 5px;">
                             <div style="display: flex; align-items: center; gap: 5px;">
                                 <label style="white-space: nowrap; margin-bottom: 0;">Hash Mod:</label>
-                                <input type="number" id="new-db-registry-hash-mod" placeholder="Default (0)" min="{{.MinHashMod}}" max="{{.MaxHashMod}}" step="250" style="width: 60px;">
+                                <input type="number" id="new-db-registry-hash-mod" placeholder="Default (0)" min="0" max="{{.MaxHashMod}}" step="250" inputmode="numeric" style="width: 60px;">
                             </div>
 
                             <div style="display: flex; align-items: center; gap: 5px; flex: 1;">
@@ -835,7 +902,7 @@
                         <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 5px;">
                             <div style="display: flex; align-items: center; gap: 5px;">
                                 <label style="white-space: nowrap; margin-bottom: 0;">Hash Mod:</label>
-                                <input type="number" id="setup-db-registry-hash-mod" placeholder="Default (0)" min="{{.MinHashMod}}" max="{{.MaxHashMod}}" step="250" style="width: 60px;">
+                                <input type="number" id="setup-db-registry-hash-mod" placeholder="Default (0)" min="0" max="{{.MaxHashMod}}" step="250" inputmode="numeric" style="width: 60px;">
                             </div>
 
                             <div style="display: flex; align-items: center; gap: 5px; flex: 1;">
@@ -940,7 +1007,7 @@
                         <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 5px;">
                             <div style="display: flex; align-items: center; gap: 5px;">
                                 <label style="white-space: nowrap; margin-bottom: 0;">Hash Mod:</label>
-                                <input type="number" id="setup-sys-registry-hash-mod" placeholder="Default (0)" min="{{.MinHashMod}}" max="{{.MaxHashMod}}" style="width: 80px;">
+                                <input type="number" id="setup-sys-registry-hash-mod" placeholder="Default (0)" min="0" max="{{.MaxHashMod}}" step="250" inputmode="numeric" style="width: 80px;">
                             </div>
                             <div style="display: flex; align-items: center; gap: 5px; flex: 1;">
                                 <label style="white-space: nowrap; margin-bottom: 0;">Stores Folder(s):</label>
@@ -968,26 +1035,34 @@
 
         <!-- Step 3: Review -->
         <div class="wizard-step" id="step-3">
-            <h3>3. Ready to Go!</h3>
-            <p style="font-size: 14px;">We are ready to initialize your environment.</p>
+            <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
+                <h3 style="margin: 0;">3. Ready to Go!</h3>
+                <p style="margin: 0; font-size: 0.85em; color: var(--text-muted);">We are ready to initialize your environment.</p>
+            </div>
 
-           <div style="display: flex; gap: 12px; margin-bottom: 15px;">
-                <div style="flex: 1 1 0; min-width: 0; background: var(--pre-bg); padding: 10px; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--border-color);">
-                    <label for="setup-root-password" style="display: block; font-weight: bold; margin-bottom: 4px;">Root Password</label>
-                    <input type="password" id="setup-root-password" placeholder="Enter root password" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); box-sizing: border-box;">
+           <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 15px;">
+                <div style="display: flex; background: var(--pre-bg); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; gap: 12px; font-size: 0.85em;">
+                    <div style="flex: 1 1 0; min-width: 0;">
+                        <label for="setup-root-password" style="display: block; font-weight: bold; margin-bottom: 4px;">Root Password</label>
+                        <input type="password" id="setup-root-password" placeholder="Enter root password" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); box-sizing: border-box;">
+                    </div>
+
+                    <div style="flex: 1 1 0; min-width: 0;">
+                        <label for="setup-system-admin-bootstrap-secret" title="Leave blank to keep the initial root user as Admin. Provide the bootstrap secret configured in the environment to make this initial user as SystemAdmin." style="display: block; font-weight: bold; margin-bottom: 4px; cursor: help;">
+                            SystemAdmin Bootstrap Secret
+                        </label>
+                        <input type="password" id="setup-system-admin-bootstrap-secret" placeholder="Optional bootstrap secret" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); box-sizing: border-box;">
+                    </div>
                 </div>
 
-                <div style="flex: 1 1 0; min-width: 0; background: var(--pre-bg); padding: 10px; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--border-color);">
-                    <label for="setup-vectorization-recovery-storage-path" style="display: block; font-weight: bold; margin-bottom: 4px;">Recovery Storage Path</label>
-                    <input type="text" id="setup-vectorization-recovery-storage-path" placeholder="Optional: /mnt/ssd/sop-recovery" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); box-sizing: border-box;">
-                    <div style="margin-top: 4px; color: var(--text-muted);">Optional folder for the vectorization recovery JSON log. This should be on a separate volume from the data volume for independent/separate I/O and better survival of the recovery data. If unavailable, the daemon uses its local state directory.</div>
-                </div>
-
-                <div style="flex: 1 1 0; min-width: 0; background: var(--pre-bg); padding: 10px; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--border-color);">
-                    <label for="setup-system-admin-bootstrap-secret" title="Leave blank to keep the initial root user as Admin. Provide the bootstrap secret configured in the environment to make this initial user as SystemAdmin." style="display: block; font-weight: bold; margin-bottom: 4px; cursor: help;">
-                        SystemAdmin Bootstrap Secret
-                    </label>
-                    <input type="password" id="setup-system-admin-bootstrap-secret" placeholder="Optional bootstrap secret" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); box-sizing: border-box;">
+                <div style="display: flex;">
+                    <div style="flex: 1 1 0; min-width: 0; background: var(--pre-bg); padding: 10px; border-radius: 4px; font-size: 0.85em; border: 1px solid var(--border-color);">
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <label for="setup-vectorization-recovery-storage-path" style="font-weight: bold; margin: 0;">Recovery Log Path:</label>
+                            <input type="text" id="setup-vectorization-recovery-storage-path" placeholder="Optional: /mnt/ssd/sop-recovery" style="flex: 1 1 220px; min-width: 220px; padding: 6px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); box-sizing: border-box;">
+                        </div>
+                        <div style="margin-top: 4px; color: var(--text-muted);">Optional. Leave blank to let app decide a location, e.g. its runtime state folder.</div>
+                    </div>
                 </div>
             </div>
             <!-- Brain (Generator) Settings -->

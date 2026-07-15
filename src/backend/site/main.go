@@ -567,15 +567,8 @@ func handleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {
 
 func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
 	frontendHandler := func(w http.ResponseWriter, r *http.Request) {
-		// Routing contract for the new site:
-		// - If no runtime config exists (or provisioning is not complete), redirect to /app so the
-		//   shared SetupWizard can provision the site as SA.
-		// - If config is present and provisioning is complete, serve the landing page so visitors can
-		//   log in or subscribe.
-		if r.URL.Path == "/" && !sopbackend.HasConfigFileOnDisk() {
-			http.Redirect(w, r, "/app", http.StatusFound)
-			return
-		}
+		// Always serve the public site landing page for the root routes so visitors can
+		// sign in or subscribe. The shared setup experience remains available at /app.
 		serveFrontendAsset(w, r, frontendDir)
 	}
 	mux.HandleFunc("/", frontendHandler)
@@ -675,7 +668,7 @@ func main() {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8081"
+		port = "8080"
 	}
 	addr := ":" + port
 	log.Printf("site backend listening on %s", addr)

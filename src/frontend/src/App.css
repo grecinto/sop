@@ -138,6 +138,32 @@ body {
 .preview-box { margin-top: 1rem; background: rgba(125, 211, 252, 0.12); border: 1px solid rgba(125, 211, 252, 0.25); border-radius: 16px; padding: 1rem; }
 .preview-box h4 { margin-top: 0; margin-bottom: 0.35rem; }
 .preview-box p { color: var(--text-muted); margin-bottom: 0.85rem; }
+.preview-box-compact { padding: 0.8rem 1rem; }
+.preview-toggle-shell { width: 100%; margin-top: 0.9rem; }
+.preview-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--border); border-radius: 16px; background: rgba(125, 211, 252, 0.12); color: var(--text); padding: 0.9rem 1rem; cursor: pointer; text-align: left; box-shadow: inset 0 1px 0 rgba(255,255,255,0.2); }
+.preview-toggle strong { display: block; font-size: 0.95rem; }
+.preview-toggle small { display: block; color: var(--text-muted); margin-top: 0.2rem; }
+.preview-toggle-icon { font-size: 1rem; color: var(--accent); flex-shrink: 0; }
+.preview-demo-shell { margin-top: 0.9rem; display: grid; gap: 0.75rem; }
+.preview-demo-frame { display: grid; grid-template-columns: 112px minmax(0, 1fr); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; background: linear-gradient(135deg, rgba(37,99,235,0.08), rgba(56,189,248,0.05)); min-height: 320px; }
+.preview-demo-sidebar { padding: 0.9rem; display: grid; gap: 0.5rem; background: rgba(8,17,31,0.04); border-right: 1px solid var(--border); }
+.preview-demo-chip { border-radius: 999px; padding: 0.45rem 0.6rem; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); background: var(--surface-strong); text-align: center; }
+.preview-demo-chip.active { background: var(--accent); color: white; }
+.preview-demo-main { padding: 0.9rem; display: grid; gap: 0.8rem; }
+.preview-demo-canvas { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 0.75rem; align-items: stretch; }
+.preview-demo-toolbar { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.preview-demo-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 0.3rem 0.6rem; font-size: 0.75rem; font-weight: 700; background: rgba(37,99,235,0.16); color: var(--accent); }
+.preview-demo-pill.muted { background: rgba(8,17,31,0.06); color: var(--text-muted); }
+.preview-demo-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 0.85rem; box-shadow: inset 0 1px 0 rgba(255,255,255,0.25); }
+.preview-demo-card-large { min-height: 170px; display: grid; gap: 0.45rem; }
+.preview-demo-card-small { display: grid; gap: 0.55rem; }
+.preview-demo-label { margin: 0; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--accent-soft); }
+.preview-demo-card h5 { margin: 0; font-size: 1rem; }
+.preview-demo-graph { border-radius: 12px; min-height: 90px; background: linear-gradient(135deg, rgba(37,99,235,0.18), rgba(56,189,248,0.1)); border: 1px dashed rgba(37,99,235,0.24); }
+.preview-demo-bubble { border-radius: 12px; background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.25); padding: 0.7rem; display: grid; gap: 0.25rem; }
+.preview-demo-bubble strong { font-size: 0.85rem; }
+.preview-demo-bubble span { color: var(--text-muted); font-size: 0.82rem; }
+.preview-demo-caption { margin: 0; color: var(--text-muted); font-size: 0.92rem; }
 .install-box { margin-top: 1rem; }
 .status-card { margin-top: 1rem; display: flex; align-items: center; gap: 0.75rem; padding: 0.9rem 1rem; border-radius: 16px; background: var(--surface-muted); border: 1px solid var(--border); }
 .status-pill { display: inline-flex; align-items: center; justify-content: center; padding: 0.35rem 0.6rem; border-radius: 999px; background: rgba(125, 211, 252, 0.2); color: var(--accent-soft); font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
@@ -183,5 +209,5 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Libe
 .comparison-card { min-height: 100%; }
 
 @media (max-width: 900px) {
-  .hero-grid, .section-row, .stack-grid, .checkout-grid, .inline-fields, .docs-grid, .docs-grid-wide, .docs-journey, .docs-comparison { grid-template-columns: 1fr; }
+  .hero-grid, .section-row, .stack-grid, .checkout-grid, .inline-fields, .docs-grid, .docs-grid-wide, .docs-journey, .docs-comparison, .preview-demo-canvas { grid-template-columns: 1fr; }
 }

@@ -596,6 +596,7 @@ export default function App() {
   const [checkoutComplete, setCheckoutComplete] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => resolveThemePreference());
   const [expandedImportDetails, setExpandedImportDetails] = useState(false);
+  const [showProductPreview, setShowProductPreview] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [isStatusError, setIsStatusError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1886,6 +1887,7 @@ This section explains the system design.
                   </div>
                 </div>
               </div>
+            </div>
 
               {account.payments.length > 0 ? (
                 <div className="preview-box">
@@ -1913,7 +1915,6 @@ This section explains the system design.
                   </button>
                 </div>
               ) : null}
-            </div>
           </div>
 
           <div className="hero-side" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
@@ -1940,6 +1941,56 @@ This section explains the system design.
             </div>
 
           </div>
+        </div>
+
+        <div className="preview-toggle-shell" style={{ marginTop: '1.25rem' }}>
+          <button
+            type="button"
+            className="preview-toggle"
+            onClick={() => setShowProductPreview((value) => !value)}
+            aria-expanded={showProductPreview}
+          >
+            <span>
+              <strong>See the AI Copilot and the Data Studio in action</strong>
+              <small>A standard copilot, but with spaces, visualization, and shared context.</small>
+            </span>
+            <span className="preview-toggle-icon">{showProductPreview ? '▾' : '▸'}</span>
+          </button>
+          {showProductPreview ? (
+            <div className="preview-demo-shell" role="region" aria-label="SOP Data Manager preview">
+              <div className="preview-demo-frame">
+                <div className="preview-demo-sidebar">
+                  <div className="preview-demo-chip active">Spaces</div>
+                  <div className="preview-demo-chip">Knowledge</div>
+                  <div className="preview-demo-chip">Graph</div>
+                </div>
+                <div className="preview-demo-main">
+                  <div className="preview-demo-toolbar">
+                    <span className="preview-demo-pill">Northstar workspace</span>
+                    <span className="preview-demo-pill muted">Realtime context</span>
+                  </div>
+                  <div className="preview-demo-canvas">
+                    <div className="preview-demo-card preview-demo-card-large">
+                      <p className="preview-demo-label">Active Space</p>
+                      <h5>Product Engineering</h5>
+                      <div className="preview-demo-graph" />
+                    </div>
+                    <div className="preview-demo-card preview-demo-card-small">
+                      <p className="preview-demo-label">Copilot</p>
+                      <p>“Summarize the latest architecture decisions and highlight risks.”</p>
+                      <div className="preview-demo-bubble">
+                        <strong>Context aware answer</strong>
+                        <span>Visualized memory, linked evidence, and local data context.</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <p className="preview-demo-caption">
+                This is a standard AI copilot experience, elevated with local data visualization, knowledge bases, and trusted context.
+              </p>
+            </div>
+          ) : null}
         </div>
       </section>
     );

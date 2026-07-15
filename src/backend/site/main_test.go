@@ -341,7 +341,7 @@ func TestSiteBackendDaemonBootstrapEndpointReturnsBootstrapSecret(t *testing.T) 
 	}
 }
 
-func TestSiteBackendRedirectsRootToSetupWizardWhenNoConfigExists(t *testing.T) {
+func TestSiteBackendServesFrontendAtRootWhenNoConfigExists(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
 		t.Fatalf("failed to write test frontend asset: %v", err)
@@ -354,11 +354,11 @@ func TestSiteBackendRedirectsRootToSetupWizardWhenNoConfigExists(t *testing.T) {
 	rec := httptest.NewRecorder()
 	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected root request to redirect to setup wizard, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected root request to serve the landing page, got %d", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/app" {
-		t.Fatalf("expected root request to redirect to /app, got %q", got)
+	if body := rec.Body.String(); !strings.Contains(body, "site") {
+		t.Fatalf("expected root response body to contain the site markup, got %q", body)
 	}
 }
 

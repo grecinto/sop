@@ -751,6 +751,33 @@
         }
     }
 
+    function closeChatHeaderMoreMenu() {
+        const menu = document.getElementById('chat-header-more-menu');
+        if (menu) {
+            menu.classList.remove('open');
+            const button = document.getElementById('chat-header-more-btn');
+            if (button) {
+                button.setAttribute('aria-expanded', 'false');
+            }
+        }
+    }
+
+    function toggleChatHeaderMoreMenu() {
+        const menu = document.getElementById('chat-header-more-menu');
+        const button = document.getElementById('chat-header-more-btn');
+        if (!menu || !button) return;
+
+        const isOpen = menu.classList.contains('open');
+        if (isOpen) {
+            menu.classList.remove('open');
+            button.setAttribute('aria-expanded', 'false');
+            return;
+        }
+
+        menu.classList.add('open');
+        button.setAttribute('aria-expanded', 'true');
+    }
+
     function toggleChatSettings() {
         const overlay = document.getElementById('chat-settings');
         if (!overlay) return;
