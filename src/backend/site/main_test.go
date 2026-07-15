@@ -380,6 +380,49 @@ func TestSiteBackendAllowsSetupWizardAtAppPathWhenNoConfigExists(t *testing.T) {
 	}
 }
 
+func TestSiteBackendAcceptsSharedAuthSessionForAppRoute(t *testing.T) {
+	frontendDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
+		t.Fatalf("failed to write test frontend asset: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	registerSiteHandlers(mux, frontendDir, t.TempDir())
+
+	systemDBPath := filepath.Join(t.TempDir(), "system")
+	cfg := sopbackend.Config{
+		UsersStore:    sopbackend.NewUserStore(),
+		SystemDB:      &sopbackend.DatabaseConfig{Name: sopbackend.SystemDBName, Path: systemDBPath, Mode: "standalone"},
+		SessionSecret: sopbackend.SecuredString("shared-auth-test-secret"),
+	}
+	sopbackend.SetConfig(cfg)
+	defer sopbackend.SetConfig(sopbackend.Config{})
+	if _, err := (&cfg).RegisterUser(context.Background(), "shared-auth-admin", "secret", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
+		t.Fatalf("RegisterUser() error = %v", err)
+	}
+	sopbackend.SetConfig(cfg)
+
+	oldFacade := sopbackend.GetConfig().UsersStore
+	_ = oldFacade
+	if tokenFacade := sopbackend.GetConfig().UsersStore; tokenFacade == nil {
+		// no-op
+	}
+
+	accessToken, _, err := sopbackend.CreateSession(context.Background(), "shared-auth-admin", sop.RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	req.AddCookie(&http.Cookie{Name: "sop_access_token", Value: accessToken})
+	rec := httptest.NewRecorder()
+	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected admin with shared auth session to access Data Manager, got %d", rec.Code)
+	}
+}
+
 func TestSiteBackendServesFrontendAtRootEvenWhenConfigExists(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
@@ -436,11 +479,8 @@ func TestSiteBackendRedirectsSubscribedUsersToLocalDaemon(t *testing.T) {
 	rec := httptest.NewRecorder()
 	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected redirect status for subscribed user, got %d", rec.Code)
-	}
-	if got := rec.Header().Get("Location"); got != "http://127.0.0.1:9090" {
-		t.Fatalf("expected redirect to local daemon URL, got %q", got)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden status for subscribed non-admin user, got %d", rec.Code)
 	}
 }
 
@@ -460,11 +500,8 @@ func TestSiteBackendUsesRBACPermissionForAppAccess(t *testing.T) {
 	rec := httptest.NewRecorder()
 	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("expected RBAC-authorized app access to redirect, got %d", rec.Code)
-	}
-	if got := rec.Header().Get("Location"); got != "http://127.0.0.1:9090" {
-		t.Fatalf("expected RBAC-authorized app access to redirect to local daemon URL, got %q", got)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected RBAC-authorized non-admin to be denied Data Manager access, got %d", rec.Code)
 	}
 }
 

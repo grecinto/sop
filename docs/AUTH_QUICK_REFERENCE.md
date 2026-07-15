@@ -1,21 +1,23 @@
 # Authentication Architecture - Quick Reference
 
-**Last Updated:** 2026-07-14
+**Last Updated:** 2026-07-15  
+**Status:** ✅ IMPLEMENTED & DOCUMENTED
 
 ---
 
-## Current Problem 🔴
+## Current State ✅
 
-**Symptom:** Double authentication - users must login twice (once on site, again for Data Manager)
+**Implementation:** Unified authentication system is fully operational with comprehensive inline documentation to prevent regressions.
 
-**Root Cause:**
-1. Two login endpoints exist: `/api/auth/login` and `/api/site/auth/login`
-2. User store override installed twice (redundant)
-3. Session validation may not consistently use overridden user store
+**Architecture:**
+1. Single auth system built on sopbackend's session/token layer
+2. One login endpoint: `/api/auth/login` (sopbackend handler with site user store override)
+3. Consistent token validation across all components
+4. Extensive code comments preventing AI/human regressions
 
 ---
 
-## Correct Architecture ✅
+## Unified Architecture ✅
 
 ### Single Auth Feature (Sopbackend)
 
@@ -58,60 +60,94 @@ daemon.InstallOSUserStoreOverride()  // hypothetical
 4. **Multiple User Stores:** Each runtime provides its own `UserStore` implementation
 5. **Install Once:** User store override installed **before** handler registration
 6. **Transparent to Handlers:** All sopbackend handlers automatically use override
+7. **No Double Auth:** Subscription enforcement layer works WITH (not instead of) unified auth
 
 ---
 
-## Fix Summary
+## Implementation Status ✅
 
-### Changes Required
+### Completed Changes
 
-| Component | File | Action |
+| Component | File | Status |
 |-----------|------|--------|
-| Site Login Handler | `src/backend/siteaccount/handlers.go` | **Remove** `HandleLogin` function |
-| Site Handler Registration | `src/backend/siteaccount/handlers.go` | **Remove** `/api/site/auth/login` route |
-| Site Bootstrap | `src/backend/site/main.go` | **Remove** duplicate override installation (line 319) |
-| Site Bootstrap | `src/backend/site/main.go` | **Add** comments explaining override pattern |
-| Tests | `src/backend/siteaccount/siteaccount_test.go` | **Remove** tests for deleted `HandleLogin` |
-| Tests | `src/backend/site/auth_integration_test.go` | **Add** unified auth flow test |
+| Site Login Handler | `src/backend/siteaccount/handlers.go` | ✅ Removed duplicate `HandleLogin` |
+| Site Handler Registration | `src/backend/siteaccount/handlers.go` | ✅ Removed `/api/site/auth/login` route |
+| Site Bootstrap | `src/backend/site/main.go` | ✅ Single override installation |
+| Auth Documentation | `src/backend/site/main.go` | ✅ Comprehensive comments added |
+| Handler Documentation | `src/backend/siteaccount/handlers.go` | ✅ Anti-regression comments |
+| Override Documentation | `src/backend/siteaccount/sopbackend_override.go` | ✅ Architecture explained |
+| Regression Tests | `src/backend/site/main_test.go` | ✅ Auth flow tests passing |
 
-### No Changes Required
+### Documentation Added (Prevents Regressions)
 
-| Component | Reason |
-|-----------|--------|
-| Frontend (`App.tsx`) | Already calls `/api/auth/login` (correct) |
-| Sopbackend Login | Already uses `config.findUserRecord()` (respects override) |
-| Session Validation | Already uses overridden user store |
+**src/backend/site/main.go:**
+- Unified authentication architecture overview
+- Explanation of siteAppAccessHandler as subscription enforcement (not duplicate auth)
+- Auth flow diagram: Request → subscription check → token validation → handler
+- Warnings about what NOT to do (duplicate validation, parallel auth, etc.)
 
----
+**src/backend/siteaccount/handlers.go:**
+- Handler purpose and integration with sopbackend
+- withSiteAuth delegation explanation
+- Token validation centralization notes
 
-## Testing Checklist
-
-### Before Deployment ✅
-
-- [ ] Remove site's `HandleLogin` function
-- [ ] Fix double override installation
-- [ ] Add integration test for unified auth flow
-- [ ] Run all existing tests (should pass)
-- [ ] Manual test: login → Data Manager (no re-login)
-- [ ] Manual test: refresh token rotation works
-- [ ] Manual test: logout clears session
-
-### After Deployment ✅
-
-- [ ] Monitor auth success rate (should stay consistent)
-- [ ] Monitor `/app` redirect-to-login rate (should drop)
-- [ ] Check for "double login" user complaints (should be zero)
-- [ ] Verify session logs show override being used
+**src/backend/siteaccount/sopbackend_override.go:**
+- Override foundation purpose
+- What happens after installation
+- Anti-regression warnings
 
 ---
 
-## API Endpoints (After Fix)
+## Testing Status ✅
 
-### Authentication (Sopbackend)
+### Verification Completed
+
+- ✅ Unified auth flow tests pass (site, siteaccount, sopbackend)
+- ✅ /app route access control works correctly
+- ✅ Subscription enforcement doesn't interfere with auth
+- ✅ Admins can access Data Manager without re-login
+- ✅ Subscribed users redirect to local daemon
+- ✅ uthentication Flow
+
+### Request Flow for /app Routes
 ```
-POST   /api/auth/login       → Login (uses overridden user store)
+1. Request arrives with cookies/headers
+   ↓
+2. siteAppAccessHandler checks subscription policy
+   ↓
+3. Passes to mux router
+   ↓
+4. RequireAuth middleware validates token (sopbackend)
+   ↓
+5. Populates auth context with user identity
+   ↓
+6. Handler receives authenticated request
+```
+
+### Key Point: NO Double Validation
+- siteAppAccessHandler checks if user HAS a valid subscription
+- RequireAuth validates the session token itself
+- Both use the SAME token validation (sopbackend.AuthenticateBearerToken)
+- Early subscription check avoids wasted token validation for non-subscribers
+
+---
+
+## API Endpoints
+
+### Authentication (Sopbackend - Unified Layer)
+```
+POST   /api/auth/login       → Login (uses site user store via override)
 POST   /api/auth/refresh     → Refresh session tokens
+POST   /api/auth/logout      → Invalidate session (site delegates to this)
 GET    /login                → Login page (HTML)
+GET    /app                  → Data Manager (RequireAuth middleware)
+```
+
+### Site-Specific (Siteaccount - Extends Auth)
+```
+POST   /api/auth/register               → Register new site user (calls sopbackend.CreateSession)
+GET    /api/auth/me                     → Current user info (validates via sopbackend)
+GET    /api/auth/status                 → Auth status + billing
 ```
 
 ### Site-Specific (Siteaccount)

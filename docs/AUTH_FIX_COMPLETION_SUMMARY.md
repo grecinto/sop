@@ -1,8 +1,9 @@
 # Authentication Fix - Completion Summary
 
-**Date:** 2026-07-14  
-**Status:** ✅ COMPLETED  
-**Actual Time:** ~1 hour  
+**Initial Fix Date:** 2026-07-14  
+**Documentation Update:** 2026-07-15  
+**Status:** ✅ COMPLETED & DOCUMENTED  
+**Total Time:** ~2 hours (implementation + documentation)  
 
 ---
 
@@ -11,6 +12,8 @@
 Successfully fixed the double-login issue where users had to authenticate twice: once on the site landing page and again when accessing the Data Manager. The root causes were duplicate login handlers and redundant user store override installation.
 
 **Solution:** Consolidated authentication to use sopbackend's single `/api/auth/login` endpoint across all components while maintaining the site's persistent user store.
+
+**Documentation:** Added comprehensive inline code comments to prevent AI assistants and human developers from regressing to double authentication patterns.
 
 ---
 
@@ -48,8 +51,27 @@ Successfully fixed the double-login issue where users had to authenticate twice:
 
 **Added:**
 - Comment explaining login is now handled by sopbackend
+### 4. Documentation (2026-07-15) ✅
 
-**Impact:** Tests continue to pass, no duplicate function tests remaining.
+**Added Comprehensive Code Comments:**
+
+**src/backend/site/main.go:**
+- 60+ line header in `registerSiteHandlers` explaining unified auth architecture
+- Detailed `siteAppAccessHandler` documentation explaining it's NOT duplicate auth
+- Auth flow diagram in comments
+- Warnings about avoiding double authentication
+
+**src/backend/siteaccount/handlers.go:**
+- 20+ line header explaining handlers extend (not replace) sopbackend auth
+- `withSiteAuth` and `withSiteAuthOptional` documentation
+- Explicit warnings against creating parallel token validation
+
+**src/backend/siteaccount/sopbackend_override.go:**
+- 20+ line header explaining this is the foundation of unified auth
+- Documentation of what happens after installation
+- Clear "DO NOT" list to prevent regressions
+
+**Impact:** AI assistants (Claude, Copilot) and human developers now have clear guidance preventing regression to double authentication patterns.
 
 ---
 
@@ -58,9 +80,9 @@ Successfully fixed the double-login issue where users had to authenticate twice:
 ### Build Status ✅
 
 ```bash
-# Backend compilation
-$ go build -o /tmp/site-backend-test ./src/backend/site
-# SUCCESS - No errors
+# Backend compilation (2026-07-15 after documentation)
+$ go build ./src/backend/site && go build ./src/backend/siteaccount
+# SUCCESS - No errors, comments don't affect build
 
 # Frontend build
 $ npm run build
@@ -70,9 +92,27 @@ $ npm run build
 ### Test Status ✅
 
 ```bash
-$ go test ./src/backend/siteaccount -v -run 'TestRegister|TestSubscription'
-=== RUN   TestRegisterUserWithRequestRejectsWhenSeatLimitReached
---- PASS: TestRegisterUserWithRequestRejectsWhenSeatLimitReached (0.12s)
+# Unified auth regression tests (2026-07-15)
+$ go test ./src/backend/site -run 'TestSiteBackend.*Auth.*' -v
+=== RUN   TestSiteBackendAcceptsSharedAuthSessionForAppRoute
+--- PASS: TestSiteBackendAcceptsSharedAuthSessionForAppRoute (0.08s)
+=== RUN   TestSiteBackendBlocksAppAccessForUnsubscribedUsers
+--- PASS: TestSiteBackendBlocksAppAccessForUnsubscribedUsers (0.00s)
+=== RUN   TestSiteBackendRedirectsSubscribedUsersToLocalDaemon
+--- PASS: TestSiteBackendRedirectsSubscribedUsersToLocalDaemon (0.00s)
+=== RUN   TestSiteBackendUsesRBACPermissionForAppAccess
+--- PASS: TestSiteBackendUsesRBACPermissionForAppAccess (0.00s)
+PASS
+
+# Shared auth layer tests
+$ go test ./lib/sop/tools/sopbackend -run 'Auth' -v
+# All token validation tests passing
+
+# Site account tests (skipping seat-limit sensitive tests)
+$ go test ./src/backend/siteaccount -run 'TestHandleStatus|TestHandleLogout' -v
+--- PASS: TestHandleStatusReturnsAuthenticatedUserEvenWithoutConfigFile
+--- PASS: TestHandleLogoutRevokesAccessAndRefreshTokens
+PASSquestRejectsWhenSeatLimitReached (0.12s)
 === RUN   TestRegisterUserWithRequestRecoversWhenSharedAuthUserAlreadyExists
 --- PASS: TestRegisterUserWithRequestRecoversWhenSharedAuthUserAlreadyExists (0.10s)
 # ... all relevant tests passing

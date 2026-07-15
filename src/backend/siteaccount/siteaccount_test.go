@@ -482,6 +482,99 @@ func TestHandleCheckoutSessionRejectsActiveSubscriptionUser(t *testing.T) {
 	}
 }
 
+func TestCheckoutRouteAllowsGuestIdentityWithoutAuthToken(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "guest-checkout")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "guest-checkout@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	challenge := "test-guest-checkout-challenge"
+	humanProofChallengesMu.Lock()
+	humanProofChallenges[challenge] = time.Now().Add(5 * time.Minute)
+	humanProofChallengesMu.Unlock()
+
+	body := fmt.Sprintf(`{"plan":"starter","name":"%s","email":"guest-checkout@example.com","human_proof":"%s"}`, username, challenge)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/checkout", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "sop_human_challenge", Value: challenge})
+	rr := httptest.NewRecorder()
+
+	withSiteAuthOptional(HandleCheckoutSession)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("checkout route status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"status":"ok"`) {
+		t.Fatalf("expected success response body, got %s", rr.Body.String())
+	}
+}
+
+func TestHandleStatusReturnsAuthenticatedUserEvenWithoutConfigFile(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "status-without-config")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "status-without-config@example.com",
+		Role:             "user",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	accessToken, _, err := sopbackend.CreateSession(context.Background(), username, sop.RoleUser)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req.AddCookie(&http.Cookie{Name: "sop_access_token", Value: accessToken})
+	rr := httptest.NewRecorder()
+
+	HandleStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleStatus() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"username":"`+username+`"`) {
+		t.Fatalf("expected authenticated username in status response, got %s", rr.Body.String())
+	}
+}
+
+func TestHandleLogoutRevokesAccessAndRefreshTokens(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	accessToken, refreshToken, err := sopbackend.CreateSession(context.Background(), "logout-user", sop.RoleUser)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: "sop_access_token", Value: accessToken})
+	req.AddCookie(&http.Cookie{Name: "sop_refresh_token", Value: refreshToken})
+	rr := httptest.NewRecorder()
+
+	HandleLogout(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleLogout() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if _, err := sopbackend.ValidateSessionToken(context.Background(), accessToken); err == nil {
+		t.Fatal("expected access token to be invalid after logout")
+	}
+	if _, _, err := sopbackend.RefreshSession(context.Background(), refreshToken); err == nil {
+		t.Fatal("expected refresh token to be invalid after logout")
+	}
+}
+
 // Note: Login is now handled by sopbackend at /api/auth/login.
 // The site no longer has a duplicate login handler - sopbackend's handler
 // automatically uses the site's btree user store via the installed override.

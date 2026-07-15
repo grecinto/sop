@@ -56,6 +56,64 @@ For operational moves, the simplest supported story is a file-folder migration:
 
 This is a good default because SOP data is stored in filesystem-backed stores and the migration is effectively a copy of those directories. It is straightforward, low-risk, and easy to rollback if needed.
 
+## Authentication Architecture
+
+**CRITICAL:** This codebase uses a **unified authentication system**. Do not create parallel auth logic.
+
+### Single Source of Truth
+
+All authentication is handled by the shared `sopbackend` layer:
+
+- **Token creation:** `sopbackend.CreateSession()`
+- **Token validation:** `sopbackend.AuthenticateBearerToken()`
+- **Session cookies:** `sop_access_token`, `sop_refresh_token`
+- **Auth context:** `sop.ContextWithAuth()` and `sop.GetAuthFromContext()`
+
+### User Store Override Pattern
+
+The site backend installs a user store override so sopbackend validates against the site's persistent user store instead of config.json:
+
+```go
+// src/backend/site/main.go (registerSiteHandlers)
+siteaccount.InstallSopbackendUserStoreOverride()
+sopbackend.RegisterAllHandlersWithoutRoot(mux)
+```
+
+After this override is installed:
+- `/api/auth/login` uses site users
+- `sopbackend.AuthenticateBearerToken()` validates against site users
+- `sopbackend.CreateSession()` issues tokens for site users
+- All RequireAuth middleware uses site users
+
+### Where Auth Logic Lives
+
+| Component | Responsibility | Location |
+|-----------|---------------|----------|
+| Core auth (tokens, sessions) | `sopbackend` | `lib/sop/tools/sopbackend/auth.go` |
+| User store override | `siteaccount` | `src/backend/siteaccount/sopbackend_override.go` |
+| Site-specific wrappers | `siteaccount` | `src/backend/siteaccount/handlers.go` (`withSiteAuth`) |
+| Subscription enforcement | `site` | `src/backend/site/main.go` (`siteAppAccessHandler`) |
+
+### DO NOT
+
+❌ Create duplicate login endpoints  
+❌ Implement parallel token validation  
+❌ Build custom session management  
+❌ Bypass `sopbackend.AuthenticateBearerToken()`  
+❌ Create separate auth context population  
+
+### DO
+
+✅ Use `sopbackend.CreateSession()` for new tokens  
+✅ Use `sopbackend.AuthenticateBearerToken()` for validation  
+✅ Delegate to `sopbackend` handlers where possible  
+✅ Add site-specific logic AFTER auth validation, not instead of it  
+✅ Read inline comments in `src/backend/site/main.go` and `src/backend/siteaccount/handlers.go`  
+
+### Reference Documentation
+
+See [AUTH_QUICK_REFERENCE.md](AUTH_QUICK_REFERENCE.md) for detailed architecture diagrams and API endpoints.
+
 ## Design conventions
 
 - Prefer explicit request structs and explicit parameters over context-based state passing.
@@ -67,5 +125,6 @@ This is a good default because SOP data is stored in filesystem-backed stores an
 
 - [README.md](../README.md): repository purpose and high-level architecture
 - [src/README.md](../src/README.md): the product-layer layout and conventions
+- [docs/AUTH_QUICK_REFERENCE.md](AUTH_QUICK_REFERENCE.md): unified authentication architecture (read this before touching auth code)
 - [docs/NEW_SITE_STORIES.md](NEW_SITE_STORIES.md): product stories for the new site experience
 - [docs/NEW_SITE_IMPLEMENTATION_TASKS.md](NEW_SITE_IMPLEMENTATION_TASKS.md): implementation task list

@@ -117,6 +117,16 @@ function loadProvisioningDoneFlag(): boolean {
   }
 }
 
+function clearBrowserSessionCookies() {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const cookieNames = ['sop_access_token', 'sop_refresh_token', 'sop_session_token', 'access_token', 'sop_userId'];
+  for (const cookieName of cookieNames) {
+    document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+}
+
 function clearPersistedAccountState() {
   if (typeof window === 'undefined') {
     return;
@@ -124,6 +134,17 @@ function clearPersistedAccountState() {
   window.localStorage.removeItem(ACCOUNT_STATE_STORAGE_KEY);
   window.localStorage.removeItem(DRAFT_STORAGE_KEY);
   window.sessionStorage.removeItem(ACCOUNT_STATE_STORAGE_KEY);
+  window.localStorage.removeItem('sop_access_token');
+  window.localStorage.removeItem('sop_refresh_token');
+  window.localStorage.removeItem('sop_session_token');
+  window.localStorage.removeItem('access_token');
+  window.localStorage.removeItem('sop_userId');
+  window.sessionStorage.removeItem('sop_access_token');
+  window.sessionStorage.removeItem('sop_refresh_token');
+  window.sessionStorage.removeItem('sop_session_token');
+  window.sessionStorage.removeItem('access_token');
+  window.sessionStorage.removeItem('sop_userId');
+  clearBrowserSessionCookies();
 }
 
 function loadPendingCheckoutSessionID(): string {
@@ -169,6 +190,8 @@ function clearSignedOutFlag() {
   }
   window.localStorage.removeItem(SIGNED_OUT_STORAGE_KEY);
   window.sessionStorage.removeItem(SIGNED_OUT_STORAGE_KEY);
+  window.localStorage.removeItem('sop-site-logout-pending');
+  window.sessionStorage.removeItem('sop-site-logout-pending');
 }
 
 function consumeLogoutPendingFlag(): boolean {
@@ -182,6 +205,13 @@ function consumeLogoutPendingFlag(): boolean {
     window.localStorage.removeItem('sop-site-logout-pending');
   }
   return pending || signedOut;
+}
+
+function isLogoutPending(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  return window.sessionStorage.getItem('sop-site-logout-pending') === '1' || window.localStorage.getItem('sop-site-logout-pending') === '1' || window.sessionStorage.getItem(SIGNED_OUT_STORAGE_KEY) === '1' || window.localStorage.getItem(SIGNED_OUT_STORAGE_KEY) === '1';
 }
 
 function persistAccountState(account: AccountState) {
@@ -411,20 +441,23 @@ async function recoverPendingCheckout(sessionID: string): Promise<AccountState |
 }
 
 async function loadAccountFromServer(): Promise<AccountState> {
+  if (isLogoutPending()) {
+    return emptyState;
+  }
   const response = await fetch('/api/auth/status', { credentials: 'include' });
   if (!response.ok) {
     return emptyState;
   }
   const payload = await response.json();
-  
-  // If config not provisioned, redirect to setup wizard
-  if (payload.config_provisioned === false) {
-    console.info('config not provisioned - redirecting to setup wizard');
-    window.location.assign('/app');
-    return emptyState;
-  }
-  
+
   const user = payload?.user ?? {};
+  const userHasIdentity = Boolean(user.username || user.email || user.role || user.subscription_plan || user.billing_status || user.billing);
+  if (!userHasIdentity && payload?.config_provisioned === false) {
+    return {
+      ...emptyState,
+      configProvisioned: false,
+    };
+  }
   const plan = normalizePlan(user.subscription_plan);
   const billingStatus = normalizeBillingStatus(user.billing_status);
   const billing = user.billing ?? {};
@@ -462,6 +495,18 @@ function mergeAccountWithFallback(nextAccount: AccountState, fallback: AccountSt
   };
 }
 
+function identityMatchesAccount(account: AccountState, draftName: string, draftEmail: string): boolean {
+  const requestedIdentity = buildUsername(draftName, draftEmail).toLowerCase();
+  if (!requestedIdentity) {
+    return true;
+  }
+  const currentIdentity = buildUsername(account.name || account.email || '', account.email || account.name || '').toLowerCase();
+  if (!currentIdentity) {
+    return false;
+  }
+  return requestedIdentity === currentIdentity;
+}
+
 async function getHumanProofChallenge(): Promise<string> {
   const response = await fetch('/api/auth/human-proof/challenge', { credentials: 'include' });
   if (!response.ok) {
@@ -474,6 +519,7 @@ async function getHumanProofChallenge(): Promise<string> {
 async function ensureAuthenticatedAccount(name: string, email: string, password: string, humanProofToken: string): Promise<AccountState> {
   const username = buildUsername(name.trim() || email.trim(), email.trim() || name.trim());
   const resolvedEmail = email.trim() || `${username}@sop.local`;
+  clearSignedOutFlag();
 
   const loginResponse = await fetch('/api/auth/login', {
     method: 'POST',
@@ -562,6 +608,7 @@ async function downloadLocalAgent(): Promise<void> {
 }
 
 async function loginWithCredentials(username: string, password: string): Promise<AccountState> {
+  clearSignedOutFlag();
   const response = await fetch('/api/auth/login', {
     method: 'POST',
     credentials: 'include',
@@ -571,10 +618,48 @@ async function loginWithCredentials(username: string, password: string): Promise
   if (!response.ok) {
     throw new Error('Unable to sign in to your account.');
   }
-  return loadAccountFromServer();
+  const refreshed = await loadAccountFromServer();
+  if (!refreshed.isAuthenticated) {
+    const fallback = await fetchJSON('/api/auth/me', { method: 'GET' }).catch(() => null);
+    if (fallback?.user) {
+      return {
+        ...refreshed,
+        name: fallback.user.username || refreshed.name || username,
+        email: fallback.user.email || refreshed.email || '',
+        role: normalizeRole(fallback.user.role),
+        plan: normalizePlan(fallback.user.subscription_plan),
+        billingStatus: normalizeBillingStatus(fallback.user.billing_status),
+        trialActive: normalizeBillingStatus(fallback.user.billing_status) === 'active' && normalizePlan(fallback.user.subscription_plan) === 'starter',
+        isAuthenticated: true,
+        isSystemAdmin: Boolean(fallback.user.can_access_data_manager) || isSystemAdminRole(fallback.user.role),
+        checkoutUrl: fallback.user.billing?.checkout_url || '',
+        lastWebhookEvent: fallback.user.billing?.last_webhook_event || '',
+        failureReason: fallback.user.billing?.failure_reason || '',
+        lastWebhookAt: fallback.user.billing?.last_webhook_at || '',
+        payments: Array.isArray(fallback.user.payments) ? fallback.user.payments : [],
+        subscriptions: Array.isArray(fallback.user.subscriptions) ? fallback.user.subscriptions : [],
+        configProvisioned: refreshed.configProvisioned,
+      };
+    }
+  }
+  return refreshed;
 }
 
 async function logoutFromServer(): Promise<void> {
+  if (typeof window !== 'undefined') {
+    markSignedOut();
+    window.localStorage.removeItem('sop_access_token');
+    window.localStorage.removeItem('sop_refresh_token');
+    window.localStorage.removeItem('sop_session_token');
+    window.localStorage.removeItem('access_token');
+    window.localStorage.removeItem('sop_userId');
+    window.sessionStorage.removeItem('sop_access_token');
+    window.sessionStorage.removeItem('sop_refresh_token');
+    window.sessionStorage.removeItem('sop_session_token');
+    window.sessionStorage.removeItem('access_token');
+    window.sessionStorage.removeItem('sop_userId');
+  }
+  clearBrowserSessionCookies();
   await fetch('/api/auth/logout', {
     method: 'POST',
     credentials: 'include',
@@ -795,18 +880,31 @@ export default function App() {
       const resolvedAuthAccount = mergeAccountWithFallback(serverAccount, account, name, email);
       console.log('[handleSubscription] resolved auth account:', resolvedAuthAccount);
       console.log('[handleSubscription] form name:', name.trim(), 'form email:', email.trim());
-      if (!resolvedAuthAccount.isAuthenticated) {
-        if (!password.trim()) {
-          throw new Error('Please choose a password to continue.');
-        }
-        if (password.trim() !== confirmPassword.trim()) {
-          throw new Error('Your chosen passwords do not match.');
-        }
+      const draftName = name.trim();
+      const draftEmail = email.trim();
+      const explicitIdentityProvided = Boolean(draftName || draftEmail);
+      const shouldSwitchToExplicitIdentity = Boolean(password.trim()) && (!resolvedAuthAccount.isAuthenticated || (explicitIdentityProvided && !identityMatchesAccount(resolvedAuthAccount, draftName, draftEmail)));
+
+      if (!resolvedAuthAccount.isAuthenticated && !password.trim()) {
+        throw new Error('Please choose a password to continue.');
+      }
+      if (!resolvedAuthAccount.isAuthenticated && password.trim() !== confirmPassword.trim()) {
+        throw new Error('Your chosen passwords do not match.');
       }
       const token = await getHumanProofChallenge();
-      const nextAccount = resolvedAuthAccount.isAuthenticated
-        ? resolvedAuthAccount
-        : await ensureAuthenticatedAccount(account.name || name.trim(), account.email || email.trim(), password.trim(), token);
+      if (shouldSwitchToExplicitIdentity) {
+        try {
+          await logoutFromServer();
+        } catch {
+          // Ignore logout failures; the subsequent login/registration will establish the intended identity.
+        }
+      }
+      const nextAccount = shouldSwitchToExplicitIdentity || !resolvedAuthAccount.isAuthenticated
+        ? await ensureAuthenticatedAccount(account.name || draftName, account.email || draftEmail, password.trim(), token)
+        : resolvedAuthAccount;
+      if (nextAccount.isAuthenticated) {
+        clearSignedOutFlag();
+      }
       if (!nextAccount.isAuthenticated) {
         throw new Error('Please sign in or create an account before continuing.');
       }
@@ -832,6 +930,9 @@ export default function App() {
         };
         setAccount(pendingAccount);
         persistAccountState(pendingAccount);
+        setName(pendingAccount.name || draftName);
+        setEmail(pendingAccount.email || draftEmail);
+        clearSignedOutFlag();
         setShowInstallStep(false);
         setCheckoutComplete(false);
         setStatusMessage('We are sending you to checkout. Your starter plan will activate after payment confirmation.');
@@ -873,6 +974,9 @@ export default function App() {
       console.error('[handleSubscription] Setting error message:', errorMessage);
       setStatusMessage(errorMessage);
       setIsStatusError(true);
+      if (typeof window !== 'undefined' && errorMessage.toLowerCase().includes('already taken')) {
+        window.alert('That username is already taken. Please choose a different username.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -1065,7 +1169,16 @@ export default function App() {
     setStatusMessage('Checking billing status…');
     try {
       const pendingCheckoutSessionID = loadPendingCheckoutSessionID();
-      let resolvedAccount = mergeAccountWithFallback(await loadAccountFromServer(), account, name, email);
+      const draftName = name.trim();
+      const draftEmail = email.trim();
+      const explicitIdentityProvided = Boolean(draftName || draftEmail);
+      const providedPassword = password.trim();
+      let resolvedAccount = mergeAccountWithFallback(await loadAccountFromServer(), account, draftName, draftEmail);
+
+      if (!resolvedAccount.isAuthenticated && explicitIdentityProvided && providedPassword) {
+        const reauthenticated = await loginWithCredentials(buildUsername(draftName, draftEmail), providedPassword);
+        resolvedAccount = mergeAccountWithFallback(reauthenticated, resolvedAccount, draftName, draftEmail);
+      }
 
       if (!resolvedAccount.isAuthenticated && account.isAuthenticated) {
         resolvedAccount = {
@@ -1078,19 +1191,19 @@ export default function App() {
       if (resolvedAccount.billingStatus === 'pending') {
         await pingPendingCheckout();
         const refreshedAccount = await loadAccountFromServer();
-        resolvedAccount = mergeAccountWithFallback(refreshedAccount, resolvedAccount, name, email);
+        resolvedAccount = mergeAccountWithFallback(refreshedAccount, resolvedAccount, draftName, draftEmail);
       }
 
       if (pendingCheckoutSessionID) {
         const recoveredAccount = await recoverPendingCheckout(pendingCheckoutSessionID);
         if (recoveredAccount) {
-          resolvedAccount = mergeAccountWithFallback(recoveredAccount, resolvedAccount, name, email);
+          resolvedAccount = mergeAccountWithFallback(recoveredAccount, resolvedAccount, draftName, draftEmail);
         }
       }
 
       setAccount(resolvedAccount);
-      setName(resolvedAccount.name || name);
-      setEmail(resolvedAccount.email || email);
+      setName(resolvedAccount.name || draftName);
+      setEmail(resolvedAccount.email || draftEmail);
       setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
       setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
       if (resolvedAccount.isAuthenticated) {
@@ -1161,7 +1274,7 @@ export default function App() {
     <div className="page-toolbar-left">
       <a
         className={`green-earth-badge${inline ? ' green-earth-badge-inline' : ''}`}
-        href="/docs/fleet-learning#embedded-setup-vector-database-runs-on-the-user-host"
+        href="/docs/green-earth-tech"
         aria-label="Green earth technology"
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1401,7 +1514,17 @@ export default function App() {
                 If your account is already active, you can continue to the dashboard immediately. If not, we will refresh your status shortly.
               </p>
               <div className="form-stack" style={{ marginTop: '1rem' }}>
-                <a className="button button-primary" href="/site/">Continue to dashboard</a>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      window.location.assign('/site/');
+                    }
+                  }}
+                >
+                  Continue to dashboard
+                </button>
                 <button type="button" className="button button-secondary" onClick={() => { void handleDownload(); }} disabled={isSubmitting || account.billingStatus !== 'active'}>
                   {isSubmitting ? 'Preparing…' : 'Download sop-daemon'}
                 </button>

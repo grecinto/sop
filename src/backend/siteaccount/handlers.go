@@ -19,6 +19,27 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
+// ========================================================================
+// SITE ACCOUNT HANDLERS - UNIFIED AUTH INTEGRATION
+// ========================================================================
+// These handlers extend sopbackend's auth system with site-specific features:
+//   - Registration with billing/subscription tracking
+//   - Checkout session creation and Stripe integration
+//   - Subscription status synchronization
+//   - Account management (password change, unregister, etc.)
+//
+// AUTH INTEGRATION:
+//   - withSiteAuth and withSiteAuthOptional delegate to sopbackend.AuthenticateBearerToken
+//   - They DO NOT create a separate auth system
+//   - They use the same tokens/cookies that sopbackend.RequireAuth validates
+//   - Login/registration call sopbackend.CreateSession to issue unified tokens
+//
+// DO NOT:
+//   - Create parallel token validation logic
+//   - Bypass sopbackend's session management
+//   - Implement custom JWT/token schemes
+//
+
 // RegisterHandlers wires the site account handlers to the site backend mux.
 func RegisterHandlers(mux *http.ServeMux) {
 	if mux == nil {
@@ -34,7 +55,7 @@ func RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/status", HandleStatus)
 	mux.HandleFunc("/api/auth/subscription", withSiteAuth(HandleSubscriptionUpdate))
 	mux.HandleFunc("/api/auth/password", withSiteAuth(HandleChangePassword))
-	mux.HandleFunc("/api/auth/checkout", withSiteAuth(HandleCheckoutSession))
+	mux.HandleFunc("/api/auth/checkout", withSiteAuthOptional(HandleCheckoutSession))
 	mux.HandleFunc("/api/auth/download", withSiteAuth(HandleDownloadAsset))
 	mux.HandleFunc("/api/auth/ping", withSiteAuth(HandlePing))
 	mux.HandleFunc("/api/auth/pending-checkout/recover", HandleRecoverPendingCheckout)
@@ -88,6 +109,11 @@ func currentAccountFromRequest(r *http.Request) authAccount {
 	return authAccount{Username: username, Roles: roles}
 }
 
+// withSiteAuth enforces authentication using the unified sopbackend token validation.
+// This is NOT a separate auth system - it delegates to sopbackend.AuthenticateBearerToken
+// which validates the same session tokens that sopbackend.RequireAuth uses.
+//
+// Token validation is centralized in sopbackend - DO NOT duplicate token parsing/validation here.
 func withSiteAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
@@ -95,16 +121,54 @@ func withSiteAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		// Extract token using the shared sopbackend helper (reads from Authorization header or cookie).
 		token := sopbackend.AuthTokenFromRequest(r)
 		if strings.TrimSpace(token) == "" {
 			writeJSONError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 
+		// Validate token using the SAME validator that RequireAuth uses (unified auth).
 		cfg := sopbackend.GetConfig()
 		ok, user, err := cfg.AuthenticateBearerToken(r.Context(), token)
 		if err != nil || !ok || user == nil {
 			writeJSONError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		auth := sop.AuthContext{
+			IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
+			Roles:                []string{user.Role},
+			UserID:               user.Username,
+			SubscriptionPlan:     user.SubscriptionPlan,
+			SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+		}
+		auth.Permissions = map[string]bool{siteapp.PermissionSiteAppAccess: siteapp.HasSiteAppAccess(auth)}
+		next(w, r.WithContext(sop.ContextWithAuth(r.Context(), auth)))
+	}
+}
+
+// withSiteAuthOptional is like withSiteAuth but allows unauthenticated requests to pass through.
+// When a token is present, it validates using the unified sopbackend layer.
+// This is used for endpoints that can work for both guests and authenticated users (e.g., checkout).
+func withSiteAuthOptional(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			next(w, r)
+			return
+		}
+
+		// Extract token using the shared sopbackend helper.
+		token := strings.TrimSpace(sopbackend.AuthTokenFromRequest(r))
+		if token == "" {
+			next(w, r)
+			return
+		}
+
+		cfg := sopbackend.GetConfig()
+		ok, user, err := cfg.AuthenticateBearerToken(r.Context(), token)
+		if err != nil || !ok || user == nil {
+			next(w, r)
 			return
 		}
 
@@ -368,12 +432,22 @@ func buildUserResponsePayload(user *UserRecord, ctx context.Context) map[string]
 
 func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	account := currentAccountFromRequest(r)
-	if account.Username == "" {
+	username := strings.TrimSpace(account.Username)
+	if username == "" {
+		token := sopbackend.AuthTokenFromRequest(r)
+		if strings.TrimSpace(token) != "" {
+			cfg := sopbackend.GetConfig()
+			if ok, user, err := cfg.AuthenticateBearerToken(r.Context(), token); err == nil && ok && user != nil {
+				username = strings.TrimSpace(user.Username)
+			}
+		}
+	}
+	if username == "" {
 		writeJSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	cfg := GetConfig()
-	user, ok, err := cfg.FindUserRecord(r.Context(), account.Username)
+	user, ok, err := cfg.FindUserRecord(r.Context(), username)
 	if err != nil {
 		return
 	}
@@ -383,41 +457,52 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// Sync billing status from Stripe if pending (fallback for missed webhooks)
 	if user.BillingStatus == "pending" {
-		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), account.Username)
+		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), username)
 		// Re-fetch user after potential sync
-		user, ok, err = cfg.FindUserRecord(r.Context(), account.Username)
+		user, ok, err = cfg.FindUserRecord(r.Context(), username)
 		if err != nil || !ok || user == nil {
 			writeJSONError(w, http.StatusInternalServerError, "unable to refresh user state")
 			return
 		}
 	}
+	auth := sop.AuthContext{
+		IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
+		Roles:                []string{user.Role},
+		UserID:               user.Username,
+		SubscriptionPlan:     user.SubscriptionPlan,
+		SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+	}
+	auth.Permissions = map[string]bool{siteapp.PermissionSiteAppAccess: siteapp.HasSiteAppAccess(auth)}
+	ctx := sop.ContextWithAuth(r.Context(), auth)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user, r.Context()))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(user, ctx))
 }
 
 func HandleStatus(w http.ResponseWriter, r *http.Request) {
-	// This must happen BEFORE checking authentication since no users exist yet
-	if !sopbackend.HasConfigFileOnDisk() {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"config_provisioned": false,
-		})
-		return
-	}
-
-	// Config exists, now require authentication	}
+	configProvisioned := sopbackend.HasConfigFileOnDisk()
 
 	account := currentAccountFromRequest(r)
-	slog.Debug("siteaccount.status.request", "path", r.URL.Path, "username", account.Username, "auth_roles", strings.Join(account.Roles, ","), "remote_addr", r.RemoteAddr)
-	if account.Username == "" {
+	username := strings.TrimSpace(account.Username)
+	if username == "" {
+		token := sopbackend.AuthTokenFromRequest(r)
+		if strings.TrimSpace(token) != "" {
+			cfg := sopbackend.GetConfig()
+			if ok, user, err := cfg.AuthenticateBearerToken(r.Context(), token); err == nil && ok && user != nil {
+				username = strings.TrimSpace(user.Username)
+			}
+		}
+	}
+	slog.Debug("siteaccount.status.request", "path", r.URL.Path, "username", username, "auth_roles", strings.Join(account.Roles, ","), "config_provisioned", configProvisioned, "remote_addr", r.RemoteAddr)
+	if username == "" {
 		slog.Warn("siteaccount.status.unauthenticated", "path", r.URL.Path)
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"config_provisioned": configProvisioned})
 		return
 	}
 	cfg := GetConfig()
-	user, ok, err := cfg.FindUserRecord(r.Context(), account.Username)
+	user, ok, err := cfg.FindUserRecord(r.Context(), username)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -426,24 +511,33 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	slog.Info("siteaccount.status.user_found", "username", account.Username, "billing_status_before_sync", user.BillingStatus)
+	slog.Info("siteaccount.status.user_found", "username", username, "billing_status_before_sync", user.BillingStatus)
 	// Sync billing status from Stripe if pending (fallback for missed webhooks)
 	if user.BillingStatus == "pending" {
-		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), account.Username)
+		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), username)
 		// Re-fetch user after potential sync
-		user, ok, err = cfg.FindUserRecord(r.Context(), account.Username)
+		user, ok, err = cfg.FindUserRecord(r.Context(), username)
 		if err != nil || !ok || user == nil {
 			writeJSONError(w, http.StatusInternalServerError, "unable to refresh user state")
 			return
 		}
-		slog.Info("siteaccount.status.user_after_sync", "username", account.Username, "billing_status_after_sync", user.BillingStatus)
+		slog.Info("siteaccount.status.user_after_sync", "username", username, "billing_status_after_sync", user.BillingStatus)
 	}
-	slog.Info("siteaccount.status.response", "username", account.Username, "final_billing_status", user.BillingStatus)
+	slog.Info("siteaccount.status.response", "username", username, "final_billing_status", user.BillingStatus)
+	auth := sop.AuthContext{
+		IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
+		Roles:                []string{user.Role},
+		UserID:               user.Username,
+		SubscriptionPlan:     user.SubscriptionPlan,
+		SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+	}
+	auth.Permissions = map[string]bool{siteapp.PermissionSiteAppAccess: siteapp.HasSiteAppAccess(auth)}
+	ctx := sop.ContextWithAuth(r.Context(), auth)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	payload := buildUserResponsePayload(user, r.Context())
+	payload := buildUserResponsePayload(user, ctx)
 	// Add config provisioning status so frontend can detect if Data Manager setup is needed
-	payload["config_provisioned"] = sopbackend.HasConfigFileOnDisk()
+	payload["config_provisioned"] = configProvisioned
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
@@ -639,11 +733,6 @@ func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 	account := currentAccountFromRequest(r)
 	username := strings.TrimSpace(account.Username)
 	slog.Info("siteaccount.checkout.request", "path", r.URL.Path, "username", username, "auth_roles", strings.Join(account.Roles, ","), "remote_addr", r.RemoteAddr)
-	if username == "" {
-		slog.Warn("siteaccount.checkout.unauthenticated", "path", r.URL.Path)
-		writeJSONError(w, http.StatusUnauthorized, "authentication required before checkout")
-		return
-	}
 	var req struct {
 		Plan                 string `json:"plan"`
 		Name                 string `json:"name"`
@@ -658,6 +747,19 @@ func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if username == "" {
+		resolvedUsername := strings.TrimSpace(req.Name)
+		if resolvedUsername == "" {
+			resolvedUsername = strings.TrimSpace(req.Email)
+		}
+		if resolvedUsername == "" {
+			slog.Warn("siteaccount.checkout.unauthenticated", "path", r.URL.Path)
+			writeJSONError(w, http.StatusUnauthorized, "authentication required before checkout")
+			return
+		}
+		username = normalizeUsername(resolvedUsername)
+		slog.Info("siteaccount.checkout.guest_identity", "path", r.URL.Path, "resolved_username", username)
 	}
 	cfg := GetConfig()
 	user, ok, err := cfg.FindUserRecord(r.Context(), username)

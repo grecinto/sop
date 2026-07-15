@@ -9,6 +9,27 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
+// ========================================================================
+// SOPBACKEND USER STORE OVERRIDE - UNIFIED AUTH FOUNDATION
+// ========================================================================
+// This override bridges the site's persistent user store to sopbackend's auth layer,
+// ensuring that ALL authentication operations use a single source of truth.
+//
+// After installation:
+//   - sopbackend.AuthenticateBearerToken validates against site users
+//   - sopbackend's /api/auth/login creates sessions for site users
+//   - sopbackend.CreateSession issues tokens for site users
+//   - RequireAuth middleware validates site user sessions
+//
+// This creates a UNIFIED auth system - the site doesn't need separate token
+// validation because sopbackend's auth layer already does it correctly.
+//
+// DO NOT:
+//   - Create parallel user stores
+//   - Bypass this override with custom auth logic
+//   - Implement separate token validation
+//
+
 // SopbackendUserStoreAdapter bridges the site account persistence layer to the
 // shared sopbackend user-store interface so setup-wizard and auth flows can use
 // the site's persisted user management.

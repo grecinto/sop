@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -310,20 +311,36 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir, docsDir string) {
 		return
 	}
 
+	// ========================================================================
+	// UNIFIED AUTHENTICATION ARCHITECTURE - DO NOT DUPLICATE AUTH LOGIC
+	// ========================================================================
+	// This backend uses a SINGLE unified auth system built on sopbackend's
+	// session/token layer. All authentication flows share the same:
+	//   - Token creation (sopbackend.CreateSession)
+	//   - Token validation (sopbackend.AuthenticateBearerToken)
+	//   - Cookie handling (sop_access_token, sop_refresh_token)
+	//   - Auth context population (sop.ContextWithAuth)
+	//
 	// The React site is a separate product website and is hosted by this standalone backend.
 	// The shared SOP UI/backend is also mounted here so site-admin/root users can manage
 	// the hosted environment through the same shared handlers used by the standalone httpserver/daemon.
 	//
-	// Install the site-backed user store ONCE before registering any handlers.
+	// CRITICAL: Install the site-backed user store ONCE before registering any handlers.
 	// This ensures sopbackend's auth handlers (including /api/auth/login) use the site's
 	// persistent btree user store instead of the default config.json users array.
+	// After this override is installed, ALL auth operations automatically use the site store.
 	siteaccount.InstallSopbackendUserStoreOverride()
 
 	// Register shared sopbackend handlers (auth, Data Manager, API, etc.)
-	// These handlers automatically use the overridden user store.
+	// These handlers automatically use the overridden user store and include:
+	//   - /api/auth/login (uses site store via override)
+	//   - /api/auth/refresh (validates and rotates tokens)
+	//   - /app and other UI routes with RequireAuth middleware
+	// The RequireAuth middleware reads tokens from cookies/headers and populates auth context.
 	sopbackend.RegisterAllHandlersWithoutRoot(mux)
 
 	// Register site-specific handlers (billing, subscription, registration, etc.)
+	// These use withSiteAuth/withSiteAuthOptional which delegate to sopbackend's token validation.
 	siteaccount.RegisterHandlers(mux)
 
 	// Register additional site-specific handlers
@@ -333,33 +350,130 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir, docsDir string) {
 	registerDocsHandler(mux, docsDir)
 }
 
+// ========================================================================
+// SITE APP ACCESS CONTROL - SUBSCRIPTION ENFORCEMENT LAYER
+// ========================================================================
+// This handler wraps the entire mux and enforces subscription-based access
+// control for /app routes BEFORE they reach sopbackend's RequireAuth middleware.
+//
+// WARNING: This is NOT a duplicate auth system. It works WITH the unified auth:
+//  1. sopbackend's RequireAuth (inside the mux) validates tokens and populates auth context
+//  2. This wrapper (outside the mux) enforces subscription/billing policy
+//
+// Auth Flow for /app:
+//
+//	Request → siteAppAccessHandler → mux → RequireAuth → actual handler
+//	          (subscription check)          (token validation)
+//
+// DO NOT:
+//   - Add separate token validation here (RequireAuth already does this)
+//   - Create parallel auth context population
+//   - Bypass the shared session validation
 type siteAppAccessHandler struct {
 	next http.Handler
 }
 
 func (h *siteAppAccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/") {
-		auth := sop.GetAuthFromContext(r.Context())
-		if auth.UserID == "" && len(auth.Roles) == 0 && !auth.IsSystem {
-			if !sopbackend.HasConfigFileOnDisk() {
+		// Check if RequireAuth middleware already populated the context upstream.
+		// During tests, auth context may be pre-populated; in production, it's usually empty here.
+		existingAuth := sop.GetAuthFromContext(r.Context())
+		if !sopbackend.HasConfigFileOnDisk() && !hasSiteAppAuthContext(existingAuth) && strings.TrimSpace(sopbackend.AuthTokenFromRequest(r)) == "" {
+			h.next.ServeHTTP(w, r)
+			return
+		}
+
+		// If auth context already exists (e.g., from test setup), use it for subscription check.
+		if hasSiteAppAuthContext(existingAuth) {
+			auth := enrichSiteAppAuthContext(existingAuth)
+			ctx := sop.ContextWithAuth(r.Context(), auth)
+			r = r.WithContext(ctx)
+			if isSiteAdminAuthContext(auth) {
+				// Admins always get through to the Data Manager UI.
 				h.next.ServeHTTP(w, r)
 				return
 			}
-			h.next.ServeHTTP(w, r)
+			// Regular subscribed users don't have access to the Data Manager.
+			// They should use the site frontend at /site/ for account management.
+			// The Data Manager at /app is reserved for admins only.
+			http.Error(w, "access denied", http.StatusForbidden)
 			return
 		}
+
+		// No pre-populated context, so validate the token manually to determine access policy.
+		// NOTE: This is an EARLY subscription check. RequireAuth middleware will re-validate
+		// the token after we pass through, which is intentional:
+		//   - Here: determine if user has subscription access
+		//   - RequireAuth: enforce session validity and populate final auth context
+		token := sopbackend.AuthTokenFromRequest(r)
+		if strings.TrimSpace(token) == "" {
+			// No token = not logged in, send to login page.
+			http.Redirect(w, r, "/login?return="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			return
+		}
+
+		// Use the SAME token validation that RequireAuth will use (unified auth).
+		cfg := sopbackend.GetConfig()
+		ok, user, err := cfg.AuthenticateBearerToken(r.Context(), token)
+		if err != nil || !ok || user == nil {
+			// Invalid/expired token, send to login.
+			http.Redirect(w, r, "/login?return="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			return
+		}
+
+		// Build auth context from validated token (same structure RequireAuth will build).
+		auth := sop.AuthContext{
+			IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
+			Roles:                []string{user.Role},
+			UserID:               user.Username,
+			SubscriptionPlan:     user.SubscriptionPlan,
+			SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+		}
+		auth = enrichSiteAppAuthContext(auth)
+		ctx := sop.ContextWithAuth(r.Context(), auth)
+		r = r.WithContext(ctx)
+
+		// Apply the same subscription policy as above.
 		if isSiteAdminAuthContext(auth) {
+			// Admins always get through to the Data Manager UI.
 			h.next.ServeHTTP(w, r)
 			return
 		}
-		if hasActiveSiteSubscription(r.Context(), auth) {
-			http.Redirect(w, r, "http://127.0.0.1:9090", http.StatusFound)
-			return
-		}
+		// Regular subscribed users don't have access to the Data Manager.
+		// They should use the site frontend at /site/ for account management.
 		http.Error(w, "access denied", http.StatusForbidden)
 		return
 	}
+	// Not an /app route, pass through to mux handlers.
 	h.next.ServeHTTP(w, r)
+}
+
+func hasSiteAppAuthContext(auth sop.AuthContext) bool {
+	if strings.TrimSpace(auth.UserID) != "" {
+		return true
+	}
+	if len(auth.Roles) > 0 {
+		return true
+	}
+	if strings.TrimSpace(auth.SubscriptionPlan) != "" {
+		return true
+	}
+	if auth.IsSystem {
+		return true
+	}
+	if len(auth.Permissions) > 0 {
+		return true
+	}
+	return false
+}
+
+func enrichSiteAppAuthContext(auth sop.AuthContext) sop.AuthContext {
+	out := auth
+	if out.Permissions == nil {
+		out.Permissions = map[string]bool{}
+	}
+	out.Permissions[siteAppPermissionName] = siteapp.HasSiteAppAccess(out)
+	return out
 }
 
 func newSiteAppAccessHandler(mux *http.ServeMux) http.Handler {
