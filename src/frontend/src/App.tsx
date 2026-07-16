@@ -145,6 +145,13 @@ function clearPersistedAccountState() {
   window.sessionStorage.removeItem('sop_session_token');
   window.sessionStorage.removeItem('access_token');
   window.sessionStorage.removeItem('sop_userId');
+  // Clear daemon-specific tokens to prevent state corruption after mode switching
+  window.localStorage.removeItem('sop_daemon_access_token');
+  window.localStorage.removeItem('sop_daemon_refresh_token');
+  window.localStorage.removeItem('sop_daemon_token_expiry');
+  window.localStorage.removeItem('sop_last_subscription_check_timestamp');
+  window.localStorage.removeItem('sop_chat_runtime');
+  window.localStorage.removeItem('sop_daemon_url');
   clearBrowserSessionCookies();
 }
 
@@ -662,6 +669,13 @@ async function logoutFromServer(): Promise<void> {
     window.sessionStorage.removeItem('sop_session_token');
     window.sessionStorage.removeItem('access_token');
     window.sessionStorage.removeItem('sop_userId');
+    // Clear daemon-specific tokens to prevent state corruption after mode switching
+    window.localStorage.removeItem('sop_daemon_access_token');
+    window.localStorage.removeItem('sop_daemon_refresh_token');
+    window.localStorage.removeItem('sop_daemon_token_expiry');
+    window.localStorage.removeItem('sop_last_subscription_check_timestamp');
+    window.localStorage.removeItem('sop_chat_runtime');
+    window.localStorage.removeItem('sop_daemon_url');
   }
   clearBrowserSessionCookies();
   await fetch('/api/auth/logout', {

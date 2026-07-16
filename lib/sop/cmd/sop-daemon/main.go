@@ -783,7 +783,25 @@ func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, work
 	}
 	resp := ExecuteResponse{Stdout: stdout.String(), Stderr: stderr.String()}
 	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("content", fmt.Sprintf("🛠️ Result from local_command:\n%s", strings.TrimSpace(resp.Stdout)))
+		// Stream output line-by-line for better UX with large results
+		formattedOutput := resp.Stdout
+		trimmedCmd := strings.TrimSpace(strings.ToLower(command))
+		isLsCommand := trimmedCmd == "ls" || strings.HasPrefix(trimmedCmd, "ls ") || strings.HasPrefix(trimmedCmd, "ls-")
+
+		if isLsCommand {
+			// Convert space-separated ls output to one file per line
+			items := strings.Fields(strings.TrimSpace(formattedOutput))
+			if len(items) > 0 {
+				// Format as single block for proper markdown rendering
+				formatted := "🛠️ Result from local_command:\n```\n" + strings.Join(items, "\n") + "\n```"
+				streamer("content", formatted)
+			} else {
+				streamer("content", fmt.Sprintf("🛠️ Result from local_command:\n```\n%s\n```", strings.TrimSpace(formattedOutput)))
+			}
+		} else {
+			// Non-ls commands: stream complete output as single block
+			streamer("content", fmt.Sprintf("🛠️ Result from local_command:\n```\n%s\n```", strings.TrimSpace(formattedOutput)))
+		}
 	}
 	if err != nil {
 		resp.Error = err.Error()

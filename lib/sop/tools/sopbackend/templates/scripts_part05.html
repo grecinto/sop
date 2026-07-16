@@ -872,6 +872,8 @@
 
         const floaterUrl = new URL('/app', window.location.origin);
         floaterUrl.searchParams.set('chatFloater', '1');
+        // Include mode=daemon so the floater window gets properly initialized with daemon auth
+        floaterUrl.searchParams.set('mode', 'daemon');
 
         if (window && window.documentPictureInPicture && typeof window.documentPictureInPicture.requestWindow === 'function') {
             try {
@@ -1461,17 +1463,64 @@
             normalized.includes('Use these tools via slash(/) commands.');
     }
 
+    function looksLikeLocalCommandListing(text) {
+        const normalized = String(text ?? '').trim();
+        if (!normalized) {
+            return false;
+        }
+
+        const match = normalized.match(/^🛠️ Result from local_command:\s*```(?:\r?\n)?([\s\S]*?)```$/);
+        if (!match) {
+            return false;
+        }
+
+        const body = match[1].trim();
+        if (!body || body.includes('\n') || body.includes('\r')) {
+            return false;
+        }
+
+        const tokens = body.split(/\s+/).filter(Boolean);
+        if (tokens.length < 3) {
+            return false;
+        }
+
+        return tokens.every(token => !token.includes('://') && !token.includes('**') && !token.includes('[') && !token.includes(']') && !token.includes('{') && !token.includes('}') && !token.includes('(') && !token.includes(')') && !token.includes(':') && !token.includes('/') && !token.includes('\\') && !token.includes(',') && !token.includes('|') && !token.includes('&'));
+    }
+
+    function formatDisplayText(text) {
+        const normalized = String(text ?? '');
+        if (!normalized) {
+            return '';
+        }
+
+        const match = normalized.match(/^🛠️ Result from local_command:\s*```(?:\r?\n)?([\s\S]*?)```$/);
+        if (match) {
+            const body = match[1].trim();
+            if (body && !body.includes('\n') && !body.includes('\r')) {
+                const tokens = body.split(/\s+/).filter(Boolean);
+                if (tokens.length >= 3 && tokens.every(token => !token.includes('://') && !token.includes('**') && !token.includes('[') && !token.includes(']') && !token.includes('{') && !token.includes('}') && !token.includes('(') && !token.includes(')') && !token.includes(':') && !token.includes('/') && !token.includes('\\') && !token.includes(',') && !token.includes('|') && !token.includes('&'))) {
+                    return normalized.replace(body, tokens.join('\n'));
+                }
+            }
+        }
+
+        return normalized;
+    }
+
     function renderStreamContent(text) {
         const normalized = String(text ?? '');
         if (!normalized) {
             return '';
         }
 
-        if (isToolInventoryContent(normalized)) {
-            return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: var(--chat-font-family);">${escapeHtml(normalized)}</div>`;
+        const displayText = formatDisplayText(normalized);
+        const shouldPreserveWhitespace = displayText.includes('\n') || displayText.includes('\r');
+
+        if (isToolInventoryContent(displayText) || shouldPreserveWhitespace) {
+            return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: var(--chat-font-family);">${escapeHtml(displayText)}</div>`;
         }
 
-        return marked.parse(normalized);
+        return marked.parse(displayText);
     }
 
     function scrollChatHistoryToBottom() {
@@ -2356,7 +2405,21 @@
                 const approvalBadge = autoApproved ? ' 🚀 *(auto-approved)*' : '';
                 const modeLabel = executionMode === 'terminal' ? '🖥️ Terminal' : '⚡ Background';
                 let outputMsg = `✅ **Local Command Executed** ${modeLabel}${approvalBadge}\n\nCommand: \`${command}\`\n`;
-                if (data.stdout) outputMsg += `\n**Output:**\n\`\`\`\n${data.stdout}\n\`\`\`\n`;
+                
+                // Format ls output: one file per line
+                if (data.stdout) {
+                    let formattedOutput = data.stdout;
+                    const trimmedCmd = command.trim().toLowerCase();
+                    if (trimmedCmd === 'ls' || trimmedCmd.startsWith('ls ') || trimmedCmd.startsWith('ls-')) {
+                        // Convert space-separated to one file per line
+                        const items = formattedOutput.trim().split(/\s+/).filter(i => i.length > 0);
+                        if (items.length > 0) {
+                            formattedOutput = items.join('\n') + '\n';
+                        }
+                    }
+                    outputMsg += `\n**Output:**\n\`\`\`\n${formattedOutput}\n\`\`\`\n`;
+                }
+                
                 if (data.stderr) outputMsg += `\n**Errors:**\n\`\`\`\n${data.stderr}\n\`\`\`\n`;
                 if (data.error) outputMsg += `\n**Error:** ${data.error}\n`;
                 outputMsg += `\nExit Code: ${data.exit_code}`;
@@ -2409,7 +2472,21 @@
             
             // Format daemon output back into the chat context as the user's response
             let outputMsg = `[Local Daemon Execution Result for \`${command}\`]\n`;
-            if (data.stdout) outputMsg += `\n**Stdout:**\n\`\`\`\n${data.stdout}\n\`\`\``;
+            
+            // Format ls output: one file per line
+            if (data.stdout) {
+                let formattedOutput = data.stdout;
+                const trimmedCmd = command.trim().toLowerCase();
+                if (trimmedCmd === 'ls' || trimmedCmd.startsWith('ls ') || trimmedCmd.startsWith('ls-')) {
+                    // Convert space-separated to one file per line
+                    const items = formattedOutput.trim().split(/\s+/).filter(i => i.length > 0);
+                    if (items.length > 0) {
+                        formattedOutput = items.join('\n') + '\n';
+                    }
+                }
+                outputMsg += `\n**Stdout:**\n\`\`\`\n${formattedOutput}\n\`\`\``;
+            }
+            
             if (data.stderr) outputMsg += `\n**Stderr:**\n\`\`\`\n${data.stderr}\n\`\`\``;
             if (data.error) outputMsg += `\n**Error:** ${data.error}`;
             outputMsg += `\n\nExit Code: ${data.exit_code}`;

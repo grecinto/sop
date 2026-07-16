@@ -341,6 +341,49 @@ This prevented the rest of the script from loading, including `toggleChatWidget(
 - [ ] Runtime mode: Check `localStorage.sop_chat_runtime === 'local'`
 - [ ] Console logs: Look for `[DaemonAuth]` bootstrap messages
 
+### Authentication Failed After Mode Switching
+
+**Symptoms**:
+- Login works initially
+- After toggling between daemon/HQ modes and logging out
+- Subsequent login fails with "authentication failed" + 500 Internal Server Error
+
+**Root Cause**: Daemon-specific localStorage tokens were not cleared during logout, corrupting the authentication state.
+
+**Checklist**:
+- [ ] Clear browser localStorage manually: Open DevTools → Application → Clear storage
+- [ ] Verify fix is deployed: Check that logout clears these keys:
+  - `sop_daemon_access_token`
+  - `sop_daemon_refresh_token`
+  - `sop_daemon_token_expiry`
+  - `sop_last_subscription_check_timestamp`
+  - `sop_chat_runtime`
+  - `sop_daemon_url`
+
+**Fixed**: 2026-07-15 - Logout now clears all daemon tokens to prevent state corruption.
+
+### Floating AI Window Shows "Access Denied"
+
+**Symptoms**:
+- Main Data Manager UI works fine in daemon mode
+- Clicking the "⧉" button opens floating chat window
+- Floating window shows "access denied" error
+
+**Root Cause**: The floating window was opening `/app?chatFloater=1` without including `?mode=daemon`, so it wasn't initialized with daemon authentication.
+
+**Checklist**:
+- [ ] Verify fix is deployed: Check that floating window URL includes both parameters
+- [ ] Browser console: Look for `[DaemonAuth]` bootstrap messages in floater window
+- [ ] Network tab: Check that floater is connecting to `http://127.0.0.1:9090` not HQ
+
+**Technical Details**:
+- The `openChatPiP()` function in `scripts_part05.html` builds the floater URL
+- Without `?mode=daemon`, template doesn't set `DaemonRuntimeEnabled = true`
+- Without daemon auth initialization, API calls to daemon fail authentication
+- Fix: Include `?mode=daemon` when opening floater in local runtime mode
+
+**Fixed**: 2026-07-15 - Floater now includes `?mode=daemon` parameter for proper daemon auth.
+
 ---
 
 ## Development
