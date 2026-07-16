@@ -19,7 +19,7 @@
 
     function renderObjectValueFormHtml(value) {
         const keys = Object.keys(value || {});
-        let html = '<div id="value-form" style="display: flex; flex-wrap: wrap; gap: 8px; max-height: 400px; overflow-y: auto; padding-right: 2px; align-items: flex-start;">';
+        let html = '<div id="value-form" style="display: flex; flex-wrap: wrap; gap: 8px; padding-right: 2px; align-items: flex-start;">';
         if (keys.length === 0) {
             html += '<em>Empty Object</em>';
         }
@@ -45,7 +45,7 @@
         const isBlob = Array.isArray(value) && value.every(item => typeof item === 'number');
         if (forceJson || isBlob || typeof value !== 'object' || value === null) {
             const jsonText = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-            editor.innerHTML = `<textarea id="edit-value" oninput="markItemDirty()" style="width: 100%; height: 300px; font-family: monospace; margin-top: 5px;" class="form-input">${escapeHtml(jsonText)}</textarea>`;
+            editor.innerHTML = `<textarea id="edit-value" oninput="markItemDirty()" style="width: 100%; height: 400px; font-family: monospace; margin-top: 5px; resize: vertical;" class="form-input">${escapeHtml(jsonText)}</textarea>`;
             return;
         }
 

@@ -87,8 +87,8 @@
 (function() {
     try {
         localStorage.setItem('sop_chat_runtime', 'local');
-        localStorage.setItem('sop_daemon_url', 'http://127.0.0.1:9090');
-        window.SOP_DAEMON_BASE_URL = 'http://127.0.0.1:9090';
+        localStorage.setItem('sop_daemon_url', '{{.DaemonURL}}');
+        window.SOP_DAEMON_BASE_URL = '{{.DaemonURL}}';
     } catch (err) {
         console.debug('[daemon-ui] failed to initialize daemon runtime state', err);
     }

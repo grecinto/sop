@@ -57,16 +57,18 @@
         return DEFAULT_RUNTIME_MODE;
     }
 
+    // DEFAULT_DAEMON_URL constant is defined in scripts_part01.html
+
     function normalizeDaemonBaseURL(url) {
         const value = (url || '').trim();
         if (!value) {
-            return 'http://127.0.0.1:9090';
+            return DEFAULT_DAEMON_URL;
         }
         return value.replace(/\/$/, '');
     }
 
     function getDaemonBaseURL() {
-        const configured = window.SOP_DAEMON_BASE_URL || localStorage.getItem('sop_daemon_url') || 'http://127.0.0.1:9090';
+        const configured = window.SOP_DAEMON_BASE_URL || localStorage.getItem('sop_daemon_url') || DEFAULT_DAEMON_URL;
         const value = normalizeDaemonBaseURL(configured);
         window.SOP_DAEMON_BASE_URL = value;
         return value;

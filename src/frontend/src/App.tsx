@@ -60,6 +60,7 @@ const PROVISIONING_DONE_STORAGE_KEY = 'sop_provisioning_done';
 const SIGNED_OUT_STORAGE_KEY = 'sop-site-signed-out';
 const PENDING_CHECKOUT_SESSION_STORAGE_KEY = 'sop-cloud-site-pending-checkout-session';
 const THEME_STORAGE_KEY = 'theme';
+const DEFAULT_DAEMON_URL = 'http://127.0.0.1:9090';
 
 type ThemeMode = 'light' | 'dark';
 
@@ -452,18 +453,21 @@ async function loadAccountFromServer(): Promise<AccountState> {
 
   const user = payload?.user ?? {};
   const userHasIdentity = Boolean(user.username || user.email || user.role || user.subscription_plan || user.billing_status || user.billing);
-  if (!userHasIdentity && payload?.config_provisioned === false) {
+  const configProvisioned = payload?.config_provisioned !== false;
+  
+  // If no user identity exists, return unauthenticated state
+  if (!userHasIdentity) {
     return {
       ...emptyState,
-      configProvisioned: false,
+      configProvisioned,
     };
   }
+  
   const plan = normalizePlan(user.subscription_plan);
   const billingStatus = normalizeBillingStatus(user.billing_status);
   const billing = user.billing ?? {};
   const role = normalizeRole(user.role);
   const canAccessDataManager = Boolean(user.can_access_data_manager) || isSystemAdminRole(role);
-  const configProvisioned = payload?.config_provisioned !== false;
   
   return {
     name: user.username ?? '',
@@ -667,6 +671,46 @@ async function logoutFromServer(): Promise<void> {
   });
 }
 
+/**
+ * Open Data Manager UI in daemon mode (connects to local daemon instead of HQ).
+ * 
+ * This function is triggered by the "AI Studio" button and:
+ * 1. Checks for custom daemon URL in localStorage
+ * 2. Builds URL with ?mode=daemon query parameter
+ * 3. Adds &daemon_url= if custom port configured
+ * 4. Opens Data Manager in new tab
+ * 
+ * The Data Manager UI will:
+ * - Auto-bootstrap authentication with daemon
+ * - Use site session token for daemon auth
+ * - Connect all API calls to daemon (not HQ)
+ * 
+ * CRITICAL: Do NOT change DEFAULT_DAEMON_URL without updating:
+ * - lib/sop/tools/sopbackend/ui_routes.go (DefaultDaemonURL)
+ * - lib/sop/tools/sopbackend/templates/scripts_daemon.html (DEFAULT_DAEMON_URL)
+ * - lib/sop/tools/sopbackend/templates/scripts_part01.html (DEFAULT_DAEMON_URL)
+ * - lib/sop/tools/sopbackend/templates/scripts_part05.html (DEFAULT_DAEMON_URL)
+ * 
+ * See: docs/AI_STUDIO_DAEMON_MODE.md for complete specification
+ */
+async function openLocalWorkflow(event: MouseEvent<HTMLAnchorElement>): Promise<void> {
+  event.preventDefault();
+  
+  // Check if user has configured a custom daemon URL (stored in localStorage)
+  const customDaemonURL = window.localStorage.getItem('sop_daemon_url');
+  
+  let url = '/app?mode=daemon';
+  if (customDaemonURL && customDaemonURL.trim() !== '' && customDaemonURL !== DEFAULT_DAEMON_URL) {
+    // Pass custom daemon URL as query parameter
+    url += `&daemon_url=${encodeURIComponent(customDaemonURL)}`;
+  }
+  
+  // Open Data Manager UI in daemon mode - it will connect to daemon instead of HQ
+  // The Data Manager UI has daemon authentication built in (scripts_daemon.html)
+  // User can also change daemon URL from within Data Manager settings
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 function ThemeToggle({ theme, onToggle }: { theme: ThemeMode; onToggle: () => void }) {
   const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
   return (
@@ -798,6 +842,7 @@ export default function App() {
         setAccount(nextAccount);
         if (nextAccount.isAuthenticated) {
           console.info('auth bootstrap restored authenticated account', { role: nextAccount.role, name: nextAccount.name });
+          clearSignedOutFlag();
           setName(nextAccount.name || draft.name);
           setEmail(nextAccount.email || draft.email);
           setShowInstallStep(nextAccount.billingStatus === 'active' && nextAccount.plan === 'starter');
@@ -846,6 +891,33 @@ export default function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  // Refresh account state when returning to home page (e.g., after login redirect)
+  useEffect(() => {
+    if (typeof window === 'undefined' || view !== 'home') {
+      return;
+    }
+    // Only refresh if not already authenticated (gap after login redirect)
+    if (!account.isAuthenticated) {
+      void (async () => {
+        try {
+          const refreshedAccount = await loadAccountFromServer();
+          if (refreshedAccount.isAuthenticated) {
+            console.info('auth refresh detected authenticated session after redirect');
+            setAccount({
+              ...refreshedAccount,
+              name: refreshedAccount.name || name,
+              email: refreshedAccount.email || email,
+            });
+            setName(refreshedAccount.name || name);
+            setEmail(refreshedAccount.email || email);
+          }
+        } catch (error) {
+          console.warn('auth refresh failed', error);
+        }
+      })();
+    }
+  }, [view]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1065,50 +1137,6 @@ export default function App() {
       setIsStatusError(false);
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to remove the account.');
-      setIsStatusError(true);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleLogin = async () => {
-    const existingIdentity = (name.trim() || account.name || email.trim() || account.email || '').trim();
-    const resolvedUsername = existingIdentity || (typeof window !== 'undefined' ? window.prompt('Enter your username to sign in.') ?? '' : '');
-    if (!resolvedUsername) {
-      setStatusMessage('Please enter your username before signing in.');
-      setIsStatusError(true);
-      return;
-    }
-    const enteredPassword = password.trim() || (typeof window !== 'undefined' ? window.prompt('Enter your password to sign in.') ?? '' : '');
-    if (!enteredPassword.trim()) {
-      setStatusMessage('Please enter your password to sign in.');
-      setIsStatusError(true);
-      return;
-    }
-    setPassword(enteredPassword.trim());
-    setIsSubmitting(true);
-    setStatusMessage('');
-    setIsStatusError(false);
-    try {
-      const synced = await loginWithCredentials(resolvedUsername, enteredPassword.trim());
-      const resolvedAccount = {
-        ...synced,
-        name: synced.name || resolvedUsername,
-        email: synced.email || email.trim() || account.email || '',
-        role: synced.role || '',
-        isSystemAdmin: synced.isSystemAdmin || isSystemAdminRole(synced.role),
-        trialActive: synced.billingStatus === 'active' && synced.plan === 'starter',
-      };
-      setName(resolvedUsername);
-      setEmail(resolvedAccount.email || '');
-      clearSignedOutFlag();
-      setAccount(resolvedAccount);
-      setShowInstallStep(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
-      setCheckoutComplete(resolvedAccount.billingStatus === 'active' && resolvedAccount.plan === 'starter');
-      setStatusMessage(resolvedAccount.isAuthenticated ? 'Signed in successfully.' : 'Signed in.');
-      setIsStatusError(false);
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Unable to sign in right now.');
       setIsStatusError(true);
     } finally {
       setIsSubmitting(false);
@@ -1863,7 +1891,7 @@ This section explains the system design.
                   </button>
                 ) : null}
                 {canAccessLocalDaemon ? (
-                  <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
+                  <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer" onClick={(e) => void openLocalWorkflow(e)}>AI Studio</a>
                 ) : null}
                 <a className="button button-secondary" href="/site/docs">Product docs</a>
               </div>
@@ -1995,14 +2023,12 @@ This section explains the system design.
                   </div>
                   <div className="action-row">
                     {!account.isAuthenticated ? (
-                      <button
-                        type="button"
+                      <a
                         className="button button-secondary"
-                        onClick={() => { void handleLogin(); }}
-                        disabled={isSubmitting}
+                        href="/login?return=/site/"
                       >
                         Log in
-                      </button>
+                      </a>
                     ) : null}
                     {account.isAuthenticated ? (
                       <button type="button" className="button button-secondary" onClick={handleLogout} disabled={isSubmitting}>
@@ -2010,7 +2036,7 @@ This section explains the system design.
                       </button>
                     ) : null}
                     {canAccessLocalDaemon ? (
-                      <a className="button button-secondary" href="http://127.0.0.1:9090" target="_blank" rel="noreferrer">Open local workflow</a>
+                      <a className="button button-secondary" href={DEFAULT_DAEMON_URL} target="_blank" rel="noreferrer" onClick={(e) => void openLocalWorkflow(e)}>AI Studio</a>
                     ) : null}
                     {account.isAuthenticated && account.plan !== 'none' ? (
                       <button type="button" className="button button-secondary" onClick={handleUnsubscribe} disabled={isSubmitting}>

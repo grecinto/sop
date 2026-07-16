@@ -18,6 +18,14 @@ import (
 	aidb "github.com/sharedcode/sop/ai/database"
 )
 
+// DefaultDaemonURL is the default local daemon endpoint.
+// CRITICAL: This must match constants in JavaScript/TypeScript:
+//   - templates/scripts_daemon.html
+//   - templates/scripts_part01.html
+//   - templates/scripts_part05.html
+//   - src/frontend/src/App.tsx
+const DefaultDaemonURL = "http://127.0.0.1:9090"
+
 var (
 	lookPathForDaemonUninstall = exec.LookPath
 	runDaemonUninstallCommand  = func(name string, args ...string) *exec.Cmd {
@@ -457,6 +465,52 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		configFile = cfg.ConfigFile
 	}
 
+	// ========================================================================
+	// DAEMON MODE CONFIGURATION
+	// ========================================================================
+	// When ?mode=daemon query parameter is present, the Data Manager UI should
+	// connect to the local daemon (http://127.0.0.1:9090) instead of HQ.
+	//
+	// This is used by the "AI Studio" button to launch Data Manager in daemon mode.
+	//
+	// Implementation:
+	//   1. Check for mode=daemon query parameter
+	//   2. Set DaemonRuntimeEnabled = true (enables daemon auth bootstrap)
+	//   3. Set DefaultRuntimeMode = "local" (JavaScript defaults to daemon)
+	//   4. Set DaemonURL to custom URL if provided, else DefaultDaemonURL
+	//
+	// Template Effects (index.html):
+	//   {{if .DaemonRuntimeEnabled}}
+	//     localStorage.setItem('sop_chat_runtime', 'local');
+	//     localStorage.setItem('sop_daemon_url', '{{.DaemonURL}}');
+	//     window.SOP_DAEMON_BASE_URL = '{{.DaemonURL}}';
+	//   {{end}}
+	//
+	// JavaScript Effects (scripts_daemon.html):
+	//   - Auto-bootstrap on DOMContentLoaded
+	//   - Uses site session token as bootstrap_token
+	//   - Falls back to bootstrap secret if no session token
+	//
+	// CRITICAL: Do not change DefaultDaemonURL constant without updating:
+	//   - scripts_daemon.html (DEFAULT_DAEMON_URL)
+	//   - scripts_part01.html (DEFAULT_DAEMON_URL)
+	//   - scripts_part05.html (DEFAULT_DAEMON_URL)
+	//   - src/frontend/src/App.tsx (DEFAULT_DAEMON_URL)
+	//
+	// See: docs/AI_STUDIO_DAEMON_MODE.md for complete specification
+	// ========================================================================
+	daemonRuntimeEnabled := false
+	daemonURL := DefaultDaemonURL
+	defaultRuntimeMode := "hq"
+	if mode := strings.TrimSpace(req.URL.Query().Get("mode")); mode == "daemon" {
+		daemonRuntimeEnabled = true
+		defaultRuntimeMode = "local"
+		// Allow custom daemon URL via query parameter
+		if customURL := strings.TrimSpace(req.URL.Query().Get("daemon_url")); customURL != "" {
+			daemonURL = customURL
+		}
+	}
+
 	return map[string]any{
 		"Version":                 sop.Version,
 		"Username":                username,
@@ -469,12 +523,14 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		"AdminCapabilities":       adminCapabilities,
 		"ShowSubscribeForm":       false,
 		"ShowDownloadStep":        false,
+		"DaemonURL":               daemonURL,
 		"SubscriptionSuccess":     false,
 		"SubscriptionMessage":     "",
 		"IsUnsubscribed":          false,
 		"RuntimeSwitchEnabled":    runtimeSwitchEnabled,
+		"DaemonRuntimeEnabled":    daemonRuntimeEnabled,
 		"ConfigFile":              configFile,
-		"DefaultRuntimeMode":      "hq",
+		"DefaultRuntimeMode":      defaultRuntimeMode,
 		"SetupWizardAIConfigJSON": r.setupWizardAIConfigJSON(),
 		"ModelCatalogJSON":        r.modelCatalogJSON(),
 	}

@@ -264,7 +264,7 @@
                     <input type="checkbox" id="chat-runtime-hq" checked onclick="event.stopPropagation(); setChatRuntimeMode(this.checked ? 'hq' : 'local')" onchange="event.stopPropagation(); setChatRuntimeMode(this.checked ? 'hq' : 'local')" style="margin: 0; cursor: pointer;">
                     <span>HQ</span>
                 </label>
-                <input type="text" id="chat-runtime-local-url" value="http://127.0.0.1:9090" style="display: none; width: 114px; padding: 2px 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); font-size: 11px; flex-shrink: 0;" onblur="persistChatRuntimeLocalURL()" onclick="event.stopPropagation()" title="Local daemon URL">
+                <input type="text" id="chat-runtime-local-url" value="" placeholder="http://127.0.0.1:9090" style="display: none; width: 114px; padding: 2px 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); font-size: 11px; flex-shrink: 0;" onblur="persistChatRuntimeLocalURL()" onclick="event.stopPropagation()" title="Local daemon URL">
             </div>
             
             <!-- Global Feedback Controls (Hidden until next release) -->

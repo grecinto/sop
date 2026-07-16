@@ -407,7 +407,7 @@
              valueHtml = `
                 <div id="detail-value-editor">
                     ${Array.isArray(currentItemValue) && currentItemValue.every(n => typeof n === 'number') ? `<div style="margin-bottom: 5px; font-size: 12px; color: var(--text-muted);">Byte Array (${len} bytes)</div>` : ''}
-                    <textarea id="edit-value" oninput="markItemDirty()" style="width: 100%; height: 300px; font-family: monospace; margin-top: 5px;" class="form-input">${jsonStr}</textarea>
+                    <textarea id="edit-value" oninput="markItemDirty()" style="width: 100%; height: 400px; font-family: monospace; margin-top: 5px; resize: vertical;" class="form-input">${jsonStr}</textarea>
                 </div>
             `;
         } else if (typeof currentItemValue === 'object' && currentItemValue !== null) {
@@ -421,7 +421,7 @@
         } else {
             // Primitive View (Textarea)
             const valStr = JSON.stringify(currentItemValue, null, 2);
-                valueHtml = `<div id="detail-value-editor"><textarea id="edit-value" oninput="markItemDirty()" style="width: 100%; height: 300px; font-family: monospace; margin-top: 5px;" class="form-input">${valStr}</textarea></div>`;
+                valueHtml = `<div id="detail-value-editor"><textarea id="edit-value" oninput="markItemDirty()" style="width: 100%; height: 400px; font-family: monospace; margin-top: 5px; resize: vertical;" class="form-input">${valStr}</textarea></div>`;
         }
 
         const jsonToggle = (!isScriptView) ? `<label style="display:flex; align-items:center; gap:6px; font-size: 11px; color: var(--text-muted); cursor:pointer;" title="Switch the value editor between form and raw JSON."><input type="checkbox" id="detail-value-mode-toggle" onchange="toggleDetailValueMode()" ${detailValueMode ? 'checked' : ''}> Edit as JSON</label>` : '';

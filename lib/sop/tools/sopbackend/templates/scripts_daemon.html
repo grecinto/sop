@@ -15,10 +15,11 @@
     const TOKEN_EXPIRY_KEY = 'sop_daemon_token_expiry';
     const LAST_SUBSCRIPTION_CHECK_KEY = 'sop_last_subscription_check_timestamp';
     const SUBSCRIPTION_CHECK_INTERVAL = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
+    const DEFAULT_DAEMON_URL = 'http://127.0.0.1:9090';
 
     function getDaemonBaseURL() {
-        const configured = window.SOP_DAEMON_BASE_URL || localStorage.getItem('sop_daemon_url') || 'http://127.0.0.1:9090';
-        return (configured || 'http://127.0.0.1:9090').replace(/\/$/, '');
+        const configured = window.SOP_DAEMON_BASE_URL || localStorage.getItem('sop_daemon_url') || DEFAULT_DAEMON_URL;
+        return (configured || DEFAULT_DAEMON_URL).replace(/\/$/, '');
     }
 
     class DaemonAuthClient {
@@ -57,31 +58,7 @@
                     return true;
                 }
 
-                // Step 1: Get bootstrap secret from httpserver (proxies filesystem read)
-                const secretResponse = await fetch('/api/daemon/bootstrap-secret');
-                if (!secretResponse.ok) {
-                    if (secretResponse.status === 404) {
-                        console.debug('[DaemonAuth] Daemon not running or bootstrap file not found');
-                        this.bootstrapping = false;
-                        return false;
-                    }
-                    throw new Error(`Failed to get bootstrap secret: ${secretResponse.status}`);
-                }
-
-                let secretData = null;
-                try {
-                    secretData = await secretResponse.json();
-                } catch (parseError) {
-                    console.debug('[DaemonAuth] Bootstrap secret response was not valid JSON', parseError);
-                    throw new Error('Bootstrap secret response was not valid JSON');
-                }
-
-                const bootstrapSecret = secretData && secretData.bootstrap_secret;
-
-                if (!bootstrapSecret) {
-                    throw new Error('Bootstrap secret is empty');
-                }
-
+                // Get site session token from storage
                 const bootstrapToken = [
                     localStorage.getItem('sop_access_token'),
                     sessionStorage.getItem('sop_access_token'),
@@ -89,12 +66,38 @@
                     sessionStorage.getItem('access_token')
                 ].find(value => typeof value === 'string' && value.trim() !== '');
 
-                const authPayload = bootstrapToken
-                    ? { bootstrap_token: bootstrapToken.trim() }
-                    : { bootstrap_secret: bootstrapSecret };
+                let authPayload;
+                let authEndpoint;
 
-                // Step 2: Authenticate with daemon using either the current UI session token or the legacy bootstrap secret.
-                const authResponse = await fetch(`${getDaemonBaseURL()}/api/daemon/auth`, {
+                if (bootstrapToken) {
+                    // Use site session token directly
+                    authPayload = { bootstrap_token: bootstrapToken.trim() };
+                    authEndpoint = `${getDaemonBaseURL()}/api/daemon/auth`;
+                } else {
+                    // Fall back to bootstrap secret from file
+                    const secretResponse = await fetch('/api/daemon/bootstrap-secret');
+                    if (!secretResponse.ok) {
+                        if (secretResponse.status === 404) {
+                            console.debug('[DaemonAuth] Daemon not running or bootstrap file not found');
+                            this.bootstrapping = false;
+                            return false;
+                        }
+                        throw new Error(`Failed to get bootstrap secret: ${secretResponse.status}`);
+                    }
+
+                    const secretData = await secretResponse.json();
+                    const bootstrapSecret = secretData && secretData.bootstrap_secret;
+
+                    if (!bootstrapSecret) {
+                        throw new Error('Bootstrap secret is empty');
+                    }
+
+                    authPayload = { bootstrap_secret: bootstrapSecret };
+                    authEndpoint = `${getDaemonBaseURL()}/api/daemon/auth`;
+                }
+
+                // Authenticate with daemon
+                const authResponse = await fetch(authEndpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -109,7 +112,7 @@
 
                 const authData = await authResponse.json();
 
-                // Step 3: Store tokens
+                // Store tokens
                 this.accessToken = authData.access_token;
                 this.refreshToken = authData.refresh_token;
                 this.tokenExpiry = Date.now() + (authData.expires_in * 1000);

@@ -375,6 +375,10 @@ type siteAppAccessHandler struct {
 
 func (h *siteAppAccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/") {
+		// Check if this is daemon mode - UI will connect to daemon, not site backend
+		// In daemon mode, any authenticated user can access the UI
+		isDaemonMode := strings.TrimSpace(r.URL.Query().Get("mode")) == "daemon"
+
 		// Check if RequireAuth middleware already populated the context upstream.
 		// During tests, auth context may be pre-populated; in production, it's usually empty here.
 		existingAuth := sop.GetAuthFromContext(r.Context())
@@ -393,9 +397,15 @@ func (h *siteAppAccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 				h.next.ServeHTTP(w, r)
 				return
 			}
-			// Regular subscribed users don't have access to the Data Manager.
+			// In daemon mode, any authenticated user can access the UI
+			// since it only connects to daemon, not site backend
+			if isDaemonMode {
+				h.next.ServeHTTP(w, r)
+				return
+			}
+			// Regular subscribed users don't have access to the Data Manager in HQ mode.
 			// They should use the site frontend at /site/ for account management.
-			// The Data Manager at /app is reserved for admins only.
+			// The Data Manager at /app is reserved for admins only when connecting to HQ.
 			http.Error(w, "access denied", http.StatusForbidden)
 			return
 		}
@@ -439,8 +449,38 @@ func (h *siteAppAccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			h.next.ServeHTTP(w, r)
 			return
 		}
-		// Regular subscribed users don't have access to the Data Manager.
+
+		// ========================================================================
+		// DAEMON MODE ACCESS CONTROL
+		// ========================================================================
+		// When mode=daemon query parameter is present, allow ANY authenticated user
+		// to access the Data Manager UI (not just admins).
+		//
+		// Rationale:
+		//   - Daemon mode connects to user's LOCAL daemon (http://127.0.0.1:9090)
+		//   - Does NOT connect to site backend or HQ
+		//   - No privileged operations on shared infrastructure
+		//   - User can only access their own local data
+		//
+		// Security Note:
+		//   - Access control is on the DAEMON side (separate service)
+		//   - Daemon validates tokens, enforces local permissions
+		//   - Site only serves the UI HTML/JS (no data access)
+		//
+		// Implementation:
+		//   - Check for ?mode=daemon in query string
+		//   - If present, allow request through to Data Manager UI
+		//   - UI will auto-bootstrap with daemon using session token
+		//
+		// See: docs/AI_STUDIO_DAEMON_MODE.md for complete flow
+		// ========================================================================
+		if isDaemonMode {
+			h.next.ServeHTTP(w, r)
+			return
+		}
+		// Regular subscribed users don't have access to the Data Manager in HQ mode.
 		// They should use the site frontend at /site/ for account management.
+		// The Data Manager at /app is reserved for admins only when connecting to HQ.
 		http.Error(w, "access denied", http.StatusForbidden)
 		return
 	}

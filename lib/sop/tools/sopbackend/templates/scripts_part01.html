@@ -1,5 +1,6 @@
 {{define "scripts_part01"}}
 <script>
+    const DEFAULT_DAEMON_URL = 'http://127.0.0.1:9090';
     // Global context RBAC map mapping asset type to permission map.
     window.CONTEXT_RBAC = window.CONTEXT_RBAC || {};
 
@@ -149,7 +150,7 @@
         if (runtimeMode !== 'local') {
             return endpoint;
         }
-        const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+        const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
         return `${daemonBase}${endpoint}`;
     }
 
@@ -403,7 +404,7 @@
 
                 const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
 
-                const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+                const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
                 const targetUrl = `${daemonBase}${endpoint}`;
                 if (useDaemonAuth && window.daemonAuth) {
                     const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
@@ -876,7 +877,7 @@
     }
 
     async function daemonRuntimeRequest(endpoint, options = {}) {
-        const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+        const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
         const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
 
         if (useDaemonAuth) {
@@ -906,7 +907,7 @@
     async function loadRuntimeRefreshPayload() {
         const runtimeMode = getCurrentRuntimeMode();
         if (runtimeMode === 'local') {
-            const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+            const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
             try {
                 const response = await daemonRuntimeRequest('/api/runtime/refresh', {
                     method: 'GET',

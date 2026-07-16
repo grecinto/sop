@@ -159,6 +159,12 @@
               sessionStorage.setItem('sop_userId', body.user.username);
             }
             
+            // Clear logout/signed-out flags from site frontend
+            localStorage.removeItem('sop-site-logout-pending');
+            sessionStorage.removeItem('sop-site-logout-pending');
+            localStorage.removeItem('sop-site-signed-out');
+            sessionStorage.removeItem('sop-site-signed-out');
+            
             // Keep the local daemon experience intact after a normal HQ login.
             if (window.daemonAuth) {
               window.daemonAuth.markSubscriptionCheckCompleted();
