@@ -495,3 +495,122 @@ The KB Quality system transforms how you work with AI copilots. By enforcing exp
 And with real-time vector database architecture, nested semantic categories, and relativity-based triangulation, we ship data science capabilities directly in the database—accessible to everyone, not just specialists.
 
 Stop wasting time and money on manual refinement. Let SOP's KB Quality system enforce expertise automatically.
+# KB Custom Validators Guide
+
+## Purpose
+
+This guide explains how to add custom validation rules to the KB quality enforcement pipeline. The validator infrastructure lives in [lib/sop/ai/agent/codingworkflow/validator.go](../lib/sop/ai/agent/codingworkflow/validator.go) and is invoked by the orchestration flow before a patch is accepted.
+
+## Where to extend
+
+1. Open [lib/sop/ai/agent/codingworkflow/validator.go](../lib/sop/ai/agent/codingworkflow/validator.go)
+2. Add a new validation method on the Validator type, such as `checkMyRule(content, filePath)`
+3. Call it from `ValidatePatch()` alongside the existing rule checks
+4. Add corresponding coverage in [lib/sop/ai/agent/codingworkflow/validator_test.go](../lib/sop/ai/agent/codingworkflow/validator_test.go)
+
+## Recommended pattern
+
+- Keep checks focused on a single rule or convention
+- Return a `Violation` with a clear `RuleName`, `Severity`, and `Suggestion`
+- Prefer `SeverityWarning` for advisory guidance and `SeverityError` for strong enforcement
+- Use `LineHint` and `FilePath` so failures are actionable in the UI and logs
+
+## Example
+
+```go
+func (v *Validator) checkMyRule(content, filePath string) []Violation {
+    violations := make([]Violation, 0)
+    if strings.Contains(content, "panic()") {
+        violations = append(violations, Violation{
+            RuleName:    "custom-no-panic",
+            Severity:    SeverityWarning,
+            Description: "Direct panic calls are discouraged",
+            FilePath:    filePath,
+            Suggestion:  "Return an error instead of panicking",
+        })
+    }
+    return violations
+}
+```
+
+Then wire it into `ValidatePatch()`:
+
+```go
+if v.config.EnableErrorHandling {
+    rulesChecked = append(rulesChecked, "error-handling")
+    violations = append(violations, v.checkErrorHandling(newContent, patch.FilePath)...)
+}
+
+rulesChecked = append(rulesChecked, "custom-rule")
+violations = append(violations, v.checkMyRule(newContent, patch.FilePath)...)
+```
+
+## Configuration guidance
+
+Use the validator config to keep new rules optional and easy to roll out:
+
+- `EnableComments` for comment/style rules
+- `StrictMode` to treat warnings as failures
+- Feature flags in the runtime config when the rule should be staged
+
+## Testing guidance
+
+Add tests for:
+- passing cases
+- known violations
+- strict-mode behavior
+- severity filtering
+
+## Production notes
+
+- Start with warnings before making a rule hard-failing
+- Keep the rule deterministic and easy to explain
+- Capture the reason in the violation message so users can understand the feedback
+# KB Task Classification Guide
+
+## Purpose
+
+The task classifier helps the KB quality system choose the most relevant Knowledge Bases for a coding request. It lives in [lib/sop/ai/agent/codingworkflow/task_classifier.go](../lib/sop/ai/agent/codingworkflow/task_classifier.go) and produces a task type plus ranked KB candidates.
+
+## How it works
+
+The classifier looks at three signals:
+
+1. The task description text
+2. The active file extension
+3. Domain keywords such as error, api, database, concurrency, or security
+
+It maps those signals into one of the built-in task types:
+
+- implementation
+- debugging
+- testing
+- refactoring
+- documentation
+- architecture
+
+## Extending the classifier
+
+To add a new task type:
+
+1. Add a new constant in [lib/sop/ai/agent/codingworkflow/task_classifier.go](../lib/sop/ai/agent/codingworkflow/task_classifier.go)
+2. Expand the scoring logic in `classifyTaskType()`
+3. Add a new case in `recommendKBs()` for KB recommendations
+4. Add or update tests in [lib/sop/ai/agent/codingworkflow/task_classifier_test.go](../lib/sop/ai/agent/codingworkflow/task_classifier_test.go)
+
+## Recommended heuristics
+
+- Prefer specific keywords over broad ones
+- Use file extensions as a weak signal, not the only signal
+- Keep confidence values modest and explainable
+- Add domain-specific KB recommendations only when there is a clear match
+
+## Example
+
+A request such as "fix the auth error in the API handler" should score highly for debugging and also recommend an error-handling or security-related KB.
+
+## Tuning advice
+
+- Start with a small keyword set and add only patterns that are clearly useful
+- Track classifier outcomes in the effectiveness tracker so the system can learn from real usage
+- Review the task distribution in the quality dashboard after rollout
