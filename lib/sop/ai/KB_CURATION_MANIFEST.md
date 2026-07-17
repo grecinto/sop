@@ -129,8 +129,8 @@ The same workflow can be used to author a custom Knowledge Base for a separate d
    ./run.sh
    ```
    If you are using a custom curated input path, pass it to the compiler with the same `-input` option used in `run.sh`.
-4. Open the SOP Data Manager UI and use the Import JSON button in the Space/KB toolbar to load the generated file into your installation.
-5. Once imported, the custom KB can be queried and managed through the same HTTP Server and SOP Data Manager experience as the built-in SOP KB.
+4. Open the AI Studio UI and use the Import JSON button in the Space/KB toolbar to load the generated file into your installation.
+5. Once imported, the custom KB can be queried and managed through the same HTTP Server and AI Studio experience as the built-in SOP KB.
 
 This keeps the authoring and compilation steps identical to the built-in flow, while letting end users ship a domain-specific KB as a normal JSON artifact.
 ## Source selection

@@ -1,5 +1,5 @@
 ## Running Modes & Security
-The SOP Data Manager is designed to be flexible, serving as both a lightweight internal tool and a secure public API.
+The AI Studio is designed to be flexible, serving as both a lightweight internal tool and a secure public API.
 
 ### Phase 1 Auth Notes
 The current V1 implementation uses a small token-auth facade built on top of `Config.Users` and the setup-created root user:

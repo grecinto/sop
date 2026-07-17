@@ -1,7 +1,7 @@
 # KB Quality Dashboard - Implementation Documentation
 
 ## Overview
-The KB Quality Dashboard provides real-time monitoring and management of Knowledge Base effectiveness in the SOP Data Manager. It displays historical success rates, identifies top performers and poor performers, and enables manual quality checks.
+The KB Quality Dashboard provides real-time monitoring and management of Knowledge Base effectiveness in the AI Studio. It displays historical success rates, identifies top performers and poor performers, and enables manual quality checks.
 
 ## Architecture
 

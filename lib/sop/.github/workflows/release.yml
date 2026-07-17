@@ -1,4 +1,4 @@
-name: Release SOP Data Manager
+name: Release AI Studio
 
 on:
   push:

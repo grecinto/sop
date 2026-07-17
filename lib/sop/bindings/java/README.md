@@ -199,7 +199,7 @@ If **clustered**, no worries, as SOP takes care of Redis-based coordination with
 
 ## AI Copilot & Scripts
 
-The SOP Data Manager includes a built-in **AI Copilot** that allows you to interact with your data using natural language and automate workflows using **Scripts**.
+The AI Studio includes a built-in **AI Copilot** that allows you to interact with your data using natural language and automate workflows using **Scripts**.
 
 ### 1. Launch the Assistant
 Start the server:

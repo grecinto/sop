@@ -1,7 +1,7 @@
 # SOP System Knowledge Base & Handoff
 
 **Last Updated:** January 12, 2026
-**Purpose:** This document serves as a knowledge transfer artifact for future AI agents (e.g., GPT-5.2) or developers continuing work on the SOP Data Manager. It details the system architecture, specific implementation nuances, and recent modifications.
+**Purpose:** This document serves as a knowledge transfer artifact for future AI agents (e.g., GPT-5.2) or developers continuing work on the AI Studio. It details the system architecture, specific implementation nuances, and recent modifications.
 
 ---
 

@@ -61,7 +61,7 @@ The core of the **Computing Platform**. It allows you to define complex, multi-s
 *   **Adaptable**: Can be tailored to any domain (Finance, Media, etc.) by registering custom Tools.
 *   **Swarm Computing**: Async execution of steps for high-performance parallel processing.
 *   **Agent Framework**: Define agents with Personality, Memory, and Tool access.
-*   **Interoperable**: Scripts are stored as JSON and can be managed/visualized via the SOP Data Manager.
+*   **Interoperable**: Scripts are stored as JSON and can be managed/visualized via the AI Studio.
 
 See [ai/agent/README.md](ai/agent/README.md) for full documentation on Scripts, Swarm Computing, and the Tool Registry.
 
@@ -232,13 +232,13 @@ The runtime-side flow mirrors the UI workflow:
 3. **Vectorize** the Space or selected categories/items when you are ready to enable semantic retrieval.
 4. **Search** using the unified `Search(...)` API for keyword, semantic, and mixed retrieval flows.
 
-This gives your application the same Space-aware reasoning path that the AI Copilot uses, while keeping the authoring experience in SOP Data Manager.
+This gives your application the same Space-aware reasoning path that the AI Copilot uses, while keeping the authoring experience in AI Studio.
 
-### Authoring Spaces in SOP Data Manager, then consuming them in code
+### Authoring Spaces in AI Studio, then consuming them in code
 
-A common pattern is to use the SOP Data Manager as the **authoring studio** for your Knowledge Bases (Spaces), then consume the curated data from your application with the `ai` library:
+A common pattern is to use the AI Studio as the **authoring studio** for your Knowledge Bases (Spaces), then consume the curated data from your application with the `ai` library:
 
-1. Create or curate a Space in the SOP Data Manager / Knowledge Base Studio UI.
+1. Create or curate a Space in the AI Studio / Knowledge Base Studio UI.
 2. Use the `ai/database` package to open that Space in your Go code with `OpenKnowledgeBase(...)`.
 3. Query it with the rich `KnowledgeBase` API, using `Search(...)` as the single entry point for retrieval in RAG or agent workflows.
 

@@ -1,4 +1,4 @@
-# SOP Data Manager (HTTP Server & UI)
+# AI Studio (HTTP Server & UI)
 
 A powerful, web-based management suite for SOP B-Tree repositories. This tool transforms SOP from a library into a full-fledged SOP HTTP Server with a rich User Interface.
 
@@ -30,19 +30,19 @@ go build -o sop-manager ./tools/httpserver
 - **Natural Language SQL**: Execute complex Selects, Joins, and CRUD operations using plain English via the AI Copilot.
 - **Mobile Optimized**: Fully responsive design with touch-friendly controls and a fullscreen AI assistant for managing data on the go.
 
-## The Power of the SOP Data Manager: From Embedded to Enterprise
+## The Power of the AI Studio: From Embedded to Enterprise
 
-The SOP Data Manager is not just a simple admin tool; it is a demonstration of the SOP architecture's flexibility. Because SOP is a library that turns your application into the database engine, this SOP HTTP Server is effectively a **universal database server** that can adapt to any scale.
+The AI Studio is not just a simple admin tool; it is a demonstration of the SOP architecture's flexibility. Because SOP is a library that turns your application into the database engine, this SOP HTTP Server is effectively a **universal database server** that can adapt to any scale.
 
 ### 1. Embedded & Single-Node
-For local development, IoT devices, or single-user desktop applications, the SOP Data Manager acts as a standalone SOP HTTP Server.
+For local development, IoT devices, or single-user desktop applications, the AI Studio acts as a standalone SOP HTTP Server.
 - **Zero Setup**: Just point it to a folder.
 - **Instant Access**: Serve one or many databases from a single lightweight process.
 - **Use Case**: A developer inspecting their local data, or an embedded device exposing a management interface.
 
 ### 2. Enterprise Swarm (Clustered Peer Nodes)
-In a large-scale enterprise environment, the SOP Data Manager shines as a stateless, high-performance peer node within your storage swarm. 
-- **True Scalability**: Deploy the SOP Data Manager behind a **Load Balancer** on **Kubernetes**, **AWS EC2 Auto Scaling Groups**, or **Linux Bare Metal** farms. Because the frontend UI uses relative paths, users can connect their browser to any `httpserver` instance in the network, and the traffic will natively route and distribute perfectly.
+In a large-scale enterprise environment, the AI Studio shines as a stateless, high-performance peer node within your storage swarm. 
+- **True Scalability**: Deploy the AI Studio behind a **Load Balancer** on **Kubernetes**, **AWS EC2 Auto Scaling Groups**, or **Linux Bare Metal** farms. Because the frontend UI uses relative paths, users can connect their browser to any `httpserver` instance in the network, and the traffic will natively route and distribute perfectly.
 - **Bare Metal I/O**: Each `httpserver` acts as a peer server capable of doing heavy bare-metal I/O on attached network volumes (EBS/EFS) or local SSDs, distributing the computational load of serving massive client requests across many machines.
 - **Cluster Coordination**: When configured with `"mode": "clustered"` and connected to your infrastructure's **Redis cluster**, the HTTP servers seamlessly negotiate distributed locks, caching, and state coordination across the entire swarm.
 - **Safe Production Access**: You can view, edit, and manage live production data safely. Because every HTTP server peer respects the Redis distributed locks, manual admin actions or AI Copilot queries never corrupt data or violate ACID properties, even while your high-throughput microservices are hammering the same data files.
@@ -226,7 +226,7 @@ go run ./tools/httpserver -config config.json
 
 ### Importing a custom Knowledge Base JSON
 
-You can use the same compile-and-import workflow to bring a custom KB into a local or deployed SOP Data Manager installation:
+You can use the same compile-and-import workflow to bring a custom KB into a local or deployed AI Studio installation:
 
 1. Author or adapt the source Markdown and the KB curation manifest for your domain.
 2. Generate the importable JSON with the KB compiler:
@@ -241,7 +241,7 @@ You can use the same compile-and-import workflow to bring a custom KB into a loc
    ```
 4. In the UI, open the Space/KB view and click the Import JSON button to load the generated file.
 
-This lets end users package their own curated KB as a JSON file and load it into SOP Data Manager without changing the server code.
+This lets end users package their own curated KB as a JSON file and load it into AI Studio without changing the server code.
 
 ### Administrative Features
 
@@ -285,7 +285,7 @@ In **Clustered** mode, the database is designed to be managed by many SOP HTTP S
 - **Topology**: Distributed / Swarm.
 - **Use Case**: Kubernetes clusters, EC2 auto-scaling groups, or bare-metal server farms.
 - **Coordination**: All instances must be configured with the same **Redis** cluster address. Redis is used for distributed locking and transaction coordination.
-- **Scalability**: You can spin up as many instances of the SOP Data Manager as needed.
+- **Scalability**: You can spin up as many instances of the AI Studio as needed.
 - **Guarantee**: Management actions from any node are orchestrated properly with ACID guarantees. If User A updates a record via Server 1, and User B tries to update the same record via Server 2, SOP uses Redis to detect the conflict and ensure data integrity.
 
 ### The "Masterless" Philosophy
@@ -313,7 +313,7 @@ Typical results on a modern laptop (M1/M2/M3 Mac):
 
 ## Demo & Tutorial
 
-The SOP Data Manager includes a built-in **Setup Wizard** that can populate your database with a sample E-commerce dataset (Users, Products, Orders).
+The AI Studio includes a built-in **Setup Wizard** that can populate your database with a sample E-commerce dataset (Users, Products, Orders).
 
 This dataset is perfect for exploring the **AI Copilot** capabilities:
 1.  **Natural Language Queries**: "Show me all users from France"

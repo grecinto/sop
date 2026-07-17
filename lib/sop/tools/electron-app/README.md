@@ -253,7 +253,7 @@ npm run package
 
 2. **Notarization** (for Gatekeeper):
 ```bash
-npx electron-notarize --bundle-id com.sopcloud.ai-desktop
+npx electron-notarize --bundle-id com.Northstar.ai-desktop
 ```
 
 ### Windows
@@ -279,8 +279,8 @@ Creates `SOP-AI-Desktop-Setup.exe` in `dist/`
 
 ## License
 
-Same as SOP Cloud project
+Same as Northstar project
 
 ## Support
 
-For issues, see main SOP Cloud repository.
+For issues, see main Northstar repository.

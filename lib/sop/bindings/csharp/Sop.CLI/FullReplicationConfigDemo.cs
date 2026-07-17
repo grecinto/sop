@@ -43,7 +43,7 @@ namespace Sop.CLI
                     ErasureConfig = ec,
                 };
 
-                // Setup the database so the config can be persisted and read/used by other tools like SOP Data Manager.
+                // Setup the database so the config can be persisted and read/used by other tools like AI Studio.
                 Database.Setup(ctx, dbOpts);
 
                 var db = new Database(dbOpts);

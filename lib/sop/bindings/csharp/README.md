@@ -37,15 +37,15 @@ dotnet tool install -g Sop4CS.CLI
 *   **Multi-Tenancy**: Native support for Cassandra Keyspaces or Directory-based isolation.
 *   **Flexible Deployment**: Supports both **Standalone** (local) and **Clustered** (distributed) modes.
 
-## SOP Data Manager
+## AI Studio
 
-SOP includes a powerful **SOP Data Manager** that provides **full CRUD** capabilities for your B-Tree stores. It goes beyond simple viewing, offering a complete GUI for inspecting, searching, and managing your data at scale.
+SOP includes a powerful **AI Studio** that provides **full CRUD** capabilities for your B-Tree stores. It goes beyond simple viewing, offering a complete GUI for inspecting, searching, and managing your data at scale.
 
 *   **Web UI**: A modern, responsive interface for browsing B-Trees, managing stores, and visualizing data.
 *   **AI Copilot**: Integrated directly into the UI, the AI Copilot can help you write queries, explain data structures, and even generate code snippets. Configure your LLM provider through the Setup Wizard on first launch.
 *   **SystemDB**: View and manage internal system data, including registry information and transaction logs.
 
-To launch the SOP Data Manager, download the all-in-one single-file installer from [SOP Releases](https://github.com/SharedCode/sop/releases). Alternatively, you can use the Go toolchain:
+To launch the AI Studio, download the all-in-one single-file installer from [SOP Releases](https://github.com/SharedCode/sop/releases). Alternatively, you can use the Go toolchain:
 
 ```bash
 # From the root of the repository
@@ -149,7 +149,7 @@ sop-cli httpserver
 
 It is important to distinguish between the **SOP HTTP Server** (this tool) and SOP's internal **Clustered Mode**:
 
-1.  **SOP HTTP Server**: This is a standard web server that serves the SOP Data Manager UI and REST API.
+1.  **SOP HTTP Server**: This is a standard web server that serves the AI Studio UI and REST API.
     *   **Multi-Client**: It can serve **many concurrent HTTP clients** (users on web browsers, mobile apps, or other services).
     *   **Collaborative Management**: Multiple team members can access the console simultaneously to view, edit, and query data in real-time.
     *   **REST API**: Exposes your B-Tree stores via standard HTTP endpoints, allowing you to integrate SOP with any language or tool (curl, Postman, Python scripts).
@@ -204,7 +204,7 @@ sop-cli httpserver -clustered
 
 ## AI Copilot & Scripts
 
-The SOP Data Manager includes a built-in **AI Copilot** that allows you to interact with your data using natural language and automate workflows using **Scripts**.
+The AI Studio includes a built-in **AI Copilot** that allows you to interact with your data using natural language and automate workflows using **Scripts**.
 
 ### 1. Launch the Assistant
 Start the SOP HTTP Server:
@@ -258,7 +258,7 @@ You can make scripts dynamic by using parameters.
     ```
 
 ### 5. Scripts as Views & Streaming
-The SOP Data Manager supports **Streaming Results**, allowing you to use Scripts as data sources (Views) in your queries.
+The AI Studio supports **Streaming Results**, allowing you to use Scripts as data sources (Views) in your queries.
 *   **Efficiency**: Results are streamed in real-time, enabling low-latency processing of large datasets.
 *   **Composition**: You can join a Script's output with a B-Tree store: "Join 'Users' and 'MyScript' on 'ID'".
 
@@ -421,9 +421,9 @@ var dbOpts = new DatabaseOptions
 var db = new Database(dbOpts);
 ```
 
-### SOP Data Manager Visibility
+### AI Studio Visibility
 
-To ensure your C#-created databases are fully discoverable and manageable in the **SOP Data Manager** GUI, you should use the `Database.Setup` method. This persists your configuration options (like schema types, store paths, etc.) to the disk.
+To ensure your C#-created databases are fully discoverable and manageable in the **AI Studio** GUI, you should use the `Database.Setup` method. This persists your configuration options (like schema types, store paths, etc.) to the disk.
 
 ```csharp
 var dbOpts = new DatabaseOptions 

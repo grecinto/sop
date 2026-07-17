@@ -19,7 +19,7 @@ The application supports a responsive design that adapts not just layout, but be
 This preference is managed via the "Preferences" modal in the UI and applied immediately upon selection.
 
 ## Problem Statement: Hardcoded UI Logic
-Currently, the SOP Data Manager UI (`tools/httpserver/templates/index.html`) contains hardcoded logic to handle specific display requirements for different stores. 
+Currently, the AI Studio UI (`tools/httpserver/templates/index.html`) contains hardcoded logic to handle specific display requirements for different stores. 
 
 **Example:**
 The `scripts` store has a field named `database`. In the code, we explicitly check:
@@ -83,4 +83,4 @@ The frontend `showDetail` function will be refactored to be **data-driven**:
 *   **Flexibility**: Users can define custom UI behaviors for their own data without touching the codebase.
 *   **Consistency**: System stores (like `scripts`) and user stores are treated identically.
 *   **Scalability**: The UI code remains clean and generic, regardless of how many special field types are added.
-*   **"Meta" Management**: Users can use the SOP Data Manager to edit the `_meta_ui` store itself, effectively building a "No-Code" admin interface builder.
+*   **"Meta" Management**: Users can use the AI Studio to edit the `_meta_ui` store itself, effectively building a "No-Code" admin interface builder.

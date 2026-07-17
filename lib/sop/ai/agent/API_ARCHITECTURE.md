@@ -135,7 +135,7 @@ agent.CommitTransaction(ctx, TransactionCommitArgs{TransactionID: tx.ID})
 
 ### Visual Management
 
-**SOP Data Manager** provides complete visual management for both Stores and Spaces through an intuitive web interface:
+**AI Studio** provides complete visual management for both Stores and Spaces through an intuitive web interface:
 
 #### Store Management
 - **Full CRUD Operations** - Add, edit, delete, view records with JSON editor

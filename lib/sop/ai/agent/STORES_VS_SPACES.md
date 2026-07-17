@@ -10,11 +10,11 @@ Most vendors force a choice:
 
 **SOP delivers both** → Strong ACID + Strong AI in one platform.
 
-### Visual Management: SOP Data Manager
+### Visual Management: AI Studio
 
 **SOP includes a complete visual management suite** that provides full CRUD capabilities for both Stores and Spaces through an intuitive web interface:
 
-#### SOP Data Manager Features
+#### AI Studio Features
 - ✅ **Modern Web UI** - Responsive interface for managing all data
 - ✅ **AI Copilot Integration** - Natural language queries, SQL-like joins, code generation
 - ✅ **Real-time Streaming** - See results as they stream from agents and scripts
@@ -61,7 +61,7 @@ Most vendors force a choice:
 This is the end-user and developer path for Spaces:
 
 1. **Create / Mint a Space**: Establish a dedicated KB for a department, product, or persona.
-2. **Manage Categories and Items**: Curate the taxonomy, add summaries, and refine the structure in SOP Data Manager / Knowledge Base Studio.
+2. **Manage Categories and Items**: Curate the taxonomy, add summaries, and refine the structure in AI Studio / Knowledge Base Studio.
 3. **Vectorize When Ready**: Generate embeddings for the whole Space, specific categories, or individual items.
 4. **Search Through AI Copilot or Code**: Use the Copilot UI for trial-and-error retrieval, then call the same logic from your app using the unified `Search(...)` API.
 

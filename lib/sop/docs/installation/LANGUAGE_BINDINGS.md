@@ -2,7 +2,7 @@
 
 ## Integration Guide
 
-After successfully setting up the SOP Data Manager and configuring your storage environment, the next step is to integrate SOP into your applications.
+After successfully setting up the AI Studio and configuring your storage environment, the next step is to integrate SOP into your applications.
 
 Because you have already completed the **Setup Wizard**, your environment is fully configured (Path locations, Erasure Coding rules, Partitioning, etc.).
 
@@ -128,6 +128,6 @@ This allows you to verify your application logic visually, without writing custo
 ## Next Steps
 
 Now that you have your code connecting to the database, you can:
-1.  Run the **SOP Data Manager** to see the "Users" table you just created.
+1.  Run the **AI Studio** to see the "Users" table you just created.
 2.  Check out the **Language Tutorials** linked above for deep-dives into your preferred language.
 3.  Visit the **[SOP GitHub Repository](https://github.com/sharedcode/sop)** for the latest updates, issues, and discussions.

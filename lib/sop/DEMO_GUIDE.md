@@ -1,6 +1,6 @@
 # SOP Demo Walkthrough
 
-This guide will walk you through the key features of the SOP Data Manager, from initial setup to using the AI Copilot.
+This guide will walk you through the key features of the AI Studio, from initial setup to using the AI Copilot.
 
 ## Prerequisites
 

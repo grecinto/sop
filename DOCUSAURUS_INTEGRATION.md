@@ -2,7 +2,7 @@
 
 ## What Was Done
 
-Successfully integrated Docusaurus 3.10.2 documentation framework into the SOP Cloud application with authentication protection.
+Successfully integrated Docusaurus 3.10.2 documentation framework into the Northstar application with authentication protection.
 
 ## Implementation Details
 
@@ -10,7 +10,7 @@ Successfully integrated Docusaurus 3.10.2 documentation framework into the SOP C
 
 - **Installed**: Docusaurus 3.10.2 with TypeScript and classic template
 - **Configuration**:
-  - Title: "SOP Cloud Documentation"  
+  - Title: "Northstar Documentation"  
   - Base URL: `/`
   - Blog feature disabled (docs-focused)
   - Removed broken footer links

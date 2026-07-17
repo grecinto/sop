@@ -1,6 +1,6 @@
-# SOP Data Manager Setup Guide
+# AI Studio Setup Guide
 
-Welcome to the **SOP Data Manager**. If this is your first time here, you might be wondering: *"What exactly am I building?"*
+Welcome to the **AI Studio**. If this is your first time here, you might be wondering: *"What exactly am I building?"*
 
 This guide is designed to walk you through the **Setup Wizard** step-by-step, explaining every concept, field, and feature so you can configure your environment with confidence.
 

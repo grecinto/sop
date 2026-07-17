@@ -250,7 +250,7 @@ func RegisterSwaggerHandlers(mux *http.ServeMux, basePath string) {
 		"info": map[string]any{
 			"title":       "SOP Backend API",
 			"version":     "1.0.0",
-			"description": "Shared API surface for the SOP Data Manager, daemon, and new site experience.",
+			"description": "Shared API surface for the AI Studio, daemon, and new site experience.",
 		},
 		"components": map[string]any{
 			"schemas": map[string]any{

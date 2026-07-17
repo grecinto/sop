@@ -113,7 +113,7 @@ Instead of building wheels and nuget packages locally (which requires setting up
 1.  **Bump Version**: Run `./update_version.sh <version>` and commit the changes locally.
 2.  **Tag & Push**: Run `git tag v<version>` and `git push origin v<version>`.
     *   This triggers the `release.yml` workflow on GitHub.
-3.  **Wait for CI**: Go to the Actions tab on GitHub and wait for the "Release SOP Data Manager" workflow to complete.
+3.  **Wait for CI**: Go to the Actions tab on GitHub and wait for the "Release AI Studio" workflow to complete.
 4.  **Download Artifacts**:
     *   Go to the new **Release** page on GitHub.
     *   Download the `.whl` (Python) and `.nupkg` (C#) files from the "Assets" section.

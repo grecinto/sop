@@ -84,7 +84,7 @@ func main() {
 }
 ```
 
-> **Pro Tip**: Want to verify your data? Run the **SOP Data Manager** to inspect the `users` store visually:
+> **Pro Tip**: Want to verify your data? Run the **AI Studio** to inspect the `users` store visually:
 > ```bash
 > go run ./tools/httpserver -registry /tmp/sop_data
 > ```

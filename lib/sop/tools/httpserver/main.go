@@ -148,7 +148,7 @@ func main() {
 	log.SetDefault(l)
 
 	if showVersion {
-		fmt.Printf("SOP Data Manager v%s\n", sop.Version)
+		fmt.Printf("AI Studio v%s\n", sop.Version)
 		os.Exit(0)
 	}
 
@@ -252,7 +252,7 @@ func main() {
 
 	// Start Server
 	addr := fmt.Sprintf(":%d", config.Port)
-	log.Debug(fmt.Sprintf("SOP Data Manager v%s running at http://localhost%s", sop.Version, addr))
+	log.Debug(fmt.Sprintf("AI Studio v%s running at http://localhost%s", sop.Version, addr))
 
 	// Open Browser
 	if openBrowserFlag {
@@ -319,7 +319,7 @@ func serveSiteFrontend(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>SOP Cloud</title></head><body><div id="root"><h1>Secure checkout</h1><p>Choose your plan and complete the monthly subscription securely.</p></div></body></html>`)
+		_, _ = io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Northstar</title></head><body><div id="root"><h1>Secure checkout</h1><p>Choose your plan and complete the monthly subscription securely.</p></div></body></html>`)
 		return
 	}
 
@@ -345,7 +345,7 @@ func serveSiteFrontend(w http.ResponseWriter, r *http.Request) {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SOP Cloud</title>
+    <title>Northstar</title>
     <style>
       body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #07111f; color: #f5f7fb; }
       main { max-width: 900px; margin: 0 auto; padding: 4rem 1.5rem; }
@@ -356,7 +356,7 @@ func serveSiteFrontend(w http.ResponseWriter, r *http.Request) {
   <body>
     <main>
       <div class="card">
-        <h1>SOP Cloud</h1>
+        <h1>Northstar</h1>
         <p>The new product experience is now served from the dedicated site route.</p>
         <p>This shell is a placeholder until the React build is generated for the full experience.</p>
       </div>

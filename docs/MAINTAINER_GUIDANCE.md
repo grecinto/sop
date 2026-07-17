@@ -41,7 +41,7 @@ If it is product-specific, keep it in the overlay or product tree. If it is broa
 The best public story is:
 
 - “SOP Public” is the open-source engine and platform foundation.
-- “SOP Cloud / the richer product experience” is the private or hosted layer that adds the product UX, MA capabilities, workflows, and commercial value.
+- “Northstar / the richer product experience” is the private or hosted layer that adds the product UX, MA capabilities, workflows, and commercial value.
 
 That keeps the public repo valuable without giving away the full moat.
 

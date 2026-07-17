@@ -42,7 +42,7 @@ This repo is organized as a thin overlay rather than a full fork of the public c
 
 - [ai/database](ai/database): database overlay logic for private knowledge-base and document-aware behavior.
 - [ai/memory](ai/memory): private memory models, knowledge-base semantics, and document support that are not part of the generic upstream package.
-- [lib/sop](lib/sop): the mature SOP Data Manager and daemon/runtime source code used by this overlay.
+- [lib/sop](lib/sop): the mature AI Studio and daemon/runtime source code used by this overlay.
 - [src](src): the new product-facing application layer for the site experience, including the frontend and site backend.
 
 The repository uses a module replacement in [go.mod](go.mod) to point at the shared upstream checkout in [../sop-public](../sop-public). Where a file is an exact duplicate of the upstream implementation and does not carry private behavior, it is exposed through the local tree as a shared link and ignored by Git to avoid carrying duplicate copies here.
@@ -52,11 +52,11 @@ The repository uses a module replacement in [go.mod](go.mod) to point at the sha
 - Keep private behavior local and leave shared generic implementations upstream when possible.
 - For the new sop-cloud onboarding and account-management experience, see [docs/NEW_SITE_STORIES.md](docs/NEW_SITE_STORIES.md) and [docs/NEW_SITE_IMPLEMENTATION_TASKS.md](docs/NEW_SITE_IMPLEMENTATION_TASKS.md). The current site experience includes a starter-plan onboarding flow, a post-payment download/install step for the local agent, account management actions, and a future "HQ + Local Agent" plan preview that is disabled for regular users and available for system-admin testing.
 - The new React site/app is a separate frontend experience served by the standalone site backend in [src/backend/site](src/backend/site), while the daemon remains a separate runtime process and does not take on the React UI surface.
-- The shared SOP Data Manager UI/backend is intentionally reusable in two distinct modes: site-admin/root management for environment, database, store, and space administration; and per-user local workflows where the UI is pointed at an end-user daemon instance for local-hosted AI work.
+- The shared AI Studio UI/backend is intentionally reusable in two distinct modes: site-admin/root management for environment, database, store, and space administration; and per-user local workflows where the UI is pointed at an end-user daemon instance for local-hosted AI work.
 - The new site package should be container-friendly and runnable baremetal: one app process can serve the product site frontend, the shared SOP UI routes, and the shared sopbackend handlers needed for the admin experience. The headless daemon remains a separate runtime artifact for release-based deployment and Cloudflare/edge-facing hosting patterns.
 - The first implementation phase introduces a pluggable sopbackend user-store override. When the site backend wires it in, setup-wizard and shared auth flows persist their users through the site’s own account store instead of the default built-in store, while the default sopbackend/httpserver behavior remains unchanged when the override is not installed.
 - A detailed implementation blueprint for the blob-store, digest-to-Space, and expert-mode AI workflow is documented in [docs/SPACE_EXPERT_IMPLEMENTATION_GUIDE.md](docs/SPACE_EXPERT_IMPLEMENTATION_GUIDE.md).
-- The intended architecture uses four layers: the daemon and httpserver as the SOP Data Manager-compatible product apps, sopbackend as the shared application core, and a separate React site app served by the standalone site backend on dedicated routes. The new React site is a separate website experience for subscriptions and self-service onboarding, not a replacement for the Data Manager UI.
+- The intended architecture uses four layers: the daemon and httpserver as the AI Studio-compatible product apps, sopbackend as the shared application core, and a separate React site app served by the standalone site backend on dedicated routes. The new React site is a separate website experience for subscriptions and self-service onboarding, not a replacement for the Data Manager UI.
 - The new source-store flow uses side-car containers for folder and repository intake. These are lightweight, manifest-driven placeholders that are not part of the core ACID store graph; they exist to hold raw intake material until a later chat-driven digest action curates that content into a normal Space.
 - Hybrid LTM lifecycle maintenance is now implemented around a nightly wakeup servicer for cleanup and retention checks, a weekly compaction pass for archive/merge/prune work, and lightweight inline metadata updates on active usage paths so retrieval and write flows keep recency data fresh.
 - The lifecycle policy is intentionally conservative: active and warm memories stay in place, stale memories are marked archived during the nightly retention pass, and archived entries are pruned after a seven-day compaction window.
@@ -206,7 +206,7 @@ Best for developers who want to integrate SOP directly into their application co
 
 ## AI Copilot Configuration
 
-The **SOP Data Manager** includes an embedded AI Copilot powered by LLMs (like Google Gemini). To use the Copilot features, you must configure your API key.
+The **AI Studio** includes an embedded AI Copilot powered by LLMs (like Google Gemini). To use the Copilot features, you must configure your API key.
 
 ### Setting the API Key
 
@@ -246,9 +246,9 @@ SOP supports both code-first and data-first workflows.
 *   **Data-first**: Create stores and seed data in the Data Manager, then open those stores from application code.
 *   **Further Reading**: See [Workflows Guide](WORKFLOWS.md) for the detailed workflow patterns and deployment scenarios.
 
-## SOP Data Manager & AI Suite
+## AI Studio & AI Suite
 
-SOP allows you to interact with your data using the **SOP Data Manager**—a web-based console that includes a **SQL-like** query engine and an **AI Copilot**.
+SOP allows you to interact with your data using the **AI Studio**—a web-based console that includes a **SQL-like** query engine and an **AI Copilot**.
 
 ### Data Manager Capabilities
 *   **Visual Management**: Inspect B-Trees, manage Stores (Key-Value, Vector, Model), and explore the System DB.
@@ -264,7 +264,7 @@ There are two ways to model relationships so that AI Agents can intuitively navi
     *   **Pro Tip**: This enables **Bi-Directional Querying** (Parent $\leftrightarrow$ Child) without the need for redundant "Link Stores" or double-indexing. Query "User's Orders" or "Order's User" with equal efficiency.
 2.  **Link Store Pattern (Advanced)**: Use this for Many-to-Many relationships or complex graph traversals. Create a dedicated `Link Store` (e.g., `User_Orders`) to map IDs effectively without modifying the base tables.
 
-This structure allows AI Agents to navigate data using simple "Chain of Thought" reasoning steps (e.g., "First find the User ID, then look up their Orders") rather than struggling to generate complex SQL Joins. The SOP Data Manager provides first-class support for visualizing and debugging these relationships.
+This structure allows AI Agents to navigate data using simple "Chain of Thought" reasoning steps (e.g., "First find the User ID, then look up their Orders") rather than struggling to generate complex SQL Joins. The AI Studio provides first-class support for visualizing and debugging these relationships.
 *   **SQL Capabilities**: Perform familiar SQL operations directly on your NoSQL B-Trees:
     *   **SELECT / SCAN**: Filter data using rich criteria (`$gt`, `$regex`, `$in`).
     *   **JOIN**: Perform high-performance connections between stores (e.g., `Join 'Users' and 'Orders'`).
@@ -413,7 +413,7 @@ SOP is designed as a **Universal Data Platform**. Whether you are writing in Go,
 ### 1. The Universal Approach (JSONDB)
 This is the standard approach used by all language bindings (Python, Java, C#, Rust) and is also available to Go developers via the `jsondb` package.
 *   **Mechanism**: Data is serialized as JSON.
-*   **Benefit**: **Native Data Manager Support**. Since the format is standardized, the SOP Data Manager can automatically read, write, query, and visualize your B-Trees without any extra configuration.
+*   **Benefit**: **Native Data Manager Support**. Since the format is standardized, the AI Studio can automatically read, write, query, and visualize your B-Trees without any extra configuration.
 *   **Interoperability**: A B-Tree created in Python can be read by a Java app or managed by the Go-based Data Manager.
 
 ### 2. The Native Go Approach (Structs & Comparers)
@@ -433,7 +433,7 @@ Go developers often prefer storing native structs for maximum performance and ty
 
 The same managed workflow extends to **Spaces**, which are SOP's Knowledge Base assets.
 
-*   **Author in the UI**: Use the SOP Data Manager (Knowledge Base Studio) to create, curate, and refine your Spaces / Knowledge Bases without writing application code.
+*   **Author in the UI**: Use the AI Studio (Knowledge Base Studio) to create, curate, and refine your Spaces / Knowledge Bases without writing application code.
 *   **Consume in your app**: Once authored, open the same Space from your Go application with the `sop/ai` package and use the rich `KnowledgeBase` API to manage, search, and digest those authored assets at runtime.
 *   **Best practice**: Treat the Data Manager as the authoring and governance layer, and the `ai` package as the runtime layer that retrieves, filters, and reasons over the curated Space content inside your product.
 
@@ -442,7 +442,7 @@ Typical flow:
 2. Curate categories, summaries, and items in the UI.
 3. In your Go app, open the Space through `ai/database` / `ai/memory`, then use `SearchKeywords` or `SearchSemantics` to retrieve context for RAG, copilots, or domain tools.
 
-This is how developers can keep the human-friendly authoring experience in SOP Data Manager while still embedding the resulting Knowledge Base directly into their application logic.
+This is how developers can keep the human-friendly authoring experience in AI Studio while still embedding the resulting Knowledge Base directly into their application logic.
 
 ### Bridging the Gap: From Code-First to Managed (Safe & Zero-Downtime)
 
@@ -469,9 +469,9 @@ SOP B-Trees are **general-purpose** storage engines. Similar to a Model Store, t
 
 See the [API Cookbook](COOKBOOK.md#interoperability-note-go-vs-other-languages) for details.
 
-## SOP Data Manager
+## AI Studio
 
-SOP includes a **SOP Data Manager** that provides **full CRUD** capabilities for B-Tree stores. It supports inspection, search, and day-to-day data management through a web UI.
+SOP includes a **AI Studio** that provides **full CRUD** capabilities for B-Tree stores. It supports inspection, search, and day-to-day data management through a web UI.
 
 *   **Web UI**: A modern, responsive interface for browsing B-Trees, managing stores, and visualizing data.
 *   **AI Copilot**: Integrated directly into the UI, the AI Copilot can help you write queries (including SQL-like Joins), explain data structures, and even generate code snippets.
@@ -480,7 +480,7 @@ SOP includes a **SOP Data Manager** that provides **full CRUD** capabilities for
 *   **SystemDB**: View and manage internal system data, including registry information and transaction logs.
 *   **Scripts**: Record and replay complex data operations for testing or automation (now with Parameter support).
 
-To launch the SOP Data Manager:
+To launch the AI Studio:
 
 ### Development Mode (Offline / Dummy AI)
 By default, the server runs in development mode. The AI Copilot and Space Management tools will use dummy/mock AI providers. This is perfect for local testing without incurring API costs.
@@ -538,7 +538,7 @@ See [ai/README.md](ai/README.md) for a deep dive into the AI capabilities.
 - [SOP AI Kit](ai/README.md) - Includes Vector Store, RAG Agents, and **Scripts** (Record & Replay).
   - [AI Script Architecture](ai/AI_SCRIPT_ARCHITECTURE.md) - Deep dive into our scalable, functional AI runtime.
   - [Scripting Guide](ai/SCRIPTS.md) - Learn how to record and write scripts.
-- [SOP Data Manager](tools/httpserver/README.md) - SOP HTTP Server & Web UI for local and clustered management workflows.
+- [AI Studio](tools/httpserver/README.md) - SOP HTTP Server & Web UI for local and clustered management workflows.
 - [Changelog](CHANGELOG.md)
 - [Community & support](#community--support)
 - [Contributing & license](#contributing--license)

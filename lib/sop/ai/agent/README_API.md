@@ -50,7 +50,7 @@ Semantic knowledge bases with vector search:
 - Self-balancing, no optimization needed
 - **Mint → Refine → Vectorize** lifecycle
 
-### Visual Management: SOP Data Manager
+### Visual Management: AI Studio
 
 SOP includes a complete visual management suite with:
 - **Store Management**: Full CRUD, JSON editor, schema designer, bulk operations

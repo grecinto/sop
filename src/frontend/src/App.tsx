@@ -1702,7 +1702,7 @@ export default function App() {
                 <li><strong>One-click refinement controls—revalidate with stricter standards or try alternative knowledge bases instantly</strong></li>
                 <li>Bring your own API keys—we don't store conversation history, unlike other AI copilots</li>
                 <li>Lightweight real-time vector database that runs on your machine—no overnight optimization, no data center processing</li>
-                <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
+                <li>Semantic category trees organize millions of 'thoughts'(e.g. - code snippets when coding) for instant intelligent search</li>
                 <li>Privacy-first fleet learning—respects PII with automatic detection, privacy governance, and user opt-in/opt-out policies</li>
                 <li>Built-in auditable visualization—see exactly what's shared, when, and why with full transparency</li>
                 <li>Generate higher-quality code that follows architecture best practices and coding standards automatically</li>
@@ -2104,7 +2104,7 @@ This section explains the system design.
               <ul className="feature-list">
                 <li>Load knowledge bases to turn your LLM into a domain expert in any field</li>
                 <li>Real-time vector database on your machine—no overnight optimization or HQ processing</li>
-                <li>Semantic category trees organize millions of code snippets for instant intelligent search</li>
+                <li>Semantic category trees organize millions of 'thoughts'(e.g. - code snippets when coding) for instant intelligent search</li>
                 <li><strong>Automated KB Quality validation—expertise enforced during code generation, no manual refinement needed</strong></li>
                 <li><strong>Massive context savings—built-in validation eliminates costly back-and-forth iterations, reducing token usage by up to 70%</strong></li>
                 <li><strong>Expertise Dashboard—real-time visibility into which knowledge bases drive your AI sessions</strong></li>
@@ -2135,7 +2135,7 @@ This section explains the system design.
             <span className="preview-toggle-icon">{showProductPreview ? '▾' : '▸'}</span>
           </button>
           {showProductPreview ? (
-            <div className="preview-demo-shell" role="region" aria-label="SOP Data Manager preview">
+            <div className="preview-demo-shell" role="region" aria-label="AI Studio preview">
               <div className="preview-demo-frame">
                 <div className="preview-demo-sidebar">
                   <div className="preview-demo-chip active">Spaces</div>

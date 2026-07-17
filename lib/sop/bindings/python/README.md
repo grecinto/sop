@@ -123,7 +123,7 @@ If **clustered**, no worries, as SOP takes care of Redis-based coordination with
 
 ## AI Copilot & Scripts
 
-The SOP Data Manager includes a built-in **AI Copilot** that allows you to interact with your data using natural language and automate workflows using **Scripts**.
+The AI Studio includes a built-in **AI Copilot** that allows you to interact with your data using natural language and automate workflows using **Scripts**.
 
 ### 1. Launch the Assistant
 Start the server:
@@ -475,9 +475,9 @@ db = Database(
 )
 ```
 
-### SOP Data Manager Visibility
+### AI Studio Visibility
 
-To ensure your Python-created databases are visible and fully manageable in the **SOP Data Manager** (GUI), you should use the `setup` method during initialization. This persists your configuration options (like store paths, erasure coding settings, etc.) so the UI can discover them.
+To ensure your Python-created databases are visible and fully manageable in the **AI Studio** (GUI), you should use the `setup` method during initialization. This persists your configuration options (like store paths, erasure coding settings, etc.) so the UI can discover them.
 
 ```python
 # 1. Define Options

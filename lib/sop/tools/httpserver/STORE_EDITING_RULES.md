@@ -1,6 +1,6 @@
-# SOP Data Manager - Store Editing Rules
+# AI Studio - Store Editing Rules
 
-This document outlines the rules for editing store metadata and structure via the SOP Data Manager UI and API.
+This document outlines the rules for editing store metadata and structure via the AI Studio UI and API.
 
 ## 1. Empty Store (Count == 0)
 

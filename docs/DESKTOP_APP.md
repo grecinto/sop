@@ -194,7 +194,7 @@ Defined in `package.json`:
 ```json
 {
   "build": {
-    "appId": "com.sopcloud.ai-desktop",
+    "appId": "com.Northstar.ai-desktop",
     "productName": "SOP AI Desktop",
     "mac": {
       "category": "public.app-category.productivity",
@@ -233,7 +233,7 @@ Required for Gatekeeper approval:
 
 ```bash
 npx electron-notarize \
-  --bundle-id com.sopcloud.ai-desktop \
+  --bundle-id com.Northstar.ai-desktop \
   --apple-id your@email.com \
   --apple-id-password your-app-specific-password
 ```
@@ -368,4 +368,4 @@ For issues or questions:
 - Check [README.md](README.md) in electron-app directory
 - Review Electron logs in terminal
 - Check httpserver logs for backend issues
-- See main SOP Cloud repository for general support
+- See main Northstar repository for general support

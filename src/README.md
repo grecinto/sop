@@ -1,6 +1,6 @@
 # src
 
-This top-level source tree holds the new product-facing application layer for the SOP Cloud site.
+This top-level source tree holds the new product-facing application layer for the Northstar site.
 
 ## Layout
 
@@ -10,7 +10,7 @@ This top-level source tree holds the new product-facing application layer for th
   - site: standalone backend entrypoint for local site development
 - operations: deployment and operational scripts for the sop-cloud product experience
 
-The mature SOP Data Manager and daemon code remain in [lib/sop](../lib/sop) and are not part of this new product layer.
+The mature AI Studio and daemon code remain in [lib/sop](../lib/sop) and are not part of this new product layer.
 
 ## What belongs here
 
@@ -36,7 +36,7 @@ Keep shared platform behavior in [lib/sop](../lib/sop). Avoid adding new site-sp
 
 ## How to think about the two experiences
 
-- Mature tool stack: run the existing SOP Data Manager apps from [lib/sop](../lib/sop)
+- Mature tool stack: run the existing AI Studio apps from [lib/sop](../lib/sop)
   - httpserver for the Data Manager UI and management experience
   - sop-daemon for HQ/local RAG setup and runtime services
 - New site/app: use the standalone backend entrypoint in [src/backend/site](backend/site) for the React website experience; do not treat [lib/sop/tools/httpserver](../lib/sop/tools/httpserver) as the launcher for the product site UI.

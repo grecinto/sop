@@ -1,6 +1,6 @@
-# AI Copilot Architecture in SOP Data Manager
+# AI Copilot Architecture in AI Studio
 
-The **SOP Data Manager** includes a context-aware **AI Copilot** integrated with the database workflow.
+The **AI Studio** includes a context-aware **AI Copilot** integrated with the database workflow.
 
 The Copilot is implemented as a **ReAct (Reasoning + Acting) Agent** that uses local tools and runtime validation rather than a chat-only interface.
 
@@ -72,7 +72,7 @@ We invented a new primitive: **Agentic Data**.
 Instead of forcing data into rigid columns, Agentic Data is auto-managed by the AI. It is stored semantically (via `Concept`, `Category`, and `Description` embeddings) inside dedicated **Playbooks (Knowledge Bases)**. 
 - **AI-Native**: Because the data speaks the AI's language (natural language + embeddings), the LLM can seamlessly mine it, reason over it, and self-correct it without complex SQL joins.
 - **Configurable Personas**: Each Playbook is imbued with "AI-ness". When creating a Playbook, users define a **System Prompt** and an **Embedder**, dictating exactly *how* the AI should manage and draw persona from that specific data pool.
-- **UI Reflection**: In the SOP Data Manager, Agentic Data isn't displayed in a dense tabular grid like standard crud stores. It is rendered as a responsive Card UI, subtly reminding the user that this entity is an "AI Maintained" context module.
+- **UI Reflection**: In the AI Studio, Agentic Data isn't displayed in a dense tabular grid like standard crud stores. It is rendered as a responsive Card UI, subtly reminding the user that this entity is an "AI Maintained" context module.
 
 ### Persona Routing and Isolation
 
