@@ -1487,10 +1487,60 @@
         return tokens.every(token => !token.includes('://') && !token.includes('**') && !token.includes('[') && !token.includes(']') && !token.includes('{') && !token.includes('}') && !token.includes('(') && !token.includes(')') && !token.includes(':') && !token.includes('/') && !token.includes('\\') && !token.includes(',') && !token.includes('|') && !token.includes('&'));
     }
 
+    function buildLocalCommandOutputHtml(text) {
+        const normalized = String(text ?? '');
+        if (!normalized) {
+            return '';
+        }
+
+        const match = normalized.match(/^🛠️ Result from local_command:\s*```(?:\r?\n)?([\s\S]*?)```$/);
+        if (!match) {
+            return '';
+        }
+
+        const body = match[1].trim();
+        if (!body) {
+            return '';
+        }
+
+        const lines = body.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+        if (lines.length === 0) {
+            return '';
+        }
+
+        const items = lines.flatMap(line => line.split(/\s+/).filter(Boolean));
+        if (items.length < 4) {
+            return '';
+        }
+
+        const maxItemsPerColumn = Math.ceil(items.length / 2);
+        const leftColumn = items.slice(0, maxItemsPerColumn);
+        const rightColumn = items.slice(maxItemsPerColumn);
+        const columnWidth = Math.max(1, Math.ceil(100 / 2));
+
+        const rows = [];
+        const rowCount = Math.max(leftColumn.length, rightColumn.length);
+        for (let index = 0; index < rowCount; index += 1) {
+            const left = leftColumn[index] || '';
+            const right = rightColumn[index] || '';
+            rows.push(`<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; align-items: start; margin-bottom: 4px;">` +
+                `<div style="font-family: var(--chat-font-family); color: var(--text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(left)}</div>` +
+                `<div style="font-family: var(--chat-font-family); color: var(--text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(right)}</div>` +
+                `</div>`);
+        }
+
+        return `<div class="chat-command-output-grid" style="display: flex; flex-direction: column; min-width: 0;">${rows.join('')}</div>`;
+    }
+
     function formatDisplayText(text) {
         const normalized = String(text ?? '');
         if (!normalized) {
             return '';
+        }
+
+        const twoColumnHtml = buildLocalCommandOutputHtml(normalized);
+        if (twoColumnHtml) {
+            return twoColumnHtml;
         }
 
         const match = normalized.match(/^🛠️ Result from local_command:\s*```(?:\r?\n)?([\s\S]*?)```$/);
@@ -2033,6 +2083,7 @@
         input.value = '';
         input.style.height = '40px'; 
         if (sendBtn) sendBtn.disabled = true;
+        scrollChatHistoryToBottom();
         
         // Show Loading
         const loadingId = appendChatMessage('ai', 'Thinking...');

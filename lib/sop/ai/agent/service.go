@@ -2001,20 +2001,6 @@ func (s *Service) ask(ctx context.Context, req AskRequest) (AskResponse, error) 
 	// /list_directory resolve through the shared executor instead of failing as unknown tools.
 	s.registerTools()
 
-	// 5. Handle direct slash commands before any pipeline or LLM work so tools like
-	// /list_directory run via the shared executor instead of failing in a configured pipeline.
-	if trimmed := strings.TrimSpace(query); strings.HasPrefix(trimmed, "/") {
-		if engineResp, handled, err := handleDirectSlashReasoningRequest(ctx, ai.ReasoningRequest{
-			UserQuery: trimmed,
-			Executor:  req.Executor,
-		}); handled {
-			if err != nil {
-				return AskResponse{}, err
-			}
-			return AskResponse{FinalText: engineResp.FinalText, UpdatedSession: req.Session, ToolCalls: engineResp.ToolCalls}, nil
-		}
-	}
-
 	// 6. Perform topic routing and short-term memory thread promotion/initialization
 	topicResult := s.performTopicRoutingWithRequest(ctx, query, req.Session)
 

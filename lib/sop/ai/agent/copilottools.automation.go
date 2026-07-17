@@ -9,7 +9,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sharedcode/sop/ai"
 )
@@ -50,16 +52,99 @@ func DefaultAutomationPolicy() AutomationPolicy {
 	}
 }
 
+// LocalCommandRequest specifies parameters for executing local commands with optional
+// real-time streaming and stdin support.
+//
+// Basic Usage:
+//
+//	req := LocalCommandRequest{
+//	    Command: "ls -la",
+//	    WorkingDir: "/home/user",
+//	    TimeoutSeconds: 30,
+//	}
+//
+// Real-Time Streaming (Phase 1 Enhancement):
+//
+//	req := LocalCommandRequest{
+//	    Command: "go test ./...",
+//	    StreamStdout: func(line string) {
+//	        // Receives each line as it's produced
+//	        fmt.Print(line)
+//	    },
+//	    StreamStderr: func(line string) {
+//	        // Receives errors separately with ⚠️ prefix
+//	        fmt.Printf("ERROR: %s", line)
+//	    },
+//	}
+//
+// Interactive Commands with Stdin:
+//
+//	req := LocalCommandRequest{
+//	    Command: "cat",
+//	    Stdin: "hello from AI\n",
+//	    StreamStdout: func(line string) {
+//	        fmt.Println(line)  // Receives "hello from AI"
+//	    },
+//	}
+//
+// Completion Callback:
+//
+//	req := LocalCommandRequest{
+//	    Command: "npm install",
+//	    OnComplete: func(stdout, stderr string, exitCode int) {
+//	        if exitCode == 0 {
+//	            log.Println("Success!")
+//	        } else {
+//	            log.Printf("Failed with code %d", exitCode)
+//	        }
+//	    },
+//	}
+//
+// Backward Compatibility:
+// StreamOutput callback is deprecated but still supported. If both StreamOutput and
+// StreamStdout/StreamStderr are provided, the new callbacks take precedence.
 type LocalCommandRequest struct {
-	Command        string
-	Reasoning      string
-	WorkingDir     string
-	TimeoutSeconds int
-	SessionID      string
-	StreamOutput   func(string)
+	Command        string // Command to execute (e.g., "ls -la", "npm install")
+	Reasoning      string // Optional: Explanation of why this command is being run
+	WorkingDir     string // Working directory for command execution
+	TimeoutSeconds int    // Maximum execution time (default: 600s)
+	SessionID      string // Session ID for persistent working directory across commands
+
+	// Deprecated: Use StreamStdout/StreamStderr for real-time streaming
+	StreamOutput func(string)
+
+	// Phase 1 Enhancements: Real-Time I/O
+	Stdin        string                                    // Input to send to command's stdin
+	StreamStdout func(string)                              // Called for each stdout line in real-time
+	StreamStderr func(string)                              // Called for each stderr line in real-time
+	OnComplete   func(stdout, stderr string, exitCode int) // Called when command finishes
+
+	// Phase 2 Enhancements: Process Control
+	ProcessGroup   bool          // Create new process group for signal isolation
+	OnProcessStart func(pid int) // Called when process starts with PID
+
+	// Phase 3 Enhancements: Background Jobs
+	Background bool   // Run in background, return immediately with JobID
+	JobID      string // Optional: Specify custom job ID (auto-generated if empty)
+}
+
+// BackgroundJob represents a command running in background
+type BackgroundJob struct {
+	JobID     string
+	Command   string
+	PID       int
+	StartTime time.Time
+	Stdout    strings.Builder
+	Stderr    strings.Builder
+	ExitCode  *int // nil if still running
+	Error     string
+	mu        sync.Mutex
 }
 
 var localCommandExecutor func(ctx context.Context, req LocalCommandRequest) (string, error)
+var localSendSignalToProcess func(pid int, signal os.Signal) error
+var localGetBackgroundJob func(jobID string) (*BackgroundJob, error)
+var localKillBackgroundJob func(jobID string) error
 var localDesktopAutomationEnabled atomic.Bool
 var automationPolicy atomic.Value
 
@@ -71,12 +156,80 @@ func SetLocalCommandExecutor(fn func(ctx context.Context, req LocalCommandReques
 	localCommandExecutor = fn
 }
 
+// Phase 2: Signal control
+func SetLocalSendSignalToProcess(fn func(pid int, signal os.Signal) error) {
+	localSendSignalToProcess = fn
+}
+
+// Phase 3: Background job control
+func SetLocalGetBackgroundJob(fn func(jobID string) (*BackgroundJob, error)) {
+	localGetBackgroundJob = fn
+}
+
+func SetLocalKillBackgroundJob(fn func(jobID string) error) {
+	localKillBackgroundJob = fn
+}
+
 func SetLocalDesktopAutomationEnabled(enabled bool) {
 	localDesktopAutomationEnabled.Store(enabled)
 }
 
 func SetAutomationPolicy(policy AutomationPolicy) {
 	automationPolicy.Store(policy)
+}
+
+// formatCommandOutputForDisplay formats command output for better readability.
+// For list-like outputs (e.g., ls), formats into two aligned columns.
+func formatCommandOutputForDisplay(command, output string) string {
+	// Only format if it's a list command (ls, dir, etc.) and output looks like a simple list
+	cmdLower := strings.ToLower(strings.TrimSpace(command))
+	isListCommand := strings.HasPrefix(cmdLower, "ls") ||
+		strings.HasPrefix(cmdLower, "dir") ||
+		strings.HasPrefix(cmdLower, "ll")
+
+	if !isListCommand {
+		return output
+	}
+
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+
+	// Need at least 4 items to make two columns worthwhile
+	if len(lines) < 4 {
+		return output
+	}
+
+	// Check if lines are simple (no tabs, not overly complex formatting)
+	for _, line := range lines {
+		// Skip already formatted output (with multiple spaces, tabs, or very long lines)
+		if strings.Contains(line, "\t") || strings.Contains(line, "  ") || len(line) > 50 {
+			return output
+		}
+	}
+
+	// Format into two columns
+	var sb strings.Builder
+	maxLen := 0
+	for _, line := range lines {
+		if len(line) > maxLen {
+			maxLen = len(line)
+		}
+	}
+
+	// Add padding for column alignment
+	colWidth := maxLen + 4
+
+	for i := 0; i < len(lines); i += 2 {
+		left := lines[i]
+		if i+1 < len(lines) {
+			right := lines[i+1]
+			sb.WriteString(fmt.Sprintf("%-*s  %s\n", colWidth, left, right))
+		} else {
+			// Odd number of items, last one goes on its own line
+			sb.WriteString(left + "\n")
+		}
+	}
+
+	return sb.String()
 }
 
 func GetAutomationPolicy() AutomationPolicy {
@@ -178,7 +331,7 @@ func (p AutomationPolicy) validateRequest(req LocalCommandRequest) error {
 	return nil
 }
 
-const executeLocalCommandArgsSchema = `{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute on the user's local machine after approval."},"reasoning":{"type":"string","description":"Short explanation shown to the user for why this local command is needed."},"working_dir":{"type":"string","description":"Optional working directory for repo-aware tasks such as code generation, tests, and debugging."},"timeout_seconds":{"type":"integer","description":"Optional timeout in seconds for long-running commands such as builds or tests."}},"required":["command"]}`
+const executeLocalCommandArgsSchema = `{"type":"object","properties":{"command":{"type":"string","description":"Shell command, shell script, or runnable executable path to execute on the user's local machine after approval."},"reasoning":{"type":"string","description":"Short explanation shown to the user for why this local command is needed."},"working_dir":{"type":"string","description":"Optional working directory for repo-aware tasks such as code generation, tests, and debugging."},"timeout_seconds":{"type":"integer","description":"Optional timeout in seconds for long-running commands such as builds or tests."}},"required":["command"]}`
 
 const searchRepoFilesArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository or directory path to inspect."},"pattern":{"type":"string","description":"Optional filename pattern such as *.go or *.md."},"max_results":{"type":"integer","description":"Optional maximum number of files to return."}},"required":["path"]}`
 
@@ -1461,6 +1614,7 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 	if localCommandExecutor != nil {
 		result, err := localCommandExecutor(ctx, request)
 		if err == nil {
+			// Return raw result - let the frontend renderer handle display formatting
 			emitAutomationToolResult(ctx, "local_command", result)
 		}
 		return result, err

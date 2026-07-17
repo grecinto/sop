@@ -182,6 +182,21 @@ func TestChatRuntimeSelectionKeepsFormatSelectorVisibleForLocalRuntime(t *testin
 	}
 }
 
+func TestChatLocalCommandOutputUsesTwoColumnLayout(t *testing.T) {
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "buildLocalCommandOutputHtml") {
+		t.Fatalf("expected local command renderer to expose a two-column helper in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "chat-command-output-grid") {
+		t.Fatalf("expected local command output to use a dedicated grid container in %s", scriptsPath)
+	}
+}
+
 func TestChatComposerSupportsImageAttachments(t *testing.T) {
 	modalPath := templatePath("modals.html")
 	modalData, err := os.ReadFile(modalPath)

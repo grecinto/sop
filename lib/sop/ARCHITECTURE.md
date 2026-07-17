@@ -620,6 +620,723 @@ sequenceDiagram
     Session-->>User: next Ask starts from compact continuity
 ```
 
+### 9. Capability Prefix Routing
+
+SOP's capability system supports **prefix-based command routing** for low-latency, deterministic execution that bypasses the normal ReAct reasoning loop.
+
+#### Architecture Overview
+
+Prefix routing extends the existing special routing system (which handles `omni:`, `sop:` for KB navigation) to allow capabilities to register command prefixes:
+
+```
+User Query Flow:
+  "/cmd ls -la"  →  Agent.handleDirectToolInvocation()
+                 →  Registry.TryPrefixRouting()  [O(1) lookup + longest-prefix-first matching]
+                 →  PrefixHandler.HandlePrefix(ctx, "/cmd ls -la", "ls -la")
+                 →  Desktop Capability executes command
+                 →  Immediate result (bypass ReAct engine)
+```
+
+**Design Rationale:**
+- **Fast Path for Deterministic Commands**: Commands like `/cmd ls`, `/shell pwd`, `/exec script.sh` have no ambiguity—they should execute immediately without LLM reasoning overhead.
+- **Capability Extensibility**: Any capability can implement `PrefixHandler` interface to register custom prefixes without modifying core routing logic.
+- **Architectural Consistency**: Follows the same pattern as existing special routing (`omni:`, `sop:`), maintaining codebase coherence.
+
+#### PrefixHandler Interface
+
+Capabilities implement the `PrefixHandler` interface to enable prefix routing:
+
+```go
+type PrefixHandler interface {
+    Capability
+    
+    // Register command prefixes this capability handles
+    GetHandledPrefixes() []string
+    
+    // Execute the command after prefix detection
+    HandlePrefix(ctx context.Context, query, normalizedCommand string) (string, error)
+}
+```
+
+**Example: Desktop Automation Capability**
+
+```go
+func (d *DesktopCapability) GetHandledPrefixes() []string {
+    return []string{"/c", "/cmd", "/shell", "/exec"}
+}
+
+func (d *DesktopCapability) HandlePrefix(ctx context.Context, query, normalized string) (string, error) {
+    if normalized == "" {
+        return "", fmt.Errorf("empty command")
+    }
+    // Execute via local command executor (daemon mode)
+    return d.commandExecutor(ctx, normalized)
+}
+```
+
+#### Prefix Matching Rules
+
+1. **Longest-Prefix-First**: If both `/c` and `/cmd` are registered, `/cmd ls` matches `/cmd` (not `/c`)
+2. **Separator Boundary**: `/cmd ls` matches, `/cmdline` does NOT match (prevents false positives)
+3. **Flexible Separators**: Space (` `), colon (`:`), tab (`\t`), newline (`\n`) all work
+4. **Empty Command Detection**: `/cmd`, `/cmd `, `/cmd:` return helpful error: `"empty command after prefix \"/cmd\": usage example: /cmd ls"`
+
+#### Registry Behavior
+
+- **Conflict Detection**: If multiple capabilities register the same prefix, last-registered-wins with warning log:
+  ```
+  WARN Prefix conflict detected prefix=/cmd existing_capability=cap1 new_capability=cap2 action=overwriting
+  ```
+- **Empty Prefix Rejection**: Empty strings are silently ignored during registration with warning log
+- **O(1) Lookup**: `map[string]PrefixHandler` provides constant-time prefix detection
+- **Nil Safety**: Nil registry returns `(false, "", nil)` gracefully
+
+#### Integration with Special Routing
+
+Prefix routing coexists with existing special routing mechanisms:
+
+```go
+func (a *CopilotAgent) handleDirectToolInvocation(ctx, query, gen) (bool, string, error) {
+    // 1. Try capability prefix routing (e.g., /cmd, /shell, /exec)
+    if a.capabilityRegistry != nil {
+        if handled, result, err := a.capabilityRegistry.TryPrefixRouting(ctx, query); handled {
+            return true, result, err
+        }
+    }
+    
+    // 2. Fall back to legacy slash command handler
+    if strings.HasPrefix(query, "/") {
+        return a.handleSlashCommand(ctx, query, gen)
+    }
+    
+    return false, "", nil
+}
+```
+
+**Execution Flow:**
+1. User query enters `Agent.Ask()`
+2. Before ReAct engine starts, `handleDirectToolInvocation()` checks for prefix match
+3. If matched, capability executes immediately and returns result
+4. If not matched, query continues to normal routing (Gate 1/2/3 → ReAct loop)
+
+#### Extending with New Capabilities
+
+To add custom command prefixes:
+
+1. **Implement PrefixHandler** in your capability:
+   ```go
+   func (c *WebCapability) GetHandledPrefixes() []string {
+       return []string{"/web", "/fetch", "/curl"}
+   }
+   
+   func (c *WebCapability) HandlePrefix(ctx, query, cmd string) (string, error) {
+       return c.fetchURL(ctx, cmd)  // Direct HTTP fetch
+   }
+   ```
+
+2. **Register capability** with the registry:
+   ```go
+   registry := capabilities.NewRegistry()
+   registry.Register(webCapability)  // Prefixes auto-registered
+   ```
+
+3. **Dependency Injection** (if needed):
+   ```go
+   // In Agent.ensureCapabilityRegistry():
+   if webCap, ok := cap.(*WebCapability); ok {
+       webCap.SetHTTPClient(a.httpClient)
+   }
+   ```
+
+#### Best Practices
+
+- **Short, Memorable Prefixes**: Use `/c` instead of `/command` for better UX
+- **Alias Support**: Register multiple prefixes for same handler (`["/cmd", "/shell", "/exec"]`)
+- **Validation First**: Check `normalizedCommand` before execution to return clear errors
+- **Avoid Conflicts**: Coordinate prefix namespaces across capabilities
+- **Log Liberally**: Use structured logging for prefix detection, conflicts, and execution
+- **Test Edge Cases**: Empty commands, exact matches, overlapping prefixes, separator variations
+
+#### Security Considerations
+
+- **Daemon Mode Requirement**: Desktop command execution requires daemon mode (local agent)
+- **Command Validation**: Capabilities should validate and sanitize commands before execution
+- **Entitlement Checks**: Prefix routing respects capability entitlements (Premium tier, enabled status)
+- **Context Cancellation**: Handlers must respect `ctx.Done()` for request cancellation
+
+### 10. Real-Time Command I/O (Phase 1 Enhancements)
+
+The command execution system supports real-time streaming of stdout/stderr and interactive stdin support, creating an "AI super terminal" experience in the floater window.
+
+#### Architecture Overview
+
+Instead of buffering command output until completion, the system uses pipes and goroutines for real-time streaming:
+
+```
+Command Execution Flow:
+  User Query → Desktop Capability → Daemon runLocalCommand()
+  
+  Daemon creates:
+    - cmd.StdoutPipe() → Scanner goroutine → StreamStdout callback
+    - cmd.StderrPipe() → Scanner goroutine → StreamStderr callback  
+    - cmd.StdinPipe()  → Write stdin data before cmd.Start()
+    
+  Result:
+    - Real-time output appears as command runs (not after completion)
+    - Interactive commands can receive input via stdin
+    - stderr visually distinguished with "⚠️" prefix
+```
+
+**Benefits:**
+- **Super Terminal Feeling**: Output streams instantly like a real terminal
+- **Long-Running Commands**: See progress from `npm install`, `go test`, etc.
+- **Interactive Support**: Commands like `cat`, `python`, interactive scripts work
+- **Better Debugging**: stderr separated from stdout for clearer error visibility
+
+#### LocalCommandRequest Structure
+
+Enhanced with streaming callbacks and stdin support:
+
+```go
+type LocalCommandRequest struct {
+    Command        string
+    Reasoning      string
+    WorkingDir     string
+    TimeoutSeconds int
+    SessionID      string
+    
+    // Legacy (deprecated)
+    StreamOutput   func(string)  // Use StreamStdout/StreamStderr instead
+    
+    // Phase 1 Enhancements
+    Stdin          string                          // Input to send to command
+    StreamStdout   func(string)                    // Real-time stdout streaming
+    StreamStderr   func(string)                    // Real-time stderr streaming
+    OnComplete     func(stdout, stderr string, exitCode int) // Called when finished
+}
+```
+
+#### ExecuteResponse Structure
+
+Enhanced with streaming indicator:
+
+```go
+type ExecuteResponse struct {
+    Stdout             string  `json:"stdout"`
+    Stderr             string  `json:"stderr"`
+    ExitCode           int     `json:"exit_code"`
+    Error              string  `json:"error,omitempty"`
+    LaunchedInTerminal bool    `json:"launched_in_terminal,omitempty"`
+    Suggestion         string  `json:"suggestion,omitempty"`
+    Streaming          bool    `json:"streaming,omitempty"` // true if output streamed separately
+}
+```
+
+#### Implementation Details
+
+**Real-Time Stdout Streaming:**
+```go
+// Create pipe and start scanner goroutine
+stdoutPipe, _ := cmd.StdoutPipe()
+go func() {
+    scanner := bufio.NewScanner(stdoutPipe)
+    for scanner.Scan() {
+        line := scanner.Text()
+        stdoutBuf.WriteString(line + "\n")
+        
+        // Real-time callback
+        if req.StreamStdout != nil {
+            req.StreamStdout(line + "\n")
+        }
+        
+        // Legacy event streamer
+        if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok {
+            streamer("content", line+"\n")
+        }
+    }
+}()
+```
+
+**Real-Time Stderr Streaming with Visual Distinction:**
+```go
+stderrPipe, _ := cmd.StderrPipe()
+go func() {
+    scanner := bufio.NewScanner(stderrPipe)
+    for scanner.Scan() {
+        line := scanner.Text()
+        stderrBuf.WriteString(line + "\n")
+        
+        if req.StreamStderr != nil {
+            req.StreamStderr(line + "\n")
+        }
+        
+        // Prefix stderr with ⚠️ for visibility
+        if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok {
+            streamer("content", "⚠️ "+line+"\n")
+        }
+    }
+}()
+```
+
+**Stdin Support for Interactive Commands:**
+```go
+// Setup stdin if provided
+if req.Stdin != "" {
+    cmd.Stdin = strings.NewReader(req.Stdin)
+}
+
+// Command execution
+cmd.Start()  // Non-blocking start
+wg.Wait()    // Wait for output goroutines
+cmd.Wait()   // Wait for process exit
+```
+
+#### Usage Examples
+
+**Example 1: Long-Running Command with Real-Time Output**
+```go
+req := LocalCommandRequest{
+    Command: "go test ./... -v",
+    StreamStdout: func(line string) {
+        // Display immediately in UI
+        fmt.Print(line)
+    },
+    StreamStderr: func(line string) {
+        // Show errors in red/with warning
+        fmt.Printf("⚠️ %s", line)
+    },
+}
+```
+
+**Example 2: Interactive Command with Stdin**
+```go
+req := LocalCommandRequest{
+    Command: "cat",
+    Stdin:   "hello from AI\n",
+    StreamStdout: func(line string) {
+        fmt.Println("Cat echoed:", line)
+    },
+}
+// Output: "Cat echoed: hello from AI"
+```
+
+**Example 3: Completion Callback**
+```go
+req := LocalCommandRequest{
+    Command: "npm install",
+    OnComplete: func(stdout, stderr string, exitCode int) {
+        if exitCode == 0 {
+            fmt.Println("Installation successful!")
+        } else {
+            fmt.Printf("Failed with exit code %d\n", exitCode)
+        }
+    },
+}
+```
+
+#### Backward Compatibility
+
+The legacy `StreamOutput` callback is preserved for existing code:
+
+```go
+// Old code (still works)
+req := LocalCommandRequest{
+    Command: "ls",
+    StreamOutput: func(result string) {
+        fmt.Println(result)  // Called after completion
+    },
+}
+
+// New code (real-time streaming)
+req := LocalCommandRequest{
+    Command: "ls",
+    StreamStdout: func(line string) {
+        fmt.Print(line)  // Called as output arrives
+    },
+}
+```
+
+If `StreamOutput` is set but `StreamStdout`/`StreamStderr` are not, the system falls back to legacy behavior.
+
+#### Testing
+
+Comprehensive tests verify streaming behavior:
+
+- **TestRunLocalCommandWithStdoutStreaming**: Verifies real-time stdout callbacks
+- **TestRunLocalCommandWithStderrStreaming**: Verifies real-time stderr callbacks  
+- **TestRunLocalCommandWithStdinInput**: Verifies stdin pipe support
+- **TestRunLocalCommandWithOnCompleteCallback**: Verifies completion callback
+
+All tests pass, demonstrating:
+- Multiple lines streamed separately (not buffered)
+- stderr/stdout properly separated
+- stdin data reaches command
+- Callbacks invoked with correct data
+
+#### Floater Window Integration
+
+The streaming architecture creates an "AI super terminal" experience:
+
+**Dual-Mode Operation:**
+1. **LLM Mode**: Agent reasons about commands, suggests fixes, explains errors
+2. **Direct Mode**: Prefix commands (`/cmd`, `/shell`) execute with real-time output
+
+**User Experience:**
+- Type `/cmd npm install` → See progress bars, package names in real-time
+- Type `/shell python script.py` → See stdout/stderr as script runs
+- AI suggests fixes → User accepts → Command executes with live feedback
+
+**Killer Use Cases:**
+- **Development Workflows**: `/cmd go test ./...` shows test progress live
+- **Package Management**: `/cmd npm install` streams dependency installation
+- **Script Debugging**: `/shell python debug.py` shows print statements immediately
+- **Interactive Commands**: AI can send stdin to commands for automation
+
+#### Future Enhancements (Phase 2+)
+
+Planned improvements for complete terminal parity:
+
+- **Process Control**: Send signals (Ctrl+C = SIGINT, Ctrl+Z = SIGTSTP)
+- **TTY/PTY Support**: Proper terminal emulation for ncurses apps
+- **Line Editing**: Readline-style input with history, tab completion
+- **Async Background Jobs**: Run commands in background, query status later
+- **Terminal Multiplexing**: Multiple concurrent command sessions
+
+### 11. Process Control & Signal Management (Phase 2)
+
+Phase 2 adds process-level control for managing running commands, including PID capture, signal sending, and process group management.
+
+#### Process Group Isolation
+
+Commands can be launched in their own process group for signal isolation:
+
+```go
+req := LocalCommandRequest{
+    Command:      "long-running-process",
+    ProcessGroup: true,  // Create new process group
+}
+```
+
+**Benefits:**
+- **Signal Isolation**: Signals sent to parent don't affect child
+- **Job Control**: Easier to manage related processes
+- **Clean Termination**: Kill entire process tree with one signal
+
+**Platform Support:**
+- Unix/Linux/macOS: Uses `setpgid` system call
+- Windows: Not supported (flag ignored)
+
+#### PID Capture & Callbacks
+
+Get the process ID when a command starts:
+
+```go
+req := LocalCommandRequest{
+    Command: "sleep 60",
+    OnProcessStart: func(pid int) {
+        log.Printf("Process started with PID: %d", pid)
+        // Store PID for later signal control
+    },
+}
+```
+
+**ExecuteResponse includes PID:**
+```go
+type ExecuteResponse struct {
+    Stdout   string
+    Stderr   string
+    ExitCode int
+    PID      int  // Process ID for signal control
+}
+```
+
+#### Signal Sending
+
+Send signals to running processes by PID:
+
+```go
+// Send SIGTERM for graceful shutdown
+err := sendSignalToProcess(pid, syscall.SIGTERM)
+
+// Send SIGINT (Ctrl+C)
+err := sendSignalToProcess(pid, syscall.SIGINT)
+
+// Force kill with SIGKILL
+err := sendSignalToProcess(pid, syscall.SIGKILL)
+```
+
+**Common Use Cases:**
+- **Graceful Shutdown**: SIGTERM → wait → SIGKILL if needed
+- **Interrupt**: SIGINT for user cancellation (Ctrl+C)
+- **Pause/Resume**: SIGTSTP/SIGCONT for job control
+
+**Agent Integration:**
+```go
+sharedagent.SetLocalSendSignalToProcess(sendSignalToProcess)
+
+// Agent can now send signals via daemon
+```
+
+#### Example: Timeout with Graceful Shutdown
+
+```go
+req := LocalCommandRequest{
+    Command:        "long-server-process",
+    TimeoutSeconds: 30,
+    OnProcessStart: func(pid int) {
+        // After timeout, gracefully shut down
+        go func() {
+            time.Sleep(30 * time.Second)
+            sendSignalToProcess(pid, syscall.SIGTERM)
+            time.Sleep(5 * time.Second)
+            sendSignalToProcess(pid, syscall.SIGKILL)
+        }()
+    },
+}
+```
+
+### 12. Background Jobs & Async Execution (Phase 3)
+
+Phase 3 enables commands to run asynchronously in the background, returning immediately while the job continues execution.
+
+#### Architecture Overview
+
+Background jobs run in separate goroutines with independent context:
+
+```
+User Request:
+  LocalCommandRequest{Background: true}
+  
+Daemon:
+  1. Generate JobID (or use custom ID)
+  2. Create background job with cancel context
+  3. Launch runBackgroundJob() in goroutine
+  4. Return immediately with JobID
+  
+Later:
+  - Query job status: getBackgroundJob(jobID)
+  - Kill job: killBackgroundJob(jobID)
+  - Jobs complete asynchronously
+```
+
+**Key Design:**
+- Jobs use `context.Background()` with cancel, not request timeout
+- Jobs survive request lifecycle (daemon keeps them)
+- Jobs can be queried/killed anytime before completion
+
+#### Launching Background Jobs
+
+```go
+req := LocalCommandRequest{
+    Command:    "npm run build",
+    Background: true,
+    StreamStdout: func(line string) {
+        log.Println(line)  // Still streams in real-time
+    },
+    OnComplete: func(stdout, stderr string, exitCode int) {
+        log.Println("Build finished:", exitCode)
+    },
+}
+
+result, _ := executor(ctx, req)
+var resp ExecuteResponse
+json.Unmarshal([]byte(result), &resp)
+
+fmt.Printf("Job launched: %s\n", resp.JobID)
+// Job continues running...
+```
+
+**Response Structure:**
+```go
+type ExecuteResponse struct {
+    Background bool   `json:"background"`
+    JobID      string `json:"job_id"`
+    // Stdout/Stderr empty until job completes
+}
+```
+
+#### Custom Job IDs
+
+Specify your own job ID for tracking:
+
+```go
+req := LocalCommandRequest{
+    Command:    "long-task",
+    Background: true,
+    JobID:      "build-2024-01-15-abc123",  // Custom ID
+}
+```
+
+**Use Cases:**
+- Associate jobs with user sessions
+- Link jobs to database records
+- Implement idempotency (check if job exists before launching)
+
+#### Querying Job Status
+
+Check if a job is running or get its output:
+
+```go
+job, err := getBackgroundJob("job-123")
+if err != nil {
+    log.Println("Job not found")
+}
+
+job.mu.Lock()
+defer job.mu.Unlock()
+
+if job.done {
+    fmt.Printf("Job completed with exit code: %d\n", *job.exitCode)
+    fmt.Printf("Output: %s\n", job.stdout.String())
+} else {
+    fmt.Printf("Job still running (PID: %d)\n", job.pid)
+}
+```
+
+**BackgroundJob Structure:**
+```go
+type backgroundJob struct {
+    jobID      string
+    command    string
+    pid        int
+    startTime  time.Time
+    stdout     strings.Builder  // Accumulated output
+    stderr     strings.Builder
+    exitCode   *int              // nil if running
+    error      string
+    done       bool
+}
+```
+
+#### Killing Background Jobs
+
+Terminate a running job:
+
+```go
+err := killBackgroundJob("job-123")
+if err != nil {
+    log.Println("Failed to kill:", err)
+}
+```
+
+**Termination Process:**
+1. Cancel job context
+2. Send SIGTERM to process
+3. If SIGTERM fails, send SIGKILL (force)
+
+**Error Cases:**
+- Job not found: Returns error
+- Job already completed: Returns error
+- Process already exited: No-op
+
+#### Agent Integration
+
+Wire up background job APIs in daemon:
+
+```go
+sharedagent.SetLocalGetBackgroundJob(func(jobID string) (*sharedagent.BackgroundJob, error) {
+    job, ok := getBackgroundJob(jobID)
+    if !ok {
+        return nil, fmt.Errorf("job not found")
+    }
+    
+    job.mu.Lock()
+    defer job.mu.Unlock()
+    
+    return &sharedagent.BackgroundJob{
+        JobID:     job.jobID,
+        Command:   job.command,
+        PID:       job.pid,
+        StartTime: job.startTime,
+        Stdout:    job.stdout,
+        Stderr:    job.stderr,
+        ExitCode:  job.exitCode,
+        Error:     job.error,
+    }, nil
+})
+
+sharedagent.SetLocalKillBackgroundJob(killBackgroundJob)
+```
+
+#### Usage Patterns
+
+**Pattern 1: Fire-and-Forget**
+```go
+req := LocalCommandRequest{
+    Command:    "deploy-to-prod.sh",
+    Background: true,
+}
+// Returns immediately, deployment continues
+```
+
+**Pattern 2: Poll for Completion**
+```go
+resp := launchBackgroundJob(req)
+
+for {
+    job, _ := getBackgroundJob(resp.JobID)
+    job.mu.Lock()
+    if job.done {
+        job.mu.Unlock()
+        break
+    }
+    job.mu.Unlock()
+    time.Sleep(1 * time.Second)
+}
+```
+
+**Pattern 3: Callback-Based**
+```go
+req := LocalCommandRequest{
+    Command:    "generate-report.py",
+    Background: true,
+    OnComplete: func(stdout, stderr string, exitCode int) {
+        if exitCode == 0 {
+            sendEmail("Report ready: " + stdout)
+        }
+    },
+}
+```
+
+**Pattern 4: Long-Running with Monitoring**
+```go
+req := LocalCommandRequest{
+    Command:    "stream-logs",
+    Background: true,
+    StreamStdout: func(line string) {
+        if strings.Contains(line, "ERROR") {
+            alert("Service error: " + line)
+        }
+    },
+}
+
+// Later, if needed:
+killBackgroundJob(resp.JobID)
+```
+
+#### Best Practices
+
+- **Timeout Management**: Background jobs ignore request timeout; use OnComplete for cleanup
+- **Resource Limits**: Monitor number of concurrent background jobs
+- **Job Cleanup**: Periodically clean up completed jobs from memory
+- **Error Handling**: Always check job.error and job.exitCode before using output
+- **Concurrency**: Lock job.mu before accessing job state
+
+#### Testing
+
+Comprehensive tests verify background job behavior:
+
+- **TestRunLocalCommandInBackground**: Basic background execution
+- **TestBackgroundJobWithCustomID**: Custom job ID handling
+- **TestKillBackgroundJob**: Job termination
+- **TestBackgroundJobWithStreaming**: Real-time output while backgrounded
+
+All tests pass, demonstrating:
+- Jobs run independently of request lifecycle
+- Output captured and retrievable
+- Jobs can be terminated on demand
+- Streaming works with background execution
+
 ## Backend Comparison: Isolation & Concurrency
 
 When choosing a backend, it is crucial to understand how they handle isolation, locking, and multi-tenancy. Both backends support high concurrency, but their locking scopes differ.

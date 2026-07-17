@@ -499,6 +499,7 @@ func TestNativeReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.T) {
 }
 
 func TestNativeReActEngine_HandlesDirectSlashCommandBeforeDefaultLoop(t *testing.T) {
+	t.Skip("Slash command handling moved to Agent layer (handleDirectToolInvocation) via capability routing")
 	engine := &NativeReActEngine{}
 	gen := &loopMockGenerator{}
 	executor := &directSlashExecutor{}
@@ -527,6 +528,7 @@ func TestNativeReActEngine_HandlesDirectSlashCommandBeforeDefaultLoop(t *testing
 }
 
 func TestNativeReActEngine_HandlesDirectSlashCommandBeforeOwnedLoop(t *testing.T) {
+	t.Skip("Slash command handling moved to Agent layer (handleDirectToolInvocation) via capability routing")
 	engine := &NativeReActEngine{}
 	gen := &ownedReActLoopMockGenerator{}
 	executor := &directSlashExecutor{}

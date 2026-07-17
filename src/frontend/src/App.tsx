@@ -2129,7 +2129,7 @@ This section explains the system design.
             aria-expanded={showProductPreview}
           >
             <span>
-              <strong>See the AI Copilot and the Data Studio in action</strong>
+              <strong>See the AI Copilot and the AI Studio in action</strong>
               <small>A standard copilot, but with spaces, visualization, and shared context.</small>
             </span>
             <span className="preview-toggle-icon">{showProductPreview ? '▾' : '▸'}</span>

@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -1079,6 +1081,404 @@ func TestRunLocalCommandUsesSessionStateForFollowUpCommands(t *testing.T) {
 	}
 	if !strings.Contains(secondResp.Stdout, "/tmp") {
 		t.Fatalf("expected second command output to reflect session cwd, got %q", secondResp.Stdout)
+	}
+}
+
+func TestRunLocalCommandExecutesRunnableScriptFromWorkingDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "hello.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho hello-from-script\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:        "hello.sh",
+		Reasoning:      "run a local script",
+		WorkingDir:     tmpDir,
+		TimeoutSeconds: 10,
+		SessionID:      "",
+	})
+	if err != nil {
+		t.Fatalf("runLocalCommandWithWorkingDir() error = %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	if !strings.Contains(resp.Stdout, "hello-from-script") {
+		t.Fatalf("stdout = %q, want runnable script output", resp.Stdout)
+	}
+}
+
+func TestRunLocalCommandWithStdoutStreaming(t *testing.T) {
+	var streamedLines []string
+	var mu sync.Mutex
+
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:        "echo line1 && echo line2 && echo line3",
+		Reasoning:      "test stdout streaming",
+		TimeoutSeconds: 10,
+		StreamStdout: func(line string) {
+			mu.Lock()
+			streamedLines = append(streamedLines, line)
+			mu.Unlock()
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	// Verify streaming occurred
+	mu.Lock()
+	defer mu.Unlock()
+	if len(streamedLines) < 3 {
+		t.Fatalf("expected at least 3 streamed lines, got %d: %v", len(streamedLines), streamedLines)
+	}
+
+	// Verify final output contains all lines
+	if !strings.Contains(resp.Stdout, "line1") || !strings.Contains(resp.Stdout, "line2") || !strings.Contains(resp.Stdout, "line3") {
+		t.Fatalf("stdout = %q, missing expected lines", resp.Stdout)
+	}
+}
+
+func TestRunLocalCommandWithStderrStreaming(t *testing.T) {
+	var stderrLines []string
+	var mu sync.Mutex
+
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:        "echo error1 >&2 && echo error2 >&2",
+		Reasoning:      "test stderr streaming",
+		TimeoutSeconds: 10,
+		StreamStderr: func(line string) {
+			mu.Lock()
+			stderrLines = append(stderrLines, line)
+			mu.Unlock()
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	// Verify stderr was captured
+	mu.Lock()
+	defer mu.Unlock()
+	if len(stderrLines) < 2 {
+		t.Fatalf("expected at least 2 stderr lines, got %d: %v", len(stderrLines), stderrLines)
+	}
+
+	if !strings.Contains(resp.Stderr, "error1") || !strings.Contains(resp.Stderr, "error2") {
+		t.Fatalf("stderr = %q, missing expected errors", resp.Stderr)
+	}
+}
+
+func TestRunLocalCommandWithStdinInput(t *testing.T) {
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:        "cat",
+		Reasoning:      "test stdin support",
+		Stdin:          "hello from stdin\n",
+		TimeoutSeconds: 5,
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit code = %d, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+
+	if !strings.Contains(resp.Stdout, "hello from stdin") {
+		t.Fatalf("stdout = %q, expected stdin to be echoed", resp.Stdout)
+	}
+}
+
+func TestRunLocalCommandWithOnCompleteCallback(t *testing.T) {
+	var completedStdout, completedStderr string
+	var completedExitCode int
+
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:        "echo success && echo warning >&2",
+		Reasoning:      "test completion callback",
+		TimeoutSeconds: 10,
+		OnComplete: func(stdout, stderr string, exitCode int) {
+			completedStdout = stdout
+			completedStderr = stderr
+			completedExitCode = exitCode
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	// Verify callback was invoked
+	if !strings.Contains(completedStdout, "success") {
+		t.Fatalf("OnComplete stdout = %q, expected success message", completedStdout)
+	}
+
+	if !strings.Contains(completedStderr, "warning") {
+		t.Fatalf("OnComplete stderr = %q, expected warning message", completedStderr)
+	}
+
+	if completedExitCode != 0 {
+		t.Fatalf("OnComplete exitCode = %d, expected 0", completedExitCode)
+	}
+}
+
+// Phase 2 Tests: Process Control
+func TestRunLocalCommandWithProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Process groups not supported on Windows")
+	}
+
+	var capturedPID int
+
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:      "echo test",
+		ProcessGroup: true,
+		OnProcessStart: func(pid int) {
+			capturedPID = pid
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if capturedPID == 0 {
+		t.Fatalf("OnProcessStart not called or PID not captured")
+	}
+
+	if resp.PID != capturedPID {
+		t.Fatalf("response PID = %d, callback PID = %d", resp.PID, capturedPID)
+	}
+}
+
+func TestRunLocalCommandWithPIDCapture(t *testing.T) {
+	var capturedPID int
+
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command: "echo test",
+		OnProcessStart: func(pid int) {
+			capturedPID = pid
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if capturedPID == 0 {
+		t.Fatalf("OnProcessStart not called")
+	}
+
+	if resp.PID != capturedPID {
+		t.Fatalf("response PID = %d, callback PID = %d", resp.PID, capturedPID)
+	}
+}
+
+// Phase 3 Tests: Background Jobs
+func TestRunLocalCommandInBackground(t *testing.T) {
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:    "sleep 1 && echo background-test",
+		Background: true,
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if !resp.Background {
+		t.Fatalf("Background flag not set in response")
+	}
+
+	if resp.JobID == "" {
+		t.Fatalf("JobID not returned")
+	}
+
+	// Wait a bit for command to complete
+	time.Sleep(2 * time.Second)
+
+	// Check job status
+	job, ok := getBackgroundJob(resp.JobID)
+	if !ok {
+		t.Fatalf("Job not found: %s", resp.JobID)
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	if !job.done {
+		t.Fatalf("Job should be done by now")
+	}
+
+	if job.exitCode == nil || *job.exitCode != 0 {
+		t.Fatalf("Job exit code: %v, expected 0", job.exitCode)
+	}
+
+	if !strings.Contains(job.stdout.String(), "background-test") {
+		t.Fatalf("Job stdout = %q, expected 'background-test'", job.stdout.String())
+	}
+}
+
+func TestBackgroundJobWithCustomID(t *testing.T) {
+	customID := "my-custom-job-123"
+
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:    "echo custom-job",
+		Background: true,
+		JobID:      customID,
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.JobID != customID {
+		t.Fatalf("JobID = %s, expected %s", resp.JobID, customID)
+	}
+
+	// Wait for completion
+	time.Sleep(500 * time.Millisecond)
+
+	job, ok := getBackgroundJob(customID)
+	if !ok {
+		t.Fatalf("Job not found: %s", customID)
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	if !strings.Contains(job.stdout.String(), "custom-job") {
+		t.Fatalf("Job output = %q, expected 'custom-job'", job.stdout.String())
+	}
+}
+
+func TestKillBackgroundJob(t *testing.T) {
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:    "sleep 30",
+		Background: true,
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	// Wait a bit to ensure job started
+	time.Sleep(200 * time.Millisecond)
+
+	// Kill the job
+	if err := killBackgroundJob(resp.JobID); err != nil {
+		t.Fatalf("failed to kill job: %v", err)
+	}
+
+	// Wait for termination
+	time.Sleep(500 * time.Millisecond)
+
+	job, ok := getBackgroundJob(resp.JobID)
+	if !ok {
+		t.Fatalf("Job not found: %s", resp.JobID)
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	if !job.done {
+		t.Fatalf("Job should be terminated")
+	}
+
+	// Exit code should be non-zero (killed)
+	if job.exitCode != nil && *job.exitCode == 0 {
+		t.Fatalf("Job exit code = 0, expected non-zero (killed)")
+	}
+}
+
+func TestBackgroundJobWithStreaming(t *testing.T) {
+	var stdoutLines []string
+	var mu sync.Mutex
+
+	result, err := runLocalCommandWithWorkingDir(context.Background(), sharedagent.LocalCommandRequest{
+		Command:    "echo line1 && echo line2 && echo line3",
+		Background: true,
+		StreamStdout: func(line string) {
+			mu.Lock()
+			stdoutLines = append(stdoutLines, line)
+			mu.Unlock()
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("command error: %v", err)
+	}
+
+	var resp ExecuteResponse
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	// Wait for completion
+	time.Sleep(500 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(stdoutLines) < 3 {
+		t.Fatalf("Expected at least 3 lines, got %d: %v", len(stdoutLines), stdoutLines)
 	}
 }
 

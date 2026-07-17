@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -239,6 +240,14 @@ type ExecuteResponse struct {
 	Error              string `json:"error,omitempty"`
 	LaunchedInTerminal bool   `json:"launched_in_terminal,omitempty"`
 	Suggestion         string `json:"suggestion,omitempty"`
+	Streaming          bool   `json:"streaming,omitempty"` // If true, output streamed separately
+
+	// Phase 2 Enhancement: Process info
+	PID int `json:"pid,omitempty"` // Process ID for signal control
+
+	// Phase 3 Enhancement: Background job info
+	Background bool   `json:"background,omitempty"` // If true, running in background
+	JobID      string `json:"job_id,omitempty"`     // Unique job identifier
 }
 
 type UIHandoffRequest struct {
@@ -335,6 +344,32 @@ func main() {
 
 	// Keep the daemon-specific command executor hook, but let sopbackend own the shared bootstrap.
 	sharedagent.SetLocalCommandExecutor(runLocalCommand)
+
+	// Phase 2: Signal control
+	sharedagent.SetLocalSendSignalToProcess(sendSignalToProcess)
+
+	// Phase 3: Background job control
+	sharedagent.SetLocalGetBackgroundJob(func(jobID string) (*sharedagent.BackgroundJob, error) {
+		job, ok := getBackgroundJob(jobID)
+		if !ok {
+			return nil, fmt.Errorf("job not found: %s", jobID)
+		}
+
+		job.mu.Lock()
+		defer job.mu.Unlock()
+
+		return &sharedagent.BackgroundJob{
+			JobID:     job.jobID,
+			Command:   job.command,
+			PID:       job.pid,
+			StartTime: job.startTime,
+			Stdout:    job.stdout,
+			Stderr:    job.stderr,
+			ExitCode:  job.exitCode,
+			Error:     job.error,
+		}, nil
+	})
+	sharedagent.SetLocalKillBackgroundJob(killBackgroundJob)
 
 	if *printConfigPath {
 		if _, err := resolveDaemonConfigLocation(*configPath, os.Stdout); err != nil {
@@ -647,15 +682,143 @@ var localCommandSessionState = struct {
 	sessions: make(map[string]*localCommandSession),
 }
 
+// Phase 3: Background job tracking
+type backgroundJob struct {
+	jobID     string
+	command   string
+	pid       int
+	startTime time.Time
+	cmd       *exec.Cmd
+	cancel    context.CancelFunc
+	stdout    strings.Builder
+	stderr    strings.Builder
+	exitCode  *int
+	error     string
+	mu        sync.Mutex
+	done      bool
+}
+
+var backgroundJobs = struct {
+	mu   sync.RWMutex
+	jobs map[string]*backgroundJob
+}{
+	jobs: make(map[string]*backgroundJob),
+}
+
+// generateJobID creates a unique job ID
+func generateJobID() string {
+	return fmt.Sprintf("job-%d-%d", time.Now().Unix(), rand.Intn(10000))
+}
+
+// getBackgroundJob retrieves a background job by ID
+func getBackgroundJob(jobID string) (*backgroundJob, bool) {
+	backgroundJobs.mu.RLock()
+	defer backgroundJobs.mu.RUnlock()
+	job, ok := backgroundJobs.jobs[jobID]
+	return job, ok
+}
+
+// killBackgroundJob terminates a background job
+func killBackgroundJob(jobID string) error {
+	backgroundJobs.mu.RLock()
+	job, ok := backgroundJobs.jobs[jobID]
+	backgroundJobs.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	if job.done {
+		return fmt.Errorf("job already completed: %s", jobID)
+	}
+
+	// Cancel context first
+	if job.cancel != nil {
+		job.cancel()
+	}
+
+	// Send SIGTERM to process
+	if job.cmd != nil && job.cmd.Process != nil {
+		if err := job.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			// If SIGTERM fails, force kill
+			return job.cmd.Process.Kill()
+		}
+	}
+
+	return nil
+}
+
+// sendSignalToProcess sends a signal to a running process
+func sendSignalToProcess(pid int, sig os.Signal) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("process not found: %w", err)
+	}
+	return process.Signal(sig)
+}
+
 func runLocalCommand(ctx context.Context, req sharedagent.LocalCommandRequest) (string, error) {
-	result, err := runLocalCommandWithWorkingDir(ctx, req.Command, req.Reasoning, req.WorkingDir, req.TimeoutSeconds, req.SessionID)
-	if err == nil && req.StreamOutput != nil {
+	result, err := runLocalCommandWithWorkingDir(ctx, req)
+
+	// Backward compatibility: call legacy StreamOutput if new callbacks not provided
+	if err == nil && req.StreamOutput != nil && req.StreamStdout == nil && req.StreamStderr == nil {
 		req.StreamOutput(result)
 	}
+
 	return result, err
 }
 
-func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, workingDir string, timeoutSeconds int, sessionID string) (string, error) {
+func directExecutableCommand(ctx context.Context, command, workingDir string) (*exec.Cmd, bool) {
+	trimmedCommand := strings.TrimSpace(command)
+	if trimmedCommand == "" {
+		return nil, false
+	}
+	if strings.ContainsAny(trimmedCommand, "|&;<>()`$\\\"'") {
+		return nil, false
+	}
+
+	parts := strings.Fields(trimmedCommand)
+	if len(parts) == 0 {
+		return nil, false
+	}
+
+	candidate := parts[0]
+	args := parts[1:]
+	if filepath.IsAbs(candidate) || strings.Contains(candidate, "/") || strings.Contains(candidate, `\`) {
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(workingDir, candidate)
+		}
+		if resolved, err := filepath.Abs(candidate); err == nil {
+			if info, err := os.Stat(resolved); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+				return exec.CommandContext(ctx, resolved, args...), true
+			}
+		}
+		return nil, false
+	}
+
+	if workingDir != "" {
+		localCandidate := filepath.Join(workingDir, candidate)
+		if info, err := os.Stat(localCandidate); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return exec.CommandContext(ctx, localCandidate, args...), true
+		}
+	}
+
+	if resolved, err := exec.LookPath(candidate); err == nil {
+		return exec.CommandContext(ctx, resolved, args...), true
+	}
+
+	return nil, false
+}
+
+func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCommandRequest) (string, error) {
+	command := req.Command
+	workingDir := req.WorkingDir
+	sessionID := req.SessionID
+	timeoutSeconds := req.TimeoutSeconds
+
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 600
 	}
@@ -667,74 +830,18 @@ func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, work
 	}
 
 	trimmedCommand := strings.TrimSpace(command)
+
+	// Handle cd command (session-based directory tracking)
 	if strings.HasPrefix(trimmedCommand, "cd") || strings.EqualFold(trimmedCommand, "cd") {
-		if sessionID != "" {
-			localCommandSessionState.mu.Lock()
-			sessionState := localCommandSessionState.sessions[sessionID]
-			if sessionState == nil {
-				sessionState = &localCommandSession{}
-				localCommandSessionState.sessions[sessionID] = sessionState
-			}
-			if sessionState.workingDir == "" {
-				sessionState.workingDir = workingDir
-				if sessionState.workingDir == "" {
-					sessionState.workingDir = "."
-				}
-			}
-			localCommandSessionState.mu.Unlock()
-		}
-		if strings.EqualFold(trimmedCommand, "cd") || strings.TrimSpace(strings.TrimPrefix(trimmedCommand, "cd")) == "" {
-			if sessionID != "" {
-				localCommandSessionState.mu.Lock()
-				sessionState := localCommandSessionState.sessions[sessionID]
-				if sessionState != nil {
-					if home, err := os.UserHomeDir(); err == nil {
-						sessionState.workingDir = home
-					} else {
-						sessionState.workingDir = "."
-					}
-				}
-				localCommandSessionState.mu.Unlock()
-			}
-			return `{"stdout":"","stderr":"","exit_code":0}`, nil
-		}
-		if sessionID != "" {
-			localCommandSessionState.mu.Lock()
-			sessionState := localCommandSessionState.sessions[sessionID]
-			if sessionState != nil {
-				target := strings.TrimSpace(strings.TrimPrefix(trimmedCommand, "cd"))
-				if target == "~" {
-					if home, err := os.UserHomeDir(); err == nil {
-						target = home
-					}
-				}
-				if !filepath.IsAbs(target) {
-					target = filepath.Join(sessionState.workingDir, target)
-				}
-				if absPath, err := filepath.Abs(target); err == nil {
-					sessionState.workingDir = absPath
-				}
-			}
-			localCommandSessionState.mu.Unlock()
-		}
-		return `{"stdout":"","stderr":"","exit_code":0}`, nil
+		return handleCdCommand(trimmedCommand, workingDir, sessionID)
 	}
 
+	// Handle pwd command
 	if strings.EqualFold(trimmedCommand, "pwd") {
-		workingDirForPwd := workingDir
-		if sessionID != "" {
-			localCommandSessionState.mu.Lock()
-			if sessionState := localCommandSessionState.sessions[sessionID]; sessionState != nil && sessionState.workingDir != "" {
-				workingDirForPwd = sessionState.workingDir
-			}
-			localCommandSessionState.mu.Unlock()
-		}
-		if workingDirForPwd == "" {
-			workingDirForPwd = "."
-		}
-		return fmt.Sprintf(`{"stdout":"%s\n","stderr":"","exit_code":0}`, strings.ReplaceAll(workingDirForPwd, "\n", "\\n")), nil
+		return handlePwdCommand(workingDir, sessionID)
 	}
 
+	// Resolve working directory from session if needed
 	if sessionID != "" {
 		localCommandSessionState.mu.Lock()
 		if existing, ok := localCommandSessionState.sessions[sessionID]; ok && existing != nil {
@@ -745,12 +852,84 @@ func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, work
 		localCommandSessionState.mu.Unlock()
 	}
 
+	// Phase 3: Background job execution (handle early to use different context)
+	if req.Background {
+		jobID := req.JobID
+		if jobID == "" {
+			jobID = generateJobID()
+		}
+
+		// Create background job with long-running context
+		jobCtx, jobCancel := context.WithCancel(context.Background())
+
+		// Build command with background context
+		var bgCmd *exec.Cmd
+		if directCmd, ok := directExecutableCommand(jobCtx, trimmedCommand, workingDir); ok {
+			bgCmd = directCmd
+		} else if runtime.GOOS == "windows" {
+			bgCmd = exec.CommandContext(jobCtx, "cmd", "/C", command)
+		} else {
+			// Prepend COLUMNS environment variable for proper multi-column output
+			commandWithEnv := "COLUMNS=100 " + command
+			bgCmd = exec.CommandContext(jobCtx, "sh", "-c", commandWithEnv)
+		}
+
+		if workingDir != "" {
+			bgCmd.Dir = workingDir
+		} else if sessionID != "" {
+			localCommandSessionState.mu.Lock()
+			if existing, ok := localCommandSessionState.sessions[sessionID]; ok && existing != nil {
+				bgCmd.Dir = existing.workingDir
+			}
+			localCommandSessionState.mu.Unlock()
+		}
+
+		if req.Stdin != "" {
+			bgCmd.Stdin = strings.NewReader(req.Stdin)
+		}
+
+		if req.ProcessGroup && runtime.GOOS != "windows" {
+			bgCmd.SysProcAttr = &syscall.SysProcAttr{
+				Setpgid: true,
+			}
+		}
+
+		job := &backgroundJob{
+			jobID:     jobID,
+			command:   command,
+			startTime: time.Now(),
+			cmd:       bgCmd,
+			cancel:    jobCancel,
+		}
+
+		backgroundJobs.mu.Lock()
+		backgroundJobs.jobs[jobID] = job
+		backgroundJobs.mu.Unlock()
+
+		// Launch in goroutine
+		go runBackgroundJob(jobCtx, job, req)
+
+		// Return immediately with job info
+		resp := ExecuteResponse{
+			Background: true,
+			JobID:      jobID,
+		}
+		payload, _ := json.Marshal(resp)
+		return string(payload), nil
+	}
+
+	// Build command for foreground execution
 	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
+	if directCmd, ok := directExecutableCommand(ctx, trimmedCommand, workingDir); ok {
+		cmd = directCmd
+	} else if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
 	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", command)
+		// Prepend COLUMNS environment variable to command for proper multi-column output
+		commandWithEnv := "COLUMNS=100 " + command
+		cmd = exec.CommandContext(ctx, "sh", "-c", commandWithEnv)
 	}
+
 	if workingDir != "" {
 		cmd.Dir = workingDir
 	} else if sessionID != "" {
@@ -761,11 +940,96 @@ func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, work
 		localCommandSessionState.mu.Unlock()
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Setup stdin if provided
+	if req.Stdin != "" {
+		cmd.Stdin = strings.NewReader(req.Stdin)
+	}
 
-	err := cmd.Run()
+	// Phase 2: Process group support for signal isolation
+	if req.ProcessGroup {
+		if runtime.GOOS != "windows" {
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				Setpgid: true,
+			}
+		}
+	}
+
+	// Real-time streaming setup (foreground execution)
+	var stdoutBuf, stderrBuf bytes.Buffer
+	var wg sync.WaitGroup
+
+	// Create pipes for real-time streaming
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	// Start command
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start command: %w", err)
+	}
+
+	// Phase 2: Capture PID and notify callback
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+		if req.OnProcessStart != nil {
+			req.OnProcessStart(pid)
+		}
+	}
+
+	// Stream stdout in real-time
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			stdoutBuf.WriteString(line + "\n")
+
+			// Real-time streaming callbacks
+			if req.StreamStdout != nil {
+				req.StreamStdout(line + "\n")
+			}
+
+			// Legacy event streamer
+			if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+				streamer("content", line+"\n")
+			}
+		}
+	}()
+
+	// Stream stderr in real-time
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			stderrBuf.WriteString(line + "\n")
+
+			// Real-time stderr streaming with visual distinction
+			if req.StreamStderr != nil {
+				req.StreamStderr(line + "\n")
+			}
+
+			// Legacy event streamer with error indicator
+			if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+				streamer("content", "⚠️ "+line+"\n")
+			}
+		}
+	}()
+
+	// Wait for command and streams to complete
+	cmdErr := cmd.Wait()
+	wg.Wait()
+
+	// Update session state
 	if sessionID != "" {
 		localCommandSessionState.mu.Lock()
 		sessionState := localCommandSessionState.sessions[sessionID]
@@ -781,31 +1045,21 @@ func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, work
 		sessionState.lastCmd = cmd
 		localCommandSessionState.mu.Unlock()
 	}
-	resp := ExecuteResponse{Stdout: stdout.String(), Stderr: stderr.String()}
-	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		// Stream output line-by-line for better UX with large results
-		formattedOutput := resp.Stdout
-		trimmedCmd := strings.TrimSpace(strings.ToLower(command))
-		isLsCommand := trimmedCmd == "ls" || strings.HasPrefix(trimmedCmd, "ls ") || strings.HasPrefix(trimmedCmd, "ls-")
 
-		if isLsCommand {
-			// Convert space-separated ls output to one file per line
-			items := strings.Fields(strings.TrimSpace(formattedOutput))
-			if len(items) > 0 {
-				// Format as single block for proper markdown rendering
-				formatted := "🛠️ Result from local_command:\n```\n" + strings.Join(items, "\n") + "\n```"
-				streamer("content", formatted)
-			} else {
-				streamer("content", fmt.Sprintf("🛠️ Result from local_command:\n```\n%s\n```", strings.TrimSpace(formattedOutput)))
-			}
-		} else {
-			// Non-ls commands: stream complete output as single block
-			streamer("content", fmt.Sprintf("🛠️ Result from local_command:\n```\n%s\n```", strings.TrimSpace(formattedOutput)))
-		}
+	// Build response
+	stdoutStr := stdoutBuf.String()
+	stderrStr := stderrBuf.String()
+
+	resp := ExecuteResponse{
+		Stdout:    stdoutStr,
+		Stderr:    stderrStr,
+		Streaming: req.StreamStdout != nil || req.StreamStderr != nil,
+		PID:       pid,
 	}
-	if err != nil {
-		resp.Error = err.Error()
-		if exitErr, ok := err.(*exec.ExitError); ok {
+
+	if cmdErr != nil {
+		resp.Error = cmdErr.Error()
+		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
 			resp.ExitCode = exitErr.ExitCode()
 		} else {
 			resp.ExitCode = -1
@@ -814,11 +1068,202 @@ func runLocalCommandWithWorkingDir(ctx context.Context, command, reasoning, work
 		resp.ExitCode = 0
 	}
 
+	// Call completion callback
+	if req.OnComplete != nil {
+		req.OnComplete(stdoutStr, stderrStr, resp.ExitCode)
+	}
+
 	payload, marshalErr := json.Marshal(resp)
 	if marshalErr != nil {
 		return "", marshalErr
 	}
 	return string(payload), nil
+}
+
+// handleCdCommand handles directory change commands
+func handleCdCommand(trimmedCommand, workingDir, sessionID string) (string, error) {
+	if sessionID != "" {
+		localCommandSessionState.mu.Lock()
+		sessionState := localCommandSessionState.sessions[sessionID]
+		if sessionState == nil {
+			sessionState = &localCommandSession{}
+			localCommandSessionState.sessions[sessionID] = sessionState
+		}
+		if sessionState.workingDir == "" {
+			sessionState.workingDir = workingDir
+			if sessionState.workingDir == "" {
+				sessionState.workingDir = "."
+			}
+		}
+		localCommandSessionState.mu.Unlock()
+	}
+
+	if strings.EqualFold(trimmedCommand, "cd") || strings.TrimSpace(strings.TrimPrefix(trimmedCommand, "cd")) == "" {
+		if sessionID != "" {
+			localCommandSessionState.mu.Lock()
+			sessionState := localCommandSessionState.sessions[sessionID]
+			if sessionState != nil {
+				if home, err := os.UserHomeDir(); err == nil {
+					sessionState.workingDir = home
+				} else {
+					sessionState.workingDir = "."
+				}
+			}
+			localCommandSessionState.mu.Unlock()
+		}
+		return `{"stdout":"","stderr":"","exit_code":0}`, nil
+	}
+
+	if sessionID != "" {
+		localCommandSessionState.mu.Lock()
+		sessionState := localCommandSessionState.sessions[sessionID]
+		if sessionState != nil {
+			target := strings.TrimSpace(strings.TrimPrefix(trimmedCommand, "cd"))
+			if target == "~" {
+				if home, err := os.UserHomeDir(); err == nil {
+					target = home
+				}
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(sessionState.workingDir, target)
+			}
+			if absPath, err := filepath.Abs(target); err == nil {
+				sessionState.workingDir = absPath
+			}
+		}
+		localCommandSessionState.mu.Unlock()
+	}
+	return `{"stdout":"","stderr":"","exit_code":0}`, nil
+}
+
+// handlePwdCommand handles print working directory command
+func handlePwdCommand(workingDir, sessionID string) (string, error) {
+	workingDirForPwd := workingDir
+	if sessionID != "" {
+		localCommandSessionState.mu.Lock()
+		if sessionState := localCommandSessionState.sessions[sessionID]; sessionState != nil && sessionState.workingDir != "" {
+			workingDirForPwd = sessionState.workingDir
+		}
+		localCommandSessionState.mu.Unlock()
+	}
+	if workingDirForPwd == "" {
+		workingDirForPwd = "."
+	}
+	return fmt.Sprintf(`{"stdout":"%s\n","stderr":"","exit_code":0}`, strings.ReplaceAll(workingDirForPwd, "\n", "\\n")), nil
+}
+
+// runBackgroundJob executes a command in the background
+func runBackgroundJob(ctx context.Context, job *backgroundJob, req sharedagent.LocalCommandRequest) {
+	defer func() {
+		job.mu.Lock()
+		job.done = true
+		job.mu.Unlock()
+	}()
+
+	// Create pipes for output capture
+	stdoutPipe, err := job.cmd.StdoutPipe()
+	if err != nil {
+		job.mu.Lock()
+		job.error = fmt.Sprintf("failed to create stdout pipe: %v", err)
+		job.mu.Unlock()
+		return
+	}
+
+	stderrPipe, err := job.cmd.StderrPipe()
+	if err != nil {
+		job.mu.Lock()
+		job.error = fmt.Sprintf("failed to create stderr pipe: %v", err)
+		job.mu.Unlock()
+		return
+	}
+
+	// Start command
+	if err := job.cmd.Start(); err != nil {
+		job.mu.Lock()
+		job.error = fmt.Sprintf("failed to start command: %v", err)
+		job.mu.Unlock()
+		return
+	}
+
+	// Capture PID
+	if job.cmd.Process != nil {
+		job.mu.Lock()
+		job.pid = job.cmd.Process.Pid
+		job.mu.Unlock()
+
+		if req.OnProcessStart != nil {
+			req.OnProcessStart(job.pid)
+		}
+	}
+
+	var wg sync.WaitGroup
+
+	// Capture stdout
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			job.mu.Lock()
+			job.stdout.WriteString(line + "\n")
+			job.mu.Unlock()
+
+			if req.StreamStdout != nil {
+				req.StreamStdout(line + "\n")
+			}
+		}
+	}()
+
+	// Capture stderr
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			job.mu.Lock()
+			job.stderr.WriteString(line + "\n")
+			job.mu.Unlock()
+
+			if req.StreamStderr != nil {
+				req.StreamStderr(line + "\n")
+			}
+		}
+	}()
+
+	// Wait for command
+	cmdErr := job.cmd.Wait()
+	wg.Wait()
+
+	// Update job with results
+	job.mu.Lock()
+	if cmdErr != nil {
+		job.error = cmdErr.Error()
+		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
+			exitCode := exitErr.ExitCode()
+			job.exitCode = &exitCode
+		} else {
+			exitCode := -1
+			job.exitCode = &exitCode
+		}
+	} else {
+		exitCode := 0
+		job.exitCode = &exitCode
+	}
+
+	stdout := job.stdout.String()
+	stderr := job.stderr.String()
+	exitCode := 0
+	if job.exitCode != nil {
+		exitCode = *job.exitCode
+	}
+	job.mu.Unlock()
+
+	// Call completion callback
+	if req.OnComplete != nil {
+		req.OnComplete(stdout, stderr, exitCode)
+	}
 }
 
 func startHQSyncLoop(authHandler *DaemonAuthHandler) {

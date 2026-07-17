@@ -198,7 +198,65 @@ func (a *CopilotAgent) toolListTools(ctx context.Context, args map[string]any) (
 			Schema:      t.ArgsSchema,
 		})
 	}
-	return formatToolInventoryList(visible), nil
+
+	output := formatToolInventoryList(visible)
+
+	// Add command shortcuts section if any prefix handlers are registered
+	if a.capabilityRegistry != nil {
+		shortcuts := a.formatCommandShortcuts()
+		if shortcuts != "" {
+			output += "\n" + shortcuts
+		}
+	}
+
+	return output, nil
+}
+
+// formatCommandShortcuts returns a formatted list of command prefix shortcuts
+func (a *CopilotAgent) formatCommandShortcuts() string {
+	a.ensureCapabilityRegistry()
+	if a.capabilityRegistry == nil {
+		return ""
+	}
+
+	// Collect all prefix handlers and their prefixes
+	type prefixInfo struct {
+		capability string
+		prefixes   []string
+	}
+	var handlers []prefixInfo
+
+	for _, cap := range a.capabilityRegistry.ListAll() {
+		if ph, ok := cap.(capabilities.PrefixHandler); ok {
+			prefixes := ph.GetHandledPrefixes()
+			if len(prefixes) > 0 {
+				handlers = append(handlers, prefixInfo{
+					capability: cap.Name(),
+					prefixes:   prefixes,
+				})
+			}
+		}
+	}
+
+	if len(handlers) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("### Command Shortcuts\n\n")
+	sb.WriteString("Fast-path command execution (bypasses ReAct reasoning):\n\n")
+
+	for _, h := range handlers {
+		sb.WriteString(fmt.Sprintf("**%s**\n", h.capability))
+		for _, prefix := range h.prefixes {
+			sb.WriteString(fmt.Sprintf("%s <command>: Execute command directly\n", prefix))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Example: /cmd ls -la or /shell pwd executes immediately without LLM reasoning.\n")
+
+	return sb.String()
 }
 
 func (a *CopilotAgent) toolClear(ctx context.Context, args map[string]any) (string, error) {

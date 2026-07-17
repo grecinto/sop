@@ -1860,7 +1860,9 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	if a == nil || a.capabilityRegistry != nil {
 		return
 	}
-	a.capabilityRegistry = capabilities.NewRegistry(desktop.NewCapability(), stores.NewCapability(), spaces.NewCapability())
+	desktopCap := desktop.NewCapability()
+	desktopCap.SetCommandExecutor(a.toolExecuteLocalCommand)
+	a.capabilityRegistry = capabilities.NewRegistry(desktopCap, stores.NewCapability(), spaces.NewCapability())
 }
 
 func buildCodingWorkflowExpertiseQuery(task cw.Task, pack cw.ContextPack) string {
@@ -2895,16 +2897,11 @@ func (a *CopilotAgent) handleDirectToolInvocation(ctx context.Context, query str
 		return false, "", nil
 	}
 
-	if directCommand, ok := parseDirectCommandInvocation(trimmed); ok {
-		a.registerTools(ctx)
-		res, err := a.toolExecuteLocalCommand(ctx, map[string]any{
-			"command":   directCommand,
-			"reasoning": "Direct local command execution requested by user.",
-		})
-		if err != nil {
-			return true, "", err
+	// Try capability-based prefix routing first
+	if a.capabilityRegistry != nil {
+		if handled, result, err := a.capabilityRegistry.TryPrefixRouting(ctx, trimmed); handled {
+			return true, result, err
 		}
-		return true, res, nil
 	}
 
 	if strings.HasPrefix(trimmed, "/") {
@@ -2919,22 +2916,6 @@ func (a *CopilotAgent) handleDirectToolInvocation(ctx context.Context, query str
 		}
 	}
 	return false, "", nil
-}
-
-func parseDirectCommandInvocation(query string) (string, bool) {
-	trimmed := strings.TrimSpace(query)
-	if trimmed == "" {
-		return "", false
-	}
-
-	prefixes := []string{"cmd:", "cmd ", "shell:", "shell ", "exec:", "exec ", "run:", "run "}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(trimmed, prefix) {
-			command := strings.TrimSpace(trimmed[len(prefix):])
-			return command, command != ""
-		}
-	}
-	return "", false
 }
 
 func (a *CopilotAgent) handlePendingUserConfirmation(ctx context.Context, query string) (bool, string, error) {

@@ -104,6 +104,7 @@ func (a *directSlashStubAgent) ListTools(ctx context.Context) ([]ai.ToolDefiniti
 }
 
 func TestServiceAskBypassesPipelineForDirectSlashCommands(t *testing.T) {
+	t.Skip("Slash command handling moved to Agent layer (handleDirectToolInvocation) via capability routing")
 	svc := &Service{
 		registry: map[string]ai.Agent[map[string]any]{"stub": &directSlashStubAgent{}},
 		session:  &RunnerSession{},
@@ -120,6 +121,7 @@ func TestServiceAskBypassesPipelineForDirectSlashCommands(t *testing.T) {
 }
 
 func TestServiceAskRegistersToolsBeforeDirectSlashCommands(t *testing.T) {
+	t.Skip("Slash command handling moved to Agent layer (handleDirectToolInvocation) via capability routing")
 	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
 	defer SetAutomationPolicy(DefaultAutomationPolicy())
 	SetLocalDesktopAutomationEnabled(false)

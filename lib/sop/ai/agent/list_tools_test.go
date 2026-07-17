@@ -407,3 +407,37 @@ func TestListTools_LowRiskExposedToolsUseJSONSchemas(t *testing.T) {
 		}
 	}
 }
+
+func TestListToolsIncludesCommandShortcuts(t *testing.T) {
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.Background()
+	payload := &ai.SessionPayload{CurrentDB: "system"}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
+	// Ensure desktop capability is registered (which provides command shortcuts)
+	agent.ensureCapabilityRegistry()
+	agent.registerTools(ctx)
+
+	output, err := agent.Execute(ctx, "list_tools", nil)
+	if err != nil {
+		t.Fatalf("list_tools failed: %v", err)
+	}
+
+	// Check for command shortcuts section
+	if !strings.Contains(output, "### Command Shortcuts") {
+		t.Errorf("list_tools output should include Command Shortcuts section.\nGot:\n%s", output)
+	}
+
+	// Check for desktop automation shortcuts
+	expectedShortcuts := []string{"/c", "/cmd", "/shell", "/exec"}
+	for _, shortcut := range expectedShortcuts {
+		if !strings.Contains(output, shortcut+" <command>:") {
+			t.Errorf("list_tools output should include shortcut %s.\nGot:\n%s", shortcut, output)
+		}
+	}
+
+	// Check for example usage
+	if !strings.Contains(output, "Example:") && !strings.Contains(output, "/cmd ls") {
+		t.Errorf("list_tools output should include example usage.\nGot:\n%s", output)
+	}
+}
