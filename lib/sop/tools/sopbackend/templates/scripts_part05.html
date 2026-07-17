@@ -265,9 +265,36 @@
     }
 
     function replaceWelcomeContextMessage(text) {
+        console.debug('[replaceWelcomeContextMessage] Called from:', new Error().stack);
         const history = document.getElementById('chat-history');
         if (!history) return;
 
+        // Check if there are any real messages (non-welcome) in the history
+        const messageCount = history.children.length;
+        const messages = Array.from(history.children);
+        const realMessages = messages.filter(el => 
+            !el.dataset || !el.dataset.welcomeContext || el.dataset.welcomeContext !== 'true'
+        );
+        
+        console.debug('[replaceWelcomeContextMessage] History check:', {
+            totalMessages: messageCount,
+            realMessages: realMessages.length,
+            messageDetails: messages.map(el => ({
+                class: el.className,
+                hasDataset: !!el.dataset,
+                welcomeContext: el.dataset?.welcomeContext,
+                textPreview: el.textContent.substring(0, 50)
+            })),
+            willSkip: realMessages.length > 0
+        });
+        
+        // Don't clear history if there are real user/AI messages
+        if (realMessages.length > 0) {
+            console.debug('[replaceWelcomeContextMessage] Skipping - real messages exist in history');
+            return;
+        }
+
+        console.debug('[replaceWelcomeContextMessage] Clearing history and adding welcome message');
         history.innerHTML = '';
         currentAiMsgId = null;
 

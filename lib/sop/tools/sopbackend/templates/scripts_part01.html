@@ -1202,7 +1202,9 @@
                 
                 // Handle local daemon connection failure with clear user messaging
                 if (runtimeMode === 'local' && err.message && err.message.includes('Cannot connect to local daemon')) {
-                    showAlert(err.message, null, "Local Daemon Unavailable", "red");
+                    // Don't use showAlert during page initialization - it can cause infinite recursion
+                    // if the modal DOM isn't ready yet
+                    console.warn('[reloadDatabases] Local daemon unavailable:', err.message);
                     const select = document.getElementById('database-select');
                     if (select) {
                         select.innerHTML = '<option>Local daemon offline</option>';

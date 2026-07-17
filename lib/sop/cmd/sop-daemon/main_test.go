@@ -1145,8 +1145,14 @@ func TestRunLocalCommandWithStdoutStreaming(t *testing.T) {
 	// Verify streaming occurred
 	mu.Lock()
 	defer mu.Unlock()
-	if len(streamedLines) < 3 {
-		t.Fatalf("expected at least 3 streamed lines, got %d: %v", len(streamedLines), streamedLines)
+	if len(streamedLines) == 0 {
+		t.Fatalf("expected streaming to occur, but got 0 chunks")
+	}
+
+	// Verify all content was streamed
+	allStreamed := strings.Join(streamedLines, "")
+	if !strings.Contains(allStreamed, "line1") || !strings.Contains(allStreamed, "line2") || !strings.Contains(allStreamed, "line3") {
+		t.Fatalf("streamed content = %q, missing expected lines", allStreamed)
 	}
 
 	// Verify final output contains all lines
@@ -1182,8 +1188,14 @@ func TestRunLocalCommandWithStderrStreaming(t *testing.T) {
 	// Verify stderr was captured
 	mu.Lock()
 	defer mu.Unlock()
-	if len(stderrLines) < 2 {
-		t.Fatalf("expected at least 2 stderr lines, got %d: %v", len(stderrLines), stderrLines)
+	if len(stderrLines) == 0 {
+		t.Fatalf("expected stderr streaming to occur, but got 0 chunks")
+	}
+
+	// Verify all stderr content was streamed
+	allStreamed := strings.Join(stderrLines, "")
+	if !strings.Contains(allStreamed, "error1") || !strings.Contains(allStreamed, "error2") {
+		t.Fatalf("streamed stderr = %q, missing expected errors", allStreamed)
 	}
 
 	if !strings.Contains(resp.Stderr, "error1") || !strings.Contains(resp.Stderr, "error2") {
@@ -1477,8 +1489,14 @@ func TestBackgroundJobWithStreaming(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if len(stdoutLines) < 3 {
-		t.Fatalf("Expected at least 3 lines, got %d: %v", len(stdoutLines), stdoutLines)
+	if len(stdoutLines) == 0 {
+		t.Fatalf("Expected streaming to occur, but got 0 chunks")
+	}
+
+	// Verify all content was streamed
+	allStreamed := strings.Join(stdoutLines, "")
+	if !strings.Contains(allStreamed, "line1") || !strings.Contains(allStreamed, "line2") || !strings.Contains(allStreamed, "line3") {
+		t.Fatalf("streamed content = %q, missing expected lines", allStreamed)
 	}
 }
 

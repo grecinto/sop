@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -836,11 +835,6 @@ func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCom
 		return handleCdCommand(trimmedCommand, workingDir, sessionID)
 	}
 
-	// Handle pwd command
-	if strings.EqualFold(trimmedCommand, "pwd") {
-		return handlePwdCommand(workingDir, sessionID)
-	}
-
 	// Resolve working directory from session if needed
 	if sessionID != "" {
 		localCommandSessionState.mu.Lock()
@@ -987,19 +981,25 @@ func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCom
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stdoutPipe)
-		for scanner.Scan() {
-			line := scanner.Text()
-			stdoutBuf.WriteString(line + "\n")
+		buf := make([]byte, 1024)
+		for {
+			n, err := stdoutPipe.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				stdoutBuf.WriteString(chunk)
 
-			// Real-time streaming callbacks
-			if req.StreamStdout != nil {
-				req.StreamStdout(line + "\n")
+				// Real-time streaming callbacks
+				if req.StreamStdout != nil {
+					req.StreamStdout(chunk)
+				}
+
+				// Legacy event streamer
+				if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+					streamer("content", chunk)
+				}
 			}
-
-			// Legacy event streamer
-			if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-				streamer("content", line+"\n")
+			if err != nil {
+				break
 			}
 		}
 	}()
@@ -1008,19 +1008,25 @@ func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCom
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			line := scanner.Text()
-			stderrBuf.WriteString(line + "\n")
+		buf := make([]byte, 1024)
+		for {
+			n, err := stderrPipe.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				stderrBuf.WriteString(chunk)
 
-			// Real-time stderr streaming with visual distinction
-			if req.StreamStderr != nil {
-				req.StreamStderr(line + "\n")
+				// Real-time stderr streaming with visual distinction
+				if req.StreamStderr != nil {
+					req.StreamStderr(chunk)
+				}
+
+				// Legacy event streamer with error indicator
+				if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+					streamer("content", "⚠️ "+chunk)
+				}
 			}
-
-			// Legacy event streamer with error indicator
-			if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-				streamer("content", "⚠️ "+line+"\n")
+			if err != nil {
+				break
 			}
 		}
 	}()
@@ -1136,22 +1142,6 @@ func handleCdCommand(trimmedCommand, workingDir, sessionID string) (string, erro
 	return `{"stdout":"","stderr":"","exit_code":0}`, nil
 }
 
-// handlePwdCommand handles print working directory command
-func handlePwdCommand(workingDir, sessionID string) (string, error) {
-	workingDirForPwd := workingDir
-	if sessionID != "" {
-		localCommandSessionState.mu.Lock()
-		if sessionState := localCommandSessionState.sessions[sessionID]; sessionState != nil && sessionState.workingDir != "" {
-			workingDirForPwd = sessionState.workingDir
-		}
-		localCommandSessionState.mu.Unlock()
-	}
-	if workingDirForPwd == "" {
-		workingDirForPwd = "."
-	}
-	return fmt.Sprintf(`{"stdout":"%s\n","stderr":"","exit_code":0}`, strings.ReplaceAll(workingDirForPwd, "\n", "\\n")), nil
-}
-
 // runBackgroundJob executes a command in the background
 func runBackgroundJob(ctx context.Context, job *backgroundJob, req sharedagent.LocalCommandRequest) {
 	defer func() {
@@ -1202,15 +1192,21 @@ func runBackgroundJob(ctx context.Context, job *backgroundJob, req sharedagent.L
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stdoutPipe)
-		for scanner.Scan() {
-			line := scanner.Text()
-			job.mu.Lock()
-			job.stdout.WriteString(line + "\n")
-			job.mu.Unlock()
+		buf := make([]byte, 1024)
+		for {
+			n, err := stdoutPipe.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				job.mu.Lock()
+				job.stdout.WriteString(chunk)
+				job.mu.Unlock()
 
-			if req.StreamStdout != nil {
-				req.StreamStdout(line + "\n")
+				if req.StreamStdout != nil {
+					req.StreamStdout(chunk)
+				}
+			}
+			if err != nil {
+				break
 			}
 		}
 	}()
@@ -1219,15 +1215,21 @@ func runBackgroundJob(ctx context.Context, job *backgroundJob, req sharedagent.L
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			line := scanner.Text()
-			job.mu.Lock()
-			job.stderr.WriteString(line + "\n")
-			job.mu.Unlock()
+		buf := make([]byte, 1024)
+		for {
+			n, err := stderrPipe.Read(buf)
+			if n > 0 {
+				chunk := string(buf[:n])
+				job.mu.Lock()
+				job.stderr.WriteString(chunk)
+				job.mu.Unlock()
 
-			if req.StreamStderr != nil {
-				req.StreamStderr(line + "\n")
+				if req.StreamStderr != nil {
+					req.StreamStderr(chunk)
+				}
+			}
+			if err != nil {
+				break
 			}
 		}
 	}()
