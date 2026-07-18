@@ -1028,7 +1028,7 @@ func (a *CopilotAgent) toolStatPath(ctx context.Context, args map[string]any) (s
 func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromArgs(args)
 	short := boolFlagFromArgs(args, "short")
-	command := fmt.Sprintf("git -C %s status", shellQuote(path))
+	command := fmt.Sprintf("git --no-pager -C %s status", shellQuote(path))
 	if short {
 		command += " --short"
 	}
@@ -1038,7 +1038,7 @@ func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (
 func (a *CopilotAgent) toolGitDiff(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromArgs(args)
 	staged := boolFlagFromArgs(args, "staged")
-	command := fmt.Sprintf("git -C %s diff", shellQuote(path))
+	command := fmt.Sprintf("git --no-pager -C %s diff", shellQuote(path))
 	if staged {
 		command += " --staged"
 	}
@@ -1063,13 +1063,13 @@ func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (str
 	if count <= 0 {
 		count = 10
 	}
-	command := fmt.Sprintf("git -C %s log --oneline -n %d", shellQuote(path), count)
+	command := fmt.Sprintf("git --no-pager -C %s log --oneline -n %d", shellQuote(path), count)
 	return a.runLocalAutomationCommand(ctx, args, command, "Inspect recent repository history.", path, 60)
 }
 
 func (a *CopilotAgent) toolGitBranch(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromArgs(args)
-	command := fmt.Sprintf("git -C %s branch --all", shellQuote(path))
+	command := fmt.Sprintf("git --no-pager -C %s branch --all", shellQuote(path))
 	return a.runLocalAutomationCommand(ctx, args, command, "Inspect repository branches.", path, 60)
 }
 
@@ -1083,7 +1083,7 @@ func (a *CopilotAgent) toolGitCheckout(ctx context.Context, args map[string]any)
 	if !ok || strings.TrimSpace(ref) == "" {
 		return "", fmt.Errorf("'ref' must be a non-empty string")
 	}
-	command := fmt.Sprintf("git -C %s checkout %s", shellQuote(path), shellQuote(ref))
+	command := fmt.Sprintf("git --no-pager -C %s checkout %s", shellQuote(path), shellQuote(ref))
 	return a.runLocalAutomationCommand(ctx, args, command, "Switch the repository to another branch or revision.", path, 60)
 }
 
@@ -1097,10 +1097,10 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 	if !ok || strings.TrimSpace(message) == "" {
 		return "", fmt.Errorf("'message' must be a non-empty string")
 	}
-	command := fmt.Sprintf("git -C %s add -A && git -C %s commit -m %s", shellQuote(path), shellQuote(path), shellQuote(message))
+	command := fmt.Sprintf("git --no-pager -C %s add -A && git --no-pager -C %s commit -m %s", shellQuote(path), shellQuote(path), shellQuote(message))
 	if allRaw, ok := args["all"]; ok {
 		if all, ok := allRaw.(bool); ok && !all {
-			command = fmt.Sprintf("git -C %s commit -m %s", shellQuote(path), shellQuote(message))
+			command = fmt.Sprintf("git --no-pager -C %s commit -m %s", shellQuote(path), shellQuote(message))
 		}
 	}
 	return a.runLocalAutomationCommand(ctx, args, command, "Create a git commit for the requested repository change.", path, 60)
@@ -1108,9 +1108,9 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 
 func (a *CopilotAgent) toolGitPull(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromArgs(args)
-	command := fmt.Sprintf("git -C %s pull", shellQuote(path))
+	command := fmt.Sprintf("git --no-pager -C %s pull", shellQuote(path))
 	if rebase := boolFlagFromArgs(args, "rebase"); rebase {
-		command = fmt.Sprintf("git -C %s pull --rebase", shellQuote(path))
+		command = fmt.Sprintf("git --no-pager -C %s pull --rebase", shellQuote(path))
 	}
 	return a.runLocalAutomationCommand(ctx, args, command, "Pull the latest changes for the repository.", path, 60)
 }
@@ -1129,7 +1129,7 @@ func (a *CopilotAgent) toolGitPush(ctx context.Context, args map[string]any) (st
 			branch = value
 		}
 	}
-	command := fmt.Sprintf("git -C %s push %s", shellQuote(path), remote)
+	command := fmt.Sprintf("git --no-pager -C %s push %s", shellQuote(path), remote)
 	if branch != "" {
 		command += " " + shellQuote(branch)
 	}
