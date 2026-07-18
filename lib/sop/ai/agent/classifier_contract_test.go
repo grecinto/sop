@@ -104,6 +104,24 @@ func (m *continuityIntentMockGen) Generate(ctx context.Context, prompt string, o
 
 func (m *continuityIntentMockGen) Name() string { return "continuity_intent_mock" }
 
+type classificationPromptMockGen struct {
+	response string
+	prompt   string
+}
+
+func (m *classificationPromptMockGen) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	m.prompt = opts.SystemPrompt
+	return ai.GenOutput{Text: m.response}, nil
+}
+
+func (m *classificationPromptMockGen) Name() string { return "classification_prompt_mock" }
+
+func (m *classificationPromptMockGen) EstimateCost(inTokens, outTokens int) float64 { return 0 }
+
+func (m *classificationPromptMockGen) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
+}
+
 func (m *continuityIntentMockGen) EstimateCost(inTokens, outTokens int) float64 { return 0 }
 
 func (m *continuityIntentMockGen) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
@@ -115,6 +133,22 @@ func TestClassifyContinuityTaskContext_RejectsInvalidIntent(t *testing.T) {
 	_, _, err := ag.ClassifyContinuityTaskContext(context.Background(), "same task", &TaskContextClassification{Entity: "Omni", Domain: StoresDomain}, nil, &continuityIntentMockGen{response: `{"intent":"maybe","layers":[]}`})
 	if err == nil {
 		t.Fatal("expected invalid continuity intent to return an error")
+	}
+}
+
+func TestClassifyTaskContext_PassesAutomationFamiliesPromptToLLM(t *testing.T) {
+	ag := &CopilotAgent{}
+	gen := &classificationPromptMockGen{response: `{"entity":"Omni","domain":"Automation","db_artifacts":[],"stores_artifacts":[],"spaces_artifacts":[],"automation_families":["git","postgres"],"layers":[{"name":"Single-Domain","crud":["R"]}]}`}
+
+	_, err := ag.ClassifyTaskContext(context.Background(), "check git diff and query postgres for recent changes", gen)
+	if err != nil {
+		t.Fatalf("expected classification to succeed, got %v", err)
+	}
+	if !strings.Contains(gen.prompt, "automation_families") {
+		t.Fatalf("expected classification prompt to mention automation_families, got: %s", gen.prompt)
+	}
+	if !strings.Contains(gen.prompt, "postgres") || !strings.Contains(gen.prompt, "git") {
+		t.Fatalf("expected classification prompt to include automation family guidance, got: %s", gen.prompt)
 	}
 }
 

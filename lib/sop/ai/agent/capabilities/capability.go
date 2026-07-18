@@ -35,6 +35,20 @@ type CapabilityResult struct {
 	Data    map[string]any
 }
 
+// ParticipationResult captures the outcome of a capability participation hook.
+type ParticipationResult struct {
+	Summary string
+	Data    map[string]any
+}
+
+// Participant extends capabilities with an optional lightweight hook for Ask continuity.
+// Implementations can use this to contribute pending-state, approval notes, or follow-up context
+// without taking over the core Ask routing loop.
+type Participant interface {
+	Capability
+	Participate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error)
+}
+
 // Capability is the plug-in contract for Ask domains.
 type Capability interface {
 	ID() string
@@ -201,6 +215,28 @@ func (r *Registry) Resolve(query string, state RoutingState) (Capability, bool) 
 		}
 	}
 	return nil, false
+}
+
+// TryParticipate asks each registered capability whether it wants to participate in the current Ask.
+// It stops at the first participating capability and returns its result.
+func (r *Registry) TryParticipate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error) {
+	if r == nil {
+		return ParticipationResult{}, false, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, cap := range r.capabilities {
+		if participant, ok := cap.(Participant); ok {
+			result, handled, err := participant.Participate(ctx, query, state)
+			if handled {
+				return result, true, err
+			}
+			if err != nil {
+				return ParticipationResult{}, true, err
+			}
+		}
+	}
+	return ParticipationResult{}, false, nil
 }
 
 // Compose returns all enabled capabilities that can handle the request, sorted by precedence.

@@ -102,6 +102,17 @@ func TestApplyCapabilityRoutingHintsSwitchesToCodingWorkflowForImplementationAsk
 	}
 }
 
+func TestInferCapabilityRoutingSignalPrefersKnowledgeForSummaryQueries(t *testing.T) {
+	intent, hint := inferCapabilityRoutingSignal("Summarize the main Go packages and modules in this repository", "")
+
+	if intent != intentFamilyKnowledge {
+		t.Fatalf("expected knowledge intent family for summary query, got %q", intent)
+	}
+	if hint != capabilityHintGeneral {
+		t.Fatalf("expected general capability hint for summary query, got %q", hint)
+	}
+}
+
 func TestResetRoutingForTopicSwitchClearsCapabilityAffinityHint(t *testing.T) {
 	ctx := context.Background()
 	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}

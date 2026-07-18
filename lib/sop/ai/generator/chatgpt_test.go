@@ -18,6 +18,13 @@ import (
 
 type chatGPTOwnedLoopHydrationStub struct{}
 
+type stubToolExecutor struct{}
+
+func (stubToolExecutor) ListTools(context.Context) ([]ai.ToolDefinition, error) { return nil, nil }
+func (stubToolExecutor) Execute(context.Context, string, map[string]any) (string, error) {
+	return "ok", nil
+}
+
 func (chatGPTOwnedLoopHydrationStub) Run(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
 	_ = ctx
 	resp := chatGPTOwnedLoopResponse("gpt-4o", "Final answer from ChatGPT owned loop", []ai.ToolCall{
@@ -117,6 +124,44 @@ func TestChatGPTReActLoop_DefaultsToOwnedLoop(t *testing.T) {
 	gen := &chatgpt{model: "gpt-4o", apiKey: "test-key"}
 	if _, ok := gen.ReActLoop().(chatGPTOwnedReActLoop); !ok {
 		t.Fatalf("expected owned loop by default, got %#v", gen.ReActLoop())
+	}
+}
+
+func TestChatGPTOwnedLoop_ReturnsFallbackResponseWhenIterationBudgetIsExceeded(t *testing.T) {
+	var calls int
+	loop := chatGPTOwnedReActLoop{
+		generator:     &chatgpt{model: "gpt-5.4"},
+		maxIterations: 1,
+		create: func(context.Context, openAIResponsesRequest) (openAIResponsesResponse, error) {
+			calls++
+			return openAIResponsesResponse{
+				ID: fmt.Sprintf("resp_%d", calls),
+				Output: []openAIResponsesOutputItem{{
+					Type:      "function_call",
+					Name:      "search_repo",
+					CallID:    "call_1",
+					Arguments: `{"query":"go"}`,
+				}},
+				OutputText: "still inspecting",
+			}, nil
+		},
+	}
+
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		UserQuery: "Summarize the repository",
+		Executor:  stubToolExecutor{},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if strings.TrimSpace(resp.FinalText) == "" {
+		t.Fatal("expected fallback final text when the loop exhausts its budget")
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "search_repo" {
+		t.Fatalf("expected one executed tool call, got %#v", resp.ToolCalls)
+	}
+	if calls != 1 {
+		t.Fatalf("expected one loop iteration before falling back, got %d", calls)
 	}
 }
 

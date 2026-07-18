@@ -777,11 +777,11 @@ func TestNativeReActEngine_UsesSessionPayloadVerboseForRuntimeProgress(t *testin
 	}
 	want := []string{
 		"Planning request with native multi-step loop.",
-		"Reasoning iteration 1 of 3.",
+		"Reasoning iteration 1 of 5.",
 		"Waiting for model response.",
 		"Calling tool `execute_script`.",
 		"Tool `execute_script` completed.",
-		"Reasoning iteration 2 of 3.",
+		"Reasoning iteration 2 of 5.",
 		"Waiting for model response.",
 		"No further tools required; preparing final answer.",
 	}
@@ -2749,7 +2749,7 @@ func (m *progressBudgetGenerator) Generate(ctx context.Context, prompt string, o
 	if strings.Contains(prompt, "We have hit the retry cap.") {
 		return ai.GenOutput{Text: "Which specific store or field should I focus on next to unblock this query?"}, nil
 	}
-	if m.calls <= 3 {
+	if m.calls <= nativeReActBaseToolIterations {
 		return ai.GenOutput{ToolCalls: []ai.ToolCall{{
 			Name: "execute_script",
 			Args: map[string]any{"script": []any{map[string]any{"op": "scan"}}},

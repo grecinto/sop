@@ -189,6 +189,17 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 // registerCapabilityTools iterates through all registered capabilities and registers
 // their exposed tools into the agent's tool registry. This ensures all capability-provided
 // tools flow through the ReAct loop naturally with server-side continuation support.
+func shouldRegisterCapabilityTool(cap capabilities.Capability, toolName string) bool {
+	if cap == nil {
+		return false
+	}
+	if toolName != "execute_local_command" {
+		return true
+	}
+	policy := GetAutomationPolicy()
+	return policy.isShellAutomationEnabled() || localDesktopAutomationEnabled.Load()
+}
+
 func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
 	a.ensureCapabilityRegistry()
 	if a.capabilityRegistry == nil {
@@ -203,6 +214,10 @@ func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
 			capability := cap
 			toolName := toolDef.Name
 			capID := cap.ID()
+
+			if !shouldRegisterCapabilityTool(capability, toolName) {
+				continue
+			}
 
 			handler := func(ctx context.Context, args map[string]any) (string, error) {
 				// Extract routing state from context if available

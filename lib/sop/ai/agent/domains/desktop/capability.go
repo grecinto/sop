@@ -154,6 +154,18 @@ func (c *Capability) Run(query string, state capabilities.RoutingState) (capabil
 	return capabilities.CapabilityResult{Summary: "desktop automation capability placeholder"}, nil
 }
 
+func (c *Capability) Participate(ctx context.Context, query string, state capabilities.RoutingState) (capabilities.ParticipationResult, bool, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return capabilities.ParticipationResult{}, false, nil
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "pwd") || strings.Contains(lower, "ls") || strings.Contains(lower, "status") || strings.Contains(lower, "approve") || strings.Contains(lower, "continue") {
+		return capabilities.ParticipationResult{Summary: "desktop automation follow-up", Data: map[string]any{"continuation": true}}, true, nil
+	}
+	return capabilities.ParticipationResult{}, false, nil
+}
+
 // GetHandledPrefixes returns the supported command prefixes this capability handles.
 // Only explicit slash-prefixed shortcuts are exposed to avoid ambiguity with natural-language prompts.
 func (c *Capability) GetHandledPrefixes() []string {

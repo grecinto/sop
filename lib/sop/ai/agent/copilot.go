@@ -2584,6 +2584,14 @@ func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	// 5. Episode Metadata Tracking (MRU Cache)
 	a.trackEpisodeMetadata(ctx, intent)
 
+	if a.capabilityRegistry != nil {
+		if result, handled, err := a.capabilityRegistry.TryParticipate(ctx, query, capabilities.RoutingState{Domain: taskContext.Domain, Gate: taskContext.RoutingGate, CapabilityHint: taskContext.CapabilityHint}); err == nil && handled {
+			if result.Summary != "" {
+				log.Info("Ask flow consulted capability participation hook", "summary", result.Summary)
+			}
+		}
+	}
+
 	// 6. System Prompt Construction
 	fullPrompt := a.buildSystemPrompt(ctx, query, *taskContext)
 

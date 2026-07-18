@@ -59,8 +59,12 @@ var validCRUDFlags = map[string]bool{
 }
 
 const (
-	StoresDomain = "Stores"
-	SpacesDomain = "Spaces"
+	StoresDomain      = "Stores"
+	SpacesDomain      = "Spaces"
+	GitDomain         = "Git"
+	CommandLineDomain = "CommandLine"
+	AutomationDomain  = "Automation"
+	GeneralDomain     = "General"
 
 	RoutingGateFocused    = "focused"
 	RoutingGateContinuity = "continuity"
@@ -119,7 +123,9 @@ func (a *CopilotAgent) ClassifyTaskContext(ctx context.Context, query string, ge
 		return nil, err
 	}
 
-	// Check if desktop automation is available
+	// Use the lightweight LLM-based classifier for discovery routing so it can
+	// infer multi-family automation needs (for example, git + postgres) from the
+	// user query instead of relying on hard-coded keyword shortcuts.
 	policy := GetAutomationPolicy()
 	hasDesktopAutomation := policy.Enabled || localDesktopAutomationEnabled.Load()
 
@@ -695,6 +701,20 @@ func normalizeTaskContext(taskCtx *TaskContextClassification) {
 			taskCtx.Domain = StoresDomain
 		case len(taskCtx.SpacesArtifacts) > 0 && len(taskCtx.StoresArtifacts) == 0:
 			taskCtx.Domain = SpacesDomain
+		case len(taskCtx.AutomationFamilies) > 0:
+			// Normalize based on the automation families emitted by the classifier.
+			if len(taskCtx.AutomationFamilies) == 1 {
+				switch taskCtx.AutomationFamilies[0] {
+				case "git":
+					taskCtx.Domain = GitDomain
+				case "shell":
+					taskCtx.Domain = CommandLineDomain
+				default:
+					taskCtx.Domain = AutomationDomain
+				}
+			} else {
+				taskCtx.Domain = AutomationDomain
+			}
 		case len(taskCtx.DBArtifacts) > 0 && hasLayer(taskCtx.Layers, "Single-Domain"):
 			// Preserve legacy single-array compatibility by biasing toward Stores when the domain is still unknown.
 			taskCtx.Domain = StoresDomain
@@ -811,6 +831,14 @@ func canonicalizeDomain(domain string) string {
 		return StoresDomain
 	case strings.EqualFold(domain, SpacesDomain):
 		return SpacesDomain
+	case strings.EqualFold(domain, GitDomain):
+		return GitDomain
+	case strings.EqualFold(domain, CommandLineDomain):
+		return CommandLineDomain
+	case strings.EqualFold(domain, AutomationDomain):
+		return AutomationDomain
+	case strings.EqualFold(domain, GeneralDomain):
+		return GeneralDomain
 	case strings.EqualFold(domain, "Store"):
 		return StoresDomain
 	case strings.EqualFold(domain, "Space"):

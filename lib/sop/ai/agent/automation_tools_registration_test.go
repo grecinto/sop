@@ -509,7 +509,7 @@ func TestGitStatusUsesLocalCommandExecutor(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("toolGitStatus() output = %q", out)
 	}
-	if !strings.Contains(received.Command, "git -C") || !strings.Contains(received.Command, "status") {
+	if !strings.Contains(received.Command, "git --no-pager") || !strings.Contains(received.Command, "status") {
 		t.Fatalf("expected git status command, got %q", received.Command)
 	}
 }

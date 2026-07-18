@@ -61,6 +61,13 @@ Available Space Artifacts: [%s]
 - Populate both `stores_artifacts` AND `spaces_artifacts`
 - Leave `db_artifacts` empty (superseded by domain-specific arrays)
 
+**For Domain + Automation** (Cross-capability):
+- Populate the primary domain artifacts (spaces_artifacts OR stores_artifacts)
+- ALSO populate `automation_families` with relevant tools (git, postgres, shell, etc.)
+- Example: "mint data to medical space and commit changes" → spaces_artifacts + automation_families: ["git"]
+- Example: "query users table and run git status" → stores_artifacts + automation_families: ["git"]
+- This enables the system to expose BOTH domain tools AND automation tools
+
 ### 4. Detect Operational Layer
 **"Single-Domain"** - Default choice when:
 - Request operates within one domain (Stores OR Spaces, not both)

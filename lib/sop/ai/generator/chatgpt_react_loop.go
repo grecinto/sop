@@ -122,7 +122,11 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 			request.ToolChoice = buildToolChoiceForceCall(request.Tools)
 		}
 	}
-	return ai.ReasoningResponse{}, fmt.Errorf("chatgpt owned loop exceeded %d iterations for model %q", maxIterations, l.modelName())
+
+	finalText := openAIResponseFinalText(openAIResponsesResponse{OutputText: "I reached the tool-step limit while trying to answer. I’ll provide the best answer I can from the information gathered so far."})
+	resp := buildFinalResponse(l.modelName(), finalText, executedToolCalls, toolResults, "", "")
+	emitChatGPTOwnedLoopHydration(req, resp)
+	return resp, nil
 }
 
 // sendRequest dispatches to streaming or blocking depending on the request flag.

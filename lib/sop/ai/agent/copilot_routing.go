@@ -9,6 +9,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
 type routingAnchor struct {
@@ -92,6 +93,13 @@ func (a *CopilotAgent) persistRoutingState(ctx context.Context, taskCtx *TaskCon
 func (a *CopilotAgent) applyCapabilityRoutingHints(ctx context.Context, taskCtx *TaskContextClassification, query string) {
 	if taskCtx == nil {
 		return
+	}
+	if a != nil && a.capabilityRegistry != nil {
+		if _, ok := a.capabilityRegistry.Resolve(query, capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate, CapabilityHint: taskCtx.CapabilityHint}); ok {
+			if taskCtx.CapabilityHint == "" {
+				taskCtx.CapabilityHint = capabilityHintGeneral
+			}
+		}
 	}
 	inferredIntent, inferredHint := inferCapabilityRoutingSignal(query, taskCtx.Domain)
 	if taskCtx.RoutingGate == RoutingGateContinuity {
@@ -177,10 +185,13 @@ func inferCapabilityRoutingSignal(query string, domain string) (string, string) 
 	if strings.Contains(q, "git") || strings.Contains(q, "cmd") || strings.Contains(q, "shell") || strings.Contains(q, "postgres") || strings.Contains(q, "splunk") || strings.Contains(q, "docker") || strings.Contains(q, "service") || strings.Contains(q, "process") || strings.Contains(q, "terminal") || strings.Contains(q, "file system") || strings.Contains(q, "filesystem") || strings.Contains(q, "local") {
 		return intentFamilyLocalOps, capabilityHintDesktopAutomation
 	}
+	if strings.Contains(q, "summarize") || strings.Contains(q, "summary") || strings.Contains(q, "overview") || strings.Contains(q, "explain") || strings.Contains(q, "describe") || strings.Contains(q, "walk through") {
+		return intentFamilyKnowledge, capabilityHintGeneral
+	}
 	if strings.Contains(q, "fix") || strings.Contains(q, "refactor") || strings.Contains(q, "patch") || strings.Contains(q, "edit") || strings.Contains(q, "implement") || strings.Contains(q, "modify") || strings.Contains(q, "add test") || strings.Contains(q, "update") || strings.Contains(q, "repo") || strings.Contains(q, "code") || strings.Contains(q, "parser") || strings.Contains(q, "function") || strings.Contains(q, "class") || strings.Contains(q, "module") || strings.Contains(q, "generate") || strings.Contains(q, "json") || strings.Contains(q, "script") || strings.Contains(q, "analysis") || strings.Contains(q, "analy") || strings.Contains(q, "sql") || strings.Contains(q, "table") || strings.Contains(q, "record") || strings.Contains(q, "search") {
 		return intentFamilyRepoEdit, capabilityHintCodingWorkflow
 	}
-	if strings.Contains(q, "research") || strings.Contains(q, "explain") || strings.Contains(q, "what") || strings.Contains(q, "why") || strings.Contains(q, "summarize") || strings.Contains(q, "how") || strings.Contains(q, "concept") || strings.Contains(q, "docs") {
+	if strings.Contains(q, "research") || strings.Contains(q, "what") || strings.Contains(q, "why") || strings.Contains(q, "how") || strings.Contains(q, "concept") || strings.Contains(q, "docs") {
 		return intentFamilyKnowledge, capabilityHintGeneral
 	}
 	return inferIntentFamily(domain, q), capabilityHintGeneral
@@ -294,6 +305,13 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 func (a *CopilotAgent) tryColdStartBasedRouting(ctx context.Context, query string, gen ai.Generator, isTest bool) (*TaskContextClassification, error) {
 	if len(strings.Split(query, ":")) == 1 {
 		log.Info("Cold-Start Routing Activated")
+	}
+	if a != nil && a.capabilityRegistry != nil {
+		if result, handled, err := a.capabilityRegistry.TryParticipate(ctx, query, capabilities.RoutingState{}); err == nil && handled {
+			if result.Summary != "" {
+				log.Info("Capability participation hook handled follow-up", "summary", result.Summary)
+			}
+		}
 	}
 	if gen == nil || isTest {
 		return nil, nil

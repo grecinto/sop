@@ -93,6 +93,31 @@ type mockPrefixCapability struct {
 	handler  func(context.Context, string, string) (string, error)
 }
 
+type participatingCapability struct {
+	id      string
+	summary string
+}
+
+func (p *participatingCapability) ID() string   { return p.id }
+func (p *participatingCapability) Name() string { return "participating" }
+func (p *participatingCapability) Entitlement() Entitlement {
+	return Entitlement{EnabledByDefault: true, Tier: "test"}
+}
+func (p *participatingCapability) CanHandle(query string, state RoutingState) bool {
+	return state.Domain == "Desktop"
+}
+func (p *participatingCapability) BuildContext(query string, state RoutingState) string { return "" }
+func (p *participatingCapability) ExposeTools() []ToolDefinition                        { return nil }
+func (p *participatingCapability) BuildInstructions(query string, state RoutingState) string {
+	return ""
+}
+func (p *participatingCapability) Run(query string, state RoutingState) (CapabilityResult, error) {
+	return CapabilityResult{}, nil
+}
+func (p *participatingCapability) Participate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error) {
+	return ParticipationResult{Summary: p.summary}, true, nil
+}
+
 func (m *mockPrefixCapability) ID() string   { return m.id }
 func (m *mockPrefixCapability) Name() string { return "Mock " + m.id }
 func (m *mockPrefixCapability) Entitlement() Entitlement {
@@ -172,6 +197,23 @@ func TestTryPrefixRouting_EmptyQuery(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("Empty query should not return error, got %v", err)
+	}
+}
+
+func TestRegistryTryParticipateUsesParticipationHook(t *testing.T) {
+	reg := NewRegistry()
+	cap := &participatingCapability{id: "desktop", summary: "shell output"}
+	reg.Register(cap)
+
+	result, handled, err := reg.TryParticipate(context.Background(), "pwd", RoutingState{Domain: "Desktop"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !handled {
+		t.Fatal("expected participation hook to handle the query")
+	}
+	if result.Summary != "shell output" {
+		t.Fatalf("expected participation summary %q, got %q", "shell output", result.Summary)
 	}
 }
 
