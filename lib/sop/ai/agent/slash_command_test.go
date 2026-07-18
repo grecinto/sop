@@ -106,10 +106,10 @@ func TestCapabilityPrefixRouting_RequiresSlashPrefixes(t *testing.T) {
 		}
 	}
 
-	// Test slash-prefixed forms - should be handled by capability routing
+	// Test the supported explicit slash prefixes
 	for _, input := range []string{"/cmd echo direct-ok", "/cmd:echo direct-ok", "/c echo direct-ok", "/c:echo direct-ok", "/shell echo test", "/exec pwd"} {
 		if handled, _, _ := agent.capabilityRegistry.TryPrefixRouting(ctx, input); !handled {
-			t.Fatalf("TryPrefixRouting(%q) = not handled, want handled for slash-prefixed command", input)
+			t.Fatalf("TryPrefixRouting(%q) = not handled, want handled for supported slash-prefixed command", input)
 		}
 	}
 }

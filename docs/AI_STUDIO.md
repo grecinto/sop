@@ -25,6 +25,14 @@ The **AI Studio** button allows authenticated site users to launch the Data Mana
 - 🎯 **Flexibility**: Custom daemon ports supported
 - 🔑 **Security**: Uses existing site session for authentication
 
+### Command Execution Features
+- 🖥️ **Terminal Launch**: Interactive commands (sudo, ssh, vim) open in native terminal
+- ⚡ **Background Execution**: Simple commands run with output captured to chat
+- 🚫 **Cancellation**: Long-running commands can be aborted with proper cleanup
+- 📊 **Error Handling**: Partial output preserved on failures or cancellation
+
+**See Also**: [Terminal Launch Feature](TERMINAL_LAUNCH_FEATURE.md) for detailed execution mode documentation
+
 ### Access Control
 - **HQ Mode** (`/app`): Admins only
 - **Daemon Mode** (`/app?mode=daemon`): All authenticated users

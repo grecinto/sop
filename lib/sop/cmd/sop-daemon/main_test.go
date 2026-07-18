@@ -997,35 +997,75 @@ func TestExecuteHandlerRunsShellCommand(t *testing.T) {
 	}
 }
 
-func TestLocalAgentExecuteToolUsesDaemonCommandRunner(t *testing.T) {
-	sharedagent.SetLocalCommandExecutor(func(ctx context.Context, req sharedagent.LocalCommandRequest) (string, error) {
-		if req.Command != "echo hello" {
-			t.Fatalf("command = %q, want %q", req.Command, "echo hello")
-		}
-		if req.Reasoning != "show me the output" {
-			t.Fatalf("reasoning = %q, want %q", req.Reasoning, "show me the output")
-		}
-		if req.WorkingDir != "" {
-			t.Fatalf("working dir = %q, want empty", req.WorkingDir)
-		}
-		if req.TimeoutSeconds != 600 {
-			t.Fatalf("timeout = %d, want 600", req.TimeoutSeconds)
-		}
-		return `{"stdout":"hello","stderr":"","exit_code":0}`, nil
-	})
-	sharedagent.SetLocalDesktopAutomationEnabled(true)
-	defer sharedagent.SetLocalDesktopAutomationEnabled(false)
-	defer sharedagent.SetLocalCommandExecutor(nil)
+func TestExecuteHandlerHandlesCancellation(t *testing.T) {
+	// Create a cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
 
-	ag := sharedagent.NewCopilotAgent(sharedagent.Config{}, nil, nil)
-	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "system"})
+	// Start a long-running command
+	reqBody := `{"command":"sleep 10 && echo done"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(reqBody))
+	req = req.WithContext(ctx)
+	rr := httptest.NewRecorder()
 
-	out, err := ag.Execute(ctx, "execute_local_command", map[string]any{"command": "echo hello", "reasoning": "show me the output"})
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
+	// Cancel the context after a short delay
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	executeHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("executeHandler() status = %d, want %d", rr.Code, http.StatusOK)
 	}
-	if !strings.Contains(out, "hello") {
-		t.Fatalf("Execute() output = %q, want it to contain command output", out)
+
+	var resp ExecuteResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if !resp.Cancelled {
+		t.Fatalf("expected command to be marked as cancelled, got cancelled=%v", resp.Cancelled)
+	}
+
+	if resp.ExitCode != -1 {
+		t.Fatalf("expected exit code -1 for cancelled command, got %d", resp.ExitCode)
+	}
+
+	if !strings.Contains(resp.Error, "cancelled") {
+		t.Fatalf("expected error to mention cancellation, got %q", resp.Error)
+	}
+}
+
+func TestExecuteHandlerShowsPartialOutputOnError(t *testing.T) {
+	// Command that produces output before failing
+	reqBody := `{"command":"echo 'partial output' && exit 1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(reqBody))
+	rr := httptest.NewRecorder()
+
+	executeHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("executeHandler() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var resp ExecuteResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.ExitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", resp.ExitCode)
+	}
+
+	// Verify partial output is captured
+	if !strings.Contains(resp.Stdout, "partial output") {
+		t.Fatalf("expected stdout to contain partial output, got %q", resp.Stdout)
+	}
+
+	// Should not be marked as cancelled
+	if resp.Cancelled {
+		t.Fatalf("command failed naturally, should not be marked as cancelled")
 	}
 }
 

@@ -254,7 +254,7 @@ func (a *CopilotAgent) formatCommandShortcuts() string {
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("Example: /cmd ls -la or /shell pwd executes immediately without LLM reasoning.\n")
+	sb.WriteString("Example: /cmd ls -la, /c pwd, or /shell pwd executes immediately without LLM reasoning.\n")
 
 	return sb.String()
 }

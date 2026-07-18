@@ -73,7 +73,8 @@ func (c *Capability) Run(query string, state capabilities.RoutingState) (capabil
 	return capabilities.CapabilityResult{Summary: "desktop automation capability placeholder"}, nil
 }
 
-// GetHandledPrefixes returns the command prefixes this capability handles
+// GetHandledPrefixes returns the supported command prefixes this capability handles.
+// Only explicit slash-prefixed shortcuts are exposed to avoid ambiguity with natural-language prompts.
 func (c *Capability) GetHandledPrefixes() []string {
 	return []string{"/c", "/cmd", "/shell", "/exec"}
 }

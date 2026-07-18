@@ -237,6 +237,7 @@ type ExecuteResponse struct {
 	Stderr             string `json:"stderr"`
 	ExitCode           int    `json:"exit_code"`
 	Error              string `json:"error,omitempty"`
+	Cancelled          bool   `json:"cancelled,omitempty"` // If true, command was cancelled by user
 	LaunchedInTerminal bool   `json:"launched_in_terminal,omitempty"`
 	Suggestion         string `json:"suggestion,omitempty"`
 	Streaming          bool   `json:"streaming,omitempty"` // If true, output streamed separately
@@ -1728,11 +1729,23 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Background mode: capture output and return
+	// Use request context for cancellation support
+	ctx := r.Context()
+	if req.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", req.Command)
+		cmd = exec.CommandContext(ctx, "cmd", "/C", req.Command)
 	} else {
-		cmd = exec.Command("sh", "-c", req.Command)
+		cmd = exec.CommandContext(ctx, "sh", "-c", req.Command)
+		// Set process group so we can kill the entire group on cancellation
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setpgid: true,
+		}
 	}
 
 	if req.WorkingDir != "" {
@@ -1743,32 +1756,75 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
-
-	resp := ExecuteResponse{
-		Stdout: stdout.String(),
-		Stderr: stderr.String(),
-	}
-
-	// Add suggestion if command would work better in terminal
-	if shouldUseTerminal(req.Command) && executionMode == "background" {
-		resp.Suggestion = getTerminalSuggestion(req.Command)
-	}
-
-	if err != nil {
-		resp.Error = err.Error()
-		if exitError, ok := err.(*exec.ExitError); ok {
-			resp.ExitCode = exitError.ExitCode()
-		} else {
-			resp.ExitCode = -1
+	// Start command and monitor for cancellation
+	if err := cmd.Start(); err != nil {
+		resp := ExecuteResponse{
+			Stdout:   stdout.String(),
+			Stderr:   stderr.String(),
+			ExitCode: -1,
+			Error:    fmt.Sprintf("Failed to start command: %v", err),
 		}
-		log.Printf("Command finished with error: %v", err)
-	} else {
-		resp.ExitCode = 0
-		log.Printf("Command executed successfully")
+		respondJSON(w, http.StatusOK, resp)
+		return
 	}
 
-	respondJSON(w, http.StatusOK, resp)
+	// Monitor context cancellation in a goroutine
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Context cancelled - kill the process
+		if cmd.Process != nil {
+			if runtime.GOOS == "windows" {
+				cmd.Process.Kill()
+			} else {
+				// Kill the entire process group
+				syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+		}
+		<-done // Wait for process to finish
+
+		resp := ExecuteResponse{
+			Stdout:    stdout.String(),
+			Stderr:    stderr.String(),
+			Cancelled: true,
+			ExitCode:  -1,
+			Error:     "Command cancelled by user",
+		}
+		log.Printf("Command cancelled by user")
+		respondJSON(w, http.StatusOK, resp)
+		return
+
+	case err := <-done:
+		// Command completed normally
+		resp := ExecuteResponse{
+			Stdout: stdout.String(),
+			Stderr: stderr.String(),
+		}
+
+		// Add suggestion if command would work better in terminal
+		if shouldUseTerminal(req.Command) && executionMode == "background" {
+			resp.Suggestion = getTerminalSuggestion(req.Command)
+		}
+
+		if err != nil {
+			resp.Error = err.Error()
+			if exitError, ok := err.(*exec.ExitError); ok {
+				resp.ExitCode = exitError.ExitCode()
+			} else {
+				resp.ExitCode = -1
+			}
+			log.Printf("Command finished with error: %v", err)
+		} else {
+			resp.ExitCode = 0
+			log.Printf("Command executed successfully")
+		}
+
+		respondJSON(w, http.StatusOK, resp)
+	}
 }
 
 func buildListenAddr(host string, port int) string {

@@ -36,7 +36,7 @@ func launchMacTerminal(command, workingDir string) error {
 	script := fmt.Sprintf(`
 		tell application "Terminal"
 			activate
-			do script "cd '%s' && %s; echo ''; echo 'Press any key to close...'; read -n 1"
+			do script "cd '%s' && %s; echo ''; echo '✅ Command completed. You can now return to the AI Studio chat window.'; echo 'Press any key to close this terminal...'; read -n 1"
 		end tell
 	`, workingDir, escapedCmd)
 
@@ -63,7 +63,7 @@ func launchLinuxTerminal(command, workingDir string) error {
 	}
 
 	// Build command string with directory change
-	fullCommand := fmt.Sprintf("cd '%s' && %s; echo ''; echo 'Press any key to close...'; read -n 1", workingDir, command)
+	fullCommand := fmt.Sprintf("cd '%s' && %s; echo ''; echo '✅ Command completed. You can now return to the AI Studio chat window.'; echo 'Press any key to close this terminal...'; read -n 1", workingDir, command)
 
 	var lastErr error
 	for _, term := range terminals {
@@ -95,7 +95,7 @@ func launchWindowsTerminal(command, workingDir string) error {
 	}
 
 	// Build command string
-	fullCommand := fmt.Sprintf(`cd /d "%s" && %s && echo. && echo Press any key to close... && pause > nul`, workingDir, command)
+	fullCommand := fmt.Sprintf(`cd /d "%s" && %s && echo. && echo ✅ Command completed. You can now return to the AI Studio chat window. && echo Press any key to close this terminal... && pause > nul`, workingDir, command)
 
 	// Try Windows Terminal first (modern)
 	if _, err := exec.LookPath("wt.exe"); err == nil {

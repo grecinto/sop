@@ -88,6 +88,61 @@ cmd:find . -name "*.go" | head
 
 When local desktop automation is enabled, the same execution path can also trigger richer helpers for repo inspection and editing, including file reads/writes/patches, directory management, repo search/grep, test execution, and path inspection. These actions are still approval-aware and policy-gated by the automation layer.
 
+### Command Execution Modes
+
+Commands can execute in two modes: **Terminal** or **Background**.
+
+**Terminal Mode** (🖥️):
+- Opens a native terminal window (Terminal.app, gnome-terminal, etc.)
+- Supports interactive commands requiring user input (sudo passwords, ssh prompts)
+- User types directly in terminal, maintains full control
+- Best for: `sudo`, `ssh`, `vim`, `top`, `tail -f`, text editors, monitors
+
+**Background Mode** (⚡):
+- Runs invisibly with stdout/stderr captured
+- Results displayed in chat window
+- Supports cancellation with partial output preservation
+- Best for: `ls`, `pwd`, `git status`, `cat`, build commands
+
+**Auto-Detection**: The daemon automatically suggests the appropriate mode based on command patterns (see `terminal.go:shouldUseTerminal()`). Users can override the suggestion in the approval modal.
+
+**Cancellation Support**: Background commands can be aborted mid-execution. The system kills the process group (including child processes) and preserves any partial output captured before cancellation.
+
+**Error Handling**: Failed commands preserve stdout/stderr output, allowing users to see what happened before the error. The UI distinguishes between cancelled (user-initiated abort) and failed (command error) states.
+
+See [docs/TERMINAL_LAUNCH_FEATURE.md](../../../../docs/TERMINAL_LAUNCH_FEATURE.md) for complete documentation.
+
+### Testing
+
+Run all daemon tests:
+```bash
+go test ./cmd/sop-daemon/ -v
+```
+
+Test specific features:
+```bash
+# Terminal detection and suggestions
+go test ./cmd/sop-daemon/ -run TestShouldUseTerminal
+go test ./cmd/sop-daemon/ -run TestGetTerminalSuggestion
+
+# Command execution and cancellation
+go test ./cmd/sop-daemon/ -run TestExecuteHandler
+
+# Cancellation response time (should complete in ~0.10s)
+go test ./cmd/sop-daemon/ -run TestExecuteHandlerHandlesCancellation
+```
+
+**Test Coverage**:
+- 96 test functions covering command execution, cancellation, error handling
+- Terminal pattern detection (sudo, ssh, vim, editors, monitors)
+- Process group termination on cancellation
+- Partial output preservation on errors
+- Cross-platform terminal launch (macOS, Linux, Windows)
+
+**Key Test Files**:
+- `main_test.go` - Command execution, cancellation, error handling
+- `terminal_test.go` - Terminal detection patterns and suggestions
+
 ## Private overlay scope
 
 The following pieces are the private overlay pieces that belong in this repository:

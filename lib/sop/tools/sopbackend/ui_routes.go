@@ -511,6 +511,44 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		}
 	}
 
+	// ========================================================================
+	// PARENT SITE NAVIGATION
+	// ========================================================================
+	// Allow parent application to specify its landing page URL so users can
+	// navigate back from AI Studio to the main site dashboard.
+	//
+	// Usage: /app?mode=daemon&site_url=http://localhost:8080&site_label=Back%20to%20Dashboard
+	//
+	// This makes sopbackend generic so any app launching AI Studio can
+	// provide its own return URL without hardcoding site-specific navigation.
+	//
+	// Implementation:
+	//   1. Parse site_url query parameter
+	//   2. Validate URL format (require http/https scheme)
+	//   3. Parse optional site_label parameter for custom button text
+	//   4. Template renders fixed top-right back button if URL present
+	//
+	// Security:
+	//   - Only http:// and https:// schemes allowed
+	//   - Template engine auto-escapes URLs (XSS prevention)
+	//   - Empty/invalid URLs result in no back button (safe fallback)
+	// ========================================================================
+	parentSiteURL := ""
+	parentSiteLabel := "Back to Site"
+	if siteURL := strings.TrimSpace(req.URL.Query().Get("site_url")); siteURL != "" {
+		// Validate URL format - must have valid scheme
+		if parsedURL, err := url.Parse(siteURL); err == nil && parsedURL.Scheme != "" {
+			// Only allow http and https schemes for security
+			if parsedURL.Scheme == "http" || parsedURL.Scheme == "https" {
+				parentSiteURL = siteURL
+				// Optional: Allow custom label via site_label parameter
+				if label := strings.TrimSpace(req.URL.Query().Get("site_label")); label != "" {
+					parentSiteLabel = label
+				}
+			}
+		}
+	}
+
 	return map[string]any{
 		"Version":                 sop.Version,
 		"Username":                username,
@@ -533,6 +571,8 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		"DefaultRuntimeMode":      defaultRuntimeMode,
 		"SetupWizardAIConfigJSON": r.setupWizardAIConfigJSON(),
 		"ModelCatalogJSON":        r.modelCatalogJSON(),
+		"ParentSiteURL":           parentSiteURL,
+		"ParentSiteLabel":         parentSiteLabel,
 	}
 }
 

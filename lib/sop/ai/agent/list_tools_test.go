@@ -428,7 +428,7 @@ func TestListToolsIncludesCommandShortcuts(t *testing.T) {
 		t.Errorf("list_tools output should include Command Shortcuts section.\nGot:\n%s", output)
 	}
 
-	// Check for desktop automation shortcuts
+	// Check for the supported desktop automation shortcuts
 	expectedShortcuts := []string{"/c", "/cmd", "/shell", "/exec"}
 	for _, shortcut := range expectedShortcuts {
 		if !strings.Contains(output, shortcut+" <command>:") {

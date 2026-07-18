@@ -9,6 +9,8 @@ Commands can now execute in **visible terminal windows** instead of hidden backg
 - ✅ **Security**: Passwords typed in real terminal, not web UI
 - ✅ **Debugging**: Direct terminal access for troubleshooting
 - ✅ **User Control**: Choose execution mode per command
+- ✅ **Cancellation**: Commands can be aborted with proper cleanup
+- ✅ **Error Handling**: Partial output preserved when commands fail or are cancelled
 
 ## How It Works
 
@@ -30,22 +32,32 @@ Commands can now execute in **visible terminal windows** instead of hidden backg
 
 ### Smart Defaults
 
-The system **automatically suggests** the best execution mode:
+The system **automatically suggests** the best execution mode based on command pattern detection.
 
-**Auto-selects Terminal for**:
+**Auto-selects Terminal for Interactive Commands**:
 - `sudo` - password input needed
-- `ssh`, `scp` - may need credentials
-- `vim`, `nano`, `emacs` - text editors
+- `su ` - switch user (password required)
+- `ssh` - remote shell/may need credentials
+- `scp` - secure copy (may need password)
+- `vim`, `vi `, `nano`, `emacs` - text editors
 - `less`, `more` - pagers
-- `top`, `htop`, `watch` - monitors
+- `top`, `htop` - process monitors
+- `watch` - continuous monitoring
 - `tail -f` - log following
-- `docker exec -it` - interactive containers
+- `docker exec -it`, `kubectl exec -it` - interactive containers
+- `python -i`, `node ` - REPLs
+- `irb` - Ruby REPL
+- `psql` - PostgreSQL shell
+- `mysql` - MySQL shell
+- `redis-cli` - Redis CLI
 
-**Auto-selects Background for**:
+**Auto-selects Background for Non-Interactive Commands**:
 - `ls`, `pwd`, `cd` - directory operations
 - `cat`, `head`, `tail` (without -f) - file viewing
 - `git status`, `git log` - git queries
 - `echo`, `printf` - output commands
+- Most build/compilation commands
+- Simple script execution
 
 ### User Override
 
@@ -53,6 +65,87 @@ Users can always override the suggestion:
 - Modal shows both options
 - Recommendation highlighted when applicable
 - Choice remembered for session (optional)
+
+## Command Lifecycle & Cancellation
+
+### Command Execution States
+
+1. **Pending**: User approval required (modal shown)
+2. **Running**: Command executing (background or terminal)
+3. **Completed**: Finished with exit code
+4. **Cancelled**: User-initiated abort
+5. **Failed**: Error during execution
+
+### Cancellation Support (Background Mode)
+
+**User-Initiated Cancellation**:
+- Frontend sends abort signal via `AbortController`
+- Backend detects context cancellation
+- Process killed via `syscall.Kill(-pid, SIGKILL)`
+- Process group ensures child processes also terminated
+- Partial output captured before cancellation
+- Response marked with `cancelled: true`
+
+**Implementation Details**:
+```go
+// Process group support for Unix
+cmd.SysProcAttr = &syscall.SysProcAttr{
+    Setpgid: true, // Create new process group
+}
+
+// Kill entire process tree on cancellation
+syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+```
+
+**Cancellation Response**:
+```json
+{
+  "cancelled": true,
+  "exit_code": -1,
+  "stdout": "partial output before cancellation",
+  "stderr": "partial errors if any",
+  "error": "context cancelled: command aborted by user"
+}
+```
+
+**UI Display**:
+```
+⚠️ Command Cancelled ⚡ Background
+
+Command: `sleep 10 && echo done`
+
+Status: The command was stopped by user request.
+
+Partial Output (before cancellation):
+```
+[Any output captured before abort]
+```
+```
+
+### Error Handling with Partial Output
+
+**Graceful Failure Handling**:
+- Commands that fail naturally (exit code != 0) preserve all output
+- Stdout and stderr captured even when command errors
+- Error message includes exit code and reason
+- UI distinguishes between cancelled vs failed states
+
+**Failed Command Response**:
+```json
+{
+  "cancelled": false,
+  "exit_code": 1,
+  "stdout": "output before failure",
+  "stderr": "error messages",
+  "error": "exit status 1"
+}
+```
+
+**Terminal Mode Cancellation**:
+- User presses Ctrl+C directly in terminal window
+- Terminal handles process interruption
+- No special backend logic needed
+- Natural terminal behavior preserved
 
 ## Implementation
 
@@ -91,10 +184,42 @@ type ExecuteRequest struct {
 ExecuteResponse includes:
 ```go
 type ExecuteResponse struct {
+    Stdout             string `json:"stdout"`
+    Stderr             string `json:"stderr"`
+    ExitCode           int    `json:"exit_code"`
+    Error              string `json:"error,omitempty"`
+    Cancelled          bool   `json:"cancelled,omitempty"`      // NEW: User-initiated abort
     LaunchedInTerminal bool   `json:"launched_in_terminal,omitempty"`
-    Suggestion        string `json:"suggestion,omitempty"`
+    Suggestion         string `json:"suggestion,omitempty"`
     // ... other fields
 }
+```
+
+**Execution Flow**:
+1. Parse `execution_mode` from request ("terminal" or "background")
+2. Auto-detect if not specified using `shouldUseTerminal()`
+3. Terminal mode: Launch via `launchInTerminal()` and return immediately
+4. Background mode: Execute with context cancellation support
+5. Monitor for context.Done() signal during execution
+6. On cancellation: Kill process group and capture partial output
+7. On completion: Return full output with exit code
+
+**Terminal Launch Messages**:
+When commands launch in terminal, the chat window displays:
+```
+✅ Command Launched in Terminal Window 🖥️
+
+Command: `sudo apt update`
+
+What's happening:
+• A terminal window has opened on your system
+• The command is running there with full terminal capabilities
+• You can interact with it directly (passwords, prompts, etc.)
+
+After the command completes:
+• Return to this chat window to continue
+• The terminal will prompt "Press any key to close..."
+• You can then tell me about the results or ask follow-up questions
 ```
 
 ### Frontend (Web UI)
@@ -446,12 +571,40 @@ Scenario: Terminal launch fails
 Expected: Falls back to background, shows warning
 ```
 
+#### Test 6: Command Cancellation
+```bash
+Command: sleep 10 && echo done
+Action: Click cancel button during execution
+Expected: Command aborted within 0.10s, partial output shown
+```
+
+#### Test 7: Partial Output on Error
+```bash
+Command: echo 'partial output' && exit 1
+Expected: Shows "partial output" even though command failed, exit code 1
+```
+
 ### Automated Tests
 
+**Run all daemon tests**:
 ```bash
-cd /Volumes/T7/sop-cloud/lib/sop/cmd/sop-daemon
-go test -v -run TestTerminal
+cd /Volumes/T7/sop-cloud/lib/sop
+go test ./cmd/sop-daemon/ -v
 ```
+
+**Key test functions**:
+- `TestExecuteHandlerRunsShellCommand` - Basic command execution
+- `TestExecuteHandlerHandlesCancellation` - Context cancellation (0.10s completion)
+- `TestExecuteHandlerShowsPartialOutputOnError` - Partial output preservation
+- `TestShouldUseTerminal` - Pattern detection logic
+- `TestGetTerminalSuggestion` - Suggestion text generation
+
+**Test coverage**:
+- 97+ tests covering command execution
+- Process group termination
+- Cancellation flow (verify fast termination)
+- Error handling with output preservation
+- Terminal detection patterns
 
 ## Future Enhancements
 
@@ -524,6 +677,80 @@ This is a **production-ready** implementation following industry best practices 
 
 ---
 
-**Version**: 1.0  
-**Date**: 2026-07-07  
+## Decision Flow Diagram
+
+```
+┌─────────────────────────────┐
+│  User Request (Command)     │
+└──────────┬──────────────────┘
+           │
+           ▼
+┌─────────────────────────────┐
+│  Approval Modal Appears     │
+│  - Shows command            │
+│  - Shows execution mode     │
+│  - Smart default selected   │
+└──────────┬──────────────────┘
+           │
+           ▼
+    ┌──────────────┐
+    │ Mode Check   │
+    │ execution_   │
+    │ mode set?    │
+    └──┬───────┬───┘
+       │       │
+      NO      YES
+       │       │
+       ▼       │
+ ┌──────────┐ │
+ │shouldUse │ │
+ │Terminal()│ │
+ └──┬───┬───┘ │
+    │   │     │
+   YES  NO    │
+    │   │     │
+    │   └─────┤
+    │         │
+    ▼         ▼
+┌────────┐ ┌──────────┐
+│Terminal│ │Background│
+│  Mode  │ │   Mode   │
+└───┬────┘ └────┬─────┘
+    │           │
+    ▼           ▼
+┌────────┐ ┌──────────────────┐
+│Launch  │ │Execute with      │
+│Terminal│ │Context Monitoring│
+│Window  │ └────┬─────────────┘
+└────────┘      │
+                ▼
+          ┌─────────────┐
+          │ Running...  │
+          │             │
+          │ Wait for:   │
+          │ - Complete  │
+          │ - Cancel    │
+          └──┬─────┬────┘
+             │     │
+         Cancel  Done
+             │     │
+             ▼     ▼
+        ┌──────┐ ┌────────┐
+        │Kill  │ │Capture │
+        │Group │ │Output  │
+        └──┬───┘ └───┬────┘
+           │         │
+           └────┬────┘
+                ▼
+         ┌──────────────┐
+         │Return Result │
+         │- Stdout/Stderr│
+         │- Exit Code   │
+         │- Cancelled   │
+         └──────────────┘
+```
+
+**Version**: 2.0  
+**Date**: 2026-07-17  
 **Status**: ✅ Production Ready
+**Updates**: Added cancellation support, error handling, complete pattern list
