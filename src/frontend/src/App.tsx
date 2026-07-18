@@ -155,6 +155,36 @@ function clearPersistedAccountState() {
   clearBrowserSessionCookies();
 }
 
+function clearAIStudioHQTokens() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  // Clear HQ mode tokens only (used when opening AI Studio in HQ mode)
+  // This prevents stale HQ tokens from conflicting with new session
+  window.localStorage.removeItem('sop_access_token');
+  window.localStorage.removeItem('sop_refresh_token');
+  window.localStorage.removeItem('sop_session_token');
+  window.localStorage.removeItem('access_token');
+  window.localStorage.removeItem('sop_userId');
+  window.sessionStorage.removeItem('sop_access_token');
+  window.sessionStorage.removeItem('sop_refresh_token');
+  window.sessionStorage.removeItem('sop_session_token');
+  window.sessionStorage.removeItem('access_token');
+  window.sessionStorage.removeItem('sop_userId');
+}
+
+function clearAIStudioDaemonTokens() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  // Clear daemon mode tokens only (used when opening AI Studio in daemon mode)
+  // This prevents stale daemon tokens from conflicting with new daemon session
+  window.localStorage.removeItem('sop_daemon_access_token');
+  window.localStorage.removeItem('sop_daemon_refresh_token');
+  window.localStorage.removeItem('sop_daemon_token_expiry');
+  window.localStorage.removeItem('sop_chat_runtime');
+}
+
 function loadPendingCheckoutSessionID(): string {
   if (typeof window === 'undefined') {
     return '';
@@ -710,9 +740,13 @@ async function logoutFromServer(): Promise<void> {
 async function openLocalWorkflow(event: MouseEvent<HTMLAnchorElement>): Promise<void> {
   event.preventDefault();
   
+  // Clear HQ tokens to prevent conflicts when switching to daemon mode
+  clearAIStudioHQTokens();
+  
   // Check if user has configured a custom daemon URL (stored in localStorage)
   const customDaemonURL = window.localStorage.getItem('sop_daemon_url');
   
+  // Build relative URL to go through site backend first
   let url = '/app?mode=daemon';
   if (customDaemonURL && customDaemonURL.trim() !== '' && customDaemonURL !== DEFAULT_DAEMON_URL) {
     // Pass custom daemon URL as query parameter
@@ -1284,7 +1318,8 @@ export default function App() {
   const canAccessLocalDaemon = Boolean(account.isAuthenticated) && !account.isSystemAdmin && account.plan !== 'none';
   // If backend config not provisioned, primary action should launch setup wizard
   const needsSetup = account.isAuthenticated && !account.configProvisioned;
-  const primaryActionHref = needsSetup ? '/app' : (canLaunchDataManager ? '/app' : '/site/subscribe');
+  const dataManagerHref = `/app?site_url=${encodeURIComponent(window.location.origin)}&site_label=${encodeURIComponent('Back to Dashboard')}`;
+  const primaryActionHref = needsSetup ? dataManagerHref : (canLaunchDataManager ? dataManagerHref : '/site/subscribe');
   const handleOpenDataManager = async (event?: MouseEvent<HTMLAnchorElement>) => {
     if (event) {
       event.preventDefault();
@@ -1292,16 +1327,26 @@ export default function App() {
     if (typeof window === 'undefined') {
       return;
     }
+    
+    // Clear daemon tokens to prevent conflicts when switching to HQ mode
+    clearAIStudioDaemonTokens();
+    
     try {
       await fetchJSON('/api/auth/status', { credentials: 'include' });
     } catch {
       // Fall back to the direct navigation below so the app still opens even if the auth probe is transiently unavailable.
     }
-    window.location.assign('/app');
+    
+    // Build URL with parent site navigation parameters
+    let url = '/app';
+    url += `?site_url=${encodeURIComponent(window.location.origin)}`;
+    url += `&site_label=${encodeURIComponent('Back to Dashboard')}`;
+    
+    window.location.assign(url);
   };
   const primaryActionLabel = needsSetup ? 'Setup Data Manager' : (canLaunchDataManager ? 'Open Data Manager' : (hasSubscription ? 'Unsubscribe' : 'Subscribe'));
   
-  const secondaryActionHref = canLaunchDataManager ? '/app' : '/site/subscribe';
+  const secondaryActionHref = canLaunchDataManager ? dataManagerHref : '/site/subscribe';
   const secondaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Manage subscription' : 'Review subscription';
   const shouldShowInstallPanel = showInstallStep || isStarterActive || checkoutComplete;
   const canResumeCheckout = Boolean(account.checkoutUrl) && (account.billingStatus === 'pending' || Boolean(account.failureReason));
@@ -1984,7 +2029,7 @@ This section explains the system design.
                   <div>
                     <span className="summary-label">Data Manager</span>
                     {canLaunchDataManager ? (
-                      <a href="/app" className="summary-link" onClick={(event) => { void handleOpenDataManager(event); }}>Open Data Manager</a>
+                      <a href={dataManagerHref} className="summary-link" onClick={(event) => { void handleOpenDataManager(event); }}>Open Data Manager</a>
                     ) : (
                       <strong>Admin access required</strong>
                     )}
@@ -2017,7 +2062,17 @@ This section explains the system design.
               <strong>Built-in expertise validation saves you time and money.</strong> Unlike other copilots that require manual refinement cycles, our automated KB Quality system validates code against best practices during generation—no additional prompts, no costly back-and-forth iterations. Expertise is enforced automatically, cutting context usage by up to 70%.
             </p>
             <div className="hero-actions" style={{ marginTop: '-1rem' }}>
-              <a className="button button-primary" href={primaryActionHref}>{primaryActionLabel}</a>
+              <a 
+                className="button button-primary" 
+                href={primaryActionHref}
+                onClick={(event) => {
+                  if (needsSetup || canLaunchDataManager) {
+                    void handleOpenDataManager(event);
+                  }
+                }}
+              >
+                {primaryActionLabel}
+              </a>
               <a className="button button-secondary" href="/site/docs">Product docs</a>
               <a className="button button-secondary" href="/docs/fleet-learning">Fleet Learning</a>
               <a className="button button-secondary" href="/docs/sdk/intro">Coming soon</a>
