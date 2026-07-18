@@ -103,6 +103,71 @@ SOP treats operational guidance as managed data instead of static prompt text.
 
 The ReAct loop in SOP is progressive by design, not a blind repeat-until-success loop.
 
+#### Multi-Step Tool Chaining Enhancement
+
+**Problem**: Traditional LLM tool-calling systems suffer from premature termination. After calling a single tool and seeing its result, the LLM is trained to synthesize a final answer rather than continue with additional tool calls. This creates a "tool → answer" pattern instead of the desired "tool → tool → tool → answer" workflow.
+
+**Example of the Problem**:
+```
+User: "Check in relevant files only"
+
+Iteration 1:
+  LLM calls: git_status
+  Result: "Modified: auth.go, test.go, README.md"
+  
+Iteration 2:
+  LLM response: "Based on git_status, the relevant files are auth.go and test.go"
+  Tool calls: NONE ← Synthesized answer instead of calling git_commit
+  Loop exits prematurely
+```
+
+**Solution**: SOP implements intelligent multi-step tool chaining with two complementary mechanisms:
+
+**1. Prompt-Level Guidance**: The system persona explicitly instructs the LLM:
+- Execute tasks with tools, don't just describe them
+- For multi-step tasks (git commit, file edits, data queries), chain tools until complete
+- After each tool result, evaluate: "Do I need another tool or can I answer?"
+- Examples embedded in prompt: `git_status → git_commit → confirm`, `read_file → patch_file → validate`
+
+**2. Conditional Tool Forcing**: The loop detects incomplete multi-step workflows and forces tool continuation:
+
+*Detection Heuristics*:
+- **Read-only tools**: `list`, `status`, `read`, `get`, `search`, `grep`, `scan`, `select`, `explain`
+- **Action keywords in query**: `commit`, `create`, `fix`, `patch`, `update`, `add`, `delete`, `write`, `checkin`, `implement`, `refactor`
+- **Rule**: If last tool was read-only AND query implies action → force next iteration to call a tool
+- **Iteration Limit**: Up to 5 tool-call iterations per Ask to support complex multi-step workflows
+
+**Enabled Workflows**:
+```
+Query: "check in relevant files"
+  Iteration 1: git_status (read) → forced continuation
+  Iteration 2: git_commit (action) → confirm
+  
+Query: "fix authentication bug"  
+  Iteration 1: read_file (read) → forced continuation
+  Iteration 2: patch_file (action) → validation
+  Iteration 3: final confirmation
+  
+Query: "find users with orders > 500"
+  Iteration 1: list_stores (research) → forced continuation
+  Iteration 2: execute_script (query) → analyze results
+
+Query: "refactor function and test it"
+  Iteration 1: search_repo_files (research) → forced continuation
+  Iteration 2: read_file (read) → forced continuation
+  Iteration 3: patch_file (action) → forced continuation
+  Iteration 4: run_repo_tests (validation) → forced continuation
+  Iteration 5: git_commit (finalize) → confirm
+```
+
+**Benefits**:
+- Transforms ReAct from single-shot to truly iterative
+- Enables autonomous completion of complex multi-step tasks
+- Reduces user intervention needed to prod the LLM forward
+- Works across all tool domains (git, files, databases, spaces)
+
+**Implementation**: Located in `ai/generator/chatgpt_react_loop.go` with `needsToolContinuation()` heuristic detector. Similar patterns can be applied to Gemini and Anthropic loops.
+
 #### Gate 1: Advanced KB Routing & Specialized Focus
 
 Gate 1 now provides powerful, deterministic knowledge base routing with flexible syntax that supports hierarchical category navigation, text search, and LLM-assisted filtering.

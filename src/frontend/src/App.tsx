@@ -689,6 +689,8 @@ async function loginWithCredentials(username: string, password: string): Promise
 async function logoutFromServer(): Promise<void> {
   if (typeof window !== 'undefined') {
     markSignedOut();
+    
+    // Clear authentication tokens (HQ mode)
     window.localStorage.removeItem('sop_access_token');
     window.localStorage.removeItem('sop_refresh_token');
     window.localStorage.removeItem('sop_session_token');
@@ -699,13 +701,21 @@ async function logoutFromServer(): Promise<void> {
     window.sessionStorage.removeItem('sop_session_token');
     window.sessionStorage.removeItem('access_token');
     window.sessionStorage.removeItem('sop_userId');
+    
     // Clear daemon-specific tokens to prevent state corruption after mode switching
     window.localStorage.removeItem('sop_daemon_access_token');
     window.localStorage.removeItem('sop_daemon_refresh_token');
     window.localStorage.removeItem('sop_daemon_token_expiry');
-    window.localStorage.removeItem('sop_last_subscription_check_timestamp');
     window.localStorage.removeItem('sop_chat_runtime');
-    window.localStorage.removeItem('sop_daemon_url');
+    
+    // Clear session-specific state
+    window.localStorage.removeItem('sop_last_subscription_check_timestamp');
+    
+    // Preserve user preferences and configuration:
+    // - sop_daemon_url (custom daemon port)
+    // - sop_theme_mode (theme preference)
+    // - LLM API keys and provider settings
+    // - Other non-auth configuration
   }
   clearBrowserSessionCookies();
   await fetch('/api/auth/logout', {
@@ -2027,7 +2037,7 @@ This section explains the system design.
                     <strong>{isStarterActive ? 'Ready to download' : 'Pending activation'}</strong>
                   </div>
                   <div>
-                    <span className="summary-label">AI Studio</span>
+                    <span className="summary-label">AI Studio for HQ</span>
                     {canLaunchDataManager ? (
                       <a href={dataManagerHref} className="summary-link" onClick={(event) => { void handleOpenDataManager(event); }}>Open AI Studio</a>
                     ) : (

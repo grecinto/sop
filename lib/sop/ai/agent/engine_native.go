@@ -21,8 +21,8 @@ type NativeReActEngine struct {
 	MaxTokens         int
 }
 
-const nativeReActBaseToolIterations = 3
-const nativeReActMaxToolIterations = 3
+const nativeReActBaseToolIterations = 5
+const nativeReActMaxToolIterations = 5
 const nativeReActToolCallTemperature float32 = 0.1
 const nativeReActRepairTemperature float32 = 0.0
 

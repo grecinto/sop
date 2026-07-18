@@ -19,7 +19,7 @@ type anthropicOwnedReActLoop struct {
 func (g *anthropic) ReActLoop() ai.ReActLoop {
 	return anthropicOwnedReActLoop{
 		generator:     g,
-		maxIterations: 4,
+		maxIterations: 5,
 	}
 }
 

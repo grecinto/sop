@@ -179,8 +179,71 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 		a.registerAutomationTools(ctx)
 	}
 
+	// Register tools exposed by all capabilities
+	a.registerCapabilityTools(ctx)
+
 	registered := a.registry.List()
 	log.Info("CopilotAgent.registerTools: completed", "tool_count", len(registered))
+}
+
+// registerCapabilityTools iterates through all registered capabilities and registers
+// their exposed tools into the agent's tool registry. This ensures all capability-provided
+// tools flow through the ReAct loop naturally with server-side continuation support.
+func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
+	a.ensureCapabilityRegistry()
+	if a.capabilityRegistry == nil {
+		return
+	}
+
+	caps := a.capabilityRegistry.ListAll()
+	for _, cap := range caps {
+		tools := cap.ExposeTools()
+		for _, toolDef := range tools {
+			// Capture variables for closure
+			capability := cap
+			toolName := toolDef.Name
+			capID := cap.ID()
+
+			handler := func(ctx context.Context, args map[string]any) (string, error) {
+				// Extract routing state from context if available
+				state := capabilities.RoutingState{}
+				if p := ai.GetSessionPayload(ctx); p != nil {
+					if rs, ok := p.Variables["RoutingState"].(*TaskContextClassification); ok && rs != nil {
+						state.Domain = rs.Domain
+						state.Gate = rs.RoutingGate
+						state.CapabilityHint = rs.CapabilityHint
+					}
+				}
+
+				// Build query from args if present, otherwise use empty string
+				query := ""
+				if queryArg, ok := args["query"].(string); ok {
+					query = queryArg
+				} else if taskArg, ok := args["task"].(string); ok {
+					query = taskArg
+				} else if descArg, ok := args["description"].(string); ok {
+					query = descArg
+				}
+
+				// Execute capability
+				result, err := capability.Run(query, state)
+				if err != nil {
+					return "", err
+				}
+
+				// Return summary as tool result
+				return result.Summary, nil
+			}
+
+			a.registry.Register(
+				toolName,
+				toolDef.Description,
+				toolDef.Schema,
+				wrapStringTool(handler),
+			)
+			log.Info("Registered capability tool", "tool", toolName, "capability", capID)
+		}
+	}
 }
 
 func (a *CopilotAgent) toolListTools(ctx context.Context, args map[string]any) (string, error) {

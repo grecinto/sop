@@ -312,7 +312,7 @@ Architectural rule:
 
 This eliminates prompt bloat and minimizes structural hallucinations while preserving deterministic routing behavior.
 
-### 7. Progressive Native ReAct Loop
+### 7. Progressive Native ReAct Loop with Multi-Step Tool Chaining
 
 Once routing and focused context assembly finish, the native ReAct engine takes over as the inner micro loop.
 
@@ -323,6 +323,33 @@ System split:
 - Micro loop: the native reasoning engine executes bounded tool-based progression inside that frame.
 
 This separation is intentional. Routing gates do not run on every retry. They shape the Ask once, then the inner loop progresses from actual execution evidence.
+
+**Multi-Step Tool Chaining Enhancement:**
+
+The ReAct loop now includes intelligent multi-step tool chaining to enable true iterative task completion (up to 5 iterations per Ask):
+
+- **Prompt-Level Guidance**: The system persona explicitly instructs the LLM to chain tools together rather than stopping after the first tool result. For tasks like "check in files", the expected flow is: `git_status → git_commit → confirm`, not `git_status → describe what to do`.
+
+- **Conditional Tool Forcing**: When the loop detects that a task requires multiple steps (e.g., a read-only tool like `git_status` was called, but the query implies an action like "commit"), it automatically forces the next iteration to call a tool rather than allowing the LLM to return a final answer prematurely.
+
+- **Heuristic Detection**: The system recognizes common patterns:
+  - **Read-only tools**: `list`, `status`, `read`, `get`, `search`, `grep`, `scan`, `select`, `explain`
+  - **Action keywords**: `commit`, `create`, `fix`, `patch`, `update`, `add`, `delete`, `write`, `checkin`, `implement`, `refactor`
+  - When a read-only tool result is present and the query contains action keywords, the loop forces tool continuation.
+
+- **Examples**:
+  - Query: "check in relevant files only"
+    - Iteration 1: `git_status` (read-only) → forced continuation
+    - Iteration 2: `git_commit` (action) → final confirmation
+  - Query: "fix the authentication bug"
+    - Iteration 1: `read_file` (read-only) → forced continuation
+    - Iteration 2: `patch_file` (action) → validation
+    - Iteration 3: final confirmation
+  - Query: "find users with orders > 500"
+    - Iteration 1: `list_stores` (research) → forced continuation
+    - Iteration 2: `execute_script` (query) → analyze results
+
+This enhancement transforms the ReAct loop from a "tool → answer" pattern to a true "tool → tool → tool → answer" chaining system, enabling the LLM to complete complex multi-step workflows autonomously.
 
 Clarification-first consequence:
 

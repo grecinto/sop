@@ -50,7 +50,7 @@ func (g *gemini) CarryoverCapability() ai.CarryoverCapability {
 func (g *gemini) ReActLoop() ai.ReActLoop {
 	return geminiOwnedReActLoop{
 		generator:     g,
-		maxIterations: 4,
+		maxIterations: 5,
 	}
 }
 

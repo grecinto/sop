@@ -32,7 +32,7 @@ type chatGPTOwnedReActLoop struct {
 }
 
 func newChatGPTOwnedReActLoop(g *chatgpt) ai.ReActLoop {
-	return chatGPTOwnedReActLoop{generator: g, maxIterations: 3}
+	return chatGPTOwnedReActLoop{generator: g, maxIterations: 5}
 }
 
 func (l chatGPTOwnedReActLoop) modelName() string {
@@ -116,6 +116,11 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 		emitChatGPTOwnedLoopHydration(req, partial)
 
 		request = buildContinuationRequest(l.modelName(), req, request, response, toolOutputItems)
+
+		// Force tool continuation if task requires more steps
+		if iteration < maxIterations && needsToolContinuation(req.UserQuery, toolResults) {
+			request.ToolChoice = buildToolChoiceForceCall(request.Tools)
+		}
 	}
 	return ai.ReasoningResponse{}, fmt.Errorf("chatgpt owned loop exceeded %d iterations for model %q", maxIterations, l.modelName())
 }
@@ -233,6 +238,39 @@ func buildContinuationRequest(model string, req ai.ReasoningRequest, prev openAI
 		MaxOutputTokens:    prev.MaxOutputTokens,
 		Stream:             prev.Stream,
 	}
+}
+
+// needsToolContinuation determines if the task requires more tool calls based on
+// the query intent and the tools that have been executed so far.
+func needsToolContinuation(query string, toolResults []ai.ReActToolResult) bool {
+	if len(toolResults) == 0 {
+		return false
+	}
+
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	lastTool := toolResults[len(toolResults)-1].Name
+
+	// Detect if last tool was read-only (status/query) and query implies action
+	readOnlyTools := []string{"status", "list", "read", "get", "search", "grep", "scan", "select", "explain"}
+	actionKeywords := []string{"commit", "create", "fix", "patch", "update", "add", "delete", "write", "checkin", "check in", "implement", "refactor"}
+
+	isReadOnly := false
+	for _, keyword := range readOnlyTools {
+		if strings.Contains(strings.ToLower(lastTool), keyword) {
+			isReadOnly = true
+			break
+		}
+	}
+
+	needsAction := false
+	for _, keyword := range actionKeywords {
+		if strings.Contains(queryLower, keyword) {
+			needsAction = true
+			break
+		}
+	}
+
+	return isReadOnly && needsAction
 }
 
 // chatGPTSystemInstructions appends the tool-call guardrail to the system prompt
