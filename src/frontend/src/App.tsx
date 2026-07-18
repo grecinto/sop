@@ -1941,7 +1941,7 @@ This section explains the system design.
               <p className="eyebrow">Northstar workspace</p>
               <h1 className="hero-title">Welcome back to the new site dashboard</h1>
               <p className="hero-copy">
-                Setup is complete. Review your account, keep your subscription current, and open the Northstar Data Manager whenever you need the admin-level operational view.
+                Setup is complete. Review your account, keep your subscription current, and use the AI Studio for AI copilot workflows.
               </p>
               <div className="hero-actions">
                 <a
@@ -1997,7 +1997,7 @@ This section explains the system design.
               <div className="form-panel">
                 <h2>Next steps</h2>
                 <p className="muted-copy">
-                  Continue with local-agent setup, review your subscription, or open the Northstar Data Manager when you need deeper operator controls.
+                  Continue with local-agent setup, review your subscription, or use the AI Studio for AI copilot workflows.
                 </p>
                 <div className="action-row">
                   <a

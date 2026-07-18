@@ -928,6 +928,8 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 		filepath.Join(cwd, "..", configPath),
 		filepath.Join(cwd, "..", "..", configPath),
 		filepath.Join(cwd, "..", "..", "..", configPath),
+		filepath.Join(cwd, "..", "..", "..", "lib", "sop", configPath),
+		filepath.Join("/Volumes/T7/sop-cloud/lib/sop", configPath),
 		filepath.Join("/Volumes/T7/sop-cloud", configPath),
 		filepath.Join("/Volumes/T7/sop", configPath),
 		filepath.Join("/Users/grecinto/sop", configPath), // Absolute fallback
@@ -942,8 +944,7 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 	}
 
 	if foundPath == "" {
-		log.Debug(fmt.Sprintf("Agent config not found at %s (searched parents), skipping.", configPath))
-		return nil
+		return fmt.Errorf("agent config not found: %s (searched: %v)", configPath, pathsToTry)
 	}
 
 	cfg, err := agent.LoadConfigFromFile(foundPath)

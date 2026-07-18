@@ -820,6 +820,16 @@ func main() {
 	dataDir := defaultDataDir()
 	configureRuntimeEnvironment(dataDir)
 	applySopbackendPreloadPolicy()
+
+	// Initialize sopbackend runtime (agents, databases, etc.)
+	// This matches what the daemon does and ensures agents like 'copilot' are loaded
+	configPath := sopbackend.GetConfig().ConfigFile
+	if _, err := sopbackend.InitializeRuntime(context.Background(), configPath, sopbackend.RuntimeOptions{
+		EnableLocalAutomation: false, // Site backend doesn't need local automation
+	}, 0, nil); err != nil {
+		log.Printf("Warning: sopbackend initialization failed: %v", err)
+	}
+
 	frontendDir := defaultFrontendDir()
 	docsDir := defaultDocsDir()
 
