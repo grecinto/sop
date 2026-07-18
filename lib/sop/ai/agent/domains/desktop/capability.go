@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
@@ -32,6 +34,13 @@ const (
 type Capability struct {
 	// commandExecutor is injected to execute local commands
 	commandExecutor func(context.Context, map[string]any) (string, error)
+	// shellSessionManager provides persistent shell sessions per conversation
+	shellSessionManager ShellSessionManager
+}
+
+// ShellSessionManager interface for persistent shell sessions
+type ShellSessionManager interface {
+	Run(sessionID, command string, timeout time.Duration) (string, bool, error)
 }
 
 func NewCapability() *Capability { return &Capability{} }
@@ -39,6 +48,42 @@ func NewCapability() *Capability { return &Capability{} }
 // SetCommandExecutor injects the command execution function from the agent
 func (c *Capability) SetCommandExecutor(executor func(context.Context, map[string]any) (string, error)) {
 	c.commandExecutor = executor
+}
+
+// SetShellSessionManager injects the shell session manager
+func (c *Capability) SetShellSessionManager(mgr ShellSessionManager) {
+	c.shellSessionManager = mgr
+}
+
+// getSessionIDFromContext extracts the SessionID from context
+func getSessionIDFromContext(ctx context.Context) string {
+	// Use string literal to avoid circular import with agent package
+	if payload, ok := ctx.Value("session_payload").(*ai.SessionPayload); ok && payload != nil {
+		if payload.SessionID != "" {
+			return payload.SessionID
+		}
+	}
+	return "default"
+}
+
+// isStatefulCommand returns true if the command modifies shell state (cd, export, etc.)
+func isStatefulCommand(cmd string) bool {
+	trimmed := strings.TrimSpace(cmd)
+	if trimmed == "" {
+		return false
+	}
+	// Check for state-changing commands
+	if strings.HasPrefix(trimmed, "cd ") || trimmed == "cd" {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "export ") {
+		return true
+	}
+	// Session management commands
+	if strings.EqualFold(trimmed, "status") || strings.EqualFold(trimmed, "stop") {
+		return true
+	}
+	return false
 }
 
 func (c *Capability) ID() string   { return CapabilityID }
@@ -67,7 +112,43 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 	return []capabilities.ToolDefinition{{Name: "execute_local_command", Description: "Executes a shell command on the user's local machine after approval.", Schema: "{}"}}
 }
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	return ""
+	return `Desktop Automation Workflow Guide:
+
+State Persistence:
+- Commands run in a persistent shell session per conversation
+- Working directory (cd) persists across commands
+- Environment variables (export) persist across commands
+- Use this for multi-step workflows: cd into directory, then run commands there
+
+Background Execution (Use Sparingly):
+- Default: Run commands SEQUENTIALLY (safe, predictable, no race conditions)
+- Set background=true ONLY when user explicitly requests parallel execution
+- Clear user intent signals:
+  * "in the background"
+  * "in parallel"
+  * "while I..."
+  * "simultaneously"
+- When user intent is unclear: ASK before using background=true
+- Safe background examples (when user confirms):
+  * Dev servers: npm run dev, python -m http.server, rails server
+  * File watchers: webpack --watch, tsc --watch, nodemon
+  * Long-running servers: postgres, redis-server, mongod
+
+Sequential vs Parallel Decision:
+- Sequential (default): "build and test" → build finishes, then test runs
+- Parallel (user requested): "start dev server in background and run tests" → both run simultaneously
+- Unclear: "run dev server and tests" → ASK: "Should I run the dev server in the background (parallel) or wait for it to complete first (sequential)?"
+
+Coding Workflow Pattern:
+1. Navigate to correct directory: execute_local_command(command="cd /path/to/project")
+2. Build/install (sequential): execute_local_command(command="npm install")
+3. Start dev server (only if user wants background): execute_local_command(command="npm run dev", background=true)
+4. Run tests (sequential): execute_local_command(command="npm test")
+
+Session Recovery:
+- If a command times out or hangs, the next command will auto-recover
+- Stuck sessions are automatically detected and reset
+- No manual intervention needed`
 }
 func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
 	return capabilities.CapabilityResult{Summary: "desktop automation capability placeholder"}, nil
@@ -81,10 +162,6 @@ func (c *Capability) GetHandledPrefixes() []string {
 
 // HandlePrefix executes a command that starts with a registered prefix
 func (c *Capability) HandlePrefix(ctx context.Context, query string, normalizedCommand string) (string, error) {
-	if c.commandExecutor == nil {
-		return "", fmt.Errorf("desktop automation command executor not available")
-	}
-
 	if normalizedCommand == "" {
 		return "", fmt.Errorf("empty command: provide a command to execute")
 	}
@@ -92,6 +169,38 @@ func (c *Capability) HandlePrefix(ctx context.Context, query string, normalizedC
 	// Validate command is not just whitespace
 	if len(strings.TrimSpace(normalizedCommand)) == 0 {
 		return "", fmt.Errorf("command contains only whitespace")
+	}
+
+	// Route stateful commands through persistent shell session
+	if c.shellSessionManager != nil && isStatefulCommand(normalizedCommand) {
+		sessionID := getSessionIDFromContext(ctx)
+		output, stillRunning, err := c.shellSessionManager.Run(sessionID, normalizedCommand, 30*time.Second)
+
+		if err != nil {
+			return "", fmt.Errorf("shell session error: %w", err)
+		}
+
+		// Handle cd command - return working directory feedback
+		if strings.HasPrefix(strings.TrimSpace(normalizedCommand), "cd ") {
+			// Get current directory by running pwd in the same session
+			pwdOutput, _, pwdErr := c.shellSessionManager.Run(sessionID, "pwd", 5*time.Second)
+			if pwdErr == nil && strings.TrimSpace(pwdOutput) != "" {
+				return fmt.Sprintf("📁 Changed directory to: %s", strings.TrimSpace(pwdOutput)), nil
+			}
+			return "📁 Directory changed", nil
+		}
+
+		// Return status for long-running or session commands
+		if stillRunning {
+			return fmt.Sprintf("⏳ Still running...\n%s", output), nil
+		}
+
+		return output, nil
+	}
+
+	// One-shot execution for simple commands
+	if c.commandExecutor == nil {
+		return "", fmt.Errorf("desktop automation command executor not available")
 	}
 
 	// Normalize ls commands to use multi-column output

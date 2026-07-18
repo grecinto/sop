@@ -508,6 +508,13 @@ func main() {
 	defer stopHost()
 	sopbackend.StartBackgroundServiceWithContext(hostCtx, sopbackend.DefaultSessionCleanupInterval(), 2*time.Hour)
 
+	// Start PTY shell session cleanup (30 minute idle timeout, check every 5 minutes)
+	shellMgr := GetGlobalShellSessionManager()
+	if shellMgr != nil {
+		shellMgr.StartCleanup(hostCtx, 5*time.Minute, 30*time.Minute)
+		log.Printf("PTY session cleanup started (idle timeout: 30m, check interval: 5m)")
+	}
+
 	mux := http.NewServeMux()
 	sopbackend.RegisterAllHandlers(mux)
 	sopbackend.RegisterMonitorabilityHandlers(mux)
@@ -831,20 +838,100 @@ func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCom
 
 	trimmedCommand := strings.TrimSpace(command)
 
-	// Handle cd command (session-based directory tracking)
-	if strings.HasPrefix(trimmedCommand, "cd") || strings.EqualFold(trimmedCommand, "cd") {
-		return handleCdCommand(trimmedCommand, workingDir, sessionID)
+	// Route foreground commands through PTY for state persistence + streaming
+	// Background jobs need exec.Command for proper lifecycle management
+	if !req.Background && sessionID != "" {
+		shellMgr := GetGlobalShellSessionManager()
+		if shellMgr != nil {
+			var stdoutBuf strings.Builder
+
+			// Wrap streaming callbacks to capture output
+			streamCallback := func(chunk string) {
+				stdoutBuf.WriteString(chunk)
+				if req.StreamStdout != nil {
+					req.StreamStdout(chunk)
+				}
+			}
+
+			// Note: PTY doesn't separate stdout/stderr - they're combined
+			// This is standard PTY behavior (same as interactive terminals)
+
+			// Handle cd command - execute and return new directory
+			if strings.HasPrefix(trimmedCommand, "cd ") || trimmedCommand == "cd" {
+				output, stillRunning, err := shellMgr.RunWithStreaming(sessionID, trimmedCommand, time.Duration(timeoutSeconds)*time.Second, streamCallback)
+				if err != nil {
+					resp := ExecuteResponse{
+						Stderr:   err.Error(),
+						Error:    err.Error(),
+						ExitCode: 1,
+					}
+					payload, _ := json.Marshal(resp)
+					return string(payload), nil
+				}
+				if stillRunning {
+					resp := ExecuteResponse{
+						Stdout: output,
+						Error:  "command still running",
+					}
+					payload, _ := json.Marshal(resp)
+					return string(payload), nil
+				}
+				// Get new working directory
+				pwdOutput, _, _ := shellMgr.Run(sessionID, "pwd", 5*time.Second)
+				resp := ExecuteResponse{
+					Stdout:   strings.TrimSpace(pwdOutput),
+					ExitCode: 0,
+				}
+				payload, _ := json.Marshal(resp)
+				return string(payload), nil
+			}
+
+			// Execute command through PTY with streaming
+			output, stillRunning, err := shellMgr.RunWithStreaming(sessionID, trimmedCommand, time.Duration(timeoutSeconds)*time.Second, streamCallback)
+
+			// Call completion callback if provided
+			exitCode := 0
+			if err != nil {
+				exitCode = 1
+			}
+			if req.OnComplete != nil {
+				// PTY combines stdout/stderr, so pass output as stdout and empty stderr
+				req.OnComplete(output, "", exitCode)
+			}
+
+			if err != nil {
+				resp := ExecuteResponse{
+					Stderr:   err.Error(),
+					Error:    err.Error(),
+					ExitCode: 1,
+				}
+				payload, _ := json.Marshal(resp)
+				return string(payload), nil
+			}
+
+			resp := ExecuteResponse{
+				Stdout:   output,
+				ExitCode: exitCode,
+			}
+			if stillRunning {
+				resp.Error = "command still running (use status command to check)"
+			}
+			payload, _ := json.Marshal(resp)
+			return string(payload), nil
+		}
 	}
 
-	// Resolve working directory from session if needed
-	if sessionID != "" {
-		localCommandSessionState.mu.Lock()
-		if existing, ok := localCommandSessionState.sessions[sessionID]; ok && existing != nil {
-			if workingDir == "" && existing.workingDir != "" {
-				workingDir = existing.workingDir
+	// Background jobs and special cases still use exec.Command
+	// They need independent process lifecycle management
+
+	// For background jobs, inherit working directory from PTY session if available
+	if req.Background && sessionID != "" && workingDir == "" {
+		shellMgr := GetGlobalShellSessionManager()
+		if shellMgr != nil {
+			if pwdOutput, _, err := shellMgr.Run(sessionID, "pwd", 2*time.Second); err == nil {
+				workingDir = strings.TrimSpace(pwdOutput)
 			}
 		}
-		localCommandSessionState.mu.Unlock()
 	}
 
 	// Phase 3: Background job execution (handle early to use different context)
@@ -912,6 +999,13 @@ func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCom
 		payload, _ := json.Marshal(resp)
 		return string(payload), nil
 	}
+
+	// Fallback to exec.Command for:
+	// - Commands without sessionID (one-shot execution)
+	// - Stdin input (not supported by PTY)
+	// - Process groups (special syscall features)
+	// - OnProcessStart callbacks (need individual command PID)
+	// Note: These lose state persistence but gain fine-grained control
 
 	// Build command for foreground execution
 	var cmd *exec.Cmd

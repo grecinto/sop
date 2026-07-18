@@ -1865,6 +1865,20 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	a.capabilityRegistry = capabilities.NewRegistry(desktopCap, stores.NewCapability(), spaces.NewCapability())
 }
 
+// InjectShellSessionManager injects a shell session manager into the desktop capability
+func (a *CopilotAgent) InjectShellSessionManager(mgr desktop.ShellSessionManager) {
+	if a == nil || a.capabilityRegistry == nil {
+		return
+	}
+	// Find the desktop capability and inject the shell session manager
+	for _, cap := range a.capabilityRegistry.ListAll() {
+		if desktopCap, ok := cap.(*desktop.Capability); ok {
+			desktopCap.SetShellSessionManager(mgr)
+			return
+		}
+	}
+}
+
 func buildCodingWorkflowExpertiseQuery(task cw.Task, pack cw.ContextPack) string {
 	parts := []string{}
 	if strings.TrimSpace(task.Description) != "" {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,10 +8,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/sharedcode/sop/ai"
@@ -170,179 +167,18 @@ type AskResponse struct {
 
 type localRAGService struct {
 	service       ai.Agent[map[string]any]
-	shellSessions *shellSessionState
+	shellSessions *ptyShellSessionManager
 }
 
-type shellSessionState struct {
-	mu       sync.Mutex
-	sessions map[string]*shellSession
+var globalShellSessionManager = newPTYShellSessionManager()
+
+func newShellSessionManager() *ptyShellSessionManager {
+	return newPTYShellSessionManager()
 }
 
-type shellSession struct {
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	process  *os.Process
-	cwd      string
-	busy     bool
-	lastErr  error
-	output   bytes.Buffer
-	exitCode int
-}
-
-func newShellSessionState() *shellSessionState {
-	return &shellSessionState{sessions: make(map[string]*shellSession)}
-}
-
-func newShellSessionManager() *shellSessionState {
-	return newShellSessionState()
-}
-
-func (s *shellSessionState) run(sessionID, command string, timeout time.Duration) (string, bool, error) {
-	if s == nil {
-		return "", false, nil
-	}
-	trimmed := strings.TrimSpace(command)
-	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
-		return "", false, nil
-	}
-
-	s.mu.Lock()
-	session, ok := s.sessions[sessionID]
-	if !ok {
-		session = newShellSession()
-		s.sessions[sessionID] = session
-	}
-	s.mu.Unlock()
-
-	return session.run(trimmed, timeout)
-}
-
-func newShellSession() *shellSession {
-	return &shellSession{cwd: "."}
-}
-
-func (s *shellSession) run(command string, timeout time.Duration) (string, bool, error) {
-	trimmed := strings.TrimSpace(command)
-	if trimmed == "" {
-		return "", false, nil
-	}
-
-	s.mu.Lock()
-	if s.cwd == "" {
-		s.cwd = "."
-	}
-	cwd := s.cwd
-	s.mu.Unlock()
-
-	if strings.HasPrefix(trimmed, "cd ") {
-		target := strings.TrimSpace(strings.TrimPrefix(trimmed, "cd"))
-		if target == "" || target == "~" {
-			target = os.Getenv("HOME")
-		}
-		if target == "" {
-			return "", false, nil
-		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(cwd, target)
-		}
-		absPath, err := filepath.Abs(target)
-		if err != nil {
-			return "", false, err
-		}
-		s.mu.Lock()
-		s.cwd = absPath
-		s.mu.Unlock()
-		return "", false, nil
-	}
-
-	if strings.EqualFold(trimmed, "status") {
-		s.mu.Lock()
-		output := strings.TrimSpace(s.output.String())
-		running := s.busy
-		exitCode := s.exitCode
-		s.mu.Unlock()
-		if running {
-			return fmt.Sprintf("running=true\nexit_code=%d\n%s", exitCode, output), true, nil
-		}
-		return fmt.Sprintf("running=false\nexit_code=%d\n%s", exitCode, output), false, nil
-	}
-
-	if strings.EqualFold(trimmed, "stop") {
-		s.mu.Lock()
-		if s.busy && s.process != nil {
-			_ = s.process.Kill()
-		}
-		s.busy = false
-		s.exitCode = 1
-		output := strings.TrimSpace(s.output.String())
-		s.mu.Unlock()
-		return fmt.Sprintf("stopped\n%s", output), false, nil
-	}
-
-	if s.busy && s.process != nil {
-		return strings.TrimSpace(s.output.String()), true, nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "sh", "-c", trimmed)
-	cmd.Dir = cwd
-	cmd.Env = os.Environ()
-
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stdout
-
-	s.mu.Lock()
-	s.busy = true
-	s.cmd = cmd
-	s.process = nil
-	s.output.Reset()
-	s.exitCode = 0
-	s.mu.Unlock()
-
-	if err := cmd.Start(); err != nil {
-		s.mu.Lock()
-		s.busy = false
-		s.lastErr = err
-		s.mu.Unlock()
-		return "", false, err
-	}
-
-	s.mu.Lock()
-	s.process = cmd.Process
-	s.mu.Unlock()
-
-	err := cmd.Wait()
-	s.mu.Lock()
-	s.lastErr = err
-	s.cmd = nil
-	s.process = nil
-	if ctx.Err() == context.DeadlineExceeded {
-		s.busy = true
-		s.exitCode = -1
-	} else {
-		s.busy = false
-		if err != nil {
-			s.exitCode = 1
-		} else {
-			s.exitCode = 0
-		}
-	}
-	if stdout.Len() > 0 {
-		s.output.Write(stdout.Bytes())
-	}
-	output := strings.TrimSpace(s.output.String())
-	s.mu.Unlock()
-
-	if ctx.Err() == context.DeadlineExceeded {
-		return output, true, nil
-	}
-	if err != nil {
-		return output, false, err
-	}
-	return output, false, nil
+// GetGlobalShellSessionManager returns the global shell session manager instance
+func GetGlobalShellSessionManager() *ptyShellSessionManager {
+	return globalShellSessionManager
 }
 
 func newLocalRAGService(configPath string) (*localRAGService, error) {
@@ -352,7 +188,7 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 
 	if svc, err := autoProvisionSharedCopilotService(context.Background()); err == nil {
 		log.Printf("daemon newLocalRAGService: using auto-provisioned shared service")
-		return &localRAGService{service: svc, shellSessions: newShellSessionState()}, nil
+		return &localRAGService{service: svc, shellSessions: newPTYShellSessionManager()}, nil
 	} else {
 		log.Printf("daemon newLocalRAGService: shared RAG runtime unavailable: %v", err)
 		return nil, fmt.Errorf("shared RAG runtime unavailable: %w", err)
@@ -363,12 +199,14 @@ func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string
 	log.Printf("daemon autoProvisionSharedCopilotService: starting")
 	for _, agentID := range []string{"copilot", "sql_core"} {
 		if agentSvc, ok := sopbackend.GetLoadedAgents()[agentID]; ok && agentSvc != nil {
+			injectShellSessionManager(agentSvc)
 			return agentSvc, nil
 		}
 	}
 	for _, agentSvc := range sopbackend.GetLoadedAgents() {
 		if agentSvc != nil {
 			log.Printf("daemon autoProvisionSharedCopilotService: using fallback loaded agent")
+			injectShellSessionManager(agentSvc)
 			return agentSvc, nil
 		}
 	}
@@ -388,12 +226,14 @@ func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string
 		for _, agentID := range []string{"copilot", "sql_core"} {
 			if agentSvc, ok := sopbackend.GetLoadedAgents()[agentID]; ok && agentSvc != nil {
 				log.Printf("daemon autoProvisionSharedCopilotService: using initialized agent: %s", agentID)
+				injectShellSessionManager(agentSvc)
 				return agentSvc, nil
 			}
 		}
 		for _, agentSvc := range sopbackend.GetLoadedAgents() {
 			if agentSvc != nil {
 				log.Printf("daemon autoProvisionSharedCopilotService: using initialized fallback agent")
+				injectShellSessionManager(agentSvc)
 				return agentSvc, nil
 			}
 		}
@@ -422,10 +262,19 @@ func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string
 		if err != nil {
 			return nil, fmt.Errorf("build shared pipeline agent %s: %w", candidate, err)
 		}
+		injectShellSessionManager(svc)
 		return svc, nil
 	}
 
 	return nil, fmt.Errorf("shared copilot pipeline config not found")
+}
+
+// injectShellSessionManager injects the global shell session manager into a CopilotAgent
+func injectShellSessionManager(agentSvc ai.Agent[map[string]any]) {
+	if copilotAgent, ok := agentSvc.(*agent.CopilotAgent); ok {
+		copilotAgent.InjectShellSessionManager(globalShellSessionManager)
+		log.Printf("daemon: injected shell session manager into CopilotAgent")
+	}
 }
 
 func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
@@ -488,7 +337,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		payload.SessionID = "local-daemon"
 	}
 	if s.shellSessions == nil {
-		s.shellSessions = newShellSessionState()
+		s.shellSessions = newPTYShellSessionManager()
 	}
 	sessionID := strings.TrimSpace(strings.TrimSpace(r.Header.Get("X-SOP-Session-ID")))
 	if sessionID == "" {
@@ -605,19 +454,8 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if fallbackAnswer, handled, fallbackErr := s.trySimpleShellCommandFallback(routingQuery, sessionID); handled {
-		if fallbackErr != nil {
-			log.Printf("daemon shell fallback failed: query=%q error=%v", normalizedQuery, fallbackErr)
-			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: fallbackErr.Error()})
-			return
-		}
-		if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, fallbackAnswer, payload); err != nil {
-			logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
-		}
-		logVerbose("daemon handleAsk: completed via shell fallback query=%q answer_len=%d", normalizedQuery, len(fallbackAnswer))
-		respondJSON(w, http.StatusOK, AskResponse{Answer: fallbackAnswer})
-		return
-	}
+	// Direct bare command execution removed - commands must use slash prefixes like /c, /cmd, /shell, /exec
+	// This prevents ambiguity between natural language prompts and shell commands
 	ctx = sopbackend.InjectSharedRuntimeContext(ctx, nil, nil)
 	if s.service != nil {
 		answer, err := s.service.Ask(ctx, askQuery, cfg)
@@ -814,9 +652,9 @@ func (s *localRAGService) trySimpleShellCommandFallback(query, sessionID string)
 		return "", false, nil
 	}
 	if s.shellSessions == nil {
-		s.shellSessions = newShellSessionState()
+		s.shellSessions = newPTYShellSessionManager()
 	}
-	output, stillRunning, err := s.shellSessions.run(sessionID, trimmed, 5*time.Second)
+	output, stillRunning, err := s.shellSessions.Run(sessionID, trimmed, 5*time.Second)
 	if err != nil {
 		return "", true, err
 	}

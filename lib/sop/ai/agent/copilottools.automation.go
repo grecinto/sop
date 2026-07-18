@@ -331,7 +331,7 @@ func (p AutomationPolicy) validateRequest(req LocalCommandRequest) error {
 	return nil
 }
 
-const executeLocalCommandArgsSchema = `{"type":"object","properties":{"command":{"type":"string","description":"Shell command, shell script, or runnable executable path to execute on the user's local machine after approval."},"reasoning":{"type":"string","description":"Short explanation shown to the user for why this local command is needed."},"working_dir":{"type":"string","description":"Optional working directory for repo-aware tasks such as code generation, tests, and debugging."},"timeout_seconds":{"type":"integer","description":"Optional timeout in seconds for long-running commands such as builds or tests."}},"required":["command"]}`
+const executeLocalCommandArgsSchema = `{"type":"object","properties":{"command":{"type":"string","description":"Shell command, shell script, or runnable executable path to execute on the user's local machine after approval."},"reasoning":{"type":"string","description":"Short explanation shown to the user for why this local command is needed."},"working_dir":{"type":"string","description":"Optional working directory for repo-aware tasks such as code generation, tests, and debugging."},"timeout_seconds":{"type":"integer","description":"Optional timeout in seconds for long-running commands such as builds or tests."},"background":{"type":"boolean","description":"Run command in background (non-blocking). Default: false (sequential execution). Only set to true when user explicitly requests parallel execution with phrases like 'in background', 'in parallel', 'while', 'simultaneously'. When unclear, ask user before setting to true."}},"required":["command"]}`
 
 const searchRepoFilesArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository or directory path to inspect."},"pattern":{"type":"string","description":"Optional filename pattern such as *.go or *.md."},"max_results":{"type":"integer","description":"Optional maximum number of files to return."}},"required":["path"]}`
 
@@ -414,7 +414,7 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 	}
 
 	if policy.isShellAutomationEnabled() {
-		a.registry.Register("execute_local_command", "Executes a shell command on the user's local machine via the SOP Desktop Daemon. Use this for building code, git operations, local file inspection, or running local scripts. This will prompt the user for approval in the UI.", executeLocalCommandArgsSchema, wrapStringTool(a.toolExecuteLocalCommand))
+		a.registry.Register("execute_local_command", "Executes a shell command on the user's local machine via the SOP Desktop Daemon. Use this for building code, git operations, local file inspection, or running local scripts. Commands run in a persistent shell session that maintains working directory and environment variables across calls. Runs sequentially by default (safe). Only set background=true when user explicitly requests parallel execution. This will prompt the user for approval in the UI.", executeLocalCommandArgsSchema, wrapStringTool(a.toolExecuteLocalCommand))
 		a.registry.Register("search_repo_files", "Searches a repository or directory for files matching a pattern. Useful for locating implementation files, docs, tests, or configs.", searchRepoFilesArgsSchema, wrapStringTool(a.toolSearchRepoFiles))
 		a.registry.Register("grep_repo_text", "Searches repository text for a query and returns matching lines. Useful for finding TODOs, symbols, references, or debugging clues.", grepRepoTextArgsSchema, wrapStringTool(a.toolGrepRepoText))
 		a.registry.Register("run_repo_tests", "Runs Go tests in a repository or module directory. Useful for validating changes, reproducing failures, and inspecting test output.", runRepoTestsArgsSchema, wrapStringTool(a.toolRunRepoTests))
@@ -479,6 +479,16 @@ func sessionIDFromArgs(args map[string]any) string {
 	if raw, ok := args["session_id"]; ok {
 		if sessionID, ok := raw.(string); ok {
 			return sessionID
+		}
+	}
+	return ""
+}
+
+// sessionIDFromContext extracts SessionID from context (same approach as desktop capability)
+func sessionIDFromContext(ctx context.Context) string {
+	if payload, ok := ctx.Value("session_payload").(*ai.SessionPayload); ok && payload != nil {
+		if payload.SessionID != "" {
+			return payload.SessionID
 		}
 	}
 	return ""
@@ -1595,12 +1605,21 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		}
 	}
 
+	// Extract background flag
+	background := false
+	if backgroundRaw, ok := args["background"]; ok {
+		if bgBool, ok := backgroundRaw.(bool); ok {
+			background = bgBool
+		}
+	}
+
 	request := LocalCommandRequest{
 		Command:        command,
 		Reasoning:      reasoning,
 		WorkingDir:     workingDir,
 		TimeoutSeconds: timeoutSeconds,
-		SessionID:      sessionIDFromArgs(args),
+		SessionID:      sessionIDFromContext(ctx),
+		Background:     background,
 		StreamOutput: func(chunk string) {
 			emitAutomationToolChunk(ctx, "local_command", chunk)
 		},

@@ -766,7 +766,8 @@ func TestHandleVectorizationRecoveryStatusRecoverAllActionRebuildsAllDegradedTar
 }
 
 func TestTrySimpleShellCommandFallbackSkipsAgentCommandsWithoutSlash(t *testing.T) {
-	svc := &localRAGService{shellSessions: newShellSessionState()}
+	t.Skip("Bare command execution removed to avoid ambiguity with natural language prompts. Commands must use slash prefixes like /c, /cmd")
+	svc := &localRAGService{shellSessions: newPTYShellSessionManager()}
 	for _, query := range []string{"list_tools", "list_databases", "last-tool"} {
 		got, handled, err := svc.trySimpleShellCommandFallback(query, "session")
 		if err != nil {
@@ -782,7 +783,8 @@ func TestTrySimpleShellCommandFallbackSkipsAgentCommandsWithoutSlash(t *testing.
 }
 
 func TestTrySimpleShellCommandFallbackSkipsNaturalLanguageQuestions(t *testing.T) {
-	svc := &localRAGService{shellSessions: newShellSessionState()}
+	t.Skip("Bare command execution removed to avoid ambiguity with natural language prompts. Commands must use slash prefixes like /c, /cmd")
+	svc := &localRAGService{shellSessions: newPTYShellSessionManager()}
 	query := "show me list of changed files in this repo in git"
 
 	got, handled, err := svc.trySimpleShellCommandFallback(query, "session")
@@ -799,7 +801,7 @@ func TestTrySimpleShellCommandFallbackSkipsNaturalLanguageQuestions(t *testing.T
 
 func TestHandleAskRoutesPlainListToolsToAgentWithSlashPrefix(t *testing.T) {
 	agent := &recordingQueryAgent{}
-	svc := &localRAGService{service: agent, shellSessions: newShellSessionState()}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
 	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"list_tools"}`))
 	rr := httptest.NewRecorder()
 
@@ -818,7 +820,7 @@ func TestHandleAskRoutesPlainListToolsToAgentWithSlashPrefix(t *testing.T) {
 
 func TestHandleAskInjectsBackendExecutorIntoContext(t *testing.T) {
 	agent := &executorAwareAgent{}
-	svc := &localRAGService{service: &stubSharedAgent{name: "shared"}, shellSessions: newShellSessionState()}
+	svc := &localRAGService{service: &stubSharedAgent{name: "shared"}, shellSessions: newPTYShellSessionManager()}
 	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"list_tools"}`))
 	rr := httptest.NewRecorder()
 
@@ -838,7 +840,7 @@ func TestHandleAskInjectsBackendExecutorIntoContext(t *testing.T) {
 func TestHandleAskUsesSharedBackendHandlerForSlashCommands(t *testing.T) {
 	localAgent := &recordingQueryAgent{}
 	sharedAgent := &recordingQueryAgent{}
-	svc := &localRAGService{service: localAgent, shellSessions: newShellSessionState()}
+	svc := &localRAGService{service: localAgent, shellSessions: newPTYShellSessionManager()}
 	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"list_tools"}`))
 	rr := httptest.NewRecorder()
 
@@ -861,7 +863,7 @@ func TestHandleAskUsesSharedBackendHandlerForSlashCommands(t *testing.T) {
 func TestHandleAskUsesSharedBackendHandlerForNaturalLanguageQueries(t *testing.T) {
 	localAgent := &recordingQueryAgent{}
 	sharedAgent := &recordingQueryAgent{}
-	svc := &localRAGService{service: localAgent, shellSessions: newShellSessionState()}
+	svc := &localRAGService{service: localAgent, shellSessions: newPTYShellSessionManager()}
 	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"show me list of changed files in this repo in git"}`))
 	rr := httptest.NewRecorder()
 
@@ -886,7 +888,7 @@ func TestHandleAskUsesSharedBackendHandlerForNaturalLanguageQueries(t *testing.T
 
 func TestHandleAskNormalizesKelindarProviderUsingSharedBackendLogic(t *testing.T) {
 	agent := &recordingAskAgent{}
-	svc := &localRAGService{service: agent, shellSessions: newShellSessionState()}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
 	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","llm_provider":"kelindar","llm_model":"nomic-embed-text-v1.5-q8_0"}`))
 	rr := httptest.NewRecorder()
 
@@ -919,7 +921,7 @@ func TestHandleAskNormalizesKelindarProviderUsingSharedBackendLogic(t *testing.T
 
 func TestHandleAskPassesProviderDetailsToAgentConfig(t *testing.T) {
 	agent := &recordingAskAgent{}
-	svc := &localRAGService{service: agent, shellSessions: newShellSessionState()}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
 	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","llm_provider":"gemini","llm_api_key":"secret-key","llm_model":"gemini-2.5-pro","llm_url":"https://example.test"}`))
 	rr := httptest.NewRecorder()
 
@@ -1736,8 +1738,9 @@ func (a *recordingAskAgent) Ask(ctx context.Context, query string, cfg *ai.Confi
 }
 
 func TestLocalRAGAskUsesShellFallbackForSimpleCommands(t *testing.T) {
+	t.Skip("Bare command execution removed - commands must use slash prefixes like /c, /cmd")
 	agent := &recordingAskAgent{response: "⚠️ **AI Copilot Disabled**: No valid API Key found."}
-	svc := &localRAGService{service: agent}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"echo hello"}`))
 	rr := httptest.NewRecorder()
@@ -1762,10 +1765,10 @@ func TestLocalRAGAskUsesShellFallbackForSimpleCommands(t *testing.T) {
 func TestShellSessionManagerPersistsDirectoryAcrossCommands(t *testing.T) {
 	mgr := newShellSessionManager()
 
-	if _, _, err := mgr.run("shell-pty", "cd /tmp", 2*time.Second); err != nil {
+	if _, _, err := mgr.Run("shell-pty", "cd /tmp", 2*time.Second); err != nil {
 		t.Fatalf("first run failed: %v", err)
 	}
-	out, stillRunning, err := mgr.run("shell-pty", "pwd", 2*time.Second)
+	out, stillRunning, err := mgr.Run("shell-pty", "pwd", 2*time.Second)
 	if err != nil {
 		t.Fatalf("second run failed: %v", err)
 	}
@@ -1780,7 +1783,7 @@ func TestShellSessionManagerPersistsDirectoryAcrossCommands(t *testing.T) {
 func TestShellSessionManagerSupportsLongRunningProcessAndStatus(t *testing.T) {
 	mgr := newShellSessionManager()
 
-	out, stillRunning, err := mgr.run("long-run", "sh -c 'printf start; sleep 1; printf end'", 200*time.Millisecond)
+	out, stillRunning, err := mgr.Run("long-run", "sh -c 'printf start; sleep 1; printf end'", 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("first run failed: %v", err)
 	}
@@ -1791,7 +1794,7 @@ func TestShellSessionManagerSupportsLongRunningProcessAndStatus(t *testing.T) {
 		t.Fatalf("expected partial output from long-running process, got %q", out)
 	}
 
-	status, stillRunning, err := mgr.run("long-run", "status", 200*time.Millisecond)
+	status, stillRunning, err := mgr.Run("long-run", "status", 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("status query failed: %v", err)
 	}
@@ -1803,8 +1806,221 @@ func TestShellSessionManagerSupportsLongRunningProcessAndStatus(t *testing.T) {
 	}
 }
 
+func TestPTYShellSessionManagerSpawnsBackgroundSessions(t *testing.T) {
+	mgr := newPTYShellSessionManager()
+	defer func() {
+		mgr.mu.Lock()
+		for _, sess := range mgr.sessions {
+			sess.Close()
+		}
+		mgr.mu.Unlock()
+	}()
+
+	// Spawn a background session
+	bgSessionID, err := mgr.SpawnBackgroundSession("")
+	if err != nil {
+		t.Fatalf("SpawnBackgroundSession() failed: %v", err)
+	}
+
+	if bgSessionID == "" {
+		t.Fatal("expected non-empty background session ID")
+	}
+
+	// Verify it's tracked as background
+	mgr.mu.Lock()
+	bgSession := mgr.sessions[bgSessionID]
+	mgr.mu.Unlock()
+
+	if bgSession == nil {
+		t.Fatal("background session not found in manager")
+	}
+
+	if !bgSession.isBackground {
+		t.Error("expected session to be marked as background")
+	}
+
+	// Can run commands in background session
+	output, _, err := mgr.Run(bgSessionID, "echo 'background'", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Run() in background session failed: %v", err)
+	}
+
+	if !strings.Contains(output, "background") {
+		t.Errorf("expected output to contain 'background', got %q", output)
+	}
+}
+
+func TestPTYShellSessionManagerCleansUpIdleSessions(t *testing.T) {
+	mgr := newPTYShellSessionManager()
+	defer mgr.StopCleanup()
+
+	// Create a session and mark it as old
+	sessionID := "test-session"
+	_, _, err := mgr.Run(sessionID, "echo test", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	// Force session to appear idle
+	mgr.mu.Lock()
+	if sess, ok := mgr.sessions[sessionID]; ok {
+		sess.lastUsed = time.Now().Add(-1 * time.Hour) // 1 hour ago
+	}
+	mgr.mu.Unlock()
+
+	// Cleanup with 30 minute timeout should remove the session
+	cleaned := mgr.cleanupIdleSessions(30 * time.Minute)
+	if cleaned != 1 {
+		t.Errorf("expected 1 session cleaned, got %d", cleaned)
+	}
+
+	// Verify session was removed
+	mgr.mu.Lock()
+	_, exists := mgr.sessions[sessionID]
+	mgr.mu.Unlock()
+
+	if exists {
+		t.Error("expected session to be removed after cleanup")
+	}
+}
+
+func TestPTYShellSessionHealthCheckDetectsStuckSession(t *testing.T) {
+	mgr := newPTYShellSessionManager()
+	defer func() {
+		mgr.mu.Lock()
+		for _, sess := range mgr.sessions {
+			sess.Close()
+		}
+		mgr.mu.Unlock()
+	}()
+
+	sessionID := "test-health"
+
+	// Create a session and run a valid command
+	_, _, err := mgr.Run(sessionID, "echo test", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	// Session should be healthy
+	mgr.mu.Lock()
+	session := mgr.sessions[sessionID]
+	mgr.mu.Unlock()
+
+	if !session.IsHealthy() {
+		t.Error("expected healthy session to report healthy")
+	}
+
+	// Close the session (simulates stuck/crashed session)
+	session.Close()
+
+	// Health check should now fail
+	if session.IsHealthy() {
+		t.Error("expected closed session to report unhealthy")
+	}
+}
+
+func TestPTYShellSessionAutoRecoveryFromStuckSession(t *testing.T) {
+	mgr := newPTYShellSessionManager()
+	defer func() {
+		mgr.mu.Lock()
+		for _, sess := range mgr.sessions {
+			sess.Close()
+		}
+		mgr.mu.Unlock()
+	}()
+
+	sessionID := "test-recovery"
+
+	// Create a session
+	_, _, err := mgr.Run(sessionID, "echo first", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	// Get the session and mark it as stuck
+	mgr.mu.Lock()
+	session := mgr.sessions[sessionID]
+	session.stillRunning = true
+	mgr.mu.Unlock()
+
+	// Close the session to simulate unresponsive state
+	session.Close()
+
+	// Next command should trigger auto-recovery
+	output, _, err := mgr.Run(sessionID, "echo recovered", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Run() after recovery failed: %v", err)
+	}
+
+	if !strings.Contains(output, "recovered") {
+		t.Errorf("expected recovered session to work, got output: %q", output)
+	}
+
+	// Verify new session was created
+	mgr.mu.Lock()
+	newSession := mgr.sessions[sessionID]
+	mgr.mu.Unlock()
+
+	if newSession == session {
+		t.Error("expected new session to be created after recovery")
+	}
+}
+
+func TestPTYShellSessionForceReset(t *testing.T) {
+	mgr := newPTYShellSessionManager()
+	defer func() {
+		mgr.mu.Lock()
+		for _, sess := range mgr.sessions {
+			sess.Close()
+		}
+		mgr.mu.Unlock()
+	}()
+
+	sessionID := "test-force-reset"
+
+	// Create a session
+	_, _, err := mgr.Run(sessionID, "echo before", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	mgr.mu.Lock()
+	oldSession := mgr.sessions[sessionID]
+	mgr.mu.Unlock()
+
+	// Force reset
+	if err := mgr.ForceResetSession(sessionID); err != nil {
+		t.Fatalf("ForceResetSession() failed: %v", err)
+	}
+
+	// Verify new session exists
+	mgr.mu.Lock()
+	newSession := mgr.sessions[sessionID]
+	mgr.mu.Unlock()
+
+	if newSession == nil {
+		t.Fatal("expected session to exist after reset")
+	}
+
+	if newSession == oldSession {
+		t.Error("expected new session after force reset")
+	}
+
+	// New session should work
+	output, _, err := mgr.Run(sessionID, "echo after", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Run() after force reset failed: %v", err)
+	}
+
+	if !strings.Contains(output, "after") {
+		t.Errorf("expected reset session to work, got: %q", output)
+	}
+}
+
 func TestLocalRAGAskPersistsShellSessionDirectoryAcrossRequests(t *testing.T) {
-	svc := &localRAGService{service: &recordingAskAgent{}}
+	t.Skip("Bare command execution removed - commands must use slash prefixes like /c, /cmd")
+	svc := &localRAGService{service: &recordingAskAgent{}, shellSessions: newPTYShellSessionManager()}
 
 	firstReq := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"cd /tmp"}`))
 	firstReq.Header.Set("X-SOP-Session-ID", "shell-session")

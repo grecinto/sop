@@ -197,27 +197,19 @@ async function handoffToHQ(query, hqContext) {
 
 The desktop/local-agent experience supports three input styles:
 
-1. Plain shell commands for local execution.
-   - Examples: `ls`, `pwd`, `echo hello`, `git status`
-   - These run directly in the local shell.
-
-2. Direct command prefixes for fast local execution.
-   - Examples: `cmd:pwd`, `shell:git status`, `exec:go test ./...`, `run:ls`
+1. Slash-prefixed command execution for fast local execution.
+   - Examples: `/c ls`, `/cmd pwd`, `/shell git status`, `/exec go test ./...`
    - These bypass the normal reasoning loop and route directly to the local automation executor.
    - They are ideal for quick shell work, repo inspection, or command-style execution without paying the full reasoning cost.
+   - Shell state is preserved per session: `/c cd /Volumes` changes the working directory, and `/c ls` uses that updated directory.
 
-3. Slash commands for built-in SOP actions.
+2. Slash commands for built-in SOP actions.
    - Examples: `/list_tools`, `/verbose`, `/run my_script`
-   - These are reserved for built-in agent features and should not be used for general shell execution.
+   - These are reserved for built-in agent features and workflow automation.
 
-4. Natural language questions and instructions.
+3. Natural language questions and instructions.
    - Examples: "What files are in this folder?", "Explain how to run the daemon"
-   - These go through the AI agent.
-
-Shell state is preserved per session:
-- `cd /Volumes` changes the working directory for the current session.
-- A later `ls` or `pwd` uses that updated directory.
-- Multi-part shell commands such as `cd /Volumes && ls` are also supported when the shell can execute them.
+   - These go through the AI agent for intelligent processing.
 
 When local desktop automation is enabled, the same direct path can also trigger richer automation tools such as repo search, repo grep, test execution, file read/write/patch, directory creation and deletion, path existence checks, and path metadata inspection. These are approval-aware and policy-gated so the local-agent experience remains safe by default.
 

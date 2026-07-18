@@ -70,20 +70,19 @@ The daemon listens on 127.0.0.1 by default and exposes:
 
 ## Direct local command execution
 
-The local-agent Ask flow accepts direct command prefixes so users can work with the host shell without going through the full reasoning loop:
+The local-agent Ask flow accepts slash-prefixed commands so users can work with the host shell without going through the full reasoning loop:
 
-- `cmd:...`
-- `shell:...`
-- `exec:...`
-- `run:...`
+- `/c <command>` or `/cmd <command>` - Execute shell command directly
+- `/shell <command>` - Execute shell command directly  
+- `/exec <command>` - Execute shell command directly
 
 Examples:
 
 ```text
-cmd:pwd
-cmd:go test ./...
-cmd:git status
-cmd:find . -name "*.go" | head
+/c pwd
+/cmd go test ./...
+/shell git status
+/c find . -name "*.go" | head
 ```
 
 When local desktop automation is enabled, the same execution path can also trigger richer helpers for repo inspection and editing, including file reads/writes/patches, directory management, repo search/grep, test execution, and path inspection. These actions are still approval-aware and policy-gated by the automation layer.
