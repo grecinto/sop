@@ -1,6 +1,6 @@
 # AI Studio - Local Daemon Integration
 
-Complete guide for the AI Studio feature that enables authenticated users to connect the Data Manager UI to their local SOP daemon.
+Complete guide for the AI Studio feature that enables authenticated users to connect the AI Studio UI to their local SOP daemon.
 
 ---
 
@@ -17,7 +17,7 @@ Complete guide for the AI Studio feature that enables authenticated users to con
 
 ## Overview
 
-The **AI Studio** button allows authenticated site users to launch the Data Manager UI in daemon mode, connecting to their local daemon (`http://127.0.0.1:9090`) instead of the HQ backend.
+The **AI Studio** button allows authenticated site users to launch the AI Studio UI in daemon mode, connecting to their local daemon (`http://127.0.0.1:9090`) instead of the HQ backend.
 
 ### Key Benefits
 - 🔒 **Privacy**: Data stays local, no network transmission
@@ -51,7 +51,7 @@ The **AI Studio** button allows authenticated site users to launch the Data Mana
 
 2. **Click "AI Studio"** button on site homepage
 
-3. **Data Manager opens** in new tab, auto-connects to daemon
+3. **AI Studio opens** in new tab, auto-connects to daemon
 
 ### For Developers
 
@@ -81,13 +81,13 @@ The **AI Studio** button allows authenticated site users to launch the Data Mana
          v
 ┌─────────────────┐
 │  Site Backend   │ Access control
-│   (Go port      │ Serves Data Manager UI
+│   (Go port      │ Serves AI Studio UI
 │    8080)        │ with daemon config
 └────────┬────────┘
          │
          v
 ┌─────────────────┐
-│ Data Manager UI │ HTML/JS templates
+│ AI Studio UI    │ HTML/JS templates
 │  (Templates)    │ Auto-bootstrap auth
 └────────┬────────┘
          │
@@ -109,7 +109,7 @@ The **AI Studio** button allows authenticated site users to launch the Data Mana
    - Sets DefaultRuntimeMode = "local"
    - Sets localStorage.sop_chat_runtime = 'local'
    ↓
-3. Data Manager UI auto-bootstraps
+3. AI Studio UI auto-bootstraps
    - Reads localStorage.sop_access_token (site session)
    - Sends POST /api/daemon/auth { bootstrap_token: token }
    - Daemon validates via sessionStore.ValidateTokenWithoutAccountCheck()
@@ -373,7 +373,7 @@ This prevented the rest of the script from loading, including `toggleChatWidget(
 ### Floating AI Window Shows "Access Denied"
 
 **Symptoms**:
-- Main Data Manager UI works fine in daemon mode
+- Main AI Studio UI works fine in daemon mode
 - Clicking the "⧉" button opens floating chat window
 - Floating window shows "access denied" error
 
@@ -415,7 +415,7 @@ sop-daemon --port 9090
 open http://localhost:8080
 
 # 4. Click "AI Studio" button
-# 5. Verify Data Manager connects to daemon
+# 5. Verify AI Studio connects to daemon
 ```
 
 ### Adding Features
@@ -497,7 +497,7 @@ const DAEMON_RUNTIME_ENABLED = {{ .DaemonRuntimeEnabled }};
 - Custom daemon port support via `daemon_url` parameter
 - Access control allowing all authenticated users in daemon mode
 
-**Why**: Enable users to use Data Manager with their local daemon without manual configuration
+**Why**: Enable users to use AI Studio with their local daemon without manual configuration
 
 ---
 

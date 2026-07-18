@@ -8,7 +8,7 @@ Because you have already completed the **Setup Wizard**, your environment is ful
 
 ## 1. Connecting Your Application
 
-To connect your code to the database you just created, you can load the settings directly from the disk. This ensures your application always uses the exact same configuration as the Data Manager.
+To connect your code to the database you just created, you can load the settings directly from the disk. This ensures your application always uses the exact same configuration as the AI Studio.
 
 ### 🐹 Go (Golang)
 ```go
@@ -120,7 +120,7 @@ Database.setup(ctx, opts)
 ### The "Full Circle" Benefit
 The beauty of SOP is that these workflows communicate.
 *   If you setup via **Wizard** $\rightarrow$ You can load it in Code.
-*   If you setup via **Code** $\rightarrow$ You can open the **Data Manager**, point it to your new folder, and immediately visualize/debug the data your code generated.
+*   If you setup via **Code** $\rightarrow$ You can open the **AI Studio**, point it to your new folder, and immediately visualize/debug the data your code generated.
 
 This allows you to verify your application logic visually, without writing custom inspection tools.
 

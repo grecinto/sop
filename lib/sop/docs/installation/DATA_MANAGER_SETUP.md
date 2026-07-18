@@ -81,6 +81,6 @@ Once you click **"Initialize"**:
 1.  SOP creates the directory structures on your disk.
 2.  It writes the `dboptions.json` configuration file.
 3.  The **System Database** registers itself.
-4.  The **Data Manager UI** launches, connected to your new environment.
+4.  The **AI Studio UI** launches, connected to your new environment.
 
 You are now ready to start coding! Check the [Language Bindings](./LANGUAGE_BINDINGS.md) to see how to connect your code to this new database.

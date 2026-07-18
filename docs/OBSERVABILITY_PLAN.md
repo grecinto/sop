@@ -185,7 +185,7 @@ Each instance should expose a small, standard surface that can be consumed by Pr
 - optional GET /readyz
   - readiness signal once the instance is fully initialized and dependencies are ready
 
-This contract should be implemented in the shared backend layer so the new site backend, the Data Manager httpserver, and the daemon can all expose the same interface.
+This contract should be implemented in the shared backend layer so the new site backend, the AI Studio httpserver, and the daemon can all expose the same interface.
 
 ### Phase 2: operational dashboards and alerts
 

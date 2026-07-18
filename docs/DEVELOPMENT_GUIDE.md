@@ -6,7 +6,7 @@ This document is the short orientation guide for future developers and maintaine
 
 This repo is a private overlay on top of the shared SOP implementation.
 
-- [lib/sop](../lib/sop): the mature SOP platform code. This includes the existing Data Manager, shared runtime, and daemon-oriented capabilities.
+- [lib/sop](../lib/sop): the mature SOP platform code. This includes the existing AI Studio, shared runtime, and daemon-oriented capabilities.
 - [src](../src): the product-facing sop-cloud application layer. Use this tree for site-specific UX, registration flows, onboarding, subscriptions, and account management.
 - [docs](.) and the repository root: product stories, implementation notes, and repository-level guidance.
 
@@ -19,14 +19,14 @@ There are two distinct experiences in this repository:
 
 1. The mature platform experience
    - Lives in [lib/sop](../lib/sop)
-   - Includes the original Data Manager and the shared runtime/daemon workflow
+   - Includes the original AI Studio and the shared runtime/daemon workflow
    - Should remain the stable platform layer for core runtime behavior
 
 2. The new sop-cloud product experience
    - Lives in [src](../src)
    - Includes the new site backend and planned frontend experience
    - Holds self-registration, onboarding, account management, and subscription logic
-   - Treat register, unregister, and subscription updates as site/product-facing flows rather than core Data Manager or daemon endpoints
+   - Treat register, unregister, and subscription updates as site/product-facing flows rather than core AI Studio or daemon endpoints
 
 ## Maintenance rules
 

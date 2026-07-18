@@ -35,7 +35,7 @@ The **SOP AI Kit** transforms SOP from a storage engine into a complete AI data 
 *   **KnowledgeBase**: Use the shared ai/memory package and KnowledgeBase APIs to build memory-backed retrieval, semantic search, and knowledge workflows from Python for end-user applications or microservices.
 *   **Scripts**: A functional AI runtime for drafting, refining, and executing complex workflows (Hybrid Execution Model).
 
-> **Important**: To use the AI Copilot features (e.g., in the Data Manager), configure your LLM provider through the Setup Wizard or add generator configuration to your `config.json`. See the [Main README](../../README.md#ai-copilot-configuration) for details.
+> **Important**: To use the AI Copilot features (e.g., in the AI Studio), configure your LLM provider through the Setup Wizard or add generator configuration to your `config.json`. See the [Main README](../../README.md#ai-copilot-configuration) for details.
 
 For comprehensive details on the **SOP Platform Tools** (Scripting, Explain Plans, Self-Correcting Agents), please see the [Platform Tools Documentation](../../SOP_PLATFORM_TOOLS.md).
 
@@ -62,7 +62,7 @@ SOP includes a powerful **Data Management Suite** that provides **full CRUD** ca
 *   **AI Copilot**: Integrated directly into the UI, the AI Copilot can help you write queries, explain data structures, and even generate code snippets.
 *   **SystemDB**: View and manage internal system data, including registry information and transaction logs.
 
-To launch the Data Manager simply run:
+To launch the AI Studio simply run:
 
 ```bash
 sop-httpserver
@@ -111,7 +111,7 @@ For managing multiple environments (e.g., Dev, Staging, Prod), create a `config.
 }
 ```
 
-> **Note**: This example shows the structure of `system_db`, but it is best to let the **Data Manager Setup Wizard** create and populate it automatically on first launch. The Wizard ensures that essential stores (like `Script` and `llm_knowledge`) are correctly initialized for the AI Copilot.
+> **Note**: This example shows the structure of `system_db`, but it is best to let the **AI Studio Setup Wizard** create and populate it automatically on first launch. The Wizard ensures that essential stores (like `Script` and `llm_knowledge`) are correctly initialized for the AI Copilot.
 
 Run with: `sop-httpserver -config config.json`
 
@@ -494,7 +494,7 @@ Database.setup(ctx, options)
 db = Database(options)
 ```
 
-Later, you (or the Data Manager) can inspect these options using `get_options`:
+Later, you (or the AI Studio) can inspect these options using `get_options`:
 
 ```python
 # Retrieve config from a path

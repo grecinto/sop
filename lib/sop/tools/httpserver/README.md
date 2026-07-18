@@ -97,7 +97,7 @@ This keeps the first release easy to reason about while still allowing Copilot s
 
 ### 1. Managing Stores
 
-The Data Manager provides a comprehensive interface for managing your B-Tree stores.
+The AI Studio provides a comprehensive interface for managing your B-Tree stores.
 
 *   **Add Store**: Click the **+** button in the sidebar next to "Stores". This opens a modal where you can define the store name, key/value types, and advanced settings like Index Specifications or CEL Expressions.
 *   **Edit Store**: Select a store, then click the **Pencil** icon in the main header.
@@ -138,7 +138,7 @@ The AI Copilot supports complex queries that mimic SQL operations, even though S
     *   *Command*: "Select * from 'MyScript' where Age > 20."
     *   *Join*: "Join 'Users' and 'MyScript' on 'RegionID'."
     *   **Efficiency**: Because Scripts stream their results, using them as Views is extremely lightweight. The system pipelines the data, allowing for complex transformations with minimal memory footprint.
-*   **Agent Streaming**: Results are streamed in real-time from the Agent to the Data Manager.
+*   **Agent Streaming**: Results are streamed in real-time from the Agent to the AI Studio.
     *   **Benefit**: You see results immediately as they are found.
     *   **Resource Utilization**: This streaming architecture ensures **lightweight resource utilization**, as the server doesn't need to buffer the entire result set. It combines the raw speed of B-Tree navigation with the flexibility of an AI agent to provide a complete, high-performance solution.
 
@@ -209,7 +209,7 @@ Create a JSON configuration file (e.g., `config.json`) to define your environmen
 }
 ```
 
-> **Note**: This example shows the structure of `system_db`, but for a fresh setup it is usually better to let the Data Manager Setup Wizard create and initialize it.
+> **Note**: This example shows the structure of `system_db`, but for a fresh setup it is usually better to let the AI Studio Setup Wizard create and initialize it.
 
 **Security Note:** For production environments, it is recommended to set the root password using the `SOP_ROOT_PASSWORD` environment variable instead of storing it in the config file. The environment variable takes precedence over the config file setting.
 
@@ -235,7 +235,7 @@ You can use the same compile-and-import workflow to bring a custom KB into a loc
    ./run.sh
    ```
    If you are using a different curated input file, update the compiler invocation accordingly.
-3. Start the Data Manager:
+3. Start the AI Studio:
    ```bash
    go run ./tools/httpserver
    ```

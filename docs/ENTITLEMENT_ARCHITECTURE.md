@@ -5,7 +5,7 @@ This document captures the internal design for making the new site the authority
 ## Goals
 
 - Keep the new site as the control plane for user accounts, subscription state, and entitlement decisions.
-- Make the bundled Data Manager behave as a licensed client that must remain tied to a valid account.
+- Make the bundled AI Studio behave as a licensed client that must remain tied to a valid account.
 - Make future language bindings enforce the same rule for Memory, KnowledgeBase, and other premium capabilities.
 - Fail closed when entitlement is missing, expired, revoked, or invalid.
 - Use periodic heartbeat checks so the client remains tied to the current subscription state and cannot continue operating after the subscription is no longer valid.
@@ -22,7 +22,7 @@ The new site owns the truth for:
 - plan features and feature flags
 - revocation or suspension state
 
-The bundled Data Manager and future language bindings do not independently decide whether a user is allowed to use premium capabilities. They rely on the new site for a current entitlement decision.
+The bundled AI Studio and future language bindings do not independently decide whether a user is allowed to use premium capabilities. They rely on the new site for a current entitlement decision.
 
 ## Proposed flow
 
@@ -36,9 +36,9 @@ The new site remains the place where users:
 - update or cancel their plan
 - are suspended or revoked
 
-### 2. Bundled Data Manager checks the new site on startup and on a periodic cadence
+### 2. Bundled AI Studio checks the new site on startup and on a periodic cadence
 
-When the bundled Data Manager starts, it performs an entitlement check against the new site before continuing.
+When the bundled AI Studio starts, it performs an entitlement check against the new site before continuing.
 
 After startup, it should continue to ping the new site on a periodic interval such as every two days to confirm that:
 
@@ -49,12 +49,12 @@ After startup, it should continue to ping the new site on a periodic interval su
 
 Required behavior:
 
-- if the account exists and the subscription is active, the Data Manager continues to run normally
-- if the account is missing, disabled, expired, or otherwise invalid, the Data Manager exits with a clear error message and a non-zero exit code
-- if the entitlement check cannot be completed because the new site is unreachable, the Data Manager should continue to operate locally for a grace period rather than shutting down immediately; once connectivity returns, a fresh validation should be performed and any invalid state should then be enforced
+- if the account exists and the subscription is active, the AI Studio continues to run normally
+- if the account is missing, disabled, expired, or otherwise invalid, the AI Studio exits with a clear error message and a non-zero exit code
+- if the entitlement check cannot be completed because the new site is unreachable, the AI Studio should continue to operate locally for a grace period rather than shutting down immediately; once connectivity returns, a fresh validation should be performed and any invalid state should then be enforced
 - if connectivity is restored and the account is still valid, the client may resume after a fresh verification cycle
 
-This means the Data Manager becomes a dependent client of the new site rather than an independently usable product surface.
+This means the AI Studio becomes a dependent client of the new site rather than an independently usable product surface.
 
 ### 3. Future language bindings use short-lived entitlement tokens
 
@@ -83,7 +83,7 @@ The binding validates the token locally and refuses to perform Memory or Knowled
 - POST /api/entitlements/revoke
   - revokes a previously issued token or disables a user’s entitlement
 
-### Daemon and bundled Data Manager behavior
+### Daemon and bundled AI Studio behavior
 
 - on startup, call /api/entitlements/verify using the authenticated account context or a bootstrap credential
 - on a periodic interval such as every two days, call /api/entitlements/heartbeat or a similar lightweight endpoint to confirm entitlement remains valid
@@ -148,9 +148,9 @@ The user-facing error can be simple, but internally the implementation should pr
 
 - add the new site entitlement endpoints
 - add a lightweight heartbeat endpoint for periodic client validation on a two-day cadence
-- enforce startup validation in the bundled Data Manager
-- make the Data Manager exit when the account cannot be validated
-- make the Data Manager stop if the site is unreachable and the heartbeat cannot be completed
+- enforce startup validation in the bundled AI Studio
+- make the AI Studio exit when the account cannot be validated
+- make the AI Studio stop if the site is unreachable and the heartbeat cannot be completed
 
 ### Phase 2
 

@@ -175,7 +175,7 @@ For managing multiple environments (e.g., Dev, Staging, Prod), create a `config.
 }
 ```
 
-> **Note**: This example shows the structure of `system_db`, but it is best to let the **Data Manager Setup Wizard** create and populate it automatically on first launch. The Wizard ensures that essential stores (like `Script` and `llm_knowledge`) are correctly initialized for the AI Copilot.
+> **Note**: This example shows the structure of `system_db`, but it is best to let the **AI Studio Setup Wizard** create and populate it automatically on first launch. The Wizard ensures that essential stores (like `Script` and `llm_knowledge`) are correctly initialized for the AI Copilot.
 
 Run with: `sop-cli httpserver -config config.json`
 

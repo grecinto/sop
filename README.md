@@ -191,14 +191,14 @@ The shared upstream engine still provides the underlying storage, coordination, 
 
 ## Installation & Distribution
 
-SOP is designed to be accessible regardless of your preferred technology stack. There are two primary ways to get the **SOP Platform Suite**, which includes both the **SOP Code Library** and the **Platform Tools** (Data Manager, Script VDE, AI Copilot).
+SOP is designed to be accessible regardless of your preferred technology stack. There are two primary ways to get the **SOP Platform Suite**, which includes both the **SOP Code Library** and the **Platform Tools** (AI Studio, Script VDE, AI Copilot).
 
 ### Option 1: Language Packages
-Best for developers who want to integrate SOP directly into their application code. Installing the package for your language automatically includes the Data Manager (`sop-httpserver`) and CLI tools.
+Best for developers who want to integrate SOP directly into their application code. Installing the package for your language automatically includes the AI Studio (`sop-httpserver`) and CLI tools.
 
 | Language | Installation | Description |
 | :--- | :--- | :--- |
-| **Python** | `pip install sop4py` | Full Python bindings with Data Manager & AI Scripts. |
+| **Python** | `pip install sop4py` | Full Python bindings with AI Studio & AI Scripts. |
 | **Go** | `go get github.com/sharedcode/sop` | The core native library for maximum performance. |
 | **C#** | `dotnet add package Sop` |  Complete .NET Core integration. |
 | **Java** | *Maven/Gradle* | (Coming Soon) Full JVM support. |
@@ -242,15 +242,15 @@ Best for infrastructure administrators, DevOps, or "Data-First" users who want t
 
 SOP supports both code-first and data-first workflows.
 
-*   **Code-first**: Define stores and logic in application code, then inspect and manage them with the Data Manager.
-*   **Data-first**: Create stores and seed data in the Data Manager, then open those stores from application code.
+*   **Code-first**: Define stores and logic in application code, then inspect and manage them with the AI Studio.
+*   **Data-first**: Create stores and seed data in the AI Studio, then open those stores from application code.
 *   **Further Reading**: See [Workflows Guide](WORKFLOWS.md) for the detailed workflow patterns and deployment scenarios.
 
 ## AI Studio & AI Suite
 
 SOP allows you to interact with your data using the **AI Studio**—a web-based console that includes a **SQL-like** query engine and an **AI Copilot**.
 
-### Data Manager Capabilities
+### AI Studio Capabilities
 *   **Visual Management**: Inspect B-Trees, manage Stores (Key-Value, Vector, Model), and explore the System DB.
 *   **Recent Progress**: The HTTP server now supports signed bearer access tokens for browser and remote API clients, plus store-management fixes that preserve runtime schema metadata and reduce false structural-change validation.
 *   **Environment Manager**: Switch between environments using portable **JSON** configuration files.
@@ -301,15 +301,15 @@ SOP supports complex B-Tree keys that carry metadata such as status, version, ca
 This pattern is used across general-purpose stores and the AI/vector layers to support filtering and structural operations with minimal value reads. See [Architecture Guide](ARCHITECTURE.md), [SOP AI Kit](ai/README.md), and [Vector Store Design](ai/vector/VECTOR_STORE_DESIGN.md) for the detailed key layouts.
 
 ### AI Copilot & Scripts
-The Data Manager includes an integrated AI Copilot that supports **Natural Language Programming**.
+The AI Studio includes an integrated AI Copilot that supports **Natural Language Programming**.
 *   **Natural Language Queries**: Ask for selections, joins, and CRUD operations in plain language.
 *   **Script Drafting and Execution**: Create, save, and run reusable workflows from the UI or command surface.
 *   **Hybrid Execution**: Deterministic tool steps and reasoning steps can be combined in the same workflow.
 *   **Documentation**: See [AI Copilot & Agent Architecture](AI_COPILOT.md), [AI Script Architecture](ai/AI_SCRIPT_ARCHITECTURE.md), and [Store Orchestration Modes](ai/STORE_ORCHESTRATION_MODES.md) for runtime internals and orchestration details.
 
-To launch the Data Manager:
+To launch the AI Studio:
 ```bash
-# Data Manager is included in your language binding installation
+# AI Studio is included in your language binding installation
 sop-httpserver
 ```
 
@@ -413,21 +413,21 @@ SOP is designed as a **Universal Data Platform**. Whether you are writing in Go,
 ### 1. The Universal Approach (JSONDB)
 This is the standard approach used by all language bindings (Python, Java, C#, Rust) and is also available to Go developers via the `jsondb` package.
 *   **Mechanism**: Data is serialized as JSON.
-*   **Benefit**: **Native Data Manager Support**. Since the format is standardized, the AI Studio can automatically read, write, query, and visualize your B-Trees without any extra configuration.
-*   **Interoperability**: A B-Tree created in Python can be read by a Java app or managed by the Go-based Data Manager.
+*   **Benefit**: **Native AI Studio Support**. Since the format is standardized, the AI Studio can automatically read, write, query, and visualize your B-Trees without any extra configuration.
+*   **Interoperability**: A B-Tree created in Python can be read by a Java app or managed by the Go-based AI Studio.
 
 ### 2. The Native Go Approach (Structs & Comparers)
-Go developers often prefer storing native structs for maximum performance and type safety. SOP supports this fully but requires a bridge to be manageable by the generic Data Manager.
+Go developers often prefer storing native structs for maximum performance and type safety. SOP supports this fully but requires a bridge to be manageable by the generic AI Studio.
 
 *   **SOP as a Library (Code First)**:
     *   **Usage**: You define custom structs and a custom comparer in Go code.
     *   **Pros**: Maximum flexibility and performance.
-    *   **Cons**: **Hidden Logic**. The Data Manager cannot inherently understand your compiled sorting logic.
+    *   **Cons**: **Hidden Logic**. The AI Studio cannot inherently understand your compiled sorting logic.
 
 *   **SOP as a Managed Platform (Data First)**:
     *   **Usage**: You provide an **`IndexSpecification`** that describes your key fields and sorting order.
-    *   **Pros**: **Full Data Manager Support**. The `IndexSpecification` acts as the contract, allowing the UI and AI Agents to manage your data.
-    *   **Workflow**: You can use the **Data Manager** to create the B-Tree and define the `IndexSpecification`. Then, use the built-in **Code Generator** to generate the Go structs.
+    *   **Pros**: **Full AI Studio Support**. The `IndexSpecification` acts as the contract, allowing the UI and AI Agents to manage your data.
+    *   **Workflow**: You can use the **AI Studio** to create the B-Tree and define the `IndexSpecification`. Then, use the built-in **Code Generator** to generate the Go structs.
 
 ### 3. Spaces / Knowledge Bases (Knowledge Base Studio)
 
@@ -435,10 +435,10 @@ The same managed workflow extends to **Spaces**, which are SOP's Knowledge Base 
 
 *   **Author in the UI**: Use the AI Studio (Knowledge Base Studio) to create, curate, and refine your Spaces / Knowledge Bases without writing application code.
 *   **Consume in your app**: Once authored, open the same Space from your Go application with the `sop/ai` package and use the rich `KnowledgeBase` API to manage, search, and digest those authored assets at runtime.
-*   **Best practice**: Treat the Data Manager as the authoring and governance layer, and the `ai` package as the runtime layer that retrieves, filters, and reasons over the curated Space content inside your product.
+*   **Best practice**: Treat the AI Studio as the authoring and governance layer, and the `ai` package as the runtime layer that retrieves, filters, and reasons over the curated Space content inside your product.
 
 Typical flow:
-1. Use the Data Manager to create or import a Space.
+1. Use the AI Studio to create or import a Space.
 2. Curate categories, summaries, and items in the UI.
 3. In your Go app, open the Space through `ai/database` / `ai/memory`, then use `SearchKeywords` or `SearchSemantics` to retrieve context for RAG, copilots, or domain tools.
 
@@ -446,13 +446,13 @@ This is how developers can keep the human-friendly authoring experience in AI St
 
 ### Bridging the Gap: From Code-First to Managed (Safe & Zero-Downtime)
 
-SOP supports a hybrid workflow. You can start with a **Code-First** approach (using custom Go structs and comparers) and later make the store fully manageable by the Data Manager—**without migration or downtime**.
+SOP supports a hybrid workflow. You can start with a **Code-First** approach (using custom Go structs and comparers) and later make the store fully manageable by the AI Studio—**without migration or downtime**.
 
-*   **The Feature**: Use the Data Manager's **Edit Store** functionality to attach an `IndexSpecification` or `CEL expression` to an existing "Code-First" store.
+*   **The Feature**: Use the AI Studio's **Edit Store** functionality to attach an `IndexSpecification` or `CEL expression` to an existing "Code-First" store.
 *   **The Safety Mechanism**: This operation is **100% safe** but protected.
     1.  **Admin Unlock**: For non-empty stores, these fields are locked by default. You must provide an **Admin Token** to unlock them, ensuring only authorized personnel can modify the schema of a live database.
     2.  **Metadata Only**: The change only updates the **Store Registry** (metadata). It *never* touches the actual B-Tree data nodes or re-writes the data file.
-    3.  **Non-Invasive**: The underlying B-Tree structure remains identical. The Data Manager simply uses the new specification to interpret and sort the keys dynamically, matching the logic of your compiled code.
+    3.  **Non-Invasive**: The underlying B-Tree structure remains identical. The AI Studio simply uses the new specification to interpret and sort the keys dynamically, matching the logic of your compiled code.
     4.  **Reversibility**: Since the data is untouched, you can refine or remove the specification at any time.
 
 This allows DBAs to take a "black box" store generated by application code and turn it into a transparent, queryable dataset for reporting, debugging, and AI analysis.
@@ -462,8 +462,8 @@ This allows DBAs to take a "black box" store generated by application code and t
 SOP B-Trees are **general-purpose** storage engines. Similar to a Model Store, they can store "any" value type (e.g., `interface{}` in Go, `Object` in Java).
 
 *   **Dynamic Typing**: You can store mixed types in the same B-Tree if your application logic supports it.
-*   **Strong Typing via "Seed"**: To enforce strong typing and enable rich Data Manager features, you should **seed** the B-Tree with an initial item.
-    *   **Discovery**: When you add a "seed" item (the first record), the Data Manager inspects it to discover the Key and Value types automatically.
+*   **Strong Typing via "Seed"**: To enforce strong typing and enable rich AI Studio features, you should **seed** the B-Tree with an initial item.
+    *   **Discovery**: When you add a "seed" item (the first record), the AI Studio inspects it to discover the Key and Value types automatically.
     *   **Schema Enforcement**: This effectively "locks in" the schema for the UI, allowing it to generate correct forms and validation rules.
     *   **Swarm Readiness**: As noted below, this seed item also initializes the tree structure, enabling efficient "Swarm" transaction merging immediately.
 
@@ -550,7 +550,7 @@ SOP supports "Swarm Computing" where multiple distributed processes or threads c
 **Important Requirement for First Commit:**
 To enable seamless concurrent merging on a newly created B-Tree, you **must pre-seed the B-Tree with at least one item** in a separate, initial transaction.
 - **Why?** This establishes the root node and structure, preventing race conditions that can occur when multiple transactions attempt to initialize an empty tree simultaneously.
-- **Bonus**: As mentioned above, this seed item also allows the **Data Manager** to auto-discover the Key/Value types, turning your general-purpose B-Tree into a strongly-typed, manageable store.
+- **Bonus**: As mentioned above, this seed item also allows the **AI Studio** to auto-discover the Key/Value types, turning your general-purpose B-Tree into a strongly-typed, manageable store.
 - **Note:** This requirement is simply to have at least one item in the tree. It can be a real application item or a dummy seed item.
 - **Safety:** Your data remains ACID-compliant. This step simply ensures the "first commit" doesn't suffer from a "random drop" race condition where one transaction's initialization overwrites another's.
 - **After this single seed item is committed, the B-Tree is fully ready for high-concurrency "swarm" operations.**

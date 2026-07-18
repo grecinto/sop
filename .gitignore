@@ -1,6 +1,7 @@
 # Generated runtime artifacts and local state
 storelist.txt
 **/storelist.txt
+**/storeinfo.txt
 **/sessions/
 **/shared_memory/
 **/system_daemon_registry/
@@ -9,5 +10,23 @@ storelist.txt
 **/site_user_payment_ids/
 **/site_user_subscription_ids/
 **/site_users/
+**/site_products/
+**/kb/categories/
+**/kb/categoriesByDistance/
+**/kb/categoriesByPath/
+**/kb/documents/
+**/kb/items/
+**/kb/vectors/
 **/fs.test
 .sop-data/config.json
+
+# Binary executables (should be built, not committed)
+/site
+/site-backend
+/sop-daemon
+/src/backend/site/site
+/lib/sop/sop-daemon
+*.exe
+*.dll
+*.so
+*.dylib

@@ -305,7 +305,7 @@ The side-car layer is manifest-driven and lives beside the existing store regist
 - `folderstorelist.txt` for folder source stores
 - `repostorelist.txt` for repo source stores
 
-The Data Manager can display all three lists together in the Stores section, while the digest step later materializes curated knowledge into a Space.
+The AI Studio can display all three lists together in the Stores section, while the digest step later materializes curated knowledge into a Space.
 
 ### Lifecycle expectations
 
@@ -360,7 +360,7 @@ See detailed plan: [KB_EXPERTISE_QUALITY_IMPROVEMENT.md](KB_EXPERTISE_QUALITY_IM
 - [ ] Implement KB effectiveness scoring (success rate per KB per task type)
 - [ ] Add user feedback capture (thumbs up/down) linked to KB usage
 - [ ] Build automatic KB pruning for rules with <30% success rate
-- [ ] Create KB quality metrics dashboard in Data Manager
+- [ ] Create KB quality metrics dashboard in AI Studio
 
 **Phase 4: User Experience (Medium Priority)**
 - [ ] Implement zero-config automatic KB selection mode
@@ -650,7 +650,7 @@ The compiler automatically:
 
 ### Import Steps
 
-1. Open the Data Manager or the Space view in your app.
+1. Open the AI Studio or the Space view in your app.
 2. Create a new Space or select an existing one as the destination.
 3. Click the **Import JSON** action.
 4. Choose the Knowledge Base JSON file (compiled bundle).

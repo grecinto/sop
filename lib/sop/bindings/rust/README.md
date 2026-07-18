@@ -17,7 +17,7 @@ SOP includes a powerful **Data Management Suite** that provides **full CRUD** ca
 *   **AI Copilot**: Integrated directly into the UI, the AI Copilot can help you write queries, explain data structures, and even generate code snippets.
 *   **SystemDB**: View and manage internal system data, including registry information and transaction logs.
 
-To launch the Data Manager, download the all-in-one single-file installer from [SOP Releases](https://github.com/SharedCode/sop/releases). Alternatively, you can use the Go toolchain:
+To launch the AI Studio, download the all-in-one single-file installer from [SOP Releases](https://github.com/SharedCode/sop/releases). Alternatively, you can use the Go toolchain:
 
 ```bash
 # From the root of the repository
@@ -167,7 +167,7 @@ For managing multiple environments (e.g., Dev, Staging, Prod), create a `config.
 }
 ```
 
-> **Note**: This example shows the structure of `system_db`, but it is best to let the **Data Manager Setup Wizard** create and populate it automatically on first launch. The Wizard ensures that essential stores (like `Script` and `llm_knowledge`) are correctly initialized for the AI Copilot.
+> **Note**: This example shows the structure of `system_db`, but it is best to let the **AI Studio Setup Wizard** create and populate it automatically on first launch. The Wizard ensures that essential stores (like `Script` and `llm_knowledge`) are correctly initialized for the AI Copilot.
 
 Run with: `sop-httpserver -config config.json`
 

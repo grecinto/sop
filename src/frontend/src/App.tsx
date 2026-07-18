@@ -1344,10 +1344,10 @@ export default function App() {
     
     window.location.assign(url);
   };
-  const primaryActionLabel = needsSetup ? 'Setup Data Manager' : (canLaunchDataManager ? 'Open Data Manager' : (hasSubscription ? 'Unsubscribe' : 'Subscribe'));
+  const primaryActionLabel = needsSetup ? 'Setup AI Studio' : (canLaunchDataManager ? 'Open AI Studio' : (hasSubscription ? 'Unsubscribe' : 'Subscribe'));
   
   const secondaryActionHref = canLaunchDataManager ? dataManagerHref : '/site/subscribe';
-  const secondaryActionLabel = canLaunchDataManager ? 'Open Data Manager' : hasSubscription ? 'Manage subscription' : 'Review subscription';
+  const secondaryActionLabel = canLaunchDataManager ? 'Open AI Studio' : hasSubscription ? 'Manage subscription' : 'Review subscription';
   const shouldShowInstallPanel = showInstallStep || isStarterActive || checkoutComplete;
   const canResumeCheckout = Boolean(account.checkoutUrl) && (account.billingStatus === 'pending' || Boolean(account.failureReason));
   const billingStatusTitle = account.billingStatus === 'active'
@@ -1415,7 +1415,7 @@ export default function App() {
                 Your first month is free. After that, billing starts at $5/month and you can cancel anytime.
               </p>
               <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
-                The subscription also includes the Data Manager, where you can inspect workflows, review knowledge base activity, and use built-in visualization and studio-style controls for managing data, knowledge bases, and workspace context.
+                The subscription also includes the AI Studio, where you can inspect workflows, review knowledge base activity, and use built-in visualization and studio-style controls for managing data, knowledge bases, and workspace context.
               </p>
               <p className="muted-copy" style={{ marginTop: '0.75rem' }}>
                 Visit <strong>ai-northstar.com</strong> for the public product site and onboarding experience.
@@ -2027,9 +2027,9 @@ This section explains the system design.
                     <strong>{isStarterActive ? 'Ready to download' : 'Pending activation'}</strong>
                   </div>
                   <div>
-                    <span className="summary-label">Data Manager</span>
+                    <span className="summary-label">AI Studio</span>
                     {canLaunchDataManager ? (
-                      <a href={dataManagerHref} className="summary-link" onClick={(event) => { void handleOpenDataManager(event); }}>Open Data Manager</a>
+                      <a href={dataManagerHref} className="summary-link" onClick={(event) => { void handleOpenDataManager(event); }}>Open AI Studio</a>
                     ) : (
                       <strong>Admin access required</strong>
                     )}
