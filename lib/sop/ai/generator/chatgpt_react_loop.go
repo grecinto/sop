@@ -32,7 +32,7 @@ type chatGPTOwnedReActLoop struct {
 }
 
 func newChatGPTOwnedReActLoop(g *chatgpt) ai.ReActLoop {
-	return chatGPTOwnedReActLoop{generator: g, maxIterations: 5}
+	return chatGPTOwnedReActLoop{generator: g, maxIterations: 8}
 }
 
 func (l chatGPTOwnedReActLoop) modelName() string {
@@ -74,6 +74,11 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 	maxIterations := l.maxIterations
 	if maxIterations <= 0 {
 		maxIterations = 3
+	}
+
+	// Adjust iterations for multi-step workflows
+	if requiresExtendedIterations(tools, req.UserQuery) {
+		maxIterations = maxIterations + 3 // Extra steps for git/automation workflows
 	}
 
 	executedToolCalls := make([]ai.ToolCall, 0)
@@ -147,6 +152,43 @@ func (l chatGPTOwnedReActLoop) sendRequest(ctx context.Context, request openAIRe
 		return openAIResponsesResponse{}, fmt.Errorf("chatgpt owned loop requires a generator")
 	}
 	return l.generator.createResponses(ctx, request)
+}
+
+// requiresExtendedIterations detects workflows that typically need more tool chaining.
+func requiresExtendedIterations(tools []ai.ToolDefinition, query string) bool {
+	queryLower := strings.ToLower(query)
+	
+	// Git workflows: status → diff → add → commit → push
+	isGitWorkflow := strings.Contains(queryLower, "commit") ||
+		strings.Contains(queryLower, "check in") ||
+		strings.Contains(queryLower, "checkin") ||
+		strings.Contains(queryLower, "git push") ||
+		strings.Contains(queryLower, "stage")
+	
+	// File editing workflows: search → read → edit → validate → save
+	isFileWorkflow := strings.Contains(queryLower, "fix") && strings.Contains(queryLower, "file") ||
+		strings.Contains(queryLower, "edit") && strings.Contains(queryLower, "code") ||
+		strings.Contains(queryLower, "refactor")
+	
+	// Multi-step automation
+	isComplexAutomation := strings.Contains(queryLower, "workflow") ||
+		strings.Contains(queryLower, "pipeline") ||
+		strings.Contains(queryLower, "automation")
+	
+	if isGitWorkflow || isFileWorkflow || isComplexAutomation {
+		return true
+	}
+	
+	// Check if git tools are available (indicates git domain)
+	hasGitTools := false
+	for _, tool := range tools {
+		if strings.HasPrefix(tool.Name, "git_") {
+			hasGitTools = true
+			break
+		}
+	}
+	
+	return hasGitTools && (strings.Contains(queryLower, "files") || strings.Contains(queryLower, "changes"))
 }
 
 // ----------------------------------------------------------------------------

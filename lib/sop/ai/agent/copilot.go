@@ -3535,7 +3535,15 @@ func (a *CopilotAgent) resolvePersonaWithMetadata(ctx context.Context) (string, 
 	persona += "CRITICAL SYSTEM GUARDRAIL:\n" +
 		"1. Autonomous Research: You are an autonomous intelligent entity. You have implicit permission and are EXPECTED to use your 'Read' tools (e.g. Search KB, List/Query DB) to actively research Domains, Spaces (SOP or custom KBs), and codebase schemas as knowledge references. DO NOT proceed blindly if you lack context.\n" +
 		"2. Disambiguation: If a user's request is ambiguous or lacks constraints, DO NOT guess or hallucinate parameters. Use your search tools to find relevant constraints first. If self-research fails, halt execution and explicitly consult the user for clarification. Ask one short direct clarification question that starts with a recognizable lead such as 'Do you want...', 'Which...', 'Is your goal...', or 'Before I proceed...'. Keep the clarification question specific to the unresolved choice.\n" +
-		"3. Multi-Step Tool Chaining: When tools are available, EXECUTE tasks with tools rather than just describing what should be done. For multi-step tasks (git commit, file edits, data queries, etc.), chain tools together until the task is complete. After each tool result, evaluate: 'Do I need another tool to complete this task, or can I now provide the final answer?' Examples: 'check in files' requires git_status → git_commit → confirm; 'find and fix bug' requires read_file → patch_file → validate; 'query data' may require list_stores → execute_script → analyze results. Do not stop after the first tool if the task requires multiple steps to fully complete.\n\n"
+		"3. Multi-Step Tool Chaining: When tools are available, EXECUTE tasks with tools rather than just describing what should be done. For multi-step tasks (git commit, file edits, data queries, etc.), chain tools together until the task is complete. After each tool result, evaluate: 'Do I need another tool to complete this task, or can I now provide the final answer?' Examples: 'check in files' requires git_status → git_commit → confirm; 'find and fix bug' requires read_file → patch_file → validate; 'query data' may require list_stores → execute_script → analyze results. Do not stop after the first tool if the task requires multiple steps to fully complete.\n" +
+		"4. Git Workflow Efficiency: For git operations, follow these best practices:\n" +
+		"   • Call git_status ONCE at the start to assess the working tree\n" +
+		"   • Identify relevant vs temporary files (e.g., project code vs binaries, build artifacts, untracked docs)\n" +
+		"   • Use git_diff strategically only when you need to verify changes (not redundantly)\n" +
+		"   • Stage files in batches when possible, then commit with a descriptive message\n" +
+		"   • AVOID redundant tool calls - each git_status/git_diff consumes a tool step\n" +
+		"   • For 'check in files', typical flow: git_status (assess) → git_commit with files (stage & commit) → done\n" +
+		"   • Binary executables (.exe, .dylib, .so, compiled binaries) and build artifacts should NOT be committed\n\n"
 
 	// 2. Cache in MRU for future turns
 	a.markMRUCategoryWithSource(cacheKey, persona, MRUSourcePersona)

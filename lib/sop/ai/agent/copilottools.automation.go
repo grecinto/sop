@@ -374,7 +374,7 @@ const gitDiffArgsSchema = `{"type":"object","properties":{"path":{"type":"string
 const gitLogArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"max_count":{"type":"integer","description":"Maximum number of commits to return."}}}`
 const gitBranchArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."}}}`
 const gitCheckoutArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"ref":{"type":"string","description":"Branch, tag, or commit to switch to."}},"required":["path","ref"]}`
-const gitCommitArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"message":{"type":"string","description":"Commit message."},"all":{"type":"boolean","description":"Stage all modified and deleted files before committing."}},"required":["path","message"]}`
+const gitCommitArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"message":{"type":"string","description":"Commit message."},"files":{"type":"array","items":{"type":"string"},"description":"Optional list of specific files to stage before committing. If omitted and 'all' is true, stages all modified files."},"all":{"type":"boolean","description":"Stage all modified and deleted files before committing. Ignored if 'files' is specified."}},"required":["path","message"]}`
 const gitPullArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"rebase":{"type":"boolean","description":"Use rebase instead of merge when pulling."}}}`
 const gitPushArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"remote":{"type":"string","description":"Remote name to push to."},"branch":{"type":"string","description":"Branch name to push."}}}`
 
@@ -434,7 +434,7 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 		a.registry.Register("git_log", "Shows recent commit history for a repository.", gitLogArgsSchema, wrapStringTool(a.toolGitLog))
 		a.registry.Register("git_branch", "Lists branches for a repository.", gitBranchArgsSchema, wrapStringTool(a.toolGitBranch))
 		a.registry.Register("git_checkout", "Switches a repository to a different branch, tag, or commit.", gitCheckoutArgsSchema, wrapStringTool(a.toolGitCheckout))
-		a.registry.Register("git_commit", "Creates a git commit for a repository after staging changes if requested.", gitCommitArgsSchema, wrapStringTool(a.toolGitCommit))
+		a.registry.Register("git_commit", "Creates a git commit for a repository. Can stage specific files or all changes in one operation. Use 'files' parameter to stage only relevant project files (excluding binaries, build artifacts, temp files).", gitCommitArgsSchema, wrapStringTool(a.toolGitCommit))
 		a.registry.Register("git_pull", "Pulls changes from a remote into a repository, optionally using rebase.", gitPullArgsSchema, wrapStringTool(a.toolGitPull))
 		a.registry.Register("git_push", "Pushes a branch to a remote repository.", gitPushArgsSchema, wrapStringTool(a.toolGitPush))
 		if policy.isPostgresReadEnabled() {
@@ -1097,12 +1097,38 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 	if !ok || strings.TrimSpace(message) == "" {
 		return "", fmt.Errorf("'message' must be a non-empty string")
 	}
-	command := fmt.Sprintf("git --no-pager -C %s add -A && git --no-pager -C %s commit -m %s", shellQuote(path), shellQuote(path), shellQuote(message))
-	if allRaw, ok := args["all"]; ok {
-		if all, ok := allRaw.(bool); ok && !all {
-			command = fmt.Sprintf("git --no-pager -C %s commit -m %s", shellQuote(path), shellQuote(message))
+	
+	// Check if specific files are provided
+	var command string
+	if filesRaw, ok := args["files"]; ok {
+		if filesArray, ok := filesRaw.([]any); ok && len(filesArray) > 0 {
+			// Stage specific files
+			files := make([]string, 0, len(filesArray))
+			for _, f := range filesArray {
+				if fileStr, ok := f.(string); ok && strings.TrimSpace(fileStr) != "" {
+					files = append(files, shellQuote(fileStr))
+				}
+			}
+			if len(files) > 0 {
+				filesList := strings.Join(files, " ")
+				command = fmt.Sprintf("git --no-pager -C %s add %s && git --no-pager -C %s commit -m %s", 
+					shellQuote(path), filesList, shellQuote(path), shellQuote(message))
+			} else {
+				return "", fmt.Errorf("'files' array contains no valid file paths")
+			}
+		} else {
+			return "", fmt.Errorf("'files' must be an array of strings")
+		}
+	} else {
+		// Fall back to 'all' parameter behavior
+		command = fmt.Sprintf("git --no-pager -C %s add -A && git --no-pager -C %s commit -m %s", shellQuote(path), shellQuote(path), shellQuote(message))
+		if allRaw, ok := args["all"]; ok {
+			if all, ok := allRaw.(bool); ok && !all {
+				command = fmt.Sprintf("git --no-pager -C %s commit -m %s", shellQuote(path), shellQuote(message))
+			}
 		}
 	}
+	
 	return a.runLocalAutomationCommand(ctx, args, command, "Create a git commit for the requested repository change.", path, 60)
 }
 
