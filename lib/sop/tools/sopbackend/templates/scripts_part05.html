@@ -794,6 +794,37 @@
         };
     }
 
+    function isAuthenticationError(error) {
+        if (!error) return false;
+        const message = error.message || String(error);
+        return message.includes('Invalid or expired token') ||
+               message.includes('Failed to authenticate with daemon') ||
+               message.includes('Auth required') ||
+               message.includes('401') ||
+               message.includes('403');
+    }
+
+    function handleAuthenticationError() {
+        // Clear any stored tokens
+        if (typeof clearStoredSessionToken === 'function') {
+            clearStoredSessionToken();
+        }
+        if (typeof clearCachedAppState === 'function') {
+            clearCachedAppState();
+        }
+        // Clear daemon auth tokens
+        if (window.daemonAuth && typeof window.daemonAuth.clearTokens === 'function') {
+            window.daemonAuth.clearTokens();
+        }
+        // Redirect to login if not already there
+        if (window.location.pathname !== '/login') {
+            console.log('[Auth] Redirecting to login due to authentication failure');
+            // Save current URL to return after login
+            const returnUrl = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
+            window.location.assign('/login?return=' + returnUrl);
+        }
+    }
+
     async function ensureLocalAgentReachable() {
         const response = await daemonFetch('/api/handoff', {
             method: 'POST',
@@ -802,7 +833,19 @@
         });
         if (!response.ok) {
             const text = await response.text().catch(() => '');
-            throw new Error(text || 'Local agent is unavailable');
+            let errorMessage = text || 'Local agent is unavailable';
+            
+            // Try to parse JSON error response
+            try {
+                const errorData = JSON.parse(text);
+                if (errorData.error) {
+                    errorMessage = errorData.error;
+                }
+            } catch (e) {
+                // Not JSON, use text as-is
+            }
+            
+            throw new Error(errorMessage);
         }
         const data = await response.json().catch(() => null);
         if (data && data.welcome_context && !window.__sopLocalWelcomeShown) {
@@ -2271,6 +2314,11 @@
                 try {
                     await ensureLocalAgentReachable();
                 } catch (err) {
+                    // Check if this is an authentication error
+                    if (isAuthenticationError(err)) {
+                        handleAuthenticationError();
+                        return;
+                    }
                     const loadingEl = document.getElementById(loadingId);
                     if (loadingEl) loadingEl.remove();
                     appendChatMessage('ai', 'Local agent unavailable: ' + (err.message || 'unknown error'));

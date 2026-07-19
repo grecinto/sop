@@ -258,7 +258,8 @@
             clearStoredSessionToken();
             clearCachedAppState();
             if (window.location.pathname !== '/login') {
-                window.location.assign('/login');
+                const returnUrl = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
+                window.location.assign('/login?return=' + returnUrl);
             }
             throw new Error(`Auth required (${response.status})`);
         }
@@ -296,7 +297,8 @@
                 clearStoredSessionToken();
                 clearCachedAppState();
                 if (window.location.pathname !== '/login') {
-                    window.location.assign('/login');
+                    const returnUrl = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
+                    window.location.assign('/login?return=' + returnUrl);
                 }
             }
 
@@ -361,7 +363,8 @@
                     clearStoredSessionToken();
                     clearCachedAppState();
                     if (window.location.pathname !== '/login') {
-                        window.location.assign('/login');
+                        const returnUrl = encodeURIComponent(window.location.pathname + window.location.search + window.location.hash);
+                        window.location.assign('/login?return=' + returnUrl);
                     }
                 }
                 const text = await response.text();
