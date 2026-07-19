@@ -132,6 +132,12 @@ function clearPersistedAccountState() {
   if (typeof window === 'undefined') {
     return;
   }
+  console.info('[site-auth] clearPersistedAccountState', {
+    hasAccountState: Boolean(window.localStorage.getItem(ACCOUNT_STATE_STORAGE_KEY)),
+    hasSignedOutFlag: Boolean(window.localStorage.getItem(SIGNED_OUT_STORAGE_KEY)),
+    hasLogoutPending: Boolean(window.localStorage.getItem('sop-site-logout-pending')),
+    hasAccessToken: Boolean(window.localStorage.getItem('sop_access_token') || window.sessionStorage.getItem('sop_access_token')),
+  });
   window.localStorage.removeItem(ACCOUNT_STATE_STORAGE_KEY);
   window.localStorage.removeItem(DRAFT_STORAGE_KEY);
   window.sessionStorage.removeItem(ACCOUNT_STATE_STORAGE_KEY);
@@ -256,6 +262,14 @@ function persistAccountState(account: AccountState) {
   if (typeof window === 'undefined') {
     return;
   }
+  console.info('[site-auth] persistAccountState', {
+    isAuthenticated: account.isAuthenticated,
+    name: account.name,
+    role: account.role,
+    billingStatus: account.billingStatus,
+    hasSignedOutFlag: Boolean(window.localStorage.getItem(SIGNED_OUT_STORAGE_KEY)),
+    hasLogoutPending: Boolean(window.localStorage.getItem('sop-site-logout-pending')),
+  });
   if (!account.isAuthenticated) {
     clearPersistedAccountState();
     return;
@@ -426,6 +440,12 @@ async function pingPendingCheckout(): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
     });
     console.info('[site-subscribe] pending checkout ping response', { ok: response.ok, status: response.status });
+    try {
+      const bodyText = await response.text();
+      console.info('[site-subscribe] pending checkout ping body', bodyText);
+    } catch {
+      // ignore
+    }
   } catch (error) {
     console.warn('[site-subscribe] pending checkout ping failed', error);
     // Ignore ping failures; the status poller will keep retrying and the server can still recover.
@@ -480,13 +500,21 @@ async function recoverPendingCheckout(sessionID: string): Promise<AccountState |
 
 async function loadAccountFromServer(): Promise<AccountState> {
   if (isLogoutPending()) {
+    console.info('[site-auth] loadAccountFromServer skipped because logout is pending');
     return emptyState;
   }
+  console.info('[site-auth] loadAccountFromServer requesting /api/auth/status', {
+    hasSignedOutFlag: Boolean(window.localStorage.getItem(SIGNED_OUT_STORAGE_KEY)),
+    hasLogoutPending: Boolean(window.localStorage.getItem('sop-site-logout-pending')),
+    pathname: typeof window !== 'undefined' ? window.location.pathname : undefined,
+  });
   const response = await fetch('/api/auth/status', { credentials: 'include' });
+  console.info('[site-auth] loadAccountFromServer response', { status: response.status, ok: response.ok });
   if (!response.ok) {
     return emptyState;
   }
   const payload = await response.json();
+  console.info('[site-auth] loadAccountFromServer payload', payload);
 
   const user = payload?.user ?? {};
   const userHasIdentity = Boolean(user.username || user.email || user.role || user.subscription_plan || user.billing_status || user.billing);
@@ -872,7 +900,7 @@ export default function App() {
   useEffect(() => {
     const pendingLogout = consumeLogoutPendingFlag();
     if (pendingLogout) {
-      console.info('auth bootstrap skipped after logout');
+      console.info('[site-auth] auth bootstrap skipped after logout');
       setAccount(emptyState);
       clearPersistedAccountState();
       markSignedOut();
@@ -892,7 +920,7 @@ export default function App() {
     setEmail(draft.email);
     void (async () => {
       try {
-        console.info('auth bootstrap probing server status');
+        console.info('[site-auth] auth bootstrap probing server status');
         let resolvedAccount = await loadAccountFromServer();
         if (!resolvedAccount.isAuthenticated && pendingCheckoutSessionID) {
           const recoveredAccount = await recoverPendingCheckout(pendingCheckoutSessionID);
@@ -910,7 +938,7 @@ export default function App() {
         };
         setAccount(nextAccount);
         if (nextAccount.isAuthenticated) {
-          console.info('auth bootstrap restored authenticated account', { role: nextAccount.role, name: nextAccount.name });
+          console.info('[site-auth] auth bootstrap restored authenticated account', { role: nextAccount.role, name: nextAccount.name, billingStatus: nextAccount.billingStatus });
           clearSignedOutFlag();
           setName(nextAccount.name || draft.name);
           setEmail(nextAccount.email || draft.email);
@@ -923,13 +951,13 @@ export default function App() {
           }
           persistAccountState(nextAccount);
         } else {
-          console.info('auth bootstrap found no authenticated account');
+          console.info('[site-auth] auth bootstrap found no authenticated account');
           clearPersistedAccountState();
           setShowInstallStep(false);
           setCheckoutComplete(false);
         }
       } catch (error) {
-        console.warn('auth bootstrap failed', error);
+        console.warn('[site-auth] auth bootstrap failed', error);
         setAccount(emptyState);
         clearPersistedAccountState();
         setShowInstallStep(false);

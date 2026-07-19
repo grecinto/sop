@@ -84,7 +84,7 @@ func main() {
 	flag.BoolVar(&openBrowserFlag, "open-browser", true, "Open browser on startup")
 	flag.StringVar(&logLevelFlag, "log-level", "info", "Set log level (debug, info, warn, error). Default is info.")
 	flag.IntVar(&port, "port", 8080, "Port to run the server on")
-	flag.StringVar(&databasePath, "database", "/tmp/sop_data", "Path to the SOP database/data directory")
+	flag.StringVar(&databasePath, "database", "./.sop-data", "Path to the SOP database/data directory")
 	flag.StringVar(&mode, "mode", "standalone", "SOP mode: 'standalone' or 'clustered'")
 	flag.StringVar(&configFile, "config", "", "Path to configuration file (optional)")
 	flag.StringVar(&redisURL, "redis", "localhost:6379", "Redis URL for clustered mode (e.g. localhost:6379)")

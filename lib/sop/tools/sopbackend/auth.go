@@ -2548,8 +2548,10 @@ func (c *Config) AuthenticateBearerToken(ctx context.Context, token string) (boo
 func (c *Config) Authenticate(username, password string) (bool, *UserRecord, error) {
 	provider, err := c.resolveAuthProvider()
 	if err != nil {
+		log.Info("auth.provider.trace", "username", normalizeUsername(username), "provider_error", err)
 		return false, nil, err
 	}
+	log.Info("auth.provider.trace", "username", normalizeUsername(username), "provider", fmt.Sprintf("%T", provider))
 	return provider.Authenticate(context.Background(), username, password)
 }
 
@@ -3268,17 +3270,23 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	username, password, err := parseLoginRequest(r)
 	if err != nil {
+		log.Warn("auth.login.parse_failed", "path", r.URL.Path, "method", r.Method, "remote_addr", r.RemoteAddr, "content_type", r.Header.Get("Content-Type"), "error", err)
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	log.Info("auth.login.request", "path", r.URL.Path, "method", r.Method, "remote_addr", r.RemoteAddr, "content_type", r.Header.Get("Content-Type"), "username", username)
+	log.Info("auth.login.trace", "path", r.URL.Path, "method", r.Method, "username", username, "password_length", len(password))
+
 	ok, user, err := config.Authenticate(username, password)
 	if err != nil {
+		log.Warn("auth.login.authenticate_error", "path", r.URL.Path, "method", r.Method, "remote_addr", r.RemoteAddr, "username", username, "error", err)
 		recordProductMetric("auth_login_failures")
 		writeJSONError(w, http.StatusInternalServerError, "authentication failed")
 		return
 	}
 	if !ok || user == nil {
+		log.Info("auth.login.invalid_credentials", "path", r.URL.Path, "method", r.Method, "remote_addr", r.RemoteAddr, "username", username)
 		recordProductMetric("auth_login_failures")
 		writeJSONError(w, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -3308,9 +3316,12 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	accessToken, refreshToken, err := currentTokenFacade().CreateSession(r.Context(), user.Username, user.Role)
 	if err != nil {
+		log.Warn("auth.login.create_session_error", "path", r.URL.Path, "method", r.Method, "remote_addr", r.RemoteAddr, "username", username, "user_role", user.Role, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
+
+	log.Info("auth.login.session_created", "path", r.URL.Path, "method", r.Method, "remote_addr", r.RemoteAddr, "username", username, "user_role", user.Role)
 
 	secure := r.TLS != nil
 	setSessionCookies(w, accessToken, refreshToken, secure)

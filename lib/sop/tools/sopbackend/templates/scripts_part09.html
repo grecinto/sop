@@ -785,8 +785,8 @@
                     if (opts) opts.style.display = 'none';
                 }
 
-                // If value is default /tmp..., maybe clear it to encourage entry?
-                if (input.value.startsWith('/tmp/sop_data')) {
+                // If value is the default durable path, leave it in place unless the user wants to override it.
+                if (input.value === './.sop-data/system_db') {
                     // input.value = ""; 
                 }
                 input.focus();
@@ -829,7 +829,7 @@
                 if (input) {
                     input.placeholder = "/path/to/existing/db_folder";
                     // If default value (parent dir), clear it so user enters full path
-                    if (input.value === "/tmp/sop_data/db" || input.value === "") {
+                    if (input.value === "./.sop-data/db" || input.value === "") {
                          input.value = "";
                     }
                     input.focus();
@@ -872,7 +872,7 @@
                  // Or revert to default parent? 
                  // Generally safer to leave it or reset to default if empt.
                  if (input && input.value === "") {
-                     input.value = "/tmp/sop_data/db";
+                     input.value = "./.sop-data/db";
                  }
                  
                  // Show Advanced Mode

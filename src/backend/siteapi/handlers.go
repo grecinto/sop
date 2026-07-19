@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -158,6 +160,30 @@ func clearSessionCookies(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: "sop_refresh_token", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
+func traceLoginRequest(r *http.Request, body []byte) {
+	if r == nil {
+		return
+	}
+
+	username := ""
+	if len(body) > 0 {
+		if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+			var payload struct {
+				Username string `json:"username"`
+			}
+			if err := json.Unmarshal(body, &payload); err == nil {
+				username = strings.TrimSpace(payload.Username)
+			}
+		} else if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+			if form, err := url.ParseQuery(string(body)); err == nil {
+				username = strings.TrimSpace(form.Get("username"))
+			}
+		}
+	}
+
+	log.Printf("site-auth.trace path=%s method=%s remote_addr=%s content_type=%s username=%q body_bytes=%d", r.URL.Path, r.Method, r.RemoteAddr, r.Header.Get("Content-Type"), username, len(body))
+}
+
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -169,6 +195,8 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	traceLoginRequest(r, bodyBytes)
 
 	proxyReq := httptest.NewRequest(r.Method, "/api/auth/login", bytes.NewReader(bodyBytes))
 	proxyReq.Header = r.Header.Clone()
@@ -193,6 +221,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(recorder.Code)
 	_, _ = w.Write(recorder.Body.Bytes())
+	log.Printf("site-auth.trace result path=%s method=%s status=%d", r.URL.Path, r.Method, recorder.Code)
 
 	sopbackend.RecordProductMetric("site_auth_login_requests")
 }

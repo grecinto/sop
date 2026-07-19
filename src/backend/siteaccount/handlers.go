@@ -88,6 +88,15 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": message, "message": message})
 }
 
+func writeSafeEmptyAccountResponse(w http.ResponseWriter, configProvisioned bool) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"config_provisioned": configProvisioned,
+		"user":               map[string]any{},
+	})
+}
+
 func shortTokenPrefix(token string) string {
 	if len(token) <= 8 {
 		return token
@@ -449,10 +458,13 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	cfg := GetConfig()
 	user, ok, err := cfg.FindUserRecord(r.Context(), username)
 	if err != nil {
+		slog.Warn("siteaccount.current_user.lookup_error", "username", username, "error", err)
+		writeSafeEmptyAccountResponse(w, sopbackend.HasConfigFileOnDisk())
 		return
 	}
 	if !ok || user == nil {
-		writeJSONError(w, http.StatusNotFound, "user not found")
+		slog.Warn("siteaccount.current_user.user_not_found", "username", username)
+		writeSafeEmptyAccountResponse(w, sopbackend.HasConfigFileOnDisk())
 		return
 	}
 	// Sync billing status from Stripe if pending (fallback for missed webhooks)
@@ -461,7 +473,8 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 		// Re-fetch user after potential sync
 		user, ok, err = cfg.FindUserRecord(r.Context(), username)
 		if err != nil || !ok || user == nil {
-			writeJSONError(w, http.StatusInternalServerError, "unable to refresh user state")
+			slog.Warn("siteaccount.current_user.user_refresh_error", "username", username, "error", err)
+			writeSafeEmptyAccountResponse(w, sopbackend.HasConfigFileOnDisk())
 			return
 		}
 	}
@@ -493,9 +506,9 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	slog.Debug("siteaccount.status.request", "path", r.URL.Path, "username", username, "auth_roles", strings.Join(account.Roles, ","), "config_provisioned", configProvisioned, "remote_addr", r.RemoteAddr)
+	slog.Info("siteaccount.status.request", "path", r.URL.Path, "username", username, "auth_roles", strings.Join(account.Roles, ","), "config_provisioned", configProvisioned, "remote_addr", r.RemoteAddr, "has_auth_header", strings.TrimSpace(r.Header.Get("Authorization")) != "", "has_cookie", r.Header.Get("Cookie") != "")
 	if username == "" {
-		slog.Warn("siteaccount.status.unauthenticated", "path", r.URL.Path)
+		slog.Warn("siteaccount.status.unauthenticated", "path", r.URL.Path, "headers", r.Header.Get("Cookie"), "auth_header", strings.TrimSpace(r.Header.Get("Authorization")))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{"config_provisioned": configProvisioned})
@@ -504,11 +517,13 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := GetConfig()
 	user, ok, err := cfg.FindUserRecord(r.Context(), username)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		slog.Warn("siteaccount.status.user_lookup_error", "username", username, "error", err)
+		writeSafeEmptyAccountResponse(w, configProvisioned)
 		return
 	}
 	if !ok || user == nil {
-		writeJSONError(w, http.StatusNotFound, "user not found")
+		slog.Warn("siteaccount.status.user_not_found", "username", username)
+		writeSafeEmptyAccountResponse(w, configProvisioned)
 		return
 	}
 	slog.Info("siteaccount.status.user_found", "username", username, "billing_status_before_sync", user.BillingStatus)
@@ -518,7 +533,8 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 		// Re-fetch user after potential sync
 		user, ok, err = cfg.FindUserRecord(r.Context(), username)
 		if err != nil || !ok || user == nil {
-			writeJSONError(w, http.StatusInternalServerError, "unable to refresh user state")
+			slog.Warn("siteaccount.status.user_refresh_error", "username", username, "error", err)
+			writeSafeEmptyAccountResponse(w, configProvisioned)
 			return
 		}
 		slog.Info("siteaccount.status.user_after_sync", "username", username, "billing_status_after_sync", user.BillingStatus)
@@ -543,7 +559,7 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 func HandlePing(w http.ResponseWriter, r *http.Request) {
 	account := currentAccountFromRequest(r)
-	slog.Info("siteaccount.ping.request", "username", account.Username, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+	slog.Info("siteaccount.ping.request", "username", account.Username, "path", r.URL.Path, "remote_addr", r.RemoteAddr, "has_auth_header", strings.TrimSpace(r.Header.Get("Authorization")) != "", "has_cookie", r.Header.Get("Cookie") != "")
 	if account.Username == "" {
 		writeJSONError(w, http.StatusUnauthorized, "authentication required")
 		return
@@ -551,11 +567,13 @@ func HandlePing(w http.ResponseWriter, r *http.Request) {
 	cfg := GetConfig()
 	user, ok, err := cfg.FindUserRecord(r.Context(), account.Username)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		slog.Warn("siteaccount.ping.user_lookup_error", "username", account.Username, "error", err)
+		writeJSONError(w, http.StatusOK, "authentication unavailable")
 		return
 	}
 	if !ok || user == nil {
-		writeJSONError(w, http.StatusNotFound, "user not found")
+		slog.Warn("siteaccount.ping.user_not_found", "username", account.Username)
+		writeJSONError(w, http.StatusOK, "authentication unavailable")
 		return
 	}
 	slog.Info("siteaccount.ping.user_found", "username", account.Username, "billing_status", user.BillingStatus)
@@ -564,11 +582,13 @@ func HandlePing(w http.ResponseWriter, r *http.Request) {
 		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), account.Username)
 		refreshedUser, ok, err := cfg.FindUserRecord(r.Context(), account.Username)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			slog.Warn("siteaccount.ping.user_refresh_error", "username", account.Username, "error", err)
+			writeJSONError(w, http.StatusOK, "authentication unavailable")
 			return
 		}
 		if !ok || refreshedUser == nil {
-			writeJSONError(w, http.StatusNotFound, "user not found")
+			slog.Warn("siteaccount.ping.refreshed_user_not_found", "username", account.Username)
+			writeJSONError(w, http.StatusOK, "authentication unavailable")
 			return
 		}
 		user = refreshedUser
@@ -637,11 +657,13 @@ func HandleRecoverPendingCheckout(w http.ResponseWriter, r *http.Request) {
 		_ = cfg.SyncSubscriptionStatusFromStripe(r.Context(), user.Username)
 		refreshedUser, ok, err := cfg.FindUserRecord(r.Context(), user.Username)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			slog.Warn("siteaccount.recover.user_refresh_error", "username", user.Username, "error", err)
+			writeJSONError(w, http.StatusOK, "authentication unavailable")
 			return
 		}
 		if !ok || refreshedUser == nil {
-			writeJSONError(w, http.StatusNotFound, "user not found")
+			slog.Warn("siteaccount.recover.user_not_found", "username", user.Username)
+			writeJSONError(w, http.StatusOK, "authentication unavailable")
 			return
 		}
 		user = refreshedUser

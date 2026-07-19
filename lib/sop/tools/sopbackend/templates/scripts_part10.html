@@ -681,11 +681,11 @@
         // Build a system database path from the configured system DB name.
         const systemDbName = (typeof SYSTEM_DB_NAME === 'string' && SYSTEM_DB_NAME.trim()) ? SYSTEM_DB_NAME : 'system';
         const buildSystemDbPath = (path) => {
-            if (!path) return `/tmp/sop_data/${systemDbName}`;
+            if (!path) return `./.sop-data/${systemDbName}`;
             const isWin = path.includes('\\');
             const sep = isWin ? '\\' : '/';
             const parts = path.split(sep).filter(p => p.length > 0);
-            if (parts.length === 0) return `/tmp/sop_data/${systemDbName}`;
+            if (parts.length === 0) return `./.sop-data/${systemDbName}`;
             parts.pop();
             parts.push(systemDbName);
             return (path.startsWith(sep) ? sep : '') + parts.join(sep);
@@ -868,7 +868,7 @@
     function resetSetupForm() {
         // Reset Inputs to Defaults
         document.getElementById('setup-db-name').value = 'dev_db';
-        document.getElementById('setup-db-path').value = '/tmp/sop_data/db';
+        document.getElementById('setup-db-path').value = './.sop-data/db';
         document.getElementById('setup-db-stores-folders').value = '';
         
         const dbEcContainer = document.getElementById('setup-db-ec-container');

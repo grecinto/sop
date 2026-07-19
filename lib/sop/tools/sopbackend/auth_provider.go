@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 
+	log "log/slog"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -30,21 +32,30 @@ func (p *LocalAuthProvider) Name() string {
 func (p *LocalAuthProvider) Authenticate(ctx context.Context, username, password string) (bool, *UserRecord, error) {
 	username = normalizeUsername(username)
 	password = strings.TrimSpace(password)
+	log.Info("auth.provider.trace", "provider", "local", "username", username, "password_length", len(password))
 	if username == "" || password == "" {
+		log.Info("auth.provider.trace", "provider", "local", "username", username, "reason", "empty_credentials")
 		return false, nil, nil
 	}
 
 	user, ok, err := p.cfg.findUserRecord(ctx, username)
 	if err != nil {
+		log.Info("auth.provider.trace", "provider", "local", "username", username, "error", err)
 		return false, nil, err
 	}
-	if ok && user != nil && user.PasswordHash.Plaintext() != "" {
-		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash.Plaintext()), []byte(password)); err == nil {
-			return true, user, nil
-		}
+	if !ok || user == nil {
+		log.Info("auth.provider.trace", "provider", "local", "username", username, "reason", "user_not_found")
 		return false, nil, nil
 	}
-
+	if user.PasswordHash.Plaintext() == "" {
+		log.Info("auth.provider.trace", "provider", "local", "username", username, "reason", "empty_password_hash")
+		return false, nil, nil
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash.Plaintext()), []byte(password)); err == nil {
+		log.Info("auth.provider.trace", "provider", "local", "username", username, "reason", "password_match")
+		return true, user, nil
+	}
+	log.Info("auth.provider.trace", "provider", "local", "username", username, "reason", "password_mismatch")
 	return false, nil, nil
 }
 

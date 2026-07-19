@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,77 @@ import (
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
+
+func isLoginEndpoint(path string) bool {
+	return path == "/api/auth/login" || path == "/api/site/auth/login"
+}
+
+func traceLoginRequest(r *http.Request, body []byte) {
+	if r == nil {
+		return
+	}
+
+	username := ""
+	if len(body) > 0 {
+		if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+			var payload struct {
+				Username string `json:"username"`
+			}
+			if err := json.Unmarshal(body, &payload); err == nil {
+				username = strings.TrimSpace(payload.Username)
+			}
+		} else if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+			if form, err := url.ParseQuery(string(body)); err == nil {
+				username = strings.TrimSpace(form.Get("username"))
+			}
+		}
+	}
+
+	log.Printf("site-auth.trace path=%s method=%s remote_addr=%s content_type=%s username=%q body_bytes=%d", r.URL.Path, r.Method, r.RemoteAddr, r.Header.Get("Content-Type"), username, len(body))
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	if r.status == 0 {
+		r.status = statusCode
+	}
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(b)
+}
+
+func traceLoginRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r != nil && isLoginEndpoint(r.URL.Path) && r.Method == http.MethodPost {
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Printf("site-auth.trace path=%s method=%s remote_addr=%s error=read_body %v", r.URL.Path, r.Method, r.RemoteAddr, err)
+			} else {
+				r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				traceLoginRequest(r, bodyBytes)
+			}
+		}
+
+		recorder := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+
+		if r != nil && isLoginEndpoint(r.URL.Path) {
+			if recorder.status == 0 {
+				recorder.status = http.StatusOK
+			}
+			log.Printf("site-auth.trace result path=%s method=%s status=%d", r.URL.Path, r.Method, recorder.status)
+		}
+	})
+}
 
 func resolveFrontendAssetPath(requestPath string) (string, bool) {
 	trimmed := strings.TrimSpace(requestPath)
@@ -847,7 +919,7 @@ func main() {
 	addr := ":" + port
 	log.Printf("site backend listening on %s", addr)
 	log.Printf("frontend: %s, docs: %s", frontendDir, docsDir)
-	if err := http.ListenAndServe(addr, newSiteAppAccessHandler(mux)); err != nil {
+	if err := http.ListenAndServe(addr, traceLoginRequests(newSiteAppAccessHandler(mux))); err != nil {
 		panic(fmt.Sprintf("listen failed: %v", err))
 	}
 }

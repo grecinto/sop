@@ -70,10 +70,10 @@ func TestSetupWizardUsesSystemDBNameForDefaultSystemPath(t *testing.T) {
 
 	text := string(content)
 	if strings.Contains(text, `value="/tmp/sop_data/system_db"`) {
-		t.Fatalf("expected setup wizard to use the concrete system DB default for the system path, got template contents: %s", text)
+		t.Fatalf("expected setup wizard to stop advertising /tmp for the system DB path, got template contents: %s", text)
 	}
-	if !strings.Contains(text, `value="/tmp/sop_data/{{.SystemDBName}}"`) {
-		t.Fatalf("expected setup wizard template to render the template-driven system DB default path")
+	if !strings.Contains(text, `value="./.sop-data/{{.SystemDBName}}"`) {
+		t.Fatalf("expected setup wizard template to render the durable project-local system DB default path")
 	}
 }
 

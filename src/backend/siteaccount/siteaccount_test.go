@@ -293,6 +293,78 @@ func TestHandleChangePasswordUpdatesStoredPassword(t *testing.T) {
 	}
 }
 
+func TestHandleStatusDoesNotFailWhenPendingBillingSyncIsUnavailable(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	t.Setenv("STRIPE_SECRET_KEY", "")
+	cfg := NewConfig()
+	SetConfig(cfg)
+	defer SetConfig(nil)
+
+	username := uniqueTestUsername(t, "site-status-pending-sync")
+	user := UserRecord{
+		Username:         username,
+		Role:             "user",
+		Email:            "pending-sync@example.com",
+		SubscriptionPlan: "starter",
+		BillingStatus:    "pending",
+	}
+	if err := cfg.UpsertUserRecord(context.Background(), &user); err != nil {
+		t.Fatalf("UpsertUserRecord() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: username, Roles: []string{sop.RoleUser}}))
+	rr := httptest.NewRecorder()
+
+	HandleStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleStatus() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "pending") {
+		t.Fatalf("expected pending billing status to remain visible, got %s", rr.Body.String())
+	}
+}
+
+func TestHandleStatusFallsBackGracefullyWhenUserStoreCannotBeOpened(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	invalidPath := filepath.Join(t.TempDir(), "invalid-db-path")
+	if err := os.WriteFile(invalidPath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	sopbackend.SetConfig(sopbackend.Config{
+		Mode: "standalone",
+		SystemDB: &sopbackend.DatabaseConfig{
+			Name: sopbackend.SystemDBName,
+			Path: filepath.Join(t.TempDir(), "system-db"),
+			Mode: "standalone",
+		},
+		Databases: []sopbackend.DatabaseConfig{{
+			Name: "userdb",
+			Path: invalidPath,
+			Mode: "standalone",
+		}},
+	})
+
+	cfg := NewConfig()
+	SetConfig(cfg)
+	defer SetConfig(nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "some-user", Roles: []string{sop.RoleUser}}))
+	rr := httptest.NewRecorder()
+
+	HandleStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleStatus() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "config_provisioned") {
+		t.Fatalf("expected fallback status payload, got %s", rr.Body.String())
+	}
+}
+
 func TestHandleStatusAcceptsSessionCookieWithoutConfigFile(t *testing.T) {
 	cfg := NewConfig()
 	username := uniqueTestUsername(t, "site-status-cookie")
