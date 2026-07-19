@@ -77,6 +77,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 | Document | Description |
 |----------|-------------|
 | [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Terminal-first coding workflow |
+| [MULTI_TURN_ORCHESTRATION_IMPLEMENTATION.md](MULTI_TURN_ORCHESTRATION_IMPLEMENTATION.md) | ✅ Complete: Queue-based multi-turn orchestration for AI agent workflows |
 
 ### Platform
 

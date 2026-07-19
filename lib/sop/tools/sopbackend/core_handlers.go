@@ -130,6 +130,17 @@ func init() {
 		Endpoints:   []string{string(sop.EndpointStoresList)},
 		Actions:     []sop.Action{sop.ActionRead, sop.ActionWrite, sop.ActionDelete},
 		Evaluator: func(ctx context.Context, entCtx sop.EntitlementContext, action sop.Action, evalState *sop.RBACEvaluationState) bool {
+			// WorkQueue stores (wfq_*) are read-only for all users (including SystemAdmin)
+			if strings.HasPrefix(entCtx.AssetID, "wfq_") {
+				if action == sop.ActionWrite || action == sop.ActionDelete {
+					return false
+				}
+				// Only allow read access
+				if !shouldExposeStoreInRBAC(ctx, entCtx.AssetID) {
+					return false
+				}
+				return action == sop.ActionRead
+			}
 			if entCtx.IsSystemDB && (action == sop.ActionWrite || action == sop.ActionDelete) {
 				return false
 			}
@@ -1015,13 +1026,9 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 
 	// WorkQueue stores: wfq_checkpoints_{userID}, wfq_metrics_{userID}, wfq_bytimestamp_{userID}
 	if strings.HasPrefix(storeName, "wfq_") {
-		// SystemAdmin can see all users' WorkQueue stores
-		if isSystemAdminRoleInContext(ctx) {
+		// SystemAdmin and Admin can see all users' WorkQueue stores
+		if isSystemAdminRoleInContext(ctx) || isRegularAdminRoleInContext(ctx) {
 			return true
-		}
-		// Regular Admin cannot see WorkQueue stores
-		if isRegularAdminRoleInContext(ctx) {
-			return false
 		}
 		currentUserID := strings.TrimSpace(sop.GetAuthFromContext(ctx).UserID)
 		if currentUserID == "" {

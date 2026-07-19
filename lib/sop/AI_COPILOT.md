@@ -89,6 +89,21 @@ We purposely designed a **Retrieval-Augmented Generation (RAG)** pipeline to add
 2.  **Data Privacy & Filtration**: Your production data *never* leaves the environment. Only the prompt for interpretation and reasoning is sent to the LLM. The actual data retrieval and manipulation happen locally via the SOP library.
 3.  **Policy Enforcement**: By decoupling the reasoning (LLM) from the execution (Local Tools), we can enforce strict policies on what the agent can and cannot do, removing the risks associated with giving an AI direct access to corporate data.
 4.  **ReAct Loop**: The LLM reasons about which tool to use, but the Go backend intercepts these calls, validates them, and executes them safely using ACID transactions.
+5.  **Multi-Turn Orchestration**: Complex workflows can execute across multiple ReAct turns through a queue-based architecture, enabling capabilities to orchestrate multi-step tasks (analyze → patch → test → fix) while maintaining full tool access and traceability at each step.
+
+### Multi-Turn Workflow Orchestration
+
+For complex tasks that require multiple steps (like coding workflows, data migrations, or multi-stage analysis), SOP supports **queue-based multi-turn orchestration**:
+
+*   **Work Queue Architecture**: Instead of completing all work in a single response, capabilities can inject work items into an execution queue. Each injected prompt gets full access to the ReAct tool registry and reasoning engine.
+*   **Separation of Concerns**: High-level capabilities orchestrate workflow steps, while the ReAct engine handles low-level tool execution. This keeps orchestration logic separate from tool implementation.
+*   **Conditional Logic**: Workflows can branch based on previous results (e.g., "only repair if tests fail"), enabling intelligent, context-aware execution.
+*   **Traceability**: Each turn is explicitly tracked with turn number, actor (user, coding_workflow, test_runner), and parent-child relationships for full debugging visibility.
+*   **Safety Guards**: Prevents infinite loops through configurable limits: max depth (default 10 turns), per-actor limits, and turn timeouts.
+
+**Example**: A coding workflow orchestrates: "Analyze code" → "Generate patch" → "Apply patch" → "Run tests" → Conditionally: "Fix failures". Each step executes as a separate ReAct turn with full tool access.
+
+See [Multi-Turn Queue-Based Orchestration](ai/README.md#multi-turn-queue-based-orchestration) for technical details.
 
 ### Self-Correction and Grounding Model
 

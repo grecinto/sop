@@ -6,6 +6,26 @@ This document captures the missing capabilities required to make SOP's coding wo
 
 The focus is on workflow execution, not just answer generation.
 
+## Architecture Foundation: Multi-Turn Queue-Based Orchestration
+
+The coding workflow capability leverages SOP's **queue-based multi-turn orchestration architecture** to execute complex, multi-step workflows across multiple ReAct turns.
+
+**Key Enabler**: Instead of completing all work in a single turn (hitting token/time limits) or implementing internal loops (bypassing ReAct tools), the coding workflow injects work items into an execution queue. Each injected prompt gets full access to the ReAct tool registry.
+
+**Workflow Example**:
+```
+Turn 1 (User): "Fix the parser bug"
+  ↓ Inject: "Generate patch for parser.go"
+Turn 2: Patch generation with full tool access
+  ↓ Inject: "Apply patch"
+Turn 3: File write with approval gate
+  ↓ Inject: "Run tests"
+Turn 4: Terminal execution
+  ↓ Conditional: If tests fail, inject "Analyze failures and fix"
+```
+
+**See**: [Multi-Turn Queue-Based Orchestration](../lib/sop/ai/README.md#multi-turn-queue-based-orchestration) in the main AI architecture doc for full technical details.
+
 ## V1 Product Direction
 
 For V1, the coding workflow should be designed to compete with high-quality coding copilots on everyday repository work. The bar is not merely “answer questions about code”; it is to help a developer inspect, edit, test, debug, and continue work with minimal friction.

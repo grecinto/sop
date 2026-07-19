@@ -114,11 +114,16 @@ func registerBuiltinRBACBlueprints() {
 		Endpoints:   []string{string(sop.EndpointStoresList)},
 		Actions:     []sop.Action{sop.ActionRead, sop.ActionWrite, sop.ActionDelete},
 		Evaluator: func(ctx context.Context, entCtx sop.EntitlementContext, action sop.Action, evalState *sop.RBACEvaluationState) bool {
-			// WorkQueue stores (wfq_*) are read-only for all users
+			// WorkQueue stores (wfq_*) are read-only for all users (including SystemAdmin)
 			if strings.HasPrefix(entCtx.AssetID, "wfq_") {
 				if action == sop.ActionWrite || action == sop.ActionDelete {
 					return false
 				}
+				// Only allow read access
+				if !shouldExposeStoreInRBAC(ctx, entCtx.AssetID) {
+					return false
+				}
+				return action == sop.ActionRead
 			}
 			if entCtx.IsSystemDB && (action == sop.ActionWrite || action == sop.ActionDelete) {
 				return false
