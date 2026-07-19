@@ -791,6 +791,17 @@
     let currentDatabase = null;
     let currentSessionID = "";
     
+    // Initialize session ID from URL if present (for floater windows)
+    // This must happen immediately so all subsequent code uses the correct session
+    (function initSessionFromURL() {
+        const params = new URLSearchParams(window.location.search);
+        const urlSessionID = params.get('sessionID');
+        if (urlSessionID) {
+            currentSessionID = urlSessionID;
+            console.log('[Session] Initialized from URL:', currentSessionID);
+        }
+    })();
+    
     let currentUserID = localStorage.getItem("sop_userId");
     if (!currentUserID) {
         currentUserID = crypto.randomUUID ? crypto.randomUUID() : 'user-' + Date.now();

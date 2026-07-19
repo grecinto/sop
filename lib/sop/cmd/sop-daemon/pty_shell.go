@@ -270,6 +270,13 @@ func (s *ptyShellSession) SendInterrupt() error {
 		return fmt.Errorf("session is closed")
 	}
 
+	// Only send interrupt if a command is actually running
+	// This prevents buffering Ctrl+C signals that affect subsequent commands
+	if !s.stillRunning {
+		// Nothing running - no-op, don't write Ctrl+C to the PTY
+		return nil
+	}
+
 	// Send Ctrl+C (ASCII 0x03)
 	if _, err := s.pty.Write([]byte{0x03}); err != nil {
 		return fmt.Errorf("failed to send interrupt: %w", err)

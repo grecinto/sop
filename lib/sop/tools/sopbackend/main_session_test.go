@@ -306,7 +306,7 @@ func TestHandleAIChat_InjectsJSONStreamerIntoExecutionContext(t *testing.T) {
 
 func TestSetupStream_EmitsVisibleContentForToolResults(t *testing.T) {
 	w := httptest.NewRecorder()
-	sendEvent, _ := setupStream(w)
+	sendEvent, _ := SetupStream(w)
 
 	sendEvent(ai.ReasoningEventToolResult, map[string]any{
 		"tool":   "lookup_user",
@@ -324,7 +324,7 @@ func TestSetupStream_EmitsVisibleContentForToolResults(t *testing.T) {
 
 func TestSetupStream_HandlesListStoresResultAsContent(t *testing.T) {
 	w := httptest.NewRecorder()
-	sendEvent, _ := setupStream(w)
+	sendEvent, _ := SetupStream(w)
 
 	sendEvent(ai.ReasoningEventToolResult, map[string]any{
 		"tool":   "list_stores",
@@ -342,7 +342,7 @@ func TestSetupStream_HandlesListStoresResultAsContent(t *testing.T) {
 
 func TestSetupStream_SuppressesReducerNoticeContent(t *testing.T) {
 	w := httptest.NewRecorder()
-	sendEvent, _ := setupStream(w)
+	sendEvent, _ := SetupStream(w)
 
 	sendEvent(ai.ReasoningEventToolResult, map[string]any{
 		"tool":   "select",
@@ -357,7 +357,7 @@ func TestSetupStream_SuppressesReducerNoticeContent(t *testing.T) {
 
 func TestSetupStream_MarksStructuredToolResultsAsStreamedContent(t *testing.T) {
 	w := httptest.NewRecorder()
-	sendEvent, hasStreamedContent := setupStream(w)
+	sendEvent, hasStreamedContent := SetupStream(w)
 
 	sendEvent(ai.ReasoningEventToolResult, map[string]any{
 		"tool":   "execute_script",
@@ -374,7 +374,7 @@ func TestSetupStream_MarksStructuredToolResultsAsStreamedContent(t *testing.T) {
 
 func TestSetupStream_MarksRecordEventsAsStreamedContent(t *testing.T) {
 	w := httptest.NewRecorder()
-	sendEvent, hasStreamedContent := setupStream(w)
+	sendEvent, hasStreamedContent := SetupStream(w)
 
 	sendEvent("record", map[string]any{"id": 1})
 
@@ -385,7 +385,7 @@ func TestSetupStream_MarksRecordEventsAsStreamedContent(t *testing.T) {
 
 func TestSetupStream_MarksContentEventsAsStreamedContent(t *testing.T) {
 	w := httptest.NewRecorder()
-	sendEvent, hasStreamedContent := setupStream(w)
+	sendEvent, hasStreamedContent := SetupStream(w)
 
 	sendEvent("content", "list_tools inventory")
 
@@ -396,7 +396,7 @@ func TestSetupStream_MarksContentEventsAsStreamedContent(t *testing.T) {
 
 func TestSetupStream_SanitizesToolErrorMessagesBeforeRendering(t *testing.T) {
 	w := httptest.NewRecorder()
-	sendEvent, _ := setupStream(w)
+	sendEvent, _ := SetupStream(w)
 
 	sendEvent(ai.ReasoningEventToolError, map[string]any{
 		"tool":  "list_directory",
@@ -437,8 +437,9 @@ func TestHandleAIChat_StreamsStructuredToolEvents(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, `"type":"tool_call"`) {
-		t.Fatalf("expected tool_call event in NDJSON stream, got: %s", body)
+	// SetupStream now converts tool_call events to user-friendly content
+	if !strings.Contains(body, "🔧 **Calling**") {
+		t.Fatalf("expected formatted tool call in NDJSON stream, got: %s", body)
 	}
 	if !strings.Contains(body, `"type":"tool_result"`) {
 		t.Fatalf("expected tool_result event in NDJSON stream, got: %s", body)

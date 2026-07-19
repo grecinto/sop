@@ -574,10 +574,9 @@ func main() {
 	// Both call sopbackend.AskSharedAgent() so LOGIC is shared.
 	// Separation is at AUTH and PAYLOAD layers, which is correct.
 	//
-	// TODO: Add NDJSON streaming to /api/ask (UI already expects it!)
-	//       UI checks for application/x-ndjson and has full streaming parser.
-	//       Currently falls back to plain JSON, but streaming would enable
-	//       real-time progress updates in local mode.
+	// STREAMING: /api/ask now supports NDJSON streaming (same as /api/ai/chat)!
+	//            UI sends Accept: application/x-ndjson and gets real-time progress.
+	//            Falls back gracefully to plain JSON for backward compatibility.
 	mux.HandleFunc("/api/ask", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ragSvc == nil {
 			respondJSON(w, http.StatusServiceUnavailable, AskResponse{Error: "official RAG is not configured"})
@@ -598,7 +597,7 @@ func main() {
 	log.Printf("Token expiry: access=%v, refresh=%v", *accessTokenTTL, *refreshTokenTTL)
 	log.Printf("Auth endpoints: /api/daemon/auth, /api/daemon/refresh")
 	log.Printf("Full backend API available (via sopbackend)")
-	log.Printf("AI chat endpoint: /api/ask (JWT authenticated, TODO: add NDJSON streaming)")
+	log.Printf("AI chat endpoint: /api/ask (JWT auth, NDJSON streaming enabled)")
 	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff (authenticated)")
 	logVerbose("Waiting for UI authentication...")
 

@@ -20,84 +20,7 @@ import (
 
 const defaultDaemonConfigFileName = "config.json"
 
-// setupAskStream initializes NDJSON streaming for /api/ask (same pattern as /api/ai/chat)
-// Returns:
-//   - sendEvent: function to send streaming events
-//   - hasStreamedContent: returns true if any content was streamed
-func setupAskStream(w http.ResponseWriter) (func(string, any), func() bool) {
-	var contentStreamed bool
-
-	writeEvent := func(eventType string, payload any) {
-		// Track if we've sent content
-		switch eventType {
-		case "content", "record", "records", "preview", "result_stream":
-			contentStreamed = true
-		}
-
-		// Set NDJSON content type
-		w.Header().Set("Content-Type", "application/x-ndjson")
-
-		// Write NDJSON event
-		if err := json.NewEncoder(w).Encode(map[string]any{
-			"type":    eventType,
-			"payload": payload,
-		}); err != nil {
-			log.Printf("Failed to encode NDJSON event: %v", err)
-			return
-		}
-
-		// Flush immediately for streaming
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-	}
-
-	sendEvent := func(eventType string, payload any) {
-		// Filter internal events
-		switch eventType {
-		case "session_id":
-			return // Internal only
-		case ai.ReasoningEventAssistantMessage:
-			if message, ok := payload.(map[string]any); ok {
-				if text, ok := message["text"].(string); ok && strings.TrimSpace(text) != "" {
-					contentStreamed = true
-					writeEvent("content", text)
-					return
-				}
-			}
-		case "content":
-			contentStreamed = true
-			writeEvent(eventType, payload)
-			return
-		case ai.ReasoningEventToolError:
-			// Stream tool errors for real-time feedback
-			if errorEvent, ok := payload.(map[string]any); ok {
-				if errorMsg, _ := errorEvent["error"].(string); strings.TrimSpace(errorMsg) != "" {
-					contentStreamed = true
-					tool, _ := errorEvent["tool"].(string)
-					msg := fmt.Sprintf("⚠️ Error (tool: %s): %s\n", tool, errorMsg)
-					writeEvent("content", msg)
-					return
-				}
-			}
-		case ai.ReasoningEventToolResult:
-			if result, ok := payload.(map[string]any); ok {
-				if text, ok := result["result"].(string); ok && strings.TrimSpace(text) != "" {
-					contentStreamed = true
-					tool, _ := result["tool"].(string)
-					formatted := fmt.Sprintf("🛠️ Result from %s:\n%s\n", tool, strings.TrimSpace(text))
-					writeEvent("content", formatted)
-					return
-				}
-			}
-		}
-
-		// Default: write event as-is
-		writeEvent(eventType, payload)
-	}
-
-	return sendEvent, func() bool { return contentStreamed }
-}
+// Daemon uses the shared SetupStream from sopbackend
 
 // isValidDaemonConfig checks if the config file has the required daemon structure
 func isValidDaemonConfig(configPath string) bool {
@@ -382,7 +305,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	var sendEvent func(string, any)
 	var hasStreamedContent func() bool
 	if acceptsNDJSON {
-		sendEvent, hasStreamedContent = setupAskStream(w)
+		sendEvent, hasStreamedContent = sopbackend.SetupStream(w)
 	} else {
 		// No-op event handler for non-streaming mode
 		sendEvent = func(string, any) {}
@@ -583,11 +506,11 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	// Send response based on streaming mode
 	if acceptsNDJSON {
 		// Only send content if nothing was streamed during execution
+		// (same pattern as HQ's /api/ai/chat handler)
 		if !hasStreamedContent() && strings.TrimSpace(answer) != "" {
 			sendEvent("content", answer)
 		}
-		// Signal completion
-		sendEvent("done", map[string]any{"success": true})
+		// Stream ends naturally - no explicit done event needed
 	} else {
 		// Traditional JSON response for backward compatibility
 		respondJSON(w, http.StatusOK, AskResponse{Answer: answer})

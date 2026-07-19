@@ -128,7 +128,7 @@ func handleAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendEvent, hasStreamedContent := setupStream(w)
+	sendEvent, hasStreamedContent := SetupStream(w)
 
 	blueprint, err := resolveContextAndAgent(r.Context(), req, sendEvent)
 	if err != nil {
@@ -332,13 +332,15 @@ func isReducerSamplePayload(s string) bool {
 	return false
 }
 
-// setupStream initialises the NDJSON event writer for an AI chat response.
+// SetupStream initialises the NDJSON event writer for an AI chat response.
 // It returns:
 //   - sendEvent: the function to call for each event
 //   - hasStreamedContent: returns true once any assistant text was sent via the
 //     event stream (delta or non-streaming). Used by handleAIChat to decide
 //     whether interpretOutput should re-emit the same text.
-func setupStream(w http.ResponseWriter) (func(string, any), func() bool) {
+//
+// This is used by both HQ (/api/ai/chat) and daemon (/api/ask).
+func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 	var contentStreamed bool
 
 	writeEvent := func(eventType string, payload any) {
@@ -398,11 +400,19 @@ func setupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 			writeEvent(eventType, payload)
 			return
 		case ai.ReasoningEventToolCall:
+			// Stream tool call start for visibility (native engine emits these)
 			if toolCall, ok := payload.(map[string]any); ok {
-				if tool, _ := toolCall["tool"].(string); isStructuredToolResult(tool) {
+				tool, _ := toolCall["tool"].(string)
+				if isStructuredToolResult(tool) {
 					return
 				}
+				if tool != "" {
+					contentStreamed = true
+					msg := fmt.Sprintf("🔧 **Calling**: %s\n", tool)
+					writeEvent("content", msg)
+				}
 			}
+			return
 		case ai.ReasoningEventToolError:
 			// Stream tool errors immediately so user can see validation failures in real-time
 			if errorEvent, ok := payload.(map[string]any); ok {

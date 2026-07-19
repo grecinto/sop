@@ -1466,6 +1466,124 @@ func emitAutomationToolResult(ctx context.Context, toolName, result string) {
 	}
 }
 
+// parseAndEmitTestStatus analyzes test command output and streams immediate status
+// Returns a status summary string to prepend to LLM output (empty if not a test or no status found)
+// This ensures critical test outcomes are delivered to both UI and LLM
+func parseAndEmitTestStatus(ctx context.Context, command, output string) string {
+	// Only parse test commands
+	isTestCommand := strings.Contains(command, "go test") ||
+		strings.Contains(command, "npm test") ||
+		strings.Contains(command, "yarn test") ||
+		strings.Contains(command, "pytest") ||
+		strings.Contains(command, "run_all_tests")
+
+	if !isTestCommand {
+		return ""
+	}
+
+	streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any))
+	hasStreamer := ok && streamer != nil
+
+	lines := strings.Split(output, "\n")
+	status := "UNKNOWN"
+	summary := ""
+	keyLines := []string{}
+
+	// Parse Go test output
+	if strings.Contains(command, "go test") || strings.Contains(command, "run_all_tests") {
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			// Check for FAIL indicator
+			if trimmed == "FAIL" || strings.HasPrefix(trimmed, "FAIL\t") {
+				status = "FAIL"
+				keyLines = append(keyLines, trimmed)
+			}
+			// Check for package test results
+			if strings.HasPrefix(trimmed, "ok  \t") || strings.HasPrefix(trimmed, "FAIL\t") {
+				keyLines = append(keyLines, trimmed)
+			}
+			// Check for final FAIL/PASS
+			if strings.HasPrefix(trimmed, "?") && strings.Contains(trimmed, "[no test files]") {
+				// Skip packages without tests
+				continue
+			}
+		}
+
+		// Determine overall status
+		if status == "FAIL" {
+			summary = "❌ **Test Suite Failed**"
+		} else if len(keyLines) > 0 {
+			// Has test results but no FAIL - assume PASS
+			status = "PASS"
+			summary = "✅ **Test Suite Passed**"
+		}
+	}
+
+	// Parse npm/yarn test output
+	if strings.Contains(command, "npm test") || strings.Contains(command, "yarn test") {
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.Contains(trimmed, "failing") || strings.Contains(trimmed, "failed") {
+				status = "FAIL"
+				summary = "❌ **Test Suite Failed**"
+				keyLines = append(keyLines, trimmed)
+			} else if strings.Contains(trimmed, "passing") {
+				status = "PASS"
+				summary = "✅ **Test Suite Passed**"
+				keyLines = append(keyLines, trimmed)
+			}
+		}
+	}
+
+	// Parse pytest output
+	if strings.Contains(command, "pytest") {
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.Contains(trimmed, "failed") || strings.Contains(trimmed, "error") {
+				status = "FAIL"
+				summary = "❌ **Test Suite Failed**"
+				keyLines = append(keyLines, trimmed)
+			} else if strings.Contains(trimmed, "passed") {
+				if !strings.Contains(trimmed, "failed") {
+					status = "PASS"
+					summary = "✅ **Test Suite Passed**"
+				}
+				keyLines = append(keyLines, trimmed)
+			}
+		}
+	}
+
+	// Emit immediate status if we found test results
+	if status != "UNKNOWN" && summary != "" {
+		// Stream the status immediately to UI
+		if hasStreamer {
+			streamer("content", "\n"+summary+"\n")
+
+			// Add key failure lines if test failed
+			if status == "FAIL" && len(keyLines) > 0 {
+				// Show last few key lines (most relevant)
+				displayLines := keyLines
+				if len(displayLines) > 10 {
+					displayLines = displayLines[len(displayLines)-10:]
+				}
+				streamer("content", "\nKey test output:\n```\n"+strings.Join(displayLines, "\n")+"\n```\n")
+			}
+		}
+
+		// Return status summary for LLM
+		// This prevents LLM from looping - it sees clear PASS/FAIL status
+		llmSummary := fmt.Sprintf("TEST STATUS: %s\n", status)
+		if status == "FAIL" {
+			llmSummary += "The test suite failed. Do not retry - report the failure to the user.\n"
+		} else if status == "PASS" {
+			llmSummary += "All tests passed successfully.\n"
+		}
+		return llmSummary + "\n"
+	}
+
+	return ""
+}
+
 func boolFlagFromArgs(args map[string]any, key string) bool {
 	if raw, ok := args[key]; ok {
 		if value, ok := raw.(bool); ok {
@@ -1659,7 +1777,17 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 	if localCommandExecutor != nil {
 		result, err := localCommandExecutor(ctx, request)
 		if err == nil {
-			// Return raw result - let the frontend renderer handle display formatting
+			// Parse and emit test status immediately (before LLM analysis)
+			// This ensures users see PASS/FAIL even if LLM hits tool-step limits
+			// Returns a status summary to prepend to output for LLM clarity
+			statusSummary := parseAndEmitTestStatus(ctx, command, result)
+
+			// Prepend test status to result for LLM - prevents retry loops
+			if statusSummary != "" {
+				result = statusSummary + result
+			}
+
+			// Return result with status prepended - let the frontend renderer handle display formatting
 			emitAutomationToolResult(ctx, "local_command", result)
 		}
 		return result, err

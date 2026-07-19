@@ -813,6 +813,10 @@
         const model = providerConfig.model || '';
         const apiKey = chatAIConfig.brain_api_key || '';
         const baseURL = chatAIConfig.brain_url || '';
+        
+        const effectiveSessionID = currentSessionID || 'local-daemon';
+        console.log('[buildLocalDaemonHandoffPayload] Using session_id:', effectiveSessionID, '(currentSessionID:', currentSessionID, ')');
+        
         return {
             query: query || 'connect',
             auth: {
@@ -822,7 +826,7 @@
             hq: {
                 base_url: window.location.origin || 'http://127.0.0.1:3000',
                 user_id: currentUserID || '',
-                session_id: currentSessionID || ''
+                session_id: effectiveSessionID
             },
             llm_provider: provider,
             llm_api_key: apiKey,
@@ -889,9 +893,19 @@
         const data = await response.json().catch(() => null);
         
         // Capture session ID from handoff response for terminal polling
+        // BUT: Don't overwrite if we're in floater mode and inherited session ID from URL
+        // Floater must maintain the same session ID as main window
+        const params = new URLSearchParams(window.location.search);
+        const hasInheritedSession = params.get('sessionID');
+        
         if (data && data.session_id && typeof currentSessionID !== 'undefined') {
-            currentSessionID = data.session_id;
-            console.log('[Terminal] Using session ID:', currentSessionID);
+            if (!hasInheritedSession || !currentSessionID) {
+                // Only update if we didn't inherit from URL or don't have one yet
+                currentSessionID = data.session_id;
+                console.log('[Terminal] Using session ID:', currentSessionID);
+            } else {
+                console.log('[Terminal] Preserving inherited session ID:', currentSessionID, '(ignoring response session:', data.session_id + ')');
+            }
         }
         
         if (data && data.welcome_context && !window.__sopLocalWelcomeShown) {
@@ -1064,7 +1078,7 @@
         });
     }
 
-    function initializeChatFloaterMode() {
+    async function initializeChatFloaterMode() {
         if (!isChatFloaterMode()) {
             return;
         }
@@ -1072,12 +1086,31 @@
         if (window.location.search.includes('chatFloater=1')) {
             requestMainWindowRefreshOnClose();
             document.body.classList.add('sop-chat-floater-mode');
-            setTimeout(() => {
+            
+            // Session ID is already initialized from URL in scripts_part01.html
+            // Both main window and floater use the same daemon session
+            console.log('[Floater] Using session ID:', currentSessionID || 'none yet');
+            
+            // Ensure daemon auth is ready before initializing floater features
+            if (typeof window.ensureDaemonAuth === 'function') {
+                await window.ensureDaemonAuth().catch(err => {
+                    console.warn('[initializeChatFloaterMode] Daemon auth bootstrap failed:', err);
+                });
+            }
+            
+            setTimeout(async () => {
                 applyChatRuntimeSelection();
                 toggleChatWidget(true);
                 resetChatPosition();
                 handleChatInput();
-                void hydrateRuntimeWelcomeContext();
+                
+                // Only hydrate if we don't have a session ID from URL
+                // This prevents creating a new session when we should reuse the existing one
+                if (!currentSessionID) {
+                    await hydrateRuntimeWelcomeContext();
+                } else {
+                    console.log('[Floater] Reusing existing session, skipping hydrate');
+                }
             }, 150);
         }
     }
@@ -1098,6 +1131,10 @@
         floaterUrl.searchParams.set('chatFloater', '1');
         // Include mode=daemon so the floater window gets properly initialized with daemon auth
         floaterUrl.searchParams.set('mode', 'daemon');
+        // Pass current session ID to floater so it uses the same session
+        const sessionToPass = currentSessionID || 'local-daemon';
+        floaterUrl.searchParams.set('sessionID', sessionToPass);
+        console.log('[openChatPiP] Passing session ID to floater:', sessionToPass);
 
         if (window && window.documentPictureInPicture && typeof window.documentPictureInPicture.requestWindow === 'function') {
             try {
@@ -2157,7 +2194,7 @@
      *   - Target: Local daemon (127.0.0.1:9090)
      *   - Security: Bootstrap file → JWT
      *   - Features: Full agent capabilities
-     *   - Streaming: UI expects NDJSON (daemon currently returns plain JSON with fallback)
+     *   - Streaming: ✅ NDJSON streaming enabled (real-time progress updates)
      * 
      * HQ MODE → /api/ai/chat:
      *   - Auth: Session cookies (authFetch)
@@ -2165,7 +2202,7 @@
      *   - Target: HQ server (internet)
      *   - Security: Session-based with CSRF
      *   - Features: Full agent capabilities + multi-tenant
-     *   - Streaming: Full NDJSON streaming
+     *   - Streaming: ✅ NDJSON streaming enabled
      * 
      * WHY SEPARATE ENDPOINTS?
      * 1. Different auth models (JWT vs session)
@@ -2173,8 +2210,8 @@
      * 3. Daemon-specific integration (session store, PTY shells, federation)
      * 4. Independence (cleaner boundaries, less coupling risk)
      * 
-     * Both share underlying logic (sopbackend.AskSharedAgent) but maintain
-     * separate endpoints for their different integration requirements.
+     * Both share underlying logic (sopbackend.AskSharedAgent) and now both
+     * support full NDJSON streaming for real-time progress updates.
      */
     function buildRuntimeRequestConfig(message, runtimeMode, options = {}) {
         const chatAIConfig = getStoredAIConfig();
