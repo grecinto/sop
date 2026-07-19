@@ -378,6 +378,11 @@ const gitCommitArgsSchema = `{"type":"object","properties":{"path":{"type":"stri
 const gitPullArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"rebase":{"type":"boolean","description":"Use rebase instead of merge when pulling."}}}`
 const gitPushArgsSchema = `{"type":"object","properties":{"path":{"type":"string","description":"Repository path to inspect."},"remote":{"type":"string","description":"Remote name to push to."},"branch":{"type":"string","description":"Branch name to push."}}}`
 
+// Phase 2.3: Tool Result Analysis
+const listToolResultsArgsSchema = `{"type":"object","properties":{}}`
+const readToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"start_line":{"type":"integer","description":"Starting line number (1-indexed)."},"end_line":{"type":"integer","description":"Ending line number (inclusive)."}},"required":["file_path"]}`
+const grepToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"pattern":{"type":"string","description":"Text pattern to search for within the file."},"max_matches":{"type":"integer","description":"Maximum number of matching lines to return (default: 100)."}},"required":["file_path","pattern"]}`
+
 const postgresQueryArgsSchema = `{"type":"object","properties":{"query":{"type":"string","description":"Read-only SQL query to run against PostgreSQL."},"connection_string":{"type":"string","description":"Optional PostgreSQL connection string such as postgresql://user:pass@host:5432/dbname."},"host":{"type":"string","description":"Optional PostgreSQL host name."},"port":{"type":"string","description":"Optional PostgreSQL port."},"database":{"type":"string","description":"Optional PostgreSQL database name."},"user":{"type":"string","description":"Optional PostgreSQL user name."},"password":{"type":"string","description":"Optional PostgreSQL password."}},"required":["query"]}`
 
 const postgresExecuteArgsSchema = `{"type":"object","properties":{"statement":{"type":"string","description":"Write-capable SQL statement for PostgreSQL such as INSERT, UPDATE, DELETE, CREATE, ALTER, or DROP."},"connection_string":{"type":"string","description":"Optional PostgreSQL connection string such as postgresql://user:pass@host:5432/dbname."},"host":{"type":"string","description":"Optional PostgreSQL host name."},"port":{"type":"string","description":"Optional PostgreSQL port."},"database":{"type":"string","description":"Optional PostgreSQL database name."},"user":{"type":"string","description":"Optional PostgreSQL user name."},"password":{"type":"string","description":"Optional PostgreSQL password."}},"required":["statement"]}`
@@ -437,6 +442,12 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 		a.registry.Register("git_commit", "Creates a git commit for a repository. Can stage specific files or all changes in one operation. Use 'files' parameter to stage only relevant project files (excluding binaries, build artifacts, temp files).", gitCommitArgsSchema, wrapStringTool(a.toolGitCommit))
 		a.registry.Register("git_pull", "Pulls changes from a remote into a repository, optionally using rebase.", gitPullArgsSchema, wrapStringTool(a.toolGitPull))
 		a.registry.Register("git_push", "Pushes a branch to a remote repository.", gitPushArgsSchema, wrapStringTool(a.toolGitPush))
+
+		// Phase 2.3: Tool Result Analysis - efficiently process large tool outputs
+		a.registry.Register("list_tool_results", "Lists all stored tool result files from the current session. When a tool produces large output (>20KB), it's stored to a file. Use this to see what result files are available for analysis.", listToolResultsArgsSchema, wrapStringTool(a.toolListToolResults))
+		a.registry.Register("read_tool_result", "Reads a specific line range from a stored tool result file. Use this after identifying line numbers with grep_tool_result, or to view specific sections of large test/build outputs.", readToolResultArgsSchema, wrapStringTool(a.toolReadToolResult))
+		a.registry.Register("grep_tool_result", "Searches for a text pattern within a stored tool result file and returns matching lines with line numbers. Use this to find errors, failures, or specific patterns in large outputs.", grepToolResultArgsSchema, wrapStringTool(a.toolGrepToolResult))
+
 		if policy.isPostgresReadEnabled() {
 			a.registry.Register("postgres_query", "Runs a read-only SQL query against PostgreSQL through the local psql CLI using a connection string or host/database/user/password fields.", postgresQueryArgsSchema, wrapStringTool(a.toolPostgresQuery))
 			a.registry.Register("postgres_list_tables", "Lists PostgreSQL tables from the configured database for inspection and debugging.", postgresListTablesArgsSchema, wrapStringTool(a.toolPostgresListTables))
@@ -1160,6 +1171,152 @@ func (a *CopilotAgent) toolGitPush(ctx context.Context, args map[string]any) (st
 		command += " " + shellQuote(branch)
 	}
 	return a.runLocalAutomationCommand(ctx, args, command, "Push repository changes to the requested remote branch.", path, 60)
+}
+
+// Phase 2.3: Tool Result Analysis Tools
+
+func (a *CopilotAgent) toolListToolResults(ctx context.Context, args map[string]any) (string, error) {
+	storage := getOrCreateToolResultStorage(ctx)
+	if storage == nil {
+		return "No tool result storage available for this session.", nil
+	}
+
+	results, err := storage.ListStoredResults()
+	if err != nil {
+		return "", fmt.Errorf("failed to list tool results: %w", err)
+	}
+
+	if len(results) == 0 {
+		return "No stored tool results found. Large tool outputs (>20KB) are automatically stored for analysis.", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d stored tool result file(s):\n\n", len(results)))
+
+	for i, result := range results {
+		sizeKB := float64(result.Size) / 1024.0
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, result.FileName))
+		sb.WriteString(fmt.Sprintf("   Path: %s\n", result.FilePath))
+		sb.WriteString(fmt.Sprintf("   Size: %.1fKB\n", sizeKB))
+		sb.WriteString(fmt.Sprintf("   Time: %s\n\n", result.Timestamp.Format("2006-01-02 15:04:05")))
+	}
+
+	sb.WriteString("Use read_tool_result() or grep_tool_result() to analyze these files.\n")
+	return sb.String(), nil
+}
+
+func (a *CopilotAgent) toolReadToolResult(ctx context.Context, args map[string]any) (string, error) {
+	filePathRaw, ok := args["file_path"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'file_path'")
+	}
+	filePath, ok := filePathRaw.(string)
+	if !ok || strings.TrimSpace(filePath) == "" {
+		return "", fmt.Errorf("'file_path' must be a non-empty string")
+	}
+
+	storage := getOrCreateToolResultStorage(ctx)
+	if storage == nil {
+		return "", fmt.Errorf("no tool result storage available")
+	}
+
+	startLine := 1
+	endLine := -1 // Read to end
+
+	if startLineRaw, ok := args["start_line"]; ok {
+		switch v := startLineRaw.(type) {
+		case int:
+			startLine = v
+		case float64:
+			startLine = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				startLine = int(parsed)
+			}
+		}
+	}
+
+	if endLineRaw, ok := args["end_line"]; ok {
+		switch v := endLineRaw.(type) {
+		case int:
+			endLine = v
+		case float64:
+			endLine = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				endLine = int(parsed)
+			}
+		}
+	}
+
+	content, err := storage.ReadResultLines(filePath, startLine, endLine)
+	if err != nil {
+		return "", fmt.Errorf("failed to read tool result: %w", err)
+	}
+
+	lineCount := strings.Count(content, "\n")
+	return fmt.Sprintf("[Lines %d-%d from %s]\n\n%s", startLine, startLine+lineCount, filepath.Base(filePath), content), nil
+}
+
+func (a *CopilotAgent) toolGrepToolResult(ctx context.Context, args map[string]any) (string, error) {
+	filePathRaw, ok := args["file_path"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'file_path'")
+	}
+	filePath, ok := filePathRaw.(string)
+	if !ok || strings.TrimSpace(filePath) == "" {
+		return "", fmt.Errorf("'file_path' must be a non-empty string")
+	}
+
+	patternRaw, ok := args["pattern"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'pattern'")
+	}
+	pattern, ok := patternRaw.(string)
+	if !ok || strings.TrimSpace(pattern) == "" {
+		return "", fmt.Errorf("'pattern' must be a non-empty string")
+	}
+
+	storage := getOrCreateToolResultStorage(ctx)
+	if storage == nil {
+		return "", fmt.Errorf("no tool result storage available")
+	}
+
+	maxMatches := 100
+	if maxMatchesRaw, ok := args["max_matches"]; ok {
+		switch v := maxMatchesRaw.(type) {
+		case int:
+			maxMatches = v
+		case float64:
+			maxMatches = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				maxMatches = int(parsed)
+			}
+		}
+	}
+
+	matches, err := storage.GrepResult(filePath, pattern, maxMatches)
+	if err != nil {
+		return "", fmt.Errorf("failed to grep tool result: %w", err)
+	}
+
+	if len(matches) == 0 {
+		return fmt.Sprintf("No matches found for pattern '%s' in %s", pattern, filepath.Base(filePath)), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d match(es) for '%s' in %s:\n\n", len(matches), pattern, filepath.Base(filePath)))
+
+	for _, match := range matches {
+		sb.WriteString(fmt.Sprintf("Line %d: %s\n", match.LineNumber, match.Content))
+	}
+
+	if maxMatches > 0 && len(matches) >= maxMatches {
+		sb.WriteString(fmt.Sprintf("\n(Showing first %d matches. Use max_matches parameter to see more.)\n", maxMatches))
+	}
+
+	return sb.String(), nil
 }
 
 func (a *CopilotAgent) toolPostgresQuery(ctx context.Context, args map[string]any) (string, error) {

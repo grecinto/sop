@@ -630,7 +630,7 @@ func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest
 	}
 
 	rawResult, execErr := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
-	resultText, hint := unwrapGeminiToolResultEnvelope(rawResult)
+	resultText, hint, filePath, fileSize := unwrapGeminiToolResultEnvelopeFull(rawResult)
 	continuationResponse := coerceGeminiToolContinuationResponse(rawResult)
 	if execErr != nil {
 		log.Warn("Gemini owned loop tool execution failed",
@@ -642,7 +642,7 @@ func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest
 		resultText = execErr.Error()
 
 		if shouldStreamGeminiToolResult(req, iteration >= maxIterations) {
-			emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), resultText, cloneGeminiToolProgressHint(hint), iteration))
+			emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), resultText, cloneGeminiToolProgressHint(hint), iteration, filePath, fileSize))
 		}
 		emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), execErr, iteration))
 		continuationResponse = map[string]any{
@@ -656,9 +656,10 @@ func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest
 			"tool", toolCall.Name,
 			"hint_status", geminiHintStatus(hint),
 			"result_preview", geminiPreview(resultText, 320),
+			"file_backed", filePath != "",
 		)
 		if shouldStreamGeminiToolResult(req, iteration >= maxIterations) {
-			emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), resultText, cloneGeminiToolProgressHint(hint), iteration))
+			emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), resultText, cloneGeminiToolProgressHint(hint), iteration, filePath, fileSize))
 		}
 	}
 
@@ -689,24 +690,38 @@ func emitGeminiOwnedLoopEvent(req ai.ReasoningRequest, eventType string, data an
 }
 
 func unwrapGeminiToolResultEnvelope(rawResult string) (string, *ai.ToolProgressHint) {
+	result, hint, _, _ := unwrapGeminiToolResultEnvelopeFull(rawResult)
+	return result, hint
+}
+
+func unwrapGeminiToolResultEnvelopeFull(rawResult string) (result string, hint *ai.ToolProgressHint, filePath string, fileSize int64) {
 	trimmed := strings.TrimSpace(rawResult)
 	if trimmed == "" {
-		return rawResult, nil
+		return rawResult, nil, "", 0
 	}
 
 	var envelope ai.ToolResultEnvelope
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
-		return rawResult, nil
+		return rawResult, nil, "", 0
 	}
-	if len(envelope.ToolResult) == 0 && envelope.ProgressHint == nil {
-		return rawResult, nil
+	if len(envelope.ToolResult) == 0 && envelope.ProgressHint == nil && envelope.FileMetadata == nil {
+		return rawResult, nil, "", 0
 	}
 
-	result := formatGeminiEnvelopeToolResult(envelope.ToolResult)
-	if strings.TrimSpace(result) == "" {
-		result = rawResult
+	resultText := formatGeminiEnvelopeToolResult(envelope.ToolResult)
+	if strings.TrimSpace(resultText) == "" {
+		resultText = rawResult
 	}
-	return result, cloneGeminiToolProgressHint(envelope.ProgressHint)
+
+	// Extract file metadata if present
+	var resultFile string
+	var resultSize int64
+	if envelope.FileMetadata != nil {
+		resultFile = envelope.FileMetadata.FilePath
+		resultSize = envelope.FileMetadata.FileSize
+	}
+
+	return resultText, cloneGeminiToolProgressHint(envelope.ProgressHint), resultFile, resultSize
 }
 
 func formatGeminiEnvelopeToolResult(raw json.RawMessage) string {

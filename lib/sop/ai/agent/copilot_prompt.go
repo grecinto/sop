@@ -166,6 +166,19 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = selectedSpaceGuidance
 		}
 	}
+
+	// Inject research workflow guidance for complex/advanced tasks
+	if taskClassification.ResearchRecommended {
+		researchGuidance := a.buildResearchWorkflowGuidance(ctx, query, taskClassification)
+		if researchGuidance != "" {
+			if focusedExecutionContext != "" {
+				focusedExecutionContext = researchGuidance + "\n\n" + focusedExecutionContext
+			} else {
+				focusedExecutionContext = researchGuidance
+			}
+		}
+	}
+
 	builder.With(ComponentFocusedContext, focusedExecutionContext)
 
 	// 5. Generic schema fallback only when no specific store targets were classified.

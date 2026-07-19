@@ -297,7 +297,7 @@ func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequ
 	}
 
 	rawResult, execErr := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
-	resultText, hint := unwrapAnthropicToolResultEnvelope(rawResult)
+	resultText, hint, filePath, fileSize := unwrapAnthropicToolResultEnvelopeFull(rawResult)
 	continuationResponse := coerceAnthropicToolContinuationResponse(rawResult)
 	if execErr != nil {
 		log.Warn("Anthropic owned loop tool execution failed",
@@ -308,7 +308,7 @@ func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequ
 		)
 		resultText = execErr.Error()
 		if shouldStreamAnthropicToolResult(req, iteration >= maxIterations) {
-			emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), resultText, cloneAnthropicToolProgressHint(hint), iteration))
+			emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), resultText, cloneAnthropicToolProgressHint(hint), iteration, filePath, fileSize))
 		}
 		emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), execErr, iteration))
 		continuationResponse = map[string]any{
@@ -316,15 +316,21 @@ func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequ
 				"message": execErr.Error(),
 			},
 		}
+		log.Debug("Anthropic owned loop tool execution completed (file-backed)",
+			"tool", toolCall.Name,
+			"file_backed", filePath != "",
+			"file_size", fileSize,
+		)
 	} else {
 		log.Debug("Anthropic owned loop tool execution completed",
 			"iteration", iteration,
 			"tool", toolCall.Name,
 			"hint_status", anthropicHintStatus(hint),
 			"result_preview", anthropicPreview(resultText, 320),
+			"file_backed", filePath != "",
 		)
 		if shouldStreamAnthropicToolResult(req, iteration >= maxIterations) {
-			emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), resultText, cloneAnthropicToolProgressHint(hint), iteration))
+			emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), resultText, cloneAnthropicToolProgressHint(hint), iteration, filePath, fileSize))
 		}
 	}
 
@@ -340,24 +346,38 @@ func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequ
 }
 
 func unwrapAnthropicToolResultEnvelope(rawResult string) (string, *ai.ToolProgressHint) {
+	result, hint, _, _ := unwrapAnthropicToolResultEnvelopeFull(rawResult)
+	return result, hint
+}
+
+func unwrapAnthropicToolResultEnvelopeFull(rawResult string) (result string, hint *ai.ToolProgressHint, filePath string, fileSize int64) {
 	trimmed := strings.TrimSpace(rawResult)
 	if trimmed == "" {
-		return rawResult, nil
+		return rawResult, nil, "", 0
 	}
 
 	var envelope ai.ToolResultEnvelope
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
-		return rawResult, nil
+		return rawResult, nil, "", 0
 	}
-	if len(envelope.ToolResult) == 0 && envelope.ProgressHint == nil {
-		return rawResult, nil
+	if len(envelope.ToolResult) == 0 && envelope.ProgressHint == nil && envelope.FileMetadata == nil {
+		return rawResult, nil, "", 0
 	}
 
-	result := formatAnthropicEnvelopeToolResult(envelope.ToolResult)
-	if strings.TrimSpace(result) == "" {
-		result = rawResult
+	resultText := formatAnthropicEnvelopeToolResult(envelope.ToolResult)
+	if strings.TrimSpace(resultText) == "" {
+		resultText = rawResult
 	}
-	return result, cloneAnthropicToolProgressHint(envelope.ProgressHint)
+
+	// Extract file metadata if present
+	var resultFile string
+	var resultSize int64
+	if envelope.FileMetadata != nil {
+		resultFile = envelope.FileMetadata.FilePath
+		resultSize = envelope.FileMetadata.FileSize
+	}
+
+	return resultText, cloneAnthropicToolProgressHint(envelope.ProgressHint), resultFile, resultSize
 }
 
 func formatAnthropicEnvelopeToolResult(raw json.RawMessage) string {

@@ -861,10 +861,18 @@ type ToolProgressHint struct {
 
 // ToolResultEnvelope is an optional JSON result shape that tools can return.
 // If present, `tool_result` remains the user-visible payload while `progress_hint`
-// feeds the engine's internal progress and retry budgeting.
+// feeds the engine's internal progress and retry budgeting, and `file_metadata`
+// provides information about file-backed storage for large results.
 type ToolResultEnvelope struct {
 	ToolResult   json.RawMessage   `json:"tool_result,omitempty"`
 	ProgressHint *ToolProgressHint `json:"progress_hint,omitempty"`
+	FileMetadata *ToolFileMetadata `json:"file_metadata,omitempty"`
+}
+
+// ToolFileMetadata describes file-backed storage for large tool results.
+type ToolFileMetadata struct {
+	FilePath string `json:"file_path,omitempty"`
+	FileSize int64  `json:"file_size,omitempty"`
 }
 
 // ToolDefinition describes a tool available to the agent.

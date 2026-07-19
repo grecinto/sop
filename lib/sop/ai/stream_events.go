@@ -30,7 +30,7 @@ func BuildToolCallEvent(tool string, args map[string]any, iteration int) map[str
 	return payload
 }
 
-func BuildToolResultEvent(tool string, args map[string]any, result string, hint *ToolProgressHint, iteration int) map[string]any {
+func BuildToolResultEvent(tool string, args map[string]any, result string, hint *ToolProgressHint, iteration int, resultFile string, resultSize int64) map[string]any {
 	payload := map[string]any{
 		"tool":         strings.TrimSpace(tool),
 		"args":         args,
@@ -42,6 +42,12 @@ func BuildToolResultEvent(tool string, args map[string]any, result string, hint 
 	}
 	if iteration > 0 {
 		payload["iteration"] = iteration
+	}
+	// Phase 2.2: File-backed result metadata for UI indicators
+	if resultFile != "" {
+		payload["result_file"] = resultFile
+		payload["result_size"] = resultSize
+		payload["file_backed"] = true
 	}
 	return payload
 }

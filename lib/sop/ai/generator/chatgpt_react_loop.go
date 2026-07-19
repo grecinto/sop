@@ -446,13 +446,13 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 	}
 
 	rawResult, execErr := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
-	resultText, hint := unwrapChatGPTToolResultEnvelope(rawResult)
+	resultText, hint, filePath, fileSize := unwrapChatGPTToolResultEnvelopeFull(rawResult)
 
 	if execErr != nil {
 		resultText = execErr.Error()
 	}
 	if shouldStreamChatGPTToolResult(req, finalToolResult) {
-		emitChatGPTOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneChatGPTToolArgs(toolCall.Args), resultText, cloneChatGPTToolProgressHint(hint), iteration))
+		emitChatGPTOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneChatGPTToolArgs(toolCall.Args), resultText, cloneChatGPTToolProgressHint(hint), iteration, filePath, fileSize))
 	}
 	if execErr != nil {
 		emitChatGPTOwnedLoopEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneChatGPTToolArgs(toolCall.Args), execErr, iteration))
@@ -613,22 +613,36 @@ func emitChatGPTOwnedLoopHydration(req ai.ReasoningRequest, resp ai.ReasoningRes
 // ----------------------------------------------------------------------------
 
 func unwrapChatGPTToolResultEnvelope(rawResult string) (string, *ai.ToolProgressHint) {
+	result, hint, _, _ := unwrapChatGPTToolResultEnvelopeFull(rawResult)
+	return result, hint
+}
+
+func unwrapChatGPTToolResultEnvelopeFull(rawResult string) (result string, hint *ai.ToolProgressHint, filePath string, fileSize int64) {
 	trimmed := strings.TrimSpace(rawResult)
 	if trimmed == "" {
-		return rawResult, nil
+		return rawResult, nil, "", 0
 	}
 	var envelope ai.ToolResultEnvelope
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
-		return rawResult, nil
+		return rawResult, nil, "", 0
 	}
-	if len(envelope.ToolResult) == 0 && envelope.ProgressHint == nil {
-		return rawResult, nil
+	if len(envelope.ToolResult) == 0 && envelope.ProgressHint == nil && envelope.FileMetadata == nil {
+		return rawResult, nil, "", 0
 	}
-	result := formatChatGPTEnvelopeToolResult(envelope.ToolResult)
-	if strings.TrimSpace(result) == "" {
-		result = rawResult
+	resultText := formatChatGPTEnvelopeToolResult(envelope.ToolResult)
+	if strings.TrimSpace(resultText) == "" {
+		resultText = rawResult
 	}
-	return result, cloneChatGPTToolProgressHint(envelope.ProgressHint)
+
+	// Extract file metadata if present
+	var resultFile string
+	var resultSize int64
+	if envelope.FileMetadata != nil {
+		resultFile = envelope.FileMetadata.FilePath
+		resultSize = envelope.FileMetadata.FileSize
+	}
+
+	return resultText, cloneChatGPTToolProgressHint(envelope.ProgressHint), resultFile, resultSize
 }
 
 func formatChatGPTEnvelopeToolResult(raw json.RawMessage) string {

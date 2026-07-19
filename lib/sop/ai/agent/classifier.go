@@ -18,18 +18,19 @@ type LayerInfo struct {
 }
 
 type TaskContextClassification struct {
-	Entity             string      `json:"entity"`
-	Domain             string      `json:"domain"`
-	DBArtifacts        []string    `json:"db_artifacts"`
-	StoresArtifacts    []string    `json:"stores_artifacts,omitempty"`
-	SpacesArtifacts    []string    `json:"spaces_artifacts,omitempty"`
-	Layers             []LayerInfo `json:"layers"`
-	AutomationFamilies []string    `json:"automation_families,omitempty"`
-	ScriptAuthoring    bool        `json:"-"`
-	GeneralContext     bool        `json:"-"`
-	RoutingGate        string      `json:"-"`
-	CapabilityHint     string      `json:"-"`
-	IntentFamily       string      `json:"-"`
+	Entity              string      `json:"entity"`
+	Domain              string      `json:"domain"`
+	DBArtifacts         []string    `json:"db_artifacts"`
+	StoresArtifacts     []string    `json:"stores_artifacts,omitempty"`
+	SpacesArtifacts     []string    `json:"spaces_artifacts,omitempty"`
+	Layers              []LayerInfo `json:"layers"`
+	AutomationFamilies  []string    `json:"automation_families,omitempty"`
+	ResearchRecommended bool        `json:"research_recommended,omitempty"`
+	ScriptAuthoring     bool        `json:"-"`
+	GeneralContext      bool        `json:"-"`
+	RoutingGate         string      `json:"-"`
+	CapabilityHint      string      `json:"-"`
+	IntentFamily        string      `json:"-"`
 	// KB Search Results (for specialized KB routing)
 	KBSearchResults string `json:"-"`
 	KBMatchCount    int    `json:"-"`
@@ -135,7 +136,7 @@ func (a *CopilotAgent) ClassifyTaskContext(ctx context.Context, query string, ge
 	automationExamples := ""
 
 	if hasDesktopAutomation {
-		automationFieldJSON = "\n  \"automation_families\": [],"
+		automationFieldJSON = "\n  \"automation_families\": [],\n  \"research_recommended\": false,"
 		automationDocSection = `
 
 ### 6. Identify Automation Families
@@ -146,6 +147,34 @@ Populate ` + "`automation_families`" + ` ONLY when the request clearly involves:
 - **shell**: Shell/terminal commands, bash/zsh scripts, file system operations
 
 Leave empty for general database or knowledge operations.
+
+### 7. Recommend Research Phase
+Set ` + "`research_recommended: true`" + ` when the request involves:
+
+**Advanced/Complex Operations:**
+- Multi-step problem-solving: "fix", "troubleshoot", "debug", "optimize", "resolve"
+- Setup/deployment: "setup", "deploy", "configure", "install", "initialize"
+- Investigation: "why is", "what's wrong with", "diagnose", "analyze", "investigate"
+
+**Knowledge-Seeking Patterns:**
+- How-to questions: "how do I", "how to", "what's the best way"
+- Conceptual questions: "why", "when should I", "which approach"
+- Comparison requests: "compare", "difference between", "pros and cons"
+
+**Domain-Specific Complexity:**
+- Test failures: "tests failing", "test errors", "fix tests"
+- Git workflows: "merge conflict", "rebase", "cherry-pick", "resolve conflicts"
+- Performance: "slow query", "optimization", "performance issue"
+- Database migrations: "migrate", "schema change", "alter table"
+- CI/CD issues: "pipeline failing", "build error", "deployment failed"
+
+**Leave false for:**
+- Simple reads: "show", "list", "get", "view"
+- Basic commands: "git status", "ls", "pwd"
+- Single-step operations with clear intent
+- User provides explicit command to execute
+
+Research phase consults KB for project conventions, best practices, and systematic approaches before execution.
 `
 		automationExamples = `
 **Query: "run git status and show me the changes"**
@@ -157,7 +186,50 @@ Leave empty for general database or knowledge operations.
   "stores_artifacts": [],
   "spaces_artifacts": [],
   "automation_families": ["git", "shell"],
+  "research_recommended": false,
   "layers": [{"name": "Single-Domain", "crud": ["R"]}]
+}
+` + "```" + `
+
+**Query: "fix the failing CI tests"**
+` + "```json" + `
+{
+  "entity": "Omni",
+  "domain": "",
+  "db_artifacts": [],
+  "stores_artifacts": [],
+  "spaces_artifacts": [],
+  "automation_families": ["shell"],
+  "research_recommended": true,
+  "layers": [{"name": "Single-Domain", "crud": ["R"]}]
+}
+` + "```" + `
+
+**Query: "how do I resolve this merge conflict?"**
+` + "```json" + `
+{
+  "entity": "Omni",
+  "domain": "",
+  "db_artifacts": [],
+  "stores_artifacts": [],
+  "spaces_artifacts": [],
+  "automation_families": ["git"],
+  "research_recommended": true,
+  "layers": [{"name": "Single-Domain", "crud": ["U"]}]
+}
+` + "```" + `
+
+**Query: "deploy the service to staging"**
+` + "```json" + `
+{
+  "entity": "Omni",
+  "domain": "",
+  "db_artifacts": [],
+  "stores_artifacts": [],
+  "spaces_artifacts": [],
+  "automation_families": ["shell", "git"],
+  "research_recommended": true,
+  "layers": [{"name": "Single-Domain", "crud": ["C"]}]
 }
 ` + "```" + `
 

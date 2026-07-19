@@ -15,6 +15,8 @@ Return valid JSON only, no markdown fences:
 }
 ```
 
+**Note**: The `research_recommended` field (if present in format) indicates whether the LLM should consult knowledge bases before execution. See Section 7 for criteria.
+
 ## Classification Decision Flow
 
 ### 1. Determine Entity

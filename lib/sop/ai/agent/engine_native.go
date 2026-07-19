@@ -21,6 +21,8 @@ type NativeReActEngine struct {
 	MaxTokens         int
 }
 
+const ctxKeyToolResultStorage contextKey = "tool_result_storage"
+
 const nativeReActBaseToolIterations = 5
 const nativeReActMaxToolIterations = 5
 const nativeReActToolCallTemperature float32 = 0.1
@@ -28,7 +30,9 @@ const nativeReActRepairTemperature float32 = 0.0
 
 type nativeToolResult struct {
 	Name          string
-	Result        string
+	Result        string // Inline result or summary if file-backed
+	ResultFile    string // Path to full output file (if large)
+	ResultSize    int64  // Byte count of original result
 	Args          map[string]any
 	Hint          *ai.ToolProgressHint
 	ExecutionMode ai.ReActToolResultExecutionMode
@@ -74,6 +78,18 @@ type progressSink func(string)
 
 // Run executes the orchestration loop relying on native tool calls.
 func (e *NativeReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
+	// Initialize file-backed tool result storage for this session (all engines)
+	storage := getOrCreateToolResultStorage(ctx)
+	if storage != nil {
+		ctx = context.WithValue(ctx, ctxKeyToolResultStorage, storage)
+		defer func() {
+			if cleanupErr := storage.Cleanup(); cleanupErr != nil {
+				log.Warn("Failed to cleanup tool result storage", "error", cleanupErr)
+			}
+		}()
+		log.Info("Tool result storage initialized", "session_id", storage.sessionID, "base_dir", storage.baseDir)
+	}
+
 	if loop := resolveOwnedReActLoop(req); loop != nil {
 		return loop.Run(ctx, req)
 	}
@@ -284,6 +300,7 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 		priorRepair := pendingRepair
 		// req.Executor is the registered runtime (CopilotAgent). Execute() resolves
 		// the tool name from the registry and runs the matching handler.
+		// Execute now handles file-backed storage internally for all engines.
 		rawResult, err := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
 		if err != nil {
 			emitReasoningEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), err, iteration+1))
@@ -314,18 +331,28 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 			log.Error("Native ReAct Engine Tool Failure", "tool", toolCall.Name, "error", err)
 			return ai.ReasoningResponse{}, fmt.Errorf("tool execution failed")
 		}
-		result, hint := unwrapToolResultEnvelope(rawResult)
+		// Extract result, hint, and file metadata from envelope
+		result, hint, resultFile, resultSize := unwrapToolResultEnvelopeFull(rawResult)
 		emitVerboseProgress(ctx, "Tool `%s` completed.", toolCall.Name)
 		if shouldResetRepairAttempts(priorRepair, toolCall.Name) {
 			repairAttempts = 0
 		}
 		pendingRepair = nil
-		log.Info("Native ReAct Engine Tool Success", "iteration", iteration+1, "tool", toolCall.Name, "result_chars", len(result))
-		emitReasoningEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), result, hint, iteration+1))
+
+		log.Info("Native ReAct Engine Tool Success", "iteration", iteration+1, "tool", toolCall.Name, "result_chars", len(result), "file_backed", resultFile != "")
+		// Stream file-backed metadata to UI (extracted from envelope)
+		emitReasoningEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), result, hint, iteration+1, resultFile, resultSize))
 
 		executedToolCalls = append(executedToolCalls, toolCall)
 		previousResults := append([]nativeToolResult(nil), toolResults...)
-		toolResults = appendOrReplaceRetriedToolResult(toolResults, nativeToolResult{Name: toolCall.Name, Result: result, Args: cloneToolEventMap(toolCall.Args), Hint: cloneToolProgressHint(hint)}, priorRepair, toolCall.Name)
+		toolResults = appendOrReplaceRetriedToolResult(toolResults, nativeToolResult{
+			Name:       toolCall.Name,
+			Result:     result,
+			ResultFile: resultFile,
+			ResultSize: resultSize,
+			Args:       cloneToolEventMap(toolCall.Args),
+			Hint:       cloneToolProgressHint(hint),
+		}, priorRepair, toolCall.Name)
 		pendingContinuation = &ai.ToolCallContinuation{
 			ToolCall: toolCall,
 			Response: coerceToolCallContinuationResponse(result),
@@ -633,6 +660,46 @@ func effectiveVerbose(ctx context.Context) bool {
 
 func isVerboseEnabled(ctx context.Context) bool {
 	return effectiveVerbose(ctx)
+}
+
+// getOrCreateToolResultStorage retrieves or creates a ToolResultStorage for the current session
+func getOrCreateToolResultStorage(ctx context.Context) *ToolResultStorage {
+	// Check if already in context
+	if storage, ok := ctx.Value(ctxKeyToolResultStorage).(*ToolResultStorage); ok && storage != nil {
+		return storage
+	}
+
+	// Get session ID
+	sessionID := getSessionIDFromContext(ctx)
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	// Create new storage (best effort)
+	// Note: Storage is added to context by the engine's runDefaultLoop.
+	// This function creates but doesn't add to context to avoid context mutation.
+	storage, err := NewToolResultStorage(sessionID)
+	if err != nil {
+		log.Warn("Failed to create tool result storage", "error", err, "session_id", sessionID)
+		return nil
+	}
+
+	return storage
+}
+
+// getSessionIDFromContext extracts session ID from context
+func getSessionIDFromContext(ctx context.Context) string {
+	// Try SessionPayload first
+	if payload := ai.GetSessionPayload(ctx); payload != nil && payload.SessionID != "" {
+		return payload.SessionID
+	}
+
+	// Try RunnerSession script name as fallback
+	if rs := runnerSessionFromContext(ctx); rs != nil && rs.CurrentScriptName != "" {
+		return rs.CurrentScriptName
+	}
+
+	return ""
 }
 
 const (
@@ -1923,22 +1990,36 @@ func shouldShortCircuitAskLoopOnToolHint(hint *ai.ToolProgressHint) bool {
 }
 
 func unwrapToolResultEnvelope(rawResult string) (string, *ai.ToolProgressHint) {
+	result, hint, _, _ := unwrapToolResultEnvelopeFull(rawResult)
+	return result, hint
+}
+
+func unwrapToolResultEnvelopeFull(rawResult string) (result string, hint *ai.ToolProgressHint, filePath string, fileSize int64) {
 	trimmed := strings.TrimSpace(rawResult)
 	if trimmed == "" {
-		return rawResult, nil
+		return rawResult, nil, "", 0
 	}
 	var envelope ai.ToolResultEnvelope
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
-		return rawResult, nil
+		return rawResult, nil, "", 0
 	}
-	if len(envelope.ToolResult) == 0 && envelope.ProgressHint == nil {
-		return rawResult, nil
+	if len(envelope.ToolResult) == 0 && envelope.ProgressHint == nil && envelope.FileMetadata == nil {
+		return rawResult, nil, "", 0
 	}
-	result := formatEnvelopeToolResult(envelope.ToolResult)
-	if strings.TrimSpace(result) == "" {
-		result = rawResult
+	resultText := formatEnvelopeToolResult(envelope.ToolResult)
+	if strings.TrimSpace(resultText) == "" {
+		resultText = rawResult
 	}
-	return result, cloneToolProgressHint(envelope.ProgressHint)
+
+	// Extract file metadata if present
+	var resultFile string
+	var resultSize int64
+	if envelope.FileMetadata != nil {
+		resultFile = envelope.FileMetadata.FilePath
+		resultSize = envelope.FileMetadata.FileSize
+	}
+
+	return resultText, cloneToolProgressHint(envelope.ProgressHint), resultFile, resultSize
 }
 
 func formatEnvelopeToolResult(raw json.RawMessage) string {

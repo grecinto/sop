@@ -4584,7 +4584,9 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 		if fmtErr != nil {
 			return "", fmtErr
 		}
-		return text, nil
+
+		// Apply file-backed storage for large results (general-purpose feature)
+		return wrapToolResultWithStorage(ctx, toolName, text)
 	}
 
 	// Dump registry keys if tool not found (Debug)
@@ -4615,6 +4617,47 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 	}
 
 	return "", fmt.Errorf("unknown tool: %s", toolName)
+}
+
+// wrapToolResultWithStorage applies file-backed storage for large tool results.
+// This is a general-purpose feature that works with all reasoning engines.
+func wrapToolResultWithStorage(ctx context.Context, toolName, result string) (string, error) {
+	storage := getOrCreateToolResultStorage(ctx)
+	if storage == nil {
+		// No storage available, return result as-is
+		return result, nil
+	}
+
+	// Check if result needs file backing
+	summary, filePath, fileSize, err := storage.StoreResult(toolName, result)
+	if err != nil {
+		log.Warn("Failed to store tool result", "error", err, "tool", toolName)
+		return result, nil // Fallback to inline
+	}
+
+	if filePath == "" {
+		// Result was small, not stored to file
+		return result, nil
+	}
+
+	// Result was stored to file, wrap in envelope with metadata
+	log.Info("Tool result stored to file", "tool", toolName, "file", filePath, "size", fileSize)
+
+	envelope := ai.ToolResultEnvelope{
+		ToolResult: json.RawMessage(fmt.Sprintf("%q", summary)),
+		FileMetadata: &ai.ToolFileMetadata{
+			FilePath: filePath,
+			FileSize: int64(fileSize),
+		},
+	}
+
+	envelopeBytes, err := json.Marshal(envelope)
+	if err != nil {
+		log.Warn("Failed to marshal tool result envelope", "error", err)
+		return result, nil // Fallback
+	}
+
+	return string(envelopeBytes), nil
 }
 
 // scriptTransaction encapsulates transaction management for scripts
