@@ -1,6 +1,6 @@
 {
   "name": "sop-cloud-site",
-  "description": "Frontend for the new SOP Cloud product site",
+  "description": "Frontend for the new Northstar product site",
   "private": true,
   "version": "0.1.0",
   "type": "module",
