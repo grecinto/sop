@@ -42,7 +42,6 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 |----------|-------------|
 | [FILE_BACKED_TOOL_RESULTS.md](FILE_BACKED_TOOL_RESULTS.md) | ✅ Production-ready: File-backed tool results for large outputs, strategic analysis tools |
 | [FILE_BACKED_TOOL_RESULTS_TRACKER.md](FILE_BACKED_TOOL_RESULTS_TRACKER.md) | Implementation tracker with completion status |
-| [AGENT_TOOL_FILTERING_PLAN.md](AGENT_TOOL_FILTERING_PLAN.md) | Tool filtering and selection strategies |
 | [SHELL_SESSION_PERSISTENCE.md](SHELL_SESSION_PERSISTENCE.md) | Persistent shell sessions for commands |
 
 ### Knowledge Base Quality
