@@ -1,12 +1,38 @@
 package codingworkflow
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
+
+// workQueueContextKey is the context key for accessing the work queue
+// This must match the key used in the agent package to avoid import cycles
+type workQueueContextKey string
+
+const (
+	ctxKeyWorkQueue      workQueueContextKey = "work_queue"
+	ctxKeyMultiTurnQuery string              = "multi_turn_query"
+)
+
+// WorkItem represents a work item to inject into the queue
+type WorkItem struct {
+	Query     string
+	Actor     string
+	Priority  int
+	Condition func(interface{}) bool
+}
+
+// getWorkQueue retrieves the work queue from context
+// Uses string key directly to avoid type mismatch with agent package's workQueueContextKey
+func getWorkQueue(ctx context.Context) (capabilities.WorkQueue, bool) {
+	// Use the same string value as agent.ctxKeyWorkQueue = workQueueContextKey("work_queue")
+	queue, ok := ctx.Value("work_queue").(capabilities.WorkQueue)
+	return queue, ok
+}
 
 const (
 	CapabilityID   = "coding_workflow"
@@ -78,6 +104,136 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
 	return "Use the coding workflow capability for local-runtime code, generation, and analysis tasks. Start from the design intent, make the plan explicit, and use TDD as an assistive practice by drafting or reviewing focused tests while implementing. Keep actions explicit, previewable, and safe, and preserve continuation context across turns."
+}
+
+// Orchestrate implements MultiTurnCapability for queue-based multi-turn orchestration.
+// This enables the coding workflow to inject work items across multiple ReAct turns.
+func (c *Capability) Orchestrate(ctx context.Context, state capabilities.RoutingState) (bool, error) {
+	if c == nil || c.Orchestrator == nil {
+		return false, fmt.Errorf("coding workflow capability requires an orchestrator")
+	}
+
+	// Get the work queue from context
+	queue, ok := getWorkQueue(ctx)
+	if !ok {
+		return false, fmt.Errorf("work queue not found in context")
+	}
+
+	// Get the initial query from context
+	query, ok := ctx.Value("multi_turn_query").(string)
+	if !ok || query == "" {
+		return false, fmt.Errorf("query not found in context")
+	}
+
+	// Classify the task to determine workflow type
+	classifier := DefaultTaskClassifier()
+	classification := classifier.Classify(query, "", "")
+
+	// Inject work items based on task type
+	switch classification.TaskType {
+	case TaskTypeDebugging:
+		return c.orchestrateDebuggingWorkflow(queue, query)
+	case TaskTypeImplementation:
+		return c.orchestrateImplementationWorkflow(queue, query)
+	case TaskTypeTesting:
+		return c.orchestrateTestingWorkflow(queue, query)
+	case TaskTypeRefactoring:
+		return c.orchestrateRefactoringWorkflow(queue, query)
+	default:
+		// For unknown/other task types, use general workflow
+		return c.orchestrateGeneralWorkflow(queue, query)
+	}
+}
+
+// orchestrateDebuggingWorkflow injects work items for debugging tasks
+func (c *Capability) orchestrateDebuggingWorkflow(queue capabilities.WorkQueue, query string) (bool, error) {
+	// Debugging workflow: analyze → identify → fix → test
+	queue.Enqueue(map[string]interface{}{
+		"query":    fmt.Sprintf("Analyze the code to identify the bug: %s", query),
+		"actor":    "coding_workflow.analyzer",
+		"priority": 10,
+	})
+
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Generate patch to fix the identified bug",
+		"actor":    "coding_workflow.patcher",
+		"priority": 10,
+	})
+
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Apply the patch to fix the bug",
+		"actor":    "coding_workflow.applier",
+		"priority": 10,
+	})
+
+	return true, nil
+}
+
+// orchestrateImplementationWorkflow injects work items for implementation tasks
+func (c *Capability) orchestrateImplementationWorkflow(queue capabilities.WorkQueue, query string) (bool, error) {
+	// Implementation workflow: design → implement → test
+	queue.Enqueue(map[string]interface{}{
+		"query":    fmt.Sprintf("Design the implementation approach: %s", query),
+		"actor":    "coding_workflow.designer",
+		"priority": 10,
+	})
+
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Generate code to implement the design",
+		"actor":    "coding_workflow.implementer",
+		"priority": 10,
+	})
+
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Apply the implementation",
+		"actor":    "coding_workflow.applier",
+		"priority": 10,
+	})
+
+	return true, nil
+}
+
+// orchestrateTestingWorkflow injects work items for testing tasks
+func (c *Capability) orchestrateTestingWorkflow(queue capabilities.WorkQueue, query string) (bool, error) {
+	// Testing workflow: run tests → analyze failures → fix
+	queue.Enqueue(map[string]interface{}{
+		"query":    fmt.Sprintf("Run tests: %s", query),
+		"actor":    "coding_workflow.tester",
+		"priority": 10,
+	})
+
+	return true, nil
+}
+
+// orchestrateRefactoringWorkflow injects work items for refactoring tasks
+func (c *Capability) orchestrateRefactoringWorkflow(queue capabilities.WorkQueue, query string) (bool, error) {
+	// Refactoring workflow: analyze → plan → refactor → test
+	queue.Enqueue(map[string]interface{}{
+		"query":    fmt.Sprintf("Analyze code structure for refactoring: %s", query),
+		"actor":    "coding_workflow.analyzer",
+		"priority": 10,
+	})
+
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Generate refactoring plan",
+		"actor":    "coding_workflow.planner",
+		"priority": 10,
+	})
+
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Apply refactoring changes",
+		"actor":    "coding_workflow.refactorer",
+		"priority": 10,
+	})
+
+	return true, nil
+}
+
+// orchestrateGeneralWorkflow injects work items for general/unknown tasks
+func (c *Capability) orchestrateGeneralWorkflow(queue capabilities.WorkQueue, query string) (bool, error) {
+	// General workflow: just execute the query as-is
+	// The initial user query is already in the queue, so we don't need to add anything
+	return true, nil
 }
 
 func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {

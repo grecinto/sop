@@ -18,6 +18,13 @@ const (
 )
 
 func SummarizeSuccessfulToolResult(result ReActToolResult) []string {
+	// Skip semantic summarization for command-line/automation tools.
+	// These tools output raw command results that should be preserved intact.
+	// Large results go to temp files with grep/awk/tail recommendations.
+	if isCommandLineAutomationTool(result.Name) {
+		return nil
+	}
+
 	if result.Name == "list_stores" {
 		if facts := extractListStoresFacts(result.Result); len(facts) > 0 {
 			return facts
@@ -149,6 +156,62 @@ func summarizeGenericSuccessfulToolResult(result ReActToolResult) string {
 		trimmed = trimmed[:177] + "..."
 	}
 	return fmt.Sprintf("%s returned: %s", result.Name, trimmed)
+}
+
+// isCommandLineAutomationTool returns true for tools that execute shell commands,
+// run tests, search files, or perform other desktop automation tasks.
+// These tools should NOT be semantically summarized - their raw output should be
+// preserved intact. Large results will be handled by ToolResultStorage (temp file
+// with grep/awk/tail recommendations), allowing the LLM to analyze them using tools.
+func isCommandLineAutomationTool(toolName string) bool {
+	commandLineTools := map[string]bool{
+		// Shell execution
+		"execute_local_command": true,
+
+		// Repository operations
+		"search_repo_files": true,
+		"grep_repo_text":    true,
+		"run_repo_tests":    true,
+
+		// Git operations
+		"git_status":   true,
+		"git_diff":     true,
+		"git_log":      true,
+		"git_branch":   true,
+		"git_checkout": true,
+		"git_commit":   true,
+		"git_pull":     true,
+		"git_push":     true,
+
+		// File operations
+		"read_file":        true,
+		"write_file":       true,
+		"list_directory":   true,
+		"create_directory": true,
+		"delete_file":      true,
+		"delete_directory": true,
+		"copy_file":        true,
+		"rename_file":      true,
+		"patch_file":       true,
+		"path_exists":      true,
+		"stat_path":        true,
+
+		// Database/observability
+		"postgres_query":             true,
+		"postgres_execute":           true,
+		"splunk_search":              true,
+		"splunk_list_saved_searches": true,
+		"splunk_create_saved_search": true,
+		"splunk_update_saved_search": true,
+		"splunk_delete_saved_search": true,
+
+		// Store file operations
+		"list_folder_store_files": true,
+		"read_folder_store_file":  true,
+		"list_repo_store_files":   true,
+		"read_repo_store_file":    true,
+	}
+	return commandLineTools[toolName]
 }
 
 func extractExecuteScriptPlanFacts(args map[string]any) []string {

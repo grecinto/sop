@@ -49,6 +49,70 @@ type Participant interface {
 	Participate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error)
 }
 
+// WorkQueue is defined in the agent package but referenced here for interface definition.
+// Import cycle avoided by using interface segregation.
+type WorkQueue interface {
+	Enqueue(item interface{}) error
+	EnqueueConditional(item interface{}) error
+	Depth() int
+	IsEmpty() bool
+}
+
+// MultiTurnCapability extends Capability to support queue-based multi-turn orchestration.
+// Capabilities implementing this interface can inject work items into an execution queue,
+// enabling complex workflows that span multiple ReAct turns (analyze → patch → test → fix).
+//
+// Architecture:
+//
+//	Turn 1 (User): "Fix the parser bug"
+//	  ↓
+//	  Capability.Orchestrate() injects: "Generate patch for parser.go"
+//	Turn 2: Patch generation with full tool access
+//	  ↓
+//	  Injects: "Apply patch"
+//	Turn 3: File write with approval gate
+//	  ↓
+//	  Injects: "Run tests"
+//	Turn 4: Terminal execution
+//	  ↓
+//	  Conditional: If tests fail, inject "Analyze failures and fix"
+//
+// Benefits:
+// - Each turn gets full ReAct tool registry access
+// - Orchestration logic separated from tool execution
+// - Conditional branching based on previous results
+// - Explicit state management across turns
+//
+// Example implementation (coding workflow):
+//
+//	func (c *CodingWorkflowCapability) Orchestrate(ctx context.Context, state RoutingState) (bool, error) {
+//	    queue := GetWorkQueueFromState(state)
+//
+//	    // Inject analysis step
+//	    queue.Enqueue(WorkItem{Query: "Analyze code", Actor: "coding_workflow.analyzer"})
+//
+//	    // Inject patch generation
+//	    queue.Enqueue(WorkItem{Query: "Generate patch", Actor: "coding_workflow.patcher"})
+//
+//	    // Conditional test execution
+//	    queue.EnqueueConditional(WorkItem{
+//	        Query: "Run tests",
+//	        Condition: func(prevResult) bool { return prevResult.NeedsTesting },
+//	    })
+//
+//	    return true, nil
+//	}
+type MultiTurnCapability interface {
+	Capability
+
+	// Orchestrate is called when the capability is selected for multi-turn execution.
+	// It can inject work items into the queue to drive a multi-step workflow.
+	// Returns (handled, error):
+	//   - handled=true: capability took over orchestration
+	//   - handled=false: fall back to single-turn execution
+	Orchestrate(ctx context.Context, state RoutingState) (bool, error)
+}
+
 // Capability is the plug-in contract for Ask domains.
 type Capability interface {
 	ID() string

@@ -1013,6 +1013,32 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 		}
 	}
 
+	// WorkQueue stores: wfq_checkpoints_{userID}, wfq_metrics_{userID}, wfq_bytimestamp_{userID}
+	if strings.HasPrefix(storeName, "wfq_") {
+		// SystemAdmin can see all users' WorkQueue stores
+		if isSystemAdminRoleInContext(ctx) {
+			return true
+		}
+		// Regular Admin cannot see WorkQueue stores
+		if isRegularAdminRoleInContext(ctx) {
+			return false
+		}
+		currentUserID := strings.TrimSpace(sop.GetAuthFromContext(ctx).UserID)
+		if currentUserID == "" {
+			return false
+		}
+		// Extract userID from store name: wfq_checkpoints_{userID}
+		parts := strings.SplitN(storeName, "_", 3)
+		if len(parts) < 3 {
+			return false
+		}
+		storeOwnerID := parts[2]
+		// Users can only see their own WorkQueue stores
+		if storeOwnerID != currentUserID {
+			return false
+		}
+	}
+
 	return true
 }
 
@@ -1078,9 +1104,16 @@ func handleListStores(w http.ResponseWriter, r *http.Request) {
 		visibleStores = make([]string, 0)
 	}
 
+	// Generate user-friendly display names for stores (WorkQueue, memory, etc.)
+	storeDisplayNames := make(map[string]string)
+	for _, storeName := range visibleStores {
+		storeDisplayNames[storeName] = resolveStoreDisplayName(storeName)
+	}
+
 	bundled := sop.BundledResponse{
-		Data: visibleStores,
-		RBAC: sop.ResolveRBACMap(ctx, "store", sop.EntitlementContext{AssetID: dbName, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil),
+		Data:              visibleStores,
+		RBAC:              sop.ResolveRBACMap(ctx, "store", sop.EntitlementContext{AssetID: dbName, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil),
+		StoreDisplayNames: storeDisplayNames,
 	}
 
 	json.NewEncoder(w).Encode(bundled)
@@ -1092,6 +1125,29 @@ func resolveSpaceDisplayName(name string, cfg *memory.KnowledgeBaseConfig) strin
 	lowerName := strings.ToLower(strings.TrimSpace(name))
 	if strings.HasPrefix(lowerName, "ltm_") || strings.HasPrefix(lowerName, "memory_") {
 		return "memory"
+	}
+
+	return name
+}
+
+func resolveStoreDisplayName(name string) string {
+	// User-friendly names for WorkQueue stores in AI Studio
+	if strings.HasPrefix(name, "wfq_checkpoints_") {
+		return "AI Studio - Workflow Checkpoints"
+	}
+	if strings.HasPrefix(name, "wfq_metrics_") {
+		return "AI Studio - Workflow Metrics"
+	}
+	if strings.HasPrefix(name, "wfq_bytimestamp_") {
+		return "AI Studio - Workflow Timeline"
+	}
+
+	// User-friendly names for memory stores
+	if strings.HasPrefix(name, "stm_") {
+		return "Short-term Memory"
+	}
+	if strings.HasPrefix(name, "ltm_") {
+		return "Long-term Memory"
 	}
 
 	return name

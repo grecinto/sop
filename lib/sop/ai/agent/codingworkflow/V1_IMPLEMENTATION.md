@@ -2,7 +2,40 @@
 
 ## Overview
 
-This document describes the V1 implementation of the repo-aware coding workflow capability, integrated with SOP's **Spaces** architecture for memory and semantic retrieval.
+This document describes the V1 implementation of the repo-aware coding workflow capability, integrated with SOP's **Spaces** architecture for memory and semantic retrieval, and leveraging the **multi-turn queue-based orchestration** for complex workflows.
+
+## Multi-Turn Orchestration Architecture
+
+The coding workflow capability uses SOP's queue-based multi-turn orchestration to execute complex, multi-step workflows across multiple ReAct turns. This enables true task orchestration where each step has full access to the ReAct tool registry.
+
+**Architecture Benefits**:
+- **Orchestration without internal loops**: Inject work items into execution queue instead of bypassing ReAct
+- **Tool reusability**: Each turn gets full tool registry access (read_file, write_file, run_in_terminal, etc.)
+- **Conditional branching**: Inject repair prompts only if tests fail
+- **Explicit state**: Turn-by-turn execution is traceable and debuggable
+- **User visibility**: Each turn can stream progress independently
+
+**See**: [Multi-Turn Queue-Based Orchestration](../README.md#multi-turn-queue-based-orchestration) in the main AI README for full architecture details.
+
+**Example Multi-Turn Flow**:
+```
+Turn 1 (User): "Fix the parser bug in orchestrator.go"
+  → Analysis with read_file, grep_search
+  → Inject: "Generate patch for line 45 parser error"
+
+Turn 2 (Injected): "Generate patch for line 45 parser error"
+  → Patch generation with LLM reasoning + file reading
+  → Inject: "Apply patch to orchestrator.go"
+
+Turn 3 (Injected): "Apply patch to orchestrator.go"
+  → File modification with write_file + approval gate
+  → Inject: "Run tests matching orchestrator_test.go"
+
+Turn 4 (Injected): "Run tests matching orchestrator_test.go"
+  → Test execution with run_in_terminal
+  → Conditional: If tests fail, inject "Analyze failures and fix"
+  → Result: Tests passed ✓
+```
 
 ## Core Architecture
 

@@ -2569,7 +2569,13 @@ func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		"query", query,
 	)
 
-	// 4a. KB Search Direct Display (Case 1: Few matches)
+	// 4a. Multi-Turn Routing: Check if capability supports multi-turn orchestration
+	if a.shouldUseMultiTurn(ctx, query, taskContext) {
+		log.Info("Routing to multi-turn orchestration", "capability_hint", taskContext.CapabilityHint)
+		return a.multiTurnAsk(ctx, query, cfg)
+	}
+
+	// 4b. KB Search Direct Display (Case 1: Few matches)
 	if taskContext.DirectDisplay && taskContext.KBSearchResults != "" {
 		log.Info("KB routing: Direct display path", "match_count", taskContext.KBMatchCount)
 		// Track episode metadata for MRU

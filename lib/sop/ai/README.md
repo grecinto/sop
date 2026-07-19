@@ -125,6 +125,199 @@ Result: Faster execution, lower cost, correct tool selection
 - `lib/sop/ai/agent/copilot.go` - Integration with routing state
 - `lib/sop/ai/agent/copilottools.automation.go` - Git commands with `--no-pager`
 
+#### Multi-Turn Queue-Based Orchestration
+
+The agent system supports queue-based multi-turn execution, enabling capabilities to orchestrate complex workflows across multiple ReAct turns rather than executing in a single response cycle.
+
+**Problem Solved**: Traditional Ask → ReAct → Response flow requires capabilities to either:
+- Complete all work in a single turn (hitting token/time limits)
+- Implement their own internal loops (bypassing the ReAct tool registry)
+- Return incomplete results requiring manual follow-up from users
+
+Complex workflows like coding tasks need: Analyze → Patch → Test → Fix → Retry, where each step benefits from full ReAct tool access and reasoning.
+
+**Solution**: Queue-based multi-turn architecture where capabilities inject work items into an execution queue.
+
+**Architecture**:
+
+```go
+// Work queue injectable into Ask loop
+type WorkQueue struct {
+    items       []WorkItem
+    maxDepth    int           // prevent infinite loops
+    maxPerActor map[string]int // limit per capability
+    turnTimeout time.Duration
+}
+
+type WorkItem struct {
+    Query        string
+    Actor        string           // "user", "coding_workflow", "test_runner"
+    Priority     int
+    Context      map[string]any
+    ParentItemID string           // for tracing multi-turn flows
+    TurnNumber   int
+}
+
+// Enhanced Ask with queue processing
+func (a *CopilotAgent) Ask(ctx, query, cfg) (string, error) {
+    queue := NewWorkQueue()
+    queue.Enqueue(WorkItem{Query: query, Actor: "user"})
+    
+    ctx = WithWorkQueue(ctx, queue) // Inject for capability access
+    
+    var turnResults []TurnResult
+    turnNumber := 0
+    
+    for !queue.IsEmpty() && turnNumber < maxTurns {
+        item := queue.Dequeue()
+        item.TurnNumber = turnNumber
+        
+        // Each turn goes through full ReAct pipeline
+        result, err := a.processSingleTurn(ctx, item)
+        if err != nil { 
+            return aggregateResults(turnResults), err 
+        }
+        
+        turnResults = append(turnResults, result)
+        turnNumber++
+    }
+    
+    return aggregateMultiTurnResults(turnResults), nil
+}
+```
+
+**Capability Integration**:
+
+Capabilities can inject prompts during execution to drive multi-step workflows:
+
+```go
+type MultiTurnCapability interface {
+    Capability
+    Orchestrate(ctx context.Context, queue *WorkQueue, task Task) error
+}
+
+// Coding workflow example
+func (c *CodingWorkflowCapability) Run(query, state) (CapabilityResult, error) {
+    queue := GetWorkQueue(state.Context)
+    task := c.parseTask(query, state)
+    
+    // Step 1: Analysis (current turn)
+    analysisResult := c.analyzeCode(task)
+    
+    // Step 2: Inject patch generation
+    if analysisResult.needsPatch {
+        queue.Enqueue(WorkItem{
+            Query: fmt.Sprintf("Generate patch for %s", task.ActiveFile),
+            Actor: "coding_workflow.patcher",
+            Context: map[string]any{"analysis": analysisResult},
+        })
+    }
+    
+    // Step 3: Inject test execution
+    queue.Enqueue(WorkItem{
+        Query: fmt.Sprintf("Run tests matching %s", task.TestPattern),
+        Actor: "coding_workflow.tester",
+    })
+    
+    // Step 4: Conditional repair (only if tests fail)
+    queue.EnqueueConditional(WorkItem{
+        Query: "Analyze test failures and generate fix",
+        Actor: "coding_workflow.repair",
+        Condition: func(prevResult) bool {
+            return prevResult.TestsFailed
+        },
+        MaxRetries: 3,
+    })
+}
+```
+
+**Benefits**:
+
+1. **Separation of Concerns**: Capabilities = high-level orchestration, ReAct = low-level tool execution
+2. **Tool Reusability**: Each injected prompt gets full tool registry access (read_file, grep_search, write_file, run_in_terminal)
+3. **Debuggability**: Explicit queue state makes workflow execution transparent and traceable
+4. **Conditional Logic**: Supports branching based on previous turn results (e.g., repair only if tests fail)
+5. **User Visibility**: Each turn can stream progress independently
+6. **Error Recovery**: Failed turns can inject recovery prompts or gracefully terminate
+
+**Context Propagation**:
+
+Results flow between turns via enhanced SessionPayload:
+
+```go
+type TurnContext struct {
+    TurnNumber    int
+    ParentResults map[string]TurnResult  // keyed by turn ID
+    SharedState   map[string]any
+}
+
+// Previous turn results available to next turn
+ctx = WithTurnContext(ctx, TurnContext{
+    ParentResults: map[string]TurnResult{
+        item.ParentItemID: parentResult,
+    },
+})
+```
+
+**Safety Guards**:
+
+- **Max Depth**: Prevents infinite queue loops (default: 10 turns)
+- **Per-Actor Limits**: Caps turns per capability to prevent runaway orchestration
+- **Timeout**: Each turn has execution timeout
+- **Checkpoint/Rollback**: Queue state can be snapshotted before each turn for error recovery
+
+**Backward Compatibility**:
+
+Existing single-turn capabilities continue to work. The system detects multi-turn support:
+
+```go
+if multiTurn, ok := cap.(MultiTurnCapability); ok {
+    return a.multiTurnAsk(ctx, query, cfg, multiTurn)
+} else {
+    return a.singleTurnAsk(ctx, query, cfg) // Standard path
+}
+```
+
+**Example Workflow** (Coding Task):
+
+```
+Turn 1 (User): "Fix the parser bug in orchestrator.go"
+  ↓
+  Actor: coding_workflow
+  Tools Used: read_file, grep_search
+  Result: Bug identified in line 45
+  Enqueued: "Generate patch for line 45 parser error"
+
+Turn 2 (Injected): "Generate patch for line 45 parser error"
+  ↓
+  Actor: coding_workflow.patcher
+  Tools Used: read_file, LLM reasoning
+  Result: Patch generated
+  Enqueued: "Apply patch to orchestrator.go"
+
+Turn 3 (Injected): "Apply patch to orchestrator.go"
+  ↓
+  Actor: coding_workflow.patcher
+  Tools Used: write_file
+  Result: Patch applied
+  Enqueued: "Run tests matching orchestrator_test.go"
+
+Turn 4 (Injected): "Run tests matching orchestrator_test.go"
+  ↓
+  Actor: coding_workflow.tester
+  Tools Used: run_in_terminal
+  Result: Tests passed ✓
+  Final Response: "Fixed parser bug, all tests passing"
+```
+
+**Implementation Status**: Planned for Phase 1 (Queue Infrastructure).
+
+**Implementation Files** (Planned):
+- `lib/sop/ai/agent/workqueue.go` - Queue and WorkItem types
+- `lib/sop/ai/agent/copilot_multiturn.go` - Multi-turn Ask variant
+- `lib/sop/ai/agent/capabilities/capability.go` - MultiTurnCapability interface
+- `lib/sop/ai/agent/codingworkflow/capability.go` - First multi-turn implementation
+
 ### 3. Memory Architecture (SOP Unique Design)
 The SOP Agent is equipped with a dual-memory system that leverages the Database Engine itself:
 *   **Short-Term Memory (Session Context)**: Uses `RunnerSession` / `ConversationThread` to track **Topics** and **Goals**. Unlike standard chat history (flat list), this structured approach allows the Agent to maintain distinct threads of thought and switch contexts with clearer state boundaries.

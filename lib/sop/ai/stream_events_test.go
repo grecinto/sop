@@ -56,12 +56,12 @@ func TestBuildToolResultEvent_FileBackedMetadata(t *testing.T) {
 
 	// Test with file-backing (large result)
 	fileBackedResult := BuildToolResultEvent("execute_test", map[string]any{"path": "."},
-		"Test output summary...", nil, 1, "/tmp/sop-tool-results/session-123/execute_test-abc123.txt", 54321)
+		"Test output summary...", nil, 1, "/tmp/sop-tool-results/session-123/execute_test-abc123.txt", int64(54321))
 
 	if fileBackedResult["result_file"] != "/tmp/sop-tool-results/session-123/execute_test-abc123.txt" {
 		t.Errorf("expected result_file in payload, got %v", fileBackedResult["result_file"])
 	}
-	if fileBackedResult["result_size"] != 54321 {
+	if fileBackedResult["result_size"] != int64(54321) {
 		t.Errorf("expected result_size=54321, got %v", fileBackedResult["result_size"])
 	}
 	if fileBackedResult["file_backed"] != true {
