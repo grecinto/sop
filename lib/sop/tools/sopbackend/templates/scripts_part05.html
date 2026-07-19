@@ -364,6 +364,114 @@
         });
     }
 
+    // AI Terminal Management
+    let aiTerminalPollInterval = null;
+    let aiTerminalHeight = 250;
+
+    function toggleAITerminal() {
+        const pane = document.getElementById('ai-terminal-pane');
+        if (!pane) return;
+        
+        if (pane.style.display === 'none') {
+            openAITerminal();
+        } else {
+            closeAITerminal();
+        }
+    }
+
+    function openAITerminal() {
+        const pane = document.getElementById('ai-terminal-pane');
+        if (!pane) return;
+        
+        pane.style.display = 'block';
+        refreshAITerminal();
+        startAITerminalPolling();
+    }
+
+    function closeAITerminal() {
+        const pane = document.getElementById('ai-terminal-pane');
+        if (!pane) return;
+        
+        pane.style.display = 'none';
+        stopAITerminalPolling();
+    }
+
+    async function refreshAITerminal() {
+        const output = document.getElementById('ai-terminal-output');
+        if (!output) return;
+
+        try {
+            const sessionID = 'copilot-default';
+            const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+            
+            const response = await fetch(daemonBase + '/api/terminal/status?session_id=' + encodeURIComponent(sessionID), {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (!response.ok) {
+                throw new Error('Terminal endpoint not available');
+            }
+
+            const data = await response.json();
+            if (data && data.output && data.output.trim()) {
+                output.textContent = data.output;
+            } else {
+                output.textContent = 'No commands run yet. When the AI executes shell commands, the output will appear here.';
+            }
+        } catch (err) {
+            output.textContent = 'Terminal monitoring unavailable. Ensure the daemon is running.';
+        }
+    }
+
+    function startAITerminalPolling() {
+        stopAITerminalPolling();
+        aiTerminalPollInterval = setInterval(() => {
+            refreshAITerminal();
+        }, 2000);
+    }
+
+    function stopAITerminalPolling() {
+        if (aiTerminalPollInterval) {
+            clearInterval(aiTerminalPollInterval);
+            aiTerminalPollInterval = null;
+        }
+    }
+
+    // Terminal resize functionality
+    (function() {
+        const handle = document.getElementById('terminal-resize-handle');
+        const pane = document.getElementById('ai-terminal-pane');
+        if (!handle || !pane) return;
+
+        let isResizing = false;
+        let startY = 0;
+        let startHeight = 0;
+
+        handle.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startY = e.clientY;
+            startHeight = parseInt(pane.style.height || '250', 10);
+            document.body.style.cursor = 'ns-resize';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const deltaY = startY - e.clientY;
+            const newHeight = Math.max(100, Math.min(600, startHeight + deltaY));
+            pane.style.height = newHeight + 'px';
+            aiTerminalHeight = newHeight;
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                document.body.style.cursor = '';
+            }
+        });
+    })();
+
     function getDefaultThinkingLevelForCurrentConfig() {
         const chatAIConfig = typeof getStoredAIConfig === 'function' ? getStoredAIConfig() : {};
         const providerConfig = typeof normalizeProviderConfig === 'function'
@@ -1017,8 +1125,29 @@
             
             // Use top/left for positioning
             const rect = widget.getBoundingClientRect();
-            widget.style.left = (rect.left + deltaX) + 'px';
-            widget.style.top = (rect.top + deltaY) + 'px';
+            let newLeft = rect.left + deltaX;
+            let newTop = rect.top + deltaY;
+            
+            // Constrain to viewport - keep header always visible
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const minVisibleWidth = 100; // Keep at least 100px visible on sides
+            const headerHeight = 50; // Approximate header height
+            
+            // Keep header always visible at top
+            newTop = Math.max(0, newTop);
+            
+            // Keep left edge from going too far right (allow dragging mostly off-screen but keep some visible)
+            newLeft = Math.min(newLeft, viewportWidth - minVisibleWidth);
+            
+            // Keep right edge from going too far left
+            newLeft = Math.max(-rect.width + minVisibleWidth, newLeft);
+            
+            // Keep bottom from going above viewport top (header must be visible)
+            newTop = Math.min(newTop, viewportHeight - headerHeight);
+            
+            widget.style.left = newLeft + 'px';
+            widget.style.top = newTop + 'px';
             
             // Clear right/bottom if they exist to avoid conflicts
             widget.style.right = 'auto';
@@ -1078,22 +1207,40 @@
             }
             if (resizeDir.includes('w')) {
                 let newWidth = startWidth - deltaX;
+                let newLeft = startLeft + deltaX;
+                
+                // Prevent left edge from going off-screen too much
+                const minVisibleWidth = 100;
+                const maxLeft = window.innerWidth - minVisibleWidth;
+                if (newLeft > maxLeft) {
+                    newLeft = maxLeft;
+                    newWidth = startWidth + (startLeft - maxLeft);
+                }
+                
                 if (newWidth < minW) {
                     newWidth = minW;
-                    widget.style.left = (startLeft + startWidth - minW) + 'px';
-                } else {
-                    widget.style.left = (startLeft + deltaX) + 'px';
+                    newLeft = startLeft + startWidth - minW;
                 }
+                
+                widget.style.left = newLeft + 'px';
                 widget.style.width = newWidth + 'px';
             }
             if (resizeDir.includes('n')) {
                 let newHeight = startHeight - deltaY;
+                let newTop = startTop + deltaY;
+                
+                // Prevent top from going above viewport (keep header visible)
+                if (newTop < 0) {
+                    newTop = 0;
+                    newHeight = startHeight + startTop;
+                }
+                
                 if (newHeight < minH) {
                     newHeight = minH;
-                    widget.style.top = (startTop + startHeight - minH) + 'px';
-                } else {
-                    widget.style.top = (startTop + deltaY) + 'px';
+                    newTop = startTop + startHeight - minH;
                 }
+                
+                widget.style.top = newTop + 'px';
                 widget.style.height = newHeight + 'px';
             }
         });

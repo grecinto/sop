@@ -99,6 +99,21 @@
 {{template "topRightActions" .}}
 
 {{template "sidebar" .}}
+
+<!-- Bottom AI Command Terminal -->
+<div id="ai-terminal-pane" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; height: 250px; background: var(--bg-color); border-top: 2px solid var(--border-color); z-index: 999; box-shadow: 0 -2px 10px rgba(0,0,0,0.1);">
+    <!-- Resize Handle -->
+    <div id="terminal-resize-handle" style="position: absolute; top: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; background: transparent;"></div>
+    
+    <!-- Terminal Header -->
+    <div style="padding: 4px 8px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; font-size: 0.85em;">
+        <span style="font-weight: 500;">Terminal</span>
+        <button onclick="closeAITerminal()" style="padding: 2px 6px; font-size: 1.1em; background: transparent; color: var(--text-muted); border: none; cursor: pointer; line-height: 1;" title="Close terminal">&times;</button>
+    </div>
+    
+    <!-- Terminal Output -->
+    <pre id="ai-terminal-output" style="margin: 0; padding: 12px; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace; font-size: 12px; color: var(--text-color); background: var(--pre-bg); overflow-x: auto; height: calc(100% - 28px); overflow-y: auto; white-space: pre-wrap;">No commands run yet. When the AI executes shell commands, the output will appear here.</pre>
+</div>
 </div>
 
 <div id="resizer"></div>
@@ -225,8 +240,6 @@
     </div>
 
     <div id="data-grid"></div>
-
-    
 
     <div id="pagination" style="display:none; margin-top: 10px; gap: 10px; justify-content: center;">
         <button onclick="firstPage()" tabindex="0" title="Go to the first page of items." style="text-decoration: none; padding: 4px 8px; background: none; border: none; font-size: 1.2em; cursor: pointer;">
