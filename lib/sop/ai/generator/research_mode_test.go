@@ -7,6 +7,20 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
+func TestSelectToolResultExecutionMode_PreservesFullPayloadForInspectionTools(t *testing.T) {
+	got := selectToolResultExecutionMode("git_status", true)
+	if got != ai.ReActToolResultExecutionModeFull {
+		t.Fatalf("expected full payload mode for inspection tools, got %q", got)
+	}
+}
+
+func TestSelectToolResultExecutionMode_UsesCompactModeForWriteTools(t *testing.T) {
+	got := selectToolResultExecutionMode("git_commit", true)
+	if got != ai.ReActToolResultExecutionModeSummary {
+		t.Fatalf("expected compact summary mode for write tools, got %q", got)
+	}
+}
+
 func TestSummarizeChatGPTContinuationToolOutput_UsesPreviewForNonFinalResults(t *testing.T) {
 	got := summarizeChatGPTContinuationToolOutput("execute_script", `[{"id":1},{"id":2},{"id":3}]`, ai.ReActToolResultExecutionModeStructuredSummary)
 	if !strings.Contains(got, "Preview (first 3 rows)") {

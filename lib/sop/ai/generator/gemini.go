@@ -959,10 +959,7 @@ func buildGeminiRequest(prompt string, opts ai.GenOptions) geminiRequest {
 			continue
 		}
 
-		executionMode := ai.ReActToolResultExecutionModeStructuredSummary
-		if i == len(opts.ToolCallContinuations)-1 {
-			executionMode = ai.ReActToolResultExecutionModeSummary
-		}
+		executionMode := selectToolResultExecutionMode(continuation.ToolCall.Name, i == len(opts.ToolCallContinuations)-1)
 		summarizedResponse := summarizeGeminiContinuationToolOutput(continuation.ToolCall.Name, continuation.Response, executionMode)
 		reqBody.Contents = append(reqBody.Contents,
 			geminiContent{

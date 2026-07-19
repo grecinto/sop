@@ -271,6 +271,7 @@ type UIHandoffRequest struct {
 type UIHandoffResponse struct {
 	Accepted            bool                              `json:"accepted"`
 	Message             string                            `json:"message"`
+	SessionID           string                            `json:"session_id,omitempty"`
 	WelcomeContext      string                            `json:"welcome_context,omitempty"`
 	Error               string                            `json:"error,omitempty"`
 	NeedsRecovery       bool                              `json:"needs_recovery,omitempty"`
@@ -538,11 +539,45 @@ func main() {
 	mux.HandleFunc("/api/daemon/privacy/apply-template", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleApplyPolicyTemplate))))
 	mux.HandleFunc("/api/daemon/privacy/advanced-settings", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleAdvancedSettings))))
 
+	// Terminal output endpoint for AI command monitoring
+	mux.HandleFunc("/api/terminal/status", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleTerminalStatus))))
+	mux.HandleFunc("/api/terminal/stop", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleTerminalStop))))
+
 	// Override/Add daemon-specific handlers WITH authentication
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))
 	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff)))))
 
-	// Override /api/ask to use the shared RAG implementation with authentication.
+	// IMPORTANT: /api/ask (daemon) vs /api/ai/chat (HQ) - Separate by Design
+	//
+	// The daemon provides /api/ask with JWT auth for LOCAL runtime mode.
+	// This is SEPARATE from HQ's /api/ai/chat for good reasons:
+	//
+	// 1. DIFFERENT AUTH MODELS:
+	//    - /api/ask: JWT bearer tokens (bootstrap file → JWT)
+	//    - /api/ai/chat: Session cookies (internet login)
+	//
+	// 2. DIFFERENT PAYLOAD STRUCTURES:
+	//    - /api/ask: {query, auth{access_token, refresh_token}, hq{base_url, user_id}, llm_provider, ...}
+	//    - /api/ai/chat: {message, database, store, agent, provider, domain, ...}
+	//
+	// 3. DAEMON-SPECIFIC INTEGRATION:
+	//    - HQ token handoff and renewal in payload
+	//    - Daemon session store (daemonSessionStore) for context persistence
+	//    - PTY shell session management
+	//    - Federation sync state
+	//
+	// 4. INDEPENDENCE:
+	//    - Daemon evolves for local-first features
+	//    - HQ evolves for multi-tenant features
+	//    - Separate endpoints = clearer boundaries, less coupling risk
+	//
+	// Both call sopbackend.AskSharedAgent() so LOGIC is shared.
+	// Separation is at AUTH and PAYLOAD layers, which is correct.
+	//
+	// TODO: Add NDJSON streaming to /api/ask (UI already expects it!)
+	//       UI checks for application/x-ndjson and has full streaming parser.
+	//       Currently falls back to plain JSON, but streaming would enable
+	//       real-time progress updates in local mode.
 	mux.HandleFunc("/api/ask", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ragSvc == nil {
 			respondJSON(w, http.StatusServiceUnavailable, AskResponse{Error: "official RAG is not configured"})
@@ -563,11 +598,7 @@ func main() {
 	log.Printf("Token expiry: access=%v, refresh=%v", *accessTokenTTL, *refreshTokenTTL)
 	log.Printf("Auth endpoints: /api/daemon/auth, /api/daemon/refresh")
 	log.Printf("Full backend API available (via sopbackend)")
-	if ragSvc != nil {
-		log.Printf("Official RAG endpoint enabled at /api/ask (authenticated)")
-	} else {
-		log.Printf("Official RAG endpoint disabled")
-	}
+	log.Printf("AI chat endpoint: /api/ask (JWT authenticated, TODO: add NDJSON streaming)")
 	log.Printf("Daemon-specific endpoints: /api/execute, /api/handoff (authenticated)")
 	logVerbose("Waiting for UI authentication...")
 
@@ -1398,6 +1429,76 @@ func nextHQSyncDelay(baseInterval, jitter time.Duration, seed int64) time.Durati
 	return baseInterval + time.Duration(rng.Int63n(int64(jitter)))
 }
 
+func handleTerminalStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get session_id from query params (e.g., "copilot-default")
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	// Get the shell session manager
+	shellMgr := GetGlobalShellSessionManager()
+	if shellMgr == nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"session_id": sessionID,
+			"output":     "",
+			"available":  false,
+		})
+		return
+	}
+
+	// Get accumulated output and running status from the session
+	output, exists, isRunning := shellMgr.GetSessionStatus(sessionID)
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"session_id": sessionID,
+		"output":     output,
+		"available":  exists,
+		"running":    isRunning,
+	})
+}
+
+func handleTerminalStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get session_id from query params
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	// Get the shell session manager
+	shellMgr := GetGlobalShellSessionManager()
+	if shellMgr == nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": "shell manager not available",
+		})
+		return
+	}
+
+	// Send interrupt signal to the session
+	if err := shellMgr.SendSessionInterrupt(sessionID); err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"success":    true,
+		"message":    "interrupt signal sent",
+		"session_id": sessionID,
+	})
+}
+
 func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1455,6 +1556,7 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, UIHandoffResponse{
 		Accepted:            true,
 		Message:             "handoff accepted",
+		SessionID:           ctxKey,
 		WelcomeContext:      buildLocalRAGWelcomeContext(),
 		NeedsRecovery:       currentVectorizationNeedsRecovery(),
 		Recovery:            currentVectorizationRecoveryState(),

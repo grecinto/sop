@@ -157,28 +157,28 @@ func (l chatGPTOwnedReActLoop) sendRequest(ctx context.Context, request openAIRe
 // requiresExtendedIterations detects workflows that typically need more tool chaining.
 func requiresExtendedIterations(tools []ai.ToolDefinition, query string) bool {
 	queryLower := strings.ToLower(query)
-	
+
 	// Git workflows: status → diff → add → commit → push
 	isGitWorkflow := strings.Contains(queryLower, "commit") ||
 		strings.Contains(queryLower, "check in") ||
 		strings.Contains(queryLower, "checkin") ||
 		strings.Contains(queryLower, "git push") ||
 		strings.Contains(queryLower, "stage")
-	
+
 	// File editing workflows: search → read → edit → validate → save
 	isFileWorkflow := strings.Contains(queryLower, "fix") && strings.Contains(queryLower, "file") ||
 		strings.Contains(queryLower, "edit") && strings.Contains(queryLower, "code") ||
 		strings.Contains(queryLower, "refactor")
-	
+
 	// Multi-step automation
 	isComplexAutomation := strings.Contains(queryLower, "workflow") ||
 		strings.Contains(queryLower, "pipeline") ||
 		strings.Contains(queryLower, "automation")
-	
+
 	if isGitWorkflow || isFileWorkflow || isComplexAutomation {
 		return true
 	}
-	
+
 	// Check if git tools are available (indicates git domain)
 	hasGitTools := false
 	for _, tool := range tools {
@@ -187,7 +187,7 @@ func requiresExtendedIterations(tools []ai.ToolDefinition, query string) bool {
 			break
 		}
 	}
-	
+
 	return hasGitTools && (strings.Contains(queryLower, "files") || strings.Contains(queryLower, "changes"))
 }
 
@@ -458,10 +458,7 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 		emitChatGPTOwnedLoopEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneChatGPTToolArgs(toolCall.Args), execErr, iteration))
 	}
 
-	executionMode := ai.ReActToolResultExecutionModeStructuredSummary
-	if finalToolResult {
-		executionMode = ai.ReActToolResultExecutionModeSummary
-	}
+	executionMode := selectToolResultExecutionMode(toolCall.Name, finalToolResult)
 
 	return ai.ReActToolResult{
 			Name:          toolCall.Name,

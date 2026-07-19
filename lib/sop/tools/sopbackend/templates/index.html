@@ -108,11 +108,14 @@
     <!-- Terminal Header -->
     <div style="padding: 4px 8px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; font-size: 0.85em;">
         <span style="font-weight: 500;">Terminal</span>
-        <button onclick="closeAITerminal()" style="padding: 2px 6px; font-size: 1.1em; background: transparent; color: var(--text-muted); border: none; cursor: pointer; line-height: 1;" title="Close terminal">&times;</button>
+        <div style="display: flex; gap: 4px;">
+            <button onclick="stopAITerminalCommand()" style="padding: 2px 6px; font-size: 1.1em; background: transparent; color: var(--text-muted); border: none; cursor: pointer; line-height: 1;" title="Stop the currently running command">■</button>
+            <button onclick="closeAITerminal()" style="padding: 2px 6px; font-size: 1.1em; background: transparent; color: var(--text-muted); border: none; cursor: pointer; line-height: 1;" title="Close terminal">&times;</button>
+        </div>
     </div>
     
     <!-- Terminal Output -->
-    <pre id="ai-terminal-output" style="margin: 0; padding: 12px; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace; font-size: 12px; color: var(--text-color); background: var(--pre-bg); overflow-x: auto; height: calc(100% - 28px); overflow-y: auto; white-space: pre-wrap;">No commands run yet. When the AI executes shell commands, the output will appear here.</pre>
+    <pre id="ai-terminal-output" style="margin: 0; padding: 12px; font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace; font-size: 12px; color: var(--text-color); background: var(--pre-bg); overflow-x: auto; height: calc(100% - 28px - 24px); overflow-y: auto; white-space: pre-wrap;">No commands run yet. When the AI executes shell commands, the output will appear here.</pre>
 </div>
 </div>
 

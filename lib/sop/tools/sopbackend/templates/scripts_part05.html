@@ -396,15 +396,18 @@
         stopAITerminalPolling();
     }
 
+    let lastTerminalOutput = '';
+
     async function refreshAITerminal() {
         const output = document.getElementById('ai-terminal-output');
         if (!output) return;
 
         try {
-            const sessionID = 'copilot-default';
-            const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : 'http://127.0.0.1:9090').replace(/\/$/, '');
+            // Use the same session ID that AI commands use
+            // Default to 'local-daemon' to match backend default (not 'default')
+            const sessionID = (typeof currentSessionID !== 'undefined' && currentSessionID) ? currentSessionID : 'local-daemon';
             
-            const response = await fetch(daemonBase + '/api/terminal/status?session_id=' + encodeURIComponent(sessionID), {
+            const response = await daemonFetch('/api/terminal/status?session_id=' + encodeURIComponent(sessionID), {
                 method: 'GET',
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -414,13 +417,30 @@
             }
 
             const data = await response.json();
-            if (data && data.output && data.output.trim()) {
-                output.textContent = data.output;
-            } else {
-                output.textContent = 'No commands run yet. When the AI executes shell commands, the output will appear here.';
+            
+            // Only update UI if:
+            // 1. A command is currently running (data.running === true), OR
+            // 2. The output has changed from what we last displayed
+            const newOutput = (data && data.output) ? data.output : '';
+            const isRunning = data && data.running === true;
+            
+            if (isRunning || newOutput !== lastTerminalOutput) {
+                if (data && data.output && data.output.trim()) {
+                    output.textContent = data.output;
+                    lastTerminalOutput = data.output;
+                    // Always scroll to bottom to show latest output
+                    output.scrollTop = output.scrollHeight;
+                } else {
+                    const defaultMsg = 'No commands run yet. When the AI executes shell commands, the output will appear here.';
+                    output.textContent = defaultMsg;
+                    lastTerminalOutput = defaultMsg;
+                }
             }
+            // If no command is running and output hasn't changed, preserve current display
         } catch (err) {
+            console.error('Terminal refresh error:', err);
             output.textContent = 'Terminal monitoring unavailable. Ensure the daemon is running.';
+            lastTerminalOutput = '';
         }
     }
 
@@ -435,6 +455,25 @@
         if (aiTerminalPollInterval) {
             clearInterval(aiTerminalPollInterval);
             aiTerminalPollInterval = null;
+        }
+    }
+
+    async function stopAITerminalCommand() {
+        try {
+            const sessionID = (typeof currentSessionID !== 'undefined' && currentSessionID) ? currentSessionID : 'local-daemon';
+            const response = await daemonFetch('/api/terminal/stop?session_id=' + encodeURIComponent(sessionID), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to stop command');
+            }
+            
+            const result = await response.json();
+            console.log('[Terminal] Stop command result:', result);
+        } catch (err) {
+            console.error('[Terminal] Failed to stop command:', err);
         }
     }
 
@@ -848,6 +887,13 @@
             throw new Error(errorMessage);
         }
         const data = await response.json().catch(() => null);
+        
+        // Capture session ID from handoff response for terminal polling
+        if (data && data.session_id && typeof currentSessionID !== 'undefined') {
+            currentSessionID = data.session_id;
+            console.log('[Terminal] Using session ID:', currentSessionID);
+        }
+        
         if (data && data.welcome_context && !window.__sopLocalWelcomeShown) {
             window.__sopLocalWelcomeShown = true;
             replaceWelcomeContextMessage(data.welcome_context);
@@ -2098,6 +2144,38 @@
         return msgId;
     }
 
+    /**
+     * Build runtime-specific request configuration
+     * 
+     * SEPARATE ENDPOINTS BY DESIGN
+     * 
+     * This function routes to different endpoints based on runtime mode:
+     * 
+     * LOCAL MODE → /api/ask:
+     *   - Auth: JWT bearer tokens (daemonFetch)
+     *   - Payload: {query, auth{access_token, refresh_token}, hq{base_url, user_id}, llm_provider, ...}
+     *   - Target: Local daemon (127.0.0.1:9090)
+     *   - Security: Bootstrap file → JWT
+     *   - Features: Full agent capabilities
+     *   - Streaming: UI expects NDJSON (daemon currently returns plain JSON with fallback)
+     * 
+     * HQ MODE → /api/ai/chat:
+     *   - Auth: Session cookies (authFetch)
+     *   - Payload: {message, database, store, agent, provider, domain, ...}
+     *   - Target: HQ server (internet)
+     *   - Security: Session-based with CSRF
+     *   - Features: Full agent capabilities + multi-tenant
+     *   - Streaming: Full NDJSON streaming
+     * 
+     * WHY SEPARATE ENDPOINTS?
+     * 1. Different auth models (JWT vs session)
+     * 2. Different payload structures (daemon handoff vs HQ rich context)
+     * 3. Daemon-specific integration (session store, PTY shells, federation)
+     * 4. Independence (cleaner boundaries, less coupling risk)
+     * 
+     * Both share underlying logic (sopbackend.AskSharedAgent) but maintain
+     * separate endpoints for their different integration requirements.
+     */
     function buildRuntimeRequestConfig(message, runtimeMode, options = {}) {
         const chatAIConfig = getStoredAIConfig();
         const provider = buildProviderValue(chatAIConfig.brain_provider, chatAIConfig.brain_model);
@@ -2110,11 +2188,12 @@
             payloadDomain = window.customKBs.join(',');
         }
 
+        // Route to local daemon with JWT auth and daemon-specific payload
         if (runtimeMode === 'local') {
             return {
                 endpoint: '/api/ask',
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/x-ndjson' },
                 body: JSON.stringify({
                     query: message,
                     ...buildLocalDaemonHandoffPayload(message)
@@ -2124,6 +2203,7 @@
             };
         }
 
+        // Route to HQ server with session auth and HQ payload structure
         return {
             endpoint: '/api/ai/chat',
             method: 'POST',
@@ -2173,6 +2253,69 @@
         const format = formatSelect ? formatSelect.value : 'csv';
 
         if (runtimeMode === 'local') {
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/x-ndjson') && response.body) {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                const streamState = {
+                    format,
+                    currentContentSpan: null,
+                    currentTableRecords: [],
+                    currentTableType: null
+                };
+                let pendingChunk = '';
+                const yieldToBrowser = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        break;
+                    }
+
+                    const chunk = pendingChunk + decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+                    pendingChunk = lines.pop() || '';
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed) continue;
+                        try {
+                            const event = (() => {
+                                try {
+                                    return JSON.parse(trimmed);
+                                } catch (parseErr) {
+                                    const start = Math.min(trimmed.indexOf('{'), trimmed.indexOf('['));
+                                    if (start >= 0) {
+                                        const candidate = trimmed.slice(start);
+                                        try {
+                                            return JSON.parse(candidate);
+                                        } catch (candidateErr) {
+                                            throw parseErr;
+                                        }
+                                    }
+                                    throw parseErr;
+                                }
+                            })();
+
+                            if (event.payload === undefined) {
+                                if (event.record !== undefined) event.payload = event.record;
+                                else if (event.result !== undefined) event.payload = event.result;
+                            }
+
+                            if (event.type === 'result') {
+                                event.type = 'content';
+                            }
+
+                            await renderStreamEvent(event, streamState);
+                        } catch (parseErr) {
+                            console.warn('[UI runtime response] failed to parse local NDJSON event', parseErr, trimmed);
+                        }
+                    }
+                }
+
+                return true;
+            }
+
             const responseText = await response.text();
             let data;
             try {

@@ -1097,7 +1097,7 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 	if !ok || strings.TrimSpace(message) == "" {
 		return "", fmt.Errorf("'message' must be a non-empty string")
 	}
-	
+
 	// Check if specific files are provided
 	var command string
 	if filesRaw, ok := args["files"]; ok {
@@ -1111,7 +1111,7 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 			}
 			if len(files) > 0 {
 				filesList := strings.Join(files, " ")
-				command = fmt.Sprintf("git --no-pager -C %s add %s && git --no-pager -C %s commit -m %s", 
+				command = fmt.Sprintf("git --no-pager -C %s add %s && git --no-pager -C %s commit -m %s",
 					shellQuote(path), filesList, shellQuote(path), shellQuote(message))
 			} else {
 				return "", fmt.Errorf("'files' array contains no valid file paths")
@@ -1128,7 +1128,7 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 			}
 		}
 	}
-	
+
 	return a.runLocalAutomationCommand(ctx, args, command, "Create a git commit for the requested repository change.", path, 60)
 }
 

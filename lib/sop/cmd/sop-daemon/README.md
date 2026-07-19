@@ -65,8 +65,8 @@ go run ./cmd/sop-daemon -port 9090 -config /path/to/agent-config.json
 
 The daemon listens on 127.0.0.1 by default and exposes:
 
-- POST /api/execute
 - POST /api/ask
+- POST /api/execute
 
 ## Direct local command execution
 

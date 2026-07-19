@@ -265,10 +265,7 @@ func (g *anthropic) buildMessages(prompt string, opts ai.GenOptions) []anthropic
 			})
 
 			// User message with tool result
-			executionMode := ai.ReActToolResultExecutionModeStructuredSummary
-			if i == len(opts.ToolCallContinuations)-1 {
-				executionMode = ai.ReActToolResultExecutionModeSummary
-			}
+			executionMode := selectToolResultExecutionMode(cont.ToolCall.Name, i == len(opts.ToolCallContinuations)-1)
 			summarizedResponse := summarizeAnthropicContinuationToolOutput(cont.ToolCall.Name, cont.Response, executionMode)
 			resultContent, _ := json.Marshal(summarizedResponse)
 			userContent := []anthropicContentBlock{

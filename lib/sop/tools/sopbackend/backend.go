@@ -285,6 +285,14 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/validate", WithAuth(handleValidateAdminToken))
 
 	// AI Endpoints
+	//
+	// NOTE: /api/ai/chat vs /api/ask (daemon)
+	// This endpoint (/api/ai/chat) is for HQ mode with SESSION auth.
+	// The daemon provides /api/ask with JWT auth for localhost (see daemon/main.go).
+	// Both share underlying agent logic but maintain separate endpoints for:
+	// - Different auth models (session vs JWT)
+	// - Different payload structures (rich HQ vs simpler daemon)
+	// - Independent evolution (HQ features vs local-first features)
 	mux.HandleFunc("/api/ai/chat", WithAuth(handleAIChat))
 	mux.HandleFunc("/api/ai/test-connection", WithAuth(handleTestLLMConnection))
 	mux.HandleFunc("/api/ai/test-embedder-connection", WithAuth(handleTestEmbedderConnection))

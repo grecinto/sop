@@ -29,18 +29,20 @@ type StreamCallback func(chunk string)
 
 // ptyShellSession represents a persistent shell session using PTY
 type ptyShellSession struct {
-	mu           sync.Mutex
-	cmd          *exec.Cmd
-	pty          *os.File
-	reader       *bufio.Reader
-	sessionID    string
-	shell        string
-	lastOutput   string
-	promptReady  chan struct{}
-	closed       bool
-	stillRunning bool      // tracks if previous command is still running
-	lastUsed     time.Time // tracks last activity for idle cleanup
-	isBackground bool      // marks background/detached sessions
+	mu            sync.Mutex
+	cmd           *exec.Cmd
+	pty           *os.File
+	reader        *bufio.Reader
+	sessionID     string
+	shell         string
+	lastOutput    string
+	promptReady   chan struct{}
+	closed        bool
+	stillRunning  bool            // tracks if previous command is still running
+	lastUsed      time.Time       // tracks last activity for idle cleanup
+	isBackground  bool            // marks background/detached sessions
+	outputHistory strings.Builder // accumulated output for terminal display
+	historyLines  int             // track line count for size management
 }
 
 // newPTYShellSession creates a new persistent shell session with PTY
@@ -205,6 +207,31 @@ func (s *ptyShellSession) RunWithStreaming(command string, timeout time.Duration
 	s.lastOutput = output
 	s.stillRunning = !foundPrompt
 
+	// Accumulate output in history buffer for terminal display (limit growth)
+	if output != "" {
+		// Prefix with command for context
+		s.outputHistory.WriteString("$ ")
+		s.outputHistory.WriteString(trimmed)
+		s.outputHistory.WriteString("\n")
+		s.outputHistory.WriteString(output)
+		if !strings.HasSuffix(output, "\n") {
+			s.outputHistory.WriteString("\n")
+		}
+		s.historyLines += strings.Count(trimmed, "\n") + 1 + strings.Count(output, "\n")
+
+		// Keep last 1000 lines to prevent memory issues
+		if s.historyLines > 1000 {
+			history := s.outputHistory.String()
+			lines := strings.Split(history, "\n")
+			if len(lines) > 500 {
+				keptLines := lines[len(lines)-500:]
+				s.outputHistory.Reset()
+				s.outputHistory.WriteString(strings.Join(keptLines, "\n"))
+				s.historyLines = len(keptLines)
+			}
+		}
+	}
+
 	// If we found the prompt, command completed
 	// If we didn't find prompt, command is still running
 	return output, s.stillRunning, nil
@@ -217,6 +244,41 @@ func (s *ptyShellSession) GetWorkingDirectory() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(output), nil
+}
+
+// GetOutputHistory returns the accumulated terminal output
+func (s *ptyShellSession) GetOutputHistory() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.outputHistory.String()
+}
+
+// ClearOutputHistory clears the accumulated terminal output
+func (s *ptyShellSession) ClearOutputHistory() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.outputHistory.Reset()
+	s.historyLines = 0
+}
+
+// SendInterrupt sends Ctrl+C to stop the currently running command
+func (s *ptyShellSession) SendInterrupt() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed || s.pty == nil {
+		return fmt.Errorf("session is closed")
+	}
+
+	// Send Ctrl+C (ASCII 0x03)
+	if _, err := s.pty.Write([]byte{0x03}); err != nil {
+		return fmt.Errorf("failed to send interrupt: %w", err)
+	}
+
+	// Reset running state
+	s.stillRunning = false
+
+	return nil
 }
 
 // Close terminates the shell session
@@ -479,6 +541,63 @@ func (m *ptyShellSessionManager) CloseSession(sessionID string) error {
 		return session.Close()
 	}
 	return nil
+}
+
+// GetSessionOutput retrieves the accumulated output for a session
+func (m *ptyShellSessionManager) GetSessionOutput(sessionID string) (string, bool) {
+	m.mu.Lock()
+	session, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+
+	if !ok {
+		return "", false
+	}
+
+	return session.GetOutputHistory(), true
+}
+
+// GetSessionStatus returns output, exists, and whether a command is currently running
+func (m *ptyShellSessionManager) GetSessionStatus(sessionID string) (output string, exists bool, isRunning bool) {
+	m.mu.Lock()
+	session, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+
+	if !ok {
+		return "", false, false
+	}
+
+	session.mu.Lock()
+	running := session.stillRunning
+	session.mu.Unlock()
+
+	return session.GetOutputHistory(), true, running
+}
+
+// ClearSessionOutput clears the accumulated output for a session
+func (m *ptyShellSessionManager) ClearSessionOutput(sessionID string) bool {
+	m.mu.Lock()
+	session, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+
+	if !ok {
+		return false
+	}
+
+	session.ClearOutputHistory()
+	return true
+}
+
+// SendSessionInterrupt sends Ctrl+C to stop the currently running command in a session
+func (m *ptyShellSessionManager) SendSessionInterrupt(sessionID string) error {
+	m.mu.Lock()
+	session, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("session %s not found", sessionID)
+	}
+
+	return session.SendInterrupt()
 }
 
 // CloseAll closes all shell sessions

@@ -109,6 +109,45 @@ func normalizeToolResultExecutionMode(mode ai.ReActToolResultExecutionMode) ai.R
 	}
 }
 
+func selectToolResultExecutionMode(toolName string, finalToolResult bool) ai.ReActToolResultExecutionMode {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	if isInspectionTool(name) {
+		return ai.ReActToolResultExecutionModeFull
+	}
+	if isExecutionTool(name) {
+		if finalToolResult {
+			return ai.ReActToolResultExecutionModeSummary
+		}
+		return ai.ReActToolResultExecutionModeStructuredSummary
+	}
+	if finalToolResult {
+		return ai.ReActToolResultExecutionModeSummary
+	}
+	return ai.ReActToolResultExecutionModeStructuredSummary
+}
+
+func isInspectionTool(toolName string) bool {
+	switch toolName {
+	case "git_status", "git_diff", "git_log", "git_branch", "git_checkout":
+		return true
+	case "read_file", "list_directory", "path_exists", "stat_path", "list_stores", "list_space_items", "read_space_config":
+		return true
+	case "search_web", "search_repo_files", "grep_repo_text":
+		return true
+	default:
+		return false
+	}
+}
+
+func isExecutionTool(toolName string) bool {
+	switch toolName {
+	case "execute_script", "run_script", "patch_file", "write_file", "copy_file", "move_file", "delete_file", "delete_directory", "git_commit", "git_pull", "git_push":
+		return true
+	default:
+		return false
+	}
+}
+
 func buildToolResultContext(toolName, outcome, evidence, guidance string) string {
 	var builder strings.Builder
 	builder.WriteString("Tool result context:")

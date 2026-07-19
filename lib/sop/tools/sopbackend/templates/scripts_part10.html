@@ -471,13 +471,13 @@
             brain_provider: storedConfig.brain_provider || envConfig.brain_provider || defaults.brain_provider,
             brain_model: storedConfig.brain_model || envConfig.brain_model || defaults.brain_model,
             brain_source: brainSource,
-            brain_url: getStoredAIConfigValue(storedConfig, 'brain_url', brainSource === 'env' ? (envConfig.brain_url || '') : ''),
-            brain_api_key: getStoredAIConfigValue(storedConfig, 'brain_api_key', brainSource === 'env' ? (envConfig.brain_api_key || '') : ''),
+            brain_url: storedConfig.brain_url || (brainSource === 'env' ? envConfig.brain_url : '') || '',
+            brain_api_key: storedConfig.brain_api_key || (brainSource === 'env' ? envConfig.brain_api_key : '') || '',
             embedder_provider: storedConfig.embedder_provider || envConfig.embedder_provider || defaults.embedder_provider,
             embedder_model: storedConfig.embedder_model || envConfig.embedder_model || defaults.embedder_model,
             embedder_source: embedderSource,
-            embedder_url: getStoredAIConfigValue(storedConfig, 'embedder_url', embedderSource === 'env' ? (envConfig.embedder_url || '') : ''),
-            embedder_api_key: getStoredAIConfigValue(storedConfig, 'embedder_api_key', embedderSource === 'env' ? (envConfig.embedder_api_key || '') : '')
+            embedder_url: storedConfig.embedder_url || (embedderSource === 'env' ? envConfig.embedder_url : '') || '',
+            embedder_api_key: storedConfig.embedder_api_key || (embedderSource === 'env' ? envConfig.embedder_api_key : '') || ''
         };
     }
 
