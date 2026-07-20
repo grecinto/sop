@@ -22,13 +22,16 @@ import (
 type workerRequest struct {
 	Command        string `json:"command"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
+	Streaming      bool   `json:"streaming,omitempty"` // Enable NDJSON streaming
 }
 
 type workerResponse struct {
 	Output   string `json:"output"`
 	ExitCode int    `json:"exit_code"`
 	Error    string `json:"error,omitempty"`
-	Running  bool   `json:"running"` // true if command still executing
+	Running  bool   `json:"running"`            // true if command still executing
+	Chunk    string `json:"chunk,omitempty"`    // Partial output chunk (when streaming)
+	Complete bool   `json:"complete,omitempty"` // True when command finished (when streaming)
 }
 
 var ansiEscapeWorker = regexp.MustCompile(`\x1b\[[?]?[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^\[]*|\r`)
@@ -108,10 +111,10 @@ func runPTYWorkerWithOutput(jsonOut *os.File) error {
 	time.Sleep(100 * time.Millisecond)
 
 	// Explicitly set prompt (ensures it's set correctly)
-	io.WriteString(ptmx, "PS1='<<<PROMPT_READY>>>\n'\n")
+	io.WriteString(ptmx, "PS1='<<<PROMPT_READY>>>'\n")
 	time.Sleep(50 * time.Millisecond)
 
-	// Disable echo
+	// Disable echo so commands aren't printed back
 	io.WriteString(ptmx, "stty -echo\n")
 	time.Sleep(50 * time.Millisecond)
 
@@ -135,10 +138,14 @@ func runPTYWorkerWithOutput(jsonOut *os.File) error {
 		}
 
 		// Execute command
-		resp := executeCommandWorker(ptmx, reader, req)
-		if err := encoder.Encode(resp); err != nil {
-			// Cannot send response - worker is broken
-			return fmt.Errorf("failed to send response: %w", err)
+		if req.Streaming {
+			executeCommandWorkerStreaming(ptmx, reader, req, encoder)
+		} else {
+			resp := executeCommandWorker(ptmx, reader, req)
+			if err := encoder.Encode(resp); err != nil {
+				// Cannot send response - worker is broken
+				return fmt.Errorf("failed to send response: %w", err)
+			}
 		}
 	}
 
@@ -217,7 +224,6 @@ func executeCommandWorker(ptmx *os.File, reader *bufio.Reader, req workerRequest
 			}
 		}
 		cleanOutput := stripANSIWorker(output.String())
-		cleanOutput = removeCommandEcho(cleanOutput, command)
 		return workerResponse{
 			Output:   cleanOutput,
 			ExitCode: 0,
@@ -226,11 +232,95 @@ func executeCommandWorker(ptmx *os.File, reader *bufio.Reader, req workerRequest
 	case <-ctx.Done():
 		// Command still running
 		cleanOutput := stripANSIWorker(output.String())
-		cleanOutput = removeCommandEcho(cleanOutput, command)
 		return workerResponse{
 			Output:  cleanOutput,
 			Running: true,
 		}
+	}
+}
+
+// executeCommandWorkerStreaming handles streaming execution with NDJSON chunks
+func executeCommandWorkerStreaming(ptmx *os.File, reader *bufio.Reader, req workerRequest, encoder *json.Encoder) {
+	command := strings.TrimSpace(req.Command)
+	if command == "" {
+		encoder.Encode(workerResponse{Output: "", ExitCode: 0, Complete: true})
+		return
+	}
+
+	timeout := time.Duration(req.TimeoutSeconds) * time.Second
+	if timeout == 0 {
+		timeout = 600 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Clear any leftover prompts
+	const promptMarker = "<<<PROMPT_READY>>>"
+	for reader.Buffered() > 0 {
+		peek, _ := reader.Peek(reader.Buffered())
+		peekStr := string(peek)
+		if strings.Contains(peekStr, promptMarker) {
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil || strings.Contains(line, promptMarker) {
+					break
+				}
+			}
+		} else {
+			break
+		}
+	}
+
+	// Send command
+	if _, err := io.WriteString(ptmx, command+"\n"); err != nil {
+		encoder.Encode(workerResponse{
+			Error:    fmt.Sprintf("failed to write command: %v", err),
+			ExitCode: 1,
+			Complete: true,
+		})
+		return
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Read output with streaming chunks
+	var output strings.Builder
+	done := make(chan error, 1)
+
+	go func() {
+		chunkCallback := func(chunk string) {
+			clean := stripANSIWorker(chunk)
+			if clean != "" {
+				encoder.Encode(workerResponse{
+					Chunk: clean,
+				})
+			}
+		}
+		done <- readUntilPromptWorkerWithCallback(reader, &output, chunkCallback)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			encoder.Encode(workerResponse{
+				Output:   output.String(),
+				Error:    fmt.Sprintf("read error: %v", err),
+				ExitCode: 1,
+				Complete: true,
+			})
+			return
+		}
+		encoder.Encode(workerResponse{
+			ExitCode: 0,
+			Complete: true,
+		})
+
+	case <-ctx.Done():
+		encoder.Encode(workerResponse{
+			Running:  true,
+			Complete: true,
+		})
 	}
 }
 
@@ -240,6 +330,10 @@ func drainUntilPromptWorker(reader *bufio.Reader) error {
 }
 
 func readUntilPromptWorker(reader *bufio.Reader, output *strings.Builder) error {
+	return readUntilPromptWorkerWithCallback(reader, output, nil)
+}
+
+func readUntilPromptWorkerWithCallback(reader *bufio.Reader, output *strings.Builder, chunkCallback func(string)) error {
 	const promptMarker = "<<<PROMPT_READY>>>"
 	var buffer strings.Builder
 
@@ -253,6 +347,11 @@ func readUntilPromptWorker(reader *bufio.Reader, output *strings.Builder) error 
 		}
 
 		buffer.WriteString(line)
+
+		// Send chunk if callback provided and line doesn't contain prompt
+		if chunkCallback != nil && !strings.Contains(line, promptMarker) {
+			chunkCallback(line)
+		}
 
 		// Check if we hit the prompt
 		if strings.Contains(buffer.String(), promptMarker) {

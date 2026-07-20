@@ -385,22 +385,102 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 		timeoutSeconds = 600 // Default 10 minutes
 	}
 
+	// Ensure session is tracked in the manager
+	m.mu.Lock()
+	session, exists := m.sessions[sessionID]
+	if !exists {
+		session = &ptyShellSession{
+			sessionID:     sessionID,
+			lastUsed:      time.Now(),
+			isBackground:  false,
+			outputHistory: strings.Builder{},
+		}
+		m.sessions[sessionID] = session
+	}
+	session.lastUsed = time.Now()
+	m.mu.Unlock()
+
+	// Determine if we should use streaming mode
+	useStreaming := streamCallback != nil
+
+	// Create chunk handler that updates session history and calls user callback
+	var chunkHandler func(string)
+	if useStreaming {
+		chunkHandler = func(chunk string) {
+			// Update session history
+			session.mu.Lock()
+			session.outputHistory.WriteString(chunk)
+			session.historyLines += strings.Count(chunk, "\n")
+
+			// Trim history if too long
+			if session.historyLines > 1000 {
+				history := session.outputHistory.String()
+				lines := strings.Split(history, "\n")
+				if len(lines) > 500 {
+					keptLines := lines[len(lines)-500:]
+					session.outputHistory.Reset()
+					session.outputHistory.WriteString(strings.Join(keptLines, "\n"))
+					session.historyLines = len(keptLines)
+				}
+			}
+			session.mu.Unlock()
+
+			// Call user callback
+			if streamCallback != nil {
+				streamCallback(chunk)
+			}
+		}
+	}
+
 	// Send command to worker (spawns if needed)
-	resp, err := workerMgr.sendCommand(context.Background(), sessionID, command, timeoutSeconds)
+	resp, err := workerMgr.sendCommandWithStreaming(context.Background(), sessionID, command, timeoutSeconds, useStreaming, chunkHandler)
 	if err != nil {
 		return "", false, fmt.Errorf("worker command failed: %w", err)
 	}
 
-	// Handle streaming callback if provided
-	if streamCallback != nil && resp.Output != "" {
-		// Stream the output (worker already collected it)
-		lines := strings.Split(resp.Output, "\n")
-		for _, line := range lines {
-			if line != "" {
-				streamCallback(line + "\n")
+	// In non-streaming mode, accumulate output in session history
+	if !useStreaming && resp.Output != "" {
+		session.mu.Lock()
+		// Prefix with command for context
+		session.outputHistory.WriteString("$ ")
+		session.outputHistory.WriteString(strings.TrimSpace(command))
+		session.outputHistory.WriteString("\n")
+		session.outputHistory.WriteString(resp.Output)
+		if !strings.HasSuffix(resp.Output, "\n") {
+			session.outputHistory.WriteString("\n")
+		}
+		session.historyLines += strings.Count(command, "\n") + 1 + strings.Count(resp.Output, "\n")
+
+		// Keep last 1000 lines to prevent memory issues
+		if session.historyLines > 1000 {
+			history := session.outputHistory.String()
+			lines := strings.Split(history, "\n")
+			if len(lines) > 500 {
+				keptLines := lines[len(lines)-500:]
+				session.outputHistory.Reset()
+				session.outputHistory.WriteString(strings.Join(keptLines, "\n"))
+				session.historyLines = len(keptLines)
 			}
 		}
+		session.mu.Unlock()
+	} else if useStreaming {
+		// In streaming mode, just add command prefix (output already added via chunks)
+		session.mu.Lock()
+		// Note: We need to prepend the command, but output chunks were already added
+		// This is a bit tricky - we'll reconstruct the history with command prefix
+		currentHistory := session.outputHistory.String()
+		session.outputHistory.Reset()
+		session.outputHistory.WriteString("$ ")
+		session.outputHistory.WriteString(strings.TrimSpace(command))
+		session.outputHistory.WriteString("\n")
+		session.outputHistory.WriteString(currentHistory)
+		session.mu.Unlock()
 	}
+
+	// Update running status in session
+	session.mu.Lock()
+	session.stillRunning = resp.Running
+	session.mu.Unlock()
 
 	// Check for error in response
 	if resp.Error != "" {

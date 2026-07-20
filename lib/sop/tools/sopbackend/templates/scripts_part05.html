@@ -443,12 +443,14 @@
             if (isRunning || newOutput !== lastTerminalOutput) {
                 if (data && data.output && data.output.trim()) {
                     output.textContent = data.output;
+                    output.dataset.hasOutput = 'true'; // Mark that we have real output
                     lastTerminalOutput = data.output;
                     // Always scroll to bottom to show latest output
                     output.scrollTop = output.scrollHeight;
                 } else {
                     const defaultMsg = 'No commands run yet. When the AI executes shell commands, the output will appear here.';
                     output.textContent = defaultMsg;
+                    output.dataset.hasOutput = ''; // Clear flag so spinner shows on next command
                     lastTerminalOutput = defaultMsg;
                 }
             }
@@ -2136,7 +2138,14 @@
             // Start terminal polling when local command tools are called (no auto-open)
             const toolName = normalizedEvent.payload && normalizedEvent.payload.tool;
             if (toolName === 'local_command' || toolName === 'execute_local_command') {
-                startAITerminalPolling(); // Handles both floater and main window
+                // Show loading indicator in terminal immediately
+                const terminalOutput = document.getElementById('ai-terminal-output');
+                if (terminalOutput) {
+                    terminalOutput.innerHTML = '<span class="loading" style="margin-right: 8px;"></span><span style="opacity: 0.6;">Executing command...</span>';
+                    terminalOutput.dataset.hasOutput = ''; // Clear flag so we know we're waiting
+                }
+                // Delay polling start slightly so spinner shows
+                setTimeout(() => startAITerminalPolling(), 200);
             }
         } else if (normalizedEvent.type === 'tool_error') {
             handled = true;

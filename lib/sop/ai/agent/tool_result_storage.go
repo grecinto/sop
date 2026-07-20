@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,11 +14,11 @@ import (
 const (
 	// toolResultThreshold defines when LLM gets summary vs full output
 	// ALL results are written to temp file, but LLM gets full result if <= threshold
-	toolResultThreshold = 15 * 1024 // 15KB - adjust if needed
+	toolResultThreshold = 5 * 1024 // 5KB - triggers summarization for most test outputs
 
 	// toolResultMaxInline defines the summary size for file-backed results
 	// We show head + tail of this size total
-	toolResultMaxInline = 2 * 1024 // 2KB
+	toolResultMaxInline = 1536 // 1.5KB (750 bytes head + 750 bytes tail)
 )
 
 // ToolResultStorage manages temporary file storage for large tool outputs
@@ -52,26 +53,69 @@ func NewToolResultStorage(sessionID string) (*ToolResultStorage, error) {
 //   - size: Byte count of original result
 //   - error: Any error during storage
 func (s *ToolResultStorage) StoreResult(toolName, result string) (inline string, filePath string, size int, err error) {
-	size = len(result)
+	// FIRST: Unwrap JSON responses to get the actual content
+	// Commands like execute_local_command return {"stdout":"...", "stderr":"", "exit_code":0}
+	// We want to store and display the actual stdout content, not the JSON wrapper
+	displayResult := unwrapJSONCommandResult(result)
+	size = len(displayResult)
 
 	// ALWAYS write to file first (regardless of size)
 	resultID := uuid.New().String()[:8] // Short UUID for readability
 	fileName := fmt.Sprintf("%s-%s.txt", sanitizeToolName(toolName), resultID)
 	filePath = filepath.Join(s.baseDir, fileName)
 
-	if err := os.WriteFile(filePath, []byte(result), 0600); err != nil {
+	if err := os.WriteFile(filePath, []byte(displayResult), 0600); err != nil {
 		return "", "", 0, fmt.Errorf("failed to write tool result to file: %w", err)
 	}
 
-	// THEN apply 20KB rule: return full result if small, summary if large
+	// THEN apply 5KB rule: return full result if small, summary if large
 	if size <= toolResultThreshold {
 		// Small - return full result inline
-		return result, filePath, size, nil
+		return displayResult, filePath, size, nil
 	}
 
-	// Large - return summary with analysis tools
-	summary := s.createSummary(toolName, result, filePath, size)
+	// Large - return summary with guidance for LLM
+	summary := s.createSummary(toolName, displayResult, filePath, size)
 	return summary, filePath, size, nil
+}
+
+// unwrapJSONCommandResult extracts stdout from JSON command responses
+// If result is {"stdout":"...", "stderr":"...", "exit_code":0}, extract the stdout
+// Otherwise return result as-is
+func unwrapJSONCommandResult(result string) string {
+	// Quick check - does it look like a JSON command response?
+	if !strings.HasPrefix(strings.TrimSpace(result), "{") {
+		return result
+	}
+
+	var cmdResult struct {
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+		ExitCode int    `json:"exit_code"`
+	}
+
+	if err := json.Unmarshal([]byte(result), &cmdResult); err != nil {
+		// Not a command result, return as-is
+		return result
+	}
+
+	// Build readable output from stdout/stderr
+	var output strings.Builder
+	if cmdResult.Stdout != "" {
+		output.WriteString(cmdResult.Stdout)
+	}
+	if cmdResult.Stderr != "" {
+		if output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
+			output.WriteString("\n")
+		}
+		output.WriteString(cmdResult.Stderr)
+	}
+
+	// If we got something, return it; otherwise return original
+	if output.Len() > 0 {
+		return output.String()
+	}
+	return result
 }
 
 // createSummary generates a summary for large outputs
@@ -95,75 +139,31 @@ func (s *ToolResultStorage) createSummary(toolName, result, filePath string, siz
 
 	var sb strings.Builder
 
-	// Header
-	sb.WriteString(fmt.Sprintf("Tool %s produced large output (%.1fKB).\n", toolName, sizeKB))
-	sb.WriteString(fmt.Sprintf("Full output saved to: %s\n\n", filePath))
-
-	// Head content
-	sb.WriteString(fmt.Sprintf("[First %d bytes]\n", len(head)))
+	// Show sample output
 	sb.WriteString(head)
 	if !strings.HasSuffix(head, "\n") {
 		sb.WriteString("\n")
 	}
 
-	// Omission marker
 	if omittedBytes > 0 {
-		sb.WriteString(fmt.Sprintf("\n... [%d bytes omitted - use text processing tools below] ...\n\n", omittedBytes))
+		sb.WriteString(fmt.Sprintf("\n... [%.1fKB omitted] ...\n\n", float64(omittedBytes)/1024.0))
 	}
 
-	// Tail content
 	if tail != "" {
-		sb.WriteString(fmt.Sprintf("[Last %d bytes]\n", len(tail)))
 		sb.WriteString(tail)
 		if !strings.HasSuffix(tail, "\n") {
 			sb.WriteString("\n")
 		}
 	}
 
-	// Tool recommendations
-	sb.WriteString("\n")
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	sb.WriteString("📊 ANALYSIS TOOLS (Cross-Platform)\n")
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-
-	// Common patterns based on tool type
-	if isTestCommand(toolName) {
-		sb.WriteString("Finding failures:\n")
-		sb.WriteString(fmt.Sprintf("  grep \"FAIL\" %s\n", filePath))
-		sb.WriteString(fmt.Sprintf("  grep -n \"FAIL\" %s\n\n", filePath))
-
-		sb.WriteString("Counting results:\n")
-		sb.WriteString(fmt.Sprintf("  grep -c \"PASS\" %s\n", filePath))
-		sb.WriteString(fmt.Sprintf("  grep -c \"FAIL\" %s\n\n", filePath))
-
-		sb.WriteString("View test summary (last 50 lines):\n")
-		sb.WriteString(fmt.Sprintf("  tail -50 %s\n\n", filePath))
-	} else if isBuildCommand(toolName) {
-		sb.WriteString("Finding errors:\n")
-		sb.WriteString(fmt.Sprintf("  grep \"error:\" %s\n", filePath))
-		sb.WriteString(fmt.Sprintf("  grep -n \"error:\" %s\n\n", filePath))
-
-		sb.WriteString("View with context:\n")
-		sb.WriteString(fmt.Sprintf("  grep -C 3 \"error:\" %s\n\n", filePath))
-	} else {
-		sb.WriteString("Search for patterns:\n")
-		sb.WriteString(fmt.Sprintf("  grep \"pattern\" %s\n", filePath))
-		sb.WriteString(fmt.Sprintf("  grep -n \"pattern\" %s\n\n", filePath))
-
-		sb.WriteString("View sections:\n")
-		sb.WriteString(fmt.Sprintf("  head -50 %s\n", filePath))
-		sb.WriteString(fmt.Sprintf("  tail -50 %s\n\n", filePath))
-	}
-
-	// Generic tools
-	sb.WriteString("Extract sections:\n")
-	sb.WriteString(fmt.Sprintf("  sed -n '/start/,/end/p' %s\n", filePath))
-	sb.WriteString(fmt.Sprintf("  awk '/pattern/,/pattern/' %s\n\n", filePath))
-
-	sb.WriteString("Line ranges (after finding line numbers):\n")
-	sb.WriteString(fmt.Sprintf("  read_file(path: \"%s\", startLine: N, endLine: M)\n\n", filePath))
-
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	// Guide the LLM on how to analyze the full output
+	sb.WriteString("\n---\n")
+	sb.WriteString(fmt.Sprintf("Full output: %s (%.1fKB)\n", filePath, sizeKB))
+	sb.WriteString("To analyze based on user's request:\n")
+	sb.WriteString("  • Tests/results: grep \"PASS\\|FAIL\\|error\" <file>\n")
+	sb.WriteString("  • Find specific: grep \"<keyword>\" <file>\n")
+	sb.WriteString("  • Count: grep -c \"<pattern>\" <file> or wc -l <file>\n")
+	sb.WriteString("  • Extract: sed -n '10,50p' <file> or awk 'NR>=10 && NR<=50' <file>\n")
 
 	return sb.String()
 }
@@ -194,19 +194,6 @@ func sanitizeToolName(name string) string {
 	}
 
 	return result
-}
-
-// isTestCommand checks if a tool name is related to testing
-func isTestCommand(toolName string) bool {
-	lower := strings.ToLower(toolName)
-	return strings.Contains(lower, "test") || strings.Contains(lower, "spec")
-}
-
-// isBuildCommand checks if a tool name is related to building
-func isBuildCommand(toolName string) bool {
-	lower := strings.ToLower(toolName)
-	return strings.Contains(lower, "build") || strings.Contains(lower, "compile") ||
-		strings.Contains(lower, "make")
 }
 
 // CleanupOldToolResults removes tool result directories older than the given TTL

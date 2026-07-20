@@ -996,6 +996,11 @@ func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]an
 		path = "."
 	}
 
+	// Emit command to streamer before execution
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("tool_stream_chunk", map[string]any{"tool": "list_directory", "text": fmt.Sprintf("$ ls -la %s\n", path)})
+	}
+
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return "", err
@@ -1013,18 +1018,15 @@ func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]an
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Directory contents for %s:\n", path))
-	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("content", strings.TrimSpace(sb.String()))
-	}
 	for _, name := range names {
-		line := fmt.Sprintf("- %s", name)
-		sb.WriteString(line)
-		sb.WriteByte('\n')
-		if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-			streamer("content", line)
-		}
+		sb.WriteString(fmt.Sprintf("- %s\n", name))
 	}
+
+	// Stream the entire result at once to avoid double newlines
 	formatted := strings.TrimSpace(sb.String())
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("content", formatted)
+	}
 	return formatted, nil
 }
 
@@ -1631,6 +1633,15 @@ func emitAutomationToolChunk(ctx context.Context, toolName, chunk string) {
 	}
 }
 
+func emitTerminalCommand(ctx context.Context, command string) {
+	if strings.TrimSpace(command) == "" {
+		return
+	}
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("terminal_command", command)
+	}
+}
+
 func emitAutomationToolStreamContent(ctx context.Context, content string) {
 	if strings.TrimSpace(content) == "" {
 		return
@@ -1645,35 +1656,14 @@ func emitAutomationToolResult(ctx context.Context, toolName, result string) {
 		return
 	}
 
-	// For local_command, parse JSON response and emit formatted output
-	if toolName == "local_command" {
-		var response struct {
-			Stdout   string `json:"stdout"`
-			Stderr   string `json:"stderr"`
-			ExitCode int    `json:"exit_code"`
-		}
-		if err := json.Unmarshal([]byte(result), &response); err == nil {
-			// Successfully parsed - emit formatted output
-			output := strings.TrimSpace(response.Stdout)
-			if output != "" {
-				if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-					streamer("content", fmt.Sprintf("🛠️ Result from %s:\n%s", toolName, output))
-				}
-			}
-			// Include stderr separately if present
-			if response.Stderr != "" {
-				if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-					streamer("content", fmt.Sprintf("\n⚠️ Errors:\n%s", strings.TrimSpace(response.Stderr)))
-				}
-			}
-			return
-		}
-		// Fall through if parse failed
-	}
-
-	// For other tools or if JSON parse failed, emit as-is
+	// Result is already unwrapped and processed by storage layer
+	// Just emit it to the reasoning event stream
+	// Storage handles truncation and file pointers for large results
 	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("content", fmt.Sprintf("🛠️ Result from %s:\n%s", toolName, strings.TrimSpace(result)))
+		streamer(ai.ReasoningEventToolResult, map[string]any{
+			"tool":   toolName,
+			"result": strings.TrimSpace(result),
+		})
 	}
 }
 
@@ -1919,6 +1909,46 @@ func discoverWorkingDirCandidates(startDir string) []string {
 	return candidates
 }
 
+// unwrapCommandExecutorResult extracts stdout from JSON command executor responses
+// localCommandExecutor returns {"stdout":"...", "stderr":"...", "exit_code":0}
+// This function extracts the actual stdout content for display
+func unwrapCommandExecutorResult(result string) string {
+	// Quick check - does it look like JSON?
+	trimmed := strings.TrimSpace(result)
+	if !strings.HasPrefix(trimmed, "{") {
+		return result
+	}
+
+	var execResp struct {
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+		ExitCode int    `json:"exit_code"`
+	}
+
+	if err := json.Unmarshal([]byte(result), &execResp); err != nil {
+		// Not a command result, return as-is
+		return result
+	}
+
+	// Build readable output from stdout/stderr
+	var output strings.Builder
+	if execResp.Stdout != "" {
+		output.WriteString(execResp.Stdout)
+	}
+	if execResp.Stderr != "" {
+		if output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
+			output.WriteString("\n")
+		}
+		output.WriteString(execResp.Stderr)
+	}
+
+	// If we got something, return it; otherwise return original
+	if output.Len() > 0 {
+		return output.String()
+	}
+	return result
+}
+
 func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[string]any, command, defaultReasoning, defaultWorkingDir string, defaultTimeoutSeconds int) (string, error) {
 	reasoningRaw, _ := args["reasoning"]
 	reasoning, _ := reasoningRaw.(string)
@@ -1975,7 +2005,7 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		TimeoutSeconds: timeoutSeconds,
 		SessionID:      sessionIDFromContext(ctx),
 		Background:     background,
-		StreamOutput: func(chunk string) {
+		StreamStdout: func(chunk string) {
 			emitAutomationToolChunk(ctx, "local_command", chunk)
 		},
 	}
@@ -1985,32 +2015,27 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		return "", err
 	}
 
+	// Emit command to streamer before execution
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("tool_stream_chunk", map[string]any{"tool": "local_command", "text": fmt.Sprintf("$ %s\n", command)})
+	}
+
 	if localCommandExecutor != nil {
 		result, err := localCommandExecutor(ctx, request)
 		if err == nil {
-			statusSummary := parseAndEmitTestStatus(ctx, command, result)
+			// Unwrap JSON response to get actual stdout content
+			// localCommandExecutor returns {"stdout":"...", "stderr":"...", "exit_code":0}
+			// but we want just the stdout for display/storage
+			displayResult := unwrapCommandExecutorResult(result)
 
-			// Use ToolResultStorage: always writes to file, then applies 15KB rule
-			storage := getOrCreateToolResultStorage(ctx)
-			if storage != nil {
-				llmResult, uiResult, _, storageErr := storage.StoreResult("local_command", result)
-				if storageErr == nil {
-					// Send UI-appropriate output (respects 15KB threshold)
-					emitAutomationToolResult(ctx, "local_command", uiResult)
+			statusSummary := parseAndEmitTestStatus(ctx, command, displayResult)
 
-					// Return LLM-appropriate output (with status prepended)
-					if statusSummary != "" {
-						llmResult = statusSummary + "\n\n" + llmResult
-					}
-					return llmResult, nil
-				}
-			}
-
-			// Fallback if storage fails (send full output)
-			emitAutomationToolResult(ctx, "local_command", result)
+			// Prepend status summary if present
+			// wrapToolResultWithStorage will handle file storage automatically
 			if statusSummary != "" {
-				result = statusSummary + "\n\n" + result
+				displayResult = statusSummary + "\n\n" + displayResult
 			}
+			return displayResult, nil
 		}
 		return result, err
 	}

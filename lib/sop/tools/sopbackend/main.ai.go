@@ -415,17 +415,17 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 			writeEvent(eventType, payload)
 			return
 		case ai.ReasoningEventToolCall:
-			// Stream tool call start for visibility (native engine emits these)
-			if toolCall, ok := payload.(map[string]any); ok {
-				tool, _ := toolCall["tool"].(string)
-				if isStructuredToolResult(tool) {
+			// Tool call events are handled by the tools themselves
+			// They will emit the actual command via content streaming
+			// So we skip this event to avoid duplication
+			return
+		case "tool_stream_chunk":
+			// Stream command output chunks to terminal only
+			// Tool result will go to chat when complete
+			if chunkData, ok := payload.(map[string]any); ok {
+				if text, ok := chunkData["text"].(string); ok && strings.TrimSpace(text) != "" {
+					writeEvent("terminal_output", text)
 					return
-				}
-				if tool != "" {
-					contentStreamed = true
-					msg := fmt.Sprintf("🔧 **Calling**: %s\n", tool)
-					log.Info("UI: streaming tool call", "tool", tool)
-					writeEvent("content", msg)
 				}
 			}
 			return

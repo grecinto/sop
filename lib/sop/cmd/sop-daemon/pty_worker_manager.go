@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -100,7 +101,9 @@ func (m *workerManager) spawnWorker(sessionID string) (*workerProcess, error) {
 	// Start logging stderr in background
 	go m.logWorkerStderr(worker)
 
-	log.Printf("[Worker Manager] Spawned worker process PID=%d for session=%s", worker.pid, sessionID)
+	if shouldLogVerbose() {
+		log.Printf("[Worker Manager] Spawned worker process PID=%d for session=%s", worker.pid, sessionID)
+	}
 
 	return worker, nil
 }
@@ -121,12 +124,14 @@ func (m *workerManager) monitorWorker(worker *workerProcess) {
 	delete(m.workers, worker.sessionID)
 	m.mu.Unlock()
 
-	if err != nil {
-		log.Printf("[Worker Manager] Worker PID=%d session=%s died with error (exit=%d): %v",
-			worker.pid, worker.sessionID, exitCode, err)
-	} else {
-		log.Printf("[Worker Manager] Worker PID=%d session=%s exited cleanly (exit=%d)",
-			worker.pid, worker.sessionID, exitCode)
+	if shouldLogVerbose() {
+		if err != nil {
+			log.Printf("[Worker Manager] Worker PID=%d session=%s died with error (exit=%d): %v",
+				worker.pid, worker.sessionID, exitCode, err)
+		} else {
+			log.Printf("[Worker Manager] Worker PID=%d session=%s exited cleanly (exit=%d)",
+				worker.pid, worker.sessionID, exitCode)
+		}
 	}
 }
 
@@ -134,7 +139,9 @@ func (m *workerManager) monitorWorker(worker *workerProcess) {
 func (m *workerManager) logWorkerStderr(worker *workerProcess) {
 	scanner := bufio.NewScanner(worker.stderr)
 	for scanner.Scan() {
-		log.Printf("[Worker PID=%d stderr] %s", worker.pid, scanner.Text())
+		if shouldLogVerbose() {
+			log.Printf("[Worker PID=%d stderr] %s", worker.pid, scanner.Text())
+		}
 	}
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		log.Printf("[Worker Manager] Error reading stderr from PID=%d: %v", worker.pid, err)
@@ -143,6 +150,11 @@ func (m *workerManager) logWorkerStderr(worker *workerProcess) {
 
 // sendCommand sends a command to a worker process and returns the response
 func (m *workerManager) sendCommand(ctx context.Context, sessionID, command string, timeoutSeconds int) (*workerResponse, error) {
+	return m.sendCommandWithStreaming(ctx, sessionID, command, timeoutSeconds, false, nil)
+}
+
+// sendCommandWithStreaming sends a command with optional NDJSON streaming
+func (m *workerManager) sendCommandWithStreaming(ctx context.Context, sessionID, command string, timeoutSeconds int, streaming bool, chunkCallback func(string)) (*workerResponse, error) {
 	// Get or spawn worker
 	worker, err := m.spawnWorker(sessionID)
 	if err != nil {
@@ -153,7 +165,7 @@ func (m *workerManager) sendCommand(ctx context.Context, sessionID, command stri
 	if worker.dead {
 		worker.mu.Unlock()
 		// Worker is dead, try to spawn a new one
-		return m.sendCommand(ctx, sessionID, command, timeoutSeconds)
+		return m.sendCommandWithStreaming(ctx, sessionID, command, timeoutSeconds, streaming, chunkCallback)
 	}
 	worker.lastUsed = time.Now()
 	worker.mu.Unlock()
@@ -162,6 +174,7 @@ func (m *workerManager) sendCommand(ctx context.Context, sessionID, command stri
 	req := workerRequest{
 		Command:        command,
 		TimeoutSeconds: timeoutSeconds,
+		Streaming:      streaming,
 	}
 
 	// Send request to worker via stdin
@@ -173,17 +186,42 @@ func (m *workerManager) sendCommand(ctx context.Context, sessionID, command stri
 		return nil, fmt.Errorf("failed to send command to worker: %w", err)
 	}
 
-	// Read response from worker stdout
+	// Read response(s) from worker stdout
 	decoder := json.NewDecoder(worker.stdout)
-	var resp workerResponse
-	if err := decoder.Decode(&resp); err != nil {
-		worker.mu.Lock()
-		worker.dead = true
-		worker.mu.Unlock()
-		return nil, fmt.Errorf("failed to read response from worker: %w", err)
+	var finalResp workerResponse
+	var fullOutput strings.Builder
+
+	for {
+		var resp workerResponse
+		if err := decoder.Decode(&resp); err != nil {
+			worker.mu.Lock()
+			worker.dead = true
+			worker.mu.Unlock()
+			return nil, fmt.Errorf("failed to read response from worker: %w", err)
+		}
+
+		// Handle chunk
+		if resp.Chunk != "" {
+			fullOutput.WriteString(resp.Chunk)
+			if chunkCallback != nil {
+				chunkCallback(resp.Chunk)
+			}
+		}
+
+		// Check if this is the final response
+		if !streaming || resp.Complete {
+			finalResp = resp
+			// Include accumulated output in non-streaming mode
+			if !streaming && resp.Output != "" {
+				fullOutput.WriteString(resp.Output)
+			}
+			break
+		}
 	}
 
-	return &resp, nil
+	// Return final response with accumulated output
+	finalResp.Output = fullOutput.String()
+	return &finalResp, nil
 }
 
 // killWorker kills a worker process for the given sessionID
@@ -209,7 +247,9 @@ func (m *workerManager) killWorker(sessionID string) error {
 	// Try graceful shutdown first (close stdin)
 	if worker.stdin != nil {
 		if err := worker.stdin.Close(); err != nil {
-			log.Printf("[Worker Manager] Failed to close stdin for PID=%d: %v", worker.pid, err)
+			if shouldLogVerbose() {
+				log.Printf("[Worker Manager] Failed to close stdin for PID=%d: %v", worker.pid, err)
+			}
 		}
 	}
 
@@ -227,11 +267,15 @@ func (m *workerManager) killWorker(sessionID string) error {
 
 	select {
 	case <-done:
-		log.Printf("[Worker Manager] Worker PID=%d exited gracefully", worker.pid)
+		if shouldLogVerbose() {
+			log.Printf("[Worker Manager] Worker PID=%d exited gracefully", worker.pid)
+		}
 		return nil
 	case <-time.After(2 * time.Second):
 		// Force kill if not exited
-		log.Printf("[Worker Manager] Force killing worker PID=%d", worker.pid)
+		if shouldLogVerbose() {
+			log.Printf("[Worker Manager] Force killing worker PID=%d", worker.pid)
+		}
 		if worker.cmd.Process != nil {
 			if err := worker.cmd.Process.Kill(); err != nil {
 				return fmt.Errorf("failed to kill worker: %w", err)
@@ -246,7 +290,9 @@ func (m *workerManager) cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	log.Printf("[Worker Manager] Cleaning up %d active workers", len(m.workers))
+	if shouldLogVerbose() {
+		log.Printf("[Worker Manager] Cleaning up %d active workers", len(m.workers))
+	}
 
 	for sessionID, worker := range m.workers {
 		worker.mu.Lock()
@@ -255,7 +301,9 @@ func (m *workerManager) cleanup() {
 			// Close stdin only if it's not nil
 			if worker.stdin != nil {
 				if err := worker.stdin.Close(); err != nil {
-					log.Printf("[Worker Manager] Failed to close stdin for session=%s: %v", sessionID, err)
+					if shouldLogVerbose() {
+						log.Printf("[Worker Manager] Failed to close stdin for session=%s: %v", sessionID, err)
+					}
 				}
 			}
 			// Force kill after short wait

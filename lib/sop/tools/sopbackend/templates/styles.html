@@ -662,7 +662,7 @@
         .data-table th, .data-table td { white-space: nowrap; padding: 4px 8px; }
         .data-table th { text-transform: capitalize; border-bottom: 2px solid var(--border-color); }
         .csv-header { text-transform: capitalize; border-bottom: 1px solid var(--border-color); display: inline-block; min-width: 100%; }
-        .chat-input-area { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; padding: 4px; margin-top: -25px; border-top: 0px solid var(--border-color); background: var(--sidebar-bg); }
+        .chat-input-area { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; padding: 4px; margin-top: -5px; border-top: 0px solid var(--border-color); background: var(--sidebar-bg); }
         .chat-input-row { display: flex; align-items: flex-end; gap: 8px; }
         #chat-input { flex: 1; min-width: 0; height: 60px; resize: vertical; min-height: 40px; max-height: 200px; font-family: var(--chat-font-family); font-size: 13px; line-height: 1.5; font-weight: 400; }
         .chat-composer-controls { display: flex; flex-direction: column; align-items: stretch; gap: 0; flex-shrink: 0; justify-content: flex-end; padding-bottom: 0; margin-top: 0; }
@@ -687,6 +687,21 @@
         .chat-attachment-icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
         .chat-send-icon { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
         #tab-chat { overflow-y: hidden; height: auto; flex: 1; display: flex; flex-direction: column; }
+
+        /* Loading spinner */
+        .loading {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #569cd6;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
 
         @media (max-width: 768px) {
             #sidebar, #resizer, #main, #detail-panel { 

@@ -82,11 +82,8 @@ func (e *NativeReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (a
 	storage := getOrCreateToolResultStorage(ctx)
 	if storage != nil {
 		ctx = context.WithValue(ctx, ctxKeyToolResultStorage, storage)
-		defer func() {
-			if cleanupErr := storage.Cleanup(); cleanupErr != nil {
-				log.Warn("Failed to cleanup tool result storage", "error", cleanupErr)
-			}
-		}()
+		// NOTE: DO NOT cleanup here in daemon mode - files need to persist across reasoning loops
+		// The daemon process will handle cleanup when the session truly ends
 		log.Info("Tool result storage initialized", "session_id", storage.sessionID, "base_dir", storage.baseDir)
 	}
 
