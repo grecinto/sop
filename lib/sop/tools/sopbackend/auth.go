@@ -1058,6 +1058,36 @@ func (s *SessionStore) CreateToken(ctx context.Context, username, role string) (
 }
 
 func (s *SessionStore) CreateSession(ctx context.Context, username, role string) (string, string, error) {
+	// Retry logic for transaction conflicts (e.g., concurrent login attempts)
+	maxRetries := 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 10ms, 20ms, 40ms
+			time.Sleep(time.Duration(10<<uint(attempt-1)) * time.Millisecond)
+			log.Debug("CreateSession: retrying after conflict", "attempt", attempt+1, "username", username)
+		}
+
+		accessToken, refreshToken, err := s.createSessionAttempt(ctx, username, role)
+		if err == nil {
+			return accessToken, refreshToken, nil
+		}
+
+		// Check if it's a retryable transaction conflict
+		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "lock") {
+			lastErr = err
+			continue
+		}
+
+		// Non-retryable error
+		return "", "", err
+	}
+
+	return "", "", fmt.Errorf("failed to create session after %d retries: %v", maxRetries, lastErr)
+}
+
+func (s *SessionStore) createSessionAttempt(ctx context.Context, username, role string) (string, string, error) {
 	store, tx, err := s.getStore(ctx)
 	if err != nil {
 		return "", "", err

@@ -374,13 +374,14 @@ func validatePathConflictsAndPermissions(req *SaveConfigRequest) error {
 	}
 
 	// 1. Register System DB Paths
-	// System Registry Path (ignore if empty/advanced mode fallback)
-	if req.RegistryPath != "" {
+	// System Registry Path (only in Simple Mode when StoresFolders is empty)
+	// In Advanced Mode, StoresFolders takes precedence and RegistryPath is derived/ignored.
+	if req.RegistryPath != "" && len(req.SystemOptions.StoresFolders) == 0 {
 		if err := registerPath(req.RegistryPath, "System RegistryPath"); err != nil {
 			return err
 		}
 	}
-	// System Stores Folders
+	// System Stores Folders (Advanced Mode)
 	for i, sf := range req.SystemOptions.StoresFolders {
 		if err := registerPath(sf, fmt.Sprintf("System StoresFolder[%d]", i)); err != nil {
 			return err
@@ -401,9 +402,14 @@ func validatePathConflictsAndPermissions(req *SaveConfigRequest) error {
 	// 2. Register User DB Paths
 	for dbIdx, db := range req.Databases {
 		dbLabel := fmt.Sprintf("UserDB[%d] '%s'", dbIdx, db.Name)
-		if err := registerPath(db.Path, dbLabel+" Path"); err != nil {
-			return err
+		// User DB Path (only in Simple Mode when StoresFolders is empty)
+		// In Advanced Mode, StoresFolders takes precedence and Path is derived/ignored.
+		if db.Path != "" && len(db.DatabaseOptions.StoresFolders) == 0 {
+			if err := registerPath(db.Path, dbLabel+" Path"); err != nil {
+				return err
+			}
 		}
+		// User DB Stores Folders (Advanced Mode)
 		for i, sf := range db.DatabaseOptions.StoresFolders {
 			if err := registerPath(sf, fmt.Sprintf("%s StoresFolder[%d]", dbLabel, i)); err != nil {
 				return err

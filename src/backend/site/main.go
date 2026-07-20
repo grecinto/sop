@@ -269,40 +269,6 @@ func resolveRuntimeDataDir(dataDir string) string {
 	return canonicalPath(trimmed)
 }
 
-func resolveRuntimeConfigPath(dataDir string) string {
-	resolvedDataDir := resolveRuntimeDataDir(dataDir)
-	if resolvedDataDir == "" {
-		return ""
-	}
-
-	candidates := []string{}
-	if envPath := strings.TrimSpace(os.Getenv("SOP_CONFIG_FILE")); envPath != "" {
-		candidates = append(candidates, envPath)
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates,
-			filepath.Join(cwd, "config.json"),
-			filepath.Join(cwd, ".sop-data", "config.json"),
-		)
-	}
-	candidates = append(candidates, filepath.Join(resolvedDataDir, "config.json"))
-
-	seen := map[string]struct{}{}
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		if _, err := os.Stat(candidate); err == nil {
-			return canonicalPath(candidate)
-		}
-	}
-	return filepath.Join(resolvedDataDir, "config.json")
-}
-
 func shouldPrintHelp(args []string) bool {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--h" || arg == "-help" || arg == "--help" {
@@ -313,7 +279,8 @@ func shouldPrintHelp(args []string) bool {
 }
 
 func printSiteHelpTo(w io.Writer) {
-	resolvedConfigPath := resolveRuntimeConfigPath(defaultDataDir())
+	// Use sopbackend's config discovery instead of custom path resolution
+	resolvedConfigPath := sopbackend.FindExistingConfigFile()
 	if strings.TrimSpace(resolvedConfigPath) != "" {
 		if _, err := os.Stat(resolvedConfigPath); err != nil {
 			resolvedConfigPath = ""
@@ -344,6 +311,22 @@ func printSiteHelp() {
 	printSiteHelpTo(os.Stdout)
 }
 
+// configureRuntimeEnvironment sets up the data directory environment variables.
+//
+// ⚠️  DO NOT ADD CONFIG LOADING HERE
+//
+// This function ONLY:
+//   - Resolves the data directory path
+//   - Creates the directory if needed
+//   - Sets environment variables (SOP_DATA_DIR, SOP_CLOUD_DATA_DIR, etc.)
+//
+// It does NOT and MUST NOT:
+//
+//	❌ Discover or resolve config.json paths
+//	❌ Load or parse config.json
+//	❌ Call sopbackend.LoadConfig() or sopbackend.SetConfigFile()
+//
+// Config discovery is handled by sopbackend.InitializeRuntime() in main().
 func configureRuntimeEnvironment(dataDir string) {
 	resolvedDataDir := resolveRuntimeDataDir(dataDir)
 	if resolvedDataDir == "" {
@@ -353,6 +336,7 @@ func configureRuntimeEnvironment(dataDir string) {
 		log.Printf("failed to create runtime data dir %s: %v", resolvedDataDir, err)
 		return
 	}
+	// Set environment variables for data directory location
 	if err := os.Setenv("datapath", resolvedDataDir); err != nil {
 		log.Printf("failed to set datapath env var: %v", err)
 	}
@@ -364,17 +348,6 @@ func configureRuntimeEnvironment(dataDir string) {
 	}
 	if err := os.Setenv("SOP_CODING_WORKFLOW_MEMORY_PATH", filepath.Join(resolvedDataDir, "coding-workflow-memory.json")); err != nil {
 		log.Printf("failed to set SOP_CODING_WORKFLOW_MEMORY_PATH env var: %v", err)
-	}
-
-	configPath := resolveRuntimeConfigPath(resolvedDataDir)
-	sopbackend.SetConfigFile(configPath)
-	if err := os.Setenv("SOP_CONFIG_FILE", configPath); err != nil {
-		log.Printf("failed to set SOP_CONFIG_FILE env var: %v", err)
-	}
-	if _, err := os.Stat(configPath); err == nil {
-		if err := sopbackend.LoadConfig(configPath); err != nil {
-			log.Printf("failed to load existing config from %s: %v", configPath, err)
-		}
 	}
 }
 
@@ -801,9 +774,38 @@ func handleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"bootstrap_secret": secret})
 }
 
+// registerFrontendHandler registers the site landing page handlers.
+//
+// ⚠️  CRITICAL: First-run setup wizard flow - DO NOT MODIFY without running tests!
+//
+// This handler implements the first-run experience. When no config.json exists,
+// it MUST redirect / and /site to /app (the setup wizard). Breaking this logic
+// means new installations cannot complete initial setup.
+//
+// REQUIRED BEHAVIOR:
+//   - When !sopbackend.HasConfigFileOnDisk(): redirect / and /site → /app (302)
+//   - When config exists: serve landing page (200)
+//
+// BEFORE MODIFYING:
+//  1. Read: src/backend/site/SETUP_WIZARD_CRITICAL.md
+//  2. Run: go test ./src/backend/site -run TestSetupWizard -v
+//  3. Verify: All tests pass
+//
+// This logic has been regressed multiple times when adding landing page features.
+// The tests in setup_wizard_test.go are your contract - they MUST pass.
 func registerFrontendHandler(mux *http.ServeMux, frontendDir string) {
 	frontendHandler := func(w http.ResponseWriter, r *http.Request) {
-		// Always serve the public site landing page for the root routes so visitors can
+		// CRITICAL: First-run setup wizard redirect
+		// When no config exists yet, redirect root requests to the setup wizard at /app.
+		// This delegates to sopbackend's shared setup flow instead of duplicating the logic.
+		if !sopbackend.HasConfigFileOnDisk() {
+			path := strings.TrimSuffix(r.URL.Path, "/")
+			if path == "" || path == "/site" {
+				http.Redirect(w, r, "/app", http.StatusFound)
+				return
+			}
+		}
+		// Serve the public site landing page for the root routes so visitors can
 		// sign in or subscribe. The shared setup experience remains available at /app.
 		serveFrontendAsset(w, r, frontendDir)
 	}
@@ -893,10 +895,37 @@ func main() {
 	configureRuntimeEnvironment(dataDir)
 	applySopbackendPreloadPolicy()
 
-	// Initialize sopbackend runtime (agents, databases, etc.)
-	// This matches what the daemon does and ensures agents like 'copilot' are loaded
-	configPath := sopbackend.GetConfig().ConfigFile
-	if _, err := sopbackend.InitializeRuntime(context.Background(), configPath, sopbackend.RuntimeOptions{
+	// ============================================================================
+	// ⚠️  CRITICAL: DO NOT DUPLICATE INITIALIZATION LOGIC HERE
+	// ============================================================================
+	//
+	// sopbackend.InitializeRuntime() handles ALL config discovery and loading:
+	//   - FindExistingConfigFile() - searches cwd and env for config.json
+	//   - SetConfigFile() - sets the discovered path
+	//   - LoadConfig() - loads and validates the config
+	//   - Initializes agents, sessions, and all backend services
+	//
+	// ❌ DO NOT ADD: Config path resolution
+	// ❌ DO NOT ADD: Config loading calls
+	// ❌ DO NOT ADD: Config discovery logic
+	// ❌ DO NOT ADD: Database initialization
+	//
+	// ✅ ONLY SET: Environment variables for data directory (done above)
+	// ✅ THEN CALL: InitializeRuntime() with EMPTY configPath to auto-discover
+	//
+	// Passing empty string "" tells sopbackend to discover config automatically.
+	// This prevents path duplication bugs like ".sop-data/.sop-data"
+	//
+	// If you're tempted to add config logic here, READ THIS FIRST:
+	//   - src/backend/site/SETUP_WIZARD_CRITICAL.md
+	//   - lib/sop/tools/sopbackend/exports.go (InitializeRuntime function)
+	//
+	// ============================================================================
+
+	// Initialize sopbackend runtime (agents, databases, config discovery, etc.)
+	// This delegates all config file discovery and loading to sopbackend.InitializeRuntime
+	// which handles FindExistingConfigFile, SetConfigFile, and LoadConfig automatically.
+	if _, err := sopbackend.InitializeRuntime(context.Background(), "", sopbackend.RuntimeOptions{
 		EnableLocalAutomation: false, // Site backend doesn't need local automation
 	}, 0, nil); err != nil {
 		log.Printf("Warning: sopbackend initialization failed: %v", err)

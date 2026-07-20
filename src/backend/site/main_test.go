@@ -38,14 +38,17 @@ func TestShouldPrintHelpRecognizesHelpFlags(t *testing.T) {
 }
 
 func TestPrintSiteHelpIncludesResolvedConfigPath(t *testing.T) {
+	oldConfig := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldConfig)
+
 	dataDir := t.TempDir()
 	configPath := filepath.Join(dataDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	t.Setenv("SOP_CLOUD_DATA_DIR", dataDir)
-	t.Setenv("SOP_DATA_DIR", dataDir)
-	t.Setenv("SOP_CONFIG_FILE", "")
+
+	// Set the config file path so sopbackend.FindExistingConfigFile can locate it
+	sopbackend.SetConfigFile(configPath)
 
 	var stdout strings.Builder
 	printSiteHelpTo(&stdout)
@@ -175,7 +178,7 @@ func TestConfigureRuntimeEnvironmentSkipsSeedingConfigOnFirstRun(t *testing.T) {
 	}
 }
 
-func TestResolveRuntimeConfigPathPrefersCwdConfigOverEnvOverride(t *testing.T) {
+func TestSopbackendConfigDiscoveryPrefersCwdConfig(t *testing.T) {
 	oldWd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -198,7 +201,8 @@ func TestResolveRuntimeConfigPathPrefersCwdConfigOverEnvOverride(t *testing.T) {
 	}
 	t.Setenv("SOP_CONFIG_FILE", envConfigPath)
 
-	got := resolveRuntimeConfigPath(filepath.Join(workDir, ".sop-data"))
+	// sopbackend.FindExistingConfigFile should find the cwd config.json
+	got := sopbackend.FindExistingConfigFile()
 	want := cwdConfigPath
 	if resolved, err := filepath.EvalSymlinks(got); err == nil {
 		got = resolved
@@ -207,11 +211,11 @@ func TestResolveRuntimeConfigPathPrefersCwdConfigOverEnvOverride(t *testing.T) {
 		want = resolved
 	}
 	if filepath.Clean(got) != filepath.Clean(want) {
-		t.Fatalf("resolveRuntimeConfigPath() = %q, want %q", got, want)
+		t.Fatalf("sopbackend.FindExistingConfigFile() = %q, want %q", got, want)
 	}
 }
 
-func TestResolveRuntimeConfigPathIgnoresRepoSharedConfigWhenNoRuntimeConfigExists(t *testing.T) {
+func TestSopbackendConfigDiscoveryReturnsEmptyWhenNoConfigExists(t *testing.T) {
 	oldWd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -231,20 +235,14 @@ func TestResolveRuntimeConfigPathIgnoresRepoSharedConfigWhenNoRuntimeConfigExist
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	got := resolveRuntimeConfigPath(filepath.Join(workDir, ".sop-data"))
-	want := filepath.Join(workDir, ".sop-data", "config.json")
-	if resolved, err := filepath.EvalSymlinks(got); err == nil {
-		got = resolved
-	}
-	if resolved, err := filepath.EvalSymlinks(want); err == nil {
-		want = resolved
-	}
-	if filepath.Clean(got) != filepath.Clean(want) {
-		t.Fatalf("resolveRuntimeConfigPath() = %q, want %q", got, want)
+	// sopbackend.FindExistingConfigFile should return empty when no config.json is in cwd
+	got := sopbackend.FindExistingConfigFile()
+	if got != "" {
+		t.Fatalf("sopbackend.FindExistingConfigFile() = %q, want empty string when no config in cwd", got)
 	}
 }
 
-func TestConfigureRuntimeEnvironmentUsesExistingDataDirConfigWhenPresent(t *testing.T) {
+func TestConfigureRuntimeEnvironmentSetsDataDirEnvVars(t *testing.T) {
 	oldWd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -256,30 +254,15 @@ func TestConfigureRuntimeEnvironmentUsesExistingDataDirConfigWhenPresent(t *test
 		t.Fatalf("Chdir() error = %v", err)
 	}
 
-	t.Setenv("SOP_CONFIG_FILE", "")
+	dataDir := filepath.Join(workDir, ".sop-data")
+	configureRuntimeEnvironment(dataDir)
 
-	configDir := filepath.Join(workDir, ".sop-data")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
+	// Verify environment variables are set
+	if got := os.Getenv("SOP_DATA_DIR"); !strings.Contains(got, ".sop-data") {
+		t.Fatalf("expected SOP_DATA_DIR to contain .sop-data, got %q", got)
 	}
-	configPath := filepath.Join(configDir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	configureRuntimeEnvironment(".sop-data")
-
-	cfg := sopbackend.GetConfig()
-	wantPath := configPath
-	if resolved, err := filepath.EvalSymlinks(configPath); err == nil {
-		wantPath = resolved
-	}
-	gotPath := cfg.ConfigFile
-	if resolved, err := filepath.EvalSymlinks(cfg.ConfigFile); err == nil {
-		gotPath = resolved
-	}
-	if filepath.Clean(gotPath) != filepath.Clean(wantPath) {
-		t.Fatalf("expected runtime to use existing config at %q, got %q", filepath.Clean(wantPath), filepath.Clean(gotPath))
+	if got := os.Getenv("SOP_CLOUD_DATA_DIR"); !strings.Contains(got, ".sop-data") {
+		t.Fatalf("expected SOP_CLOUD_DATA_DIR to contain .sop-data, got %q", got)
 	}
 }
 
@@ -341,27 +324,6 @@ func TestSiteBackendDaemonBootstrapEndpointReturnsBootstrapSecret(t *testing.T) 
 	}
 }
 
-func TestSiteBackendServesFrontendAtRootWhenNoConfigExists(t *testing.T) {
-	frontendDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
-		t.Fatalf("failed to write test frontend asset: %v", err)
-	}
-
-	mux := http.NewServeMux()
-	registerSiteHandlers(mux, frontendDir, t.TempDir())
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	newSiteAppAccessHandler(mux).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected root request to serve the landing page, got %d", rec.Code)
-	}
-	if body := rec.Body.String(); !strings.Contains(body, "site") {
-		t.Fatalf("expected root response body to contain the site markup, got %q", body)
-	}
-}
-
 func TestSiteBackendAllowsSetupWizardAtAppPathWhenNoConfigExists(t *testing.T) {
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
@@ -381,6 +343,9 @@ func TestSiteBackendAllowsSetupWizardAtAppPathWhenNoConfigExists(t *testing.T) {
 }
 
 func TestSiteBackendAcceptsSharedAuthSessionForAppRoute(t *testing.T) {
+	oldConfig := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldConfig)
+
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
 		t.Fatalf("failed to write test frontend asset: %v", err)
@@ -396,7 +361,6 @@ func TestSiteBackendAcceptsSharedAuthSessionForAppRoute(t *testing.T) {
 		SessionSecret: sopbackend.SecuredString("shared-auth-test-secret"),
 	}
 	sopbackend.SetConfig(cfg)
-	defer sopbackend.SetConfig(sopbackend.Config{})
 	if _, err := (&cfg).RegisterUser(context.Background(), "shared-auth-admin", "secret", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
 		t.Fatalf("RegisterUser() error = %v", err)
 	}
@@ -424,6 +388,9 @@ func TestSiteBackendAcceptsSharedAuthSessionForAppRoute(t *testing.T) {
 }
 
 func TestSiteBackendServesFrontendAtRootEvenWhenConfigExists(t *testing.T) {
+	oldConfig := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldConfig)
+
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
 		t.Fatalf("failed to write test frontend asset: %v", err)
@@ -434,10 +401,11 @@ func TestSiteBackendServesFrontendAtRootEvenWhenConfigExists(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
-	if err := os.Setenv("SOP_CLOUD_DATA_DIR", dataDir); err != nil {
-		t.Fatalf("failed to set SOP_CLOUD_DATA_DIR: %v", err)
+	// Load the config so sopbackend.HasConfigFileOnDisk() returns true
+	sopbackend.SetConfigFile(configPath)
+	if err := sopbackend.LoadConfig(configPath); err != nil {
+		t.Fatalf("failed to load config: %v", err)
 	}
-	defer os.Unsetenv("SOP_CLOUD_DATA_DIR")
 
 	mux := http.NewServeMux()
 	registerSiteHandlers(mux, frontendDir, t.TempDir())
@@ -506,9 +474,23 @@ func TestSiteBackendUsesRBACPermissionForAppAccess(t *testing.T) {
 }
 
 func TestSiteBackendServesSiteFrontendRoutes(t *testing.T) {
+	oldConfig := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldConfig)
+
 	frontendDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html>site</html>"), 0o644); err != nil {
 		t.Fatalf("failed to write test frontend asset: %v", err)
+	}
+
+	// Create a config so the frontend is served instead of redirecting to setup wizard
+	dataDir := t.TempDir()
+	configPath := filepath.Join(dataDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"databases":[{"name":"default","path":"/tmp/default"}]}`), 0o644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+	sopbackend.SetConfigFile(configPath)
+	if err := sopbackend.LoadConfig(configPath); err != nil {
+		t.Fatalf("failed to load config: %v", err)
 	}
 
 	mux := http.NewServeMux()

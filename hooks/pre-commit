@@ -1,0 +1,54 @@
+#!/bin/bash
+# Pre-commit hook to prevent regressions in critical setup wizard flow
+#
+# To enable this hook:
+#   cp .git/hooks/pre-commit.example .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# To bypass (NOT RECOMMENDED):
+#   git commit --no-verify
+
+set -e
+
+# Check if any critical files were modified
+CRITICAL_FILES=(
+    "src/backend/site/main.go"
+    "src/backend/site/main_test.go"
+    "src/backend/site/setup_wizard_test.go"
+    "lib/sop/tools/sopbackend/core_handlers.go"
+    "lib/sop/tools/sopbackend/config_loader.go"
+)
+
+modified=false
+for file in "${CRITICAL_FILES[@]}"; do
+    if git diff --cached --name-only | grep -q "^$file$"; then
+        modified=true
+        break
+    fi
+done
+
+if [ "$modified" = true ]; then
+    echo "⚠️  CRITICAL FILES MODIFIED - Running setup wizard tests..."
+    echo ""
+    
+    cd src/backend/site
+    if ! go test -run TestSetupWizard -v; then
+        echo ""
+        echo "❌ CRITICAL TEST FAILURE"
+        echo ""
+        echo "You modified critical setup wizard code but tests are failing."
+        echo "This would break first-run setup for new installations."
+        echo ""
+        echo "Fix the tests before committing, or read:"
+        echo "  src/backend/site/SETUP_WIZARD_CRITICAL.md"
+        echo ""
+        echo "To bypass this check (NOT RECOMMENDED):"
+        echo "  git commit --no-verify"
+        exit 1
+    fi
+    
+    echo ""
+    echo "✅ Setup wizard tests passed"
+fi
+
+exit 0
