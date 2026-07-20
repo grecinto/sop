@@ -252,7 +252,8 @@ func main() {
 
 	// Start Server
 	addr := fmt.Sprintf(":%d", config.Port)
-	log.Debug(fmt.Sprintf("AI Studio v%s running at http://localhost%s", sop.Version, addr))
+	log.Info(fmt.Sprintf("AI Studio (HQ) v%s", sop.Version))
+	log.Info(fmt.Sprintf("Running at http://localhost%s", addr))
 
 	// Open Browser
 	if openBrowserFlag {

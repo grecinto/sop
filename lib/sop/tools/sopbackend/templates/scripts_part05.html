@@ -2087,6 +2087,15 @@
             streamState.currentContentSpan = null;
         } else if (normalizedEvent.type === 'tool_call') {
             handled = true;
+            // Auto-open terminal when local command tools are called
+            const toolName = normalizedEvent.payload && normalizedEvent.payload.tool;
+            if (toolName === 'local_command' || toolName === 'execute_local_command') {
+                const pane = document.getElementById('ai-terminal-pane');
+                if (pane && pane.style.display === 'none') {
+                    console.log('[Terminal] Auto-opening for', toolName);
+                    openAITerminal();
+                }
+            }
         } else if (normalizedEvent.type === 'tool_error') {
             handled = true;
             const fallbackText = typeof normalizedEvent.payload === 'string'
@@ -2267,11 +2276,21 @@
 
     async function executeRuntimeRequest(message, runtimeMode, options = {}) {
         const runtimeRequest = buildRuntimeRequestConfig(message, runtimeMode, options);
+        console.log('[executeRuntimeRequest] Sending request:', {
+            endpoint: runtimeRequest.endpoint,
+            runtimeMode: runtimeRequest.runtimeMode,
+            headers: runtimeRequest.headers
+        });
         const response = await runtimeRequest.fetcher(runtimeRequest.endpoint, {
             method: runtimeRequest.method,
             headers: runtimeRequest.headers,
             body: runtimeRequest.body,
             signal: options.signal
+        });
+        console.log('[executeRuntimeRequest] Response received:', {
+            status: response.status,
+            contentType: response.headers.get('content-type'),
+            hasBody: !!response.body
         });
         return { response, runtimeMode: runtimeRequest.runtimeMode };
     }
@@ -2291,7 +2310,9 @@
 
         if (runtimeMode === 'local') {
             const contentType = response.headers.get('content-type') || '';
+            console.log('[handleRuntimeResponse] Response Content-Type:', contentType, 'Has body:', !!response.body);
             if (contentType.includes('application/x-ndjson') && response.body) {
+                console.log('[handleRuntimeResponse] Using NDJSON streaming reader');
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 const streamState = {
@@ -2351,6 +2372,8 @@
                 }
 
                 return true;
+            } else {
+                console.warn('[handleRuntimeResponse] NOT using streaming - Content-Type:', contentType, 'Has body:', !!response.body);
             }
 
             const responseText = await response.text();

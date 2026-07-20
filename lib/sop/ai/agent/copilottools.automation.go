@@ -530,6 +530,32 @@ func (a *CopilotAgent) toolExecuteLocalCommand(ctx context.Context, args map[str
 	return a.runLocalAutomationCommand(ctx, args, command, "", "", 600)
 }
 
+// rawLocalCommandExecutor executes commands for direct /c prefix calls
+// Does NOT emit tool result events (HandlePrefix will format and emit)
+func (a *CopilotAgent) rawLocalCommandExecutor(ctx context.Context, args map[string]any) (string, error) {
+	commandRaw, ok := args["command"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'command'")
+	}
+	command, ok := commandRaw.(string)
+	if !ok {
+		return "", fmt.Errorf("'command' must be a string")
+	}
+
+	if localCommandExecutor == nil {
+		return "", fmt.Errorf("local command execution not available")
+	}
+
+	req := LocalCommandRequest{
+		Command:        command,
+		Reasoning:      "Direct local command execution requested by user.",
+		TimeoutSeconds: 600,
+		SessionID:      sessionIDFromContext(ctx),
+	}
+
+	return localCommandExecutor(ctx, req)
+}
+
 func (a *CopilotAgent) toolSearchRepoFiles(ctx context.Context, args map[string]any) (string, error) {
 	pathRaw, ok := args["path"]
 	if !ok {
@@ -1618,6 +1644,34 @@ func emitAutomationToolResult(ctx context.Context, toolName, result string) {
 	if strings.TrimSpace(result) == "" {
 		return
 	}
+
+	// For local_command, parse JSON response and emit formatted output
+	if toolName == "local_command" {
+		var response struct {
+			Stdout   string `json:"stdout"`
+			Stderr   string `json:"stderr"`
+			ExitCode int    `json:"exit_code"`
+		}
+		if err := json.Unmarshal([]byte(result), &response); err == nil {
+			// Successfully parsed - emit formatted output
+			output := strings.TrimSpace(response.Stdout)
+			if output != "" {
+				if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+					streamer("content", fmt.Sprintf("🛠️ Result from %s:\n%s", toolName, output))
+				}
+			}
+			// Include stderr separately if present
+			if response.Stderr != "" {
+				if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+					streamer("content", fmt.Sprintf("\n⚠️ Errors:\n%s", strings.TrimSpace(response.Stderr)))
+				}
+			}
+			return
+		}
+		// Fall through if parse failed
+	}
+
+	// For other tools or if JSON parse failed, emit as-is
 	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
 		streamer("content", fmt.Sprintf("🛠️ Result from %s:\n%s", toolName, strings.TrimSpace(result)))
 	}

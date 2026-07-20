@@ -32,8 +32,10 @@ const (
 //
 // The capability requires daemon mode (local agent) for command execution.
 type Capability struct {
-	// commandExecutor is injected to execute local commands
+	// commandExecutor is injected to execute local commands (for LLM tool calls)
 	commandExecutor func(context.Context, map[string]any) (string, error)
+	// rawCommandExecutor is injected for direct /c commands (bypasses tool result events)
+	rawCommandExecutor func(context.Context, map[string]any) (string, error)
 	// shellSessionManager provides persistent shell sessions per conversation
 	shellSessionManager ShellSessionManager
 }
@@ -45,9 +47,14 @@ type ShellSessionManager interface {
 
 func NewCapability() *Capability { return &Capability{} }
 
-// SetCommandExecutor injects the command execution function from the agent
+// SetCommandExecutor injects the command execution function from the agent (for LLM tool calls)
 func (c *Capability) SetCommandExecutor(executor func(context.Context, map[string]any) (string, error)) {
 	c.commandExecutor = executor
+}
+
+// SetRawCommandExecutor injects the raw command executor for direct /c commands
+func (c *Capability) SetRawCommandExecutor(executor func(context.Context, map[string]any) (string, error)) {
+	c.rawCommandExecutor = executor
 }
 
 // SetShellSessionManager injects the shell session manager
@@ -211,7 +218,12 @@ func (c *Capability) HandlePrefix(ctx context.Context, query string, normalizedC
 	}
 
 	// One-shot execution for simple commands
-	if c.commandExecutor == nil {
+	// Use rawCommandExecutor if available (for direct /c commands) to avoid double-emission
+	executor := c.rawCommandExecutor
+	if executor == nil {
+		executor = c.commandExecutor
+	}
+	if executor == nil {
 		return "", fmt.Errorf("desktop automation command executor not available")
 	}
 
@@ -219,7 +231,7 @@ func (c *Capability) HandlePrefix(ctx context.Context, query string, normalizedC
 	normalizedCommand = normalizeLsCommand(normalizedCommand)
 
 	// Execute the command via the injected executor
-	result, err := c.commandExecutor(ctx, map[string]any{
+	result, err := executor(ctx, map[string]any{
 		"command":   normalizedCommand,
 		"reasoning": "Direct local command execution requested by user.",
 	})
@@ -242,6 +254,13 @@ func (c *Capability) HandlePrefix(ctx context.Context, query string, normalizedC
 		// Include stderr if present
 		if response.Stderr != "" {
 			output += "\n⚠️ Errors:\n" + response.Stderr
+		}
+
+		// Emit formatted result for direct commands (rawCommandExecutor path)
+		if c.rawCommandExecutor != nil {
+			if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+				streamer("content", fmt.Sprintf("🛠️ Result from local_command:\n%s", output))
+			}
 		}
 
 		// Return raw output - let the frontend renderer handle display formatting

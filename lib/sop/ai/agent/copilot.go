@@ -1861,7 +1861,8 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 		return
 	}
 	desktopCap := desktop.NewCapability()
-	desktopCap.SetCommandExecutor(a.toolExecuteLocalCommand)
+	desktopCap.SetCommandExecutor(a.toolExecuteLocalCommand)    // For LLM tool calls
+	desktopCap.SetRawCommandExecutor(a.rawLocalCommandExecutor) // For direct /c commands
 	a.capabilityRegistry = capabilities.NewRegistry(desktopCap, stores.NewCapability(), spaces.NewCapability())
 }
 

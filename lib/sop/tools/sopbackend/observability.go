@@ -22,6 +22,13 @@ func (w *statusResponseWriter) WriteHeader(statusCode int) {
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
+// Flush implements http.Flusher to support streaming responses
+func (w *statusResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 type observabilityMetrics struct {
 	mu       sync.Mutex
 	requests int64

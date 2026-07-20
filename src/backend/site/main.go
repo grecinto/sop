@@ -946,7 +946,8 @@ func main() {
 		port = "8080"
 	}
 	addr := ":" + port
-	log.Printf("site backend listening on %s", addr)
+	log.Printf("SOP Site Backend v%s", sop.Version)
+	log.Printf("Listening on %s", addr)
 	log.Printf("frontend: %s, docs: %s", frontendDir, docsDir)
 	if err := http.ListenAndServe(addr, traceLoginRequests(newSiteAppAccessHandler(mux))); err != nil {
 		panic(fmt.Sprintf("listen failed: %v", err))

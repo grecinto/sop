@@ -298,19 +298,9 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if client wants NDJSON streaming (same as /api/ai/chat)
-	acceptsNDJSON := strings.Contains(r.Header.Get("Accept"), "application/x-ndjson")
-
-	// Setup streaming if requested
-	var sendEvent func(string, any)
-	var hasStreamedContent func() bool
-	if acceptsNDJSON {
-		sendEvent, hasStreamedContent = sopbackend.SetupStream(w)
-	} else {
-		// No-op event handler for non-streaming mode
-		sendEvent = func(string, any) {}
-		hasStreamedContent = func() bool { return false }
-	}
+	// Setup streaming (same pattern as HQ's /api/ai/chat)
+	// Always initialize streaming - client will receive NDJSON events
+	sendEvent, hasStreamedContent := sopbackend.SetupStream(w)
 
 	ctx := r.Context()
 	sessionKey := strings.TrimSpace(req.HQ.SessionID)
@@ -331,7 +321,8 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	payload := &ai.SessionPayload{
 		CurrentUserQuery: req.Query,
 		UserID:           strings.TrimSpace(req.HQ.UserID),
-		SessionID:        strings.TrimSpace(req.HQ.SessionID),
+		SessionID:        sessionKey, // Use the already-determined sessionKey to ensure consistency
+		CurrentDB:        "system",   // Default to system database for daemon mode
 		Variables:        map[string]any{},
 	}
 	if len(req.InputParts) > 0 {
@@ -339,18 +330,6 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	if payload.UserID == "" && storedSessionContext.HQUserID != "" {
 		payload.UserID = storedSessionContext.HQUserID
-	}
-	if payload.SessionID == "" {
-		if storedSessionContext.HQSessionID != "" {
-			payload.SessionID = storedSessionContext.HQSessionID
-		} else if payload.UserID != "" {
-			payload.SessionID = payload.UserID
-		} else {
-			payload.SessionID = sessionKey
-		}
-	}
-	if payload.SessionID == "" {
-		payload.SessionID = "local-daemon"
 	}
 	if s.shellSessions == nil {
 		s.shellSessions = newPTYShellSessionManager()
@@ -392,8 +371,11 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx = context.WithValue(ctx, "session_payload", payload)
-	// Inject streaming support into context (same as /api/ai/chat)
+	// Inject streaming support into context (same as HQ's /api/ai/chat)
 	ctx = sopbackend.InjectSharedRuntimeContext(ctx, sendEvent, w)
+	// Inject DirectFlushingWriter for additional flushing during execution
+	ctx = context.WithValue(ctx, ai.CtxKeyWriter, sopbackend.NewDirectFlushingWriter(w))
+	log.Printf("Daemon: streaming context injected, sendEvent=%v", sendEvent != nil)
 
 	cfg := ai.NewConfigMap()
 	cfg.Set("payload", payload)
@@ -448,13 +430,16 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	payload.CurrentUserQuery = req.Query
 	cfg.Set("payload", payload)
 
+	// Inject session_payload into context so tools can access SessionID
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
 	askQuery := normalizedQuery
 	if sharedContext, err := trySharedMemoryContext(ctx, normalizedQuery, payload.UserID); err == nil && strings.TrimSpace(sharedContext) != "" {
 		cfg.Set("shared_memory_context", sharedContext)
 		cfg.Set("shared_memory_enabled", true)
 	}
 
-	logVerbose("daemon handleAsk: request received query=%q session=%q normalized_query=%q streaming=%v", req.Query, payload.SessionID, normalizedQuery, acceptsNDJSON)
+	logVerbose("daemon handleAsk: request received query=%q session=%q normalized_query=%q streaming=true", req.Query, payload.SessionID, normalizedQuery)
 
 	// Execute query with streaming support
 	var answer string
@@ -465,11 +450,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 			answer, err = sopbackend.AskSharedAgent(ctx, routingQuery, cfg)
 			if err != nil {
 				log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
-				if acceptsNDJSON {
-					sendEvent("error", err.Error())
-					return
-				}
-				respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
+				sendEvent("error", err.Error())
 				return
 			}
 			if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
@@ -490,11 +471,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 			log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
-			if acceptsNDJSON {
-				sendEvent("error", err.Error())
-				return
-			}
-			respondJSON(w, http.StatusInternalServerError, AskResponse{Error: err.Error()})
+			sendEvent("error", err.Error())
 			return
 		}
 		if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
@@ -503,18 +480,12 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		logVerbose("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
 	}
 
-	// Send response based on streaming mode
-	if acceptsNDJSON {
-		// Only send content if nothing was streamed during execution
-		// (same pattern as HQ's /api/ai/chat handler)
-		if !hasStreamedContent() && strings.TrimSpace(answer) != "" {
-			sendEvent("content", answer)
-		}
-		// Stream ends naturally - no explicit done event needed
-	} else {
-		// Traditional JSON response for backward compatibility
-		respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
+	// Send final content if nothing was streamed during execution
+	// (same pattern as HQ's /api/ai/chat handler)
+	if !hasStreamedContent() && strings.TrimSpace(answer) != "" {
+		sendEvent("content", answer)
 	}
+	// Stream ends naturally - no explicit done event needed
 }
 
 func trySharedMemoryContext(ctx context.Context, query, userID string) (string, error) {

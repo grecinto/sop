@@ -1292,21 +1292,13 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 		log.Debug("ValidateToken: expired session",
 			"token_prefix", tokenPrefix(token),
 			"expires_at", r.ExpiresAt)
-		if err := removeSessionRecord(ctx, store, r); err != nil {
-			log.Warn("ValidateToken: failed to remove expired session", "error", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			log.Warn("ValidateToken: failed to commit expired session cleanup", "error", err)
-		}
+		// Don't cleanup here - ValidateToken should be read-only
+		// Expired sessions will be cleaned up by refresh flow or background job
 		return nil, fmt.Errorf("expired session")
 	}
 	if requireActiveAccount && !isUserAccountActive(ctx, r.Username, r.Role) {
-		if err := removeSessionRecord(ctx, store, r); err != nil {
-			log.Warn("ValidateToken: failed to remove revoked session", "error", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			log.Warn("ValidateToken: failed to commit revoked session cleanup", "error", err)
-		}
+		// Don't cleanup here - ValidateToken should be read-only
+		// Invalid sessions will be cleaned up by refresh flow or background job
 		return nil, fmt.Errorf("invalid session")
 	}
 

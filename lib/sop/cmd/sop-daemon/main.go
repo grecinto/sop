@@ -592,7 +592,8 @@ func main() {
 	corsHandler := addCORSToAll(loggingHandler)
 
 	addr := buildListenAddr("127.0.0.1", *port)
-	log.Printf("Starting SOP Daemon on %s", addr)
+	log.Printf("SOP Daemon v%s", sop.Version)
+	log.Printf("Starting on %s", addr)
 	log.Printf("Authentication: JWT with bootstrap secret")
 	log.Printf("Token expiry: access=%v, refresh=%v", *accessTokenTTL, *refreshTokenTTL)
 	log.Printf("Auth endpoints: /api/daemon/auth, /api/daemon/refresh")
@@ -623,6 +624,13 @@ type statusResponseWriter struct {
 func (w *statusResponseWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+// Flush implements http.Flusher to support streaming responses
+func (w *statusResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func addLoggingToAll(handler http.Handler) http.Handler {

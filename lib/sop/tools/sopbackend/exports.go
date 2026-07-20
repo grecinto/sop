@@ -75,7 +75,16 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 	if cfg == nil {
 		cfg = ai.NewConfigMap()
 	}
-	ctx = InjectSharedRuntimeContext(ctx, nil, nil)
+	// Preserve existing streaming context if already injected (daemon mode)
+	// Only inject defaults if context doesn't already have streaming support
+	existingStreamer := ctx.Value(ai.CtxKeyEventStreamer)
+	log.Info("AskSharedAgent: checking streaming context", "has_streamer", existingStreamer != nil)
+	if existingStreamer == nil {
+		ctx = InjectSharedRuntimeContext(ctx, nil, nil)
+		log.Warn("AskSharedAgent: NO EXISTING STREAMER - injected nil defaults (streaming will not work!)")
+	} else {
+		log.Info("AskSharedAgent: preserving existing streaming context")
+	}
 
 	if auth := sop.GetAuthFromContext(ctx); auth.UserID != "" {
 		username := normalizeUsername(auth.UserID)
@@ -662,4 +671,9 @@ func stopKBQuality() {
 			log.Warn("Failed to close KB effectiveness tracker", "error", err)
 		}
 	}
+}
+
+// NewDirectFlushingWriter creates a writer that flushes after each write for real-time streaming
+func NewDirectFlushingWriter(w http.ResponseWriter) *DirectFlushingWriter {
+	return &DirectFlushingWriter{w: w}
 }

@@ -353,6 +353,10 @@ func isAdminAuthContext(auth sop.AuthContext) bool {
 }
 
 func (r *UIRouter) handleLogout(w http.ResponseWriter, req *http.Request) {
+	// Delete session from database before clearing cookies
+	if token := AuthTokenFromRequest(req); token != "" {
+		currentTokenFacade().RevokeToken(req.Context(), token)
+	}
 	clearSessionCookies(w)
 	http.Redirect(w, req, "/login", http.StatusFound)
 }

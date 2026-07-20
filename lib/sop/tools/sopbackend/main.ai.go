@@ -343,6 +343,21 @@ func isReducerSamplePayload(s string) bool {
 func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 	var contentStreamed bool
 
+	// Set streaming headers immediately to prevent buffering
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Transfer-Encoding", "chunked")
+
+	// CRITICAL: Write status header BEFORE first flush to initiate chunked encoding
+	w.WriteHeader(http.StatusOK)
+
+	// Flush headers immediately to establish streaming connection
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
 	writeEvent := func(eventType string, payload any) {
 		switch eventType {
 		case "record", "records", "preview", "result_stream":
@@ -356,8 +371,6 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 			s := fmt.Sprintf("%v", payload)
 			log.Debug("UI: streaming content", "length", len(s))
 		}
-
-		w.Header().Set("Content-Type", "application/x-ndjson")
 
 		log.Debug("UI: writing NDJSON event", "type", eventType, "payload_type", fmt.Sprintf("%T", payload))
 		if err := json.NewEncoder(w).Encode(map[string]any{
@@ -391,12 +404,14 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 				}
 				if text, ok := message["text"].(string); ok && strings.TrimSpace(text) != "" {
 					contentStreamed = true
+					log.Info("UI: streaming assistant message", "length", len(text))
 					writeEvent("content", text)
 					return
 				}
 			}
 		case "content":
 			contentStreamed = true
+			log.Info("UI: streaming content", "length", len(fmt.Sprintf("%v", payload)))
 			writeEvent(eventType, payload)
 			return
 		case ai.ReasoningEventToolCall:
@@ -409,6 +424,7 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 				if tool != "" {
 					contentStreamed = true
 					msg := fmt.Sprintf("🔧 **Calling**: %s\n", tool)
+					log.Info("UI: streaming tool call", "tool", tool)
 					writeEvent("content", msg)
 				}
 			}
@@ -513,12 +529,14 @@ func InjectSharedRuntimeContext(ctx context.Context, sendEvent func(string, any)
 	}
 	ctx = context.WithValue(ctx, ai.CtxKeyExecutor, &DefaultToolExecutor{Agents: loadedAgents})
 	if sendEvent != nil {
+		log.Info("InjectSharedRuntimeContext: setting up streaming context")
 		ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, func(msg string) {
 			sendEvent("content", msg+"\n")
 		})
 		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, sendEvent)
 		ctx = context.WithValue(ctx, ai.CtxKeyResultStreamer, agent.NewEventResultStreamer(sendEvent))
 	} else {
+		log.Warn("InjectSharedRuntimeContext: sendEvent is NIL - streaming disabled")
 		ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, func(string) {})
 		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, func(string, any) {})
 	}
