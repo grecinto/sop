@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	// toolResultThreshold defines when outputs should be file-backed vs inline
-	// Outputs larger than this are written to temp files
-	toolResultThreshold = 20 * 1024 // 20KB
+	// toolResultThreshold defines when LLM gets summary vs full output
+	// ALL results are written to temp file, but LLM gets full result if <= threshold
+	toolResultThreshold = 15 * 1024 // 15KB - adjust if needed
 
 	// toolResultMaxInline defines the summary size for file-backed results
 	// We show head + tail of this size total
@@ -54,12 +54,7 @@ func NewToolResultStorage(sessionID string) (*ToolResultStorage, error) {
 func (s *ToolResultStorage) StoreResult(toolName, result string) (inline string, filePath string, size int, err error) {
 	size = len(result)
 
-	// Small enough - return inline
-	if size <= toolResultThreshold {
-		return result, "", size, nil
-	}
-
-	// Large - write to file and return summary
+	// ALWAYS write to file first (regardless of size)
 	resultID := uuid.New().String()[:8] // Short UUID for readability
 	fileName := fmt.Sprintf("%s-%s.txt", sanitizeToolName(toolName), resultID)
 	filePath = filepath.Join(s.baseDir, fileName)
@@ -68,7 +63,13 @@ func (s *ToolResultStorage) StoreResult(toolName, result string) (inline string,
 		return "", "", 0, fmt.Errorf("failed to write tool result to file: %w", err)
 	}
 
-	// Create summary with head/tail and tool recommendations
+	// THEN apply 20KB rule: return full result if small, summary if large
+	if size <= toolResultThreshold {
+		// Small - return full result inline
+		return result, filePath, size, nil
+	}
+
+	// Large - return summary with analysis tools
 	summary := s.createSummary(toolName, result, filePath, size)
 	return summary, filePath, size, nil
 }

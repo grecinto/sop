@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,6 +33,37 @@ type recordingQueryAgent struct {
 
 type executorAwareAgent struct {
 	gotExecutor bool
+}
+
+var workerModeEnabled bool
+
+func init() {
+	flag.BoolVar(&workerModeEnabled, "worker-mode", false, "run the PTY worker and exit")
+}
+
+func TestMain(m *testing.M) {
+	// CRITICAL: Check for worker mode BEFORE any test framework initialization
+	// We check os.Args directly (not flags) because flags haven't been parsed yet
+	if len(os.Args) > 1 && os.Args[1] == "--worker-mode" {
+		// Save real stdout for JSON protocol BEFORE any redirection
+		realStdout := os.Stdout
+		// Redirect global stdout to stderr to prevent test framework pollution
+		os.Stdout = os.Stderr
+		// Also redirect logs to stderr
+		log.SetOutput(os.Stderr)
+
+		// Run worker with the saved real stdout for JSON
+		if err := runPTYWorkerWithOutput(realStdout); err != nil {
+			log.Fatalf("[PTY Worker] Fatal error: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	// Redirect logs to stderr (same as production main())
+	// This prevents test framework logs from polluting worker stdout JSON protocol
+	log.SetOutput(os.Stderr)
+
+	os.Exit(m.Run())
 }
 
 func (a *stubSharedAgent) Open(ctx context.Context) error  { return nil }
@@ -93,6 +126,40 @@ func TestBuildListenAddr(t *testing.T) {
 
 	if got, want := buildListenAddr("0.0.0.0", 8080), "0.0.0.0:8080"; got != want {
 		t.Fatalf("buildListenAddr() = %q, want %q", got, want)
+	}
+}
+
+func TestParseDaemonLogLevel(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    daemonLogLevel
+		wantErr bool
+	}{
+		{name: "default", input: "", want: daemonLogLevelInfo},
+		{name: "debug", input: "debug", want: daemonLogLevelDebug},
+		{name: "info", input: "info", want: daemonLogLevelInfo},
+		{name: "warn", input: "warn", want: daemonLogLevelWarn},
+		{name: "error", input: "error", want: daemonLogLevelError},
+		{name: "invalid", input: "verbosez", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDaemonLogLevel(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseDaemonLogLevel(%q) expected error, got nil", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseDaemonLogLevel(%q) unexpected error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseDaemonLogLevel(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
 	}
 }
 

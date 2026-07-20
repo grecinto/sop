@@ -370,95 +370,101 @@ func (m *ptyShellSessionManager) Run(sessionID, command string, timeout time.Dur
 }
 
 // RunWithStreaming executes a command with optional real-time output streaming
+// PHASE 2: Now routes through worker process for crash isolation
 func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, timeout time.Duration, streamCallback StreamCallback) (string, bool, error) {
 	if sessionID == "" {
 		sessionID = "default"
 	}
 
-	m.mu.Lock()
-	session, ok := m.sessions[sessionID]
-	if !ok {
-		var err error
-		session, err = newPTYShellSession(sessionID)
-		if err != nil {
-			m.mu.Unlock()
-			return "", false, fmt.Errorf("failed to create shell session: %w", err)
-		}
-		m.sessions[sessionID] = session
-	} else {
-		// Check if existing session is stuck and needs recovery
-		if session.stillRunning {
-			log.Printf("PTY session %s marked as stuck, checking health...", sessionID)
-			if !session.IsHealthy() {
-				log.Printf("PTY session %s unresponsive, forcing reset", sessionID)
-				// Close stuck session
-				session.Close()
-				// Create fresh session
-				var err error
-				session, err = newPTYShellSession(sessionID)
-				if err != nil {
-					m.mu.Unlock()
-					return "", false, fmt.Errorf("failed to recreate shell session after reset: %w", err)
-				}
-				m.sessions[sessionID] = session
+	// Get worker manager
+	workerMgr := getGlobalWorkerManager()
+
+	// Convert timeout to seconds
+	timeoutSeconds := int(timeout.Seconds())
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 600 // Default 10 minutes
+	}
+
+	// Send command to worker (spawns if needed)
+	resp, err := workerMgr.sendCommand(context.Background(), sessionID, command, timeoutSeconds)
+	if err != nil {
+		return "", false, fmt.Errorf("worker command failed: %w", err)
+	}
+
+	// Handle streaming callback if provided
+	if streamCallback != nil && resp.Output != "" {
+		// Stream the output (worker already collected it)
+		lines := strings.Split(resp.Output, "\n")
+		for _, line := range lines {
+			if line != "" {
+				streamCallback(line + "\n")
 			}
 		}
-		// Update last used time for existing session
-		session.lastUsed = time.Now()
 	}
-	m.mu.Unlock()
 
-	return session.RunWithStreaming(command, timeout, streamCallback)
+	// Check for error in response
+	if resp.Error != "" {
+		return resp.Output, resp.Running, fmt.Errorf("worker error: %s", resp.Error)
+	}
+
+	// Return output and running status
+	return resp.Output, resp.Running, nil
 }
 
 // SpawnBackgroundSession creates a new background PTY session with a unique ID
 // Use this to run long-running commands (servers, watchers) in parallel with main session
+// PHASE 2: Now spawns worker process for isolation
 func (m *ptyShellSessionManager) SpawnBackgroundSession(workingDir string) (string, error) {
 	// Generate unique session ID for background work
 	sessionID := fmt.Sprintf("bg-%d-%d", time.Now().Unix(), len(m.sessions))
 
-	m.mu.Lock()
-	session, err := newPTYShellSession(sessionID)
+	// Get worker manager
+	workerMgr := getGlobalWorkerManager()
+
+	// Spawn the worker (it will be ready for commands)
+	_, err := workerMgr.spawnWorker(sessionID)
 	if err != nil {
-		m.mu.Unlock()
-		return "", fmt.Errorf("failed to create background shell session: %w", err)
+		return "", fmt.Errorf("failed to spawn background worker: %w", err)
 	}
-	session.isBackground = true
-	m.sessions[sessionID] = session
-	m.mu.Unlock()
 
 	// Change to working directory if specified
 	if workingDir != "" {
-		_, _, err := session.Run("cd "+workingDir, 5*time.Second)
-		if err != nil {
-			session.Close()
+		resp, err := workerMgr.sendCommand(context.Background(), sessionID, "cd "+workingDir, 5)
+		if err != nil || resp.ExitCode != 0 {
+			workerMgr.killWorker(sessionID)
 			return "", fmt.Errorf("failed to change to working directory: %w", err)
 		}
 	}
+
+	// Track session (for cleanup purposes)
+	m.mu.Lock()
+	m.sessions[sessionID] = &ptyShellSession{
+		sessionID:    sessionID,
+		isBackground: true,
+		lastUsed:     time.Now(),
+	}
+	m.mu.Unlock()
 
 	return sessionID, nil
 }
 
 // ForceResetSession forcibly closes and recreates a session
 // Use this when a session is stuck and auto-recovery didn't work
+// PHASE 2: Now kills worker process for clean restart
 func (m *ptyShellSessionManager) ForceResetSession(sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if session, ok := m.sessions[sessionID]; ok {
-		// Close the stuck session
-		if err := session.Close(); err != nil {
-			log.Printf("Error closing stuck session %s: %v", sessionID, err)
-		}
-		delete(m.sessions, sessionID)
+	// Get worker manager and kill the worker
+	workerMgr := getGlobalWorkerManager()
+	if err := workerMgr.killWorker(sessionID); err != nil {
+		log.Printf("Warning: failed to kill worker for session %s: %v", sessionID, err)
+	}
 
-		// Create fresh session
-		newSession, err := newPTYShellSession(sessionID)
-		if err != nil {
-			return fmt.Errorf("failed to recreate session %s: %w", sessionID, err)
-		}
-		m.sessions[sessionID] = newSession
-		log.Printf("Forcibly reset session %s", sessionID)
+	// Remove session tracking
+	if _, ok := m.sessions[sessionID]; ok {
+		delete(m.sessions, sessionID)
+		log.Printf("Forcibly reset session %s (worker killed, will respawn on next command)", sessionID)
 		return nil
 	}
 
@@ -509,23 +515,29 @@ func (m *ptyShellSessionManager) StopCleanup() {
 }
 
 // cleanupIdleSessions removes sessions that haven't been used within idleTimeout
+// PHASE 2: Now kills idle worker processes
 func (m *ptyShellSessionManager) cleanupIdleSessions(idleTimeout time.Duration) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	now := time.Now()
 	cleaned := 0
+	workerMgr := getGlobalWorkerManager()
 
 	for sessionID, session := range m.sessions {
+		if session == nil {
+			continue
+		}
+
 		session.mu.Lock()
 		idle := now.Sub(session.lastUsed)
 		isIdle := idle > idleTimeout
 		session.mu.Unlock()
 
 		if isIdle {
-			// Close the session
-			if err := session.Close(); err != nil {
-				log.Printf("PTY cleanup: error closing session %s: %v", sessionID, err)
+			// Kill the worker process
+			if err := workerMgr.killWorker(sessionID); err != nil {
+				log.Printf("PTY cleanup: error killing worker for session %s: %v", sessionID, err)
 			}
 			delete(m.sessions, sessionID)
 			cleaned++
@@ -536,16 +548,18 @@ func (m *ptyShellSessionManager) cleanupIdleSessions(idleTimeout time.Duration) 
 }
 
 // CloseSession closes a specific shell session
+// PHASE 2: Now kills the worker process
 func (m *ptyShellSessionManager) CloseSession(sessionID string) error {
 	m.mu.Lock()
-	session, ok := m.sessions[sessionID]
+	_, ok := m.sessions[sessionID]
 	if ok {
 		delete(m.sessions, sessionID)
 	}
 	m.mu.Unlock()
 
-	if session != nil {
-		return session.Close()
+	if ok {
+		workerMgr := getGlobalWorkerManager()
+		return workerMgr.killWorker(sessionID)
 	}
 	return nil
 }

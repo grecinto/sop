@@ -1988,18 +1988,29 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 	if localCommandExecutor != nil {
 		result, err := localCommandExecutor(ctx, request)
 		if err == nil {
-			// Parse and emit test status immediately (before LLM analysis)
-			// This ensures users see PASS/FAIL even if LLM hits tool-step limits
-			// Returns a status summary to prepend to output for LLM clarity
 			statusSummary := parseAndEmitTestStatus(ctx, command, result)
 
-			// Prepend test status to result for LLM - prevents retry loops
-			if statusSummary != "" {
-				result = statusSummary + result
+			// Use ToolResultStorage: always writes to file, then applies 15KB rule
+			storage := getOrCreateToolResultStorage(ctx)
+			if storage != nil {
+				llmResult, uiResult, _, storageErr := storage.StoreResult("local_command", result)
+				if storageErr == nil {
+					// Send UI-appropriate output (respects 15KB threshold)
+					emitAutomationToolResult(ctx, "local_command", uiResult)
+
+					// Return LLM-appropriate output (with status prepended)
+					if statusSummary != "" {
+						llmResult = statusSummary + "\n\n" + llmResult
+					}
+					return llmResult, nil
+				}
 			}
 
-			// Return result with status prepended - let the frontend renderer handle display formatting
+			// Fallback if storage fails (send full output)
 			emitAutomationToolResult(ctx, "local_command", result)
+			if statusSummary != "" {
+				result = statusSummary + "\n\n" + result
+			}
 		}
 		return result, err
 	}

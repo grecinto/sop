@@ -138,6 +138,73 @@ func (r *errOnceOnAddReg) Replicate(ctx context.Context, newRootNodeHandles, add
 	return r.inner.Replicate(ctx, newRootNodeHandles, addedNodeHandles, updatedNodeHandles, removedNodeHandles)
 }
 
+type retryableCommitError struct {
+	msg string
+}
+
+func (e retryableCommitError) Error() string   { return e.msg }
+func (e retryableCommitError) Retryable() bool { return true }
+
+type failOnceAfterAddRegistry struct {
+	inner *mocks.Mock_vid_registry
+	calls int
+	lk    sop.LockKey
+}
+
+type alwaysFailRegistry struct {
+	inner       *mocks.Mock_vid_registry
+	lk          sop.LockKey
+	removeCalls int
+}
+
+func (r *alwaysFailRegistry) Add(ctx context.Context, storesHandles []sop.RegistryPayload[sop.Handle]) error {
+	return sop.Error{Code: sop.RestoreRegistryFileSectorFailure, Err: fmt.Errorf("simulated sector timeout"), UserData: &r.lk}
+}
+func (r *alwaysFailRegistry) Update(ctx context.Context, storesHandles []sop.RegistryPayload[sop.Handle]) error {
+	return r.inner.Update(ctx, storesHandles)
+}
+func (r *alwaysFailRegistry) UpdateNoLocks(ctx context.Context, allOrNothing bool, storesHandles []sop.RegistryPayload[sop.Handle]) error {
+	return r.inner.UpdateNoLocks(ctx, allOrNothing, storesHandles)
+}
+func (r *alwaysFailRegistry) Get(ctx context.Context, storesLids []sop.RegistryPayload[sop.UUID]) ([]sop.RegistryPayload[sop.Handle], error) {
+	return r.inner.Get(ctx, storesLids)
+}
+func (r *alwaysFailRegistry) Remove(ctx context.Context, storesLids []sop.RegistryPayload[sop.UUID]) error {
+	r.removeCalls++
+	return r.inner.Remove(ctx, storesLids)
+}
+func (r *alwaysFailRegistry) Replicate(ctx context.Context, newRootNodeHandles, addedNodeHandles, updatedNodeHandles, removedNodeHandles []sop.RegistryPayload[sop.Handle]) error {
+	return r.inner.Replicate(ctx, newRootNodeHandles, addedNodeHandles, updatedNodeHandles, removedNodeHandles)
+}
+
+func (r *failOnceAfterAddRegistry) Add(ctx context.Context, storesHandles []sop.RegistryPayload[sop.Handle]) error {
+	r.calls++
+	if r.calls == 1 {
+		for _, storeHandles := range storesHandles {
+			for _, h := range storeHandles.IDs {
+				r.inner.Lookup[h.LogicalID] = h
+			}
+		}
+		return sop.Error{Code: sop.RestoreRegistryFileSectorFailure, Err: fmt.Errorf("simulated add failure after partial persistence"), UserData: &r.lk}
+	}
+	return r.inner.Add(ctx, storesHandles)
+}
+func (r *failOnceAfterAddRegistry) Update(ctx context.Context, storesHandles []sop.RegistryPayload[sop.Handle]) error {
+	return r.inner.Update(ctx, storesHandles)
+}
+func (r *failOnceAfterAddRegistry) UpdateNoLocks(ctx context.Context, allOrNothing bool, storesHandles []sop.RegistryPayload[sop.Handle]) error {
+	return r.inner.UpdateNoLocks(ctx, allOrNothing, storesHandles)
+}
+func (r *failOnceAfterAddRegistry) Get(ctx context.Context, storesLids []sop.RegistryPayload[sop.UUID]) ([]sop.RegistryPayload[sop.Handle], error) {
+	return r.inner.Get(ctx, storesLids)
+}
+func (r *failOnceAfterAddRegistry) Remove(ctx context.Context, storesLids []sop.RegistryPayload[sop.UUID]) error {
+	return r.inner.Remove(ctx, storesLids)
+}
+func (r *failOnceAfterAddRegistry) Replicate(ctx context.Context, newRootNodeHandles, addedNodeHandles, updatedNodeHandles, removedNodeHandles []sop.RegistryPayload[sop.Handle]) error {
+	return r.inner.Replicate(ctx, newRootNodeHandles, addedNodeHandles, updatedNodeHandles, removedNodeHandles)
+}
+
 // Covers phase1Commit branch in commitAddedNodes where sop.Error triggers handleRegistrySectorLockTimeout;
 // after rollback and refetch, retry succeeds and phase1Commit completes.
 func Test_Phase1Commit_CommitAddedNodes_SectorTimeout_Retry_Succeeds(t *testing.T) {
@@ -175,9 +242,8 @@ func Test_Phase1Commit_CommitAddedNodes_SectorTimeout_Retry_Succeeds(t *testing.
 	}
 }
 
-// Asserts that a sector-timeout during commitAddedNodes triggers rollback (registry.Remove invoked)
-// before retrying and succeeding.
-func Test_Phase1Commit_CommitAddedNodes_SectorTimeout_NoRollbackAndRetrySucceeds(t *testing.T) {
+// Asserts that a transient sector-timeout during commitAddedNodes is retried and succeeds.
+func Test_Phase1Commit_CommitAddedNodes_SectorTimeout_RetrySucceeds(t *testing.T) {
 	ctx := context.Background()
 	l2 := mocks.NewMockClient()
 	cache.GetGlobalL1Cache(l2)
@@ -208,11 +274,6 @@ func Test_Phase1Commit_CommitAddedNodes_SectorTimeout_NoRollbackAndRetrySucceeds
 
 	if err := tx.phase1Commit(ctx); err != nil {
 		t.Fatalf("phase1Commit error: %v", err)
-	}
-	// No rollback (registry.Remove) is expected at the exact commitAddedNodes failure point; rollbackAddedNodes only
-	// occurs when committedState > commitAddedNodes, which is not the case here.
-	if induced.removeCount != 0 {
-		t.Fatalf("did not expect registry.Remove during sector-timeout handling at commitAddedNodes; got %d", induced.removeCount)
 	}
 	// After retry, the handle for the added node should be registered.
 	if _, ok := baseReg.Lookup[id]; !ok {
@@ -258,6 +319,79 @@ func (r *onceMismatchGetReg) Remove(ctx context.Context, storesLids []sop.Regist
 }
 func (r *onceMismatchGetReg) Replicate(ctx context.Context, a, b, c, d []sop.RegistryPayload[sop.Handle]) error {
 	return r.inner.Replicate(ctx, a, b, c, d)
+}
+
+func Test_Phase1Commit_RetryLimitExceeded_ReturnsErrorWithoutRollback(t *testing.T) {
+	ctx := context.Background()
+	l2 := mocks.NewMockClient()
+	cache.GetGlobalL1Cache(l2)
+
+	reg := &alwaysFailRegistry{inner: mocks.NewMockRegistry(false).(*mocks.Mock_vid_registry), lk: sop.LockKey{Key: "retry-limit", LockID: sop.NewUUID()}}
+	sr := mocks.NewMockStoreRepository()
+	tx := &Transaction{mode: sop.ForWriting, maxTime: time.Minute, StoreRepository: sr, registry: reg, l2Cache: l2, l1Cache: cache.GetGlobalL1Cache(l2), blobStore: mocks.NewMockBlobStore(), logger: newTransactionLogger(mocks.NewMockTransactionLog(), true), phaseDone: 0}
+
+	si := sop.NewStoreInfo(sop.StoreOptions{Name: "p1_retry_limit", SlotLength: 4})
+	nr := &nodeRepositoryBackend{transaction: tx, storeInfo: si, readNodesCache: cache.NewCache[sop.UUID, any](8, 12), localCache: make(map[sop.UUID]cachedNode), l2Cache: l2, l1Cache: cache.GetGlobalL1Cache(l2), count: si.Count}
+	id := sop.NewUUID()
+	nr.localCache[id] = cachedNode{action: addAction, node: &btree.Node[PersonKey, Person]{ID: id, Version: 0}}
+
+	tx.btreesBackend = []btreeBackend{{
+		nodeRepository:                   nr,
+		getStoreInfo:                     func() *sop.StoreInfo { return si },
+		hasTrackedItems:                  func() bool { return true },
+		checkTrackedItems:                func(context.Context) error { return nil },
+		lockTrackedItems:                 func(context.Context, time.Duration) error { return nil },
+		unlockTrackedItems:               func(context.Context) error { return nil },
+		commitTrackedItemsValues:         func(context.Context) error { return nil },
+		getForRollbackTrackedItemsValues: func() *sop.BlobsPayload[sop.UUID] { return nil },
+		getObsoleteTrackedItemsValues:    func() *sop.BlobsPayload[sop.UUID] { return nil },
+		refetchAndMerge:                  func(context.Context) error { return nil },
+	}}
+
+	err := tx.phase1Commit(ctx)
+	if err == nil || !strings.Contains(err.Error(), "retry limit") {
+		t.Fatalf("expected retry-limit error after repeated rollback/retry failures, got: %v", err)
+	}
+	if reg.removeCalls != 0 {
+		t.Fatalf("expected retry-limit error to return before invoking rollback, got %d remove calls", reg.removeCalls)
+	}
+}
+
+func Test_Phase1Commit_CommitAddedNodes_PartialPersistenceReturnsError(t *testing.T) {
+	ctx := context.Background()
+	l2 := mocks.NewMockClient()
+	cache.GetGlobalL1Cache(l2)
+
+	baseReg := mocks.NewMockRegistry(false).(*mocks.Mock_vid_registry)
+	induced := &failOnceAfterAddRegistry{inner: baseReg, lk: sop.LockKey{Key: "partial-add-retry", LockID: sop.NewUUID()}}
+
+	sr := mocks.NewMockStoreRepository()
+	tx := &Transaction{mode: sop.ForWriting, maxTime: 250 * time.Millisecond, StoreRepository: sr, registry: induced, l2Cache: l2, l1Cache: cache.GetGlobalL1Cache(l2), blobStore: mocks.NewMockBlobStore(), logger: newTransactionLogger(mocks.NewMockTransactionLog(), true), phaseDone: 0}
+
+	si := sop.NewStoreInfo(sop.StoreOptions{Name: "p1_partial_add_retry", SlotLength: 4})
+	nr := &nodeRepositoryBackend{transaction: tx, storeInfo: si, readNodesCache: cache.NewCache[sop.UUID, any](8, 12), localCache: make(map[sop.UUID]cachedNode), l2Cache: l2, l1Cache: cache.GetGlobalL1Cache(l2), count: si.Count}
+	id := sop.NewUUID()
+	nr.localCache[id] = cachedNode{action: addAction, node: &btree.Node[PersonKey, Person]{ID: id, Version: 0}}
+
+	tx.btreesBackend = []btreeBackend{{
+		nodeRepository:                   nr,
+		getStoreInfo:                     func() *sop.StoreInfo { return si },
+		hasTrackedItems:                  func() bool { return true },
+		checkTrackedItems:                func(context.Context) error { return nil },
+		lockTrackedItems:                 func(context.Context, time.Duration) error { return nil },
+		unlockTrackedItems:               func(context.Context) error { return nil },
+		commitTrackedItemsValues:         func(context.Context) error { return nil },
+		getForRollbackTrackedItemsValues: func() *sop.BlobsPayload[sop.UUID] { return nil },
+		getObsoleteTrackedItemsValues:    func() *sop.BlobsPayload[sop.UUID] { return nil },
+		refetchAndMerge:                  func(context.Context) error { return nil },
+	}}
+
+	if err := tx.phase1Commit(ctx); err == nil {
+		t.Fatalf("expected phase1Commit to surface the partial-add failure to the caller")
+	}
+	if _, ok := baseReg.Lookup[id]; !ok {
+		t.Fatalf("expected the partially persisted handle to remain visible for the caller rollback path")
+	}
 }
 
 // Covers commitRemovedNodes returning false (mismatch) -> rollback -> needsRefetchAndMerge -> retry success.

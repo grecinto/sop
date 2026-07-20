@@ -166,6 +166,25 @@ func shouldPrintHelp(args []string) bool {
 	return false
 }
 
+func flagWasProvided(flagName string) bool {
+	for i := 0; i < len(os.Args)-1; i++ {
+		arg := os.Args[i+1]
+		if arg == "--" {
+			break
+		}
+		if arg == "-"+flagName || arg == "--"+flagName {
+			return true
+		}
+		if strings.HasPrefix(arg, "-"+flagName+"=") || strings.HasPrefix(arg, "--"+flagName+"=") {
+			return true
+		}
+		if (arg == "-"+flagName[:1] || arg == "--"+flagName[:1]) && i+2 < len(os.Args) {
+			return true
+		}
+	}
+	return false
+}
+
 func printDaemonHelpTo(w io.Writer) {
 	resolvedPath, err := resolveDaemonConfigLocation("", nil)
 	if err != nil {
@@ -194,6 +213,8 @@ Usage:
         Path to the SOP daemon configuration file. If omitted, the daemon will look in the user config directory and fall back to the current working directory.
   -print-config-path
         Print the resolved daemon config path and exit.
+  -log-level string
+        Set daemon log verbosity (debug, info, warn, error). Default is info.
   -port int
         Port to run the local SOP daemon on (default 9090)
   -rate-limit-max-requests int
@@ -302,16 +323,37 @@ var daemonSessionStore = struct {
 
 var localRuntimeConfigPath string
 
+type daemonLogLevel string
+
+const (
+	daemonLogLevelDebug daemonLogLevel = "debug"
+	daemonLogLevelInfo  daemonLogLevel = "info"
+	daemonLogLevelWarn  daemonLogLevel = "warn"
+	daemonLogLevelError daemonLogLevel = "error"
+)
+
 const daemonVerboseLoggingEnv = "SOP_DAEMON_VERBOSE"
 
-func shouldLogVerbose() bool {
-	value := strings.TrimSpace(os.Getenv(daemonVerboseLoggingEnv))
-	switch strings.ToLower(value) {
-	case "1", "true", "yes", "on":
-		return true
+var activeDaemonLogLevel = daemonLogLevelInfo
+
+func parseDaemonLogLevel(value string) (daemonLogLevel, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "", "info":
+		return daemonLogLevelInfo, nil
+	case "debug":
+		return daemonLogLevelDebug, nil
+	case "warn":
+		return daemonLogLevelWarn, nil
+	case "error":
+		return daemonLogLevelError, nil
 	default:
-		return false
+		return "", fmt.Errorf("unsupported log level %q (expected one of: debug, info, warn, error)", value)
 	}
+}
+
+func shouldLogVerbose() bool {
+	return activeDaemonLogLevel == daemonLogLevelDebug
 }
 
 func logVerbose(format string, args ...any) {
@@ -321,9 +363,23 @@ func logVerbose(format string, args ...any) {
 }
 
 func main() {
+	// Redirect daemon operational logs to stderr so they don't pollute command output (stdout)
+	// This ensures only PTY command output goes to stdout and gets returned to the LLM
+	log.SetOutput(os.Stderr)
+
+	// Check for worker mode BEFORE flag parsing (worker mode needs minimal setup)
+	// Worker mode flag must be first argument to avoid conflicts with other flags
+	if len(os.Args) > 1 && os.Args[1] == "--worker-mode" {
+		if err := runPTYWorker(); err != nil {
+			log.Fatalf("[PTY Worker] Fatal error: %v", err)
+		}
+		os.Exit(0)
+	}
+
 	port := flag.Int("port", 9090, "Port to run the local SOP daemon on")
 	configPath := flag.String("config", "", "Path to the SOP daemon configuration file")
 	printConfigPath := flag.Bool("print-config-path", false, "Print the resolved daemon config path and exit")
+	logLevelFlag := flag.String("log-level", "info", "Set daemon log verbosity (debug, info, warn, error)")
 	policyMaxRequests := flag.Int("rate-limit-max-requests", 20, "Maximum local requests per session before enforcement kicks in")
 	policyWindow := flag.Duration("rate-limit-window", time.Minute, "Rate limit window for local daemon requests")
 	accessTokenTTL := flag.Duration("access-token-ttl", 15*time.Minute, "Access token expiry duration")
@@ -342,6 +398,19 @@ func main() {
 		}
 		log.Fatalf("Failed to parse flags: %v", err)
 	}
+
+	resolvedLogLevel, err := parseDaemonLogLevel(*logLevelFlag)
+	if err != nil {
+		log.Fatalf("Invalid log level: %v", err)
+	}
+	if !flagWasProvided("log-level") {
+		value := strings.TrimSpace(os.Getenv(daemonVerboseLoggingEnv))
+		switch strings.ToLower(value) {
+		case "1", "true", "yes", "on":
+			resolvedLogLevel = daemonLogLevelDebug
+		}
+	}
+	activeDaemonLogLevel = resolvedLogLevel
 
 	// Keep the daemon-specific command executor hook, but let sopbackend own the shared bootstrap.
 	sharedagent.SetLocalCommandExecutor(runLocalCommand)
@@ -605,6 +674,14 @@ func main() {
 	server := &http.Server{Addr: addr, Handler: sopbackend.NewObservabilityHandler(corsHandler)}
 	go func() {
 		<-hostCtx.Done()
+		log.Printf("Shutting down daemon...")
+
+		// Cleanup workers before shutting down server
+		workerMgr := getGlobalWorkerManager()
+		if workerMgr != nil {
+			workerMgr.cleanup()
+		}
+
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -895,8 +972,11 @@ func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCom
 			// This is standard PTY behavior (same as interactive terminals)
 
 			// Handle cd command - execute and return new directory
+			// IMPORTANT: Combine cd && pwd into single command to avoid PTY sync issues
 			if strings.HasPrefix(trimmedCommand, "cd ") || trimmedCommand == "cd" {
-				output, stillRunning, err := shellMgr.RunWithStreaming(sessionID, trimmedCommand, time.Duration(timeoutSeconds)*time.Second, streamCallback)
+				// Execute "cd dir && pwd" as a single command to get the new directory
+				combinedCmd := trimmedCommand + " && pwd"
+				output, stillRunning, err := shellMgr.RunWithStreaming(sessionID, combinedCmd, time.Duration(timeoutSeconds)*time.Second, streamCallback)
 				if err != nil {
 					resp := ExecuteResponse{
 						Stderr:   err.Error(),
@@ -914,10 +994,9 @@ func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCom
 					payload, _ := json.Marshal(resp)
 					return string(payload), nil
 				}
-				// Get new working directory
-				pwdOutput, _, _ := shellMgr.Run(sessionID, "pwd", 5*time.Second)
+				// The output is the new directory from pwd
 				resp := ExecuteResponse{
-					Stdout:   strings.TrimSpace(pwdOutput),
+					Stdout:   strings.TrimSpace(output),
 					ExitCode: 0,
 				}
 				payload, _ := json.Marshal(resp)

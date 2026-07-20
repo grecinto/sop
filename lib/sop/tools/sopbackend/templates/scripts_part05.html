@@ -367,6 +367,22 @@
     // AI Terminal Management
     let aiTerminalPollInterval = null;
     let aiTerminalHeight = 250;
+    let isTerminalPolling = false; // Track polling state to avoid loops
+    
+    // Cross-window communication for terminal polling (main window ↔ floating AI window)
+    let terminalBroadcast = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+        terminalBroadcast = new BroadcastChannel('sop_terminal_polling');
+        terminalBroadcast.onmessage = (event) => {
+            if (event.data === 'start' && !isChatFloaterMode() && !isTerminalPolling) {
+                // Main window receives start signal from floating window
+                startAITerminalPollingInternal();
+            } else if (event.data === 'stop' && !isChatFloaterMode() && isTerminalPolling) {
+                // Main window receives stop signal from floating window
+                stopAITerminalPollingInternal();
+            }
+        };
+    }
 
     function toggleAITerminal() {
         const pane = document.getElementById('ai-terminal-pane');
@@ -385,7 +401,7 @@
         
         pane.style.display = 'block';
         refreshAITerminal();
-        startAITerminalPolling();
+        startAITerminalPollingInternal(); // Direct call, no broadcast needed
     }
 
     function closeAITerminal() {
@@ -393,7 +409,7 @@
         if (!pane) return;
         
         pane.style.display = 'none';
-        stopAITerminalPolling();
+        stopAITerminalPollingInternal(); // Direct call, no broadcast needed
     }
 
     let lastTerminalOutput = '';
@@ -445,13 +461,43 @@
     }
 
     function startAITerminalPolling() {
-        stopAITerminalPolling();
+        // Notify other windows (e.g., floating AI window → main window)
+        if (terminalBroadcast && isChatFloaterMode()) {
+            terminalBroadcast.postMessage('start');
+        }
+        
+        // Start polling in this window if not in floater mode
+        if (!isChatFloaterMode()) {
+            startAITerminalPollingInternal();
+        }
+    }
+
+    function startAITerminalPollingInternal() {
+        if (isTerminalPolling) return; // Already polling
+        isTerminalPolling = true;
+        
+        if (aiTerminalPollInterval) {
+            clearInterval(aiTerminalPollInterval);
+        }
         aiTerminalPollInterval = setInterval(() => {
             refreshAITerminal();
         }, 2000);
     }
 
     function stopAITerminalPolling() {
+        // Notify other windows (e.g., floating AI window → main window)
+        if (terminalBroadcast && isChatFloaterMode()) {
+            terminalBroadcast.postMessage('stop');
+        }
+        
+        // Stop polling in this window if not in floater mode
+        if (!isChatFloaterMode()) {
+            stopAITerminalPollingInternal();
+        }
+    }
+
+    function stopAITerminalPollingInternal() {
+        isTerminalPolling = false;
         if (aiTerminalPollInterval) {
             clearInterval(aiTerminalPollInterval);
             aiTerminalPollInterval = null;
@@ -2087,14 +2133,10 @@
             streamState.currentContentSpan = null;
         } else if (normalizedEvent.type === 'tool_call') {
             handled = true;
-            // Auto-open terminal when local command tools are called
+            // Start terminal polling when local command tools are called (no auto-open)
             const toolName = normalizedEvent.payload && normalizedEvent.payload.tool;
             if (toolName === 'local_command' || toolName === 'execute_local_command') {
-                const pane = document.getElementById('ai-terminal-pane');
-                if (pane && pane.style.display === 'none') {
-                    console.log('[Terminal] Auto-opening for', toolName);
-                    openAITerminal();
-                }
+                startAITerminalPolling(); // Handles both floater and main window
             }
         } else if (normalizedEvent.type === 'tool_error') {
             handled = true;
@@ -2568,6 +2610,8 @@
              if (currentAiMsgId) {
                  updateHeaderFeedbackVisibility(true);
              }
+             // Stop terminal polling when AI response completes
+             stopAITerminalPolling();
         }
     }
 

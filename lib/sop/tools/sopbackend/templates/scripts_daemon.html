@@ -26,7 +26,11 @@
         constructor() {
             this.accessToken = localStorage.getItem(TOKEN_STORAGE_KEY);
             this.refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
-            this.tokenExpiry = localStorage.getItem(TOKEN_EXPIRY_KEY);
+            
+            // Parse tokenExpiry as number (localStorage returns strings)
+            const storedExpiry = localStorage.getItem(TOKEN_EXPIRY_KEY);
+            this.tokenExpiry = storedExpiry ? parseInt(storedExpiry, 10) : null;
+            
             this.bootstrapping = false;
             
             // Track when the daemon last performed a background subscription check.
@@ -142,8 +146,12 @@
             }
 
             // Check if token expires in less than 1 minute (refresh early)
-            const expiresIn = this.tokenExpiry - Date.now();
-            return expiresIn > 60000; // 1 minute buffer
+            const expiresIn = this.tokenExpiry - Date.now();            
+            // Ensure expiresIn is a valid number
+            if (isNaN(expiresIn)) {
+                return false;
+            }
+                        return expiresIn > 60000; // 1 minute buffer
         }
 
         /**
