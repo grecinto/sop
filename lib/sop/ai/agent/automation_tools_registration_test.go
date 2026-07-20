@@ -598,7 +598,7 @@ func TestRunRepoTestsUsesLocalCommandExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("toolRunRepoTests() error = %v", err)
 	}
-	if out != "ok" {
+	if !strings.Contains(out, "Command: go test ./... -run \"TestFoo\"") {
 		t.Fatalf("toolRunRepoTests() output = %q", out)
 	}
 	if !strings.Contains(received.Command, "go test") {
@@ -606,6 +606,12 @@ func TestRunRepoTestsUsesLocalCommandExecutor(t *testing.T) {
 	}
 	if received.WorkingDir != "/tmp/repo" {
 		t.Fatalf("expected working dir to be preserved, got %q", received.WorkingDir)
+	}
+	if !strings.Contains(received.Command, "go test ./...") {
+		t.Fatalf("expected command to include concrete shell command, got %q", received.Command)
+	}
+	if !strings.Contains(out, "go test ./...") {
+		t.Fatalf("expected tool result to include the concrete shell command, got %q", out)
 	}
 }
 

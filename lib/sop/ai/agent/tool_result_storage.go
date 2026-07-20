@@ -14,7 +14,7 @@ import (
 const (
 	// toolResultThreshold defines when LLM gets summary vs full output
 	// ALL results are written to temp file, but LLM gets full result if <= threshold
-	toolResultThreshold = 5 * 1024 // 5KB - triggers summarization for most test outputs
+	toolResultThreshold = 2*1024 // 5KB - triggers summarization for most test outputs
 
 	// toolResultMaxInline defines the summary size for file-backed results
 	// We show head + tail of this size total
@@ -105,7 +105,7 @@ func unwrapJSONCommandResult(result string) string {
 		output.WriteString(cmdResult.Stdout)
 	}
 	if cmdResult.Stderr != "" {
-		if output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
+		if output.Len() > 0 {
 			output.WriteString("\n")
 		}
 		output.WriteString(cmdResult.Stderr)
@@ -196,6 +196,22 @@ func sanitizeToolName(name string) string {
 	return result
 }
 
+func isTestCommand(toolName string) bool {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	if name == "" {
+		return false
+	}
+	return strings.Contains(name, "test") || strings.Contains(name, "spec")
+}
+
+func isBuildCommand(toolName string) bool {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	if name == "" {
+		return false
+	}
+	return strings.Contains(name, "build") || strings.Contains(name, "compile") || strings.Contains(name, "make")
+}
+
 // CleanupOldToolResults removes tool result directories older than the given TTL
 // Used for background cleanup of abandoned sessions
 func CleanupOldToolResults(baseDir string, ttl time.Duration) error {
@@ -275,6 +291,9 @@ func (s *ToolResultStorage) ReadResultLines(filePath string, startLine, endLine 
 
 	content, err := os.ReadFile(filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
 		return "", fmt.Errorf("failed to read result file: %w", err)
 	}
 
@@ -308,6 +327,9 @@ func (s *ToolResultStorage) GrepResult(filePath, pattern string, maxMatches int)
 
 	content, err := os.ReadFile(filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("failed to read result file: %w", err)
 	}
 

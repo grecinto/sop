@@ -197,6 +197,46 @@ func TestChatLocalCommandOutputUsesTwoColumnLayout(t *testing.T) {
 	}
 }
 
+func TestChatCommandPreviewUsesDedicatedStyledSpan(t *testing.T) {
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "chat-command-preview") {
+		t.Fatalf("expected chat command preview to use a dedicated styled span in %s", scriptsPath)
+	}
+	if !strings.Contains(scriptsContent, "activeChatCommandPreview") || !strings.Contains(scriptsContent, "clearActiveChatCommandPreview") {
+		t.Fatalf("expected chat command preview to track the active preview element in %s", scriptsPath)
+	}
+
+	stylesPath := templatePath("styles.html")
+	stylesData, err := os.ReadFile(stylesPath)
+	if err != nil {
+		t.Fatalf("read chat styles template: %v", err)
+	}
+	stylesContent := string(stylesData)
+	if !strings.Contains(stylesContent, ".chat-command-preview") {
+		t.Fatalf("expected chat command preview styling to be defined in %s", stylesPath)
+	}
+	if !strings.Contains(stylesContent, ".chat-command-preview.is-active::after") {
+		t.Fatalf("expected only the active chat command preview to animate in %s", stylesPath)
+	}
+}
+
+func TestChatCommandPreviewCleanupTargetsDomElements(t *testing.T) {
+	scriptsPath := templatePath("scripts_part05.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "querySelectorAll('.chat-command-preview.is-active')") {
+		t.Fatalf("expected chat command preview cleanup to target active DOM previews in %s", scriptsPath)
+	}
+}
+
 func TestChatComposerSupportsImageAttachments(t *testing.T) {
 	modalPath := templatePath("modals.html")
 	modalData, err := os.ReadFile(modalPath)

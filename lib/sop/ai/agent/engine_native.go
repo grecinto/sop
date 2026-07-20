@@ -88,9 +88,17 @@ func (e *NativeReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (a
 	}
 
 	if loop := resolveOwnedReActLoop(req); loop != nil {
-		return loop.Run(ctx, req)
+		resp, err := loop.Run(ctx, req)
+		if storage != nil {
+			_ = storage.Cleanup()
+		}
+		return resp, err
 	}
-	return e.runDefaultLoop(ctx, req)
+	resp, err := e.runDefaultLoop(ctx, req)
+	if storage != nil {
+		_ = storage.Cleanup()
+	}
+	return resp, err
 }
 
 func resolveOwnedReActLoop(req ai.ReasoningRequest) ai.ReActLoop {

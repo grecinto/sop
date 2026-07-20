@@ -447,7 +447,13 @@
                     lastTerminalOutput = data.output;
                     // Always scroll to bottom to show latest output
                     output.scrollTop = output.scrollHeight;
-                } else {
+                } else if (isRunning) {
+                    if (output.textContent !== 'Thinking...') {
+                        output.textContent = 'Thinking...';
+                    }
+                    output.dataset.hasOutput = ''; // Keep the terminal in a pending state
+                    lastTerminalOutput = 'Thinking...';
+                } else if (lastTerminalOutput !== 'Thinking...') {
                     const defaultMsg = 'No commands run yet. When the AI executes shell commands, the output will appear here.';
                     output.textContent = defaultMsg;
                     output.dataset.hasOutput = ''; // Clear flag so spinner shows on next command
@@ -1485,6 +1491,7 @@
     let chatHistory = [];
     let historyIndex = -1;
     let currentAiMsgId = null;
+    let activeChatCommandPreview = null;
 
     function isPendingDeleteConfirmationText(text) {
         const normalized = String(text || '').trim();
@@ -1915,7 +1922,7 @@
         const shouldPreserveWhitespace = displayText.includes('\n') || displayText.includes('\r');
 
         if (isToolInventoryContent(displayText) || shouldPreserveWhitespace) {
-            return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: var(--chat-font-family);">${escapeHtml(displayText)}</div>`;
+            return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: var(--chat-font-family); line-height: 1.2; margin: 0;">${escapeHtml(displayText)}</div>`;
         }
 
         return marked.parse(displayText);
@@ -2083,6 +2090,96 @@
         scrollChatHistoryToBottom();
     }
 
+    function renderTerminalCommandEvent(payload) {
+        const terminalOutput = document.getElementById('ai-terminal-output');
+        if (!terminalOutput) return false;
+
+        let commandText = '';
+        let displayAsCommand = false;
+
+        if (payload && typeof payload === 'object') {
+            if (typeof payload.text === 'string') {
+                commandText = payload.text;
+            }
+            displayAsCommand = payload.display_as_command === true || payload.display_as_command === 'true';
+        } else if (typeof payload === 'string') {
+            commandText = payload;
+            displayAsCommand = commandText.startsWith('$ ') || commandText.startsWith('# ');
+        }
+
+        commandText = commandText.trim();
+        if (!commandText) return false;
+
+        terminalOutput.textContent = commandText;
+        terminalOutput.dataset.hasOutput = 'true';
+        if (displayAsCommand) {
+            terminalOutput.classList.remove('terminal-processing');
+        } else {
+            terminalOutput.classList.remove('terminal-processing');
+        }
+        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+        return true;
+    }
+
+    function clearActiveChatCommandPreview() {
+        const chatHistoryEl = document.getElementById('chat-history');
+        if (chatHistoryEl) {
+            const activePreviews = chatHistoryEl.querySelectorAll('.chat-command-preview.is-active');
+            activePreviews.forEach(preview => {
+                preview.classList.remove('is-active');
+                preview.classList.add('chat-command-preview-plain');
+                preview.classList.remove('chat-command-preview');
+                preview.setAttribute('data-command-line', 'plain');
+            });
+        }
+
+        if (activeChatCommandPreview && activeChatCommandPreview.isConnected) {
+            activeChatCommandPreview.classList.remove('is-active');
+            activeChatCommandPreview.classList.add('chat-command-preview-plain');
+            activeChatCommandPreview.classList.remove('chat-command-preview');
+            activeChatCommandPreview.setAttribute('data-command-line', 'plain');
+        }
+        activeChatCommandPreview = null;
+    }
+
+    function renderChatCommandPreview(payload, streamState) {
+        clearActiveChatCommandPreview();
+
+        let contentSpan = streamState && streamState.currentContentSpan ? streamState.currentContentSpan : null;
+        if (!contentSpan) {
+            const block = createAssistantContentBlock();
+            if (!block) return false;
+            contentSpan = block.contentSpan;
+            if (streamState) {
+                streamState.currentContentSpan = contentSpan;
+            }
+        }
+
+        let commandText = '';
+        let displayAsCommand = false;
+
+        if (payload && typeof payload === 'object') {
+            if (typeof payload.text === 'string') {
+                commandText = payload.text;
+            }
+            displayAsCommand = payload.display_as_command === true || payload.display_as_command === 'true';
+        } else if (typeof payload === 'string') {
+            commandText = payload;
+            displayAsCommand = commandText.startsWith('$ ') || commandText.startsWith('# ');
+        }
+
+        commandText = commandText.trim();
+        if (!commandText || !displayAsCommand) return false;
+
+        const preview = document.createElement('div');
+        preview.className = 'chat-command-preview is-active';
+        preview.textContent = commandText;
+        contentSpan.appendChild(preview);
+        activeChatCommandPreview = preview;
+        scrollChatHistoryToBottom();
+        return true;
+    }
+
     async function renderStreamEvent(event, streamState) {
         if (!streamState) {
             return;
@@ -2132,20 +2229,40 @@
         } else if (normalizedEvent.type === 'result_stream') {
             handled = true;
             flushRecords();
+            clearActiveChatCommandPreview();
             streamState.currentContentSpan = null;
         } else if (normalizedEvent.type === 'tool_call') {
             handled = true;
+            console.log('[DEBUG] tool_call event received:', normalizedEvent);
             // Start terminal polling when local command tools are called (no auto-open)
             const toolName = normalizedEvent.payload && normalizedEvent.payload.tool;
+            console.log('[DEBUG] tool name:', toolName);
             if (toolName === 'local_command' || toolName === 'execute_local_command') {
-                // Show loading indicator in terminal immediately
+                console.log('[DEBUG] Command tool started');
                 const terminalOutput = document.getElementById('ai-terminal-output');
                 if (terminalOutput) {
-                    terminalOutput.innerHTML = '<span class="loading" style="margin-right: 8px;"></span><span style="opacity: 0.6;">Executing command...</span>';
+                    terminalOutput.textContent = 'Thinking...';
                     terminalOutput.dataset.hasOutput = ''; // Clear flag so we know we're waiting
+                    terminalOutput.classList.remove('terminal-processing');
                 }
-                // Delay polling start slightly so spinner shows
                 setTimeout(() => startAITerminalPolling(), 200);
+            }
+        } else if (normalizedEvent.type === 'terminal_command') {
+            handled = true;
+            renderTerminalCommandEvent(normalizedEvent.payload);
+            renderChatCommandPreview(normalizedEvent.payload, streamState);
+        } else if (normalizedEvent.type === 'terminal_output') {
+            handled = true;
+            clearActiveChatCommandPreview();
+            const terminalOutput = document.getElementById('ai-terminal-output');
+            if (terminalOutput) {
+                const nextText = String(normalizedEvent.payload ?? '');
+                if (nextText) {
+                    terminalOutput.textContent = nextText;
+                    terminalOutput.dataset.hasOutput = 'true';
+                    terminalOutput.classList.remove('terminal-processing');
+                    terminalOutput.scrollTop = terminalOutput.scrollHeight;
+                }
             }
         } else if (normalizedEvent.type === 'tool_error') {
             handled = true;
@@ -2346,10 +2463,7 @@
         return { response, runtimeMode: runtimeRequest.runtimeMode };
     }
 
-    async function handleRuntimeResponse(response, loadingId, runtimeMode) {
-        const loadingEl = document.getElementById(loadingId);
-        if (loadingEl) loadingEl.remove();
-
+    async function handleRuntimeResponse(response, runtimeMode) {
         if (!response.ok) {
             const text = await response.text();
             appendChatMessage('ai', `${runtimeMode === 'local' ? 'Local RAG' : 'HTTP'} Error: ${response.status} - ${text}`);
@@ -2378,6 +2492,7 @@
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) {
+                        clearActiveChatCommandPreview();
                         break;
                     }
 
@@ -2466,6 +2581,7 @@
         while (true) {
             const { done, value } = await reader.read();
             if (done) {
+                clearActiveChatCommandPreview();
                 break;
             }
 
@@ -2556,8 +2672,7 @@
         if (sendBtn) sendBtn.disabled = true;
         scrollChatHistoryToBottom();
         
-        // Show Loading
-        const loadingId = appendChatMessage('ai', 'Thinking...');
+        // The structured tool stream will provide the actual command text event.
         // Setup AbortController
         chatAbortController = new AbortController();
         updateComposerState();
@@ -2573,8 +2688,6 @@
                         handleAuthenticationError();
                         return;
                     }
-                    const loadingEl = document.getElementById(loadingId);
-                    if (loadingEl) loadingEl.remove();
                     appendChatMessage('ai', 'Local agent unavailable: ' + (err.message || 'unknown error'));
                     return;
                 }
@@ -2597,22 +2710,23 @@
             }
 
             if (resolvedRuntimeMode === 'local') {
-                await handleRuntimeResponse(response, loadingId, 'local');
+                await handleRuntimeResponse(response, 'local');
             } else {
-                await handleRuntimeResponse(response, loadingId, 'hq');
+                await handleRuntimeResponse(response, 'hq');
             }
             return;
 
         } catch (err) {
-             const loadingEl = document.getElementById(loadingId);
-             if (loadingEl) loadingEl.remove();
-
              if (err.name === 'AbortError') {
                  // Ignore
              } else {
                  appendChatMessage('ai', 'Error: ' + err.message);
              }
         } finally {
+             const terminalOutput = document.getElementById('ai-terminal-output');
+             if (terminalOutput) {
+                 terminalOutput.classList.remove('terminal-processing');
+             }
              chatAbortController = null;
              updateComposerState();
              resetPendingChatAttachments();

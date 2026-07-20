@@ -111,7 +111,7 @@ func runPTYWorkerWithOutput(jsonOut *os.File) error {
 	time.Sleep(100 * time.Millisecond)
 
 	// Explicitly set prompt (ensures it's set correctly)
-	io.WriteString(ptmx, "PS1='<<<PROMPT_READY>>>'\n")
+	io.WriteString(ptmx, "PS1='<<<PROMPT_READY>>>\n'\n")
 	time.Sleep(50 * time.Millisecond)
 
 	// Disable echo so commands aren't printed back

@@ -4593,6 +4593,7 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 		}
 
 		// Apply file-backed storage for large results (general-purpose feature)
+		// Keep the model-facing tool result compact and resilient to missing backing files.
 		return wrapToolResultWithStorage(ctx, toolName, text)
 	}
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -495,6 +496,30 @@ func TestNativeReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.T) {
 	}
 	if resp.FinalText != "Final answer: provider owned loop used" {
 		t.Fatalf("expected provider-owned loop response, got %q", resp.FinalText)
+	}
+}
+
+func TestNativeReActEngine_CleansUpToolResultStorageAfterLoop(t *testing.T) {
+	engine := &NativeReActEngine{}
+	gen := &loopMockGenerator{}
+	executor := &loopMockExecutor{}
+	storage := &ToolResultStorage{sessionID: "cleanup-test", baseDir: t.TempDir()}
+	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
+
+	resp, err := engine.Run(ctx, ai.ReasoningRequest{
+		SystemPrompt: "You are a test assistant.",
+		UserQuery:    "Find users",
+		Executor:     executor,
+		Generator:    gen,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if resp.FinalText == "" {
+		t.Fatal("expected a final response")
+	}
+	if _, err := os.Stat(storage.GetSessionDir()); !os.IsNotExist(err) {
+		t.Fatalf("expected tool result storage dir to be cleaned up, stat err = %v", err)
 	}
 }
 

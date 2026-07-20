@@ -254,6 +254,38 @@ func TestSanitizeToolName(t *testing.T) {
 	}
 }
 
+func TestReadResultLines_MissingFileReturnsEmpty(t *testing.T) {
+	storage, err := NewToolResultStorage("test-missing-file")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	content, err := storage.ReadResultLines(filepath.Join(storage.GetSessionDir(), "missing.txt"), 1, 10)
+	if err != nil {
+		t.Fatalf("ReadResultLines returned unexpected error: %v", err)
+	}
+	if content != "" {
+		t.Fatalf("expected empty content for missing file, got %q", content)
+	}
+}
+
+func TestGrepResult_MissingFileReturnsEmpty(t *testing.T) {
+	storage, err := NewToolResultStorage("test-missing-grep")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	matches, err := storage.GrepResult(filepath.Join(storage.GetSessionDir(), "missing.txt"), "needle", 10)
+	if err != nil {
+		t.Fatalf("GrepResult returned unexpected error: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches for missing file, got %+v", matches)
+	}
+}
+
 func TestCleanupOldToolResults(t *testing.T) {
 	baseDir := filepath.Join(os.TempDir(), "test-cleanup-old")
 	defer os.RemoveAll(baseDir)

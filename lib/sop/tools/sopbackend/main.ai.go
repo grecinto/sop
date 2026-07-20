@@ -304,6 +304,48 @@ func renderVisibleText(s string) string {
 	return html.UnescapeString(s)
 }
 
+func shouldSuppressLogLikeChunk(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, "\n") || strings.Contains(trimmed, "\r") {
+		return false
+	}
+
+	prefixes := []string{
+		"[INFO]",
+		"[DEBUG]",
+		"[WARN]",
+		"[WARNING]",
+		"[ERROR]",
+		"INFO ",
+		"DEBUG ",
+		"WARN ",
+		"WARNING ",
+		"ERROR ",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+
+	timestampPattern := regexp.MustCompile(`^\d{4}[-/]\d{2}[-/]\d{2}([ T]\d{2}:\d{2}:\d{2}([.,]\d+)?(Z|[+-]\d{2}:\d{2})?)?`)
+	if timestampPattern.MatchString(trimmed) {
+		return true
+	}
+
+	if len(trimmed) >= 20 {
+		prefix := trimmed[:10]
+		if (strings.Count(prefix, ":") >= 1 && strings.Count(prefix, "/") >= 1) || strings.Contains(prefix, "T") {
+			return true
+		}
+	}
+
+	return false
+}
+
 func isReducerSamplePayload(s string) bool {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -391,6 +433,10 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 		case "session_id":
 			// Filter out session_id from client stream - it's for internal logging only
 			return
+		case "record", "records", "preview", "result_stream":
+			contentStreamed = true
+			writeEvent(eventType, payload)
+			return
 		case ai.ReasoningEventAssistantMessage:
 			if message, ok := payload.(map[string]any); ok {
 				if streaming, _ := message["streaming"].(bool); streaming {
@@ -409,21 +455,49 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 					return
 				}
 			}
+			return
 		case "content":
 			contentStreamed = true
 			log.Info("UI: streaming content", "length", len(fmt.Sprintf("%v", payload)))
 			writeEvent(eventType, payload)
 			return
+		case "terminal_command":
+			if payloadMap, ok := payload.(map[string]any); ok {
+				if text, ok := payloadMap["text"].(string); ok && strings.TrimSpace(text) != "" {
+					writeEvent(eventType, payloadMap)
+					return
+				}
+			}
+			if text, ok := payload.(string); ok && strings.TrimSpace(text) != "" {
+				writeEvent(eventType, map[string]any{"text": text, "display_as_command": true})
+				return
+			}
+			return
+		case "terminal_output":
+			if text, ok := payload.(string); ok && strings.TrimSpace(text) != "" {
+				writeEvent(eventType, text)
+				return
+			}
+			return
 		case ai.ReasoningEventToolCall:
-			// Tool call events are handled by the tools themselves
-			// They will emit the actual command via content streaming
-			// So we skip this event to avoid duplication
+			// Send tool_call event to UI for spinner/loading indicator
+			// But don't mark contentStreamed to avoid displaying raw event
+			log.Info("Sending tool_call event", "payload", payload)
+			writeEvent(eventType, payload)
 			return
 		case "tool_stream_chunk":
-			// Stream command output chunks to terminal only
-			// Tool result will go to chat when complete
+			// Stream command preview and output events separately so the UI can
+			// show the command line with special styling before normal terminal output arrives.
 			if chunkData, ok := payload.(map[string]any); ok {
 				if text, ok := chunkData["text"].(string); ok && strings.TrimSpace(text) != "" {
+					commandText := strings.TrimSpace(text)
+					if strings.HasPrefix(commandText, "$ ") || strings.HasPrefix(commandText, "# ") {
+						writeEvent("terminal_command", map[string]any{
+							"text":               commandText,
+							"display_as_command": true,
+						})
+						return
+					}
 					writeEvent("terminal_output", text)
 					return
 				}
@@ -471,15 +545,41 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 						return
 					}
 
+					// For command execution tools, don't show output in chat - Terminal only
+					// Let the LLM provide its own analysis instead of showing raw output
+					isCommandTool := tool == "local_command" || tool == "execute_local_command"
+					if isCommandTool {
+						contentStreamed = true
+						return
+					}
+
+					// For other tools, show first 5 lines
+					lines := strings.Split(trimmed, "\n")
+					highlight := lines
+					truncated := false
+
+					if len(lines) > 5 {
+						highlight = lines[:5]
+						truncated = true
+					}
+
 					contentStreamed = true
-					formatted := fmt.Sprintf("🛠️ Result from %s:\n%s", tool, renderVisibleText(trimmed))
+					summary := strings.Join(highlight, "\n")
+					if truncated {
+						summary += "\n... (output truncated)"
+					}
+					formatted := fmt.Sprintf("🛠️ %s:\n%s", tool, renderVisibleText(summary))
 					writeEvent("content", formatted)
 				}
 			}
+			return
+		default:
+			// Silently ignore unknown events - don't display raw event data in UI
+			return
 		}
 
-		// Fallback event writer.
-		writeEvent(eventType, payload)
+		// This fallback should never be reached due to default case
+		// writeEvent(eventType, payload)
 	}
 
 	return sendEvent, func() bool { return contentStreamed }

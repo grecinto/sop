@@ -317,7 +317,7 @@ func TestSetupStream_EmitsVisibleContentForToolResults(t *testing.T) {
 	if !strings.Contains(body, `"type":"content"`) {
 		t.Fatalf("expected content event for tool_result, got: %s", body)
 	}
-	if !strings.Contains(body, "Result from lookup_user") {
+	if !strings.Contains(body, "lookup_user") || !strings.Contains(body, "John is in the users store") {
 		t.Fatalf("expected human-readable tool result content, got: %s", body)
 	}
 }
@@ -415,6 +415,36 @@ func TestSetupStream_SanitizesToolErrorMessagesBeforeRendering(t *testing.T) {
 func TestSetupStream_UnescapesToolResultText(t *testing.T) {
 	if got := renderVisibleText(`Link table: UserID -\u003e OrderID`); got != "Link table: UserID -> OrderID" {
 		t.Fatalf("expected real arrow rendering for escaped unicode text, got: %q", got)
+	}
+}
+
+func TestSetupStream_EmitsStructuredTerminalCommandEvents(t *testing.T) {
+	w := httptest.NewRecorder()
+	sendEvent, _ := SetupStream(w)
+
+	sendEvent("terminal_command", map[string]any{
+		"text":               "$ go test ./...",
+		"display_as_command": true,
+	})
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"type":"terminal_command"`) {
+		t.Fatalf("expected terminal command event to be emitted, got: %s", body)
+	}
+	if !strings.Contains(body, "display_as_command") {
+		t.Fatalf("expected terminal command payload to include display flag, got: %s", body)
+	}
+}
+
+func TestShouldSuppressLogLikeChunk_WithoutExplicitLevel(t *testing.T) {
+	if !shouldSuppressLogLikeChunk("2024/07/20 10:10:10 starting worker") {
+		t.Fatal("expected timestamped log line without explicit level to be suppressed")
+	}
+	if !shouldSuppressLogLikeChunk("2024-07-20T10:10:10Z worker ready") {
+		t.Fatal("expected ISO timestamped log line without explicit level to be suppressed")
+	}
+	if shouldSuppressLogLikeChunk("hello from the command") {
+		t.Fatal("expected ordinary command output to remain visible")
 	}
 }
 

@@ -666,7 +666,15 @@ func (a *CopilotAgent) toolRunRepoTests(ctx context.Context, args map[string]any
 		command += " -run " + shellQuote(pattern)
 	}
 
-	return a.runLocalAutomationCommand(ctx, args, command, "Run the relevant Go tests for the requested repository path.", path, 120)
+	result, err := a.runLocalAutomationCommand(ctx, args, command, "Run the relevant Go tests for the requested repository path.", path, 120)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.TrimSpace(result) == "" {
+		return fmt.Sprintf("Command: %s", command), nil
+	}
+	return fmt.Sprintf("Command: %s\n\n%s", command, result), nil
 }
 
 func (a *CopilotAgent) toolListFolderStoreFiles(ctx context.Context, args map[string]any) (string, error) {
@@ -1022,11 +1030,8 @@ func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]an
 		sb.WriteString(fmt.Sprintf("- %s\n", name))
 	}
 
-	// Stream the entire result at once to avoid double newlines
+	// Don't emit to content stream - let tool result handler decide
 	formatted := strings.TrimSpace(sb.String())
-	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("content", formatted)
-	}
 	return formatted, nil
 }
 
@@ -1628,8 +1633,43 @@ func emitAutomationToolChunk(ctx context.Context, toolName, chunk string) {
 	if strings.TrimSpace(chunk) == "" {
 		return
 	}
+	// if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+	// 	streamer("tool_stream_chunk", map[string]any{"tool": toolName, "text": chunk})
+	// }
+}
+
+func shouldEmitAutomationProgressCommentary(command, workingDir string) bool {
+	trimmedCommand := strings.TrimSpace(command)
+	trimmedDir := strings.TrimSpace(workingDir)
+	if trimmedCommand == "" {
+		return false
+	}
+	if strings.Contains(trimmedCommand, "go test") || strings.Contains(trimmedCommand, "go test ./...") || strings.Contains(trimmedCommand, "go test") {
+		return true
+	}
+	if trimmedDir == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(trimmedDir, "go.mod")); err == nil {
+		return strings.Contains(trimmedCommand, "go") || strings.Contains(trimmedCommand, "test")
+	}
+	return false
+}
+
+func emitAutomationProgressCommentary(ctx context.Context, command, workingDir string) {
+	if strings.TrimSpace(command) == "" {
+		return
+	}
 	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("tool_stream_chunk", map[string]any{"tool": toolName, "text": chunk})
+		message := "Starting the requested automation now."
+		if strings.Contains(strings.TrimSpace(command), "go test") {
+			if _, err := os.Stat(filepath.Join(strings.TrimSpace(workingDir), "go.mod")); err == nil {
+				message = "I’m running the test suite now; this workspace looks predominantly Go-based."
+			} else {
+				message = "I’m running the test suite now; this looks like a Go-based check."
+			}
+		}
+		streamer(ai.ReasoningEventAssistantMessage, ai.BuildAssistantMessageEvent("commentary", message))
 	}
 }
 
@@ -1638,7 +1678,10 @@ func emitTerminalCommand(ctx context.Context, command string) {
 		return
 	}
 	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("terminal_command", command)
+		streamer("terminal_command", map[string]any{
+			"text":               strings.TrimSpace(command),
+			"display_as_command": true,
+		})
 	}
 }
 
@@ -1656,9 +1699,8 @@ func emitAutomationToolResult(ctx context.Context, toolName, result string) {
 		return
 	}
 
-	// Result is already unwrapped and processed by storage layer
-	// Just emit it to the reasoning event stream
-	// Storage handles truncation and file pointers for large results
+	// Result is already unwrapped and processed by storage layer.
+	// Emit it to the reasoning event stream as-is.
 	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
 		streamer(ai.ReasoningEventToolResult, map[string]any{
 			"tool":   toolName,
@@ -1682,102 +1724,104 @@ func parseAndEmitTestStatus(ctx context.Context, command, output string) string 
 		return ""
 	}
 
-	streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any))
-	hasStreamer := ok && streamer != nil
-
 	lines := strings.Split(output, "\n")
 	status := "UNKNOWN"
 	summary := ""
 	keyLines := []string{}
+	isGoTestCommand := strings.Contains(command, "go test") || strings.Contains(command, "run_all_tests")
+	isNpmLikeCommand := strings.Contains(command, "npm test") || strings.Contains(command, "yarn test")
+	isPytestCommand := strings.Contains(command, "pytest")
 
-	// Parse Go test output
-	if strings.Contains(command, "go test") || strings.Contains(command, "run_all_tests") {
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			// Check for FAIL indicator
-			if trimmed == "FAIL" || strings.HasPrefix(trimmed, "FAIL\t") {
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if isGoTestCommand {
+			if trimmed == "FAIL" || strings.HasPrefix(trimmed, "FAIL\t") || strings.HasPrefix(trimmed, "--- FAIL:") || strings.HasPrefix(trimmed, "panic:") {
 				status = "FAIL"
-				keyLines = append(keyLines, trimmed)
-			}
-			// Check for package test results
-			if strings.HasPrefix(trimmed, "ok  \t") || strings.HasPrefix(trimmed, "FAIL\t") {
-				keyLines = append(keyLines, trimmed)
-			}
-			// Check for final FAIL/PASS
-			if strings.HasPrefix(trimmed, "?") && strings.Contains(trimmed, "[no test files]") {
-				// Skip packages without tests
+				summary = "❌ **Test Suite Failed**"
+				if len(keyLines) < 8 {
+					keyLines = append(keyLines, trimmed)
+				}
 				continue
 			}
+
+			if strings.HasPrefix(trimmed, "ok") {
+				if len(trimmed) > 2 && (trimmed[2] == ' ' || trimmed[2] == '\t') {
+					if status != "FAIL" {
+						status = "PASS"
+						summary = "✅ **Test Suite Passed**"
+					}
+					if len(keyLines) < 8 {
+						keyLines = append(keyLines, trimmed)
+					}
+				}
+			}
 		}
 
-		// Determine overall status
-		if status == "FAIL" {
-			summary = "❌ **Test Suite Failed**"
-		} else if len(keyLines) > 0 {
-			// Has test results but no FAIL - assume PASS
-			status = "PASS"
-			summary = "✅ **Test Suite Passed**"
-		}
-	}
-
-	// Parse npm/yarn test output
-	if strings.Contains(command, "npm test") || strings.Contains(command, "yarn test") {
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
+		if isNpmLikeCommand {
 			if strings.Contains(trimmed, "failing") || strings.Contains(trimmed, "failed") {
 				status = "FAIL"
 				summary = "❌ **Test Suite Failed**"
-				keyLines = append(keyLines, trimmed)
+				if len(keyLines) < 8 {
+					keyLines = append(keyLines, trimmed)
+				}
 			} else if strings.Contains(trimmed, "passing") {
-				status = "PASS"
-				summary = "✅ **Test Suite Passed**"
-				keyLines = append(keyLines, trimmed)
-			}
-		}
-	}
-
-	// Parse pytest output
-	if strings.Contains(command, "pytest") {
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if strings.Contains(trimmed, "failed") || strings.Contains(trimmed, "error") {
-				status = "FAIL"
-				summary = "❌ **Test Suite Failed**"
-				keyLines = append(keyLines, trimmed)
-			} else if strings.Contains(trimmed, "passed") {
-				if !strings.Contains(trimmed, "failed") {
+				if status != "FAIL" {
 					status = "PASS"
 					summary = "✅ **Test Suite Passed**"
 				}
-				keyLines = append(keyLines, trimmed)
+				if len(keyLines) < 8 {
+					keyLines = append(keyLines, trimmed)
+				}
+			}
+		}
+
+		if isPytestCommand {
+			if strings.Contains(trimmed, "failed") || strings.Contains(trimmed, "error") {
+				status = "FAIL"
+				summary = "❌ **Test Suite Failed**"
+				if len(keyLines) < 8 {
+					keyLines = append(keyLines, trimmed)
+				}
+			} else if strings.Contains(trimmed, "passed") {
+				if !strings.Contains(trimmed, "failed") && status != "FAIL" {
+					status = "PASS"
+					summary = "✅ **Test Suite Passed**"
+				}
+				if len(keyLines) < 8 {
+					keyLines = append(keyLines, trimmed)
+				}
 			}
 		}
 	}
 
 	// Emit immediate status if we found test results
 	if status != "UNKNOWN" && summary != "" {
-		// Stream the status immediately to UI
-		if hasStreamer {
-			streamer("content", "\n"+summary+"\n")
-
-			// Add key failure lines if test failed
-			if status == "FAIL" && len(keyLines) > 0 {
-				// Show last few key lines (most relevant)
-				displayLines := keyLines
-				if len(displayLines) > 10 {
-					displayLines = displayLines[len(displayLines)-10:]
-				}
-				streamer("content", "\nKey test output:\n```\n"+strings.Join(displayLines, "\n")+"\n```\n")
-			}
-		}
+		// Don't stream to UI - let tool result handler decide
+		// The full output is already in Terminal
 
 		// Return status summary for LLM
 		// This prevents LLM from looping - it sees clear PASS/FAIL status
 		llmSummary := fmt.Sprintf("TEST STATUS: %s\n", status)
 		if status == "FAIL" {
 			llmSummary += "The test suite failed. Do not retry - report the failure to the user.\n"
+			if len(keyLines) > 0 {
+				llmSummary += "\nRelevant output:\n"
+				for _, line := range keyLines {
+					llmSummary += line + "\n"
+				}
+			}
 		} else if status == "PASS" {
 			llmSummary += "All tests passed successfully.\n"
+			if len(keyLines) > 0 {
+				llmSummary += "\nObserved result:\n"
+				for _, line := range keyLines {
+					llmSummary += line + "\n"
+				}
+			}
 		}
 		return llmSummary + "\n"
 	}
@@ -1942,11 +1986,12 @@ func unwrapCommandExecutorResult(result string) string {
 		output.WriteString(execResp.Stderr)
 	}
 
-	// If we got something, return it; otherwise return original
+	// If we got something, return it; otherwise return an empty string so the
+	// caller can fall back to callback-captured streamed output if present.
 	if output.Len() > 0 {
 		return output.String()
 	}
-	return result
+	return ""
 }
 
 func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[string]any, command, defaultReasoning, defaultWorkingDir string, defaultTimeoutSeconds int) (string, error) {
@@ -1998,6 +2043,9 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		}
 	}
 
+	var streamedStdout strings.Builder
+	var streamedStderr strings.Builder
+
 	request := LocalCommandRequest{
 		Command:        command,
 		Reasoning:      reasoning,
@@ -2006,7 +2054,10 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		SessionID:      sessionIDFromContext(ctx),
 		Background:     background,
 		StreamStdout: func(chunk string) {
-			emitAutomationToolChunk(ctx, "local_command", chunk)
+			streamedStdout.WriteString(chunk)
+		},
+		StreamStderr: func(chunk string) {
+			streamedStderr.WriteString(chunk)
 		},
 	}
 
@@ -2015,9 +2066,12 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		return "", err
 	}
 
-	// Emit command to streamer before execution
-	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("tool_stream_chunk", map[string]any{"tool": "local_command", "text": fmt.Sprintf("$ %s\n", command)})
+	// Emit the concrete shell command as a structured terminal event before execution.
+	// The UI will unwrap this event and style it as the active command line.
+	emitTerminalCommand(ctx, fmt.Sprintf("$ %s", command))
+
+	if shouldEmitAutomationProgressCommentary(command, workingDir) {
+		emitAutomationProgressCommentary(ctx, command, workingDir)
 	}
 
 	if localCommandExecutor != nil {
@@ -2027,6 +2081,15 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 			// localCommandExecutor returns {"stdout":"...", "stderr":"...", "exit_code":0}
 			// but we want just the stdout for display/storage
 			displayResult := unwrapCommandExecutorResult(result)
+			if strings.TrimSpace(displayResult) == "" {
+				displayResult = strings.TrimSpace(streamedStdout.String() + streamedStderr.String())
+			}
+			if strings.TrimSpace(displayResult) == "" {
+				displayResult = strings.TrimSpace(streamedStdout.String())
+			}
+			if strings.TrimSpace(displayResult) == "" {
+				displayResult = strings.TrimSpace(streamedStderr.String())
+			}
 
 			statusSummary := parseAndEmitTestStatus(ctx, command, displayResult)
 
