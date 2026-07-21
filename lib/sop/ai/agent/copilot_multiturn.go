@@ -77,6 +77,8 @@ func (a *CopilotAgent) multiTurnAsk(ctx context.Context, query string, cfg *ai.C
 	queue := NewWorkQueue()
 	queue.SetMaxPerActor("coding_workflow", 8) // Allow coding workflow more turns
 	queue.SetMaxPerActor("test_runner", 5)
+	// Step 4: Define actor limits for test debugging workflow (Phase 1.5)
+	queue.SetMaxPerActor("test_debugger.repair", 3) // Max 3 repair iterations
 
 	// Enqueue initial user query
 	initialItem := WorkItem{
@@ -546,6 +548,7 @@ func (a *CopilotAgent) multiTurnAskWithOptions(ctx context.Context, query string
 	queue := NewWorkQueue()
 	queue.SetMaxPerActor("coding_workflow", 8)
 	queue.SetMaxPerActor("test_runner", 5)
+	queue.SetMaxPerActor("test_debugger.repair", 3) // Phase 1.5: Max 3 repair iterations
 
 	// Enqueue initial user query
 	initialItem := WorkItem{
@@ -749,6 +752,7 @@ func (a *CopilotAgent) multiTurnAskProduction(ctx context.Context, query string,
 	queue := NewWorkQueue()
 	queue.SetMaxPerActor("coding_workflow", 8)
 	queue.SetMaxPerActor("test_runner", 5)
+	queue.SetMaxPerActor("test_debugger.repair", 3) // Phase 1.5: Max 3 repair iterations
 
 	// Enqueue initial user query
 	initialItem := WorkItem{

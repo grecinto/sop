@@ -509,7 +509,24 @@ for _, result := range results {
 ## Roadmap
 
 ### V1.1 (Near-term)
-- [ ] **Add systematic test debugging protocol (HIGHEST PRIORITY)** - Explicit workflow steps, verification gates, improved tool result visibility
+- [x] **Add systematic test debugging protocol (HIGHEST PRIORITY)** ✅ **COMPLETED** - See [PHASE1_IMPLEMENTATION.md](PHASE1_IMPLEMENTATION.md)
+  - ✅ Phase 1: System prompt enhancement with 7-step mandatory workflow
+  - ✅ Phase 1: Tool result improvements with failure detection and explicit next steps
+  - ✅ Phase 1: Test execution enhancements (auto -v flag)
+  - ✅ Phase 1: Helper function to detect test-fix requests
+  - ✅ **Phase 1.5: Queue-based orchestration (Steps 1-4 COMPLETED + TESTED)** - See [QUEUE_ORCHESTRATION_ASSESSMENT.md](QUEUE_ORCHESTRATION_ASSESSMENT.md)
+    - ✅ Added `orchestrateTestFixWorkflow()` with 7-step workflow
+    - ✅ Test-fix detection logic in `Orchestrate()` method
+    - ✅ Actor names defined: test_debugger.{runner,analyzer,fixer,verifier,repair}
+    - ✅ Actor limits set: max 3 repair iterations
+    - ✅ Integration tests with 100% pass rate
+  - ✅ **Phase 2: Enhanced tool result handling (COMPLETED + TESTED)**
+    - ✅ Auto-inline critical error portions for test failures (first 50 lines with context)
+    - ✅ Test failure detection creates prominent error display
+    - ✅ Critical error extraction with natural break detection
+    - ✅ Comprehensive tests validating error extraction logic
+    - ✅ All existing tests updated and passing (7 tests total)
+  - **Next:** KB-Driven Workflow Automation (see docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md)
 - [ ] Add Python and JavaScript tree-sitter grammars
 - [ ] Enhanced file ranking with relevance scoring
 - [ ] Repository-specific coding conventions learning

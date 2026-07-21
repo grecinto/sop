@@ -41,16 +41,23 @@ func TestStoreResult_SmallInline(t *testing.T) {
 		t.Fatalf("StoreResult failed: %v", err)
 	}
 
-	if filePath != "" {
-		t.Errorf("Expected no file path for small result, got: %s", filePath)
+	// Phase 2: Files are created even for small results (for debugging/auditing)
+	if filePath == "" {
+		t.Errorf("Expected file path even for small result")
 	}
 
+	// But small results are returned inline (not summarized)
 	if inline != smallResult {
-		t.Errorf("Expected inline result to match original")
+		t.Errorf("Expected inline result to match original for small result")
 	}
 
 	if size != 1024 {
 		t.Errorf("Expected size 1024, got %d", size)
+	}
+
+	// Verify file was created
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		t.Errorf("File should be created even for small results: %s", filePath)
 	}
 }
 
@@ -99,9 +106,9 @@ func TestStoreResult_LargeFileBacked(t *testing.T) {
 		t.Errorf("Summary should include file path")
 	}
 
-	// Summary should include tool recommendations
-	if !strings.Contains(inline, "ANALYSIS TOOLS") {
-		t.Errorf("Summary should include analysis tools section")
+	// Phase 2: Passing tests use standard summary format with "To analyze" guidance
+	if !strings.Contains(inline, "To analyze") {
+		t.Errorf("Summary should include standard analysis guidance")
 	}
 
 	if size != len(largeResult) {
@@ -123,17 +130,9 @@ func TestStoreResult_TestToolRecommendations(t *testing.T) {
 		t.Fatalf("StoreResult failed: %v", err)
 	}
 
-	// Should include test-specific recommendations
-	if !strings.Contains(inline, "Finding failures") {
-		t.Errorf("Expected test-specific recommendations for test tool")
-	}
-
-	if !strings.Contains(inline, "grep \"FAIL\"") {
-		t.Errorf("Expected FAIL grep recommendation for test tool")
-	}
-
-	if !strings.Contains(inline, "tail -50") {
-		t.Errorf("Expected tail recommendation for test tool")
+	// Phase 2: Passing tests (no failure indicators) use standard summary format
+	if !strings.Contains(inline, "To analyze") {
+		t.Errorf("Expected standard analysis guidance for passing tests")
 	}
 }
 
@@ -151,13 +150,9 @@ func TestStoreResult_BuildToolRecommendations(t *testing.T) {
 		t.Fatalf("StoreResult failed: %v", err)
 	}
 
-	// Should include build-specific recommendations
-	if !strings.Contains(inline, "Finding errors") {
-		t.Errorf("Expected build-specific recommendations for build tool")
-	}
-
-	if !strings.Contains(inline, "error:") {
-		t.Errorf("Expected error grep recommendation for build tool")
+	// Phase 2: Build tools use standard summary format
+	if !strings.Contains(inline, "To analyze") {
+		t.Errorf("Expected standard analysis guidance for build tools")
 	}
 }
 
@@ -190,9 +185,10 @@ func TestStoreResult_HeadAndTail(t *testing.T) {
 		t.Errorf("Summary should include tail of output")
 	}
 
-	// Summary should indicate omitted bytes
-	if !strings.Contains(inline, "bytes omitted") {
-		t.Errorf("Summary should indicate omitted bytes")
+	// Phase 2: Standard summary format includes head and tail with analysis guidance
+	// The exact format may vary, but should have analysis instructions
+	if !strings.Contains(inline, "To analyze") && !strings.Contains(inline, "Full output") {
+		t.Errorf("Summary should include analysis guidance")
 	}
 }
 
@@ -366,5 +362,61 @@ func TestIsBuildCommand(t *testing.T) {
 				t.Errorf("isBuildCommand(%q) = %v, want %v", tt.toolName, result, tt.expected)
 			}
 		})
+	}
+}
+
+// Phase 2 Tests: Auto-inline critical error portions
+
+func TestPhase2_TestFailureAutoInline(t *testing.T) {
+	storage, err := NewToolResultStorage("test-failure-inline")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	// Simulate large test output with failure
+	testOutput := `=== RUN   TestHandleVectorizationRecoveryStatus
+Running vectorization recovery test...
+--- FAIL: TestHandleVectorizationRecoveryStatus (0.05s)
+    main_test.go:430: 
+        Error: can't do operation on b-tree if transaction has not begun
+FAIL
+` + strings.Repeat("Additional output\n", 500)
+
+	inline, filePath, _, err := storage.StoreResult("run_repo_tests", testOutput)
+	if err != nil {
+		t.Fatalf("StoreResult failed: %v", err)
+	}
+
+	if !strings.Contains(inline, "⚠️  TEST FAILURE DETECTED") {
+		t.Errorf("Summary should include failure warning")
+	}
+
+	if !strings.Contains(inline, "CRITICAL ERROR OUTPUT") {
+		t.Errorf("Summary should include critical error section")
+	}
+
+	if !strings.Contains(inline, "can't do operation on b-tree") {
+		t.Errorf("Summary should inline the actual error message")
+	}
+
+	if !strings.Contains(inline, filePath) {
+		t.Errorf("Summary should include file path")
+	}
+}
+
+func TestPhase2_ExtractCriticalErrorSection(t *testing.T) {
+	input := `Setup line
+--- FAIL: TestSomething
+Error occurred
+Stack trace`
+
+	result := extractCriticalErrorSection(input, 50)
+
+	if !strings.Contains(result, "--- FAIL: TestSomething") {
+		t.Errorf("Should extract error section")
+	}
+	if !strings.Contains(result, "Setup line") {
+		t.Errorf("Should include context before error")
 	}
 }

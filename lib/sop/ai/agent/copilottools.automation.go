@@ -661,7 +661,8 @@ func (a *CopilotAgent) toolRunRepoTests(ctx context.Context, args map[string]any
 	patternRaw, _ := args["pattern"]
 	pattern, _ := patternRaw.(string)
 
-	command := "go test " + pkg
+	// Phase 1: Always use -v flag for test debugging
+	command := "go test -v " + pkg
 	if pattern != "" {
 		command += " -run " + shellQuote(pattern)
 	}

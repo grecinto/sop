@@ -125,6 +125,18 @@ func (c *Capability) Orchestrate(ctx context.Context, state capabilities.Routing
 		return false, fmt.Errorf("query not found in context")
 	}
 
+	// Step 3: Detect test-fix requests (Phase 1.5)
+	// This takes priority over general classification
+	lowerQuery := strings.ToLower(query)
+	isTestFix := strings.Contains(lowerQuery, "fix") &&
+		(strings.Contains(lowerQuery, "test") ||
+			strings.Contains(lowerQuery, "failing") ||
+			strings.Contains(lowerQuery, "failed"))
+
+	if isTestFix {
+		return c.orchestrateTestFixWorkflow(queue, query)
+	}
+
 	// Classify the task to determine workflow type
 	classifier := DefaultTaskClassifier()
 	classification := classifier.Classify(query, "", "")
@@ -164,6 +176,73 @@ func (c *Capability) orchestrateDebuggingWorkflow(queue capabilities.WorkQueue, 
 		"query":    "Apply the patch to fix the bug",
 		"actor":    "coding_workflow.applier",
 		"priority": 10,
+	})
+
+	return true, nil
+}
+
+// orchestrateTestFixWorkflow injects work items for test fixing tasks (Phase 1.5).
+// This implements the 7-step test debugging protocol using queue-based orchestration.
+//
+// Workflow: Run tests → Read errors → Read test → Read impl → Apply fix → Verify → Iterate
+//
+// Step 4: Actor names are clearly defined:
+//   - test_debugger.runner: Runs tests with verbose output
+//   - test_debugger.analyzer: Reads errors, test source, and implementation
+//   - test_debugger.fixer: Applies fixes based on analysis
+//   - test_debugger.verifier: Re-runs tests to verify the fix
+//   - test_debugger.repair: Iterates on fixes if tests still fail (max 3 iterations)
+func (c *Capability) orchestrateTestFixWorkflow(queue capabilities.WorkQueue, query string) (bool, error) {
+	// Step 1: Run tests with verbose output to capture failure
+	queue.Enqueue(map[string]interface{}{
+		"query":    fmt.Sprintf("Run tests with verbose output to capture the failure: %s", query),
+		"actor":    "test_debugger.runner",
+		"priority": 100,
+	})
+
+	// Step 2: Read error output from stored file
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Read the test error output. If the output was stored to a file, use read_tool_result or grep_tool_result to analyze it. Extract the actual error message.",
+		"actor":    "test_debugger.analyzer",
+		"priority": 90,
+	})
+
+	// Step 3: Read test source to understand what's being tested
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Read the failing test source code to understand what it's testing and what functions it calls.",
+		"actor":    "test_debugger.analyzer",
+		"priority": 80,
+	})
+
+	// Step 4: Read implementation code
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Find and read the implementation code that the test is checking. Use search_repo_files or grep_repo_text if needed.",
+		"actor":    "test_debugger.analyzer",
+		"priority": 70,
+	})
+
+	// Step 5: Apply fix based on analysis
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Based on the error message, test code, and implementation code, identify the root cause and apply the fix. Use patch_file for focused changes.",
+		"actor":    "test_debugger.fixer",
+		"priority": 60,
+	})
+
+	// Step 6: Verify the fix by re-running tests
+	queue.Enqueue(map[string]interface{}{
+		"query":    "Re-run the same test to verify the fix works. Show the passing test output as proof.",
+		"actor":    "test_debugger.verifier",
+		"priority": 50,
+	})
+
+	// Step 7: Iterate if needed (conditional - only if tests still fail)
+	// Note: EnqueueConditional is not yet implemented in the queue adapter,
+	// so we enqueue unconditionally but with lower priority.
+	// The repair actor will be limited to max 3 iterations via SetMaxPerActor.
+	queue.Enqueue(map[string]interface{}{
+		"query":    "The test still failed. Analyze the new error and iterate on the fix. Return to step 2 (read errors) with the new failure information.",
+		"actor":    "test_debugger.repair",
+		"priority": 40,
 	})
 
 	return true, nil

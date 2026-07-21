@@ -51,7 +51,7 @@ For this direction, AST/tree-sitter-style structure is a first-class V1 capabili
 - [x] Add persistent coding memory for repo/file/symbol summaries, relationships, embeddings, and lifecycle state.
 - [ ] Add explicit workflow tracing so the user can see what context was selected, what changed, and what was validated.
 - [ ] Add safety controls for destructive operations, including preview, approval, and rollback paths.
-- [ ] **Add systematic test debugging protocol (HIGH PRIORITY)**: System prompt with mandatory workflow steps, verification gates, and improved tool result visibility (See §6.1)
+- [x] **Add systematic test debugging protocol (HIGH PRIORITY)**: ✅ **COMPLETED** - System prompt with mandatory workflow steps, verification gates, and improved tool result visibility. See [lib/sop/ai/agent/codingworkflow/PHASE1_IMPLEMENTATION.md](/Volumes/T7/sop-cloud/lib/sop/ai/agent/codingworkflow/PHASE1_IMPLEMENTATION.md) (§6.1)
 
 ## Guard Rails for Future Copilots
 

@@ -14,7 +14,7 @@ import (
 const (
 	// toolResultThreshold defines when LLM gets summary vs full output
 	// ALL results are written to temp file, but LLM gets full result if <= threshold
-	toolResultThreshold = 2*1024 // 5KB - triggers summarization for most test outputs
+	toolResultThreshold = 2 * 1024 // 5KB - triggers summarization for most test outputs
 
 	// toolResultMaxInline defines the summary size for file-backed results
 	// We show head + tail of this size total
@@ -120,9 +120,61 @@ func unwrapJSONCommandResult(result string) string {
 
 // createSummary generates a summary for large outputs
 // Includes: head + tail content + file path + tool usage recommendations
+// Phase 2: For test failures, auto-inlines critical error portions
 func (s *ToolResultStorage) createSummary(toolName, result, filePath string, size int) string {
 	sizeKB := float64(size) / 1024.0
 
+	// Phase 2: For test failures, extract and inline critical error portions
+	if isTestCommand(toolName) && containsFailureIndicators(result) {
+		return s.createTestFailureSummary(result, filePath, sizeKB)
+	}
+
+	// Standard summary for non-test or passing results
+	return s.createStandardSummary(result, filePath, sizeKB, toolName)
+}
+
+// createTestFailureSummary creates an enhanced summary for test failures
+// that auto-inlines critical error portions (Phase 2)
+func (s *ToolResultStorage) createTestFailureSummary(result, filePath string, sizeKB float64) string {
+	var sb strings.Builder
+
+	sb.WriteString("⚠️  TEST FAILURE DETECTED\n\n")
+
+	// Extract critical error section (first 50 lines or until first blank line after error)
+	criticalSection := extractCriticalErrorSection(result, 50)
+	sb.WriteString("CRITICAL ERROR OUTPUT:\n")
+	sb.WriteString(strings.Repeat("=", 80))
+	sb.WriteString("\n")
+	sb.WriteString(criticalSection)
+	sb.WriteString("\n")
+	sb.WriteString(strings.Repeat("=", 80))
+	sb.WriteString("\n\n")
+
+	// Show how much was omitted
+	omittedBytes := len(result) - len(criticalSection)
+	if omittedBytes > 0 {
+		sb.WriteString(fmt.Sprintf("[%.1fKB of additional output omitted - full output available in file]\n\n", float64(omittedBytes)/1024.0))
+	}
+
+	sb.WriteString(fmt.Sprintf("Full output saved to: %s (%.1fKB)\n\n", filePath, sizeKB))
+
+	sb.WriteString("NEXT STEPS (DO NOT SKIP):\n")
+	sb.WriteString("1. ✓ Error captured above - analyze the failure message\n")
+	sb.WriteString("2. Read the failing test source code to understand what's being tested\n")
+	sb.WriteString("3. Read the implementation code that the test is checking\n")
+	sb.WriteString("4. Identify the root cause by matching error to code\n")
+	sb.WriteString("5. Apply the fix using patch_file\n")
+	sb.WriteString("6. Re-run the test to verify the fix works\n\n")
+
+	sb.WriteString("If you need more context from the test output:\n")
+	sb.WriteString(fmt.Sprintf("  • Read specific lines: read_tool_result(file_path=\"%s\", start_line=X, end_line=Y)\n", filePath))
+	sb.WriteString(fmt.Sprintf("  • Search patterns: grep_tool_result(file_path=\"%s\", pattern=\"PATTERN\")\n", filePath))
+
+	return sb.String()
+}
+
+// createStandardSummary creates a standard head+tail summary for non-test outputs
+func (s *ToolResultStorage) createStandardSummary(result, filePath string, sizeKB float64, toolName string) string {
 	// Extract head and tail
 	headSize := toolResultMaxInline / 2
 	tailSize := toolResultMaxInline / 2
@@ -134,7 +186,7 @@ func (s *ToolResultStorage) createSummary(toolName, result, filePath string, siz
 	if len(result) > toolResultMaxInline {
 		head = result[:headSize]
 		tail = result[len(result)-tailSize:]
-		omittedBytes = size - headSize - tailSize
+		omittedBytes = len(result) - headSize - tailSize
 	}
 
 	var sb strings.Builder
@@ -210,6 +262,75 @@ func isBuildCommand(toolName string) bool {
 		return false
 	}
 	return strings.Contains(name, "build") || strings.Contains(name, "compile") || strings.Contains(name, "make")
+}
+
+// containsFailureIndicators checks if output contains test/build failure patterns
+func containsFailureIndicators(result string) bool {
+	lower := strings.ToLower(result)
+	// Check for common failure patterns
+	return strings.Contains(lower, "fail") ||
+		strings.Contains(lower, "error:") ||
+		strings.Contains(lower, "panic:") ||
+		strings.Contains(lower, "fatal") ||
+		strings.Contains(result, "exit status 1") ||
+		strings.Contains(result, "exit code: 1")
+}
+
+// extractCriticalErrorSection extracts the critical error portion from test output
+// Returns the first maxLines or until we hit a natural break after the error
+func extractCriticalErrorSection(result string, maxLines int) string {
+	lines := strings.Split(result, "\n")
+
+	// Find the first line with an error indicator
+	errorStartIdx := -1
+	for i, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "fail") ||
+			strings.Contains(lower, "error") ||
+			strings.Contains(lower, "panic") ||
+			strings.Contains(line, "--- FAIL:") ||
+			strings.Contains(line, "FAIL\t") {
+			errorStartIdx = i
+			break
+		}
+	}
+
+	// If no error found, just return first maxLines
+	if errorStartIdx == -1 {
+		if len(lines) <= maxLines {
+			return result
+		}
+		return strings.Join(lines[:maxLines], "\n")
+	}
+
+	// Include some context before the error (up to 5 lines)
+	startIdx := errorStartIdx - 5
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	// Include lines until maxLines or we hit a natural break
+	endIdx := startIdx + maxLines
+	if endIdx > len(lines) {
+		endIdx = len(lines)
+	}
+
+	// Try to find a natural stopping point (blank line after error context)
+	blankCount := 0
+	for i := errorStartIdx + 1; i < endIdx && i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "" {
+			blankCount++
+			if blankCount >= 2 {
+				// Stop after 2 consecutive blank lines
+				endIdx = i
+				break
+			}
+		} else {
+			blankCount = 0
+		}
+	}
+
+	return strings.Join(lines[startIdx:endIdx], "\n")
 }
 
 // CleanupOldToolResults removes tool result directories older than the given TTL

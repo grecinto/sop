@@ -3932,9 +3932,6 @@ func (a *CopilotAgent) getCodingWorkflowContext() string {
 		return ""
 	}
 	caveats := a.service.session.Memory.GetRuntimeCaveats(3)
-	if len(caveats) == 0 {
-		return ""
-	}
 	var sb strings.Builder
 	var wrote bool
 	for _, caveat := range caveats {
@@ -3958,10 +3955,81 @@ func (a *CopilotAgent) getCodingWorkflowContext() string {
 		}
 		sb.WriteString("\n")
 	}
+
+	// Phase 1: Inject test debugging protocol when user requests test fixes
+	if a.isTestFixRequest() {
+		if wrote {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(`TEST DEBUGGING PROTOCOL (MANDATORY STEPS):
+
+Step 1: CAPTURE TEST FAILURE
+- Run: execute_local_command(command="go test -v -run TestName ./path", reasoning="capture full test error")
+- If output shows file_path: IMMEDIATELY call read_tool_result(file_path="...") to read it
+- Extract actual error message
+- NEVER proceed without seeing the error
+
+Step 2: UNDERSTAND THE TEST
+- Call: read_file(path="path/to/test.go", start_line=N, end_line=M)
+- Understand what the test is checking
+- Identify which functions it calls
+
+Step 3: INSPECT IMPLEMENTATION
+- Use search_repo_files or grep_repo_text to find implementation
+- Read the code that the test calls
+- Compare expected vs actual behavior
+
+Step 4: IDENTIFY ROOT CAUSE
+- Match error message to code location
+- Determine what's missing or incorrect
+- Form hypothesis about the fix
+
+Step 5: APPLY FIX
+- Use patch_file for focused changes (preferred)
+- Or write_file for complete rewrites
+- Include clear reasoning
+
+Step 6: VERIFY FIX
+- Re-run the same test command from Step 1
+- Confirm test passes
+- Show passing output to user
+
+Step 7: ITERATE IF NEEDED
+- If test still fails, return to Step 1
+- Maximum 3 iterations
+
+CRITICAL RULES:
+✗ NEVER claim tests are fixed without running them
+✗ NEVER skip reading the error output
+✗ NEVER skip reading test and implementation code
+✗ NEVER proceed without completing prior step
+✓ ALWAYS show passing test output as proof
+`)
+		wrote = true
+	}
+
 	if !wrote {
 		return ""
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func (a *CopilotAgent) isTestFixRequest() bool {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return false
+	}
+	thread := a.service.session.Memory.GetCurrentThread()
+	if thread == nil || len(thread.Exchanges) == 0 {
+		return false
+	}
+	// Check last user message for test-fix keywords
+	for i := len(thread.Exchanges) - 1; i >= 0; i-- {
+		if thread.Exchanges[i].Role == RoleUser {
+			content := strings.ToLower(thread.Exchanges[i].Content)
+			return strings.Contains(content, "fix") && (strings.Contains(content, "test") || strings.Contains(content, "failing"))
+		}
+	}
+	return false
 }
 
 func (a *CopilotAgent) getCaveatContext() string {
