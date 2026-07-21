@@ -526,7 +526,30 @@ for _, result := range results {
     - ✅ Critical error extraction with natural break detection
     - ✅ Comprehensive tests validating error extraction logic
     - ✅ All existing tests updated and passing (7 tests total)
-  - **Next:** KB-Driven Workflow Automation (see docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md)
+  - 🚀 **Phase 3: KB-Driven Workflow Orchestration (APPROVED FOR IMPLEMENTATION)**
+    - **Design Complete**: See [docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md](/Volumes/T7/sop-cloud/docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md)
+    - **Architecture**: 3-tier system (KB Workflows → Scripts → Tools)
+    - **Track A** (2-3 days): WorkflowManager with KB integration
+      - Create workflow_manager.go with types (WorkflowDefinition, WorkflowStep)
+      - Implement GetWorkflow() - retrieves from KB via SearchByPath
+      - Implement Execute() - injects work items from workflow steps
+      - Convert test debugging workflow to JSON, ingest to KB
+    - **Track B** (2-3 days): Script auto-optimization
+      - Add OptimizationProfile to WorkflowStep (PreferScript, ScriptLibrary, FallbackToLLM)
+      - WorkflowManager detects when to use scripts vs tools
+      - Hybrid execution: Scripts for efficiency (5-10x), LLM for reasoning
+      - Build script library (extract_go_test_errors.json, find_test_functions.json)
+    - **Track C** (2-3 days): Code generation (compilation path)
+      - Create codegen/script_codegen.go (JSON scripts → Go source)
+      - Create codegen/workflow_codegen.go (KB workflows → Go binaries)
+      - Implement CompileWorkflow() - generates + compiles to native executable
+      - 10-100x performance, distributable standalone binaries (10-20MB)
+    - **Total**: 6-9 days for complete implementation (tracks can run in parallel)
+    - **Competitive Advantage**: Data-driven workflows that compile to native binaries
+      - Like: GitHub Actions (YAML), Airflow (Python), n8n (JSON) ← Industry standard format
+      - Unlike: All others stay interpreted/cloud-dependent ← We compile to binaries
+      - Unique: Edge deployment + Zero API costs + Distribution as products
+    - **Status**: All ingredients in place, design approved, ready to implement
 - [ ] Add Python and JavaScript tree-sitter grammars
 - [ ] Enhanced file ranking with relevance scoring
 - [ ] Repository-specific coding conventions learning

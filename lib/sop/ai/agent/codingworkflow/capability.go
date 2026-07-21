@@ -9,6 +9,13 @@ import (
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
+// WorkflowManagerInterface defines the interface for KB-driven workflow orchestration.
+// This avoids import cycles by defining the interface in codingworkflow package.
+type WorkflowManagerInterface interface {
+	GetWorkflow(ctx context.Context, query string) (interface{}, error)
+	Execute(ctx context.Context, workflow interface{}, queue capabilities.WorkQueue, originalQuery string) error
+}
+
 // workQueueContextKey is the context key for accessing the work queue
 // This must match the key used in the agent package to avoid import cycles
 type workQueueContextKey string
@@ -41,11 +48,20 @@ const (
 
 // Capability adapts the coding workflow orchestrator into the agent capability plugin contract.
 type Capability struct {
-	Orchestrator *Orchestrator
+	Orchestrator    *Orchestrator
+	WorkflowManager WorkflowManagerInterface // KB-driven workflow orchestration (Phase 3)
 }
 
 func NewCapability(orchestrator *Orchestrator) *Capability {
-	return &Capability{Orchestrator: orchestrator}
+	return &Capability{
+		Orchestrator:    orchestrator,
+		WorkflowManager: nil, // Set via SetWorkflowManager after creation
+	}
+}
+
+// SetWorkflowManager sets the workflow manager for KB-driven orchestration.
+func (c *Capability) SetWorkflowManager(wm WorkflowManagerInterface) {
+	c.WorkflowManager = wm
 }
 
 func (c *Capability) ID() string   { return CapabilityID }
@@ -123,6 +139,19 @@ func (c *Capability) Orchestrate(ctx context.Context, state capabilities.Routing
 	query, ok := ctx.Value("multi_turn_query").(string)
 	if !ok || query == "" {
 		return false, fmt.Errorf("query not found in context")
+	}
+
+	// Phase 3: Try KB-driven workflow first (if WorkflowManager available)
+	if c.WorkflowManager != nil {
+		workflow, err := c.WorkflowManager.GetWorkflow(ctx, query)
+		if err == nil && workflow != nil {
+			// Found workflow in KB, execute it
+			if err := c.WorkflowManager.Execute(ctx, workflow, queue, query); err == nil {
+				return true, nil
+			}
+			// KB workflow execution failed, fall back to hardcoded
+		}
+		// No workflow found in KB or error occurred, fall back to hardcoded
 	}
 
 	// Step 3: Detect test-fix requests (Phase 1.5)

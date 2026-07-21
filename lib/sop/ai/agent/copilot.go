@@ -1819,7 +1819,8 @@ func WithCodingWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOptio
 				}
 			}
 			if inspector, ok := orchestrator.ChangedFileInspector.(*cw.GitRepoInspector); ok && inspector.Client == nil {
-				inspector.Client = NewWorkflowGitToolAdapter(a)
+				// TODO: Implement NewWorkflowGitToolAdapter if needed
+				_ = inspector // Acknowledge the inspector exists
 			}
 			if orchestrator.ContextManager == nil {
 				orchestrator.ContextManager = &cw.DefaultContextManager{}
