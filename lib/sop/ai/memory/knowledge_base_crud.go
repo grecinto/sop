@@ -423,6 +423,11 @@ func (kb *KnowledgeBase[T]) UpsertItems(ctx context.Context, params []UpsertItem
 		if p.CategoryPath != "" {
 			if found, _ := catsByPath.Find(ctx, p.CategoryPath, false); found {
 				catID, _ = catsByPath.GetCurrentValue(ctx)
+			} else if kb.Manager != nil {
+				ensuredCatID, err := kb.Manager.EnsureCategory(ctx, p.CategoryPath)
+				if err == nil && !ensuredCatID.IsNil() {
+					catID = ensuredCatID
+				}
 			}
 		}
 

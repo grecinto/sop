@@ -79,7 +79,7 @@ For this direction, AST/tree-sitter-style structure is a first-class V1 capabili
 - [x] Add persistent coding memory for repo/file/symbol summaries, relationships, embeddings, and lifecycle state.
 - [ ] Add explicit workflow tracing so the user can see what context was selected, what changed, and what was validated.
 - [ ] Add safety controls for destructive operations, including preview, approval, and rollback paths.
-- [x] **Add systematic test debugging protocol (HIGH PRIORITY)**: ✅ **COMPLETED** - System prompt with mandatory workflow steps, verification gates, and improved tool result visibility. See [lib/sop/ai/agent/codingworkflow/PHASE1_IMPLEMENTATION.md](/Volumes/T7/sop-cloud/lib/sop/ai/agent/codingworkflow/PHASE1_IMPLEMENTATION.md) (§6.1)
+- [x] **Add systematic test debugging protocol (HIGH PRIORITY)**: ✅ **COMPLETED** - System prompt with mandatory workflow steps, verification gates, and improved tool result visibility. See the systematic test-fix protocol section in this document (§6.1).
 - [ ] **KB-Driven Workflow Orchestration (APPROVED)**: ✅ **DESIGN COMPLETE** - WorkflowManager with script auto-optimization and compilation path. See [docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md](/Volumes/T7/sop-cloud/docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md) for full design.
   - **Phase 1** (2-3 days): WorkflowManager + KB integration + interpreted execution
   - **Phase 2** (2-3 days): Script auto-optimization (detect when to use scripts vs tools)
@@ -238,6 +238,8 @@ The system should support:
 - Claimed completion without verification
 
 **Solution**: Explicit test debugging protocol in system prompt and workflow gates.
+
+This is now implemented in the runtime via a mandatory test-debugging protocol that activates for test-fix requests. The system prompt now requires a seven-step workflow, tool results surface failures more clearly, and test execution uses verbose output so the model sees the full error context.
 
 ##### Required System Prompt Addition
 

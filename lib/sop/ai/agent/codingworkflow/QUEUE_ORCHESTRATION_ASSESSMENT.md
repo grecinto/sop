@@ -71,6 +71,25 @@ type MultiTurnCapability interface {
 - `orchestrateImplementationWorkflow()` - design → implement → test
 - `orchestrateTestingWorkflow()` - run tests → analyze failures → fix
 
+## Gap Assessment: What Is Still Missing
+
+The current runtime already has the orchestration skeleton for workflows, but it still lacks a fully data-driven instruction layer for complex procedures such as test fixing.
+
+### Current gap
+- **Workflow steps can be queued**, but the workflow definition does not yet carry a rich, step-level instruction payload for each turn.
+- **The test-debugging protocol is still partially runtime-hardcoded** in the agent prompt assembly rather than being authored as workflow data.
+- **Queue turns are structurally simple**: they carry a query, actor, and some context, but not a fully declarative instruction object that the runtime can render into the LLM prompt.
+- **Loop control is only partially declarative**: the system can evaluate simple conditions, but a robust “fix tests → rerun → iterate until green” flow should be expressed through workflow metadata such as success conditions, max iterations, and evidence requirements.
+
+### Mitigation plan
+1. **Extend workflow schema** with step-level fields such as `instructions`, `required_context`, `success_criteria`, `iteration_policy`, and `tools_expected`.
+2. **Carry structured step payloads in queue work items** so each turn receives the exact guidance, evidence requirements, and success gate defined by the workflow.
+3. **Compose prompt context from workflow data** rather than relying on special-case runtime branches for test debugging.
+4. **Make the loop explicit** by using workflow-defined conditions and iteration limits instead of assuming the LLM will self-manage the process.
+5. **Add regression tests** for workflow payload injection, prompt rendering, and the “run tests → inspect → fix → rerun” sequence.
+
+This keeps the runtime generic while allowing the knowledge base to define domain-specific behavior such as test repair, code review, or incident triage.
+
 ## Proposed Enhancement: Queue-Based Test Debugging
 
 ### Architecture
@@ -401,14 +420,14 @@ With queue orchestration in place, Phase 2 becomes simpler:
 3. **Test:** Run against real failing test (vectorizationResetExecutor case)
 4. **Measure:** Compare success rate vs Phase 1 prompt-only approach
 5. **Iterate:** Refine actor boundaries and conditional logic
-6. **Document:** Update TEST_DEBUGGING_PROTOCOL.md with queue architecture
+6. **Document:** Update the consolidated workflow implementation guide with queue architecture
 7. **Scale:** Apply pattern to other workflows (refactoring, implementation)
 
 ## References
 
 - [Multi-Turn Queue-Based Orchestration](../README.md#multi-turn-queue-based-orchestration) - Architecture overview
 - [V1_IMPLEMENTATION.md](V1_IMPLEMENTATION.md) - Current coding workflow implementation
-- [TEST_DEBUGGING_PROTOCOL.md](TEST_DEBUGGING_PROTOCOL.md) - 7-step protocol specification
-- [PHASE1_IMPLEMENTATION.md](PHASE1_IMPLEMENTATION.md) - System prompt enhancements
+- [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](../../../../docs/CLI_CODING_WORKFLOW_IMPLEMENTATION.md) - 7-step protocol specification and implementation notes
+- [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](../../../../docs/CLI_CODING_WORKFLOW_IMPLEMENTATION.md) - System prompt enhancements and workflow protocol details
 - [copilot_multiturn.go](../copilot_multiturn.go) - Queue execution engine
 - [capability.go](capability.go) - Existing orchestration examples

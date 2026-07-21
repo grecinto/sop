@@ -79,6 +79,18 @@ This shared model supports three reusable task modes:
 
 The important design point is that the general workflow engine is not “the coding workflow capability.” It is the reusable foundation, and the coding workflow capability is simply one consumer of that foundation.
 
+### Workflow instruction payloads should be data-driven
+For workflows such as “fix failing tests,” the execution guidance should be owned by the workflow definition rather than hardcoded in the runtime. The runtime should treat instructions, verification rules, and iteration policy as structured workflow data that is injected into each queued turn.
+
+In practice, the workflow should describe:
+*   **Step instructions**: what the LLM must do for that turn.
+*   **Required context**: which files, errors, or prior results to include.
+*   **Success criteria**: what counts as completion for that step.
+*   **Iteration policy**: when to loop back, how many times, and what conditions stop the loop.
+*   **Expected tools**: which tools are expected or preferred for the step.
+
+The current implementation already supports queue-based orchestration, but the richer prompt payload layer is still incomplete. The mitigation plan is to move test-debugging guidance from runtime special-casing into the workflow schema and inject it through the work queue so the LLM sees the same structured policy for every workflow execution.
+
 ### Balanced TDD operating posture
 The coding workflow should follow a balanced operating model:
 *   **Design first**: understand the requirement, shape the change, and make the plan explicit before editing files.

@@ -68,6 +68,10 @@ func SetLoadedAgents(agents map[string]ai.Agent[map[string]any]) {
 // AskSharedAgent routes a query through the shared backend agent runtime.
 // It prefers the initialized backend agents so daemon and httpserver use the same
 // handler/formatting path for slash-style requests such as /list_tools.
+type parallelAskAgent interface {
+	AskParallel(context.Context, string, *ai.ConfigMap) (string, error)
+}
+
 func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -102,11 +106,17 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 
 	for _, agentID := range []string{"copilot", "sql_core"} {
 		if agentSvc, ok := loadedAgents[agentID]; ok && agentSvc != nil {
+			if parallelAgent, ok := agentSvc.(parallelAskAgent); ok && len(sharedagent.DetectParallelSubqueries(query)) > 1 {
+				return parallelAgent.AskParallel(ctx, query, cfg)
+			}
 			return agentSvc.Ask(ctx, query, cfg)
 		}
 	}
 	for _, agentSvc := range loadedAgents {
 		if agentSvc != nil {
+			if parallelAgent, ok := agentSvc.(parallelAskAgent); ok && len(sharedagent.DetectParallelSubqueries(query)) > 1 {
+				return parallelAgent.AskParallel(ctx, query, cfg)
+			}
 			return agentSvc.Ask(ctx, query, cfg)
 		}
 	}

@@ -509,7 +509,7 @@ for _, result := range results {
 ## Roadmap
 
 ### V1.1 (Near-term)
-- [x] **Add systematic test debugging protocol (HIGHEST PRIORITY)** ✅ **COMPLETED** - See [PHASE1_IMPLEMENTATION.md](PHASE1_IMPLEMENTATION.md)
+- [x] **Add systematic test debugging protocol (HIGHEST PRIORITY)** ✅ **COMPLETED** - See the systematic test-fix protocol section in [docs/CLI_CODING_WORKFLOW_IMPLEMENTATION.md](../../../../docs/CLI_CODING_WORKFLOW_IMPLEMENTATION.md)
   - ✅ Phase 1: System prompt enhancement with 7-step mandatory workflow
   - ✅ Phase 1: Tool result improvements with failure detection and explicit next steps
   - ✅ Phase 1: Test execution enhancements (auto -v flag)

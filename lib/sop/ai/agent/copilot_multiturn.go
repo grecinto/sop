@@ -121,6 +121,23 @@ func convertToWorkItem(item interface{}) (WorkItem, bool) {
 
 // processQueueLoop is the SINGLE queue processor - dequeues items and calls Ask().
 // This is the only place that should loop over queue items.
+func buildEffectiveQueueQuery(item WorkItem) string {
+	if item.Context == nil {
+		return item.Query
+	}
+	if payload, ok := item.Context["workflow_step"]; ok {
+		switch ctx := payload.(type) {
+		case WorkflowExecutionContext:
+			return ctx.RenderPrompt(item.Query)
+		case *WorkflowExecutionContext:
+			if ctx != nil {
+				return ctx.RenderPrompt(item.Query)
+			}
+		}
+	}
+	return item.Query
+}
+
 func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, cfg *ai.ConfigMap, maxTurns int) []TurnResult {
 	var turnResults []TurnResult
 	turnNumber := 0
@@ -151,8 +168,20 @@ func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, c
 
 		// Execute turn by calling Ask() - queue as prompt source!
 		turnCtx, cancel := context.WithTimeout(ctx, queue.GetTurnTimeout())
+		effectiveQuery := buildEffectiveQueueQuery(item)
 
-		log.Info("Executing turn", "turn_number", turnNumber, "actor", item.Actor, "query_preview", truncateString(item.Query, 100))
+		if payload, ok := item.Context["workflow_step"]; ok {
+			switch workflowContext := payload.(type) {
+			case WorkflowExecutionContext:
+				emitTerminalCommand(turnCtx, workflowContext.RenderStepEventLabel())
+			case *WorkflowExecutionContext:
+				if workflowContext != nil {
+					emitTerminalCommand(turnCtx, workflowContext.RenderStepEventLabel())
+				}
+			}
+		}
+
+		log.Info("Executing turn", "turn_number", turnNumber, "actor", item.Actor, "query_preview", truncateString(effectiveQuery, 100))
 
 		startTime := time.Now()
 
@@ -161,16 +190,16 @@ func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, c
 		var execErr error
 
 		if a.enablePhase5 && a.retryStrategy != nil {
-			response, execErr = a.executeWithRetry(turnCtx, item.Query, cfg, queue)
+			response, execErr = a.executeWithRetry(turnCtx, effectiveQuery, cfg, queue)
 		} else {
-			response, execErr = a.askWithQueue(turnCtx, item.Query, cfg, queue)
+			response, execErr = a.askWithQueue(turnCtx, effectiveQuery, cfg, queue)
 		}
 
 		result := TurnResult{
 			Duration:   time.Since(startTime),
 			TurnNumber: turnNumber,
 			Actor:      item.Actor,
-			Query:      item.Query,
+			Query:      effectiveQuery,
 			Response:   response,
 			Error:      execErr,
 			Data:       make(map[string]any),

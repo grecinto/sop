@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/sharedcode/sop/ai/memory"
 )
 
 func TestWorkflowManager_New(t *testing.T) {
@@ -183,6 +185,226 @@ func TestWorkflowManager_Execute(t *testing.T) {
 
 	// Note: Actor limits can't be set through capabilities.WorkQueue interface
 	// They would need to be set at queue construction time
+}
+
+func TestWorkflowExecutionContext_RenderStepEventLabel(t *testing.T) {
+	ctx := WorkflowExecutionContext{StepNumber: 5, StepTitle: "Review and polish"}
+	if got := ctx.RenderStepEventLabel(); got != "#Review and polish" {
+		t.Fatalf("expected event label %q, got %q", "#Review and polish", got)
+	}
+
+	fallback := WorkflowExecutionContext{StepNumber: 2}
+	if got := fallback.RenderStepEventLabel(); got != "#Step 2" {
+		t.Fatalf("expected fallback event label %q, got %q", "#Step 2", got)
+	}
+}
+
+func TestWorkflowManager_ParseWorkflowFromItem_PreservesStepTitle(t *testing.T) {
+	wm := NewWorkflowManager(nil)
+
+	item := memory.Item[map[string]any]{
+		Data: map[string]any{
+			"workflow_name": "Coding",
+			"workflow_template": map[string]any{
+				"name":        "Coding",
+				"description": "Plan, implement, verify, and review",
+				"steps": []any{
+					map[string]any{
+						"step":         5,
+						"title":        "Review and polish",
+						"instructions": "Review the final diff for clarity and correctness.",
+					},
+				},
+			},
+		},
+	}
+
+	workflow, err := wm.parseWorkflowFromItem(&item)
+	if err != nil {
+		t.Fatalf("parseWorkflowFromItem failed: %v", err)
+	}
+	if len(workflow.Steps) != 1 {
+		t.Fatalf("expected 1 workflow step, got %d", len(workflow.Steps))
+	}
+	if workflow.Steps[0].Title != "Review and polish" {
+		t.Fatalf("expected step title %q, got %q", "Review and polish", workflow.Steps[0].Title)
+	}
+	if workflow.Steps[0].QueryTemplate != "Review and polish" {
+		t.Fatalf("expected fallback query template %q, got %q", "Review and polish", workflow.Steps[0].QueryTemplate)
+	}
+	ctx := WorkflowExecutionContext{StepNumber: 5, StepTitle: workflow.Steps[0].Title}
+	if got := ctx.RenderStepStatus(); got != "Step 5: Review and polish" {
+		t.Fatalf("expected rendered step status %q, got %q", "Step 5: Review and polish", got)
+	}
+}
+
+func TestWorkflowManager_ParseWorkflowFromItem_UsesWorkflowTemplatePayload(t *testing.T) {
+	wm := NewWorkflowManager(nil)
+
+	item := memory.Item[map[string]any]{
+		Data: map[string]any{
+			"description":   "Fix failing tests",
+			"workflow_name": "Fix failing tests",
+			"workflow_template": map[string]any{
+				"name":              "Fix failing tests",
+				"description":       "Fix failing tests",
+				"protocol_guidance": "Inspect the failing output before changing code.",
+				"steps": []any{
+					map[string]any{
+						"step":             1,
+						"title":            "Inspect the failing output",
+						"instructions":     "Read the test output first.",
+						"required_context": []any{"test output", "stack trace"},
+						"success_criteria": []any{"Root cause identified"},
+						"iteration_policy": "Retry up to 3 times if the failure persists.",
+						"tools_expected":   []any{"run_tests", "read_file"},
+					},
+				},
+			},
+		},
+	}
+
+	workflow, err := wm.parseWorkflowFromItem(&item)
+	if err != nil {
+		t.Fatalf("parseWorkflowFromItem failed: %v", err)
+	}
+	if workflow.Name != "Fix failing tests" {
+		t.Fatalf("expected workflow name %q, got %q", "Fix failing tests", workflow.Name)
+	}
+	if workflow.Description != "Fix failing tests" {
+		t.Fatalf("expected workflow description %q, got %q", "Fix failing tests", workflow.Description)
+	}
+	if workflow.ProtocolGuidance != "Inspect the failing output before changing code." {
+		t.Fatalf("expected protocol guidance %q, got %q", "Inspect the failing output before changing code.", workflow.ProtocolGuidance)
+	}
+	if len(workflow.Steps) != 1 {
+		t.Fatalf("expected 1 workflow step, got %d", len(workflow.Steps))
+	}
+	step := workflow.Steps[0]
+	if step.QueryTemplate != "Inspect the failing output" {
+		t.Fatalf("expected query template %q, got %q", "Inspect the failing output", step.QueryTemplate)
+	}
+	if step.Instructions != "Read the test output first." {
+		t.Fatalf("expected instructions %q, got %q", "Read the test output first.", step.Instructions)
+	}
+	if len(step.RequiredContext) != 2 {
+		t.Fatalf("expected 2 required contexts, got %d", len(step.RequiredContext))
+	}
+	if len(step.SuccessCriteria) != 1 {
+		t.Fatalf("expected 1 success criterion, got %d", len(step.SuccessCriteria))
+	}
+	if step.IterationPolicy != "Retry up to 3 times if the failure persists." {
+		t.Fatalf("expected iteration policy %q, got %q", "Retry up to 3 times if the failure persists.", step.IterationPolicy)
+	}
+	if len(step.ToolsExpected) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(step.ToolsExpected))
+	}
+}
+
+func TestWorkflowManager_GetWorkflow_FallsBackToStoredWorkflowTemplateItems(t *testing.T) {
+	ctx := context.Background()
+	kb, err := createTestKnowledgeBase(ctx)
+	if err != nil {
+		t.Fatalf("createTestKnowledgeBase failed: %v", err)
+	}
+
+	wm := NewWorkflowManager(kb)
+	if err := kb.UpsertItems(ctx, []memory.UpsertItemParam[map[string]any]{
+		{
+			CategoryPath: "Workflows/TestDebugging",
+			Item: &memory.Item[map[string]any]{
+				Data: map[string]any{
+					"workflow_name": "Fix failing tests",
+					"description":   "Fix failing tests in the repository",
+					"workflow_template": map[string]any{
+						"name":        "Fix failing tests",
+						"description": "Fix failing tests in the repository",
+						"steps": []any{
+							map[string]any{
+								"step":  1,
+								"title": "Inspect the failing output",
+							},
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpsertItems failed: %v", err)
+	}
+
+	workflowIface, err := wm.GetWorkflow(ctx, "fix failing tests")
+	if err != nil {
+		t.Fatalf("expected workflow lookup to succeed, got error: %v", err)
+	}
+	if workflowIface == nil {
+		t.Fatal("expected workflow, got nil")
+	}
+	workflow, ok := workflowIface.(*WorkflowDefinition)
+	if !ok {
+		t.Fatalf("expected *WorkflowDefinition, got %T", workflowIface)
+	}
+	if workflow.Name != "Fix failing tests" {
+		t.Fatalf("expected workflow name %q, got %q", "Fix failing tests", workflow.Name)
+	}
+	if len(workflow.Steps) != 1 {
+		t.Fatalf("expected 1 workflow step, got %d", len(workflow.Steps))
+	}
+}
+
+func TestWorkflowManager_Execute_PopulatesWorkflowStepContext(t *testing.T) {
+	wm := NewWorkflowManager(nil)
+
+	workflow := &WorkflowDefinition{
+		ID:               "test-workflow-context",
+		Name:             "Test Debugging",
+		Description:      "Fix failing tests",
+		ProtocolGuidance: "Always inspect test output before changing code.",
+		Steps: []WorkflowStep{{
+			Step:            1,
+			Actor:           "test.runner",
+			Priority:        100,
+			QueryTemplate:   "Run {original_query}",
+			Instructions:    "Inspect the failing test output before making changes.",
+			RequiredContext: []string{"test output", "failing stack trace"},
+			SuccessCriteria: []string{"A failing test has been reproduced and explained."},
+			IterationPolicy: "Retry up to 3 times if the failure persists.",
+			ToolsExpected:   []string{"run_tests", "read_file"},
+		}},
+	}
+
+	queue := newMockWorkQueue()
+	if err := wm.Execute(context.Background(), workflow, queue, "fix failing tests"); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(queue.items) != 1 {
+		t.Fatalf("Expected 1 work item, got %d", len(queue.items))
+	}
+
+	item := queue.items[0]
+	payload, ok := item.Context["workflow_step"]
+	if !ok {
+		t.Fatalf("expected workflow_step context in work item, got %#v", item.Context)
+	}
+
+	ctxPayload, ok := payload.(WorkflowExecutionContext)
+	if !ok {
+		t.Fatalf("expected WorkflowExecutionContext payload, got %T", payload)
+	}
+
+	if ctxPayload.StepInstructions != workflow.Steps[0].Instructions {
+		t.Fatalf("expected step instructions %q, got %q", workflow.Steps[0].Instructions, ctxPayload.StepInstructions)
+	}
+	if ctxPayload.WorkflowName != workflow.Name {
+		t.Fatalf("expected workflow name %q, got %q", workflow.Name, ctxPayload.WorkflowName)
+	}
+	if ctxPayload.IterationPolicy != workflow.Steps[0].IterationPolicy {
+		t.Fatalf("expected iteration policy %q, got %q", workflow.Steps[0].IterationPolicy, ctxPayload.IterationPolicy)
+	}
+	if len(ctxPayload.RequiredContext) != 2 {
+		t.Fatalf("expected 2 required contexts, got %d", len(ctxPayload.RequiredContext))
+	}
 }
 
 // mockWorkQueue is a test implementation of capabilities.WorkQueue interface

@@ -1,5 +1,10 @@
 package agent
 
+import (
+	"fmt"
+	"strings"
+)
+
 // WorkflowDefinition represents a complete workflow stored in the KnowledgeBase.
 // Workflows are stored as JSON at CategoryPaths like "Workflows/TestDebugging/Go/UnitTests".
 type WorkflowDefinition struct {
@@ -35,10 +40,17 @@ func (w *WorkflowDefinition) GetName() string {
 // WorkflowStep represents a single step in a workflow.
 type WorkflowStep struct {
 	Step          int      `json:"step"`
+	Title         string   `json:"title,omitempty"`
 	Actor         string   `json:"actor"`
 	Priority      int      `json:"priority"`
 	QueryTemplate string   `json:"query_template"`
 	ToolsExpected []string `json:"tools_expected,omitempty"`
+
+	// Declarative execution guidance for the LLM.
+	Instructions    string   `json:"instructions,omitempty"`
+	RequiredContext []string `json:"required_context,omitempty"`
+	SuccessCriteria []string `json:"success_criteria,omitempty"`
+	IterationPolicy string   `json:"iteration_policy,omitempty"`
 
 	// Script optimization (Track B)
 	ScriptTemplate      string               `json:"script_template,omitempty"`
@@ -46,6 +58,96 @@ type WorkflowStep struct {
 
 	// Conditional execution
 	Condition *StepCondition `json:"condition,omitempty"`
+}
+
+// WorkflowExecutionContext is the structured payload injected into queued workflow turns.
+type WorkflowExecutionContext struct {
+	WorkflowID          string
+	WorkflowName        string
+	WorkflowDescription string
+	ProtocolGuidance    string
+	StepNumber          int
+	StepTitle           string
+	StepActor           string
+	StepInstructions    string
+	RequiredContext     []string
+	SuccessCriteria     []string
+	IterationPolicy     string
+	ToolsExpected       []string
+}
+
+func (c WorkflowExecutionContext) RenderStepStatus() string {
+	if c.StepNumber <= 0 {
+		if strings.TrimSpace(c.StepTitle) != "" {
+			return c.StepTitle
+		}
+		return "Workflow step"
+	}
+	if strings.TrimSpace(c.StepTitle) != "" {
+		return fmt.Sprintf("Step %d: %s", c.StepNumber, c.StepTitle)
+	}
+	return fmt.Sprintf("Step %d", c.StepNumber)
+}
+
+func (c WorkflowExecutionContext) RenderStepEventLabel() string {
+	if trimmed := strings.TrimSpace(c.StepTitle); trimmed != "" {
+		return fmt.Sprintf("#%s", trimmed)
+	}
+	if c.StepNumber > 0 {
+		return fmt.Sprintf("#Step %d", c.StepNumber)
+	}
+	return "#workflow-step"
+}
+
+// RenderPrompt turns the structured context into a compact prompt block that can be prepended to the next turn.
+func (c WorkflowExecutionContext) RenderPrompt(query string) string {
+	var sb strings.Builder
+	sb.WriteString("Workflow execution context:\n")
+	if c.WorkflowName != "" {
+		sb.WriteString("- Workflow: ")
+		sb.WriteString(c.WorkflowName)
+		sb.WriteByte('\n')
+	}
+	if c.WorkflowDescription != "" {
+		sb.WriteString("- Description: ")
+		sb.WriteString(c.WorkflowDescription)
+		sb.WriteByte('\n')
+	}
+	if c.ProtocolGuidance != "" {
+		sb.WriteString("- Protocol: ")
+		sb.WriteString(c.ProtocolGuidance)
+		sb.WriteByte('\n')
+	}
+	if c.StepInstructions != "" {
+		sb.WriteString("- Instructions: ")
+		sb.WriteString(c.StepInstructions)
+		sb.WriteByte('\n')
+	}
+	if len(c.RequiredContext) > 0 {
+		sb.WriteString("- Required context: ")
+		sb.WriteString(strings.Join(c.RequiredContext, "; "))
+		sb.WriteByte('\n')
+	}
+	if len(c.SuccessCriteria) > 0 {
+		sb.WriteString("- Success criteria: ")
+		sb.WriteString(strings.Join(c.SuccessCriteria, "; "))
+		sb.WriteByte('\n')
+	}
+	if c.IterationPolicy != "" {
+		sb.WriteString("- Iteration policy: ")
+		sb.WriteString(c.IterationPolicy)
+		sb.WriteByte('\n')
+	}
+	if len(c.ToolsExpected) > 0 {
+		sb.WriteString("- Expected tools: ")
+		sb.WriteString(strings.Join(c.ToolsExpected, ", "))
+		sb.WriteByte('\n')
+	}
+	if trimmed := strings.TrimSpace(query); trimmed != "" {
+		sb.WriteString("\nTask:\n")
+		sb.WriteString(trimmed)
+	}
+	return sb.String()
 }
 
 // OptimizationProfile defines how to optimize a step with scripting.

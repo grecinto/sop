@@ -142,6 +142,48 @@ func TestAddSpaceItemModalUsesStretchableBodyAndReferenceMetadataToggle(t *testi
 	}
 }
 
+func TestAddSpaceItemModalSupportsWorkflowTemplateAuthoring(t *testing.T) {
+	modalsPath := templatePath("modals.html")
+	modalsData, err := os.ReadFile(modalsPath)
+	if err != nil {
+		t.Fatalf("read modal template: %v", err)
+	}
+	modalsContent := string(modalsData)
+	for _, token := range []string{"new-space-item-mode", "new-space-item-workflow-section", "new-space-item-workflow-name", "new-space-item-workflow-steps", "new-space-item-workflow-description", "new-space-item-workflow-protocol-guidance", "new-space-item-workflow-step-metadata"} {
+		if !strings.Contains(modalsContent, token) {
+			t.Fatalf("expected add-space-item modal to expose %s in %s", token, modalsPath)
+		}
+	}
+}
+
+func TestSpaceItemScriptsSerializeWorkflowStepMetadata(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"parseWorkflowStepMetadata", "workflowProtocolGuidance", "workflowMetadataRaw"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected workflow authoring helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestSpaceItemScriptsExposeWorkflowPreviewHelpers(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"toggleSpaceItemMode", "renderWorkflowDefinitionPreview"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected workflow authoring helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
 func TestChatWidgetSupportsPinnedFloatingMode(t *testing.T) {
 	modalsPath := templatePath("modals.html")
 	modalsData, err := os.ReadFile(modalsPath)

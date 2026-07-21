@@ -96,46 +96,335 @@ func (wm *WorkflowManager) getWorkflowInternal(ctx context.Context, query string
 		return nil, fmt.Errorf("workflow search failed: %w", err)
 	}
 
-	if len(results) == 0 || len(results[0]) == 0 {
-		return nil, fmt.Errorf("no workflow found for query: %s", query)
+	if len(results) > 0 && len(results[0]) > 0 {
+		// Extract the Item from ai.Hit
+		hit := results[0][0]
+
+		// Parse UUID from string ID
+		itemID, err := sop.ParseUUID(hit.ID)
+		if err != nil {
+			itemID = sop.NilUUID
+		}
+
+		item := memory.Item[map[string]any]{
+			ID:         itemID,
+			Data:       hit.Payload,
+			DocID:      memory.DocIDs(hit.DocID),
+			CategoryID: sop.NilUUID, // Not available in Hit
+		}
+
+		if workflow, err := wm.parseWorkflowFromItem(&item); err == nil && workflow != nil {
+			return workflow, nil
+		}
 	}
 
-	// Extract the Item from ai.Hit
-	hit := results[0][0]
+	if workflow, err := wm.findWorkflowByScanningKB(ctx, query); err != nil {
+		return nil, err
+	} else if workflow != nil {
+		return workflow, nil
+	}
 
-	// Parse UUID from string ID
-	itemID, err := sop.ParseUUID(hit.ID)
+	return nil, fmt.Errorf("no workflow found for query: %s", query)
+}
+
+func (wm *WorkflowManager) findWorkflowByScanningKB(ctx context.Context, query string) (*WorkflowDefinition, error) {
+	if wm.kb == nil {
+		return nil, nil
+	}
+
+	items, _, err := wm.kb.ListItems(ctx, memory.ListItemsParam{Limit: 1000})
 	if err != nil {
-		itemID = sop.NilUUID
+		return nil, nil
 	}
 
-	item := memory.Item[map[string]any]{
-		ID:         itemID,
-		Data:       hit.Payload,
-		DocID:      memory.DocIDs(hit.DocID),
-		CategoryID: sop.NilUUID, // Not available in Hit
+	for _, item := range items {
+		if item.Data == nil {
+			continue
+		}
+		if workflow, err := wm.parseWorkflowFromItem(&item); err == nil && workflow != nil {
+			if wm.workflowMatchesQuery(workflow, query) {
+				return workflow, nil
+			}
+		}
 	}
 
-	return wm.parseWorkflowFromItem(&item)
+	return nil, nil
+}
+
+func (wm *WorkflowManager) workflowMatchesQuery(workflow *WorkflowDefinition, query string) bool {
+	if workflow == nil {
+		return false
+	}
+	queryText := strings.ToLower(strings.TrimSpace(query))
+	if queryText == "" {
+		return false
+	}
+	if strings.Contains(strings.ToLower(workflow.Name), queryText) || strings.Contains(strings.ToLower(workflow.Description), queryText) {
+		return true
+	}
+	for _, step := range workflow.Steps {
+		if strings.Contains(strings.ToLower(step.QueryTemplate), queryText) || strings.Contains(strings.ToLower(step.Instructions), queryText) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseWorkflowFromItem parses an Item into a WorkflowDefinition.
 func (wm *WorkflowManager) parseWorkflowFromItem(item *memory.Item[map[string]any]) (*WorkflowDefinition, error) {
-	var workflow WorkflowDefinition
-
-	// Parse from Data field
-	if item.Data != nil {
-		data, err := json.Marshal(item.Data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal workflow data: %w", err)
-		}
-		if err := json.Unmarshal(data, &workflow); err != nil {
-			return nil, fmt.Errorf("failed to parse workflow from data: %w", err)
-		}
-		return &workflow, nil
+	if item == nil {
+		return nil, fmt.Errorf("item is nil")
+	}
+	if item.Data == nil {
+		return nil, fmt.Errorf("item data is nil")
 	}
 
-	return nil, fmt.Errorf("item data is nil")
+	if workflow, err := wm.parseWorkflowFromRawData(item.Data); err != nil {
+		return nil, err
+	} else if workflow != nil {
+		return workflow, nil
+	}
+
+	return nil, fmt.Errorf("failed to parse workflow data")
+}
+
+func (wm *WorkflowManager) parseWorkflowFromRawData(data map[string]any) (*WorkflowDefinition, error) {
+	if data == nil {
+		return nil, nil
+	}
+
+	if workflowTemplate, ok := data["workflow_template"]; ok {
+		workflow, err := wm.buildWorkflowFromTemplate(data, workflowTemplate)
+		if err != nil {
+			return nil, err
+		}
+		if workflow != nil {
+			return workflow, nil
+		}
+	}
+
+	var workflow WorkflowDefinition
+	dataJSON, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal workflow data: %w", err)
+	}
+	if err := json.Unmarshal(dataJSON, &workflow); err != nil {
+		return nil, fmt.Errorf("failed to parse workflow from data: %w", err)
+	}
+	return &workflow, nil
+}
+
+func (wm *WorkflowManager) buildWorkflowFromTemplate(data map[string]any, workflowTemplate any) (*WorkflowDefinition, error) {
+	switch template := workflowTemplate.(type) {
+	case map[string]any:
+		return wm.buildWorkflowDefinitionFromTemplateMap(data, template), nil
+	case string:
+		var templateMap map[string]any
+		if err := json.Unmarshal([]byte(template), &templateMap); err != nil {
+			return nil, fmt.Errorf("failed to parse workflow template JSON: %w", err)
+		}
+		return wm.buildWorkflowDefinitionFromTemplateMap(data, templateMap), nil
+	default:
+		return nil, nil
+	}
+}
+
+func (wm *WorkflowManager) buildWorkflowDefinitionFromTemplateMap(data map[string]any, templateMap map[string]any) *WorkflowDefinition {
+	workflow := &WorkflowDefinition{}
+
+	workflow.Name = firstStringValue(data, "workflow_name", "name")
+	if workflow.Name == "" {
+		workflow.Name = firstStringValue(templateMap, "name")
+	}
+	workflow.Description = firstStringValue(data, "workflow_description", "description")
+	if workflow.Description == "" {
+		workflow.Description = firstStringValue(templateMap, "description")
+	}
+	workflow.ProtocolGuidance = firstStringValue(templateMap, "protocol_guidance")
+	if workflow.ProtocolGuidance == "" {
+		workflow.ProtocolGuidance = firstStringValue(data, "protocol_guidance")
+	}
+	workflow.ID = firstStringValue(data, "workflow_id", "id")
+	if workflow.ID == "" {
+		workflow.ID = firstStringValue(templateMap, "workflow_id")
+	}
+
+	if steps, err := parseWorkflowSteps(templateMap["steps"]); err == nil {
+		workflow.Steps = steps
+	}
+	if len(workflow.Steps) == 0 {
+		if steps, err := parseWorkflowSteps(data["steps"]); err == nil {
+			workflow.Steps = steps
+		}
+	}
+
+	if workflow.Name == "" {
+		workflow.Name = firstStringValue(data, "workflow_name")
+	}
+	if workflow.Description == "" {
+		workflow.Description = firstStringValue(data, "description")
+	}
+	return workflow
+}
+
+func firstStringValue(source map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := source[key]; ok {
+			switch v := value.(type) {
+			case string:
+				if strings.TrimSpace(v) != "" {
+					return strings.TrimSpace(v)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func parseWorkflowSteps(raw any) ([]WorkflowStep, error) {
+	switch value := raw.(type) {
+	case nil:
+		return nil, nil
+	case []any:
+		steps := make([]WorkflowStep, 0, len(value))
+		for idx, item := range value {
+			stepMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			step := WorkflowStep{
+				Step:            idx + 1,
+				Title:           firstStringValue(stepMap, "title"),
+				Actor:           "assistant",
+				Priority:        100 - idx,
+				QueryTemplate:   firstStringValue(stepMap, "query_template", "title"),
+				Instructions:    firstStringValue(stepMap, "instructions"),
+				RequiredContext: parseStringList(stepMap["required_context"]),
+				SuccessCriteria: parseStringList(stepMap["success_criteria"]),
+				IterationPolicy: firstStringValue(stepMap, "iteration_policy"),
+				ToolsExpected:   parseStringList(stepMap["tools_expected"]),
+			}
+			if stepValue, ok := stepMap["step"]; ok {
+				if parsed, err := parseIntValue(stepValue); err == nil {
+					step.Step = parsed
+				}
+			}
+			if actorValue, ok := stepMap["actor"]; ok {
+				if actor, ok := actorValue.(string); ok && strings.TrimSpace(actor) != "" {
+					step.Actor = strings.TrimSpace(actor)
+				}
+			}
+			if priorityValue, ok := stepMap["priority"]; ok {
+				if parsed, err := parseIntValue(priorityValue); err == nil {
+					step.Priority = parsed
+				}
+			}
+			steps = append(steps, step)
+		}
+		return steps, nil
+	case []map[string]any:
+		steps := make([]WorkflowStep, 0, len(value))
+		for idx, stepMap := range value {
+			step := WorkflowStep{
+				Step:            idx + 1,
+				Title:           firstStringValue(stepMap, "title"),
+				Actor:           "assistant",
+				Priority:        100 - idx,
+				QueryTemplate:   firstStringValue(stepMap, "query_template", "title"),
+				Instructions:    firstStringValue(stepMap, "instructions"),
+				RequiredContext: parseStringList(stepMap["required_context"]),
+				SuccessCriteria: parseStringList(stepMap["success_criteria"]),
+				IterationPolicy: firstStringValue(stepMap, "iteration_policy"),
+				ToolsExpected:   parseStringList(stepMap["tools_expected"]),
+			}
+			if stepValue, ok := stepMap["step"]; ok {
+				if parsed, err := parseIntValue(stepValue); err == nil {
+					step.Step = parsed
+				}
+			}
+			if actorValue, ok := stepMap["actor"]; ok {
+				if actor, ok := actorValue.(string); ok && strings.TrimSpace(actor) != "" {
+					step.Actor = strings.TrimSpace(actor)
+				}
+			}
+			if priorityValue, ok := stepMap["priority"]; ok {
+				if parsed, err := parseIntValue(priorityValue); err == nil {
+					step.Priority = parsed
+				}
+			}
+			steps = append(steps, step)
+		}
+		return steps, nil
+	default:
+		return nil, nil
+	}
+}
+
+func parseStringList(raw any) []string {
+	switch value := raw.(type) {
+	case nil:
+		return nil
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil
+		}
+		parts := strings.Split(trimmed, ",")
+		result := make([]string, 0, len(parts))
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				result = append(result, part)
+			}
+		}
+		return result
+	case []string:
+		result := make([]string, 0, len(value))
+		for _, item := range value {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				result = append(result, item)
+			}
+		}
+		return result
+	case []any:
+		result := make([]string, 0, len(value))
+		for _, item := range value {
+			if str, ok := item.(string); ok {
+				str = strings.TrimSpace(str)
+				if str != "" {
+					result = append(result, str)
+				}
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func parseIntValue(raw any) (int, error) {
+	switch value := raw.(type) {
+	case int:
+		return value, nil
+	case int64:
+		return int(value), nil
+	case float64:
+		return int(value), nil
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return 0, fmt.Errorf("empty integer")
+		}
+		var parsed int
+		_, err := fmt.Sscanf(trimmed, "%d", &parsed)
+		if err != nil {
+			return 0, err
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("unsupported integer value")
+	}
 }
 
 // Execute executes a workflow by injecting work items into the queue.
@@ -170,12 +459,30 @@ func (wm *WorkflowManager) executeInternal(workflow *WorkflowDefinition, queue c
 			}
 		}
 
+		workflowContext := WorkflowExecutionContext{
+			WorkflowID:          workflow.ID,
+			WorkflowName:        workflow.Name,
+			WorkflowDescription: workflow.Description,
+			ProtocolGuidance:    workflow.ProtocolGuidance,
+			StepNumber:          step.Step,
+			StepTitle:           step.Title,
+			StepActor:           step.Actor,
+			StepInstructions:    step.Instructions,
+			RequiredContext:     append([]string(nil), step.RequiredContext...),
+			SuccessCriteria:     append([]string(nil), step.SuccessCriteria...),
+			IterationPolicy:     step.IterationPolicy,
+			ToolsExpected:       append([]string(nil), step.ToolsExpected...),
+		}
+
 		// Create work item
 		workItem := WorkItem{
 			Query:     query,
 			Actor:     step.Actor,
 			Priority:  step.Priority,
 			Condition: condition,
+			Context: map[string]any{
+				"workflow_step": workflowContext,
+			},
 		}
 
 		if err := queue.Enqueue(workItem); err != nil {

@@ -53,6 +53,28 @@
                 </select>
             </div>
 
+            <div style="display:flex; align-items:center; gap: 10px; flex-shrink:0;">
+                <label style="font-size: 0.9em; white-space: nowrap;">Mode:</label>
+                <select id="new-space-item-mode" onchange="toggleSpaceItemMode()" style="width: 100%; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box;">
+                    <option value="content">Content / Reference</option>
+                    <option value="workflow">Workflow Template</option>
+                </select>
+            </div>
+
+            <div id="new-space-item-workflow-section" style="display:none; flex-direction:column; gap:8px; padding:10px; border:1px solid var(--border-color); border-radius:6px; background:rgba(100,100,100,0.05); flex-shrink:0;">
+                <label style="font-size: 0.9em;">Workflow Name</label>
+                <input id="new-space-item-workflow-name" type="text" oninput="renderWorkflowDefinitionPreview()" placeholder="Fix failing tests" style="width: 100%; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box;">
+                <label style="font-size: 0.9em;">Workflow Description (optional)</label>
+                <textarea id="new-space-item-workflow-description" oninput="renderWorkflowDefinitionPreview()" placeholder="Reproduce the failure, identify the root cause, patch the implementation, and verify the fix." style="width: 100%; min-height: 80px; resize: vertical; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box;"></textarea>
+                <label style="font-size: 0.9em;">Protocol Guidance (optional)</label>
+                <textarea id="new-space-item-workflow-protocol-guidance" oninput="renderWorkflowDefinitionPreview()" placeholder="Always inspect the failing output before changing code and rerun the relevant tests before claiming success." style="width: 100%; min-height: 80px; resize: vertical; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box;"></textarea>
+                <label style="font-size: 0.9em;">Workflow Steps (one per line)</label>
+                <textarea id="new-space-item-workflow-steps" oninput="renderWorkflowDefinitionPreview()" placeholder="1. Inspect the failing test output&#10;2. Identify the likely root cause&#10;3. Apply a targeted fix" style="width: 100%; min-height: 110px; resize: vertical; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box;"></textarea>
+                <label style="font-size: 0.9em;">Step Metadata (optional, one per line)</label>
+                <textarea id="new-space-item-workflow-step-metadata" oninput="renderWorkflowDefinitionPreview()" placeholder="1. Inspect the failing test output | instructions: Read the test output first | required_context: test output, stack trace | success: Root cause identified | iteration: Retry up to 3 times if the failure persists | tools: run_tests, read_file" style="width: 100%; min-height: 110px; resize: vertical; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box;"></textarea>
+                <div id="new-space-item-workflow-preview" style="padding:10px; border:1px solid var(--border-color); border-radius:6px; background:var(--pre-bg); font-size:0.9em; color:var(--text-muted);"></div>
+            </div>
+
             <label style="font-size: 0.9em; flex-shrink:0;">Summaries (Optional - Dot separated for distinct semantic vectors):</label>
             <textarea id="new-space-item-summaries" placeholder="High speed cache. Persistent storage. Cloud architecture" style="width: 100%; min-height: 90px; max-height: 160px; resize: vertical; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box; margin-top: -2px; flex-shrink:0;"></textarea>
 

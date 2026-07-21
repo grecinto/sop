@@ -2584,6 +2584,11 @@ func (a *CopilotAgent) AskParallel(ctx context.Context, query string, cfg *ai.Co
 	return aggregateParallelResults(subQueries, results, errors), nil
 }
 
+// DetectParallelSubqueries exposes the parallel query splitter for shared runtime integrations.
+func DetectParallelSubqueries(query string) []string {
+	return detectParallelSubqueries(query)
+}
+
 // detectParallelSubqueries splits a query into independent parallel subqueries.
 // Returns single-element slice if query is not parallelizable.
 func detectParallelSubqueries(query string) []string {

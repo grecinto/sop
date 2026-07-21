@@ -3801,6 +3801,11 @@ function showAddSpaceItem() {
     sourceRadios.forEach(radio => {
         radio.onchange = toggleSpaceItemAssetSource;
     });
+    const modeSelect = document.getElementById('new-space-item-mode');
+    if (modeSelect) {
+        modeSelect.value = 'content';
+    }
+    toggleSpaceItemMode();
     const providerSelect = document.getElementById('new-space-item-cloud-provider');
     if (providerSelect) {
         providerSelect.onchange = toggleSpaceItemReferenceDetails;
@@ -3867,6 +3872,106 @@ async function autoSummarizeAddSpaceItem() {
         btn.disabled = false;
     }
 }
+
+function toggleSpaceItemMode() {
+    const modeSelect = document.getElementById('new-space-item-mode');
+    const workflowSection = document.getElementById('new-space-item-workflow-section');
+    const workflowName = document.getElementById('new-space-item-workflow-name');
+    const workflowSteps = document.getElementById('new-space-item-workflow-steps');
+    const isWorkflowMode = (modeSelect?.value || 'content') === 'workflow';
+    if (workflowSection) {
+        workflowSection.style.display = isWorkflowMode ? 'flex' : 'none';
+    }
+    if (workflowName) {
+        workflowName.required = isWorkflowMode;
+        workflowName.disabled = !isWorkflowMode;
+    }
+    if (workflowSteps) {
+        workflowSteps.required = isWorkflowMode;
+        workflowSteps.disabled = !isWorkflowMode;
+    }
+    if (isWorkflowMode) {
+        renderWorkflowDefinitionPreview();
+    } else {
+        const preview = document.getElementById('new-space-item-workflow-preview');
+        if (preview) {
+            preview.innerHTML = '';
+        }
+    }
+}
+
+window.toggleSpaceItemMode = toggleSpaceItemMode;
+
+function parseWorkflowStepMetadata(rawValue) {
+    const lines = (rawValue || '').split(/\n+/).map(line => line.trim()).filter(Boolean);
+    if (lines.length === 0) {
+        return [];
+    }
+
+    return lines.map((line, index) => {
+        const firstPipe = line.indexOf('|');
+        const baseText = firstPipe >= 0 ? line.slice(0, firstPipe).trim() : line;
+        const remainder = firstPipe >= 0 ? line.slice(firstPipe + 1) : '';
+        const title = baseText.replace(/^\d+\.?\s*-?\s*/, '').trim();
+        const payload = { step: index + 1, title };
+
+        if (!remainder) {
+            return payload;
+        }
+
+        remainder.split('|').map(part => part.trim()).filter(Boolean).forEach(part => {
+            const separatorIndex = part.indexOf(':');
+            if (separatorIndex < 0) {
+                return;
+            }
+            const key = part.slice(0, separatorIndex).trim().toLowerCase();
+            const value = part.slice(separatorIndex + 1).trim();
+            if (!key || !value) {
+                return;
+            }
+            if (key === 'instructions') {
+                payload.instructions = value;
+            } else if (key === 'required_context' || key === 'required-context') {
+                payload.required_context = value.split(',').map(item => item.trim()).filter(Boolean);
+            } else if (key === 'success' || key === 'success_criteria' || key === 'success-criteria') {
+                payload.success_criteria = value.split(';').map(item => item.trim()).filter(Boolean);
+            } else if (key === 'iteration' || key === 'iteration_policy' || key === 'iteration-policy') {
+                payload.iteration_policy = value;
+            } else if (key === 'tools' || key === 'tools_expected' || key === 'tools-expected') {
+                payload.tools_expected = value.split(',').map(item => item.trim()).filter(Boolean);
+            }
+        });
+
+        return payload;
+    });
+}
+
+function renderWorkflowDefinitionPreview() {
+    const preview = document.getElementById('new-space-item-workflow-preview');
+    if (!preview) {
+        return;
+    }
+    const workflowName = document.getElementById('new-space-item-workflow-name')?.value?.trim() || 'Untitled workflow';
+    const description = document.getElementById('new-space-item-workflow-description')?.value?.trim() || '';
+    const protocolGuidance = document.getElementById('new-space-item-workflow-protocol-guidance')?.value?.trim() || '';
+    const stepsRaw = document.getElementById('new-space-item-workflow-steps')?.value || '';
+    const metadataRaw = document.getElementById('new-space-item-workflow-step-metadata')?.value || '';
+    const steps = stepsRaw.split(/\n+/).map(step => step.trim()).filter(Boolean);
+    const metadataSteps = parseWorkflowStepMetadata(metadataRaw);
+    const previewItems = steps.length > 0 ? steps.map((step, idx) => {
+        const metaStep = metadataSteps[idx] || null;
+        const detail = metaStep && (metaStep.instructions || metaStep.iteration_policy || (metaStep.required_context && metaStep.required_context.length > 0) || (metaStep.success_criteria && metaStep.success_criteria.length > 0))
+            ? `<div style="margin-top:2px; color:var(--text-muted);">${window.escapeHTML(metaStep.instructions || metaStep.iteration_policy || 'Step guidance configured')}</div>`
+            : '';
+        return `<div style="margin-top:4px;">${idx + 1}. ${window.escapeHTML(step)}${detail}</div>`;
+    }).join('') : '<div style="color:var(--text-muted);">Add one or more workflow steps to preview the flow.</div>';
+    const descriptionHtml = description ? `<div style="margin-top:4px; color:var(--text-muted);">${window.escapeHTML(description)}</div>` : '';
+    const guidanceHtml = protocolGuidance ? `<div style="margin-top:4px; color:var(--text-muted);">Protocol: ${window.escapeHTML(protocolGuidance)}</div>` : '';
+    preview.innerHTML = `<div style="font-weight:600; color:var(--text-color); margin-bottom:6px;">Workflow preview</div><div style="font-size:0.95em; color:var(--text-color);">${window.escapeHTML(workflowName)}</div>${descriptionHtml}${guidanceHtml}${previewItems}`;
+}
+
+window.renderWorkflowDefinitionPreview = renderWorkflowDefinitionPreview;
+window.parseWorkflowStepMetadata = parseWorkflowStepMetadata;
 
 function toggleSpaceItemAssetSource() {
     const uploadSection = document.getElementById('new-space-item-upload-section');
@@ -3985,6 +4090,23 @@ async function saveSpaceItem() {
         summaries = summariesInput.split('.').map(s => s.trim()).filter(s => s.length > 0);
     }
 
+    const workflowMode = document.getElementById('new-space-item-mode')?.value === 'workflow';
+    const workflowName = document.getElementById('new-space-item-workflow-name')?.value.trim() || '';
+    const workflowDescription = document.getElementById('new-space-item-workflow-description')?.value.trim() || '';
+    const workflowProtocolGuidance = document.getElementById('new-space-item-workflow-protocol-guidance')?.value.trim() || '';
+    const workflowSteps = (document.getElementById('new-space-item-workflow-steps')?.value || '').split(/\n+/).map(step => step.trim()).filter(Boolean);
+    const workflowMetadataRaw = document.getElementById('new-space-item-workflow-step-metadata')?.value || '';
+    if (workflowMode) {
+        if (!workflowName) {
+            showAlert('Workflow name is required.');
+            return;
+        }
+        if (workflowSteps.length === 0) {
+            showAlert('Add at least one workflow step.');
+            return;
+        }
+    }
+
     const assetMode = document.querySelector('input[name="new-space-item-source"]:checked')?.value || 'upload';
     const cloudRef = document.getElementById('new-space-item-cloud-ref').value.trim();
     const cloudProvider = document.getElementById('new-space-item-cloud-provider').value.trim();
@@ -4016,6 +4138,41 @@ async function saveSpaceItem() {
             description: desc
         }
     };
+    if (workflowMode) {
+        const parsedStepMetadata = window.parseWorkflowStepMetadata ? window.parseWorkflowStepMetadata(workflowMetadataRaw) : [];
+        const workflowStepsPayload = workflowSteps.map((step, idx) => {
+            const metadata = parsedStepMetadata[idx] || {};
+            const payload = {
+                step: idx + 1,
+                title: step,
+            };
+            if (metadata.instructions) {
+                payload.instructions = metadata.instructions;
+            }
+            if (metadata.required_context && metadata.required_context.length > 0) {
+                payload.required_context = metadata.required_context;
+            }
+            if (metadata.success_criteria && metadata.success_criteria.length > 0) {
+                payload.success_criteria = metadata.success_criteria;
+            }
+            if (metadata.iteration_policy) {
+                payload.iteration_policy = metadata.iteration_policy;
+            }
+            if (metadata.tools_expected && metadata.tools_expected.length > 0) {
+                payload.tools_expected = metadata.tools_expected;
+            }
+            return payload;
+        });
+        reqBody.data.workflow_template = {
+            name: workflowName,
+            description: workflowDescription || (desc || `Workflow template: ${workflowName}`),
+            protocol_guidance: workflowProtocolGuidance,
+            steps: workflowStepsPayload
+        };
+        reqBody.data.workflow_name = workflowName;
+        reqBody.data.workflow_step_count = workflowStepsPayload.length;
+        reqBody.data.description = desc || `Workflow template: ${workflowName}`;
+    }
     if (cloudRef) {
         if (cloudProvider === 'filesystem') {
             reqBody.data.storage_mode = 'filesystem_reference';
@@ -4041,7 +4198,13 @@ async function saveSpaceItem() {
 
     try {
         let res;
-        if ((assetMode === 'upload' && uploadFile) || assetMode === 'reference') {
+        if (workflowMode) {
+            res = await authFetch(`/api/spaces/item/add?name=${encodeURIComponent(kbNameDisplay)}&database=${encodeURIComponent(dbNameDisplay)}`, {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify(reqBody)
+            });
+        } else if ((assetMode === 'upload' && uploadFile) || assetMode === 'reference') {
             const formData = new FormData();
             if (uploadFile) {
                 formData.append('file', uploadFile);

@@ -1,3 +1,130 @@
+# Workflows
+
+These workflows give the assistant a repeatable way to handle common tasks such as debugging failures or carrying out implementation work.
+
+Each workflow below is written so the assistant can follow a clear sequence of steps, understand the goal, and apply the right tools to complete the task effectively.
+
+## Coding
+
+- Item: Fix failing tests
+  Summary: Reproduce the failing behavior, inspect the root cause, apply a focused fix, and verify the result with tests.
+  Summary: Use this workflow when a test is failing and the goal is to repair the underlying issue safely and systematically.
+  Body:
+  Use this workflow when a repository test fails and the goal is to diagnose and correct the underlying issue without introducing regressions.
+
+  Workflow payload:
+  ```json
+  {
+    "workflow_name": "Fix failing tests",
+    "description": "Reproduce the failure, inspect the root cause, apply a focused fix, and verify the result with tests.",
+    "workflow_template": {
+      "name": "Fix failing tests",
+      "description": "Reproduce the failure, inspect the root cause, apply a focused fix, and verify the result with tests.",
+      "protocol_guidance": "Always capture the failing output before changing code. Read the relevant test and implementation files before editing. Prefer a focused patch and re-run the relevant tests before claiming success.",
+      "steps": [
+        {
+          "step": 1,
+          "title": "Reproduce and inspect the failure",
+          "instructions": "Run the relevant test or command that reproduces the failure and capture the error output. Read the failing stack trace, assertion, or log before changing code.",
+          "required_context": ["test output", "failing stack trace", "relevant code paths"],
+          "success_criteria": ["The failure has been reproduced and summarized."],
+          "iteration_policy": "Retry up to 3 times if the failure is not yet understood.",
+          "tools_expected": ["run_tests", "read_file", "search"]
+        },
+        {
+          "step": 2,
+          "title": "Analyze the root cause",
+          "instructions": "Inspect the relevant test and implementation files. Determine the likely root cause before editing the code.",
+          "required_context": ["test file", "implementation file", "error context"],
+          "success_criteria": ["The likely root cause is identified and explained."],
+          "tools_expected": ["read_file", "search", "grep"]
+        },
+        {
+          "step": 3,
+          "title": "Apply a focused fix",
+          "instructions": "Make the smallest change that addresses the root cause. Avoid large rewrites unless necessary.",
+          "required_context": ["root cause analysis", "implementation context"],
+          "success_criteria": ["The fix is applied with minimal change and preserves intended behavior."],
+          "tools_expected": ["edit_file", "patch_file"]
+        },
+        {
+          "step": 4,
+          "title": "Verify the result",
+          "instructions": "Re-run the relevant tests and confirm the change resolves the failure without introducing regressions.",
+          "required_context": ["test command", "changed files"],
+          "success_criteria": ["Relevant tests pass and the original failure is resolved."],
+          "iteration_policy": "Retry up to 3 times if the fix is incomplete.",
+          "tools_expected": ["run_tests", "read_file"]
+        }
+      ]
+    }
+  }
+  ```
+  Sources: https://go.dev/doc/effective_go, https://go.dev/wiki/CodeReviewComments
+
+- Item: Coding
+  Summary: Follow a structured implementation workflow that covers planning, design, coding, testing, and review.
+  Summary: Use this workflow for feature work and general code changes that need a disciplined delivery path.
+  Body:
+  Use this workflow for general software implementation tasks that need a structured path from request to verified change.
+
+  Workflow payload:
+  ```json
+  {
+    "workflow_name": "Coding",
+    "description": "Plan the work, design the approach, implement the change, verify it with tests, and review the final result.",
+    "workflow_template": {
+      "name": "Coding",
+      "description": "Plan the work, design the approach, implement the change, verify it with tests, and review the final result.",
+      "protocol_guidance": "Start by understanding the requirement, design the approach before coding, keep changes focused, and verify the result with relevant tests and review.",
+      "steps": [
+        {
+          "step": 1,
+          "title": "Planning and analysis",
+          "instructions": "Clarify the request, identify constraints, and define the success criteria before implementation begins.",
+          "required_context": ["requirements", "repo context", "constraints"],
+          "success_criteria": ["The task is clearly scoped and the implementation target is understood."],
+          "tools_expected": ["read_file", "search", "reasoning"]
+        },
+        {
+          "step": 2,
+          "title": "Design",
+          "instructions": "Choose the approach, identify affected components, and outline the implementation plan before editing code.",
+          "required_context": ["current architecture", "affected modules"],
+          "success_criteria": ["A clear implementation strategy is defined."],
+          "tools_expected": ["read_file", "search"]
+        },
+        {
+          "step": 3,
+          "title": "Coding",
+          "instructions": "Implement the change in a focused way that matches the chosen approach and keeps the codebase maintainable.",
+          "required_context": ["implementation plan", "relevant files"],
+          "success_criteria": ["The implementation is complete and aligned with the plan."],
+          "tools_expected": ["edit_file", "patch_file"]
+        },
+        {
+          "step": 4,
+          "title": "Testing and verification",
+          "instructions": "Run the relevant tests and validation steps to confirm the change behaves as intended and does not regress existing behavior.",
+          "required_context": ["test commands", "changed files"],
+          "success_criteria": ["Relevant tests pass and the change is verified."],
+          "iteration_policy": "Retry up to 3 times if the verification is incomplete.",
+          "tools_expected": ["run_tests", "read_file"]
+        },
+        {
+          "step": 5,
+          "title": "Review and polish",
+          "instructions": "Review the final diff for clarity, correctness, maintainability, and any follow-up work needed before completion.",
+          "required_context": ["diff", "final implementation"],
+          "success_criteria": ["The result is understandable, complete, and ready for handoff."],
+          "tools_expected": ["read_file", "review_diff"]
+        }
+      ]
+    }
+  }
+  ```
+  Sources: https://go.dev/doc/effective_go, https://go.dev/wiki/CodeReviewComments
+
 # Coding Best Practices
 
 This category contains language-specific engineering guidance and cross-cutting best practices for coding, architecture, testing, and security.

@@ -77,8 +77,9 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 
 | Document | Description |
 |----------|-------------|
+| [WORKFLOW_ORCHESTRATION.md](WORKFLOW_ORCHESTRATION.md) | Product-facing design for workflow-driven assistance and visible step-based execution |
+| [WORKFLOW_RUNTIME_IMPLEMENTATION.md](WORKFLOW_RUNTIME_IMPLEMENTATION.md) | Implementation overview for the workflow runtime, parsing, queue execution, validation, and optional Phase 5 hardening |
 | [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Terminal-first coding workflow |
-| [MULTI_TURN_ORCHESTRATION_IMPLEMENTATION.md](MULTI_TURN_ORCHESTRATION_IMPLEMENTATION.md) | ✅ Complete: Queue-based multi-turn orchestration for AI agent workflows |
 
 ### Platform
 
