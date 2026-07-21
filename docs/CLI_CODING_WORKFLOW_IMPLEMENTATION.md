@@ -51,6 +51,7 @@ For this direction, AST/tree-sitter-style structure is a first-class V1 capabili
 - [x] Add persistent coding memory for repo/file/symbol summaries, relationships, embeddings, and lifecycle state.
 - [ ] Add explicit workflow tracing so the user can see what context was selected, what changed, and what was validated.
 - [ ] Add safety controls for destructive operations, including preview, approval, and rollback paths.
+- [ ] **Add systematic test debugging protocol (HIGH PRIORITY)**: System prompt with mandatory workflow steps, verification gates, and improved tool result visibility (See §6.1)
 
 ## Guard Rails for Future Copilots
 
@@ -191,6 +192,198 @@ The system should support:
 - inspecting failing tests
 - proposing root cause hypotheses
 - retrying with a bounded loop
+
+#### 6.1 Systematic Test Fix Protocol (High Priority)
+
+**Root Cause**: Analysis of real failures (GPT 5.4 test-fix attempts, 2026-07-20) showed that even with all necessary tools available, the LLM failed to fix tests because it didn't follow a systematic debugging workflow. Key failures:
+- Never captured actual test error output (ran tests but didn't read results)
+- Stored large outputs to files but never called `read_tool_result` to inspect them
+- Never read test source code to understand what was being tested
+- Never read implementation code to find the bug
+- Never attempted any fixes
+- Claimed completion without verification
+
+**Solution**: Explicit test debugging protocol in system prompt and workflow gates.
+
+##### Required System Prompt Addition
+
+When user requests "fix failing tests" or similar, inject this protocol:
+
+```
+TEST DEBUGGING PROTOCOL (MANDATORY STEPS):
+
+Step 1: CAPTURE TEST FAILURE
+- Run: execute_local_command(command="go test -v -run TestName ./path", reasoning="capture full test error")
+- If output saved to file: IMMEDIATELY call read_tool_result(file_path="...") to read it
+- Extract the actual error message from output
+- NEVER proceed without seeing the actual error
+
+Step 2: UNDERSTAND THE TEST
+- Call: read_file(path="path/to/test.go", start_line=N, end_line=M)
+- Understand what the test is checking
+- Identify which functions/methods it calls
+
+Step 3: INSPECT IMPLEMENTATION
+- Use search_repo_files or grep_repo_text to find implementation
+- Read the code that the test calls
+- Compare expected behavior vs actual behavior
+
+Step 4: IDENTIFY ROOT CAUSE
+- Match error message to code location
+- Determine what's missing, incorrect, or misconfigured
+- Form hypothesis about the fix
+
+Step 5: APPLY FIX
+- Use patch_file for focused changes (preferred)
+- Or write_file for complete rewrites (if necessary)
+- Include clear reasoning for the change
+
+Step 6: VERIFY FIX
+- Re-run the same test command from Step 1
+- Confirm test passes
+- Show passing output to user
+
+Step 7: ITERATE IF NEEDED
+- If test still fails, return to Step 1 with new error
+- Update hypothesis and try again
+- Maximum 3 iterations before asking user for guidance
+
+CRITICAL RULES:
+✗ NEVER claim tests are fixed without running them
+✗ NEVER skip reading the error output
+✗ NEVER skip reading test and implementation code
+✗ NEVER proceed to next step without completing prior step
+✓ ALWAYS show passing test output as proof of success
+```
+
+##### Implementation Checkpoints
+
+Add workflow verification gates in the ReAct engine:
+
+```go
+type TestFixState struct {
+    HasCapturedError       bool
+    ErrorMessage           string
+    HasReadTestFile        bool
+    HasReadImplementation  bool
+    HasAppliedFix          bool
+    HasVerifiedFix         bool
+    IterationCount         int
+}
+
+// Before allowing completion of a test-fix request:
+if userRequestedTestFix {
+    if !state.HasCapturedError {
+        return error("Must capture test error before proceeding")
+    }
+    if !state.HasReadTestFile || !state.HasReadImplementation {
+        return error("Must read test and implementation code")
+    }
+    if state.HasAppliedFix && !state.HasVerifiedFix {
+        return error("Must re-run tests after applying fixes")
+    }
+}
+```
+
+##### Tool Result Visibility Improvements
+
+Problem: Large test outputs stored to files but LLM never reads them.
+
+**Solution A (Preferred)**: Auto-inline critical portions
+```go
+// In run_repo_tests and execute_local_command tools:
+if exitCode != 0 && len(output) > 20000 {
+    stored := storeToFile(output)
+    return fmt.Sprintf(`Test FAILED. Output was large (%dKB) and saved to: %s
+
+CRITICAL ERRORS (first 50 lines):
+%s
+
+NEXT REQUIRED STEP: Call read_tool_result(file_path="%s", start_line=1, end_line=100) for full output`, 
+        len(output)/1024, stored, firstNLines(output, 50), stored)
+}
+```
+
+**Solution B**: Explicit instruction in tool result
+```go
+return fmt.Sprintf(`Output saved to: %s
+
+⚠️  REQUIRED NEXT STEP: You must read this file to see the error.
+Call: read_tool_result(file_path="%s", start_line=1, end_line=50)
+Or: grep_tool_result(file_path="%s", pattern="FAIL|error|Error")`, 
+    path, path, path)
+```
+
+##### Test-Specific Tool Enhancement
+
+Consider adding a focused `debug_test` tool that bundles the workflow:
+
+```json
+{
+  "name": "debug_test",
+  "description": "Run a test, capture failure, and return structured diagnostic info",
+  "schema": {
+    "test_path": "path to test package",
+    "test_name": "specific test name to debug",
+    "max_iterations": 3
+  }
+}
+```
+
+Returns:
+```json
+{
+  "status": "failing",
+  "error_message": "can't do operation on b-tree if transaction has not begun",
+  "test_file": "lib/sop/cmd/sop-daemon/main_test.go",
+  "test_line": 456,
+  "implementation_hints": [
+    "Test calls handleGetVectorizationRecoveryStatus",
+    "Handler calls resetVectorizationIndexForRecovery", 
+    "vectorizationResetExecutor is not mocked"
+  ],
+  "suggested_fix": "Mock vectorizationResetExecutor in test setup",
+  "next_steps": [
+    "read_file to inspect test setup",
+    "patch_file to add mock"
+  ]
+}
+```
+
+##### Coding Memory Integration
+
+Store successful patterns for future reference:
+
+```go
+// After successful test fix:
+a.service.session.Memory.AddRuntimeCaveat(
+    "test_fix_pattern",
+    fmt.Sprintf("Fixed %s by %s", testName, fixDescription),
+    "success_pattern",
+    "coding_workflow",
+    "learned"
+)
+
+// Store failures too:
+if fixFailed && iterationCount >= 3 {
+    a.service.session.Memory.AddRuntimeCaveat(
+        "test_fix_failure",
+        fmt.Sprintf("Failed to fix %s. Common mistake: %s", testName, commonMistake),
+        "antipattern",
+        "coding_workflow",
+        "learned"
+    )
+}
+```
+
+##### Priority Implementation Order
+
+1. **Immediate (High ROI)**: Add test debugging protocol to system prompt
+2. **Short-term**: Add verification gates to prevent claiming success without proof
+3. **Short-term**: Improve tool result messages to explicitly guide next steps
+4. **Medium-term**: Auto-inline critical error portions in test failures
+5. **Long-term**: Build unified `debug_test` tool
+6. **Long-term**: Implement coding memory learning from patterns
 
 ### 7. Session Memory and Continuity
 

@@ -201,6 +201,10 @@
             throw new Error('Refresh returned no access token');
         }
 
+        if (typeof storeSessionTokens === 'function') {
+            storeSessionTokens(body);
+        }
+
         return true;
     }
 

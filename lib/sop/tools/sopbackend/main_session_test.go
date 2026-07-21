@@ -394,6 +394,21 @@ func TestSetupStream_MarksContentEventsAsStreamedContent(t *testing.T) {
 	}
 }
 
+func TestSetupStream_EmitsRegularErrorEventsAsContent(t *testing.T) {
+	w := httptest.NewRecorder()
+	sendEvent, _ := SetupStream(w)
+
+	sendEvent("error", "TLS handshake timeout while contacting the routing provider")
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"type":"content"`) {
+		t.Fatalf("expected regular error events to be emitted as content, got: %s", body)
+	}
+	if !strings.Contains(body, "TLS handshake timeout") {
+		t.Fatalf("expected original error text to be preserved in stream, got: %s", body)
+	}
+}
+
 func TestSetupStream_SanitizesToolErrorMessagesBeforeRendering(t *testing.T) {
 	w := httptest.NewRecorder()
 	sendEvent, _ := SetupStream(w)

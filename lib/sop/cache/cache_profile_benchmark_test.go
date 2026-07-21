@@ -102,7 +102,7 @@ func BenchmarkStandaloneCacheWorkload(b *testing.B) {
 					target := &btree.Node[string, string]{}
 					probeCount++
 
-					if _, hit := l1.getEntryForHandle(handle); hit {
+					if _, hit := l1.getEntryForHandleLocked(handle); hit {
 						l1Hits++
 					} else {
 						l2Fallbacks++

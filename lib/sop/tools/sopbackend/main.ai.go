@@ -503,6 +503,24 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 				}
 			}
 			return
+		case "error":
+			if errorText, ok := payload.(string); ok && strings.TrimSpace(errorText) != "" {
+				contentStreamed = true
+				writeEvent("content", fmt.Sprintf("⚠️ %s", strings.TrimSpace(errorText)))
+				return
+			}
+			if errorText, ok := payload.(fmt.Stringer); ok {
+				contentStreamed = true
+				writeEvent("content", fmt.Sprintf("⚠️ %s", strings.TrimSpace(errorText.String())))
+				return
+			}
+			if errorEvent, ok := payload.(map[string]any); ok {
+				if errorMsg, _ := errorEvent["error"].(string); strings.TrimSpace(errorMsg) != "" {
+					contentStreamed = true
+					writeEvent("content", fmt.Sprintf("⚠️ %s", strings.TrimSpace(errorMsg)))
+					return
+				}
+			}
 		case ai.ReasoningEventToolError:
 			// Stream tool errors immediately so user can see validation failures in real-time
 			if errorEvent, ok := payload.(map[string]any); ok {

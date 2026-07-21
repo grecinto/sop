@@ -225,6 +225,18 @@ func TestChatCommandPreviewUsesDedicatedStyledSpan(t *testing.T) {
 	}
 }
 
+func TestSessionRefreshStoresRefreshedTokens(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	if !strings.Contains(scriptsContent, "storeSessionTokens(body)") {
+		t.Fatalf("expected session refresh to store refreshed tokens in %s", scriptsPath)
+	}
+}
+
 func TestChatCommandPreviewCleanupTargetsDomElements(t *testing.T) {
 	scriptsPath := templatePath("scripts_part05.html")
 	scriptsData, err := os.ReadFile(scriptsPath)

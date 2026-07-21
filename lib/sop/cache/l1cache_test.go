@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +54,36 @@ func TestL1CacheGetNodeFromMRU_ReturnsConstructedNodeForMatchingTargetType(t *te
 	if got := c.GetNodeFromMRU(handle, target); got != cachedNode {
 		t.Fatalf("expected cached constructed node to be returned directly, got %T", got)
 	}
+}
+
+func TestL1CacheConcurrentGetAndSet(t *testing.T) {
+	c := NewL1Cache(nil, 1, 2)
+	ctx := context.Background()
+	nodeID := sop.NewUUID()
+	initialNode := &btree.Node[string, string]{ID: nodeID, Version: 1}
+	c.SetNodeToMRU(ctx, nodeID, initialNode, time.Minute)
+
+	handle := sop.NewHandle(nodeID)
+	handle.Version = initialNode.Version
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 2000; i++ {
+			c.SetNodeToMRU(ctx, nodeID, &btree.Node[string, string]{ID: nodeID, Version: int32(i + 1)}, time.Minute)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 2000; i++ {
+			_ = c.GetNodeFromMRU(handle, &btree.Node[string, string]{})
+		}
+	}()
+
+	wg.Wait()
 }
 
 func BenchmarkL1CacheGetNodeFromMRU(b *testing.B) {

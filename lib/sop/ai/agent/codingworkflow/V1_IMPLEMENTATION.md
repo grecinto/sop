@@ -496,10 +496,20 @@ for _, result := range results {
 2. **File search:** Basic filename/content matching; no advanced ranking
 3. **Orchestration:** Interface-based; no real state machine integration yet
 4. **LSP support:** Not implemented
+5. **Test debugging workflow (CRITICAL):** System lacks explicit protocol for test fixing. Analysis of real-world failures (GPT 5.4, 2026-07-20) revealed:
+   - LLM ran tests but never captured/read error output
+   - Tool results stored to files but never inspected with `read_tool_result`
+   - Never read test source or implementation code
+   - Never attempted any fixes despite having all necessary tools
+   - No verification gates to prevent claiming success without proof
+   - **Impact:** Even with full tool access, workflow fails without systematic debugging protocol
+   - **Priority:** HIGH - Blocks effective test fixing capability
+   - **Solution path:** See [CLI_CODING_WORKFLOW_IMPLEMENTATION.md §6.1](../../../docs/CLI_CODING_WORKFLOW_IMPLEMENTATION.md) for detailed protocol
 
 ## Roadmap
 
 ### V1.1 (Near-term)
+- [ ] **Add systematic test debugging protocol (HIGHEST PRIORITY)** - Explicit workflow steps, verification gates, improved tool result visibility
 - [ ] Add Python and JavaScript tree-sitter grammars
 - [ ] Enhanced file ranking with relevance scoring
 - [ ] Repository-specific coding conventions learning
