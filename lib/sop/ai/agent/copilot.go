@@ -70,6 +70,7 @@ const (
 
 const (
 	ctxKeyDeferImplicitSessionTxClose = "_defer_implicit_session_tx_close"
+	ctxKeyWorkingDir                  = "working_dir"
 )
 
 const (
@@ -430,6 +431,16 @@ type CopilotAgent struct {
 
 	// capabilityRegistry provides modular domain capabilities for Ask routing and context building.
 	capabilityRegistry *capabilities.Registry
+
+	// workflowManager orchestrates KB-driven workflows (Track A-D)
+	workflowManager *WorkflowManager
+
+	// Phase 5: Production hardening components
+	retryStrategy  *RetryStrategy
+	circuitBreaker *CircuitBreaker
+	queueMetrics   *QueueMetrics
+	queuePersist   *QueuePersistence
+	enablePhase5   bool
 }
 
 // Clone creates a new isolated instance of the agent sharing read-only components.
@@ -2366,6 +2377,16 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		compiledScripts: make(map[string]CachedScript),
 	}
 	agent.ensureCapabilityRegistry()
+
+	if cfg.ProductionMode {
+		agent.EnablePhase5(nil, nil, nil, nil)
+	}
+
+	// Initialize WorkflowManager for KB-driven workflows (Track A-D)
+	if systemDB != nil {
+		agent.workflowManager = NewWorkflowManager(nil) // KB initialized lazily on first use
+	}
+
 	// Wire default coding workflow orchestrator with MemorySink for LTM integration
 	orchestrator := &cw.Orchestrator{}
 	orchestrator.MemorySink = func(mem cw.CodingMemory) {
@@ -2504,7 +2525,224 @@ func (a *CopilotAgent) Search(ctx context.Context, query string, limit int) ([]a
 //  8. Epilogue & Cleanup:
 //     Records the completed dialogue and active track-state into the short-term memory transcript,
 //     clears the volatile MRU buffer, and returns the final text response to the client.
+//
+// Ask is the main entry point for processing queries. For single-turn execution only.
+// For multi-turn/workflow execution, use entry points that create queues internally.
 func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	return a.askWithQueue(ctx, query, cfg, nil)
+}
+
+// AskParallel executes independent subqueries in parallel threads.
+// Each thread gets its own isolated queue and execution context.
+// Main thread (index 0) uses PTY child process, background threads use exec.Command.
+func (a *CopilotAgent) AskParallel(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	// 1. Detect parallelizable subqueries
+	subQueries := detectParallelSubqueries(query)
+	if len(subQueries) <= 1 {
+		// Fall back to sequential execution
+		return a.Ask(ctx, query, cfg)
+	}
+
+	log.Info("Parallel execution detected", "total_threads", len(subQueries))
+
+	// 2. Launch each subquery as independent Ask() thread
+	results := make([]string, len(subQueries))
+	errors := make([]error, len(subQueries))
+	var wg sync.WaitGroup
+
+	defaultWorkingDir := resolveParallelWorkingDir(ctx, query)
+
+	for i, subQuery := range subQueries {
+		wg.Add(1)
+
+		// First thread = main (PTY child process)
+		// Subsequent threads = background (exec.Command)
+		threadCtx := ctx
+		if i > 0 {
+			threadCtx = context.WithValue(ctx, "parallel_execution_mode", true)
+		}
+
+		normalizedSubQuery, explicitWorkingDir := extractParallelTaskWorkingDir(subQuery)
+		if explicitWorkingDir != "" {
+			threadCtx = context.WithValue(threadCtx, ctxKeyWorkingDir, explicitWorkingDir)
+		} else if defaultWorkingDir != "" {
+			threadCtx = context.WithValue(threadCtx, ctxKeyWorkingDir, defaultWorkingDir)
+		}
+
+		go func(idx int, q string, tCtx context.Context) {
+			defer wg.Done()
+			log.Info("Parallel thread start", "thread", idx, "query", q, "is_background", idx > 0, "working_dir", resolveParallelWorkingDir(tCtx, q))
+			results[idx], errors[idx] = a.Ask(tCtx, q, cfg)
+			log.Info("Parallel thread complete", "thread", idx, "error", errors[idx] != nil)
+		}(i, normalizedSubQuery, threadCtx)
+	}
+
+	// 3. Wait for all threads to complete
+	wg.Wait()
+
+	// 4. Aggregate results
+	return aggregateParallelResults(subQueries, results, errors), nil
+}
+
+// detectParallelSubqueries splits a query into independent parallel subqueries.
+// Returns single-element slice if query is not parallelizable.
+func detectParallelSubqueries(query string) []string {
+	// Phase 4.1: Simple pattern matching
+	// Detect common parallel patterns: "X and Y", "X, Y, and Z"
+
+	lowerQuery := strings.ToLower(query)
+
+	// Pattern 1: Comma-separated tasks with "and"
+	// "run tests, check formatting, and build docs"
+	// Handle this FIRST to avoid splitting on " and " incorrectly
+	if strings.Contains(lowerQuery, ",") && strings.Contains(lowerQuery, " and ") {
+		// Replace ", and" with "," for uniform splitting
+		normalized := strings.ReplaceAll(query, ", and ", ", ")
+		normalized = strings.ReplaceAll(normalized, " and ", ", ")
+		parts := strings.Split(normalized, ",")
+		if len(parts) >= 2 {
+			subQueries := make([]string, len(parts))
+			for i, part := range parts {
+				subQueries[i] = strings.TrimSpace(part)
+			}
+			return subQueries
+		}
+	}
+
+	// Pattern 2: "run X and Y" or "do X and Y" (without commas)
+	if strings.Contains(lowerQuery, " and ") && !strings.Contains(lowerQuery, ",") {
+		// Check for action verbs that indicate parallel tasks
+		actionVerbs := []string{"run", "check", "execute", "build", "test", "lint", "format"}
+		for _, verb := range actionVerbs {
+			if strings.HasPrefix(lowerQuery, verb+" ") {
+				// Split on " and "
+				parts := strings.Split(query, " and ")
+				if len(parts) >= 2 {
+					subQueries := make([]string, len(parts))
+					for i, part := range parts {
+						subQueries[i] = strings.TrimSpace(part)
+					}
+					return subQueries
+				}
+			}
+		}
+	}
+
+	// Pattern 3: Explicit parallel marker "||"
+	// "run tests || check formatting"
+	if strings.Contains(query, "||") {
+		parts := strings.Split(query, "||")
+		if len(parts) >= 2 {
+			subQueries := make([]string, len(parts))
+			for i, part := range parts {
+				subQueries[i] = strings.TrimSpace(part)
+			}
+			return subQueries
+		}
+	}
+
+	// Not parallelizable - return as single query
+	return []string{query}
+}
+
+// aggregateParallelResults combines results from parallel threads.
+func aggregateParallelResults(queries []string, results []string, errors []error) string {
+	var combined strings.Builder
+
+	combined.WriteString("✅ **Parallel Execution Complete**\n\n")
+
+	hasErrors := false
+	for _, err := range errors {
+		if err != nil {
+			hasErrors = true
+			break
+		}
+	}
+
+	for i := range results {
+		combined.WriteString(fmt.Sprintf("### Task %d: %s\n\n", i+1, queries[i]))
+
+		if errors[i] != nil {
+			combined.WriteString(fmt.Sprintf("❌ **Error**: %v\n\n", errors[i]))
+			hasErrors = true
+		} else {
+			combined.WriteString(results[i])
+			combined.WriteString("\n\n")
+		}
+
+		if i < len(results)-1 {
+			combined.WriteString("---\n\n")
+		}
+	}
+
+	if hasErrors {
+		combined.WriteString("\n⚠️ *Some tasks failed during parallel execution*\n")
+	}
+
+	return combined.String()
+}
+
+// isParallelExecution checks if the current context is for a parallel background thread.
+func isParallelExecution(ctx context.Context) bool {
+	val, ok := ctx.Value("parallel_execution_mode").(bool)
+	return ok && val
+}
+
+func extractParallelTaskWorkingDir(query string) (string, string) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return "", ""
+	}
+
+	patterns := []string{" in ", " under ", " from ", " for ", " at ", " repo ", " workspace "}
+	for _, pattern := range patterns {
+		lower := strings.ToLower(trimmed)
+		idx := strings.Index(lower, pattern)
+		if idx < 0 {
+			continue
+		}
+		candidate := strings.TrimSpace(trimmed[idx+len(pattern):])
+		if candidate == "" {
+			continue
+		}
+		parts := strings.Fields(candidate)
+		if len(parts) == 0 {
+			continue
+		}
+		first := strings.TrimSpace(parts[0])
+		if first == "" {
+			continue
+		}
+		if strings.Contains(first, "/") || strings.Contains(first, string(os.PathSeparator)) {
+			queryWithoutDir := strings.TrimSpace(trimmed[:idx])
+			return strings.TrimSpace(queryWithoutDir), first
+		}
+	}
+
+	return trimmed, ""
+}
+
+func resolveParallelWorkingDir(ctx context.Context, query string) string {
+	if _, workingDir := extractParallelTaskWorkingDir(query); workingDir != "" {
+		return workingDir
+	}
+
+	if ctx != nil {
+		if val, ok := ctx.Value(ctxKeyWorkingDir).(string); ok && strings.TrimSpace(val) != "" {
+			return strings.TrimSpace(val)
+		}
+	}
+
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return ""
+}
+
+// askWithQueue is the core prompt consumer - processes a single query through the reasoning pipeline.
+// If queue is provided (multi-turn mode), Ask may enqueue additional work items and return early.
+// The external processQueueLoop dequeues items and calls askWithQueue repeatedly.
+func (a *CopilotAgent) askWithQueue(ctx context.Context, query string, cfg *ai.ConfigMap, queue *WorkQueue) (string, error) {
 	ctx = a.applyAskConfig(ctx, cfg)
 	a.clearAskProgressMRU()
 
@@ -2571,13 +2809,41 @@ func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		"query", query,
 	)
 
-	// 4a. Multi-Turn Routing: Check if capability supports multi-turn orchestration
-	if a.shouldUseMultiTurn(ctx, query, taskContext) {
-		log.Info("Routing to multi-turn orchestration", "capability_hint", taskContext.CapabilityHint)
-		return a.multiTurnAsk(ctx, query, cfg)
+	// 4a. KB Workflow Detection
+	if a.workflowManager != nil {
+		if workflow, err := a.tryDetectWorkflow(ctx, query); err == nil && workflow != nil {
+			log.Info("KB workflow detected", "query", query)
+
+			if queue != nil {
+				// Already in queue mode - just enqueue workflow steps
+				if err := a.enqueueWorkflowSteps(ctx, workflow, queue, query); err != nil {
+					return "", fmt.Errorf("failed to enqueue workflow: %w", err)
+				}
+				return "🔄 Workflow enqueued", nil
+			} else {
+				// Create queue and process workflow
+				return a.executeWorkflow(ctx, workflow, query, cfg)
+			}
+		}
 	}
 
-	// 4b. KB Search Direct Display (Case 1: Few matches)
+	// 4b. Multi-Turn Detection
+	if a.shouldUseMultiTurn(ctx, query, taskContext) {
+		log.Info("Multi-turn needed", "capability_hint", taskContext.CapabilityHint)
+
+		if queue != nil {
+			// Already in queue mode - just enqueue subtasks
+			if err := a.enqueueMultiTurnTasks(ctx, query, taskContext, queue); err != nil {
+				return "", fmt.Errorf("failed to enqueue multi-turn tasks: %w", err)
+			}
+			return "🔄 Multi-turn tasks enqueued", nil
+		} else {
+			// Create queue and process multi-turn
+			return a.executeMultiTurn(ctx, query, taskContext, cfg)
+		}
+	}
+
+	// 4c. KB Search Direct Display (Case 1: Few matches)
 	if taskContext.DirectDisplay && taskContext.KBSearchResults != "" {
 		log.Info("KB routing: Direct display path", "match_count", taskContext.KBMatchCount)
 		// Track episode metadata for MRU
@@ -2650,6 +2916,261 @@ func (a *CopilotAgent) applyAskConfig(ctx context.Context, cfg *ai.ConfigMap) co
 		}
 	}
 	return ctx
+}
+
+// tryKBWorkflowExecution attempts to match the query against KB workflows and execute if matched.
+// Returns (result, handled, error) where handled=true means a workflow was executed.
+func (a *CopilotAgent) tryKBWorkflowExecution(ctx context.Context, query string, cfg *ai.ConfigMap) (string, bool, error) {
+	if a.workflowManager == nil || a.systemDB == nil {
+		return "", false, nil // No workflow support
+	}
+
+	// Lazily initialize KB if needed
+	if a.workflowManager.kb == nil {
+		p := ai.GetSessionPayload(ctx)
+		if p == nil || p.Transaction == nil {
+			// Need transaction for KB access
+			return "", false, nil
+		}
+
+		// Type assert transaction
+		tx, ok := p.Transaction.(sop.Transaction)
+		if !ok {
+			log.Warn("Invalid transaction type for KB access")
+			return "", false, nil
+		}
+
+		// Open SOP KnowledgeBase for workflow search
+		embedder := a.service.Domain().Embedder()
+		kb, err := a.systemDB.OpenKnowledgeBase(ctx, ai.DefaultKBName, tx, a.brain, embedder, false, true)
+		if err != nil {
+			log.Warn("Failed to open KB for workflows", "error", err)
+			return "", false, nil
+		}
+		a.workflowManager.kb = kb
+	}
+
+	// Try to find matching workflow
+	workflow, err := a.workflowManager.GetWorkflow(ctx, query)
+	if err != nil {
+		// No workflow found - not an error, just means no match
+		log.Debug("No KB workflow matched", "query", query)
+		return "", false, nil
+	}
+
+	// Workflow found! Execute via multi-turn orchestration
+	log.Info("KB workflow matched", "query", query, "workflow", workflow)
+
+	// Initialize work queue
+	queue := NewWorkQueue()
+	queue.SetMaxPerActor("test_debugger.repair", 3) // Max 3 repair iterations
+	queue.SetMaxPerActor("coding_workflow", 8)      // Allow coding workflow more turns
+	queue.SetMaxPerActor("test_runner", 5)
+
+	// Enqueue initial user query
+	initialItem := WorkItem{
+		Query: query,
+		Actor: "user",
+		ID:    "turn-0",
+	}
+	if err := queue.Enqueue(initialItem); err != nil {
+		return "", false, fmt.Errorf("failed to enqueue initial query: %w", err)
+	}
+
+	// Create workflow execution state (explicit state management, not context)
+	workflowState := &WorkflowExecutionState{
+		InWorkflowMode: true,
+		Queue:          queue,
+		TurnResults:    make([]TurnResult, 0),
+		OriginalQuery:  query,
+	}
+
+	// Inject queue into context for capability access (only for capability interface)
+	queueAdapter := &workQueueAdapter{queue: queue}
+	ctx = WithWorkQueue(ctx, queue)
+	ctx = context.WithValue(ctx, "work_queue", queueAdapter)
+
+	// Execute workflow via WorkflowManager (injects work items into queue)
+	if err := a.workflowManager.Execute(ctx, workflow, queueAdapter, query); err != nil {
+		return "", false, fmt.Errorf("workflow execution failed: %w", err)
+	}
+
+	// Process queue using the single clean loop - queue as prompt source!
+	workflowState.TurnResults = a.processQueueLoop(ctx, queue, cfg, 15)
+
+	// Compile results
+	var finalResponse strings.Builder
+	finalResponse.WriteString("✅ **Workflow Complete**\n\n")
+	for i, result := range workflowState.TurnResults {
+		if result.Response != "" {
+			finalResponse.WriteString(fmt.Sprintf("**Turn %d** (%s):\n%s\n\n", i+1, result.Actor, result.Response))
+		}
+	}
+
+	return finalResponse.String(), true, nil
+}
+
+// tryDetectWorkflow checks if a workflow exists for the query (no execution)
+func (a *CopilotAgent) tryDetectWorkflow(ctx context.Context, query string) (*WorkflowDefinition, error) {
+	if a.workflowManager == nil || a.systemDB == nil {
+		return nil, nil
+	}
+
+	// Lazily initialize KB if needed
+	if a.workflowManager.kb == nil {
+		p := ai.GetSessionPayload(ctx)
+		if p == nil || p.Transaction == nil {
+			return nil, nil
+		}
+
+		tx, ok := p.Transaction.(sop.Transaction)
+		if !ok {
+			return nil, nil
+		}
+
+		embedder := a.service.Domain().Embedder()
+		kb, err := a.systemDB.OpenKnowledgeBase(ctx, ai.DefaultKBName, tx, a.brain, embedder, false, true)
+		if err != nil {
+			return nil, nil
+		}
+		a.workflowManager.kb = kb
+	}
+
+	workflowIface, err := a.workflowManager.GetWorkflow(ctx, query)
+	if err != nil {
+		return nil, nil // No workflow found
+	}
+
+	// Type assert to *WorkflowDefinition
+	workflow, ok := workflowIface.(*WorkflowDefinition)
+	if !ok {
+		return nil, fmt.Errorf("invalid workflow type")
+	}
+	return workflow, nil
+}
+
+// enqueueWorkflowSteps injects workflow steps into the queue
+func (a *CopilotAgent) enqueueWorkflowSteps(ctx context.Context, workflow *WorkflowDefinition, queue *WorkQueue, query string) error {
+	// Set actor limits
+	queue.SetMaxPerActor("test_debugger.repair", 3)
+	queue.SetMaxPerActor("coding_workflow", 8)
+	queue.SetMaxPerActor("test_runner", 5)
+
+	// Create queue adapter for capability interface
+	queueAdapter := &workQueueAdapter{queue: queue}
+
+	// Execute workflow (injects work items into queue via capability)
+	return a.workflowManager.Execute(ctx, workflow, queueAdapter, query)
+}
+
+// enqueueMultiTurnTasks injects multi-turn subtasks into the queue
+func (a *CopilotAgent) enqueueMultiTurnTasks(ctx context.Context, query string, taskContext *TaskContextClassification, queue *WorkQueue) error {
+	// Capability-driven multi-turn: Let capability decide what to enqueue
+	if a.capabilityRegistry != nil && taskContext.CapabilityHint != "" {
+		queueAdapter := &workQueueAdapter{queue: queue}
+		ctx = context.WithValue(ctx, "work_queue", queueAdapter)
+
+		// Delegate to capability to populate queue
+		if result, handled, err := a.capabilityRegistry.TryParticipate(ctx, query, capabilities.RoutingState{
+			Domain:         taskContext.Domain,
+			Gate:           taskContext.RoutingGate,
+			CapabilityHint: taskContext.CapabilityHint,
+		}); err == nil && handled {
+			log.Info("Capability populated queue", "summary", result.Summary, "queue_depth", queue.Depth())
+			return nil
+		}
+	}
+
+	// Fallback: Simple task decomposition (enqueue single item)
+	return queue.Enqueue(WorkItem{
+		Query:    query,
+		Actor:    "assistant",
+		Priority: 50,
+	})
+}
+
+// executeWorkflow creates a queue, initializes it with the workflow, and processes
+func (a *CopilotAgent) executeWorkflow(ctx context.Context, workflow *WorkflowDefinition, query string, cfg *ai.ConfigMap) (string, error) {
+	queue := NewWorkQueue()
+	queue.SetMaxPerActor("test_debugger.repair", 3)
+	queue.SetMaxPerActor("coding_workflow", 8)
+	queue.SetMaxPerActor("test_runner", 5)
+
+	// Enqueue initial query
+	if err := queue.Enqueue(WorkItem{Query: query, Actor: "user", ID: "turn-0"}); err != nil {
+		return "", err
+	}
+
+	// Enqueue workflow steps
+	if err := a.enqueueWorkflowSteps(ctx, workflow, queue, query); err != nil {
+		return "", err
+	}
+
+	// Process queue
+	results := a.processQueueLoop(ctx, queue, cfg, 15)
+
+	// Format results
+	var finalResponse strings.Builder
+	finalResponse.WriteString("✅ **Workflow Complete**\n\n")
+	for i, result := range results {
+		if result.Response != "" {
+			finalResponse.WriteString(fmt.Sprintf("**Turn %d** (%s):\n%s\n\n", i+1, result.Actor, result.Response))
+		}
+	}
+	return finalResponse.String(), nil
+}
+
+// executeMultiTurn creates a queue, lets capability orchestrate, and processes
+func (a *CopilotAgent) executeMultiTurn(ctx context.Context, query string, taskContext *TaskContextClassification, cfg *ai.ConfigMap) (string, error) {
+	queue := NewWorkQueue()
+	queue.SetMaxPerActor("coding_workflow", 8)
+	queue.SetMaxPerActor("test_runner", 5)
+	queue.SetMaxPerActor("test_debugger.repair", 3)
+
+	// Enqueue initial query
+	if err := queue.Enqueue(WorkItem{Query: query, Actor: "user", ID: "turn-0"}); err != nil {
+		return "", err
+	}
+
+	// Let capability populate queue
+	queueAdapter := &workQueueAdapter{queue: queue}
+	ctx = context.WithValue(ctx, "work_queue", queueAdapter)
+
+	if a.capabilityRegistry != nil && taskContext.CapabilityHint != "" {
+		state := capabilities.RoutingState{
+			Domain:         taskContext.Domain,
+			Gate:           taskContext.RoutingGate,
+			CapabilityHint: taskContext.CapabilityHint,
+		}
+		cap, ok := a.capabilityRegistry.Resolve(query, state)
+		if ok {
+			if multiTurnCap, isMultiTurn := cap.(capabilities.MultiTurnCapability); isMultiTurn {
+				log.Info("Calling capability Orchestrate", "capability", cap.Name())
+				if _, err := multiTurnCap.Orchestrate(ctx, state); err != nil {
+					return "", fmt.Errorf("orchestration failed: %w", err)
+				}
+			}
+		}
+	}
+
+	// Process queue
+	results := a.processQueueLoop(ctx, queue, cfg, 15)
+
+	// Aggregate and epilogue
+	finalResponse := a.aggregateMultiTurnResults(results)
+	if len(results) > 0 {
+		lastResult := results[len(results)-1]
+		var toolCalls []ai.ToolCall
+		if lastResult.ToolCalls != nil {
+			for _, tc := range lastResult.ToolCalls {
+				if toolCall, ok := tc.(ai.ToolCall); ok {
+					toolCalls = append(toolCalls, toolCall)
+				}
+			}
+		}
+		a.epilogueAndCleanup(ctx, query, ai.IntentOmni, finalResponse, toolCalls, nil, nil, nil)
+	}
+	return finalResponse, nil
 }
 
 func isExplicitNewTopic(ctx context.Context) bool {
@@ -5273,4 +5794,12 @@ func (a *CopilotAgent) classifyIntent(ctx context.Context, query string, gen ai.
 
 	// 3. Final Default
 	return ai.IntentOmni
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

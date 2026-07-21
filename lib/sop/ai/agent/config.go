@@ -26,6 +26,7 @@ type Config struct {
 	SkipDeduplication     bool              `json:"skip_deduplication,omitempty"`      // Optional: Skip deduplication phase
 	EnableIngestionBuffer bool              `json:"enable_ingestion_buffer,omitempty"` // Optional: Enable Stage 0 buffering for faster ingestion
 	Verbose               bool              `json:"verbose,omitempty"`                 // Optional: Enable verbose output (e.g. tool instructions)
+	ProductionMode        bool              `json:"production_mode,omitempty"`         // Optional: Enable production-oriented hardening defaults (e.g. Phase 5)
 	// Cognitive Memory Consolidation (STM to LTM)
 	SleepCycleIntervalHours int            `json:"sleep_cycle_interval_hours,omitempty"` // e.g. 1 (run every X hours on the clock). 0 disables hourly.
 	IdleSleepTimeoutMinutes int            `json:"idle_sleep_timeout_minutes,omitempty"` // e.g. 5 (run cycle after X minutes of avatar inactivity).

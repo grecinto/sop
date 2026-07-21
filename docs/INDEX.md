@@ -43,6 +43,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 | [FILE_BACKED_TOOL_RESULTS.md](FILE_BACKED_TOOL_RESULTS.md) | ✅ Production-ready: File-backed tool results for large outputs, strategic analysis tools |
 | [FILE_BACKED_TOOL_RESULTS_TRACKER.md](FILE_BACKED_TOOL_RESULTS_TRACKER.md) | Implementation tracker with completion status |
 | [SHELL_SESSION_PERSISTENCE.md](SHELL_SESSION_PERSISTENCE.md) | Persistent shell sessions for commands |
+| [PHASE4_PARALLEL_EXECUTION.md](PHASE4_PARALLEL_EXECUTION.md) | Phase 4 parallel execution architecture, thread routing, PTY vs exec.Command |
 
 ### Knowledge Base Quality
 

@@ -55,6 +55,15 @@ type TurnContext struct {
 	SharedState   map[string]any
 }
 
+// WorkflowExecutionState tracks the state of an active workflow execution.
+// This is passed explicitly rather than through context to avoid anti-patterns.
+type WorkflowExecutionState struct {
+	InWorkflowMode bool         // Prevents recursive workflow detection
+	Queue          *WorkQueue   // The active work queue
+	TurnResults    []TurnResult // Results from previous turns
+	OriginalQuery  string       // The initial user query that triggered the workflow
+}
+
 // WorkQueueError represents queue-specific errors.
 type WorkQueueError struct {
 	Code    string
@@ -455,16 +464,29 @@ func (rs *RetryStrategy) CalculateDelay(attempt int) time.Duration {
 	return time.Duration(delay)
 }
 
-// QueuePersistence handles saving/loading queue state to/from persistent storage using SOP b-trees.
-type QueuePersistence struct {
+// QueuePersistenceStore is the storage contract for queue checkpoint/metric persistence.
+// Concrete implementations can use SOP B-trees or any other backend.
+type QueuePersistenceStore interface {
+	SaveCheckpoint(ctx context.Context, checkpoint QueueCheckpoint) error
+	LoadCheckpoint(ctx context.Context, checkpointID string) (*QueueCheckpoint, error)
+	ListCheckpoints(ctx context.Context) ([]string, error)
+	SaveMetric(ctx context.Context, checkpointID string, result TurnResult) error
+	Close(ctx context.Context) error
+}
+
+type btreeQueuePersistence struct {
 	checkpoints btree.BtreeInterface[string, []byte] // checkpoint_id -> serialized QueueCheckpoint
 	metrics     btree.BtreeInterface[string, []byte] // metric_id -> serialized TurnResult
 	byTimestamp btree.BtreeInterface[string, string] // timestamp:checkpoint_id -> checkpoint_id
-	mu          sync.Mutex
 }
 
-// NewQueuePersistence creates a new persistence layer backed by SOP b-trees.
-// Requires a transaction to open/create the b-tree stores.
+// QueuePersistence is the facade used by the agent layer.
+type QueuePersistence struct {
+	backend QueuePersistenceStore
+	mu      sync.Mutex
+}
+
+// NewQueuePersistence creates a new persistence facade backed by an SOP B-tree adapter.
 func NewQueuePersistence(
 	ctx context.Context,
 	checkpoints btree.BtreeInterface[string, []byte],
@@ -475,18 +497,75 @@ func NewQueuePersistence(
 		return nil, fmt.Errorf("all b-tree stores must be non-nil")
 	}
 
-	return &QueuePersistence{
+	backend := &btreeQueuePersistence{
 		checkpoints: checkpoints,
 		metrics:     metrics,
 		byTimestamp: byTimestamp,
-	}, nil
+	}
+
+	return &QueuePersistence{backend: backend}, nil
+}
+
+// NewQueuePersistenceWithBackend creates a facade around a custom persistence backend.
+func NewQueuePersistenceWithBackend(backend QueuePersistenceStore) *QueuePersistence {
+	if backend == nil {
+		return &QueuePersistence{}
+	}
+	return &QueuePersistence{backend: backend}
 }
 
 // SaveCheckpoint persists a queue checkpoint to storage.
 func (qp *QueuePersistence) SaveCheckpoint(ctx context.Context, checkpoint QueueCheckpoint) error {
 	qp.mu.Lock()
 	defer qp.mu.Unlock()
+	if qp.backend == nil {
+		return fmt.Errorf("queue persistence backend not initialized")
+	}
+	return qp.backend.SaveCheckpoint(ctx, checkpoint)
+}
 
+// LoadCheckpoint loads a checkpoint from persistent storage.
+func (qp *QueuePersistence) LoadCheckpoint(ctx context.Context, checkpointID string) (*QueueCheckpoint, error) {
+	qp.mu.Lock()
+	defer qp.mu.Unlock()
+	if qp.backend == nil {
+		return nil, fmt.Errorf("queue persistence backend not initialized")
+	}
+	return qp.backend.LoadCheckpoint(ctx, checkpointID)
+}
+
+// ListCheckpoints returns all available checkpoint IDs ordered by timestamp (newest first).
+func (qp *QueuePersistence) ListCheckpoints(ctx context.Context) ([]string, error) {
+	qp.mu.Lock()
+	defer qp.mu.Unlock()
+	if qp.backend == nil {
+		return nil, fmt.Errorf("queue persistence backend not initialized")
+	}
+	return qp.backend.ListCheckpoints(ctx)
+}
+
+// SaveMetric records a turn execution metric.
+func (qp *QueuePersistence) SaveMetric(ctx context.Context, checkpointID string, result TurnResult) error {
+	qp.mu.Lock()
+	defer qp.mu.Unlock()
+	if qp.backend == nil {
+		return fmt.Errorf("queue persistence backend not initialized")
+	}
+	return qp.backend.SaveMetric(ctx, checkpointID, result)
+}
+
+// Close closes the persistence layer (commits the transaction).
+func (qp *QueuePersistence) Close(ctx context.Context) error {
+	qp.mu.Lock()
+	defer qp.mu.Unlock()
+	if qp.backend == nil {
+		return nil
+	}
+	return qp.backend.Close(ctx)
+}
+
+// SaveCheckpoint persists a queue checkpoint to storage.
+func (bp *btreeQueuePersistence) SaveCheckpoint(ctx context.Context, checkpoint QueueCheckpoint) error {
 	// Marshal checkpoint to JSON
 	data, err := json.Marshal(checkpoint)
 	if err != nil {
@@ -494,13 +573,13 @@ func (qp *QueuePersistence) SaveCheckpoint(ctx context.Context, checkpoint Queue
 	}
 
 	// Save checkpoint by ID
-	if _, err := qp.checkpoints.Add(ctx, checkpoint.CheckpointID, data); err != nil {
+	if _, err := bp.checkpoints.Add(ctx, checkpoint.CheckpointID, data); err != nil {
 		return fmt.Errorf("failed to save checkpoint: %w", err)
 	}
 
 	// Create timestamp index key for ordering: timestamp:checkpoint_id
 	timestampKey := fmt.Sprintf("%020d:%s", checkpoint.Timestamp.Unix(), checkpoint.CheckpointID)
-	if _, err := qp.byTimestamp.Add(ctx, timestampKey, checkpoint.CheckpointID); err != nil {
+	if _, err := bp.byTimestamp.Add(ctx, timestampKey, checkpoint.CheckpointID); err != nil {
 		return fmt.Errorf("failed to save timestamp index: %w", err)
 	}
 
@@ -508,12 +587,9 @@ func (qp *QueuePersistence) SaveCheckpoint(ctx context.Context, checkpoint Queue
 }
 
 // LoadCheckpoint loads a checkpoint from persistent storage.
-func (qp *QueuePersistence) LoadCheckpoint(ctx context.Context, checkpointID string) (*QueueCheckpoint, error) {
-	qp.mu.Lock()
-	defer qp.mu.Unlock()
-
+func (bp *btreeQueuePersistence) LoadCheckpoint(ctx context.Context, checkpointID string) (*QueueCheckpoint, error) {
 	// Find checkpoint by ID
-	ok, err := qp.checkpoints.Find(ctx, checkpointID, false)
+	ok, err := bp.checkpoints.Find(ctx, checkpointID, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find checkpoint: %w", err)
 	}
@@ -522,7 +598,7 @@ func (qp *QueuePersistence) LoadCheckpoint(ctx context.Context, checkpointID str
 	}
 
 	// Get checkpoint data
-	data, err := qp.checkpoints.GetCurrentValue(ctx)
+	data, err := bp.checkpoints.GetCurrentValue(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get checkpoint data: %w", err)
 	}
@@ -537,26 +613,23 @@ func (qp *QueuePersistence) LoadCheckpoint(ctx context.Context, checkpointID str
 }
 
 // ListCheckpoints returns all available checkpoint IDs ordered by timestamp (newest first).
-func (qp *QueuePersistence) ListCheckpoints(ctx context.Context) ([]string, error) {
-	qp.mu.Lock()
-	defer qp.mu.Unlock()
-
+func (bp *btreeQueuePersistence) ListCheckpoints(ctx context.Context) ([]string, error) {
 	var checkpoints []string
 
 	// Iterate through timestamp index in reverse order (newest first)
-	ok, err := qp.byTimestamp.Last(ctx)
+	ok, err := bp.byTimestamp.Last(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to iterate checkpoints: %w", err)
 	}
 
 	for ok {
-		checkpointID, err := qp.byTimestamp.GetCurrentValue(ctx)
+		checkpointID, err := bp.byTimestamp.GetCurrentValue(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get checkpoint ID: %w", err)
 		}
 		checkpoints = append(checkpoints, checkpointID)
 
-		ok, err = qp.byTimestamp.Previous(ctx)
+		ok, err = bp.byTimestamp.Previous(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to iterate previous: %w", err)
 		}
@@ -566,10 +639,7 @@ func (qp *QueuePersistence) ListCheckpoints(ctx context.Context) ([]string, erro
 }
 
 // SaveMetric records a turn execution metric.
-func (qp *QueuePersistence) SaveMetric(ctx context.Context, checkpointID string, result TurnResult) error {
-	qp.mu.Lock()
-	defer qp.mu.Unlock()
-
+func (bp *btreeQueuePersistence) SaveMetric(ctx context.Context, checkpointID string, result TurnResult) error {
 	// Create metric record
 	metric := struct {
 		CheckpointID string `json:"checkpoint_id"`
@@ -600,7 +670,7 @@ func (qp *QueuePersistence) SaveMetric(ctx context.Context, checkpointID string,
 	metricID := fmt.Sprintf("%s:%d:%d", checkpointID, result.TurnNumber, time.Now().UnixNano())
 
 	// Save metric
-	if _, err := qp.metrics.Add(ctx, metricID, data); err != nil {
+	if _, err := bp.metrics.Add(ctx, metricID, data); err != nil {
 		return fmt.Errorf("failed to save metric: %w", err)
 	}
 
@@ -608,7 +678,7 @@ func (qp *QueuePersistence) SaveMetric(ctx context.Context, checkpointID string,
 }
 
 // Close closes the persistence layer (commits the transaction).
-func (qp *QueuePersistence) Close(ctx context.Context) error {
+func (bp *btreeQueuePersistence) Close(ctx context.Context) error {
 	// B-trees are managed by the transaction, just return nil
 	// The caller should commit the transaction
 	return nil

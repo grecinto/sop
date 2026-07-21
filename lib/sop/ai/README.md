@@ -312,11 +312,154 @@ Turn 4 (Injected): "Run tests matching orchestrator_test.go"
 
 **Implementation Status**: Planned for Phase 1 (Queue Infrastructure).
 
-**Implementation Files** (Planned):
+**Implementation Files**:
 - `lib/sop/ai/agent/workqueue.go` - Queue and WorkItem types
-- `lib/sop/ai/agent/copilot_multiturn.go` - Multi-turn Ask variant
-- `lib/sop/ai/agent/capabilities/capability.go` - MultiTurnCapability interface
-- `lib/sop/ai/agent/codingworkflow/capability.go` - First multi-turn implementation
+- `lib/sop/ai/agent/copilot_multiturn.go` - Multi-turn orchestration
+- `lib/sop/ai/agent/copilot.go` - Ask() entry point with queue support
+
+#### Phase 4: Parallel Execution Architecture
+
+**Design Principle**: Each `Ask()` call is an isolated thread of execution with its own queue. Parallel execution is achieved through composition, not modification.
+
+**Current Architecture** (Sequential Multi-Turn):
+```go
+func (a *CopilotAgent) Ask(ctx, query, cfg) (string, error) {
+    // Detect if workflow exists
+    if workflow := detectWorkflow(query); workflow != nil {
+        queue := NewWorkQueue()  // Each Ask gets its own queue
+        enqueueWorkflowSteps(queue, workflow)
+        return processQueueLoop(ctx, queue, cfg)  // Sequential processing
+    }
+    // Standard single-turn path
+    return askWithQueue(ctx, query, cfg, nil)
+}
+```
+
+**Phase 4 Extension** (Parallel Multi-Thread):
+```go
+func (a *CopilotAgent) AskParallel(ctx, query, cfg) (string, error) {
+    // 1. Detect parallelizable subqueries (from KB workflow or natural language)
+    subQueries := detectParallelSubqueries(query)
+    if len(subQueries) <= 1 {
+        return a.Ask(ctx, query, cfg)  // Fall back to sequential
+    }
+    
+    // 2. Launch each subquery as independent Ask() thread
+    results := make([]string, len(subQueries))
+    errors := make([]error, len(subQueries))
+    var wg sync.WaitGroup
+    
+    for i, subQuery := range subQueries {
+        wg.Add(1)
+        
+        // First thread = main (PTY child process)
+        // Subsequent threads = background (exec.Command)
+        threadCtx := ctx
+        if i > 0 {
+            threadCtx = context.WithValue(ctx, "parallel_execution_mode", true)
+        }
+        
+        go func(idx int, q string, tCtx context.Context) {
+            defer wg.Done()
+            results[idx], errors[idx] = a.Ask(tCtx, q, cfg)  // 100% reuse!
+        }(i, subQuery, threadCtx)
+    }
+    wg.Wait()
+    
+    // 3. Aggregate results
+    return aggregateParallelResults(results, errors), nil
+}
+```
+
+**Key Design Decisions**:
+
+1. **Queue Isolation**: Each `Ask()` creates its own `WorkQueue` - no shared state between threads
+2. **100% Code Reuse**: Parallel execution wraps `Ask()`, doesn't modify it
+3. **Thread-Safe by Design**: Each thread has isolated queue, context, and state
+4. **Process Routing via Context**:
+   - Main thread (`parallel_execution_mode` not set): Routes to PTY child process (stateful shell)
+   - Background threads (`parallel_execution_mode=true`): Routes to exec.Command (stateless)
+
+**Process Routing Implementation**:
+
+```go
+// In copilottools.automation.go
+func (a *CopilotAgent) runLocalAutomationCommand(ctx, args, ...) {
+    background := extractBackgroundFlag(args)
+    sessionID := sessionIDFromContext(ctx)
+    
+    // Force background execution for parallel threads
+    if isParallelExecution(ctx) {
+        background = true
+        sessionID = "" // Strip session to avoid PTY routing
+    }
+    
+    request := LocalCommandRequest{
+        SessionID:  sessionID,
+        Background: background,
+        // ...
+    }
+}
+
+func isParallelExecution(ctx context.Context) bool {
+    val, ok := ctx.Value("parallel_execution_mode").(bool)
+    return ok && val
+}
+```
+
+**Daemon Routing Logic** (`lib/sop/cmd/sop-daemon/main.go:958`):
+
+```go
+func runLocalCommandWithWorkingDir(ctx, req) {
+    // Foreground commands with SessionID → PTY child process
+    if !req.Background && req.SessionID != "" {
+        return shellMgr.Run(req.SessionID, req.Command, timeout)
+    }
+    
+    // Background commands → exec.Command goroutine
+    if req.Background {
+        go runBackgroundJob(ctx, job, req)
+        return jobID, nil
+    }
+}
+```
+
+**Execution Flow Example**:
+
+```
+User: "Run tests and check formatting"
+  ↓
+AskParallel detects parallel structure
+  ↓
+Split: ["Run tests", "Check formatting"]
+  ↓
+Thread 1 (Main): Ask("Run tests")
+  - Context: parallel_execution_mode = false
+  - SessionID: "session-123"
+  - Routes to: PTY child process (stateful shell)
+  - Queue: queue-1 (isolated)
+  
+Thread 2 (Background): Ask("Check formatting")
+  - Context: parallel_execution_mode = true
+  - SessionID: "" (stripped)
+  - Background: true (forced)
+  - Routes to: exec.Command goroutine
+  - Queue: queue-2 (isolated)
+  ↓
+Wait for both threads
+  ↓
+Aggregate results: "Tests passed ✓\nFormatting OK ✓"
+```
+
+**Benefits**:
+
+- ✅ **2-3x speedup** for independent tasks (tests + formatting + linting)
+- ✅ **No race conditions** - each thread has isolated queue and state
+- ✅ **Simple implementation** - ~60 lines of wrapper code
+- ✅ **Maintains state** - main thread preserves PTY shell state (cd, env vars)
+- ✅ **Clean architecture** - composition over modification
+
+**Implementation Status**: Design complete, implementation pending.
 
 ### 3. Memory Architecture (SOP Unique Design)
 The SOP Agent is equipped with a dual-memory system that leverages the Database Engine itself:

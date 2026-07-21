@@ -235,6 +235,120 @@ Explicit close or timeout → Resources released
 - Use for long-running processes only
 - Clean up explicitly when done
 
+## Phase 4: Parallel Execution Integration
+
+### Overview
+
+Phase 4 parallel execution extends the multi-turn orchestration architecture to run independent workflow steps concurrently. The PTY session architecture routes threads appropriately:
+
+- **Main thread**: Uses PTY child process (preserves shell state)
+- **Background threads**: Use exec.Command goroutines (stateless, parallel)
+
+### Thread Routing Architecture
+
+**Process Selection Logic** (`main.go:958`):
+```go
+func runLocalCommandWithWorkingDir(ctx, req) {
+    // Main thread: Foreground + SessionID → PTY child process
+    if !req.Background && req.SessionID != "" {
+        return shellMgr.Run(req.SessionID, req.Command, timeout)
+    }
+    
+    // Background threads: Background flag → exec.Command
+    if req.Background {
+        go runBackgroundJob(ctx, job, req)
+        return jobID, nil
+    }
+}
+```
+
+**Context-Based Routing**:
+```go
+// Main thread (preserves session state)
+Ask(ctx, "run tests")
+  → sessionIDFromContext(ctx) → "session-123"
+  → LocalCommandRequest{SessionID: "session-123", Background: false}
+  → Routes to PTY child process ✅
+
+// Parallel thread (stateless execution)
+bgCtx := context.WithValue(ctx, "parallel_execution_mode", true)
+Ask(bgCtx, "check formatting")
+  → isParallelExecution(ctx) → true
+  → LocalCommandRequest{SessionID: "", Background: true}
+  → Routes to exec.Command goroutine ✅
+```
+
+### Example: Parallel Quality Checks
+
+**Workflow**:
+```
+User: "Run tests and check formatting"
+  ↓
+AskParallel splits into 2 threads:
+  
+Thread 1 (Main):
+  Query: "Run tests"
+  SessionID: "session-123"
+  Process: PTY child (preserves shell state)
+  Working Dir: /project (from PTY session)
+  Command: npm test
+  
+Thread 2 (Background):
+  Query: "Check formatting"  
+  SessionID: "" (stripped)
+  Process: exec.Command goroutine
+  Working Dir: /project (inherited from request)
+  Command: npm run format:check
+  ↓
+Both execute in parallel
+  ↓
+Results aggregated
+```
+
+### Why This Design?
+
+**Main Thread Uses PTY**:
+- Preserves shell state (`cd`, `export`, etc.) for subsequent commands
+- User's conversation continues with expected working directory
+- Environment variables and aliases remain active
+
+**Background Threads Use exec.Command**:
+- Independent execution (no state dependencies)
+- Clean process isolation
+- Proper goroutine-based concurrency
+- No PTY overhead for parallel work
+
+**Benefits**:
+- ✅ Main conversation context preserved
+- ✅ Parallel work doesn't interfere with shell state
+- ✅ Clean separation: stateful vs stateless execution
+- ✅ Efficient resource usage (PTY only for main thread)
+
+### Implementation Details
+
+**Forcing Background Mode** (`copilottools.automation.go`):
+```go
+func (a *CopilotAgent) runLocalAutomationCommand(ctx, args, ...) {
+    background := extractBackgroundFlag(args)
+    sessionID := sessionIDFromContext(ctx)
+    
+    // Force background execution for parallel threads
+    if isParallelExecution(ctx) {
+        background = true
+        sessionID = "" // Strip session to avoid PTY routing
+    }
+    
+    request := LocalCommandRequest{
+        SessionID:  sessionID,
+        Background: background,
+        Command:    command,
+        // ...
+    }
+}
+```
+
+**Result**: Parallel execution is achieved with zero changes to PTY session management - routing happens automatically based on context flags.
+
 ## Idle Session Cleanup
 
 ### How It Works

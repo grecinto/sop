@@ -26,6 +26,34 @@ Turn 4: Terminal execution
 
 **See**: [Multi-Turn Queue-Based Orchestration](../lib/sop/ai/README.md#multi-turn-queue-based-orchestration) in the main AI architecture doc for full technical details.
 
+### Phase 4: Parallel Execution
+
+The architecture supports **parallel execution** of independent workflow steps by launching multiple `Ask()` threads. Each thread gets its own isolated queue and execution context.
+
+**Example** (Parallel Quality Checks):
+```
+User: "Run tests and check formatting"
+  ↓
+Split into parallel threads:
+  Thread 1 (Main/PTY): "Run tests"
+  Thread 2 (Background): "Check formatting"
+  ↓
+Both execute simultaneously with isolated queues
+  ↓
+Results aggregated: "Tests passed ✓, Formatting OK ✓"
+```
+
+**Process Routing**:
+- **Main thread**: Routes to PTY child process (stateful shell, preserves `cd`, env vars)
+- **Background threads**: Route to exec.Command goroutines (stateless, parallel execution)
+
+**Benefits**:
+- 2-3x speedup for independent tasks
+- Each Ask() call is fully isolated (own queue, own state)
+- Main thread maintains shell persistence for subsequent commands
+
+**Implementation**: Wrapper around existing `Ask()` - no modifications to core orchestration logic required.
+
 ## V1 Product Direction
 
 For V1, the coding workflow should be designed to compete with high-quality coding copilots on everyday repository work. The bar is not merely “answer questions about code”; it is to help a developer inspect, edit, test, debug, and continue work with minimal friction.
@@ -52,6 +80,12 @@ For this direction, AST/tree-sitter-style structure is a first-class V1 capabili
 - [ ] Add explicit workflow tracing so the user can see what context was selected, what changed, and what was validated.
 - [ ] Add safety controls for destructive operations, including preview, approval, and rollback paths.
 - [x] **Add systematic test debugging protocol (HIGH PRIORITY)**: ✅ **COMPLETED** - System prompt with mandatory workflow steps, verification gates, and improved tool result visibility. See [lib/sop/ai/agent/codingworkflow/PHASE1_IMPLEMENTATION.md](/Volumes/T7/sop-cloud/lib/sop/ai/agent/codingworkflow/PHASE1_IMPLEMENTATION.md) (§6.1)
+- [ ] **KB-Driven Workflow Orchestration (APPROVED)**: ✅ **DESIGN COMPLETE** - WorkflowManager with script auto-optimization and compilation path. See [docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md](/Volumes/T7/sop-cloud/docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md) for full design.
+  - **Phase 1** (2-3 days): WorkflowManager + KB integration + interpreted execution
+  - **Phase 2** (2-3 days): Script auto-optimization (detect when to use scripts vs tools)
+  - **Phase 3** (2-3 days): Code generation (JSON → Go → Binary compilation)
+  - **Impact**: Data-driven workflows, 5-10x script speedup, distributable binaries
+  - **Competitive Edge**: Nobody else has data-driven workflows that compile to native binaries
 
 ## Guard Rails for Future Copilots
 

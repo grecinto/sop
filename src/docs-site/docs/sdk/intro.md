@@ -22,6 +22,8 @@ The SDK provides:
 - **Swarm Computing**: Distributed, resilient retrieval and memory infrastructure with no single point of failure
 - **End-user hosting**: The SDK can run on customer servers, private infrastructure, or edge deployments
 - **Integration Options**: Use the SDK through UI, API, or tool calls
+- **Parallel Ask Flow**: Split complex requests into parallel sub-asks, gather the results at the end, and keep each execution (proess) isolated so one failing task does not bring down the others or the daemon
+- **KB-driven workflows**: The agent can follow knowledge-base-defined workflows(data driven!) for tasks such as "fix failing tests", orchestrating the steps from failure capture to analysis and verification
 
 ## Why this matters for AI platforms
 

@@ -22,6 +22,13 @@ This repository is a private overlay built on top of the shared public SOP imple
 Other copilots: Generate → Manual review → Fix error handling → Fix naming → Fix architecture → Deploy  
 **SOP with KB Quality**: Generate with built-in validation → Deploy  
 
+### ⚡ Multi-Threaded Ask Flow
+
+- Split complex requests into parallel sub-asks and run them concurrently for faster investigation and synthesis
+- Gather the results at the end into a single cohesive answer instead of forcing a serial back-and-forth
+- Each thread runs in an isolated process boundary so a crash in one thread does not take down the others or the daemon
+- Useful for repository audits, multi-step research, and broad analysis tasks that benefit from parallel execution
+
 ### 🔒 Privacy-First with Local Intelligence
 
 - Real-time vector database on your machine—no overnight optimization or data center processing

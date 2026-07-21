@@ -2007,8 +2007,12 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 	workingDirPromptRequired := false
 	candidateDirs := []string{}
 	if strings.TrimSpace(workingDir) == "" {
-		if strings.TrimSpace(defaultWorkingDir) != "" {
+		if ctxWorkingDir := resolveParallelWorkingDir(ctx, ""); strings.TrimSpace(ctxWorkingDir) != "" {
+			workingDir = ctxWorkingDir
+		} else if strings.TrimSpace(defaultWorkingDir) != "" {
 			workingDir = defaultWorkingDir
+		}
+		if strings.TrimSpace(workingDir) != "" {
 			candidateDirs = discoverWorkingDirCandidates(workingDir)
 			if len(candidateDirs) == 0 {
 				workingDirPromptRequired = true
@@ -2044,6 +2048,13 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		}
 	}
 
+	// Phase 4: Force background execution for parallel threads
+	sessionID := sessionIDFromContext(ctx)
+	if isParallelExecution(ctx) {
+		background = true
+		sessionID = "" // Strip session to route to exec.Command instead of PTY
+	}
+
 	var streamedStdout strings.Builder
 	var streamedStderr strings.Builder
 
@@ -2052,7 +2063,7 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		Reasoning:      reasoning,
 		WorkingDir:     workingDir,
 		TimeoutSeconds: timeoutSeconds,
-		SessionID:      sessionIDFromContext(ctx),
+		SessionID:      sessionID,
 		Background:     background,
 		StreamStdout: func(chunk string) {
 			streamedStdout.WriteString(chunk)
