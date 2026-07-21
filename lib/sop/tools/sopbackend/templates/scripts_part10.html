@@ -328,6 +328,14 @@
         }
     }
 
+    function handleChatSettingsFallbackChange() {
+        applyEnvSelectionDefaults('chat-settings-fallback-overlay', 'chat-settings-fallback-api-key', 'chat-settings-fallback-url');
+        toggleChatSettingsFields();
+        if (typeof persistChatSettingsDraft === 'function') {
+            persistChatSettingsDraft();
+        }
+    }
+
     function injectEnvBackedAIOptions(envConfig) {
         const cfg = envConfig || {};
         const providers = Array.isArray(cfg.env_providers) && cfg.env_providers.length
@@ -402,6 +410,23 @@
         }
         if (overlayEmbedderAPIKey) {
             overlayEmbedderAPIKey.value = cfg.embedder_api_key || '';
+        }
+
+        const fallbackSource = cfg.fallback_source || 'catalog';
+        if (cfg.fallback_provider) {
+            ensureSetupProviderOption('chat-settings-fallback-overlay', cfg.fallback_provider, cfg.fallback_model, fallbackSource);
+        }
+        const overlayFallback = document.getElementById('chat-settings-fallback-overlay');
+        const overlayFallbackURL = document.getElementById('chat-settings-fallback-url');
+        const overlayFallbackAPIKey = document.getElementById('chat-settings-fallback-api-key');
+        if (overlayFallback && cfg.fallback_provider) {
+            selectProviderOption(overlayFallback, buildProviderValue(cfg.fallback_provider, cfg.fallback_model), fallbackSource);
+        }
+        if (overlayFallbackURL) {
+            overlayFallbackURL.value = cfg.fallback_url || '';
+        }
+        if (overlayFallbackAPIKey) {
+            overlayFallbackAPIKey.value = cfg.fallback_api_key || '';
         }
 
         toggleChatSettingsFields();

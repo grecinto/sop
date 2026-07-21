@@ -805,6 +805,12 @@
         const embedderURL = document.getElementById('chat-settings-embedder-url')?.value.trim() || '';
         const persistEmbedderURL = embedderValue && selectedProviderUsesURL('chat-settings-embedder-overlay') ? embedderURL : '';
         const persistEmbedderAPIKey = embedderParts.provider && !isLocalProviderValue(embedderValue) ? embedderAPIKey : '';
+        const fallbackValue = document.getElementById('chat-settings-fallback-overlay')?.value || '';
+        const fallbackParts = splitProviderValue(fallbackValue);
+        const fallbackAPIKey = document.getElementById('chat-settings-fallback-api-key')?.value.trim() || '';
+        const fallbackURL = document.getElementById('chat-settings-fallback-url')?.value.trim() || '';
+        const persistFallbackURL = fallbackValue && selectedProviderUsesURL('chat-settings-fallback-overlay') ? fallbackURL : '';
+        const persistFallbackAPIKey = fallbackParts.provider && !isLocalProviderValue(fallbackValue) ? fallbackAPIKey : '';
 
         return {
             brain_provider: parts.provider,
@@ -816,7 +822,11 @@
             embedder_model: embedderParts.model,
             embedder_source: embedderSource,
             embedder_api_key: persistEmbedderAPIKey,
-            embedder_url: persistEmbedderURL
+            embedder_url: persistEmbedderURL,
+            fallback_provider: fallbackParts.provider,
+            fallback_model: fallbackParts.model,
+            fallback_api_key: persistFallbackAPIKey,
+            fallback_url: persistFallbackURL
         };
     }
 
@@ -862,6 +872,12 @@
         const embedderURLInput = document.getElementById('chat-settings-embedder-url');
         const isLocalEmbedder = isLocalProviderValue(embedderProvider);
         const showEmbedderURL = selectedProviderUsesURL('chat-settings-embedder-overlay');
+        const fallbackProvider = document.getElementById('chat-settings-fallback-overlay')?.value || '';
+        const fallbackURLContainer = document.getElementById('chat-settings-fallback-url-container');
+        const fallbackAPIKeyContainer = document.getElementById('chat-settings-fallback-apikey-container');
+        const fallbackURLInput = document.getElementById('chat-settings-fallback-url');
+        const isLocalFallback = isLocalProviderValue(fallbackProvider);
+        const showFallbackURL = selectedProviderUsesURL('chat-settings-fallback-overlay');
         
         if (provider === '') {
             if (urlContainer) urlContainer.style.display = 'none';
@@ -881,6 +897,16 @@
             if (embedderURLContainer) embedderURLContainer.style.display = showEmbedderURL ? 'block' : 'none';
             if (embedderAPIKeyContainer) embedderAPIKeyContainer.style.display = isLocalEmbedder ? 'none' : 'block';
             if (!showEmbedderURL && embedderURLInput) embedderURLInput.value = '';
+        }
+
+        if (fallbackProvider === '') {
+            if (fallbackURLContainer) fallbackURLContainer.style.display = 'none';
+            if (fallbackAPIKeyContainer) fallbackAPIKeyContainer.style.display = 'none';
+            if (fallbackURLInput) fallbackURLInput.value = '';
+        } else {
+            if (fallbackURLContainer) fallbackURLContainer.style.display = showFallbackURL ? 'block' : 'none';
+            if (fallbackAPIKeyContainer) fallbackAPIKeyContainer.style.display = isLocalFallback ? 'none' : 'block';
+            if (!showFallbackURL && fallbackURLInput) fallbackURLInput.value = '';
         }
     }
 
@@ -972,6 +998,22 @@
             url: document.getElementById('chat-settings-embedder-url')?.value.trim() || ''
         };
         runEmbedderConnectionTest(payload, 'chat-settings-embedder-test-status');
+    }
+
+    function testChatSettingsFallbackConnection() {
+        const providerValue = document.getElementById('chat-settings-fallback-overlay')?.value || '';
+        const parts = splitProviderValue(providerValue);
+        if (!parts.provider) {
+            showAlert('Please choose a fallback provider first.');
+            return;
+        }
+        const payload = {
+            provider: parts.provider,
+            model: parts.model,
+            api_key: document.getElementById('chat-settings-fallback-api-key')?.value.trim() || '',
+            url: document.getElementById('chat-settings-fallback-url')?.value.trim() || ''
+        };
+        runLLMConnectionTest(payload, 'chat-settings-fallback-test-status');
     }
 
     function testSetupBrainConnection() {

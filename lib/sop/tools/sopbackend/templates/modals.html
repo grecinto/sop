@@ -374,7 +374,33 @@
             <input type="password" id="chat-settings-embedder-api-key" placeholder="Enter API Key securely" style="width: 100%; padding: 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color);" onchange="persistChatSettingsDraft()">
         </div>
         <div id="chat-settings-embedder-test-status" style="display: none; margin-bottom: 10px; font-size: 12px;"></div>
+        <h4 style="margin-top: 16px; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">
+            Fallback Provider (Optional)
+            <span style="font-weight: normal; font-size: 11px; color: var(--text-muted);">⚡ Auto-switch if primary fails</span>
+        </h4>
+        <div style="margin-bottom: 10px;">
+            <p style="color: var(--text-muted); font-size: 11px; margin: 0 0 8px 0;">
+                Configure a backup LLM provider. If the primary provider fails (rate limit, outage), requests automatically fall back to this provider.
+            </p>
+        </div>
+        <div style="margin-bottom: 10px;">
+            <label style="display: block; margin-bottom: 4px; font-weight: bold;">Provider / Model</label>
+            <select id="chat-settings-fallback-overlay" style="width: 100%; padding: 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color);" onchange="handleChatSettingsFallbackChange()">
+                <option value="">None (No Fallback)</option>
+                {{template "llmOptions" .}}
+            </select>
+        </div>
+        <div id="chat-settings-fallback-url-container" style="margin-bottom: 10px; display: none;">
+            <label style="display: block; margin-bottom: 4px; font-weight: bold;">Base URL</label>
+            <input type="text" id="chat-settings-fallback-url" placeholder="http://localhost:11434" style="width: 100%; padding: 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color);" onchange="persistChatSettingsDraft()">
+        </div>
+        <div id="chat-settings-fallback-apikey-container" style="margin-bottom: 10px; display: none;">
+            <label style="display: block; margin-bottom: 4px; font-weight: bold;">API Key (Auth Token)</label>
+            <input type="password" id="chat-settings-fallback-api-key" placeholder="Enter API Key securely" style="width: 100%; padding: 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color);" onchange="persistChatSettingsDraft()">
+        </div>
+        <div id="chat-settings-fallback-test-status" style="display: none; margin-bottom: 10px; font-size: 12px;"></div>
         <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 15px;">
+            <button onclick="testChatSettingsFallbackConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Fallback</button>
             <button onclick="testChatSettingsEmbedderConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Embedder</button>
             <button onclick="testChatSettingsConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Connection</button>
             <button onclick="toggleChatSettings()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Cancel</button>

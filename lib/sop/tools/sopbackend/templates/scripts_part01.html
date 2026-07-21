@@ -516,6 +516,10 @@
         if (cfg.embedder_api_key) headers['X-Embedder-API-Key'] = cfg.embedder_api_key;
         if (cfg.embedder_url) headers['X-Embedder-URL'] = cfg.embedder_url;
         if (cfg.embedder_model) headers['X-Embedder-Model'] = cfg.embedder_model;
+        if (cfg.fallback_provider) headers['X-LLM-Fallback-Provider'] = cfg.fallback_provider;
+        if (cfg.fallback_api_key) headers['X-LLM-Fallback-API-Key'] = cfg.fallback_api_key;
+        if (cfg.fallback_url) headers['X-LLM-Fallback-URL'] = cfg.fallback_url;
+        if (cfg.fallback_model) headers['X-LLM-Fallback-Model'] = cfg.fallback_model;
         return headers;
     }
 

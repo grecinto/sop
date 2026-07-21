@@ -122,10 +122,17 @@ func (g *chatgpt) Generate(ctx context.Context, prompt string, opts ai.GenOption
 		messages = append(messages, openAIMessage{Role: "user", Content: contentParts})
 	}
 
+	// GUARDRAIL: Strict temperature control for deterministic code generation
+	// Default to 0.1 for consistent, deterministic responses unless explicitly overridden
+	temperature := opts.Temperature
+	if temperature == 0 && !opts.ForceTemperature {
+		temperature = 0.1
+	}
+
 	reqBody := openAIRequest{
 		Model:       g.model,
 		Messages:    messages,
-		Temperature: opts.Temperature,
+		Temperature: temperature,
 	}
 
 	// GPT-5+ and o-series models use max_completion_tokens instead of max_tokens

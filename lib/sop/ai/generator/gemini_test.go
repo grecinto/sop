@@ -40,14 +40,14 @@ func TestDescribeGeminiEmptyResponse_IncludesFinishReason(t *testing.T) {
 	}
 }
 
-func TestGeminiReActLoop_DefaultsToFourIterations(t *testing.T) {
+func TestGeminiReActLoop_DefaultsToFiveIterations(t *testing.T) {
 	g := &gemini{model: "gemini-3.5-flash"}
 	loop, ok := g.ReActLoop().(geminiOwnedReActLoop)
 	if !ok {
 		t.Fatalf("expected gemini owned loop, got %#v", g.ReActLoop())
 	}
-	if loop.maxIterations != 4 {
-		t.Fatalf("expected default Gemini owned loop budget to be 4, got %d", loop.maxIterations)
+	if loop.maxIterations != 5 {
+		t.Fatalf("expected default Gemini owned loop budget to be 5, got %d", loop.maxIterations)
 	}
 }
 

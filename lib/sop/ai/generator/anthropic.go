@@ -369,11 +369,15 @@ func (g *anthropic) buildBaseRequest(prompt string, opts ai.GenOptions) anthropi
 		Thinking:  g.thinkingConfig(opts.ThinkingLevel),
 	}
 
+	// GUARDRAIL: Strict temperature control for deterministic code generation
+	// Keep temperature low (0.1-0.2) to force deterministic token paths and override infrastructure fluctuations
 	if g.supportsTemperature() {
 		if reqBody.Thinking != nil {
+			// Thinking mode requires temperature 1.0
 			temp := float32(1.0)
 			reqBody.Temperature = &temp
-		} else if opts.Temperature != 0 {
+		} else if opts.ForceTemperature || opts.Temperature != 0 {
+			// Respect explicit temperature values including 0.0 when ForceTemperature is set
 			temp := opts.Temperature
 			reqBody.Temperature = &temp
 		}

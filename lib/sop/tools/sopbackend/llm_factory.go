@@ -40,6 +40,33 @@ func resolveLLMSettings(r *http.Request) llmSettings {
 	return settings
 }
 
+func resolveFallbackSettings(r *http.Request) *llmSettings {
+	if r == nil {
+		return nil
+	}
+
+	provider := r.Header.Get("X-LLM-Fallback-Provider")
+	if provider == "" {
+		return nil
+	}
+
+	settings := &llmSettings{
+		Provider: provider,
+	}
+
+	if h := r.Header.Get("X-LLM-Fallback-API-Key"); h != "" {
+		settings.APIKey = h
+	}
+	if h := r.Header.Get("X-LLM-Fallback-URL"); h != "" {
+		settings.URL = h
+	}
+	if h := r.Header.Get("X-LLM-Fallback-Model"); h != "" {
+		settings.Model = h
+	}
+
+	return settings
+}
+
 func newConfiguredLLM(settings llmSettings) (ai.Generator, error) {
 	provider := settings.Provider
 	options := make(map[string]any)
@@ -81,19 +108,35 @@ func newConfiguredLLM(settings llmSettings) (ai.Generator, error) {
 
 // GetConfiguredLLM returns an AI Generator based on the server configuration.
 // It checks the HTTP request headers first, then falls back to server config defaults.
+// If a fallback provider is configured via X-LLM-Fallback-* headers, it wraps the
+// primary and fallback generators in a FallbackGenerator for automatic failover.
 func GetConfiguredLLM(r *http.Request) ai.Generator {
 	if !config.ProductionMode {
 		mockGen, _ := generator.New("perceptron", nil)
 		return mockGen
 	}
 
-	gen, err := newConfiguredLLM(resolveLLMSettings(r))
+	primarySettings := resolveLLMSettings(r)
+	primary, err := newConfiguredLLM(primarySettings)
 	if err != nil {
 		mockGen, _ := generator.New("perceptron", nil)
 		return mockGen
 	}
 
-	return gen
+	// Check for fallback configuration
+	fallbackSettings := resolveFallbackSettings(r)
+	if fallbackSettings == nil {
+		return primary
+	}
+
+	fallback, err := newConfiguredLLM(*fallbackSettings)
+	if err != nil {
+		// If fallback fails to initialize, just return primary
+		return primary
+	}
+
+	// Wrap in FallbackGenerator for automatic failover
+	return generator.NewFallbackGenerator(primary, []ai.Generator{fallback})
 }
 
 // summarizerLLMClient is an adapter that makes ai.Generator implement LLMClient
