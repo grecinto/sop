@@ -17,6 +17,7 @@ const sidebars: SidebarsConfig = {
     'intro',
     'fleet-learning',
     'green-earth-tech',
+    'ai-studio-memory-advantage',
     {
       type: 'category',
       label: 'SDK Documentation',

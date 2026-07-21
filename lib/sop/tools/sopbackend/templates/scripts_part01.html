@@ -1659,6 +1659,349 @@
               .replace(/\r/g, '&#13;');
 };
 
+    window.normalizeWorkflowStep = function(step, index) {
+        if (!step || typeof step !== 'object') {
+            return { stepNumber: index + 1, title: '', instructions: '', requiredContext: [], successCriteria: [], iterationPolicy: '', toolsExpected: [] };
+        }
+        const rawStepNumber = step.step ?? step.Step ?? step.number ?? step.Number ?? step.order ?? index + 1;
+        const parsedStepNumber = Number(rawStepNumber);
+        const stepNumber = Number.isFinite(parsedStepNumber) && parsedStepNumber > 0 ? parsedStepNumber : index + 1;
+        const title = String(step.title || step.Title || step.name || step.label || '').trim();
+        const instructions = String(step.instructions || step.Instructions || '').trim();
+        const requiredContext = Array.isArray(step.required_context || step.requiredContext)
+            ? (step.required_context || step.requiredContext).filter(Boolean)
+            : (step.required_context || step.requiredContext ? String(step.required_context || step.requiredContext).split(',').map(item => item.trim()).filter(Boolean) : []);
+        const successCriteria = Array.isArray(step.success_criteria || step.successCriteria)
+            ? (step.success_criteria || step.successCriteria).filter(Boolean)
+            : (step.success_criteria || step.successCriteria ? String(step.success_criteria || step.successCriteria).split(';').map(item => item.trim()).filter(Boolean) : []);
+        const iterationPolicy = String(step.iteration_policy || step.iterationPolicy || '').trim();
+        const toolsExpected = Array.isArray(step.tools_expected || step.toolsExpected)
+            ? (step.tools_expected || step.toolsExpected).filter(Boolean)
+            : (step.tools_expected || step.toolsExpected ? String(step.tools_expected || step.toolsExpected).split(',').map(item => item.trim()).filter(Boolean) : []);
+        return { stepNumber, title, instructions, requiredContext, successCriteria, iterationPolicy, toolsExpected };
+    };
+
+    function createBlankWorkflowStudioStep(stepNumber) {
+        return {
+            stepNumber: stepNumber,
+            title: '',
+            instructions: '',
+            requiredContext: [],
+            successCriteria: [],
+            iterationPolicy: '',
+            toolsExpected: []
+        };
+    }
+
+    function getWorkflowStudioState(item, fallbackTitle) {
+        const workflowPayload = item && typeof item === 'object'
+            ? (item.workflow_template || item.workflowTemplate || (item.data && (item.data.workflow_template || item.data.workflowTemplate)) || null)
+            : null;
+        const workflowName = String(item && typeof item === 'object'
+            ? (item.workflow_name || item.workflowName || (item.data && (item.data.workflow_name || item.data.workflowName)) || (workflowPayload && workflowPayload.name) || fallbackTitle || 'Workflow')
+            : (workflowPayload && workflowPayload.name) || fallbackTitle || 'Workflow').trim();
+        const workflowDescription = String(item && typeof item === 'object'
+            ? (item.workflow_description || item.workflowDescription || (item.data && (item.data.workflow_description || item.data.workflowDescription)) || (workflowPayload && workflowPayload.description) || '')
+            : (workflowPayload && workflowPayload.description) || '').trim();
+        const workflowProtocol = String(item && typeof item === 'object'
+            ? (item.protocol_guidance || item.protocolGuidance || (item.data && (item.data.protocol_guidance || item.data.protocolGuidance)) || (workflowPayload && workflowPayload.protocol_guidance) || '')
+            : (workflowPayload && workflowPayload.protocol_guidance) || '').trim();
+        const rawSteps = Array.isArray(workflowPayload && workflowPayload.steps)
+            ? workflowPayload.steps
+            : (Array.isArray(item && item.workflow_steps) ? item.workflow_steps : (Array.isArray(item && item.steps) ? item.steps : []));
+        const steps = rawSteps.map((step, idx) => window.normalizeWorkflowStep(step, idx)).sort((a, b) => {
+            if (a.stepNumber !== b.stepNumber) return a.stepNumber - b.stepNumber;
+            return a.title.localeCompare(b.title);
+        });
+        const normalizedSteps = steps.length > 0 ? steps.map((step, index) => ({
+            stepNumber: step.stepNumber || index + 1,
+            title: step.title || '',
+            instructions: step.instructions || '',
+            requiredContext: Array.isArray(step.requiredContext) ? step.requiredContext.slice() : [],
+            successCriteria: Array.isArray(step.successCriteria) ? step.successCriteria.slice() : [],
+            iterationPolicy: step.iterationPolicy || '',
+            toolsExpected: Array.isArray(step.toolsExpected) ? step.toolsExpected.slice() : []
+        })) : [createBlankWorkflowStudioStep(1)];
+
+        if (!window._workflowStudioState || !window._workflowStudioState.item || !item || (item.id && window._workflowStudioState.item && window._workflowStudioState.item.id !== item.id)) {
+            window._workflowStudioState = {
+                item: item || null,
+                fallbackTitle: fallbackTitle || 'Workflow',
+                workflow: {
+                    name: workflowName,
+                    description: workflowDescription,
+                    protocolGuidance: workflowProtocol,
+                    steps: normalizedSteps
+                },
+                selectedIndex: 0
+            };
+        }
+
+        if (!window._workflowStudioState.workflow) {
+            window._workflowStudioState.workflow = {
+                name: workflowName,
+                description: workflowDescription,
+                protocolGuidance: workflowProtocol,
+                steps: normalizedSteps
+            };
+        }
+        if (!window._workflowStudioState.workflow.steps || window._workflowStudioState.workflow.steps.length === 0) {
+            window._workflowStudioState.workflow.steps = normalizedSteps;
+        }
+        if (typeof window._workflowStudioState.selectedIndex !== 'number' || window._workflowStudioState.selectedIndex < 0) {
+            window._workflowStudioState.selectedIndex = 0;
+        }
+        if (window._workflowStudioState.selectedIndex >= window._workflowStudioState.workflow.steps.length) {
+            window._workflowStudioState.selectedIndex = window._workflowStudioState.workflow.steps.length - 1;
+        }
+        return window._workflowStudioState;
+    }
+
+    window.renderWorkflowStudioModal = function(item, fallbackTitle) {
+        const state = getWorkflowStudioState(item, fallbackTitle);
+        const body = document.getElementById('workflow-studio-body');
+        if (!body) return;
+
+        const selectedIndex = state.selectedIndex >= 0 ? state.selectedIndex : 0;
+        const selectedStep = state.workflow.steps[selectedIndex] || createBlankWorkflowStudioStep(1);
+        const stepListHtml = (state.workflow.steps || []).map((step, index) => {
+            const isActive = index === selectedIndex;
+            return `
+                <button type="button" data-step-index="${index}" onclick="window.selectWorkflowStudioStep(${index})" style="text-align:left; border:1px solid ${isActive ? 'var(--active-bg)' : 'var(--border-color)'}; border-radius:8px; padding:10px; background:${isActive ? 'rgba(91,110,209,0.12)' : 'var(--bg-color)'}; color:var(--text-color); cursor:pointer; display:flex; flex-direction:column; gap:3px;">
+                    <div style="font-size:0.72em; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:var(--key-color);">Step ${window.escapeHTML(step.stepNumber || index + 1)}</div>
+                    <div style="font-size:0.9em; font-weight:600;">${window.escapeHTML(step.title || `Step ${index + 1}`)}</div>
+                </button>
+            `;
+        }).join('');
+
+        body.innerHTML = `
+            <div style="display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden; border:1px solid var(--border-color); border-radius:8px; padding:10px; background:var(--secondary-bg);">
+                <div style="font-size:0.85em; font-weight:700; color:var(--text-color);">Workflow overview</div>
+                <label style="font-size:0.8em; color:var(--text-muted);">Workflow name</label>
+                <input id="workflow-studio-name" type="text" value="${window.escapeHTML(state.workflow.name || 'Untitled workflow')}" oninput="window.updateWorkflowStudioField('name', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                <label style="font-size:0.8em; color:var(--text-muted);">Description</label>
+                <textarea id="workflow-studio-description" oninput="window.updateWorkflowStudioField('description', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(state.workflow.description || '')}</textarea>
+                <label style="font-size:0.8em; color:var(--text-muted);">Protocol guidance</label>
+                <textarea id="workflow-studio-protocol" oninput="window.updateWorkflowStudioField('protocolGuidance', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(state.workflow.protocolGuidance || '')}</textarea>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden; border:1px solid var(--border-color); border-radius:8px; padding:10px; background:var(--secondary-bg);">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                    <div style="font-size:0.85em; font-weight:700; color:var(--text-color);">Workflow steps</div>
+                    <button type="button" id="workflow-studio-add-step-btn" onclick="window.addWorkflowStudioStep()" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer;">Add step</button>
+                </div>
+                <div id="workflow-studio-step-list" style="display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-right:2px;">${stepListHtml || '<div style="font-size:0.85em; color:var(--text-muted);">No steps yet. Add one to start editing the workflow.</div>'}</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden; border:1px solid var(--border-color); border-radius:8px; padding:10px; background:var(--secondary-bg);">
+                <div style="font-size:0.85em; font-weight:700; color:var(--text-color);">Step details</div>
+                <label style="font-size:0.8em; color:var(--text-muted);">Step title</label>
+                <input type="text" value="${window.escapeHTML(selectedStep.title || '')}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'title', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                <label style="font-size:0.8em; color:var(--text-muted);">Instructions</label>
+                <textarea oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'instructions', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(selectedStep.instructions || '')}</textarea>
+                <label style="font-size:0.8em; color:var(--text-muted);">Required context (comma separated)</label>
+                <input type="text" value="${window.escapeHTML((selectedStep.requiredContext || []).join(', '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'requiredContext', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                <label style="font-size:0.8em; color:var(--text-muted);">Success criteria (semicolon separated)</label>
+                <input type="text" value="${window.escapeHTML((selectedStep.successCriteria || []).join('; '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'successCriteria', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                <label style="font-size:0.8em; color:var(--text-muted);">Iteration policy</label>
+                <input type="text" value="${window.escapeHTML(selectedStep.iterationPolicy || '')}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'iterationPolicy', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                <label style="font-size:0.8em; color:var(--text-muted);">Tools expected (comma separated)</label>
+                <input type="text" value="${window.escapeHTML((selectedStep.toolsExpected || []).join(', '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'toolsExpected', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                <div style="display:flex; justify-content:flex-end; margin-top:4px;">
+                    <button type="button" id="workflow-studio-save-btn" onclick="window.saveWorkflowStudioChanges()" style="padding:8px 14px; border:none; border-radius:6px; background:var(--active-bg); color:#fff; cursor:pointer;">Save workflow</button>
+                </div>
+            </div>
+        `;
+        openUIModal('workflow-studio-modal');
+    };
+
+    window.openWorkflowStudioModal = function(item, fallbackTitle) {
+        window.renderWorkflowStudioModal(item, fallbackTitle);
+    };
+
+    window.openWorkflowStudioModalById = function(itemId) {
+        const item = window._workflowStudioItemById && window._workflowStudioItemById[itemId];
+        if (item) {
+            window.openWorkflowStudioModal(item, itemId || 'Workflow');
+        }
+    };
+
+    window.selectWorkflowStudioStep = function(index) {
+        const state = window._workflowStudioState;
+        if (!state || !state.workflow || !state.workflow.steps) {
+            return;
+        }
+        if (index < 0) {
+            index = 0;
+        }
+        if (index >= state.workflow.steps.length) {
+            index = state.workflow.steps.length - 1;
+        }
+        state.selectedIndex = index;
+        window.renderWorkflowStudioModal(state.item, state.fallbackTitle);
+    };
+
+    window.addWorkflowStudioStep = function() {
+        const state = window._workflowStudioState;
+        if (!state || !state.workflow) {
+            return;
+        }
+        const nextIndex = (state.workflow.steps || []).length;
+        state.workflow.steps.push(createBlankWorkflowStudioStep(nextIndex + 1));
+        state.selectedIndex = state.workflow.steps.length - 1;
+        window.renderWorkflowStudioModal(state.item, state.fallbackTitle);
+    };
+
+    window.updateWorkflowStudioField = function(field, value) {
+        const state = window._workflowStudioState;
+        if (!state || !state.workflow) {
+            return;
+        }
+        if (field === 'name') {
+            state.workflow.name = value;
+        } else if (field === 'description') {
+            state.workflow.description = value;
+        } else if (field === 'protocolGuidance') {
+            state.workflow.protocolGuidance = value;
+        }
+    };
+
+    window.updateWorkflowStudioStepField = function(index, field, value) {
+        const state = window._workflowStudioState;
+        if (!state || !state.workflow || !state.workflow.steps || !state.workflow.steps[index]) {
+            return;
+        }
+        const step = state.workflow.steps[index];
+        if (field === 'title') {
+            step.title = value;
+        } else if (field === 'instructions') {
+            step.instructions = value;
+        } else if (field === 'requiredContext') {
+            step.requiredContext = String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+        } else if (field === 'successCriteria') {
+            step.successCriteria = String(value || '').split(';').map(item => item.trim()).filter(Boolean);
+        } else if (field === 'iterationPolicy') {
+            step.iterationPolicy = value;
+        } else if (field === 'toolsExpected') {
+            step.toolsExpected = String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+        }
+    };
+
+    window.saveWorkflowStudioChanges = async function() {
+        const state = window._workflowStudioState;
+        if (!state || !state.item || !state.workflow) {
+            return;
+        }
+
+        const item = state.item;
+        const categoryId = (item.category_id || item.category || '').toString();
+        const workflowName = String(state.workflow.name || 'Untitled workflow').trim();
+        const workflowDescription = String(state.workflow.description || '').trim();
+        const workflowProtocolGuidance = String(state.workflow.protocolGuidance || '').trim();
+        const workflowStepsPayload = (state.workflow.steps || []).map((step, idx) => {
+            const parsedStepNumber = Number(step.stepNumber || idx + 1);
+            const payloadStep = {
+                step: Number.isFinite(parsedStepNumber) && parsedStepNumber > 0 ? parsedStepNumber : idx + 1,
+                title: String(step.title || `Step ${idx + 1}`).trim()
+            };
+            if (step.instructions) {
+                payloadStep.instructions = step.instructions;
+            }
+            if (step.requiredContext && step.requiredContext.length > 0) {
+                payloadStep.required_context = step.requiredContext;
+            }
+            if (step.successCriteria && step.successCriteria.length > 0) {
+                payloadStep.success_criteria = step.successCriteria;
+            }
+            if (step.iterationPolicy) {
+                payloadStep.iteration_policy = step.iterationPolicy;
+            }
+            if (step.toolsExpected && step.toolsExpected.length > 0) {
+                payloadStep.tools_expected = step.toolsExpected;
+            }
+            return payloadStep;
+        });
+
+        const payload = {
+            id: item.id,
+            category_id: categoryId,
+            data: {
+                workflow_template: {
+                    name: workflowName,
+                    description: workflowDescription || `Workflow template: ${workflowName}`,
+                    protocol_guidance: workflowProtocolGuidance,
+                    steps: workflowStepsPayload
+                },
+                workflow_name: workflowName,
+                workflow_description: workflowDescription,
+                protocol_guidance: workflowProtocolGuidance,
+                workflow_step_count: workflowStepsPayload.length,
+                description: workflowDescription || (item.description || `Workflow template: ${workflowName}`)
+            }
+        };
+
+        try {
+            const kbNameDisplay = window.currentStore ? window.currentStore.replace('/data', '') : (currentStore ? currentStore.replace('/data', '') : '');
+            const dbNameDisplay = window.currentDatabase || currentDatabase || '';
+            const res = await authFetch(`/api/spaces/item/update?name=${encodeURIComponent(kbNameDisplay)}&database=${encodeURIComponent(dbNameDisplay)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                throw new Error(await res.text());
+            }
+            closeUIModal('workflow-studio-modal');
+            if (typeof window.showAlert === 'function') {
+                window.showAlert('Workflow saved successfully.');
+            }
+            if (window._lastFetchItemsArgs) {
+                const args = window._lastFetchItemsArgs;
+                window.fetchItemsForCategory(args.spaceName, args.categoryId, args.categoryName, args.liElement, args.catObj);
+            } else if (window.currentStore) {
+                selectSpace(window.currentStore.replace('/data', ''), document.querySelector('#sidebar li.active'));
+            }
+        } catch (err) {
+            if (typeof window.showAlert === 'function') {
+                window.showAlert('Failed to save workflow: ' + (err && err.message ? err.message : err));
+            }
+        }
+    };
+
+    window.renderWorkflowCardHtml = function(item, fallbackTitle) {
+        const workflowPayload = item && typeof item === 'object'
+            ? (item.workflow_template || item.workflowTemplate || (item.data && (item.data.workflow_template || item.data.workflowTemplate)) || null)
+            : null;
+        const workflowName = String(item && typeof item === 'object'
+            ? (item.workflow_name || item.workflowName || (item.data && (item.data.workflow_name || item.data.workflowName)) || (workflowPayload && workflowPayload.name) || fallbackTitle || 'Workflow')
+            : (workflowPayload && workflowPayload.name) || fallbackTitle || 'Workflow').trim();
+        const workflowDescription = String(item && typeof item === 'object'
+            ? (item.workflow_description || item.workflowDescription || (item.data && (item.data.workflow_description || item.data.workflowDescription)) || (workflowPayload && workflowPayload.description) || '')
+            : (workflowPayload && workflowPayload.description) || '').trim();
+        const workflowProtocol = String(item && typeof item === 'object'
+            ? (item.protocol_guidance || item.protocolGuidance || (item.data && (item.data.protocol_guidance || item.data.protocolGuidance)) || (workflowPayload && workflowPayload.protocol_guidance) || '')
+            : (workflowPayload && workflowPayload.protocol_guidance) || '').trim();
+        const rawSteps = Array.isArray(workflowPayload && workflowPayload.steps)
+            ? workflowPayload.steps
+            : (Array.isArray(item && item.workflow_steps) ? item.workflow_steps : (Array.isArray(item && item.steps) ? item.steps : []));
+        const steps = rawSteps.map((step, idx) => window.normalizeWorkflowStep(step, idx)).sort((a, b) => {
+            if (a.stepNumber !== b.stepNumber) return a.stepNumber - b.stepNumber;
+            return a.title.localeCompare(b.title);
+        });
+        if (!steps.length) {
+            return '';
+        }
+        const stepCardsHtml = steps.map(step => {
+            const titleHtml = step.title ? `<div style="font-size:0.92em; font-weight:600; color:var(--text-color); margin-bottom:6px;">${window.escapeHTML(step.title)}</div>` : '';
+            const instructionHtml = step.instructions ? `<div style="font-size:0.8em; color:var(--text-muted); line-height:1.4; margin-bottom:6px;">${window.escapeHTML(step.instructions)}</div>` : '';
+            const contextHtml = step.requiredContext.length > 0 ? `<div style="font-size:0.75em; color:var(--link-color); margin-top:4px;">Context: ${window.escapeHTML(step.requiredContext.join(', '))}</div>` : '';
+            const criteriaHtml = step.successCriteria.length > 0 ? `<div style="font-size:0.75em; color:var(--text-muted); margin-top:3px;">Success: ${window.escapeHTML(step.successCriteria.join(' • '))}</div>` : '';
+            const iterationHtml = step.iterationPolicy ? `<div style="font-size:0.75em; color:var(--text-muted); margin-top:3px;">Iteration: ${window.escapeHTML(step.iterationPolicy)}</div>` : '';
+            return `<div class="workflow-step-card" style="display:flex; flex-direction:column; gap:4px; min-width:180px; flex:1 1 220px; padding:10px; border:1px solid var(--border-color); border-radius:8px; background:rgba(91,110,209,0.06); box-sizing:border-box;"><div style="font-size:0.72em; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:var(--key-color);">Step ${window.escapeHTML(step.stepNumber)}</div>${titleHtml}${instructionHtml}${contextHtml}${criteriaHtml}${iterationHtml}</div>`;
+        }).join('');
+        const descriptionHtml = workflowDescription ? `<div style="font-size:0.84em; color:var(--text-muted); margin-bottom:10px; line-height:1.45;">${window.escapeHTML(workflowDescription)}</div>` : '';
+        const protocolHtml = workflowProtocol ? `<div style="font-size:0.78em; color:var(--text-muted); margin-bottom:10px;">Protocol: ${window.escapeHTML(workflowProtocol)}</div>` : '';
+        return `<div class="workflow-card" style="display:flex; flex-direction:column; gap:8px; padding:10px; border:1px solid rgba(91,110,209,0.24); border-radius:10px; background:linear-gradient(180deg, rgba(91,110,209,0.06), rgba(255,255,255,0.02));"><div style="font-size:0.86em; font-weight:700; color:var(--key-color); margin-bottom:2px;">${window.escapeHTML(workflowName)}</div>${descriptionHtml}${protocolHtml}<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:8px;">${stepCardsHtml}</div></div>`;
+    };
+
     window.normalizeDocIDs = function(docID) {
         if (Array.isArray(docID)) {
             return docID.filter(Boolean);
@@ -3145,6 +3488,17 @@
                     const archivedAt = (t.archived_at || t.archivedAt || (t.data && (t.data.archived_at || t.data.archivedAt)) || '').toString();
                     const mediaPreviewHtml = window.getItemMediaPreviewHtml(t, primaryDocID);
                     const displayMode = window._spaceItemDisplayMode || 'text';
+                    const workflowCardHtml = window.renderWorkflowCardHtml(t, (t.summaries && t.summaries.length > 0 ? t.summaries[0] : (t.id ? t.id.substring(0,8) : "Unnamed Item")));
+                    const hasWorkflowData = Boolean(t.workflow_template || t.workflowTemplate || (t.data && (t.data.workflow_template || t.data.workflowTemplate)) || t.workflow_name || t.workflowName || (t.data && (t.data.workflow_name || t.data.workflowName)) || t.workflow_steps || t.steps);
+                    if (t && t.id) {
+                        window._workflowStudioItemById = window._workflowStudioItemById || {};
+                        window._workflowStudioItemById[t.id] = t;
+                    }
+                    const workflowStudioActionHtml = hasWorkflowData ? `
+                        <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+                            <button type="button" class="workflow-studio-open-btn" id="workflow-studio-open-btn-${window.escapeHTML(t.id || '')}" data-item-id="${window.escapeHTML(t.id || '')}" onclick="window.openWorkflowStudioModalById(this.getAttribute('data-item-id'))" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer;">Open Studio</button>
+                        </div>
+                    ` : '';
                     let descHtml = '';
                     if (isLongDesc) {
                         descHtml = `
@@ -3191,7 +3545,7 @@
                         `;
                     }
 
-                    const contentBodyHtml = displayMode === 'icon' && mediaPreviewHtml ? mediaPreviewHtml : descHtml;
+                    const contentBodyHtml = workflowCardHtml || (displayMode === 'icon' && mediaPreviewHtml ? mediaPreviewHtml : descHtml);
 
                     contentHtml += `
                         <div class="kb-item-card" data-preview-ref="${window.escapeHTML(itemRef)}" style="width: 100%; box-sizing: border-box; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 15px; background: var(--bg-color); box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: inline-block; margin-bottom: 15px; break-inside: avoid; transition: transform 0.2s, box-shadow 0.2s; cursor: pointer;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 8px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.05)';">
@@ -3205,6 +3559,7 @@
                             <div style="font-size: 1.15em; font-weight: 600; margin-bottom: 10px; color: var(--text-color);">
                                 ${t.summaries && t.summaries.length > 0 ? t.summaries[0].substring(0, 50).replace(/</g, '&lt;') : (t.id ? t.id.substring(0,8) : "Unnamed Item")}
                             </div>
+                            ${workflowStudioActionHtml}
                             <div style="font-size: 0.9em; flex: 1; color: var(--text-muted); line-height: 1.5; margin-bottom: 15px; word-break: break-word; display: flex; flex-direction: column;">
                                 ${contentBodyHtml}
                             </div>

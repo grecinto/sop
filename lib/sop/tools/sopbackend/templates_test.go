@@ -3,12 +3,18 @@ package sopbackend
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func templatePath(parts ...string) string {
-	return filepath.Join(append([]string{"templates"}, parts...)...)
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return filepath.Join(append([]string{"templates"}, parts...)...)
+	}
+	packageDir := filepath.Dir(filename)
+	return filepath.Join(append([]string{packageDir, "templates"}, parts...)...)
 }
 
 func TestMediaPreviewRendererIsDefinedInTemplate(t *testing.T) {
@@ -180,6 +186,58 @@ func TestSpaceItemScriptsExposeWorkflowPreviewHelpers(t *testing.T) {
 	for _, token := range []string{"toggleSpaceItemMode", "renderWorkflowDefinitionPreview"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected workflow authoring helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestSpaceItemCardRendererSupportsWorkflowStepCards(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"workflow-step-card", "workflow-card", "renderWorkflowCardHtml"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected workflow card renderer token %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestWorkflowStudioModalAndRendererAreDefinedInTemplates(t *testing.T) {
+	modalsPath := templatePath("modals.html")
+	modalsData, err := os.ReadFile(modalsPath)
+	if err != nil {
+		t.Fatalf("read modal template: %v", err)
+	}
+	modalsContent := string(modalsData)
+	if !strings.Contains(modalsContent, "workflow-studio-modal") {
+		t.Fatalf("expected workflow studio modal container in %s", modalsPath)
+	}
+
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"renderWorkflowStudioModal", "openWorkflowStudioModal", "workflow-studio-open-btn"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected workflow studio renderer token %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestWorkflowStudioEditorExposesEditableActions(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"workflow-studio-save-btn", "workflow-studio-add-step-btn", "workflow-studio-step-list"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected workflow studio editor token %s in %s", token, scriptsPath)
 		}
 	}
 }

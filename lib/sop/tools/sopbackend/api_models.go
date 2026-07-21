@@ -52,24 +52,29 @@ type UpdateSpaceItemRequest struct {
 // SpaceItemView defines the JSON model delivered to the UI for displaying Items.
 // It acts as a ViewModel rendering data originally stored generically inside Item[T].
 type SpaceItemView struct {
-	ID                   string        `json:"id"`
-	DocID                memory.DocIDs `json:"doc_id,omitempty"`
-	CategoryID           string        `json:"category_id,omitempty"`
-	Category             string        `json:"category"`
-	Text                 string        `json:"text"`
-	Description          string        `json:"description"`
-	Summaries            []string      `json:"summaries,omitempty"`
-	Vector               []float32     `json:"vector,omitempty"`
-	VectorSize           int           `json:"vector_size,omitempty"`
-	ContentType          string        `json:"content_type,omitempty"`
-	StorageMode          string        `json:"storage_mode,omitempty"`
-	PayloadRef           string        `json:"payload_ref,omitempty"`
-	CloudProvider        string        `json:"cloud_provider,omitempty"`
-	LifecycleStatus      string        `json:"lifecycle_status,omitempty"`
-	LifecycleReason      string        `json:"lifecycle_reason,omitempty"`
-	ArchivedAt           int64         `json:"archived_at,omitempty"`
-	ArchiveReason        string        `json:"archive_reason,omitempty"`
-	LifecycleAccessCount int           `json:"lifecycle_access_count,omitempty"`
+	ID                   string         `json:"id"`
+	DocID                memory.DocIDs  `json:"doc_id,omitempty"`
+	CategoryID           string         `json:"category_id,omitempty"`
+	Category             string         `json:"category"`
+	Text                 string         `json:"text"`
+	Description          string         `json:"description"`
+	Summaries            []string       `json:"summaries,omitempty"`
+	Vector               []float32      `json:"vector,omitempty"`
+	VectorSize           int            `json:"vector_size,omitempty"`
+	ContentType          string         `json:"content_type,omitempty"`
+	StorageMode          string         `json:"storage_mode,omitempty"`
+	PayloadRef           string         `json:"payload_ref,omitempty"`
+	CloudProvider        string         `json:"cloud_provider,omitempty"`
+	LifecycleStatus      string         `json:"lifecycle_status,omitempty"`
+	LifecycleReason      string         `json:"lifecycle_reason,omitempty"`
+	ArchivedAt           int64          `json:"archived_at,omitempty"`
+	ArchiveReason        string         `json:"archive_reason,omitempty"`
+	LifecycleAccessCount int            `json:"lifecycle_access_count,omitempty"`
+	WorkflowName         string         `json:"workflow_name,omitempty"`
+	WorkflowDescription  string         `json:"workflow_description,omitempty"`
+	WorkflowStepCount    int            `json:"workflow_step_count,omitempty"`
+	ProtocolGuidance     string         `json:"protocol_guidance,omitempty"`
+	WorkflowTemplate     map[string]any `json:"workflow_template,omitempty"`
 }
 
 // TemplateMetadata defines the structure for space template info.

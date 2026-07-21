@@ -2048,6 +2048,103 @@ func TestHandleListSpaceItemsFallsBackToFilesystemRef(t *testing.T) {
 	}
 }
 
+func TestHandleListSpaceItemsExposesWorkflowTemplateFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbName := "testdb_list_workflow_template_fields"
+	spaceName := "test_space_list_workflow_template_fields"
+
+	config = Config{
+		RootPassword: SecuredString("secret_password"),
+		Databases: []DatabaseConfig{{
+			Name: dbName,
+			Path: tmpDir,
+			Mode: "standalone",
+		}},
+	}
+
+	sendJSON := func(method, url string, handler http.HandlerFunc, body interface{}) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, url, bytes.NewBuffer(b))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		handler(rr, req)
+		return rr
+	}
+
+	rr := sendJSON("POST", "/api/spaces/create", handleCreateSpace, CreateSpaceRequest{DatabaseName: dbName, SpaceName: spaceName})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to create space: %v", rr.Body.String())
+	}
+
+	rr = sendJSON("POST", "/api/spaces/category/add?database="+dbName+"&name="+spaceName, handleAddSpaceCategory, AddSpaceCategoryRequest{Name: "Workflow Root"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add category: %v", rr.Body.String())
+	}
+	var catRes map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&catRes); err != nil {
+		t.Fatalf("Failed to decode category response: %v", err)
+	}
+	categoryID := catRes["id"].(string)
+
+	workflowTemplate := map[string]any{
+		"name":              "Fix failing tests",
+		"description":       "Investigate the failing test output and apply a targeted fix.",
+		"protocol_guidance": "Inspect the failing output before changing code.",
+		"steps": []map[string]any{
+			{"step": 2, "title": "Inspect output", "instructions": "Read the failing test output", "actor": "assistant"},
+			{"step": 1, "title": "Reproduce issue", "instructions": "Run the relevant test", "actor": "assistant"},
+		},
+	}
+
+	rr = sendJSON("POST", "/api/spaces/item/add?database="+dbName+"&name="+spaceName, handleAddSpaceItem, AddSpaceItemRequest{
+		CategoryID: categoryID,
+		Summaries:  []string{"Fix failing tests"},
+		Data: map[string]any{
+			"text":                 "workflow item",
+			"description":          "workflow item description",
+			"workflow_name":        "Fix failing tests",
+			"workflow_description": "Investigate the failing test output and apply a targeted fix.",
+			"workflow_step_count":  2,
+			"protocol_guidance":    "Inspect the failing output before changing code.",
+			"workflow_template":    workflowTemplate,
+		},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Failed to add item: %v", rr.Body.String())
+	}
+
+	req, _ := http.NewRequest("GET", "/api/spaces/items?database="+dbName+"&name="+spaceName, nil)
+	rrGet := httptest.NewRecorder()
+	handleListSpaceItems(rrGet, req)
+	if rrGet.Code != http.StatusOK {
+		t.Fatalf("List returned wrong status: got %v body %s", rrGet.Code, rrGet.Body.String())
+	}
+
+	var listRes map[string]any
+	if err := json.NewDecoder(rrGet.Body).Decode(&listRes); err != nil {
+		t.Fatalf("Failed to decode list response: %v", err)
+	}
+	items := listRes["data"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("Expected 1 item after add, got %d", len(items))
+	}
+	item := items[0].(map[string]any)
+	if got := fmt.Sprint(item["workflow_name"]); got != "Fix failing tests" {
+		t.Fatalf("expected workflow_name to be exposed, got %q", got)
+	}
+	if got := fmt.Sprint(item["workflow_description"]); got != "Investigate the failing test output and apply a targeted fix." {
+		t.Fatalf("expected workflow_description to be exposed, got %q", got)
+	}
+	if got := fmt.Sprint(item["workflow_step_count"]); got != "2" {
+		t.Fatalf("expected workflow_step_count to be exposed, got %q", got)
+	}
+	if workflowTemplatePayload, ok := item["workflow_template"].(map[string]any); !ok {
+		t.Fatalf("expected workflow_template to be exposed as a map, got %#v", item["workflow_template"])
+	} else if _, ok := workflowTemplatePayload["steps"]; !ok {
+		t.Fatalf("expected workflow_template steps to be exposed, got %#v", workflowTemplatePayload)
+	}
+}
+
 func TestHandleAddSpaceCategoryPersistsLifecycleMetadata(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbName := "testdb_category_lifecycle_metadata"

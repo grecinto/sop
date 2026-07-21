@@ -241,6 +241,40 @@ func handleListSpaceItems(w http.ResponseWriter, r *http.Request) {
 				if lifecycleReason, found := payload["lifecycle_reason"]; found {
 					t.LifecycleReason = fmt.Sprint(lifecycleReason)
 				}
+				if workflowName, found := payload["workflow_name"]; found {
+					t.WorkflowName = fmt.Sprint(workflowName)
+				}
+				if workflowDescription, found := payload["workflow_description"]; found {
+					t.WorkflowDescription = fmt.Sprint(workflowDescription)
+				}
+				if workflowStepCount, found := payload["workflow_step_count"]; found {
+					switch v := workflowStepCount.(type) {
+					case int:
+						t.WorkflowStepCount = v
+					case int64:
+						t.WorkflowStepCount = int(v)
+					case float64:
+						t.WorkflowStepCount = int(v)
+					default:
+						if parsed, err := fmt.Sscanf(fmt.Sprint(v), "%d", &t.WorkflowStepCount); parsed > 0 && err == nil {
+							// keep parsed count
+						}
+					}
+				}
+				if protocolGuidance, found := payload["protocol_guidance"]; found {
+					t.ProtocolGuidance = fmt.Sprint(protocolGuidance)
+				}
+				if workflowTemplate, found := payload["workflow_template"]; found {
+					switch v := workflowTemplate.(type) {
+					case map[string]any:
+						t.WorkflowTemplate = v
+					case string:
+						var parsed map[string]any
+						if err := json.Unmarshal([]byte(v), &parsed); err == nil {
+							t.WorkflowTemplate = parsed
+						}
+					}
+				}
 				if archivedAt, found := payload["archived_at"]; found {
 					switch v := archivedAt.(type) {
 					case int64:
