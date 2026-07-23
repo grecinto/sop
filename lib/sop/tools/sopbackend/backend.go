@@ -30,7 +30,9 @@ func DefaultSessionGCBatchSize() int {
 
 func isReadOnlyContext(id string) bool {
 	lower := strings.ToLower(id)
-	return lower == "sop" || strings.HasPrefix(lower, "memory_")
+	normalized := strings.ReplaceAll(strings.ReplaceAll(lower, "_", " "), "-", " ")
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	return normalized == "core playbook" || normalized == "shared memory" || strings.HasPrefix(lower, "memory_") || strings.HasSuffix(lower, "_ltm") || strings.HasSuffix(lower, "_stm")
 }
 
 func registerBuiltinRBACBlueprints() {
@@ -52,6 +54,13 @@ func registerBuiltinRBACBlueprints() {
 			}
 
 			if isReadOnlyContext(entCtx.AssetID) && entCtx.IsSystemDB && (action == sop.ActionWrite || action == sop.ActionDelete) {
+				// Allow SystemAdmin to manage memory spaces via AI
+				auth := sop.GetAuthFromContext(ctx)
+				for _, role := range auth.Roles {
+					if strings.EqualFold(role, sop.RoleSystemAdmin) {
+						return true
+					}
+				}
 				return false
 			}
 			return true

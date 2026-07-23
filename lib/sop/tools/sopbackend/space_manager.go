@@ -353,7 +353,7 @@ func runIngestSpace(ctx context.Context, request IngestSpaceRequest, emb ai.Embe
 
 func shouldUseImportPathForPreload(templateID, preloadPath string) bool {
 	trimmed := strings.TrimSpace(templateID)
-	return strings.EqualFold(trimmed, ai.DefaultKBName) || strings.EqualFold(trimmed, "SOP") || strings.EqualFold(trimmed, "Core Playbook")
+	return strings.EqualFold(trimmed, ai.DefaultKBName) || strings.EqualFold(trimmed, "Core Playbook")
 }
 
 func builtinPreloadCandidates(templateID string) []string {
@@ -374,7 +374,7 @@ func builtinPreloadCandidates(templateID string) []string {
 			"../../lib/sop/medical.json",
 		)
 	}
-	if strings.Contains(normalized, "sop") || strings.Contains(normalized, "core playbook") {
+	if strings.Contains(normalized, "core playbook") {
 		candidates = append(candidates,
 			"sop_base_knowledge.json",
 			"ai/sop_base_knowledge.json",
@@ -492,7 +492,7 @@ func PreloadSpaceFromTemplate(ctx context.Context, templateID, databaseName stri
 		return fmt.Errorf("template_id and database_name are required")
 	}
 
-	if config.DisableSOPKBPreload && (strings.EqualFold(templateID, ai.DefaultKBName) || strings.EqualFold(templateID, "SOP") || strings.EqualFold(templateID, "Core Playbook")) {
+	if config.DisableSOPKBPreload && (strings.EqualFold(templateID, ai.DefaultKBName) || strings.EqualFold(templateID, "Core Playbook")) {
 		return fmt.Errorf("SOP KB preload is disabled by configuration")
 	}
 
@@ -537,7 +537,7 @@ func PreloadSpaceFromTemplate(ctx context.Context, templateID, databaseName stri
 		}
 	}
 
-	if actualPath == "" && (strings.EqualFold(templateID, ai.DefaultKBName) || strings.EqualFold(templateID, "SOP") || strings.EqualFold(templateID, "Core Playbook")) {
+	if actualPath == "" && (strings.EqualFold(templateID, ai.DefaultKBName) || strings.EqualFold(templateID, "Core Playbook")) {
 		isGoRun := strings.Contains(os.Args[0], "go-build") || strings.HasPrefix(os.Args[0], os.TempDir())
 		if isGoRun {
 			fmt.Printf("SOP Knowledge Base JSON not found. Auto-compiling since running in dev mode...\n")

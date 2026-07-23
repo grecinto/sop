@@ -66,6 +66,22 @@ func TestPinnedInternalKBSettings(t *testing.T) {
 		t.Fatalf("expected pinned internal KB embedder to be %q, got %q", "kelindar:nomic-embed-text-v1.5-q8_0", embedder)
 	}
 
+	embedder, readOnly = pinnedInternalKBSettings("Core Playbook")
+	if !readOnly {
+		t.Fatal("expected Core Playbook to be pinned read-only")
+	}
+	if embedder != "kelindar:nomic-embed-text-v1.5-q8_0" {
+		t.Fatalf("expected pinned internal KB embedder to be %q, got %q", "kelindar:nomic-embed-text-v1.5-q8_0", embedder)
+	}
+
+	embedder, readOnly = pinnedInternalKBSettings("Shared Memory")
+	if !readOnly {
+		t.Fatal("expected Shared Memory to be pinned read-only")
+	}
+	if embedder != "kelindar:nomic-embed-text-v1.5-q8_0" {
+		t.Fatalf("expected pinned internal KB embedder to be %q, got %q", "kelindar:nomic-embed-text-v1.5-q8_0", embedder)
+	}
+
 	embedder, readOnly = pinnedInternalKBSettings("Custom")
 	if readOnly {
 		t.Fatal("expected non-internal KB to remain editable")

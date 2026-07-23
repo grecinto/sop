@@ -1605,7 +1605,10 @@
             ? spaceName.replace(/\/data$/, '').replace(/_/g, ' ').replace(/-/g, ' ').toLowerCase().trim()
             : '';
         const normalized = cleanName.split(/\s+/).filter(Boolean).join(' ');
-        return normalized === 'sop' || normalized === 'sop kb' || normalized === 'sop knowledge base'
+        const lower = typeof spaceName === 'string' ? spaceName.replace(/\/data$/, '').toLowerCase() : '';
+        return normalized === 'core playbook' || normalized === 'core playbook kb' || normalized === 'core playbook knowledge base'
+            || normalized === 'shared memory'
+            || lower.endsWith('_ltm') || lower.endsWith('_stm')
             || normalized === 'medical' || normalized === 'medical kb' || normalized === 'medical knowledge base';
     }
 
@@ -1625,7 +1628,10 @@
             ? spaceName.replace(/\/data$/, '').replace(/_/g, ' ').replace(/-/g, ' ').toLowerCase().trim()
             : '';
         const normalized = cleanName.split(/\s+/).filter(Boolean).join(' ');
-        return normalized === 'sop' || normalized === 'sop kb' || normalized === 'sop knowledge base';
+        const lower = typeof spaceName === 'string' ? spaceName.replace(/\/data$/, '').toLowerCase() : '';
+        return normalized === 'core playbook' || normalized === 'core playbook kb' || normalized === 'core playbook knowledge base'
+            || normalized === 'shared memory'
+            || lower.endsWith('_ltm') || lower.endsWith('_stm');
     }
 
     window.toggleDomainItemDesc = function(link) {
@@ -1662,6 +1668,50 @@
               .replace(/\n/g, '&#10;')
               .replace(/\r/g, '&#13;');
 };
+
+    // Workflow helper functions
+    window.getWorkflowName = function(item) {
+        if (!item || typeof item !== 'object') return 'Untitled Workflow';
+        const data = item.data || item.payload || {};
+        return String(item.workflow_name || item.workflowName || data.workflow_name || data.workflowName || 
+               (item.workflow_template && item.workflow_template.name) || 
+               (data.workflow_template && data.workflow_template.name) || 
+               (item.summaries && item.summaries.length > 0 ? item.summaries[0] : '') || 'Untitled Workflow').trim();
+    };
+
+    window.getWorkflowDescription = function(item) {
+        if (!item || typeof item !== 'object') return '';
+        const data = item.data || item.payload || {};
+        return String(item.workflow_description || item.workflowDescription || data.workflow_description || data.workflowDescription || 
+               (item.workflow_template && item.workflow_template.description) || 
+               (data.workflow_template && data.workflow_template.description) || '').trim();
+    };
+
+    window.getWorkflowSteps = function(item) {
+        if (!item || typeof item !== 'object') return [];
+        const data = item.data || item.payload || {};
+        const workflowPayload = item.workflow_template || item.workflowTemplate || data.workflow_template || data.workflowTemplate || {};
+        const rawSteps = Array.isArray(workflowPayload.steps) ? workflowPayload.steps : 
+                        (Array.isArray(item.workflow_steps) ? item.workflow_steps : 
+                        (Array.isArray(item.steps) ? item.steps : 
+                        (Array.isArray(data.steps) ? data.steps : [])));
+        return rawSteps.map((step, idx) => window.normalizeWorkflowStep(step, idx)).sort((a, b) => {
+            if (a.stepNumber !== b.stepNumber) return a.stepNumber - b.stepNumber;
+            return a.title.localeCompare(b.title);
+        });
+    };
+
+    window.getWorkflowStepCount = function(item) {
+        return window.getWorkflowSteps(item).length;
+    };
+
+    window.isWorkflowItem = function(item) {
+        if (!item || typeof item !== 'object') return false;
+        const data = item.data || item.payload || {};
+        return Boolean(item.workflow_template || item.workflowTemplate || data.workflow_template || data.workflowTemplate || 
+                      item.workflow_name || item.workflowName || data.workflow_name || data.workflowName || 
+                      item.workflow_steps || item.steps || data.steps);
+    };
 
     window.normalizeWorkflowStep = function(step, index) {
         if (!step || typeof step !== 'object') {
@@ -1763,8 +1813,19 @@
 
     window.renderWorkflowStudioModal = function(item, fallbackTitle) {
         const state = getWorkflowStudioState(item, fallbackTitle);
-        const body = document.getElementById('workflow-studio-body');
-        if (!body) return;
+        
+        // Render in items grid only, keep category tree visible
+        const itemsGrid = document.getElementById('kb-items-grid');
+        const headerTitle = document.getElementById('kb-items-header-title');
+        if (!itemsGrid) {
+            console.error('kb-items-grid not found');
+            return;
+        }
+        
+        // Update header title
+        if (headerTitle) {
+            headerTitle.textContent = '⚙️ Edit Workflow';
+        }
 
         const selectedIndex = state.selectedIndex >= 0 ? state.selectedIndex : 0;
         const selectedStep = state.workflow.steps[selectedIndex] || createBlankWorkflowStudioStep(1);
@@ -1778,43 +1839,68 @@
             `;
         }).join('');
 
-        body.innerHTML = `
-            <div style="display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden; border:1px solid var(--border-color); border-radius:8px; padding:10px; background:var(--secondary-bg);">
-                <div style="font-size:0.85em; font-weight:700; color:var(--text-color);">Workflow overview</div>
-                <label style="font-size:0.8em; color:var(--text-muted);">Workflow name</label>
-                <input id="workflow-studio-name" type="text" value="${window.escapeHTML(state.workflow.name || 'Untitled workflow')}" oninput="window.updateWorkflowStudioField('name', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
-                <label style="font-size:0.8em; color:var(--text-muted);">Description</label>
-                <textarea id="workflow-studio-description" oninput="window.updateWorkflowStudioField('description', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(state.workflow.description || '')}</textarea>
-                <label style="font-size:0.8em; color:var(--text-muted);">Protocol guidance</label>
-                <textarea id="workflow-studio-protocol" oninput="window.updateWorkflowStudioField('protocolGuidance', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(state.workflow.protocolGuidance || '')}</textarea>
-            </div>
-            <div style="display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden; border:1px solid var(--border-color); border-radius:8px; padding:10px; background:var(--secondary-bg);">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                    <div style="font-size:0.85em; font-weight:700; color:var(--text-color);">Workflow steps</div>
-                    <button type="button" id="workflow-studio-add-step-btn" onclick="window.addWorkflowStudioStep()" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer;">Add step</button>
+        itemsGrid.innerHTML = `
+            <div style="padding: 15px 0;">
+                <div style="display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid rgba(124, 58, 237, 0.2);">
+                    <button onclick="window.closeWorkflowStudio()" style="padding: 8px 16px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--button-bg); color: var(--text-color); cursor: pointer; font-size: 0.95em;">
+                        Cancel
+                    </button>
+                    <button onclick="window.saveWorkflowStudioChanges()" style="padding: 8px 16px; border: none; border-radius: 6px; background: var(--active-bg); color: #fff; cursor: pointer; font-weight: 600; font-size: 0.95em; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);">
+                        Save Workflow
+                    </button>
                 </div>
-                <div id="workflow-studio-step-list" style="display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-right:2px;">${stepListHtml || '<div style="font-size:0.85em; color:var(--text-muted);">No steps yet. Add one to start editing the workflow.</div>'}</div>
-            </div>
-            <div style="display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden; border:1px solid var(--border-color); border-radius:8px; padding:10px; background:var(--secondary-bg);">
-                <div style="font-size:0.85em; font-weight:700; color:var(--text-color);">Step details</div>
-                <label style="font-size:0.8em; color:var(--text-muted);">Step title</label>
-                <input type="text" value="${window.escapeHTML(selectedStep.title || '')}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'title', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
-                <label style="font-size:0.8em; color:var(--text-muted);">Instructions</label>
-                <textarea oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'instructions', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(selectedStep.instructions || '')}</textarea>
-                <label style="font-size:0.8em; color:var(--text-muted);">Required context (comma separated)</label>
-                <input type="text" value="${window.escapeHTML((selectedStep.requiredContext || []).join(', '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'requiredContext', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
-                <label style="font-size:0.8em; color:var(--text-muted);">Success criteria (semicolon separated)</label>
-                <input type="text" value="${window.escapeHTML((selectedStep.successCriteria || []).join('; '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'successCriteria', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
-                <label style="font-size:0.8em; color:var(--text-muted);">Iteration policy</label>
-                <input type="text" value="${window.escapeHTML(selectedStep.iterationPolicy || '')}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'iterationPolicy', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
-                <label style="font-size:0.8em; color:var(--text-muted);">Tools expected (comma separated)</label>
-                <input type="text" value="${window.escapeHTML((selectedStep.toolsExpected || []).join(', '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'toolsExpected', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
-                <div style="display:flex; justify-content:flex-end; margin-top:4px;">
-                    <button type="button" id="workflow-studio-save-btn" onclick="window.saveWorkflowStudioChanges()" style="padding:8px 14px; border:none; border-radius:6px; background:var(--active-bg); color:#fff; cursor:pointer;">Save workflow</button>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <!-- Left Column -->
+                    <div style="display: flex; flex-direction: column; gap: 20px;">
+                        <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--secondary-bg);">
+                            <div style="font-size:0.9em; font-weight:700; color:var(--text-color); margin-bottom: 5px;">Workflow Overview</div>
+                            <label style="font-size:0.8em; color:var(--text-muted); margin-top: 5px;">Workflow name</label>
+                            <input id="workflow-studio-name" type="text" value="${window.escapeHTML(state.workflow.name || 'Untitled workflow')}" oninput="window.updateWorkflowStudioField('name', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                            <label style="font-size:0.8em; color:var(--text-muted); margin-top: 8px;">Description</label>
+                            <textarea id="workflow-studio-description" oninput="window.updateWorkflowStudioField('description', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(state.workflow.description || '')}</textarea>
+                            <label style="font-size:0.8em; color:var(--text-muted); margin-top: 8px;">Protocol guidance</label>
+                            <textarea id="workflow-studio-protocol" oninput="window.updateWorkflowStudioField('protocolGuidance', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(state.workflow.protocolGuidance || '')}</textarea>
+                        </div>
+                        
+                        <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--secondary-bg); flex: 1;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                                <div style="font-size:0.9em; font-weight:700; color:var(--text-color);">Workflow Steps</div>
+                                <button type="button" onclick="window.addWorkflowStudioStep()" style="padding:6px 12px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer; font-size: 0.9em;">+ Add Step</button>
+                            </div>
+                            <div style="display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-right:2px; max-height: 400px;">${stepListHtml || '<div style="font-size:0.85em; color:var(--text-muted); padding: 10px 0;">No steps yet. Add one to start editing the workflow.</div>'}</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Right Column -->
+                    <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--secondary-bg);">
+                        <div style="font-size:0.9em; font-weight:700; color:var(--text-color); margin-bottom: 5px;">Step Details</div>
+                        <label style="font-size:0.8em; color:var(--text-muted); margin-top: 5px;">Step title</label>
+                        <input type="text" value="${window.escapeHTML(selectedStep.title || '')}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'title', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                        <label style="font-size:0.8em; color:var(--text-muted); margin-top: 8px;">Instructions</label>
+                        <textarea oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'instructions', this.value)" style="width:100%; min-height:120px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(selectedStep.instructions || '')}</textarea>
+                        <label style="font-size:0.8em; color:var(--text-muted); margin-top: 8px;">Required context <span style="font-weight: normal; opacity: 0.7;">(comma separated)</span></label>
+                        <input type="text" value="${window.escapeHTML((selectedStep.requiredContext || []).join(', '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'requiredContext', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                        <label style="font-size:0.8em; color:var(--text-muted); margin-top: 8px;">Success criteria <span style="font-weight: normal; opacity: 0.7;">(semicolon separated)</span></label>
+                        <input type="text" value="${window.escapeHTML((selectedStep.successCriteria || []).join('; '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'successCriteria', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                        <label style="font-size:0.8em; color:var(--text-muted); margin-top: 8px;">Iteration policy</label>
+                        <input type="text" value="${window.escapeHTML(selectedStep.iterationPolicy || '')}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'iterationPolicy', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                        <label style="font-size:0.8em; color:var(--text-muted); margin-top: 8px;">Tools expected <span style="font-weight: normal; opacity: 0.7;">(comma separated)</span></label>
+                        <input type="text" value="${window.escapeHTML((selectedStep.toolsExpected || []).join(', '))}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'toolsExpected', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
+                    </div>
                 </div>
             </div>
         `;
-        openUIModal('workflow-studio-modal');
+    };
+    
+    window.closeWorkflowStudio = function() {
+        // Reload the items view
+        if (window._lastFetchItemsArgs) {
+            const args = window._lastFetchItemsArgs;
+            window.fetchItemsForCategory(args.spaceName, args.categoryId, args.categoryName, args.liElement, args.catObj);
+        } else if (window.currentStore) {
+            selectSpace(window.currentStore.replace('/data', ''), document.querySelector('#sidebar li.active'));
+        }
     };
 
     window.openWorkflowStudioModal = function(item, fallbackTitle) {
@@ -1953,16 +2039,10 @@
             if (!res.ok) {
                 throw new Error(await res.text());
             }
-            closeUIModal('workflow-studio-modal');
             if (typeof window.showAlert === 'function') {
                 window.showAlert('Workflow saved successfully.');
             }
-            if (window._lastFetchItemsArgs) {
-                const args = window._lastFetchItemsArgs;
-                window.fetchItemsForCategory(args.spaceName, args.categoryId, args.categoryName, args.liElement, args.catObj);
-            } else if (window.currentStore) {
-                selectSpace(window.currentStore.replace('/data', ''), document.querySelector('#sidebar li.active'));
-            }
+            window.closeWorkflowStudio();
         } catch (err) {
             if (typeof window.showAlert === 'function') {
                 window.showAlert('Failed to save workflow: ' + (err && err.message ? err.message : err));
@@ -2272,7 +2352,7 @@
         
         // Create Summaries input
         const summLbl = document.createElement('label');
-        summLbl.innerText = 'Summaries (Dot separated for distinct logic vectors):';
+        summLbl.innerText = 'Summaries (One per line for distinct semantic vectors):';
         summLbl.style.marginTop = '10px';
         summLbl.style.fontSize = '0.9em';
 
@@ -2387,7 +2467,7 @@
                 });
                 const data = await res.json();
                 if (data.status === "success" && data.summaries) {
-                    summInput.value = data.summaries.join(". ");
+                    summInput.value = data.summaries.join("\n");
                 } else {
                     showAlert(data.message || "Failed to summarize");
                 }
@@ -2422,7 +2502,7 @@
             const newSummVal = summInput.value;
             let summArr = [];
             if (newSummVal) {
-                summArr = newSummVal.split('.').map(s => s.trim()).filter(s => s.length > 0);
+                summArr = newSummVal.split('\n').map(s => s.trim()).filter(s => s.length > 0);
             }
             const data = {chunk: newVal, text: newVal, description: newVal};
 
@@ -2478,6 +2558,9 @@
     };
 
     window.editCategoryModal = function(cat, spaceName) {
+        // Always use the freshest category data from the cache to avoid stale metadata
+        const freshCat = window._currentKBCategories?.find(c => c.id === cat.id) || cat;
+        
         const readonly = isSpaceReadOnly(spaceName, currentDatabase);
 
         // Create overlay
@@ -2519,7 +2602,7 @@
         
         const nameInput = document.createElement('input');
         nameInput.type = 'text';
-        nameInput.value = cat.name || '';
+        nameInput.value = freshCat.name || '';
         nameInput.style.width = '100%';
         nameInput.style.background = 'var(--input-bg)';
         nameInput.style.color = 'var(--text-color)';
@@ -2540,7 +2623,7 @@
         descLabel.style.fontSize = '0.9em';
         
         const descInput = document.createElement('textarea');
-        descInput.value = cat.description || '';
+        descInput.value = freshCat.description || '';
         descInput.style.width = '100%';
         descInput.style.height = '100px';
         descInput.style.background = 'var(--input-bg)';
@@ -2555,6 +2638,40 @@
             descInput.readOnly = true;
         }
 
+        // Workflow enabled checkbox
+        const workflowContainer = document.createElement('div');
+        workflowContainer.style.marginTop = '15px';
+        
+        const workflowLabel = document.createElement('label');
+        workflowLabel.style.display = 'flex';
+        workflowLabel.style.alignItems = 'center';
+        workflowLabel.style.gap = '8px';
+        workflowLabel.style.cursor = readonly ? 'default' : 'pointer';
+        workflowLabel.style.fontSize = '0.9em';
+        workflowLabel.style.color = 'var(--text-color)';
+        
+        const workflowCheckbox = document.createElement('input');
+        workflowCheckbox.type = 'checkbox';
+        workflowCheckbox.checked = freshCat.metadata?.workflow_enabled === true;
+        if (readonly) {
+            workflowCheckbox.disabled = true;
+        }
+        
+        const workflowText = document.createElement('span');
+        workflowText.innerText = 'Enable Workflow Attribute';
+        
+        workflowLabel.appendChild(workflowCheckbox);
+        workflowLabel.appendChild(workflowText);
+        
+        const workflowNote = document.createElement('div');
+        workflowNote.style.fontSize = '0.8em';
+        workflowNote.style.color = 'var(--text-muted)';
+        workflowNote.style.marginTop = '4px';
+        workflowNote.innerText = 'Turn this on to let items in this category use Workflow Template mode.';
+        
+        workflowContainer.appendChild(workflowLabel);
+        workflowContainer.appendChild(workflowNote);
+
         // Read-only Vector info (if any)
         const sysLabel = document.createElement('div');
         sysLabel.style.marginTop = '15px';
@@ -2563,8 +2680,8 @@
         
         let extraInfo = '';
         let vectorField = null;
-        if (cat.center_vector && cat.center_vector.length > 0) {
-            extraInfo += `<span><strong>Vector Length:</strong> ${cat.center_vector.length} dimensions</span><br/>`;
+        if (freshCat.center_vector && freshCat.center_vector.length > 0) {
+            extraInfo += `<span><strong>Vector Length:</strong> ${freshCat.center_vector.length} dimensions</span><br/>`;
             
             vectorField = document.createElement('div');
             vectorField.style.marginTop = '10px';
@@ -2574,7 +2691,7 @@
             vectorLabel.style.fontSize = '0.9em';
             
             const vectorInput = document.createElement('textarea');
-            vectorInput.value = JSON.stringify(cat.center_vector);
+            vectorInput.value = JSON.stringify(freshCat.center_vector);
             vectorInput.readOnly = true;
             vectorInput.style.width = '100%';
             vectorInput.style.height = '60px';
@@ -2591,8 +2708,8 @@
             vectorField.appendChild(vectorLabel);
             vectorField.appendChild(vectorInput);
         }
-        if (cat.item_count !== undefined) {
-             extraInfo += `<span title="Item count is only maintained and updated during/after Vectorization."><strong>Items Count:</strong> ${cat.item_count}</span><br/>`;
+        if (freshCat.item_count !== undefined) {
+             extraInfo += `<span title="Item count is only maintained and updated during/after Vectorization."><strong>Items Count:</strong> ${freshCat.item_count}</span><br/>`;
         }
         sysLabel.innerHTML = extraInfo;
 
@@ -2600,9 +2717,9 @@
             sysLabel.appendChild(vectorField);
         }
 
-        const showCategoryControls = !!(cat && cat.show_category_auto_share_controls);
+        const showCategoryControls = !!(freshCat && freshCat.show_category_auto_share_controls);
         let categorySharingToggle = null;
-        const categoryPath = (cat && cat.path && String(cat.path).trim()) || (cat && cat.name && String(cat.name).trim()) || '';
+        const categoryPath = (freshCat && freshCat.path && String(freshCat.path).trim()) || (freshCat && freshCat.name && String(freshCat.name).trim()) || '';
         const sharingControls = document.createElement('div');
         sharingControls.style.marginTop = '15px';
         sharingControls.style.padding = '10px 12px';
@@ -2628,7 +2745,7 @@
 
             categorySharingToggle = document.createElement('input');
             categorySharingToggle.type = 'checkbox';
-            categorySharingToggle.checked = cat.auto_share_to_daemons !== false;
+            categorySharingToggle.checked = freshCat.auto_share_to_daemons !== false;
 
             const sharingText = document.createElement('span');
             sharingText.innerText = 'Allow this category to be auto-shared to daemons';
@@ -2685,20 +2802,42 @@
         saveBtn.onclick = async () => {
             const newName = nameInput.value.trim();
             const newDesc = descInput.value.trim();
+            const workflowEnabled = workflowCheckbox.checked;
             
-            if (newName && (newName !== cat.name || newDesc !== cat.description)) {
+            const hasChanges = newName !== freshCat.name || 
+                              newDesc !== freshCat.description || 
+                              workflowEnabled !== (freshCat.metadata?.workflow_enabled === true);
+            
+            if (newName && hasChanges) {
+                // Preserve existing metadata and update workflow_enabled
+                const metadata = freshCat.metadata ? {...freshCat.metadata} : {};
+                if (workflowEnabled) {
+                    metadata.workflow_enabled = true;
+                } else {
+                    delete metadata.workflow_enabled;
+                }
+                
+                const payload = {id: freshCat.id, name: newName, description: newDesc, metadata: metadata};
+                
                 try {
-                    const res = await authFetch(`/api/spaces/category/add?name=${encodeURIComponent(spaceName)}`, {
+                    const res = await authFetch(`/api/spaces/category/add?name=${encodeURIComponent(spaceName)}&database=${encodeURIComponent(currentDatabase)}`, {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({id: cat.id, name: newName, description: newDesc})
+                        body: JSON.stringify(payload)
                     });
                     if (res.ok) {
-                        selectSpace(spaceName, document.querySelector('#sidebar li.active'));
+                        cleanUp();
+                        await selectSpace(spaceName, document.querySelector('#sidebar li.active'));
+                    } else {
+                        cleanUp();
                     }
-                } catch(e) { console.error('Update failed', e); }
+                } catch(e) { 
+                    console.error('Update failed', e);
+                    cleanUp();
+                }
+            } else {
+                cleanUp();
             }
-            cleanUp();
         };
 
         modal.appendChild(titleObj);
@@ -2706,6 +2845,7 @@
         modal.appendChild(nameInput);
         modal.appendChild(descLabel);
         modal.appendChild(descInput);
+        if (!readonly) modal.appendChild(workflowContainer);
         if (extraInfo) modal.appendChild(sysLabel);
         modal.appendChild(sharingControls);
         modal.appendChild(actionContainer);
@@ -3066,10 +3206,11 @@
 
                 const hasChildren = (cat.children && cat.children.length > 0) || (childrenMap[cat.id] && childrenMap[cat.id].length > 0);
                 const isExpanded = childrenMap[cat.id] && childrenMap[cat.id].length > 0;
+                const isWorkflowCategory = cat.metadata && cat.metadata.workflow_enabled === true;
 
                 const arrowSpan = document.createElement('span');
-                arrowSpan.innerHTML = hasChildren ? (isExpanded ? '▾ ' : '▸ ') : '◦ ';
-                arrowSpan.style.cursor = hasChildren ? 'pointer' : 'default';
+                arrowSpan.innerHTML = (hasChildren || isWorkflowCategory) ? (isExpanded ? '▾ ' : '▸ ') : '◦ ';
+                arrowSpan.style.cursor = (hasChildren || isWorkflowCategory) ? 'pointer' : 'default';
                 arrowSpan.style.display = 'inline-block';
                 arrowSpan.style.width = '16px';
                 arrowSpan.style.textAlign = 'left';
@@ -3081,6 +3222,17 @@
                 titleSpan.style.overflow = 'hidden';
                 titleSpan.style.textOverflow = 'ellipsis';
                 titleSpan.title = cat.name;
+
+                // Add workflow badge for workflow categories
+                if (isWorkflowCategory) {
+                    const workflowBadge = document.createElement('span');
+                    workflowBadge.innerHTML = '⚡';
+                    workflowBadge.style.marginLeft = '6px';
+                    workflowBadge.style.color = '#7c3aed';
+                    workflowBadge.style.fontSize = '12px';
+                    workflowBadge.title = 'Workflow Category';
+                    titleSpan.appendChild(workflowBadge);
+                }
 
                 const indicator = renderCategoryLifecycleIndicator(cat);
 
@@ -3095,7 +3247,7 @@
 
                 arrowSpan.onclick = async (e) => {
                     e.stopPropagation();
-                    if (!hasChildren) return;
+                    if (!hasChildren && !isWorkflowCategory) return;
                     
                     if (childrenContainer.style.display === 'none') {
                         arrowSpan.innerHTML = '▾ ';
@@ -3106,20 +3258,28 @@
                         if (childrenContainer.children.length === 0) {
                             arrowSpan.innerHTML = '⌛ ';
                             try {
-                                const resCat = await authFetch(`/api/spaces/categories?database=${encodeURIComponent(currentDatabase)}&name=${encodeURIComponent(name)}&parent_id=${cat.id}&offset=0&limit=500`);
-                                if (resCat.ok) {
-                                    const data = await resCat.json();
-                                    let childrenData = Array.isArray(data) ? data : (data.data || []);
-                                    childrenData.forEach(c => {
-                                        if (!window._currentKBCategories.find(existing => existing.id === c.id)) {
-                                            window._currentKBCategories.push(c);
-                                        }
-                                    });
-                                    childrenData.sort((a,b) => a.name.localeCompare(b.name));
-                                    renderTreeNodes(childrenData, childrenContainer, depth+1);
+                                // If workflow category, try loading workflow items as tree leaves first
+                                if (isWorkflowCategory) {
+                                    await window.renderWorkflowItemsAsLeaves(cat, childrenContainer, depth + 1, name);
+                                }
+                                
+                                // If no workflow items added (or not workflow category), load child categories
+                                if (childrenContainer.children.length === 0) {
+                                    const resCat = await authFetch(`/api/spaces/categories?database=${encodeURIComponent(currentDatabase)}&name=${encodeURIComponent(name)}&parent_id=${cat.id}&offset=0&limit=500`);
+                                    if (resCat.ok) {
+                                        const data = await resCat.json();
+                                        let childrenData = Array.isArray(data) ? data : (data.data || []);
+                                        childrenData.forEach(c => {
+                                            if (!window._currentKBCategories.find(existing => existing.id === c.id)) {
+                                                window._currentKBCategories.push(c);
+                                            }
+                                        });
+                                        childrenData.sort((a,b) => a.name.localeCompare(b.name));
+                                        renderTreeNodes(childrenData, childrenContainer, depth+1);
+                                    }
                                 }
                             } catch(err) {
-                                console.error('Failed to fetch sub-categories', err);
+                                console.error('Failed to load tree content', err);
                             }
                             arrowSpan.innerHTML = '▾ ';
                         }
@@ -3141,8 +3301,13 @@
                 addSubBtn.style.fontWeight = 'bold';
                 addSubBtn.style.display = 'none'; // hidden by default, shown on hover
                 
-                li.onmouseover = () => { li.style.background = 'rgba(0,0,0,0.03)'; addSubBtn.style.display = 'inline'; };
-                li.onmouseout = () => { li.style.background = 'transparent'; addSubBtn.style.display = 'none'; };
+                if (isWorkflowCategory) {
+                    li.onmouseover = () => { li.style.background = 'rgba(124, 58, 237, 0.08)'; addSubBtn.style.display = 'inline'; };
+                    li.onmouseout = () => { li.style.background = 'transparent'; addSubBtn.style.display = 'none'; };
+                } else {
+                    li.onmouseover = () => { li.style.background = 'rgba(0,0,0,0.03)'; addSubBtn.style.display = 'inline'; };
+                    li.onmouseout = () => { li.style.background = 'transparent'; addSubBtn.style.display = 'none'; };
+                }
 
                 addSubBtn.onclick = (e) => {
                     e.stopPropagation();
@@ -3176,6 +3341,252 @@
         if (roots.length > 0) {
             renderTreeNodes(roots.sort((a,b) => a.name.localeCompare(b.name)), treeRoot);
         }
+        
+        // Workflow tree-leaf rendering functions
+        window.renderWorkflowItemsAsLeaves = async function(category, container, depth, spaceName) {
+            try {
+                const res = await authFetch(
+                    `/api/spaces/items?database=${encodeURIComponent(currentDatabase)}&name=${encodeURIComponent(spaceName)}&category_id=${category.id}&offset=0&limit=500`
+                );
+                const data = await res.json();
+                const items = data.data || data.items || [];
+                
+                container.innerHTML = '';
+                
+                // If no workflow items, don't block - category may have child categories with workflows
+                if (items.length === 0) {
+                    return;
+                }
+                
+                items.forEach(item => {
+                    console.log('=== Workflow Item Debug ===');
+                    console.log('Full item:', JSON.stringify(item, null, 2));
+                    console.log('item.data exists?', !!item.data);
+                    console.log('item.workflow_template exists?', !!item.workflow_template);
+                    if (item.data) {
+                        console.log('item.data.workflow_template exists?', !!item.data.workflow_template);
+                        if (item.data.workflow_template) {
+                            console.log('item.data.workflow_template.steps:', item.data.workflow_template.steps);
+                        }
+                    }
+                    
+                    const workflowName = window.getWorkflowName(item);
+                    const stepCount = window.getWorkflowStepCount(item);
+                    console.log(`Detected: "${workflowName}" with ${stepCount} steps`);
+                    
+                    const leafLi = document.createElement('li');
+                    leafLi.style.marginBottom = '6px';
+                    leafLi.style.marginLeft = (depth * 10) + 'px';
+                    leafLi.style.cursor = 'pointer';
+                    leafLi.style.padding = '6px 8px';
+                    leafLi.style.borderRadius = '4px';
+                    leafLi.style.display = 'flex';
+                    leafLi.style.alignItems = 'center';
+                    leafLi.style.gap = '8px';
+                    leafLi.dataset.workflowItemId = item.id;
+                    
+                    const icon = document.createElement('span');
+                    icon.innerHTML = '⚡';
+                    icon.style.color = '#7c3aed';
+                    icon.style.fontSize = '14px';
+                    icon.style.flexShrink = '0';
+                    
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = workflowName;
+                    nameSpan.style.flex = '1';
+                    nameSpan.style.overflow = 'hidden';
+                    nameSpan.style.textOverflow = 'ellipsis';
+                    nameSpan.style.whiteSpace = 'nowrap';
+                    nameSpan.style.fontSize = '0.9em';
+                    nameSpan.style.color = 'var(--text-color)';
+                    
+                    const badge = document.createElement('span');
+                    badge.textContent = stepCount;
+                    badge.style.fontSize = '0.7em';
+                    badge.style.background = '#7c3aed';
+                    badge.style.color = '#fff';
+                    badge.style.padding = '2px 6px';
+                    badge.style.borderRadius = '10px';
+                    badge.style.fontWeight = '600';
+                    badge.style.flexShrink = '0';
+                    
+                    leafLi.appendChild(icon);
+                    leafLi.appendChild(nameSpan);
+                    leafLi.appendChild(badge);
+                    
+                    leafLi.onmouseover = () => {
+                        leafLi.style.background = 'rgba(124, 58, 237, 0.15)';
+                    };
+                    leafLi.onmouseout = () => {
+                        if (!leafLi.classList.contains('selected')) {
+                            leafLi.style.background = 'transparent';
+                        }
+                    };
+                    
+                    leafLi.onclick = (e) => {
+                        e.stopPropagation();
+                        document.querySelectorAll('#kb-category-tree li[data-workflow-item-id]').forEach(li => {
+                            li.classList.remove('selected');
+                            li.style.fontWeight = 'normal';
+                            li.style.background = 'transparent';
+                        });
+                        leafLi.classList.add('selected');
+                        leafLi.style.fontWeight = '600';
+                        leafLi.style.background = 'rgba(124, 58, 237, 0.15)';
+                        window.showWorkflowFlowDiagram(item, category, spaceName);
+                    };
+                    
+                    container.appendChild(leafLi);
+                    
+                    if (item.id && !window._workflowStudioItemById) {
+                        window._workflowStudioItemById = {};
+                    }
+                    if (item.id) {
+                        window._workflowStudioItemById[item.id] = item;
+                    }
+                });
+            } catch (err) {
+                console.error('Failed to load workflow items', err);
+                container.innerHTML = '<li style="padding: 8px; color: var(--text-muted); font-size: 0.85em;">Failed to load workflows</li>';
+            }
+        };
+
+        window.showWorkflowFlowDiagram = function(item, category, spaceName) {
+            const itemsGrid = document.getElementById('kb-items-grid');
+            const headerTitle = document.getElementById('kb-items-header-title');
+            if (!itemsGrid) {
+                console.error('kb-items-grid not found');
+                return;
+            }
+            
+            // Update header title
+            if (headerTitle) {
+                headerTitle.textContent = '⚡ ' + window.getWorkflowName(item);
+            }
+            
+            const workflowName = window.getWorkflowName(item);
+            const workflowDesc = window.getWorkflowDescription(item);
+            const steps = window.getWorkflowSteps(item);
+            const protocolGuidance = item.protocol_guidance || item.protocolGuidance || (item.data && (item.data.protocol_guidance || item.data.protocolGuidance)) || '';
+            
+            itemsGrid.innerHTML = `
+                <div class="workflow-detail-view" style="padding: 15px 0;">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid rgba(124, 58, 237, 0.2);">
+                        <div style="flex: 1;">
+                            ${workflowDesc ? `<p style="color: var(--text-muted); margin: 0 0 12px 0; font-size: 1em; line-height: 1.6;">${window.escapeHTML(workflowDesc)}</p>` : ''}
+                            ${protocolGuidance ? `<div style="margin-top: 8px; padding: 10px; background: rgba(124, 58, 237, 0.05); border-left: 3px solid #7c3aed; border-radius: 4px;"><strong style="color: #7c3aed; font-size: 0.85em;">Protocol:</strong> <span style="font-size: 0.9em; color: var(--text-color);">${window.escapeHTML(protocolGuidance)}</span></div>` : ''}
+                        </div>
+                        <div style="display: flex; gap: 12px; margin-left: 20px; flex-shrink: 0;">
+                            <button onclick="window.openWorkflowStudioModalById('${item.id}')" style="padding: 10px 18px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--button-bg); color: var(--text-color); cursor: pointer; font-size: 0.95em; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background='rgba(0,0,0,0.05)'" onmouseout="this.style.background='var(--button-bg)'">
+                                ✏️ Edit
+                            </button>
+                            <button onclick="alert('Workflow runner coming soon!')" style="padding: 10px 18px; border: 1px solid #7c3aed; border-radius: 8px; background: #7c3aed; color: #fff; cursor: pointer; font-weight: 600; font-size: 0.95em; transition: all 0.2s; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);" onmouseover="this.style.background='#6d28d9'; this.style.boxShadow='0 4px 12px rgba(124, 58, 237, 0.4)'" onmouseout="this.style.background='#7c3aed'; this.style.boxShadow='0 2px 8px rgba(124, 58, 237, 0.3)'">
+                                ▶ Run Workflow
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="workflow-flow-diagram">
+                        ${window.renderFlowDiagram(steps)}
+                    </div>
+                </div>
+            `;
+        };
+
+        window.renderFlowDiagram = function(steps) {
+            if (!steps || steps.length === 0) {
+                return '<div style="text-align: center; color: var(--text-muted); padding: 60px; font-size: 1.1em;">No steps defined for this workflow</div>';
+            }
+            
+            let html = '<div style="display: flex; flex-direction: column; gap: 20px;">';
+            
+            html += `
+                <div style="display: flex; align-items: center; gap: 15px; justify-content: center;">
+                    <div style="padding: 12px 24px; border: 2px solid #10b981; border-radius: 50px; background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05)); color: #059669; font-weight: 700; font-size: 1em; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);">
+                        START
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: center; margin: -10px 0;">
+                    <div style="width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 20px solid #10b981;"></div>
+                </div>
+            `;
+            
+            steps.forEach((step, idx) => {
+                const stepNumber = step.stepNumber || idx + 1;
+                const title = step.title || `Step ${stepNumber}`;
+                const instructions = step.instructions || '';
+                const requiredContext = step.requiredContext || [];
+                const successCriteria = step.successCriteria || [];
+                const iterationPolicy = step.iterationPolicy || '';
+                
+                html += `
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <div style="border: 2px solid #7c3aed; border-radius: 12px; padding: 24px; background: linear-gradient(135deg, rgba(124,58,237,0.08), rgba(255,255,255,0.02)); box-shadow: 0 4px 12px rgba(124,58,237,0.15); transition: all 0.3s;" onmouseover="this.style.boxShadow='0 6px 20px rgba(124,58,237,0.25)'; this.style.transform='translateY(-2px)'" onmouseout="this.style.boxShadow='0 4px 12px rgba(124,58,237,0.15)'; this.style.transform='translateY(0)'">
+                            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 16px;">
+                                <div style="width: 50px; height: 50px; border-radius: 50%; background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.3em; box-shadow: 0 3px 10px rgba(124, 58, 237, 0.4);">${stepNumber}</div>
+                                <h3 style="margin: 0; flex: 1; color: var(--text-color); font-size: 1.3em; font-weight: 600;">
+                                    ${window.escapeHTML(title)}
+                                </h3>
+                            </div>
+                            
+                            ${instructions ? `
+                                <div style="margin-bottom: 16px; line-height: 1.7; color: var(--text-color); font-size: 1em; padding: 12px; background: rgba(0,0,0,0.02); border-radius: 6px;">
+                                    ${window.escapeHTML(instructions)}
+                                </div>
+                            ` : ''}
+                            
+                            ${requiredContext.length > 0 ? `
+                                <div style="margin-bottom: 12px;">
+                                    <strong style="color: #7c3aed; font-size: 0.9em; display: block; margin-bottom: 8px;">📋 Required Context:</strong>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                                        ${requiredContext.map(ctx => `
+                                            <span style="font-size: 0.85em; background: rgba(124,58,237,0.12); color: #7c3aed; padding: 6px 12px; border-radius: 14px; border: 1px solid rgba(124,58,237,0.25); font-weight: 500;">${window.escapeHTML(ctx)}</span>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            ` : ''}
+                            
+                            ${successCriteria.length > 0 ? `
+                                <div style="margin-bottom: 12px;">
+                                    <strong style="color: #10b981; font-size: 0.9em; display: block; margin-bottom: 8px;">✓ Success Criteria:</strong>
+                                    <ul style="margin: 0; padding-left: 24px; font-size: 0.9em; color: var(--text-muted); line-height: 1.8;">
+                                        ${successCriteria.map(criterion => `
+                                            <li style="margin: 4px 0;">${window.escapeHTML(criterion)}</li>
+                                        `).join('')}
+                                    </ul>
+                                </div>
+                            ` : ''}
+                            
+                            ${iterationPolicy ? `
+                                <div style="font-size: 0.85em; color: var(--text-muted); font-style: italic; margin-top: 8px; padding: 8px 12px; background: rgba(0,0,0,0.02); border-radius: 6px;">
+                                    <strong style="color: var(--key-color);">🔄 Iteration:</strong> ${window.escapeHTML(iterationPolicy)}
+                                </div>
+                            ` : ''}
+                        </div>
+                        
+                        ${idx < steps.length - 1 ? `
+                            <div style="display: flex; justify-content: center; margin: -5px 0;">
+                                <div style="width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 20px solid #7c3aed;"></div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+            
+            html += `
+                <div style="display: flex; justify-content: center; margin-top: -5px;">
+                    <div style="width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 20px solid #ef4444;"></div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 15px; justify-content: center;">
+                    <div style="padding: 12px 24px; border: 2px solid #ef4444; border-radius: 50px; background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.05)); color: #dc2626; font-weight: 700; font-size: 1em; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2);">
+                        END
+                    </div>
+                </div>
+            `;
+            
+            html += '</div>';
+            return html;
+        };
         
         // Category Pagination UI
         const totalCatPages = Math.ceil(totalCatCount / catLimit);
@@ -3521,9 +3932,9 @@
                                 <div style="margin-top: 8px; display: flex; align-items: center; position: relative;">
                                     <a class="read-more-btn" onclick="toggleDomainItemDesc(this)" data-item-id="${window.escapeHTML(t.id || '')}" data-item-category="${window.escapeHTML(t.category_id || t.category || '')}" style="cursor:pointer; color:var(--link-color); font-size:0.85em; text-decoration:underline;">Read More</a>
                                     ${kbIsReadOnly ? 
-                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDescForData || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" data-lifecycle-status="${window.escapeHTML(lifecycleStatus)}" data-lifecycle-reason="${window.escapeHTML(lifecycleReason)}" data-archive-reason="${window.escapeHTML(archiveReason)}" data-archived-at="${window.escapeHTML(archivedAt)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
+                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('\n') : '')}" data-full-desc="${window.escapeHTML(fullDescForData || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" data-lifecycle-status="${window.escapeHTML(lifecycleStatus)}" data-lifecycle-reason="${window.escapeHTML(lifecycleReason)}" data-archive-reason="${window.escapeHTML(archiveReason)}" data-archived-at="${window.escapeHTML(archivedAt)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
                                         : 
-                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDescForData || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Edit Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></a>
+                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('\n') : '')}" data-full-desc="${window.escapeHTML(fullDescForData || '')}" data-payload-ref="${window.escapeHTML(itemRef)}" data-storage-mode="${window.escapeHTML(itemStorageMode)}" data-cloud-provider="${window.escapeHTML(itemCloudProvider)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Edit Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></a>
                                          <a class="delete-item-btn" data-item-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-item-name="${window.escapeHTML(((t.summaries && t.summaries.length > 0) ? t.summaries[0] : (t.text || t.description || t.topic || t.concept || t.name || t.id || '')).substring(0, 100))}" onclick="window.deleteSpaceItem(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Delete Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg></a>`
                                     }
                                     <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
@@ -3542,9 +3953,9 @@
                                 </div>
                                 <div style="margin-top: 8px; display: flex; align-items: center; position: relative;">
                                     ${kbIsReadOnly ? 
-                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDescForData || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" data-lifecycle-status="${window.escapeHTML(lifecycleStatus)}" data-lifecycle-reason="${window.escapeHTML(lifecycleReason)}" data-archive-reason="${window.escapeHTML(archiveReason)}" data-archived-at="${window.escapeHTML(archivedAt)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
+                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('\n') : '')}" data-full-desc="${window.escapeHTML(fullDescForData || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" data-lifecycle-status="${window.escapeHTML(lifecycleStatus)}" data-lifecycle-reason="${window.escapeHTML(lifecycleReason)}" data-archive-reason="${window.escapeHTML(archiveReason)}" data-archived-at="${window.escapeHTML(archivedAt)}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); display: inline-flex; align-items: center;" title="View Details"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/></svg></a>` 
                                         : 
-                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('. ') : '')}" data-full-desc="${window.escapeHTML(fullDescForData || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); display: inline-flex; align-items: center;" title="Edit Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></a>
+                                        `<a class="edit-item-btn" data-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-category-name="${window.escapeHTML(currCatName || '')}" data-summaries="${window.escapeHTML(t.summaries ? t.summaries.join('\n') : '')}" data-full-desc="${window.escapeHTML(fullDescForData || '')}" data-payload-ref="${window.escapeHTML(t.payload_ref || '')}" data-storage-mode="${window.escapeHTML(t.storage_mode || '')}" data-cloud-provider="${window.escapeHTML(t.cloud_provider || '')}" onclick="editDomainItemInline(this)" style="cursor:pointer; color:var(--text-color); display: inline-flex; align-items: center;" title="Edit Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg></a>
                                          <a class="delete-item-btn" data-item-id="${window.escapeHTML(t.id || '')}" data-category-id="${window.escapeHTML(t.category_id || t.category || '')}" data-item-name="${window.escapeHTML(((t.summaries && t.summaries.length > 0) ? t.summaries[0] : (t.text || t.description || t.topic || t.concept || t.name || t.id || '')).substring(0, 100))}" onclick="window.deleteSpaceItem(this)" style="cursor:pointer; color:var(--text-color); margin-left: 15px; display: inline-flex; align-items: center;" title="Delete Item"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg></a>`
                                     }
                                     <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
@@ -4090,17 +4501,23 @@ async function submitAddCategoryItem() {
     if (parentSel) {
         parentId = parentSel.value;
     }
+    const workflowEnabled = document.getElementById('new-category-workflow-enabled')?.checked || false;
     
     if (!name) {
         showAlert("Category Name is required.");
         return;
     }
     
+    const metadata = {};
+    if (workflowEnabled) {
+        metadata.workflow_enabled = true;
+    }
+    
     try {
         const res = await authFetch(`/api/spaces/category/add?name=${encodeURIComponent(spaceName)}&database=${encodeURIComponent(currentDatabase)}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({name: name, description: desc, parent_id: parentId})
+            body: JSON.stringify({name: name, description: desc, parent_id: parentId, metadata: metadata})
         });
         
         if (res.ok) {
@@ -4109,7 +4526,7 @@ async function submitAddCategoryItem() {
             if (data.message) {
                 showAlert(data.message, false);
             }
-            selectSpace(spaceName, document.querySelector('#sidebar li.active'));
+            await selectSpace(spaceName, document.querySelector('#sidebar li.active'));
         } else {
             const err = await res.text();
             showAlert("Failed to add category: " + err, true);
@@ -4227,7 +4644,7 @@ async function autoSummarizeAddSpaceItem() {
         });
         const data = await res.json();
         if (data.status === "success" && data.summaries) {
-            summInput.value = data.summaries.join(". ");
+            summInput.value = data.summaries.join("\n");
         } else {
             showAlert(data.message || "Failed to summarize");
         }
@@ -4453,7 +4870,7 @@ async function saveSpaceItem() {
 
     let summaries = [];
     if (summariesInput) {
-        summaries = summariesInput.split('.').map(s => s.trim()).filter(s => s.length > 0);
+        summaries = summariesInput.split('\n').map(s => s.trim()).filter(s => s.length > 0);
     }
 
     const workflowMode = document.getElementById('new-space-item-mode')?.value === 'workflow';

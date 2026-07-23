@@ -227,6 +227,7 @@ func resetCompilerState() {
 	allDocuments = nil
 	catGraphMap = make(map[string]*memory.Category)
 	catDescriptions = make(map[string]string)
+	catHasWorkflows = make(map[string]bool)
 }
 
 func findRepoRoot() string {
@@ -256,17 +257,19 @@ var allChunks []KnowledgeChunk
 var allDocuments []*memory.Document
 var catGraphMap = make(map[string]*memory.Category)
 var catDescriptions = make(map[string]string)
+var catHasWorkflows = make(map[string]bool)
 
 type KnowledgeChunk struct {
-	ID          string   `json:"id"`
-	Category    string   `json:"category"`
-	CategoryKey string   `json:"-"`
-	Title       string   `json:"title"`
-	Summaries   []string `json:"summaries"`
-	Description string   `json:"description"`
-	Sources     []string `json:"sources"`
-	DocumentID  sop.UUID `json:"document_id"`
-	Explicit    bool     `json:"explicit"`
+	ID               string         `json:"id"`
+	Category         string         `json:"category"`
+	CategoryKey      string         `json:"-"`
+	Title            string         `json:"title"`
+	Summaries        []string       `json:"summaries"`
+	Description      string         `json:"description"`
+	Sources          []string       `json:"sources"`
+	DocumentID       sop.UUID       `json:"document_id"`
+	Explicit         bool           `json:"explicit"`
+	WorkflowTemplate map[string]any `json:"workflow_template,omitempty"`
 }
 
 type explicitItemBlock struct {
@@ -335,22 +338,62 @@ func buildExportItems(chunks []KnowledgeChunk) []memory.ExportItem[map[string]an
 		if len(summaries) == 0 && chunk.Title != "" {
 			summaries = []string{chunk.Title}
 		}
+		data := map[string]any{
+			"title":         chunk.Title,
+			"text":          chunk.Title,
+			"category":      cat.Name,
+			"category_path": cat.Path,
+			"description":   chunk.Description,
+			"sources":       sources,
+			"original_id":   chunk.ID,
+		}
+		if chunk.WorkflowTemplate != nil {
+			data["workflow_template"] = chunk.WorkflowTemplate
+		}
 		exportItems = append(exportItems, memory.ExportItem[map[string]any]{
 			CategoryPath: cat.ID.String(),
 			DocID:        docIDs,
-			Data: map[string]any{
-				"title":         chunk.Title,
-				"text":          chunk.Title,
-				"category":      cat.Name,
-				"category_path": cat.Path,
-				"description":   chunk.Description,
-				"sources":       sources,
-				"original_id":   chunk.ID,
-			},
-			Summaries: summaries,
+			Data:         data,
+			Summaries:    summaries,
 		})
 	}
 	return exportItems
+}
+
+func parseWorkflowTemplateFromBody(body string) map[string]any {
+	// Look for markdown code block with workflow_template JSON
+	start := strings.Index(body, "```\n{")
+	if start == -1 {
+		start = strings.Index(body, "``` \n{")
+	}
+	if start == -1 {
+		start = strings.Index(body, "```json\n{")
+	}
+	if start == -1 {
+		return nil
+	}
+
+	end := strings.Index(body[start:], "\n```")
+	if end == -1 {
+		return nil
+	}
+
+	jsonStart := strings.Index(body[start:], "{")
+	if jsonStart == -1 {
+		return nil
+	}
+
+	jsonStr := body[start+jsonStart : start+end]
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		return nil
+	}
+
+	if wfTemplate, ok := parsed["workflow_template"].(map[string]any); ok {
+		return wfTemplate
+	}
+
+	return nil
 }
 
 func normalizeStructuredLine(line string) string {
@@ -788,6 +831,12 @@ func processFlattenedTreeIntoChunks(node *Section, currentPathContext []string, 
 	}
 	catKey := strings.Join(encodedPaths, "/")
 
+	// Check if this category has explicit [workflow] marker
+	// (categories will also be marked when they contain workflow items below)
+	if isWorkflowCategoryPath(currentPathContext) {
+		catHasWorkflows[catKey] = true
+	}
+
 	explicitBlocks, remainingParagraphs := parseExplicitItemBlocks(node.Paragraphs)
 
 	cleanedDesc := extractCategoryDescription(remainingParagraphs, node.Title)
@@ -801,16 +850,22 @@ func processFlattenedTreeIntoChunks(node *Section, currentPathContext []string, 
 
 	for _, block := range explicitBlocks {
 		idPrefix := strings.ReplaceAll(block.Title, " ", "_")
+		wfTemplate := parseWorkflowTemplateFromBody(block.Body)
+		if wfTemplate != nil {
+			// Mark this category as containing workflows
+			catHasWorkflows[catKey] = true
+		}
 		allChunks = append(allChunks, KnowledgeChunk{
-			ID:          fmt.Sprintf("%s_item_%d", idPrefix, len(allChunks)),
-			Category:    catPath,
-			CategoryKey: catKey,
-			Title:       removePrefix(cleanText(block.Title), prefix),
-			Summaries:   block.Summaries,
-			Description: block.Body,
-			Sources:     block.Sources,
-			DocumentID:  docID,
-			Explicit:    true,
+			ID:               fmt.Sprintf("%s_item_%d", idPrefix, len(allChunks)),
+			Category:         catPath,
+			CategoryKey:      catKey,
+			Title:            removePrefix(cleanText(block.Title), prefix),
+			Summaries:        block.Summaries,
+			Description:      block.Body,
+			Sources:          block.Sources,
+			DocumentID:       docID,
+			Explicit:         true,
+			WorkflowTemplate: wfTemplate,
 		})
 	}
 
@@ -1000,11 +1055,18 @@ func main() {
 	exportItems := buildExportItems(allChunks)
 
 	var categories []*memory.Category
-	for _, c := range catGraphMap {
+	for catKey, c := range catGraphMap {
 		if desc, ok := catDescriptions[c.Path]; ok {
 			c.Description = desc
 		} else if desc, ok := catDescriptions[c.Name]; ok {
 			c.Description = desc
+		}
+		// Set workflow_enabled metadata for categories containing workflows
+		if catHasWorkflows[catKey] {
+			if c.Metadata == nil {
+				c.Metadata = make(map[string]any)
+			}
+			c.Metadata["workflow_enabled"] = true
 		}
 		categories = append(categories, c)
 	}

@@ -1,5 +1,17 @@
 # Workflows
 
+<!-- 
+  Workflow Category Detection:
+  Categories are automatically marked with workflow_enabled=true when:
+  1. The category heading has [workflow] marker (e.g., "## My Tasks [workflow]")
+  2. The category contains items with workflow_template JSON payloads
+  
+  Parent categories (like "Workflows") are NOT auto-marked unless they explicitly
+  have the [workflow] marker or contain workflow items directly.
+  
+  Workflow items are displayed as expandable tree leaves in the UI.
+-->
+
 These workflows give the assistant a repeatable way to handle common tasks such as debugging failures or carrying out implementation work.
 
 Each workflow below is written so the assistant can follow a clear sequence of steps, understand the goal, and apply the right tools to complete the task effectively.
@@ -18,6 +30,7 @@ Each workflow below is written so the assistant can follow a clear sequence of s
     "workflow_name": "Fix failing tests",
     "description": "Reproduce the failure, inspect the root cause, apply a focused fix, and verify the result with tests.",
     "workflow_template": {
+      "schema_version": "1.0",
       "name": "Fix failing tests",
       "description": "Reproduce the failure, inspect the root cause, apply a focused fix, and verify the result with tests.",
       "protocol_guidance": "Always capture the failing output before changing code. Read the relevant test and implementation files before editing. Prefer a focused patch and re-run the relevant tests before claiming success.",
@@ -74,6 +87,7 @@ Each workflow below is written so the assistant can follow a clear sequence of s
     "workflow_name": "Coding",
     "description": "Plan the work, design the approach, implement the change, verify it with tests, and review the final result.",
     "workflow_template": {
+      "schema_version": "1.0",
       "name": "Coding",
       "description": "Plan the work, design the approach, implement the change, verify it with tests, and review the final result.",
       "protocol_guidance": "Start by understanding the requirement, design the approach before coding, keep changes focused, and verify the result with relevant tests and review.",

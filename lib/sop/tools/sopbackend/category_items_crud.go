@@ -289,7 +289,7 @@ func handleAddSpaceCategory(w http.ResponseWriter, r *http.Request) {
 
 		targetID, err := sop.ParseUUID(req.ID)
 		if err != nil {
-			http.Error(w, "Invalid ID format format", http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("Invalid ID format: %q - %v", req.ID, err), http.StatusBadRequest)
 			return
 		}
 
@@ -566,7 +566,14 @@ func handleAddSpaceItem(w http.ResponseWriter, r *http.Request) {
 			req.CategoryID = r.FormValue("category_id")
 		}
 		if r.FormValue("summaries") != "" {
-			req.Summaries = strings.Split(r.FormValue("summaries"), ".")
+			lines := strings.Split(r.FormValue("summaries"), "\n")
+			req.Summaries = make([]string, 0, len(lines))
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if trimmed != "" {
+					req.Summaries = append(req.Summaries, trimmed)
+				}
+			}
 		}
 		if r.FormValue("storage_mode") != "" {
 			req.Data["storage_mode"] = r.FormValue("storage_mode")

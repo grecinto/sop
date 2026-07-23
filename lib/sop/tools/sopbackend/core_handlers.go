@@ -69,6 +69,13 @@ func init() {
 			}
 
 			if isReadOnlyContext(entCtx.AssetID) && entCtx.IsSystemDB && (action == sop.ActionWrite || action == sop.ActionDelete) {
+				// Allow SystemAdmin to manage memory spaces via AI
+				auth := sop.GetAuthFromContext(ctx)
+				for _, role := range auth.Roles {
+					if strings.EqualFold(role, sop.RoleSystemAdmin) {
+						return true
+					}
+				}
 				return false
 			}
 			return true
@@ -1130,10 +1137,21 @@ func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter out other users' LTMs
+	// Filter out other users' LTMs, STMs, and memory spaces (unless SystemAdmin)
 	var filtered []string
+	auth := sop.GetAuthFromContext(ctx)
+	isSystemAdmin := false
+	for _, role := range auth.Roles {
+		if strings.EqualFold(role, sop.RoleSystemAdmin) {
+			isSystemAdmin = true
+			break
+		}
+	}
+
 	expectedMemoryPrefix := "memory_"
 	expectedMemoryFull := expectedMemoryPrefix + userID
+	expectedLTMSuffix := userID + "_ltm"
+	expectedSTMSuffix := userID + "_stm"
 
 	if result != nil {
 		for _, name := range result {
@@ -1141,13 +1159,40 @@ func handleListSpaces(w http.ResponseWriter, r *http.Request) {
 			if trimmedName == "" {
 				continue
 			}
+			lowerName := strings.ToLower(trimmedName)
+
+			// SystemAdmin can see everything
+			if isSystemAdmin {
+				filtered = append(filtered, trimmedName)
+				continue
+			}
+
+			// Filter memory_ prefixed spaces - only show user's own
 			if strings.HasPrefix(trimmedName, expectedMemoryPrefix) {
 				if trimmedName == expectedMemoryFull {
 					filtered = append(filtered, trimmedName)
 				}
-			} else {
-				filtered = append(filtered, trimmedName)
+				continue
 			}
+
+			// Filter _ltm suffixed spaces - only show user's own
+			if strings.HasSuffix(lowerName, "_ltm") {
+				if strings.EqualFold(trimmedName, expectedLTMSuffix) {
+					filtered = append(filtered, trimmedName)
+				}
+				continue
+			}
+
+			// Filter _stm suffixed spaces - only show user's own
+			if strings.HasSuffix(lowerName, "_stm") {
+				if strings.EqualFold(trimmedName, expectedSTMSuffix) {
+					filtered = append(filtered, trimmedName)
+				}
+				continue
+			}
+
+			// All other spaces are visible
+			filtered = append(filtered, trimmedName)
 		}
 	}
 

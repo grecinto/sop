@@ -57,8 +57,10 @@ func isInternalKnowledgeBase(spaceName, preloadPath string) bool {
 	lowerPath := strings.ToLower(strings.TrimSpace(preloadPath))
 
 	switch normalized {
-	case "sop", "sop kb", "sop knowledge base", "core playbook", "core playbook kb", "core playbook knowledge base":
+	case "core playbook", "core playbook kb", "core playbook knowledge base":
 		return strings.TrimSpace(preloadPath) == "" || strings.Contains(lowerPath, "sop_base_knowledge.json")
+	case "shared memory":
+		return true
 	case "medical", "medical kb", "medical knowledge base":
 		return strings.TrimSpace(preloadPath) == "" || strings.Contains(lowerPath, "medical.json")
 	default:

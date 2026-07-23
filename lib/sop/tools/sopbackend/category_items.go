@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai/memory"
@@ -195,6 +196,7 @@ func handleListSpaceItems(w http.ResponseWriter, r *http.Request) {
 			}
 			if val.Data != nil {
 				payload := val.Data
+				t.Data = val.Data // Include full data payload
 				if docID, found := payload["doc_id"]; found && len(t.DocID) == 0 {
 					switch v := docID.(type) {
 					case []string:
@@ -272,6 +274,32 @@ func handleListSpaceItems(w http.ResponseWriter, r *http.Request) {
 						var parsed map[string]any
 						if err := json.Unmarshal([]byte(v), &parsed); err == nil {
 							t.WorkflowTemplate = parsed
+						}
+					}
+				}
+				// Fallback: Parse workflow_template from description if not found in payload
+				if t.WorkflowTemplate == nil && t.Description != "" {
+					// Look for markdown code block with workflow_template JSON
+					start := strings.Index(t.Description, "```\n{")
+					if start == -1 {
+						start = strings.Index(t.Description, "``` \n{")
+					}
+					if start == -1 {
+						start = strings.Index(t.Description, "```json\n{")
+					}
+					if start != -1 {
+						end := strings.Index(t.Description[start:], "\n```")
+						if end != -1 {
+							jsonStart := strings.Index(t.Description[start:], "{")
+							if jsonStart != -1 {
+								jsonStr := t.Description[start+jsonStart : start+end]
+								var parsed map[string]any
+								if err := json.Unmarshal([]byte(jsonStr), &parsed); err == nil {
+									if wfTemplate, ok := parsed["workflow_template"].(map[string]any); ok {
+										t.WorkflowTemplate = wfTemplate
+									}
+								}
+							}
 						}
 					}
 				}

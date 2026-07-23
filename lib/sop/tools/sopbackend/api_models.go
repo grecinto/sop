@@ -75,6 +75,7 @@ type SpaceItemView struct {
 	WorkflowStepCount    int            `json:"workflow_step_count,omitempty"`
 	ProtocolGuidance     string         `json:"protocol_guidance,omitempty"`
 	WorkflowTemplate     map[string]any `json:"workflow_template,omitempty"`
+	Data                 map[string]any `json:"data,omitempty"` // Full data payload
 }
 
 // TemplateMetadata defines the structure for space template info.
