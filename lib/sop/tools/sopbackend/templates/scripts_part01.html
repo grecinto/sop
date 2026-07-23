@@ -1814,17 +1814,59 @@
     window.renderWorkflowStudioModal = function(item, fallbackTitle) {
         const state = getWorkflowStudioState(item, fallbackTitle);
         
-        // Render in items grid only, keep category tree visible
+        // Render in items grid
         const itemsGrid = document.getElementById('kb-items-grid');
         const headerTitle = document.getElementById('kb-items-header-title');
+        const itemsControls = document.getElementById('kb-items-controls');
+        
         if (!itemsGrid) {
             console.error('kb-items-grid not found');
             return;
         }
         
-        // Update header title
+        // Hide the Icon and per-page controls for workflow form
+        if (itemsControls) {
+            itemsControls.style.display = 'none';
+        }
+        
+        // Update header title with action icons
         if (headerTitle) {
-            headerTitle.textContent = '⚙️ Edit Workflow';
+            headerTitle.innerHTML = '';
+            headerTitle.appendChild(document.createTextNode('⚙️ Edit Workflow'));
+            
+            // Add Cancel button icon
+            const cancelBtn = document.createElement('span');
+            cancelBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854Z"/></svg>';
+            cancelBtn.title = 'Cancel';
+            cancelBtn.style.fontSize = '1em';
+            cancelBtn.style.marginLeft = '10px';
+            cancelBtn.style.cursor = 'pointer';
+            cancelBtn.style.color = 'var(--text-color)';
+            cancelBtn.style.verticalAlign = 'middle';
+            cancelBtn.style.display = 'inline-flex';
+            cancelBtn.style.alignItems = 'center';
+            cancelBtn.onclick = (e) => {
+                e.stopPropagation();
+                window.closeWorkflowStudio();
+            };
+            headerTitle.appendChild(cancelBtn);
+            
+            // Add Save button icon
+            const saveBtn = document.createElement('span');
+            saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M2 1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H9.5a1 1 0 0 0-1 1v7.293l2.646-2.647a.5.5 0 0 1 .708.708l-3.5 3.5a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L7.5 9.293V2a2 2 0 0 1 2-2H14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2h2.5a.5.5 0 0 1 0 1H2z"/></svg>';
+            saveBtn.title = 'Save Workflow';
+            saveBtn.style.fontSize = '1em';
+            saveBtn.style.marginLeft = '10px';
+            saveBtn.style.cursor = 'pointer';
+            saveBtn.style.color = '#7c3aed';
+            saveBtn.style.verticalAlign = 'middle';
+            saveBtn.style.display = 'inline-flex';
+            saveBtn.style.alignItems = 'center';
+            saveBtn.onclick = (e) => {
+                e.stopPropagation();
+                window.saveWorkflowStudioChanges();
+            };
+            headerTitle.appendChild(saveBtn);
         }
 
         const selectedIndex = state.selectedIndex >= 0 ? state.selectedIndex : 0;
@@ -1840,20 +1882,11 @@
         }).join('');
 
         itemsGrid.innerHTML = `
-            <div style="padding: 15px 0;">
-                <div style="display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid rgba(124, 58, 237, 0.2);">
-                    <button onclick="window.closeWorkflowStudio()" style="padding: 8px 16px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--button-bg); color: var(--text-color); cursor: pointer; font-size: 0.95em;">
-                        Cancel
-                    </button>
-                    <button onclick="window.saveWorkflowStudioChanges()" style="padding: 8px 16px; border: none; border-radius: 6px; background: var(--active-bg); color: #fff; cursor: pointer; font-weight: 600; font-size: 0.95em; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);">
-                        Save Workflow
-                    </button>
-                </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                    <!-- Left Column -->
-                    <div style="display: flex; flex-direction: column; gap: 20px;">
-                        <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--secondary-bg);">
+            <div style="padding: 15px 0; min-width: 628px; max-width: 1012px; width: 820px;">
+                <div style="display: flex; gap: 20px; width: 100%;">
+                    <!-- Left Column: Workflow Overview and Steps List -->
+                    <div style="display: flex; flex-direction: column; gap: 0; flex: 1;">
+                        <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:8px 8px 0 0; border-bottom: none; padding:15px; background:var(--secondary-bg);">
                             <div style="font-size:0.9em; font-weight:700; color:var(--text-color); margin-bottom: 5px;">Workflow Overview</div>
                             <label style="font-size:0.8em; color:var(--text-muted); margin-top: 5px;">Workflow name</label>
                             <input id="workflow-studio-name" type="text" value="${window.escapeHTML(state.workflow.name || 'Untitled workflow')}" oninput="window.updateWorkflowStudioField('name', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
@@ -1863,17 +1896,29 @@
                             <textarea id="workflow-studio-protocol" oninput="window.updateWorkflowStudioField('protocolGuidance', this.value)" style="width:100%; min-height:80px; resize:vertical; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">${window.escapeHTML(state.workflow.protocolGuidance || '')}</textarea>
                         </div>
                         
-                        <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--secondary-bg); flex: 1;">
+                        <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:0 0 8px 8px; padding:15px; background:var(--secondary-bg); flex: 1;">
                             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
                                 <div style="font-size:0.9em; font-weight:700; color:var(--text-color);">Workflow Steps</div>
-                                <button type="button" onclick="window.addWorkflowStudioStep()" style="padding:6px 12px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer; font-size: 0.9em;">+ Add Step</button>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <span onclick="window.addWorkflowStudioStep()" title="Add Step" style="cursor: pointer; display: inline-flex; align-items: center; color: #7c3aed;">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16">
+                                            <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
+                                        </svg>
+                                    </span>
+                                    <span onclick="window.deleteWorkflowStudioStep()" title="Delete Selected Step" style="cursor: pointer; display: inline-flex; align-items: center; color: var(--text-color); opacity: 0.7;">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+                                            <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+                                        </svg>
+                                    </span>
+                                </div>
                             </div>
-                            <div style="display:flex; flex-direction:column; gap:8px; overflow-y:auto; padding-right:2px; max-height: 400px;">${stepListHtml || '<div style="font-size:0.85em; color:var(--text-muted); padding: 10px 0;">No steps yet. Add one to start editing the workflow.</div>'}</div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; overflow-y:auto; padding-right:2px; max-height: 400px;">${stepListHtml || '<div style="font-size:0.85em; color:var(--text-muted); padding: 10px 0; grid-column: 1 / -1;">No steps yet. Add one to start editing the workflow.</div>'}</div>
                         </div>
                     </div>
                     
-                    <!-- Right Column -->
-                    <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--secondary-bg);">
+                    <!-- Right Column: Step Details -->
+                    <div style="display:flex; flex-direction:column; gap:10px; border:1px solid var(--border-color); border-radius:8px; padding:15px; background:var(--secondary-bg); flex: 1;">
                         <div style="font-size:0.9em; font-weight:700; color:var(--text-color); margin-bottom: 5px;">Step Details</div>
                         <label style="font-size:0.8em; color:var(--text-muted); margin-top: 5px;">Step title</label>
                         <input type="text" value="${window.escapeHTML(selectedStep.title || '')}" oninput="window.updateWorkflowStudioStepField(${selectedIndex}, 'title', this.value)" style="width:100%; background: var(--input-bg); color: var(--text-color); border:1px solid var(--border-color); border-radius:6px; padding:8px; box-sizing:border-box;">
@@ -1894,6 +1939,12 @@
     };
     
     window.closeWorkflowStudio = function() {
+        // Show the controls again when returning to items view
+        const itemsControls = document.getElementById('kb-items-controls');
+        if (itemsControls) {
+            itemsControls.style.display = 'flex';
+        }
+        
         // Reload the items view
         if (window._lastFetchItemsArgs) {
             const args = window._lastFetchItemsArgs;
@@ -1937,6 +1988,26 @@
         const nextIndex = (state.workflow.steps || []).length;
         state.workflow.steps.push(createBlankWorkflowStudioStep(nextIndex + 1));
         state.selectedIndex = state.workflow.steps.length - 1;
+        window.renderWorkflowStudioModal(state.item, state.fallbackTitle);
+    };
+
+    window.deleteWorkflowStudioStep = function() {
+        const state = window._workflowStudioState;
+        if (!state || !state.workflow || !state.workflow.steps || state.workflow.steps.length === 0) {
+            return;
+        }
+        const selectedIndex = state.selectedIndex >= 0 ? state.selectedIndex : 0;
+        if (selectedIndex >= state.workflow.steps.length) {
+            return;
+        }
+        // Remove the selected step
+        state.workflow.steps.splice(selectedIndex, 1);
+        // Adjust selected index
+        if (state.workflow.steps.length === 0) {
+            state.selectedIndex = -1;
+        } else if (selectedIndex >= state.workflow.steps.length) {
+            state.selectedIndex = state.workflow.steps.length - 1;
+        }
         window.renderWorkflowStudioModal(state.item, state.fallbackTitle);
     };
 
@@ -3064,14 +3135,14 @@
                     </ul>
                 </div>
                 
-                <!-- Resizer Handle -->
-                <div class="resizer" id="tree-resizer" style="width: 4px; cursor: col-resize; background-color: transparent; transition: background-color 0.2s; height: 100%; border-right: 1px solid var(--border-color); flex-shrink: 0;" onmouseover="this.style.backgroundColor='var(--success-bg)'" onmouseout="this.style.backgroundColor='transparent'"></div>
+                <!-- Resizer Handle - hidden as it's not used in Spaces -->
+                <div class="resizer" id="tree-resizer" style="display: none; width: 4px; cursor: col-resize; background-color: transparent; transition: background-color 0.2s; height: 100%; border-right: 1px solid var(--border-color); flex-shrink: 0;" onmouseover="this.style.backgroundColor='var(--success-bg)'" onmouseout="this.style.backgroundColor='transparent'"></div>
 
                 <!-- Right Side Grid -->
                 <div style="flex: 1; display: flex; flex-direction: column; height: 100%; overflow-y: auto; overflow-x: hidden; padding-right: 0px; padding-left: 10px; min-width: 0; box-sizing: border-box;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 5px; border-bottom: 1px solid var(--border-color); position: sticky; top: 0; background: var(--bg-color); z-index: 10; overflow: hidden;">
                         <h3 id="kb-items-header-title" style="margin: 0; font-size: 1.1em; color: var(--text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 10px;">All Items</h3>
-                        <div style="display: flex; align-items: center; gap: 10px;">
+                        <div id="kb-items-controls" style="display: flex; align-items: center; gap: 10px;">
                             <style>
                                 #space-items-view-toggle {
                                     width: 16px;
@@ -3097,7 +3168,7 @@
                             ${actionButtons}
                         </div>
                     </div>
-                    <div id="kb-items-grid" style="display: block; column-width: 280px; column-gap: 15px; padding-bottom: 20px;">
+                    <div id="kb-items-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px; padding-bottom: 20px;">
                         <div style="padding: 15px;">Please select a category.</div>
                     </div>
                 </div>
@@ -3111,40 +3182,37 @@
             displayToggle.checked = (window._spaceItemDisplayMode || 'text') === 'icon';
         }
 
-        // Add resizing behavior
+        // Resizing behavior exists but resizer is hidden
         const resizer = document.getElementById('tree-resizer');
         const treePane = document.getElementById('category-tree-pane');
         let isResizing = false;
 
-        resizer.addEventListener('mousedown', (e) => {
-            isResizing = true;
-            document.body.style.cursor = 'col-resize';
-            // Prevent text selection during drag
-            document.body.style.userSelect = 'none';
-        });
+        if (resizer) {
+            resizer.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+            });
 
-        document.addEventListener('mousemove', (e) => {
-            if (!isResizing) return;
-            // Calculate new width relative to the left side of the screen
-            // or the container's bounds if we want to be more precise.
-            const containerRect = grid.getBoundingClientRect();
-            // grid usually has some padding/margin to account for.
-            let newWidth = e.clientX - treePane.getBoundingClientRect().left;
-            
-            // Constrain width
-            if (newWidth < 150) newWidth = 150;
-            if (newWidth > containerRect.width * 0.7) newWidth = containerRect.width * 0.7; // Max 70% of pane
-            
-            treePane.style.width = `${newWidth}px`;
-        });
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const containerRect = grid.getBoundingClientRect();
+                let newWidth = e.clientX - treePane.getBoundingClientRect().left;
+                
+                if (newWidth < 150) newWidth = 150;
+                if (newWidth > containerRect.width * 0.7) newWidth = containerRect.width * 0.7;
+                
+                treePane.style.width = `${newWidth}px`;
+            });
 
-        document.addEventListener('mouseup', () => {
-            if (isResizing) {
-                isResizing = false;
-                document.body.style.cursor = '';
-                document.body.style.userSelect = '';
-            }
-        });
+            document.addEventListener('mouseup', () => {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                }
+            });
+        }
 
         // Recursively render tree
         const treeRoot = document.querySelector('#kb-category-tree');
@@ -3454,14 +3522,62 @@
         window.showWorkflowFlowDiagram = function(item, category, spaceName) {
             const itemsGrid = document.getElementById('kb-items-grid');
             const headerTitle = document.getElementById('kb-items-header-title');
+            const itemsControls = document.getElementById('kb-items-controls');
+            
             if (!itemsGrid) {
                 console.error('kb-items-grid not found');
                 return;
             }
             
-            // Update header title
+            // Hide the Icon and per-page controls for workflow diagram
+            if (itemsControls) {
+                itemsControls.style.display = 'none';
+            }
+            
+            // Switch to block layout for workflow view (full width)
+            itemsGrid.style.display = 'block';
+            itemsGrid.style.gridTemplateColumns = '';
+            itemsGrid.style.gap = '';
+            itemsGrid.style.width = '100%';
+            
+            // Update header title with workflow actions
             if (headerTitle) {
-                headerTitle.textContent = '⚡ ' + window.getWorkflowName(item);
+                headerTitle.innerHTML = '';
+                headerTitle.appendChild(document.createTextNode('⚡ ' + window.getWorkflowName(item)));
+                
+                // Add Edit button icon
+                const editBtn = document.createElement('span');
+                editBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>';
+                editBtn.title = 'Edit Workflow';
+                editBtn.style.fontSize = '1em';
+                editBtn.style.marginLeft = '10px';
+                editBtn.style.cursor = 'pointer';
+                editBtn.style.color = 'var(--text-color)';
+                editBtn.style.verticalAlign = 'middle';
+                editBtn.style.display = 'inline-flex';
+                editBtn.style.alignItems = 'center';
+                editBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    window.openWorkflowStudioModalById(item.id);
+                };
+                headerTitle.appendChild(editBtn);
+                
+                // Add Run button icon
+                const runBtn = document.createElement('span');
+                runBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="m11.596 8.697-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/></svg>';
+                runBtn.title = 'Run Workflow';
+                runBtn.style.fontSize = '1em';
+                runBtn.style.marginLeft = '10px';
+                runBtn.style.cursor = 'pointer';
+                runBtn.style.color = '#7c3aed';
+                runBtn.style.verticalAlign = 'middle';
+                runBtn.style.display = 'inline-flex';
+                runBtn.style.alignItems = 'center';
+                runBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    alert('Workflow runner coming soon!');
+                };
+                headerTitle.appendChild(runBtn);
             }
             
             const workflowName = window.getWorkflowName(item);
@@ -3469,25 +3585,32 @@
             const steps = window.getWorkflowSteps(item);
             const protocolGuidance = item.protocol_guidance || item.protocolGuidance || (item.data && (item.data.protocol_guidance || item.data.protocolGuidance)) || '';
             
+            // Store steps globally for click handlers
+            window._currentWorkflowSteps = steps;
+            
             itemsGrid.innerHTML = `
                 <div class="workflow-detail-view" style="padding: 15px 0;">
-                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid rgba(124, 58, 237, 0.2);">
-                        <div style="flex: 1;">
-                            ${workflowDesc ? `<p style="color: var(--text-muted); margin: 0 0 12px 0; font-size: 1em; line-height: 1.6;">${window.escapeHTML(workflowDesc)}</p>` : ''}
-                            ${protocolGuidance ? `<div style="margin-top: 8px; padding: 10px; background: rgba(124, 58, 237, 0.05); border-left: 3px solid #7c3aed; border-radius: 4px;"><strong style="color: #7c3aed; font-size: 0.85em;">Protocol:</strong> <span style="font-size: 0.9em; color: var(--text-color);">${window.escapeHTML(protocolGuidance)}</span></div>` : ''}
+                    <div style="display: flex; gap: 24px; align-items: flex-start; width: 100%;">
+                        <!-- Left side: Description and Step Details (stretchable 35%-70%) -->
+                        <div style="min-width: 35%; max-width: 70%; flex: 1; overflow-wrap: break-word;">
+                            <div style="margin-bottom: 20px;">
+                                ${workflowDesc ? `<p style="color: var(--text-muted); margin: 0 0 12px 0; font-size: 1em; line-height: 1.6;">${window.escapeHTML(workflowDesc)}</p>` : ''}
+                                ${protocolGuidance ? `<div style="margin-top: 8px; padding: 10px; background: rgba(124, 58, 237, 0.05); border-left: 3px solid #7c3aed; border-radius: 4px;"><strong style="color: #7c3aed; font-size: 0.85em;">Protocol:</strong> <span style="font-size: 0.9em; color: var(--text-color);">${window.escapeHTML(protocolGuidance)}</span></div>` : ''}
+                            </div>
+                            
+                            <div id="workflow-step-details" style="padding: 15px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--secondary-bg); display: none;">
+                                <div style="font-size: 0.9em; color: var(--text-muted); text-align: center; padding: 20px;">
+                                    Click on a step in the diagram to view details
+                                </div>
+                            </div>
                         </div>
-                        <div style="display: flex; gap: 12px; margin-left: 20px; flex-shrink: 0;">
-                            <button onclick="window.openWorkflowStudioModalById('${item.id}')" style="padding: 10px 18px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--button-bg); color: var(--text-color); cursor: pointer; font-size: 0.95em; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background='rgba(0,0,0,0.05)'" onmouseout="this.style.background='var(--button-bg)'">
-                                ✏️ Edit
-                            </button>
-                            <button onclick="alert('Workflow runner coming soon!')" style="padding: 10px 18px; border: 1px solid #7c3aed; border-radius: 8px; background: #7c3aed; color: #fff; cursor: pointer; font-weight: 600; font-size: 0.95em; transition: all 0.2s; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);" onmouseover="this.style.background='#6d28d9'; this.style.boxShadow='0 4px 12px rgba(124, 58, 237, 0.4)'" onmouseout="this.style.background='#7c3aed'; this.style.boxShadow='0 2px 8px rgba(124, 58, 237, 0.3)'">
-                                ▶ Run Workflow
-                            </button>
+                        
+                        <!-- Right side: Diagram (flexible to accommodate left side growth) -->
+                        <div style="flex: 1; min-width: 0; overflow-wrap: break-word;">
+                            <div class="workflow-flow-diagram">
+                                ${window.renderFlowDiagram(steps)}
+                            </div>
                         </div>
-                    </div>
-                    
-                    <div class="workflow-flow-diagram">
-                        ${window.renderFlowDiagram(steps)}
                     </div>
                 </div>
             `;
@@ -3498,94 +3621,191 @@
                 return '<div style="text-align: center; color: var(--text-muted); padding: 60px; font-size: 1.1em;">No steps defined for this workflow</div>';
             }
             
-            let html = '<div style="display: flex; flex-direction: column; gap: 20px;">';
+            // Generate unique ID for this diagram
+            const diagramId = 'workflow-diagram-' + Math.random().toString(36).substr(2, 9);
             
-            html += `
-                <div style="display: flex; align-items: center; gap: 15px; justify-content: center;">
-                    <div style="padding: 12px 24px; border: 2px solid #10b981; border-radius: 50px; background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05)); color: #059669; font-weight: 700; font-size: 1em; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);">
-                        START
-                    </div>
-                </div>
-                <div style="display: flex; justify-content: center; margin: -10px 0;">
-                    <div style="width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 20px solid #10b981;"></div>
-                </div>
-            `;
+            // Build Mermaid flowchart syntax
+            let mermaidCode = 'flowchart TD\n';
+            mermaidCode += '    Start([START]):::startNode\n';
             
+            // Add steps
             steps.forEach((step, idx) => {
                 const stepNumber = step.stepNumber || idx + 1;
-                const title = step.title || `Step ${stepNumber}`;
-                const instructions = step.instructions || '';
-                const requiredContext = step.requiredContext || [];
-                const successCriteria = step.successCriteria || [];
-                const iterationPolicy = step.iterationPolicy || '';
+                const title = (step.title || `Step ${stepNumber}`).replace(/"/g, '#quot;');
+                const nodeId = `step${stepNumber}`;
+                const prevNodeId = idx === 0 ? 'Start' : `step${steps[idx - 1].stepNumber || idx}`;
                 
-                html += `
-                    <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <div style="border: 2px solid #7c3aed; border-radius: 12px; padding: 24px; background: linear-gradient(135deg, rgba(124,58,237,0.08), rgba(255,255,255,0.02)); box-shadow: 0 4px 12px rgba(124,58,237,0.15); transition: all 0.3s;" onmouseover="this.style.boxShadow='0 6px 20px rgba(124,58,237,0.25)'; this.style.transform='translateY(-2px)'" onmouseout="this.style.boxShadow='0 4px 12px rgba(124,58,237,0.15)'; this.style.transform='translateY(0)'">
-                            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 16px;">
-                                <div style="width: 50px; height: 50px; border-radius: 50%; background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.3em; box-shadow: 0 3px 10px rgba(124, 58, 237, 0.4);">${stepNumber}</div>
-                                <h3 style="margin: 0; flex: 1; color: var(--text-color); font-size: 1.3em; font-weight: 600;">
-                                    ${window.escapeHTML(title)}
-                                </h3>
-                            </div>
-                            
-                            ${instructions ? `
-                                <div style="margin-bottom: 16px; line-height: 1.7; color: var(--text-color); font-size: 1em; padding: 12px; background: rgba(0,0,0,0.02); border-radius: 6px;">
-                                    ${window.escapeHTML(instructions)}
-                                </div>
-                            ` : ''}
-                            
-                            ${requiredContext.length > 0 ? `
-                                <div style="margin-bottom: 12px;">
-                                    <strong style="color: #7c3aed; font-size: 0.9em; display: block; margin-bottom: 8px;">📋 Required Context:</strong>
-                                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                                        ${requiredContext.map(ctx => `
-                                            <span style="font-size: 0.85em; background: rgba(124,58,237,0.12); color: #7c3aed; padding: 6px 12px; border-radius: 14px; border: 1px solid rgba(124,58,237,0.25); font-weight: 500;">${window.escapeHTML(ctx)}</span>
-                                        `).join('')}
-                                    </div>
-                                </div>
-                            ` : ''}
-                            
-                            ${successCriteria.length > 0 ? `
-                                <div style="margin-bottom: 12px;">
-                                    <strong style="color: #10b981; font-size: 0.9em; display: block; margin-bottom: 8px;">✓ Success Criteria:</strong>
-                                    <ul style="margin: 0; padding-left: 24px; font-size: 0.9em; color: var(--text-muted); line-height: 1.8;">
-                                        ${successCriteria.map(criterion => `
-                                            <li style="margin: 4px 0;">${window.escapeHTML(criterion)}</li>
-                                        `).join('')}
-                                    </ul>
-                                </div>
-                            ` : ''}
-                            
-                            ${iterationPolicy ? `
-                                <div style="font-size: 0.85em; color: var(--text-muted); font-style: italic; margin-top: 8px; padding: 8px 12px; background: rgba(0,0,0,0.02); border-radius: 6px;">
-                                    <strong style="color: var(--key-color);">🔄 Iteration:</strong> ${window.escapeHTML(iterationPolicy)}
-                                </div>
-                            ` : ''}
-                        </div>
-                        
-                        ${idx < steps.length - 1 ? `
-                            <div style="display: flex; justify-content: center; margin: -5px 0;">
-                                <div style="width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 20px solid #7c3aed;"></div>
-                            </div>
-                        ` : ''}
-                    </div>
-                `;
+                // Add node with step number and title
+                mermaidCode += `    ${nodeId}["${stepNumber}. ${title}"]:::stepNode\n`;
+                // Add arrow from previous node
+                mermaidCode += `    ${prevNodeId} --> ${nodeId}\n`;
+                // Add click event
+                mermaidCode += `    click ${nodeId} call showWorkflowStepByNumber(${stepNumber})\n`;
             });
             
-            html += `
-                <div style="display: flex; justify-content: center; margin-top: -5px;">
-                    <div style="width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 20px solid #ef4444;"></div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 15px; justify-content: center;">
-                    <div style="padding: 12px 24px; border: 2px solid #ef4444; border-radius: 50px; background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.05)); color: #dc2626; font-weight: 700; font-size: 1em; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2);">
-                        END
-                    </div>
+            // Add END node
+            const lastStepId = `step${steps[steps.length - 1].stepNumber || steps.length}`;
+            mermaidCode += `    End([END]):::endNode\n`;
+            mermaidCode += `    ${lastStepId} --> End\n`;
+            
+            // Add styling
+            mermaidCode += '\n';
+            mermaidCode += '    classDef startNode fill:#d1fae5,stroke:#10b981,stroke-width:3px,color:#059669\n';
+            mermaidCode += '    classDef stepNode fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#5b21b6\n';
+            mermaidCode += '    classDef endNode fill:#fee2e2,stroke:#ef4444,stroke-width:3px,color:#dc2626\n';
+            
+            // Return HTML with Mermaid diagram
+            const html = `
+                <div class="mermaid" id="${diagramId}" style="text-align: center;">
+                    ${mermaidCode}
                 </div>
             `;
             
-            html += '</div>';
+            // Initialize Mermaid and render the diagram after a short delay
+            setTimeout(() => {
+                if (typeof mermaid !== 'undefined') {
+                    mermaid.initialize({ 
+                        startOnLoad: false,
+                        theme: 'base',
+                        securityLevel: 'loose',
+                        themeVariables: {
+                            primaryColor: '#ede9fe',
+                            primaryTextColor: '#5b21b6',
+                            primaryBorderColor: '#7c3aed',
+                            lineColor: '#7c3aed',
+                            secondaryColor: '#d1fae5',
+                            tertiaryColor: '#fee2e2'
+                        },
+                        flowchart: {
+                            curve: 'basis',
+                            padding: 20
+                        }
+                    });
+                    mermaid.run({ nodes: [document.getElementById(diagramId)] }).then(() => {
+                        // Add click handlers to step nodes after Mermaid renders
+                        const diagramEl = document.getElementById(diagramId);
+                        if (diagramEl) {
+                            const stepNodes = diagramEl.querySelectorAll('[id^="flowchart-step"]');
+                            stepNodes.forEach(node => {
+                                node.style.cursor = 'pointer';
+                                node.addEventListener('click', (e) => {
+                                    // Extract step number from the node's text content
+                                    const textEl = node.querySelector('.nodeLabel, text, span');
+                                    if (textEl) {
+                                        const text = textEl.textContent || textEl.innerText;
+                                        const match = text.match(/^(\d+)\./);
+                                        if (match && window._currentWorkflowSteps) {
+                                            const stepNum = parseInt(match[1], 10);
+                                            const step = window._currentWorkflowSteps.find(s => (s.stepNumber || 0) === stepNum);
+                                            if (step) {
+                                                window.showWorkflowStepDetails(step);
+                                            }
+                                        }
+                                    }
+                                });
+                            });
+                        }
+                    });
+                }
+            }, 100);
+            
             return html;
+        };
+        
+        window.showWorkflowStepDetails = function(step) {
+            const detailsPanel = document.getElementById('workflow-step-details');
+            if (!detailsPanel) return;
+            
+            const stepNumber = step.stepNumber || 1;
+            const title = step.title || `Step ${stepNumber}`;
+            const instructions = step.instructions || '';
+            const requiredContext = step.requiredContext || [];
+            const successCriteria = step.successCriteria || [];
+            const iterationPolicy = step.iterationPolicy || '';
+            const toolsExpected = step.toolsExpected || [];
+            
+            let html = `
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid rgba(124, 58, 237, 0.2);">
+                    <div style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #7c3aed, #6d28d9); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.1em; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.4); flex-shrink: 0;">${stepNumber}</div>
+                    <h3 style="margin: 0; color: var(--text-color); font-size: 1.1em; font-weight: 600;">
+                        ${window.escapeHTML(title)}
+                    </h3>
+                </div>
+            `;
+            
+            if (instructions) {
+                html += `
+                    <div style="margin-bottom: 16px;">
+                        <strong style="color: var(--text-color); font-size: 0.9em; display: block; margin-bottom: 8px;">Instructions:</strong>
+                        <div style="line-height: 1.6; color: var(--text-muted); font-size: 0.9em; padding: 10px; background: rgba(0,0,0,0.02); border-radius: 6px;">
+                            ${window.escapeHTML(instructions)}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            if (requiredContext.length > 0) {
+                html += `
+                    <div style="margin-bottom: 16px;">
+                        <strong style="color: #7c3aed; font-size: 0.9em; display: block; margin-bottom: 8px;">📋 Required Context:</strong>
+                        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                            ${requiredContext.map(ctx => `
+                                <span style="font-size: 0.85em; background: rgba(124,58,237,0.12); color: #7c3aed; padding: 5px 10px; border-radius: 12px; border: 1px solid rgba(124,58,237,0.25); font-weight: 500;">${window.escapeHTML(ctx)}</span>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            if (successCriteria.length > 0) {
+                html += `
+                    <div style="margin-bottom: 16px;">
+                        <strong style="color: #10b981; font-size: 0.9em; display: block; margin-bottom: 8px;">✓ Success Criteria:</strong>
+                        <ul style="margin: 0; padding-left: 20px; font-size: 0.85em; color: var(--text-muted); line-height: 1.7;">
+                            ${successCriteria.map(criterion => `
+                                <li style="margin: 4px 0;">${window.escapeHTML(criterion)}</li>
+                            `).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+            
+            if (toolsExpected.length > 0) {
+                html += `
+                    <div style="margin-bottom: 16px;">
+                        <strong style="color: var(--text-color); font-size: 0.9em; display: block; margin-bottom: 8px;">🔧 Tools Expected:</strong>
+                        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                            ${toolsExpected.map(tool => `
+                                <span style="font-size: 0.8em; background: rgba(0,0,0,0.05); color: var(--text-color); padding: 4px 8px; border-radius: 10px; border: 1px solid var(--border-color); font-family: monospace;">${window.escapeHTML(tool)}</span>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            if (iterationPolicy) {
+                html += `
+                    <div style="margin-bottom: 8px;">
+                        <strong style="color: var(--key-color); font-size: 0.9em; display: block; margin-bottom: 8px;">🔄 Iteration Policy:</strong>
+                        <div style="font-size: 0.85em; color: var(--text-muted); font-style: italic; padding: 8px; background: rgba(0,0,0,0.02); border-radius: 6px;">
+                            ${window.escapeHTML(iterationPolicy)}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            detailsPanel.innerHTML = html;
+            detailsPanel.style.display = 'block';
+        };
+        
+        // Global callback for Mermaid click events
+        window.showWorkflowStepByNumber = function(stepNumber) {
+            if (window._currentWorkflowSteps) {
+                const step = window._currentWorkflowSteps.find(s => (s.stepNumber || 0) === stepNumber);
+                if (step) {
+                    window.showWorkflowStepDetails(step);
+                }
+            }
         };
         
         // Category Pagination UI
@@ -3668,6 +3888,13 @@
     window.fetchItemsForCategory = async function(spaceName, categoryId, categoryName, liElement, catObj, offset = 0, limit = (window._currentLimit || 50), lastCatId = "", lastItemId = "") {
             window._lastFetchItemsArgs = { spaceName, categoryId, categoryName, liElement, catObj, offset, limit, lastCatId, lastItemId };
             window._currentSelectedCategoryName = categoryName;
+            
+            // Show the controls for item cards view
+            const itemsControls = document.getElementById('kb-items-controls');
+            if (itemsControls) {
+                itemsControls.style.display = 'flex';
+            }
+            
             document.querySelectorAll('#kb-category-tree li').forEach(li => {
                 li.style.fontWeight = 'normal';
                 li.style.color = 'var(--text-color)';
@@ -3970,7 +4197,7 @@
                     const contentBodyHtml = workflowCardHtml || (displayMode === 'icon' && mediaPreviewHtml ? mediaPreviewHtml : descHtml);
 
                     contentHtml += `
-                        <div class="kb-item-card" data-preview-ref="${window.escapeHTML(itemRef)}" style="width: 100%; box-sizing: border-box; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 15px; background: var(--bg-color); box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: inline-block; margin-bottom: 15px; break-inside: avoid; transition: transform 0.2s, box-shadow 0.2s; cursor: pointer;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 8px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.05)';">
+                        <div class="kb-item-card" data-preview-ref="${window.escapeHTML(itemRef)}" style="box-sizing: border-box; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 15px; background: var(--bg-color); box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; flex-direction: column; transition: transform 0.2s, box-shadow 0.2s; cursor: pointer;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 8px rgba(0,0,0,0.1)';" onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.05)';">
                             <div style="display:flex; justify-content:${(!categoryId || categoryName === 'All Items') ? 'space-between' : 'flex-end'}; align-items:center; margin-bottom:5px;">
                                 ${(!categoryId || categoryName === 'All Items') ? `
                                 <div style="font-size: 0.75em; font-weight: 600; color: #fff; background-color: #5b6ed1; padding: 3px 8px; border-radius: 12px; text-transform: uppercase;">
@@ -4049,6 +4276,11 @@
                 }
                 
                 contentHtml += paginationHtml;
+                tg.style.display = 'grid';
+                tg.style.gridTemplateColumns = 'repeat(auto-fill, minmax(280px, 1fr))';
+                tg.style.gap = '15px';
+                tg.style.columnWidth = '';
+                tg.style.columnGap = '';
                 tg.innerHTML = contentHtml;
 
             } catch (err) {
