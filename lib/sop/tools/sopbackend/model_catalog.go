@@ -96,6 +96,9 @@ func defaultLocalEmbedderOptions() []ModelCatalogOption {
 
 func DefaultModelCatalog() ModelCatalog {
 	localOptions := defaultLocalEmbedderOptions()
+	if len(localOptions) == 0 || !containsLocalEmbedderOption(localOptions) {
+		localOptions = append([]ModelCatalogOption{{Value: "kelindar:kelindar", Label: "Local Kelindar (default)"}}, localOptions...)
+	}
 	return ModelCatalog{
 		LLM: []ModelCatalogGroup{
 			{
@@ -137,6 +140,17 @@ func DefaultModelCatalog() ModelCatalog {
 }
 
 const modelCatalogFilename = "model_catalog.json"
+
+func containsLocalEmbedderOption(options []ModelCatalogOption) bool {
+	for _, option := range options {
+		value := strings.ToLower(option.Value)
+		label := strings.ToLower(option.Label)
+		if strings.Contains(value, "kelindar") || strings.Contains(value, "local") || strings.Contains(label, "kelindar") || strings.Contains(label, "local") {
+			return true
+		}
+	}
+	return false
+}
 
 func ensureModelCatalogDefaults(catalog *ModelCatalog) bool {
 	defaults := DefaultModelCatalog()

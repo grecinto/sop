@@ -14,14 +14,14 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
-func TestApplySopbackendPreloadPolicyDisablesPreloadByDefault(t *testing.T) {
+func TestApplySopbackendPreloadPolicyPreservesDefaultPreloadSetting(t *testing.T) {
 	sopbackend.SetConfig(sopbackend.Config{})
 	defer sopbackend.SetConfig(sopbackend.Config{})
 
 	applySopbackendPreloadPolicy()
 
-	if !sopbackend.GetConfig().DisableSOPKBPreload {
-		t.Fatalf("expected DisableSOPKBPreload to be enabled")
+	if sopbackend.GetConfig().DisableSOPKBPreload {
+		t.Fatalf("expected DisableSOPKBPreload to remain disabled by default")
 	}
 }
 

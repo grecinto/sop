@@ -264,7 +264,7 @@ func TestListSpacesMarksInternalSOPAsNonAISelectable(t *testing.T) {
 	}
 }
 
-func TestListSpacesFiltersOutNonVectorizedSpaces(t *testing.T) {
+func TestListSpacesIncludesNonVectorizedSpaces(t *testing.T) {
 	oldConfig := config
 	t.Cleanup(func() { config = oldConfig })
 
@@ -329,18 +329,14 @@ func TestListSpacesFiltersOutNonVectorizedSpaces(t *testing.T) {
 		t.Fatalf("decode list response error = %v", err)
 	}
 
+	// Both vectorized and non-vectorized spaces should be included in the response
 	for _, name := range []string{vectorizedSpace, nonVectorizedSpace} {
-		if name == vectorizedSpace {
-			if !contains(listResp.Data, name) {
-				t.Fatalf("expected vectorized space %q in response data, got %#v", name, listResp.Data)
-			}
-			continue
-		}
-		if contains(listResp.Data, name) {
-			t.Fatalf("expected non-vectorized space %q to be filtered from response data, got %#v", name, listResp.Data)
+		if !contains(listResp.Data, name) {
+			t.Fatalf("expected space %q in response data, got %#v", name, listResp.Data)
 		}
 	}
 
+	// VectorizedSpaces map should correctly indicate vectorization status
 	if got := listResp.VectorizedSpaces[vectorizedSpace]; !got {
 		t.Fatalf("expected vectorized_spaces[%q] = true, got %v", vectorizedSpace, got)
 	}

@@ -60,6 +60,34 @@ func TestUIRouterFindsTemplatesWhenWorkingDirectoryChanges(t *testing.T) {
 	}
 }
 
+func TestLandingPageDataExposesModelCatalogForTemplates(t *testing.T) {
+	router := NewUIRouter(nil, "*.html")
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root"}))
+
+	data := router.landingPageData(req)
+	catalog, ok := data["ModelCatalog"].(ModelCatalog)
+	if !ok {
+		t.Fatalf("expected landing page data to expose ModelCatalog, got %#v", data["ModelCatalog"])
+	}
+
+	var found bool
+	for _, group := range catalog.Embedder {
+		for _, option := range group.Options {
+			if option.Value == "kelindar:nomic-embed-text-v1.5-q8_0" {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected landing page data to include the default local embedder option, got %#v", catalog)
+	}
+}
+
 func TestUIRouterRedirectsLogoutToLogin(t *testing.T) {
 	templateFS := os.DirFS(filepath.Join("..", "httpserver", "templates"))
 	router := NewUIRouter(templateFS, "*.html")

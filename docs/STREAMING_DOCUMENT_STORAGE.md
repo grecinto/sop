@@ -71,7 +71,7 @@ classDiagram
     Document --> DocumentTree : stored as
 ```
 
-The important design point is that the chunked document strategy should be shared across the local streaming implementations, while the storage backend differs:
+The important design point is that the chunked document strategy should be shared across the local streaming implementations, while the storage backend differs. The more important product principle is that documents and media assets should be treated as semantic objects from the start, with vector or tensor attributes stored alongside their metadata so retrieval and search improve as a natural consequence of ingestion.
 
 - SOP Store Streaming: chunk persistence in the SOP storage layer
 - Local B-tree Streaming: chunk persistence in a local B-tree-backed store
@@ -103,12 +103,18 @@ Cloud object storage such as Google Cloud Storage or Apple Cloud Storage can be 
 
 - document indexing,
 - chunking and segmentation,
-- vectorization,
+- vectorization and tensor enrichment,
 - semantic search,
 - retrieval and grounding,
 - document-to-item provenance and lifecycle management.
 
-In other words, object storage is the cheap persistence layer for the asset, while SOP remains the intelligent retrieval and knowledge layer.
+In other words, object storage is the cheap persistence layer for the asset, while SOP remains the intelligent retrieval and knowledge layer. The vector/tensor layer is not an optional add-on; it is part of the core knowledge model that makes Spaces and Knowledge Bases richer with every document, category, and workflow entry they contain.
+
+### Why this is different
+
+Many competitors can offer a semantic index or a memory-like interface, but their systems are often delayed, remote, and dependent on large cloud infrastructure. Their vector layers may lag behind the freshest user data, and their retrieval stack often cannot operate as a compact, always-on application in the user’s environment.
+
+This product is designed to feel more like an integrated AI memory system than a disconnected search backend. The content, metadata, and semantic representations are kept close to the knowledge object so retrieval stays current and lightweight. That makes it practical to ship as a real application running on a laptop or desktop, with the memory system following the user instead of depending on a huge data-center cluster.
 
 This also supports a lean commercial model for Spaces:
 
@@ -130,13 +136,29 @@ From a product perspective, this model enables a richer file experience in the U
 
 This is especially valuable for media workflows. A user could open a large video or audio file and receive a smoother experience because the client can fetch and play content in a chunked fashion instead of waiting for the entire payload to be downloaded. If the stream is interrupted, the system can resume from the last known offset more naturally. That creates a stronger product story around intelligent media handling, not just raw storage.
 
+## First-class Space UI surfaces for documents and workflows
+
+The document abstraction should not remain a hidden implementation detail. In the Space product experience, documents and workflows should appear as first-class resources that users can browse, inspect, and relate to one another.
+
+### Recommended UI model
+- A built-in Documents root node exposes all documents in the Space as a global browse surface.
+- Each category or item can expose a Documents section that lists references to documents in the Space document store through their DocID-based links.
+- Documents should be shown as cards in the Documents view, with a compact set of metadata such as title, type, size, upload date, and source.
+- Selecting a document card opens a detail experience that shows metadata plus a type-aware preview when the payload can be rendered inline.
+- Workflow-backed items appear as workflow leaf nodes with a dedicated editor surface.
+- An item or category can include lightweight relationship fields so it can reference another item or category for semantic indexing and composition.
+- The detail surface adapts by object type: workflow studio for workflows, metadata/preview for documents, and the standard item editor for content.
+
+This keeps the storage model consistent with the underlying document-store semantics while making the UX feel native and discoverable.
+
 ## Competitive positioning
 
 There is some competition in the general document-storage and media-asset space, but much of it focuses on raw storage, indexing, or file hosting rather than the higher-order knowledge layer that SOP provides.
 
 Where SOP is differentiated is in the combination of:
 
-- semantic search across documents and media assets,
+- vector/tensor-native semantics across documents and media assets,
+- semantic search that improves as the Space grows,
 - nested-category understanding and retrieval,
 - document-to-item provenance,
 - chunk-aware intelligence over large content,

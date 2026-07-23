@@ -164,9 +164,9 @@ From the root of the `sop` repository:
 go run ./tools/httpserver -database /path/to/your/sop/data
 ```
 
-#### Developer trial with the built-in SOP KB
+#### Developer trial with the built-in Core Playbook
 
-If you want to exercise the SOP Knowledge Base preload flow from source:
+If you want to exercise the Core Playbook preload flow from source:
 
 ```bash
 cd ai/cmd/knowledge_compiler
@@ -175,7 +175,9 @@ cd ../..
 go run ./tools/httpserver
 ```
 
-The generated file lives at `ai/sop_base_knowledge.json`. When the SOP KB preload path is used in the UI, the server automatically detects and loads the first matching file from `sop_base_knowledge.json`, `ai/sop_base_knowledge.json`, or `../ai/sop_base_knowledge.json`.
+The generated file lives at `ai/sop_base_knowledge.json`. When the Core Playbook preload path is used in the UI, the server automatically detects and loads the first matching file from `sop_base_knowledge.json`, `ai/sop_base_knowledge.json`, or `../ai/sop_base_knowledge.json`.
+
+For daemon deployments, the same asset should be packaged with the daemon and used as the first-run bootstrap source. The daemon can then use the existing HQ sync flow to refresh or update the knowledge later, rather than relying on HQ for cold-start initialization.
 
 #### Option 2: Multiple Databases (Recommended)
 

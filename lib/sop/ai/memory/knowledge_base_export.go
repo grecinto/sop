@@ -408,26 +408,6 @@ func (kb *KnowledgeBase[T]) ImportJSONWithOptions(ctx context.Context, reader io
 					}
 				}
 
-				// If DocumentMode is true, we truncate the generic text/description metadata
-				// after enrichment (so embeddings/summaries are generated fairly), but before storage.
-				if cfg, err := kb.GetConfig(ctx); err == nil && cfg != nil && cfg.DocumentMode {
-					if dataMap, ok := any(it.Data).(map[string]any); ok {
-						if txt, ok := dataMap["text"].(string); ok && len(txt) > 800 {
-							runes := []rune(txt)
-							if len(runes) > 800 {
-								dataMap["text"] = string(runes[:800]) + "... (truncated)"
-							}
-						}
-						if desc, ok := dataMap["description"].(string); ok && len(desc) > 800 {
-							runes := []rune(desc)
-							if len(runes) > 800 {
-								dataMap["description"] = string(runes[:800]) + "... (truncated)"
-							}
-						}
-						it.Data = any(dataMap).(T)
-					}
-				}
-
 				if parsedID, err := sop.ParseUUID(it.CategoryPath); err == nil {
 					if mapped, ok := uuidMap[parsedID]; ok {
 						it.CategoryPath = mapped.String()

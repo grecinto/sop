@@ -99,6 +99,6 @@ For curation rules and the bounded semantic taxonomy, see [ai/KB_CURATION_MANIFE
    ```bash
    go run ./tools/httpserver
    ```
-3. Use the SOP KB preload path in the UI. The HTTP server automatically looks for the generated file in the built-in candidate locations `sop_base_knowledge.json`, `ai/sop_base_knowledge.json`, and `../ai/sop_base_knowledge.json`.
+3. Use the Core Playbook preload path in the UI. The HTTP server automatically looks for the generated file in the built-in candidate locations `sop_base_knowledge.json`, `ai/sop_base_knowledge.json`, and `../ai/sop_base_knowledge.json`.
 
 *Note: This specific README file is internally ignored by the compiler to prevent self-referential clutter in the generated Knowledge Base.*

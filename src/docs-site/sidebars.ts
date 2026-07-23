@@ -23,6 +23,11 @@ const sidebars: SidebarsConfig = {
       label: 'SDK Documentation',
       items: ['sdk/intro', 'sdk/vector-database', 'sdk/ai-database'],
     },
+    {
+      type: 'category',
+      label: 'Space Management',
+      items: ['spaces/content-management'],
+    },
   ],
 };
 

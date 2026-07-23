@@ -3,6 +3,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -189,6 +190,60 @@ func TestImportJSONWithOptions_BootstrapsCategorizerWhenMissing(t *testing.T) {
 	}
 	if category != "Engineering/Go" {
 		t.Fatalf("expected bootstrap categorizer to infer Engineering/Go, got %q", category)
+	}
+}
+
+func TestImportJSONWithOptions_PreservesLongItemDataWithoutTruncation(t *testing.T) {
+	ctx := context.Background()
+	llm := &MockLLM{}
+	embedder := &MockEmbedder{}
+
+	cats := inmemory.NewBtree[sop.UUID, *Category](true)
+	vecs := inmemory.NewBtree[VectorKey, Vector](true)
+	items := inmemory.NewBtree[ItemKey, Item[map[string]any]](true)
+	st := NewStore[map[string]any]("test_kb_long_data", nil, cats.Btree, inmemory.NewBtree[string, sop.UUID](false).Btree, inmemory.NewBtree[DistanceKey, byte](false).Btree, vecs.Btree, items.Btree, inmemory.NewBtree[sop.UUID, Document](false).Btree).(*store[map[string]any])
+	st.SetTextIndex(&MockTextIndex{})
+	kb := &KnowledgeBase[map[string]any]{
+		Store:   st,
+		Manager: NewMemoryManager[map[string]any](st, llm, embedder),
+	}
+
+	longText := strings.Repeat("abcde", 200)
+	payload := []byte(fmt.Sprintf(`{"config":{"description":"test"},"categories":[],"items":[{"category":"Docs","data":{"text":"%s","description":"%s"}}]}`, longText, longText))
+	if err := kb.ImportJSON(ctx, bytes.NewReader(payload), "test"); err != nil {
+		t.Fatalf("ImportJSON failed: %v", err)
+	}
+
+	itemsBtree, err := st.Items(ctx)
+	if err != nil {
+		t.Fatalf("Items failed: %v", err)
+	}
+	ok, _ := itemsBtree.First(ctx)
+	var item Item[map[string]any]
+	foundItem := false
+	for ok {
+		candidate, err := itemsBtree.GetCurrentValue(ctx)
+		if err != nil {
+			t.Fatalf("GetCurrentValue failed: %v", err)
+		}
+		if !candidate.IsConfig() {
+			item = candidate
+			foundItem = true
+			break
+		}
+		ok, _ = itemsBtree.Next(ctx)
+	}
+	if !foundItem {
+		t.Fatal("expected imported content item")
+	}
+
+	text, _ := item.Data["text"].(string)
+	if text != longText {
+		t.Fatalf("expected imported text to preserve full content, got length %d", len(text))
+	}
+	desc, _ := item.Data["description"].(string)
+	if desc != longText {
+		t.Fatalf("expected imported description to preserve full content, got length %d", len(desc))
 	}
 }
 

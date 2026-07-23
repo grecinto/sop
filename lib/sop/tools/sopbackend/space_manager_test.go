@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,76 @@ func TestResolvePreloadFilePathSearchesRepoStyleRoots(t *testing.T) {
 	got := resolvePreloadFilePath("SOP", []string{repoRoot})
 	if got != assetPath {
 		t.Fatalf("resolvePreloadFilePath() = %q, want %q", got, assetPath)
+	}
+}
+
+func TestResolvePreloadFilePathFindsCorePlaybookAsset(t *testing.T) {
+	tmpRoot := t.TempDir()
+	repoRoot := filepath.Join(tmpRoot, "lib", "sop")
+	assetPath := filepath.Join(repoRoot, "ai", "sop_base_knowledge.json")
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0o755); err != nil {
+		t.Fatalf("mkdir asset dir: %v", err)
+	}
+	if err := os.WriteFile(assetPath, []byte(`{"items":[]}`), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	got := resolvePreloadFilePath("Core Playbook", []string{repoRoot})
+	if got != assetPath {
+		t.Fatalf("resolvePreloadFilePath() = %q, want %q", got, assetPath)
+	}
+}
+
+func TestRepositoryConfigAllowsSOPKBPreloadByDefault(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+
+	candidate := filepath.Dir(filename)
+	var foundConfig string
+	for {
+		configPath := filepath.Join(candidate, "config.json")
+		if _, err := os.Stat(configPath); err == nil {
+			data, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("read config: %v", err)
+			}
+			var cfg map[string]any
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				t.Fatalf("decode config: %v", err)
+			}
+			if _, ok := cfg["disable_sop_kb_preload"].(bool); ok {
+				foundConfig = configPath
+				break
+			}
+		}
+
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			break
+		}
+		candidate = parent
+	}
+
+	if foundConfig == "" {
+		t.Fatalf("could not locate repository config.json with disable_sop_kb_preload from %s", filename)
+	}
+
+	data, err := os.ReadFile(foundConfig)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	disabled, ok := cfg["disable_sop_kb_preload"].(bool)
+	if !ok {
+		t.Fatalf("expected disable_sop_kb_preload bool in %s", foundConfig)
+	}
+	if disabled {
+		t.Fatalf("expected repository config to allow SOP KB preload, got disable_sop_kb_preload=true in %s", foundConfig)
 	}
 }
 

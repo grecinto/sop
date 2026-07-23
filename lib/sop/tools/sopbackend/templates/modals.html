@@ -49,8 +49,14 @@
         <div id="new-space-item-form-body" style="display:flex; flex-direction:column; gap:12px; flex:1; min-height:0; overflow:hidden;">
             <div style="display:flex; align-items:center; gap: 10px; flex-shrink:0;">
                 <label style="font-size: 0.9em; white-space: nowrap;">Category:</label>
-                <select id="new-space-item-category" style="width: 100%; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box;">
-                </select>
+                <div style="display:flex; align-items:center; gap:8px; flex:1;">
+                    <select id="new-space-item-category" style="width: 100%; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box;">
+                    </select>
+                    <button id="new-space-item-create-category-btn" type="button" onclick="window.showAddCategoryModal()" style="padding:8px 12px; background:var(--button-bg); color:var(--button-text); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; white-space:nowrap;">New Category</button>
+                </div>
+            </div>
+            <div id="new-space-item-document-hint" style="font-size:0.8em; color:var(--text-muted); margin-top:-4px; flex-shrink:0;">
+                Tip: upload a file to create a document-backed item. The file becomes the document and the item will reference it automatically.
             </div>
 
             <div style="display:flex; align-items:center; gap: 10px; flex-shrink:0;">
@@ -181,6 +187,11 @@
         <select id="new-category-parent" style="width: 100%; background: var(--input-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 8px; border-radius: 4px; box-sizing: border-box; margin-top: 5px;">
             <option value="">None (Top Level)</option>
         </select>
+
+        <label style="margin-top: 15px; font-size: 0.9em; display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="new-category-workflow-enabled"> Enable Workflow Attribute
+        </label>
+        <div style="font-size:0.8em; color:var(--text-muted); margin-top:4px;">Turn this on to let items in this category use Workflow Template mode.</div>
 
         <div style="display:flex; justify-content:flex-end; gap:10px; margin-top: 20px;">
             <button onclick="closeUIModal('add-category-modal')" style="padding: 8px 20px; background: transparent; color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Cancel</button>
@@ -418,7 +429,7 @@
                 <li style="margin: 0 0 4px 0; padding: 0;">help you troubleshoot local workflows from the command line</li>
             </ul>
             Type <strong>/list_tools</strong> to see the available commands in this session.<br><br>
-            <em style="color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;">Shell-style commands such as <strong>ls</strong>, <strong>pwd</strong>, and <strong>cd /Volumes</strong> run directly in the local shell. Slash commands such as <strong>/list_tools</strong> are reserved for built-in SOP actions.</em><br><br>
+            <em style="color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;">Shell-style commands such as <strong>ls</strong>, <strong>pwd</strong>, and <strong>cd /Volumes</strong> run directly in the local shell. Slash commands such as <strong>/list_tools</strong> are reserved for built-in Core Playbook actions.</em><br><br>
             <em style="color: var(--text-muted); font-size: 0.9em; display: block; margin-bottom: 4px;">Try asking things like:</em>
             <ul style="color: var(--text-muted); font-size: 0.9em; margin: 0 0 0 18px; padding: 0; list-style-position: outside;">
                 <li style="margin: 0 0 2px 0; padding: 0;">"Show me the current directory and files"</li>
@@ -672,7 +683,7 @@
             <div style="margin-bottom: 15px; display: flex; gap: 10px;">
                 <div style="flex: 2;">
                     <label class="form-label" style="display:block; margin-bottom:5px;">Embedder (for this Space):</label>
-                    <select id="new-kb-embedder" class="form-input" style="width: 100%;">
+                    <select id="new-kb-embedder" class="form-input" style="width: 100%;" data-template-version="2026-07-21-catalog-driven">
                         {{template "embedderOptions" .}}
                     </select>
                 </div>

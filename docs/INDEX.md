@@ -28,7 +28,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 | Document | Description |
 |----------|-------------|
 | [AI_STUDIO.md](AI_STUDIO.md) | Local daemon integration, daemon mode authentication |
-| [SPACES.md](SPACES.md) | Knowledge base spaces, blob-to-space digest, expert implementation |
+| [SPACES.md](SPACES.md) | Knowledge base spaces, vector-backed semantic memory, blob-to-space digest, expert implementation, and the current grounded model of Spaces / KBs as expertise sources with optional persona and tone guidance |
 | [APPROVALS.md](APPROVALS.md) | Session-based auto-approval system |
 | [TERMINAL_LAUNCH_FEATURE.md](TERMINAL_LAUNCH_FEATURE.md) | Terminal launch modes and execution |
 
@@ -67,7 +67,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 | Document | Description |
 |----------|-------------|
 | [LONG_TERM_MEMORY.md](LONG_TERM_MEMORY.md) | Hybrid memory system, category auto-share |
-| [STREAMING_DOCUMENT_STORAGE.md](STREAMING_DOCUMENT_STORAGE.md) | Document storage for space items |
+| [STREAMING_DOCUMENT_STORAGE.md](STREAMING_DOCUMENT_STORAGE.md) | Vector/tensor-native document storage for space items, first-class Space UI surfaces, DocID-backed references, and document-card/detail-view browsing |
 
 ---
 

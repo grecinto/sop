@@ -17,13 +17,13 @@ const (
 	IntentOmni       = "OMNI"
 
 	// Knowledge Base Constants
-	DefaultKBName = "SOP"
+	DefaultKBName = "Core Playbook"
 )
 
 // CanonicalKBName returns the canonical system KB identifier for known names.
 func CanonicalKBName(name string) string {
-	switch strings.ToUpper(strings.TrimSpace(name)) {
-	case "SOP":
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "sop", "core playbook", "core-playbook":
 		return DefaultKBName
 	default:
 		return strings.TrimSpace(name)

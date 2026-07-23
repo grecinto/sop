@@ -37,26 +37,6 @@ func buildChunkData(cid string, chunk SpaceIngestChunk, documentMode bool) map[s
 	text := chunk.Text
 	desc := chunk.Description
 
-	// In DocumentMode=true, Text and Description act only as index/search summaries,
-	// because the canonical data is external to the item. Thus, we truncate them
-	// to keep payloads optimal. In DocumentMode=false, the item itself is the canonical
-	// data source, so we do not restrict text length.
-	if documentMode {
-		if len(text) > 800 {
-			runes := []rune(text)
-			if len(runes) > 800 {
-				text = string(runes[:800]) + "... (truncated)"
-			}
-		}
-
-		if len(desc) > 800 {
-			runes := []rune(desc)
-			if len(runes) > 800 {
-				desc = string(runes[:800]) + "... (truncated)"
-			}
-		}
-	}
-
 	res := map[string]any{
 		"text":        text,
 		"description": desc,

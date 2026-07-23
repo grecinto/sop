@@ -70,7 +70,9 @@ func (r *UIRouter) ensureTemplates() error {
 	if r == nil {
 		return os.ErrInvalid
 	}
-	if r.Templates != nil {
+	// In development mode (when ProductionMode is false), always reload templates
+	// to pick up changes without restarting the server
+	if r.Templates != nil && config.ProductionMode {
 		return nil
 	}
 	if r.TemplateFS == nil {
@@ -173,6 +175,7 @@ func (r *UIRouter) handleLoginPage(w http.ResponseWriter, req *http.Request) {
 		"ReturnTo":         returnTo,
 		"DefaultReturnURL": defaultReturnURL,
 		"HQBaseURL":        strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")),
+		"ModelCatalog":     GetModelCatalog(),
 	}
 	if err := r.executeTemplateWithFallback(w, data, "login.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -337,6 +340,7 @@ func (r *UIRouter) handleHQPreview(w http.ResponseWriter, req *http.Request) {
 		"IsAdmin":          true,
 		"CurrentPlan":      "hq-local-agent",
 		"CurrentPlanLabel": "HQ + Local Agent",
+		"ModelCatalog":     GetModelCatalog(),
 	}
 	if err := r.executeTemplateWithFallback(w, data, "hq_preview.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -574,6 +578,7 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		"ConfigFile":              configFile,
 		"DefaultRuntimeMode":      defaultRuntimeMode,
 		"SetupWizardAIConfigJSON": r.setupWizardAIConfigJSON(),
+		"ModelCatalog":            GetModelCatalog(),
 		"ModelCatalogJSON":        r.modelCatalogJSON(),
 		"ParentSiteURL":           parentSiteURL,
 		"ParentSiteLabel":         parentSiteLabel,

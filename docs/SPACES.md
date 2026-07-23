@@ -25,7 +25,7 @@ The core idea is simple:
 
 ## Product goal
 
-Provide a general-purpose “expert memory” workflow where users can:
+Provide a practical AI operating layer for knowledge work where users can:
 
 - upload document blobs,
 - drag and drop files into a target Store,
@@ -33,7 +33,29 @@ Provide a general-purpose “expert memory” workflow where users can:
 - digest them into a Space,
 - and later ask AI questions grounded in that Space.
 
+The key product story is not a standalone chatbot. It is a durable body + memory layer for AI that can be used through workflows, grounded research, and tool-driven execution. The underlying reasoning can be powered by any supported LLM provider, while the product value comes from the memory, context continuity, and workflow engine around it.
+
+Core architectural principle: Spaces and Knowledge Bases are semantic memory systems, not just document stores. Categories, documents, workflow items, and references all participate in a shared retrieval model where vector and tensor attributes are first-class data. That means every ingestion, digest, and workflow step strengthens the semantic search layer, so retrieval, grounding, ranking, and similarity-based exploration improve automatically across the product.
+
+### Positioning: an integrated AI memory system
+
+This product should be framed as an AI database and AI memory system, not merely as a retrieval layer or a passive vector index. Competitors may offer similar functionality, but their memory systems are often loosely coupled, asynchronously synchronized, and dependent on large remote infrastructure. In practice, their semantic indexes can lag behind the latest thoughts, documents, and context by hours or more.
+
+Our approach is different. The memory, semantics, and workflow layers are tightly integrated so the system behaves more like a human memory: compact, immediate, and self-contained, with the ingredients needed for recall, grounding, and continuity in one place. That makes it possible to ship the experience as an application that runs on a laptop, desktop, or local machine rather than requiring a giant data-center cluster. The product story is not simply “another cloud search layer”; it is a portable AI memory system that can operate wherever the user works.
+
 This should work for any domain, not just technical or educational content.
+
+---
+
+## Current product model: Space, KB, research, and persona/tone
+The current implementation is best described as a grounded expertise stack rather than a separate "avatar" product. In practice:
+
+- Space / KB: the source of truth for domain expertise and curated knowledge.
+- Research: retrieval and synthesis over the active Space / KB to find the most relevant material.
+- Persona / tone: optional style and role guidance such as "senior engineer", "calm mentor", or "strict reviewer".
+- Workflow: structured execution and tool use when the task requires more than a single answer.
+
+This documentation does not describe a futuristic, fully simulated identity. The practical model is: select a Space or KB, optionally attach persona / tone guidance, and let the assistant answer using grounded research and the current workflow context. The product value comes from shipping a reliable body and memory layer to the user, while the underlying LLM can be swapped as needed. Because vector and tensor attributes live at the heart of the Space/KB model, every interaction benefits from richer semantic search, retrieval quality, and contextual grounding.
 
 ---
 
@@ -92,6 +114,48 @@ Acceptance criteria:
 - The system can answer debugging questions using the curated knowledge.
 - The system can suggest test patterns and conventions from the selected Space.
 - The answer can reference relevant conceptual categories or source material from the Space.
+
+---
+
+## Space UI model: first-class resources
+
+The Space experience should not treat workflows, documents, and references as hidden metadata. They should be surfaced as native objects in the same explorer used for categories and content items.
+
+### Native object types
+- Categories: primary navigation structure and grouping mechanism
+- Content items: ordinary knowledge entries or references
+- Workflow items: first-class leaf resources with their own editing surface
+- Documents: references into the Space document store, surfaced under a built-in Documents root container and optionally under per-category document sections
+
+### UX behavior
+- The category tree remains the primary navigation surface.
+- A built-in Documents root node exposes every document in the Space and serves as a global browse entry.
+- Categories may optionally expose a Documents section so users can see documents associated with that branch.
+- Workflow-backed items appear as workflow nodes with their own studio/editor experience instead of being treated as generic content.
+- Items can optionally reference another item or category to support semantic indexing, composition, and cross-linking.
+- The detail surface adapts to the selected object: workflow studio for workflows, preview/metadata for documents, and the standard item editor for content.
+
+### Proposed document browsing experience
+When the user selects the Documents root node or a category that has document associations, the UI should present a document gallery rather than a plain list.
+
+Suggested interaction model:
+1. Show each document as a card with title, icon, type, size, upload date, source, and a short excerpt or summary.
+2. Allow the user to filter cards by type, category, or recency.
+3. Selecting a card opens a detail panel or full-page view that shows document metadata and a content preview.
+4. The detail surface should include key metadata such as document ID, storage mode, content type, provider, checksum or payload reference, and the categories/items that reference it.
+5. For supported types, the preview area should render the actual blob content instead of only showing metadata.
+
+Recommended renderer strategy:
+- Text, Markdown, and HTML: inline reader with syntax-aware rendering.
+- PDF: embedded preview if the browser supports it; otherwise a fallback open/download action.
+- Images: thumbnail preview with zoom or lightbox support.
+- DOCX or PPTX: text extraction preview plus metadata and download fallback.
+- Audio or video: lightweight inline player when the content type supports it.
+
+This should be implemented as a type-aware renderer layer that chooses the best preview experience based on the document’s content type and available storage metadata. The minimal version can ship with cards + metadata + text preview, while the richer blob renderer can be layered on top as a second step.
+
+### Storage semantics
+The UI should make it clear that documents are stored once in the Space document store and then referenced by category/item associations through DocID-based links. This keeps the product experience simple while preserving the underlying storage model.
 
 ---
 
@@ -204,17 +268,27 @@ This is especially useful for:
 - auditability,
 - and later “open source document” experiences inside the Space UI.
 
-### H. Expert-mode prompting
-When the user selects one or more Spaces in an AI session, the system should build a prompt context that makes the model behave like a specialist for that Space.
+### H. First-class UI surface for categories, workflows, and documents
+The Space UI should present the following as first-class resources:
+- categories for navigation and organization,
+- workflow-backed items for step-based authoring,
+- documents as references into the Space document store,
+- and cross-resource links that support semantic indexing and composition.
+
+This experience should be additive to the existing category tree rather than replacing it. Users should be able to browse a Space in a familiar way while still discovering workflow and document resources through explicit entry points such as the Documents root node, per-category document sections, and workflow leaf nodes.
+
+### I. Expert-mode prompting
+When the user selects one or more Spaces in an AI session, the system should build a prompt context that makes the model behave like a grounded specialist for that Space.
 
 Prompt instructions should include:
 - use the selected Space as the primary source of truth,
 - prefer grounded answers over generic speculation,
 - explain from the retrieved material,
 - mention when information is missing or uncertain,
-- and maintain the correct tone for the domain.
+- maintain the correct tone for the domain,
+- and apply any optional persona / tone guidance that was attached to the selected Space or session context.
 
-### I. Automatic Space resolution for research grounding
+### J. Automatic Space resolution for research grounding
 Research-oriented prompts now support automatic Space selection when the user has not explicitly chosen one.
 
 The resolver follows a simple priority order:
@@ -473,6 +547,7 @@ The AI should use a structured instruction pattern, such as:
 - “Use the Space as your primary source of truth.”
 - “Prefer grounded answers over generic speculation.”
 - “If the information is not present in the selected Space, say so clearly.”
+- “Apply the attached persona / tone guidance when it is relevant.”
 - “Explain the concept first, then provide implementation guidance where appropriate.”
 
 A robust implementation should separate the workflow into:
@@ -512,7 +587,7 @@ The current code already has the right building blocks for this feature:
 This feature should be layered on top of those existing primitives rather than implemented as a separate, disconnected subsystem.
 # Spaces User Guide
 
-**What are Spaces?** Your personal knowledge experts that automatically improve your code.
+**What are Spaces?** Knowledge-backed expertise sources that improve research, coding, and response quality. They are not separate futuristic avatars; they are practical, attachable contexts that provide grounded knowledge and optional persona / tone guidance.
 
 ---
 

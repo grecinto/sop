@@ -12,7 +12,6 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
-	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 )
 
@@ -48,56 +47,7 @@ func registerBuiltinRBACBlueprints() {
 					return false
 				}
 
-				if evalState != nil && evalState.VectorizedSpaces != nil {
-					if allowed, exists := evalState.VectorizedSpaces[entCtx.AssetID]; exists {
-						return allowed
-					}
-					return false
-				}
-
-				if evalState != nil && evalState.ConfigCache != nil {
-					if allowed, exists := evalState.ConfigCache[entCtx.AssetID]; exists {
-						return allowed
-					}
-				}
-
-				if evalState != nil && evalState.Transaction != nil {
-					dbOpts, err := GetDBOptions(ctx, entCtx.Database)
-					if err == nil {
-						db := aidb.NewDatabase(dbOpts)
-						kb, errKB := db.OpenKnowledgeBase(ctx, entCtx.AssetID, evalState.Transaction, nil, nil, false)
-						if errKB == nil && kb != nil {
-							cfg, cfgErr := kb.GetConfig(ctx)
-							if cfgErr == nil && cfg != nil {
-								allowed := cfg.LastVectorized > 0
-								if evalState.ConfigCache != nil {
-									evalState.ConfigCache[entCtx.AssetID] = allowed
-								}
-								return allowed
-							}
-						}
-					}
-					return false
-				}
-
-				// Fallback slow path (if evaluated outside of handleListSpaces)
-				dbOpts, err := GetDBOptions(ctx, entCtx.Database)
-				if err == nil {
-					db := aidb.NewDatabase(dbOpts)
-					tx, _ := db.BeginTransaction(ctx, sop.ForReading)
-					if tx != nil {
-						kb, errKB := db.OpenKnowledgeBase(ctx, entCtx.AssetID, tx, nil, nil, false)
-						if errKB == nil && kb != nil {
-							cfg, cfgErr := kb.GetConfig(ctx)
-							if cfgErr == nil && cfg != nil {
-								tx.Rollback(ctx)
-								return cfg.LastVectorized > 0
-							}
-						}
-						tx.Rollback(ctx)
-					}
-				}
-
+				// Vectorization is no longer a requirement - all spaces are accessible
 				return true
 			}
 

@@ -10,11 +10,10 @@
 {{end}}
 
 {{define "embedderOptions"}}
-<option value="">Same as Brain / Default</option>
 {{range .ModelCatalog.Embedder}}
 <optgroup label="{{.Label}}">
     {{range .Options}}
-    <option value="{{.Value}}">{{.Label}}</option>
+    <option value="{{.Value}}" {{if eq .Value "kelindar:nomic-embed-text-v1.5-q8_0"}}selected{{end}}>{{.Label}}</option>
     {{end}}
 </optgroup>
 {{end}}

@@ -3,6 +3,7 @@ package sopbackend
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +39,29 @@ func TestLoadModelCatalogUsesDefaultCatalogWithoutWritingFile(t *testing.T) {
 	}
 	if _, err := os.Stat(modelCatalogPath); !os.IsNotExist(err) {
 		t.Fatalf("expected no model catalog file to be created, got err=%v", err)
+	}
+}
+
+func TestDefaultModelCatalogIncludesFallbackLocalKelindarEmbedder(t *testing.T) {
+	catalog := DefaultModelCatalog()
+	var found bool
+
+	for _, group := range catalog.Embedder {
+		for _, option := range group.Options {
+			value := strings.ToLower(option.Value)
+			label := strings.ToLower(option.Label)
+			if strings.Contains(value, "kelindar") || strings.Contains(value, "local") || strings.Contains(label, "kelindar") || strings.Contains(label, "local") {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		t.Fatal("expected default embedder catalog to include a local embedder option")
 	}
 }
 

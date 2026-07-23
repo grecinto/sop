@@ -106,7 +106,7 @@ func main() {
 		}
 	}
 
-	if !sopbackend.GetConfig().DisableSOPKBPreload {
+	if sopbackend.GetConfig().DisableSOPKBPreload {
 		sopbackend.SetConfig(sopbackend.Config{
 			Port:                   sopbackend.GetConfig().Port,
 			Databases:              sopbackend.GetConfig().Databases,

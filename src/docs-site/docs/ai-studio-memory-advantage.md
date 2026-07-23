@@ -53,6 +53,15 @@ With AI Studio, memory can be delivered as a runtime capability that follows the
 - the assistant can continue to reason over prior context without relying on a brittle app-level abstraction
 - the experience can remain stable even when model providers or infrastructure layers evolve
 
+## Customer-facing benefits
+
+This design creates a few concrete benefits for the customer:
+
+- Customer ownership of data: the user retains control over chat history, knowledge, expertise, and memory artifacts rather than handing them over to a closed provider application.
+- Stability and quality: the AI’s behavior is anchored by the customer’s own memory and runtime, so the quality of assistance is not dependent on a single provider wrapper changing underneath the user.
+- No competition with other users: because the memory layer runs in the customer’s host environment, the experience does not have to compete with other users for shared provider resources or pooled memory infrastructure.
+- Portable intelligence: the same memory system can travel with the user across devices, workspaces, and environments without requiring a giant centralized semantic index to be kept in sync.
+
 ## Bottom line
 
-The advantage is not just “better prompts” or “better retrieval.” It is that our platform can ship memory as a real architectural primitive to end users through AI Studio. That gives us a more durable, more private, and more controllable copilot experience than provider-wrapped tools that hide the memory and orchestration layers behind a consumer application.
+The advantage is not just “better prompts” or “better retrieval.” It is that our platform can ship memory as a real architectural primitive to end users through AI Studio. That gives us(you!) a more durable, more private, and more controllable copilot experience than provider-wrapped tools that hide the memory and orchestration layers behind a consumer application.

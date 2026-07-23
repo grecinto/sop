@@ -849,10 +849,6 @@ func registerDocsHandler(mux *http.ServeMux, docsDir string) {
 
 func applySopbackendPreloadPolicy() {
 	cfg := sopbackend.GetConfig()
-	if cfg.DisableSOPKBPreload {
-		return
-	}
-
 	sopbackend.SetConfig(sopbackend.Config{
 		Port:                   cfg.Port,
 		Databases:              cfg.Databases,
@@ -871,7 +867,7 @@ func applySopbackendPreloadPolicy() {
 		ConfigFile:             cfg.ConfigFile,
 		RedisURL:               cfg.RedisURL,
 		DisableAuth:            cfg.DisableAuth,
-		DisableSOPKBPreload:    true,
+		DisableSOPKBPreload:    cfg.DisableSOPKBPreload,
 	})
 }
 

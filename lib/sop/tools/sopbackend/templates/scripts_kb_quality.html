@@ -165,7 +165,7 @@ async function loadKBQualityDashboard() {
 
 function refreshQualityDashboard() {
     loadKBQualityDashboard().then(() => {
-        if (typeof showAlert === 'function') showAlert('Dashboard refreshed', null, 'Success', 'green');
+        if (typeof showAlert === 'function') showAlert('Dashboard refreshed');
     });
 }
 
@@ -436,10 +436,10 @@ async function triggerQualityCheck(event) {
         // Reload dashboard data
         await loadKBQualityDashboard();
         
-        showAlert('Quality check completed successfully', null, 'Success', 'green');
+        showAlert('Quality check completed successfully');
     } catch (error) {
         console.error('Failed to trigger quality check:', error);
-        showAlert('Failed to trigger quality check: ' + error.message, null, 'Error', 'red');
+        showAlert('Failed to trigger quality check: ' + error.message);
     } finally {
         const btn = event?.target || document.querySelector('.kb-btn-primary');
         if (btn) {
@@ -478,16 +478,16 @@ async function downloadReport() {
         document.body.removeChild(a);
         URL.revokeObjectURL(downloadUrl);
         
-        showAlert('Report downloaded successfully', null, 'Success', 'green');
+        showAlert('Report downloaded successfully');
     } catch (error) {
         console.error('Failed to download report:', error);
-        showAlert('Failed to download report: ' + error.message, null, 'Error', 'red');
+        showAlert('Failed to download report: ' + error.message);
     }
 }
 
 async function refreshDashboard() {
     await loadKBQualityDashboard();
-    showAlert('Dashboard refreshed', null, 'Success', 'green');
+    showAlert('Dashboard refreshed');
 }
 
 function showLoading(show) {
@@ -503,13 +503,6 @@ function showError(message) {
     container.appendChild(errorDiv);
 }
 
-// Helper function to show alerts (uses existing showAlert from scripts_part01 if available)
-function showAlert(message, details, title, color) {
-    if (typeof window.showAlert === 'function') {
-        window.showAlert(message, details, title, color);
-    } else {
-        alert(title ? title + ': ' + message : message);
-    }
-}
+// No need for a wrapper - use the global showAlert from scripts_part01 directly
 </script>
 {{end}}

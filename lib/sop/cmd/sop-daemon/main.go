@@ -26,7 +26,7 @@ import (
 	"github.com/sharedcode/sop"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
-	"github.com/sharedcode/sop/database"
+	sopdatabase "github.com/sharedcode/sop/database"
 	sopfs "github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -35,6 +35,23 @@ var (
 	globalSyncQueue *SyncQueue
 	syncQueueOnce   sync.Once
 )
+
+func bootstrapSOPKnowledgeBaseIfNeeded(ctx context.Context, databaseName string, spaceExists func(context.Context, string) (bool, error), preload func(context.Context, string) error) error {
+	if strings.TrimSpace(databaseName) == "" {
+		return nil
+	}
+
+	exists, err := spaceExists(ctx, ai.DefaultKBName)
+	if err != nil {
+		return fmt.Errorf("check SOP space existence: %w", err)
+	}
+	if exists {
+		log.Printf("SOP knowledge base already exists in database %s; skipping preload", databaseName)
+		return nil
+	}
+
+	return preload(ctx, databaseName)
+}
 
 type runtimeVectorizationFailurePolicyHandle interface {
 	aidb.VectorizationFailurePolicy
@@ -511,7 +528,7 @@ func main() {
 				}
 
 				ctx := context.Background()
-				if _, err := database.Setup(ctx, options); err != nil {
+				if _, err := sopdatabase.Setup(ctx, options); err != nil {
 					log.Printf("Warning: failed to auto-provision system DB: %v", err)
 				} else {
 					log.Printf("System DB auto-provisioned at %s", cfg.SystemDB.Path)
@@ -540,6 +557,27 @@ func main() {
 
 	// Initialize local session registry for rate limiting
 	localRegistry := NewSessionRegistry(SubscriptionPolicy{MaxRequests: *policyMaxRequests, Window: *policyWindow})
+
+	if cfg.SystemDB != nil {
+		if err := bootstrapSOPKnowledgeBaseIfNeeded(
+			context.Background(),
+			cfg.SystemDB.Name,
+			func(ctx context.Context, spaceName string) (bool, error) {
+				dbOpts, err := sopbackend.GetDBOptions(ctx, cfg.SystemDB.Name)
+				if err != nil {
+					return false, fmt.Errorf("resolve DB options for bootstrap: %w", err)
+				}
+				db := aidb.NewDatabase(dbOpts)
+				return db.KnowledgeBaseExists(ctx, spaceName)
+			},
+			func(ctx context.Context, dbName string) error {
+				log.Printf("Bootstrapping built-in SOP knowledge base into database %s", dbName)
+				return sopbackend.PreloadSpaceFromTemplate(ctx, ai.DefaultKBName, dbName, nil)
+			},
+		); err != nil {
+			log.Printf("Warning: failed to bootstrap built-in SOP knowledge base: %v", err)
+		}
+	}
 
 	// Initialize the shared RAG service for daemon asks.
 	var ragSvc *localRAGService

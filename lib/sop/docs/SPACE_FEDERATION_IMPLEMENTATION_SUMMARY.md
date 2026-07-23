@@ -4,6 +4,15 @@
 
 The full Space federation feature has been implemented and tested, enabling HQ to push Spaces to daemons and daemons to consume and extend them during research.
 
+## Shared Memory Concept
+
+Shared memory is the system's special federated memory Space. It is used to store compact, reusable memory artifacts produced by daemons and later curated or re-shared by HQ. The goal is not ordinary authoring; it is to accumulate learned patterns and make them available across the daemon fleet.
+
+In practice, this means:
+- Daemons can promote useful observations into shared memory after local work.
+- HQ can collect those artifacts, validate them, and decide whether to widen their distribution.
+- Shared memory becomes the shared memory channel for daemon/HQ federation, separate from ordinary Spaces.
+
 ## Implementation Overview
 
 ### Files Created/Modified

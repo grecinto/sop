@@ -245,6 +245,17 @@ This gives us a path to scale the federation layer without requiring a full stre
 - **Knowledge base**: `shared_memory`
 - **Why**: Reuses existing infrastructure, no new storage layer needed
 
+### SOP bootstrap and refresh strategy
+
+For first-run daemon bootstrap, the daemon should ship with a packaged copy of the Core Playbook knowledge payload so the built-in Core Playbook Space can be preloaded even when HQ is unavailable or the daemon is starting in an offline environment. This provides deterministic cold-start behavior and avoids making the daemon depend on HQ for its initial knowledge load.
+
+HQ sync remains the update path for later refreshes and governance:
+- use the regular daemon → HQ sync flow to publish new or curated knowledge artifacts,
+- use the same flow to pull refreshed content back into the daemon when appropriate,
+- keep the packaged asset as the fallback bootstrap source and treat HQ as the later synchronization channel.
+
+This gives us reliable first-run initialization without giving up the centralized update path.
+
 ## Bidirectional Sync Implementation
 
 ### Daemon → HQ Sync Flow (PUSH)

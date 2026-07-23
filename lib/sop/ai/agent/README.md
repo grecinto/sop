@@ -133,19 +133,19 @@ The storage layer should then register that same payload under two different ind
 #### Long-Term Memory (Knowledge)
 *   **V1 Implementation**: Originally implemented as `KnowledgeBase` in `ai/agent/memory_longterm.go`. Used a dedicated B-Tree named `memory` (via `agent.KnowledgeStore`) to explicitly persist learned instructions, domain terms, and tool overrides.
 *   **V2 Implementation (Current)**: Omni Protocol introduces a **generic blueprint** approach (`Expertise KB + Memory (STM/LTM)`) to managing knowledge:
-    *   **Omni**: Driven by the **SOP KB** (static system architectural rules) + **Memory System**. Omni can also be configured with custom KBs to act as supplementary data lookups.
+    *   **Omni**: Driven by the **Core Playbook** (static system architectural rules) + **Memory System**. Omni can also be configured with custom KBs to act as supplementary data lookups.
     *   **Avatars**: Can have their own **Custom KB** (domain-specific rules) + **Memory System** for discrete user interactions.
 *   The generic architecture divides into two tiers:
-    1.  **Expertise KB (e.g. SOP KB)**: A static Vector Space compiled from text files that teaches the agent *how* to operate.
+    1.  **Expertise KB (e.g. Core Playbook)**: A static Vector Space compiled from text files that teaches the agent *how* to operate.
     2.  **Memory System (LTM KB / MRU / STM)**: An active layer embedding live feedback, transient constraints, and conversational context automatically.
 *   **Storage**: Dynamic Vector Spaces embedded inside the **System Database**.
-*   **Behavior**: Stores foundational frameworks in the SOP KB, and conversational adjustments natively inside the LTM KB (powering self-correction, which is just one of Omni's many advanced capabilities).
+*   **Behavior**: Stores foundational frameworks in the Core Playbook, and conversational adjustments natively inside the LTM KB (powering self-correction, which is just one of Omni's many advanced capabilities).
 *   **Architecture & Flexibility**:
     *   **Omni / Butler Architecture**: The LLM does not ingest all rules statically at boot. Instead, it dynamically switches "Vector KBs" (like a Butler accessing different rooms) to retrieve knowledge natively via vector queries.
-    *   **Contextual Tool Injection**: The orchestrator searches the SOP KB (e.g., searching for `<ToolName> Tool Operations`) to load instructions natively, while consulting the active Memory System (LTM KB) for session-specific behavior edits.
-    *   **User-Driven Privacy Scopes**: The scoping of the knowledge base heavily relies on the Omni protocol's separation of memory tiers. The SOP KB provides globally shared expertise, while the user's Memory System (STM and LTM KB) remain strictly private and do not cross-pollinate between users.
+    *   **Contextual Tool Injection**: The orchestrator searches the Core Playbook (e.g., searching for `<ToolName> Tool Operations`) to load instructions natively, while consulting the active Memory System (LTM KB) for session-specific behavior edits.
+    *   **User-Driven Privacy Scopes**: The scoping of the knowledge base heavily relies on the Omni protocol's separation of memory tiers. The Core Playbook provides globally shared expertise, while the user's Memory System (STM and LTM KB) remain strictly private and do not cross-pollinate between users.
     *   **Domain-Specific KBs**: Alternatively, you can provision separate Vector KBs for different domains (e.g., `finance_kb`, `legal_kb`). This creates isolated "Expert Copilots" with deep, specialized knowledge that doesn't leak into other domains.
-    *   **Environment Isolation**: Each environment (Dev, Staging, Prod) can have its own SOP KB. This allows developers to test or over-ride rules or vocabulary in Dev without affecting Production knowledge.
+    *   **Environment Isolation**: Each environment (Dev, Staging, Prod) can have its own Core Playbook. This allows developers to test or over-ride rules or vocabulary in Dev without affecting Production knowledge.
 
 ---
 

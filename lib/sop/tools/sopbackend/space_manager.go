@@ -353,7 +353,7 @@ func runIngestSpace(ctx context.Context, request IngestSpaceRequest, emb ai.Embe
 
 func shouldUseImportPathForPreload(templateID, preloadPath string) bool {
 	trimmed := strings.TrimSpace(templateID)
-	return strings.EqualFold(trimmed, ai.DefaultKBName) || strings.EqualFold(trimmed, "SOP")
+	return strings.EqualFold(trimmed, ai.DefaultKBName) || strings.EqualFold(trimmed, "SOP") || strings.EqualFold(trimmed, "Core Playbook")
 }
 
 func builtinPreloadCandidates(templateID string) []string {
@@ -374,7 +374,7 @@ func builtinPreloadCandidates(templateID string) []string {
 			"../../lib/sop/medical.json",
 		)
 	}
-	if strings.Contains(normalized, "sop") {
+	if strings.Contains(normalized, "sop") || strings.Contains(normalized, "core playbook") {
 		candidates = append(candidates,
 			"sop_base_knowledge.json",
 			"ai/sop_base_knowledge.json",
@@ -487,6 +487,105 @@ func ingestImportReader(ctx context.Context, request IngestSpaceRequest) (io.Rea
 	return nil, nil, nil
 }
 
+func PreloadSpaceFromTemplate(ctx context.Context, templateID, databaseName string, r *http.Request) error {
+	if strings.TrimSpace(templateID) == "" || strings.TrimSpace(databaseName) == "" {
+		return fmt.Errorf("template_id and database_name are required")
+	}
+
+	if config.DisableSOPKBPreload && (strings.EqualFold(templateID, ai.DefaultKBName) || strings.EqualFold(templateID, "SOP") || strings.EqualFold(templateID, "Core Playbook")) {
+		return fmt.Errorf("SOP KB preload is disabled by configuration")
+	}
+
+	var actualPath string
+	searchRoots := []string{}
+	if cwd, err := os.Getwd(); err == nil {
+		searchRoots = append(searchRoots, cwd)
+	}
+	if exePath, err := os.Executable(); err == nil {
+		searchRoots = append(searchRoots, filepath.Dir(exePath))
+	}
+	if configPath := strings.TrimSpace(os.Getenv("SOP_CONFIG_FILE")); configPath != "" {
+		searchRoots = append(searchRoots, filepath.Dir(configPath))
+	}
+	if repoRoot, err := filepath.Abs(filepath.Join(".", "..", "..")); err == nil {
+		searchRoots = append(searchRoots, repoRoot)
+	}
+	searchRoots = append(searchRoots, ".", "..", "../..", "ai")
+
+	pathsToTry := []string{
+		templateID + ".json",
+		"../" + templateID + ".json",
+		"../../" + templateID + ".json",
+		"ai/" + templateID + ".json",
+	}
+	pathsToTry = append(pathsToTry, builtinPreloadCandidates(templateID)...)
+
+	for _, p := range pathsToTry {
+		if _, err := os.Stat(p); err == nil {
+			actualPath = p
+			log.Debug("SOP preload candidate found directly", "template_id", templateID, "path", p)
+			break
+		}
+		log.Debug("SOP preload candidate missing", "template_id", templateID, "path", p)
+	}
+	if actualPath == "" {
+		if resolved := resolvePreloadFilePath(templateID, searchRoots); resolved != "" {
+			actualPath = resolved
+			log.Debug("SOP preload candidate found via resolver", "template_id", templateID, "resolved_path", resolved)
+		} else {
+			log.Warn("SOP preload asset not found", "template_id", templateID, "search_roots", searchRoots, "paths_tried", pathsToTry)
+		}
+	}
+
+	if actualPath == "" && (strings.EqualFold(templateID, ai.DefaultKBName) || strings.EqualFold(templateID, "SOP") || strings.EqualFold(templateID, "Core Playbook")) {
+		isGoRun := strings.Contains(os.Args[0], "go-build") || strings.HasPrefix(os.Args[0], os.TempDir())
+		if isGoRun {
+			fmt.Printf("SOP Knowledge Base JSON not found. Auto-compiling since running in dev mode...\n")
+			compilerDir := "./ai/cmd/knowledge_compiler"
+			if _, err := os.Stat("../../ai/cmd/knowledge_compiler"); err == nil {
+				compilerDir = "../../ai/cmd/knowledge_compiler"
+			} else if _, err := os.Stat("../ai/cmd/knowledge_compiler"); err == nil {
+				compilerDir = "../ai/cmd/knowledge_compiler"
+			}
+			cmd := exec.Command("bash", "run.sh")
+			cmd.Dir = compilerDir
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err == nil {
+				for _, p := range pathsToTry {
+					if _, err := os.Stat(p); err == nil {
+						actualPath = p
+						break
+					}
+				}
+			} else {
+				fmt.Printf("Warning: Failed to auto-compile SOP KB: %v\n", err)
+			}
+		}
+	}
+
+	if actualPath == "" {
+		return fmt.Errorf("failed to find Space file for template %q", templateID)
+	}
+
+	log.Debug("SOP preload asset resolved", "template_id", templateID, "asset_path", actualPath)
+	dbEmbedder := GetConfiguredEmbedderForSpace(r, templateID, actualPath)
+	dbLLM := GetConfiguredLLM(r)
+	if shouldUseImportPathForPreload(templateID, actualPath) {
+		return runIngestImportSpace(ctx, IngestSpaceRequest{
+			DatabaseName:    databaseName,
+			SpaceName:       templateID,
+			PreloadFilePath: actualPath,
+		}, dbEmbedder, dbLLM, nil, nil)
+	}
+
+	return runIngestSpace(ctx, IngestSpaceRequest{
+		DatabaseName:    databaseName,
+		SpaceName:       templateID,
+		PreloadFilePath: actualPath,
+	}, dbEmbedder, dbLLM, nil, nil)
+}
+
 func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -506,7 +605,7 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if config.DisableSOPKBPreload && (strings.EqualFold(req.TemplateID, ai.DefaultKBName) || req.TemplateID == "SOP") {
+	if config.DisableSOPKBPreload && (strings.EqualFold(req.TemplateID, ai.DefaultKBName) || strings.EqualFold(req.TemplateID, "SOP") || strings.EqualFold(req.TemplateID, "Core Playbook")) {
 		log.Info("SOP preload disabled by configuration", "template_id", req.TemplateID, "database_name", req.DatabaseName)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -558,7 +657,7 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if actualPath == "" && (strings.EqualFold(req.TemplateID, ai.DefaultKBName) || req.TemplateID == "SOP") {
+	if actualPath == "" && (strings.EqualFold(req.TemplateID, ai.DefaultKBName) || strings.EqualFold(req.TemplateID, "SOP") || strings.EqualFold(req.TemplateID, "Core Playbook")) {
 		// Auto-generate if running in source development (go run)
 		isGoRun := strings.Contains(os.Args[0], "go-build") || strings.HasPrefix(os.Args[0], os.TempDir())
 		if isGoRun {

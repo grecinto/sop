@@ -3,6 +3,15 @@
 ## Overview
 Space Federation enables HQ to distribute expert knowledge Spaces to field daemons, and field daemons to contribute learned insights back to HQ.
 
+## Shared Memory Concept
+
+Think of shared memory as a special Space for daemon/HQ memory artifact sharing. It is the system-wide memory surface where compact lessons, patterns, and derived guidance can be accumulated over time and then re-shared across the fleet.
+
+This is different from a normal authoring Space:
+- Its purpose is memory propagation, not day-to-day content editing.
+- Daemons write to it when they discover useful patterns during local work.
+- HQ can ingest those artifacts, curate them, and redistribute them to other daemons.
+
 ## Quick Start
 
 ### HQ: Push Space to Single Daemon

@@ -1147,14 +1147,14 @@
         }
         
         setTimeout(() => { 
-            showAlert("SOP Space Studio is ready! You can now ask the Copilot to author new contexts."); 
+            showAlert("Core Playbook Studio is ready! You can now ask the Copilot to author new contexts.");
         }, 1000);
     }
     
     function handleSopSetupError(error, btn, loadingModal) {
         console.error(error);
         if (loadingModal) loadingModal.style.display = 'none';
-        showAlert('Failed to preload SOP Space: ' + error.message);
+        showAlert('Failed to preload Core Playbook Space: ' + error.message);
         if (btn) {
             btn.disabled = false;
             btn.innerText = "Install";
@@ -1262,7 +1262,26 @@ function showAddSpace() {
         if (document.getElementById('new-kb-sysprompt-container')) document.getElementById('new-kb-sysprompt-container').style.display = 'none';
         const embedderSelect = document.getElementById('new-kb-embedder');
         if (embedderSelect) {
-            embedderSelect.value = defaultSpaceEmbedder;
+            // Debug: log template version and current options
+            const templateVersion = embedderSelect.dataset.templateVersion || 'unknown';
+            console.log('[showAddSpace] Template version:', templateVersion);
+            console.log('[showAddSpace] Embedder dropdown has', embedderSelect.options.length, 'options:');
+            Array.from(embedderSelect.options).forEach((opt, idx) => {
+                console.log(`  [${idx}] value='${opt.value}' text='${opt.text}'`);
+            });
+            
+            const preferredValues = [defaultSpaceEmbedder, 'kelindar:kelindar', 'kelindar:nomic-embed-text-v1.5-q8_0', 'kelindar:bge-small-en-v1.5-q8_0'];
+            const preferredOption = Array.from(embedderSelect.options).find(option => preferredValues.includes(option.value));
+            if (preferredOption) {
+                embedderSelect.value = preferredOption.value;
+                console.log('[showAddSpace] Selected preferred embedder:', preferredOption.value);
+            } else if (embedderSelect.options.length > 0) {
+                embedderSelect.value = embedderSelect.options[0].value;
+                console.log('[showAddSpace] Selected first embedder:', embedderSelect.options[0].value);
+            } else {
+                embedderSelect.value = defaultSpaceEmbedder;
+                console.log('[showAddSpace] No options found, set to default:', defaultSpaceEmbedder);
+            }
         }
         if (document.getElementById('new-kb-dimension')) document.getElementById('new-kb-dimension').value = '';
         if (document.getElementById('new-kb-public')) document.getElementById('new-kb-public').checked = false;
@@ -1311,6 +1330,11 @@ async function saveNewKB() {
         return;
     }
     
+    // Split embedder value into provider and model for HTTP headers
+    const embedderSplit = splitProviderValue(embedder);
+    const normalized = normalizeProviderConfig(embedderSplit.provider, embedderSplit.model);
+    console.log('[saveNewKB] Embedder config:', { raw: embedder, provider: normalized.provider, model: normalized.model });
+    
     // Pass configuration to the create endpoint
     const createData = {
         database_name: currentDatabase,
@@ -1323,7 +1347,13 @@ async function saveNewKB() {
         }
     };
     
-    apiCall('/api/spaces/create', 'POST', createData)
+    // Pass embedder as HTTP headers (backend expects X-Embedder-Provider and X-Embedder-Model)
+    const customHeaders = {
+        'X-Embedder-Provider': normalized.provider,
+        'X-Embedder-Model': normalized.model
+    };
+    
+    apiCall('/api/spaces/create', 'POST', createData, customHeaders)
     .then(async () => {
         showAlert("Space created successfully!");
         closeAddKBModal();

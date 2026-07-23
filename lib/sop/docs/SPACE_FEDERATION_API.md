@@ -2,6 +2,17 @@
 
 This document describes the Space federation endpoints that enable HQ to push Spaces to daemons, and daemons to push derived content back to HQ.
 
+## Shared Memory as a Special Federated Space
+
+Shared memory is a special knowledge surface in the system. It is not a normal user-facing Space for everyday authoring; it is the application-wide memory lane used by daemons and HQ to store compact, privacy-safe "memory artifacts" that may later be reused, summarized, and re-shared across the fleet.
+
+In this model:
+- Daemons can promote useful observations, patterns, and derived guidance into shared memory.
+- HQ can receive those artifacts, curate them, and re-share them with other daemons.
+- Shared memory acts as the federated memory artifact channel for the daemon/HQ network.
+
+Think of it as a special Space whose purpose is memory exchange rather than ordinary content authoring.
+
 ## HQ-side Endpoints
 
 ### Push Space to Daemon
@@ -117,14 +128,14 @@ Response:
 
 ### Daemon Research Integration
 - When daemon performs research (handleAsk), it queries:
-  - Local shared_memory artifacts
+  - Local shared_memory artifacts from the special federated memory Space
   - Federated Space content received from HQ
 - Results are combined and injected into the prompt context
 
 ### Daemon → HQ Content Push Flow
 1. Daemon generates useful content based on federated Space
 2. Daemon pushes derived content to HQ via `/api/daemon/hq-sync`
-3. HQ stores the content in central shared_memory
+3. HQ stores the artifact in the special shared_memory federated memory Space
 4. HQ can later reshare to other daemons
 
 ### HQ Reshare Flow

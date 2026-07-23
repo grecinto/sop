@@ -148,6 +148,20 @@ func TestAddSpaceItemModalUsesStretchableBodyAndReferenceMetadataToggle(t *testi
 	}
 }
 
+func TestAddSpaceItemModalExplainsDocumentBackedWorkflow(t *testing.T) {
+	modalsPath := templatePath("modals.html")
+	modalsData, err := os.ReadFile(modalsPath)
+	if err != nil {
+		t.Fatalf("read modal template: %v", err)
+	}
+	modalsContent := string(modalsData)
+	for _, token := range []string{"new-space-item-create-category-btn", "document-backed item"} {
+		if !strings.Contains(modalsContent, token) {
+			t.Fatalf("expected add-space-item modal to expose %s in %s", token, modalsPath)
+		}
+	}
+}
+
 func TestAddSpaceItemModalSupportsWorkflowTemplateAuthoring(t *testing.T) {
 	modalsPath := templatePath("modals.html")
 	modalsData, err := os.ReadFile(modalsPath)
@@ -158,6 +172,46 @@ func TestAddSpaceItemModalSupportsWorkflowTemplateAuthoring(t *testing.T) {
 	for _, token := range []string{"new-space-item-mode", "new-space-item-workflow-section", "new-space-item-workflow-name", "new-space-item-workflow-steps", "new-space-item-workflow-description", "new-space-item-workflow-protocol-guidance", "new-space-item-workflow-step-metadata"} {
 		if !strings.Contains(modalsContent, token) {
 			t.Fatalf("expected add-space-item modal to expose %s in %s", token, modalsPath)
+		}
+	}
+}
+
+func TestAddCategoryModalExposesWorkflowToggle(t *testing.T) {
+	modalsPath := templatePath("modals.html")
+	modalsData, err := os.ReadFile(modalsPath)
+	if err != nil {
+		t.Fatalf("read modal template: %v", err)
+	}
+	modalsContent := string(modalsData)
+	if !strings.Contains(modalsContent, "new-category-workflow-enabled") {
+		t.Fatalf("expected add-category modal to expose workflow toggle in %s", modalsPath)
+	}
+}
+
+func TestSpaceItemScriptsGateWorkflowModeByCategoryFlag(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"getSelectedCategoryWorkflowEnabled", "workflowOption"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected workflow mode helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestSpaceItemScriptsRenderWorkflowItemsAsTreeLeaves(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"renderWorkflowItemTreeNode", "loadWorkflowItemsForCategoryTree"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected workflow tree helper %s in %s", token, scriptsPath)
 		}
 	}
 }
@@ -186,6 +240,75 @@ func TestSpaceItemScriptsExposeWorkflowPreviewHelpers(t *testing.T) {
 	for _, token := range []string{"toggleSpaceItemMode", "renderWorkflowDefinitionPreview"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected workflow authoring helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestSpaceDocumentRootNodeStaysVisibleAsBuiltInDocumentView(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"rootDocumentsContainer.style.display = 'block'", "showSpaceDocumentsRootIfNeeded"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected document tree helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestRenderTreeNodesOnlyAddsDocumentsRootAtTopLevel(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	guardSnippet := "function renderTreeNodes(catList, container, depth=0) {\n            if (depth === 0) {"
+	if !strings.Contains(scriptsContent, guardSnippet) {
+		t.Fatalf("expected top-level Documents root guard in %s", scriptsPath)
+	}
+}
+
+func TestSpaceItemScriptsExposeDocumentTreeHelpers(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"renderDocumentTreeNode", "loadDocumentsForCategoryTree", "renderSpaceDocumentsRootNode"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected document tree helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestSpaceItemScriptsExposeDocumentGalleryHelpers(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"renderDocumentCardHtml", "openDocumentDetailView", "fetchDocumentsForCategory"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected document gallery helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestSpaceDocumentDeleteActionIsDefinedInTemplate(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"deleteSpaceDocument", "Delete Document"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected document delete helper %s in %s", token, scriptsPath)
 		}
 	}
 }
@@ -238,6 +361,20 @@ func TestWorkflowStudioEditorExposesEditableActions(t *testing.T) {
 	for _, token := range []string{"workflow-studio-save-btn", "workflow-studio-add-step-btn", "workflow-studio-step-list"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected workflow studio editor token %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestWorkflowStudioEditorExposesStepManagementControls(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"workflow-studio-step-number", "workflow-studio-delete-step-btn", "workflow-studio-move-step-up-btn", "workflow-studio-move-step-down-btn"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected workflow studio step management token %s in %s", token, scriptsPath)
 		}
 	}
 }
