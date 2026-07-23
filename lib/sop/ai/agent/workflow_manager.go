@@ -17,8 +17,10 @@ import (
 // WorkflowManager manages KB-driven workflow orchestration.
 // It retrieves workflow definitions from the KnowledgeBase and executes them
 // by injecting work items into the queue.
+// Supports searching across multiple KBs: Core Playbook (always) + selected Spaces.
 type WorkflowManager struct {
-	kb                *memory.KnowledgeBase[map[string]any]
+	kb                *memory.KnowledgeBase[map[string]any]   // Primary KB (Core Playbook)
+	selectedKBs       []*memory.KnowledgeBase[map[string]any] // Additional selected KBs
 	conditionRegistry map[string]ConditionEvaluator
 	scriptLibraryPath string
 	scriptExecutor    ScriptExecutor
@@ -59,6 +61,11 @@ func NewWorkflowManager(kb *memory.KnowledgeBase[map[string]any]) *WorkflowManag
 	return wm
 }
 
+// SetSelectedKBs sets additional KBs to search for workflows (beyond Core Playbook).
+func (wm *WorkflowManager) SetSelectedKBs(kbs []*memory.KnowledgeBase[map[string]any]) {
+	wm.selectedKBs = kbs
+}
+
 // RegisterCondition registers a custom condition evaluator.
 func (wm *WorkflowManager) RegisterCondition(name string, evaluator ConditionEvaluator) {
 	wm.conditionRegistry[name] = evaluator
@@ -72,67 +79,84 @@ func (wm *WorkflowManager) GetWorkflow(ctx context.Context, query string) (inter
 }
 
 // getWorkflowInternal is the typed internal method.
+// Searches across Core Playbook + selected Spaces for matching workflows.
 func (wm *WorkflowManager) getWorkflowInternal(ctx context.Context, query string) (*WorkflowDefinition, error) {
 	if wm.kb == nil {
 		return nil, fmt.Errorf("knowledge base is nil")
 	}
 
+	// Collect all KBs to search: Core Playbook + selected Spaces
+	kbsToSearch := []*memory.KnowledgeBase[map[string]any]{wm.kb}
+	kbsToSearch = append(kbsToSearch, wm.selectedKBs...)
+
 	// Try searching by category path first (for known workflow paths)
 	// Example: "Workflows/TestDebugging/Go/UnitTests"
 	if strings.Contains(query, "Workflows/") {
-		results, err := wm.kb.SearchByPath(ctx, []memory.PathSearchParam{
-			{CategoryPath: query, SearchText: ""},
+		for _, kb := range kbsToSearch {
+			if kb == nil {
+				continue
+			}
+			results, err := kb.SearchByPath(ctx, []memory.PathSearchParam{
+				{CategoryPath: query, SearchText: ""},
+			})
+			if err == nil && len(results) > 0 {
+				if workflow, err := wm.parseWorkflowFromItem(&results[0]); err == nil && workflow != nil {
+					return workflow, nil
+				}
+			}
+		}
+	}
+
+	// Fall back to semantic search across all KBs
+	for _, kb := range kbsToSearch {
+		if kb == nil {
+			continue
+		}
+
+		results, err := kb.Search(ctx, []memory.SearchRequest[map[string]any]{
+			{Text: query, Limit: 3}, // Get top 3 matches per KB
 		})
-		if err == nil && len(results) > 0 {
-			return wm.parseWorkflowFromItem(&results[0])
-		}
-	}
-
-	// Fall back to semantic search
-	results, err := wm.kb.Search(ctx, []memory.SearchRequest[map[string]any]{
-		{Text: query, Limit: 1},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("workflow search failed: %w", err)
-	}
-
-	if len(results) > 0 && len(results[0]) > 0 {
-		// Extract the Item from ai.Hit
-		hit := results[0][0]
-
-		// Parse UUID from string ID
-		itemID, err := sop.ParseUUID(hit.ID)
 		if err != nil {
-			itemID = sop.NilUUID
+			continue // Try next KB
 		}
 
-		item := memory.Item[map[string]any]{
-			ID:         itemID,
-			Data:       hit.Payload,
-			DocID:      memory.DocIDs(hit.DocID),
-			CategoryID: sop.NilUUID, // Not available in Hit
+		if len(results) > 0 && len(results[0]) > 0 {
+			// Check each hit for workflow data
+			for _, hit := range results[0] {
+				// Parse UUID from string ID
+				itemID, err := sop.ParseUUID(hit.ID)
+				if err != nil {
+					itemID = sop.NilUUID
+				}
+
+				item := memory.Item[map[string]any]{
+					ID:         itemID,
+					Data:       hit.Payload,
+					DocID:      memory.DocIDs(hit.DocID),
+					CategoryID: sop.NilUUID, // Not available in Hit
+				}
+
+				if workflow, err := wm.parseWorkflowFromItem(&item); err == nil && workflow != nil {
+					return workflow, nil // Return first valid workflow found
+				}
+			}
 		}
 
-		if workflow, err := wm.parseWorkflowFromItem(&item); err == nil && workflow != nil {
+		// Try scanning this KB if semantic search didn't find workflows
+		if workflow, err := wm.findWorkflowInKB(ctx, kb, query); err == nil && workflow != nil {
 			return workflow, nil
 		}
-	}
-
-	if workflow, err := wm.findWorkflowByScanningKB(ctx, query); err != nil {
-		return nil, err
-	} else if workflow != nil {
-		return workflow, nil
 	}
 
 	return nil, fmt.Errorf("no workflow found for query: %s", query)
 }
 
-func (wm *WorkflowManager) findWorkflowByScanningKB(ctx context.Context, query string) (*WorkflowDefinition, error) {
-	if wm.kb == nil {
+func (wm *WorkflowManager) findWorkflowInKB(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], query string) (*WorkflowDefinition, error) {
+	if kb == nil {
 		return nil, nil
 	}
 
-	items, _, err := wm.kb.ListItems(ctx, memory.ListItemsParam{Limit: 1000})
+	items, _, err := kb.ListItems(ctx, memory.ListItemsParam{Limit: 1000})
 	if err != nil {
 		return nil, nil
 	}

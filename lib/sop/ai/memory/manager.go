@@ -1285,23 +1285,26 @@ func (m *MemoryManager[T]) FindClosestCategory(ctx context.Context, vector []flo
 	return m.store.FindClosestCategory(ctx, vector)
 }
 
-// EnsureCategory guarantees a Semantic Anchor physically exists in the B-Tree for a string noun.
-func (m *MemoryManager[T]) EnsureCategory(ctx context.Context, categoryPath string) (sop.UUID, error) {
+// findCategoryByExactPath searches for a category by exact path match (case-insensitive).
+// Returns the category ID if found, or NilUUID if not found.
+// Uses strings.EqualFold for case-insensitive comparison while preserving stored casing.
+func (m *MemoryManager[T]) findCategoryByExactPath(ctx context.Context, categoryPath string) (sop.UUID, error) {
 	categoriesTree, err := m.store.Categories(ctx)
 	if err != nil {
 		return sop.NilUUID, err
 	}
 
+	// Try UUID parsing first
 	if parsedID, err := sop.ParseUUID(categoryPath); err == nil {
 		if found, _ := categoriesTree.Find(ctx, parsedID, false); found {
 			return parsedID, nil
 		}
 	}
 
+	// Scan for path match
 	ok, err := categoriesTree.First(ctx)
 	for ok && err == nil {
 		c, _ := categoriesTree.GetCurrentValue(ctx)
-		// Match against Path instead of Name to ensure uniqueness of deeper nodes
 		if c != nil {
 			if c.Path != "" && strings.EqualFold(c.Path, categoryPath) {
 				return categoriesTree.GetCurrentKey().Key, nil
@@ -1313,23 +1316,74 @@ func (m *MemoryManager[T]) EnsureCategory(ctx context.Context, categoryPath stri
 		ok, err = categoriesTree.Next(ctx)
 	}
 
+	return sop.NilUUID, nil
+}
+
+// EnsureCategory guarantees a Semantic Anchor physically exists in the B-Tree for a string noun.
+// Creates complete hierarchical category structure for paths like "A/B/C" by ensuring
+// intermediate categories "A" and "A/B" exist before creating "A/B/C".
+// This is required for Semantic Path Search (DYNAMIC_VECTOR_STORE_DESIGN.md Section 12).
+//
+// Case Handling: Lookups are case-insensitive, but the first-created version's casing is preserved.
+// Convention: Use Title Case (e.g., "Coding Best Practices/Go/Error Handling") to match preload data.
+// See CATEGORY_HIERARCHY_INTEGRITY.md for details on case handling conventions.
+func (m *MemoryManager[T]) EnsureCategory(ctx context.Context, categoryPath string) (sop.UUID, error) {
+	if strings.TrimSpace(categoryPath) == "" {
+		return sop.NilUUID, fmt.Errorf("categoryPath cannot be empty")
+	}
+
+	// Split path into components
 	parts := strings.Split(categoryPath, "/")
-	leafName := parts[len(parts)-1]
-
-	CID := sop.NewUUID()
-	anchor := &Category{
-		ID:          CID,
-		Name:        leafName,
-		Path:        categoryPath,
-		Description: "",
-		ItemCount:   0,
+	if len(parts) == 0 {
+		return sop.NilUUID, fmt.Errorf("invalid category path: %s", categoryPath)
 	}
 
-	cid, err := m.store.AddCategory(ctx, anchor)
-	if err != nil {
-		return sop.NilUUID, err
+	// Create or find each level of the hierarchy
+	var parentID sop.UUID = sop.NilUUID
+	for i := 0; i < len(parts); i++ {
+		// Build path for current level
+		currentPath := strings.Join(parts[0:i+1], "/")
+		currentName := parts[i]
+
+		// Check if category already exists at this level
+		existingID, err := m.findCategoryByExactPath(ctx, currentPath)
+		if err != nil {
+			return sop.NilUUID, fmt.Errorf("failed to search for category %s: %w", currentPath, err)
+		}
+
+		if !existingID.IsNil() {
+			// Category exists, use it as parent for next level
+			parentID = existingID
+			continue
+		}
+
+		// Create new category at this level
+		newID := sop.NewUUID()
+		cat := &Category{
+			ID:          newID,
+			Name:        currentName,
+			Path:        currentPath,
+			Description: "",
+			ItemCount:   0,
+		}
+
+		// Set parent relationship if not at root level
+		if !parentID.IsNil() {
+			cat.ParentIDs = []CategoryParent{{ParentID: parentID}}
+		}
+
+		// Add category to store
+		createdID, err := m.store.AddCategory(ctx, cat)
+		if err != nil {
+			return sop.NilUUID, fmt.Errorf("failed to create category %s: %w", currentPath, err)
+		}
+
+		// Use this category as parent for next level
+		parentID = createdID
 	}
-	return cid, nil
+
+	// Return the leaf category ID
+	return parentID, nil
 }
 
 // SleepCycle performs Asynchronous Memory Consolidation.

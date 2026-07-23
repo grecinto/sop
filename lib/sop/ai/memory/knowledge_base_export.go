@@ -300,11 +300,11 @@ func (kb *KnowledgeBase[T]) ImportJSONWithOptions(ctx context.Context, reader io
 				found := false
 				for ok {
 					existing, _ := catBtree.GetCurrentValue(ctx)
-					if existing != nil && existing.Path == c.Path && c.Path != "" {
+					if existing != nil && strings.EqualFold(existing.Path, c.Path) && c.Path != "" {
 						uuidMap[c.ID] = existing.ID
 						found = true
 						break
-					} else if existing != nil && existing.Path == "" && existing.Name == c.Name {
+					} else if existing != nil && existing.Path == "" && strings.EqualFold(existing.Name, c.Name) {
 						uuidMap[c.ID] = existing.ID
 						found = true
 						break

@@ -2945,14 +2945,32 @@ func (a *CopilotAgent) tryKBWorkflowExecution(ctx context.Context, query string,
 			return "", false, nil
 		}
 
-		// Open SOP KnowledgeBase for workflow search
+		// Open Core Playbook for workflow search (always available)
 		embedder := a.service.Domain().Embedder()
 		kb, err := a.systemDB.OpenKnowledgeBase(ctx, ai.DefaultKBName, tx, a.brain, embedder, false, true)
 		if err != nil {
-			log.Warn("Failed to open KB for workflows", "error", err)
+			log.Warn("Failed to open Core Playbook for workflows", "error", err)
 			return "", false, nil
 		}
 		a.workflowManager.kb = kb
+
+		// Add selected Spaces as additional workflow sources
+		if len(p.SelectedKBs) > 0 {
+			selectedKBs := make([]*memory.KnowledgeBase[map[string]any], 0, len(p.SelectedKBs))
+			for _, kbRef := range p.SelectedKBs {
+				if strings.TrimSpace(kbRef.Name) == "" || strings.EqualFold(kbRef.Name, ai.DefaultKBName) {
+					continue // Skip empty or Core Playbook (already primary)
+				}
+				selectedKB, err := a.systemDB.OpenKnowledgeBase(ctx, kbRef.Name, tx, a.brain, embedder, false, true)
+				if err != nil {
+					log.Warn("Failed to open selected Space for workflows", "space", kbRef.Name, "error", err)
+					continue
+				}
+				selectedKBs = append(selectedKBs, selectedKB)
+			}
+			a.workflowManager.SetSelectedKBs(selectedKBs)
+			log.Info("Workflow search configured", "core_playbook", true, "additional_spaces", len(selectedKBs))
+		}
 	}
 
 	// Try to find matching workflow

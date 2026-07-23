@@ -17,6 +17,13 @@ It provides components for building local AI applications on top of SOP's B-Tree
 *   [Vector Store Design](vector/VECTOR_STORE_DESIGN.md)
 *   [Dynamic Vector Store Design](DYNAMIC_VECTOR_STORE_DESIGN.md)
 
+### Workflow Documentation
+
+For comprehensive workflow system documentation, see:
+*   **[Workflow Lifecycle Assessment](../../docs/WORKFLOW_LIFECYCLE_ASSESSMENT.md)** - Complete implementation guide (authoring → compilation → preload → runtime)
+*   [Workflow Strategy](../../docs/WORKFLOW_STRATEGY_ASSESSMENT.md) - Core Playbook as workflow standard library
+*   [Workflow Tools Proposal](../../docs/WORKFLOW_COPILOT_INTEGRATION_PROPOSAL.md) - User-facing workflow management tools
+
 ## Core Components
 
 ### 1. New Memory Architecture (`ai/memory`) (Recommended)

@@ -91,6 +91,8 @@ In practice, the workflow should describe:
 
 The current implementation already supports queue-based orchestration, but the richer prompt payload layer is still incomplete. The mitigation plan is to move test-debugging guidance from runtime special-casing into the workflow schema and inject it through the work queue so the LLM sees the same structured policy for every workflow execution.
 
+**See [Workflow Lifecycle Assessment](../../../docs/WORKFLOW_LIFECYCLE_ASSESSMENT.md)** for the complete implementation guide covering workflow authoring, compilation, preload, runtime access, and quality tools following the KB/Space loading pattern.
+
 ### Balanced TDD operating posture
 The coding workflow should follow a balanced operating model:
 *   **Design first**: understand the requirement, shape the change, and make the plan explicit before editing files.

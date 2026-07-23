@@ -77,9 +77,9 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 
 | Document | Description |
 |----------|-------------|
-| [WORKFLOW_ORCHESTRATION.md](WORKFLOW_ORCHESTRATION.md) | Product-facing design for workflow-driven assistance and visible step-based execution |
-| [WORKFLOW_RUNTIME_IMPLEMENTATION.md](WORKFLOW_RUNTIME_IMPLEMENTATION.md) | Implementation overview for the workflow runtime, parsing, queue execution, validation, and optional Phase 5 hardening |
-| [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Terminal-first coding workflow |
+| [WORKFLOWS.md](WORKFLOWS.md) | ⭐ **Complete Guide**: Workflow architecture, lifecycle, implementation status, tool specifications, and best practices. Covers KB-based storage, multi-step orchestration, and automatic ingestion. |
+| [../lib/sop/ai/memory/CATEGORY_HIERARCHY_INTEGRITY.md](../lib/sop/ai/memory/CATEGORY_HIERARCHY_INTEGRITY.md) | ⚠️ **Critical**: Semantic Path Search requires complete category hierarchies. Documents EnsureCategory fix for workflow category storage. |
+| [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Terminal-first coding workflow implementation |
 
 ### Platform
 
