@@ -25,6 +25,82 @@
 
 ---
 
+## Knowledge Base Consolidation (2026-07-23)
+
+**Change**: Eliminated `shared_memory` KB - all federated content now lives in `core_playbook` under **Fleet Learning/** root category.
+
+### Before (Dual System)
+
+```
+shared_memory KB                  core_playbook KB
+├── workflow_pattern/        +    ├── Coding Best Practices/
+├── anti_pattern/                 └── Workflows/
+├── repair_strategy/
+├── tool_preference/
+└── ... (13 categories)
+```
+
+**Problem**: Two parallel systems serving the same purpose (federated content sharing):
+- `core_playbook` = Original SOP concept (static, curated)
+- `shared_memory` = Federation system (dynamic, field-learned)
+- Both conceptually identical but implemented separately
+
+### After (Unified Structure)
+
+```
+core_playbook KB
+├── Coding Best Practices/         (static, curated)
+├── Workflows/                      (versioned, SA-managed)
+└── Fleet Learning/                 (dynamic, federated from daemon fleet)
+    ├── workflow_pattern/
+    ├── anti_pattern/
+    ├── repair_strategy/
+    ├── tool_preference/
+    ├── safety_heuristic/
+    ├── verified_playbook/
+    ├── context_gathering/
+    ├── error_resolution/
+    ├── performance_optimization/
+    ├── security_pattern/
+    ├── testing_strategy/
+    ├── code_quality/
+    └── api_design/
+```
+
+**Benefits**:
+- ✅ Single source of truth for all knowledge
+- ✅ Clear organizational hierarchy
+- ✅ "Fleet Learning" name describes dynamic nature
+- ✅ Category auto-share works with `Fleet Learning/` prefix
+- ✅ Workflows stay separate from field-learned patterns
+
+### Implementation Details
+
+**Constants Updated**:
+```go
+// lib/sop/ai/agent/shared_memory.go
+const defaultSharedMemoryKBName = "core_playbook"  // Was "shared_memory"
+
+// lib/sop/cmd/sop-daemon/federation_content.go
+CategoryWorkflowPattern = "Fleet Learning/workflow_pattern"  // Was "workflow_pattern"
+CategoryAntiPattern     = "Fleet Learning/anti_pattern"      // Was "anti_pattern"
+// ... all 13 categories now prefixed with "Fleet Learning/"
+```
+
+**Auto-Share Allowlist** (SA controls which categories federate to daemons):
+```go
+// lib/sop/tools/sopbackend/ltm_category_auto_share.go
+var federatedLTMCategoryAllowlist = map[string]struct{}{
+    "Fleet Learning/workflow_pattern":         {},
+    "Fleet Learning/anti_pattern":             {},
+    // ... (13 total categories)
+}
+```
+
+**UI Integration**: Existing category auto-share UI (`/api/ltm/category/auto-share`) works with `core_playbook` Space and `Fleet Learning/` prefixed categories.
+
+---
+
 ## V2 Implementation Summary (Completed 2026-07-23)
 
 ### What Was Implemented
@@ -102,7 +178,7 @@ POST /api/daemon/hq-sync
 2. Checks for existing workflow with same hash
 3. If exists: increments recurrence_count, keeps version
 4. If new: stores with version=1
-5. Routes to Core Playbook KB (not shared_memory)
+5. Routes to Core Playbook KB under Fleet Learning/ category
 
 #### 3. Cross-Daemon Retrieval
 
@@ -129,6 +205,236 @@ Workflows don't require LLM prompt injection like patterns do:
 | **Rollback** | Hard - affects all Ask calls | Easy - don't execute workflow |
 
 **Result**: Workflows can be federated immediately without testing impact on Ask quality.
+
+---
+
+## Workflow Management & Versioning (Added 2026-07-23)
+
+**Status**: ✅ Implemented - SA users can save/publish workflows with version control
+
+### Three-Component System
+
+**1. Explicit Version Control (Backend)**
+- `PromoteWorkflowArtifactV2()` now accepts `targetVersion` parameter
+- `targetVersion = 0` → auto-increment (used by automatic promotion)
+- `targetVersion > 0` → update specific version (used by SA publish)
+
+**2. Save vs Publish Flow (Backend)**
+- **Save Workflow**: Local only, no HQ push
+  - `SaveWorkflow()` function saves to Core Playbook KB
+  - Sets `publish_state` to "unpublished" or "modified"
+  - Tracks `last_published_version` and `last_published_at`
+- **Publish Workflow**: Explicit push to HQ
+  - `PublishWorkflowToHQ()` function promotes with SA checks
+  - Updates `publish_state` to "published"
+  - Syncs to HQ via V1 queue infrastructure
+
+**3. Backend APIs (SA Only)**
+- `POST /api/workflow/save` - Save workflow locally
+- `POST /api/workflow/publish` - Publish to HQ with version
+- `GET /api/workflow/list` - List workflows with publish state
+- `GET /api/workflow/get` - Get single workflow by path
+
+### WorkflowDefinition Extensions
+
+```go
+type WorkflowDefinition struct {
+    // ... existing fields ...
+    Version      string `json:"version,omitempty"` // Semantic version (e.g., "1.0.0", "2.1.0")
+    
+    // Publish state tracking (added 2026-07-23)
+    PublishState         string `json:"publish_state,omitempty"`         // "unpublished", "published", "modified"
+    LastPublishedVersion string `json:"last_published_version,omitempty"` // Last version pushed to HQ
+    LastPublishedAt      string `json:"last_published_at,omitempty"`      // ISO8601 timestamp
+}
+
+type WorkflowMetadata struct {
+    // ... existing fields ...
+    
+    // Federation tracking (added 2026-07-23)
+    FederationVersion int    `json:"federation_version,omitempty"` // Auto-incremented by HQ
+    ContentHash       string `json:"content_hash,omitempty"`       // SHA-256 of workflow content
+}
+```
+
+### Save Workflow Flow
+
+```
+SA User in Daemon
+    ↓
+Edit workflow in UI (future)
+    ↓
+POST /api/workflow/save
+{
+  "workflow": {
+    "workflow_id": "test-debugging-go-v1",
+    "name": "Go Test Debugging",
+    "category_path": "Workflows/TestDebugging/Go",
+    "version": "1.0.0",
+    "description": "Debug failing Go unit tests",
+    "steps": [...]
+  }
+}
+    ↓
+SaveWorkflow()
+    ├─ Check SA authorization
+    ├─ Update timestamp
+    ├─ Set publish_state to "unpublished" or "modified"
+    ├─ Save to Core Playbook KB (local)
+    └─ NO HQ sync (local only)
+    ↓
+Response
+{
+  "success": true,
+  "publish_state": "modified",
+  "last_saved_at": "2026-07-23T10:30:00Z"
+}
+```
+
+### Publish Workflow Flow
+
+```
+SA User in Daemon
+    ↓
+POST /api/workflow/publish
+{
+  "workflow_id": "test-debugging-go-v1",
+  "category_path": "Workflows/TestDebugging/Go",
+  "target_version": 0  // 0 = auto-increment, >0 = specific version
+}
+    ↓
+PublishWorkflowToHQ()
+    ├─ Check SA authorization
+    ├─ Load workflow from Core Playbook KB
+    ├─ Compute content hash
+    ├─ Update publish metadata
+    │   ├─ publish_state = "published"
+    │   ├─ last_published_version = workflow.version
+    │   └─ last_published_at = now()
+    ├─ Save locally with updated state
+    └─ Call PromoteWorkflowArtifactV2(targetVersion)
+        ├─ Build V2 artifact
+        ├─ Store in Core Playbook
+        └─ Enqueue to HQ sync (V1 queue)
+    ↓
+Response
+{
+  "success": true,
+  "published_version": "1.0.0",
+  "federation_version": 1,
+  "last_published_at": "2026-07-23T10:35:00Z"
+}
+```
+
+### List Workflows
+
+```
+GET /api/workflow/list
+or
+POST /api/workflow/list
+{
+  "category_path": "Workflows/",      // Optional filter
+  "publish_state": "modified"         // Optional filter
+}
+    ↓
+Response
+{
+  "success": true,
+  "workflows": [
+    {
+      "workflow_id": "test-debugging-go-v1",
+      "name": "Go Test Debugging",
+      "category_path": "Workflows/TestDebugging/Go",
+      "description": "Debug failing Go unit tests",
+      "version": "1.0.0",
+      "publish_state": "published",
+      "last_published_version": "1.0.0",
+      "last_published_at": "2026-07-23T10:35:00Z",
+      "last_updated": "2026-07-23T10:30:00Z"
+    },
+    {
+      "workflow_id": "python-debug-v1",
+      "name": "Python Debug Workflow",
+      "category_path": "Workflows/TestDebugging/Python",
+      "version": "2.0.0",
+      "publish_state": "modified",
+      "last_published_version": "1.5.0",
+      "last_published_at": "2026-07-20T14:00:00Z",
+      "last_updated": "2026-07-23T09:15:00Z"
+    }
+  ]
+}
+```
+
+### Version Management Semantics
+
+**Two Version Fields**:
+1. **WorkflowDefinition.Version** (string) - User-facing semantic version
+   - SA sets this manually (e.g., "1.0.0", "2.1.0", "3.0.0-beta")
+   - Represents workflow feature version
+   - Displayed in UI
+
+2. **FederatedArtifactV2.Version** (int) - Federation tracking version
+   - Auto-incremented by HQ for same content hash
+   - Used for deduplication and recurrence tracking
+   - Internal system tracking
+
+**Publish States**:
+- `"unpublished"` - Never published to HQ
+- `"published"` - Published, no local changes since publish
+- `"modified"` - Published before, but has local changes
+
+**UI Indicators (Future)**:
+- Show "New" badge if `publish_state == "unpublished"`
+- Show "Modified" badge if `publish_state == "modified"`
+- Show version delta: "v2.0.0 (published: v1.5.0)"
+
+### Authorization
+
+All workflow management endpoints require **SA (SystemAdmin) role**:
+```go
+authCtx := sop.GetAuthFromContext(r.Context())
+isSA := false
+for _, role := range authCtx.Roles {
+    if strings.EqualFold(role, sop.RoleSystemAdmin) {
+        isSA = true
+        break
+    }
+}
+if !isSA {
+    return http.StatusForbidden
+}
+```
+
+Regular users can:
+- ✅ Execute workflows from Core Playbook
+- ✅ Read workflows (via WorkflowManager)
+- ❌ Save workflows
+- ❌ Publish workflows to HQ
+
+### Files Added/Modified
+
+**Backend API** (New):
+- [lib/sop/tools/sopbackend/workflow_handler.go](../lib/sop/tools/sopbackend/workflow_handler.go) - Workflow management APIs
+
+**Core Functions** (Modified):
+- [lib/sop/ai/agent/shared_memory.go](../lib/sop/ai/agent/shared_memory.go) 
+  - `PromoteWorkflowArtifactV2()` now accepts `targetVersion` parameter
+  - Added `SaveWorkflow()` function
+  - Added `PublishWorkflowToHQ()` function
+- [lib/sop/ai/agent/workflow_types.go](../lib/sop/ai/agent/workflow_types.go)
+  - Added publish state fields to `WorkflowDefinition`
+  - Added federation tracking to `WorkflowMetadata`
+- [lib/sop/tools/sopbackend/backend.go](../lib/sop/tools/sopbackend/backend.go)
+  - Registered workflow management endpoints
+
+**HQ Sync** (Modified):
+- [lib/sop/tools/sopbackend/hq_sync_handler.go](../lib/sop/tools/sopbackend/hq_sync_handler.go)
+  - `handleV2WorkflowArtifact()` uses version from artifact
+
+**Auto Promotion** (Modified):
+- [lib/sop/ai/agent/copilot.go](../lib/sop/ai/agent/copilot.go)
+  - Auto-promotion uses `targetVersion = 0` (auto-increment)
 
 ---
 
@@ -233,7 +539,7 @@ Result: Two workflow variants coexist, semantic search ranks by relevance.
 **Code Changes Summary** (+460 lines total):
 
 **lib/sop/ai/agent/shared_memory.go** (+250 lines)
-- `FederationTarget` enum (shared_memory, core_playbook, custom_kb)
+- `FederationTarget` enum (core_playbook with Fleet Learning/, custom_kb)
 - `FederatedArtifactV2` struct with full V2 schema
 - `computeContentHash()` - SHA-256 content hashing
 - `computeWorkflowHash()` - Workflow-specific hashing
@@ -432,7 +738,7 @@ Central Memory Federation enables local daemon nodes to share learned patterns a
 - ✅ Multi-daemon recurrence counting
 - ✅ Version and content hash tracking
 
-**Storage Target**: Core Playbook KB (not shared_memory)
+**Storage Target**: Core Playbook KB with Fleet Learning/ category prefix
 
 **Promotion Criteria**:
 - Workflow executed successfully (≥2 steps completed)
@@ -884,7 +1190,7 @@ This gives us a path to scale the federation layer without requiring a full stre
 
 ### V1 Backend Storage
 - **Backing store**: Root service-account LTM (`ltm_root`)
-- **Knowledge base**: `shared_memory`
+- **Knowledge base**: `core_playbook` with Fleet Learning/ category
 - **Why**: Reuses existing infrastructure, no new storage layer needed
 
 ### SOP bootstrap and refresh strategy
@@ -1330,8 +1636,7 @@ Artifacts can be routed to different backend stores based on content type:
 
 | Target | Purpose | Storage | Examples |
 |--------|---------|---------|----------|
-| **SharedMemory** | Patterns, heuristics, preferences | `shared_memory` KB | Error resolution, code quality, tool preferences |
-| **CorePlaybook** | Proven workflows, multi-step procedures | `core_playbook` KB | Test debugging workflow, refactoring workflow |
+| **CorePlaybook** | All federated content (workflows, patterns, heuristics) | `core_playbook` KB under Fleet Learning/ | Workflows, error resolution, code quality, tool preferences |
 | **CustomKB** | Domain-specific knowledge | Named KB in Space | API docs, architecture patterns |
 
 #### Routing Logic
@@ -1340,7 +1645,6 @@ Artifacts can be routed to different backend stores based on content type:
 type FederationTarget string
 
 const (
-    FederationTargetSharedMemory FederationTarget = "shared_memory"
     FederationTargetCorePlaybook FederationTarget = "core_playbook"
     FederationTargetCustomKB     FederationTarget = "custom_kb"
 )
@@ -1939,3 +2243,677 @@ func normalizeArtifact(rawArtifact any) FederatedArtifactV2 {
 | [lib/sop/cmd/sop-daemon/auth_test.go](../lib/sop/cmd/sop-daemon/auth_test.go) | Bootstrap and sync tests | ✅ Complete |
 | [lib/sop/tools/sopbackend/hq_sync_handler_test.go](../lib/sop/tools/sopbackend/hq_sync_handler_test.go) | HQ handler tests (7 test cases) | ✅ Complete |
 | [docs/FEDERATED_CONTENT_STRATEGY.md](FEDERATED_CONTENT_STRATEGY.md) | Complete content strategy documentation | ✅ Complete |
+
+---
+
+## Daemon Upgrades & Binary Distribution (Future)
+
+**Status**: 📋 Planned - Hybrid Architecture  
+**Target**: TBD  
+**Purpose**: Auto-upgrade daemons via HQ sync, support community binary sharing
+
+### Architecture: HQ Orchestration + GitHub Releases
+
+The upgrade system extends the HQ sync infrastructure to support binary distribution with **zero hosting costs**.
+
+**Design Principle**: 
+- **Official daemon binaries** → GitHub Releases (free hosting, public downloads)
+- **Community binaries** → R2 or HQ-hosted (need access control)
+- **HQ orchestrates everything** (auth, gating, subscription checks)
+
+**Key Insight**: Use a **public GitHub releases repo** for binaries without exposing source code. Private repo (`sop-cloud`) builds and uploads to public repo (`sop-daemon-releases`).
+
+### Why GitHub Releases for Official Daemon?
+
+| Aspect | Pure HQ-Hosted | CloudFlare R2 | GitHub Releases |
+|--------|---------------|---------------|-----------------|
+| **Bandwidth Cost** | ❌ $0.09/GB AWS | ✅ $0/GB | ✅ **$0/GB** (GitHub CDN) |
+| **Storage Cost** | ⚠️ $0.023/GB AWS | ✅ $0.015/GB | ✅ **$0** (free) |
+| **Subscription Gating** | ✅ Easy | ⚠️ Signed URLs | ✅ Easy (HQ controls) |
+| **Fleet Management** | ✅ Full control | ⚠️ Complex | ✅ Full control (HQ orchestrates) |
+| **Staged Rollouts** | ✅ Easy | ⚠️ Hard | ✅ Easy (HQ decides who gets URL) |
+| **Version Tracking** | ✅ Built-in | ❌ Manual | ✅ **Built-in** (tags, releases) |
+| **CI/CD** | ⚠️ Separate | ⚠️ Separate | ✅ **GitHub Actions** |
+| **Changelog** | ⚠️ Separate | ❌ None | ✅ **Release notes built-in** |
+| **Developer Trust** | ⚠️ Unknown URL | ⚠️ Unknown URL | ✅ **Familiar (github.com)** |
+| **API Access** | Custom | S3-compatible | ✅ **GitHub REST API** |
+| **Source Code Exposure** | N/A | N/A | ✅ **Binaries only, no code** |
+
+**Cost Estimate** (1000 daemons, 50MB binary, 10 upgrades/year):
+- GitHub: **$0** (unlimited bandwidth + storage for public repos)
+- HQ bandwidth: ~$5/month (API only, no binary traffic)
+- **Total: ~$5/month vs $45/month on pure AWS, vs $6/month on R2**
+
+**Winner: GitHub Releases** 🏆
+
+### Repository Strategy
+
+**Private Source Repo**: `github.com/yourorg/sop-cloud` (this repo)
+- Contains all source code
+- Private - never exposed
+- GitHub Actions builds binaries
+
+**Public Releases Repo**: `github.com/yourorg/sop-daemon-releases`
+- **No source code** - just README, LICENSE, and Releases tab
+- Public - anyone can download binaries
+- Binaries uploaded from private repo CI/CD
+
+**Why this works**:
+- Daemon binary is useless without HQ authentication
+- HQ validates subscription on every sync
+- Source code stays private, binaries are public
+- Free hosting + CDN via GitHub
+
+### Flow: Version Detection & Upgrade
+
+```
+Daemon                    HQ (AWS)              GitHub Releases (Public)
+  │                          │                        │
+  │  1. Regular Sync         │                        │
+  │  POST /api/daemon/hq-sync│                        │
+  │  {                       │                        │
+  │    daemon_id: "alpha",   │                        │
+  │    version: "v1.4.2"     │                        │
+  │  }                       │                        │
+  │─────────────────────────>│                        │
+  │                          │                        │
+  │                          │ 1a. Check version      │
+  │                          │     (v1.4.2 < v1.5.0)  │
+  │                          │                        │
+  │                          │ 1b. Query GitHub API   │
+  │                          │     for latest release │
+  │                          │─────────────────────────>
+  │                          │                        │
+  │                          │ 1c. Get release info   │
+  │                          │<─────────────────────────
+  │                          │                        │
+  │                          │ 1d. Check subscription │
+  │                          │     (can user upgrade?)│
+  │                          │                        │
+  │  2. Response with        │                        │
+  │     GitHub download URL  │                        │
+  │  {                       │                        │
+  │    upgrade_available: true,                       │
+  │    latest_version: "v1.5.0",                      │
+  │    download_url: "https://github.com/yourorg/sop-daemon-releases/releases/download/v1.5.0/sop-daemon-darwin-arm64",
+  │    checksum: "sha256:abc123..."                   │
+  │  }                       │                        │
+  │<─────────────────────────│                        │
+  │                          │                        │
+  │  3. User approves OR     │                        │
+  │     auto-upgrade enabled │                        │
+  │                          │                        │
+  │  4. Download binary      │                        │
+  │     GET <github_url>     │                        │
+  │──────────────────────────────────────────────────>│
+  │                          │                        │
+  │  5. Binary stream        │                        │
+  │     (via GitHub CDN)     │                        │
+  │<──────────────────────────────────────────────────│
+  │                          │                        │
+  │  6. Verify checksum      │                        │
+  │  7. Backup old binary    │                        │
+  │  8. Replace with new     │                        │
+  │  9. Restart daemon       │                        │
+  │                          │                        │
+  │  10. Report upgrade done │                        │
+  │  POST /api/daemon/hq-sync│                        │
+  │  { version: "v1.5.0" }   │                        │
+  │─────────────────────────>│                        │
+  │                          │                        │
+  │                          │ 10a. Log upgrade success
+  │                          │ 10b. Update fleet registry
+```
+
+### HQ Sync Request Schema (Extended)
+
+```go
+type hqSyncBatch struct {
+    Kind      string `json:"kind"`
+    SessionID string `json:"session_id"`
+    UserID    string `json:"user_id"`
+    DaemonID  string `json:"daemon_id"`
+    DaemonURL string `json:"daemon_url"`
+    Timestamp string `json:"timestamp"`
+    
+    // NEW: Version detection
+    Version   string `json:"version"`    // e.g. "v1.4.2"
+    Platform  string `json:"platform"`   // e.g. "darwin"
+    Arch      string `json:"arch"`       // e.g. "arm64"
+    
+    // Existing: Federation artifacts
+    SharedMeta struct {
+        Enabled    bool
+        Artifacts  []ArtifactV2
+    } `json:"shared_memory,omitempty"`
+    
+    // FUTURE: Community artifacts
+    CommunityMeta struct {
+        Enabled       bool     `json:"enabled"`
+        CommunityIDs  []string `json:"community_ids"`
+        Artifacts     []ArtifactV2 `json:"artifacts"`
+    } `json:"community,omitempty"`
+}
+```
+
+### HQ Sync Response Schema (Extended)
+
+```go
+type hqSyncResponse struct {
+    Status    string `json:"status"`
+    Timestamp string `json:"timestamp"`
+    DaemonID  string `json:"daemon_id"`
+    
+    // Existing: Federation artifacts
+    AutoSharedSpaces    []Space    `json:"auto_shared_spaces"`
+    FederatedWorkflows  []Workflow `json:"federated_workflows,omitempty"`
+    
+    // NEW: Upgrade notification
+    UpgradeAvailable bool   `json:"upgrade_available,omitempty"`
+    LatestVersion    string `json:"latest_version,omitempty"`
+    CurrentVersion   string `json:"current_version,omitempty"`
+    DownloadURL      string `json:"download_url,omitempty"`      // GitHub release URL
+    Checksum         string `json:"checksum,omitempty"`          // sha256:...
+    ExpiresAt        string `json:"expires_at,omitempty"`        // ISO8601 (not needed for GitHub, kept for compatibility)
+    UpgradeRequired  bool   `json:"upgrade_required,omitempty"`  // true if below min_version
+    
+    // FUTURE: Community artifacts
+    CommunityArtifacts []CommunityArtifact `json:"community_artifacts,omitempty"`
+}
+```
+
+### GitHub Repository Structure
+
+**Public Releases Repo** (`yourorg/sop-daemon-releases`):
+```
+github.com/yourorg/sop-daemon-releases (PUBLIC)
+├── README.md               # Installation instructions
+├── LICENSE                 # Proprietary license
+└── Releases/              # GitHub Releases tab
+    ├── v1.5.0 (Latest)
+    │   ├── Release Notes: "Bug fixes, performance improvements..."
+    │   ├── sop-daemon-darwin-arm64           # macOS Apple Silicon
+    │   ├── sop-daemon-darwin-arm64.sha256
+    │   ├── sop-daemon-darwin-amd64           # macOS Intel
+    │   ├── sop-daemon-darwin-amd64.sha256
+    │   ├── sop-daemon-linux-amd64            # Linux x64
+    │   ├── sop-daemon-linux-amd64.sha256
+    │   ├── sop-daemon-linux-arm64            # Linux ARM
+    │   ├── sop-daemon-linux-arm64.sha256
+    │   ├── sop-daemon-windows-amd64.exe      # Windows
+    │   └── sop-daemon-windows-amd64.exe.sha256
+    ├── v1.4.2
+    │   └── ...
+```
+
+**Public Repo README Example**:
+```markdown
+# SOP Daemon - Official Releases
+
+Download pre-built binaries for the SOP Daemon.
+
+## Installation
+
+### macOS (Apple Silicon)
+\`\`\`bash
+curl -LO https://github.com/yourorg/sop-daemon-releases/releases/latest/download/sop-daemon-darwin-arm64
+chmod +x sop-daemon-darwin-arm64
+sudo mv sop-daemon-darwin-arm64 /usr/local/bin/sop-daemon
+\`\`\`
+
+### Linux (x64)
+\`\`\`bash
+curl -LO https://github.com/yourorg/sop-daemon-releases/releases/latest/download/sop-daemon-linux-amd64
+chmod +x sop-daemon-linux-amd64
+sudo mv sop-daemon-linux-amd64 /usr/local/bin/sop-daemon
+\`\`\`
+
+## Verify Checksum
+\`\`\`bash
+curl -LO https://github.com/yourorg/sop-daemon-releases/releases/latest/download/sop-daemon-darwin-arm64.sha256
+sha256sum -c sop-daemon-darwin-arm64.sha256
+\`\`\`
+
+## License
+Proprietary - Requires active subscription. See [LICENSE](LICENSE).
+```
+
+### CI/CD: Build in Private, Release to Public
+
+**GitHub Actions in Private Repo** (`.github/workflows/release-daemon.yml`):
+```yaml
+name: Build and Release Daemon to Public Repo
+
+on:
+  push:
+    tags:
+      - 'daemon-v*'
+
+jobs:
+  build-and-release:
+    strategy:
+      matrix:
+        include:
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+          - os: macos-14  # M1 runner
+            goos: darwin
+            goarch: arm64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: yourorg/sop-cloud  # Private repo
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+      
+      - name: Build daemon
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          cd lib/sop/cmd/sop-daemon
+          go build -ldflags="-X main.version=${{ github.ref_name }}" \
+                   -o sop-daemon-${{ matrix.goos }}-${{ matrix.goarch }}
+      
+      - name: Generate checksum
+        run: |
+          cd lib/sop/cmd/sop-daemon
+          sha256sum sop-daemon-${{ matrix.goos }}-${{ matrix.goarch }} > \
+                    sop-daemon-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
+      
+      - name: Upload to PUBLIC releases repo
+        uses: softprops/action-gh-release@v1
+        with:
+          repository: yourorg/sop-daemon-releases  # PUBLIC repo
+          token: ${{ secrets.PUBLIC_REPO_PAT }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            lib/sop/cmd/sop-daemon/sop-daemon-${{ matrix.goos }}-${{ matrix.goarch }}
+            lib/sop/cmd/sop-daemon/sop-daemon-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
+          body: |
+            ## SOP Daemon ${{ github.ref_name }}
+            
+            Download the appropriate binary for your platform.
+            
+            **Installation**: See [README](https://github.com/yourorg/sop-daemon-releases#installation)
+            **Full changelog**: Available to subscribers at your HQ dashboard
+```
+
+**Required Secrets**:
+- `PUBLIC_REPO_PAT` - Personal Access Token with `repo` scope for public releases repo
+
+### HQ Implementation: Query GitHub API
+
+```go
+// In hq_sync_handler.go or new daemon_upgrade_handler.go
+func checkGitHubForUpgrade(daemonVersion, platform, arch string) (*UpgradeInfo, error) {
+    // Call GitHub API for latest release
+    url := "https://api.github.com/repos/yourorg/sop-daemon-releases/releases/latest"
+    req, _ := http.NewRequest("GET", url, nil)
+    req.Header.Set("Accept", "application/vnd.github.v3+json")
+    
+    // Optional: Add PAT for higher rate limits (5000/hr vs 60/hr)
+    if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+        req.Header.Set("Authorization", "Bearer "+token)
+    }
+    
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("github API request failed: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    var release GitHubRelease
+    if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+        return nil, fmt.Errorf("failed to parse GitHub response: %w", err)
+    }
+    
+    // Find matching asset for daemon's platform
+    assetName := fmt.Sprintf("sop-daemon-%s-%s", platform, arch)
+    checksumName := assetName + ".sha256"
+    
+    var downloadURL, checksum string
+    for _, asset := range release.Assets {
+        if asset.Name == assetName {
+            downloadURL = asset.BrowserDownloadURL
+        }
+        if asset.Name == checksumName {
+            // Fetch checksum file
+            checksum = fetchChecksumFromURL(asset.BrowserDownloadURL)
+        }
+    }
+    
+    if downloadURL == "" {
+        return nil, fmt.Errorf("no binary found for %s-%s in release %s", 
+            platform, arch, release.TagName)
+    }
+    
+    return &UpgradeInfo{
+        Version:     release.TagName,
+        DownloadURL: downloadURL,
+        Checksum:    checksum,
+        Size:        findAssetSize(release.Assets, assetName),
+    }, nil
+}
+
+type GitHubRelease struct {
+    TagName string `json:"tag_name"`
+    Name    string `json:"name"`
+    Body    string `json:"body"` // Release notes
+    Assets  []struct {
+        Name               string `json:"name"`
+        BrowserDownloadURL string `json:"browser_download_url"`
+        Size               int64  `json:"size"`
+    } `json:"assets"`
+}
+```
+
+### HQ Version Manifest (Database)
+
+```sql
+CREATE TABLE daemon_releases (
+    version TEXT PRIMARY KEY,
+    released_at TIMESTAMP NOT NULL,
+    min_subscription_tier TEXT DEFAULT 'starter',
+    min_supported_version TEXT,  -- Oldest version that can upgrade
+    github_repo TEXT DEFAULT 'yourorg/sop-daemon-releases',
+    github_tag TEXT,             -- GitHub tag name (usually same as version)
+    changelog TEXT,
+    platforms JSONB  -- ["darwin-arm64", "linux-amd64", ...]
+);
+
+CREATE TABLE daemon_release_checksums (
+    version TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    arch TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    file_size_bytes BIGINT,
+    github_asset_url TEXT,       -- Direct GitHub download URL
+    PRIMARY KEY (version, platform, arch),
+    FOREIGN KEY (version) REFERENCES daemon_releases(version)
+);
+
+CREATE TABLE daemon_upgrade_log (
+    id SERIAL PRIMARY KEY,
+    daemon_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    from_version TEXT,
+    to_version TEXT NOT NULL,
+    platform TEXT,
+    arch TEXT,
+    started_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    status TEXT,  -- 'pending', 'success', 'failed'
+    error TEXT
+);
+```
+
+**Note**: HQ can cache GitHub release info in database or query GitHub API on-demand. GitHub API has rate limits:
+- Unauthenticated: 60 requests/hour
+- Authenticated: 5000 requests/hour (use PAT)
+
+For high-traffic HQ, cache release info and refresh every 15 minutes.
+    status TEXT,  -- 'pending', 'success', 'failed'
+    error TEXT
+);
+```
+
+### Subscription Gating
+
+```go
+// In hq_sync_handler.go
+func checkUpgradeEligibility(userID, currentVersion, latestVersion string) (bool, string) {
+    user := getUserRecord(userID)
+    
+    // Check subscription tier
+    switch user.SubscriptionPlan {
+    case "starter":
+        // Manual upgrades only, 30-day delay
+        if daysSinceRelease(latestVersion) < 30 {
+            return false, "Starter plan: upgrades available after 30 days"
+        }
+    case "professional":
+        // Auto-upgrades with 7-day delay
+        if daysSinceRelease(latestVersion) < 7 {
+            return false, "Professional plan: upgrades available after 7 days"
+        }
+    case "enterprise":
+        // Immediate access
+        return true, ""
+    }
+    
+    // Check if upgrade is required (security/critical)
+    minVersion := getMinSupportedVersion()
+    if compareVersions(currentVersion, minVersion) < 0 {
+        return true, "Critical upgrade required"
+    }
+    
+    return true, ""
+}
+```
+
+### Staged Rollout Strategy
+
+HQ can control rollout velocity:
+
+```go
+// Gradual rollout: 10% → 50% → 100%
+func shouldOfferUpgrade(daemonID, version string) bool {
+    rolloutPercentage := getRolloutPercentage(version)
+    
+    // Consistent hashing: same daemon always gets same result
+    hash := sha256(daemonID + version)
+    bucket := hash % 100
+    
+    return bucket < rolloutPercentage
+}
+```
+
+**Example Timeline**:
+- Day 1: 10% of fleet gets v1.5.0
+- Day 3: If no issues, 50% gets v1.5.0
+- Day 7: If no issues, 100% gets v1.5.0
+
+### Security
+
+**1. GitHub URLs are Public**
+- No signed URLs needed (GitHub hosts public binaries)
+- Anyone can download, but daemon requires HQ auth to function
+- Daemon validates subscription with HQ on every sync
+- Without valid subscription, daemon cannot connect to HQ
+
+**2. Checksum Verification**
+```go
+// Daemon verifies before installing
+func verifyBinary(filePath, expectedChecksum string) error {
+    actualChecksum := sha256sum(filePath)
+    if actualChecksum \!= expectedChecksum {
+        return fmt.Errorf("checksum mismatch: got %s, want %s", 
+            actualChecksum, expectedChecksum)
+    }
+    return nil
+}
+```
+
+**3. Backup & Rollback**
+```go
+// Daemon keeps old binary
+func upgradeDaemon(newBinaryPath string) error {
+    currentPath := os.Executable()
+    backupPath := currentPath + ".backup"
+    
+    // Backup current binary
+    if err := copyFile(currentPath, backupPath); err \!= nil {
+        return err
+    }
+    
+    // Install new binary
+    if err := copyFile(newBinaryPath, currentPath); err \!= nil {
+        // Restore backup on failure
+        copyFile(backupPath, currentPath)
+        return err
+    }
+    
+    return nil
+}
+```
+
+### Community Binary Sharing (Future Phase)
+
+**Different approach for community binaries** - these need access control, so GitHub public releases won't work.
+
+**Storage Options**:
+1. **CloudFlare R2** - Signed URLs with 1hr expiry
+2. **HQ-hosted** - Stored in HQ database/filesystem
+3. **Private GitHub repos** - Per-community repos (complex)
+
+**Recommended: R2 for Community Binaries**
+
+**Use Case**: "golang-experts" community shares custom debugging tool
+1. Community SA uploads binary via HQ UI
+2. HQ uploads to R2 under `community/golang-experts/tools/v1.0.0/`
+3. Community members sync with HQ
+4. HQ checks membership + subscription
+5. HQ returns signed R2 URL (1hr expiry)
+6. Daemon downloads + verifies + installs
+
+**R2 Storage Layout for Community Binaries**:
+```
+R2 Bucket: sop-community-releases
+  ├── golang-experts/
+  │   ├── debugger-pro/
+  │   │   └── v1.0.0/
+  │   │       ├── debugger-pro-darwin-arm64
+  │   │       ├── debugger-pro-darwin-arm64.sha256
+  │   │       └── ...
+  │   └── test-helpers/
+  │       └── v1.0.0/
+  │           └── ...
+  ├── data-science/
+  │   └── ml-toolkit/
+  │       └── v2.1.0/
+  │           └── ...
+```
+
+**Gating**:
+- Only community members can access (HQ validates membership)
+- Subscription tier can limit community features
+- Community admin can mark binaries as "approved"
+- R2 signed URLs prevent unauthorized access
+
+**Why Not GitHub for Community Binaries?**
+- ❌ GitHub public repos = no access control
+- ❌ GitHub private repos per community = complex management
+- ✅ R2 with signed URLs = precise access control
+- ✅ Same infrastructure as other community content
+
+### Implementation Phases
+
+**Phase 1: Version Detection** (Foundation)
+- [ ] Add `version`, `platform`, `arch` to `hqSyncBatch`
+- [ ] HQ queries GitHub API for latest release
+- [ ] Compare daemon version vs latest
+- [ ] Return `upgrade_available` flag in response
+- [ ] No actual download yet
+
+**Phase 2: GitHub Integration** (Official Daemon Storage)
+- [ ] Create public releases repo (`yourorg/sop-daemon-releases`)
+- [ ] Setup GitHub Actions in private repo to build + upload
+- [ ] HQ caches GitHub release info
+- [ ] HQ returns GitHub download URLs to eligible daemons
+
+**Phase 3: Auto-Upgrade** (Daemon Side)
+- [ ] Daemon downloads binary from GitHub URL
+- [ ] Verify checksum
+- [ ] Backup current binary
+- [ ] Replace + restart
+- [ ] Report upgrade status to HQ
+
+**Phase 4: Community Binaries** (AI Studio Feature)
+- [ ] Setup CloudFlare R2 bucket for community binaries
+- [ ] Community membership system
+- [ ] Community binary upload UI
+- [ ] HQ generates signed R2 URLs (1hr expiry)
+- [ ] Same download/verify/install flow as daemon upgrades
+
+### Integration Points
+
+| System | Touch Point | Purpose |
+|--------|-------------|---------|
+| **HQ Sync** | `/api/daemon/hq-sync` | Version detection, upgrade orchestration |
+| **GitHub Releases** | Public repo + API | Official daemon binary storage (free) |
+| **GitHub Actions** | Private repo CI/CD | Build binaries, upload to public repo |
+| **CloudFlare R2** | Signed URLs | Community binary storage (access control) |
+| **Subscription** | User tier check | Gate upgrade availability |
+| **Fleet Registry** | Daemon tracking | Know which versions are deployed |
+| **Daemon** | Startup check | Query HQ for upgrades |
+| **AI Studio UI** | Upgrade prompt | User consent for auto-upgrade |
+
+### Metrics & Observability
+
+```sql
+-- Fleet version distribution
+SELECT version, COUNT(*) as daemon_count
+FROM daemon_registry
+GROUP BY version
+ORDER BY daemon_count DESC;
+
+-- Upgrade success rate
+SELECT to_version, 
+       COUNT(*) as total_attempts,
+       SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successes,
+       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failures
+FROM daemon_upgrade_log
+WHERE started_at > NOW() - INTERVAL '7 days'
+GROUP BY to_version;
+
+-- Cost savings comparison
+-- GitHub: $0/GB storage + $0/GB egress (unlimited for public repos)
+-- R2: $0.015/GB storage + $0/GB egress
+-- AWS: $0.023/GB storage + $0.09/GB egress
+-- 
+-- For 1000 daemons, 50MB binary, 10 upgrades/year:
+--   AWS bandwidth: 50MB × 1000 × 10 × $0.09/GB = ~$45/month
+--   R2: $0/month bandwidth + $0.75/month storage = $0.75/month
+--   GitHub: $0/month (everything free for public repos)
+-- 
+-- Savings: $45/month vs AWS, $0.75/month vs R2
+```
+
+### Real-World Examples
+
+Many commercial products use this pattern:
+
+| Product | Public Releases Repo | Source Code |
+|---------|---------------------|-------------|
+| Discord | github.com/discord/discord-api-docs (public binaries) | Closed source |
+| Slack | github.com/slackapi/slack-api-specs (public specs) | Closed source |
+| 1Password | github.com/1Password/1password-teams-open-source | Closed source |
+| HashiCorp (pre-MPL) | github.com/hashicorp/terraform (releases) | Some closed |
+
+### References
+
+- [CLOUDFLARE_PRIVATE_DOWNLOADS.md](CLOUDFLARE_PRIVATE_DOWNLOADS.md) - Signed URL guide (for community binaries)
+- [PAYMENTS.md](PAYMENTS.md) - Subscription tier definitions
+- [DESKTOP_APP.md](DESKTOP_APP.md) - Desktop app binary packaging
+
+**Key Takeaway**: GitHub Releases provides free, reliable, global binary distribution for official daemon binaries. Community binaries still use R2 for access control.
+
+---

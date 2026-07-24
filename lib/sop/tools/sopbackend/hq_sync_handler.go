@@ -51,7 +51,7 @@ const (
 	// rootSAUsername is the service account username for central/shared memory storage.
 	rootSAUsername = "ltm_root"
 	// sharedMemoryKBName is the knowledge base name for central shared memory.
-	sharedMemoryKBName = "shared_memory"
+	sharedMemoryKBName = "core_playbook"
 )
 
 // getHQRateLimiter returns the global HQ rate limiter instance.
@@ -74,7 +74,7 @@ func getHQRateLimiter() *RateLimiter {
 // Design:
 // - V1 uses the root service-account LTM as the backing store for central memory
 // - Only authenticated daemon requests with valid bearer tokens are accepted
-// - Artifacts are stored in the "shared_memory" knowledge base under the ltm_root user
+// - Artifacts are stored in the "core_playbook" knowledge base under Fleet Learning/ category for the ltm_root user
 // - The feature is additive and degrades gracefully if the root SA or KB is unavailable
 func HandleHQSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -229,7 +229,7 @@ func storeSharedMemoryArtifacts(ctx context.Context, batch hqSyncBatch) error {
 
 		category := strings.TrimSpace(artifact.Category)
 		if category == "" {
-			category = "shared_memory"
+			category = "Fleet Learning/general"
 		}
 
 		// Enrich metadata with provenance information
@@ -542,7 +542,7 @@ func retrieveSharedMemoryArtifacts(ctx context.Context, query string, limit int)
 	artifacts := make([]hqArtifact, 0)
 	for _, hit := range hits {
 		text := ""
-		category := "shared_memory"
+		category := "Fleet Learning/general"
 		metadata := make(map[string]any)
 
 		if hit.Payload != nil {
@@ -678,7 +678,21 @@ func isV2WorkflowArtifact(metadata map[string]any) bool {
 }
 
 // handleV2WorkflowArtifact processes a V2 workflow artifact and stores it in Core Playbook.
+// Only accepts workflows promoted by SA (SystemAdmin) users.
 func handleV2WorkflowArtifact(ctx context.Context, db *aidb.Database, embedder ai.Embeddings, metadata map[string]any, daemonID string) error {
+	// SA Access Control: Validate that workflow was promoted by SystemAdmin
+	promotedByRole := ""
+	if role, ok := metadata["promoted_by_role"].(string); ok {
+		promotedByRole = strings.TrimSpace(role)
+	}
+	if !strings.EqualFold(promotedByRole, sop.RoleSystemAdmin) {
+		log.Warn("HQ sync: rejecting workflow from non-SA user",
+			"daemon_id", daemonID,
+			"promoted_by_role", promotedByRole,
+		)
+		return fmt.Errorf("workflow promotion requires SystemAdmin role, got: %s", promotedByRole)
+	}
+
 	// Parse V2 artifact
 	artifact, err := agent.ParseFederatedArtifactV2(metadata)
 	if err != nil {
@@ -718,7 +732,7 @@ func handleV2WorkflowArtifact(ctx context.Context, db *aidb.Database, embedder a
 		)
 	}
 
-	// Store in Core Playbook
+	// Store in Core Playbook with version from artifact
 	if err := agent.PromoteWorkflowArtifactV2(
 		ctx,
 		db,
@@ -727,6 +741,7 @@ func handleV2WorkflowArtifact(ctx context.Context, db *aidb.Database, embedder a
 		artifact.WorkflowDefinition,
 		daemonID,
 		artifact.ExecutionStats,
+		artifact.Version, // Use version from incoming artifact
 	); err != nil {
 		return fmt.Errorf("store workflow in core playbook: %w", err)
 	}

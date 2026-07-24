@@ -24,11 +24,11 @@ func TestPromoteAndRetrieveSharedMemoryArtifact(t *testing.T) {
 	}
 
 	sysDB := aidb.NewDatabase(opts)
-	if err := PromoteSharedMemoryArtifact(ctx, sysDB, nil, nil, "Retry auth failures with a short backoff before escalating", "shared_memory", "shared_memory", "scope", "shared", map[string]any{"source": "test"}); err != nil {
+	if err := PromoteSharedMemoryArtifact(ctx, sysDB, nil, nil, "Retry auth failures with a short backoff before escalating", "core_playbook", "Fleet Learning/general", "scope", "shared", map[string]any{"source": "test"}); err != nil {
 		t.Fatalf("PromoteSharedMemoryArtifact() error = %v", err)
 	}
 
-	hits, err := RetrieveSharedMemory(ctx, sysDB, nil, nil, "auth failures backoff", "shared_memory", 5)
+	hits, err := RetrieveSharedMemory(ctx, sysDB, nil, nil, "auth failures backoff", "core_playbook", 5)
 	if err != nil {
 		t.Fatalf("RetrieveSharedMemory() error = %v", err)
 	}

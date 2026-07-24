@@ -21,7 +21,7 @@ func TestMemorySpaceRBAC_SystemAdminCanManage(t *testing.T) {
 		{"SystemAdmin writes alice_ltm", "alice_ltm", sop.ActionWrite, []string{sop.RoleSystemAdmin}, true, true},
 		{"SystemAdmin writes bob_stm", "bob_stm", sop.ActionWrite, []string{sop.RoleSystemAdmin}, true, true},
 		{"SystemAdmin writes memory_alice", "memory_alice", sop.ActionWrite, []string{sop.RoleSystemAdmin}, true, true},
-		{"SystemAdmin writes shared_memory", "shared_memory", sop.ActionWrite, []string{sop.RoleSystemAdmin}, true, true},
+		{"SystemAdmin writes core_playbook", "core_playbook", sop.ActionWrite, []string{sop.RoleSystemAdmin}, true, true},
 		{"SystemAdmin writes Core Playbook", "Core Playbook", sop.ActionWrite, []string{sop.RoleSystemAdmin}, true, true},
 
 		// SystemAdmin can delete memory spaces
@@ -32,7 +32,7 @@ func TestMemorySpaceRBAC_SystemAdminCanManage(t *testing.T) {
 		{"User cannot write alice_ltm", "alice_ltm", sop.ActionWrite, []string{sop.RoleUser}, true, false},
 		{"User cannot write bob_stm", "bob_stm", sop.ActionWrite, []string{sop.RoleUser}, true, false},
 		{"User cannot write memory_alice", "memory_alice", sop.ActionWrite, []string{sop.RoleUser}, true, false},
-		{"User cannot write shared_memory", "shared_memory", sop.ActionWrite, []string{sop.RoleUser}, true, false},
+		{"User cannot write core_playbook", "core_playbook", sop.ActionWrite, []string{sop.RoleUser}, true, false},
 		{"User cannot write Core Playbook", "Core Playbook", sop.ActionWrite, []string{sop.RoleUser}, true, false},
 
 		// Regular users cannot delete memory spaces

@@ -3114,9 +3114,28 @@ func (a *CopilotAgent) enqueueMultiTurnTasks(ctx context.Context, query string, 
 
 // promoteWorkflowToFederation promotes a successful workflow execution to Federation V2.
 // Only workflows are promoted (not general patterns) per V2 scoped implementation.
+// Only SA (SystemAdmin) users can promote workflows to Core Playbook.
 func (a *CopilotAgent) promoteWorkflowToFederation(ctx context.Context, workflow *WorkflowDefinition, results []TurnResult, duration time.Duration) error {
 	if workflow == nil {
 		return fmt.Errorf("workflow is nil")
+	}
+
+	// SA Access Control: Only SystemAdmin users can promote workflows to Core Playbook
+	authCtx := sop.GetAuthFromContext(ctx)
+	isSA := false
+	for _, role := range authCtx.Roles {
+		if strings.EqualFold(role, sop.RoleSystemAdmin) {
+			isSA = true
+			break
+		}
+	}
+	if !isSA {
+		// Skip promotion for non-SA users - this is intentional and not an error
+		log.Debug("Skipping workflow promotion: user is not SA",
+			"workflow_id", workflow.ID,
+			"user_id", authCtx.UserID,
+		)
+		return nil
 	}
 
 	// Check if federation is enabled
@@ -3138,9 +3157,12 @@ func (a *CopilotAgent) promoteWorkflowToFederation(ctx context.Context, workflow
 		"duration_seconds": duration.Seconds(),
 		"actors_used":      extractActorsUsed(results),
 		"promoted_at":      time.Now().UTC().Format(time.RFC3339),
+		"promoted_by":      authCtx.UserID,
+		"promoted_by_role": sop.RoleSystemAdmin,
 	}
 
 	// Promote to federation (stores locally in Core Playbook)
+	// Auto-promotion uses targetVersion = 0 (auto-increment)
 	if err := PromoteWorkflowArtifactV2(
 		ctx,
 		a.systemDB,
@@ -3149,6 +3171,7 @@ func (a *CopilotAgent) promoteWorkflowToFederation(ctx context.Context, workflow
 		workflow,
 		daemonID,
 		executionStats,
+		0, // targetVersion = 0 means auto-increment
 	); err != nil {
 		return fmt.Errorf("promote workflow artifact: %w", err)
 	}

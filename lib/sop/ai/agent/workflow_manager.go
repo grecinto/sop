@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sharedcode/sop"
@@ -18,12 +19,21 @@ import (
 // It retrieves workflow definitions from the KnowledgeBase and executes them
 // by injecting work items into the queue.
 // Supports searching across multiple KBs: Core Playbook (always) + selected Spaces.
+//
+// Performance: Workflows are cached in-memory to avoid I/O contention with Fleet Learning
+// write traffic in the shared core_playbook KB. Cache is refreshed periodically or on-demand.
 type WorkflowManager struct {
 	kb                *memory.KnowledgeBase[map[string]any]   // Primary KB (Core Playbook)
 	selectedKBs       []*memory.KnowledgeBase[map[string]any] // Additional selected KBs
 	conditionRegistry map[string]ConditionEvaluator
 	scriptLibraryPath string
 	scriptExecutor    ScriptExecutor
+
+	// In-memory workflow cache (to avoid I/O contention with Fleet Learning writes)
+	workflowCache       map[string]*WorkflowDefinition // key: workflow ID or category path
+	workflowCacheMu     sync.RWMutex
+	workflowCacheLoaded time.Time
+	workflowCacheTTL    time.Duration // 0 = no expiration (refresh only on demand)
 }
 
 // ScriptExecutor is an interface for executing optimization scripts.
@@ -43,6 +53,8 @@ func NewWorkflowManager(kb *memory.KnowledgeBase[map[string]any]) *WorkflowManag
 	wm := &WorkflowManager{
 		kb:                kb,
 		conditionRegistry: make(map[string]ConditionEvaluator),
+		workflowCache:     make(map[string]*WorkflowDefinition),
+		workflowCacheTTL:  0, // No expiration by default (manual refresh only)
 	}
 
 	// Register built-in conditions using workqueue.TurnResult
@@ -80,11 +92,45 @@ func (wm *WorkflowManager) GetWorkflow(ctx context.Context, query string) (inter
 
 // getWorkflowInternal is the typed internal method.
 // Searches across Core Playbook + selected Spaces for matching workflows.
+// Uses in-memory cache to avoid I/O contention with Fleet Learning writes.
 func (wm *WorkflowManager) getWorkflowInternal(ctx context.Context, query string) (*WorkflowDefinition, error) {
 	if wm.kb == nil {
 		return nil, fmt.Errorf("knowledge base is nil")
 	}
 
+	// Check cache first (read lock)
+	wm.workflowCacheMu.RLock()
+	if cached, ok := wm.workflowCache[query]; ok {
+		// Check TTL if configured
+		if wm.workflowCacheTTL == 0 || time.Since(wm.workflowCacheLoaded) < wm.workflowCacheTTL {
+			wm.workflowCacheMu.RUnlock()
+			return cached, nil
+		}
+	}
+	wm.workflowCacheMu.RUnlock()
+
+	// Cache miss or expired - search KB
+	workflow, err := wm.searchWorkflowInKB(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update cache (write lock)
+	if workflow != nil {
+		wm.workflowCacheMu.Lock()
+		wm.workflowCache[query] = workflow
+		// Also cache by workflow ID for faster lookups
+		if workflow.ID != "" {
+			wm.workflowCache[workflow.ID] = workflow
+		}
+		wm.workflowCacheMu.Unlock()
+	}
+
+	return workflow, nil
+}
+
+// searchWorkflowInKB performs the actual KB search (uncached).
+func (wm *WorkflowManager) searchWorkflowInKB(ctx context.Context, query string) (*WorkflowDefinition, error) {
 	// Collect all KBs to search: Core Playbook + selected Spaces
 	kbsToSearch := []*memory.KnowledgeBase[map[string]any]{wm.kb}
 	kbsToSearch = append(kbsToSearch, wm.selectedKBs...)
@@ -610,4 +656,128 @@ func (wm *WorkflowManager) LoadScript(scriptName string) (map[string]any, error)
 	}
 
 	return script, nil
+}
+
+// =====================================================================
+// Workflow Cache Management
+// =====================================================================
+
+// RefreshWorkflowCache preloads all workflows from Core Playbook into memory.
+// This should be called at daemon startup to avoid I/O contention with Fleet Learning writes.
+// Returns count of workflows loaded and any error.
+func (wm *WorkflowManager) RefreshWorkflowCache(ctx context.Context) (int, error) {
+	if wm.kb == nil {
+		return 0, fmt.Errorf("knowledge base is nil")
+	}
+
+	// Search for all items under Workflows/ category
+	pathReq := memory.PathSearchParam{
+		CategoryPath: "Workflows/",
+		SearchText:   "",
+	}
+
+	items, err := wm.kb.SearchByPath(ctx, []memory.PathSearchParam{pathReq})
+	if err != nil {
+		// Fall back to semantic search if path search fails
+		searchReq := memory.SearchRequest[map[string]any]{
+			Text:  "workflow",
+			Limit: 500,
+		}
+		batch, err2 := wm.kb.Search(ctx, []memory.SearchRequest[map[string]any]{searchReq})
+		if err2 != nil {
+			return 0, fmt.Errorf("failed to search workflows: %w (path search error: %v)", err2, err)
+		}
+		if len(batch) == 0 || len(batch[0]) == 0 {
+			return 0, nil // No workflows found
+		}
+		// Convert hits to items (hits have Payload, items have Data)
+		items = make([]memory.Item[map[string]any], len(batch[0]))
+		for i, hit := range batch[0] {
+			items[i] = memory.Item[map[string]any]{
+				ID:            sop.UUID{}, // We don't have ID from hit
+				CategoryID:    sop.UUID{},
+				Data:          hit.Payload,
+				EmbeddingText: hit.DocumentContent,
+			}
+		}
+	}
+
+	// Parse and cache workflows
+	wm.workflowCacheMu.Lock()
+	defer wm.workflowCacheMu.Unlock()
+
+	// Clear existing cache
+	wm.workflowCache = make(map[string]*WorkflowDefinition)
+	count := 0
+
+	for _, item := range items {
+		if item.Data == nil {
+			continue
+		}
+
+		// Try to parse as WorkflowDefinition
+		data, err := json.Marshal(item.Data)
+		if err != nil {
+			continue
+		}
+
+		var workflow WorkflowDefinition
+		if err := json.Unmarshal(data, &workflow); err != nil {
+			continue
+		}
+
+		// Validate it's a real workflow
+		if workflow.ID == "" || len(workflow.Steps) == 0 {
+			continue
+		}
+
+		// Cache by ID and category path
+		wm.workflowCache[workflow.ID] = &workflow
+		if workflow.CategoryPath != "" {
+			wm.workflowCache[workflow.CategoryPath] = &workflow
+		}
+		count++
+	}
+
+	wm.workflowCacheLoaded = time.Now()
+	return count, nil
+}
+
+// InvalidateWorkflowCache clears the in-memory workflow cache.
+// Call this after SA publishes a workflow to force reload on next access.
+func (wm *WorkflowManager) InvalidateWorkflowCache() {
+	wm.workflowCacheMu.Lock()
+	defer wm.workflowCacheMu.Unlock()
+	wm.workflowCache = make(map[string]*WorkflowDefinition)
+	wm.workflowCacheLoaded = time.Time{} // Zero time = never loaded
+}
+
+// InvalidateWorkflow removes a specific workflow from cache.
+// Call this when a single workflow is updated.
+func (wm *WorkflowManager) InvalidateWorkflow(workflowID string) {
+	wm.workflowCacheMu.Lock()
+	defer wm.workflowCacheMu.Unlock()
+	delete(wm.workflowCache, workflowID)
+}
+
+// SetCacheTTL configures the workflow cache time-to-live.
+// Set to 0 for manual refresh only (default).
+// Set to a duration (e.g., 5*time.Minute) for automatic expiration.
+func (wm *WorkflowManager) SetCacheTTL(ttl time.Duration) {
+	wm.workflowCacheMu.Lock()
+	defer wm.workflowCacheMu.Unlock()
+	wm.workflowCacheTTL = ttl
+}
+
+// GetCacheStats returns cache statistics for monitoring.
+func (wm *WorkflowManager) GetCacheStats() map[string]any {
+	wm.workflowCacheMu.RLock()
+	defer wm.workflowCacheMu.RUnlock()
+
+	return map[string]any{
+		"workflow_count": len(wm.workflowCache),
+		"loaded_at":      wm.workflowCacheLoaded.Format(time.RFC3339),
+		"ttl_seconds":    wm.workflowCacheTTL.Seconds(),
+		"cache_age":      time.Since(wm.workflowCacheLoaded).String(),
+	}
 }

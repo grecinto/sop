@@ -307,6 +307,12 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ltm/category/auto-share/list", WithAuth(HandleListCategoryAutoShare))
 	mux.HandleFunc("/api/ltm/category/auto-share/bulk", WithAuth(HandleBulkSetCategoryAutoShare))
 
+	// Workflow Management Endpoints (SA only)
+	mux.HandleFunc("/api/workflow/save", WithAuth(handleSaveWorkflow))
+	mux.HandleFunc("/api/workflow/publish", WithAuth(handlePublishWorkflow))
+	mux.HandleFunc("/api/workflow/list", WithAuth(handleListWorkflows))
+	mux.HandleFunc("/api/workflow/get", WithAuth(handleGetWorkflow))
+
 	// Daemon Sync Endpoints
 	mux.HandleFunc("/api/daemon/hq-sync", HandleHQSync)
 

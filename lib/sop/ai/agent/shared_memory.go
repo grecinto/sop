@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sharedcode/sop"
@@ -16,15 +18,40 @@ import (
 	"github.com/sharedcode/sop/ai/memory"
 )
 
-const defaultSharedMemoryKBName = "shared_memory"
+const defaultSharedMemoryKBName = "core_playbook"
+
+// SyncEnqueuer is a callback interface for enqueueing artifacts to the federation sync queue.
+// This allows the agent package to remain independent of the daemon package while still
+// enabling integration with V1's scalable sync infrastructure (circuit breaker, throttling, etc.).
+type SyncEnqueuer func(text, category string, metadata map[string]any) error
+
+var (
+	globalSyncEnqueuer SyncEnqueuer
+	syncEnqueuerMu     sync.RWMutex
+)
+
+// RegisterSyncEnqueuer registers a callback for enqueueing artifacts to the federation sync queue.
+// This should be called by the daemon during initialization to integrate with V1's sync infrastructure.
+func RegisterSyncEnqueuer(enqueuer SyncEnqueuer) {
+	syncEnqueuerMu.Lock()
+	defer syncEnqueuerMu.Unlock()
+	globalSyncEnqueuer = enqueuer
+}
+
+// getSyncEnqueuer returns the registered sync enqueuer, if any.
+func getSyncEnqueuer() SyncEnqueuer {
+	syncEnqueuerMu.RLock()
+	defer syncEnqueuerMu.RUnlock()
+	return globalSyncEnqueuer
+}
 
 // FederationTarget specifies where a federated artifact should be stored.
+// All federation now routes to core_playbook with Fleet Learning root category.
 type FederationTarget string
 
 const (
-	// FederationTargetSharedMemory stores patterns, heuristics, and preferences
-	FederationTargetSharedMemory FederationTarget = "shared_memory"
-	// FederationTargetCorePlaybook stores proven workflows and procedures
+	// FederationTargetCorePlaybook stores all federated content (workflows, patterns, heuristics)
+	// in core_playbook under Fleet Learning/ root category
 	FederationTargetCorePlaybook FederationTarget = "core_playbook"
 	// FederationTargetCustomKB stores domain-specific knowledge in a named KB
 	FederationTargetCustomKB FederationTarget = "custom_kb"
@@ -39,7 +66,7 @@ type FederatedArtifactV2 struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 
 	// V2 routing and typing
-	Target      FederationTarget `json:"target"`       // Where to store (shared_memory, core_playbook, custom_kb)
+	Target      FederationTarget `json:"target"`       // Where to store (core_playbook with Fleet Learning/, custom_kb)
 	ContentType string           `json:"content_type"` // "pattern", "workflow", "knowledge"
 
 	// V2 versioning and deduplication
@@ -86,7 +113,7 @@ func PromoteSharedMemoryArtifact(
 		kbName = defaultSharedMemoryKBName
 	}
 	if strings.TrimSpace(category) == "" {
-		category = "shared_memory"
+		category = "Fleet Learning/general"
 	}
 	if strings.TrimSpace(scopeType) == "" {
 		scopeType = "scope"
@@ -487,6 +514,7 @@ func PromoteWorkflowArtifactV2(
 	workflow *WorkflowDefinition,
 	daemonID string,
 	executionStats map[string]any,
+	targetVersion int, // 0 = auto-increment, >0 = specific version to update
 ) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -501,15 +529,31 @@ func PromoteWorkflowArtifactV2(
 		return fmt.Errorf("daemon ID is required")
 	}
 
+	// Extract user role from execution stats (set by promotion caller)
+	promotedByRole := ""
+	if executionStats != nil {
+		if role, ok := executionStats["promoted_by_role"].(string); ok {
+			promotedByRole = role
+		}
+	}
+
 	// Build V2 artifact
 	now := time.Now().UTC().Format(time.RFC3339)
+	contentHash := computeWorkflowHash(workflow)
+
+	// Determine version: use targetVersion if specified, otherwise default to 1
+	version := targetVersion
+	if version == 0 {
+		version = 1 // Default for new workflows or auto-increment
+	}
+
 	artifact := FederatedArtifactV2{
 		Text:               workflow.Description,
-		Category:           "workflow_pattern",
+		Category:           "Fleet Learning/workflow_pattern",
 		Target:             FederationTargetCorePlaybook,
 		ContentType:        "workflow",
-		Version:            1, // Will be incremented by HQ if duplicate exists
-		ContentHash:        computeWorkflowHash(workflow),
+		Version:            version,
+		ContentHash:        contentHash,
 		OriginDaemonID:     daemonID,
 		LastModifiedBy:     daemonID,
 		RecurrenceCount:    1,
@@ -526,6 +570,7 @@ func PromoteWorkflowArtifactV2(
 			"step_count":         len(workflow.Steps),
 			"federation_version": "v2",
 			"promoted_at":        now,
+			"promoted_by_role":   promotedByRole,
 		},
 	}
 
@@ -533,6 +578,46 @@ func PromoteWorkflowArtifactV2(
 	// This makes it available immediately to this daemon
 	if err := storeWorkflowArtifactLocally(ctx, db, llm, embedder, &artifact); err != nil {
 		return fmt.Errorf("failed to store workflow locally: %w", err)
+	}
+
+	// Enqueue for HQ sync using V1's scalable sync infrastructure
+	// (circuit breaker, throttling, exponential backoff, jitter, etc.)
+	enqueuer := getSyncEnqueuer()
+	if enqueuer != nil {
+		// Build compact text representation for sync
+		text := fmt.Sprintf("[Workflow] %s: %s", workflow.Name, workflow.Description)
+		if len(text) > 500 {
+			text = text[:500]
+		}
+
+		// Serialize workflow definition for metadata
+		workflowData, _ := json.Marshal(workflow)
+		syncMetadata := map[string]any{
+			"federation_version":  "v2",
+			"target":              string(artifact.Target),
+			"content_type":        artifact.ContentType,
+			"version":             artifact.Version,
+			"content_hash":        artifact.ContentHash,
+			"workflow_id":         artifact.WorkflowID,
+			"workflow_definition": string(workflowData),
+			"execution_stats":     artifact.ExecutionStats,
+			"origin_daemon_id":    artifact.OriginDaemonID,
+			"recurrence_count":    artifact.RecurrenceCount,
+			"promoted_at":         artifact.CreatedAt,
+			"promoted_by_role":    promotedByRole,
+		}
+
+		// Merge artifact metadata
+		for k, v := range artifact.Metadata {
+			if _, exists := syncMetadata[k]; !exists {
+				syncMetadata[k] = v
+			}
+		}
+
+		if err := enqueuer(text, artifact.Category, syncMetadata); err != nil {
+			log.Printf("Warning: failed to enqueue workflow for HQ sync: %v", err)
+			// Don't fail promotion if enqueue fails - local storage succeeded
+		}
 	}
 
 	return nil
@@ -619,6 +704,182 @@ func storeWorkflowArtifactLocally(
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// SaveWorkflow saves a workflow locally without publishing to HQ.
+// This allows SA users to edit and refine workflows before publishing.
+// Sets publish_state to "unpublished" or "modified" depending on previous state.
+func SaveWorkflow(
+	ctx context.Context,
+	db *aidb.Database,
+	llm ai.Generator,
+	embedder ai.Embeddings,
+	workflow *WorkflowDefinition,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if db == nil {
+		return fmt.Errorf("database is required")
+	}
+	if workflow == nil {
+		return fmt.Errorf("workflow is required")
+	}
+	if workflow.CategoryPath == "" {
+		return fmt.Errorf("workflow category_path is required")
+	}
+
+	// Update timestamp
+	now := time.Now().UTC().Format(time.RFC3339)
+	if workflow.Metadata == nil {
+		workflow.Metadata = &WorkflowMetadata{}
+	}
+	workflow.Metadata.LastUpdated = now
+
+	// Set publish state
+	if workflow.PublishState == "" || workflow.PublishState == "unpublished" {
+		workflow.PublishState = "unpublished"
+	} else {
+		workflow.PublishState = "modified" // Had been published, now has changes
+	}
+
+	// Open Core Playbook KB
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	kb, err := db.OpenKnowledgeBase(ctx, "core_playbook", tx, llm, embedder, false, true)
+	if err != nil {
+		return fmt.Errorf("open core_playbook KB: %w", err)
+	}
+
+	// Convert workflow to map
+	workflowBytes, err := json.Marshal(workflow)
+	if err != nil {
+		return fmt.Errorf("marshal workflow: %w", err)
+	}
+	var workflowData map[string]any
+	if err := json.Unmarshal(workflowBytes, &workflowData); err != nil {
+		return fmt.Errorf("unmarshal workflow to map: %w", err)
+	}
+
+	// Create embedding text
+	embeddingText := fmt.Sprintf("%s\\n%s\\n%s",
+		workflow.Name,
+		workflow.Description,
+		workflow.CategoryPath,
+	)
+	for _, pattern := range workflow.TriggerPatterns {
+		embeddingText += "\\n" + pattern
+	}
+
+	// Upsert into KB
+	params := []memory.UpsertItemParam[map[string]any]{
+		{
+			CategoryPath: workflow.CategoryPath,
+			Item: &memory.Item[map[string]any]{
+				Data:          workflowData,
+				EmbeddingText: embeddingText,
+			},
+		},
+	}
+
+	if err := kb.UpsertItems(ctx, params); err != nil {
+		return fmt.Errorf("upsert workflow: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// PublishWorkflowToHQ explicitly publishes a workflow to HQ with version control.
+// This is the explicit publish action (vs automatic promotion on execution).
+// Only SA users should be able to call this.
+func PublishWorkflowToHQ(
+	ctx context.Context,
+	db *aidb.Database,
+	llm ai.Generator,
+	embedder ai.Embeddings,
+	workflow *WorkflowDefinition,
+	daemonID string,
+	publishedBy string, // User ID of SA doing the publish
+	targetVersion int, // 0 = auto-increment, >0 = update specific version
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if db == nil {
+		return fmt.Errorf("database is required")
+	}
+	if workflow == nil {
+		return fmt.Errorf("workflow is required")
+	}
+	if strings.TrimSpace(daemonID) == "" {
+		return fmt.Errorf("daemon ID is required")
+	}
+	if strings.TrimSpace(publishedBy) == "" {
+		return fmt.Errorf("published_by user ID is required")
+	}
+
+	// Check SA authorization
+	authCtx := sop.GetAuthFromContext(ctx)
+	isSA := false
+	for _, role := range authCtx.Roles {
+		if strings.EqualFold(role, sop.RoleSystemAdmin) {
+			isSA = true
+			break
+		}
+	}
+	if !isSA {
+		return fmt.Errorf("only SystemAdmin users can publish workflows to HQ")
+	}
+
+	// Update workflow publish metadata
+	now := time.Now().UTC().Format(time.RFC3339)
+	workflow.PublishState = "published"
+	workflow.LastPublishedVersion = workflow.Version
+	workflow.LastPublishedAt = now
+
+	// Compute content hash
+	contentHash := computeWorkflowHash(workflow)
+	if workflow.Metadata == nil {
+		workflow.Metadata = &WorkflowMetadata{}
+	}
+	workflow.Metadata.ContentHash = contentHash
+
+	// Save workflow locally first with updated publish state
+	if err := SaveWorkflow(ctx, db, llm, embedder, workflow); err != nil {
+		return fmt.Errorf("save workflow before publish: %w", err)
+	}
+
+	// Prepare execution stats for publish
+	executionStats := map[string]any{
+		"published_at":      now,
+		"published_by":      publishedBy,
+		"published_by_role": sop.RoleSystemAdmin,
+		"publish_action":    "explicit", // vs "auto" from workflow execution
+	}
+
+	// Promote to federation with target version
+	if err := PromoteWorkflowArtifactV2(
+		ctx,
+		db,
+		llm,
+		embedder,
+		workflow,
+		daemonID,
+		executionStats,
+		targetVersion,
+	); err != nil {
+		return fmt.Errorf("promote workflow to HQ: %w", err)
 	}
 
 	return nil

@@ -258,6 +258,13 @@ func printDaemonHelp() {
 func GetGlobalSyncQueue() *SyncQueue {
 	syncQueueOnce.Do(func() {
 		globalSyncQueue = NewSyncQueue()
+		// Register sync queue with agent package for V2 workflow federation integration
+		sharedagent.RegisterSyncEnqueuer(func(text, category string, metadata map[string]any) error {
+			if globalSyncQueue != nil {
+				return globalSyncQueue.Enqueue(text, category, metadata)
+			}
+			return nil
+		})
 	})
 	return globalSyncQueue
 }

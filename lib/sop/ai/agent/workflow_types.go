@@ -13,7 +13,12 @@ type WorkflowDefinition struct {
 	Name         string `json:"name"`
 	CategoryPath string `json:"category_path"`
 	Description  string `json:"description"`
-	Version      string `json:"version,omitempty"`
+	Version      string `json:"version,omitempty"` // User-facing semantic version (e.g., "1.0.0", "2.1.0")
+
+	// Publish state (for SA workflow management)
+	PublishState         string `json:"publish_state,omitempty"`          // "unpublished", "published", "modified"
+	LastPublishedVersion string `json:"last_published_version,omitempty"` // Last version pushed to HQ
+	LastPublishedAt      string `json:"last_published_at,omitempty"`      // ISO8601 timestamp
 
 	// Workflow behavior
 	Steps       []WorkflowStep    `json:"steps"`
@@ -171,6 +176,10 @@ type WorkflowMetadata struct {
 	Language    string   `json:"language,omitempty"`
 	Framework   string   `json:"framework,omitempty"`
 	LastUpdated string   `json:"last_updated,omitempty"`
+
+	// Federation tracking
+	FederationVersion int    `json:"federation_version,omitempty"` // Auto-incremented by HQ on each publish
+	ContentHash       string `json:"content_hash,omitempty"`       // SHA-256 of workflow content
 }
 
 // ConditionEvaluator is a function that determines if a step should execute.

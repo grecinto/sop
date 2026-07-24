@@ -13,27 +13,31 @@ import (
 	"github.com/sharedcode/sop/ai/database"
 )
 
+// federatedLTMCategoryAllowlist defines categories in core_playbook/Fleet Learning/
+// that are eligible for auto-share federation to daemons.
+// These are dynamically learned patterns and knowledge from the daemon fleet.
 var federatedLTMCategoryAllowlist = map[string]struct{}{
-	"workflow_pattern":         {},
-	"anti_pattern":             {},
-	"repair_strategy":          {},
-	"tool_preference":          {},
-	"safety_heuristic":         {},
-	"verified_playbook":        {},
-	"context_gathering":        {},
-	"error_resolution":         {},
-	"performance_optimization": {},
-	"security_pattern":         {},
-	"testing_strategy":         {},
-	"code_quality":             {},
-	"api_design":               {},
+	"Fleet Learning/workflow_pattern":         {},
+	"Fleet Learning/anti_pattern":             {},
+	"Fleet Learning/repair_strategy":          {},
+	"Fleet Learning/tool_preference":          {},
+	"Fleet Learning/safety_heuristic":         {},
+	"Fleet Learning/verified_playbook":        {},
+	"Fleet Learning/context_gathering":        {},
+	"Fleet Learning/error_resolution":         {},
+	"Fleet Learning/performance_optimization": {},
+	"Fleet Learning/security_pattern":         {},
+	"Fleet Learning/testing_strategy":         {},
+	"Fleet Learning/code_quality":             {},
+	"Fleet Learning/api_design":               {},
 }
 
 func shouldShowCategoryAutoShareControls(authCtx sop.AuthContext, spaceName, categoryPath string, isHQ bool) bool {
 	if strings.TrimSpace(spaceName) == "" {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(spaceName), "shared_memory") {
+	// Only core_playbook Space has category auto-share controls for Fleet Learning
+	if !strings.EqualFold(strings.TrimSpace(spaceName), "core_playbook") {
 		return false
 	}
 	if strings.TrimSpace(categoryPath) != "" {

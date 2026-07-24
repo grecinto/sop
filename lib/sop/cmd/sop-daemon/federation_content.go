@@ -15,43 +15,43 @@ type FederatedContentCategory string
 
 const (
 	// CategoryWorkflowPattern captures proven sequences that solve common problems.
-	CategoryWorkflowPattern FederatedContentCategory = "workflow_pattern"
+	CategoryWorkflowPattern FederatedContentCategory = "Fleet Learning/workflow_pattern"
 
 	// CategoryAntiPattern captures mistakes to avoid that appeared across nodes.
-	CategoryAntiPattern FederatedContentCategory = "anti_pattern"
+	CategoryAntiPattern FederatedContentCategory = "Fleet Learning/anti_pattern"
 
 	// CategoryRepairStrategy captures successful fixes for auth, config, or runtime issues.
-	CategoryRepairStrategy FederatedContentCategory = "repair_strategy"
+	CategoryRepairStrategy FederatedContentCategory = "Fleet Learning/repair_strategy"
 
 	// CategoryToolPreference captures which tool sequences work best for which tasks.
-	CategoryToolPreference FederatedContentCategory = "tool_preference"
+	CategoryToolPreference FederatedContentCategory = "Fleet Learning/tool_preference"
 
 	// CategorySafetyHeuristic captures when to verify, confirm, or slow down.
-	CategorySafetyHeuristic FederatedContentCategory = "safety_heuristic"
+	CategorySafetyHeuristic FederatedContentCategory = "Fleet Learning/safety_heuristic"
 
 	// CategoryVerifiedPlaybook captures multi-step sequences with proven success.
-	CategoryVerifiedPlaybook FederatedContentCategory = "verified_playbook"
+	CategoryVerifiedPlaybook FederatedContentCategory = "Fleet Learning/verified_playbook"
 
 	// CategoryContextGathering captures effective strategies for understanding codebases.
-	CategoryContextGathering FederatedContentCategory = "context_gathering"
+	CategoryContextGathering FederatedContentCategory = "Fleet Learning/context_gathering"
 
 	// CategoryErrorResolution captures patterns for diagnosing and fixing common errors.
-	CategoryErrorResolution FederatedContentCategory = "error_resolution"
+	CategoryErrorResolution FederatedContentCategory = "Fleet Learning/error_resolution"
 
 	// CategoryPerformanceOptimization captures patterns for improving performance.
-	CategoryPerformanceOptimization FederatedContentCategory = "performance_optimization"
+	CategoryPerformanceOptimization FederatedContentCategory = "Fleet Learning/performance_optimization"
 
 	// CategorySecurityPattern captures security best practices and vulnerability prevention.
-	CategorySecurityPattern FederatedContentCategory = "security_pattern"
+	CategorySecurityPattern FederatedContentCategory = "Fleet Learning/security_pattern"
 
 	// CategoryTestingStrategy captures effective testing approaches and patterns.
-	CategoryTestingStrategy FederatedContentCategory = "testing_strategy"
+	CategoryTestingStrategy FederatedContentCategory = "Fleet Learning/testing_strategy"
 
 	// CategoryCodeQuality captures maintainability and readability patterns.
-	CategoryCodeQuality FederatedContentCategory = "code_quality"
+	CategoryCodeQuality FederatedContentCategory = "Fleet Learning/code_quality"
 
 	// CategoryAPIDesign captures API design conventions and best practices.
-	CategoryAPIDesign FederatedContentCategory = "api_design"
+	CategoryAPIDesign FederatedContentCategory = "Fleet Learning/api_design"
 )
 
 // PromotionConfig defines thresholds for what gets promoted to HQ.
