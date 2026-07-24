@@ -813,7 +813,24 @@
         }
         const nextAttachments = [];
         const rejectedFiles = [];
+        const codeFiles = [];
+        
         for (const file of files) {
+            if (!file) {
+                rejectedFiles.push('unknown file');
+                continue;
+            }
+            
+            // Check if it's a code file (text-based)
+            const isCodeFile = /^(text\/|application\/(javascript|json|xml|x-sh))/.test(file.type) || 
+                /\.(js|jsx|ts|tsx|py|go|java|c|cpp|h|hpp|cs|rb|php|rs|swift|kt|scala|sql|sh|bash|yml|yaml|json|xml|html|css|scss|sass|md|txt|log|conf|cfg|ini|toml|env)$/i.test(file.name);
+            
+            if (isCodeFile) {
+                codeFiles.push(file);
+                continue;
+            }
+            
+            // Handle image files
             if (!file || !/^image\//i.test(file.type)) {
                 rejectedFiles.push(file && file.name ? file.name : 'unknown file');
                 continue;
@@ -834,6 +851,34 @@
                 rejectedFiles.push(file.name || 'image');
             }
         }
+        // Handle code files by injecting into chat input
+        if (codeFiles.length > 0) {
+            const chatInput = document.getElementById('chat-input');
+            if (chatInput) {
+                for (const file of codeFiles) {
+                    try {
+                        const content = await file.text();
+                        const ext = file.name.split('.').pop() || 'txt';
+                        const langMap = {
+                            'js': 'javascript', 'jsx': 'javascript', 'ts': 'typescript', 'tsx': 'typescript',
+                            'py': 'python', 'rb': 'ruby', 'php': 'php', 'java': 'java', 'c': 'c', 'cpp': 'cpp',
+                            'cs': 'csharp', 'go': 'go', 'rs': 'rust', 'swift': 'swift', 'kt': 'kotlin',
+                            'sh': 'bash', 'bash': 'bash', 'yml': 'yaml', 'yaml': 'yaml', 'json': 'json',
+                            'xml': 'xml', 'html': 'html', 'css': 'css', 'scss': 'scss', 'sql': 'sql',
+                            'md': 'markdown', 'txt': 'text', 'log': 'text'
+                        };
+                        const lang = langMap[ext.toLowerCase()] || ext.toLowerCase();
+                        const existingText = chatInput.value;
+                        const separator = existingText && !existingText.endsWith('\n') ? '\n\n' : '';
+                        chatInput.value = existingText + separator + `File: ${file.name}\n\`\`\`${lang}\n${content}\n\`\`\`\n`;
+                        showChatAttachmentFeedback(`Added code file: ${file.name}`, 'success');
+                    } catch (err) {
+                        rejectedFiles.push(file.name);
+                    }
+                }
+            }
+        }
+        
         if (nextAttachments.length > 0) {
             pendingChatAttachments = pendingChatAttachments.concat(nextAttachments);
             renderChatAttachmentPreview();
@@ -1925,7 +1970,18 @@
             return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: var(--chat-font-family); line-height: 1.2; margin: 0;">${escapeHtml(displayText)}</div>`;
         }
 
-        return marked.parse(displayText);
+        const html = marked.parse(displayText);
+        
+        // Apply syntax highlighting to code blocks after markdown parsing
+        requestAnimationFrame(() => {
+            if (typeof hljs !== 'undefined') {
+                document.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+            }
+        });
+        
+        return html;
     }
 
     function scrollChatHistoryToBottom() {
@@ -1936,6 +1992,108 @@
         requestAnimationFrame(() => {
             history.scrollTop = history.scrollHeight;
         });
+    }
+
+    // Code diff view helper
+    function detectAndRenderCodeDiff(contentSpan) {
+        if (!contentSpan) return;
+        
+        // Look for consecutive code blocks that might be before/after
+        const codeBlocks = contentSpan.querySelectorAll('pre code');
+        if (codeBlocks.length < 2) return;
+        
+        // Detect patterns like "Before:" and "After:" or "Original:" and "Modified:"
+        const beforeKeywords = ['before', 'original', 'old', 'current'];
+        const afterKeywords = ['after', 'modified', 'new', 'updated', 'fixed'];
+        
+        for (let i = 0; i < codeBlocks.length - 1; i++) {
+            const firstBlock = codeBlocks[i];
+            const secondBlock = codeBlocks[i + 1];
+            
+            // Check if there's text between them indicating before/after
+            const textBetween = getTextBetweenElements(firstBlock.parentElement, secondBlock.parentElement);
+            const lowerText = textBetween.toLowerCase();
+            
+            const hasBefore = beforeKeywords.some(kw => lowerText.includes(kw));
+            const hasAfter = afterKeywords.some(kw => lowerText.includes(kw));
+            
+            if (hasBefore && hasAfter) {
+                // Create diff view
+                createDiffView(firstBlock, secondBlock);
+                i++; // Skip next block since we've already processed it
+            }
+        }
+    }
+    
+    function getTextBetweenElements(elem1, elem2) {
+        let text = '';
+        let current = elem1.nextSibling;
+        while (current && current !== elem2) {
+            if (current.nodeType === Node.TEXT_NODE) {
+                text += current.textContent;
+            } else if (current.textContent) {
+                text += current.textContent;
+            }
+            current = current.nextSibling;
+        }
+        return text;
+    }
+    
+    function createDiffView(beforeBlock, afterBlock) {
+        const beforeCode = beforeBlock.textContent || beforeBlock.innerText;
+        const afterCode = afterBlock.textContent || afterBlock.innerText;
+        
+        // Create diff container
+        const diffContainer = document.createElement('div');
+        diffContainer.className = 'code-diff-container';
+        diffContainer.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; border: 1px solid var(--border-color); border-radius: 4px; overflow: hidden;';
+        
+        // Before section
+        const beforeSection = document.createElement('div');
+        beforeSection.className = 'diff-before';
+        beforeSection.style.cssText = 'background: var(--pre-bg); padding: 10px; border-right: 1px solid var(--border-color);';
+        beforeSection.innerHTML = `
+            <div style="font-size: 11px; font-weight: bold; color: #f14c4c; margin-bottom: 5px; text-transform: uppercase;">❌ Before</div>
+            <pre style="margin: 0; background: transparent;"><code>${escapeHtml(beforeCode)}</code></pre>
+        `;
+        
+        // After section
+        const afterSection = document.createElement('div');
+        afterSection.className = 'diff-after';
+        afterSection.style.cssText = 'background: var(--pre-bg); padding: 10px;';
+        afterSection.innerHTML = `
+            <div style="font-size: 11px; font-weight: bold; color: #4caf50; margin-bottom: 5px; text-transform: uppercase;">✅ After</div>
+            <pre style="margin: 0; background: transparent;"><code>${escapeHtml(afterCode)}</code></pre>
+        `;
+        
+        // Copy button
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = '📋 Copy New Code';
+        copyBtn.style.cssText = 'margin: 10px; padding: 8px 16px; background: var(--button-bg); color: var(--button-text); border: none; border-radius: 4px; cursor: pointer; font-size: 12px;';
+        copyBtn.onclick = () => {
+            navigator.clipboard.writeText(afterCode).then(() => {
+                copyBtn.textContent = '✓ Copied!';
+                copyBtn.style.background = '#4caf50';
+                setTimeout(() => {
+                    copyBtn.textContent = '📋 Copy New Code';
+                    copyBtn.style.background = 'var(--button-bg)';
+                }, 2000);
+            });
+        };
+        
+        diffContainer.appendChild(beforeSection);
+        diffContainer.appendChild(afterSection);
+        
+        // Replace original blocks with diff view
+        beforeBlock.parentElement.parentElement.insertBefore(diffContainer, beforeBlock.parentElement);
+        beforeBlock.parentElement.parentElement.insertBefore(copyBtn, beforeBlock.parentElement);
+        beforeBlock.parentElement.style.display = 'none';
+        afterBlock.parentElement.style.display = 'none';
+        
+        // Apply syntax highlighting to diff
+        if (typeof hljs !== 'undefined') {
+            diffContainer.querySelectorAll('code').forEach(block => hljs.highlightElement(block));
+        }
     }
 
     function createAssistantContentBlock() {
@@ -2086,6 +2244,9 @@
                 // Not JSON
             }
         });
+
+        // Detect and render code diffs (before/after comparisons)
+        detectAndRenderCodeDiff(contentSpan);
 
         scrollChatHistoryToBottom();
     }

@@ -135,7 +135,7 @@ Your observation is spot-on. Modern AI systems (OpenAI, Anthropic, Google) are *
 │ TIER 1: KB Workflows (Orchestration Layer)             │
 │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   │
 │ • Stored as JSON/MD in KnowledgeBase                    │
-│ • Retrieved via SearchByPath("Workflows/TestDebugging") │
+│ • Retrieved via SearchByPath("Playbooks/TestDebugging") │
 │ • Defines: steps, actors, priorities, conditions        │
 │ • Editable without recompilation                        │
 │ • Semantic search: "how to debug Go tests?" → workflow  │
@@ -167,7 +167,7 @@ Your observation is spot-on. Modern AI systems (OpenAI, Anthropic, Google) are *
 {
   "workflow_id": "test_debugging_go_v1",
   "name": "Test Debugging Workflow for Go",
-  "category_path": "Workflows/TestDebugging/Go/UnitTests",
+  "category_path": "Playbooks/TestDebugging/Go/UnitTests",
   "description": "7-step systematic approach to debugging failing Go tests",
   "metadata": {
     "language": "go",
@@ -294,7 +294,7 @@ type WorkflowManager struct {
 
 func (wm *WorkflowManager) Execute(ctx context.Context, query string) (bool, error) {
     // 1. Detect workflow type via KB search
-    workflow, err := wm.kb.SearchByPath("Workflows", query, 1)
+    workflow, err := wm.kb.SearchByPath("Playbooks", query, 1)
     if err != nil || len(workflow) == 0 {
         return false, nil // Fallback to hardcoded
     }

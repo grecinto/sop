@@ -415,7 +415,7 @@ func collectSharedMemoryArtifacts(ctx context.Context) ([]struct {
 	}
 
 	// Retrieve recent shared memory artifacts for sync
-	hits, err := agent.RetrieveSharedMemory(ctx, db, nil, nil, "shared_memory", "shared_memory", 10)
+	hits, err := agent.RetrieveSharedMemory(ctx, db, nil, nil, "Fleet Learning", "core_playbook", 10)
 	if err != nil {
 		return nil, err
 	}
@@ -440,7 +440,7 @@ func collectSharedMemoryArtifacts(ctx context.Context) ([]struct {
 			continue
 		}
 
-		category := "shared_memory"
+		category := "Fleet Learning/general"
 		if cat, ok := hit.Payload["category"].(string); ok && strings.TrimSpace(cat) != "" {
 			category = strings.TrimSpace(cat)
 		}
@@ -812,7 +812,7 @@ func (h *DaemonAuthHandler) storeRetrievedArtifacts(ctx context.Context, artifac
 
 		category := strings.TrimSpace(artifact.Category)
 		if category == "" {
-			category = "shared_memory"
+			category = "Fleet Learning/general"
 		}
 
 		// Enrich metadata with HQ origin
@@ -851,7 +851,7 @@ func (h *DaemonAuthHandler) storeRetrievedArtifacts(ctx context.Context, artifac
 			nil, // LLM not required
 			nil, // Embedder handled by PromoteSharedMemoryArtifact
 			text,
-			"shared_memory",
+			"core_playbook",
 			category,
 			"daemon",
 			"hq-federation",

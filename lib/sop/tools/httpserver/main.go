@@ -79,6 +79,7 @@ func main() {
 	var redisURL string
 	var pageSize int
 	var productionMode bool
+	var enableStores bool
 
 	flag.BoolVar(&showVersion, "version", false, "Show version and exit")
 	flag.BoolVar(&openBrowserFlag, "open-browser", true, "Open browser on startup")
@@ -90,6 +91,7 @@ func main() {
 	flag.StringVar(&redisURL, "redis", "localhost:6379", "Redis URL for clustered mode (e.g. localhost:6379)")
 	flag.IntVar(&pageSize, "pageSize", 40, "Number of items to display per page")
 	flag.BoolVar(&productionMode, "production", false, "Enable Production mode (use real Embedder and LLM)")
+	flag.BoolVar(&enableStores, "enable-stores", true, "Enable Stores feature (UI, API, tools). Provides database management UI for SOP developers.")
 	flag.Parse()
 
 	var wasProductionFlagPassed bool
@@ -157,7 +159,9 @@ func main() {
 	if !wasProductionFlagPassed {
 		effectiveProductionMode = true
 	}
-	targetConfigPath, err := sopbackend.InitializeRuntime(context.Background(), configFile, sopbackend.RuntimeOptions{}, port, &effectiveProductionMode)
+	targetConfigPath, err := sopbackend.InitializeRuntime(context.Background(), configFile, sopbackend.RuntimeOptions{
+		EnableStoresFeature: enableStores,
+	}, port, &effectiveProductionMode)
 	if err != nil {
 		log.Error(fmt.Sprintf("Failed to initialize shared backend: %v", err))
 	} else if _, statErr := os.Stat(targetConfigPath); statErr == nil {

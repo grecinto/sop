@@ -221,7 +221,11 @@ func autoProvisionSharedCopilotService(ctx context.Context) (ai.Agent[map[string
 		DefaultTimeoutSeconds: 600,
 		MaxTimeoutSeconds:     1800,
 	}
-	if err := sopbackend.Initialize(ctx, sopbackend.RuntimeOptions{EnableLocalAutomation: true, AutomationPolicy: &policy}); err != nil {
+	if err := sopbackend.Initialize(ctx, sopbackend.RuntimeOptions{
+		EnableLocalAutomation: true,
+		AutomationPolicy:      &policy,
+		EnableStoresFeature:   true,
+	}); err != nil {
 		log.Printf("daemon autoProvisionSharedCopilotService: shared backend bootstrap failed: %v", err)
 	} else {
 		log.Printf("daemon autoProvisionSharedCopilotService: shared backend initialized")

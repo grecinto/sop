@@ -34,7 +34,7 @@
 ```
 shared_memory KB                  core_playbook KB
 ├── workflow_pattern/        +    ├── Coding Best Practices/
-├── anti_pattern/                 └── Workflows/
+├── anti_pattern/                 └── Playbooks/
 ├── repair_strategy/
 ├── tool_preference/
 └── ... (13 categories)
@@ -50,7 +50,7 @@ shared_memory KB                  core_playbook KB
 ```
 core_playbook KB
 ├── Coding Best Practices/         (static, curated)
-├── Workflows/                      (versioned, SA-managed)
+├── Playbooks/                      (versioned, SA-managed)
 └── Fleet Learning/                 (dynamic, federated from daemon fleet)
     ├── workflow_pattern/
     ├── anti_pattern/
@@ -72,7 +72,7 @@ core_playbook KB
 - ✅ Clear organizational hierarchy
 - ✅ "Fleet Learning" name describes dynamic nature
 - ✅ Category auto-share works with `Fleet Learning/` prefix
-- ✅ Workflows stay separate from field-learned patterns
+- ✅ Playbooks stay separate from field-learned patterns
 
 ### Implementation Details
 
@@ -269,7 +269,7 @@ POST /api/workflow/save
   "workflow": {
     "workflow_id": "test-debugging-go-v1",
     "name": "Go Test Debugging",
-    "category_path": "Workflows/TestDebugging/Go",
+    "category_path": "Playbooks/TestDebugging/Go",
     "version": "1.0.0",
     "description": "Debug failing Go unit tests",
     "steps": [...]
@@ -299,7 +299,7 @@ SA User in Daemon
 POST /api/workflow/publish
 {
   "workflow_id": "test-debugging-go-v1",
-  "category_path": "Workflows/TestDebugging/Go",
+  "category_path": "Playbooks/TestDebugging/Go",
   "target_version": 0  // 0 = auto-increment, >0 = specific version
 }
     ↓
@@ -333,7 +333,7 @@ GET /api/workflow/list
 or
 POST /api/workflow/list
 {
-  "category_path": "Workflows/",      // Optional filter
+  "category_path": "Playbooks/",      // Optional filter
   "publish_state": "modified"         // Optional filter
 }
     ↓
@@ -344,7 +344,7 @@ Response
     {
       "workflow_id": "test-debugging-go-v1",
       "name": "Go Test Debugging",
-      "category_path": "Workflows/TestDebugging/Go",
+      "category_path": "Playbooks/TestDebugging/Go",
       "description": "Debug failing Go unit tests",
       "version": "1.0.0",
       "publish_state": "published",
@@ -355,7 +355,7 @@ Response
     {
       "workflow_id": "python-debug-v1",
       "name": "Python Debug Workflow",
-      "category_path": "Workflows/TestDebugging/Python",
+      "category_path": "Playbooks/TestDebugging/Python",
       "version": "2.0.0",
       "publish_state": "modified",
       "last_published_version": "1.5.0",
@@ -1726,7 +1726,7 @@ Each target has different storage semantics:
   "workflow_definition": {
     "id": "test-debugging-go-v2",
     "name": "Debug Test Failure (Enhanced)",
-    "category_path": "Workflows/Testing/Debug",
+    "category_path": "Playbooks/Testing/Debug",
     "version": "2.0",
     "steps": [...],
     "trigger_patterns": [...]

@@ -12,6 +12,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	sharedagent "github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/ai/memory"
 )
 
@@ -240,18 +241,23 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/runtime/refresh", WithAuth(handleRuntimeRefresh))
 	mux.HandleFunc("/api/databases", WithAuth(handleDatabases))
 	mux.HandleFunc("/api/databases/update", WithAuth(handleUpdateDatabase))
-	mux.HandleFunc("/api/stores", WithAuth(handleListStores))
+
+	// Stores API endpoints (disabled by default for v1, hidden via feature flag)
+	if sharedagent.StoresFeatureEnabled() {
+		mux.HandleFunc("/api/stores", WithAuth(handleListStores))
+		mux.HandleFunc("/api/store/info", WithAuth(handleGetStoreInfo))
+		mux.HandleFunc("/api/store/update", WithAuth(handleUpdateStoreInfo))
+		mux.HandleFunc("/api/store/items", WithAuth(handleListItems))
+		mux.HandleFunc("/api/store/item/update", WithAuth(handleUpdateItem))
+		mux.HandleFunc("/api/store/item/add", WithAuth(handleAddItem))
+		mux.HandleFunc("/api/store/item/delete", WithAuth(handleDeleteItem))
+		mux.HandleFunc("/api/store/items/delete", WithAuth(handleDeleteItems))
+		mux.HandleFunc("/api/store/add", WithAuth(handleAddStore))
+		mux.HandleFunc("/api/store/delete", WithAuth(handleDeleteStore))
+	}
+
 	mux.HandleFunc("/api/spaces", WithAuth(handleListSpaces))
 	mux.HandleFunc("/api/db/options", WithAuth(handleGetDBOptions))
-	mux.HandleFunc("/api/store/info", WithAuth(handleGetStoreInfo))
-	mux.HandleFunc("/api/store/update", WithAuth(handleUpdateStoreInfo))
-	mux.HandleFunc("/api/store/items", WithAuth(handleListItems))
-	mux.HandleFunc("/api/store/item/update", WithAuth(handleUpdateItem))
-	mux.HandleFunc("/api/store/item/add", WithAuth(handleAddItem))
-	mux.HandleFunc("/api/store/item/delete", WithAuth(handleDeleteItem))
-	mux.HandleFunc("/api/store/items/delete", WithAuth(handleDeleteItems))
-	mux.HandleFunc("/api/store/add", WithAuth(handleAddStore))
-	mux.HandleFunc("/api/store/delete", WithAuth(handleDeleteStore))
 	mux.HandleFunc("/api/admin/validate", WithAuth(handleValidateAdminToken))
 
 	// AI Endpoints

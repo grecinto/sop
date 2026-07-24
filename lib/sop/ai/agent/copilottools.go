@@ -139,7 +139,10 @@ func formatToolInventoryList(tools []ai.ToolDefinition) string {
 // registerSystemTools registers the core system inspection tools.
 func (a *CopilotAgent) registerSystemTools(ctx context.Context) {
 	a.registry.Register("list_databases", "Lists all available databases.", emptyObjectArgsSchema, wrapStringTool(a.toolListDatabases))
-	a.registry.Register("list_stores", ListStoresInstruction, listStoresArgsSchema, wrapStringTool(a.toolListStores))
+	// list_stores is only registered when Stores feature is enabled
+	if StoresFeatureEnabled() {
+		a.registry.Register("list_stores", ListStoresInstruction, listStoresArgsSchema, wrapStringTool(a.toolListStores))
+	}
 	a.registry.Register("list_tools", "Lists all available tools and their usage instructions.", emptyObjectArgsSchema, wrapStringTool(a.toolListTools))
 	a.registry.Register("clear", "Clear temporary session-scoped chat state such as pending confirmations, draft script context, and recent interaction buffers.", emptyObjectArgsSchema, wrapStringTool(a.toolClear))
 	a.registry.Register("set_verbose", "Toggle session verbosity for follow-up tool results and progress streaming.", `{"type":"object","properties":{"verbose":{"type":"boolean","description":"Set verbosity on or off. If omitted, the current setting is toggled."}}}`, wrapStringTool(a.toolSetVerbose))
@@ -166,14 +169,18 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 	}
 
 	a.registerSystemTools(ctx)
-	if a.hasRegisteredCapability(StoresDomain) {
+	if a.hasRegisteredCapability(StoresDomain) && StoresFeatureEnabled() {
 		a.registerStoresTools(ctx)
 	}
-	a.registerAtomicTools()
+	if StoresFeatureEnabled() {
+		a.registerAtomicTools()
+	}
 	if a.hasRegisteredCapability(SpacesDomain) {
 		a.registerSpaceTools(ctx)
 	}
-	a.registerScriptTools(ctx)
+	if StoresFeatureEnabled() {
+		a.registerScriptTools(ctx)
+	}
 	a.registerRoutingTools(ctx)
 	if a.hasRegisteredCapability("Desktop", "Desktop Automation", "desktop") {
 		a.registerAutomationTools(ctx)

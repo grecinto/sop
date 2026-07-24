@@ -690,7 +690,7 @@ func storeWorkflowArtifactLocally(
 	// Store in KB
 	categoryPath := artifact.WorkflowDefinition.CategoryPath
 	if categoryPath == "" {
-		categoryPath = "Workflows/Federated"
+		categoryPath = "Playbooks/Federated"
 	}
 
 	if err := kb.IngestThought(ctx, artifact.Text, categoryPath, "system", nil, payload); err != nil {

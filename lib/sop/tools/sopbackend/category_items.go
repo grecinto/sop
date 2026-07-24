@@ -107,11 +107,15 @@ func handleListSpaceCategories(w http.ResponseWriter, r *http.Request) {
 
 	rbacMap := sop.ResolveRBACMap(ctx, "space", sop.EntitlementContext{AssetID: storeName, Database: dbName, IsSystemDB: IsSystemDB(dbName)}, nil)
 
+	// Get display name for the space (e.g., "core_playbook" → "Core Playbook")
+	displayName := resolveSpaceDisplayName(storeName, nil)
+
 	response := map[string]any{
-		"data":   categories,
-		"total":  totalCount,
-		"offset": offset,
-		"limit":  limit,
+		"data":         categories,
+		"total":        totalCount,
+		"offset":       offset,
+		"limit":        limit,
+		"display_name": displayName,
 		// When a Space is about to be displayed, it calls handleListSpaceCategories. Thus we can send the RBAC for the Space here.
 		"rbac": rbacMap,
 	}

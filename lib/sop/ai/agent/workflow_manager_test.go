@@ -93,7 +93,7 @@ func TestWorkflowDefinition_JSONRoundTrip(t *testing.T) {
 	workflow := &WorkflowDefinition{
 		ID:           "test-workflow-v1",
 		Name:         "Test Workflow",
-		CategoryPath: "Workflows/Test",
+		CategoryPath: "Playbooks/Test",
 		Description:  "A test workflow",
 		Steps: []WorkflowStep{
 			{
@@ -311,7 +311,7 @@ func TestWorkflowManager_GetWorkflow_FallsBackToStoredWorkflowTemplateItems(t *t
 	wm := NewWorkflowManager(kb)
 	if err := kb.UpsertItems(ctx, []memory.UpsertItemParam[map[string]any]{
 		{
-			CategoryPath: "Workflows/TestDebugging",
+			CategoryPath: "Playbooks/TestDebugging",
 			Item: &memory.Item[map[string]any]{
 				Data: map[string]any{
 					"workflow_name": "Fix failing tests",

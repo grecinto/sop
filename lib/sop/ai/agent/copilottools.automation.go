@@ -147,9 +147,12 @@ var localGetBackgroundJob func(jobID string) (*BackgroundJob, error)
 var localKillBackgroundJob func(jobID string) error
 var localDesktopAutomationEnabled atomic.Bool
 var automationPolicy atomic.Value
+var storesFeatureEnabled atomic.Bool
 
 func init() {
 	automationPolicy.Store(DefaultAutomationPolicy())
+	// Stores disabled by default for v1, can be enabled for v1.1+
+	storesFeatureEnabled.Store(false)
 }
 
 func SetLocalCommandExecutor(fn func(ctx context.Context, req LocalCommandRequest) (string, error)) {
@@ -176,6 +179,17 @@ func SetLocalDesktopAutomationEnabled(enabled bool) {
 
 func SetAutomationPolicy(policy AutomationPolicy) {
 	automationPolicy.Store(policy)
+}
+
+// SetStoresFeatureEnabled controls whether Stores capability and tools are available.
+// Disabled by default for v1 (focused on AI Copilot), can be enabled for v1.1+.
+func SetStoresFeatureEnabled(enabled bool) {
+	storesFeatureEnabled.Store(enabled)
+}
+
+// StoresFeatureEnabled returns true if Stores capability should be active.
+func StoresFeatureEnabled() bool {
+	return storesFeatureEnabled.Load()
 }
 
 // formatCommandOutputForDisplay formats command output for better readability.

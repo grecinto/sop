@@ -21,7 +21,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'SDK Documentation',
-      items: ['sdk/intro', 'sdk/vector-database', 'sdk/ai-database'],
+      items: ['sdk/intro', 'sdk/vector-database', 'sdk/ai-database', 'sdk/stores-management'],
     },
     {
       type: 'category',

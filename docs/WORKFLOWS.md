@@ -27,7 +27,7 @@ Core Playbook Space (Read-Only Internal Space)
 ├── Categories/
 │   ├── Go Best Practices/          ← Existing documentation
 │   ├── Architecture Guidelines/    ← Existing documentation
-│   └── Workflows/                  ← NEW: Physical workflow definitions
+│   └── Playbooks/                  ← NEW: Physical workflow definitions
 │       ├── Coding/
 │       │   ├── Debug Test Failure
 │       │   ├── Add Unit Tests
@@ -226,7 +226,7 @@ func ingestWorkflowsIntoKB(ctx context.Context, kb *memory.KnowledgeBase[map[str
   "id": "test-debugging-go-v1",
   "name": "Debug Test Failure",
   "description": "Systematically diagnose and fix failing Go unit tests",
-  "category_path": "Workflows/Testing/Debug",
+  "category_path": "Playbooks/Testing/Debug",
   "version": "1.0",
   "trigger_patterns": [
     "fix failing tests",
@@ -377,11 +377,11 @@ func (a *CopilotAgent) evaluateStepCondition(ctx context.Context, step WorkflowS
 📋 **Available Workflows** (12 found)
 
 ### Testing Workflows
-1. **Debug Test Failure** (`Workflows/Testing/Debug`)
+1. **Debug Test Failure** (`Playbooks/Testing/Debug`)
    - Trigger: "fix failing tests", "test debug"
    - Steps: 4 (Run tests → Analyze → Fix → Verify)
    
-2. **Add Unit Tests** (`Workflows/Testing/AddCoverage`)
+2. **Add Unit Tests** (`Playbooks/Testing/AddCoverage`)
    - Trigger: "add tests for", "test coverage"
    - Steps: 3 (Analyze code → Generate tests → Run)
 ```
@@ -413,7 +413,7 @@ LLM: [Generates structured workflow automatically]
 ```json
 {
   "name": "Debug Parser Error",
-  "category_path": "Workflows/Debugging/Parser",
+  "category_path": "Playbooks/Debugging/Parser",
   "trigger_patterns": ["parser fails", "fix parser bug"],
   "steps": [...]
 }
@@ -458,7 +458,7 @@ Generate human-readable explanation with Mermaid diagrams.
 ### Workflow Authoring Guidelines
 
 1. **Category Organization**
-   - Use hierarchical paths: `Workflows/Testing/Debug`
+   - Use hierarchical paths: `Playbooks/Testing/Debug`
    - Group by domain: Testing, Debugging, Deployment, CodeReview
 
 2. **Trigger Patterns**
@@ -489,7 +489,7 @@ Generate human-readable explanation with Mermaid diagrams.
   "id": "unique-id-v1",
   "name": "Workflow Name",
   "description": "Brief description of what this accomplishes",
-  "category_path": "Workflows/Domain/Subdomain",
+  "category_path": "Playbooks/Domain/Subdomain",
   "version": "1.0",
   "trigger_patterns": [
     "user phrase 1",

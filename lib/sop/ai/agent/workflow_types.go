@@ -6,7 +6,7 @@ import (
 )
 
 // WorkflowDefinition represents a complete workflow stored in the KnowledgeBase.
-// Workflows are stored as JSON at CategoryPaths like "Workflows/TestDebugging/Go/UnitTests".
+// Workflows are stored as JSON at CategoryPaths like "Playbooks/TestDebugging/Go/UnitTests".
 type WorkflowDefinition struct {
 	// Workflow identity
 	ID           string `json:"workflow_id"`

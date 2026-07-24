@@ -136,8 +136,8 @@ func (wm *WorkflowManager) searchWorkflowInKB(ctx context.Context, query string)
 	kbsToSearch = append(kbsToSearch, wm.selectedKBs...)
 
 	// Try searching by category path first (for known workflow paths)
-	// Example: "Workflows/TestDebugging/Go/UnitTests"
-	if strings.Contains(query, "Workflows/") {
+	// Example: "Playbooks/TestDebugging/Go/UnitTests"
+	if strings.Contains(query, "Playbooks/") {
 		for _, kb := range kbsToSearch {
 			if kb == nil {
 				continue
@@ -670,9 +670,9 @@ func (wm *WorkflowManager) RefreshWorkflowCache(ctx context.Context) (int, error
 		return 0, fmt.Errorf("knowledge base is nil")
 	}
 
-	// Search for all items under Workflows/ category
+	// Search for all items under Playbooks/ category
 	pathReq := memory.PathSearchParam{
-		CategoryPath: "Workflows/",
+		CategoryPath: "Playbooks/",
 		SearchText:   "",
 	}
 

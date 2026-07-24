@@ -152,6 +152,7 @@ func GetModelCatalog() ModelCatalog {
 type RuntimeOptions struct {
 	EnableLocalAutomation bool
 	AutomationPolicy      *sharedagent.AutomationPolicy
+	EnableStoresFeature   bool // Enable Stores capability, tools, and API endpoints (enabled by default - provides DB management UI)
 }
 
 // Initialize performs shared backend initialization for a specific runtime.
@@ -167,6 +168,9 @@ func Initialize(ctx context.Context, opts RuntimeOptions) error {
 		sharedagent.SetLocalDesktopAutomationEnabled(false)
 		sharedagent.SetAutomationPolicy(sharedagent.DefaultAutomationPolicy())
 	}
+
+	// Stores feature flag (enabled by default - provides DB management UI for SOP developers)
+	sharedagent.SetStoresFeatureEnabled(opts.EnableStoresFeature)
 
 	if err := initAgents(ctx); err != nil {
 		return err

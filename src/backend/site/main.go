@@ -923,6 +923,7 @@ func main() {
 	// which handles FindExistingConfigFile, SetConfigFile, and LoadConfig automatically.
 	if _, err := sopbackend.InitializeRuntime(context.Background(), "", sopbackend.RuntimeOptions{
 		EnableLocalAutomation: false, // Site backend doesn't need local automation
+		EnableStoresFeature:   false, // Stores disabled for site backend (v1 focus: AI Copilot)
 	}, 0, nil); err != nil {
 		log.Printf("Warning: sopbackend initialization failed: %v", err)
 	}

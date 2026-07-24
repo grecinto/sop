@@ -478,7 +478,7 @@ func listWorkflowsFromKB(ctx context.Context, db *aidb.Database, llm ai.Generato
 	// Search workflows - if no category path specified, search for all workflows
 	searchPath := categoryPath
 	if searchPath == "" {
-		searchPath = "Workflows/"
+		searchPath = "Playbooks/"
 	}
 
 	results, err := kb.SearchByPath(ctx, []memory.PathSearchParam{

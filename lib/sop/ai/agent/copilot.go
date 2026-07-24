@@ -1875,7 +1875,17 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	desktopCap := desktop.NewCapability()
 	desktopCap.SetCommandExecutor(a.toolExecuteLocalCommand)    // For LLM tool calls
 	desktopCap.SetRawCommandExecutor(a.rawLocalCommandExecutor) // For direct /c commands
-	a.capabilityRegistry = capabilities.NewRegistry(desktopCap, stores.NewCapability(), spaces.NewCapability())
+
+	// Build capability list dynamically based on feature flags
+	caps := []capabilities.Capability{desktopCap}
+
+	// Stores feature disabled by default for v1 (AI Copilot focus)
+	if StoresFeatureEnabled() {
+		caps = append(caps, stores.NewCapability())
+	}
+
+	caps = append(caps, spaces.NewCapability())
+	a.capabilityRegistry = capabilities.NewRegistry(caps...)
 }
 
 // InjectShellSessionManager injects a shell session manager into the desktop capability

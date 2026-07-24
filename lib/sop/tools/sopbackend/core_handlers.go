@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	sharedagent "github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/btree"
@@ -337,6 +338,7 @@ type RuntimeRefreshResponse struct {
 	Stores              map[string][]string `json:"stores,omitempty"`
 	Spaces              map[string][]string `json:"spaces,omitempty"`
 	DisableSOPKBPreload bool                `json:"disable_sop_kb_preload,omitempty"`
+	StoresEnabled       bool                `json:"stores_enabled"`
 }
 
 func handleRuntimeRefresh(w http.ResponseWriter, r *http.Request) {
@@ -352,7 +354,14 @@ func handleRuntimeRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildRuntimeRefreshResponse(ctx context.Context, req *http.Request, runtime string) RuntimeRefreshResponse {
-	response := RuntimeRefreshResponse{Runtime: runtime, Databases: []DatabaseConfig{}, Stores: map[string][]string{}, Spaces: map[string][]string{}, DisableSOPKBPreload: config.DisableSOPKBPreload}
+	response := RuntimeRefreshResponse{
+		Runtime:             runtime,
+		Databases:           []DatabaseConfig{},
+		Stores:              map[string][]string{},
+		Spaces:              map[string][]string{},
+		DisableSOPKBPreload: config.DisableSOPKBPreload,
+		StoresEnabled:       sharedagent.StoresFeatureEnabled(),
+	}
 
 	dbs := make([]DatabaseConfig, len(config.Databases))
 	copy(dbs, config.Databases)
@@ -412,8 +421,11 @@ func buildRuntimeRefreshResponse(ctx context.Context, req *http.Request, runtime
 	}
 
 	for _, db := range dbs {
-		if stores, err := runtimeStoresForDatabase(ctx, req, db.Name); err == nil {
-			response.Stores[db.Name] = stores
+		// Only populate Stores if feature is enabled
+		if sharedagent.StoresFeatureEnabled() {
+			if stores, err := runtimeStoresForDatabase(ctx, req, db.Name); err == nil {
+				response.Stores[db.Name] = stores
+			}
 		}
 		if spaces, err := runtimeSpacesForDatabase(ctx, req, db.Name); err == nil {
 			response.Spaces[db.Name] = spaces
@@ -1420,6 +1432,9 @@ func handleGetStoreInfo(w http.ResponseWriter, r *http.Request) {
 	response["valueType"] = valueType
 	response["keyIsArray"] = keyIsArray
 	response["valueIsArray"] = valueIsArray
+
+	// Add display name for the store (uses resolveStoreDisplayName to handle special cases)
+	response["display_name"] = resolveStoreDisplayName(si.Name)
 
 	json.NewEncoder(w).Encode(response)
 }

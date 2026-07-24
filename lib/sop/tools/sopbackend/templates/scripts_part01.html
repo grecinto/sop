@@ -799,6 +799,11 @@
     let currentDatabase = null;
     let currentSessionID = "";
     
+    // Helper to check if Stores feature is enabled
+    function isStoresFeatureEnabled() {
+        return Boolean(runtimeRefreshPayload && runtimeRefreshPayload.stores_enabled);
+    }
+    
     // Initialize session ID from URL if present (for floater windows)
     // This must happen immediately so all subsequent code uses the correct session
     (function initSessionFromURL() {
@@ -980,6 +985,14 @@
                 runtimeRefreshPayload = payload || null;
                 const databases = payload && Array.isArray(payload.databases) ? payload.databases : [];
                 availableDatabases = databases;
+                
+                // Update Stores section visibility based on feature flag
+                const storesSection = document.getElementById('stores-section');
+                if (storesSection) {
+                    const storesEnabled = Boolean(payload && payload.stores_enabled);
+                    storesSection.style.display = storesEnabled ? 'block' : 'none';
+                    console.log('[Stores Feature]', storesEnabled ? 'Enabled' : 'Disabled');
+                }
 
                 let systemDB = databases ? databases.find(d => d.is_system) : null;
                 let sysName = systemDB ? systemDB.name : "system";
@@ -1127,12 +1140,33 @@
                     });
                     
                 } else {
-                     // Standard Mode: Use <select>
+                     // Standard Mode: Use <select> for multiple databases or label for single database
                      openUIModal('database-select', 'block');
                      closeUIModal('enterprise-db-container');
                      
                     const select = document.getElementById('database-select');
-                    select.innerHTML = '';
+                    const label = document.getElementById('database-label');
+                    const allDBs = [...userDBs, ...systemDBs];
+                    
+                    // If only one database, show label instead of dropdown
+                    if (allDBs.length === 1) {
+                        const singleDB = allDBs[0];
+                        if (label) {
+                            label.textContent = singleDB.name;
+                            label.style.display = 'block';
+                        }
+                        if (select) {
+                            select.style.display = 'none';
+                        }
+                    } else {
+                        // Multiple databases: show dropdown
+                        if (label) {
+                            label.style.display = 'none';
+                        }
+                        if (select) {
+                            select.style.display = 'block';
+                            select.innerHTML = '';
+                        }
 
                     userDBs.forEach(db => {
                         const opt = document.createElement('option');
@@ -1168,6 +1202,7 @@
                             opt.style.fontWeight = "bold";
                             select.appendChild(opt);
                         });
+                    }
                     }
                 }
 
@@ -1462,53 +1497,60 @@
             : localStorage.getItem('sop_current_store');
 
 
-        // Fetch stores - data-driven approach works for both local and HQ modes
-        runtimeDataCall(`/api/stores?database=${encodeURIComponent(name)}&_=${Date.now()}`)
-            .then(bundle => {
-                let stores = bundle && bundle.data ? bundle.data : [];
-                if (bundle && bundle.rbac) { window.CONTEXT_RBAC["store"] = bundle.rbac; }
-                const list = document.getElementById('store-list');
-                list.innerHTML = '';
-                if (!stores || stores.length === 0) {
-                    console.warn('[selectDatabase] no stores found for database:', name);
-                    list.innerHTML = '<li>No stores found</li>';
-                    return;
-                }
-
-                let storeRestored = false;
-                stores.forEach(store => {
-                    const li = document.createElement('li');
-                    li.textContent = store.charAt(0).toUpperCase() + store.slice(1);
-                    li.title = store;
-                    li.classList.add('truncate-text');
-                    li.setAttribute('draggable', 'true');
-                    li.setAttribute('data-store-name', store);
-                    li.onclick = () => selectStore(store, li);
-                    li.addEventListener('dragstart', (event) => {
-                        event.dataTransfer?.setData('text/plain', store);
-                        event.dataTransfer.effectAllowed = 'copy';
-                        window._digestSourceStoreName = store;
-                    });
-                    li.addEventListener('dragend', () => {
-                        window._digestSourceStoreName = '';
-                    });
-                    list.appendChild(li);
-
-                    if (storeToRestore && store === storeToRestore) {
-                        selectStore(store, li);
-                        storeRestored = true;
+        // Fetch stores only if feature is enabled - data-driven approach works for both local and HQ modes
+        if (isStoresFeatureEnabled()) {
+            runtimeDataCall(`/api/stores?database=${encodeURIComponent(name)}&_=${Date.now()}`)
+                .then(bundle => {
+                    let stores = bundle && bundle.data ? bundle.data : [];
+                    if (bundle && bundle.rbac) { window.CONTEXT_RBAC["store"] = bundle.rbac; }
+                    const list = document.getElementById('store-list');
+                    list.innerHTML = '';
+                    if (!stores || stores.length === 0) {
+                        console.warn('[selectDatabase] no stores found for database:', name);
+                        list.innerHTML = '<li>No stores found</li>';
+                        return;
                     }
+
+                    let storeRestored = false;
+                    stores.forEach(store => {
+                        const li = document.createElement('li');
+                        li.textContent = store.charAt(0).toUpperCase() + store.slice(1);
+                        li.title = store;
+                        li.classList.add('truncate-text');
+                        li.setAttribute('draggable', 'true');
+                        li.setAttribute('data-store-name', store);
+                        li.onclick = () => selectStore(store, li);
+                        li.addEventListener('dragstart', (event) => {
+                            event.dataTransfer?.setData('text/plain', store);
+                            event.dataTransfer.effectAllowed = 'copy';
+                            window._digestSourceStoreName = store;
+                        });
+                        li.addEventListener('dragend', () => {
+                            window._digestSourceStoreName = '';
+                        });
+                        list.appendChild(li);
+
+                        if (storeToRestore && store === storeToRestore) {
+                            selectStore(store, li);
+                            storeRestored = true;
+                        }
+                    });
+                    
+                    if (storeToRestore && !storeRestored) {
+                        console.warn('[selectDatabase] storeToRestore', storeToRestore, 'not found in stores:', stores);
+                    }
+                })
+                .catch(err => {
+                    const list = document.getElementById('store-list');
+                    console.warn('[selectDatabase] stores fallback:', err.message || err);
+                    list.innerHTML = '<li>No stores found</li>';
                 });
-                
-                if (storeToRestore && !storeRestored) {
-                    console.warn('[selectDatabase] storeToRestore', storeToRestore, 'not found in stores:', stores);
-                }
-            })
-            .catch(err => {
-                const list = document.getElementById('store-list');
-                console.warn('[selectDatabase] stores fallback:', err.message || err);
-                list.innerHTML = '<li>No stores found</li>';
-            });
+        } else {
+            // Stores disabled - show placeholder
+            const list = document.getElementById('store-list');
+            list.innerHTML = '<li style="color: var(--text-muted); font-style: italic;">Stores feature disabled</li>';
+            console.log('[Stores] Feature disabled, skipping store load');
+        }
 
         // Fetch Spaces
         refreshSpacesList(name, storeToSelect)
@@ -1524,7 +1566,7 @@
                 const content = document.getElementById('db-options-content');
                 section.style.display = 'block';
                 if (content) {
-                    content.style.display = 'block';
+                    content.style.display = 'none';
                 }
 
                 let html = '';
@@ -1705,6 +1747,136 @@
         return window.getWorkflowSteps(item).length;
     };
 
+    window.extractWorkflowForExport = function(item) {
+        if (!item || typeof item !== 'object') return null;
+        
+        const data = item.data || item.payload || {};
+        const workflowPayload = item.workflow_template || item.workflowTemplate || data.workflow_template || data.workflowTemplate || {};
+        
+        // Extract all workflow metadata
+        const workflow = {
+            workflow_id: item.workflow_id || item.workflowId || workflowPayload.workflow_id || data.workflow_id || item.id || 'unknown',
+            name: window.getWorkflowName(item),
+            description: window.getWorkflowDescription(item),
+            category_path: item.category_path || item.categoryPath || workflowPayload.category_path || data.category_path || '',
+            version: item.version || workflowPayload.version || data.version || '1.0.0',
+            
+            // Trigger patterns
+            trigger_patterns: Array.isArray(item.trigger_patterns || workflowPayload.trigger_patterns || data.trigger_patterns)
+                ? (item.trigger_patterns || workflowPayload.trigger_patterns || data.trigger_patterns)
+                : [],
+            
+            // Steps with full details
+            steps: window.getWorkflowSteps(item).map(step => {
+                const stepObj = {
+                    step: step.stepNumber,
+                    title: step.title || '',
+                    actor: step.actor || 'coding_workflow',
+                    priority: step.priority || (100 - (step.stepNumber * 10)),
+                    query_template: step.query_template || step.queryTemplate || '',
+                    tools_expected: step.toolsExpected || [],
+                    instructions: step.instructions || '',
+                    required_context: step.requiredContext || [],
+                    success_criteria: step.successCriteria || [],
+                    iteration_policy: step.iterationPolicy || ''
+                };
+                
+                // Add condition if present
+                if (step.condition) {
+                    stepObj.condition = step.condition;
+                }
+                
+                // Add iteration type if present
+                if (step.iterationType) {
+                    stepObj.iteration_type = step.iterationType;
+                }
+                
+                return stepObj;
+            }),
+            
+            // Protocol guidance
+            protocol_guidance: item.protocol_guidance || item.protocolGuidance || workflowPayload.protocol_guidance || data.protocol_guidance || '',
+            
+            // Actor limits
+            actor_limits: item.actor_limits || item.actorLimits || workflowPayload.actor_limits || data.actor_limits || {},
+            
+            // Metadata
+            metadata: item.metadata || workflowPayload.metadata || data.metadata || {}
+        };
+        
+        // Clean up empty fields
+        if (workflow.trigger_patterns.length === 0) delete workflow.trigger_patterns;
+        if (!workflow.protocol_guidance) delete workflow.protocol_guidance;
+        if (Object.keys(workflow.actor_limits).length === 0) delete workflow.actor_limits;
+        if (Object.keys(workflow.metadata).length === 0) delete workflow.metadata;
+        
+        return workflow;
+    };
+
+    window.copyWorkflowToClipboard = async function(item) {
+        try {
+            const workflow = window.extractWorkflowForExport(item);
+            if (!workflow) {
+                alert('Failed to extract workflow data');
+                return;
+            }
+            
+            // Format as readable JSON with context for LLM review
+            const exportText = `# Workflow Definition for LLM Review\n\nPlease review this workflow definition and assess:\n- Completeness: Are all necessary steps included?\n- Clarity: Are instructions clear and actionable?\n- Quality: Will this workflow execute accurately?\n- Improvement opportunities: What could be enhanced?\n\n## Workflow JSON\n\n\`\`\`json\n${JSON.stringify(workflow, null, 2)}\n\`\`\`\n\n## Analysis Guidance\n\n1. **Step Coverage**: Does the workflow cover all phases of the task?\n2. **Tool Selection**: Are the expected tools appropriate for each step?\n3. **Error Handling**: Are there conditional branches for failure cases?\n4. **Success Criteria**: Are success criteria measurable and specific?\n5. **Actor Assignment**: Are actors properly specialized for their tasks?\n6. **Iteration Logic**: Do loops and conditions make logical sense?\n`;
+            
+            // Try modern Clipboard API first
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(exportText);
+                showCopySuccessMessage();
+            } else {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = exportText;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                const success = document.execCommand('copy');
+                document.body.removeChild(textarea);
+                
+                if (success) {
+                    showCopySuccessMessage();
+                } else {
+                    alert('Failed to copy to clipboard');
+                }
+            }
+        } catch (err) {
+            console.error('Copy to clipboard failed:', err);
+            alert('Failed to copy to clipboard: ' + err.message);
+        }
+    };
+
+    function showCopySuccessMessage() {
+        // Create temporary success message
+        const msg = document.createElement('div');
+        msg.textContent = '✓ Workflow copied to clipboard!';
+        msg.style.position = 'fixed';
+        msg.style.top = '20px';
+        msg.style.right = '20px';
+        msg.style.padding = '12px 20px';
+        msg.style.background = '#059669';
+        msg.style.color = '#fff';
+        msg.style.borderRadius = '8px';
+        msg.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+        msg.style.zIndex = '10000';
+        msg.style.fontSize = '0.95em';
+        msg.style.fontWeight = '500';
+        msg.style.animation = 'fadeInOut 2.5s ease-in-out';
+        
+        document.body.appendChild(msg);
+        
+        setTimeout(() => {
+            msg.style.opacity = '0';
+            msg.style.transition = 'opacity 0.3s';
+            setTimeout(() => document.body.removeChild(msg), 300);
+        }, 2200);
+    }
+
     window.isWorkflowItem = function(item) {
         if (!item || typeof item !== 'object') return false;
         const data = item.data || item.payload || {};
@@ -1715,12 +1887,15 @@
 
     window.normalizeWorkflowStep = function(step, index) {
         if (!step || typeof step !== 'object') {
-            return { stepNumber: index + 1, title: '', instructions: '', requiredContext: [], successCriteria: [], iterationPolicy: '', toolsExpected: [] };
+            return { stepNumber: index + 1, title: '', actor: '', priority: 0, query_template: '', instructions: '', requiredContext: [], successCriteria: [], iterationPolicy: '', toolsExpected: [], condition: null, iterationType: null };
         }
         const rawStepNumber = step.step ?? step.Step ?? step.number ?? step.Number ?? step.order ?? index + 1;
         const parsedStepNumber = Number(rawStepNumber);
         const stepNumber = Number.isFinite(parsedStepNumber) && parsedStepNumber > 0 ? parsedStepNumber : index + 1;
         const title = String(step.title || step.Title || step.name || step.label || '').trim();
+        const actor = String(step.actor || step.Actor || '').trim();
+        const priority = Number(step.priority || step.Priority || 0);
+        const query_template = String(step.query_template || step.queryTemplate || step.QueryTemplate || '').trim();
         const instructions = String(step.instructions || step.Instructions || '').trim();
         const requiredContext = Array.isArray(step.required_context || step.requiredContext)
             ? (step.required_context || step.requiredContext).filter(Boolean)
@@ -1732,18 +1907,30 @@
         const toolsExpected = Array.isArray(step.tools_expected || step.toolsExpected)
             ? (step.tools_expected || step.toolsExpected).filter(Boolean)
             : (step.tools_expected || step.toolsExpected ? String(step.tools_expected || step.toolsExpected).split(',').map(item => item.trim()).filter(Boolean) : []);
-        return { stepNumber, title, instructions, requiredContext, successCriteria, iterationPolicy, toolsExpected };
+        
+        // Extract condition information (for branching)
+        const condition = step.condition || step.Condition || null;
+        
+        // Extract iteration type (for loops)
+        const iterationType = step.iteration_type || step.iterationType || step.loop || step.Loop || null;
+        
+        return { stepNumber, title, actor, priority, query_template, instructions, requiredContext, successCriteria, iterationPolicy, toolsExpected, condition, iterationType };
     };
 
     function createBlankWorkflowStudioStep(stepNumber) {
         return {
             stepNumber: stepNumber,
             title: '',
+            actor: '',
+            priority: 0,
+            query_template: '',
             instructions: '',
             requiredContext: [],
             successCriteria: [],
             iterationPolicy: '',
-            toolsExpected: []
+            toolsExpected: [],
+            condition: null,
+            iterationType: null
         };
     }
 
@@ -3024,7 +3211,6 @@
     columnWidths = [];
     columnsInitialized = false;
 
-    document.getElementById('current-store-title').textContent = name;
     const grid = document.getElementById('data-grid');
     grid.innerHTML = "<div style='padding: 15px;'>Fetching thoughts...</div>";
     
@@ -3032,6 +3218,10 @@
         const resCat = await authFetch(`/api/spaces/categories?database=${encodeURIComponent(currentDatabase)}&name=${encodeURIComponent(name)}&offset=${catOffset}&limit=${catLimit}&parent_id=root`);
         if (!resCat.ok) throw new Error("Failed to fetch categories");
         const categoriesData = await resCat.json();
+        
+        // Use display_name from backend if available (e.g., "core_playbook" → "Core Playbook")
+        const displayName = categoriesData.display_name || name;
+        document.getElementById('current-store-title').textContent = displayName;
 
         // Absorb the RBAC payload fetched specifically for this space (carried over from the new category API structure)
         if (categoriesData && categoriesData.rbac) {
@@ -3578,6 +3768,23 @@
                     alert('Workflow runner coming soon!');
                 };
                 headerTitle.appendChild(runBtn);
+                
+                // Add Copy to Clipboard button icon
+                const copyBtn = document.createElement('span');
+                copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>';
+                copyBtn.title = 'Copy Workflow to Clipboard (for LLM review)';
+                copyBtn.style.fontSize = '1em';
+                copyBtn.style.marginLeft = '10px';
+                copyBtn.style.cursor = 'pointer';
+                copyBtn.style.color = '#059669';
+                copyBtn.style.verticalAlign = 'middle';
+                copyBtn.style.display = 'inline-flex';
+                copyBtn.style.alignItems = 'center';
+                copyBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    window.copyWorkflowToClipboard(item);
+                };
+                headerTitle.appendChild(copyBtn);
             }
             
             const workflowName = window.getWorkflowName(item);
@@ -3624,34 +3831,135 @@
             // Generate unique ID for this diagram
             const diagramId = 'workflow-diagram-' + Math.random().toString(36).substr(2, 9);
             
-            // Build Mermaid flowchart syntax
+            // Build Mermaid flowchart syntax with branching/loop support
             let mermaidCode = 'flowchart TD\n';
             mermaidCode += '    Start([START]):::startNode\n';
             
-            // Add steps
+            // Track previous node for connections
+            let prevNodeId = 'Start';
+            
+            // Group steps by condition for branch detection
+            const stepGroups = [];
+            let currentGroup = [];
+            
             steps.forEach((step, idx) => {
-                const stepNumber = step.stepNumber || idx + 1;
-                const title = (step.title || `Step ${stepNumber}`).replace(/"/g, '#quot;');
-                const nodeId = `step${stepNumber}`;
-                const prevNodeId = idx === 0 ? 'Start' : `step${steps[idx - 1].stepNumber || idx}`;
-                
-                // Add node with step number and title
-                mermaidCode += `    ${nodeId}["${stepNumber}. ${title}"]:::stepNode\n`;
-                // Add arrow from previous node
-                mermaidCode += `    ${prevNodeId} --> ${nodeId}\n`;
-                // Add click event
-                mermaidCode += `    click ${nodeId} call showWorkflowStepByNumber(${stepNumber})\n`;
+                if (step.condition) {
+                    if (currentGroup.length > 0) {
+                        stepGroups.push({ type: 'linear', steps: currentGroup });
+                        currentGroup = [];
+                    }
+                    stepGroups.push({ type: 'conditional', step: step, index: idx });
+                } else if (step.iterationType) {
+                    if (currentGroup.length > 0) {
+                        stepGroups.push({ type: 'linear', steps: currentGroup });
+                        currentGroup = [];
+                    }
+                    stepGroups.push({ type: 'loop', step: step, index: idx });
+                } else {
+                    currentGroup.push(step);
+                }
+            });
+            if (currentGroup.length > 0) {
+                stepGroups.push({ type: 'linear', steps: currentGroup });
+            }
+            
+            // Render each group
+            const conditionalSteps = [];
+            const endConnections = [];
+            
+            stepGroups.forEach((group, groupIdx) => {
+                if (group.type === 'linear') {
+                    // Render linear sequence
+                    group.steps.forEach((step, idx) => {
+                        const stepNumber = step.stepNumber || 0;
+                        const title = (step.title || `Step ${stepNumber}`).replace(/"/g, '#quot;');
+                        const nodeId = `step${stepNumber}`;
+                        
+                        // Add node
+                        mermaidCode += `    ${nodeId}["${stepNumber}. ${title}"]:::stepNode\n`;
+                        // Connect from previous
+                        mermaidCode += `    ${prevNodeId} --> ${nodeId}\n`;
+                        // Add click event
+                        mermaidCode += `    click ${nodeId} call showWorkflowStepByNumber(${stepNumber})\n`;
+                        
+                        prevNodeId = nodeId;
+                    });
+                } else if (group.type === 'conditional') {
+                    // Render conditional branch
+                    const step = group.step;
+                    const stepNumber = step.stepNumber || 0;
+                    const title = (step.title || `Step ${stepNumber}`).replace(/"/g, '#quot;');
+                    const conditionText = (step.condition && step.condition.type) ? step.condition.type.replace(/_/g, ' ') : 'condition';
+                    
+                    // Create decision node (diamond)
+                    const decisionId = `decision${stepNumber}`;
+                    mermaidCode += `    ${decisionId}{"${conditionText}?"}:::conditionNode\n`;
+                    mermaidCode += `    ${prevNodeId} --> ${decisionId}\n`;
+                    
+                    // Create action node
+                    const nodeId = `step${stepNumber}`;
+                    mermaidCode += `    ${nodeId}["${stepNumber}. ${title}"]:::conditionalStepNode\n`;
+                    mermaidCode += `    ${decisionId} -->|"yes"| ${nodeId}\n`;
+                    mermaidCode += `    click ${nodeId} call showWorkflowStepByNumber(${stepNumber})\n`;
+                    
+                    // Track for later merging
+                    conditionalSteps.push({ decisionId, nodeId, stepNumber });
+                    
+                    // "No" branch continues to next (will be connected later)
+                    prevNodeId = decisionId;
+                } else if (group.type === 'loop') {
+                    // Render loop
+                    const step = group.step;
+                    const stepNumber = step.stepNumber || 0;
+                    const title = (step.title || `Step ${stepNumber}`).replace(/"/g, '#quot;');
+                    const loopText = step.iterationType ? String(step.iterationType).replace(/_/g, ' ') : 'loop';
+                    
+                    // Create loop node
+                    const loopId = `loop${stepNumber}`;
+                    const nodeId = `step${stepNumber}`;
+                    
+                    mermaidCode += `    ${nodeId}["${stepNumber}. ${title}<br/><small>(${loopText})</small>"]:::loopNode\n`;
+                    mermaidCode += `    ${prevNodeId} --> ${nodeId}\n`;
+                    // Self-loop for iteration
+                    mermaidCode += `    ${nodeId} -.->|"iterate"| ${nodeId}\n`;
+                    mermaidCode += `    click ${nodeId} call showWorkflowStepByNumber(${stepNumber})\n`;
+                    
+                    prevNodeId = nodeId;
+                }
+            });
+            
+            // Connect conditional "no" branches to END or next step
+            conditionalSteps.forEach((cond, idx) => {
+                const nextGroup = stepGroups[idx + 1];
+                if (nextGroup && nextGroup.type === 'linear' && nextGroup.steps.length > 0) {
+                    const nextStep = nextGroup.steps[0];
+                    const nextNodeId = `step${nextStep.stepNumber}`;
+                    mermaidCode += `    ${cond.decisionId} -->|"no"| ${nextNodeId}\n`;
+                    // Conditional step also goes to next
+                    endConnections.push(cond.nodeId);
+                } else {
+                    // Direct to END
+                    mermaidCode += `    ${cond.decisionId} -->|"no"| End\n`;
+                    endConnections.push(cond.nodeId);
+                }
             });
             
             // Add END node
-            const lastStepId = `step${steps[steps.length - 1].stepNumber || steps.length}`;
             mermaidCode += `    End([END]):::endNode\n`;
-            mermaidCode += `    ${lastStepId} --> End\n`;
+            mermaidCode += `    ${prevNodeId} --> End\n`;
+            
+            // Connect conditional branches to END
+            endConnections.forEach(nodeId => {
+                mermaidCode += `    ${nodeId} --> End\n`;
+            });
             
             // Add styling
             mermaidCode += '\n';
             mermaidCode += '    classDef startNode fill:#d1fae5,stroke:#10b981,stroke-width:3px,color:#059669\n';
             mermaidCode += '    classDef stepNode fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#5b21b6\n';
+            mermaidCode += '    classDef conditionNode fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#d97706\n';
+            mermaidCode += '    classDef conditionalStepNode fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1d4ed8\n';
+            mermaidCode += '    classDef loopNode fill:#fce7f3,stroke:#ec4899,stroke-width:2px,color:#be185d,stroke-dasharray:5\n';
             mermaidCode += '    classDef endNode fill:#fee2e2,stroke:#ef4444,stroke-width:3px,color:#dc2626\n';
             
             // Return HTML with Mermaid diagram
@@ -4416,9 +4724,9 @@ async function selectStore(name, element, force = false) {
                 }
                 */
 
-                // Use name for display, description for tooltip
-                let displayTitle = info.name;
-                if (displayTitle) {
+                // Use display_name from backend if available, otherwise capitalize first letter
+                let displayTitle = info.display_name || info.name;
+                if (!info.display_name && displayTitle) {
                     displayTitle = displayTitle.charAt(0).toUpperCase() + displayTitle.slice(1);
                 }
                 const titleElem = document.getElementById('current-store-title');

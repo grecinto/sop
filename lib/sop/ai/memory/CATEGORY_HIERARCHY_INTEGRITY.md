@@ -10,34 +10,34 @@ The Semantic Path Search algorithm (Section 12 of DYNAMIC_VECTOR_STORE_DESIGN.md
 
 ## Semantic Triangulation Requirements
 
-For a path like `"Workflows/TestDebugging/Go/UnitTests"`, the algorithm expects:
+For a path like `"Playbooks/TestDebugging/Go/UnitTests"`, the algorithm expects:
 
 ### Level 0: Root Anchor (DomainReference)
 ```
-Query: "Workflows"
+Query: "Playbooks"
 Anchor: DomainReference (global KB anchor)
-Expected: Category{Name: "Workflows", Path: "Workflows", ParentID: NilUUID}
+Expected: Category{Name: "Playbooks", Path: "Playbooks", ParentID: NilUUID}
 ```
 
 ### Level 1: Parent as Anchor
 ```
 Query: "TestDebugging"
-Anchor: "Workflows".CenterVector
-Expected: Category{Name: "TestDebugging", Path: "Workflows/TestDebugging", ParentID: "Workflows".ID}
+Anchor: "Playbooks".CenterVector
+Expected: Category{Name: "TestDebugging", Path: "Playbooks/TestDebugging", ParentID: "Playbooks".ID}
 ```
 
 ### Level 2: Grandparent as Anchor
 ```
 Query: "Go"
 Anchor: "TestDebugging".CenterVector
-Expected: Category{Name: "Go", Path: "Workflows/TestDebugging/Go", ParentID: "TestDebugging".ID}
+Expected: Category{Name: "Go", Path: "Playbooks/TestDebugging/Go", ParentID: "TestDebugging".ID}
 ```
 
 ### Level 3: Leaf
 ```
 Query: "UnitTests"
 Anchor: "Go".CenterVector
-Expected: Category{Name: "UnitTests", Path: "Workflows/TestDebugging/Go/UnitTests", ParentID: "Go".ID}
+Expected: Category{Name: "UnitTests", Path: "Playbooks/TestDebugging/Go/UnitTests", ParentID: "Go".ID}
 ```
 
 ## Why Intermediates Are Critical
@@ -83,7 +83,7 @@ func EnsureCategory(ctx, categoryPath) (UUID, error) {
     anchor := &Category{
         ID:        sop.NewUUID(),
         Name:      leafName,           // "UnitTests"
-        Path:      categoryPath,       // Full: "Workflows/TestDebugging/Go/UnitTests"
+        Path:      categoryPath,       // Full: "Playbooks/TestDebugging/Go/UnitTests"
         ParentIDs: nil,                // ❌ NO PARENT SET
     }
     
@@ -91,16 +91,16 @@ func EnsureCategory(ctx, categoryPath) (UUID, error) {
 }
 ```
 
-**Problem:** Calling `EnsureCategory("Workflows/TestDebugging/Go/UnitTests")` creates:
-- ✅ Category: `Path="Workflows/TestDebugging/Go/UnitTests"`
-- ❌ Missing: `"Workflows"`, `"Workflows/TestDebugging"`, `"Workflows/TestDebugging/Go"`
+**Problem:** Calling `EnsureCategory("Playbooks/TestDebugging/Go/UnitTests")` creates:
+- ✅ Category: `Path="Playbooks/TestDebugging/Go/UnitTests"`
+- ❌ Missing: `"Playbooks"`, `"Playbooks/TestDebugging"`, `"Playbooks/TestDebugging/Go"`
 
 ## When This Breaks
 
 ### 1. Direct KB API Usage
 ```go
 kb.IngestThoughts(ctx, []Thought{
-    {CategoryPath: "Workflows/TestDebugging/Go/UnitTests", ...}
+    {CategoryPath: "Playbooks/TestDebugging/Go/UnitTests", ...}
 })
 // → Calls EnsureCategory → Creates only leaf
 ```
@@ -121,8 +121,8 @@ The KB compiler and preload JSON (`ai/sop_base_knowledge.json`) explicitly defin
 ```json
 {
   "categories": [
-    {"id": "...", "name": "Workflows", "path": "Workflows"},
-    {"id": "...", "name": "Coding", "path": "Workflows/Coding", "parents": [{"parent_id": "..."}]},
+    {"id": "...", "name": "Playbooks", "path": "Playbooks"},
+    {"id": "...", "name": "Coding", "path": "Playbooks/Coding", "parents": [{"parent_id": "..."}]},
     {"id": "...", "name": "Go", "path": "Coding Best Practices/Go", "parents": [{"parent_id": "..."}]},
     ...
   ]
@@ -233,7 +233,7 @@ Follow the title case pattern established in preload JSON files:
 
 **Recommended casing for common patterns:**
 - ✅ `"Coding Best Practices/Go/Error Handling"` (Title Case)
-- ✅ `"Workflows/Debugging/Unit Tests"` (Title Case)
+- ✅ `"Playbooks/Debugging/Unit Tests"` (Title Case)
 - ✅ `"API/REST/Authentication"` (Preserve acronyms in uppercase)
 - ⚠️ Avoid all-lowercase unless intentional: `"api/rest/auth"`
 - ⚠️ Avoid all-uppercase unless semantic: `"URGENT/CRITICAL"`

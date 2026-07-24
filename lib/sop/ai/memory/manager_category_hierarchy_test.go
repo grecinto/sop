@@ -34,7 +34,7 @@ func TestEnsureCategoryHierarchy(t *testing.T) {
 	mgr := NewMemoryManager[string](store, nil, nil)
 
 	// Test: Create deep category path
-	deepPath := "Workflows/TestDebugging/Go/UnitTests"
+	deepPath := "Playbooks/TestDebugging/Go/UnitTests"
 	leafID, err := mgr.EnsureCategory(ctx, deepPath)
 	if err != nil {
 		t.Fatalf("EnsureCategory failed: %v", err)
@@ -45,10 +45,10 @@ func TestEnsureCategoryHierarchy(t *testing.T) {
 
 	// Verify all intermediate categories were created (preserves original casing)
 	expectedPaths := []string{
-		"Workflows",
-		"Workflows/TestDebugging",
-		"Workflows/TestDebugging/Go",
-		"Workflows/TestDebugging/Go/UnitTests",
+		"Playbooks",
+		"Playbooks/TestDebugging",
+		"Playbooks/TestDebugging/Go",
+		"Playbooks/TestDebugging/Go/UnitTests",
 	}
 
 	for _, path := range expectedPaths {
@@ -76,7 +76,7 @@ func TestEnsureCategoryHierarchy(t *testing.T) {
 		parentID := leafCat.ParentIDs[0].ParentID
 		cats.Find(ctx, parentID, false)
 		parentCat, _ := cats.GetCurrentValue(ctx)
-		expectedParentPath := "Workflows/TestDebugging/Go"
+		expectedParentPath := "Playbooks/TestDebugging/Go"
 		if parentCat.Path != expectedParentPath {
 			t.Errorf("Expected parent path %s, got %s", expectedParentPath, parentCat.Path)
 		}

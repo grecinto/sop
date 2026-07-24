@@ -122,7 +122,7 @@ func PromoteFederatedArtifact(ctx context.Context, artifact FederatedArtifact) e
 		nil, // LLM not required
 		nil, // Embedder handled by PromoteSharedMemoryArtifact
 		text,
-		"shared_memory",
+		"core_playbook",
 		string(artifact.Category),
 		"daemon",
 		"local-daemon",
@@ -986,7 +986,7 @@ func RetrieveFederatedContext(ctx context.Context, query string, categories []Fe
 		limit = 5
 	}
 
-	hits, err := agent.RetrieveSharedMemory(ctx, db, nil, nil, searchQuery, "shared_memory", limit)
+	hits, err := agent.RetrieveSharedMemory(ctx, db, nil, nil, searchQuery, "core_playbook", limit)
 	if err != nil {
 		return "", err
 	}

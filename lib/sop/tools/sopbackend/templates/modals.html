@@ -461,8 +461,8 @@
                     <button type="button" id="chat-attachment-more-btn" class="chat-attachment-more-btn" title="More attachment options" aria-label="More attachment options" onclick="toggleChatAttachmentOverflow(event)">
                         <span aria-hidden="true">…</span>
                     </button>
-                    <label class="chat-attachment-btn" title="Attach an image" aria-label="Attach an image">
-                        <input id="chat-attachment-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;" onchange="handleChatAttachmentSelection(event)">
+                    <label class="chat-attachment-btn" title="Attach images or code files" aria-label="Attach files">
+                        <input id="chat-attachment-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.js,.jsx,.ts,.tsx,.py,.go,.java,.c,.cpp,.h,.hpp,.cs,.rb,.php,.rs,.swift,.kt,.scala,.sql,.sh,.bash,.yml,.yaml,.json,.xml,.html,.css,.scss,.md,.txt,.log" multiple style="display:none;" onchange="handleChatAttachmentSelection(event)">
                         <svg class="chat-attachment-icon" viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M4 5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"></path>
                             <path d="m8 15 2.5-3 2.3 2.8 1.7-2.1 2.5 3"></path>

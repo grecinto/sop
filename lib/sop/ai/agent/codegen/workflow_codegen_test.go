@@ -17,7 +17,7 @@ func TestCompileWorkflowToGo(t *testing.T) {
   "name": "Test Workflow",
   "description": "A simple test workflow",
   "version": "1.0.0",
-  "category_path": "Workflows/Test",
+  "category_path": "Playbooks/Test",
   "trigger_patterns": ["test"],
   "steps": [
     {

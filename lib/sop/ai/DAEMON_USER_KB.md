@@ -6,7 +6,7 @@
   1. The category heading has [workflow] marker (e.g., "## My Tasks [workflow]")
   2. The category contains items with workflow_template JSON payloads
   
-  Parent categories (like "Workflows") are NOT auto-marked unless they explicitly
+  Parent categories (like "Playbooks") are NOT auto-marked unless they explicitly
   have the [workflow] marker or contain workflow items directly.
   
   Workflow items are displayed as expandable tree leaves in the UI.

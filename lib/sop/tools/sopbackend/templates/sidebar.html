@@ -10,24 +10,26 @@
                     <select id="database-select" onchange="selectDatabase(this.value)" style="width: 100%; min-width: 140px; max-width: 140px; padding: 5px; box-sizing: border-box; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
                         <option>Loading...</option>
                     </select>
+                    <div id="database-label" style="display: none; padding: 5px; margin-top: -3px; font-weight: 500; color: var(--text-primary); width: 100%; min-width: 140px; max-width: 140px; box-sizing: border-box; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                    </div>
+                </div>
             
-            <!-- Enterprise Chip Dropdown (Hidden initially, toggled by JS) -->
-            <div id="enterprise-db-container" style="display: none; position: relative; width: 100%; max-width: 100%;">
-                <div id="db-chip" class="db-chip" onclick="toggleDbDropdown()">
-                    <span id="db-chip-icon" class="db-chip-icon" style="display: none;">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                            <path d="M6.5 0a.5.5 0 0 1 .5.5V3h3V.5a.5.5 0 0 1 1 0V3h1a2 2 0 0 1 2 2v1h1.5a.5.5 0 0 1 0 1H14v3h1.5a.5.5 0 0 1 0 1H14v1a2 2 0 0 1-2 2h-1v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14H5a2 2 0 0 1-2-2v-1H1.5a.5.5 0 0 1 0-1H3V8H1.5a.5.5 0 0 1 0-1H3V5a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM5 4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1H5z"/>
+                <!-- Enterprise Chip Dropdown (Hidden initially, toggled by JS) -->
+                <div id="enterprise-db-container" style="display: none; position: relative; width: 100%; max-width: 100%;">
+                    <div id="db-chip" class="db-chip" onclick="toggleDbDropdown()">
+                        <span id="db-chip-icon" class="db-chip-icon" style="display: none;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                <path d="M6.5 0a.5.5 0 0 1 .5.5V3h3V.5a.5.5 0 0 1 1 0V3h1a2 2 0 0 1 2 2v1h1.5a.5.5 0 0 1 0 1H14v3h1.5a.5.5 0 0 1 0 1H14v1a2 2 0 0 1-2 2h-1v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14H5a2 2 0 0 1-2-2v-1H1.5a.5.5 0 0 1 0-1H3V8H1.5a.5.5 0 0 1 0-1H3V5a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM5 4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1H5z"/>
+                            </svg>
+                        </span>
+                        <span id="db-chip-label" style="margin-right: auto;">Select Database</span>
+                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" style="opacity: 0.7;">
+                            <path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
                         </svg>
-                    </span>
-                    <span id="db-chip-label" style="margin-right: auto;">Select Database</span>
-                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16" style="opacity: 0.7;">
-                        <path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
-                    </svg>
-                </div>
-                <div id="db-dropdown-menu" class="db-dropdown-menu">
-                    <!-- Options populated by JS -->
-                </div>
-            </div>
+                    </div>
+                    <div id="db-dropdown-menu" class="db-dropdown-menu">
+                        <!-- Options populated by JS -->
+                    </div>
                 </div>
                 <div style="display: flex; gap: 0px; align-items: center;">
                     <button onclick="showDeleteDatabaseModal()" title="Delete Current Database" style="background: none; border: none; margin-right: -4px; color: var(--text-color); cursor: pointer; padding: 4px; flex-shrink: 0;">
@@ -60,8 +62,8 @@
                 </div>
             </div>
 
-            <!-- Stores Section -->
-            <div style="margin-bottom: 12px;">
+            <!-- Stores Section (Dynamic visibility based on feature flag - enabled by default for v1) -->
+            <div id="stores-section" style="margin-bottom: 12px; display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
                     <h3 style="margin: 0; font-size: 1.1em; cursor: pointer; display: flex; align-items: center;" onclick="toggleSidebarList('store-list-container', 'stores-caret')" onmouseover="this.style.color='var(--success-bg)'" onmouseout="this.style.color=''">
                         <span id="stores-caret" style="display: inline-block; width: 14px; text-align: center; margin-right: 5px; font-size: 0.8em; transition: transform 0.2s;">▼</span>
