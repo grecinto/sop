@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/sharedcode/sop"
@@ -20,6 +21,31 @@ import (
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 )
+
+// validSpaceNamePattern defines allowed characters: letters, numbers, underscore, hyphen
+var validSpaceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// normalizeSpaceName converts spaces to underscores and lowercases the name for backend storage
+// Example: "Core Playbook" -> "core_playbook"
+func normalizeSpaceName(name string) string {
+	name = strings.TrimSpace(name)
+	// Convert spaces to underscores
+	name = strings.ReplaceAll(name, " ", "_")
+	// Convert to lowercase for consistency
+	name = strings.ToLower(name)
+	return name
+}
+
+// validateSpaceName checks if a Space name is valid after normalization
+func validateSpaceName(name string) error {
+	if name == "" {
+		return fmt.Errorf("space name cannot be empty")
+	}
+	if !validSpaceNamePattern.MatchString(name) {
+		return fmt.Errorf("space name can only contain letters, numbers, underscores, and hyphens")
+	}
+	return nil
+}
 
 func autoVectorizeBuiltinSpace(ctx context.Context, db *database.Database, spaceName, preloadPath string, emb ai.Embeddings, llm ai.Generator, onProgress func(progress int, total int, msg string)) error {
 	if !shouldForceLocalBuiltinEmbedder(spaceName, preloadPath) || emb == nil {
@@ -891,6 +917,18 @@ func handleCreateSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize Space name (convert spaces to underscores, lowercase)
+	normalizedName := normalizeSpaceName(req.SpaceName)
+
+	// Validate normalized Space name
+	if err := validateSpaceName(normalizedName); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Use normalized name for all operations
+	req.SpaceName = normalizedName
+
 	ctx := context.Background()
 	opts, err := GetDBOptions(ctx, req.DatabaseName)
 	if err != nil {
@@ -953,6 +991,12 @@ func handleIngestSpace(w http.ResponseWriter, r *http.Request) {
 
 	if req.SpaceName == "" {
 		http.Error(w, "space_name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate Space name - reject spaces and invalid characters
+	if err := validateSpaceName(req.SpaceName); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

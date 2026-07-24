@@ -218,10 +218,16 @@ Otherwise, extend an existing document.
 
 ### Naming Conventions
 
+**Documentation Files:**
 - **Feature guides**: `FEATURE_NAME.md` (e.g., `AI_STUDIO.md`)
 - **Architecture**: `ARCHITECTURE_AREA.md` (e.g., `AUTHENTICATION.md`)
 - **Observability**: `OBSERVABILITY_SCOPE.md` (e.g., `OBSERVABILITY_KB_QUALITY.md`)
 - **Business**: Descriptive names (e.g., `NORTHSTAR_SDK_PRICING.md`)
+
+**Spaces and Stores:**
+- User input with spaces is automatically normalized: `"My Space"` → stored as `"my_space"` → displayed as `"My Space"`
+- Only alphanumeric, underscore, and hyphen allowed in storage: `[a-zA-Z0-9_-]`
+- See [SPACES.md](SPACES.md#space-and-store-naming-conventions) for details
 
 ---
 

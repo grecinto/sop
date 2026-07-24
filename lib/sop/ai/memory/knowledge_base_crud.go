@@ -419,11 +419,18 @@ func (kb *KnowledgeBase[T]) UpsertItems(ctx context.Context, params []UpsertItem
 			continue
 		}
 
+		// Check mode early to avoid creating intermediate categories for reference-only items
+		mode := normalizeIndexPopulationMode(p.IndexPopulationMode)
+		if mode == IndexPopulationModeReference {
+			continue
+		}
+
 		catID := p.CategoryID
 		if p.CategoryPath != "" {
 			if found, _ := catsByPath.Find(ctx, p.CategoryPath, false); found {
 				catID, _ = catsByPath.GetCurrentValue(ctx)
 			} else if kb.Manager != nil {
+				// Only create intermediate categories when semantic indexing is enabled (mode != Reference)
 				ensuredCatID, err := kb.Manager.EnsureCategory(ctx, p.CategoryPath)
 				if err == nil && !ensuredCatID.IsNil() {
 					catID = ensuredCatID
@@ -432,10 +439,6 @@ func (kb *KnowledgeBase[T]) UpsertItems(ctx context.Context, params []UpsertItem
 		}
 
 		if catID.IsNil() {
-			continue
-		}
-		mode := normalizeIndexPopulationMode(p.IndexPopulationMode)
-		if mode == IndexPopulationModeReference {
 			continue
 		}
 		if p.Item.ID.IsNil() {

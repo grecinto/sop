@@ -30,7 +30,7 @@ func TestSpaceFiltering_SystemAdmin(t *testing.T) {
 		{"User bob does NOT see memory_alice", "memory_alice", "bob", []string{sop.RoleUser}, false},
 
 		// All users see non-memory spaces
-		{"User sees Core Playbook", "Core Playbook", "alice", []string{sop.RoleUser}, true},
+		{"User sees core_playbook", "core_playbook", "alice", []string{sop.RoleUser}, true},
 		{"User sees custom space", "custom_project", "bob", []string{sop.RoleUser}, true},
 	}
 

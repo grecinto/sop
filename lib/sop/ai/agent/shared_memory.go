@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +17,49 @@ import (
 )
 
 const defaultSharedMemoryKBName = "shared_memory"
+
+// FederationTarget specifies where a federated artifact should be stored.
+type FederationTarget string
+
+const (
+	// FederationTargetSharedMemory stores patterns, heuristics, and preferences
+	FederationTargetSharedMemory FederationTarget = "shared_memory"
+	// FederationTargetCorePlaybook stores proven workflows and procedures
+	FederationTargetCorePlaybook FederationTarget = "core_playbook"
+	// FederationTargetCustomKB stores domain-specific knowledge in a named KB
+	FederationTargetCustomKB FederationTarget = "custom_kb"
+)
+
+// FederatedArtifactV2 represents a versioned, routable federated artifact.
+// V2 adds: targets, versioning, deduplication, and conflict resolution.
+type FederatedArtifactV2 struct {
+	// V1 compatibility fields
+	Text     string         `json:"text"`
+	Category string         `json:"category"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+
+	// V2 routing and typing
+	Target      FederationTarget `json:"target"`       // Where to store (shared_memory, core_playbook, custom_kb)
+	ContentType string           `json:"content_type"` // "pattern", "workflow", "knowledge"
+
+	// V2 versioning and deduplication
+	Version       int      `json:"version"`                  // Monotonic version number
+	ContentHash   string   `json:"content_hash"`             // SHA-256 of normalized content
+	ParentVersion int      `json:"parent_version,omitempty"` // Previous version (0 if initial)
+	Supersedes    []string `json:"supersedes,omitempty"`     // Artifact IDs this replaces
+
+	// V2 provenance and recurrence
+	OriginDaemonID  string `json:"origin_daemon_id"` // First daemon to promote
+	LastModifiedBy  string `json:"last_modified_by"` // Latest daemon to modify
+	RecurrenceCount int    `json:"recurrence_count"` // How many daemons learned this
+	CreatedAt       string `json:"created_at"`       // RFC3339
+	UpdatedAt       string `json:"updated_at"`       // RFC3339
+
+	// Workflow-specific fields (when ContentType="workflow")
+	WorkflowDefinition *WorkflowDefinition `json:"workflow_definition,omitempty"`
+	WorkflowID         string              `json:"workflow_id,omitempty"`
+	ExecutionStats     map[string]any      `json:"execution_stats,omitempty"`
+}
 
 // PromoteSharedMemoryArtifact stores a generalized artifact into the shared-memory knowledge base.
 // It is intentionally additive: it preserves local memory behavior while making a compact,
@@ -398,4 +444,267 @@ func copySharedMemoryPayload(payload map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// =====================================================================
+// Federation V2: Workflow-Specific Functions
+// =====================================================================
+
+// computeContentHash generates a SHA-256 hash of the normalized content.
+// Used for deduplication and version tracking.
+func computeContentHash(content string) string {
+	normalized := strings.TrimSpace(strings.ToLower(content))
+	hash := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(hash[:])
+}
+
+// computeWorkflowHash generates a deterministic hash for a workflow definition.
+func computeWorkflowHash(workflow *WorkflowDefinition) string {
+	if workflow == nil {
+		return ""
+	}
+	// Hash the critical parts: ID, version, steps
+	data, err := json.Marshal(map[string]any{
+		"id":          workflow.ID,
+		"version":     workflow.Version,
+		"steps":       workflow.Steps,
+		"description": strings.TrimSpace(workflow.Description),
+	})
+	if err != nil {
+		return computeContentHash(workflow.Description)
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+// PromoteWorkflowArtifactV2 promotes a successful workflow execution to federation.
+// This is V2-specific for workflow federation to Core Playbook.
+func PromoteWorkflowArtifactV2(
+	ctx context.Context,
+	db *aidb.Database,
+	llm ai.Generator,
+	embedder ai.Embeddings,
+	workflow *WorkflowDefinition,
+	daemonID string,
+	executionStats map[string]any,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if db == nil {
+		return fmt.Errorf("database is required for workflow promotion")
+	}
+	if workflow == nil {
+		return fmt.Errorf("workflow definition is required")
+	}
+	if strings.TrimSpace(daemonID) == "" {
+		return fmt.Errorf("daemon ID is required")
+	}
+
+	// Build V2 artifact
+	now := time.Now().UTC().Format(time.RFC3339)
+	artifact := FederatedArtifactV2{
+		Text:               workflow.Description,
+		Category:           "workflow_pattern",
+		Target:             FederationTargetCorePlaybook,
+		ContentType:        "workflow",
+		Version:            1, // Will be incremented by HQ if duplicate exists
+		ContentHash:        computeWorkflowHash(workflow),
+		OriginDaemonID:     daemonID,
+		LastModifiedBy:     daemonID,
+		RecurrenceCount:    1,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		WorkflowDefinition: workflow,
+		WorkflowID:         workflow.ID,
+		ExecutionStats:     executionStats,
+		Metadata: map[string]any{
+			"workflow_name":      workflow.Name,
+			"workflow_category":  workflow.CategoryPath,
+			"workflow_version":   workflow.Version,
+			"trigger_patterns":   workflow.TriggerPatterns,
+			"step_count":         len(workflow.Steps),
+			"federation_version": "v2",
+			"promoted_at":        now,
+		},
+	}
+
+	// Store in Core Playbook KB (local promotion)
+	// This makes it available immediately to this daemon
+	if err := storeWorkflowArtifactLocally(ctx, db, llm, embedder, &artifact); err != nil {
+		return fmt.Errorf("failed to store workflow locally: %w", err)
+	}
+
+	return nil
+}
+
+// storeWorkflowArtifactLocally stores a workflow artifact in the local Core Playbook KB.
+func storeWorkflowArtifactLocally(
+	ctx context.Context,
+	db *aidb.Database,
+	llm ai.Generator,
+	embedder ai.Embeddings,
+	artifact *FederatedArtifactV2,
+) error {
+	if artifact == nil || artifact.WorkflowDefinition == nil {
+		return fmt.Errorf("invalid workflow artifact")
+	}
+
+	kbName := "core_playbook"
+	if artifact.Target == FederationTargetCustomKB {
+		if customKB, ok := artifact.Metadata["target_kb"].(string); ok && customKB != "" {
+			kbName = customKB
+		}
+	}
+
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	kb, err := db.OpenKnowledgeBase(ctx, kbName, tx, llm, embedder, false, true)
+	if err != nil {
+		return fmt.Errorf("open knowledge base %q: %w", kbName, err)
+	}
+
+	// Prepare payload with full V2 metadata
+	payload := map[string]any{
+		"federation_version":  "v2",
+		"target":              string(artifact.Target),
+		"content_type":        artifact.ContentType,
+		"version":             artifact.Version,
+		"content_hash":        artifact.ContentHash,
+		"origin_daemon_id":    artifact.OriginDaemonID,
+		"last_modified_by":    artifact.LastModifiedBy,
+		"recurrence_count":    artifact.RecurrenceCount,
+		"created_at":          artifact.CreatedAt,
+		"updated_at":          artifact.UpdatedAt,
+		"workflow_id":         artifact.WorkflowID,
+		"workflow_definition": artifact.WorkflowDefinition,
+		"execution_stats":     artifact.ExecutionStats,
+	}
+
+	// Merge artifact metadata
+	for k, v := range artifact.Metadata {
+		if _, exists := payload[k]; !exists {
+			payload[k] = v
+		}
+	}
+
+	// Generate embedding for semantic search
+	var vectors [][]float32
+	if embedder != nil {
+		searchText := fmt.Sprintf("%s. %s", artifact.WorkflowDefinition.Name, artifact.Text)
+		vecs, err := embed.DocumentTexts(ctx, embedder, []string{searchText})
+		if err == nil && len(vecs) > 0 && len(vecs[0]) > 0 {
+			vectors = [][]float32{vecs[0]}
+		}
+	}
+
+	// Store in KB
+	categoryPath := artifact.WorkflowDefinition.CategoryPath
+	if categoryPath == "" {
+		categoryPath = "Workflows/Federated"
+	}
+
+	if err := kb.IngestThought(ctx, artifact.Text, categoryPath, "system", nil, payload); err != nil {
+		return fmt.Errorf("ingest workflow thought: %w", err)
+	}
+	if len(vectors) > 0 {
+		if err := kb.IngestThought(ctx, artifact.Text, categoryPath, "system", vectors[0], payload); err != nil {
+			return fmt.Errorf("ingest workflow thought with vector: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// ParseFederatedArtifactV2 extracts a V2 artifact from raw metadata.
+// Handles both V1 (for backward compatibility) and V2 formats.
+func ParseFederatedArtifactV2(metadata map[string]any) (*FederatedArtifactV2, error) {
+	if metadata == nil {
+		return nil, fmt.Errorf("metadata is nil")
+	}
+
+	// Check for V2 marker
+	if version, ok := metadata["federation_version"].(string); ok && version == "v2" {
+		// Parse as V2
+		artifact := &FederatedArtifactV2{}
+
+		if text, ok := metadata["text"].(string); ok {
+			artifact.Text = text
+		}
+		if category, ok := metadata["category"].(string); ok {
+			artifact.Category = category
+		}
+		if target, ok := metadata["target"].(string); ok {
+			artifact.Target = FederationTarget(target)
+		}
+		if contentType, ok := metadata["content_type"].(string); ok {
+			artifact.ContentType = contentType
+		}
+		if version, ok := metadata["version"].(int); ok {
+			artifact.Version = version
+		} else if versionFloat, ok := metadata["version"].(float64); ok {
+			artifact.Version = int(versionFloat)
+		}
+		if hash, ok := metadata["content_hash"].(string); ok {
+			artifact.ContentHash = hash
+		}
+		if parentVer, ok := metadata["parent_version"].(int); ok {
+			artifact.ParentVersion = parentVer
+		} else if parentVerFloat, ok := metadata["parent_version"].(float64); ok {
+			artifact.ParentVersion = int(parentVerFloat)
+		}
+		if originID, ok := metadata["origin_daemon_id"].(string); ok {
+			artifact.OriginDaemonID = originID
+		}
+		if lastModBy, ok := metadata["last_modified_by"].(string); ok {
+			artifact.LastModifiedBy = lastModBy
+		}
+		if recurrence, ok := metadata["recurrence_count"].(int); ok {
+			artifact.RecurrenceCount = recurrence
+		} else if recurrenceFloat, ok := metadata["recurrence_count"].(float64); ok {
+			artifact.RecurrenceCount = int(recurrenceFloat)
+		}
+		if createdAt, ok := metadata["created_at"].(string); ok {
+			artifact.CreatedAt = createdAt
+		}
+		if updatedAt, ok := metadata["updated_at"].(string); ok {
+			artifact.UpdatedAt = updatedAt
+		}
+		if workflowID, ok := metadata["workflow_id"].(string); ok {
+			artifact.WorkflowID = workflowID
+		}
+
+		// Parse workflow definition
+		if workflowData, ok := metadata["workflow_definition"]; ok {
+			if workflowMap, ok := workflowData.(map[string]any); ok {
+				workflowJSON, err := json.Marshal(workflowMap)
+				if err == nil {
+					var workflow WorkflowDefinition
+					if err := json.Unmarshal(workflowJSON, &workflow); err == nil {
+						artifact.WorkflowDefinition = &workflow
+					}
+				}
+			} else if workflow, ok := workflowData.(*WorkflowDefinition); ok {
+				artifact.WorkflowDefinition = workflow
+			}
+		}
+
+		if execStats, ok := metadata["execution_stats"].(map[string]any); ok {
+			artifact.ExecutionStats = execStats
+		}
+
+		artifact.Metadata = metadata
+		return artifact, nil
+	}
+
+	// Fall back to V1 format (for backward compatibility)
+	return nil, fmt.Errorf("V1 artifact format not supported in workflow federation")
 }

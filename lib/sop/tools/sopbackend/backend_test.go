@@ -8,7 +8,7 @@ func TestIsReadOnlyContext(t *testing.T) {
 		id       string
 		expected bool
 	}{
-		// Core Playbook variations
+		// core_playbook variations
 		{"Core Playbook", "Core Playbook", true},
 		{"core playbook lowercase", "core playbook", true},
 		{"core_playbook underscore", "core_playbook", true},

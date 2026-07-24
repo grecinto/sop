@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/ai/memory"
 )
 
 var (
@@ -241,6 +243,25 @@ func storeSharedMemoryArtifacts(ctx context.Context, batch hqSyncBatch) error {
 		metadata["sync_timestamp"] = strings.TrimSpace(batch.Timestamp)
 		metadata["promoted_at"] = time.Now().UTC().Format(time.RFC3339)
 
+		// V2 Federation: Check for workflow artifacts
+		if isV2WorkflowArtifact(metadata) {
+			if err := handleV2WorkflowArtifact(ctx, db, embedder, metadata, batch.DaemonID); err != nil {
+				log.Error("HQ sync: failed to handle V2 workflow artifact",
+					"error", err,
+					"index", i,
+					"daemon_id", batch.DaemonID,
+				)
+				continue
+			}
+			log.Info("HQ sync: promoted V2 workflow artifact",
+				"index", i,
+				"daemon_id", batch.DaemonID,
+				"workflow_id", metadata["workflow_id"],
+			)
+			continue
+		}
+
+		// V1 artifact handling (existing logic)
 		artifactRef := agent.ExtractArtifactReference(metadata["artifact_ref"])
 		if artifactRef.Name != "" || artifactRef.DatabaseName != "" || artifactRef.Type != "" {
 			if err := agent.PromoteKnowledgeArtifact(
@@ -621,4 +642,147 @@ func shouldShareCategoryToDaemons(category string, settings map[string]bool) boo
 
 	// Default to sharing if category not found in settings
 	return true
+}
+
+// =====================================================================
+// Federation V2: Workflow Artifact Handling
+// =====================================================================
+
+// isV2WorkflowArtifact checks if the metadata represents a V2 workflow artifact.
+func isV2WorkflowArtifact(metadata map[string]any) bool {
+	if metadata == nil {
+		return false
+	}
+
+	// Check for V2 marker
+	if version, ok := metadata["federation_version"].(string); !ok || version != "v2" {
+		return false
+	}
+
+	// Check for workflow content type
+	if contentType, ok := metadata["content_type"].(string); ok && contentType == "workflow" {
+		return true
+	}
+
+	// Check for workflow definition
+	if _, ok := metadata["workflow_definition"]; ok {
+		return true
+	}
+
+	// Check for workflow ID
+	if workflowID, ok := metadata["workflow_id"].(string); ok && strings.TrimSpace(workflowID) != "" {
+		return true
+	}
+
+	return false
+}
+
+// handleV2WorkflowArtifact processes a V2 workflow artifact and stores it in Core Playbook.
+func handleV2WorkflowArtifact(ctx context.Context, db *aidb.Database, embedder ai.Embeddings, metadata map[string]any, daemonID string) error {
+	// Parse V2 artifact
+	artifact, err := agent.ParseFederatedArtifactV2(metadata)
+	if err != nil {
+		return fmt.Errorf("parse V2 artifact: %w", err)
+	}
+
+	if artifact.WorkflowDefinition == nil {
+		return fmt.Errorf("workflow definition is missing")
+	}
+
+	// Check for existing workflow with same content hash (deduplication)
+	existing, err := findExistingWorkflowByHash(ctx, db, artifact.ContentHash)
+	if err != nil {
+		log.Warn("HQ sync: failed to check for existing workflow, continuing with storage",
+			"error", err,
+			"workflow_id", artifact.WorkflowID,
+		)
+	}
+
+	// If workflow exists, update metadata
+	if existing != nil {
+		artifact.Version = existing.Version
+		artifact.ParentVersion = existing.Version
+		artifact.OriginDaemonID = existing.OriginDaemonID
+		artifact.CreatedAt = existing.CreatedAt
+		artifact.RecurrenceCount = existing.RecurrenceCount + 1
+
+		// Check if this is a different daemon learning the same pattern
+		if daemonID != existing.LastModifiedBy {
+			artifact.RecurrenceCount++
+		}
+
+		log.Info("HQ sync: workflow already exists, updating recurrence",
+			"workflow_id", artifact.WorkflowID,
+			"existing_version", existing.Version,
+			"recurrence_count", artifact.RecurrenceCount,
+		)
+	}
+
+	// Store in Core Playbook
+	if err := agent.PromoteWorkflowArtifactV2(
+		ctx,
+		db,
+		nil, // LLM not required
+		embedder,
+		artifact.WorkflowDefinition,
+		daemonID,
+		artifact.ExecutionStats,
+	); err != nil {
+		return fmt.Errorf("store workflow in core playbook: %w", err)
+	}
+
+	log.Info("HQ sync: V2 workflow artifact stored",
+		"workflow_id", artifact.WorkflowID,
+		"workflow_name", artifact.WorkflowDefinition.Name,
+		"version", artifact.Version,
+		"recurrence_count", artifact.RecurrenceCount,
+		"daemon_id", daemonID,
+	)
+
+	return nil
+}
+
+// findExistingWorkflowByHash checks if a workflow with the same content hash exists.
+// Returns the existing artifact metadata if found, nil otherwise.
+func findExistingWorkflowByHash(ctx context.Context, db *aidb.Database, contentHash string) (*agent.FederatedArtifactV2, error) {
+	if strings.TrimSpace(contentHash) == "" {
+		return nil, nil
+	}
+
+	// Open Core Playbook KB
+	tx, err := db.BeginTransaction(ctx, sop.ForReading)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	kb, err := db.OpenKnowledgeBase(ctx, "core_playbook", tx, nil, nil, false, true)
+	if err != nil {
+		return nil, fmt.Errorf("open core_playbook: %w", err)
+	}
+
+	// List all items and check content hash
+	items, _, err := kb.ListItems(ctx, memory.ListItemsParam{Limit: 10000})
+	if err != nil {
+		return nil, fmt.Errorf("list items: %w", err)
+	}
+
+	for _, item := range items {
+		if item.Data == nil {
+			continue
+		}
+
+		// Check if this is a V2 workflow artifact
+		if version, ok := item.Data["federation_version"].(string); !ok || version != "v2" {
+			continue
+		}
+
+		// Check content hash
+		if hash, ok := item.Data["content_hash"].(string); ok && hash == contentHash {
+			// Found matching workflow
+			return agent.ParseFederatedArtifactV2(item.Data)
+		}
+	}
+
+	return nil, nil
 }

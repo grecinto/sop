@@ -41,7 +41,7 @@ func TestResolvePreloadFilePathFindsCorePlaybookAsset(t *testing.T) {
 		t.Fatalf("write asset: %v", err)
 	}
 
-	got := resolvePreloadFilePath("Core Playbook", []string{repoRoot})
+	got := resolvePreloadFilePath("core_playbook", []string{repoRoot})
 	if got != assetPath {
 		t.Fatalf("resolvePreloadFilePath() = %q, want %q", got, assetPath)
 	}

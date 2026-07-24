@@ -59,6 +59,45 @@ This documentation does not describe a futuristic, fully simulated identity. The
 
 ---
 
+## Space and Store Naming Conventions
+
+### Automatic Name Normalization
+
+When creating Spaces or Stores, the system automatically normalizes names to ensure backend compatibility across all storage systems (including Cassandra, which has strict table naming requirements):
+
+**User Input → Storage → Display**
+- User types: `"Core Playbook"` 
+- System stores: `"core_playbook"` (lowercase with underscores)
+- UI displays: `"Core Playbook"` (title case with spaces)
+
+**Normalization Rules:**
+1. **Spaces are converted to underscores**: `"My Space"` → `"my_space"`
+2. **Converted to lowercase**: `"MySpace"` → `"myspace"`
+3. **Only alphanumeric, underscore, and hyphen allowed**: `[a-zA-Z0-9_-]`
+4. **Display names are auto-generated**: Underscores become spaces, words are title-cased
+
+**Examples:**
+```
+Input              → Stored As          → Displayed As
+"Core Playbook"    → "core_playbook"    → "Core Playbook"
+"my custom space"  → "my_custom_space"  → "My Custom Space"
+"shared_memory"    → "shared_memory"    → "Shared Memory"
+"test-space"       → "test-space"       → "Test-Space"
+```
+
+**Why This Matters:**
+- **Backend Safety**: Ensures compatibility with all storage backends (Cassandra, filesystem, etc.)
+- **No Ambiguity**: Prevents confusion between "Core Playbook" and "core_playbook" being treated as different spaces
+- **URL Safe**: Names can be safely used in URLs and file paths
+- **Predictable**: Users can type naturally with spaces, system handles the rest
+
+**Developer Note**: 
+- Always use the normalized (stored) name when referencing Spaces/Stores in code
+- Use `resolveSpaceDisplayName()` or `resolveStoreDisplayName()` for UI display
+- The normalization happens at the API boundary in `handleCreateSpace` and `handleAddStore`
+
+---
+
 ## Core user stories
 
 ### 1. Drag and drop files into a target Store

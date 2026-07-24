@@ -44,6 +44,17 @@ func resetProvisioningCompletionCache() {
 	provisioningCompleteCache.Store(false)
 }
 
+// normalizeStoreName converts spaces to underscores and lowercases the name for backend storage
+// Example: "My Store" -> "my_store"
+func normalizeStoreName(name string) string {
+	name = strings.TrimSpace(name)
+	// Convert spaces to underscores
+	name = strings.ReplaceAll(name, " ", "_")
+	// Convert to lowercase for consistency
+	name = strings.ToLower(name)
+	return name
+}
+
 func candidateConfigPaths() []string {
 	return CandidateConfigPaths(config.ConfigFile)
 }
@@ -1090,6 +1101,18 @@ func resolveSpaceDisplayName(name string, cfg *memory.KnowledgeBaseConfig) strin
 	lowerName := strings.ToLower(strings.TrimSpace(name))
 	if strings.HasPrefix(lowerName, "ltm_") || strings.HasPrefix(lowerName, "memory_") {
 		return "memory"
+	}
+
+	// Convert underscore-separated names to title case with spaces
+	// e.g., "shared_memory" → "Shared Memory", "my_custom_space" → "My Custom Space"
+	if strings.Contains(name, "_") {
+		parts := strings.Split(name, "_")
+		for i, part := range parts {
+			if len(part) > 0 {
+				parts[i] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+			}
+		}
+		return strings.Join(parts, " ")
 	}
 
 	return name
@@ -2534,6 +2557,9 @@ func handleAddStore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Store name is required", http.StatusBadRequest)
 		return
 	}
+
+	// Normalize Store name (convert spaces to underscores, lowercase)
+	req.StoreName = normalizeStoreName(req.StoreName)
 
 	ctx := r.Context()
 	dbOpts, err := GetDBOptions(ctx, req.Database)

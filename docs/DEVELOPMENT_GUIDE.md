@@ -45,6 +45,23 @@ Keep the boundary clear:
 - The current retention behavior is conservative: a memory item stays active while it is recent and relevant, becomes archived once it is deemed stale, and is removed from the store once the weekly compaction pass observes it has been archived long enough.
 - In the Data Manager, lifecycle state is now surfaced directly on space-item cards so archived or stale entries are visibly labeled and can be distinguished from active content without opening the item details.
 
+## Space and Store Naming
+
+**Important**: Space and Store names are automatically normalized to ensure backend compatibility:
+
+- **User input**: `"My Space"` → **Stored as**: `"my_space"` → **Displayed as**: `"My Space"`
+- Spaces converted to underscores, lowercased
+- Only `[a-zA-Z0-9_-]` characters allowed
+- Display names auto-generated from stored names (underscores → spaces, title case)
+
+**When writing code:**
+- Always reference Spaces/Stores using their normalized (stored) names: `"core_playbook"`, `"shared_memory"`
+- Use `resolveSpaceDisplayName()` and `resolveStoreDisplayName()` for UI display only
+- Normalization happens at API boundaries: `handleCreateSpace` and `handleAddStore`
+- See [SPACES.md](SPACES.md) for detailed examples and rationale
+
+**Why**: Ensures compatibility with all storage backends (Cassandra has strict table naming requirements, filesystems need safe paths, URLs need safe characters).
+
 ## Simple store migration
 
 For operational moves, the simplest supported story is a file-folder migration:

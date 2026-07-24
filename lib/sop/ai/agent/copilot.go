@@ -3112,6 +3112,84 @@ func (a *CopilotAgent) enqueueMultiTurnTasks(ctx context.Context, query string, 
 	})
 }
 
+// promoteWorkflowToFederation promotes a successful workflow execution to Federation V2.
+// Only workflows are promoted (not general patterns) per V2 scoped implementation.
+func (a *CopilotAgent) promoteWorkflowToFederation(ctx context.Context, workflow *WorkflowDefinition, results []TurnResult, duration time.Duration) error {
+	if workflow == nil {
+		return fmt.Errorf("workflow is nil")
+	}
+
+	// Check if federation is enabled
+	p := ai.GetSessionPayload(ctx)
+	if p == nil {
+		return fmt.Errorf("session payload not available")
+	}
+
+	// Get daemon ID from environment or config
+	daemonID := os.Getenv("SOP_DAEMON_ID")
+	if daemonID == "" {
+		daemonID = "local-daemon"
+	}
+
+	// Prepare execution stats
+	executionStats := map[string]any{
+		"total_turns":      len(results),
+		"successful_turns": countSuccessfulTurns(results),
+		"duration_seconds": duration.Seconds(),
+		"actors_used":      extractActorsUsed(results),
+		"promoted_at":      time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Promote to federation (stores locally in Core Playbook)
+	if err := PromoteWorkflowArtifactV2(
+		ctx,
+		a.systemDB,
+		nil, // LLM not required
+		a.service.Domain().Embedder(),
+		workflow,
+		daemonID,
+		executionStats,
+	); err != nil {
+		return fmt.Errorf("promote workflow artifact: %w", err)
+	}
+
+	log.Info("Workflow promoted to federation",
+		"workflow_id", workflow.ID,
+		"workflow_name", workflow.Name,
+		"successful_turns", executionStats["successful_turns"],
+		"duration_seconds", executionStats["duration_seconds"],
+	)
+
+	return nil
+}
+
+// countSuccessfulTurns counts how many turns completed successfully (non-empty response, no error)
+func countSuccessfulTurns(results []TurnResult) int {
+	count := 0
+	for _, result := range results {
+		if result.Response != "" && result.Error == nil {
+			count++
+		}
+	}
+	return count
+}
+
+// extractActorsUsed extracts unique actor names from turn results
+func extractActorsUsed(results []TurnResult) []string {
+	actorSet := make(map[string]bool)
+	for _, result := range results {
+		if result.Actor != "" {
+			actorSet[result.Actor] = true
+		}
+	}
+
+	actors := make([]string, 0, len(actorSet))
+	for actor := range actorSet {
+		actors = append(actors, actor)
+	}
+	return actors
+}
+
 // executeWorkflow creates a queue, initializes it with the workflow, and processes
 func (a *CopilotAgent) executeWorkflow(ctx context.Context, workflow *WorkflowDefinition, query string, cfg *ai.ConfigMap) (string, error) {
 	queue := NewWorkQueue()
@@ -3130,7 +3208,34 @@ func (a *CopilotAgent) executeWorkflow(ctx context.Context, workflow *WorkflowDe
 	}
 
 	// Process queue
+	startTime := time.Now()
 	results := a.processQueueLoop(ctx, queue, cfg, 15)
+	duration := time.Since(startTime)
+
+	// Determine if workflow was successful (at least 2 steps completed without critical errors)
+	successCount := 0
+	hasError := false
+	for _, result := range results {
+		if result.Response != "" {
+			successCount++
+		}
+		if result.Error != nil {
+			hasError = true
+		}
+	}
+
+	workflowSuccessful := successCount >= 2 && !hasError
+
+	// Federation V2: Promote successful workflow execution
+	if workflowSuccessful {
+		if err := a.promoteWorkflowToFederation(ctx, workflow, results, duration); err != nil {
+			log.Warn("Failed to promote workflow to federation",
+				"workflow_id", workflow.ID,
+				"error", err,
+			)
+			// Don't fail the workflow execution if promotion fails
+		}
+	}
 
 	// Format results
 	var finalResponse strings.Builder

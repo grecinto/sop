@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop/ai/memory"
+	"github.com/sharedcode/sop/btree"
 
 	log "log/slog"
 	"time"
@@ -141,9 +142,19 @@ func (db *Database) Vectorize(
 		}
 
 		found, err := catBtree.Find(ctx, catID, false)
-		if err != nil || !found {
+		if err != nil {
 			tx.Rollback(ctx)
 			break
+		}
+		if !found {
+			// Skip path-only categories (IndexPopulationModeReference) - they don't participate in semantic search
+			log.Debug("Skipping path-only category", "catID", catID)
+			ok, err = categoriesByPath.Next(ctx)
+			if err != nil {
+				tx.Rollback(ctx)
+				break
+			}
+			continue
 		}
 
 		cat, err := catBtree.GetCurrentValue(ctx)
@@ -153,6 +164,29 @@ func (db *Database) Vectorize(
 		}
 
 		log.Debug("Processing category", "catID", catID, "catName", cat.Name)
+
+		// First, recursively vectorize all parent (intermediate) categories
+		if len(cat.ParentIDs) > 0 {
+			for _, parentRel := range cat.ParentIDs {
+				if err := vectorizeCategoryRecursive(ctx, catBtree, catsByDist, embedder, embedderDim, parentRel.ParentID, oldCategoryVectors, newCategoryVectors, kb.Store.DomainReference()); err != nil {
+					skip, escalate := handleVectorizationFailure(kbName, "parent-category", parentRel.ParentID.String(), err)
+					if skip {
+						log.Warn("skipping parent category vectorization after failure", "kb_name", kbName, "parent_id", parentRel.ParentID.String(), "error", err)
+						continue
+					} else if escalate {
+						log.Warn("parent category vectorization failure escalated", "kb_name", kbName, "parent_id", parentRel.ParentID.String(), "error", err)
+						continue
+					} else {
+						tx.Rollback(ctx)
+						return err
+					}
+				}
+			}
+			// Reload current category after parent vectorization
+			if found, _ := catBtree.Find(ctx, catID, false); found {
+				cat, _ = catBtree.GetCurrentValue(ctx)
+			}
+		}
 
 		if len(cat.CenterVector) > 0 {
 			oldCategoryVectors[cat.ID] = cat.CenterVector
@@ -502,6 +536,113 @@ func (db *Database) Vectorize(
 	return tx.Commit(ctx)
 }
 
+// vectorizeCategoryRecursive recursively vectorizes a category and all its parent categories.
+// This ensures intermediate categories created by hierarchical paths have their CenterVector set.
+func vectorizeCategoryRecursive(
+	ctx context.Context,
+	catBtree btree.BtreeInterface[sop.UUID, *memory.Category],
+	catsByDist btree.BtreeInterface[memory.DistanceKey, byte],
+	embedder ai.Embeddings,
+	embedderDim int,
+	catID sop.UUID,
+	oldCategoryVectors map[sop.UUID][]float32,
+	newCategoryVectors map[sop.UUID][]float32,
+	domainRef []float32,
+) error {
+	if catID.IsNil() {
+		return nil
+	}
+
+	// Check if already processed in this session
+	if _, exists := oldCategoryVectors[catID]; exists {
+		return nil
+	}
+
+	found, err := catBtree.Find(ctx, catID, false)
+	if err != nil || !found {
+		return err
+	}
+
+	cat, err := catBtree.GetCurrentValue(ctx)
+	if err != nil || cat == nil {
+		return err
+	}
+
+	// Recursively vectorize parents first
+	if len(cat.ParentIDs) > 0 {
+		for _, parentRel := range cat.ParentIDs {
+			if err := vectorizeCategoryRecursive(ctx, catBtree, catsByDist, embedder, embedderDim, parentRel.ParentID, oldCategoryVectors, newCategoryVectors, domainRef); err != nil {
+				return err
+			}
+		}
+		// Reload current category after parent vectorization
+		if found, _ := catBtree.Find(ctx, catID, false); found {
+			cat, _ = catBtree.GetCurrentValue(ctx)
+		}
+	}
+
+	// Track old vector for distance index updates
+	if len(cat.CenterVector) > 0 {
+		oldCategoryVectors[catID] = cat.CenterVector
+	} else {
+		oldCategoryVectors[catID] = nil
+	}
+
+	// Vectorize this category if needed
+	embedText := strings.TrimSpace(cat.Name)
+	if embedText == "" {
+		embedText = strings.TrimSpace(cat.Description)
+	}
+	embedText = memory.NormalizeCategoryToken(embedText)
+	expectedCatHash := memory.ComputeVectorHash(embedderDim, embedText)
+
+	if cat.VectorHash != expectedCatHash || len(cat.CenterVector) == 0 {
+		log.Debug("Vectorizing intermediate category", "catID", catID, "catName", cat.Name)
+		catVecs, err := embed.CategoryTexts(ctx, embedder, []string{embedText})
+		if err != nil {
+			return err
+		}
+		if len(catVecs) > 0 {
+			// Remove old distance entries
+			if len(cat.CenterVector) > 0 {
+				if len(cat.ParentIDs) > 0 {
+					for _, p := range cat.ParentIDs {
+						oldDist := memory.Distance(oldCategoryVectors[p.ParentID], cat.CenterVector, true)
+						catsByDist.Remove(ctx, memory.DistanceKey{ParentID: p.ParentID, Distance: oldDist, ID: cat.ID})
+					}
+				} else {
+					oldDist := memory.Distance(domainRef, cat.CenterVector, true)
+					catsByDist.Remove(ctx, memory.DistanceKey{ParentID: sop.NilUUID, Distance: oldDist, ID: cat.ID})
+				}
+			}
+
+			// Update category with new vector
+			cat.CenterVector = catVecs[0]
+			cat.VectorHash = expectedCatHash
+			newCategoryVectors[catID] = cat.CenterVector
+
+			// Add new distance entries
+			if len(cat.ParentIDs) > 0 {
+				for _, p := range cat.ParentIDs {
+					refVec := newCategoryVectors[p.ParentID]
+					if len(refVec) == 0 {
+						refVec = oldCategoryVectors[p.ParentID]
+					}
+					newDist := memory.Distance(refVec, cat.CenterVector, true)
+					catsByDist.Add(ctx, memory.DistanceKey{ParentID: p.ParentID, Distance: newDist, ID: cat.ID}, 0)
+				}
+			} else {
+				newDist := memory.Distance(domainRef, cat.CenterVector, true)
+				catsByDist.Add(ctx, memory.DistanceKey{ParentID: sop.NilUUID, Distance: newDist, ID: cat.ID}, 0)
+			}
+
+			catBtree.UpdateCurrentItem(ctx, catID, cat)
+		}
+	}
+
+	return nil
+}
+
 // Vectorize processes the store's KnowledgeBase in batches, managing its own transactions and cursor state.
 func (db *Database) VectorizeCategories(
 	ctx context.Context,
@@ -571,9 +712,14 @@ func (db *Database) VectorizeCategories(
 	log.Debug("Before categories loop")
 	for _, catID := range categoryIDs {
 		found, err := catBtree.Find(ctx, catID, false)
-		if err != nil || !found {
+		if err != nil {
 			tx.Rollback(ctx)
 			break
+		}
+		if !found {
+			// Skip path-only categories (IndexPopulationModeReference) - they don't participate in semantic search
+			log.Debug("Skipping path-only category", "catID", catID)
+			continue
 		}
 
 		cat, err := catBtree.GetCurrentValue(ctx)
@@ -583,6 +729,20 @@ func (db *Database) VectorizeCategories(
 		}
 
 		log.Debug("Processing category", "catID", catID, "catName", cat.Name)
+
+		// First, recursively vectorize all parent (intermediate) categories
+		if len(cat.ParentIDs) > 0 {
+			for _, parentRel := range cat.ParentIDs {
+				if err := vectorizeCategoryRecursive(ctx, catBtree, catsByDist, embedder, embedderDim, parentRel.ParentID, oldCategoryVectors, newCategoryVectors, kb.Store.DomainReference()); err != nil {
+					tx.Rollback(ctx)
+					return err
+				}
+			}
+			// Reload current category after parent vectorization
+			if found, _ := catBtree.Find(ctx, catID, false); found {
+				cat, _ = catBtree.GetCurrentValue(ctx)
+			}
+		}
 
 		if len(cat.CenterVector) > 0 {
 			oldCategoryVectors[cat.ID] = cat.CenterVector

@@ -68,6 +68,12 @@ func handleImportSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate Space name - reject spaces and invalid characters
+	if err := validateSpaceName(spaceName); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Failed to read uploaded file: "+err.Error(), http.StatusBadRequest)
