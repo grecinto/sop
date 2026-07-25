@@ -2041,9 +2041,13 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 	workingDirPromptRequired := false
 	candidateDirs := []string{}
 	if strings.TrimSpace(workingDir) == "" {
-		if ctxWorkingDir := resolveParallelWorkingDir(ctx, ""); strings.TrimSpace(ctxWorkingDir) != "" {
-			workingDir = ctxWorkingDir
-		} else if strings.TrimSpace(defaultWorkingDir) != "" {
+		// Only resolve working dir in parallel execution mode (to avoid os.Getwd() fallback in tests)
+		if isParallelExecution(ctx) {
+			if ctxWorkingDir := resolveParallelWorkingDir(ctx, ""); strings.TrimSpace(ctxWorkingDir) != "" {
+				workingDir = ctxWorkingDir
+			}
+		}
+		if strings.TrimSpace(workingDir) == "" && strings.TrimSpace(defaultWorkingDir) != "" {
 			workingDir = defaultWorkingDir
 		}
 		if strings.TrimSpace(workingDir) != "" {

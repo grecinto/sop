@@ -50,7 +50,7 @@ func (m *SmartMockGenerator) Generate(ctx context.Context, prompt string, opts a
 		scriptBody = m.Scripts["join"]
 	} else if strings.Contains(lastPrompt, "List products") {
 		scriptBody = m.Scripts["list"]
-	} else if strings.Contains(lastPrompt, "Run alias test") {
+	} else if strings.Contains(lastPrompt, "Run query with alias projection") {
 		scriptBody = m.Scripts["alias"]
 	} else {
 		return ai.GenOutput{Text: "I don't know how to do that."}, nil
@@ -394,7 +394,7 @@ func TestAliasProjection_JoinRight_Legacy(t *testing.T) {
 	payload := &ai.SessionPayload{CurrentDB: "dev_db"}
 	runCtx := context.WithValue(ctx, "session_payload", payload)
 
-	res, err := svc.Ask(runCtx, "Run alias test", nil)
+	res, err := svc.Ask(runCtx, "Run query with alias projection", nil)
 	if err != nil {
 		t.Fatalf("Ask failed: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestAliasProjection_JoinRight_Native(t *testing.T) {
 	payload := &ai.SessionPayload{CurrentDB: "dev_db"}
 	runCtx := context.WithValue(ctx, "session_payload", payload)
 
-	res, err := svc.Ask(runCtx, "Run alias test", nil)
+	res, err := svc.Ask(runCtx, "Run query with alias projection", nil)
 	if err != nil {
 		t.Fatalf("Ask failed: %v", err)
 	}

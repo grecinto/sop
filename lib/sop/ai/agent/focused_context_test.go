@@ -268,6 +268,9 @@ func TestBuildStoresCRUDOperationsContext_WriteGuidanceUsesGroundedScriptContrac
 }
 
 func TestBuildSystemPrompt_IncludesCrossDomainFocusedContext(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
@@ -334,6 +337,9 @@ func TestBuildSystemPrompt_IncludesCrossDomainFocusedContext(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_IncludesScriptAuthoringContextForStores(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)

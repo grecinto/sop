@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -101,6 +103,23 @@ func TestCopilotAgentExecute_UsesRunnerSessionVerboseForToolRuntime(t *testing.T
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
+
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(out), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		if envelope.FileMetadata != nil && envelope.FileMetadata.FilePath != "" {
+			fileContent, err := os.ReadFile(envelope.FileMetadata.FilePath)
+			if err == nil {
+				out = string(fileContent)
+			}
+		} else {
+			var unwrapped string
+			if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+				out = unwrapped
+			}
+		}
+	}
+
 	if out != "true" {
 		t.Fatalf("expected runtime tool execution to see verbose=true, got %q", out)
 	}

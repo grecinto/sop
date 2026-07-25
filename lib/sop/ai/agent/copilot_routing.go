@@ -191,19 +191,34 @@ func inferCapabilityRoutingSignal(query string, domain string) (string, string, 
 	if q == "" {
 		return inferIntentFamily(domain, ""), capabilityHintGeneral, inferredDomain
 	}
-	if strings.Contains(q, "git") || strings.Contains(q, "cmd") || strings.Contains(q, "shell") || strings.Contains(q, "postgres") || strings.Contains(q, "splunk") || strings.Contains(q, "docker") || strings.Contains(q, "service") || strings.Contains(q, "process") || strings.Contains(q, "terminal") || strings.Contains(q, "file system") || strings.Contains(q, "filesystem") || strings.Contains(q, "local") {
-		return intentFamilyLocalOps, capabilityHintDesktopAutomation, inferredDomain
-	}
+	// Check explicit knowledge queries first (highest priority for clear intent signals)
 	if strings.Contains(q, "summarize") || strings.Contains(q, "summary") || strings.Contains(q, "overview") || strings.Contains(q, "explain") || strings.Contains(q, "describe") || strings.Contains(q, "walk through") {
 		return intentFamilyKnowledge, capabilityHintGeneral, inferredDomain
 	}
-	if strings.Contains(q, "fix") || strings.Contains(q, "refactor") || strings.Contains(q, "patch") || strings.Contains(q, "edit") || strings.Contains(q, "implement") || strings.Contains(q, "modify") || strings.Contains(q, "add test") || strings.Contains(q, "update") || strings.Contains(q, "repo") || strings.Contains(q, "code") || strings.Contains(q, "parser") || strings.Contains(q, "function") || strings.Contains(q, "class") || strings.Contains(q, "module") || strings.Contains(q, "generate") || strings.Contains(q, "json") || strings.Contains(q, "script") || strings.Contains(q, "analysis") || strings.Contains(q, "analy") || strings.Contains(q, "sql") || strings.Contains(q, "table") || strings.Contains(q, "record") || strings.Contains(q, "search") || strings.Contains(q, "design") || strings.Contains(q, "plan") || strings.Contains(q, "architect") || strings.Contains(q, "propose") || strings.Contains(q, "document") || strings.Contains(q, "readme") || strings.Contains(q, "spec") || strings.Contains(q, "write") {
+	// Check desktop automation (specific technology keywords should take priority)
+	// Use word boundary check for "process" to avoid matching "processing"
+	hasProcess := false
+	if idx := strings.Index(q, "process"); idx >= 0 {
+		// Check if "process" is a standalone word (not part of "processing")
+		before := idx == 0 || !isAlphaNumeric(rune(q[idx-1]))
+		after := idx+7 >= len(q) || !isAlphaNumeric(rune(q[idx+7]))
+		hasProcess = before && after
+	}
+	if strings.Contains(q, "git") || strings.Contains(q, "cmd") || strings.Contains(q, "shell") || strings.Contains(q, "postgres") || strings.Contains(q, "splunk") || strings.Contains(q, "docker") || strings.Contains(q, "service") || hasProcess || strings.Contains(q, "terminal") || strings.Contains(q, "file system") || strings.Contains(q, "filesystem") || strings.Contains(q, "local") {
+		return intentFamilyLocalOps, capabilityHintDesktopAutomation, inferredDomain
+	}
+	// Check coding workflow (general code editing keywords)
+	if strings.Contains(q, "fix") || strings.Contains(q, "refactor") || strings.Contains(q, "patch") || strings.Contains(q, "edit") || strings.Contains(q, "implement") || strings.Contains(q, "modify") || strings.Contains(q, "add test") || strings.Contains(q, "update") || strings.Contains(q, "repo") || strings.Contains(q, "code") || strings.Contains(q, "parser") || strings.Contains(q, "function") || strings.Contains(q, "class") || strings.Contains(q, "module") || strings.Contains(q, "generate") || strings.Contains(q, "json") || strings.Contains(q, "script") || strings.Contains(q, "analysis") || strings.Contains(q, "analy") || strings.Contains(q, "sql") || strings.Contains(q, "table") || strings.Contains(q, "record") || strings.Contains(q, "search") || strings.Contains(q, "design") || strings.Contains(q, "plan") || strings.Contains(q, "architect") || strings.Contains(q, "propose") || strings.Contains(q, "document") || strings.Contains(q, "readme") || strings.Contains(q, "spec") || strings.Contains(q, "write") || strings.Contains(q, "test") {
 		return intentFamilyRepoEdit, capabilityHintCodingWorkflow, inferredDomain
 	}
 	if strings.Contains(q, "research") || strings.Contains(q, "what") || strings.Contains(q, "why") || strings.Contains(q, "how") || strings.Contains(q, "concept") || strings.Contains(q, "docs") {
 		return intentFamilyKnowledge, capabilityHintGeneral, inferredDomain
 	}
 	return inferIntentFamily(domain, q), capabilityHintGeneral, inferredDomain
+}
+
+func isAlphaNumeric(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
 }
 
 func inferIntentFamily(domain string, query string) string {

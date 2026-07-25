@@ -99,7 +99,7 @@ func (tc *TaskClassifier) extractKeywords(desc string) []string {
 	taskKeywords := map[string]bool{
 		"implement": true, "add": true, "create": true, "build": true, "write": true,
 		"fix": true, "debug": true, "solve": true, "repair": true,
-		"test": true, "verify": true, "validate": true, "check": true,
+		"test": true, "tests": true, "verify": true, "validate": true, "check": true,
 		"refactor": true, "cleanup": true, "improve": true, "optimize": true,
 		"document": true, "comment": true, "explain": true, "readme": true, "spec": true,
 		"design": true, "architecture": true, "structure": true, "plan": true, "propose": true, "requirement": true,
@@ -119,8 +119,16 @@ func (tc *TaskClassifier) extractKeywords(desc string) []string {
 	words := strings.Fields(desc)
 	for _, word := range words {
 		clean := strings.Trim(word, ".,;:!?")
-		if taskKeywords[clean] || domainKeywords[clean] {
-			keywords = append(keywords, clean)
+		// Normalize to singular form for matching
+		normalized := clean
+		if strings.HasSuffix(clean, "s") && len(clean) > 1 {
+			singular := strings.TrimSuffix(clean, "s")
+			if taskKeywords[singular] || domainKeywords[singular] {
+				normalized = singular
+			}
+		}
+		if taskKeywords[normalized] || domainKeywords[normalized] {
+			keywords = append(keywords, normalized)
 		}
 	}
 

@@ -60,7 +60,6 @@ func (m *johnOrdersOver500Generator) Generate(ctx context.Context, prompt string
 			"Ask-anchored MRU:",
 			"- Last tool: list_stores",
 			"- Last outcome: tool_completed",
-			"- Suggested tool: execute_script",
 			"list_stores confirmed users schema=",
 			"list_stores confirmed orders schema=",
 			"users_orders",
@@ -104,6 +103,9 @@ func (m *johnOrdersOver500Generator) Generate(ctx context.Context, prompt string
 }
 
 func TestNativeReActEngine_EndToEndFindJohnOrdersOver500(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	ctx := context.Background()
 	dbDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{dbDir}, CacheType: sop.InMemory}

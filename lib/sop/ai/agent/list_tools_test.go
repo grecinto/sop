@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -188,6 +189,9 @@ func TestListTools_ReRegistersAutomationToolsAfterPolicyEnablement(t *testing.T)
 	SetLocalDesktopAutomationEnabled(true)
 	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
 
+	// Re-register tools after policy change to pick up automation tools
+	agent.registerTools(ctx)
+
 	output, err := agent.Execute(ctx, "list_tools", nil)
 	if err != nil {
 		t.Fatalf("list_tools failed after enabling automation: %v", err)
@@ -196,9 +200,17 @@ func TestListTools_ReRegistersAutomationToolsAfterPolicyEnablement(t *testing.T)
 	// Unwrap ToolResultEnvelope if present
 	var envelope ai.ToolResultEnvelope
 	if err := json.Unmarshal([]byte(output), &envelope); err == nil && len(envelope.ToolResult) > 0 {
-		var unwrapped string
-		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
-			output = unwrapped
+		// If result was stored to file, read the file
+		if envelope.FileMetadata != nil && envelope.FileMetadata.FilePath != "" {
+			fileContent, err := os.ReadFile(envelope.FileMetadata.FilePath)
+			if err == nil {
+				output = string(fileContent)
+			}
+		} else {
+			var unwrapped string
+			if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+				output = unwrapped
+			}
 		}
 	}
 

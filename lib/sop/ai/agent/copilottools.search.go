@@ -46,7 +46,8 @@ func stripRoutingPrefix(query, kbName string) string {
 	}
 
 	// If what remains is just the KB name itself (e.g., "sop" from "omni:sop"), strip it
-	if strings.EqualFold(trimmed, canonicalName) {
+	// Also check if trimmed canonicalizes to the same KB name (e.g., "sop" -> "core_playbook")
+	if strings.EqualFold(trimmed, canonicalName) || strings.EqualFold(ai.CanonicalKBName(trimmed), canonicalName) {
 		trimmed = ""
 	}
 

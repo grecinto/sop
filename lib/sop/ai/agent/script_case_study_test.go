@@ -13,6 +13,9 @@ import (
 // TestCaseStudy_TwoPathsToAutomation implements the two methodologies described in SCRIPTS.md
 // to verify their functional equivalence and correct implementation.
 func TestCaseStudy_TwoPathsToAutomation(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// 1. Setup Infrastructure
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{
