@@ -96,7 +96,31 @@ func isStatefulCommand(cmd string) bool {
 func (c *Capability) ID() string   { return CapabilityID }
 func (c *Capability) Name() string { return CapabilityName }
 func (c *Capability) Entitlement() capabilities.Entitlement {
-	return capabilities.Entitlement{EnabledByDefault: true, Tier: "base"}
+	return capabilities.Entitlement{
+		EnabledByDefault: true,
+		Tier:             "base",
+		RequiredGate:     capabilities.GateWriteAccess, // Gap 1: Shell execution needs write
+		Approvals: []capabilities.ApprovalType{
+			capabilities.ApprovalShellExec, // Shell execution needs approval
+		},
+		Permissions: []capabilities.Permission{
+			{
+				Resource: "shell",
+				Actions:  []string{"execute", "read"},
+				Gate:     capabilities.GateWriteAccess,
+			},
+			{
+				Resource: "git",
+				Actions:  []string{"commit", "push", "fetch"},
+				Gate:     capabilities.GateWriteAccess,
+			},
+			{
+				Resource: "filesystem",
+				Actions:  []string{"read"},
+				Gate:     capabilities.GateReadAccess,
+			},
+		},
+	}
 }
 func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
 	if state.Domain == "" {

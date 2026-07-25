@@ -16,6 +16,9 @@ import (
 )
 
 func TestExecuteScript_CommitDoesNotClobberSortedResult(t *testing.T) {
+	agent.SetStoresFeatureEnabled(true)
+	defer agent.SetStoresFeatureEnabled(false)
+
 	dbPath := "/tmp/test_commit_result_sop"
 	os.RemoveAll(dbPath)
 	defer os.RemoveAll(dbPath)
@@ -68,6 +71,15 @@ func TestExecuteScript_CommitDoesNotClobberSortedResult(t *testing.T) {
 	resStr, err := adminAgent.Execute(execCtx, "execute_script", map[string]any{"script": string(scriptJSON)})
 	if err != nil {
 		t.Fatalf("execute script: %v", err)
+	}
+
+	// Unwrap envelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(resStr), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			resStr = unwrapped
+		}
 	}
 
 	if len(resStr) == 0 || resStr[0] != '[' {

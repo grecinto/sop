@@ -172,9 +172,10 @@ func (m *workerManager) sendCommandWithStreaming(ctx context.Context, sessionID,
 
 	// Prepare request
 	req := workerRequest{
-		Command:        command,
-		TimeoutSeconds: timeoutSeconds,
-		Streaming:      streaming,
+		Command:             command,
+		TimeoutSeconds:      timeoutSeconds,
+		TimeoutMilliseconds: timeoutSeconds,
+		Streaming:           streaming,
 	}
 
 	// Send request to worker via stdin

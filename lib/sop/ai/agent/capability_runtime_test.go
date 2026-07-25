@@ -40,6 +40,9 @@ func TestNewCopilotAgentRegistersDesktopCapability(t *testing.T) {
 }
 
 func TestNewCopilotAgentRegistersStoresCapability(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	cap, ok := ag.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: "Stores"})
 	if !ok {

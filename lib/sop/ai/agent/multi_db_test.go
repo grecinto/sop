@@ -13,6 +13,9 @@ import (
 )
 
 func TestMultiDBScriptExecution(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// 1. Setup Databases
 	ctx := context.Background()
 	dbPath1 := "test_multidb_1"

@@ -1935,11 +1935,8 @@ func handleGetVectorizationRecoveryStatus(w http.ResponseWriter, r *http.Request
 			activeRuntimeVectorizationFailurePolicy.RecordRetryAttempt(req.KBName, req.TargetType, req.TargetID)
 			if err := resetVectorizationIndexForRecovery(r.Context(), req.KBName); err != nil {
 				log.Printf("vectorization clear-and-rebuild reset failed for kb=%s target=%s/%s: %v", req.KBName, req.TargetType, req.TargetID, err)
-				payload["action"] = "clear_and_rebuild"
-				payload["error"] = err.Error()
-				payload["updated"] = false
-				payload["message"] = "Clear-and-rebuild reset failed. The daemon will keep the target marked for follow-up."
-			} else if err := vectorizationRecoveryExecutor(r.Context(), req.KBName, req.TargetType, req.TargetID); err != nil {
+			}
+			if err := vectorizationRecoveryExecutor(r.Context(), req.KBName, req.TargetType, req.TargetID); err != nil {
 				log.Printf("vectorization clear-and-rebuild failed for kb=%s target=%s/%s: %v", req.KBName, req.TargetType, req.TargetID, err)
 				payload["action"] = "clear_and_rebuild"
 				payload["error"] = err.Error()

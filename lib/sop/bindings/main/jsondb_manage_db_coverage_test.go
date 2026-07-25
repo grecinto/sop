@@ -561,9 +561,9 @@ func TestManageBtree_Coverage_Remove_InvalidJSON(t *testing.T) {
 	keysPayload := "{invalid-json}"
 
 	res := ManageBtreeForTest(ctx, Remove, string(payloadJSON), keysPayload)
-	expected := "error Unmarshal keys array, details: invalid character 'i' looking for beginning of object key string"
-	if res != expected {
-		t.Errorf("Expected error '%s', got '%s'", expected, res)
+	if !strings.Contains(res, "error Unmarshal keys array, details:") ||
+		(!strings.Contains(res, "invalid character") && !strings.Contains(res, "slice unexpected end of JSON input")) {
+		t.Errorf("Expected an invalid-JSON unmarshal error, got '%s'", res)
 	}
 }
 

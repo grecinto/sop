@@ -17,7 +17,6 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
-	"github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 )
@@ -59,46 +58,6 @@ func autoVectorizeBuiltinSpace(ctx context.Context, db *database.Database, space
 	if err := db.Vectorize(ctx, spaceName, llm, emb, 100); err != nil {
 		return fmt.Errorf("vectorization failed: %w", err)
 	}
-	return nil
-}
-
-// ingestWorkflowsIntoKB ingests workflow definitions from workflows/ directory into the KB.
-func ingestWorkflowsIntoKB(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], onProgress func(progress int, total int, msg string)) error {
-	if kb == nil {
-		return fmt.Errorf("knowledge base is nil")
-	}
-
-	// Find workflows directory relative to current working directory
-	searchPaths := []string{
-		"workflows",
-		"../workflows",
-		"../../workflows",
-		"../../../workflows",
-	}
-
-	var workflowDir string
-	for _, path := range searchPaths {
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			workflowDir = path
-			break
-		}
-	}
-
-	if workflowDir == "" {
-		log.Debug("No workflows directory found, skipping workflow ingestion")
-		return nil
-	}
-
-	if onProgress != nil {
-		onProgress(85, 100, "Ingesting workflows...")
-	}
-
-	log.Info("Ingesting workflows into Core Playbook", "dir", workflowDir)
-	if err := agent.IngestWorkflowsFromDirectory(ctx, kb, workflowDir); err != nil {
-		return fmt.Errorf("failed to ingest workflows: %w", err)
-	}
-
-	log.Info("Workflows successfully ingested into Core Playbook", "dir", workflowDir)
 	return nil
 }
 
@@ -197,13 +156,6 @@ func runIngestImportSpace(ctx context.Context, request IngestSpaceRequest, emb a
 
 	if err := syncKnowledgeBaseEmbedderConfig(ctx, kb, emb); err != nil {
 		return fmt.Errorf("failed to update KnowledgeBase config: %w", err)
-	}
-
-	// Ingest workflows for Core Playbook
-	if strings.EqualFold(request.SpaceName, ai.DefaultKBName) || strings.EqualFold(request.SpaceName, "Core Playbook") {
-		if err := ingestWorkflowsIntoKB(ctx, kb, onProgress); err != nil {
-			log.Warn("Failed to ingest workflows into Core Playbook", "error", err)
-		}
 	}
 
 	if onProgress != nil {
@@ -407,12 +359,6 @@ func runIngestSpace(ctx context.Context, request IngestSpaceRequest, emb ai.Embe
 			return fmt.Errorf("failed to update KnowledgeBase config: %w", err)
 		}
 
-		// Ingest workflows for Core Playbook
-		if strings.EqualFold(request.SpaceName, ai.DefaultKBName) || strings.EqualFold(request.SpaceName, "Core Playbook") {
-			if err := ingestWorkflowsIntoKB(ctx, kb, onProgress); err != nil {
-				log.Warn("Failed to ingest workflows into Core Playbook", "error", err)
-			}
-		}
 	}
 
 	if onProgress != nil {

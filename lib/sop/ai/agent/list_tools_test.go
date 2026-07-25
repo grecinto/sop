@@ -27,6 +27,15 @@ func TestListTools(t *testing.T) {
 		t.Fatalf("list_tools failed: %v", err)
 	}
 
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(output), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			output = unwrapped
+		}
+	}
+
 	// Output format is a simple list, not a table
 	if strings.Contains(output, "| Command | Arguments | Description |") {
 		t.Errorf("Output should NOT contain table header (format changed to list). Got: %s", output)
@@ -49,6 +58,15 @@ func TestListToolsIncludesClearCommand(t *testing.T) {
 		t.Fatalf("list_tools failed: %v", err)
 	}
 
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(output), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			output = unwrapped
+		}
+	}
+
 	if !strings.Contains(output, "/clear") {
 		t.Fatalf("expected list_tools output to include /clear, got:\n%s", output)
 	}
@@ -65,6 +83,15 @@ func TestListToolsFormatterIsSharedAcrossServiceAndToolPaths(t *testing.T) {
 	toolOutput, err := agent.Execute(ctx, "list_tools", nil)
 	if err != nil {
 		t.Fatalf("list_tools tool execution failed: %v", err)
+	}
+
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(toolOutput), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			toolOutput = unwrapped
+		}
 	}
 
 	svc := &Service{registry: map[string]ai.Agent[map[string]any]{"copilot": agent}, session: &RunnerSession{}}
@@ -95,6 +122,15 @@ func TestListToolsFormatterUsesPlainSlashCommandLines(t *testing.T) {
 	output, err := agent.Execute(ctx, "list_tools", nil)
 	if err != nil {
 		t.Fatalf("list_tools failed: %v", err)
+	}
+
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(output), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			output = unwrapped
+		}
 	}
 
 	if strings.Contains(output, "\n- `/") {
@@ -157,12 +193,24 @@ func TestListTools_ReRegistersAutomationToolsAfterPolicyEnablement(t *testing.T)
 		t.Fatalf("list_tools failed after enabling automation: %v", err)
 	}
 
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(output), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			output = unwrapped
+		}
+	}
+
 	if !strings.Contains(output, "/execute_local_command") {
 		t.Fatalf("expected automation tools to appear in list_tools output after policy enablement, got:\n%s", output)
 	}
 }
 
 func TestListTools_StoresRoutingExposesStoresProtocolTools(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.Background()
 	payload := &ai.SessionPayload{
@@ -232,6 +280,9 @@ func TestListTools_SpacesRoutingHidesStoresProtocolTools(t *testing.T) {
 }
 
 func TestListTools_StoresReadRoutingHidesMutationTools(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.Background()
 	payload := &ai.SessionPayload{
@@ -264,6 +315,9 @@ func TestListTools_StoresReadRoutingHidesMutationTools(t *testing.T) {
 }
 
 func TestListTools_StoresUpdateRoutingExposesOnlyUpdateMutation(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.Background()
 	payload := &ai.SessionPayload{
@@ -328,6 +382,9 @@ func TestListTools_SpacesUpdateRoutingExposesSpaceMutationTools(t *testing.T) {
 }
 
 func TestListTools_LowRiskExposedToolsUseJSONSchemas(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: true, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
 	defer SetAutomationPolicy(DefaultAutomationPolicy())
 
@@ -421,6 +478,15 @@ func TestListToolsIncludesCommandShortcuts(t *testing.T) {
 	output, err := agent.Execute(ctx, "list_tools", nil)
 	if err != nil {
 		t.Fatalf("list_tools failed: %v", err)
+	}
+
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(output), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			output = unwrapped
+		}
 	}
 
 	// Check for command shortcuts section

@@ -87,6 +87,9 @@ func (m *MockToolExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinition, 
 }
 
 func TestScriptExecution_SelectTwice(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// 1. Setup Temp DB
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{
@@ -540,6 +543,9 @@ func TestScriptRecording_SelectTwice_Legacy(t *testing.T) {
 }
 
 func TestScriptRecording_SelectTwice_Native(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// 1. Setup Temp DB
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{
@@ -1244,6 +1250,9 @@ func TestPlayScript_SingleStepSuppressesTopLevelStepStart(t *testing.T) {
 }
 
 func TestToolScriptAddStepFromLast_MetaToolExclusion(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// Setup
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{
@@ -1311,6 +1320,9 @@ func TestToolScriptAddStepFromLast_MetaToolExclusion(t *testing.T) {
 }
 
 func TestToolScriptUpdateStep(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// Setup
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{

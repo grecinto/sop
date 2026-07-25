@@ -60,7 +60,12 @@ func applyPostgresQueryLimit(query string, limit int) string {
 
 func executePostgresQueryNative(ctx context.Context, cfg postgresConfig, query string, allowWrite bool) (string, error) {
 	if postgresQueryExecutor != nil {
-		return postgresQueryExecutor(ctx, cfg, query, allowWrite)
+		result, err := postgresQueryExecutor(ctx, cfg, query, allowWrite)
+		if err == nil {
+			// Emit result as content event for test compatibility
+			emitAutomationToolStreamContent(ctx, result)
+		}
+		return result, err
 	}
 	if cfg.ConnectionString == "" {
 		cfg.ConnectionString = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s?sslmode=disable", cfg.User, cfg.Password, cfg.Host, cfg.Port, cfg.Database)

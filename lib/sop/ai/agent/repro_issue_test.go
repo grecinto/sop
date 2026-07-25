@@ -222,6 +222,9 @@ func TestReproLoadFailedError_Legacy(t *testing.T) {
 }
 
 func TestReproLoadFailedError_Native(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// 1. Setup DB
 	ctx := context.Background()
 	dbPath := "test_repro_load_failed"

@@ -34,6 +34,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 | [AUTHENTICATION.md](AUTHENTICATION.md) | Unified auth system, user store pattern, token management |
 | [ENTITLEMENT_ARCHITECTURE.md](ENTITLEMENT_ARCHITECTURE.md) | Subscription enforcement and access control |
 | [PAYMENTS.md](PAYMENTS.md) | Subscription and payment architecture |
+| [SECURE_INPUT_HANDLING.md](SECURE_INPUT_HANDLING.md) | **🔒 Privacy-first secure input (passwords, tokens) - bypasses LLM, direct-to-tool routing** |
 
 ### Features
 

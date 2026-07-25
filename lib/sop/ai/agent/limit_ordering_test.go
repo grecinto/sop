@@ -16,6 +16,9 @@ import (
 )
 
 func TestProjectLimitOrdering(t *testing.T) {
+	agent.SetStoresFeatureEnabled(true)
+	defer agent.SetStoresFeatureEnabled(false)
+
 	// 1. Setup Data
 	dbPath := "/tmp/project_limit_ordering"
 	os.RemoveAll(dbPath)
@@ -110,6 +113,15 @@ func TestProjectLimitOrdering(t *testing.T) {
 	}
 
 	t.Logf("Result: %s", resStr)
+
+	// Unwrap envelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(resStr), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			resStr = unwrapped
+		}
+	}
 
 	var resList []map[string]any
 	json.Unmarshal([]byte(resStr), &resList)

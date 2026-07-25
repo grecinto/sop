@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -16,6 +17,9 @@ import (
 )
 
 func TestExecuteScriptOrdering(t *testing.T) {
+	agent.SetStoresFeatureEnabled(true)
+	defer agent.SetStoresFeatureEnabled(false)
+
 	// 1. Setup Test Database
 	dbPath := "/tmp/test_ordering_sop"
 	os.RemoveAll(dbPath)
@@ -73,6 +77,15 @@ func TestExecuteScriptOrdering(t *testing.T) {
 	res, err := adminAgent.Execute(execCtx, "execute_script", map[string]any{"script": scriptSteps})
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
+	}
+
+	// Unwrap envelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(res), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			res = unwrapped
+		}
 	}
 
 	// 3. Verify Order in JSON String

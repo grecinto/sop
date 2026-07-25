@@ -55,7 +55,26 @@ func NewCapability(orchestrator *Orchestrator) *Capability {
 func (c *Capability) ID() string   { return CapabilityID }
 func (c *Capability) Name() string { return CapabilityName }
 func (c *Capability) Entitlement() capabilities.Entitlement {
-	return capabilities.Entitlement{EnabledByDefault: false, Tier: "local"}
+	return capabilities.Entitlement{
+		EnabledByDefault: false,
+		Tier:             "local",
+		RequiredGate:     capabilities.GateWriteAccess, // Gap 1: Requires write access
+		Approvals: []capabilities.ApprovalType{
+			capabilities.ApprovalFileWrite, // File modifications need approval
+		},
+		Permissions: []capabilities.Permission{
+			{
+				Resource: "filesystem",
+				Actions:  []string{"read", "write", "create", "delete"},
+				Gate:     capabilities.GateWriteAccess,
+			},
+			{
+				Resource: "shell",
+				Actions:  []string{"read"},
+				Gate:     capabilities.GateReadAccess,
+			},
+		},
+	}
 }
 
 func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {

@@ -1053,12 +1053,19 @@ func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]an
 	sort.Strings(names)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Directory contents for %s:\n", path))
+	header := fmt.Sprintf("Directory contents for %s:\n", path)
+	sb.WriteString(header)
+
+	// Emit the header as first content chunk
+	emitAutomationToolStreamContent(ctx, header)
+
 	for _, name := range names {
-		sb.WriteString(fmt.Sprintf("- %s\n", name))
+		line := fmt.Sprintf("- %s\n", name)
+		sb.WriteString(line)
+		// Emit each file as a separate content chunk
+		emitAutomationToolStreamContent(ctx, line)
 	}
 
-	// Don't emit to content stream - let tool result handler decide
 	formatted := strings.TrimSpace(sb.String())
 	return formatted, nil
 }
@@ -2137,6 +2144,10 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 			if statusSummary != "" {
 				displayResult = statusSummary + "\n\n" + displayResult
 			}
+
+			// Emit the result as a content event
+			emitAutomationToolStreamContent(ctx, displayResult)
+
 			return displayResult, nil
 		}
 		return result, err

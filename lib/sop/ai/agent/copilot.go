@@ -22,6 +22,7 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	"github.com/sharedcode/sop/ai/agent/classification"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/ai/agent/domains/desktop"
 	"github.com/sharedcode/sop/ai/agent/domains/spaces"
@@ -434,6 +435,15 @@ type CopilotAgent struct {
 
 	// workflowManager orchestrates KB-driven workflows (Track A-D)
 	workflowManager *WorkflowManager
+
+	// Gap 1: Progressive authorization system
+	authzManager *capabilities.AuthorizationManager
+
+	// Gap 3: Lifecycle management
+	lifecycleManager *capabilities.LifecycleManager
+
+	// Gap 2: Classification engine (MRU + keyword + LLM)
+	classificationEngine classification.ClassificationEngine
 
 	// Phase 5: Production hardening components
 	retryStrategy  *RetryStrategy
@@ -2388,6 +2398,15 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 	}
 	agent.ensureCapabilityRegistry()
 
+	// Gap 1: Initialize authorization manager (default to GateSystemAccess for local mode)
+	agent.authzManager = capabilities.NewAuthorizationManager(capabilities.GateSystemAccess)
+
+	// Gap 3: Initialize lifecycle manager
+	agent.lifecycleManager = capabilities.NewLifecycleManager(agent.capabilityRegistry)
+
+	// Gap 2: Initialize classification engine with chained classifiers
+	agent.initializeClassificationEngine()
+
 	if cfg.ProductionMode {
 		agent.EnablePhase5(nil, nil, nil, nil)
 	}
@@ -2421,6 +2440,178 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 // SetService sets the reference to the main service (for cache invalidation).
 func (a *CopilotAgent) SetService(s *Service) {
 	a.service = s
+}
+
+// initializeClassificationEngine sets up the chained classification engine (Gap 2)
+func (a *CopilotAgent) initializeClassificationEngine() {
+	// MRU classifier (Priority 1 - highest)
+	// Simplified: Returns empty for now (full MRU integration comes later)
+	mruClassifier := classification.NewMRUClassifier(func(ctx context.Context) (string, string, bool) {
+		// TODO: Integrate with actual MRU tracking in agent Memory
+		return "", "", false
+	})
+
+	// Keyword classifier (Priority 2)
+	keywordClassifier := classification.NewKeywordClassifier()
+
+	// LLM classifier (Priority 3 - lowest, fallback)
+	// For now, we use a no-op LLM classifier (LLM integration comes later)
+	llmClassifier := classification.NewLLMClassifier(nil)
+
+	// Create chained classifier
+	a.classificationEngine = classification.NewChainedClassifier(
+		mruClassifier,
+		keywordClassifier,
+		llmClassifier,
+	)
+
+	// Register approval handlers (Gap 1)
+	a.authzManager.RegisterApprovalHandler(capabilities.ApprovalFileWrite, a.handleFileWriteApproval)
+	a.authzManager.RegisterApprovalHandler(capabilities.ApprovalShellExec, a.handleShellExecApproval)
+	a.authzManager.RegisterApprovalHandler(capabilities.ApprovalDBMutation, a.handleDBMutationApproval)
+	a.authzManager.RegisterApprovalHandler(capabilities.ApprovalSecureInput, a.handleSecureInputApproval)
+}
+
+// handleFileWriteApproval prompts user for file write approval (Gap 1)
+// Future: Integrate with chat UI to prompt user with:
+//
+//	"⚠️ Approve file write to: {resource}?"
+//	[Approve] [Deny]
+func (a *CopilotAgent) handleFileWriteApproval(ctx context.Context, opCtx capabilities.OperationContext) (bool, error) {
+	// For now, auto-approve in local mode (future: prompt user via UI)
+	log.Info("File write approval requested", "type", opCtx.OperationType, "resource", opCtx.Resource)
+	return true, nil
+}
+
+// handleShellExecApproval prompts user for shell execution approval (Gap 1)
+// Future: Integrate with chat UI to prompt user with:
+//
+//	"⚠️ Approve shell command: {command}?"
+//	[Approve] [Deny]
+//
+// If opCtx.SecureInputRequired=true, show privacy notice:
+//
+//	"🔒 This command requires secure input (password/token)"
+//	"✓ Input will be sent DIRECTLY to shell (not to LLM)"
+//	"✓ Your sensitive data will NOT be visible in chat history"
+//	Enter value: [secure input field]
+func (a *CopilotAgent) handleShellExecApproval(ctx context.Context, opCtx capabilities.OperationContext) (bool, error) {
+	// For now, auto-approve in local mode (future: prompt user via UI)
+	if opCtx.SecureInputRequired {
+		log.Info("🔒 Secure input approval requested",
+			"type", opCtx.OperationType,
+			"prompt", opCtx.SecureInputPrompt,
+			"privacy", "input_bypasses_llm")
+	} else {
+		log.Info("Shell execution approval requested", "type", opCtx.OperationType, "command", opCtx.Resource)
+	}
+	return true, nil
+}
+
+// handleDBMutationApproval prompts user for database mutation approval (Gap 1)
+// Future: Integrate with chat UI to prompt user with:
+//
+//	"⚠️ Approve database mutation: {operation}?"
+//	[Approve] [Deny]
+func (a *CopilotAgent) handleDBMutationApproval(ctx context.Context, opCtx capabilities.OperationContext) (bool, error) {
+	// For now, auto-approve in local mode (future: prompt user via UI)
+	log.Info("Database mutation approval requested", "type", opCtx.OperationType, "resource", opCtx.Resource)
+	return true, nil
+}
+
+// handleSecureInputApproval prompts user for secure data entry with privacy guarantee (Gap 1)
+// This handler is invoked when a capability needs sensitive input (passwords, API keys, tokens)
+//
+// Privacy-First Data Flow:
+//  1. User is prompted via chat UI with CLEAR privacy notice
+//  2. User enters sensitive data in chat editbox
+//  3. Frontend sends data DIRECTLY to tool via special secure channel
+//  4. LLM NEVER sees the sensitive data (not in prompt, not in history)
+//  5. Data is passed to shell/tool execution only
+//
+// Example UI Flow:
+//
+//	Agent: "🔒 Secure Input Required"
+//	Agent: "Command needs: database password"
+//	Agent: "✓ Your input will be sent DIRECTLY to the command"
+//	Agent: "✓ The AI model will NOT see your password"
+//	Agent: "✓ Not stored in chat history"
+//	User: [types password in editbox with masked display]
+//	System: [routes to shell, bypasses LLM context]
+func (a *CopilotAgent) handleSecureInputApproval(ctx context.Context, opCtx capabilities.OperationContext) (bool, error) {
+	// For now, auto-approve in local mode (future: prompt user via secure UI flow)
+	log.Info("🔒 Secure input approval requested",
+		"type", opCtx.OperationType,
+		"prompt", opCtx.SecureInputPrompt,
+		"privacy_guarantee", "input_bypasses_llm_context",
+		"flow", "user_prompt_via_chat_ui")
+	return true, nil
+}
+
+// tryCapabilityParticipation wraps capability participation with authorization and metrics (Gaps 1 & 4)
+func (a *CopilotAgent) tryCapabilityParticipation(
+	ctx context.Context,
+	query string,
+	state capabilities.RoutingState,
+) (capabilities.ParticipationResult, bool, error) {
+	if a.capabilityRegistry == nil {
+		return capabilities.ParticipationResult{}, false, nil
+	}
+
+	startTime := time.Now()
+
+	// Find the capability that would handle this
+	cap, found := a.capabilityRegistry.Resolve(query, state)
+	if !found {
+		return capabilities.ParticipationResult{}, false, nil
+	}
+
+	capID := cap.ID()
+
+	// Gap 1: Check authorization
+	if a.authzManager != nil {
+		opCtx := capabilities.OperationContext{
+			OperationType: "participate",
+			Resource:      query,
+			Action:        "execute",
+			Metadata: map[string]any{
+				"capability": capID,
+				"user":       "local",
+			},
+		}
+
+		authResult, authErr := a.authzManager.Authorize(ctx, cap, opCtx)
+		if authErr != nil {
+			a.capabilityRegistry.RecordError(capID, authErr)
+			log.Warn("Capability authorization error", "capability", capID, "error", authErr)
+			return capabilities.ParticipationResult{}, false, authErr
+		}
+
+		if !authResult.Allowed {
+			// Gap 4: Record rejection as error
+			a.capabilityRegistry.RecordError(capID, fmt.Errorf("authorization denied: %s", authResult.Reason))
+			log.Warn("Capability authorization denied", "capability", capID, "reason", authResult.Reason)
+			return capabilities.ParticipationResult{}, false, fmt.Errorf("authorization denied: %s", authResult.Reason)
+		}
+
+		// Gap 4: Record approval if one was needed
+		if authResult.ApprovalGiven {
+			a.capabilityRegistry.RecordApproval(capID, true)
+		}
+	}
+
+	// Execute the capability via registry
+	result, handled, err := a.capabilityRegistry.TryParticipate(ctx, query, state)
+
+	// Gap 4: Record metrics
+	durationMs := float64(time.Since(startTime).Milliseconds())
+	a.capabilityRegistry.RecordExecution(capID, durationMs)
+
+	if err != nil {
+		a.capabilityRegistry.RecordError(capID, err)
+	}
+
+	return result, handled, err
 }
 
 // shouldObfuscate determines if obfuscation should be applied for a given database.
@@ -2480,11 +2671,27 @@ func (a *CopilotAgent) Open(ctx context.Context) error {
 	// Register tools now that we have a context (and potentially transactions)
 	a.registerTools(ctx)
 
+	// Gap 3: Enable all registered capabilities
+	if a.lifecycleManager != nil && a.capabilityRegistry != nil {
+		for _, cap := range a.capabilityRegistry.ListAll() {
+			if err := a.lifecycleManager.EnableCapability(ctx, cap.ID()); err != nil {
+				log.Warn("Failed to enable capability", "capability", cap.ID(), "error", err)
+			}
+		}
+	}
+
 	return nil
 }
 
 // Close cleans up the agent's resources.
 func (a *CopilotAgent) Close(ctx context.Context) error {
+	// Gap 3: Shutdown all capabilities gracefully
+	if a.lifecycleManager != nil {
+		if err := a.lifecycleManager.ShutdownAll(ctx); err != nil {
+			log.Warn("Error during capability shutdown", "error", err)
+		}
+	}
+
 	// Transaction lifecycle is managed by Service.Close(), not here.
 	// CopilotAgent has no agent-specific cleanup needed.
 	return nil
@@ -2874,11 +3081,10 @@ func (a *CopilotAgent) askWithQueue(ctx context.Context, query string, cfg *ai.C
 	// 5. Episode Metadata Tracking (MRU Cache)
 	a.trackEpisodeMetadata(ctx, intent)
 
-	if a.capabilityRegistry != nil {
-		if result, handled, err := a.capabilityRegistry.TryParticipate(ctx, query, capabilities.RoutingState{Domain: taskContext.Domain, Gate: taskContext.RoutingGate, CapabilityHint: taskContext.CapabilityHint}); err == nil && handled {
-			if result.Summary != "" {
-				log.Info("Ask flow consulted capability participation hook", "summary", result.Summary)
-			}
+	// Gap 1 & 4: Try capability participation with authorization and metrics
+	if result, handled, err := a.tryCapabilityParticipation(ctx, query, capabilities.RoutingState{Domain: taskContext.Domain, Gate: taskContext.RoutingGate, CapabilityHint: taskContext.CapabilityHint}); err == nil && handled {
+		if result.Summary != "" {
+			log.Info("Ask flow consulted capability participation hook", "summary", result.Summary)
 		}
 	}
 
@@ -3114,8 +3320,8 @@ func (a *CopilotAgent) enqueueMultiTurnTasks(ctx context.Context, query string, 
 		queueAdapter := &workQueueAdapter{queue: queue}
 		ctx = context.WithValue(ctx, "work_queue", queueAdapter)
 
-		// Delegate to capability to populate queue
-		if result, handled, err := a.capabilityRegistry.TryParticipate(ctx, query, capabilities.RoutingState{
+		// Gap 1 & 4: Delegate to capability with authorization and metrics
+		if result, handled, err := a.tryCapabilityParticipation(ctx, query, capabilities.RoutingState{
 			Domain:         taskContext.Domain,
 			Gate:           taskContext.RoutingGate,
 			CapabilityHint: taskContext.CapabilityHint,

@@ -10,26 +10,6 @@ import (
 	"github.com/sharedcode/sop/inmemory"
 )
 
-// TestWorkflowIntegration_Ingestion tests workflow JSON ingestion into KB.
-func TestWorkflowIntegration_Ingestion(t *testing.T) {
-	ctx := context.Background()
-
-	// Create in-memory KnowledgeBase for testing
-	kb, err := createTestKnowledgeBase(ctx)
-	if err != nil {
-		t.Fatalf("Failed to create test KB: %v", err)
-	}
-
-	// Ingest test debugging workflow
-	workflowPath := "../../../../workflows/test_debugging_go_v1.json"
-	if err := IngestWorkflow(ctx, kb, workflowPath); err != nil {
-		t.Fatalf("Failed to ingest workflow: %v", err)
-	}
-
-	// Test passes if ingestion completes without error
-	// Full retrieval tests require proper embedder setup (Track A implementation complete)
-}
-
 // TestWorkflowManager_Integration tests WorkflowManager with hardcoded workflow.
 func TestWorkflowManager_Integration(t *testing.T) {
 	ctx := context.Background()

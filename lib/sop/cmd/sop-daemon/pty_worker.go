@@ -20,9 +20,10 @@ import (
 // Communication happens via stdin/stdout using JSON protocol
 
 type workerRequest struct {
-	Command        string `json:"command"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	Streaming      bool   `json:"streaming,omitempty"` // Enable NDJSON streaming
+	Command             string `json:"command"`
+	TimeoutSeconds      int    `json:"timeout_seconds,omitempty"`
+	TimeoutMilliseconds int    `json:"timeout_ms,omitempty"`
+	Streaming           bool   `json:"streaming,omitempty"` // Enable NDJSON streaming
 }
 
 type workerResponse struct {
@@ -162,8 +163,11 @@ func executeCommandWorker(ptmx *os.File, reader *bufio.Reader, req workerRequest
 		return workerResponse{Output: "", ExitCode: 0}
 	}
 
-	timeout := time.Duration(req.TimeoutSeconds) * time.Second
-	if timeout == 0 {
+	timeout := time.Duration(req.TimeoutMilliseconds) * time.Millisecond
+	if timeout <= 0 {
+		timeout = time.Duration(req.TimeoutSeconds) * time.Second
+	}
+	if timeout <= 0 {
 		timeout = 600 * time.Second
 	}
 
@@ -247,8 +251,11 @@ func executeCommandWorkerStreaming(ptmx *os.File, reader *bufio.Reader, req work
 		return
 	}
 
-	timeout := time.Duration(req.TimeoutSeconds) * time.Second
-	if timeout == 0 {
+	timeout := time.Duration(req.TimeoutMilliseconds) * time.Millisecond
+	if timeout <= 0 {
+		timeout = time.Duration(req.TimeoutSeconds) * time.Second
+	}
+	if timeout <= 0 {
 		timeout = 600 * time.Second
 	}
 

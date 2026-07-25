@@ -228,6 +228,9 @@ func TestRepro_Leakage_StateCleaning_Legacy(t *testing.T) {
 }
 
 func TestRepro_Leakage_StateCleaning_Native(t *testing.T) {
+	agent.SetStoresFeatureEnabled(true)
+	defer agent.SetStoresFeatureEnabled(false)
+
 	// 1. Setup Environment
 	tempDir := t.TempDir()
 
@@ -410,6 +413,9 @@ func TestAliasProjection_JoinRight_Legacy(t *testing.T) {
 }
 
 func TestAliasProjection_JoinRight_Native(t *testing.T) {
+	agent.SetStoresFeatureEnabled(true)
+	defer agent.SetStoresFeatureEnabled(false)
+
 	// Setup
 	tempDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{

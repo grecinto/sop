@@ -17,9 +17,19 @@ type RoutingState struct {
 
 // Entitlement describes whether a capability is available under the current plan.
 type Entitlement struct {
+	// Basic flags
 	Premium          bool
 	EnabledByDefault bool
 	Tier             string
+
+	// Progressive authorization gates (Gap 1: Gate 0-4)
+	RequiredGate AuthorizationGate
+
+	// Approval requirements (Gap 1)
+	Approvals []ApprovalType
+
+	// Fine-grained permissions (Gap 1)
+	Permissions []Permission
 }
 
 // ToolDefinition is a lightweight tool contract that capabilities can contribute.
@@ -190,11 +200,13 @@ type Registry struct {
 	mu             sync.RWMutex
 	capabilities   []Capability
 	prefixHandlers map[string]PrefixHandler // Maps prefix to handler
+	metrics        *MetricsCollector        // Gap 4: Metrics and telemetry
 }
 
 // NewRegistry creates a registry and optionally registers initial capabilities.
 func NewRegistry(caps ...Capability) *Registry {
 	reg := &Registry{
+		metrics:        NewMetricsCollector(), // Initialize metrics collector
 		prefixHandlers: make(map[string]PrefixHandler),
 	}
 	for _, cap := range caps {
@@ -275,6 +287,8 @@ func (r *Registry) Resolve(query string, state RoutingState) (Capability, bool) 
 	defer r.mu.RUnlock()
 	for _, cap := range r.capabilities {
 		if cap.CanHandle(query, state) {
+			// Record selection in metrics
+			r.metrics.RecordSelection(cap.ID())
 			return cap, true
 		}
 	}
@@ -448,6 +462,46 @@ func (r *Registry) TryPrefixRouting(ctx context.Context, query string) (bool, st
 		log.Debug("Capability prefix handler returned error", "prefix", match.prefix, "capability", match.handler.ID(), "error", err)
 	}
 	return true, result, err
+}
+
+// GetMetrics returns metrics for a specific capability (Gap 4: Metrics and Telemetry)
+func (r *Registry) GetMetrics(capabilityID string) CapabilityMetrics {
+	if r == nil || r.metrics == nil {
+		return CapabilityMetrics{}
+	}
+	return r.metrics.GetMetrics(capabilityID)
+}
+
+// GetAllMetrics returns metrics for all capabilities (Gap 4: Metrics and Telemetry)
+func (r *Registry) GetAllMetrics() map[string]CapabilityMetrics {
+	if r == nil || r.metrics == nil {
+		return make(map[string]CapabilityMetrics)
+	}
+	return r.metrics.GetAllMetrics()
+}
+
+// RecordExecution records a capability execution with duration (Gap 4: Metrics and Telemetry)
+func (r *Registry) RecordExecution(capabilityID string, durationMs float64) {
+	if r == nil || r.metrics == nil {
+		return
+	}
+	r.metrics.RecordExecution(capabilityID, durationMs)
+}
+
+// RecordError records a capability error (Gap 4: Metrics and Telemetry)
+func (r *Registry) RecordError(capabilityID string, err error) {
+	if r == nil || r.metrics == nil {
+		return
+	}
+	r.metrics.RecordError(capabilityID, err)
+}
+
+// RecordApproval records an approval event (Gap 4: Metrics and Telemetry)
+func (r *Registry) RecordApproval(capabilityID string, approved bool) {
+	if r == nil || r.metrics == nil {
+		return
+	}
+	r.metrics.RecordApproval(capabilityID, approved)
 }
 
 func isSeparator(ch byte) bool {

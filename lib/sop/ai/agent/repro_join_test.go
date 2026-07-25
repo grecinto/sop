@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -39,6 +40,9 @@ func (m *MockGenerator) Generate(ctx context.Context, prompt string, options ai.
 }
 
 func TestJoinRightReproduction(t *testing.T) {
+	agent.SetStoresFeatureEnabled(true)
+	defer agent.SetStoresFeatureEnabled(false)
+
 	// 1. Setup Test Database
 	dbPath := "/tmp/repro_join_right"
 	os.RemoveAll(dbPath)
@@ -184,6 +188,15 @@ func TestJoinRightReproduction(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
+	}
+
+	// Unwrap envelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(res), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			res = unwrapped
+		}
 	}
 
 	fmt.Printf("Result: %s\n", res)

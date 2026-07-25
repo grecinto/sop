@@ -11,6 +11,9 @@ import (
 )
 
 func TestServiceListTools(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// Setup
 	registry := make(map[string]ai.Agent[map[string]any])
 
@@ -189,6 +192,9 @@ func TestServiceListToolsDoesNotInterceptListDirectory(t *testing.T) {
 }
 
 func TestServiceListToolsWithoutSessionPayload(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	registry := make(map[string]ai.Agent[map[string]any])
 
 	da := NewCopilotAgent(Config{}, nil, nil)

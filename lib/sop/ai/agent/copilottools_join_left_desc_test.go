@@ -12,6 +12,9 @@ import (
 )
 
 func TestToolJoin_OrderBy_LeftStoreDirection(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// Setup
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{
@@ -61,6 +64,15 @@ func TestToolJoin_OrderBy_LeftStoreDirection(t *testing.T) {
 	res, err := agent.Execute(ctx, "join", args)
 	if err != nil {
 		t.Fatalf("Join failed: %v", err)
+	}
+
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(res), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			res = unwrapped
+		}
 	}
 
 	var items []map[string]any

@@ -379,10 +379,10 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 	// Get worker manager
 	workerMgr := getGlobalWorkerManager()
 
-	// Convert timeout to seconds
-	timeoutSeconds := int(timeout.Seconds())
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 600 // Default 10 minutes
+	// Preserve sub-second precision so short timeouts still behave as timeouts.
+	timeoutMilliseconds := int(timeout / time.Millisecond)
+	if timeoutMilliseconds <= 0 {
+		timeoutMilliseconds = 1
 	}
 
 	// Ensure session is tracked in the manager
@@ -433,7 +433,7 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 	}
 
 	// Send command to worker (spawns if needed)
-	resp, err := workerMgr.sendCommandWithStreaming(context.Background(), sessionID, command, timeoutSeconds, useStreaming, chunkHandler)
+	resp, err := workerMgr.sendCommandWithStreaming(context.Background(), sessionID, command, timeoutMilliseconds, useStreaming, chunkHandler)
 	if err != nil {
 		return "", false, fmt.Errorf("worker command failed: %w", err)
 	}

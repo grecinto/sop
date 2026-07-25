@@ -16,6 +16,9 @@ import (
 )
 
 func TestReproJoinCollision(t *testing.T) {
+	agent.SetStoresFeatureEnabled(true)
+	defer agent.SetStoresFeatureEnabled(false)
+
 	// 1. Setup Data
 	dbPath := "/tmp/repro_collision"
 	os.RemoveAll(dbPath)
@@ -108,6 +111,15 @@ func TestReproJoinCollision(t *testing.T) {
 	}
 
 	t.Logf("Result: %s", resStr)
+
+	// Unwrap envelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(resStr), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			resStr = unwrapped
+		}
+	}
 
 	// 5. Verify
 	var results []map[string]any

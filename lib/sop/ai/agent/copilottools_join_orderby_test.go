@@ -12,6 +12,9 @@ import (
 )
 
 func TestToolJoin_OrderBy(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
 	// Setup
 	tmpDir := t.TempDir()
 	dbOpts := sop.DatabaseOptions{
@@ -84,6 +87,15 @@ func TestToolJoin_OrderBy(t *testing.T) {
 		t.Fatalf("Join failed: %v", err)
 	}
 
+	// Unwrap ToolResultEnvelope if present
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(res), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			res = unwrapped
+		}
+	}
+
 	var items []map[string]any
 	json.Unmarshal([]byte(res), &items)
 	if len(items) != 3 {
@@ -105,6 +117,15 @@ func TestToolJoin_OrderBy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Join failed: %v", err)
 	}
+
+	// Unwrap ToolResultEnvelope if present
+	if err := json.Unmarshal([]byte(res), &envelope); err == nil && len(envelope.ToolResult) > 0 {
+		var unwrapped string
+		if err := json.Unmarshal(envelope.ToolResult, &unwrapped); err == nil {
+			res = unwrapped
+		}
+	}
+
 	json.Unmarshal([]byte(res), &items)
 	if len(items) != 3 {
 		t.Fatalf("Expected 3 items, got %d", len(items))

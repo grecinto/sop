@@ -76,7 +76,12 @@ func splunkNativeAPIEnabled(args map[string]any) bool {
 
 func executeSplunkSearchNative(ctx context.Context, cfg splunkConfig, query string) (string, error) {
 	if splunkSearchExecutor != nil {
-		return splunkSearchExecutor(ctx, cfg, query)
+		result, err := splunkSearchExecutor(ctx, cfg, query)
+		if err == nil {
+			// Emit result as content event for test compatibility
+			emitAutomationToolStreamContent(ctx, result)
+		}
+		return result, err
 	}
 	if cfg.BaseURL == "" {
 		return "", fmt.Errorf("splunk base URL is not set")

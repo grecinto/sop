@@ -35,7 +35,26 @@ func NewCapability(orchestrator ...*codingworkflow.Orchestrator) *Capability {
 func (c *Capability) ID() string   { return CapabilityID }
 func (c *Capability) Name() string { return CapabilityName }
 func (c *Capability) Entitlement() capabilities.Entitlement {
-	return capabilities.Entitlement{EnabledByDefault: true, Tier: "base"}
+	return capabilities.Entitlement{
+		EnabledByDefault: true,
+		Tier:             "base",
+		RequiredGate:     capabilities.GateWriteAccess, // Gap 1: DB mutations need write
+		Approvals: []capabilities.ApprovalType{
+			capabilities.ApprovalDBMutation, // DB write operations need approval
+		},
+		Permissions: []capabilities.Permission{
+			{
+				Resource: "database",
+				Actions:  []string{"read", "query"},
+				Gate:     capabilities.GateReadAccess,
+			},
+			{
+				Resource: "database",
+				Actions:  []string{"write", "create", "update", "delete"},
+				Gate:     capabilities.GateWriteAccess,
+			},
+		},
+	}
 }
 func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
 	if state.Domain == "" {
