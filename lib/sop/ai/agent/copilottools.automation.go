@@ -148,11 +148,14 @@ var localKillBackgroundJob func(jobID string) error
 var localDesktopAutomationEnabled atomic.Bool
 var automationPolicy atomic.Value
 var storesFeatureEnabled atomic.Bool
+var kbWorkflowsEnabled atomic.Bool
 
 func init() {
 	automationPolicy.Store(DefaultAutomationPolicy())
 	// Stores disabled by default for v1, can be enabled for v1.1+
 	storesFeatureEnabled.Store(false)
+	// KB workflows disabled by default for v1 - needs infrastructure development
+	kbWorkflowsEnabled.Store(false)
 }
 
 func SetLocalCommandExecutor(fn func(ctx context.Context, req LocalCommandRequest) (string, error)) {
@@ -190,6 +193,16 @@ func SetStoresFeatureEnabled(enabled bool) {
 // StoresFeatureEnabled returns true if Stores capability should be active.
 func StoresFeatureEnabled() bool {
 	return storesFeatureEnabled.Load()
+}
+
+// SetKBWorkflowsEnabled enables or disables KB-driven workflows
+func SetKBWorkflowsEnabled(enabled bool) {
+	kbWorkflowsEnabled.Store(enabled)
+}
+
+// KBWorkflowsEnabled returns whether KB-driven workflows are enabled
+func KBWorkflowsEnabled() bool {
+	return kbWorkflowsEnabled.Load()
 }
 
 // formatCommandOutputForDisplay formats command output for better readability.

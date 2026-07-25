@@ -101,8 +101,8 @@ func (tc *TaskClassifier) extractKeywords(desc string) []string {
 		"fix": true, "debug": true, "solve": true, "repair": true,
 		"test": true, "verify": true, "validate": true, "check": true,
 		"refactor": true, "cleanup": true, "improve": true, "optimize": true,
-		"document": true, "comment": true, "explain": true,
-		"design": true, "architecture": true, "structure": true,
+		"document": true, "comment": true, "explain": true, "readme": true, "spec": true,
+		"design": true, "architecture": true, "structure": true, "plan": true, "propose": true, "requirement": true,
 	}
 
 	// Domain keywords
@@ -138,21 +138,29 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 		TaskTypeArchitecture:   0.0,
 	}
 
-	// Score based on keywords
+	// Score based on keywords with priority for intent signals
 	for _, kw := range keywords {
 		switch kw {
-		case "implement", "add", "create", "build", "write":
+		case "implement", "add", "create", "build":
 			scores[TaskTypeImplementation] += 0.3
+		case "write":
+			// "write" can be documentation or implementation - check context
+			if strings.Contains(desc, "spec") || strings.Contains(desc, "doc") || strings.Contains(desc, "readme") {
+				scores[TaskTypeDocumentation] += 0.4
+			} else {
+				scores[TaskTypeImplementation] += 0.3
+			}
 		case "fix", "debug", "solve", "repair":
 			scores[TaskTypeDebugging] += 0.4
 		case "test", "verify", "validate", "check":
 			scores[TaskTypeTesting] += 0.4
 		case "refactor", "cleanup", "improve", "optimize":
 			scores[TaskTypeRefactoring] += 0.3
-		case "document", "comment", "explain":
-			scores[TaskTypeDocumentation] += 0.3
-		case "design", "architecture", "structure":
-			scores[TaskTypeArchitecture] += 0.3
+		case "document", "comment", "explain", "readme", "spec":
+			scores[TaskTypeDocumentation] += 0.4
+		case "design", "architecture", "structure", "plan", "propose", "requirement":
+			// Higher score for architecture intent signals
+			scores[TaskTypeArchitecture] += 0.5
 		}
 	}
 
@@ -173,6 +181,10 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 	}
 	if strings.Contains(desc, "update") || strings.Contains(desc, "modify") {
 		scores[TaskTypeRefactoring] += 0.1
+	}
+	// Boost testing for "add test" pattern
+	if strings.Contains(desc, "add") && strings.Contains(desc, "test") {
+		scores[TaskTypeTesting] += 0.3
 	}
 
 	// Find highest score

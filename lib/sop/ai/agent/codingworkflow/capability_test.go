@@ -1,6 +1,7 @@
 package codingworkflow
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,8 +135,9 @@ func TestOrchestrateTestFixWorkflow(t *testing.T) {
 		Orchestrator: &Orchestrator{}, // Minimal orchestrator, we're only testing queue injection
 	}
 
-	// Call orchestrateTestFixWorkflow
-	handled, err := cap.orchestrateTestFixWorkflow(mockQueue, "fix failing TestHandleVectorization")
+	// Call orchestrateTestFixWorkflow with context
+	ctx := context.Background()
+	handled, err := cap.orchestrateTestFixWorkflow(ctx, mockQueue, "fix failing TestHandleVectorization")
 	if err != nil {
 		t.Fatalf("orchestrateTestFixWorkflow returned error: %v", err)
 	}

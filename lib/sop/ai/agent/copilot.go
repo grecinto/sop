@@ -2393,7 +2393,8 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 	}
 
 	// Initialize WorkflowManager for KB-driven workflows (Track A-D)
-	if systemDB != nil {
+	// Only initialize if feature flag is enabled
+	if systemDB != nil && KBWorkflowsEnabled() {
 		agent.workflowManager = NewWorkflowManager(nil) // KB initialized lazily on first use
 	}
 
@@ -2936,6 +2937,11 @@ func (a *CopilotAgent) applyAskConfig(ctx context.Context, cfg *ai.ConfigMap) co
 // tryKBWorkflowExecution attempts to match the query against KB workflows and execute if matched.
 // Returns (result, handled, error) where handled=true means a workflow was executed.
 func (a *CopilotAgent) tryKBWorkflowExecution(ctx context.Context, query string, cfg *ai.ConfigMap) (string, bool, error) {
+	// Check if KB workflows feature is enabled
+	if !KBWorkflowsEnabled() {
+		return "", false, nil
+	}
+
 	if a.workflowManager == nil || a.systemDB == nil {
 		return "", false, nil // No workflow support
 	}
@@ -3045,6 +3051,11 @@ func (a *CopilotAgent) tryKBWorkflowExecution(ctx context.Context, query string,
 
 // tryDetectWorkflow checks if a workflow exists for the query (no execution)
 func (a *CopilotAgent) tryDetectWorkflow(ctx context.Context, query string) (*WorkflowDefinition, error) {
+	// Check if KB workflows feature is enabled
+	if !KBWorkflowsEnabled() {
+		return nil, nil
+	}
+
 	if a.workflowManager == nil || a.systemDB == nil {
 		return nil, nil
 	}

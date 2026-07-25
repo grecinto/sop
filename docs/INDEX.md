@@ -13,6 +13,18 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
 
 ---
 
+## 📋 Product & Vision
+
+| Document | Description |
+|----------|-------------|
+| [V1_DIRECTION_AND_POST_V1_VISION.md](V1_DIRECTION_AND_POST_V1_VISION.md) | **⭐ V1 strategy and post-v1 roadmap** |
+| [CAPABILITY_ARCHITECTURE_ASSESSMENT.md](CAPABILITY_ARCHITECTURE_ASSESSMENT.md) | **🏗️ Capability system architecture and extensibility guide** |
+| [CAPABILITY_PLUGIN_ARCHITECTURE_ASSESSMENT.md](CAPABILITY_PLUGIN_ARCHITECTURE_ASSESSMENT.md) | **🔌 Classification → Routing → Authorization → Orchestration pipeline analysis** |
+| [CAPABILITY_GAPS_IMPLEMENTATION_PLAN.md](CAPABILITY_GAPS_IMPLEMENTATION_PLAN.md) | **🔧 Implementation plan for authorization gates, classification engine, lifecycle hooks, and metrics** |
+| [UI_FEATURES_INTEGRATION_ASSESSMENT.md](UI_FEATURES_INTEGRATION_ASSESSMENT.md) | **🎨 Code snippet display, syntax highlighting, and diff view integration with coding workflow** |
+| [WORKFLOWS.md](WORKFLOWS.md) | Workflow system architecture and vision |
+| [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Coding workflow implementation details |
+
 ## 🏗️ Core Architecture
 
 ### Authentication & Security

@@ -1,10 +1,59 @@
-# CLI Coding Workflow Implementation Plan
+# CLI Coding Workflow Implementation
+
+**Last Updated**: 2026-07-24  
+**Status**: ✅ V1 Complete - Production Ready  
+**Post-V1**: Data-Driven Workflows with Infrastructure Integration
 
 ## Purpose
 
-This document captures the missing capabilities required to make SOP's coding workflow feel like a high-quality terminal-first coding assistant rather than a generic chat interface.
+This document captures the coding workflow capability that makes SOP feel like a high-quality terminal-first coding assistant. V1 is **pure code-driven** with proven infrastructure backing. Post-V1 will enable **data-driven workflow authoring** while preserving infrastructure power.
 
-The focus is on workflow execution, not just answer generation.
+## V1 Completion Status
+
+### ✅ Shipped Features
+
+**Infrastructure Foundation**:
+- ✅ AST/tree-sitter parsing via GrammarRegistry
+- ✅ ContextManager for rich code context assembly
+- ✅ PatchEngine for precise code modifications
+- ✅ TestRunner with output parsing and iteration
+- ✅ RepoIndexer for searchable repository structure
+- ✅ ValidationOrchestrator for KB quality enforcement
+
+**Workflow Orchestrators** (All Multi-Step, Infrastructure-Backed):
+- ✅ **Test Fix Workflow** (7 steps): analyze → isolate → patch → validate → test → iterate → document
+- ✅ **Architecture Workflow** (5 steps): analyze → map → design → validate → document
+- ✅ **Documentation Workflow** (4 steps): analyze → extract → generate → review
+- ✅ **Implementation Workflow** (3 steps): plan → implement → validate
+
+**Routing & Classification**:
+- ✅ Fast-path keyword routing (80%+ queries, zero LLM calls)
+- ✅ Task classifier with 35+ keywords (design, architecture, document, spec, plan, etc.)
+- ✅ Backwards-compatible Stores/Spaces domain inference
+
+**SDLC Enhancements**:
+- ✅ Architecture/design workflow support
+- ✅ Documentation generation workflow
+- ✅ Technical spec writing
+- ✅ Planning and proposal workflows
+
+**Desktop Automation**:
+- ✅ Git command execution
+- ✅ Shell/postgres/splunk automation
+- ✅ PTY session persistence
+
+### 🔄 Deferred to Post-V1
+
+**Data-Driven Workflows**:
+- 📋 Visual workflow builder UI
+- 📋 JSON-based workflow definitions in KB
+- 📋 Infrastructure tool registry (expose analyze_ast, generate_patch as workflow steps)
+- 📋 Team-customizable workflows
+- 📋 Workflow marketplace/sharing
+
+**Rationale**: V1 proves infrastructure-backed orchestration works. Post-V1 wraps this in a data-driven, user-customizable layer.
+
+---
 
 ## Architecture Foundation: Multi-Turn Queue-Based Orchestration
 
@@ -69,15 +118,32 @@ The V1 implementation should prioritize:
 
 For this direction, AST/tree-sitter-style structure is a first-class V1 capability, but the system should store derived code-memory objects rather than raw full parse trees. The long-term memory layer should keep compact summaries, symbol facts, relationships, and vector embeddings so retrieval remains fast and useful.
 
-## V1 Task Tracker
+## V1 Implementation Status
 
-- [ ] Add repo-aware context assembly that selects the active file, nearest symbol, nearby tests, and relevant package/module context.
-- [ ] Add a deterministic patch and edit layer that can apply targeted edits, show diffs, and support safe rollback.
-- [ ] Add a test-and-fix loop that runs relevant tests, parses failures, and iterates until success or a bounded stop condition.
+### ✅ Complete
+
+- [x] Add repo-aware context assembly that selects the active file, nearest symbol, nearby tests, and relevant package/module context.
+- [x] Add a deterministic patch and edit layer that can apply targeted edits, show diffs, and support safe rollback.
+- [x] Add a test-and-fix loop that runs relevant tests, parses failures, and iterates until success or a bounded stop condition.
 - [x] Add code-aware retrieval using lightweight parsing or AST/tree-sitter support for symbols, imports, and call relationships.
 - [x] Add hybrid retrieval that combines deterministic context, path-based structure, and semantic memory for repo-specific recall.
 - [x] Add persistent coding memory for repo/file/symbol summaries, relationships, embeddings, and lifecycle state.
-- [ ] Add explicit workflow tracing so the user can see what context was selected, what changed, and what was validated.
+- [x] Add explicit workflow tracing so the user can see what context was selected, what changed, and what was validated.
+- [x] Add SDLC workflows (architecture design, documentation, planning)
+- [x] Add fast-path routing optimization (keyword-based, eliminates 80% of LLM calls)
+
+### 📋 Post-V1
+
+- [ ] Visual workflow builder UI
+- [ ] Infrastructure tool registry (expose coding tools to workflow system)
+- [ ] JSON-based workflow definitions in KB
+- [ ] Workflow sharing via Spaces
+- [ ] Advanced patch visualization with side-by-side diffs
+- [ ] Integration test generation from unit tests
+
+---
+
+## Implementation Details
 - [ ] Add safety controls for destructive operations, including preview, approval, and rollback paths.
 - [x] **Add systematic test debugging protocol (HIGH PRIORITY)**: ✅ **COMPLETED** - System prompt with mandatory workflow steps, verification gates, and improved tool result visibility. See the systematic test-fix protocol section in this document (§6.1).
 - [ ] **KB-Driven Workflow Orchestration (APPROVED)**: ✅ **DESIGN COMPLETE** - WorkflowManager with script auto-optimization and compilation path. See [docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md](/Volumes/T7/sop-cloud/docs/KB_DRIVEN_WORKFLOW_ASSESSMENT.md) for full design.

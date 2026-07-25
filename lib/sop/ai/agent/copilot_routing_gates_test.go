@@ -103,7 +103,7 @@ func TestApplyCapabilityRoutingHintsSwitchesToCodingWorkflowForImplementationAsk
 }
 
 func TestInferCapabilityRoutingSignalPrefersKnowledgeForSummaryQueries(t *testing.T) {
-	intent, hint := inferCapabilityRoutingSignal("Summarize the main Go packages and modules in this repository", "")
+	intent, hint, _ := inferCapabilityRoutingSignal("Summarize the main Go packages and modules in this repository", "")
 
 	if intent != intentFamilyKnowledge {
 		t.Fatalf("expected knowledge intent family for summary query, got %q", intent)

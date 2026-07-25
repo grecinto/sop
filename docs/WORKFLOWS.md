@@ -1,26 +1,90 @@
 # SOP Cloud Workflows - Complete Documentation
 
-**Last Updated**: 2026-07-23  
-**Status**: ✅ Phase 1 Complete - Multi-KB Workflow Search Operational
+**Last Updated**: 2026-07-24  
+**Status**: 🚧 V1: KB Workflows Disabled - Pure Code-Driven Capabilities  
+**Post-V1 Vision**: Data-Driven Workflows with Infrastructure Integration
 
 ---
 
 ## Table of Contents
 
-1. [Overview & Strategy](#overview--strategy)
-2. [Architecture & Lifecycle](#architecture--lifecycle)
-3. [Implementation Status](#implementation-status)
-4. [Runtime & Orchestration](#runtime--orchestration)
-5. [Tool Specifications](#tool-specifications)
-6. [Migration & Best Practices](#migration--best-practices)
+1. [V1 Status & Direction](#v1-status--direction)
+2. [Post-V1 Vision](#post-v1-vision)
+3. [Architecture & Implementation](#architecture--implementation)
+4. [Migration Path](#migration-path)
 
 ---
 
-## Overview & Strategy
+## V1 Status & Direction
 
-### Core Insight: Core Playbook as Workflow Standard Library
+### Current State: Pure Code-Driven Capabilities
 
-**Strategic Decision**: Core Playbook Space becomes the **shipping vehicle** for copilot workflows.
+**Strategic Decision for V1**: KB-driven workflows are **disabled** via feature flag. V1 ships with **pure code-driven capabilities** backed by robust infrastructure.
+
+**Why This Decision:**
+1. **Infrastructure Matters**: Text-based workflow definitions lack the power of compiled code with AST parsing, tree-sitter integration, patch engines, and test runners
+2. **Quality Over Flexibility**: Code-driven workflows (7-step test fix, 5-step architecture design) deliver consistent, proven results
+3. **Proven at Scale**: The coding workflow capability demonstrates that infrastructure-backed orchestration is what makes workflows powerful
+
+**V1 Capabilities** (All Code-Driven):
+- ✅ **Test Fix Workflow**: 7-step orchestrated process (analyze → isolate → patch → validate → test → iterate → document)
+- ✅ **Architecture Workflow**: 5-step design process (analyze → map dependencies → design → validate → document)
+- ✅ **Documentation Workflow**: 4-step generation process (analyze → extract structure → generate → review)
+- ✅ **Implementation Workflow**: 3-step build process (plan → implement → validate)
+- ✅ **Desktop Automation**: Shell/git/postgres command execution with PTY persistence
+
+**Feature Flag**: `kbWorkflowsEnabled = false` in `copilottools.automation.go`
+
+**Routing Optimization**: 80%+ of queries use keyword-based fast path (zero LLM calls), falling back to LLM only for ambiguous queries.
+
+---
+
+## Post-V1 Vision
+
+### Vision: Data-Driven Workflows WITH Infrastructure Integration
+
+**Post-V1 Goal**: Enable **visual, data-driven workflow authoring** while preserving the power of code-driven infrastructure.
+
+**The Hybrid Model**:
+
+```
+Workflow Definition (JSON/KB)          Infrastructure Layer (Go Code)
+├─ Visual editing                      ├─ AST parsing (tree-sitter)
+├─ User customizable                   ├─ Patch engine
+├─ Space-specific                      ├─ Test runner
+├─ Trigger patterns                    ├─ Context manager
+└─ Step sequences                      └─ Validation orchestrator
+         ↓                                      ↓
+         └───────── Integration ────────────────┘
+                         ↓
+           Rich Visual/Data-Driven Workflows
+           with Code-Level Tool Integration
+```
+
+**What This Enables**:
+1. **Visual Workflow Builder**: Users can define custom workflows in UI/KB
+2. **Tool Integration**: Workflows can invoke coding infrastructure tools (analyze_ast, generate_patch, run_tests)
+3. **Best of Both Worlds**: Flexibility of data-driven + power of infrastructure
+4. **Team Customization**: Organizations can define team-specific workflows that leverage proven tools
+
+**Example Post-V1 Workflow**:
+```json
+{
+  "id": "custom-api-generation",
+  "name": "Generate REST API Endpoint",
+  "steps": [
+    {"tool": "analyze_existing_patterns", "type": "infrastructure"},
+    {"tool": "generate_code_with_ast", "type": "infrastructure"},
+    {"tool": "apply_patch", "type": "infrastructure"},
+    {"tool": "run_tests", "type": "infrastructure"},
+    {"prompt": "Document the new endpoint", "type": "agent"}
+  ]
+}
+```
+
+### Core Playbook as Workflow Standard Library
+
+**Strategy**: Core Playbook Space becomes the **shipping vehicle** for both curated workflows and workflow infrastructure documentation.
 
 ```
 Core Playbook Space (Read-Only Internal Space)
@@ -60,7 +124,48 @@ Core Playbook Space (Read-Only Internal Space)
 
 ---
 
-## Architecture & Lifecycle
+## Architecture & Implementation
+
+### V1 Architecture: Code-Driven Capabilities
+
+**Current System** (`lib/sop/ai/agent/codingworkflow/`):
+
+```
+Query: "fix failing tests"
+  ↓
+Keyword Routing (Fast Path - No LLM)
+  ↓
+Coding Workflow Capability Selected
+  ↓
+Task Classifier (Keyword-Based)
+  ↓
+TaskType = Debugging
+  ↓
+orchestrateTestFixWorkflow() [7 steps]
+  ↓
+Multi-Turn Queue Execution
+  1. Analyze test failures (TestRunner)
+  2. Isolate failing cases (AST analysis)
+  3. Generate patches (PatchEngine)
+  4. Validate syntax (tree-sitter)
+  5. Run tests (TestRunner)
+  6. Iterate if needed
+  7. Document resolution
+```
+
+**Key Components** (All Infrastructure-Backed):
+1. **ContextManager**: Builds rich context with AST, imports, dependencies
+2. **PatchEngine**: Generates and applies precise code patches
+3. **TestRunner**: Executes tests, parses output, tracks coverage
+4. **GrammarRegistry**: Tree-sitter AST parsing for all languages
+5. **ValidationOrchestrator**: Enforces KB quality standards
+6. **RepoIndexer**: Maintains searchable repository index
+
+**Routing Optimization**:
+- **Fast Path** (80%+ queries): Keyword matching → Zero LLM calls → Instant routing
+- **Slow Path** (ambiguous only): LLM classification → Fallback for complex queries
+
+### Post-V1 Architecture: Infrastructure-Backed Data-Driven Workflows
 
 ### Follow KB/Space Loading Pattern
 
@@ -151,9 +256,70 @@ Best match selected via semantic similarity
 Workflow executed via WorkQueue
 ```
 
-### Automatic Workflow Ingestion
+**Post-V1 Architecture**:
 
-When Core Playbook is loaded, workflows are automatically ingested:
+```
+User Query OR Visual Workflow Builder
+  ↓
+Workflow Definition (JSON in KB)
+  {
+    "steps": [
+      {"tool": "analyze_ast", "params": {...}},
+      {"tool": "generate_patch", "params": {...}},
+      {"prompt": "Custom LLM step", "context": [...]}
+    ]
+  }
+  ↓
+Workflow Execution Engine
+  ├─ Infrastructure Tools (Go functions)
+  │  ├─ analyze_ast()
+  │  ├─ generate_patch()
+  │  ├─ run_tests()
+  │  └─ validate_syntax()
+  ├─ Agent Steps (LLM prompts)
+  │  └─ Custom reasoning/generation
+  └─ Hybrid Steps (Tool + Agent)
+  ↓
+Multi-Turn Queue Execution
+  ↓
+Results + Traceability
+```
+
+**Key Innovation**: Workflows become **orchestration scripts** that call infrastructure tools as first-class steps, not just text prompts.
+
+---
+
+## Migration Path
+
+### For V1 → Post-V1 Transition
+
+**What Stays**:
+- ✅ All infrastructure tools (AST, patches, tests)
+- ✅ Multi-turn queue orchestration
+- ✅ Capability registry and routing
+- ✅ Fast-path keyword optimization
+
+**What Changes**:
+- 📝 Workflow definitions move from code → KB (JSON)
+- 📝 Add tool registry for infrastructure functions
+- 📝 Enable visual workflow builder UI
+- 📝 Re-enable `kbWorkflowsEnabled` feature flag
+
+**Backward Compatibility**:
+- Code-driven capabilities continue to work as fallback
+- Existing workflows (test fix, architecture) become templates
+- Users can choose: use curated workflows OR define custom ones
+
+**Timeline**:
+- **V1**: Ship with proven, code-driven capabilities
+- **V1.1+**: Gradually expose infrastructure tools to workflow system
+- **V2**: Full visual workflow builder with tool integration
+
+---
+
+## Technical Implementation Notes
+
+### Current KB Workflow Infrastructure (Disabled in V1)
 
 **Location**: `workflows/test_debugging_go_v1.json`
 

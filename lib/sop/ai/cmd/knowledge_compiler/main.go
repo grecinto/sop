@@ -181,6 +181,13 @@ func parseMarkdownToTree(filePath string, defaultTitle string) *Section {
 				continue
 			}
 
+			// Check for [DISABLED] marker in heading
+			if strings.Contains(strings.ToLower(title), "[disabled]") {
+				ignoring = true
+				ignoredLevel = level
+				continue
+			}
+
 			if ignoring {
 				continue
 			}
