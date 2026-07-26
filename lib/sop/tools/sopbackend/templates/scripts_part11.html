@@ -732,10 +732,31 @@
         if (bUrlC) bUrlC.style.display = showBrainURL ? 'block' : 'none';
         if (!showBrainURL && bUrlInput) bUrlInput.value = '';
 
+        // Fallback Brain Provider
+        const fbProv = document.getElementById('setup-brain-fallback-provider')?.value || '';
+        const fbApiC = document.getElementById('setup-brain-fallback-api-container');
+        const fbUrlC = document.getElementById('setup-brain-fallback-url-container');
+        const fbUrlInput = document.getElementById('setup-brain-fallback-url');
+        
+        if (fbProv === '') {
+            // None selected
+            if (fbApiC) fbApiC.style.display = 'none';
+            if (fbUrlC) fbUrlC.style.display = 'none';
+            if (fbUrlInput) fbUrlInput.value = '';
+        } else {
+            const isFallbackLocal = isLocalProviderValue(fbProv);
+            const showFallbackURL = selectedProviderUsesURL('setup-brain-fallback-provider');
+            
+            if (fbApiC) fbApiC.style.display = isFallbackLocal ? 'none' : 'block';
+            if (fbUrlC) fbUrlC.style.display = showFallbackURL ? 'block' : 'none';
+            if (!showFallbackURL && fbUrlInput) fbUrlInput.value = '';
+        }
+
         const eProv = document.getElementById('setup-embedder-provider')?.value || '';
         const eApiC = document.getElementById('setup-embedder-api-container');
         const eUrlC = document.getElementById('setup-embedder-url-container');
         const eUrlInput = document.getElementById('setup-embedder-url');
+        const eTestContainer = document.getElementById('setup-embedder-test-container');
         const isEmbedderLocal = isLocalProviderValue(eProv);
         const showEmbedderURL = selectedProviderUsesURL('setup-embedder-provider');
         
@@ -744,10 +765,13 @@
             if (eApiC) eApiC.style.display = 'none';
             if (eUrlC) eUrlC.style.display = 'none';
             if (eUrlInput) eUrlInput.value = '';
+            if (eTestContainer) eTestContainer.style.display = 'none';
         } else {
             if (eApiC) eApiC.style.display = isEmbedderLocal ? 'none' : 'block';
             if (eUrlC) eUrlC.style.display = showEmbedderURL ? 'block' : 'none';
             if (!showEmbedderURL && eUrlInput) eUrlInput.value = '';
+            // Hide test button for embedded library embedders (like Kelindar) that don't use external APIs
+            if (eTestContainer) eTestContainer.style.display = isEmbedderLocal ? 'none' : 'flex';
         }
     }
 
@@ -1023,13 +1047,64 @@
             showAlert('Please choose an LLM provider first.');
             return;
         }
-        const payload = {
+        
+        const statusEl = document.getElementById('setup-brain-test-status');
+        const primaryPayload = {
             provider: parts.provider,
             model: parts.model,
             api_key: document.getElementById('setup-brain-api-key')?.value.trim() || '',
             url: document.getElementById('setup-brain-url')?.value.trim() || ''
         };
-        runLLMConnectionTest(payload, 'setup-brain-test-status');
+        
+        // Check if fallback is configured
+        const fallbackProviderValue = document.getElementById('setup-brain-fallback-provider')?.value || '';
+        const hasFallback = fallbackProviderValue && fallbackProviderValue !== '';
+        
+        if (hasFallback) {
+            // Test both primary and fallback
+            setConnectionTestStatus('setup-brain-test-status', 'Testing primary and fallback connections...', true);
+            
+            const fallbackParts = splitProviderValue(fallbackProviderValue);
+            const fallbackPayload = {
+                provider: fallbackParts.provider,
+                model: fallbackParts.model,
+                api_key: document.getElementById('setup-brain-fallback-api-key')?.value.trim() || '',
+                url: document.getElementById('setup-brain-fallback-url')?.value.trim() || ''
+            };
+            
+            // Test both with individual error handling
+            Promise.allSettled([
+                apiCall('/api/ai/test-connection', 'POST', primaryPayload, {}),
+                apiCall('/api/ai/test-connection', 'POST', fallbackPayload, {})
+            ]).then(([primaryResult, fallbackResult]) => {
+                let messages = [];
+                let hasError = false;
+                
+                if (primaryResult.status === 'fulfilled') {
+                    const msg = primaryResult.value.response || 'Connected successfully';
+                    messages.push(`✓ Primary: ${msg}`);
+                } else {
+                    hasError = true;
+                    messages.push(`✗ Primary: ${primaryResult.reason?.message || 'Connection failed'}`);
+                }
+                
+                if (fallbackResult.status === 'fulfilled') {
+                    const msg = fallbackResult.value.response || 'Connected successfully';
+                    messages.push(`✓ Fallback: ${msg}`);
+                } else {
+                    hasError = true;
+                    messages.push(`✗ Fallback: ${fallbackResult.reason?.message || 'Connection failed'}`);
+                }
+                
+                const detailedMessage = messages.join('\n');
+                const statusMessage = hasError ? 'Some connections failed' : 'Both connections successful';
+                setConnectionTestStatus('setup-brain-test-status', statusMessage, !hasError);
+                showAlert(detailedMessage, null, 'LLM Connection Test', hasError ? 'var(--error-color)' : 'var(--success-color)');
+            });
+        } else {
+            // Test primary only
+            runLLMConnectionTest(primaryPayload, 'setup-brain-test-status');
+        }
     }
 
     function testSetupEmbedderConnection() {
@@ -1081,7 +1156,7 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
-                    template_id: 'SOP',
+                    template_id: 'core_playbook',
                     database_name: SYSTEM_DB_NAME
                 })
             });

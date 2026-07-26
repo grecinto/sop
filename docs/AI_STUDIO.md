@@ -53,6 +53,31 @@ The **AI Studio** button allows authenticated site users to launch the AI Studio
 
 3. **AI Studio opens** in new tab, auto-connects to daemon
 
+### Connect AI Studio to a daemon on another computer (Advanced)
+
+If your daemon is running on a different machine, you can still use AI Studio with it. The UI will sign in through HQ first and then connect securely to the daemon on that other computer.
+
+#### How it works
+- AI Studio signs in through your normal site account first.
+- After that, it creates a secure connection to the daemon on the target machine.
+- This lets you use the daemon remotely without exposing it to the public.
+
+#### Typical setup
+1. On the machine that will run the daemon, start it and make sure it is reachable on your network, for example:
+   ```bash
+   sop-daemon --port 9090
+   ```
+2. On the computer where you are using AI Studio, open the app and point it to the daemon address, such as:
+   ```text
+   http://192.168.1.50:9090
+   ```
+3. AI Studio will connect automatically using your authenticated session.
+
+#### Notes
+- Use the target computer's local network IP address or hostname, not `127.0.0.1`, unless the daemon is running on the same computer.
+- The daemon must be reachable from the computer running AI Studio.
+- If the daemon is not reachable, AI Studio will show a connection error and will not complete the connection.
+
 ### For Developers
 
 **Critical Files**:

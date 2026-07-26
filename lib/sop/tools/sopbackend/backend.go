@@ -98,16 +98,12 @@ func registerBuiltinRBACBlueprints() {
 
 // Backend represents the reusable SOP backend that can be used by both httpserver and sop-daemon.
 type Backend struct {
-	Config                   *Config
-	ModelCatalog             *ModelCatalog
-	LoadedAgents             map[string]ai.Agent[map[string]any]
-	ActiveSessions           *SessionManager
-	billingCollectionQueue   chan struct{}
-	billingCollectionMu      sync.Mutex
-	billingCollectionRunning bool
-	billingCollectionStarted bool
-	shutdownCh               chan struct{}
-	shutdownOnce             sync.Once
+	Config         *Config
+	ModelCatalog   *ModelCatalog
+	LoadedAgents   map[string]ai.Agent[map[string]any]
+	ActiveSessions *SessionManager
+	shutdownCh     chan struct{}
+	shutdownOnce   sync.Once
 
 	// KB Quality Management
 	KBEffectivenessTracker *memory.KBEffectivenessTracker
@@ -118,14 +114,11 @@ type Backend struct {
 // NewBackend creates a new backend instance.
 func NewBackend(cfg *Config, catalog *ModelCatalog) *Backend {
 	b := &Backend{
-		Config:                   cfg,
-		ModelCatalog:             catalog,
-		LoadedAgents:             make(map[string]ai.Agent[map[string]any]),
-		ActiveSessions:           NewSessionManager(100),
-		billingCollectionQueue:   make(chan struct{}, 1),
-		billingCollectionRunning: false,
-		billingCollectionStarted: false,
-		shutdownCh:               make(chan struct{}),
+		Config:         cfg,
+		ModelCatalog:   catalog,
+		LoadedAgents:   make(map[string]ai.Agent[map[string]any]),
+		ActiveSessions: NewSessionManager(100),
+		shutdownCh:     make(chan struct{}),
 	}
 
 	// Initialize KB Quality Management
@@ -338,11 +331,6 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
-	mux.HandleFunc("/api/billing/payment", WithAuth(handleBillingPayment))
-	mux.HandleFunc("/api/billing/status", WithAuth(handleBillingStatus))
-	mux.HandleFunc("/api/billing/daemon-access", WithAuth(handleBillingDaemonAccess))
-	mux.HandleFunc("/api/billing/day", WithAuth(handleBillingDayUpdate))
-	mux.HandleFunc("/api/billing/collection-mode", WithAuth(handleBillingCollectionModeUpdate))
 
 	// KB Quality Management Endpoints
 	if b.KBQualityAPI != nil {
@@ -364,7 +352,6 @@ func (b *Backend) StartBackgroundServiceWithContext(ctx context.Context, interva
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	b.startBillingCollectionWorker(ctx)
 
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -389,7 +376,6 @@ func (b *Backend) StartBackgroundServiceWithContext(ctx context.Context, interva
 					}
 				}
 			}
-			b.triggerBillingCollection()
 		}
 	}()
 }
@@ -402,82 +388,6 @@ func (b *Backend) StopBackgroundService() {
 		close(b.shutdownCh)
 		b.StopKBQuality()
 	})
-}
-
-func (b *Backend) startBillingCollectionWorker(ctx context.Context) {
-	if b == nil || b.billingCollectionQueue == nil {
-		return
-	}
-
-	b.billingCollectionMu.Lock()
-	if b.billingCollectionStarted {
-		b.billingCollectionMu.Unlock()
-		return
-	}
-	b.billingCollectionStarted = true
-	b.billingCollectionMu.Unlock()
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				b.StopBackgroundService()
-				return
-			case <-b.shutdownCh:
-				return
-			case <-b.billingCollectionQueue:
-				b.runBillingCollectionJob(ctx)
-			}
-		}
-	}()
-}
-
-func (b *Backend) triggerBillingCollection() {
-	if b == nil || b.billingCollectionQueue == nil || b.Config == nil {
-		return
-	}
-	select {
-	case b.billingCollectionQueue <- struct{}{}:
-	default:
-	}
-}
-
-func (b *Backend) runBillingCollectionJob(ctx context.Context) {
-	if b == nil || b.Config == nil {
-		return
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	b.billingCollectionMu.Lock()
-	if b.billingCollectionRunning {
-		b.billingCollectionMu.Unlock()
-		return
-	}
-	b.billingCollectionRunning = true
-	b.billingCollectionMu.Unlock()
-
-	defer func() {
-		b.billingCollectionMu.Lock()
-		b.billingCollectionRunning = false
-		b.billingCollectionMu.Unlock()
-	}()
-
-	jobCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		select {
-		case <-b.shutdownCh:
-			cancel()
-		case <-ctx.Done():
-			cancel()
-		}
-	}()
-
-	if _, err := b.Config.CollectScheduledBilling(jobCtx, time.Now().UTC(), 100); err != nil {
-		log.Warn("background service: billing collection failed", "error", err)
-	}
 }
 
 // SyncState synchronizes the backend state with global package variables.

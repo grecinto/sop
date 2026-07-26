@@ -239,9 +239,9 @@ Usage:
   -rate-limit-window duration
         Rate limit window for local daemon requests (default 1m0s)
   -access-token-ttl duration
-        Access token expiry duration (default 15m0s)
+        Access token expiry duration (default 1h0m0s)
   -refresh-token-ttl duration
-        Refresh token expiry duration (2 days default) (default 48h0m0s)
+        Refresh token expiry duration (1 week default) (default 168h0m0s)
 
 Examples:
   sop-daemon --print-config-path
@@ -406,8 +406,8 @@ func main() {
 	logLevelFlag := flag.String("log-level", "info", "Set daemon log verbosity (debug, info, warn, error)")
 	policyMaxRequests := flag.Int("rate-limit-max-requests", 20, "Maximum local requests per session before enforcement kicks in")
 	policyWindow := flag.Duration("rate-limit-window", time.Minute, "Rate limit window for local daemon requests")
-	accessTokenTTL := flag.Duration("access-token-ttl", 15*time.Minute, "Access token expiry duration")
-	refreshTokenTTL := flag.Duration("refresh-token-ttl", 48*time.Hour, "Refresh token expiry duration (2 days default)")
+	accessTokenTTL := flag.Duration("access-token-ttl", time.Hour, "Access token expiry duration")
+	refreshTokenTTL := flag.Duration("refresh-token-ttl", 7*24*time.Hour, "Refresh token expiry duration (1 week default)")
 	if shouldPrintHelp(os.Args[1:]) {
 		printDaemonHelp()
 		return

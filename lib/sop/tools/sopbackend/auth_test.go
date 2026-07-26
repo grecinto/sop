@@ -34,6 +34,18 @@ func TestNewSessionStoreUsesGlobalStoreName(t *testing.T) {
 	}
 }
 
+func TestDefaultSessionTTLIsOneHour(t *testing.T) {
+	if got, want := defaultSessionTTL, time.Hour; got != want {
+		t.Fatalf("defaultSessionTTL = %v, want %v", got, want)
+	}
+}
+
+func TestDefaultRefreshTTLIsTwoWeeks(t *testing.T) {
+	if got, want := defaultRefreshTTL, 14*24*time.Hour; got != want {
+		t.Fatalf("defaultRefreshTTL = %v, want %v", got, want)
+	}
+}
+
 func TestSessionStoreGCResumesFromLastProcessedKey(t *testing.T) {
 	store := NewSessionStore(time.Hour)
 	ctx := context.Background()
@@ -187,7 +199,7 @@ func TestAuthenticateUser_TrimsWhitespaceInStoredPassword(t *testing.T) {
 	}
 }
 
-func TestSaveAndLoadConfig_PersistsRootUserCredentials(t *testing.T) {
+func TestSaveAndLoadConfig_DoesNotPersistRootUserCredentials(t *testing.T) {
 	defer func() { config = Config{} }()
 
 	tmpDir := t.TempDir()
@@ -212,10 +224,10 @@ func TestSaveAndLoadConfig_PersistsRootUserCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	if !ok {
-		t.Fatal("Authenticate() = false, want true after save/load")
+	if ok {
+		t.Fatal("Authenticate() = true, want false after save/load because root credentials are not persisted in config state")
 	}
-	if user == nil || user.Username != "root" || user.Role != sop.RoleAdmin {
+	if user != nil {
 		t.Fatalf("Authenticate() returned unexpected user: %+v", user)
 	}
 }
@@ -232,6 +244,27 @@ func TestAuthenticate_UsesUsersStoreAsAuthoritativeSource(t *testing.T) {
 	}
 	if user != nil {
 		t.Fatalf("Authenticate() returned unexpected user: %+v", user)
+	}
+}
+
+func TestFindUserRecord_UsesPersistentUserStoreWhenUsersStoreFieldIsNotPrepopulated(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	config = Config{SystemDB: &DatabaseConfig{Name: SystemDBName, Path: tmpDir, Mode: "standalone"}}
+
+	cfg := Config{}
+	if err := cfg.SetUser("root", "secret-password", sop.RoleAdmin); err != nil {
+		t.Fatalf("SetUser() error = %v", err)
+	}
+
+	found, ok, err := cfg.findUserRecord(context.Background(), "root")
+	if err != nil {
+		t.Fatalf("findUserRecord() error = %v", err)
+	}
+	if !ok || found == nil || found.Username != "root" {
+		t.Fatalf("findUserRecord() returned unexpected user: %+v, ok=%v", found, ok)
 	}
 }
 
@@ -268,6 +301,25 @@ func TestEnsureUserStorePersistsInSystemDB(t *testing.T) {
 	}
 }
 
+func TestEnsureUserStoreSwitchesToConfiguredUserDatabase(t *testing.T) {
+	firstDir := t.TempDir()
+	secondDir := t.TempDir()
+
+	cfg := Config{
+		UsersStore: &DatabaseUserStore{storeName: "users", opts: sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{firstDir}}},
+		Databases:  []DatabaseConfig{{Name: "users-db", Path: secondDir, Mode: "standalone"}},
+	}
+
+	store := cfg.ensureUserStore()
+	dbStore, ok := store.(*DatabaseUserStore)
+	if !ok {
+		t.Fatalf("ensureUserStore() returned %T, want *DatabaseUserStore", store)
+	}
+	if len(dbStore.opts.StoresFolders) == 0 || dbStore.opts.StoresFolders[0] != secondDir {
+		t.Fatalf("ensureUserStore() reused store for path %v, want %s", dbStore.opts.StoresFolders, secondDir)
+	}
+}
+
 func TestRegisterUser_PersistsToStoreAndAuthenticates(t *testing.T) {
 	oldWD, err := os.Getwd()
 	if err != nil {
@@ -281,7 +333,7 @@ func TestRegisterUser_PersistsToStoreAndAuthenticates(t *testing.T) {
 
 	config = Config{}
 	cfg := Config{UsersStore: NewUserStore()}
-	user, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter")
+	user, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser)
 	if err != nil {
 		t.Fatalf("RegisterUser() error = %v", err)
 	}
@@ -303,7 +355,7 @@ func TestUnregisterUser_RemovesUserAndRevokesSessions(t *testing.T) {
 	store := NewSessionStore(time.Hour)
 	tokenFacade = store
 
-	user, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter")
+	user, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser)
 	if err != nil {
 		t.Fatalf("RegisterUser() error = %v", err)
 	}
@@ -342,10 +394,10 @@ func TestUnregisterUser_RemovesUserAndRevokesSessions(t *testing.T) {
 
 func TestUpdateUserRole_AllowsHigherLevelAdminToDemoteLowerRoleUser(t *testing.T) {
 	cfg := Config{UsersStore: NewUserStore()}
-	if _, err := cfg.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
+	if _, err := cfg.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin); err != nil {
 		t.Fatalf("RegisterUser(admin) error = %v", err)
 	}
-	if _, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+	if _, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser); err != nil {
 		t.Fatalf("RegisterUser(alice) error = %v", err)
 	}
 
@@ -361,10 +413,10 @@ func TestUpdateUserRole_AllowsHigherLevelAdminToDemoteLowerRoleUser(t *testing.T
 
 func TestUpdateUserRole_RejectsLowerLevelUserTryingToChangeAdminRole(t *testing.T) {
 	cfg := Config{UsersStore: NewUserStore()}
-	if _, err := cfg.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
+	if _, err := cfg.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin); err != nil {
 		t.Fatalf("RegisterUser(admin) error = %v", err)
 	}
-	if _, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+	if _, err := cfg.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser); err != nil {
 		t.Fatalf("RegisterUser(alice) error = %v", err)
 	}
 
@@ -411,10 +463,10 @@ func TestRegisterAllHandlers_DoesNotExposeProductAccountRoutes(t *testing.T) {
 
 func TestHandleUpdateUserRole_RejectsLowerPrivilegeUser(t *testing.T) {
 	config = Config{UsersStore: NewUserStore()}
-	if _, err := config.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
+	if _, err := config.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin); err != nil {
 		t.Fatalf("RegisterUser(admin) error = %v", err)
 	}
-	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser); err != nil {
 		t.Fatalf("RegisterUser(alice) error = %v", err)
 	}
 
@@ -468,64 +520,17 @@ func TestHandleRegister_ReturnsCreatedUser(t *testing.T) {
 	}
 }
 
-func TestHandleCurrentUser_ReturnsAuthenticatedAccountState(t *testing.T) {
-	config = Config{UsersStore: NewUserStore()}
-	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
-		t.Fatalf("RegisterUser() error = %v", err)
-	}
+// NOTE: Test removed - sopbackend only handles auth, not account state.
+// Account state (including billing) is now handled by site backend.
+// See src/backend/siteaccount for account-related tests.
 
-	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
-	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
-	w := httptest.NewRecorder()
-
-	handleCurrentUser(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("handleCurrentUser() status = %d, body=%s", w.Code, w.Body.String())
-	}
-	var payload struct {
-		User struct {
-			Username         string `json:"username"`
-			Email            string `json:"email"`
-			SubscriptionPlan string `json:"subscription_plan"`
-		} `json:"user"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	if payload.User.Username != "alice" || payload.User.Email != "alice@example.com" || payload.User.SubscriptionPlan != "starter" {
-		t.Fatalf("unexpected current-user payload: %+v", payload)
-	}
+// NOTE: Test removed - sopbackend no longer handles subscription management.
+// Billing/subscription functionality is now in site backend only.
+/*
+func TestHandleSubscriptionUpdate_UserCanUpdatePlan(t *testing.T) {
+	...
 }
-
-func TestHandleSubscriptionUpdate_PersistsPlanChange(t *testing.T) {
-	config = Config{UsersStore: NewUserStore()}
-	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
-		t.Fatalf("RegisterUser() error = %v", err)
-	}
-
-	body := strings.NewReader(`{"plan":"none"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/auth/subscription", body)
-	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleUser}}))
-	w := httptest.NewRecorder()
-
-	handleSubscriptionUpdate(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("handleSubscriptionUpdate() status = %d, body=%s", w.Code, w.Body.String())
-	}
-	user, ok, err := config.findUserRecord(context.Background(), "alice")
-	if err != nil {
-		t.Fatalf("findUserRecord() error = %v", err)
-	}
-	if !ok || user == nil {
-		t.Fatal("expected alice user record to exist")
-	}
-	if gotPlan := strings.ToLower(strings.TrimSpace(user.SubscriptionPlan)); gotPlan != "none" {
-		t.Fatalf("expected subscription plan to be updated to none, got %q", user.SubscriptionPlan)
-	}
-}
+*/
 
 func TestHasConfigFileOnDisk_UsesCachedProvisioningState(t *testing.T) {
 	resetProvisioningCompletionCache()
@@ -1257,6 +1262,22 @@ func TestIsAdminOverride_AcceptsSessionToken(t *testing.T) {
 
 	if ok := cfg.IsAdminOverride(context.Background(), "", "", token); !ok {
 		t.Fatal("IsAdminOverride() = false, want true for session token")
+	}
+}
+
+func TestSetUser_DoesNotCreatePersistentStoreWhenAuthIsDisabled(t *testing.T) {
+	cfg := Config{DisableAuth: true, SystemDB: &DatabaseConfig{Name: SystemDBName, Path: t.TempDir(), Mode: "standalone"}}
+
+	if err := cfg.SetUser("root", "secret-password", sop.RoleAdmin); err != nil {
+		t.Fatalf("SetUser() error = %v", err)
+	}
+
+	store := cfg.ensureUserStore()
+	if _, ok := store.(*SystemUserStore); ok {
+		t.Fatal("SetUser() created a persistent system user store while auth was disabled")
+	}
+	if _, ok := store.(*DatabaseUserStore); ok {
+		t.Fatal("SetUser() created a persistent database user store while auth was disabled")
 	}
 }
 

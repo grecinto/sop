@@ -1195,14 +1195,52 @@ This gives us a path to scale the federation layer without requiring a full stre
 
 ### SOP bootstrap and refresh strategy
 
-For first-run daemon bootstrap, the daemon should ship with a packaged copy of the Core Playbook knowledge payload so the built-in Core Playbook Space can be preloaded even when HQ is unavailable or the daemon is starting in an offline environment. This provides deterministic cold-start behavior and avoids making the daemon depend on HQ for its initial knowledge load.
+**Deployment order**: HTTPServer (HQ) is deployed first, then daemons connect to it.
 
-HQ sync remains the update path for later refreshes and governance:
+**HQ initialization** (tools/httpserver + Setup Wizard):
+HTTPServer serves the Setup Wizard UI on first run. The Setup Wizard is responsible for creating the system database and preloading the Core Playbook KB as part of the initial provisioning flow.
+
+Setup Wizard preload (scripts_part10.html line ~1253):
+```javascript
+// Step 3 of Setup Wizard: Trigger Core Playbook Space preload
+const sopRes = await authFetch('/api/spaces/preload', {
+    method: 'POST',
+    body: JSON.stringify({
+        template_id: 'core_playbook',  // Updated from 'SOP'
+        database_name: systemDbNameForPreload
+    })
+});
+```
+
+Additionally, HTTPServer auto-bootstraps Core Playbook on startup if the system database exists but the KB is missing. This is a safety net for server restarts with pre-existing system DBs:
+```go
+// In tools/httpserver/main.go startup
+if config.SystemDB != nil && !config.DisableSOPKBPreload {
+    bootstrapCorePlaybookIfNeeded(ctx, config.SystemDB.Name)
+}
+```
+
+**Daemon bootstrap** (cmd/sop-daemon/main.go):
+For first-run daemon bootstrap, the daemon ships with a packaged copy of the Core Playbook knowledge payload and auto-preloads it on startup into its local system database. This provides deterministic cold-start behavior even when HQ is unavailable or the daemon is starting offline.
+
+Daemon auto-preload on startup:
+```go
+if cfg.SystemDB != nil {
+    bootstrapSOPKnowledgeBaseIfNeeded(ctx, cfg.SystemDB.Name)
+    // → Checks KnowledgeBaseExists(ai.DefaultKBName)
+    // → Preloads from template if missing
+}
+```
+
+**Update path**: HQ sync remains the bidirectional update channel for fleet-wide knowledge:
 - use the regular daemon → HQ sync flow to publish new or curated knowledge artifacts,
 - use the same flow to pull refreshed content back into the daemon when appropriate,
 - keep the packaged asset as the fallback bootstrap source and treat HQ as the later synchronization channel.
 
-This gives us reliable first-run initialization without giving up the centralized update path.
+This gives us:
+- **HQ**: Setup Wizard creates core_playbook during provisioning (manual/guided flow) + auto-bootstrap on restart (safety net)
+- **Daemon**: Auto-bootstrap creates local core_playbook on startup (unattended flow)
+- **Both**: Ready for Fleet Learning federation after initialization
 
 ## Bidirectional Sync Implementation
 

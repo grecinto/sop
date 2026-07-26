@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -36,531 +36,24 @@ func getSystemDB(ctx context.Context) (*aidb.Database, error) {
 
 // UserRecord stores minimal credential and role data for the built-in auth model.
 type UserRecord struct {
-	Username                string        `json:"username"`
-	Role                    string        `json:"role"`
-	PasswordHash            SecuredString `json:"password_hash,omitempty"`
-	Email                   SecuredString `json:"email,omitempty"`
-	SubscriptionPlan        string        `json:"subscription_plan,omitempty"`
-	SubscriptionFeatures    []string      `json:"subscription_features,omitempty"`
-	BillingStatus           string        `json:"billing_status,omitempty"`
-	BillingNotice           string        `json:"billing_notice,omitempty"`
-	BillingDayOfMonth       int           `json:"billing_day_of_month,omitempty"`
-	BillingCollectionMode   string        `json:"billing_collection_mode,omitempty"`
-	LastBillingCollectedAt  time.Time     `json:"last_billing_collected_at,omitempty"`
-	NextBillingAt           time.Time     `json:"next_billing_at,omitempty"`
-	BillingCollectionCursor string        `json:"billing_collection_cursor,omitempty"`
-	CheckoutURL             string        `json:"checkout_url,omitempty"`
-	LastWebhookEvent        string        `json:"last_webhook_event,omitempty"`
-	LastWebhookAt           time.Time     `json:"last_webhook_at,omitempty"`
-	FailureReason           string        `json:"failure_reason,omitempty"`
-	StripeCustomerID        SecuredString `json:"stripe_customer_id,omitempty"`
-	StripeSubID             SecuredString `json:"stripe_subscription_id,omitempty"`
-	Status                  string        `json:"status,omitempty"`
-	CreatedAt               time.Time     `json:"created_at,omitempty"`
-	UpdatedAt               time.Time     `json:"updated_at,omitempty"`
+	Username     string        `json:"username"`
+	Role         string        `json:"role"`
+	PasswordHash SecuredString `json:"password_hash,omitempty"`
+	Email        SecuredString `json:"email,omitempty"`
+	CreatedAt    time.Time     `json:"created_at,omitempty"`
+	UpdatedAt    time.Time     `json:"updated_at,omitempty"`
 }
 
 type RegisterUserRequest struct {
-	Username             string
-	FullName             string
-	Password             string
-	Email                string
-	Role                 string
-	SubscriptionPlan     string
-	SubscriptionFeatures []string
+	Username string
+	FullName string
+	Password string
+	Email    string
+	Role     string
 }
 
 type UnregisterUserRequest struct {
 	Username string
-}
-
-type UpdateSubscriptionPlanRequest struct {
-	Username             string
-	SubscriptionPlan     string
-	SubscriptionFeatures []string
-}
-
-type SubscriptionRecord struct {
-	ID                   string    `json:"id"`
-	UserID               string    `json:"user_id"`
-	PlanCode             string    `json:"plan_code"`
-	ProviderSubscription string    `json:"provider_subscription_id,omitempty"`
-	Status               string    `json:"status"`
-	CurrentPeriodStart   time.Time `json:"current_period_start,omitempty"`
-	CurrentPeriodEnd     time.Time `json:"current_period_end,omitempty"`
-	CancelAtPeriodEnd    bool      `json:"cancel_at_period_end,omitempty"`
-	CreatedAt            time.Time `json:"created_at,omitempty"`
-	UpdatedAt            time.Time `json:"updated_at,omitempty"`
-}
-
-type PaymentRecord struct {
-	ID                string    `json:"id"`
-	UserID            string    `json:"user_id"`
-	SubscriptionID    string    `json:"subscription_id,omitempty"`
-	ProviderPaymentID string    `json:"provider_payment_id,omitempty"`
-	Amount            float64   `json:"amount"`
-	Currency          string    `json:"currency,omitempty"`
-	Status            string    `json:"status"`
-	ProviderEventID   string    `json:"provider_event_id,omitempty"`
-	CreatedAt         time.Time `json:"created_at,omitempty"`
-	UpdatedAt         time.Time `json:"updated_at,omitempty"`
-}
-
-type SubscriptionStore interface {
-	Save(ctx context.Context, subscription *SubscriptionRecord) error
-	Get(ctx context.Context, id string) (*SubscriptionRecord, bool, error)
-	Delete(ctx context.Context, id string) error
-	ListByUser(ctx context.Context, username string) ([]SubscriptionRecord, error)
-	List(ctx context.Context) ([]SubscriptionRecord, error)
-}
-
-type PaymentStore interface {
-	Save(ctx context.Context, payment *PaymentRecord) error
-	Get(ctx context.Context, id string) (*PaymentRecord, bool, error)
-	Delete(ctx context.Context, id string) error
-	ListByUser(ctx context.Context, username string) ([]PaymentRecord, error)
-	List(ctx context.Context) ([]PaymentRecord, error)
-}
-
-type SubscriptionStoreImpl struct {
-	mu            sync.RWMutex
-	subscriptions map[string]SubscriptionRecord
-}
-
-func NewSubscriptionStore() *SubscriptionStoreImpl {
-	return &SubscriptionStoreImpl{subscriptions: make(map[string]SubscriptionRecord)}
-}
-
-func (s *SubscriptionStoreImpl) Save(ctx context.Context, subscription *SubscriptionRecord) error {
-	if subscription == nil {
-		return fmt.Errorf("subscription is nil")
-	}
-	id := strings.TrimSpace(subscription.ID)
-	if id == "" {
-		return fmt.Errorf("subscription id is required")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	copySubscription := *subscription
-	copySubscription.UpdatedAt = time.Now().UTC()
-	if copySubscription.CreatedAt.IsZero() {
-		copySubscription.CreatedAt = copySubscription.UpdatedAt
-	}
-	s.subscriptions[id] = copySubscription
-	return nil
-}
-
-func (s *SubscriptionStoreImpl) Get(ctx context.Context, id string) (*SubscriptionRecord, bool, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil, false, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	subscription, ok := s.subscriptions[id]
-	if !ok {
-		return nil, false, nil
-	}
-	copySubscription := subscription
-	return &copySubscription, true, nil
-}
-
-func (s *SubscriptionStoreImpl) Delete(ctx context.Context, id string) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.subscriptions, id)
-	return nil
-}
-
-func (s *SubscriptionStoreImpl) ListByUser(ctx context.Context, username string) ([]SubscriptionRecord, error) {
-	username = normalizeUsername(username)
-	if username == "" {
-		return nil, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	results := make([]SubscriptionRecord, 0)
-	for _, subscription := range s.subscriptions {
-		if normalizeUsername(subscription.UserID) == username {
-			results = append(results, subscription)
-		}
-	}
-	return results, nil
-}
-
-func (s *SubscriptionStoreImpl) List(ctx context.Context) ([]SubscriptionRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	results := make([]SubscriptionRecord, 0, len(s.subscriptions))
-	for _, subscription := range s.subscriptions {
-		results = append(results, subscription)
-	}
-	return results, nil
-}
-
-type PaymentStoreImpl struct {
-	mu       sync.RWMutex
-	payments map[string]PaymentRecord
-}
-
-func NewPaymentStore() *PaymentStoreImpl {
-	return &PaymentStoreImpl{payments: make(map[string]PaymentRecord)}
-}
-
-func (s *PaymentStoreImpl) Save(ctx context.Context, payment *PaymentRecord) error {
-	if payment == nil {
-		return fmt.Errorf("payment is nil")
-	}
-	id := strings.TrimSpace(payment.ID)
-	if id == "" {
-		return fmt.Errorf("payment id is required")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	copyPayment := *payment
-	copyPayment.UpdatedAt = time.Now().UTC()
-	if copyPayment.CreatedAt.IsZero() {
-		copyPayment.CreatedAt = copyPayment.UpdatedAt
-	}
-	s.payments[id] = copyPayment
-	return nil
-}
-
-func (s *PaymentStoreImpl) Get(ctx context.Context, id string) (*PaymentRecord, bool, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil, false, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	payment, ok := s.payments[id]
-	if !ok {
-		return nil, false, nil
-	}
-	copyPayment := payment
-	return &copyPayment, true, nil
-}
-
-func (s *PaymentStoreImpl) Delete(ctx context.Context, id string) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.payments, id)
-	return nil
-}
-
-func (s *PaymentStoreImpl) ListByUser(ctx context.Context, username string) ([]PaymentRecord, error) {
-	username = normalizeUsername(username)
-	if username == "" {
-		return nil, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	results := make([]PaymentRecord, 0)
-	for _, payment := range s.payments {
-		if normalizeUsername(payment.UserID) == username {
-			results = append(results, payment)
-		}
-	}
-	return results, nil
-}
-
-func (s *PaymentStoreImpl) List(ctx context.Context) ([]PaymentRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	results := make([]PaymentRecord, 0, len(s.payments))
-	for _, payment := range s.payments {
-		results = append(results, payment)
-	}
-	return results, nil
-}
-
-type BillingCheckoutSession struct {
-	ID     string
-	URL    string
-	Status string
-}
-
-type AccountTransaction interface {
-	SaveUser(user *UserRecord) error
-	SaveSubscription(subscription *SubscriptionRecord) error
-	SavePayment(payment *PaymentRecord) error
-	Commit() error
-	Rollback() error
-}
-
-type AccountTransactionImpl struct {
-	cfg                  *Config
-	userStore            UserStore
-	subscriptionStore    SubscriptionStore
-	paymentStore         PaymentStore
-	pendingUser          *UserRecord
-	pendingSubscriptions []SubscriptionRecord
-	pendingPayments      []PaymentRecord
-	committed            bool
-}
-
-type AccountRepository struct {
-	cfg *Config
-}
-
-func NewAccountRepository(cfg *Config) *AccountRepository {
-	if cfg == nil {
-		cfg = &Config{}
-	}
-	return &AccountRepository{cfg: cfg}
-}
-
-func (r *AccountRepository) SaveUser(ctx context.Context, tx sop.Transaction, user *UserRecord) error {
-	if r == nil || r.cfg == nil {
-		return fmt.Errorf("account repository is not initialized")
-	}
-	if user == nil {
-		return fmt.Errorf("user is nil")
-	}
-	copyUser := *user
-	copyUser.Username = normalizeUsername(copyUser.Username)
-	if copyUser.Username == "" {
-		return fmt.Errorf("username is required")
-	}
-	if err := r.cfg.ensureUserStore().Save(ctx, &copyUser); err != nil {
-		return err
-	}
-	for i := range r.cfg.Users {
-		if normalizeUsername(r.cfg.Users[i].Username) == copyUser.Username {
-			r.cfg.Users[i] = copyUser
-			return nil
-		}
-	}
-	r.cfg.Users = append(r.cfg.Users, copyUser)
-	return nil
-}
-
-func (r *AccountRepository) SaveSubscription(ctx context.Context, tx sop.Transaction, subscription *SubscriptionRecord) error {
-	if r == nil || r.cfg == nil {
-		return fmt.Errorf("account repository is not initialized")
-	}
-	if subscription == nil {
-		return fmt.Errorf("subscription is nil")
-	}
-	copySubscription := *subscription
-	if copySubscription.ID == "" {
-		return fmt.Errorf("subscription id is required")
-	}
-	if err := r.cfg.ensureSubscriptionStore().Save(ctx, &copySubscription); err != nil {
-		return err
-	}
-	for i := range r.cfg.Subscriptions {
-		if r.cfg.Subscriptions[i].ID == copySubscription.ID {
-			r.cfg.Subscriptions[i] = copySubscription
-			return nil
-		}
-	}
-	r.cfg.Subscriptions = append(r.cfg.Subscriptions, copySubscription)
-	return nil
-}
-
-func (r *AccountRepository) SavePayment(ctx context.Context, tx sop.Transaction, payment *PaymentRecord) error {
-	if r == nil || r.cfg == nil {
-		return fmt.Errorf("account repository is not initialized")
-	}
-	if payment == nil {
-		return fmt.Errorf("payment is nil")
-	}
-	copyPayment := *payment
-	if copyPayment.ID == "" {
-		return fmt.Errorf("payment id is required")
-	}
-	if err := r.cfg.ensurePaymentStore().Save(ctx, &copyPayment); err != nil {
-		return err
-	}
-	for i := range r.cfg.Payments {
-		if r.cfg.Payments[i].ID == copyPayment.ID {
-			r.cfg.Payments[i] = copyPayment
-			return nil
-		}
-	}
-	r.cfg.Payments = append(r.cfg.Payments, copyPayment)
-	return nil
-}
-
-func (r *AccountRepository) FindUser(ctx context.Context, tx sop.Transaction, username string) (*UserRecord, bool, error) {
-	if r == nil || r.cfg == nil {
-		return nil, false, fmt.Errorf("account repository is not initialized")
-	}
-	return r.cfg.findUserRecord(ctx, username)
-}
-
-func (r *AccountRepository) ListSubscriptionsByUser(ctx context.Context, tx sop.Transaction, username string) ([]SubscriptionRecord, error) {
-	if r == nil || r.cfg == nil {
-		return nil, fmt.Errorf("account repository is not initialized")
-	}
-	return r.cfg.ensureSubscriptionStore().ListByUser(ctx, username)
-}
-
-func (r *AccountRepository) ListPaymentsByUser(ctx context.Context, tx sop.Transaction, username string) ([]PaymentRecord, error) {
-	if r == nil || r.cfg == nil {
-		return nil, fmt.Errorf("account repository is not initialized")
-	}
-	return r.cfg.ensurePaymentStore().ListByUser(ctx, username)
-}
-
-func (r *AccountRepository) DeleteUser(ctx context.Context, tx sop.Transaction, username string) error {
-	if r == nil || r.cfg == nil {
-		return fmt.Errorf("account repository is not initialized")
-	}
-	if store := r.cfg.UsersStore; store != nil {
-		if err := store.Delete(ctx, username); err != nil {
-			return err
-		}
-	}
-	users := r.cfg.Users[:0]
-	for _, existing := range r.cfg.Users {
-		if normalizeUsername(existing.Username) == normalizeUsername(username) {
-			continue
-		}
-		users = append(users, existing)
-	}
-	r.cfg.Users = users
-	return nil
-}
-
-func (r *AccountRepository) DeleteSubscription(ctx context.Context, tx sop.Transaction, id string) error {
-	if r == nil || r.cfg == nil {
-		return fmt.Errorf("account repository is not initialized")
-	}
-	if err := r.cfg.ensureSubscriptionStore().Delete(ctx, id); err != nil {
-		return err
-	}
-	subscriptions := r.cfg.Subscriptions[:0]
-	for _, existing := range r.cfg.Subscriptions {
-		if existing.ID == id {
-			continue
-		}
-		subscriptions = append(subscriptions, existing)
-	}
-	r.cfg.Subscriptions = subscriptions
-	return nil
-}
-
-func (r *AccountRepository) DeletePayment(ctx context.Context, tx sop.Transaction, id string) error {
-	if r == nil || r.cfg == nil {
-		return fmt.Errorf("account repository is not initialized")
-	}
-	if err := r.cfg.ensurePaymentStore().Delete(ctx, id); err != nil {
-		return err
-	}
-	payments := r.cfg.Payments[:0]
-	for _, existing := range r.cfg.Payments {
-		if existing.ID == id {
-			continue
-		}
-		payments = append(payments, existing)
-	}
-	r.cfg.Payments = payments
-	return nil
-}
-
-func (c *Config) BeginAccountTransaction() (AccountTransaction, error) {
-	return &AccountTransactionImpl{
-		cfg:                  c,
-		userStore:            c.ensureUserStore(),
-		subscriptionStore:    c.ensureSubscriptionStore(),
-		paymentStore:         c.ensurePaymentStore(),
-		pendingSubscriptions: make([]SubscriptionRecord, 0),
-		pendingPayments:      make([]PaymentRecord, 0),
-	}, nil
-}
-
-func (tx *AccountTransactionImpl) SaveUser(user *UserRecord) error {
-	if user == nil {
-		return fmt.Errorf("user is nil")
-	}
-	if err := tx.userStore.Save(context.Background(), user); err != nil {
-		return err
-	}
-	tx.pendingUser = user
-	return nil
-}
-
-func (tx *AccountTransactionImpl) SaveSubscription(subscription *SubscriptionRecord) error {
-	if subscription == nil {
-		return fmt.Errorf("subscription is nil")
-	}
-	if err := tx.subscriptionStore.Save(context.Background(), subscription); err != nil {
-		return err
-	}
-	tx.pendingSubscriptions = append(tx.pendingSubscriptions, *subscription)
-	return nil
-}
-
-func (tx *AccountTransactionImpl) SavePayment(payment *PaymentRecord) error {
-	if payment == nil {
-		return fmt.Errorf("payment is nil")
-	}
-	if err := tx.paymentStore.Save(context.Background(), payment); err != nil {
-		return err
-	}
-	tx.pendingPayments = append(tx.pendingPayments, *payment)
-	return nil
-}
-
-func (tx *AccountTransactionImpl) Commit() error {
-	if tx.committed {
-		return nil
-	}
-	if tx.cfg != nil {
-		if tx.pendingUser != nil {
-			tx.cfg.Users = append(tx.cfg.Users, *tx.pendingUser)
-		}
-		for _, subscription := range tx.pendingSubscriptions {
-			tx.cfg.Subscriptions = append(tx.cfg.Subscriptions, subscription)
-		}
-		for _, payment := range tx.pendingPayments {
-			tx.cfg.Payments = append(tx.cfg.Payments, payment)
-		}
-	}
-	tx.committed = true
-	return nil
-}
-
-func (tx *AccountTransactionImpl) Rollback() error {
-	if tx.committed {
-		return nil
-	}
-	if tx.cfg != nil {
-		if tx.pendingUser != nil {
-			if store := tx.userStore; store != nil {
-				_ = store.Delete(context.Background(), tx.pendingUser.Username)
-			}
-		}
-		for _, subscription := range tx.pendingSubscriptions {
-			if store := tx.subscriptionStore; store != nil {
-				_ = store.Delete(context.Background(), subscription.ID)
-			}
-		}
-		for _, payment := range tx.pendingPayments {
-			if store := tx.paymentStore; store != nil {
-				_ = store.Delete(context.Background(), payment.ID)
-			}
-		}
-	}
-	tx.committed = true
-	return nil
-}
-
-type BillingWebhookEvent struct {
-	EventType string
-	EventID   string
-	UserID    string
-	Plan      string
 }
 
 type AuthenticatedAccount struct {
@@ -580,8 +73,17 @@ type SystemUserStore struct {
 	storeName string
 }
 
+type DatabaseUserStore struct {
+	storeName string
+	opts      sop.DatabaseOptions
+}
+
 func NewSystemUserStore() *SystemUserStore {
 	return &SystemUserStore{storeName: "users"}
+}
+
+func NewDatabaseUserStore(opts sop.DatabaseOptions) *DatabaseUserStore {
+	return &DatabaseUserStore{storeName: "users", opts: opts}
 }
 
 func (s *SystemUserStore) Save(ctx context.Context, user *UserRecord) error {
@@ -611,6 +113,7 @@ func (s *SystemUserStore) Save(ctx context.Context, user *UserRecord) error {
 	}
 	copyUser := *user
 	copyUser.Username = username
+	copyUser.Role = normalizeRole(copyUser.Role)
 	copyUser.UpdatedAt = time.Now().UTC()
 	if copyUser.CreatedAt.IsZero() {
 		copyUser.CreatedAt = copyUser.UpdatedAt
@@ -634,17 +137,27 @@ func (s *SystemUserStore) Get(ctx context.Context, username string) (*UserRecord
 	if err != nil {
 		return nil, false, fmt.Errorf("system user store failed to get system db: %w", err)
 	}
+
+	// Check if store exists first
+	exists, err := db.StoreExists(ctx, s.storeName)
+	if err != nil {
+		return nil, false, fmt.Errorf("system user store failed to check store existence: %w", err)
+	}
+	if !exists {
+		// Store doesn't exist yet, user not found
+		return nil, false, nil
+	}
+
 	tx, err := db.BeginTransaction(ctx, sop.ForReading, -1)
 	if err != nil {
 		return nil, false, fmt.Errorf("system user store failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	options := sop.ConfigureStore(s.storeName, true, 1000, "System users", sop.SmallData, "")
-	options.IsPrimitiveKey = true
-	store, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options)
+	// Use OpenBtree for read-only access to existing store
+	store, err := database.OpenBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("system user store failed to open/create store: %w", err)
+		return nil, false, fmt.Errorf("system user store failed to open store: %w", err)
 	}
 	if found, err := store.Find(ctx, username, true); err != nil {
 		return nil, false, fmt.Errorf("system user store failed to find user: %w", err)
@@ -656,6 +169,7 @@ func (s *SystemUserStore) Get(ctx context.Context, username string) (*UserRecord
 		return nil, false, fmt.Errorf("system user store failed to read user: %w", err)
 	}
 	copyUser := value
+	copyUser.Role = normalizeRole(copyUser.Role)
 	return &copyUser, true, nil
 }
 
@@ -730,6 +244,173 @@ func (s *SystemUserStore) List(ctx context.Context) ([]UserRecord, error) {
 	return results, nil
 }
 
+func (s *DatabaseUserStore) Save(ctx context.Context, user *UserRecord) error {
+	if user == nil {
+		return fmt.Errorf("user is nil")
+	}
+	username := normalizeUsername(user.Username)
+	if username == "" {
+		return fmt.Errorf("username is required")
+	}
+
+	db := aidb.NewDatabase(s.opts)
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		return fmt.Errorf("database user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	options := sop.ConfigureStore(s.storeName, true, 1000, "Database users", sop.SmallData, "")
+	options.IsPrimitiveKey = true
+	store, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options)
+	if err != nil {
+		return fmt.Errorf("database user store failed to open/create store: %w", err)
+	}
+	copyUser := *user
+	copyUser.Username = username
+	copyUser.Role = normalizeRole(copyUser.Role)
+	copyUser.UpdatedAt = time.Now().UTC()
+	if copyUser.CreatedAt.IsZero() {
+		copyUser.CreatedAt = copyUser.UpdatedAt
+	}
+	if _, err := store.Upsert(ctx, username, copyUser); err != nil {
+		return fmt.Errorf("database user store failed to upsert user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("database user store failed to commit: %w", err)
+	}
+	return nil
+}
+
+func (s *DatabaseUserStore) Get(ctx context.Context, username string) (*UserRecord, bool, error) {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, false, nil
+	}
+
+	db := aidb.NewDatabase(s.opts)
+	exists, err := db.StoreExists(ctx, s.storeName)
+	if err != nil {
+		return nil, false, fmt.Errorf("database user store failed to check store existence: %w", err)
+	}
+	if !exists {
+		return nil, false, nil
+	}
+
+	tx, err := db.BeginTransaction(ctx, sop.ForReading, -1)
+	if err != nil {
+		return nil, false, fmt.Errorf("database user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	store, err := database.OpenBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("database user store failed to open store: %w", err)
+	}
+	if found, err := store.Find(ctx, username, true); err != nil {
+		return nil, false, fmt.Errorf("database user store failed to find user: %w", err)
+	} else if !found {
+		return nil, false, nil
+	}
+	value, err := store.GetCurrentValue(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("database user store failed to read user: %w", err)
+	}
+	copyUser := value
+	copyUser.Role = normalizeRole(copyUser.Role)
+	return &copyUser, true, nil
+}
+
+func (s *DatabaseUserStore) Delete(ctx context.Context, username string) error {
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil
+	}
+
+	db := aidb.NewDatabase(s.opts)
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		return fmt.Errorf("database user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	options := sop.ConfigureStore(s.storeName, true, 1000, "Database users", sop.SmallData, "")
+	options.IsPrimitiveKey = true
+	store, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options)
+	if err != nil {
+		return fmt.Errorf("database user store failed to open/create store: %w", err)
+	}
+	if _, err := store.Remove(ctx, username); err != nil {
+		return fmt.Errorf("database user store failed to remove user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("database user store failed to commit: %w", err)
+	}
+	return nil
+}
+
+func (s *DatabaseUserStore) List(ctx context.Context) ([]UserRecord, error) {
+	db := aidb.NewDatabase(s.opts)
+	tx, err := db.BeginTransaction(ctx, sop.ForReading, -1)
+	if err != nil {
+		return nil, fmt.Errorf("database user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	options := sop.ConfigureStore(s.storeName, true, 1000, "Database users", sop.SmallData, "")
+	options.IsPrimitiveKey = true
+	store, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options)
+	if err != nil {
+		return nil, fmt.Errorf("database user store failed to open/create store: %w", err)
+	}
+	ok, err := store.First(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("database user store failed to seek first user: %w", err)
+	}
+	if !ok {
+		return nil, nil
+	}
+	results := []UserRecord{}
+	for {
+		value, err := store.GetCurrentValue(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("database user store failed to read user: %w", err)
+		}
+		results = append(results, value)
+		if ok, err := store.Next(ctx); err != nil {
+			return nil, fmt.Errorf("database user store failed to iterate users: %w", err)
+		} else if !ok {
+			break
+		}
+	}
+	return results, nil
+}
+
+func (s *DatabaseUserStore) EnsureProvisioned(ctx context.Context) error {
+	db := aidb.NewDatabase(s.opts)
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		return fmt.Errorf("database user store failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	options := sop.ConfigureStore(s.storeName, true, 1000, "Database users", sop.SmallData, "")
+	options.IsPrimitiveKey = true
+	if _, err := database.NewBtree[string, UserRecord](ctx, db.Options(), s.storeName, tx, nil, options); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "already exists") || strings.Contains(strings.ToLower(err.Error()), "exists") {
+			if err := tx.Commit(ctx); err != nil {
+				return fmt.Errorf("database user store failed to commit: %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("database user store failed to open/create store: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("database user store failed to commit: %w", err)
+	}
+	return nil
+}
+
 var userStoreOverride UserStore
 
 // SetUserStoreOverride installs a custom user store for shared auth flows.
@@ -764,6 +445,7 @@ func (s *UserStoreImpl) Save(ctx context.Context, user *UserRecord) error {
 	defer s.mu.Unlock()
 	copyUser := *user
 	copyUser.Username = username
+	copyUser.Role = normalizeRole(copyUser.Role)
 	copyUser.UpdatedAt = time.Now().UTC()
 	if copyUser.CreatedAt.IsZero() {
 		copyUser.CreatedAt = copyUser.UpdatedAt
@@ -784,6 +466,7 @@ func (s *UserStoreImpl) Get(ctx context.Context, username string) (*UserRecord, 
 		return nil, false, nil
 	}
 	copyUser := user
+	copyUser.Role = normalizeRole(copyUser.Role)
 	return &copyUser, true, nil
 }
 
@@ -829,8 +512,8 @@ type TokenFacade interface {
 }
 
 const (
-	defaultSessionTTL = 30 * time.Minute
-	defaultRefreshTTL = 7 * 24 * time.Hour
+	defaultSessionTTL = time.Hour
+	defaultRefreshTTL = 14 * 24 * time.Hour
 	sessionStoreName  = "sessions"
 )
 
@@ -1029,6 +712,7 @@ func parseAndVerifySignedAccessToken(token string) (*signedAccessClaims, error) 
 }
 
 func (s *SessionStore) CreateToken(ctx context.Context, username, role string) (string, error) {
+	role = normalizeRole(role)
 	store, tx, err := s.getStore(ctx)
 	if err != nil {
 		return "", err
@@ -1088,6 +772,7 @@ func (s *SessionStore) CreateSession(ctx context.Context, username, role string)
 }
 
 func (s *SessionStore) createSessionAttempt(ctx context.Context, username, role string) (string, string, error) {
+	role = normalizeRole(role)
 	store, tx, err := s.getStore(ctx)
 	if err != nil {
 		return "", "", err
@@ -1172,7 +857,8 @@ func (s *SessionStore) Refresh(ctx context.Context, refreshToken string) (string
 	if err != nil {
 		return "", "", err
 	}
-	accessToken, err := signAccessToken(r.Username, r.Role, now, r.ExpiresAt, opaqueAccessToken)
+	normalizedRole := normalizeRole(r.Role)
+	accessToken, err := signAccessToken(r.Username, normalizedRole, now, r.ExpiresAt, opaqueAccessToken)
 	if err != nil {
 		return "", "", err
 	}
@@ -1185,7 +871,7 @@ func (s *SessionStore) Refresh(ctx context.Context, refreshToken string) (string
 		Token:            accessToken,
 		RefreshToken:     newRefreshToken,
 		Username:         r.Username,
-		Role:             r.Role,
+		Role:             normalizedRole,
 		IssuedAt:         now,
 		ExpiresAt:        r.ExpiresAt,
 		RefreshExpiresAt: r.RefreshExpiresAt,
@@ -1234,10 +920,7 @@ func isUserAccountActive(ctx context.Context, username, role string) bool {
 	if err != nil || !ok || user == nil {
 		return false
 	}
-	if strings.TrimSpace(user.Status) == "" {
-		return true
-	}
-	return strings.EqualFold(user.Status, "active")
+	return true
 }
 
 func (s *SessionStore) ValidateToken(ctx context.Context, token string) (*UserRecord, error) {
@@ -1254,6 +937,7 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 	}
 
 	if claims, err := parseAndVerifySignedAccessToken(token); err == nil {
+		claims.Role = normalizeRole(claims.Role)
 		if requireActiveAccount && !isUserAccountActive(ctx, claims.Subject, claims.Role) {
 			return nil, fmt.Errorf("invalid session")
 		}
@@ -1263,10 +947,12 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 			}
 			if strings.TrimSpace(user.Role) == "" {
 				user.Role = claims.Role
+			} else {
+				user.Role = normalizeRole(user.Role)
 			}
 			return user, nil
 		}
-		return &UserRecord{Username: claims.Subject, Role: claims.Role}, nil
+		return &UserRecord{Username: claims.Subject, Role: normalizeRole(claims.Role)}, nil
 	}
 
 	store, tx, err := s.getStore(ctx)
@@ -1296,6 +982,7 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 		// Expired sessions will be cleaned up by refresh flow or background job
 		return nil, fmt.Errorf("expired session")
 	}
+	r.Role = normalizeRole(r.Role)
 	if requireActiveAccount && !isUserAccountActive(ctx, r.Username, r.Role) {
 		// Don't cleanup here - ValidateToken should be read-only
 		// Invalid sessions will be cleaned up by refresh flow or background job
@@ -1308,6 +995,8 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 		}
 		if strings.TrimSpace(user.Role) == "" {
 			user.Role = r.Role
+		} else {
+			user.Role = normalizeRole(user.Role)
 		}
 		return user, nil
 	}
@@ -1320,7 +1009,7 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 		"token_prefix", tokenPrefix(token),
 		"expires_at", r.ExpiresAt)
 
-	return &UserRecord{Username: r.Username, Role: r.Role}, nil
+	return &UserRecord{Username: r.Username, Role: normalizeRole(r.Role)}, nil
 }
 
 func (s *SessionStore) RevokeToken(ctx context.Context, token string) {
@@ -1493,10 +1182,12 @@ func normalizeUsername(username string) string {
 }
 
 func normalizeRole(role string) string {
-	role = strings.TrimSpace(role)
-	switch role {
-	case sop.RoleAdmin, sop.RoleSystemAdmin, sop.RoleUser, sop.RoleGuest:
-		return role
+	normalized := sop.NormalizeRole(strings.TrimSpace(role))
+	switch {
+	case normalized == "":
+		return sop.RoleUser
+	case strings.EqualFold(normalized, sop.RoleAdmin), strings.EqualFold(normalized, sop.RoleSystemAdmin), strings.EqualFold(normalized, sop.RoleUser), strings.EqualFold(normalized, sop.RoleGuest):
+		return normalized
 	default:
 		return sop.RoleUser
 	}
@@ -1556,6 +1247,13 @@ func (c *Config) authFromAuthorization(authHeader string) (string, string) {
 	return "", ""
 }
 
+func (c *Config) shouldUsePersistentUserStore() bool {
+	if c == nil {
+		return false
+	}
+	return true
+}
+
 func (c *Config) SetUser(username, password, role string) error {
 	return c.SetUserWithFeatures(username, password, role, nil)
 }
@@ -1566,10 +1264,10 @@ func (c *Config) SetUserWithFeatures(username, password, role string, features [
 		return fmt.Errorf("username and password are required")
 	}
 
-	for _, existing := range c.Users {
-		if normalizeUsername(existing.Username) == username {
-			return fmt.Errorf("username already exists")
-		}
+	if _, ok, err := c.findUserRecord(context.Background(), username); err != nil {
+		return err
+	} else if ok {
+		return fmt.Errorf("username already exists")
 	}
 
 	hash, err := hashPassword(password)
@@ -1592,109 +1290,142 @@ func (c *Config) SetUserWithFeatures(username, password, role string, features [
 	}
 
 	record := UserRecord{
-		Username:             username,
-		Role:                 normalizeRole(role),
-		PasswordHash:         SecuredString(hash),
-		SubscriptionFeatures: filtered,
-		Status:               "active",
+		Username:     username,
+		Role:         normalizeRole(role),
+		PasswordHash: SecuredString(hash),
 	}
-	c.Users = append(c.Users, record)
-	if store := c.ensureUserStore(); store != nil {
-		if err := store.Save(context.Background(), &record); err != nil {
-			return err
-		}
+	if err := c.persistUserRecord(context.Background(), &record); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (c *Config) ensureUserStore() UserStore {
-	if userStoreOverride != nil {
-		c.UsersStore = userStoreOverride
-		return c.UsersStore
+	if c == nil {
+		return nil
 	}
-	if c.SystemDB != nil || config.SystemDB != nil {
-		if _, isSystemStore := c.UsersStore.(*SystemUserStore); !isSystemStore {
-			if c.UsersStore != nil {
-				if legacyStore, ok := c.UsersStore.(*UserStoreImpl); ok {
-					users := make([]UserRecord, 0, len(legacyStore.users))
-					for _, user := range legacyStore.users {
-						users = append(users, user)
-					}
-					c.UsersStore = NewSystemUserStore()
-					for i := range users {
-						_ = c.UsersStore.Save(context.Background(), &users[i])
-					}
-				} else {
-					c.UsersStore = NewSystemUserStore()
-				}
-			} else {
-				c.UsersStore = NewSystemUserStore()
-			}
+	if userStoreOverride != nil {
+		if c.UsersStore == nil || c.UsersStore != userStoreOverride {
+			c.UsersStore = userStoreOverride
 		}
 		return c.UsersStore
 	}
 	if c.UsersStore != nil {
 		return c.UsersStore
 	}
-	c.UsersStore = NewUserStore()
-	return c.UsersStore
+	return c.ensurePersistentUserStore()
 }
 
-func (c *Config) syncUsersStoreFromConfig(ctx context.Context) error {
+func (c *Config) ensurePersistentUserStore() UserStore {
 	if c == nil {
 		return nil
 	}
-	store := c.ensureUserStore()
-	if store == nil {
+	if c.persistentUsersStore != nil {
+		return c.persistentUsersStore
+	}
+	if c.UsersStore != nil && c.UsersStore != userStoreOverride {
+		c.persistentUsersStore = c.UsersStore
+		return c.persistentUsersStore
+	}
+	if !c.shouldUsePersistentUserStore() {
+		c.persistentUsersStore = NewUserStore()
+		return c.persistentUsersStore
+	}
+
+	var targetStore UserStore
+	if len(c.Databases) > 0 {
+		for i := range c.Databases {
+			if c.Databases[i].IsSystem {
+				continue
+			}
+			opts, err := GetDBOptionsFromConfig(context.Background(), &c.Databases[i])
+			if err != nil {
+				continue
+			}
+			targetStore = NewDatabaseUserStore(opts)
+			break
+		}
+	}
+	if targetStore == nil && (c.SystemDB != nil || config.SystemDB != nil) {
+		targetStore = NewSystemUserStore()
+	}
+
+	if targetStore != nil {
+		switch current := c.persistentUsersStore.(type) {
+		case *DatabaseUserStore:
+			if targetStore, ok := targetStore.(*DatabaseUserStore); ok && current != nil && reflect.DeepEqual(current.opts, targetStore.opts) {
+				return c.persistentUsersStore
+			}
+		case *SystemUserStore:
+			if _, ok := targetStore.(*SystemUserStore); ok {
+				return c.persistentUsersStore
+			}
+		case *UserStoreImpl:
+			// fall through to migrate into the persistent store below
+		default:
+			if c.persistentUsersStore == nil {
+				// fall through to assign targetStore below
+			} else {
+				return c.persistentUsersStore
+			}
+		}
+	}
+
+	if targetStore == nil {
+		if c.persistentUsersStore != nil {
+			return c.persistentUsersStore
+		}
+		c.persistentUsersStore = NewUserStore()
+		return c.persistentUsersStore
+	}
+
+	if legacyStore, ok := c.persistentUsersStore.(*UserStoreImpl); ok {
+		users := make([]UserRecord, 0, len(legacyStore.users))
+		for _, user := range legacyStore.users {
+			users = append(users, user)
+		}
+		c.persistentUsersStore = targetStore
+		for i := range users {
+			_ = c.persistentUsersStore.Save(context.Background(), &users[i])
+		}
+		return c.persistentUsersStore
+	}
+
+	c.persistentUsersStore = targetStore
+	return c.persistentUsersStore
+}
+
+func (c *Config) persistUserRecord(ctx context.Context, user *UserRecord) error {
+	if c == nil || user == nil {
 		return nil
 	}
-	if len(c.Users) == 0 {
-		return nil
+	if err := c.ensureProvisionedUsersStore(ctx); err != nil {
+		return err
 	}
-	for i := range c.Users {
-		if err := store.Save(ctx, &c.Users[i]); err != nil {
+
+	backingStore := c.ensurePersistentUserStore()
+	if backingStore != nil {
+		if err := backingStore.Save(ctx, user); err != nil {
+			return err
+		}
+	}
+
+	overrideStore := c.ensureUserStore()
+	if overrideStore != nil && overrideStore != backingStore {
+		if err := overrideStore.Save(ctx, user); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func (c *Config) syncUsersStoreFromConfig(ctx context.Context) error {
+	// No longer needed - users are only stored in the persistent store
+	return nil
+}
+
 func (c *Config) syncUsersFromStore(ctx context.Context) error {
-	if c == nil {
-		return nil
-	}
-	store := c.ensureUserStore()
-	if store == nil {
-		return nil
-	}
-	persisted, err := store.List(ctx)
-	if err != nil {
-		return err
-	}
-	if len(persisted) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(persisted))
-	merged := make([]UserRecord, 0, len(persisted)+len(c.Users))
-	for _, user := range persisted {
-		normalized := normalizeUsername(user.Username)
-		if normalized == "" {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		merged = append(merged, user)
-	}
-	for _, user := range c.Users {
-		normalized := normalizeUsername(user.Username)
-		if normalized == "" {
-			continue
-		}
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		merged = append(merged, user)
-	}
-	c.Users = merged
+	// No longer needed - we query the persistent store directly
 	return nil
 }
 
@@ -1702,9 +1433,24 @@ func (c *Config) ensureProvisionedUsersStore(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
-	store := c.ensureUserStore()
+	store := c.ensurePersistentUserStore()
 	if store == nil {
 		return nil
+	}
+	if dbStore, ok := store.(*DatabaseUserStore); ok {
+		if err := dbStore.EnsureProvisioned(ctx); err != nil {
+			return fmt.Errorf("failed to initialize users store: %w", err)
+		}
+	} else if systemStore, ok := store.(*SystemUserStore); ok {
+		if err := systemStore.Save(ctx, &UserRecord{Username: "__provisioning_probe__", Role: sop.RoleGuest}); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+				return nil
+			}
+			return fmt.Errorf("failed to initialize users store: %w", err)
+		}
+		if err := systemStore.Delete(ctx, "__provisioning_probe__"); err != nil {
+			return fmt.Errorf("failed to initialize users store: %w", err)
+		}
 	}
 	if _, err := store.List(ctx); err != nil {
 		return fmt.Errorf("failed to initialize users store: %w", err)
@@ -1712,38 +1458,21 @@ func (c *Config) ensureProvisionedUsersStore(ctx context.Context) error {
 	return nil
 }
 
-func (c *Config) ensureSubscriptionStore() SubscriptionStore {
-	if c.SubscriptionsStore != nil {
-		return c.SubscriptionsStore
-	}
-	c.SubscriptionsStore = NewSubscriptionStore()
-	return c.SubscriptionsStore
-}
-
-func (c *Config) ensurePaymentStore() PaymentStore {
-	if c.PaymentsStore != nil {
-		return c.PaymentsStore
-	}
-	c.PaymentsStore = NewPaymentStore()
-	return c.PaymentsStore
-}
-
 func (c *Config) findUserRecord(ctx context.Context, username string) (*UserRecord, bool, error) {
 	username = normalizeUsername(username)
 	if username == "" {
 		return nil, false, nil
 	}
-	if err := c.syncUsersStoreFromConfig(ctx); err != nil {
+	store := c.ensureUserStore()
+	if store == nil {
+		return nil, false, nil
+	}
+	user, ok, err := store.Get(ctx, username)
+	if err != nil {
 		return nil, false, err
 	}
-	if store := c.UsersStore; store != nil {
-		user, ok, err := store.Get(ctx, username)
-		if err != nil {
-			return nil, false, err
-		}
-		if ok {
-			return user, true, nil
-		}
+	if ok {
+		return user, true, nil
 	}
 	return nil, false, nil
 }
@@ -1753,13 +1482,12 @@ func (c *Config) FindUserRecord(ctx context.Context, username string) (*UserReco
 }
 
 // RegisterUser creates a user record using the shared auth store and default account semantics.
-func (c *Config) RegisterUser(ctx context.Context, username, password, email, role, subscriptionPlan string) (*UserRecord, error) {
+func (c *Config) RegisterUser(ctx context.Context, username, password, email, role string) (*UserRecord, error) {
 	return c.RegisterUserWithRequest(ctx, RegisterUserRequest{
-		Username:         username,
-		Password:         password,
-		Email:            email,
-		Role:             role,
-		SubscriptionPlan: subscriptionPlan,
+		Username: username,
+		Password: password,
+		Email:    email,
+		Role:     role,
 	})
 }
 
@@ -1779,35 +1507,21 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 	if role == "" {
 		role = sop.RoleUser
 	}
-	subscriptionPlan := strings.TrimSpace(req.SubscriptionPlan)
-	if subscriptionPlan == "" {
-		subscriptionPlan = "starter"
-	}
 
 	hash, err := hashPassword(req.Password)
 	if err != nil {
 		return nil, err
 	}
 
-	billingStatus := "inactive"
-	if subscriptionPlan != "" && !strings.EqualFold(subscriptionPlan, "none") {
-		billingStatus = "pending"
-	}
-
 	record := UserRecord{
-		Username:             username,
-		Role:                 role,
-		PasswordHash:         SecuredString(hash),
-		Email:                SecuredString(strings.TrimSpace(req.Email)),
-		SubscriptionPlan:     subscriptionPlan,
-		SubscriptionFeatures: append([]string(nil), req.SubscriptionFeatures...),
-		BillingStatus:        billingStatus,
-		Status:               "active",
+		Username:     username,
+		Role:         role,
+		PasswordHash: SecuredString(hash),
+		Email:        SecuredString(strings.TrimSpace(req.Email)),
 	}
-	if err := c.ensureUserStore().Save(ctx, &record); err != nil {
+	if err := c.persistUserRecord(ctx, &record); err != nil {
 		return nil, err
 	}
-	c.Users = append(c.Users, record)
 	return &record, nil
 }
 
@@ -1823,644 +1537,20 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 		return nil
 	}
 
-	if store := c.UsersStore; store != nil {
-		if err := store.Delete(ctx, username); err != nil {
-			return err
-		}
-	}
-	if store := c.ensureSubscriptionStore(); store != nil {
-		subscriptions, err := store.ListByUser(ctx, username)
-		if err != nil {
-			return err
-		}
-		for _, subscription := range subscriptions {
-			if err := store.Delete(ctx, subscription.ID); err != nil {
-				return err
-			}
-		}
-	}
-	if store := c.ensurePaymentStore(); store != nil {
-		payments, err := store.ListByUser(ctx, username)
-		if err != nil {
-			return err
-		}
-		for _, payment := range payments {
-			if err := store.Delete(ctx, payment.ID); err != nil {
-				return err
-			}
-		}
-	}
-
-	users := c.Users[:0]
-	for _, existing := range c.Users {
-		if normalizeUsername(existing.Username) == username {
-			continue
-		}
-		users = append(users, existing)
-	}
-	c.Users = users
-
-	if tokenFacade != nil {
-		if store, ok := tokenFacade.(*SessionStore); ok {
-			store.revokeSessionsForUser(ctx, username)
-		}
-	}
-	return nil
-}
-
-// UpdateSubscriptionPlan changes a user's stored subscription plan using the shared auth/user store.
-func (c *Config) UpdateSubscriptionPlan(ctx context.Context, username, subscriptionPlan string) (*UserRecord, error) {
-	return c.UpdateSubscriptionPlanWithRequest(ctx, UpdateSubscriptionPlanRequest{
-		Username:         username,
-		SubscriptionPlan: subscriptionPlan,
-	})
-}
-
-// UpdateSubscriptionPlanWithRequest changes a user's stored subscription plan from an explicit request object.
-func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req UpdateSubscriptionPlanRequest) (*UserRecord, error) {
-	username := normalizeUsername(req.Username)
-	if username == "" {
-		return nil, fmt.Errorf("username is required")
-	}
-	plan := strings.TrimSpace(req.SubscriptionPlan)
-	if plan == "" {
-		plan = "none"
-	}
-
-	user, ok, err := c.findUserRecord(ctx, username)
-	if err != nil {
-		return nil, err
-	}
-	if !ok || user == nil {
-		return nil, fmt.Errorf("user not found")
-	}
-
-	user.SubscriptionPlan = plan
-	if req.SubscriptionFeatures != nil {
-		user.SubscriptionFeatures = append([]string(nil), req.SubscriptionFeatures...)
-	}
-	if plan == "none" {
-		user.BillingStatus = "inactive"
-		user.StripeSubID = ""
-	} else if user.BillingStatus == "" || user.BillingStatus == "inactive" {
-		user.BillingStatus = "pending"
-	}
-	user.UpdatedAt = time.Now().UTC()
-	if err := c.ensureUserStore().Save(ctx, user); err != nil {
-		return nil, err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i].SubscriptionPlan = plan
-			c.Users[i].SubscriptionFeatures = append([]string(nil), user.SubscriptionFeatures...)
-			c.Users[i].BillingStatus = user.BillingStatus
-			c.Users[i].StripeSubID = user.StripeSubID
-			c.Users[i].UpdatedAt = user.UpdatedAt
-			break
-		}
-	}
-	return user, nil
-}
-
-func (c *Config) SubmitPayment(ctx context.Context, username, plan string, amount float64, currency, status, providerPaymentID, eventID string, occurredAt time.Time) (*PaymentRecord, *UserRecord, error) {
-	username = normalizeUsername(username)
-	if username == "" {
-		return nil, nil, fmt.Errorf("username is required")
-	}
-	if occurredAt.IsZero() {
-		occurredAt = time.Now().UTC()
-	}
-	if strings.TrimSpace(plan) == "" {
-		plan = "starter"
-	}
-
-	user, ok, err := c.findUserRecord(ctx, username)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !ok || user == nil {
-		return nil, nil, fmt.Errorf("user not found")
-	}
-	if strings.TrimSpace(plan) == "" {
-		plan = strings.TrimSpace(user.SubscriptionPlan)
-	}
-	if strings.TrimSpace(plan) == "" {
-		plan = "starter"
-	}
-
-	normalizedStatus := strings.ToLower(strings.TrimSpace(status))
-	paymentStatus := "pending"
-	billingStatus := "pending"
-	billingNotice := ""
-	switch normalizedStatus {
-	case "succeeded", "success", "successful", "completed", "complete", "paid":
-		paymentStatus = "succeeded"
-		billingStatus = "active"
-		billingNotice = "Billing restored. Copilot and daemon workflows are available again."
-	case "declined", "failed", "failure", "error", "expired", "requires_payment_method", "requires_action":
-		paymentStatus = "failed"
-		billingStatus = "on_hold"
-		billingNotice = fmt.Sprintf("Payment failed (%s). Your account is on hold until a successful payment is recorded.", strings.TrimSpace(status))
-	default:
-		paymentStatus = "pending"
-		billingStatus = "pending"
-		billingNotice = "Payment is being processed."
-	}
-
-	user.SubscriptionPlan = strings.TrimSpace(plan)
-	user.BillingStatus = billingStatus
-	user.BillingNotice = billingNotice
-	user.UpdatedAt = occurredAt
-	if billingStatus == "active" {
-		user.FailureReason = ""
-	}
-	if err := c.ensureUserStore().Save(ctx, user); err != nil {
-		return nil, nil, err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i].SubscriptionPlan = user.SubscriptionPlan
-			c.Users[i].BillingStatus = user.BillingStatus
-			c.Users[i].BillingNotice = user.BillingNotice
-			c.Users[i].FailureReason = user.FailureReason
-			c.Users[i].UpdatedAt = user.UpdatedAt
-			break
-		}
-	}
-
-	paymentID := strings.TrimSpace(providerPaymentID)
-	if paymentID == "" {
-		paymentID = fmt.Sprintf("pay_%s_%d", username, occurredAt.UnixNano())
-	}
-	payment := PaymentRecord{
-		ID:                paymentID,
-		UserID:            user.Username,
-		SubscriptionID:    fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan))),
-		ProviderPaymentID: paymentID,
-		Amount:            amount,
-		Currency:          strings.TrimSpace(currency),
-		Status:            paymentStatus,
-		ProviderEventID:   strings.TrimSpace(eventID),
-		CreatedAt:         occurredAt,
-		UpdatedAt:         occurredAt,
-	}
-	if err := c.ensurePaymentStore().Save(ctx, &payment); err != nil {
-		return nil, nil, err
-	}
-	c.Payments = append(c.Payments, payment)
-
-	if store := c.ensureSubscriptionStore(); store != nil {
-		subscriptionID := fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan)))
-		subscription := SubscriptionRecord{
-			ID:                 subscriptionID,
-			UserID:             user.Username,
-			PlanCode:           strings.TrimSpace(plan),
-			Status:             map[bool]string{true: "active", false: "pending"}[billingStatus == "active"],
-			CurrentPeriodStart: occurredAt,
-			CurrentPeriodEnd:   occurredAt.AddDate(0, 1, 0),
-			CreatedAt:          occurredAt,
-			UpdatedAt:          occurredAt,
-		}
-		if billingStatus == "on_hold" {
-			subscription.Status = "on_hold"
-		}
-		_ = store.Save(ctx, &subscription)
-		c.Subscriptions = append(c.Subscriptions, subscription)
-	}
-
-	return &payment, user, nil
-}
-
-func (c *Config) SetBillingDay(ctx context.Context, username string, day int) (*UserRecord, error) {
-	username = normalizeUsername(username)
-	if username == "" {
-		return nil, fmt.Errorf("username is required")
-	}
-	if day < 1 || day > 28 {
-		return nil, fmt.Errorf("billing day must be between 1 and 28")
-	}
-
-	user, ok, err := c.findUserRecord(ctx, username)
-	if err != nil {
-		return nil, err
-	}
-	if !ok || user == nil {
-		return nil, fmt.Errorf("user not found")
-	}
-
-	user.BillingDayOfMonth = day
-	user.UpdatedAt = time.Now().UTC()
-	if err := c.ensureUserStore().Save(ctx, user); err != nil {
-		return nil, err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i].BillingDayOfMonth = user.BillingDayOfMonth
-			c.Users[i].UpdatedAt = user.UpdatedAt
-			break
-		}
-	}
-	return user, nil
-}
-
-func (c *Config) SetBillingCollectionMode(ctx context.Context, username, mode string) (*UserRecord, error) {
-	username = normalizeUsername(username)
-	if username == "" {
-		return nil, fmt.Errorf("username is required")
-	}
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode == "" {
-		mode = "live"
-	}
-	if mode != "live" && mode != "fail" {
-		return nil, fmt.Errorf("unsupported billing collection mode")
-	}
-
-	user, ok, err := c.findUserRecord(ctx, username)
-	if err != nil {
-		return nil, err
-	}
-	if !ok || user == nil {
-		return nil, fmt.Errorf("user not found")
-	}
-
-	user.BillingCollectionMode = mode
-	user.UpdatedAt = time.Now().UTC()
-	if err := c.ensureUserStore().Save(ctx, user); err != nil {
-		return nil, err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i].BillingCollectionMode = user.BillingCollectionMode
-			c.Users[i].UpdatedAt = user.UpdatedAt
-			break
-		}
-	}
-	return user, nil
-}
-
-func (c *Config) CollectScheduledBilling(ctx context.Context, asOf time.Time, maxBatch int) ([]map[string]any, error) {
-	if asOf.IsZero() {
-		asOf = time.Now().UTC()
-	}
-	if maxBatch <= 0 {
-		maxBatch = 10
-	}
-
-	if err := c.syncUsersStoreFromConfig(ctx); err != nil {
-		return nil, err
-	}
-	if err := c.syncUsersFromStore(ctx); err != nil {
-		return nil, err
-	}
-
-	results := make([]map[string]any, 0)
-	eligible := make([]UserRecord, 0)
-	for _, user := range c.Users {
-		if user.BillingDayOfMonth <= 0 {
-			continue
-		}
-		if !strings.EqualFold(user.SubscriptionPlan, "starter") && !strings.EqualFold(user.SubscriptionPlan, "pro") && !strings.EqualFold(user.SubscriptionPlan, "enterprise") {
-			continue
-		}
-		if user.BillingStatus == "inactive" || user.BillingStatus == "pending" || strings.EqualFold(user.BillingStatus, "on_hold") {
-			continue
-		}
-		if user.BillingDayOfMonth != asOf.Day() {
-			continue
-		}
-		if !user.LastBillingCollectedAt.IsZero() && user.LastBillingCollectedAt.Year() == asOf.Year() && user.LastBillingCollectedAt.Month() == asOf.Month() {
-			continue
-		}
-		eligible = append(eligible, user)
-	}
-
-	sort.SliceStable(eligible, func(i, j int) bool {
-		return normalizeUsername(eligible[i].Username) < normalizeUsername(eligible[j].Username)
-	})
-
-	cursor := ""
-	for i := range eligible {
-		if strings.TrimSpace(eligible[i].BillingCollectionCursor) != "" {
-			cursor = strings.TrimSpace(eligible[i].BillingCollectionCursor)
-			break
-		}
-	}
-	if cursor != "" {
-		ordered := make([]UserRecord, 0, len(eligible))
-		for _, user := range eligible {
-			if normalizeUsername(user.Username) == cursor {
-				ordered = append(ordered, user)
-			}
-		}
-		for _, user := range eligible {
-			if normalizeUsername(user.Username) != cursor {
-				ordered = append(ordered, user)
-			}
-		}
-		eligible = ordered
-	}
-
-	for _, user := range eligible {
-		if len(results) >= maxBatch {
-			break
-		}
-
-		if strings.TrimSpace(user.BillingCollectionCursor) != "" && normalizeUsername(user.Username) != cursor {
-			continue
-		}
-		if strings.TrimSpace(user.BillingCollectionCursor) == "" && cursor != "" && normalizeUsername(user.Username) != cursor {
-			continue
-		}
-
-		windowStart := time.Date(asOf.Year(), asOf.Month(), 1, 0, 0, 0, 0, time.UTC)
-		windowEnd := windowStart.AddDate(0, 1, 0)
-		payments, err := c.ensurePaymentStore().ListByUser(ctx, user.Username)
-		if err == nil {
-			for _, payment := range payments {
-				if payment.CreatedAt.IsZero() {
-					continue
-				}
-				if payment.CreatedAt.Before(windowStart) || !payment.CreatedAt.Before(windowEnd) {
-					continue
-				}
-				if payment.Status == "succeeded" || payment.Status == "failed" {
-					for i := range c.Users {
-						if normalizeUsername(c.Users[i].Username) == user.Username {
-							c.Users[i].LastBillingCollectedAt = asOf
-							c.Users[i].NextBillingAt = asOf.AddDate(0, 1, 0)
-							c.Users[i].BillingCollectionCursor = ""
-							c.Users[i].UpdatedAt = asOf
-							break
-						}
-					}
-					continue
-				}
-			}
-		}
-
-		if strings.TrimSpace(user.BillingCollectionCursor) != "" && normalizeUsername(user.Username) == cursor {
-			// resume the in-flight account from a previous interrupted run
-		} else {
-			user.BillingCollectionCursor = normalizeUsername(user.Username)
-			if err := c.ensureUserStore().Save(ctx, &user); err != nil {
-				continue
-			}
-			for i := range c.Users {
-				if normalizeUsername(c.Users[i].Username) == user.Username {
-					c.Users[i].BillingCollectionCursor = normalizeUsername(user.Username)
-					c.Users[i].UpdatedAt = asOf
-					break
-				}
-			}
-		}
-
-		status := "succeeded"
-		if strings.EqualFold(user.BillingCollectionMode, "fail") {
-			status = "failed"
-		}
-
-		payment, updatedUser, err := c.SubmitPayment(ctx, user.Username, user.SubscriptionPlan, 5.0, "USD", status, fmt.Sprintf("pay_sched_%s_%d", user.Username, asOf.Unix()), fmt.Sprintf("evt_sched_%s_%d", user.Username, asOf.Unix()), asOf)
-		if err != nil {
-			continue
-		}
-		if payment == nil || updatedUser == nil {
-			continue
-		}
-		for i := range c.Users {
-			if normalizeUsername(c.Users[i].Username) == user.Username {
-				c.Users[i].LastBillingCollectedAt = asOf
-				c.Users[i].NextBillingAt = asOf.AddDate(0, 1, 0)
-				c.Users[i].BillingCollectionCursor = ""
-				c.Users[i].UpdatedAt = asOf
-				break
-			}
-		}
-		results = append(results, map[string]any{
-			"username":       user.Username,
-			"status":         payment.Status,
-			"billing_status": updatedUser.BillingStatus,
-			"billing_notice": updatedUser.BillingNotice,
-		})
-	}
-	return results, nil
-}
-
-func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan string) (*BillingCheckoutSession, error) {
-	username = normalizeUsername(username)
-	if username == "" {
-		return nil, fmt.Errorf("username is required")
-	}
-	if strings.TrimSpace(plan) == "" {
-		plan = "starter"
-	}
-
-	user, ok, err := c.findUserRecord(ctx, username)
-	if err != nil {
-		return nil, err
-	}
-	if !ok || user == nil {
-		return nil, fmt.Errorf("user not found")
-	}
-
-	user.SubscriptionPlan = strings.TrimSpace(plan)
-	if strings.EqualFold(strings.TrimSpace(plan), "none") {
-		user.BillingStatus = "inactive"
-		user.CheckoutURL = ""
-	} else {
-		user.BillingStatus = "pending"
-	}
-	user.UpdatedAt = time.Now().UTC()
-	if err := c.ensureUserStore().Save(ctx, user); err != nil {
-		return nil, err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i].SubscriptionPlan = user.SubscriptionPlan
-			c.Users[i].BillingStatus = user.BillingStatus
-			c.Users[i].UpdatedAt = user.UpdatedAt
-			break
-		}
-	}
-
-	subscriptionID := fmt.Sprintf("sub_%s_%s", username, strings.ToLower(strings.TrimSpace(plan)))
-	subscription := SubscriptionRecord{
-		ID:                 subscriptionID,
-		UserID:             user.Username,
-		PlanCode:           strings.TrimSpace(plan),
-		Status:             "pending",
-		CurrentPeriodStart: time.Now().UTC(),
-		CurrentPeriodEnd:   time.Now().UTC().AddDate(0, 1, 0),
-		CancelAtPeriodEnd:  false,
-		CreatedAt:          time.Now().UTC(),
-		UpdatedAt:          time.Now().UTC(),
-	}
-	if err := c.ensureSubscriptionStore().Save(ctx, &subscription); err != nil {
-		return nil, err
-	}
-	c.Subscriptions = append(c.Subscriptions, subscription)
-	payment := PaymentRecord{
-		ID:             fmt.Sprintf("pay_%s", username),
-		UserID:         user.Username,
-		SubscriptionID: subscriptionID,
-		Amount:         5,
-		Currency:       "USD",
-		Status:         "pending",
-		CreatedAt:      time.Now().UTC(),
-		UpdatedAt:      time.Now().UTC(),
-	}
-	if err := c.ensurePaymentStore().Save(ctx, &payment); err != nil {
-		return nil, err
-	}
-	c.Payments = append(c.Payments, payment)
-
-	user.CheckoutURL = fmt.Sprintf("https://example.test/checkout/%s", username)
-	user.UpdatedAt = time.Now().UTC()
-	if err := c.ensureUserStore().Save(ctx, user); err != nil {
-		return nil, err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i].CheckoutURL = user.CheckoutURL
-			c.Users[i].UpdatedAt = user.UpdatedAt
-			break
-		}
-	}
-
-	return &BillingCheckoutSession{
-		ID:     fmt.Sprintf("cs_%s", username),
-		URL:    user.CheckoutURL,
-		Status: "pending",
-	}, nil
-}
-
-func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookEvent) error {
-	if strings.TrimSpace(event.UserID) == "" {
-		return fmt.Errorf("user id is required")
-	}
-	user, ok, err := c.findUserRecord(ctx, normalizeUsername(event.UserID))
-	if err != nil {
-		return err
-	}
-	if !ok || user == nil {
-		return fmt.Errorf("user not found")
-	}
-
-	plan := strings.TrimSpace(event.Plan)
-	if plan == "" {
-		plan = "starter"
-	}
-	user.LastWebhookEvent = event.EventType
-	user.LastWebhookAt = time.Now().UTC()
-	user.FailureReason = ""
-	if strings.EqualFold(event.EventType, "checkout.session.completed") {
-		user.SubscriptionPlan = plan
-		user.BillingStatus = "active"
-		user.BillingNotice = ""
-		user.UpdatedAt = time.Now().UTC()
-		if err := c.ensureUserStore().Save(ctx, user); err != nil {
-			return err
-		}
-		for i := range c.Users {
-			if normalizeUsername(c.Users[i].Username) == normalizeUsername(event.UserID) {
-				c.Users[i].SubscriptionPlan = user.SubscriptionPlan
-				c.Users[i].BillingStatus = user.BillingStatus
-				c.Users[i].LastWebhookEvent = user.LastWebhookEvent
-				c.Users[i].LastWebhookAt = user.LastWebhookAt
-				c.Users[i].FailureReason = user.FailureReason
-				c.Users[i].UpdatedAt = user.UpdatedAt
-				break
-			}
-		}
-		for i := range c.Subscriptions {
-			if c.Subscriptions[i].UserID == normalizeUsername(event.UserID) && c.Subscriptions[i].PlanCode == plan {
-				c.Subscriptions[i].Status = "active"
-				c.Subscriptions[i].UpdatedAt = time.Now().UTC()
-				if store := c.ensureSubscriptionStore(); store != nil {
-					if existing, ok, err := store.Get(ctx, c.Subscriptions[i].ID); err == nil && ok && existing != nil {
-						existing.Status = "active"
-						existing.UpdatedAt = c.Subscriptions[i].UpdatedAt
-						_ = store.Save(ctx, existing)
-					}
-				}
-				break
-			}
-		}
-		for i := range c.Payments {
-			if c.Payments[i].UserID == normalizeUsername(event.UserID) {
-				c.Payments[i].Status = "succeeded"
-				c.Payments[i].ProviderEventID = event.EventID
-				c.Payments[i].UpdatedAt = time.Now().UTC()
-				if store := c.ensurePaymentStore(); store != nil {
-					if existing, ok, err := store.Get(ctx, c.Payments[i].ID); err == nil && ok && existing != nil {
-						existing.Status = "succeeded"
-						existing.ProviderEventID = event.EventID
-						existing.UpdatedAt = c.Payments[i].UpdatedAt
-						_ = store.Save(ctx, existing)
-					}
-				}
-				break
-			}
-		}
+	store := c.ensureUserStore()
+	if store == nil {
 		return nil
 	}
-	if strings.EqualFold(event.EventType, "customer.subscription.deleted") || strings.EqualFold(event.EventType, "checkout.session.expired") {
-		user.SubscriptionPlan = "none"
-		user.BillingStatus = "inactive"
-		user.BillingNotice = ""
-		user.FailureReason = "checkout session expired"
-		if strings.EqualFold(event.EventType, "customer.subscription.deleted") {
-			user.FailureReason = "subscription canceled"
-		}
-		user.UpdatedAt = time.Now().UTC()
-		if err := c.ensureUserStore().Save(ctx, user); err != nil {
-			return err
-		}
-		for i := range c.Users {
-			if normalizeUsername(c.Users[i].Username) == normalizeUsername(event.UserID) {
-				c.Users[i].SubscriptionPlan = user.SubscriptionPlan
-				c.Users[i].BillingStatus = user.BillingStatus
-				c.Users[i].LastWebhookEvent = user.LastWebhookEvent
-				c.Users[i].LastWebhookAt = user.LastWebhookAt
-				c.Users[i].FailureReason = user.FailureReason
-				c.Users[i].UpdatedAt = user.UpdatedAt
-				break
-			}
-		}
-		for i := range c.Subscriptions {
-			if c.Subscriptions[i].UserID == normalizeUsername(event.UserID) {
-				c.Subscriptions[i].Status = "canceled"
-				c.Subscriptions[i].UpdatedAt = time.Now().UTC()
-				if store := c.ensureSubscriptionStore(); store != nil {
-					if existing, ok, err := store.Get(ctx, c.Subscriptions[i].ID); err == nil && ok && existing != nil {
-						existing.Status = "canceled"
-						existing.UpdatedAt = c.Subscriptions[i].UpdatedAt
-						_ = store.Save(ctx, existing)
-					}
-				}
-				break
-			}
-		}
-		for i := range c.Payments {
-			if c.Payments[i].UserID == normalizeUsername(event.UserID) {
-				c.Payments[i].Status = "expired"
-				c.Payments[i].ProviderEventID = event.EventID
-				c.Payments[i].UpdatedAt = time.Now().UTC()
-				if store := c.ensurePaymentStore(); store != nil {
-					if existing, ok, err := store.Get(ctx, c.Payments[i].ID); err == nil && ok && existing != nil {
-						existing.Status = "expired"
-						existing.ProviderEventID = event.EventID
-						existing.UpdatedAt = c.Payments[i].UpdatedAt
-						_ = store.Save(ctx, existing)
-					}
-				}
-				break
-			}
-		}
+
+	if err := store.Delete(ctx, username); err != nil {
+		return fmt.Errorf("delete user from store: %w", err)
 	}
+
+	// Note: Session revocation handled by token expiry
 	return nil
 }
 
+// UpdateUserRole updates a user's role with permission checks.
 func (c *Config) UpdateUserRole(ctx context.Context, username, role string) (*UserRecord, error) {
 	username = normalizeUsername(username)
 	if username == "" {
@@ -2498,13 +1588,6 @@ func (c *Config) UpdateUserRole(ctx context.Context, username, role string) (*Us
 	user.UpdatedAt = time.Now().UTC()
 	if err := c.ensureUserStore().Save(ctx, user); err != nil {
 		return nil, err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i].Role = role
-			c.Users[i].UpdatedAt = user.UpdatedAt
-			break
-		}
 	}
 	return user, nil
 }
@@ -2679,8 +1762,6 @@ func RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		authCtx := sop.GetAuthFromContext(r.Context())
 		authCtx.UserID = user.Username
 		authCtx.Roles = []string{user.Role}
-		authCtx.SubscriptionPlan = user.SubscriptionPlan
-		authCtx.SubscriptionFeatures = append([]string(nil), user.SubscriptionFeatures...)
 		authCtx.IsSystem = strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root")
 		if authCtx.Permissions == nil {
 			authCtx.Permissions = map[string]bool{}
@@ -2790,25 +1871,24 @@ func parseLoginRequest(r *http.Request) (string, string, error) {
 	return req.Username, req.Password, nil
 }
 
-func parseRegisterRequest(r *http.Request) (string, string, string, string, string, error) {
+func parseRegisterRequest(r *http.Request) (string, string, string, string, error) {
 	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
 		if err := r.ParseForm(); err != nil {
-			return "", "", "", "", "", err
+			return "", "", "", "", err
 		}
-		return r.FormValue("username"), r.FormValue("password"), r.FormValue("email"), r.FormValue("role"), r.FormValue("subscription_plan"), nil
+		return r.FormValue("username"), r.FormValue("password"), r.FormValue("email"), r.FormValue("role"), nil
 	}
 
 	var req struct {
-		Username         string `json:"username"`
-		Password         string `json:"password"`
-		Email            string `json:"email"`
-		Role             string `json:"role"`
-		SubscriptionPlan string `json:"subscription_plan"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
+		Role     string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return "", "", "", "", "", err
+		return "", "", "", "", err
 	}
-	return req.Username, req.Password, req.Email, req.Role, req.SubscriptionPlan, nil
+	return req.Username, req.Password, req.Email, req.Role, nil
 }
 
 func parseRoleUpdateRequest(r *http.Request) (string, string, error) {
@@ -2829,18 +1909,17 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username, password, email, role, subscriptionPlan, err := parseRegisterRequest(r)
+	username, password, email, role, err := parseRegisterRequest(r)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	user, err := config.RegisterUserWithRequest(r.Context(), RegisterUserRequest{
-		Username:         username,
-		Password:         password,
-		Email:            email,
-		Role:             role,
-		SubscriptionPlan: subscriptionPlan,
+		Username: username,
+		Password: password,
+		Email:    email,
+		Role:     role,
 	})
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -2859,12 +1938,9 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
 		"user": map[string]any{
-			"username":          user.Username,
-			"role":              user.Role,
-			"email":             user.Email.Plaintext(),
-			"subscription_plan": user.SubscriptionPlan,
-			"billing_status":    user.BillingStatus,
-			"billing_notice":    user.BillingNotice,
+			"username": user.Username,
+			"role":     user.Role,
+			"email":    user.Email.Plaintext(),
 		},
 	})
 }
@@ -2897,310 +1973,11 @@ func handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
 		"user": map[string]any{
-			"username":          user.Username,
-			"role":              user.Role,
-			"email":             user.Email.Plaintext(),
-			"subscription_plan": user.SubscriptionPlan,
-			"billing_status":    user.BillingStatus,
-			"billing_notice":    user.BillingNotice,
-			"status":            user.Status,
-			"created_at":        user.CreatedAt,
-			"updated_at":        user.UpdatedAt,
-		},
-	})
-}
-
-// handleSubscriptionUpdate updates a user's subscription plan through the shared runtime auth state.
-func handleBillingPayment(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	authAccount := authenticatedAccountFromRequest(r)
-	if authAccount.Username == "" {
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	var req struct {
-		Plan              string  `json:"plan"`
-		Amount            float64 `json:"amount"`
-		Currency          string  `json:"currency"`
-		Status            string  `json:"status"`
-		ProviderPaymentID string  `json:"provider_payment_id"`
-		EventID           string  `json:"event_id"`
-		OccurredAt        string  `json:"occurred_at"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	occurredAt := time.Now().UTC()
-	if strings.TrimSpace(req.OccurredAt) != "" {
-		if parsed, err := time.Parse(time.RFC3339, req.OccurredAt); err == nil {
-			occurredAt = parsed.UTC()
-		}
-	}
-
-	payment, user, err := config.SubmitPayment(r.Context(), authAccount.Username, req.Plan, req.Amount, req.Currency, req.Status, req.ProviderPaymentID, req.EventID, occurredAt)
-	if err != nil {
-		recordProductMetric("billing_payment_failures")
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if payment == nil || user == nil {
-		recordProductMetric("billing_payment_failures")
-		writeJSONError(w, http.StatusInternalServerError, "payment was not recorded")
-		return
-	}
-
-	recordProductMetric("billing_payment_successes")
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"payment": map[string]any{
-			"id":                  payment.ID,
-			"provider_payment_id": payment.ProviderPaymentID,
-			"status":              payment.Status,
-			"amount":              payment.Amount,
-			"currency":            payment.Currency,
-		},
-		"user": map[string]any{
-			"username":          user.Username,
-			"subscription_plan": user.SubscriptionPlan,
-			"billing_status":    user.BillingStatus,
-			"billing_notice":    user.BillingNotice,
-			"updated_at":        user.UpdatedAt,
-		},
-	})
-}
-
-func handleBillingDaemonAccess(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	authAccount := authenticatedAccountFromRequest(r)
-	if authAccount.Username == "" {
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	user, ok, err := config.findUserRecord(r.Context(), authAccount.Username)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if !ok || user == nil {
-		writeJSONError(w, http.StatusNotFound, "user not found")
-		return
-	}
-
-	allowed := true
-	reason := ""
-	if strings.EqualFold(user.BillingStatus, "on_hold") {
-		allowed = false
-		reason = "account is on hold due to a failed or declined payment"
-		if strings.TrimSpace(user.BillingNotice) != "" {
-			reason = user.BillingNotice
-		}
-	} else if strings.EqualFold(user.BillingStatus, "pending") {
-		reason = "billing is still processing"
-	} else if strings.EqualFold(user.BillingStatus, "inactive") {
-		allowed = false
-		reason = "billing is not active"
-	}
-
-	if allowed && strings.TrimSpace(user.BillingNotice) != "" && strings.Contains(strings.ToLower(user.BillingNotice), "restored") {
-		user.BillingNotice = "Billing restored. Copilot and daemon workflows are available again."
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":  "ok",
-		"allowed": allowed,
-		"reason":  reason,
-		"user": map[string]any{
-			"username":                user.Username,
-			"billing_status":          user.BillingStatus,
-			"billing_notice":          user.BillingNotice,
-			"subscription_plan":       user.SubscriptionPlan,
-			"billing_day_of_month":    user.BillingDayOfMonth,
-			"billing_collection_mode": user.BillingCollectionMode,
-		},
-	})
-}
-
-func handleBillingStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	authAccount := authenticatedAccountFromRequest(r)
-	if authAccount.Username == "" {
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	user, ok, err := config.findUserRecord(r.Context(), authAccount.Username)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if !ok || user == nil {
-		writeJSONError(w, http.StatusNotFound, "user not found")
-		return
-	}
-
-	payments, err := config.ensurePaymentStore().ListByUser(r.Context(), authAccount.Username)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"user": map[string]any{
-			"username":          user.Username,
-			"subscription_plan": user.SubscriptionPlan,
-			"billing_status":    user.BillingStatus,
-			"billing_notice":    user.BillingNotice,
-			"failure_reason":    user.FailureReason,
-			"updated_at":        user.UpdatedAt,
-		},
-		"payments": payments,
-	})
-}
-
-func handleBillingDayUpdate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	authAccount := authenticatedAccountFromRequest(r)
-	if authAccount.Username == "" {
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	var req struct {
-		BillingDayOfMonth int `json:"billing_day_of_month"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	updated, err := config.SetBillingDay(r.Context(), authAccount.Username, req.BillingDayOfMonth)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"user": map[string]any{
-			"username":             updated.Username,
-			"billing_day_of_month": updated.BillingDayOfMonth,
-		},
-	})
-}
-
-func handleBillingCollectionModeUpdate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	authAccount := authenticatedAccountFromRequest(r)
-	if authAccount.Username == "" {
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	var req struct {
-		Mode string `json:"mode"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	updated, err := config.SetBillingCollectionMode(r.Context(), authAccount.Username, req.Mode)
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"user": map[string]any{
-			"username":                updated.Username,
-			"billing_collection_mode": updated.BillingCollectionMode,
-		},
-	})
-}
-
-func handleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	authAccount := authenticatedAccountFromRequest(r)
-	if authAccount.Username == "" {
-		writeJSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	var req struct {
-		Plan string `json:"plan"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	updated, err := config.UpdateSubscriptionPlanWithRequest(r.Context(), UpdateSubscriptionPlanRequest{
-		Username:         authAccount.Username,
-		SubscriptionPlan: req.Plan,
-	})
-	if err != nil {
-		status := http.StatusInternalServerError
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
-			status = http.StatusNotFound
-		}
-		recordProductMetric("auth_subscription_failures")
-		writeJSONError(w, status, err.Error())
-		return
-	}
-
-	recordProductMetric("auth_subscription_successes")
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
-		"user": map[string]any{
-			"username":          updated.Username,
-			"subscription_plan": updated.SubscriptionPlan,
-			"billing_status":    updated.BillingStatus,
-			"billing_notice":    updated.BillingNotice,
-			"updated_at":        updated.UpdatedAt,
+			"username":   user.Username,
+			"role":       user.Role,
+			"email":      user.Email.Plaintext(),
+			"created_at": user.CreatedAt,
+			"updated_at": user.UpdatedAt,
 		},
 	})
 }
@@ -3327,9 +2104,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 				"refresh_token": "",
 				"token_type":    "Bearer",
 				"user": map[string]any{
-					"username":              validatedUser.Username,
-					"role":                  validatedUser.Role,
-					"subscription_features": user.SubscriptionFeatures,
+					"username": validatedUser.Username,
+					"role":     validatedUser.Role,
 				},
 			})
 			return
@@ -3356,11 +2132,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		"refresh_token": refreshToken,
 		"token_type":    "Bearer",
 		"user": map[string]any{
-			"username":              user.Username,
-			"role":                  user.Role,
-			"subscription_features": user.SubscriptionFeatures,
-			"billing_status":        user.BillingStatus,
-			"billing_notice":        user.BillingNotice,
+			"username": user.Username,
+			"role":     user.Role,
 		},
 	})
 }

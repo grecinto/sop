@@ -145,12 +145,23 @@ func withSiteAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		// Lookup site account record for billing fields (sopbackend only has auth fields)
+		siteConfig := GetConfig()
+		siteUser, siteOk, _ := siteConfig.FindUserRecord(r.Context(), user.Username)
+		subscriptionPlan := ""
+		subscriptionFeatures := []string{}
+		if siteOk && siteUser != nil {
+			subscriptionPlan = siteUser.SubscriptionPlan
+			subscriptionFeatures = append([]string(nil), siteUser.SubscriptionFeatures...)
+		}
+
+		normalizedRole := sop.NormalizeRole(user.Role)
 		auth := sop.AuthContext{
-			IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
-			Roles:                []string{user.Role},
+			IsSystem:             sop.IsAdminRole(normalizedRole) || strings.EqualFold(user.Username, "root"),
+			Roles:                []string{normalizedRole},
 			UserID:               user.Username,
-			SubscriptionPlan:     user.SubscriptionPlan,
-			SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+			SubscriptionPlan:     subscriptionPlan,
+			SubscriptionFeatures: subscriptionFeatures,
 		}
 		auth.Permissions = map[string]bool{siteapp.PermissionSiteAppAccess: siteapp.HasSiteAppAccess(auth)}
 		next(w, r.WithContext(sop.ContextWithAuth(r.Context(), auth)))
@@ -181,12 +192,23 @@ func withSiteAuthOptional(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		// Lookup site account record for billing fields (sopbackend only has auth fields)
+		siteConfig := GetConfig()
+		siteUser, siteOk, _ := siteConfig.FindUserRecord(r.Context(), user.Username)
+		subscriptionPlan := ""
+		subscriptionFeatures := []string{}
+		if siteOk && siteUser != nil {
+			subscriptionPlan = siteUser.SubscriptionPlan
+			subscriptionFeatures = append([]string(nil), siteUser.SubscriptionFeatures...)
+		}
+
+		normalizedRole := sop.NormalizeRole(user.Role)
 		auth := sop.AuthContext{
-			IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
-			Roles:                []string{user.Role},
+			IsSystem:             sop.IsAdminRole(normalizedRole) || strings.EqualFold(user.Username, "root"),
+			Roles:                []string{normalizedRole},
 			UserID:               user.Username,
-			SubscriptionPlan:     user.SubscriptionPlan,
-			SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+			SubscriptionPlan:     subscriptionPlan,
+			SubscriptionFeatures: subscriptionFeatures,
 		}
 		auth.Permissions = map[string]bool{siteapp.PermissionSiteAppAccess: siteapp.HasSiteAppAccess(auth)}
 		next(w, r.WithContext(sop.ContextWithAuth(r.Context(), auth)))
@@ -406,14 +428,19 @@ func buildUserResponsePayload(user *UserRecord, ctx context.Context) map[string]
 		"failure_reason":     user.FailureReason,
 	}
 	authCtx := sop.GetAuthFromContext(ctx)
+	normalizedRole := sop.NormalizeRole(user.Role)
 	canAccessDataManager := authCtx.IsSystem
 	for _, role := range authCtx.Roles {
-		if sop.IsAdminRole(role) || strings.EqualFold(role, sop.RoleSystemAdmin) {
+		normalizedRoleFromContext := sop.NormalizeRole(role)
+		if sop.IsAdminRole(normalizedRoleFromContext) || strings.EqualFold(normalizedRoleFromContext, sop.RoleSystemAdmin) {
 			canAccessDataManager = true
 			break
 		}
 	}
 	if user != nil && strings.EqualFold(strings.TrimSpace(user.Username), "root") {
+		canAccessDataManager = true
+	}
+	if sop.IsAdminRole(normalizedRole) || strings.EqualFold(normalizedRole, sop.RoleSystemAdmin) {
 		canAccessDataManager = true
 	}
 	permissions := map[string]bool{
@@ -424,7 +451,7 @@ func buildUserResponsePayload(user *UserRecord, ctx context.Context) map[string]
 		"user": map[string]any{
 			"username":                user.Username,
 			"full_name":               user.FullName,
-			"role":                    user.Role,
+			"role":                    normalizedRole,
 			"email":                   user.Email,
 			"subscription_plan":       user.SubscriptionPlan,
 			"billing_status":          user.BillingStatus,
@@ -478,9 +505,10 @@ func HandleCurrentUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	normalizedRole := sop.NormalizeRole(user.Role)
 	auth := sop.AuthContext{
-		IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
-		Roles:                []string{user.Role},
+		IsSystem:             sop.IsAdminRole(normalizedRole) || strings.EqualFold(user.Username, "root"),
+		Roles:                []string{normalizedRole},
 		UserID:               user.Username,
 		SubscriptionPlan:     user.SubscriptionPlan,
 		SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
@@ -540,9 +568,10 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 		slog.Info("siteaccount.status.user_after_sync", "username", username, "billing_status_after_sync", user.BillingStatus)
 	}
 	slog.Info("siteaccount.status.response", "username", username, "final_billing_status", user.BillingStatus)
+	normalizedRole := sop.NormalizeRole(user.Role)
 	auth := sop.AuthContext{
-		IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
-		Roles:                []string{user.Role},
+		IsSystem:             sop.IsAdminRole(normalizedRole) || strings.EqualFold(user.Username, "root"),
+		Roles:                []string{normalizedRole},
 		UserID:               user.Username,
 		SubscriptionPlan:     user.SubscriptionPlan,
 		SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
@@ -796,11 +825,19 @@ func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prevent creating a new checkout session if user already has an active subscription
-	if req.StripePaymentID == "" && req.StripeSessionID == "" && user.BillingStatus == "active" {
-		slog.Warn("siteaccount.checkout.already_active", "username", username, "current_plan", user.SubscriptionPlan, "requested_plan", req.Plan)
-		writeJSONError(w, http.StatusConflict, "You already have an active subscription. Please cancel your current subscription before starting a new one.")
-		return
+	// Prevent creating a new checkout session if the account is already active.
+	// Honor the existing billing state first so active users are rejected before
+	// human-proof validation can short-circuit the request.
+	if req.StripePaymentID == "" && req.StripeSessionID == "" {
+		if user.BillingStatus == "active" {
+			slog.Warn("siteaccount.checkout.already_active", "username", username, "current_plan", user.SubscriptionPlan, "requested_plan", req.Plan)
+			writeJSONError(w, http.StatusConflict, "You already have an active subscription. Please cancel your current subscription before starting a new one.")
+			return
+		}
+
+		if user.BillingStatus != "active" {
+			slog.Info("siteaccount.checkout.checking_subscription_state", "username", username, "current_billing_status", user.BillingStatus)
+		}
 	}
 
 	if req.StripePaymentID == "" && req.StripeSessionID == "" {

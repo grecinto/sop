@@ -361,7 +361,7 @@ func TestSiteBackendAcceptsSharedAuthSessionForAppRoute(t *testing.T) {
 		SessionSecret: sopbackend.SecuredString("shared-auth-test-secret"),
 	}
 	sopbackend.SetConfig(cfg)
-	if _, err := (&cfg).RegisterUser(context.Background(), "shared-auth-admin", "secret", "admin@example.com", sop.RoleAdmin, "starter"); err != nil {
+	if _, err := (&cfg).RegisterUser(context.Background(), "shared-auth-admin", "secret", "admin@example.com", sop.RoleAdmin); err != nil {
 		t.Fatalf("RegisterUser() error = %v", err)
 	}
 	sopbackend.SetConfig(cfg)

@@ -378,18 +378,36 @@ func runIngestSpace(ctx context.Context, request IngestSpaceRequest, emb ai.Embe
 	return nil
 }
 
-func shouldUseImportPathForPreload(templateID, preloadPath string) bool {
-	trimmed := strings.TrimSpace(templateID)
-	return strings.EqualFold(trimmed, ai.DefaultKBName) || strings.EqualFold(trimmed, "Core Playbook")
-}
-
-func builtinPreloadCandidates(templateID string) []string {
+func normalizeTemplateID(templateID string) string {
 	normalized := strings.ToLower(strings.TrimSpace(templateID))
 	normalized = strings.ReplaceAll(normalized, "_", " ")
 	normalized = strings.ReplaceAll(normalized, "-", " ")
-	normalized = strings.Join(strings.Fields(normalized), " ")
+	return strings.Join(strings.Fields(normalized), " ")
+}
+
+func isSOPTemplateID(templateID string) bool {
+	normalized := normalizeTemplateID(templateID)
+	if normalized == "" {
+		return false
+	}
+	if normalized == "sop" || normalized == "core playbook" {
+		return true
+	}
+	if strings.HasPrefix(normalized, "sop ") || strings.HasSuffix(normalized, " sop") {
+		return true
+	}
+	return strings.Contains(normalized, "core playbook")
+}
+
+func shouldUseImportPathForPreload(templateID, preloadPath string) bool {
+	return isSOPTemplateID(templateID)
+}
+
+func builtinPreloadCandidates(templateID string) []string {
+	normalized := normalizeTemplateID(templateID)
 
 	var candidates []string
+	isSOPTemplate := isSOPTemplateID(normalized)
 	if strings.Contains(normalized, "medical") {
 		candidates = append(candidates,
 			"medical.json",
@@ -401,7 +419,7 @@ func builtinPreloadCandidates(templateID string) []string {
 			"../../lib/sop/medical.json",
 		)
 	}
-	if strings.Contains(normalized, "core playbook") {
+	if isSOPTemplate {
 		candidates = append(candidates,
 			"sop_base_knowledge.json",
 			"ai/sop_base_knowledge.json",
@@ -519,8 +537,8 @@ func PreloadSpaceFromTemplate(ctx context.Context, templateID, databaseName stri
 		return fmt.Errorf("template_id and database_name are required")
 	}
 
-	if config.DisableSOPKBPreload && (strings.EqualFold(templateID, ai.DefaultKBName) || strings.EqualFold(templateID, "Core Playbook")) {
-		return fmt.Errorf("SOP KB preload is disabled by configuration")
+	if config.DisableSOPKBPreload && isSOPTemplateID(templateID) {
+		return fmt.Errorf("Core Playbook KB preload is disabled by configuration")
 	}
 
 	var actualPath string
@@ -564,7 +582,7 @@ func PreloadSpaceFromTemplate(ctx context.Context, templateID, databaseName stri
 		}
 	}
 
-	if actualPath == "" && (strings.EqualFold(templateID, ai.DefaultKBName) || strings.EqualFold(templateID, "Core Playbook")) {
+	if actualPath == "" && isSOPTemplateID(templateID) {
 		isGoRun := strings.Contains(os.Args[0], "go-build") || strings.HasPrefix(os.Args[0], os.TempDir())
 		if isGoRun {
 			fmt.Printf("SOP Knowledge Base JSON not found. Auto-compiling since running in dev mode...\n")
@@ -632,13 +650,12 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if config.DisableSOPKBPreload && (strings.EqualFold(req.TemplateID, ai.DefaultKBName) || strings.EqualFold(req.TemplateID, "SOP") || strings.EqualFold(req.TemplateID, "Core Playbook")) {
-		log.Info("SOP preload disabled by configuration", "template_id", req.TemplateID, "database_name", req.DatabaseName)
+	if config.DisableSOPKBPreload && isSOPTemplateID(req.TemplateID) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"success":  true,
 			"disabled": true,
-			"message":  "SOP KB preload is disabled by configuration",
+			"message":  "Core Playbook KB preload is disabled by configuration",
 		})
 		return
 	}
@@ -684,11 +701,11 @@ func handlePreloadSpace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if actualPath == "" && (strings.EqualFold(req.TemplateID, ai.DefaultKBName) || strings.EqualFold(req.TemplateID, "SOP") || strings.EqualFold(req.TemplateID, "Core Playbook")) {
+	if actualPath == "" && isSOPTemplateID(req.TemplateID) {
 		// Auto-generate if running in source development (go run)
 		isGoRun := strings.Contains(os.Args[0], "go-build") || strings.HasPrefix(os.Args[0], os.TempDir())
 		if isGoRun {
-			fmt.Printf("SOP Knowledge Base JSON not found. Auto-compiling since running in dev mode...\n")
+			fmt.Printf("Core Playbook Knowledge Base JSON not found. Auto-compiling since running in dev mode...\n")
 			compilerDir := "./ai/cmd/knowledge_compiler"
 			if _, err := os.Stat("../../ai/cmd/knowledge_compiler"); err == nil {
 				compilerDir = "../../ai/cmd/knowledge_compiler"

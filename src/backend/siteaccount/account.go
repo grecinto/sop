@@ -31,7 +31,7 @@ var (
 )
 
 const (
-	userStoreName                  = "site_users"
+	billingInfoStoreName           = "billing_info"
 	subscriptionStoreName          = "site_subscriptions"
 	paymentStoreName               = "site_payments"
 	productStoreName               = "site_products"
@@ -43,11 +43,11 @@ const (
 
 // Config stores the site-specific account state for the React/site app.
 type Config struct {
-	Users                      []UserRecord
+	BillingInfo                []BillingInfo
 	Subscriptions              []SubscriptionRecord
 	Payments                   []PaymentRecord
 	Products                   []ProductRecord
-	UsersStore                 UserStore
+	BillingInfoStore           BillingInfoStore
 	SubscriptionsStore         SubscriptionStore
 	PaymentsStore              PaymentStore
 	ProductsStore              ProductStore
@@ -55,13 +55,11 @@ type Config struct {
 	UserPaymentIndexStore      UserPaymentStore
 }
 
-// UserRecord stores minimal account, billing, and role data for the site app.
-type UserRecord struct {
+// BillingInfo stores billing and subscription data for a site user.
+// Auth data (username, password, role, email) is stored in sopbackend's users store.
+type BillingInfo struct {
 	Username                    string    `json:"username"`
 	FullName                    string    `json:"full_name,omitempty"`
-	Role                        string    `json:"role"`
-	PasswordHash                string    `json:"password_hash,omitempty"`
-	Email                       string    `json:"email,omitempty"`
 	SubscriptionPlan            string    `json:"subscription_plan,omitempty"`
 	SubscriptionFeatures        []string  `json:"subscription_features,omitempty"`
 	BillingStatus               string    `json:"billing_status,omitempty"`
@@ -164,12 +162,41 @@ type BillingWebhookEvent struct {
 	Plan      string
 }
 
-// UserStore persists user identity records.
-type UserStore interface {
-	Upsert(ctx context.Context, users []UserRecord) error
-	Fetch(ctx context.Context, usernames []string) ([]UserRecord, error)
+// UserRecord combines auth data (from sopbackend) with billing data for API responses.
+// This is NOT stored - it's constructed by fetching from both sopbackend users and billing_info stores.
+type UserRecord struct {
+	// Auth fields (from sopbackend.UserRecord)
+	Username     string `json:"username"`
+	Role         string `json:"role"`
+	PasswordHash string `json:"password_hash,omitempty"`
+	Email        string `json:"email,omitempty"`
+	// Billing fields (from BillingInfo)
+	FullName                    string    `json:"full_name,omitempty"`
+	SubscriptionPlan            string    `json:"subscription_plan,omitempty"`
+	SubscriptionFeatures        []string  `json:"subscription_features,omitempty"`
+	BillingStatus               string    `json:"billing_status,omitempty"`
+	CheckoutURL                 string    `json:"checkout_url,omitempty"`
+	PendingCheckoutSessionID    string    `json:"pending_checkout_session_id,omitempty"`
+	StripeCheckoutSessionID     string    `json:"stripe_checkout_session_id,omitempty"`
+	LastWebhookEvent            string    `json:"last_webhook_event,omitempty"`
+	LastWebhookAt               time.Time `json:"last_webhook_at,omitempty"`
+	LastPingAt                  time.Time `json:"last_ping_at,omitempty"`
+	PendingCheckoutPingDeadline time.Time `json:"pending_checkout_ping_deadline,omitempty"`
+	FailureReason               string    `json:"failure_reason,omitempty"`
+	RequestOrigin               string    `json:"request_origin,omitempty"`
+	StripeCustomerID            string    `json:"stripe_customer_id,omitempty"`
+	StripeSubID                 string    `json:"stripe_subscription_id,omitempty"`
+	Status                      string    `json:"status,omitempty"`
+	CreatedAt                   time.Time `json:"created_at,omitempty"`
+	UpdatedAt                   time.Time `json:"updated_at,omitempty"`
+}
+
+// BillingInfoStore persists billing information keyed by username.
+type BillingInfoStore interface {
+	Upsert(ctx context.Context, billingInfo []BillingInfo) error
+	Fetch(ctx context.Context, usernames []string) ([]BillingInfo, error)
 	Delete(ctx context.Context, usernames []string) error
-	List(ctx context.Context) ([]UserRecord, error)
+	List(ctx context.Context) ([]BillingInfo, error)
 }
 
 // SubscriptionStore persists subscription records.
@@ -466,13 +493,13 @@ func (s *userPaymentIndexStoreImpl) Delete(ctx context.Context, userPayments []U
 	return s.relationshipIndexStoreImpl.delete(ctx, userPayments)
 }
 
-type userStoreImpl struct {
+type billingInfoStoreImpl struct {
 	storeName string
 	tx        sop.Transaction
-	tree      btree.BtreeInterface[string, UserRecord]
+	tree      btree.BtreeInterface[string, BillingInfo]
 }
 
-func newUserStore(ctx context.Context, tx sop.Transaction) (*userStoreImpl, error) {
+func newBillingInfoStore(ctx context.Context, tx sop.Transaction) (*billingInfoStoreImpl, error) {
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
 		return nil, err
@@ -480,42 +507,42 @@ func newUserStore(ctx context.Context, tx sop.Transaction) (*userStoreImpl, erro
 	if tx == nil {
 		return nil, fmt.Errorf("transaction is required")
 	}
-	store, err := newStringKeyedStore[UserRecord](ctx, db, tx, userStoreName)
+	store, err := newStringKeyedStore[BillingInfo](ctx, db, tx, billingInfoStoreName)
 	if err != nil {
 		return nil, err
 	}
-	return &userStoreImpl{storeName: userStoreName, tx: tx, tree: store}, nil
+	return &billingInfoStoreImpl{storeName: billingInfoStoreName, tx: tx, tree: store}, nil
 }
 
-func (s *userStoreImpl) Upsert(ctx context.Context, users []UserRecord) error {
+func (s *billingInfoStoreImpl) Upsert(ctx context.Context, billingInfos []BillingInfo) error {
 	if s == nil || s.tree == nil {
-		return fmt.Errorf("user store is not initialized")
+		return fmt.Errorf("billing info store is not initialized")
 	}
-	for _, user := range users {
-		if user.Username == "" {
+	for _, info := range billingInfos {
+		if info.Username == "" {
 			continue
 		}
-		copyUser := user
-		copyUser.Username = normalizeUsername(copyUser.Username)
-		if copyUser.Username == "" {
+		copyInfo := info
+		copyInfo.Username = normalizeUsername(copyInfo.Username)
+		if copyInfo.Username == "" {
 			continue
 		}
-		copyUser.UpdatedAt = time.Now().UTC()
-		if copyUser.CreatedAt.IsZero() {
-			copyUser.CreatedAt = copyUser.UpdatedAt
+		copyInfo.UpdatedAt = time.Now().UTC()
+		if copyInfo.CreatedAt.IsZero() {
+			copyInfo.CreatedAt = copyInfo.UpdatedAt
 		}
-		if _, err := s.tree.Upsert(ctx, copyUser.Username, copyUser); err != nil {
+		if _, err := s.tree.Upsert(ctx, copyInfo.Username, copyInfo); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *userStoreImpl) Fetch(ctx context.Context, usernames []string) ([]UserRecord, error) {
+func (s *billingInfoStoreImpl) Fetch(ctx context.Context, usernames []string) ([]BillingInfo, error) {
 	if s == nil || s.tree == nil {
 		return nil, nil
 	}
-	results := make([]UserRecord, 0, len(usernames))
+	results := make([]BillingInfo, 0, len(usernames))
 	for _, username := range usernames {
 		normalized := normalizeUsername(username)
 		if normalized == "" {
@@ -537,7 +564,7 @@ func (s *userStoreImpl) Fetch(ctx context.Context, usernames []string) ([]UserRe
 	return results, nil
 }
 
-func (s *userStoreImpl) Delete(ctx context.Context, usernames []string) error {
+func (s *billingInfoStoreImpl) Delete(ctx context.Context, usernames []string) error {
 	if s == nil || s.tree == nil {
 		return nil
 	}
@@ -553,11 +580,11 @@ func (s *userStoreImpl) Delete(ctx context.Context, usernames []string) error {
 	return nil
 }
 
-func (s *userStoreImpl) List(ctx context.Context) ([]UserRecord, error) {
+func (s *billingInfoStoreImpl) List(ctx context.Context) ([]BillingInfo, error) {
 	if s == nil || s.tree == nil {
 		return nil, nil
 	}
-	users := make([]UserRecord, 0, s.tree.Count())
+	infos := make([]BillingInfo, 0, s.tree.Count())
 	ok, err := s.tree.First(ctx)
 	if err != nil {
 		return nil, err
@@ -567,13 +594,13 @@ func (s *userStoreImpl) List(ctx context.Context) ([]UserRecord, error) {
 		if err != nil {
 			return nil, err
 		}
-		users = append(users, value)
+		infos = append(infos, value)
 		ok, err = s.tree.Next(ctx)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return users, nil
+	return infos, nil
 }
 
 type subscriptionStoreImpl struct {
@@ -1041,16 +1068,6 @@ func hashSitePassword(password string) (string, error) {
 	return string(hash), nil
 }
 
-func containsUserRecord(users []UserRecord, username string) bool {
-	username = normalizeUsername(username)
-	for _, existing := range users {
-		if normalizeUsername(existing.Username) == username {
-			return true
-		}
-	}
-	return false
-}
-
 func normalizeRequestOrigin(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "human", "site", "signup", "site-signup", "human-signup":
@@ -1060,14 +1077,14 @@ func normalizeRequestOrigin(value string) string {
 	}
 }
 
-func (c *Config) ensureUserStore(ctx context.Context, tx sop.Transaction) (UserStore, error) {
+func (c *Config) ensureBillingInfoStore(ctx context.Context, tx sop.Transaction) (BillingInfoStore, error) {
 	if c == nil {
 		return nil, fmt.Errorf("site account config is not initialized")
 	}
 	if tx == nil {
 		return nil, fmt.Errorf("transaction is required")
 	}
-	return newUserStore(ctx, tx)
+	return newBillingInfoStore(ctx, tx)
 }
 
 func (c *Config) ensureSubscriptionStore(ctx context.Context, tx sop.Transaction) (SubscriptionStore, error) {
@@ -1120,11 +1137,27 @@ func (c *Config) ensureUserPaymentIndexStore(ctx context.Context, tx sop.Transac
 	return newUserPaymentIndexStore(ctx, tx)
 }
 
-// FindUserRecord returns a site user by username.
+// FindUserRecord returns a composite user record by querying both sopbackend (auth) and billing_info stores.
 func (c *Config) FindUserRecord(ctx context.Context, username string) (*UserRecord, bool, error) {
 	if c == nil {
 		return nil, false, nil
 	}
+	username = normalizeUsername(username)
+	if username == "" {
+		return nil, false, nil
+	}
+
+	// Query sopbackend for auth data using its resilient FindUserRecord method
+	sopbackendCfg := sopbackend.GetConfig()
+	authUser, found, err := sopbackendCfg.FindUserRecord(ctx, username)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to query sopbackend user: %w", err)
+	}
+	if !found {
+		return nil, false, nil
+	}
+
+	// Query billing_info store for billing data
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
 		return nil, false, err
@@ -1134,26 +1167,49 @@ func (c *Config) FindUserRecord(ctx context.Context, username string) (*UserReco
 		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
-	store, err := c.ensureUserStore(ctx, tx)
+
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return nil, false, err
 	}
-	if store != nil {
-		users, err := store.Fetch(ctx, []string{username})
-		if err != nil {
-			return nil, false, err
-		}
-		if len(users) > 0 && normalizeUsername(users[0].Username) != "" {
-			return &users[0], true, nil
-		}
+
+	billingInfos, err := billingStore.Fetch(ctx, []string{username})
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to query billing info: %w", err)
 	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == normalizeUsername(username) {
-			copyUser := c.Users[i]
-			return &copyUser, true, nil
-		}
+
+	// Combine auth + billing into UserRecord
+	user := &UserRecord{
+		Username:     authUser.Username,
+		Role:         authUser.Role,
+		PasswordHash: string(authUser.PasswordHash),
+		Email:        string(authUser.Email),
+		CreatedAt:    authUser.CreatedAt,
+		UpdatedAt:    authUser.UpdatedAt,
 	}
-	return nil, false, nil
+
+	// Add billing fields if they exist
+	if len(billingInfos) > 0 {
+		billing := billingInfos[0]
+		user.FullName = billing.FullName
+		user.SubscriptionPlan = billing.SubscriptionPlan
+		user.SubscriptionFeatures = billing.SubscriptionFeatures
+		user.BillingStatus = billing.BillingStatus
+		user.CheckoutURL = billing.CheckoutURL
+		user.PendingCheckoutSessionID = billing.PendingCheckoutSessionID
+		user.StripeCheckoutSessionID = billing.StripeCheckoutSessionID
+		user.LastWebhookEvent = billing.LastWebhookEvent
+		user.LastWebhookAt = billing.LastWebhookAt
+		user.LastPingAt = billing.LastPingAt
+		user.PendingCheckoutPingDeadline = billing.PendingCheckoutPingDeadline
+		user.FailureReason = billing.FailureReason
+		user.RequestOrigin = billing.RequestOrigin
+		user.StripeCustomerID = billing.StripeCustomerID
+		user.StripeSubID = billing.StripeSubID
+		user.Status = billing.Status
+	}
+
+	return user, true, nil
 }
 
 func generatePendingCheckoutSessionID() string {
@@ -1169,6 +1225,7 @@ func (c *Config) FindUserRecordByPendingCheckoutSession(ctx context.Context, che
 	if checkoutSessionID == "" {
 		return nil, false, nil
 	}
+
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
 		return nil, false, err
@@ -1178,37 +1235,36 @@ func (c *Config) FindUserRecordByPendingCheckoutSession(ctx context.Context, che
 		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
-	store, err := c.ensureUserStore(ctx, tx)
+
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return nil, false, err
 	}
-	if store != nil {
-		users, err := store.List(ctx)
-		if err != nil {
-			return nil, false, err
-		}
-		for i := range users {
-			if strings.EqualFold(strings.TrimSpace(users[i].PendingCheckoutSessionID), checkoutSessionID) {
-				copyUser := users[i]
-				return &copyUser, true, nil
-			}
+
+	// Scan all billing records to find matching checkout session ID
+	allBillingInfos, err := billingStore.List(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+
+	for _, billing := range allBillingInfos {
+		if billing.PendingCheckoutSessionID == checkoutSessionID {
+			// Found matching billing record, now get auth data
+			return c.FindUserRecord(ctx, billing.Username)
 		}
 	}
-	for i := range c.Users {
-		if strings.EqualFold(strings.TrimSpace(c.Users[i].PendingCheckoutSessionID), checkoutSessionID) {
-			copyUser := c.Users[i]
-			return &copyUser, true, nil
-		}
-	}
+
 	return nil, false, nil
 }
 
 // FindUserRecordByCheckoutSession returns a site user by either the backend-issued pending checkout session ID or the Stripe checkout session ID.
 func (c *Config) FindUserRecordByCheckoutSession(ctx context.Context, checkoutSessionID string) (*UserRecord, bool, error) {
+	// Try pending checkout session ID first
 	user, ok, err := c.FindUserRecordByPendingCheckoutSession(ctx, checkoutSessionID)
 	if err != nil || ok || user != nil {
 		return user, ok, err
 	}
+
 	if c == nil {
 		return nil, false, nil
 	}
@@ -1216,6 +1272,7 @@ func (c *Config) FindUserRecordByCheckoutSession(ctx context.Context, checkoutSe
 	if checkoutSessionID == "" {
 		return nil, false, nil
 	}
+
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
 		return nil, false, err
@@ -1225,32 +1282,29 @@ func (c *Config) FindUserRecordByCheckoutSession(ctx context.Context, checkoutSe
 		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
-	store, err := c.ensureUserStore(ctx, tx)
+
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return nil, false, err
 	}
-	if store != nil {
-		users, err := store.List(ctx)
-		if err != nil {
-			return nil, false, err
-		}
-		for i := range users {
-			if strings.EqualFold(strings.TrimSpace(users[i].StripeCheckoutSessionID), checkoutSessionID) {
-				copyUser := users[i]
-				return &copyUser, true, nil
-			}
+
+	// Scan all billing records to find matching Stripe checkout session ID
+	allBillingInfos, err := billingStore.List(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+
+	for _, billing := range allBillingInfos {
+		if strings.EqualFold(strings.TrimSpace(billing.StripeCheckoutSessionID), checkoutSessionID) {
+			// Found matching billing record, now get full user data
+			return c.FindUserRecord(ctx, billing.Username)
 		}
 	}
-	for i := range c.Users {
-		if strings.EqualFold(strings.TrimSpace(c.Users[i].StripeCheckoutSessionID), checkoutSessionID) {
-			copyUser := c.Users[i]
-			return &copyUser, true, nil
-		}
-	}
+
 	return nil, false, nil
 }
 
-// UpsertUserRecord persists a site user record and keeps the in-memory cache in sync.
+// UpsertUserRecord persists a site user record by updating both sopbackend (auth) and billing_info stores.
 func (c *Config) UpsertUserRecord(ctx context.Context, user *UserRecord) error {
 	if c == nil {
 		return fmt.Errorf("site account config is not initialized")
@@ -1258,6 +1312,33 @@ func (c *Config) UpsertUserRecord(ctx context.Context, user *UserRecord) error {
 	if user == nil {
 		return fmt.Errorf("user is required")
 	}
+
+	// Update auth in sopbackend using the resilient user store access
+	sopbackendCfg := sopbackend.GetConfig()
+	store := sopbackendCfg.UsersStore
+	if store == nil {
+		// If UsersStore is not initialized, the system is not properly set up
+		// This should not happen in production, but we handle it gracefully
+		return fmt.Errorf("sopbackend users store not initialized")
+	}
+
+	authUser := &sopbackend.UserRecord{
+		Username:     user.Username,
+		Role:         user.Role,
+		PasswordHash: sopbackend.SecuredString(user.PasswordHash),
+		Email:        sopbackend.SecuredString(user.Email),
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    time.Now().UTC(),
+	}
+	if authUser.CreatedAt.IsZero() {
+		authUser.CreatedAt = authUser.UpdatedAt
+	}
+
+	if err := store.Save(ctx, authUser); err != nil {
+		return fmt.Errorf("failed to save sopbackend user: %w", err)
+	}
+
+	// Update billing info in siteaccount
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
 		return err
@@ -1268,17 +1349,41 @@ func (c *Config) UpsertUserRecord(ctx context.Context, user *UserRecord) error {
 	}
 	defer tx.Rollback(ctx)
 
-	store, err := c.ensureUserStore(ctx, tx)
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
-		return err
+
+	billing := BillingInfo{
+		Username:                    user.Username,
+		FullName:                    user.FullName,
+		SubscriptionPlan:            user.SubscriptionPlan,
+		SubscriptionFeatures:        user.SubscriptionFeatures,
+		BillingStatus:               user.BillingStatus,
+		CheckoutURL:                 user.CheckoutURL,
+		PendingCheckoutSessionID:    user.PendingCheckoutSessionID,
+		StripeCheckoutSessionID:     user.StripeCheckoutSessionID,
+		LastWebhookEvent:            user.LastWebhookEvent,
+		LastWebhookAt:               user.LastWebhookAt,
+		LastPingAt:                  user.LastPingAt,
+		PendingCheckoutPingDeadline: user.PendingCheckoutPingDeadline,
+		FailureReason:               user.FailureReason,
+		RequestOrigin:               user.RequestOrigin,
+		StripeCustomerID:            user.StripeCustomerID,
+		StripeSubID:                 user.StripeSubID,
+		Status:                      user.Status,
+		CreatedAt:                   user.CreatedAt,
+		UpdatedAt:                   time.Now().UTC(),
 	}
+
+	if err := billingStore.Upsert(ctx, []BillingInfo{billing}); err != nil {
+		return fmt.Errorf("failed to save billing info: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
-		return err
+		return fmt.Errorf("failed to commit billing info: %w", err)
 	}
-	upsertSiteUserRecord(c, *user)
+
 	return nil
 }
 
@@ -1335,50 +1440,80 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 		return nil, err
 	}
 	if found && existing != nil {
-		if strings.TrimSpace(existing.PasswordHash) != "" {
-			return nil, fmt.Errorf("user already exists")
+		billingStore, err := c.ensureBillingInfoStore(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		billingInfos, err := billingStore.Fetch(ctx, []string{username})
+		if err != nil {
+			return nil, err
+		}
+		if len(billingInfos) > 0 {
+			if strings.TrimSpace(existing.PasswordHash) != "" {
+				return nil, fmt.Errorf("user already exists")
+			}
 		}
 		passwordHash, err := hashSitePassword(req.Password)
 		if err != nil {
 			return nil, err
 		}
-		existing.Role = req.Role
-		existing.Email = req.Email
+
+		// Update sopbackend auth record
+		sharedCfg := sopbackend.GetConfig()
+		if sharedUser, ok, findErr := sharedCfg.FindUserRecord(ctx, username); findErr == nil && ok && sharedUser != nil {
+			sharedUser.Role = req.Role
+			sharedUser.Email = sopbackend.SecuredString(req.Email)
+			sharedUser.PasswordHash = sopbackend.SecuredString(passwordHash)
+			sharedUser.UpdatedAt = time.Now().UTC()
+			if store := sharedCfg.UsersStore; store != nil {
+				if err := store.Save(ctx, sharedUser); err != nil {
+					return nil, fmt.Errorf("failed to update sopbackend user: %w", err)
+				}
+			}
+		}
+		sopbackend.SetConfig(sharedCfg)
+
+		// Update billing info
 		existing.SubscriptionPlan = req.SubscriptionPlan
 		existing.SubscriptionFeatures = req.SubscriptionFeatures
-		existing.PasswordHash = passwordHash
 		existing.BillingStatus = "pending"
 		existing.RequestOrigin = normalizeRequestOrigin(req.RequestOrigin)
 		existing.Status = "active"
 		existing.UpdatedAt = time.Now().UTC()
 
-		store, err := c.ensureUserStore(ctx, tx)
-		if err != nil {
-			return nil, err
+		billingInfo := BillingInfo{
+			Username:             existing.Username,
+			FullName:             existing.FullName,
+			SubscriptionPlan:     existing.SubscriptionPlan,
+			SubscriptionFeatures: existing.SubscriptionFeatures,
+			BillingStatus:        existing.BillingStatus,
+			RequestOrigin:        existing.RequestOrigin,
+			Status:               existing.Status,
+			UpdatedAt:            existing.UpdatedAt,
 		}
-		if err := store.Upsert(ctx, []UserRecord{*existing}); err != nil {
-			return nil, err
+		if err := billingStore.Upsert(ctx, []BillingInfo{billingInfo}); err != nil {
+			return nil, fmt.Errorf("failed to update billing info: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
-		upsertSiteUserRecord(c, *existing)
 		return existing, nil
 	}
 
 	seatLimit := getSiteSeatLimit()
 	if seatLimit > 0 {
-		store, err := c.ensureUserStore(ctx, tx)
-		if err != nil {
-			return nil, err
+		// Check seat limit from sopbackend user store
+		sharedCfg := sopbackend.GetConfig()
+		if sharedCfg.UsersStore != nil {
+			users, err := sharedCfg.UsersStore.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if len(users) >= seatLimit {
+				return nil, fmt.Errorf("%s", buildSiteSeatLimitMessage(seatLimit))
+			}
 		}
-		users, err := store.List(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if len(users) >= seatLimit {
-			return nil, fmt.Errorf("%s", buildSiteSeatLimitMessage(seatLimit))
-		}
+		sopbackend.SetConfig(sharedCfg)
 	}
 
 	passwordHash, err := hashSitePassword(req.Password)
@@ -1386,12 +1521,61 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 		return nil, err
 	}
 
-	user := &UserRecord{
+	// Create or repair the shared auth user before creating billing info.
+	sharedCfg := sopbackend.GetConfig()
+	sharedUser, sharedFound, sharedErr := sharedCfg.FindUserRecord(ctx, username)
+	if sharedErr != nil {
+		return nil, fmt.Errorf("failed to inspect sopbackend user: %w", sharedErr)
+	}
+	if sharedFound && sharedUser != nil {
+		sharedUser.Role = req.Role
+		sharedUser.Email = sopbackend.SecuredString(req.Email)
+		if strings.TrimSpace(string(sharedUser.PasswordHash)) == "" {
+			sharedUser.PasswordHash = sopbackend.SecuredString(passwordHash)
+		}
+		sharedUser.UpdatedAt = time.Now().UTC()
+		if store := sharedCfg.UsersStore; store != nil {
+			if err := store.Save(ctx, sharedUser); err != nil {
+				return nil, fmt.Errorf("failed to update sopbackend user: %w", err)
+			}
+		}
+	} else {
+		_, err = sharedCfg.RegisterUserWithRequest(ctx, sopbackend.RegisterUserRequest{
+			Username: username,
+			FullName: req.FullName,
+			Password: req.Password,
+			Email:    req.Email,
+			Role:     req.Role,
+		})
+		if err != nil {
+			if !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+				return nil, fmt.Errorf("failed to create sopbackend user: %w", err)
+			}
+			sharedUser, sharedFound, sharedErr = sharedCfg.FindUserRecord(ctx, username)
+			if sharedErr != nil {
+				return nil, fmt.Errorf("failed to inspect sopbackend user after duplicate registration: %w", sharedErr)
+			}
+			if sharedFound && sharedUser != nil {
+				sharedUser.Role = req.Role
+				sharedUser.Email = sopbackend.SecuredString(req.Email)
+				if strings.TrimSpace(string(sharedUser.PasswordHash)) == "" {
+					sharedUser.PasswordHash = sopbackend.SecuredString(passwordHash)
+				}
+				sharedUser.UpdatedAt = time.Now().UTC()
+				if store := sharedCfg.UsersStore; store != nil {
+					if err := store.Save(ctx, sharedUser); err != nil {
+						return nil, fmt.Errorf("failed to update sopbackend user: %w", err)
+					}
+				}
+			}
+		}
+	}
+	sopbackend.SetConfig(sharedCfg)
+
+	// Create billing info in siteaccount
+	billing := BillingInfo{
 		Username:             username,
 		FullName:             strings.TrimSpace(req.FullName),
-		Role:                 req.Role,
-		PasswordHash:         passwordHash,
-		Email:                req.Email,
 		SubscriptionPlan:     req.SubscriptionPlan,
 		SubscriptionFeatures: req.SubscriptionFeatures,
 		BillingStatus:        "pending",
@@ -1400,45 +1584,40 @@ func (c *Config) RegisterUserWithRequest(ctx context.Context, req RegisterUserRe
 		CreatedAt:            time.Now().UTC(),
 		UpdatedAt:            time.Now().UTC(),
 	}
-	store, err := c.ensureUserStore(ctx, tx)
+
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
-		return nil, err
+	if err := billingStore.Upsert(ctx, []BillingInfo{billing}); err != nil {
+		return nil, fmt.Errorf("failed to create billing info: %w", err)
 	}
 	if err := seedDefaultProducts(ctx, tx); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to commit billing info: %w", err)
 	}
-	upsertSiteUserRecord(c, *user)
 
-	sharedCfg := sopbackend.GetConfig()
-	_, err = sharedCfg.RegisterUserWithRequest(ctx, sopbackend.RegisterUserRequest{
+	// Return composite UserRecord
+	user := &UserRecord{
 		Username:             username,
-		FullName:             req.FullName,
-		Password:             req.Password,
-		Email:                req.Email,
+		FullName:             billing.FullName,
 		Role:                 req.Role,
-		SubscriptionPlan:     req.SubscriptionPlan,
-		SubscriptionFeatures: req.SubscriptionFeatures,
-	})
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
-			// A shared-auth record may already exist from a prior retry or partial registration.
-			// Keep the site account creation successful and rely on login to authenticate the user.
-			sopbackend.SetConfig(sharedCfg)
-			return user, nil
-		}
-		return nil, err
+		PasswordHash:         passwordHash,
+		Email:                req.Email,
+		SubscriptionPlan:     billing.SubscriptionPlan,
+		SubscriptionFeatures: billing.SubscriptionFeatures,
+		BillingStatus:        billing.BillingStatus,
+		RequestOrigin:        billing.RequestOrigin,
+		Status:               billing.Status,
+		CreatedAt:            billing.CreatedAt,
+		UpdatedAt:            billing.UpdatedAt,
 	}
-	sopbackend.SetConfig(sharedCfg)
 	return user, nil
 }
 
-// UnregisterUserWithRequest removes a site account and its related records.
+// UnregisterUserWithRequest removes a site account and its related records from both stores.
 func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUserRequest) error {
 	if c == nil {
 		return fmt.Errorf("site account config is not initialized")
@@ -1447,6 +1626,8 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 	if username == "" {
 		return fmt.Errorf("username is required")
 	}
+
+	// Delete from siteaccount stores
 	db, err := getSiteAccountDB(ctx)
 	if err != nil {
 		return err
@@ -1457,13 +1638,14 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 	}
 	defer tx.Rollback(ctx)
 
-	userStore, err := c.ensureUserStore(ctx, tx)
+	// Delete billing info
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if userStore != nil {
-		if err := userStore.Delete(ctx, []string{username}); err != nil {
-			return err
+	if billingStore != nil {
+		if err := billingStore.Delete(ctx, []string{username}); err != nil {
+			return fmt.Errorf("failed to delete billing info: %w", err)
 		}
 	}
 
@@ -1535,39 +1717,19 @@ func (c *Config) UnregisterUserWithRequest(ctx context.Context, req UnregisterUs
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return err
+		return fmt.Errorf("failed to commit siteaccount deletions: %w", err)
 	}
 
-	filteredUsers := c.Users[:0]
-	for _, existing := range c.Users {
-		if normalizeUsername(existing.Username) == username {
-			continue
-		}
-		filteredUsers = append(filteredUsers, existing)
-	}
-	c.Users = filteredUsers
-
-	filteredSubscriptions := c.Subscriptions[:0]
-	for _, existing := range c.Subscriptions {
-		if normalizeUsername(existing.UserID) == username {
-			continue
-		}
-		filteredSubscriptions = append(filteredSubscriptions, existing)
-	}
-	c.Subscriptions = filteredSubscriptions
-
-	filteredPayments := c.Payments[:0]
-	for _, existing := range c.Payments {
-		if normalizeUsername(existing.UserID) == username {
-			continue
-		}
-		filteredPayments = append(filteredPayments, existing)
-	}
-	c.Payments = filteredPayments
-
+	// Delete from sopbackend auth store
 	sharedCfg := sopbackend.GetConfig()
-	_ = sharedCfg.UnregisterUserWithRequest(ctx, sopbackend.UnregisterUserRequest{Username: username})
+	if sharedCfg.UsersStore != nil {
+		if err := sharedCfg.UsersStore.Delete(ctx, username); err != nil {
+			// Log but don't fail if sopbackend deletion fails
+			slog.Warn("failed to delete sopbackend user", "username", username, "error", err)
+		}
+	}
 	sopbackend.SetConfig(sharedCfg)
+
 	return nil
 }
 
@@ -1609,53 +1771,23 @@ func (c *Config) ChangePasswordWithRequest(ctx context.Context, req ChangePasswo
 	if err != nil {
 		return nil, err
 	}
-	db, err := getSiteAccountDB(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	user.PasswordHash = passwordHash
-	user.UpdatedAt = time.Now().UTC()
-	store, err := c.ensureUserStore(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i] = *user
-			break
-		}
-	}
+
+	// Update password in sopbackend only (password is auth data, not billing)
 	sharedCfg := sopbackend.GetConfig()
 	if sharedUser, ok, findErr := sharedCfg.FindUserRecord(ctx, username); findErr == nil && ok && sharedUser != nil {
 		sharedUser.PasswordHash = sopbackend.SecuredString(passwordHash)
-		sharedUser.Email = sopbackend.SecuredString(strings.TrimSpace(user.Email))
-		sharedUser.Role = strings.TrimSpace(user.Role)
-		sharedUser.SubscriptionPlan = user.SubscriptionPlan
 		sharedUser.UpdatedAt = time.Now().UTC()
 		if store := sharedCfg.UsersStore; store != nil {
 			if err := store.Save(ctx, sharedUser); err != nil {
-				return nil, err
-			}
-		}
-		for i := range sharedCfg.Users {
-			if normalizeUsername(sharedCfg.Users[i].Username) == username {
-				sharedCfg.Users[i] = *sharedUser
-				break
+				return nil, fmt.Errorf("failed to update password in sopbackend: %w", err)
 			}
 		}
 	}
 	sopbackend.SetConfig(sharedCfg)
+
+	// Update user record with new password hash for response
+	user.PasswordHash = passwordHash
+	user.UpdatedAt = time.Now().UTC()
 	return user, nil
 }
 
@@ -1684,38 +1816,43 @@ func (c *Config) UpdateSubscriptionPlanWithRequest(ctx context.Context, req Upda
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	user.SubscriptionPlan = req.SubscriptionPlan
-	user.SubscriptionFeatures = req.SubscriptionFeatures
-	if normalized := normalizeRequestOrigin(req.RequestOrigin); normalized != "" {
-		user.RequestOrigin = normalized
-	}
-	user.UpdatedAt = time.Now().UTC()
-	store, err := c.ensureUserStore(ctx, tx)
+
+	// Update billing info only (subscription plan is billing data)
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
-		return nil, err
+
+	billingInfos, err := billingStore.Fetch(ctx, []string{username})
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch billing info: %w", err)
+	}
+	if len(billingInfos) == 0 {
+		return nil, fmt.Errorf("billing info not found for user: %s", username)
+	}
+	billingInfo := billingInfos[0]
+	billingInfo.SubscriptionPlan = req.SubscriptionPlan
+	billingInfo.SubscriptionFeatures = req.SubscriptionFeatures
+	if normalized := normalizeRequestOrigin(req.RequestOrigin); normalized != "" {
+		billingInfo.RequestOrigin = normalized
+	}
+	billingInfo.UpdatedAt = time.Now().UTC()
+
+	if err := billingStore.Upsert(ctx, []BillingInfo{billingInfo}); err != nil {
+		return nil, fmt.Errorf("failed to update billing info: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == username {
-			c.Users[i] = *user
-			break
-		}
-	}
 
-	sharedCfg := sopbackend.GetConfig()
-	if _, err := sharedCfg.UpdateSubscriptionPlanWithRequest(ctx, sopbackend.UpdateSubscriptionPlanRequest{
-		Username:             username,
-		SubscriptionPlan:     req.SubscriptionPlan,
-		SubscriptionFeatures: append([]string(nil), req.SubscriptionFeatures...),
-	}); err != nil {
-		return nil, err
-	}
-	sopbackend.SetConfig(sharedCfg)
+	// Update user record with new billing data for response
+	user.SubscriptionPlan = billingInfo.SubscriptionPlan
+	user.SubscriptionFeatures = billingInfo.SubscriptionFeatures
+	user.RequestOrigin = billingInfo.RequestOrigin
+	user.UpdatedAt = billingInfo.UpdatedAt
+
+	// NOTE: Subscription plan management is site-backend-only.
+	// sopbackend only tracks basic auth/role data, not billing/subscription.
 	return user, nil
 }
 
@@ -1746,12 +1883,6 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	user.SubscriptionPlan = plan
-	user.BillingStatus = "pending"
-	if user.RequestOrigin == "" {
-		user.RequestOrigin = "human"
-	}
-	user.UpdatedAt = time.Now().UTC()
 
 	providedEmail := ""
 	if len(opts) > 0 {
@@ -1768,32 +1899,44 @@ func (c *Config) CreateCheckoutSession(ctx context.Context, username, plan strin
 	if err != nil {
 		return nil, err
 	}
+	stripeCheckoutSessionID := ""
 	if checkoutSession != nil {
 		checkoutURL = checkoutSession.URL
 		checkoutStatus = checkoutSession.Status
-		user.StripeCheckoutSessionID = checkoutSession.ID
+		stripeCheckoutSessionID = checkoutSession.ID
 	}
-	user.CheckoutURL = checkoutURL
-	user.PendingCheckoutSessionID = pendingCheckoutSessionID
-	store, err := c.ensureUserStore(ctx, tx)
+
+	// Update billing info with checkout session details
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
-		return nil, err
+
+	billingInfos, err := billingStore.Fetch(ctx, []string{username})
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch billing info: %w", err)
+	}
+	if len(billingInfos) == 0 {
+		return nil, fmt.Errorf("billing info not found for user: %s", username)
+	}
+	billingInfo := billingInfos[0]
+	billingInfo.SubscriptionPlan = plan
+	billingInfo.BillingStatus = "pending"
+	if billingInfo.RequestOrigin == "" {
+		billingInfo.RequestOrigin = "human"
+	}
+	billingInfo.StripeCheckoutSessionID = stripeCheckoutSessionID
+	billingInfo.CheckoutURL = checkoutURL
+	billingInfo.PendingCheckoutSessionID = pendingCheckoutSessionID
+	billingInfo.UpdatedAt = time.Now().UTC()
+
+	if err := billingStore.Upsert(ctx, []BillingInfo{billingInfo}); err != nil {
+		return nil, fmt.Errorf("failed to update billing info: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == normalizeUsername(username) {
-			c.Users[i] = *user
-			break
-		}
-	}
-	if !containsUserRecord(c.Users, username) {
-		c.Users = append(c.Users, *user)
-	}
+
 	session := &BillingCheckoutSession{ID: pendingCheckoutSessionID, URL: checkoutURL, Status: checkoutStatus}
 	return session, nil
 }
@@ -1898,32 +2041,39 @@ func (c *Config) HandleBillingWebhook(ctx context.Context, event BillingWebhookE
 		return err
 	}
 	defer tx.Rollback(ctx)
-	user.LastWebhookEvent = event.EventType
-	user.LastWebhookAt = time.Now().UTC()
-	user.BillingStatus = "inactive"
-	user.FailureReason = ""
-	if event.EventType == "checkout.session.completed" {
-		user.BillingStatus = "active"
-		user.SubscriptionPlan = event.Plan
-	} else if event.EventType == "checkout.session.expired" {
-		user.FailureReason = "checkout session expired"
-	}
-	user.UpdatedAt = time.Now().UTC()
-	store, err := c.ensureUserStore(ctx, tx)
+
+	// Update billing info only (webhook events are billing data)
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
+
+	billingInfos, err := billingStore.Fetch(ctx, []string{event.UserID})
+	if err != nil {
+		return err
+	}
+	if len(billingInfos) == 0 {
+		return fmt.Errorf("billing info not found for user: %s", event.UserID)
+	}
+	billingInfo := billingInfos[0]
+
+	billingInfo.LastWebhookEvent = event.EventType
+	billingInfo.LastWebhookAt = time.Now().UTC()
+	billingInfo.BillingStatus = "inactive"
+	billingInfo.FailureReason = ""
+	if event.EventType == "checkout.session.completed" {
+		billingInfo.BillingStatus = "active"
+		billingInfo.SubscriptionPlan = event.Plan
+	} else if event.EventType == "checkout.session.expired" {
+		billingInfo.FailureReason = "checkout session expired"
+	}
+	billingInfo.UpdatedAt = time.Now().UTC()
+
+	if err := billingStore.Upsert(ctx, []BillingInfo{billingInfo}); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
-	}
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == normalizeUsername(event.UserID) {
-			c.Users[i] = *user
-			break
-		}
 	}
 	return nil
 }
@@ -1944,9 +2094,9 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 		slog.Warn("siteaccount.stripe.sync.user_not_found", "username", username)
 		return fmt.Errorf("user not found")
 	}
-	// Only sync if billing is pending
-	if user.BillingStatus != "pending" {
-		slog.Info("siteaccount.stripe.sync.not_pending", "username", username, "billing_status", user.BillingStatus)
+	// Only sync if billing is pending OR active (to verify active status with Stripe)
+	if user.BillingStatus != "pending" && user.BillingStatus != "active" {
+		slog.Info("siteaccount.stripe.sync.not_syncable", "username", username, "billing_status", user.BillingStatus)
 		return nil
 	}
 
@@ -1955,7 +2105,7 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 	secretKey := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY"))
 	if secretKey == "" {
 		slog.Error("siteaccount.stripe.sync.no_secret_key", "username", username)
-		return fmt.Errorf("STRIPE_SECRET_KEY not configured")
+		return nil
 	}
 
 	apiBaseURL := strings.TrimSpace(os.Getenv("STRIPE_API_BASE_URL"))
@@ -2062,7 +2212,11 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
-			// Subscription not found or error - don't update
+			// Subscription not found or error - mark as inactive
+			slog.Warn("siteaccount.stripe.sync.subscription_not_found", "username", username, "subscription_id", user.StripeSubID, "status", resp.StatusCode)
+			if user.BillingStatus == "active" {
+				return c.deactivateUserBilling(ctx, user, username, "subscription not found in Stripe")
+			}
 			return nil
 		}
 		var subscription struct {
@@ -2072,9 +2226,14 @@ func (c *Config) SyncSubscriptionStatusFromStripe(ctx context.Context, username 
 		if err := json.NewDecoder(resp.Body).Decode(&subscription); err != nil {
 			return err
 		}
+		slog.Info("siteaccount.stripe.sync.subscription_status", "username", username, "stripe_status", subscription.Status)
 		// If the subscription is active on Stripe, update local billing state
 		if subscription.Status == "active" || subscription.Status == "trialing" {
 			return c.activateUserBilling(ctx, user, username)
+		}
+		// If subscription is not active (cancelled, expired, etc.), deactivate locally
+		if user.BillingStatus == "active" {
+			return c.deactivateUserBilling(ctx, user, username, fmt.Sprintf("stripe subscription status: %s", subscription.Status))
 		}
 	}
 	slog.Info("siteaccount.stripe.sync.complete", "username", username, "billing_status", user.BillingStatus)
@@ -2094,17 +2253,31 @@ func (c *Config) activateUserBilling(ctx context.Context, user *UserRecord, user
 		return err
 	}
 	defer tx.Rollback(ctx)
-	user.BillingStatus = "active"
-	user.LastWebhookEvent = "subscription.synced"
-	user.LastWebhookAt = time.Now().UTC()
-	user.UpdatedAt = time.Now().UTC()
-	slog.Info("siteaccount.activate_billing.updating", "username", username, "new_status", user.BillingStatus)
-	store, err := c.ensureUserStore(ctx, tx)
+
+	// Update billing info only
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
 		slog.Error("siteaccount.activate_billing.store_error", "username", username, "error", err)
 		return err
 	}
-	if err := store.Upsert(ctx, []UserRecord{*user}); err != nil {
+
+	billingInfos, err := billingStore.Fetch(ctx, []string{username})
+	if err != nil {
+		slog.Error("siteaccount.activate_billing.fetch_error", "username", username, "error", err)
+		return err
+	}
+	if len(billingInfos) == 0 {
+		return fmt.Errorf("billing info not found for user: %s", username)
+	}
+	billingInfo := billingInfos[0]
+
+	billingInfo.BillingStatus = "active"
+	billingInfo.LastWebhookEvent = "subscription.synced"
+	billingInfo.LastWebhookAt = time.Now().UTC()
+	billingInfo.UpdatedAt = time.Now().UTC()
+	slog.Info("siteaccount.activate_billing.updating", "username", username, "new_status", billingInfo.BillingStatus)
+
+	if err := billingStore.Upsert(ctx, []BillingInfo{billingInfo}); err != nil {
 		slog.Error("siteaccount.activate_billing.upsert_error", "username", username, "error", err)
 		return err
 	}
@@ -2113,13 +2286,56 @@ func (c *Config) activateUserBilling(ctx context.Context, user *UserRecord, user
 		return err
 	}
 	slog.Info("siteaccount.activate_billing.db_committed", "username", username)
-	for i := range c.Users {
-		if normalizeUsername(c.Users[i].Username) == normalizeUsername(username) {
-			c.Users[i] = *user
-			slog.Info("siteaccount.activate_billing.cache_updated", "username", username, "cache_status", c.Users[i].BillingStatus)
-			break
-		}
+	slog.Info("siteaccount.activate_billing.success", "username", username, "billing_status", billingInfo.BillingStatus)
+	return nil
+}
+
+func (c *Config) deactivateUserBilling(ctx context.Context, user *UserRecord, username string, reason string) error {
+	slog.Info("siteaccount.deactivate_billing.start", "username", username, "current_status", user.BillingStatus, "reason", reason)
+	db, err := getSiteAccountDB(ctx)
+	if err != nil {
+		slog.Error("siteaccount.deactivate_billing.db_error", "username", username, "error", err)
+		return err
 	}
-	slog.Info("siteaccount.activate_billing.success", "username", username, "billing_status", user.BillingStatus)
+	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	if err != nil {
+		slog.Error("siteaccount.deactivate_billing.tx_error", "username", username, "error", err)
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Update billing info only
+	billingStore, err := c.ensureBillingInfoStore(ctx, tx)
+	if err != nil {
+		slog.Error("siteaccount.deactivate_billing.store_error", "username", username, "error", err)
+		return err
+	}
+
+	billingInfos, err := billingStore.Fetch(ctx, []string{username})
+	if err != nil {
+		slog.Error("siteaccount.deactivate_billing.fetch_error", "username", username, "error", err)
+		return err
+	}
+	if len(billingInfos) == 0 {
+		return fmt.Errorf("billing info not found for user: %s", username)
+	}
+	billingInfo := billingInfos[0]
+
+	billingInfo.BillingStatus = "inactive"
+	billingInfo.FailureReason = reason
+	billingInfo.LastWebhookEvent = "subscription.sync_failed"
+	billingInfo.LastWebhookAt = time.Now().UTC()
+	billingInfo.UpdatedAt = time.Now().UTC()
+	slog.Info("siteaccount.deactivate_billing.updating", "username", username, "new_status", billingInfo.BillingStatus)
+
+	if err := billingStore.Upsert(ctx, []BillingInfo{billingInfo}); err != nil {
+		slog.Error("siteaccount.deactivate_billing.upsert_error", "username", username, "error", err)
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Error("siteaccount.deactivate_billing.commit_error", "username", username, "error", err)
+		return err
+	}
+	slog.Info("siteaccount.deactivate_billing.success", "username", username, "billing_status", billingInfo.BillingStatus)
 	return nil
 }

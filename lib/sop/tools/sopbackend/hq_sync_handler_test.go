@@ -18,7 +18,6 @@ func TestHandleHQSyncAcceptsBatchWithArtifacts(t *testing.T) {
 		Username:     "root",
 		Role:         sop.RoleSystemAdmin,
 		PasswordHash: SecuredString("$2a$10$test"),
-		Status:       "active",
 	}
 	if err := config.ensureUserStore().Save(context.Background(), rootUser); err != nil {
 		t.Fatalf("save root user: %v", err)
@@ -108,7 +107,6 @@ func TestHandleHQSyncAcceptsEmptyArtifacts(t *testing.T) {
 		Username:     "root",
 		Role:         sop.RoleSystemAdmin,
 		PasswordHash: SecuredString("$2a$10$test"),
-		Status:       "active",
 	}
 	if err := config.ensureUserStore().Save(context.Background(), rootUser); err != nil {
 		t.Fatalf("save root user: %v", err)
@@ -151,7 +149,6 @@ func TestHandleHQRetrieveAcceptsQuery(t *testing.T) {
 		Username:     "root",
 		Role:         sop.RoleSystemAdmin,
 		PasswordHash: SecuredString("$2a$10$test"),
-		Status:       "active",
 	}
 	if err := config.ensureUserStore().Save(context.Background(), rootUser); err != nil {
 		t.Fatalf("save root user: %v", err)
@@ -214,7 +211,6 @@ func TestHandleHQRetrieveAcceptsEmptyQuery(t *testing.T) {
 		Username:     "root",
 		Role:         sop.RoleSystemAdmin,
 		PasswordHash: SecuredString("$2a$10$test"),
-		Status:       "active",
 	}
 	if err := config.ensureUserStore().Save(context.Background(), rootUser); err != nil {
 		t.Fatalf("save root user: %v", err)

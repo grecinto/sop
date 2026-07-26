@@ -128,11 +128,10 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	cfg := sopbackend.GetConfig()
 	user, err := cfg.RegisterUserWithRequest(r.Context(), sopbackend.RegisterUserRequest{
-		Username:         req.Username,
-		Password:         req.Password,
-		Email:            req.Email,
-		Role:             req.Role,
-		SubscriptionPlan: req.SubscriptionPlan,
+		Username: req.Username,
+		Password: req.Password,
+		Email:    req.Email,
+		Role:     req.Role,
 	})
 	if err != nil {
 		sopbackend.RecordProductMetric("site_auth_register_failures")
@@ -261,66 +260,86 @@ func buildUserResponsePayload(r *http.Request, user *sopbackend.UserRecord) map[
 		return map[string]any{"status": "ok", "user": map[string]any{}}
 	}
 
+	// NOTE: sopbackend only has auth fields now. Get billing data from siteaccount.
+	siteCfg := siteaccount.GetConfig()
+	siteUser, siteOk, _ := siteCfg.FindUserRecord(r.Context(), user.Username)
+
 	lastWebhookAt := ""
-	if user != nil && !user.LastWebhookAt.IsZero() {
-		lastWebhookAt = user.LastWebhookAt.UTC().Format(time.RFC3339Nano)
+	billingStatus := ""
+	checkoutURL := ""
+	lastWebhookEvent := ""
+	failureReason := ""
+	subscriptionPlan := ""
+	if siteOk && siteUser != nil {
+		if !siteUser.LastWebhookAt.IsZero() {
+			lastWebhookAt = siteUser.LastWebhookAt.UTC().Format(time.RFC3339Nano)
+		}
+		billingStatus = siteUser.BillingStatus
+		checkoutURL = siteUser.CheckoutURL
+		lastWebhookEvent = siteUser.LastWebhookEvent
+		failureReason = siteUser.FailureReason
+		subscriptionPlan = siteUser.SubscriptionPlan
 	}
+
 	billing := map[string]any{
-		"status":             user.BillingStatus,
-		"checkout_url":       user.CheckoutURL,
+		"status":             billingStatus,
+		"checkout_url":       checkoutURL,
 		"last_webhook_at":    lastWebhookAt,
-		"last_webhook_event": user.LastWebhookEvent,
-		"failure_reason":     user.FailureReason,
+		"last_webhook_event": lastWebhookEvent,
+		"failure_reason":     failureReason,
 	}
 
-	cfg := sopbackend.GetConfig()
-	payments := make([]map[string]any, 0, len(cfg.Payments))
-	for _, payment := range cfg.Payments {
-		if !strings.EqualFold(payment.UserID, user.Username) {
-			continue
+	payments := make([]map[string]any, 0)
+	if siteOk && siteUser != nil {
+		for _, payment := range siteCfg.Payments {
+			if !strings.EqualFold(payment.UserID, user.Username) {
+				continue
+			}
+			createdAt := ""
+			if !payment.CreatedAt.IsZero() {
+				createdAt = payment.CreatedAt.UTC().Format(time.RFC3339Nano)
+			}
+			updatedAt := ""
+			if !payment.UpdatedAt.IsZero() {
+				updatedAt = payment.UpdatedAt.UTC().Format(time.RFC3339Nano)
+			}
+			payments = append(payments, map[string]any{
+				"id":                  payment.ID,
+				"status":              payment.Status,
+				"amount":              payment.Amount,
+				"currency":            payment.Currency,
+				"subscription_id":     payment.SubscriptionID,
+				"provider_payment_id": payment.ProviderPaymentID,
+				"created_at":          createdAt,
+				"updated_at":          updatedAt,
+			})
 		}
-		createdAt := ""
-		if !payment.CreatedAt.IsZero() {
-			createdAt = payment.CreatedAt.UTC().Format(time.RFC3339Nano)
-		}
-		updatedAt := ""
-		if !payment.UpdatedAt.IsZero() {
-			updatedAt = payment.UpdatedAt.UTC().Format(time.RFC3339Nano)
-		}
-		payments = append(payments, map[string]any{
-			"id":                  payment.ID,
-			"status":              payment.Status,
-			"amount":              payment.Amount,
-			"currency":            payment.Currency,
-			"subscription_id":     payment.SubscriptionID,
-			"provider_payment_id": payment.ProviderPaymentID,
-			"created_at":          createdAt,
-			"updated_at":          updatedAt,
-		})
 	}
 
-	subscriptions := make([]map[string]any, 0, len(cfg.Subscriptions))
-	for _, subscription := range cfg.Subscriptions {
-		if !strings.EqualFold(subscription.UserID, user.Username) {
-			continue
+	subscriptions := make([]map[string]any, 0)
+	if siteOk && siteUser != nil {
+		for _, subscription := range siteCfg.Subscriptions {
+			if !strings.EqualFold(subscription.UserID, user.Username) {
+				continue
+			}
+			createdAt := ""
+			if !subscription.CreatedAt.IsZero() {
+				createdAt = subscription.CreatedAt.UTC().Format(time.RFC3339Nano)
+			}
+			updatedAt := ""
+			if !subscription.UpdatedAt.IsZero() {
+				updatedAt = subscription.UpdatedAt.UTC().Format(time.RFC3339Nano)
+			}
+			subscriptions = append(subscriptions, map[string]any{
+				"id":                       subscription.ID,
+				"plan_code":                subscription.PlanCode,
+				"status":                   subscription.Status,
+				"provider_subscription_id": subscription.ProviderSubscription,
+				"cancel_at_period_end":     subscription.CancelAtPeriodEnd,
+				"created_at":               createdAt,
+				"updated_at":               updatedAt,
+			})
 		}
-		createdAt := ""
-		if !subscription.CreatedAt.IsZero() {
-			createdAt = subscription.CreatedAt.UTC().Format(time.RFC3339Nano)
-		}
-		updatedAt := ""
-		if !subscription.UpdatedAt.IsZero() {
-			updatedAt = subscription.UpdatedAt.UTC().Format(time.RFC3339Nano)
-		}
-		subscriptions = append(subscriptions, map[string]any{
-			"id":                       subscription.ID,
-			"plan_code":                subscription.PlanCode,
-			"status":                   subscription.Status,
-			"provider_subscription_id": subscription.ProviderSubscription,
-			"cancel_at_period_end":     subscription.CancelAtPeriodEnd,
-			"created_at":               createdAt,
-			"updated_at":               updatedAt,
-		})
 	}
 
 	authCtx := sop.AuthContext{}
@@ -329,20 +348,32 @@ func buildUserResponsePayload(r *http.Request, user *sopbackend.UserRecord) map[
 	}
 	canAccessDataManager := authCtx.IsSystem || strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root")
 
+	status := ""
+	createdAt := time.Time{}
+	updatedAt := time.Time{}
+	if siteOk && siteUser != nil {
+		status = siteUser.Status
+		createdAt = siteUser.CreatedAt
+		updatedAt = siteUser.UpdatedAt
+	} else {
+		createdAt = user.CreatedAt
+		updatedAt = user.UpdatedAt
+	}
+
 	return map[string]any{
 		"status": "ok",
 		"user": map[string]any{
 			"username":                user.Username,
 			"role":                    user.Role,
 			"email":                   user.Email.Plaintext(),
-			"subscription_plan":       user.SubscriptionPlan,
-			"billing_status":          user.BillingStatus,
+			"subscription_plan":       subscriptionPlan,
+			"billing_status":          billingStatus,
 			"billing":                 billing,
 			"payments":                payments,
 			"subscriptions":           subscriptions,
-			"status":                  user.Status,
-			"created_at":              user.CreatedAt,
-			"updated_at":              user.UpdatedAt,
+			"status":                  status,
+			"created_at":              createdAt,
+			"updated_at":              updatedAt,
 			"can_access_data_manager": canAccessDataManager,
 		},
 	}
@@ -440,9 +471,13 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "subscription canceled and account removed", "unregistered": true})
 		return
 	}
-	updated, err := cfg.UpdateSubscriptionPlanWithRequest(r.Context(), sopbackend.UpdateSubscriptionPlanRequest{
-		Username:         authAccount.Username,
-		SubscriptionPlan: req.Plan,
+
+	// NOTE: Subscription management is now site-backend-only
+	siteCfg := siteaccount.GetConfig()
+	_, err := siteCfg.UpdateSubscriptionPlanWithRequest(r.Context(), siteaccount.UpdateSubscriptionPlanRequest{
+		Username:             authAccount.Username,
+		SubscriptionPlan:     req.Plan,
+		SubscriptionFeatures: []string{},
 	})
 	if err != nil {
 		sopbackend.RecordProductMetric("site_auth_subscription_failures")
@@ -454,11 +489,19 @@ func HandleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sopbackend.RecordProductMetric("site_auth_subscription_requests")
-	sopbackend.SetConfig(cfg)
+	siteaccount.SetConfig(siteCfg)
+
+	// Get sopbackend user record for response payload
+	sopCfg := sopbackend.GetConfig()
+	sopUser, sopOk, _ := sopCfg.FindUserRecord(r.Context(), authAccount.Username)
+	if !sopOk || sopUser == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(r, updated))
+	_ = json.NewEncoder(w).Encode(buildUserResponsePayload(r, sopUser))
 }
 
 func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
@@ -481,15 +524,16 @@ func HandleCheckoutSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := sopbackend.GetConfig()
-	session, err := cfg.CreateCheckoutSession(r.Context(), authAccount.Username, req.Plan)
+	// NOTE: Checkout sessions are now site-backend-only
+	siteCfg := siteaccount.GetConfig()
+	session, err := siteCfg.CreateCheckoutSession(r.Context(), authAccount.Username, req.Plan)
 	if err != nil {
 		sopbackend.RecordProductMetric("site_auth_checkout_failures")
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	siteaccount.SetConfig(siteCfg)
 	sopbackend.RecordProductMetric("site_auth_checkout_requests")
-	sopbackend.SetConfig(cfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -525,8 +569,17 @@ func HandleDownloadAsset(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "user not found")
 		return
 	}
+	// NOTE: Billing data is now site-backend-only
+	siteCfg := siteaccount.GetConfig()
+	siteUser, siteOk, _ := siteCfg.FindUserRecord(r.Context(), user.Username)
+	subscriptionPlan := ""
+	billingStatus := ""
+	if siteOk && siteUser != nil {
+		subscriptionPlan = siteUser.SubscriptionPlan
+		billingStatus = siteUser.BillingStatus
+	}
 
-	isEntitled := strings.EqualFold(user.SubscriptionPlan, "starter") || strings.EqualFold(user.SubscriptionPlan, "hq") || strings.EqualFold(user.BillingStatus, "active")
+	isEntitled := strings.EqualFold(subscriptionPlan, "starter") || strings.EqualFold(subscriptionPlan, "hq") || strings.EqualFold(billingStatus, "active")
 	if !isEntitled {
 		writeJSONError(w, http.StatusForbidden, "active subscription required")
 		return
@@ -545,7 +598,7 @@ func HandleDownloadAsset(w http.ResponseWriter, r *http.Request) {
 		"status":       "ok",
 		"available":    true,
 		"download_url": downloadURL,
-		"plan":         user.SubscriptionPlan,
+		"plan":         subscriptionPlan,
 	})
 }
 
@@ -586,22 +639,19 @@ func HandleBillingWebhook(w http.ResponseWriter, r *http.Request) {
 			if usernameValue, ok := metadata["username"].(string); ok {
 				userID = strings.TrimSpace(usernameValue)
 			}
-		}
-	}
-	if plan == "" {
-		if metadata, ok := payload.Data.Object["metadata"].(map[string]any); ok {
 			if planValue, ok := metadata["plan"].(string); ok {
 				plan = strings.TrimSpace(planValue)
 			}
 		}
 	}
 
-	cfg := sopbackend.GetConfig()
-	if err := cfg.HandleBillingWebhook(r.Context(), sopbackend.BillingWebhookEvent{EventType: eventType, EventID: eventID, UserID: userID, Plan: plan}); err != nil {
+	// NOTE: Billing webhooks are now site-backend-only
+	siteCfg := siteaccount.GetConfig()
+	if err := siteCfg.HandleBillingWebhook(r.Context(), siteaccount.BillingWebhookEvent{EventType: eventType, EventID: eventID, UserID: userID, Plan: plan}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	sopbackend.SetConfig(cfg)
+	siteaccount.SetConfig(siteCfg)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

@@ -374,7 +374,7 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir, docsDir string) {
 	// This ensures sopbackend's auth handlers (including /api/auth/login) use the site's
 	// persistent btree user store instead of the default config.json users array.
 	// After this override is installed, ALL auth operations automatically use the site store.
-	siteaccount.InstallSopbackendUserStoreOverride()
+	// Auth now uses shared sopbackend.UsersStore directly (no override needed)
 
 	// Register shared sopbackend handlers (auth, Data Manager, API, etc.)
 	// These handlers automatically use the overridden user store and include:
@@ -477,12 +477,23 @@ func (h *siteAppAccessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		}
 
 		// Build auth context from validated token (same structure RequireAuth will build).
+		// NOTE: sopbackend only has auth fields now. Get billing data from siteaccount.
+		siteCfg := siteaccount.GetConfig()
+		siteUser, siteOk, _ := siteCfg.FindUserRecord(r.Context(), user.Username)
+		subscriptionPlan := ""
+		subscriptionFeatures := []string{}
+		if siteOk && siteUser != nil {
+			subscriptionPlan = siteUser.SubscriptionPlan
+			subscriptionFeatures = append([]string(nil), siteUser.SubscriptionFeatures...)
+		}
+
+		normalizedRole := sop.NormalizeRole(user.Role)
 		auth := sop.AuthContext{
-			IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
-			Roles:                []string{user.Role},
+			IsSystem:             sop.IsAdminRole(normalizedRole) || strings.EqualFold(user.Username, "root"),
+			Roles:                []string{normalizedRole},
 			UserID:               user.Username,
-			SubscriptionPlan:     user.SubscriptionPlan,
-			SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+			SubscriptionPlan:     subscriptionPlan,
+			SubscriptionFeatures: subscriptionFeatures,
 		}
 		auth = enrichSiteAppAuthContext(auth)
 		ctx := sop.ContextWithAuth(r.Context(), auth)
@@ -858,16 +869,14 @@ func applySopbackendPreloadPolicy() {
 		SessionTokenTTLMinutes: cfg.SessionTokenTTLMinutes,
 		SessionSecret:          cfg.SessionSecret,
 		AuthProviderName:       cfg.AuthProviderName,
-		Users:                  cfg.Users,
-		Subscriptions:          cfg.Subscriptions,
-		Payments:               cfg.Payments,
-		ObfuscationMode:        cfg.ObfuscationMode,
-		DatabasePath:           cfg.DatabasePath,
-		Mode:                   cfg.Mode,
-		ConfigFile:             cfg.ConfigFile,
-		RedisURL:               cfg.RedisURL,
-		DisableAuth:            cfg.DisableAuth,
-		DisableSOPKBPreload:    cfg.DisableSOPKBPreload,
+
+		ObfuscationMode:     cfg.ObfuscationMode,
+		DatabasePath:        cfg.DatabasePath,
+		Mode:                cfg.Mode,
+		ConfigFile:          cfg.ConfigFile,
+		RedisURL:            cfg.RedisURL,
+		DisableAuth:         cfg.DisableAuth,
+		DisableSOPKBPreload: cfg.DisableSOPKBPreload,
 	})
 }
 
@@ -923,7 +932,7 @@ func main() {
 	// which handles FindExistingConfigFile, SetConfigFile, and LoadConfig automatically.
 	if _, err := sopbackend.InitializeRuntime(context.Background(), "", sopbackend.RuntimeOptions{
 		EnableLocalAutomation: false, // Site backend doesn't need local automation
-		EnableStoresFeature:   false, // Stores disabled for site backend (v1 focus: AI Copilot)
+		EnableStoresFeature:   true,  // Expose Stores in the site UI and backend runtime
 	}, 0, nil); err != nil {
 		log.Printf("Warning: sopbackend initialization failed: %v", err)
 	}

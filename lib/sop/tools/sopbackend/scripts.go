@@ -179,11 +179,9 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		if ok, user, err := config.AuthenticateBearerToken(r.Context(), token); err == nil && ok {
 			auth := sop.AuthContext{
-				IsSystem:             strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
-				Roles:                []string{user.Role},
-				UserID:               user.Username,
-				SubscriptionPlan:     user.SubscriptionPlan,
-				SubscriptionFeatures: append([]string(nil), user.SubscriptionFeatures...),
+				IsSystem: strings.EqualFold(user.Role, sop.RoleSystemAdmin) || strings.EqualFold(user.Username, "root"),
+				Roles:    []string{user.Role},
+				UserID:   user.Username,
 			}
 			ctx := sop.ContextWithAuth(r.Context(), auth)
 			r = r.WithContext(ctx)

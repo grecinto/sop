@@ -14,7 +14,7 @@ import (
 
 func TestRunAdminCLI_ListUsers(t *testing.T) {
 	config = Config{UsersStore: NewUserStore()}
-	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleAdmin, "starter"); err != nil {
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleAdmin); err != nil {
 		t.Fatalf("RegisterUser() error = %v", err)
 	}
 
@@ -35,7 +35,7 @@ func TestRunAdminCLI_ListUsers(t *testing.T) {
 
 func TestRunAdminCLI_UsesHTTPServerEndpoints(t *testing.T) {
 	config = Config{UsersStore: NewUserStore()}
-	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleAdmin, "starter"); err != nil {
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleAdmin); err != nil {
 		t.Fatalf("RegisterUser() error = %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestRunAdminCLI_UsesHTTPServerEndpoints(t *testing.T) {
 
 func TestHandleAdminUsersPage_RendersAdminUI(t *testing.T) {
 	config = Config{UsersStore: NewUserStore()}
-	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser); err != nil {
 		t.Fatalf("RegisterUser() error = %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestHandleAdminUsersPage_RendersAdminUI(t *testing.T) {
 
 func TestHandleAdminUsersList_ReturnsUsersForAdmin(t *testing.T) {
 	config = Config{UsersStore: NewUserStore()}
-	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser, "starter"); err != nil {
+	if _, err := config.RegisterUser(context.Background(), "alice", "pw123", "alice@example.com", sop.RoleUser); err != nil {
 		t.Fatalf("RegisterUser() error = %v", err)
 	}
 

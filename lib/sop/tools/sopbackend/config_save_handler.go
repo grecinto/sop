@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
@@ -123,19 +124,31 @@ func ensureRootUserFromPassword(password string, role string, features []string)
 	}
 
 	rootUsername := normalizeUsername("root")
-	for i := range config.Users {
-		if normalizeUsername(config.Users[i].Username) == rootUsername {
-			config.Users = append(config.Users[:i], config.Users[i+1:]...)
-			break
-		}
-	}
-
 	if role == "" {
 		role = sop.RoleAdmin
 	}
 
 	if len(features) == 0 {
 		features = nil
+	}
+
+	if existing, ok, err := config.findUserRecord(context.Background(), rootUsername); err == nil && ok && existing != nil {
+		if existing.Username == "" {
+			existing.Username = rootUsername
+		}
+		hash, err := hashPassword(password)
+		if err != nil {
+			return err
+		}
+		updated := *existing
+		updated.Role = normalizeRole(role)
+		updated.PasswordHash = SecuredString(hash)
+		updated.UpdatedAt = time.Now().UTC()
+		if err := config.persistUserRecord(context.Background(), &updated); err != nil {
+			return err
+		}
+		// User updated in persistent store
+		return nil
 	}
 
 	if err := config.SetUserWithFeatures("root", password, role, features); err != nil {
@@ -245,7 +258,11 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	// Append valid DBs
 	config.Databases = append(config.Databases, newDBs...)
 
-	// 6. Seed the root user into the now-configured system-backed store as part of provisioning.
+	// 6. Provision the users store first, then seed the root user into that backing store.
+	if err := config.ensureProvisionedUsersStore(ctx); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to initialize users store: %v", err), http.StatusInternalServerError)
+		return
+	}
 	if req.RootPassword != "" {
 		rootRole := sop.RoleAdmin
 		rootFeatures := []string(nil)
@@ -260,16 +277,6 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	if err := config.ensureProvisionedUsersStore(ctx); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to initialize users store: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if err := config.syncUsersStoreFromConfig(ctx); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to persist users store: %v", err), http.StatusInternalServerError)
-		return
-	}
-
 	// 7. Save Config File (Disk)
 	if err := saveConfig(); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to write config file: %v", err), http.StatusInternalServerError)

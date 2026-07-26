@@ -193,14 +193,12 @@ func handleAdminUsersPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users := config.Users
-	if len(users) == 0 {
-		if store := config.ensureUserStore(); store != nil {
-			if storedUsers, err := store.List(r.Context()); err == nil {
-				users = make([]UserRecord, 0, len(storedUsers))
-				for _, u := range storedUsers {
-					users = append(users, u)
-				}
+	var users []UserRecord
+	if store := config.ensureUserStore(); store != nil {
+		if storedUsers, err := store.List(r.Context()); err == nil {
+			users = make([]UserRecord, 0, len(storedUsers))
+			for _, u := range storedUsers {
+				users = append(users, u)
 			}
 		}
 	}
@@ -208,9 +206,9 @@ func handleAdminUsersPage(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><title>Admin Users</title></head><body>")
 	b.WriteString("<h1>Admin Users</h1>")
-	b.WriteString("<table><tr><th>Username</th><th>Role</th><th>Status</th></tr>")
+	b.WriteString("<table><tr><th>Username</th><th>Role</th></tr>")
 	for _, user := range users {
-		b.WriteString(fmt.Sprintf("<tr><td>%s</td><td>%s</td><td>%s</td></tr>", htmlEscape(user.Username), htmlEscape(user.Role), htmlEscape(user.Status)))
+		b.WriteString(fmt.Sprintf("<tr><td>%s</td><td>%s</td></tr>", htmlEscape(user.Username), htmlEscape(user.Role)))
 	}
 	b.WriteString("</table></body></html>")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -227,14 +225,12 @@ func handleAdminUsersList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users := config.Users
-	if len(users) == 0 {
-		if store := config.ensureUserStore(); store != nil {
-			if storedUsers, err := store.List(r.Context()); err == nil {
-				users = make([]UserRecord, 0, len(storedUsers))
-				for _, u := range storedUsers {
-					users = append(users, u)
-				}
+	var users []UserRecord
+	if store := config.ensureUserStore(); store != nil {
+		if storedUsers, err := store.List(r.Context()); err == nil {
+			users = make([]UserRecord, 0, len(storedUsers))
+			for _, u := range storedUsers {
+				users = append(users, u)
 			}
 		}
 	}
@@ -244,7 +240,6 @@ func handleAdminUsersList(w http.ResponseWriter, r *http.Request) {
 		payload = append(payload, map[string]string{
 			"username": user.Username,
 			"role":     user.Role,
-			"status":   user.Status,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

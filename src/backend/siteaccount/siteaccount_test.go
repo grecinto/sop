@@ -19,6 +19,16 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+func TestMain(m *testing.M) {
+	// Disable seat limit for tests to allow unlimited user registrations
+	os.Setenv("SOP_SITE_SEAT_LIMIT", "999999")
+	sopbackend.SetConfig(sopbackend.Config{
+		UsersStore:    sopbackend.NewUserStore(),
+		SessionSecret: sopbackend.SecuredString("siteaccount-test-secret"),
+	})
+	os.Exit(m.Run())
+}
+
 func uniqueTestUsername(t *testing.T, prefix string) string {
 	t.Helper()
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
@@ -51,6 +61,8 @@ func resetSiteAccountDBForTest(t *testing.T) {
 	siteAccountDBInst = nil
 	siteAccountDBMu.Unlock()
 
+	previousSopbackendCfg := sopbackend.GetConfig()
+
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -80,6 +92,8 @@ func resetSiteAccountDBForTest(t *testing.T) {
 			Path: userDBPath,
 			Mode: "standalone",
 		}},
+		UsersStore:    sopbackend.NewUserStore(),
+		SessionSecret: sopbackend.SecuredString("siteaccount-test-secret"),
 	})
 
 	t.Cleanup(func() {
@@ -87,7 +101,7 @@ func resetSiteAccountDBForTest(t *testing.T) {
 		siteAccountDBInst = nil
 		siteAccountDBMu.Unlock()
 		_ = os.Chdir(wd)
-		sopbackend.SetConfig(sopbackend.Config{})
+		sopbackend.SetConfig(previousSopbackendCfg)
 	})
 }
 
@@ -129,6 +143,8 @@ func TestGetSiteAccountDBUsesConfiguredUserDatabase(t *testing.T) {
 			Path: userDBPath,
 			Mode: "standalone",
 		}},
+		UsersStore:    sopbackend.NewUserStore(),
+		SessionSecret: sopbackend.SecuredString("siteaccount-test-secret"),
 	})
 
 	db, err := getSiteAccountDB(context.Background())
@@ -333,6 +349,9 @@ func TestHandleStatusFallsBackGracefullyWhenUserStoreCannotBeOpened(t *testing.T
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
+	previousCfg := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(previousCfg)
+
 	sopbackend.SetConfig(sopbackend.Config{
 		Mode: "standalone",
 		SystemDB: &sopbackend.DatabaseConfig{
@@ -345,6 +364,8 @@ func TestHandleStatusFallsBackGracefullyWhenUserStoreCannotBeOpened(t *testing.T
 			Path: invalidPath,
 			Mode: "standalone",
 		}},
+		UsersStore:    sopbackend.NewUserStore(),
+		SessionSecret: sopbackend.SecuredString("siteaccount-test-secret"),
 	})
 
 	cfg := NewConfig()
@@ -391,6 +412,64 @@ func TestHandleStatusAcceptsSessionCookieWithoutConfigFile(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("HandleStatus() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+}
+
+func TestHandleStatusFindsSharedAuthUserWhenUsersStoreIsNotPreinitialized(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+
+	sharedDir := t.TempDir()
+	systemDBPath := filepath.Join(sharedDir, "system-db")
+	userDBPath := filepath.Join(sharedDir, "user-db")
+	if err := os.MkdirAll(systemDBPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(systemDBPath) error = %v", err)
+	}
+	if err := os.MkdirAll(userDBPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(userDBPath) error = %v", err)
+	}
+
+	sharedCfg := sopbackend.Config{
+		Mode: "standalone",
+		SystemDB: &sopbackend.DatabaseConfig{
+			Name: sopbackend.SystemDBName,
+			Path: systemDBPath,
+			Mode: "standalone",
+		},
+		Databases: []sopbackend.DatabaseConfig{{
+			Name: "userdb",
+			Path: userDBPath,
+			Mode: "standalone",
+		}},
+		SessionSecret: sopbackend.SecuredString("siteaccount-test-secret"),
+	}
+	sopbackend.SetConfig(sharedCfg)
+
+	sharedCfgValue := sopbackend.GetConfig()
+	if _, err := (&sharedCfgValue).RegisterUserWithRequest(context.Background(), sopbackend.RegisterUserRequest{
+		Username: "root",
+		Password: "secret123",
+		Email:    "root@example.com",
+		Role:     sop.RoleSystemAdmin,
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+	sopbackend.SetConfig(sharedCfgValue)
+
+	cfg := NewConfig()
+	SetConfig(cfg)
+	defer SetConfig(nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req = req.WithContext(sop.ContextWithAuth(req.Context(), sop.AuthContext{UserID: "root", Roles: []string{sop.RoleSystemAdmin}}))
+	rr := httptest.NewRecorder()
+
+	HandleStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleStatus() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"username":"root"`) {
+		t.Fatalf("expected authenticated username in status response, got %s", rr.Body.String())
 	}
 }
 
@@ -622,6 +701,52 @@ func TestHandleStatusReturnsAuthenticatedUserEvenWithoutConfigFile(t *testing.T)
 	}
 }
 
+func TestHandleStatusMarksSystemAdminAliasAsAdmin(t *testing.T) {
+	resetSiteAccountDBForTest(t)
+	cfg := NewConfig()
+	username := uniqueTestUsername(t, "status-system-admin")
+	if _, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
+		Username:         username,
+		Password:         "secret123",
+		Email:            "status-system-admin@example.com",
+		Role:             "system-admin",
+		SubscriptionPlan: "starter",
+	}); err != nil {
+		t.Fatalf("RegisterUserWithRequest() error = %v", err)
+	}
+
+	accessToken, _, err := sopbackend.CreateSession(context.Background(), username, "system-admin")
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+	req.AddCookie(&http.Cookie{Name: "sop_access_token", Value: accessToken})
+	rr := httptest.NewRecorder()
+
+	HandleStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("HandleStatus() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var payload struct {
+		User struct {
+			CanAccessDataManager bool   `json:"can_access_data_manager"`
+			Role                 string `json:"role"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode status payload: %v", err)
+	}
+	if !payload.User.CanAccessDataManager {
+		t.Fatalf("expected system-admin alias to be surfaced as admin, got payload=%s", rr.Body.String())
+	}
+	if payload.User.Role != sop.RoleSystemAdmin {
+		t.Fatalf("expected normalized role %q, got %q", sop.RoleSystemAdmin, payload.User.Role)
+	}
+}
+
 func TestHandleLogoutRevokesAccessAndRefreshTokens(t *testing.T) {
 	resetSiteAccountDBForTest(t)
 	accessToken, refreshToken, err := sopbackend.CreateSession(context.Background(), "logout-user", sop.RoleUser)
@@ -690,11 +815,10 @@ func TestRegisterUserWithRequestRecoversWhenSharedAuthUserAlreadyExists(t *testi
 	username := uniqueTestUsername(t, "site-recover-user")
 	sharedCfg := sopbackend.GetConfig()
 	if _, err := sharedCfg.RegisterUserWithRequest(context.Background(), sopbackend.RegisterUserRequest{
-		Username:         username,
-		Password:         "secret123",
-		Email:            "recover@example.com",
-		Role:             "user",
-		SubscriptionPlan: "starter",
+		Username: username,
+		Password: "secret123",
+		Email:    "recover@example.com",
+		Role:     "user",
 	}); err != nil {
 		t.Fatalf("pre-seeding shared auth user failed: %v", err)
 	}
@@ -720,13 +844,22 @@ func TestRegisterUserWithRequestRecoversWhenSharedAuthUserAlreadyExists(t *testi
 }
 
 func TestRegisterUserWithRequestRepairsExistingAccountWithoutHash(t *testing.T) {
+	resetSiteAccountDBForTest(t)
 	cfg := NewConfig()
 	username := uniqueTestUsername(t, "site-repair-user")
-	initial := UserRecord{Username: username, Role: "user", Email: "repair@example.com", BillingStatus: "pending", Status: "active"}
-	if _, err := cfg.ensureUserStore(context.Background(), nil); err == nil {
-		// no-op: ensure the test uses the in-memory config path
+
+	// Seed a shared-auth user without a password hash so RegisterUserWithRequest can repair it.
+	sharedCfg := sopbackend.GetConfig()
+	_, err := sharedCfg.RegisterUserWithRequest(context.Background(), sopbackend.RegisterUserRequest{
+		Username: username,
+		Password: "secret123",
+		Email:    "repair@example.com",
+		Role:     "user",
+	})
+	if err != nil {
+		t.Fatalf("pre-seeding shared auth user failed: %v", err)
 	}
-	cfg.Users = append(cfg.Users, initial)
+	sopbackend.SetConfig(sharedCfg)
 
 	user, err := cfg.RegisterUserWithRequest(context.Background(), RegisterUserRequest{
 		Username:         username,
@@ -866,11 +999,10 @@ func TestUpdateSubscriptionPlanSyncsToSharedBackendAuthUser(t *testing.T) {
 	if !ok || sharedUser == nil {
 		t.Fatalf("shared cfg FindUserRecord() did not find %q", username)
 	}
-	if sharedUser.SubscriptionPlan != "hq" {
-		t.Fatalf("shared user plan = %q, want %q", sharedUser.SubscriptionPlan, "hq")
-	}
-	if !reflect.DeepEqual(sharedUser.SubscriptionFeatures, []string{"copilot", "shared-memory"}) {
-		t.Fatalf("shared user features = %v, want %v", sharedUser.SubscriptionFeatures, []string{"copilot", "shared-memory"})
+	// NOTE: sopbackend only tracks auth fields now; billing/subscription is site-backend-only.
+	// Verify basic auth fields only.
+	if sharedUser.Username != username {
+		t.Fatalf("shared user username = %q, want %q", sharedUser.Username, username)
 	}
 }
 
@@ -1164,17 +1296,17 @@ func TestPrimaryStoresReuseSameTreeHandlePerTransaction(t *testing.T) {
 	defer tx.Rollback(ctx)
 
 	before := countTransactionBackends(t, tx)
-	if _, err := cfg.ensureUserStore(ctx, tx); err != nil {
-		t.Fatalf("ensureUserStore() error = %v", err)
+	if _, err := cfg.ensureBillingInfoStore(ctx, tx); err != nil {
+		t.Fatalf("ensureBillingInfoStore() error = %v", err)
 	}
 	if got := countTransactionBackends(t, tx); got != before+1 {
-		t.Fatalf("expected the first user-store open to add one backend entry, got %d", got)
+		t.Fatalf("expected the first billing-info store open to add one backend entry, got %d", got)
 	}
-	if _, err := cfg.ensureUserStore(ctx, tx); err != nil {
-		t.Fatalf("ensureUserStore(second) error = %v", err)
+	if _, err := cfg.ensureBillingInfoStore(ctx, tx); err != nil {
+		t.Fatalf("ensureBillingInfoStore(second) error = %v", err)
 	}
 	if got := countTransactionBackends(t, tx); got != before+1 {
-		t.Fatalf("expected the user store to be reused without adding a second backend entry, got %d", got)
+		t.Fatalf("expected the billing-info store to be reused without adding a second backend entry, got %d", got)
 	}
 
 	before = countTransactionBackends(t, tx)
@@ -1304,19 +1436,19 @@ func TestStoreBatchGetAndDeleteSupportSlices(t *testing.T) {
 	defer tx.Rollback(ctx)
 
 	username := uniqueTestUsername(t, "batch-store-user")
-	userStore, err := cfg.ensureUserStore(ctx, tx)
+	billingStore, err := cfg.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
-		t.Fatalf("ensureUserStore() error = %v", err)
+		t.Fatalf("ensureBillingInfoStore() error = %v", err)
 	}
-	if err := userStore.Upsert(ctx, []UserRecord{{Username: username, Role: "user", Status: "active"}}); err != nil {
-		t.Fatalf("UpsertBatch user error = %v", err)
+	if err := billingStore.Upsert(ctx, []BillingInfo{{Username: username, Status: "active"}}); err != nil {
+		t.Fatalf("UpsertBatch billing info error = %v", err)
 	}
-	users, err := userStore.Fetch(ctx, []string{username, "missing-user"})
+	billingInfos, err := billingStore.Fetch(ctx, []string{username, "missing-user"})
 	if err != nil {
-		t.Fatalf("Get(users) error = %v", err)
+		t.Fatalf("Get(billingInfos) error = %v", err)
 	}
-	if len(users) != 1 || users[0].Username != username {
-		t.Fatalf("Get(users) = %+v, want a single record for %q", users, username)
+	if len(billingInfos) != 1 || billingInfos[0].Username != username {
+		t.Fatalf("Get(billingInfos) = %+v, want a single record for %q", billingInfos, username)
 	}
 
 	subscriptionStore, err := cfg.ensureSubscriptionStore(ctx, tx)
@@ -1362,13 +1494,13 @@ func TestUserBillingAndPaymentIndexStores(t *testing.T) {
 	defer tx.Rollback(ctx)
 
 	username := uniqueTestUsername(t, "indexed-user")
-	user := &UserRecord{Username: username, Role: "user", Email: "indexed@example.com", BillingStatus: "active", Status: "active"}
-	userStore, err := cfg.ensureUserStore(ctx, tx)
+	billingInfo := &BillingInfo{Username: username, FullName: "Indexed User", BillingStatus: "active", Status: "active"}
+	billingStore, err := cfg.ensureBillingInfoStore(ctx, tx)
 	if err != nil {
-		t.Fatalf("ensureUserStore() error = %v", err)
+		t.Fatalf("ensureBillingInfoStore() error = %v", err)
 	}
-	if err := userStore.Upsert(ctx, []UserRecord{*user}); err != nil {
-		t.Fatalf("UpsertBatch user error = %v", err)
+	if err := billingStore.Upsert(ctx, []BillingInfo{*billingInfo}); err != nil {
+		t.Fatalf("UpsertBatch billing info error = %v", err)
 	}
 
 	subscriptionID := fmt.Sprintf("sub-idx-%d", time.Now().UnixNano())

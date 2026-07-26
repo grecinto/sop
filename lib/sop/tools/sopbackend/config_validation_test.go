@@ -387,11 +387,9 @@ func TestHandleSaveConfig_AllowsBlankBootstrapSecretWhenServerIsConfigured(t *te
 	if w.Code != http.StatusOK {
 		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
 	}
-	if len(config.Users) == 0 {
-		t.Fatal("expected root user to be created")
-	}
-	if config.Users[0].Role != sop.RoleAdmin {
-		t.Fatalf("expected default root role %q, got %q", sop.RoleAdmin, config.Users[0].Role)
+	// Verify root user was created in persistent store
+	if user, ok, err := config.findUserRecord(context.Background(), "root"); err != nil || !ok || user.Role != sop.RoleAdmin {
+		t.Fatalf("expected root user with role %q, got ok=%v err=%v role=%s", sop.RoleAdmin, ok, err, user.Role)
 	}
 }
 
@@ -427,27 +425,11 @@ func TestHandleSaveConfig_PersistsSystemAdminRoleWhenBootstrapSecretMatches(t *t
 	if w.Code != http.StatusOK {
 		t.Fatalf("handleSaveConfig() status = %d, body=%s", w.Code, w.Body.String())
 	}
-	if len(config.Users) == 0 {
-		t.Fatal("expected root user to be created")
+	// Verify root user was created in persistent store
+	if user, ok, err := config.findUserRecord(context.Background(), "root"); err != nil || !ok || user.Role != sop.RoleSystemAdmin {
+		t.Fatalf("expected root user with role %q, got ok=%v err=%v role=%s", sop.RoleSystemAdmin, ok, err, user.Role)
 	}
-	if config.Users[0].Role != sop.RoleSystemAdmin {
-		t.Fatalf("expected root role %q, got %q", sop.RoleSystemAdmin, config.Users[0].Role)
-	}
-	var hasHQ, hasDaemon bool
-	for _, feature := range config.Users[0].SubscriptionFeatures {
-		switch strings.ToLower(strings.TrimSpace(feature)) {
-		case "hq_runtime":
-			hasHQ = true
-		case "daemon_runtime":
-			hasDaemon = true
-		}
-	}
-	if !hasHQ {
-		t.Fatalf("expected system admin user to receive HQ feature, got %v", config.Users[0].SubscriptionFeatures)
-	}
-	if !hasDaemon {
-		t.Fatalf("expected system admin user to receive daemon feature, got %v", config.Users[0].SubscriptionFeatures)
-	}
+	// NOTE: sopbackend no longer tracks subscription features - this is site-backend-only now
 }
 
 func TestHandleSaveConfig_RejectsIncompatibleSharedBrainReuse(t *testing.T) {

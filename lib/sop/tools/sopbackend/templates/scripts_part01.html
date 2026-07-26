@@ -1016,7 +1016,7 @@
                         // Missing Core Playbook KB is acceptable for daemon/local runtime; treat it as informational only.
                         const runtimeMode = getCurrentRuntimeMode();
                         const sopPreloadDisabled = Boolean((payload && payload.disable_sop_kb_preload) || (payload && payload.config && payload.config.disable_sop_kb_preload) || window.__sopDisableSopKbPreload);
-                        if (databases && databases.length > 0 && !spaces.includes("SOP") && runtimeMode !== 'local' && !sopPreloadDisabled) {
+                        if (databases && databases.length > 0 && !spaces.includes("core_playbook") && runtimeMode !== 'local' && !sopPreloadDisabled) {
                             warnings.push("• Core Playbook KB (KnowledgeBase) Space is missing from the System Database.");
                         }
 
@@ -4514,7 +4514,7 @@
                                 ` : ''}
                             </div>
                             <div style="font-size: 1.15em; font-weight: 600; margin-bottom: 10px; color: var(--text-color);">
-                                ${t.summaries && t.summaries.length > 0 ? t.summaries[0].substring(0, 50).replace(/</g, '&lt;') : (t.id ? t.id.substring(0,8) : "Unnamed Item")}
+                                ${t.summaries && t.summaries.length > 0 ? t.summaries[0].replace(/</g, '&lt;') : (t.id ? t.id.substring(0,8) : "Unnamed Item")}
                             </div>
                             ${workflowStudioActionHtml}
                             <div style="font-size: 0.9em; flex: 1; color: var(--text-muted); line-height: 1.5; margin-bottom: 15px; word-break: break-word; display: flex; flex-direction: column;">

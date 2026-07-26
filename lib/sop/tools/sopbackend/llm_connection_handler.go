@@ -87,7 +87,10 @@ func handleTestLLMConnection(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), aiConnectionTestTimeout())
 	defer cancel()
 
-	output, err := gen.Generate(ctx, "Reply with: OK", ai.GenOptions{MaxTokens: 50})
+	output, err := gen.Generate(ctx, "Reply with: OK", ai.GenOptions{
+		MaxTokens:     50,
+		ThinkingLevel: "disabled", // Disable extended thinking for connection tests
+	})
 	if err != nil {
 		// Check if it's a MAX_TOKENS error - this still means connection works
 		if strings.Contains(err.Error(), "MAX_TOKENS") || strings.Contains(err.Error(), "finish_reason=MAX_TOKENS") {

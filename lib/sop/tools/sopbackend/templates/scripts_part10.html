@@ -291,6 +291,21 @@
         toggleProviderAuth();
     }
 
+    function handleSetupBrainFallbackProviderChange() {
+        const provider = document.getElementById('setup-brain-fallback-provider');
+        const apiContainer = document.getElementById('setup-brain-fallback-api-container');
+        const urlContainer = document.getElementById('setup-brain-fallback-url-container');
+        
+        if (!provider || provider.value === '') {
+            if (apiContainer) apiContainer.style.display = 'none';
+            if (urlContainer) urlContainer.style.display = 'none';
+            return;
+        }
+        
+        applyEnvSelectionDefaults('setup-brain-fallback-provider', 'setup-brain-fallback-api-key', 'setup-brain-fallback-url');
+        toggleProviderAuth();
+    }
+
     function handleChatSettingsProviderChange() {
         applyEnvSelectionDefaults('chat-settings-provider-overlay', 'chat-settings-overlay-api-key', 'chat-settings-url');
         toggleChatSettingsFields();
@@ -1256,7 +1271,7 @@
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        template_id: 'SOP',
+                        template_id: 'core_playbook',
                         database_name: systemDbNameForPreload
                     })
                 });

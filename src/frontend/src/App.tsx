@@ -342,22 +342,21 @@ function normalizeRole(value: string | undefined): string {
   if (!role) {
     return '';
   }
-  const normalized = role.toLowerCase();
-  if (normalized === 'systemadmin' || normalized === 'system admin') {
+  const normalized = role.toLowerCase().replace(/[_\s-]+/g, '');
+  if (normalized === 'systemadmin' || normalized === 'systemadministrator' || normalized === 'sysadmin' || normalized === 'sa') {
     return 'SystemAdmin';
   }
-  if (normalized === 'admin') {
+  if (normalized === 'admin' || normalized === 'administrator' || normalized === 'superadmin') {
     return 'Admin';
   }
-  if (normalized === 'user') {
+  if (normalized === 'user' || normalized === 'member' || normalized === 'standard') {
     return 'User';
   }
   return role;
 }
 
 function isSystemAdminRole(role: string | undefined): boolean {
-  const normalized = (role ?? '').trim().toLowerCase();
-  return normalized === 'systemadmin' || normalized === 'system admin';
+  return normalizeRole(role) === 'SystemAdmin';
 }
 
 function slugify(value: string): string {

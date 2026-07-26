@@ -129,6 +129,15 @@ func TestBuildListenAddr(t *testing.T) {
 	}
 }
 
+func TestDefaultDaemonAuthConfigUsesOneHourAndOneWeek(t *testing.T) {
+	if got, want := defaultDaemonAuthConfig.AccessTokenTTL, time.Hour; got != want {
+		t.Fatalf("defaultDaemonAuthConfig.AccessTokenTTL = %v, want %v", got, want)
+	}
+	if got, want := defaultDaemonAuthConfig.RefreshTokenTTL, 7*24*time.Hour; got != want {
+		t.Fatalf("defaultDaemonAuthConfig.RefreshTokenTTL = %v, want %v", got, want)
+	}
+}
+
 func TestParseDaemonLogLevel(t *testing.T) {
 	tests := []struct {
 		name    string

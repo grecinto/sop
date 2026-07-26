@@ -50,7 +50,7 @@ func TestSaveConfig_OmitsSensitiveAISelectionFields(t *testing.T) {
 	}
 }
 
-func TestSaveConfig_EncryptsSensitiveFieldsAndRestoresThemOnLoad(t *testing.T) {
+func TestSaveConfig_EncryptsSensitiveFieldsAndDoesNotPersistUsers(t *testing.T) {
 	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	defer func() {
@@ -63,13 +63,6 @@ func TestSaveConfig_EncryptsSensitiveFieldsAndRestoresThemOnLoad(t *testing.T) {
 		ConfigFile:    configFile,
 		Port:          8080,
 		SessionSecret: SecuredString("super-secret-session"),
-		Users: []UserRecord{{
-			Username:         "root",
-			PasswordHash:     SecuredString("bcrypt-hash"),
-			Email:            SecuredString("root@example.com"),
-			StripeCustomerID: SecuredString("cus_123"),
-			StripeSubID:      SecuredString("sub_123"),
-		}},
 	}
 
 	if err := saveConfig(); err != nil {
@@ -95,16 +88,5 @@ func TestSaveConfig_EncryptsSensitiveFieldsAndRestoresThemOnLoad(t *testing.T) {
 	if got := loaded.SessionSecret.Plaintext(); got != "super-secret-session" {
 		t.Fatalf("expected session secret to be restored, got %q", got)
 	}
-	if got := loaded.Users[0].PasswordHash.Plaintext(); got != "bcrypt-hash" {
-		t.Fatalf("expected password hash to be restored, got %q", got)
-	}
-	if got := loaded.Users[0].Email.Plaintext(); got != "root@example.com" {
-		t.Fatalf("expected email to be restored, got %q", got)
-	}
-	if got := loaded.Users[0].StripeCustomerID.Plaintext(); got != "cus_123" {
-		t.Fatalf("expected stripe customer id to be restored, got %q", got)
-	}
-	if got := loaded.Users[0].StripeSubID.Plaintext(); got != "sub_123" {
-		t.Fatalf("expected stripe subscription id to be restored, got %q", got)
-	}
+	// Users are stored in persistent btree store, not in config.json
 }

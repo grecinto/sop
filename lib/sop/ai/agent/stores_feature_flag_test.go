@@ -9,20 +9,21 @@ import (
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
-func TestStoresFeatureIsDisabledByDefault(t *testing.T) {
-	// Reset to default state
-	SetStoresFeatureEnabled(false)
-	defer SetStoresFeatureEnabled(false)
-
+func TestStoresFeatureIsEnabledByDefault(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "system"})
 	ag.registerTools(ctx)
 
-	// Verify no Store tools are registered
+	foundStoreTool := false
 	for _, tool := range ag.registry.List() {
 		if isStoreTool(tool.Name) {
-			t.Fatalf("expected Store tools to be disabled by default, but saw %q", tool.Name)
+			foundStoreTool = true
+			break
 		}
+	}
+
+	if !foundStoreTool {
+		t.Fatal("expected Store tools to be enabled by default")
 	}
 }
 

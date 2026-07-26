@@ -32,21 +32,17 @@ type DatabaseConfig struct {
 
 // Config holds the server configuration
 type Config struct {
-	Port                   int                  `json:"port"`
-	Databases              []DatabaseConfig     `json:"databases"`
-	PageSize               int                  `json:"pageSize"`
-	SystemDB               *DatabaseConfig      `json:"system_db,omitempty"`
-	RootPassword           SecuredString        `json:"root_password,omitempty"`
-	ProductionMode         bool                 `json:"production_mode,omitempty"`
-	SessionTokenTTLMinutes int                  `json:"session_token_ttl_minutes,omitempty"`
-	SessionSecret          SecuredString        `json:"session_secret,omitempty"`
-	AuthProviderName       string               `json:"auth_provider,omitempty"`
-	Users                  []UserRecord         `json:"users,omitempty"`
-	Subscriptions          []SubscriptionRecord `json:"subscriptions,omitempty"`
-	Payments               []PaymentRecord      `json:"payments,omitempty"`
-	UsersStore             UserStore            `json:"-"`
-	SubscriptionsStore     SubscriptionStore    `json:"-"`
-	PaymentsStore          PaymentStore         `json:"-"`
+	Port                   int              `json:"port"`
+	Databases              []DatabaseConfig `json:"databases"`
+	PageSize               int              `json:"pageSize"`
+	SystemDB               *DatabaseConfig  `json:"system_db,omitempty"`
+	RootPassword           SecuredString    `json:"root_password,omitempty"`
+	ProductionMode         bool             `json:"production_mode,omitempty"`
+	SessionTokenTTLMinutes int              `json:"session_token_ttl_minutes,omitempty"`
+	SessionSecret          SecuredString    `json:"session_secret,omitempty"`
+	AuthProviderName       string           `json:"auth_provider,omitempty"`
+	UsersStore             UserStore        `json:"-"`
+	persistentUsersStore   UserStore        `json:"-"`
 
 	// ObfuscationMode defines the global obfuscation policy (disabled, per_database, all_databases).
 	// This overrides any setting in the agent's own configuration.

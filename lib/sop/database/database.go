@@ -7,6 +7,7 @@ import (
 	log "log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,6 +132,21 @@ func Setup(ctx context.Context, opts sop.DatabaseOptions) (DatabaseOptions, erro
 			fname = filepath.Join(folder, fs.RegistryHashModValueFilename)
 			if _, err := os.Stat(fname); os.IsNotExist(err) {
 				if err := os.WriteFile(fname, []byte(fmt.Sprintf("%d", opts.RegistryHashModValue)), 0644); err != nil {
+					return opts, err
+				}
+			}
+		}
+	}
+
+	// Create Erasure Coding folders
+	if opts.ErasureConfig != nil {
+		for _, ec := range opts.ErasureConfig {
+			for _, ecFolder := range ec.BaseFolderPathsAcrossDrives {
+				// Skip empty paths
+				if strings.TrimSpace(ecFolder) == "" {
+					continue
+				}
+				if err := os.MkdirAll(ecFolder, 0755); err != nil {
 					return opts, err
 				}
 			}

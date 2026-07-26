@@ -93,11 +93,8 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 	if auth := sop.GetAuthFromContext(ctx); auth.UserID != "" {
 		username := normalizeUsername(auth.UserID)
 		if username != "" && username != "root" && username != "ui-client" {
-			if user, ok, err := config.findUserRecord(ctx, username); err == nil && ok && user != nil && strings.EqualFold(user.BillingStatus, "on_hold") {
-				if strings.TrimSpace(user.BillingNotice) == "" {
-					user.BillingNotice = "Your account is on hold because a payment failed or was declined. Resolve billing to restore Copilot and daemon workflows."
-				}
-				return "", fmt.Errorf("copilot access blocked: account is on hold due to payment failure")
+			if _, ok, err := config.findUserRecord(ctx, username); err == nil && !ok {
+				return "", fmt.Errorf("user not found")
 			} else if err != nil {
 				return "", err
 			}
@@ -481,12 +478,8 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 }
 
 var (
-	billingCollectionQueue   chan struct{}
-	billingCollectionMu      sync.Mutex
-	billingCollectionRunning bool
-	billingCollectionStarted bool
-	billingShutdownCh        chan struct{}
-	billingShutdownOnce      sync.Once
+	backgroundShutdownCh   = make(chan struct{})
+	backgroundShutdownOnce sync.Once
 )
 
 var (
@@ -496,71 +489,6 @@ var (
 	kbQualityJob           *memory.QualityCheckJob
 	kbQualityInitOnce      sync.Once
 )
-
-func initBillingCollectionWorker(ctx context.Context) {
-	billingCollectionMu.Lock()
-	defer billingCollectionMu.Unlock()
-	if billingCollectionStarted {
-		return
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	billingCollectionQueue = make(chan struct{}, 1)
-	billingCollectionStarted = true
-	if billingShutdownCh == nil {
-		billingShutdownCh = make(chan struct{})
-	}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				StopBackgroundService()
-				return
-			case <-billingShutdownCh:
-				return
-			case <-billingCollectionQueue:
-			}
-			billingCollectionMu.Lock()
-			if billingCollectionRunning {
-				billingCollectionMu.Unlock()
-				continue
-			}
-			billingCollectionRunning = true
-			billingCollectionMu.Unlock()
-
-			defer func() {
-				billingCollectionMu.Lock()
-				billingCollectionRunning = false
-				billingCollectionMu.Unlock()
-			}()
-
-			jobCtx, cancel := context.WithCancel(ctx)
-			go func() {
-				select {
-				case <-billingShutdownCh:
-					cancel()
-				case <-ctx.Done():
-					cancel()
-				}
-			}()
-
-			if _, err := config.CollectScheduledBilling(jobCtx, time.Now().UTC(), 100); err != nil {
-				log.Warn("background service: billing collection failed", "error", err)
-			}
-		}
-	}()
-}
-
-func triggerBillingCollection(ctx context.Context) {
-	if billingCollectionQueue == nil {
-		initBillingCollectionWorker(ctx)
-	}
-	select {
-	case billingCollectionQueue <- struct{}{}:
-	default:
-	}
-}
 
 // StartBackgroundService starts the shared background service loop for the backend.
 // It currently handles session cleanup and delegates billing work to a separate worker goroutine.
@@ -573,7 +501,6 @@ func StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.D
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	initBillingCollectionWorker(ctx)
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -582,7 +509,7 @@ func StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.D
 			case <-ctx.Done():
 				StopBackgroundService()
 				return
-			case <-billingShutdownCh:
+			case <-backgroundShutdownCh:
 				return
 			case <-ticker.C:
 			}
@@ -600,14 +527,13 @@ func StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.D
 				}
 			}
 			runBackgroundServiceHooks(ctx)
-			triggerBillingCollection(ctx)
 		}
 	}()
 }
 
 func StopBackgroundService() {
-	billingShutdownOnce.Do(func() {
-		close(billingShutdownCh)
+	backgroundShutdownOnce.Do(func() {
+		close(backgroundShutdownCh)
 		stopKBQuality()
 	})
 }

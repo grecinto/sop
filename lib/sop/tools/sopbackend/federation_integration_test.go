@@ -276,7 +276,6 @@ func seedFederationRootUser(t *testing.T) error {
 		Username:     "ltm_root",
 		Role:         sop.RoleSystemAdmin,
 		PasswordHash: SecuredString("$2a$10$test"),
-		Status:       "active",
 	}
 	return config.ensureUserStore().Save(context.Background(), rootUser)
 }

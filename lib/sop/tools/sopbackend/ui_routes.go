@@ -262,10 +262,7 @@ func (r *UIRouter) handleSubscribe(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		auth := sop.GetAuthFromContext(req.Context())
-		if userID := strings.TrimSpace(auth.UserID); userID != "" {
-			_, _ = config.UpdateSubscriptionPlan(req.Context(), userID, "starter")
-		}
+		// Payment processing logic moved to site backend
 
 		data := r.landingPageData(req)
 		data["SubscriptionSuccess"] = true
@@ -291,10 +288,8 @@ func (r *UIRouter) handleUnsubscribe(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	auth := sop.GetAuthFromContext(req.Context())
-	if userID := strings.TrimSpace(auth.UserID); userID != "" {
-		_, _ = config.UpdateSubscriptionPlan(req.Context(), userID, "none")
-	}
+	// NOTE: Billing/subscription management is now owned by the site backend.
+	// This handler remains only for backwards compatibility but does not modify billing state.
 	if err := uninstallLocalDaemonService(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to uninstall local daemon during unsubscribe: %v\n", err)
 	}
@@ -403,15 +398,11 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		username = "there"
 	}
 
-	currentPlan := "starter"
 	currentRole := ""
 	if len(auth.Roles) > 0 {
 		currentRole = strings.TrimSpace(auth.Roles[0])
 	}
 	if user, ok, err := cfg.findUserRecord(req.Context(), username); err == nil && ok && user != nil {
-		if strings.TrimSpace(user.SubscriptionPlan) != "" {
-			currentPlan = strings.TrimSpace(user.SubscriptionPlan)
-		}
 		if strings.TrimSpace(user.Role) != "" {
 			currentRole = strings.TrimSpace(user.Role)
 		}
@@ -428,6 +419,9 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		isAdmin = true
 	}
 
+	// NOTE: Subscription plan management is now owned by the site backend.
+	// UI displays are for backwards compatibility only.
+	currentPlan := "starter"
 	planLabel := "Starter Kit"
 	planDescription := "Everything you need to get started with SOP, including access to the core workspace experience."
 	if strings.EqualFold(currentPlan, "none") || strings.TrimSpace(currentPlan) == "" {

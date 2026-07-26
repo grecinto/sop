@@ -36,7 +36,7 @@ type Product struct {
 
 type Order struct {
 	// ID removed
-	// UserID removed for normalization. Relationship managed via users_orders store.
+	// UserID removed for normalization. Relationship managed via demo_users_orders store.
 	OrderDate   time.Time   `json:"order_date"`
 	TotalAmount float64     `json:"total_amount"`
 	Status      string      `json:"status"`
@@ -61,26 +61,32 @@ func PopulateDemoData(ctx context.Context, opts sop.DatabaseOptions) error {
 	}
 
 	// 1. Create Stores
+	userStoreName := "demo_users"
+	usersByAgeStoreName := "demo_users_by_age"
+	productsStoreName := "demo_products"
+	ordersStoreName := "demo_orders"
+	usersOrdersStoreName := "demo_users_orders"
+
 	userStoreOpts := sop.StoreOptions{
-		Name:                     "users",
+		Name:                     userStoreName,
 		IsValueDataInNodeSegment: true,
 		Relations: []sop.Relation{
 			{
 				SourceFields: []string{"age"},
-				TargetStore:  "users_by_age",
+				TargetStore:  usersByAgeStoreName,
 				TargetFields: []string{"key"},
 			},
 			{
 				SourceFields: []string{"key"},
-				TargetStore:  "users_orders",
+				TargetStore:  usersOrdersStoreName,
 				TargetFields: []string{"key"},
 			},
 		},
 	}
-	userStore, err := database.NewBtree[uuid.UUID, UserProfile](ctx, opts, "users", trans, nil, userStoreOpts)
+	userStore, err := database.NewBtree[uuid.UUID, UserProfile](ctx, opts, userStoreName, trans, nil, userStoreOpts)
 	if err != nil {
 		if strings.Contains(err.Error(), "exists") {
-			userStore, err = database.OpenBtree[uuid.UUID, UserProfile](ctx, opts, "users", trans, nil)
+			userStore, err = database.OpenBtree[uuid.UUID, UserProfile](ctx, opts, userStoreName, trans, nil)
 			if err != nil {
 				trans.Rollback(ctx)
 				return fmt.Errorf("failed to open existing users store: %v", err)
@@ -91,44 +97,44 @@ func PopulateDemoData(ctx context.Context, opts sop.DatabaseOptions) error {
 		}
 	}
 
-	// Create users_by_age store for secondary index
+	// Create demo users_by_age store for secondary index
 	usersByAgeOpts := sop.StoreOptions{
-		Name:                     "users_by_age",
+		Name:                     usersByAgeStoreName,
 		IsUnique:                 false, // Allow duplicate ages
 		IsValueDataInNodeSegment: true,
 		Description:              "Index of users by age. Key=Age. Value=User ID.",
 		Relations: []sop.Relation{
 			{
 				SourceFields: []string{"value"},
-				TargetStore:  "users",
+				TargetStore:  userStoreName,
 				TargetFields: []string{"key"},
 			},
 		},
 	}
-	userByAgeStore, err := database.NewBtree[int, uuid.UUID](ctx, opts, "users_by_age", trans, intComparer, usersByAgeOpts)
+	userByAgeStore, err := database.NewBtree[int, uuid.UUID](ctx, opts, usersByAgeStoreName, trans, intComparer, usersByAgeOpts)
 	if err != nil {
 		if strings.Contains(err.Error(), "exists") {
-			userByAgeStore, err = database.OpenBtree[int, uuid.UUID](ctx, opts, "users_by_age", trans, intComparer)
+			userByAgeStore, err = database.OpenBtree[int, uuid.UUID](ctx, opts, usersByAgeStoreName, trans, intComparer)
 			if err != nil {
 				trans.Rollback(ctx)
-				return fmt.Errorf("failed to open existing users_by_age store: %v", err)
+				return fmt.Errorf("failed to open existing demo_users_by_age store: %v", err)
 			}
 		} else {
 			trans.Rollback(ctx)
-			return fmt.Errorf("failed to create users_by_age store: %v", err)
+			return fmt.Errorf("failed to create demo_users_by_age store: %v", err)
 		}
 	}
 
 	productStoreOpts := sop.StoreOptions{
-		Name:                     "products",
+		Name:                     productsStoreName,
 		IsValueDataInNodeSegment: true,
 		// Default is 2000 if not specified.
 		//SlotLength: 2000,
 	}
-	productStore, err := database.NewBtree[uuid.UUID, Product](ctx, opts, "products", trans, nil, productStoreOpts)
+	productStore, err := database.NewBtree[uuid.UUID, Product](ctx, opts, productsStoreName, trans, nil, productStoreOpts)
 	if err != nil {
 		if strings.Contains(err.Error(), "exists") {
-			productStore, err = database.OpenBtree[uuid.UUID, Product](ctx, opts, "products", trans, nil)
+			productStore, err = database.OpenBtree[uuid.UUID, Product](ctx, opts, productsStoreName, trans, nil)
 			if err != nil {
 				trans.Rollback(ctx)
 				return fmt.Errorf("failed to open existing products store: %v", err)
@@ -140,19 +146,19 @@ func PopulateDemoData(ctx context.Context, opts sop.DatabaseOptions) error {
 	}
 
 	orderStoreOpts := sop.StoreOptions{
-		Name: "orders",
+		Name: ordersStoreName,
 		Relations: []sop.Relation{
 			{
 				SourceFields: []string{"key"},
-				TargetStore:  "users_orders",
+				TargetStore:  usersOrdersStoreName,
 				TargetFields: []string{"value"},
 			},
 		},
 	}
-	orderStore, err := database.NewBtree[uuid.UUID, Order](ctx, opts, "orders", trans, nil, orderStoreOpts)
+	orderStore, err := database.NewBtree[uuid.UUID, Order](ctx, opts, ordersStoreName, trans, nil, orderStoreOpts)
 	if err != nil {
 		if strings.Contains(err.Error(), "exists") {
-			orderStore, err = database.OpenBtree[uuid.UUID, Order](ctx, opts, "orders", trans, nil)
+			orderStore, err = database.OpenBtree[uuid.UUID, Order](ctx, opts, ordersStoreName, trans, nil)
 			if err != nil {
 				trans.Rollback(ctx)
 				return fmt.Errorf("failed to open existing orders store: %v", err)
@@ -163,37 +169,37 @@ func PopulateDemoData(ctx context.Context, opts sop.DatabaseOptions) error {
 		}
 	}
 
-	// Create users_orders link table
+	// Create demo users_orders link table
 	usersOrdersOpts := sop.StoreOptions{
-		Name:                     "users_orders",
+		Name:                     usersOrdersStoreName,
 		IsUnique:                 false, // 1 user -> many orders
 		IsValueDataInNodeSegment: true,  // Optimize for speed
 		Description:              "Link table: UserID -> OrderID",
 		Relations: []sop.Relation{
 			{
 				SourceFields: []string{"key"},
-				TargetStore:  "users",
+				TargetStore:  userStoreName,
 				TargetFields: []string{"key"},
 			},
 			{
 				SourceFields: []string{"value"},
-				TargetStore:  "orders",
+				TargetStore:  ordersStoreName,
 				TargetFields: []string{"key"},
 			},
 		},
 	}
 	// Key = UserID, Value = OrderID
-	usersOrdersStore, err := database.NewBtree[uuid.UUID, uuid.UUID](ctx, opts, "users_orders", trans, nil, usersOrdersOpts)
+	usersOrdersStore, err := database.NewBtree[uuid.UUID, uuid.UUID](ctx, opts, usersOrdersStoreName, trans, nil, usersOrdersOpts)
 	if err != nil {
 		if strings.Contains(err.Error(), "exists") {
-			usersOrdersStore, err = database.OpenBtree[uuid.UUID, uuid.UUID](ctx, opts, "users_orders", trans, nil)
+			usersOrdersStore, err = database.OpenBtree[uuid.UUID, uuid.UUID](ctx, opts, usersOrdersStoreName, trans, nil)
 			if err != nil {
 				trans.Rollback(ctx)
-				return fmt.Errorf("failed to open existing users_orders store: %v", err)
+				return fmt.Errorf("failed to open existing demo_users_orders store: %v", err)
 			}
 		} else {
 			trans.Rollback(ctx)
-			return fmt.Errorf("failed to create users_orders store: %v", err)
+			return fmt.Errorf("failed to create demo_users_orders store: %v", err)
 		}
 	}
 
@@ -303,10 +309,10 @@ func PopulateDemoData(ctx context.Context, opts sop.DatabaseOptions) error {
 			return fmt.Errorf("failed to add order: %v", err)
 		}
 
-		// Add link to users_orders
+		// Add link to demo_users_orders
 		if ok, err := usersOrdersStore.Add(ctx, user.ID, orderID); err != nil || !ok {
 			trans.Rollback(ctx)
-			return fmt.Errorf("failed to add users_orders link: %v", err)
+			return fmt.Errorf("failed to add demo_users_orders link: %v", err)
 		}
 	}
 

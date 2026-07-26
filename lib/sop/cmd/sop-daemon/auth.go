@@ -128,8 +128,8 @@ type DaemonAuthConfig struct {
 }
 
 var defaultDaemonAuthConfig = DaemonAuthConfig{
-	AccessTokenTTL:  15 * time.Minute,
-	RefreshTokenTTL: 48 * time.Hour, // 2 days
+	AccessTokenTTL:  time.Hour,
+	RefreshTokenTTL: 7 * 24 * time.Hour, // 1 week
 }
 
 // DaemonAuthHandler handles daemon authentication

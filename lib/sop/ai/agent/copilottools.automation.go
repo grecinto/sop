@@ -152,8 +152,8 @@ var kbWorkflowsEnabled atomic.Bool
 
 func init() {
 	automationPolicy.Store(DefaultAutomationPolicy())
-	// Stores disabled by default for v1, can be enabled for v1.1+
-	storesFeatureEnabled.Store(false)
+	// Stores enabled by default so the runtime exposes the capability out of the box.
+	storesFeatureEnabled.Store(true)
 	// KB workflows disabled by default for v1 - needs infrastructure development
 	kbWorkflowsEnabled.Store(false)
 }

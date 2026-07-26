@@ -127,11 +127,10 @@ func migrateLegacyRootPassword() {
 		return
 	}
 
-	for _, user := range config.Users {
-		if normalizeUsername(user.Username) == "root" {
-			config.RootPassword = ""
-			return
-		}
+	// Check if root user already exists in persistent store
+	if _, ok, _ := config.findUserRecord(context.Background(), "root"); ok {
+		config.RootPassword = ""
+		return
 	}
 
 	if err := config.SetUser("root", config.RootPassword.Plaintext(), sop.RoleAdmin); err != nil {
@@ -163,6 +162,9 @@ func LoadConfig(path string) error {
 	}
 
 	migrateLegacyRootPassword()
+	if err := config.syncUsersFromStore(context.Background()); err != nil {
+		log.Warn("failed to hydrate users from backing store", "error", err)
+	}
 
 	// Default System DB logic
 	// We ONLY populate SystemDB if it is explicitly defined in the config.

@@ -27,8 +27,39 @@ const (
 	RoleGuest       = "Guest"
 )
 
+func NormalizeRole(role string) string {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return ""
+	}
+
+	switch {
+	case strings.EqualFold(role, RoleSystemAdmin),
+		strings.EqualFold(role, "system-admin"),
+		strings.EqualFold(role, "system_admin"),
+		strings.EqualFold(role, "system admin"),
+		strings.EqualFold(role, "systemadministrator"),
+		strings.EqualFold(role, "sysadmin"),
+		strings.EqualFold(role, "sa"):
+		return RoleSystemAdmin
+	case strings.EqualFold(role, RoleAdmin),
+		strings.EqualFold(role, "administrator"),
+		strings.EqualFold(role, "superadmin"):
+		return RoleAdmin
+	case strings.EqualFold(role, RoleUser),
+		strings.EqualFold(role, "member"),
+		strings.EqualFold(role, "standard"):
+		return RoleUser
+	case strings.EqualFold(role, RoleGuest):
+		return RoleGuest
+	default:
+		return role
+	}
+}
+
 func IsAdminRole(role string) bool {
-	return strings.EqualFold(role, RoleAdmin) || strings.EqualFold(role, RoleSystemAdmin)
+	normalized := NormalizeRole(role)
+	return strings.EqualFold(normalized, RoleAdmin) || strings.EqualFold(normalized, RoleSystemAdmin)
 }
 
 type ResourceAccess struct {

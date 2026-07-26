@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
+	aidb "github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/tools/siteapi"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -66,6 +68,41 @@ func applyRedisOverride(cfg *sopbackend.Config, redisURL string, wasFlagPassed b
 	for i := range cfg.Databases {
 		cfg.Databases[i].RedisURL = adjusted
 	}
+}
+
+// bootstrapCorePlaybookIfNeeded ensures the Core Playbook KB exists in the system database
+// for Fleet Learning federation. HQ needs this KB to receive daemon syncs.
+// Unlike daemon's bootstrap, this only runs if a system database is already configured.
+func bootstrapCorePlaybookIfNeeded(ctx context.Context, databaseName string) error {
+	if strings.TrimSpace(databaseName) == "" {
+		return nil
+	}
+
+	// Check if Core Playbook KB already exists
+	dbOpts, err := sopbackend.GetDBOptions(ctx, databaseName)
+	if err != nil {
+		return fmt.Errorf("resolve DB options for Core Playbook bootstrap: %w", err)
+	}
+
+	db := aidb.NewDatabase(dbOpts)
+	exists, err := db.KnowledgeBaseExists(ctx, ai.DefaultKBName)
+	if err != nil {
+		return fmt.Errorf("check Core Playbook existence: %w", err)
+	}
+
+	if exists {
+		log.Debug("Core Playbook KB already exists", "database", databaseName)
+		return nil
+	}
+
+	// Preload Core Playbook from template
+	log.Info("Bootstrapping Core Playbook KB for Fleet Learning federation", "database", databaseName)
+	if err := sopbackend.PreloadSpaceFromTemplate(ctx, ai.DefaultKBName, databaseName, nil); err != nil {
+		return fmt.Errorf("preload Core Playbook: %w", err)
+	}
+
+	log.Info("Core Playbook KB bootstrapped successfully", "database", databaseName)
+	return nil
 }
 
 func main() {
@@ -236,6 +273,16 @@ func main() {
 		implPath := filepath.Join(implicitPath, sopbackend.SystemDBName)
 		if _, err := os.Stat(implPath); os.IsNotExist(err) {
 			log.Warn(fmt.Sprintf("Warning: Implicit System DB does not exist at path '%s'.", implPath))
+		}
+	}
+
+	// Bootstrap Core Playbook KB if system database exists but KB is missing.
+	// This ensures HQ can receive Fleet Learning federation syncs from daemons.
+	// Setup Wizard also preloads Core Playbook, so this is a safety net for cases
+	// where the server is restarted with a pre-existing system DB.
+	if config.SystemDB != nil && !config.DisableSOPKBPreload {
+		if err := bootstrapCorePlaybookIfNeeded(context.Background(), config.SystemDB.Name); err != nil {
+			log.Warn("Failed to bootstrap Core Playbook KB", "error", err)
 		}
 	}
 

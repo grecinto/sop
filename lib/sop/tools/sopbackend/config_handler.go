@@ -925,7 +925,7 @@ func sanitizedConfigForDisk(cfg Config) Config {
 	sanitized := cfg
 
 	// The legacy root-password field is no longer the runtime credential source.
-	// Persist only the seeded user records and clear any raw password fallback.
+	// Persist only the seeded user records via the persistent store.
 	sanitized.RootPassword = ""
 
 	return sanitized

@@ -213,7 +213,8 @@ func TestRuntimeSwitchEnabledForContextAllowsSystemAdmin(t *testing.T) {
 
 func TestRuntimeSwitchEnabledForContextUsesStoredAdminRole(t *testing.T) {
 	oldConfig := config
-	config = Config{Users: []UserRecord{{Username: "alice", Role: sop.RoleSystemAdmin}}}
+	config = Config{UsersStore: NewUserStore()}
+	_ = config.UsersStore.Save(context.Background(), &UserRecord{Username: "alice", Role: sop.RoleSystemAdmin})
 	t.Cleanup(func() { config = oldConfig })
 
 	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "alice"})
