@@ -778,28 +778,39 @@
     function closeChatHeaderMoreMenu() {
         const menu = document.getElementById('chat-header-more-menu');
         if (menu) {
-            menu.classList.remove('open');
-            const button = document.getElementById('chat-header-more-btn');
-            if (button) {
-                button.setAttribute('aria-expanded', 'false');
-            }
+            menu.classList.remove('show');
         }
     }
 
-    function toggleChatHeaderMoreMenu() {
+    function toggleChatHeaderMoreMenu(event) {
+        event?.preventDefault();
+        event?.stopPropagation();
         const menu = document.getElementById('chat-header-more-menu');
-        const button = document.getElementById('chat-header-more-btn');
-        if (!menu || !button) return;
+        if (!menu) return;
 
-        const isOpen = menu.classList.contains('open');
-        if (isOpen) {
-            menu.classList.remove('open');
-            button.setAttribute('aria-expanded', 'false');
-            return;
+        const shouldOpen = !menu.classList.contains('show');
+        closeChatHeaderMoreMenu();
+        if (shouldOpen) {
+            const responseFormatMenuItem = document.getElementById('chat-response-format-menu-item');
+            const formatSelect = document.getElementById('chat-header-format-select');
+            if (responseFormatMenuItem) {
+                responseFormatMenuItem.style.display = 'block';
+            }
+            if (formatSelect) {
+                const saved = localStorage.getItem('chat_response_format') || 'csv';
+                formatSelect.value = saved;
+            }
+            menu.classList.add('show');
         }
 
-        menu.classList.add('open');
-        button.setAttribute('aria-expanded', 'true');
+        if (!window.__sopChatHeaderMoreMenuBound) {
+            document.addEventListener('click', (clickEvent) => {
+                if (!clickEvent.target.closest('.chat-header-more-controls')) {
+                    closeChatHeaderMoreMenu();
+                }
+            });
+            window.__sopChatHeaderMoreMenuBound = true;
+        }
     }
 
     function toggleChatSettings() {
@@ -894,8 +905,9 @@
         const embedderURLContainer = document.getElementById('chat-settings-embedder-url-container');
         const embedderAPIKeyContainer = document.getElementById('chat-settings-embedder-apikey-container');
         const embedderURLInput = document.getElementById('chat-settings-embedder-url');
-        const isLocalEmbedder = isLocalProviderValue(embedderProvider);
-        const showEmbedderURL = selectedProviderUsesURL('chat-settings-embedder-overlay');
+        const embedderTestButton = document.getElementById('chat-settings-embedder-test-button');
+        const isLocalEmbedder = isLocalProviderValue(embedderProvider) || isKelindarLocalEmbedderValue(embedderProvider);
+        const showEmbedderURL = !isLocalEmbedder && selectedProviderUsesURL('chat-settings-embedder-overlay');
         const fallbackProvider = document.getElementById('chat-settings-fallback-overlay')?.value || '';
         const fallbackURLContainer = document.getElementById('chat-settings-fallback-url-container');
         const fallbackAPIKeyContainer = document.getElementById('chat-settings-fallback-apikey-container');
@@ -917,10 +929,12 @@
             if (embedderURLContainer) embedderURLContainer.style.display = 'none';
             if (embedderAPIKeyContainer) embedderAPIKeyContainer.style.display = 'none';
             if (embedderURLInput) embedderURLInput.value = '';
+            if (embedderTestButton) embedderTestButton.style.display = 'none';
         } else {
             if (embedderURLContainer) embedderURLContainer.style.display = showEmbedderURL ? 'block' : 'none';
             if (embedderAPIKeyContainer) embedderAPIKeyContainer.style.display = isLocalEmbedder ? 'none' : 'block';
             if (!showEmbedderURL && embedderURLInput) embedderURLInput.value = '';
+            if (embedderTestButton) embedderTestButton.style.display = isLocalEmbedder ? 'none' : 'inline-block';
         }
 
         if (fallbackProvider === '') {

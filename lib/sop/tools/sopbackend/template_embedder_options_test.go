@@ -43,6 +43,28 @@ func TestEmbedderOptionsTemplateUsesCatalogEntriesWithoutPlaceholder(t *testing.
 	}
 }
 
+func TestAIWindowEmbedderToggleHidesButtonForEmbeddedLocalEmbedders(t *testing.T) {
+	templatePath := filepath.Join("templates", "scripts_part11.html")
+	fsys := os.DirFS(".")
+	tmpl, err := template.ParseFS(fsys, templatePath)
+	if err != nil {
+		t.Fatalf("parse setup wizard script template: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "scripts_part11", map[string]any{}); err != nil {
+		t.Fatalf("execute setup wizard script template: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "const embedderTestButton = document.getElementById('chat-settings-embedder-test-button');") {
+		t.Fatalf("expected AI window embedder toggle to look up the chat settings embedder test button, got content=%s", out)
+	}
+	if !strings.Contains(out, "if (embedderTestButton) embedderTestButton.style.display = isLocalEmbedder ? 'none' : 'inline-block';") {
+		t.Fatalf("expected AI window embedder toggle to hide the embedder test button for embedded local embedders, got content=%s", out)
+	}
+}
+
 func TestEmbedderOptionsTemplateRendersActualCatalog(t *testing.T) {
 	templatePath := filepath.Join("templates", "options.html")
 	fsys := os.DirFS(".")

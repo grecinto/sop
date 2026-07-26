@@ -299,12 +299,6 @@
                 <option value="" selected>None</option>
             </select>
 
-            <select id="format-select" style="display: none; width: 69px; min-width: 69px; max-width: 69px; flex: 0 0 69px; padding: 2px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); font-size: 11px; font-weight: normal;" onclick="event.stopPropagation()" title="Response Format">
-                <option value="csv">CSV</option>
-                <option value="json">JSON</option>
-                <option value="table">Table</option>
-            </select>
-
             <div id="chat-runtime-controls" style="display: {{ if .RuntimeSwitchEnabled }}flex{{ else }}none{{ end }}; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; padding-left: 8px;">
                 <label id="chat-runtime-toggle" style="display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--accent-color); color: white; font-size: 11px; font-weight: normal; cursor: pointer;" onclick="event.stopPropagation()" title="Use HQ runtime when checked, otherwise use local daemon">
                     <input type="checkbox" id="chat-runtime-hq" checked onclick="event.stopPropagation(); setChatRuntimeMode(this.checked ? 'hq' : 'local')" onchange="event.stopPropagation(); setChatRuntimeMode(this.checked ? 'hq' : 'local')" style="margin: 0; cursor: pointer;">
@@ -327,7 +321,7 @@
         </div>
         <div class="chat-controls">
             <div class="chat-header-more-controls">
-                <button type="button" id="chat-header-more-btn" class="chat-header-more-btn" onclick="event.stopPropagation(); toggleChatHeaderMoreMenu()" title="More controls" aria-haspopup="true" aria-expanded="false">⋯</button>
+                <button type="button" id="chat-header-more-btn" class="chat-header-more-btn" onmousedown="event.stopPropagation()" onclick="event.stopPropagation(); toggleChatHeaderMoreMenu(event);" title="More controls" aria-haspopup="true" aria-expanded="false">⋯</button>
                 <div id="chat-header-more-menu" class="chat-header-more-menu" role="menu" aria-label="More controls">
                     <button type="button" id="expertise-dashboard-btn" class="expertise-dashboard-btn" onclick="event.stopPropagation(); closeChatHeaderMoreMenu(); openExpertiseDashboard()" title="Expertise Dashboard (Ctrl+Shift+E)">
                         <span class="chat-header-menu-icon">📊</span>
@@ -338,6 +332,17 @@
                         <span class="chat-header-menu-icon">🧠</span>
                         <span>Space Settings</span>
                     </button>
+                    <div id="chat-response-format-menu-item" style="display: none; padding: 4px 4px 2px 4px;">
+                        <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-color); cursor:pointer;">
+                            <span class="chat-header-menu-icon">📄</span>
+                            <span>Store Response</span>
+                            <select id="chat-header-format-select" style="margin-left:auto; padding:2px 4px; border-radius:3px; border:1px solid var(--input-border); background:var(--input-bg); color:var(--text-color); font-size:11px;" onchange="event.stopPropagation(); localStorage.setItem('chat_response_format', this.value)">
+                                <option value="csv">CSV</option>
+                                <option value="json">JSON</option>
+                                <option value="table">Table</option>
+                            </select>
+                        </label>
+                    </div>
                 </div>
             </div>
             <button type="button" id="chat-floater-btn" class="pip-btn" onclick="event.stopPropagation(); openChatPiP()" title="Open AI chat in a floating window" style="display: inline-flex; font-size: 12px;">⧉</button>
@@ -412,7 +417,7 @@
         <div id="chat-settings-fallback-test-status" style="display: none; margin-bottom: 10px; font-size: 12px;"></div>
         <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 15px;">
             <button onclick="testChatSettingsFallbackConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Fallback</button>
-            <button onclick="testChatSettingsEmbedderConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Embedder</button>
+            <button id="chat-settings-embedder-test-button" onclick="testChatSettingsEmbedderConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Embedder</button>
             <button onclick="testChatSettingsConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Connection</button>
             <button onclick="toggleChatSettings()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Cancel</button>
             <button onclick="saveChatSettings()" style="padding: 4px 10px; border-radius: 3px; border: none; background: var(--accent-color); color: white; cursor: pointer;">Save & Close</button>

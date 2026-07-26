@@ -1,30 +1,33 @@
+# Commented out - user wants to commit these files
+# If you want to re-enable these ignores, uncomment the lines below
+
 # Generated runtime artifacts and local state
-storelist.txt
-**/storelist.txt
-**/storeinfo.txt
-**/sessions/
-**/shared_memory/
-**/system_daemon_registry/
-**/site_payments/
-**/site_subscriptions/
-**/site_user_payment_ids/
-**/site_user_subscription_ids/
-**/site_users/
-**/site_products/
-**/billing_info/
-**/kb/categories/
-**/kb/categoriesByDistance/
-**/kb/categoriesByPath/
-**/kb/documents/
-**/kb/items/
-**/kb/vectors/
-**/fs.test
-.sop-data/
-config.json
-knowledge_compiler
-sopbackend
-lib/sop/tools/httpserver/scripts/
-scripts/
+# storelist.txt
+# **/storelist.txt
+# **/storeinfo.txt
+# **/sessions/
+# **/shared_memory/
+# **/system_daemon_registry/
+# **/site_payments/
+# **/site_subscriptions/
+# **/site_user_payment_ids/
+# **/site_user_subscription_ids/
+# **/site_users/
+# **/site_products/
+# **/billing_info/
+# **/kb/categories/
+# **/kb/categoriesByDistance/
+# **/kb/categoriesByPath/
+# **/kb/documents/
+# **/kb/items/
+# **/kb/vectors/
+# **/fs.test
+# .sop-data/
+# config.json
+# knowledge_compiler
+# sopbackend
+# lib/sop/tools/httpserver/scripts/
+# scripts/
 
 # Backup files
 *.bak
