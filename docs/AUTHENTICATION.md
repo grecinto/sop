@@ -245,7 +245,9 @@ async function refreshToken() {
 ---
 
 ## Token Management
+### Future Evolution
 
+- TODO: Add support for switching the database transaction mode later (for example between NoCheck and stricter modes) without changing the auth/session flow contracts.
 ### Session Creation
 
 **File**: `lib/sop/tools/sopbackend/auth.go`

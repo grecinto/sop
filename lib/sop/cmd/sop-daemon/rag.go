@@ -151,6 +151,7 @@ type AskRequest struct {
 	} `json:"auth"`
 	HQ struct {
 		BaseURL   string `json:"base_url"`
+		Port      string `json:"port,omitempty"`
 		UserID    string `json:"user_id"`
 		SessionID string `json:"session_id"`
 	} `json:"hq"`
@@ -348,6 +349,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	accessToken := strings.TrimSpace(req.Auth.AccessToken)
 	refreshToken := strings.TrimSpace(req.Auth.RefreshToken)
 	hqBaseURL := strings.TrimSpace(req.HQ.BaseURL)
+	hqPort := strings.TrimSpace(req.HQ.Port)
 	if accessToken == "" && refreshToken == "" {
 		accessToken = strings.TrimSpace(storedSessionContext.AccessToken)
 		refreshToken = strings.TrimSpace(storedSessionContext.RefreshToken)
@@ -355,6 +357,10 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	if hqBaseURL == "" {
 		hqBaseURL = strings.TrimSpace(storedSessionContext.HQBaseURL)
 	}
+	if hqPort == "" {
+		hqPort = strings.TrimSpace(storedSessionContext.HQPort)
+	}
+	hqBaseURL = normalizeHQBaseURL(hqBaseURL, hqPort)
 	if accessToken != "" || refreshToken != "" || hqBaseURL != "" || storedSessionContext.LLMProvider != "" || storedSessionContext.ThinkingLevel != "" {
 		ctxKey := payload.SessionID
 		daemonSessionStore.mu.Lock()
@@ -362,6 +368,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 			AccessToken:   accessToken,
 			RefreshToken:  refreshToken,
 			HQBaseURL:     hqBaseURL,
+			HQPort:        hqPort,
 			HQUserID:      strings.TrimSpace(req.HQ.UserID),
 			HQSessionID:   payload.SessionID,
 			LLMProvider:   strings.TrimSpace(storedSessionContext.LLMProvider),
@@ -393,6 +400,9 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		cfg.Set("thinking_level", trimmedThinkingLevel)
 	}
 	cfg.Set("hq_base_url", hqBaseURL)
+	if hqPort != "" {
+		cfg.Set("hq_port", hqPort)
+	}
 	cfg.Set("hq_user_id", strings.TrimSpace(req.HQ.UserID))
 	cfg.Set("hq_session_id", strings.TrimSpace(req.HQ.SessionID))
 	provider := strings.TrimSpace(req.LLMProvider)

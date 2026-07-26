@@ -912,6 +912,7 @@
         const model = providerConfig.model || '';
         const apiKey = chatAIConfig.brain_api_key || '';
         const baseURL = chatAIConfig.brain_url || '';
+        const hqPort = (window.location.port || '').trim();
         
         const effectiveSessionID = currentSessionID || 'local-daemon';
         console.log('[buildLocalDaemonHandoffPayload] Using session_id:', effectiveSessionID, '(currentSessionID:', currentSessionID, ')');
@@ -924,6 +925,7 @@
             },
             hq: {
                 base_url: window.location.origin || 'http://127.0.0.1:3000',
+                port: hqPort,
                 user_id: currentUserID || '',
                 session_id: effectiveSessionID
             },

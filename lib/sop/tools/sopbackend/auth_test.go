@@ -46,6 +46,24 @@ func TestDefaultRefreshTTLIsTwoWeeks(t *testing.T) {
 	}
 }
 
+func TestSessionStoreValidationUsesNoCheckTransaction(t *testing.T) {
+	store := NewSessionStore(time.Minute)
+	ctx := context.Background()
+
+	_, tx, err := store.getStoreWithMode(ctx, sop.NoCheck)
+	if err != nil {
+		t.Fatalf("getStoreWithMode() error = %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if tx == nil {
+		t.Fatal("getStoreWithMode() returned nil transaction")
+	}
+	if got := tx.GetPhasedTransaction().GetMode(); got != sop.NoCheck {
+		t.Fatalf("transaction mode = %v, want %v", got, sop.NoCheck)
+	}
+}
+
 func TestSessionStoreGCResumesFromLastProcessedKey(t *testing.T) {
 	store := NewSessionStore(time.Hour)
 	ctx := context.Background()

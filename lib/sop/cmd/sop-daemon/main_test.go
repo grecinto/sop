@@ -1762,6 +1762,35 @@ func TestHandleUIHandoffReturnsWelcomeContextAndStoresSessionInfo(t *testing.T) 
 	}
 }
 
+func TestHandleUIHandoffStoresExplicitHQPortAndNormalizesBaseURL(t *testing.T) {
+	ctxKey := "handoff-port"
+	daemonSessionStore.mu.Lock()
+	delete(daemonSessionStore.data, ctxKey)
+	daemonSessionStore.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"ping","auth":{"access_token":"token-123","refresh_token":"refresh-123"},"hq":{"base_url":"https://hq.example","port":"9443","user_id":"user-1","session_id":"handoff-port"}}`))
+	rr := httptest.NewRecorder()
+
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	daemonSessionStore.mu.Lock()
+	ctx, ok := daemonSessionStore.data[ctxKey]
+	daemonSessionStore.mu.Unlock()
+	if !ok {
+		t.Fatalf("expected handoff context to be stored for %q", ctxKey)
+	}
+	if ctx.HQBaseURL != "https://hq.example:9443" {
+		t.Fatalf("expected normalized HQ base URL to include explicit port, got %q", ctx.HQBaseURL)
+	}
+	if ctx.HQPort != "9443" {
+		t.Fatalf("expected stored HQ port to be preserved, got %q", ctx.HQPort)
+	}
+}
+
 func TestHandleUIHandoffAllowsMissingAuthTokensForLocalRuntime(t *testing.T) {
 	ctxKey := "handoff-local-runtime"
 	daemonSessionStore.mu.Lock()

@@ -10,7 +10,9 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -303,6 +305,7 @@ type UIHandoffRequest struct {
 	} `json:"auth"`
 	HQ struct {
 		BaseURL   string `json:"base_url"`
+		Port      string `json:"port,omitempty"`
 		UserID    string `json:"user_id"`
 		SessionID string `json:"session_id"`
 	} `json:"hq"`
@@ -328,6 +331,7 @@ type daemonSessionContext struct {
 	AccessToken   string
 	RefreshToken  string
 	HQBaseURL     string
+	HQPort        string
 	HQUserID      string
 	HQSessionID   string
 	LLMProvider   string
@@ -336,6 +340,31 @@ type daemonSessionContext struct {
 	LLMURL        string
 	ThinkingLevel string
 	LastUpdated   time.Time
+}
+
+func normalizeHQBaseURL(baseURL, port string) string {
+	baseURL = strings.TrimSpace(baseURL)
+	port = strings.TrimSpace(port)
+	if baseURL == "" {
+		return ""
+	}
+	if port == "" {
+		return strings.TrimRight(baseURL, "/")
+	}
+
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		if strings.Contains(baseURL, "://") {
+			return strings.TrimRight(baseURL, "/")
+		}
+		return strings.TrimRight(baseURL, "/") + ":" + port
+	}
+	if parsedURL.Port() != "" {
+		return strings.TrimRight(parsedURL.String(), "/")
+	}
+
+	parsedURL.Host = net.JoinHostPort(parsedURL.Hostname(), port)
+	return strings.TrimRight(parsedURL.String(), "/")
 }
 
 var daemonSessionStore = struct {
@@ -1658,10 +1687,13 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hqBaseURL := strings.TrimSpace(req.HQ.BaseURL)
+	hqPort := strings.TrimSpace(req.HQ.Port)
 	if hqBaseURL == "" {
 		respondJSON(w, http.StatusBadRequest, UIHandoffResponse{Error: "HQ base URL is required"})
 		return
 	}
+
+	normalizedHQBaseURL := normalizeHQBaseURL(hqBaseURL, hqPort)
 
 	ctxKey := strings.TrimSpace(req.HQ.SessionID)
 	if ctxKey == "" {
@@ -1675,7 +1707,8 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 	daemonSessionStore.data[ctxKey] = daemonSessionContext{
 		AccessToken:   accessToken,
 		RefreshToken:  refreshToken,
-		HQBaseURL:     hqBaseURL,
+		HQBaseURL:     normalizedHQBaseURL,
+		HQPort:        hqPort,
 		HQUserID:      strings.TrimSpace(req.HQ.UserID),
 		HQSessionID:   strings.TrimSpace(req.HQ.SessionID),
 		LLMProvider:   strings.TrimSpace(req.LLMProvider),

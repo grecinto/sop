@@ -530,7 +530,7 @@ func (s *SessionStore) collectStaleSessions(ctx context.Context, grace time.Dura
 	cursor := s.gcCursor
 	s.mu.Unlock()
 
-	store, tx, err := s.getStore(ctx)
+	store, tx, err := s.getStoreWithMode(ctx, sop.ForWriting)
 	if err != nil {
 		return 0, err
 	}
@@ -713,7 +713,7 @@ func parseAndVerifySignedAccessToken(token string) (*signedAccessClaims, error) 
 
 func (s *SessionStore) CreateToken(ctx context.Context, username, role string) (string, error) {
 	role = normalizeRole(role)
-	store, tx, err := s.getStore(ctx)
+	store, tx, err := s.getStoreWithMode(ctx, sop.ForWriting)
 	if err != nil {
 		return "", err
 	}
@@ -773,7 +773,7 @@ func (s *SessionStore) CreateSession(ctx context.Context, username, role string)
 
 func (s *SessionStore) createSessionAttempt(ctx context.Context, username, role string) (string, string, error) {
 	role = normalizeRole(role)
-	store, tx, err := s.getStore(ctx)
+	store, tx, err := s.getStoreWithMode(ctx, sop.ForWriting)
 	if err != nil {
 		return "", "", err
 	}
@@ -824,7 +824,7 @@ func (s *SessionStore) createSessionAttempt(ctx context.Context, username, role 
 }
 
 func (s *SessionStore) Refresh(ctx context.Context, refreshToken string) (string, string, error) {
-	store, tx, err := s.getStore(ctx)
+	store, tx, err := s.getStoreWithMode(ctx, sop.ForWriting)
 	if err != nil {
 		return "", "", err
 	}
@@ -955,7 +955,7 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 		return &UserRecord{Username: claims.Subject, Role: normalizeRole(claims.Role)}, nil
 	}
 
-	store, tx, err := s.getStore(ctx)
+	store, tx, err := s.getStoreWithMode(ctx, sop.NoCheck)
 	if err != nil {
 		return nil, err
 	}
@@ -1015,7 +1015,7 @@ func (s *SessionStore) validateToken(ctx context.Context, token string, requireA
 func (s *SessionStore) RevokeToken(ctx context.Context, token string) {
 	markTokenRevoked(token)
 
-	store, tx, err := s.getStore(ctx)
+	store, tx, err := s.getStoreWithMode(ctx, sop.ForWriting)
 	if err != nil {
 		log.Warn("failed to get store for token revocation", "error", err)
 		return
@@ -1051,7 +1051,7 @@ func (s *SessionStore) RevokeToken(ctx context.Context, token string) {
 }
 
 func (s *SessionStore) revokeSessionsForUser(ctx context.Context, username string) {
-	store, tx, err := s.getStore(ctx)
+	store, tx, err := s.getStoreWithMode(ctx, sop.ForWriting)
 	if err != nil {
 		log.Warn("failed to get store for user session revocation", "error", err)
 		return
@@ -2157,11 +2157,15 @@ func removeSessionRecord(ctx context.Context, store btree.BtreeInterface[string,
 }
 
 func (s *SessionStore) getStore(ctx context.Context) (btree.BtreeInterface[string, SessionRecord], sop.Transaction, error) {
+	return s.getStoreWithMode(ctx, sop.ForWriting)
+}
+
+func (s *SessionStore) getStoreWithMode(ctx context.Context, mode sop.TransactionMode) (btree.BtreeInterface[string, SessionRecord], sop.Transaction, error) {
 	db, err := getSystemDB(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("session store failed to get system db: %v", err)
 	}
-	tx, err := db.BeginTransaction(ctx, sop.ForWriting, -1)
+	tx, err := db.BeginTransaction(ctx, mode, -1)
 	if err != nil {
 		return nil, nil, fmt.Errorf("session store failed to begin transaction: %v", err)
 	}
