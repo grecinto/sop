@@ -11,6 +11,7 @@ storelist.txt
 **/site_user_subscription_ids/
 **/site_users/
 **/site_products/
+**/billing_info/
 **/kb/categories/
 **/kb/categoriesByDistance/
 **/kb/categoriesByPath/
@@ -18,7 +19,15 @@ storelist.txt
 **/kb/items/
 **/kb/vectors/
 **/fs.test
-.sop-data/config.json
+.sop-data/
+config.json
+knowledge_compiler
+sopbackend
+lib/sop/tools/httpserver/scripts/
+scripts/
+
+# Backup files
+*.bak
 
 # Binary executables (should be built, not committed)
 /site
