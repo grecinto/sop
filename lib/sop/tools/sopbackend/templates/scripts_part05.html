@@ -704,6 +704,20 @@
         }
         const isOpen = !controls.classList.contains('show');
         setChatAttachmentControlsOpen(isOpen);
+        
+        // Add click-outside listener to close the menu when clicking elsewhere
+        if (!window.__sopChatAttachmentOverflowBound) {
+            document.addEventListener('click', (clickEvent) => {
+                const controls = document.getElementById('chat-attachment-controls');
+                if (controls && controls.classList.contains('show')) {
+                    // Check if click is outside the attachment controls container
+                    if (!clickEvent.target.closest('#chat-attachment-controls')) {
+                        setChatAttachmentControlsOpen(false);
+                    }
+                }
+            });
+            window.__sopChatAttachmentOverflowBound = true;
+        }
     }
 
     function updateChatAttachmentOverflowVisibility() {
