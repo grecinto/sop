@@ -203,6 +203,7 @@ func modelCatalogCandidatePaths(configPath string) []string {
 		current := filepath.Clean(start)
 		for {
 			add(filepath.Join(current, modelCatalogFilename))
+			add(filepath.Join(current, "lib", "sop", modelCatalogFilename))
 			parent := filepath.Dir(current)
 			if parent == current {
 				break

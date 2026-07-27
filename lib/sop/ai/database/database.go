@@ -624,6 +624,25 @@ func (db *Database) readStoreListFile(filename string) ([]string, error) {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
 
+		// Try JSON format first (written by StoreRepository)
+		var jsonStores []string
+		if err := json.Unmarshal(data, &jsonStores); err == nil {
+			// Successfully parsed as JSON
+			for _, name := range jsonStores {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					continue
+				}
+				if _, ok := seen[name]; ok {
+					continue
+				}
+				seen[name] = struct{}{}
+				stores = append(stores, name)
+			}
+			continue
+		}
+
+		// Fall back to newline-delimited format (legacy writeStoreListFile)
 		for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
 			name := strings.TrimSpace(line)
 			if name == "" {

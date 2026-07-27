@@ -758,7 +758,8 @@
         const eUrlInput = document.getElementById('setup-embedder-url');
         const eTestContainer = document.getElementById('setup-embedder-test-container');
         const isEmbedderLocal = isLocalProviderValue(eProv);
-        const showEmbedderURL = selectedProviderUsesURL('setup-embedder-provider');
+        const isEmbeddedEmbedder = isEmbeddedEmbedderValue(eProv);
+        const showEmbedderURL = !isEmbeddedEmbedder && selectedProviderUsesURL('setup-embedder-provider');
         
         if (eProv === '') {
             // Same as Brain

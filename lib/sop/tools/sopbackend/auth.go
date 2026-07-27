@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -1247,13 +1246,6 @@ func (c *Config) authFromAuthorization(authHeader string) (string, string) {
 	return "", ""
 }
 
-func (c *Config) shouldUsePersistentUserStore() bool {
-	if c == nil {
-		return false
-	}
-	return true
-}
-
 func (c *Config) SetUser(username, password, role string) error {
 	return c.SetUserWithFeatures(username, password, role, nil)
 }
@@ -1320,19 +1312,20 @@ func (c *Config) ensurePersistentUserStore() UserStore {
 	if c == nil {
 		return nil
 	}
+
+	// Use cached persistent store if available
 	if c.persistentUsersStore != nil {
 		return c.persistentUsersStore
 	}
+
 	if c.UsersStore != nil && c.UsersStore != userStoreOverride {
 		c.persistentUsersStore = c.UsersStore
 		return c.persistentUsersStore
 	}
-	if !c.shouldUsePersistentUserStore() {
-		c.persistentUsersStore = NewUserStore()
-		return c.persistentUsersStore
-	}
 
 	var targetStore UserStore
+
+	// Try to use first non-system database
 	if len(c.Databases) > 0 {
 		for i := range c.Databases {
 			if c.Databases[i].IsSystem {
@@ -1340,55 +1333,29 @@ func (c *Config) ensurePersistentUserStore() UserStore {
 			}
 			opts, err := GetDBOptionsFromConfig(context.Background(), &c.Databases[i])
 			if err != nil {
-				continue
+				// Database is configured but we can't get options - this is a FATAL error
+				log.Error(fmt.Sprintf("CRITICAL: Failed to get DB options for '%s' at '%s': %v",
+					c.Databases[i].Name, c.Databases[i].Path, err))
+				log.Error("Cannot create persistent users store - setup is broken")
+				return nil
 			}
 			targetStore = NewDatabaseUserStore(opts)
+			log.Info(fmt.Sprintf("Users store will be created in database '%s' at '%s'",
+				c.Databases[i].Name, c.Databases[i].Path))
 			break
 		}
 	}
+
+	// If no user database, use system database
 	if targetStore == nil && (c.SystemDB != nil || config.SystemDB != nil) {
+		log.Info("Using system database for users store")
 		targetStore = NewSystemUserStore()
 	}
 
-	if targetStore != nil {
-		switch current := c.persistentUsersStore.(type) {
-		case *DatabaseUserStore:
-			if targetStore, ok := targetStore.(*DatabaseUserStore); ok && current != nil && reflect.DeepEqual(current.opts, targetStore.opts) {
-				return c.persistentUsersStore
-			}
-		case *SystemUserStore:
-			if _, ok := targetStore.(*SystemUserStore); ok {
-				return c.persistentUsersStore
-			}
-		case *UserStoreImpl:
-			// fall through to migrate into the persistent store below
-		default:
-			if c.persistentUsersStore == nil {
-				// fall through to assign targetStore below
-			} else {
-				return c.persistentUsersStore
-			}
-		}
-	}
-
+	// If still no store, setup hasn't been completed yet - return nil
 	if targetStore == nil {
-		if c.persistentUsersStore != nil {
-			return c.persistentUsersStore
-		}
-		c.persistentUsersStore = NewUserStore()
-		return c.persistentUsersStore
-	}
-
-	if legacyStore, ok := c.persistentUsersStore.(*UserStoreImpl); ok {
-		users := make([]UserRecord, 0, len(legacyStore.users))
-		for _, user := range legacyStore.users {
-			users = append(users, user)
-		}
-		c.persistentUsersStore = targetStore
-		for i := range users {
-			_ = c.persistentUsersStore.Save(context.Background(), &users[i])
-		}
-		return c.persistentUsersStore
+		log.Debug("No databases configured yet - setup wizard needs to run")
+		return nil
 	}
 
 	c.persistentUsersStore = targetStore
@@ -1435,13 +1402,22 @@ func (c *Config) ensureProvisionedUsersStore(ctx context.Context) error {
 	}
 	store := c.ensurePersistentUserStore()
 	if store == nil {
+		// No databases configured yet - setup wizard hasn't run
+		if len(c.Databases) > 0 || c.SystemDB != nil {
+			// Databases ARE configured but we still got nil - something is wrong
+			return fmt.Errorf("failed to determine user store location: databases configured but no valid user store backend found")
+		}
+		// No databases, no store - this is expected before setup wizard runs
 		return nil
 	}
+
 	if dbStore, ok := store.(*DatabaseUserStore); ok {
+		log.Debug(fmt.Sprintf("Provisioning users store in database at: %s", dbStore.opts.StoresFolders))
 		if err := dbStore.EnsureProvisioned(ctx); err != nil {
 			return fmt.Errorf("failed to initialize users store: %w", err)
 		}
 	} else if systemStore, ok := store.(*SystemUserStore); ok {
+		log.Debug("Provisioning users store in system database")
 		if err := systemStore.Save(ctx, &UserRecord{Username: "__provisioning_probe__", Role: sop.RoleGuest}); err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "already exists") {
 				return nil
@@ -1455,6 +1431,7 @@ func (c *Config) ensureProvisionedUsersStore(ctx context.Context) error {
 	if _, err := store.List(ctx); err != nil {
 		return fmt.Errorf("failed to initialize users store: %w", err)
 	}
+	log.Info("Users store provisioned successfully")
 	return nil
 }
 

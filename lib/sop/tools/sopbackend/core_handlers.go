@@ -261,13 +261,35 @@ func GetDBOptionsFromConfig(ctx context.Context, db *DatabaseConfig) (sop.Databa
 		return loadedOpts, nil
 	}
 
+	// Database doesn't exist yet or options file is missing
+	// Create it using the config settings
+	log.Info(fmt.Sprintf("Database options not found for '%s', initializing with config settings", db.Name))
+
 	opts := sop.DatabaseOptions{
-		Type:          sop.Standalone,
-		StoresFolders: []string{db.Path},
+		Type:                 sop.Standalone,
+		StoresFolders:        db.StoresFolders,
+		RegistryHashModValue: fs.MinimumModValue,
 	}
-	// We rely on SOP to handle path resolution.
-	// If the store uses Erasure Coding, the config in StoreInfo should guide SOP to the correct files.
-	// If we override StoresFolders here, we risk breaking Database discovery.
+
+	if len(opts.StoresFolders) == 0 {
+		opts.StoresFolders = []string{db.Path}
+	}
+
+	// Handle erasure coding configuration
+	if len(db.ErasureConfigs) > 0 {
+		opts.ErasureConfig = make(map[string]sop.ErasureCodingConfig)
+		for _, ec := range db.ErasureConfigs {
+			key := ec.Key
+			if key == "" {
+				key = "" // Use empty string as default key
+			}
+			opts.ErasureConfig[key] = sop.ErasureCodingConfig{
+				DataShardsCount:             ec.DataChunks,
+				ParityShardsCount:           ec.ParityChunks,
+				BaseFolderPathsAcrossDrives: ec.BasePaths,
+			}
+		}
+	}
 
 	if db.Mode == "clustered" {
 		opts.Type = sop.Clustered
@@ -276,7 +298,15 @@ func GetDBOptionsFromConfig(ctx context.Context, db *DatabaseConfig) (sop.Databa
 			Address: db.RedisURL,
 		}
 	}
-	return opts, nil
+
+	// Setup the database (creates folders and writes options)
+	log.Info(fmt.Sprintf("Setting up database '%s' at '%s'", db.Name, db.Path))
+	setupOpts, err := database.Setup(ctx, opts)
+	if err != nil {
+		return sop.DatabaseOptions{}, fmt.Errorf("failed to setup database: %w", err)
+	}
+
+	return setupOpts, nil
 }
 
 func GetDBOptions(ctx context.Context, dbName string) (sop.DatabaseOptions, error) {
@@ -978,8 +1008,8 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 	if strings.EqualFold(storeName, sessionStoreName) {
 		return isSystemAdminRoleInContext(ctx)
 	}
-	if strings.EqualFold(storeName, "site_users") {
-		return isSystemAdminRoleInContext(ctx)
+	if strings.EqualFold(storeName, "users") {
+		return isRegularAdminRoleInContext(ctx) || isSystemAdminRoleInContext(ctx)
 	}
 
 	if strings.HasPrefix(storeName, "stm_") {

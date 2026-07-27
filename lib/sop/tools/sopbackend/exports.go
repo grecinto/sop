@@ -205,6 +205,12 @@ func InitializeRuntime(ctx context.Context, configPath string, opts RuntimeOptio
 		if _, err := LoadModelCatalog(targetConfigPath); err != nil {
 			return "", err
 		}
+
+		// Auto-provision users store if config exists but store is missing
+		// This handles the case where .sop-data was deleted/recreated after initial setup
+		if err := config.ensureProvisionedUsersStore(ctx); err != nil {
+			log.Warn("failed to auto-provision users store on startup", "error", err)
+		}
 	} else if _, err := LoadModelCatalog(""); err != nil {
 		return "", err
 	}

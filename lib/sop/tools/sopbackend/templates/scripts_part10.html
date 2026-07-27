@@ -100,6 +100,30 @@
         return !!localGroup?.options?.some(option => (option.value || '').toLowerCase() === normalizedValue);
     }
 
+    function isEmbeddedEmbedderValue(value) {
+        const normalized = (value || '').trim().toLowerCase();
+        if (!normalized) {
+            return false;
+        }
+
+        if (normalized.includes('embedded') || normalized.includes('kelindar')) {
+            return true;
+        }
+
+        const parts = splitProviderValue(value || '');
+        const normalizedValue = `${parts.provider || ''}:${parts.model || ''}`.toLowerCase();
+        const localGroup = Array.isArray(setupWizardModelCatalog?.embedder)
+            ? setupWizardModelCatalog.embedder.find(group => (group.label || '').toLowerCase() === 'local')
+            : null;
+        const matchedOption = localGroup?.options?.find(option => {
+            const candidateValue = (option.value || '').trim().toLowerCase();
+            return candidateValue === normalized || candidateValue === normalizedValue;
+        });
+
+        const optionLabel = (matchedOption?.label || '').toLowerCase();
+        return optionLabel.includes('embedded') || optionLabel.includes('kelindar');
+    }
+
     function selectProviderOption(select, value, source) {
         if (!select) return;
 
@@ -237,9 +261,6 @@
 
         const value = select.value || '';
         if (!value) {
-            return false;
-        }
-        if (isKelindarLocalEmbedderValue(value)) {
             return false;
         }
         if (isLocalProviderValue(value)) {

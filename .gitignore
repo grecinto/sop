@@ -8,12 +8,12 @@
 # **/sessions/
 # **/shared_memory/
 # **/system_daemon_registry/
-# **/site_payments/
-# **/site_subscriptions/
-# **/site_user_payment_ids/
-# **/site_user_subscription_ids/
-# **/site_users/
-# **/site_products/
+# **/demo_payments/
+# **/demo_subscriptions/
+# **/demo_user_payment_ids/
+# **/demo_user_subscription_ids/
+# **/demo_users/
+# **/products/
 # **/billing_info/
 # **/kb/categories/
 # **/kb/categoriesByDistance/
@@ -22,7 +22,7 @@
 # **/kb/items/
 # **/kb/vectors/
 # **/fs.test
-# .sop-data/
+.sop-data/
 # config.json
 # knowledge_compiler
 # sopbackend

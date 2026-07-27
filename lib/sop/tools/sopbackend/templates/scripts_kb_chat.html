@@ -412,7 +412,8 @@ if (!document.getElementById('kb-chat-styles')) {
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: var(--card-bg, white);
+            background: var(--card-bg, var(--bg-color, #ffffff));
+            color: var(--text-color, #333);
             border: 1px solid var(--border-color, #e0e0e0);
             border-radius: 8px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -429,7 +430,7 @@ if (!document.getElementById('kb-chat-styles')) {
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.4);
+            background: var(--modal-overlay-bg, var(--overlay-bg, rgba(0, 0, 0, 0.5)));
             z-index: 9999;
         }
 

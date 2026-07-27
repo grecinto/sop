@@ -16,7 +16,7 @@ func TestShouldExposeStoreInUI_HidesInternalStores(t *testing.T) {
 		isSystemAdmin bool
 		exposed       bool
 	}{
-		{name: "plain store", store: "users", userID: "alice", exposed: true},
+		{name: "plain store", store: "my_store", userID: "alice", exposed: true},
 		{name: "component store hidden", store: "ltm_omni/items", userID: "alice", exposed: false},
 		{name: "vector store hidden", store: "documents_vecs", userID: "alice", exposed: false},
 		{name: "stm time index hidden", store: "stm_alice_by_time", userID: "alice", exposed: false},
@@ -27,8 +27,9 @@ func TestShouldExposeStoreInUI_HidesInternalStores(t *testing.T) {
 		{name: "sessions hidden for non-admin", store: "sessions", userID: "alice", exposed: false},
 		{name: "sessions hidden for admin", store: "sessions", userID: "root", isAdmin: true, exposed: false},
 		{name: "sessions visible for system admin", store: "sessions", userID: "root", isSystemAdmin: true, exposed: true},
-		{name: "site users hidden for admin", store: "site_users", userID: "root", isAdmin: true, exposed: false},
-		{name: "site users visible for system admin", store: "site_users", userID: "root", isSystemAdmin: true, exposed: true},
+		{name: "users hidden for regular user", store: "users", userID: "alice", exposed: false},
+		{name: "users visible for admin", store: "users", userID: "root", isAdmin: true, exposed: true},
+		{name: "users visible for system admin", store: "users", userID: "root", isSystemAdmin: true, exposed: true},
 		{name: "admin own stm hidden", store: "stm_root", userID: "root", isAdmin: true, exposed: false},
 		{name: "system admin own stm visible", store: "stm_root", userID: "root", isSystemAdmin: true, exposed: true},
 	}

@@ -149,6 +149,7 @@ func modelCatalogCandidatePaths() []string {
 		current := filepath.Clean(cwd)
 		for {
 			add(filepath.Join(current, "model_catalog.json"))
+			add(filepath.Join(current, "lib", "sop", "model_catalog.json"))
 			parent := filepath.Dir(current)
 			if parent == current {
 				break
@@ -161,6 +162,7 @@ func modelCatalogCandidatePaths() []string {
 		current := filepath.Dir(filepath.Clean(exe))
 		for {
 			add(filepath.Join(current, "model_catalog.json"))
+			add(filepath.Join(current, "lib", "sop", "model_catalog.json"))
 			parent := filepath.Dir(current)
 			if parent == current {
 				break
