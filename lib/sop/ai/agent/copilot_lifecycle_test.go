@@ -100,7 +100,7 @@ func TestAgentFullMemoryLifeCycleTest(t *testing.T) {
 	// 3. Queue an episode via official logger
 	ag.Memory.LogEpisodeToSTM(ctx, "test_intent", map[string]any{"action": "learn"}, "I learned something new today", nil)
 
-	time.Sleep(6 * time.Second) // wait for worker to batch and commit
+	time.Sleep(31 * time.Second) // wait for worker to batch and commit (STM batch window is 30s)
 
 	tx2, _ := sysDB.BeginTransaction(ctx, sop.ForReading)
 	stmRead, _ := sysDB.OpenBtree(ctx, "agent123_stm", tx2)

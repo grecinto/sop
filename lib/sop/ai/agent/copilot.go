@@ -441,6 +441,10 @@ type CopilotAgent struct {
 	queueMetrics   *QueueMetrics
 	queuePersist   *QueuePersistence
 	enablePhase5   bool
+
+	// Session queue for workflow automation
+	sessionQueue   *WorkQueue
+	sessionQueueMu sync.Mutex
 }
 
 // Clone creates a new isolated instance of the agent sharing read-only components.
@@ -2530,8 +2534,66 @@ func (a *CopilotAgent) Search(ctx context.Context, query string, limit int) ([]a
 //
 // Ask is the main entry point for processing queries. For single-turn execution only.
 // For multi-turn/workflow execution, use entry points that create queues internally.
+// Ask is the public API that processes queries through a session queue.
+// The queue enables workflow automation where capabilities can enqueue next steps.
+// ReAct loop handles multi-turn execution and clarifications natively.
 func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
-	return a.askWithQueue(ctx, query, cfg, nil)
+	// Get or create session queue
+	queue := a.getOrCreateSessionQueue()
+
+	// Enqueue user query
+	if err := queue.Enqueue(WorkItem{
+		Query: query,
+		Actor: "user",
+		ID:    fmt.Sprintf("user-%d", time.Now().UnixNano()),
+	}); err != nil {
+		return "", fmt.Errorf("failed to enqueue query: %w", err)
+	}
+
+	// Process queue until empty
+	var lastResponse string
+	for !queue.IsEmpty() {
+		item, err := queue.Dequeue()
+		if err != nil {
+			break
+		}
+
+		log.Info("Processing queue item", "actor", item.Actor, "query_preview", truncateString(item.Query, 80))
+
+		// Execute pure ask (delegates to ReAct)
+		response, err := a.ask(ctx, item.Query, cfg)
+		if err != nil {
+			return response, err
+		}
+
+		lastResponse = response
+
+		// ReAct returns either:
+		// - Completed answer: continue to next queue item
+		// - Clarification question: pause queue, return to user
+		// Capabilities may have enqueued next steps during execution
+	}
+
+	return lastResponse, nil
+}
+
+// getOrCreateSessionQueue returns the session-level queue for workflow automation
+func (a *CopilotAgent) getOrCreateSessionQueue() *WorkQueue {
+	a.sessionQueueMu.Lock()
+	defer a.sessionQueueMu.Unlock()
+
+	if a.sessionQueue == nil {
+		a.sessionQueue = NewWorkQueue()
+		a.sessionQueue.SetMaxPerActor("coding_workflow", 10)
+		a.sessionQueue.SetMaxPerActor("data_pipeline", 10)
+	}
+
+	return a.sessionQueue
+}
+
+// GetSessionQueue exposes the queue to capabilities/tools for enqueueing next steps
+func (a *CopilotAgent) GetSessionQueue() *WorkQueue {
+	return a.getOrCreateSessionQueue()
 }
 
 // AskParallel executes independent subqueries in parallel threads.
@@ -2746,10 +2808,10 @@ func resolveParallelWorkingDir(ctx context.Context, query string) string {
 	return ""
 }
 
-// askWithQueue is the core prompt consumer - processes a single query through the reasoning pipeline.
-// If queue is provided (multi-turn mode), Ask may enqueue additional work items and return early.
-// The external processQueueLoop dequeues items and calls askWithQueue repeatedly.
-func (a *CopilotAgent) askWithQueue(ctx context.Context, query string, cfg *ai.ConfigMap, queue *WorkQueue) (string, error) {
+// ask is the pure Ask→ReAct transaction with no queue awareness.
+// All routing, gates, KB enrichment, and ReAct delegation happen here.
+// Capabilities can enqueue next steps via GetSessionQueue() during tool execution.
+func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	ctx = a.applyAskConfig(ctx, cfg)
 	a.clearAskProgressMRU()
 
@@ -2816,45 +2878,9 @@ func (a *CopilotAgent) askWithQueue(ctx context.Context, query string, cfg *ai.C
 		"query", query,
 	)
 
-	// For queued sub-turns, bypass workflow and multi-turn enqueue logic so they execute
-	// as normal asks with the current context and tools.
-	if shouldExecuteQueuedTurnDirectly(ctx) {
-		log.Info("Executing queued sub-turn directly", "query", query)
-	} else {
-		// 4a. KB Workflow Detection
-		if a.workflowManager != nil {
-			if workflow, err := a.tryDetectWorkflow(ctx, query); err == nil && workflow != nil {
-				log.Info("KB workflow detected", "query", query)
-
-				if queue != nil {
-					// Already in queue mode - just enqueue workflow steps
-					if err := a.enqueueWorkflowSteps(ctx, workflow, queue, query); err != nil {
-						return "", fmt.Errorf("failed to enqueue workflow: %w", err)
-					}
-					return "🔄 Workflow enqueued", nil
-				} else {
-					// Create queue and process workflow
-					return a.executeWorkflow(ctx, workflow, query, cfg)
-				}
-			}
-		}
-
-		// 4b. Multi-Turn Detection
-		if a.shouldUseMultiTurn(ctx, query, taskContext) {
-			log.Info("Multi-turn needed", "capability_hint", taskContext.CapabilityHint)
-
-			if queue != nil {
-				// Already in queue mode - just enqueue subtasks
-				if err := a.enqueueMultiTurnTasks(ctx, query, taskContext, queue); err != nil {
-					return "", fmt.Errorf("failed to enqueue multi-turn tasks: %w", err)
-				}
-				return "🔄 Multi-turn tasks enqueued", nil
-			} else {
-				// Create queue and process multi-turn
-				return a.executeMultiTurn(ctx, query, taskContext, cfg)
-			}
-		}
-	}
+	// Workflow and multi-turn detection removed from ask().
+	// Capabilities handle state tracking and enqueue next steps via GetSessionQueue().
+	// This keeps ask() pure and allows adaptive workflows based on ReAct results.
 
 	// 4c. KB Search Direct Display (Case 1: Few matches)
 	if taskContext.DirectDisplay && taskContext.KBSearchResults != "" {

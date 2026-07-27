@@ -1189,7 +1189,7 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 		}
 		svc, err := agent.NewFromConfig(ctx, agentCfg, agent.Dependencies{
 			AgentRegistry: registry,
-			SystemDB:      nil,
+			SystemDB:      sysDB,
 			Databases:     databases,
 		})
 		return svc, err
@@ -1241,7 +1241,7 @@ func loadAgent(ctx context.Context, key, configPath string) error {
 	// Initialize the main agent
 	mainAgent, err := agent.NewFromConfig(ctx, *cfg, agent.Dependencies{
 		AgentRegistry: registry,
-		SystemDB:      nil,
+		SystemDB:      sysDB,
 		Databases:     databases,
 	})
 	if err != nil {

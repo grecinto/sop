@@ -384,6 +384,55 @@
         };
     }
 
+    // Cross-window communication for chat floater visibility (main window ↔ floating AI window)
+    let chatFloaterBroadcast = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+        chatFloaterBroadcast = new BroadcastChannel('sop_chat_floater_state');
+        chatFloaterBroadcast.onmessage = (event) => {
+            if (!isChatFloaterMode()) {
+                // Main window receives state changes from floating window
+                if (event.data === 'floater_opened') {
+                    hideChatToggleButton();
+                } else if (event.data === 'floater_closed') {
+                    showChatToggleButton();
+                }
+            }
+        };
+    }
+
+    function hideChatToggleButton() {
+        const btn = document.getElementById('chat-toggle-btn');
+        if (btn) {
+            btn.style.display = 'none';
+        }
+    }
+
+    function showChatToggleButton() {
+        const btn = document.getElementById('chat-toggle-btn');
+        if (btn) {
+            btn.style.display = 'flex';
+        }
+    }
+
+    function broadcastFloaterState(state) {
+        if (chatFloaterBroadcast) {
+            chatFloaterBroadcast.postMessage(state);
+        }
+    }
+
+    function syncChatToggleButtonVisibility() {
+        const widget = document.getElementById('chat-widget');
+        const btn = document.getElementById('chat-toggle-btn');
+        if (!widget || !btn) return;
+        
+        // Hide button if widget is active, show if inactive
+        if (widget.classList.contains('active') || widget.style.display === 'flex') {
+            btn.style.display = 'none';
+        } else {
+            btn.style.display = 'flex';
+        }
+    }
+
     function toggleAITerminal() {
         const pane = document.getElementById('ai-terminal-pane');
         if (!pane) return;
@@ -1191,6 +1240,8 @@
 
         const cleanupAndRefresh = () => {
             persistCleanupSignal();
+            // Broadcast that floater is closing
+            broadcastFloaterState('floater_closed');
         };
 
         window.addEventListener('pagehide', cleanupAndRefresh);
@@ -1220,6 +1271,9 @@
         if (window.location.search.includes('chatFloater=1')) {
             requestMainWindowRefreshOnClose();
             document.body.classList.add('sop-chat-floater-mode');
+            
+            // Broadcast that floater has opened
+            broadcastFloaterState('floater_opened');
             
             // Session ID is already initialized from URL in scripts_part01.html
             // Both main window and floater use the same daemon session
@@ -1261,6 +1315,12 @@
             widget.style.display = 'none';
         }
 
+        // Hide the toggle button immediately (BroadcastChannel doesn't send to self)
+        hideChatToggleButton();
+        
+        // Broadcast that floater is opening (for other windows)
+        broadcastFloaterState('floater_opened');
+
         const floaterUrl = new URL('/app', window.location.origin);
         floaterUrl.searchParams.set('chatFloater', '1');
         // Include mode=daemon so the floater window gets properly initialized with daemon auth
@@ -1280,14 +1340,39 @@
                 targetDocument.open();
                 targetDocument.write(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/><title>SOP AI Chat</title><style>html,body{margin:0;padding:0;width:100%;height:100%;background:#1f1f1f;overflow:hidden;}iframe{border:0;width:100%;height:100%;}</style></head><body><iframe src="${floaterUrl.toString()}" allow="clipboard-write"></iframe></body></html>`);
                 targetDocument.close();
+                
+                // Detect when PiP window closes
+                pipWindow.addEventListener('pagehide', () => {
+                    showChatToggleButton();
+                    broadcastFloaterState('floater_closed');
+                });
+                
                 return;
             } catch (err) {
                 console.warn('[openChatPiP] PiP failed, falling back to the current tab:', err);
+                // Restore toggle button if PiP failed
+                showChatToggleButton();
+                broadcastFloaterState('floater_closed');
             }
         }
 
         console.warn('[openChatPiP] Opening the chat route in a fresh tab instead.');
-        window.open(floaterUrl.toString(), '_blank', 'noopener,noreferrer');
+        const newWindow = window.open(floaterUrl.toString(), '_blank', 'noopener,noreferrer');
+        
+        // For popup windows, we need to poll to detect closure
+        if (newWindow) {
+            const checkWindowClosed = setInterval(() => {
+                if (newWindow.closed) {
+                    clearInterval(checkWindowClosed);
+                    showChatToggleButton();
+                    broadcastFloaterState('floater_closed');
+                }
+            }, 500);
+        } else {
+            // Failed to open popup, restore button
+            showChatToggleButton();
+            broadcastFloaterState('floater_closed');
+        }
     }
 
     function handleChatMinimize() {
@@ -1302,6 +1387,7 @@
         if (isChatFloaterMode() && window.location.search.includes('chatFloater=1')) {
             widget.classList.add('active');
             widget.style.display = 'flex';
+            hideChatToggleButton(); // Hide button when chat is active
             handleChatInput();
             if (input) {
                 setTimeout(() => input.focus(), 100);
@@ -1311,11 +1397,13 @@
 
         if (widget.classList.contains('active') && !forceOpen) {
             widget.classList.remove('active');
+            showChatToggleButton(); // Show button when chat is closed
         } else {
             // Always reset position when opening to ensure it is visible and accessible
             resetChatPosition();
             
             widget.classList.add('active');
+            hideChatToggleButton(); // Hide button when chat is opened
 
             // Mobile-specific input optimization
             if (window.innerWidth <= 768) {
@@ -1354,6 +1442,10 @@
         const header = widget.querySelector('.chat-header');
         registerMainWindowFloaterCleanupListener();
         applyChatRuntimeSelection();
+        
+        // Sync chat toggle button visibility based on widget state
+        syncChatToggleButtonVisibility();
+        
         if (currentDatabase && typeof refreshSpacesList === 'function') {
             void refreshSpacesList(currentDatabase);
         }

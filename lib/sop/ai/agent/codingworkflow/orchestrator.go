@@ -600,14 +600,8 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 				continue
 			}
 		}
-		message := "patches applied; next step: inspect the diff"
-		if i := len(applied); i > 0 {
-			if lastTestResult.Passed {
-				message = fmt.Sprintf("applied %d patch(es); tests passed; next step: inspect the diff", i)
-			} else {
-				message = fmt.Sprintf("applied %d patch(es); tests failed; next step: inspect the test output", i)
-			}
-		}
+		// Build conclusive message for patch execution
+		message := buildConclusivePatchMessage(applied, lastTestResult, task.Description)
 		codingMemory := CodingMemory{
 			Description:    task.Description,
 			WorkingDir:     task.WorkingDir,
@@ -692,37 +686,8 @@ func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
 	if err := o.Memory.Save("latest-task", memoryValues); err != nil {
 		return ExecutionResult{}, fmt.Errorf("persist memory: %w", err)
 	}
-	message := "context assembled"
-	if pack.CodeStructureSummary != "" {
-		message = fmt.Sprintf("%s; structure: %s", message, pack.CodeStructureSummary)
-	}
-	if pack.ExpertiseSummary != "" {
-		message = fmt.Sprintf("%s; expertise: %s", message, pack.ExpertiseSummary)
-	}
-	if pack.Provider != "" {
-		message = fmt.Sprintf("%s; provider: %s", message, pack.Provider)
-	}
-	if o.OrchestrationBackend != nil {
-		message = fmt.Sprintf("%s; orchestration: %s", message, o.OrchestrationBackend.Describe(task, pack))
-	}
-	if task.ActiveFile != "" || pack.ActiveFile != "" {
-		message = fmt.Sprintf("%s; active_file: %s", message, strings.TrimSpace(pack.ActiveFile))
-	}
-	if pack.VisualizationSummary != "" {
-		message = fmt.Sprintf("%s; visualization: %s", message, pack.VisualizationSummary)
-	}
-	if task.Description != "" {
-		switch pack.TaskType {
-		case "planning":
-			message = fmt.Sprintf("design discussion prepared for %q; next step: refine the plan or request implementation", task.Description)
-		case "analysis":
-			message = fmt.Sprintf("context assembled for %q; next step: inspect or analyze the relevant materials", task.Description)
-		case "generation":
-			message = fmt.Sprintf("context assembled for %q; next step: draft the requested artifact", task.Description)
-		default:
-			message = fmt.Sprintf("context assembled for %q; next step: inspect or edit the relevant files", task.Description)
-		}
-	}
+	// Build conclusive message for non-patch execution
+	message := buildConclusiveContextMessage(task, pack, validationResult, revisionAttempts)
 	if o.OrchestrationBackend != nil {
 		message = fmt.Sprintf("%s; orchestration: %s", message, o.OrchestrationBackend.Describe(task, pack))
 	}
@@ -809,6 +774,86 @@ func buildKBMetadataJSON(result ExecutionResult) string {
 		return ""
 	}
 	return string(jsonBytes)
+}
+
+// buildConclusiveContextMessage creates a clear, conclusive message for context-only execution
+func buildConclusiveContextMessage(task Task, pack ContextPack, validationResult ValidationResult, revisionAttempts int) string {
+	// Start with status indicator
+	status := "✅ Analysis Complete"
+
+	// Build context summary
+	contextParts := []string{}
+	if pack.CodeStructureSummary != "" {
+		contextParts = append(contextParts, fmt.Sprintf("Structure: %s", pack.CodeStructureSummary))
+	}
+	if pack.ExpertiseSummary != "" {
+		contextParts = append(contextParts, fmt.Sprintf("Expertise: %s", pack.ExpertiseSummary))
+	}
+	if pack.Provider != "" {
+		contextParts = append(contextParts, fmt.Sprintf("Provider: %s", pack.Provider))
+	}
+	if pack.ActiveFile != "" {
+		contextParts = append(contextParts, fmt.Sprintf("Active File: %s", pack.ActiveFile))
+	}
+
+	// Build task-specific conclusion
+	conclusion := ""
+	if task.Description != "" {
+		switch pack.TaskType {
+		case "planning":
+			conclusion = fmt.Sprintf("\n\n**Task**: %s\n**Status**: Design context prepared\n**Next Steps**: Review the plan above and request implementation, or refine the design", task.Description)
+		case "analysis":
+			conclusion = fmt.Sprintf("\n\n**Task**: %s\n**Status**: Analysis context assembled\n**Next Steps**: Review the materials above and provide feedback", task.Description)
+		case "generation":
+			conclusion = fmt.Sprintf("\n\n**Task**: %s\n**Status**: Generation context ready\n**Next Steps**: Request the artifact generation with the context above", task.Description)
+		default:
+			conclusion = fmt.Sprintf("\n\n**Task**: %s\n**Status**: Context assembled for editing\n**Next Steps**: Review the files above and request specific changes", task.Description)
+		}
+	} else {
+		conclusion = "\n\n**Status**: Context assembled\n**Next Steps**: Provide task description to proceed"
+	}
+
+	// Combine into final message
+	contextSummary := ""
+	if len(contextParts) > 0 {
+		contextSummary = "\n\n" + strings.Join(contextParts, "\n")
+	}
+
+	return fmt.Sprintf("%s%s%s", status, contextSummary, conclusion)
+}
+
+// buildConclusivePatchMessage creates a clear, conclusive message for patch execution
+func buildConclusivePatchMessage(appliedPatches []Patch, testResult TestResult, taskDescription string) string {
+	numPatches := len(appliedPatches)
+	if numPatches == 0 {
+		return "ℹ️ No patches applied\n\n**Status**: Analysis complete\n**Next Steps**: Review context and request specific changes"
+	}
+
+	// Determine status
+	status := ""
+	conclusion := ""
+
+	if testResult.Passed {
+		status = "✅ **Task Complete**"
+		patchWord := "patch"
+		if numPatches > 1 {
+			patchWord = "patches"
+		}
+		conclusion = fmt.Sprintf("\n\n**Applied**: %d %s\n**Tests**: Passed ✓\n**Status**: Changes verified and ready\n**Next Steps**: Review the diff above or proceed to next task", numPatches, patchWord)
+	} else {
+		status = "⚠️ **Task Incomplete**"
+		patchWord := "patch"
+		if numPatches > 1 {
+			patchWord = "patches"
+		}
+		conclusion = fmt.Sprintf("\n\n**Applied**: %d %s\n**Tests**: Failed ✗\n**Status**: Changes applied but tests indicate issues\n**Next Steps**: Review test output, adjust changes, or investigate test failures", numPatches, patchWord)
+	}
+
+	if taskDescription != "" {
+		return fmt.Sprintf("%s\n\n**Task**: %s%s", status, taskDescription, conclusion)
+	}
+
+	return fmt.Sprintf("%s%s", status, conclusion)
 }
 
 // DefaultExpertiseRetriever produces concise, high-signal guidance for coding, QA, and review-oriented tasks.

@@ -501,6 +501,8 @@ func (c *Capability) Run(query string, state capabilities.RoutingState) (capabil
 	if c.Orchestrator != nil {
 		data["continuity_signal"] = "task_outcome"
 	}
+
+	// Orchestrator now provides conclusive messages - pass through directly
 	return capabilities.CapabilityResult{Summary: result.Message, Data: data}, nil
 }
 

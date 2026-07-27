@@ -220,9 +220,9 @@ func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, c
 		var execErr error
 
 		if a.enablePhase5 && a.retryStrategy != nil {
-			response, execErr = a.executeWithRetry(turnCtx, effectiveQuery, cfg, queue)
+			response, execErr = a.executeWithRetry(turnCtx, effectiveQuery, cfg)
 		} else {
-			response, execErr = a.askWithQueue(turnCtx, effectiveQuery, cfg, queue)
+			response, execErr = a.ask(turnCtx, effectiveQuery, cfg)
 		}
 
 		result := TurnResult{
@@ -294,11 +294,11 @@ func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, c
 	return turnResults
 }
 
-// executeWithRetry wraps askWithQueue with retry logic and circuit breaker.
+// executeWithRetry wraps ask with retry logic and circuit breaker.
 // Phase 5: Production hardening for unreliable LLM APIs.
-func (a *CopilotAgent) executeWithRetry(ctx context.Context, query string, cfg *ai.ConfigMap, queue *WorkQueue) (string, error) {
+func (a *CopilotAgent) executeWithRetry(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	if a.retryStrategy == nil {
-		return a.askWithQueue(ctx, query, cfg, queue)
+		return a.ask(ctx, query, cfg)
 	}
 
 	var lastErr error
@@ -315,11 +315,11 @@ func (a *CopilotAgent) executeWithRetry(ctx context.Context, query string, cfg *
 		if a.circuitBreaker != nil {
 			err = a.circuitBreaker.Call(func() error {
 				var callErr error
-				response, callErr = a.askWithQueue(ctx, query, cfg, queue)
+				response, callErr = a.ask(ctx, query, cfg)
 				return callErr
 			})
 		} else {
-			response, err = a.askWithQueue(ctx, query, cfg, queue)
+			response, err = a.ask(ctx, query, cfg)
 		}
 
 		if err == nil {
