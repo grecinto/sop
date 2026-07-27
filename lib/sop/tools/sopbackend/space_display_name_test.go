@@ -74,7 +74,7 @@ func TestSpaceListUsesGlobalLabelForInternalMemorySpace(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	dbName := "testdb_global_memory_label"
-	spaceName := "ltm_testuser"
+	spaceName := "testuser_ltm"
 
 	config = Config{
 		Databases: []DatabaseConfig{{Name: dbName, Path: tmpDir, Mode: "standalone"}},

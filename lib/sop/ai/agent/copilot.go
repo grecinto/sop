@@ -39,9 +39,6 @@ import (
 const (
 	MaxMRUSize            = 20
 	MaxExchangesInHistory = 20
-	LTMFlushWindow        = 5 * time.Minute
-	LTMFlushMaxCUDItems   = 5000
-	LTMFlushMaxReadItems  = 5000
 	// selectedSpaceReinforcementWindow is a TTL for selected-space expert framing.
 	// We only fully re-inject the Space guidance when the current Space has not been
 	// reinforced recently, otherwise we keep the prompt compact for continuity.
@@ -420,13 +417,6 @@ type CopilotAgent struct {
 	compiledScripts   map[string]CachedScript
 	compiledScriptsMu sync.RWMutex
 
-	ltmFlushMu          sync.Mutex
-	ltmFlushLastFlush   time.Time
-	ltmFlushPendingCUD  int
-	ltmFlushPendingRead int
-	ltmFlushQueue       []ltmBufferedWrite
-	ltmFlushWorkerOnce  sync.Once
-
 	// StoreOpener allows mocking the store creation (e.g. for testing)
 	StoreOpener func(ctx context.Context, dbOpts sop.DatabaseOptions, storeName string, tx sop.Transaction) (jsondb.StoreAccessor, error)
 
@@ -476,113 +466,6 @@ func (a *CopilotAgent) SetGenerator(gen ai.Generator) {
 	a.brain = gen
 }
 
-func shouldFlushLTMBufferedWrites(now time.Time, lastFlush time.Time, pendingCUDCount int, pendingReadCount int) bool {
-	if pendingCUDCount <= 0 && pendingReadCount <= 0 {
-		return false
-	}
-	if lastFlush.IsZero() {
-		return false
-	}
-	if pendingCUDCount >= LTMFlushMaxCUDItems || pendingReadCount >= LTMFlushMaxReadItems {
-		return true
-	}
-	return now.Sub(lastFlush) >= LTMFlushWindow
-}
-
-func (a *CopilotAgent) queueLTMBufferedWrite(kind string, fn func(context.Context) error) error {
-	if a == nil || fn == nil {
-		return nil
-	}
-	kind = strings.ToLower(strings.TrimSpace(kind))
-	if kind != "read" {
-		kind = "cud"
-	}
-
-	a.ltmFlushMu.Lock()
-	a.ltmFlushQueue = append(a.ltmFlushQueue, ltmBufferedWrite{kind: kind, fn: fn})
-	if kind == "read" {
-		a.ltmFlushPendingRead++
-	} else {
-		a.ltmFlushPendingCUD++
-	}
-	now := time.Now()
-	shouldFlush := shouldFlushLTMBufferedWrites(now, a.ltmFlushLastFlush, a.ltmFlushPendingCUD, a.ltmFlushPendingRead)
-	batch := []ltmBufferedWrite(nil)
-	if shouldFlush {
-		batch = append(batch, a.ltmFlushQueue...)
-		a.ltmFlushQueue = nil
-		a.ltmFlushPendingCUD = 0
-		a.ltmFlushPendingRead = 0
-	}
-	a.ltmFlushMu.Unlock()
-
-	if shouldFlush {
-		return a.flushLTMBufferedWrites(context.Background(), batch)
-	}
-	return nil
-}
-
-func (a *CopilotAgent) flushLTMBufferedWrites(ctx context.Context, batch []ltmBufferedWrite) error {
-	if a == nil || len(batch) == 0 {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for _, item := range batch {
-		if item.fn == nil {
-			continue
-		}
-		if err := item.fn(ctx); err != nil {
-			return err
-		}
-	}
-	a.ltmFlushMu.Lock()
-	a.ltmFlushLastFlush = time.Now()
-	a.ltmFlushMu.Unlock()
-	return nil
-}
-
-func (a *CopilotAgent) flushLTMBufferedWritesIfDue(ctx context.Context) {
-	if a == nil {
-		return
-	}
-	a.ltmFlushMu.Lock()
-	now := time.Now()
-	if len(a.ltmFlushQueue) == 0 || !shouldFlushLTMBufferedWrites(now, a.ltmFlushLastFlush, a.ltmFlushPendingCUD, a.ltmFlushPendingRead) {
-		a.ltmFlushMu.Unlock()
-		return
-	}
-	batch := append([]ltmBufferedWrite(nil), a.ltmFlushQueue...)
-	a.ltmFlushQueue = nil
-	a.ltmFlushPendingCUD = 0
-	a.ltmFlushPendingRead = 0
-	a.ltmFlushMu.Unlock()
-	if err := a.flushLTMBufferedWrites(ctx, batch); err != nil {
-		log.Warn("CopilotAgent: buffered LTM flush failed", "error", err)
-	}
-}
-
-func (a *CopilotAgent) startLTMFlushWorker(ctx context.Context) {
-	if a == nil || ctx == nil {
-		return
-	}
-	a.ltmFlushWorkerOnce.Do(func() {
-		go func() {
-			ticker := time.NewTicker(30 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					a.flushLTMBufferedWritesIfDue(ctx)
-				}
-			}
-		}()
-	})
-}
-
 func (a *CopilotAgent) recordCodingMemory(mem cw.CodingMemory) {
 	if a == nil {
 		return
@@ -595,10 +478,31 @@ func (a *CopilotAgent) recordCodingMemory(mem cw.CodingMemory) {
 		sess.Memory = NewShortTermMemory()
 	}
 
-	if a.systemDB != nil && a.service != nil {
-		if err := a.persistCodingMemoryToLTM(mem); err != nil {
-			log.Debug("CopilotAgent: failed persisting coding workflow memory to LTM", "error", err)
+	// Write coding memory to STM for consolidation via sleep cycle
+	if a.Memory != nil {
+		// Format coding memory as intent/outcome for STM logging
+		intent := fmt.Sprintf("coding_workflow: %s", strings.TrimSpace(mem.Description))
+		outcome := strings.TrimSpace(mem.Outcome)
+
+		// Create structured payload for STM
+		astPayload := map[string]any{
+			"event_type":      "coding_workflow",
+			"capability":      "coding_workflow",
+			"description":     strings.TrimSpace(mem.Description),
+			"outcome":         outcome,
+			"files_touched":   mem.FilesTouched,
+			"test_status":     strings.TrimSpace(mem.TestStatus),
+			"repository_hint": strings.TrimSpace(mem.RepositoryHint),
+			"lesson":          strings.TrimSpace(mem.Lesson),
+			"next_step":       strings.TrimSpace(mem.NextStep),
+			"plan":            mem.Plan,
+			"active_file":     mem.ActiveFile,
 		}
+		if len(mem.KBsUsed) > 0 {
+			astPayload["kbs_used"] = mem.KBsUsed
+		}
+
+		a.Memory.LogEpisodeToSTM(context.Background(), intent, astPayload, outcome, nil)
 	}
 
 	summary := strings.TrimSpace(mem.Description)
@@ -1684,127 +1588,7 @@ func buildLTMRetrievalTargets(query string, payload *ai.SessionPayload, repoHint
 	return targets
 }
 
-func (a *CopilotAgent) persistCodingMemoryToLTM(mem cw.CodingMemory) error {
-	if a == nil || a.service == nil || a.systemDB == nil {
-		return nil
-	}
-	if a.Memory == nil {
-		return nil
-	}
-	return a.queueLTMBufferedWrite("cud", func(ctx context.Context) error {
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		if a.service != nil {
-			ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{AgentID: a.Memory.AgentID})
-		}
-
-		category := "coding"
-		scopeType := "repo"
-		scopeID := strings.TrimSpace(mem.RepositoryHint)
-		if scopeID == "" {
-			scopeID = "default"
-		}
-		payload := buildLTMMemoryMetadata(category, "coding_workflow", scopeType, scopeID)
-		payload["description"] = strings.TrimSpace(mem.Description)
-		payload["outcome"] = strings.TrimSpace(mem.Outcome)
-		payload["files_touched"] = mem.FilesTouched
-		payload["test_status"] = strings.TrimSpace(mem.TestStatus)
-		payload["repository_hint"] = strings.TrimSpace(mem.RepositoryHint)
-		payload["lesson"] = strings.TrimSpace(mem.Lesson)
-		payload["next_step"] = strings.TrimSpace(mem.NextStep)
-		payload["recorded_at"] = time.Now().UnixMilli()
-		// Phase 1: KB expertise tracking
-		if len(mem.KBsUsed) > 0 {
-			payload["kbs_used"] = mem.KBsUsed
-		}
-		if len(mem.RulesApplied) > 0 {
-			payload["rules_applied"] = mem.RulesApplied
-		}
-		if mem.ComplianceScore > 0 {
-			payload["compliance_score"] = mem.ComplianceScore
-		}
-		if mem.RevisionCount > 0 {
-			payload["revision_count"] = mem.RevisionCount
-		}
-
-		tx, err := a.systemDB.BeginTransaction(ctx, sop.ForWriting)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback(ctx)
-
-		embedder := ai.Embeddings(nil)
-		if a.service != nil && a.service.Domain() != nil && a.service.Domain().Embedder() != nil {
-			embedder = a.service.Domain().Embedder()
-		}
-
-		ltm, err := a.systemDB.OpenKnowledgeBase(ctx, a.Memory.LongTermMemoryName(), tx, a.brain, embedder, false, true)
-		if err != nil {
-			return err
-		}
-		if scopeID := strings.TrimSpace(mem.RepositoryHint); scopeID != "" {
-			if err := touchRepoScopedLTMLifecycleState(ctx, ltm, scopeID, time.Now()); err != nil {
-				log.Warn("CopilotAgent: failed to refresh repo lifecycle state during coding memory persistence", "repo", scopeID, "error", err)
-			}
-		}
-
-		canonicalPayload, entries := buildCodingMemoryLTMPayloadAndIndexes(mem)
-		docID, err := sop.ParseUUID(canonicalPayload["document_id"].(string))
-		if err != nil {
-			return err
-		}
-		canonicalContent, err := json.Marshal(canonicalPayload["canonical_payload"])
-		if err != nil {
-			return err
-		}
-		if err := ltm.Store.UpsertDocument(ctx, memory.Document{
-			ID:          docID,
-			Title:       "coding_workflow_memory",
-			Source:      "coding_workflow",
-			ContentType: "application/json",
-			Content:     string(canonicalContent),
-			PayloadRef:  fmt.Sprintf("coding_workflow:%s", docID.String()),
-		}); err != nil {
-			return err
-		}
-
-		thoughts := buildCodingMemoryLTMThoughts(mem, docID.String(), entries)
-
-		if err := ltm.IngestThoughts(ctx, thoughts, a.Memory.AgentID); err != nil {
-			return err
-		}
-
-		categoryIDs := make([]sop.UUID, 0, len(entries))
-		for _, entry := range entries {
-			categoryID, err := ltm.Manager.EnsureCategory(ctx, entry.CategoryPath)
-			if err != nil {
-				return err
-			}
-			if shouldVectorizeLTMIndexEntry(entry) {
-				categoryIDs = append(categoryIDs, categoryID)
-			}
-		}
-		if len(categoryIDs) == 0 {
-			return nil
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return err
-		}
-		// VectorizeCategories manage its own transaction, thus, it needs to be invoked after commit call above.
-		if err := a.systemDB.VectorizeCategories(ctx, a.Memory.LongTermMemoryName(), a.brain, embedder, 10, categoryIDs); err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
 // CapabilityOption customizes the capability registry for a CopilotAgent.
-type ltmBufferedWrite struct {
-	kind string
-	fn   func(context.Context) error
-}
-
 type CapabilityOption func(*CopilotAgent)
 
 // WithCapability appends a capability to the agent's registry.
@@ -3032,37 +2816,43 @@ func (a *CopilotAgent) askWithQueue(ctx context.Context, query string, cfg *ai.C
 		"query", query,
 	)
 
-	// 4a. KB Workflow Detection
-	if a.workflowManager != nil {
-		if workflow, err := a.tryDetectWorkflow(ctx, query); err == nil && workflow != nil {
-			log.Info("KB workflow detected", "query", query)
+	// For queued sub-turns, bypass workflow and multi-turn enqueue logic so they execute
+	// as normal asks with the current context and tools.
+	if shouldExecuteQueuedTurnDirectly(ctx) {
+		log.Info("Executing queued sub-turn directly", "query", query)
+	} else {
+		// 4a. KB Workflow Detection
+		if a.workflowManager != nil {
+			if workflow, err := a.tryDetectWorkflow(ctx, query); err == nil && workflow != nil {
+				log.Info("KB workflow detected", "query", query)
 
-			if queue != nil {
-				// Already in queue mode - just enqueue workflow steps
-				if err := a.enqueueWorkflowSteps(ctx, workflow, queue, query); err != nil {
-					return "", fmt.Errorf("failed to enqueue workflow: %w", err)
+				if queue != nil {
+					// Already in queue mode - just enqueue workflow steps
+					if err := a.enqueueWorkflowSteps(ctx, workflow, queue, query); err != nil {
+						return "", fmt.Errorf("failed to enqueue workflow: %w", err)
+					}
+					return "🔄 Workflow enqueued", nil
+				} else {
+					// Create queue and process workflow
+					return a.executeWorkflow(ctx, workflow, query, cfg)
 				}
-				return "🔄 Workflow enqueued", nil
-			} else {
-				// Create queue and process workflow
-				return a.executeWorkflow(ctx, workflow, query, cfg)
 			}
 		}
-	}
 
-	// 4b. Multi-Turn Detection
-	if a.shouldUseMultiTurn(ctx, query, taskContext) {
-		log.Info("Multi-turn needed", "capability_hint", taskContext.CapabilityHint)
+		// 4b. Multi-Turn Detection
+		if a.shouldUseMultiTurn(ctx, query, taskContext) {
+			log.Info("Multi-turn needed", "capability_hint", taskContext.CapabilityHint)
 
-		if queue != nil {
-			// Already in queue mode - just enqueue subtasks
-			if err := a.enqueueMultiTurnTasks(ctx, query, taskContext, queue); err != nil {
-				return "", fmt.Errorf("failed to enqueue multi-turn tasks: %w", err)
+			if queue != nil {
+				// Already in queue mode - just enqueue subtasks
+				if err := a.enqueueMultiTurnTasks(ctx, query, taskContext, queue); err != nil {
+					return "", fmt.Errorf("failed to enqueue multi-turn tasks: %w", err)
+				}
+				return "🔄 Multi-turn tasks enqueued", nil
+			} else {
+				// Create queue and process multi-turn
+				return a.executeMultiTurn(ctx, query, taskContext, cfg)
 			}
-			return "🔄 Multi-turn tasks enqueued", nil
-		} else {
-			// Create queue and process multi-turn
-			return a.executeMultiTurn(ctx, query, taskContext, cfg)
 		}
 	}
 
@@ -3513,6 +3303,7 @@ func (a *CopilotAgent) executeMultiTurn(ctx context.Context, query string, taskC
 	// Let capability populate queue
 	queueAdapter := &workQueueAdapter{queue: queue}
 	ctx = context.WithValue(ctx, "work_queue", queueAdapter)
+	ctx = context.WithValue(ctx, "multi_turn_query", query)
 
 	if a.capabilityRegistry != nil && taskContext.CapabilityHint != "" {
 		state := capabilities.RoutingState{
@@ -3525,7 +3316,7 @@ func (a *CopilotAgent) executeMultiTurn(ctx context.Context, query string, taskC
 			if multiTurnCap, isMultiTurn := cap.(capabilities.MultiTurnCapability); isMultiTurn {
 				log.Info("Calling capability Orchestrate", "capability", cap.Name())
 				if _, err := multiTurnCap.Orchestrate(ctx, state); err != nil {
-					return "", fmt.Errorf("orchestration failed: %w", err)
+					return "", fmt.Errorf("multi-turn orchestration failed: %w", err)
 				}
 			}
 		}
@@ -5306,10 +5097,8 @@ func (a *CopilotAgent) InitializePhysicalMemory(ctx context.Context) error {
 	// Wire up Cognitive Memory background workers for the Avatar
 	// 1. Batch short-term flushing (Working Memory -> STM)
 	a.Memory.StartMemoryWorkers(ctx, a.systemDB)
-	// 2. Batch long-term persistence writes with window/count-based flushing
-	a.startLTMFlushWorker(ctx)
 
-	// 3. Schedule Sleep Cycle consolidator (STM -> LTM)
+	// 2. Schedule Sleep Cycle consolidator (STM -> LTM every 30 min)
 	hourlyInterval := a.Config.SleepCycleIntervalHours
 	idleTimeout := a.Config.IdleSleepTimeoutMinutes
 

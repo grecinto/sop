@@ -126,6 +126,28 @@ func TestCapabilityRunIncludesKBMetadataInResult(t *testing.T) {
 	}
 }
 
+func TestOrchestrateUsesMultiTurnQueryFromContext(t *testing.T) {
+	mockQueue := &mockWorkQueue{items: []map[string]interface{}{}}
+
+	cap := &Capability{
+		Orchestrator: &Orchestrator{},
+	}
+
+	ctx := context.WithValue(context.Background(), "work_queue", mockQueue)
+	ctx = context.WithValue(ctx, "multi_turn_query", "fix parser bug")
+
+	handled, err := cap.Orchestrate(ctx, capabilities.RoutingState{CapabilityHint: "coding_workflow"})
+	if err != nil {
+		t.Fatalf("Orchestrate returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected orchestrate to handle the request")
+	}
+	if mockQueue.Depth() == 0 {
+		t.Fatal("expected orchestrate to enqueue work items")
+	}
+}
+
 // TestOrchestrateTestFixWorkflow verifies Phase 1.5 queue-based test debugging orchestration
 func TestOrchestrateTestFixWorkflow(t *testing.T) {
 	// Create mock queue to capture enqueued work items

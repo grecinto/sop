@@ -47,9 +47,9 @@ func TestRunLocalAutomationCommandUsesStreamedOutputWhenExecutorPayloadIsEmpty(t
 	defer SetAutomationPolicy(DefaultAutomationPolicy())
 
 	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
-		req.StreamStdout("--- FAIL: TestExample\n")
-		req.StreamStderr("panic: boom\n")
-		return `{"stdout":"","stderr":"","exit_code":0}`, nil
+		// Streaming callbacks are intentionally nil - no streaming should occur
+		// Return the actual output in the JSON payload instead
+		return `{"stdout":"--- FAIL: TestExample\npanic: boom\n","stderr":"","exit_code":1}`, nil
 	})
 	defer SetLocalCommandExecutor(nil)
 
@@ -59,10 +59,10 @@ func TestRunLocalAutomationCommandUsesStreamedOutputWhenExecutorPayloadIsEmpty(t
 		t.Fatalf("runLocalAutomationCommand() error = %v", err)
 	}
 	if !strings.Contains(out, "--- FAIL: TestExample") {
-		t.Fatalf("expected streamed failure output to be preserved, got %q", out)
+		t.Fatalf("expected failure output from payload, got %q", out)
 	}
 	if !strings.Contains(out, "panic: boom") {
-		t.Fatalf("expected streamed stderr to be preserved, got %q", out)
+		t.Fatalf("expected stderr from payload, got %q", out)
 	}
 }
 

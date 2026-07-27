@@ -2,10 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
 func TestMultiTurnAskBasicWorkflow(t *testing.T) {
@@ -87,6 +90,79 @@ func TestMultiTurnContextPropagation(t *testing.T) {
 
 	if retrievedTurnCtx.SharedState["test_key"] != "test_value" {
 		t.Error("shared state not preserved in turn context")
+	}
+}
+
+func TestExecuteMultiTurnReturnsGenericOrchestrationError(t *testing.T) {
+	agent := &CopilotAgent{
+		capabilityRegistry: capabilities.NewRegistry(&stubMultiTurnCapability{err: errors.New("boom")}),
+	}
+
+	_, err := agent.executeMultiTurn(context.Background(), "fix parser bug", &TaskContextClassification{CapabilityHint: "stub"}, nil)
+	if err == nil {
+		t.Fatal("expected orchestration error")
+	}
+
+	if !strings.Contains(err.Error(), "multi-turn orchestration failed") {
+		t.Fatalf("expected generic orchestration error, got %q", err.Error())
+	}
+}
+
+type stubMultiTurnCapability struct {
+	err error
+}
+
+func (s *stubMultiTurnCapability) ID() string   { return "stub" }
+func (s *stubMultiTurnCapability) Name() string { return "Stub" }
+func (s *stubMultiTurnCapability) Entitlement() capabilities.Entitlement {
+	return capabilities.Entitlement{}
+}
+func (s *stubMultiTurnCapability) CanHandle(query string, state capabilities.RoutingState) bool {
+	return true
+}
+func (s *stubMultiTurnCapability) BuildContext(query string, state capabilities.RoutingState) string {
+	return ""
+}
+func (s *stubMultiTurnCapability) ExposeTools() []capabilities.ToolDefinition { return nil }
+func (s *stubMultiTurnCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
+	return ""
+}
+func (s *stubMultiTurnCapability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
+	return capabilities.CapabilityResult{}, nil
+}
+func (s *stubMultiTurnCapability) Orchestrate(ctx context.Context, state capabilities.RoutingState) (bool, error) {
+	return false, s.err
+}
+
+func TestIsQueueExecutionTurn(t *testing.T) {
+	if isQueueExecutionTurn(context.Background()) {
+		t.Fatal("expected normal context to not be marked as queue execution")
+	}
+
+	ctx := context.WithValue(context.Background(), ctxKeyQueueExecutionTurn, true)
+	if !isQueueExecutionTurn(ctx) {
+		t.Fatal("expected queue execution context to be detected")
+	}
+	if !shouldExecuteQueuedTurnDirectly(ctx) {
+		t.Fatal("expected queued turns to run directly")
+	}
+}
+
+func TestBuildEffectiveQueueQueryPreservesOriginalRequestContext(t *testing.T) {
+	item := WorkItem{
+		Query: "Run tests",
+		Context: map[string]any{
+			"parent_query": "fix failing tests",
+			"working_dir":  "/tmp/repo",
+		},
+	}
+
+	effective := buildEffectiveQueueQuery(item)
+	if !strings.Contains(effective, "Original request: fix failing tests") {
+		t.Fatalf("expected original request context to be preserved, got %q", effective)
+	}
+	if !strings.Contains(effective, "Current step: Run tests") {
+		t.Fatalf("expected queued step to be preserved, got %q", effective)
 	}
 }
 

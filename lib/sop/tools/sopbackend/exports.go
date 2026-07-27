@@ -82,15 +82,13 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 	// Preserve existing streaming context if already injected (daemon mode)
 	// Only inject defaults if context doesn't already have streaming support
 	existingStreamer := ctx.Value(ai.CtxKeyEventStreamer)
-	log.Info("AskSharedAgent: checking streaming context", "has_streamer", existingStreamer != nil)
 	if existingStreamer == nil {
 		ctx = InjectSharedRuntimeContext(ctx, nil, nil)
-		log.Warn("AskSharedAgent: NO EXISTING STREAMER - injected nil defaults (streaming will not work!)")
-	} else {
-		log.Info("AskSharedAgent: preserving existing streaming context")
 	}
 
-	if auth := sop.GetAuthFromContext(ctx); auth.UserID != "" {
+	if config.DisableAuth {
+		// Auth disabled for daemon mode - skip user-store lookup
+	} else if auth := sop.GetAuthFromContext(ctx); auth.UserID != "" {
 		username := normalizeUsername(auth.UserID)
 		if username != "" && username != "root" && username != "ui-client" {
 			if _, ok, err := config.findUserRecord(ctx, username); err == nil && !ok {

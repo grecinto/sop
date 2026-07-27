@@ -203,7 +203,7 @@ func TestImplicitEnrichment_TriggerSleepCycle(t *testing.T) {
 		generator: mockGen,
 	}
 
-	kbName := "ltm_agent123"
+	kbName := "agent123_ltm"
 
 	func() {
 		tx, _ := sysDB.BeginTransaction(ctx, sop.ForWriting)

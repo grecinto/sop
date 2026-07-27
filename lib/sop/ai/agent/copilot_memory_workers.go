@@ -129,7 +129,7 @@ func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, 
 		log.Debug("CopilotAgent: Sleep Cycle completed successfully.", "agent_id", a.Memory.AgentID)
 	}
 
-	// 1. "Quick Nap" Sensor (Idle Ticker)
+	// 1. "Quick Nap" Sensor (Idle Ticker) - recommended 5-10 minutes
 	if idleTimeoutMinutes > 0 {
 		go func() {
 			log.Info("CopilotAgent: Initiating Quick Nap Idle Sensor", "agent_id", a.Memory.AgentID, "timeout_minutes", idleTimeoutMinutes)
@@ -164,17 +164,20 @@ func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, 
 		}()
 	}
 
-	// 2. "Deep Sleep" Scheduler (Hourly/Midnight Ticker)
+	// 2. "Deep Sleep" Scheduler (Every 30 Minutes)
 	go func() {
-		log.Info("CopilotAgent: Initiating Deep Sleep Scheduler", "agent_id", a.Memory.AgentID, "hourly_interval", hourlyInterval)
+		log.Info("CopilotAgent: Initiating Deep Sleep Scheduler (30-min cycles)", "agent_id", a.Memory.AgentID)
 
-		// 1. Align to the precise top of the next hour
+		// Align to next 30-minute mark (e.g., :00 or :30)
 		now := nowFn()
-		nextHour := now.Truncate(time.Hour).Add(time.Hour)
-		time.Sleep(nextHour.Sub(now))
+		nextCycle := now.Truncate(30 * time.Minute).Add(30 * time.Minute)
+		if nextCycle.Before(now) || nextCycle.Equal(now) {
+			nextCycle = nextCycle.Add(30 * time.Minute)
+		}
+		time.Sleep(nextCycle.Sub(now))
 
-		// 2. Ticking perfectly on the hour
-		ticker := time.NewTicker(1 * time.Hour)
+		// Tick every 30 minutes
+		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 
 		for {
@@ -182,11 +185,9 @@ func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, 
 			case <-ctx.Done():
 				return
 			case t := <-ticker.C:
-				if shouldTriggerDeepSleep(t.Hour(), hourlyInterval) {
-					log.Info("CopilotAgent: Running Scheduled Deep Sleep Cycle", "agent_id", a.Memory.AgentID, "hour", t.Hour())
-					runSleepCycle()
-					a.Memory.LastEpisodeTS.Store(0) // Reset idle sensor
-				}
+				log.Info("CopilotAgent: Running Scheduled Deep Sleep Cycle", "agent_id", a.Memory.AgentID, "time", t.Format("15:04"))
+				runSleepCycle()
+				a.Memory.LastEpisodeTS.Store(0) // Reset idle sensor
 			}
 		}
 	}()

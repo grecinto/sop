@@ -183,17 +183,17 @@ func TestAutomationToolResultsStreamToEventStreamer(t *testing.T) {
 		t.Fatalf("toolExecuteLocalCommand() output = %q", out)
 	}
 
+	// Command output should NOT be streamed to chat history
+	// It should only go to the Terminal window pane
 	foundContent := false
 	for _, event := range gotEvents {
 		if event.typ == "content" {
 			foundContent = true
-			if payload, ok := event.payload.(string); !ok || payload == "" {
-				t.Fatalf("expected content payload to be a non-empty string, got %#v", event.payload)
-			}
+			t.Errorf("unexpected content event in chat history: automation tool execution should not emit content events; payload=%#v", event.payload)
 		}
 	}
-	if !foundContent {
-		t.Fatal("expected automation tool execution to emit content events")
+	if foundContent {
+		t.Fatal("automation tool execution should not emit content events (output goes to Terminal pane only)")
 	}
 }
 
@@ -1000,14 +1000,9 @@ func TestListDirectoryEmitsFormattedContentThroughEventStreamer(t *testing.T) {
 	if !strings.Contains(out, "- alpha.txt") {
 		t.Fatalf("toolListDirectory() output = %q", out)
 	}
-	if len(got) < 2 {
-		t.Fatalf("expected list_directory to emit multiple content chunks, got %d", len(got))
-	}
-	if !strings.Contains(got[0], "Directory contents") {
-		t.Fatalf("expected first streamed chunk to contain the directory header, got %q", got[0])
-	}
-	if !strings.Contains(strings.Join(got, "\n"), "- alpha.txt") {
-		t.Fatalf("expected streamed content to include alpha.txt, got %q", strings.Join(got, "\n"))
+	// Directory listing should NOT stream to chat history
+	if len(got) > 0 {
+		t.Fatalf("expected list_directory to NOT emit content chunks to chat, got %d chunks", len(got))
 	}
 }
 

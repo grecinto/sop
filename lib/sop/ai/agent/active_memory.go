@@ -106,7 +106,7 @@ func (s *Service) triggerSpaceAutoEnrichment(ctx context.Context) {
 
 		for kbName := range uniqueKBs {
 			// Do not auto-enrich agent LTM stores here. They are maintained by the STM/LTM memory pipeline.
-			if strings.HasPrefix(kbName, "ltm_") {
+			if strings.HasSuffix(kbName, "_ltm") {
 				continue
 			}
 

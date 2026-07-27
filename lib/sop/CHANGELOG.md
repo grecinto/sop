@@ -1,6 +1,23 @@
 # Changelog
 
 ## SOP V2 build 54 (Upcoming)
+- **Memory Architecture Optimization (2026-07-26)**: Major refactor of AI agent memory system for improved efficiency and biomimicry alignment.
+    - **Increased STM Batching**: Enhanced episodic memory throughput:
+        - Batch window: **5s → 30s** (6x improvement)
+        - Max items per batch: **500 → 1000** (2x improvement)
+        - Removed explicit pruning; STM now self-drains naturally via sleep cycle consolidation
+    - **Faster Sleep Cycle Consolidation**: Accelerated STM → LTM transformation:
+        - **Deep Sleep**: Now runs every **30 minutes** (changed from hourly) for faster episodic-to-semantic conversion
+        - **Quick Nap**: Recommended **5-10 minutes** idle timeout for lightweight consolidation
+        - Results in 0-30 minute STM retention window (was 0-60 min)
+    - **Unified Memory Write Path**: Simplified architecture by removing dual-path LTM writes:
+        - **Removed**: Buffered LTM write system (`queueLTMBufferedWrite`, `flushLTMBufferedWrites`, `persistCodingMemoryToLTM`)
+        - **New Flow**: All memory writes (user events, coding workflows, tool executions) → STM (batched) → Sleep Cycle → LTM
+        - **Benefit**: Single path eliminates dual-path synchronization complexity, improves predictability, better biomimicry alignment
+        - **MRU Role**: In-memory MRU cache still provides instant next-Ask context without STM batching delay
+    - **Files Modified**: `lib/sop/ai/memory/stm_store.go`, `lib/sop/ai/agent/copilot_memory_workers.go`, `lib/sop/ai/agent/config.go`, `lib/sop/ai/agent/copilot.go`
+    - **Documentation Updated**: `lib/sop/ARCHITECTURE.md` section "Memory Architecture Evolution & 2026 Refactor" with detailed refactor summary
+
 - **AI Assistant UX & Local-Agent Experience**: Polished the detached AI experience and tightened the local daemon UI behavior.
     - **Floating AI Window**: The AI can now open in a detached floating window without breaking the main app shell.
         - The main widget is hidden while the floater is open, so the shell stays visually stable.

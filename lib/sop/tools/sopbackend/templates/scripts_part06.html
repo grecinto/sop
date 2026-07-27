@@ -673,13 +673,68 @@
         });
     }
 
-    const MAX_CHAT_MESSAGES = 100; // Limit chat history to prevent DOM bloat
+    const MAX_CHAT_MESSAGES = 100; // Hard limit for total messages
+    const COMPRESS_THRESHOLD = 77; // Start archiving when this many visible messages
 
     function pruneChatHistory() {
         const history = document.getElementById('chat-history');
-        if (history) {
-            while (history.children.length > MAX_CHAT_MESSAGES) {
-                history.removeChild(history.firstChild);
+        if (!history) return;
+        
+        // Get or create collapsible archive section
+        let archive = history.querySelector('#chat-archive');
+        if (!archive) {
+            const details = document.createElement('details');
+            details.id = 'chat-archive';
+            details.style.marginBottom = '15px';
+            details.style.padding = '10px';
+            details.style.border = '1px solid #444';
+            details.style.borderRadius = '4px';
+            details.style.backgroundColor = '#1a1a1a';
+            
+            const summary = document.createElement('summary');
+            summary.textContent = 'Older messages';
+            summary.style.cursor = 'pointer';
+            summary.style.color = '#888';
+            summary.style.fontWeight = 'bold';
+            summary.style.marginBottom = '8px';
+            
+            details.appendChild(summary);
+            history.insertBefore(details, history.firstChild);
+            archive = details;
+        }
+        
+        // Get all message elements (exclude the archive itself)
+        const allMessages = Array.from(history.children).filter(el => el.id !== 'chat-archive');
+        
+        // If visible messages exceed threshold, move oldest to archive
+        if (allMessages.length > COMPRESS_THRESHOLD) {
+            const toArchive = allMessages.length - COMPRESS_THRESHOLD;
+            for (let i = 0; i < toArchive; i++) {
+                archive.appendChild(allMessages[i]);
+            }
+            
+            // Update archive summary with count
+            const archivedCount = archive.children.length - 1; // -1 for the summary element
+            archive.querySelector('summary').textContent = `Older messages (${archivedCount})`;
+        }
+        
+        // Hard limit: remove oldest from archive if total exceeds MAX_CHAT_MESSAGES
+        const allChildren = Array.from(history.querySelectorAll('.chat-message, .ai-table-container'));
+        if (allChildren.length > MAX_CHAT_MESSAGES) {
+            const toRemove = allChildren.length - MAX_CHAT_MESSAGES;
+            const archivedMessages = Array.from(archive.children).filter(el => el.tagName !== 'SUMMARY');
+            
+            for (let i = 0; i < Math.min(toRemove, archivedMessages.length); i++) {
+                archive.removeChild(archivedMessages[i]);
+            }
+            
+            // Update count
+            const remainingCount = archive.children.length - 1;
+            if (remainingCount > 0) {
+                archive.querySelector('summary').textContent = `Older messages (${remainingCount})`;
+            } else {
+                // Remove empty archive
+                history.removeChild(archive);
             }
         }
     }

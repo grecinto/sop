@@ -1012,7 +1012,7 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 		return isRegularAdminRoleInContext(ctx) || isSystemAdminRoleInContext(ctx)
 	}
 
-	if strings.HasPrefix(storeName, "stm_") {
+	if strings.HasSuffix(storeName, "_stm") {
 		if isRegularAdminRoleInContext(ctx) {
 			return false
 		}
@@ -1026,7 +1026,7 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 		}
 	}
 
-	if strings.HasPrefix(storeName, "ltm_") {
+	if strings.HasSuffix(storeName, "_ltm") {
 		currentUserID := strings.TrimSpace(sop.GetAuthFromContext(ctx).UserID)
 		if currentUserID == "" {
 			return false
@@ -1143,7 +1143,7 @@ func resolveSpaceDisplayName(name string, cfg *memory.KnowledgeBaseConfig) strin
 	_ = cfg
 
 	lowerName := strings.ToLower(strings.TrimSpace(name))
-	if strings.HasPrefix(lowerName, "ltm_") || strings.HasPrefix(lowerName, "memory_") {
+	if strings.HasSuffix(lowerName, "_ltm") || strings.HasPrefix(lowerName, "memory_") {
 		return "memory"
 	}
 
@@ -1175,10 +1175,10 @@ func resolveStoreDisplayName(name string) string {
 	}
 
 	// User-friendly names for memory stores
-	if strings.HasPrefix(name, "stm_") {
+	if strings.HasSuffix(name, "_stm") {
 		return "Short-term Memory"
 	}
-	if strings.HasPrefix(name, "ltm_") {
+	if strings.HasSuffix(name, "_ltm") {
 		return "Long-term Memory"
 	}
 

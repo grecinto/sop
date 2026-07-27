@@ -1032,10 +1032,8 @@ func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]an
 		path = "."
 	}
 
-	// Emit command to streamer before execution
-	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("tool_stream_chunk", map[string]any{"tool": "list_directory", "text": fmt.Sprintf("$ ls -la %s\n", path)})
-	}
+	// Note: Directory listing output is NOT streamed to chat history
+	// It's returned as the tool result only
 
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -1056,14 +1054,9 @@ func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]an
 	header := fmt.Sprintf("Directory contents for %s:\n", path)
 	sb.WriteString(header)
 
-	// Emit the header as first content chunk
-	emitAutomationToolStreamContent(ctx, header)
-
 	for _, name := range names {
 		line := fmt.Sprintf("- %s\n", name)
 		sb.WriteString(line)
-		// Emit each file as a separate content chunk
-		emitAutomationToolStreamContent(ctx, line)
 	}
 
 	formatted := strings.TrimSpace(sb.String())
@@ -2093,9 +2086,6 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		sessionID = "" // Strip session to route to exec.Command instead of PTY
 	}
 
-	var streamedStdout strings.Builder
-	var streamedStderr strings.Builder
-
 	request := LocalCommandRequest{
 		Command:        command,
 		Reasoning:      reasoning,
@@ -2103,12 +2093,11 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		TimeoutSeconds: timeoutSeconds,
 		SessionID:      sessionID,
 		Background:     background,
-		StreamStdout: func(chunk string) {
-			streamedStdout.WriteString(chunk)
-		},
-		StreamStderr: func(chunk string) {
-			streamedStderr.WriteString(chunk)
-		},
+		// StreamStdout and StreamStderr are intentionally nil
+		// Output is collected by the daemon but NOT streamed during execution
+		// The Terminal pane displays the final result
+		StreamStdout: nil,
+		StreamStderr: nil,
 	}
 
 	policy := GetAutomationPolicy()
@@ -2131,15 +2120,6 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 			// localCommandExecutor returns {"stdout":"...", "stderr":"...", "exit_code":0}
 			// but we want just the stdout for display/storage
 			displayResult := unwrapCommandExecutorResult(result)
-			if strings.TrimSpace(displayResult) == "" {
-				displayResult = strings.TrimSpace(streamedStdout.String() + streamedStderr.String())
-			}
-			if strings.TrimSpace(displayResult) == "" {
-				displayResult = strings.TrimSpace(streamedStdout.String())
-			}
-			if strings.TrimSpace(displayResult) == "" {
-				displayResult = strings.TrimSpace(streamedStderr.String())
-			}
 
 			statusSummary := parseAndEmitTestStatus(ctx, command, displayResult)
 
@@ -2149,8 +2129,9 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 				displayResult = statusSummary + "\n\n" + displayResult
 			}
 
-			// Emit the result as a content event
-			emitAutomationToolStreamContent(ctx, displayResult)
+			// Note: Command output is NOT streamed to chat history
+			// It's only displayed in the Terminal window pane
+			// The Terminal receives output through the PTY streaming mechanism
 
 			return displayResult, nil
 		}

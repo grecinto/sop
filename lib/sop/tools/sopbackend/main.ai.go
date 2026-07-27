@@ -647,14 +647,12 @@ func InjectSharedRuntimeContext(ctx context.Context, sendEvent func(string, any)
 	}
 	ctx = context.WithValue(ctx, ai.CtxKeyExecutor, &DefaultToolExecutor{Agents: loadedAgents})
 	if sendEvent != nil {
-		log.Info("InjectSharedRuntimeContext: setting up streaming context")
 		ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, func(msg string) {
 			sendEvent("content", msg+"\n")
 		})
 		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, sendEvent)
 		ctx = context.WithValue(ctx, ai.CtxKeyResultStreamer, agent.NewEventResultStreamer(sendEvent))
 	} else {
-		log.Warn("InjectSharedRuntimeContext: sendEvent is NIL - streaming disabled")
 		ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, func(string) {})
 		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, func(string, any) {})
 	}

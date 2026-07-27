@@ -246,19 +246,91 @@ SOP uses a multi-layer memory architecture for AI agents. This design uses B-Tre
 
 ### 1. Working Memory (MRU) - Session-Scoped
 *   **Mechanism**: A fast, in-memory array (`[]MRUItem`) attached to the `Session` state.
+*   **Role**: Serves as both the **write buffer** (receives immediate events) and **read cache** (provides instant context for next Ask). Bidirectional hub between user interactions and persistent memory layers.
 *   **Workflow**: Ensures context is contiguous for the User regardless of which agent is currently active. The Omni Architect orchestrates passing a copied snapshot of the Session MRU into the Avatar as a "whiteboard", returning and appending the result to the global MRU under thread-safe locks.
 *   **Context Continuity (Dynamic Semantic Injection)**: Rather than falling back to placeholder text ("dummy" logs) during multi-turn exchanges, the engine pipes semantic RAG chunks (`kb.SearchSemantics`) into `MarkMRUCategory()`. If a follow-up query is semantically sparse, the system can pull carried-over playbook context from the prior exchange in the MRU.
+*   **Rehydration**: On session start or context switches, MRU can be rehydrated from STM (recent episodic events) or LTM (semantic memories via RAG retrieval) to restore conversation continuity.
 
 ### 2. Episodic Memory (STM) - Avatar-Scoped
 *   **Mechanism**: A completely physically isolated B-Tree per agent (`stm_<agent_id>`), detaching from global channels.
 *   **Workflow**: The Avatar operates a private, localized batch-write loop connected to its own channel. During its internal execution loop, it logs execution snapshots to its channel. A background worker periodically flushes its local channel to the `stm_<agent_id>` tree natively. This guarantees O(1) decommissioning and pure isolation.
+*   **Batching Parameters (as of 2026-07-26)**: STM uses aggressive batching for efficiency:
+    *   **Batch Window**: 30 seconds (increased from 5 seconds for 6x improved throughput)
+    *   **Max Items**: 1000 items per batch (increased from 500 for 2x larger batches)
+    *   **Pruning**: No explicit pruning; STM naturally self-drains every 30 minutes via sleep cycle consolidation, maintaining 0-30 minute retention window
+*   **Memory Write Path**: All memory writes (including coding workflow memories) flow through STM. There is no direct LTM write path. This unified architecture ensures simpler, more predictable memory consolidation aligned with biomimicry principles.
 
 ### 3. Declarative Long-Term Memory (LTM) & Sleep Cycle
 *   **Mechanism**: The Avatar has private Vector DBs (`ltm_<agent_id>`) for semantic and procedural learnings captured during its private **Sleep Cycle**. By combining UI-managed Knowledge Bases (Declarative) with auto-enriched conversational memory (Episodic LTM), SOP converts unstructured interactions into structured vectors through summarization, clustering, and cataloging steps.
+*   **Sleep Cycle Timing (as of 2026-07-26)**: Optimized for faster consolidation and efficiency:
+    *   **Deep Sleep**: Runs every **30 minutes** (fixed schedule, changed from hourly). Reads all STM entries, transforms episodic memories into semantic LTM vectors via `IngestThoughts`, and removes consolidated entries from STM.
+    *   **Quick Nap**: Triggered after **5-10 minutes** of idle time (configurable via `IdleSleepTimeoutMinutes`). Performs lightweight consolidation when agent becomes inactive.
+    *   **Consolidation Flow**: STM (episodic) → Sleep Cycle → LTM (semantic). This biomimicry-inspired transformation mirrors human memory consolidation during sleep, converting recent experiences into long-term knowledge.
+*   **Unified Write Path Architecture**: As of 2026-07-26, the architecture was simplified to use a **single memory write path**:
+    *   **All memory writes** (user events, coding workflows, tool executions) → **STM** (batched 30s/1000 items) → **Sleep Cycle** (every 30 min) → **LTM** (vector storage)
+    *   **Removed**: Buffered LTM write system (`queueLTMBufferedWrite`, `flushLTMBufferedWrites`, `persistCodingMemoryToLTM`) which created complexity with dual write paths
+    *   **Benefit**: Simpler architecture, more predictable behavior, better alignment with biomimicry principles, eliminates dual-path synchronization issues
+    *   **MRU Role**: In-memory MRU (Most Recently Used) cache still provides instant next-Ask context without waiting for STM batching, maintaining sub-second response times
 *   **Direction**: LTM is expected to evolve from a passive vector store into a managed memory layer. User interaction drives what gets captured, Sleep Cycle refines and re-categorizes thoughts, and the resulting LTM can influence later LLM behavior. Over time, LTM will also need MRU/LRU-style lifecycle policies so cold or superseded thoughts can be archived, compacted, or purged while high-value thoughts remain active.
 *   **Current Default**: The present runtime composition is Avatar + KB + STM + LTM. The KB is still the primary grounding surface, and we need to stabilize exactly how that mounted KB benefits the LLM before making absorption a dominant operating mode.
 *   **Knowledge Absorption**: Curated Knowledge Bases may later be absorbed into LTM as distilled skills or expertise, reducing the need to keep every capability tied to an actively mounted Space.
 *   **Long-Term Shift**: This would support a transition from an "Avatar of a KB" to an Avatar carrying STM/LTM plus absorbed expertise, with additional KBs assimilated over time as new competencies.
+
+#### Memory Architecture Evolution & 2026 Refactor
+
+**Historical Context**: Prior to July 2026, the system used a dual-path architecture with separate routes for different memory types:
+- General memories: STM → Sleep Cycle (hourly) → LTM
+- Coding workflow memories: Direct buffered writes → LTM (5-min flush)
+
+This created complexity, synchronization risks, and violated biomimicry principles.
+
+**2026-07-26 Refactor**: The architecture was simplified to a unified single-path flow:
+
+```
+Write Path (Storage):
+All Memory Types → MRU (instant) → STM (batched: 30s/1000 items) → Sleep Cycle (every 30 min) → LTM
+
+Read Path (Retrieval):
+LTM/STM → MRU (for next Ask context)
+```
+
+**Bidirectional Flow**: Memory writes flow MRU → STM → LTM, while memory retrieval flows STM/LTM → MRU. The refactor only changed the write path (unified to single route through STM). The read path remains unchanged - both STM (recent 0-30 min) and LTM (semantic vectors) can populate MRU for next-Ask context.
+
+**Key Changes**:
+
+| Component | Before | After | Benefit |
+|-----------|--------|-------|---------|
+| STM Batch Window | 5 seconds | 30 seconds | 6x improved throughput |
+| STM Batch Size | 500 items | 1000 items | 2x larger batches |
+| Deep Sleep Cycle | Every 60 min | Every 30 min | 2x faster consolidation |
+| STM Retention | 0-60 minutes | 0-30 minutes | Faster episodic→semantic |
+| Write Paths | Dual (STM + Direct) | Single (STM only) | Eliminated ~300 LOC |
+| Pruning Strategy | Explicit cleanup | Natural (via sleep) | Self-draining |
+
+**Removed Components**: All buffered LTM write infrastructure was deleted:
+- Functions: `queueLTMBufferedWrite()`, `flushLTMBufferedWrites()`, `persistCodingMemoryToLTM()`
+- Constants: `LTMFlushWindow`, `LTMFlushMaxCUDItems`, `LTMFlushMaxReadItems`
+- ~300 lines of complex buffering/flushing logic
+
+**Coding Memory Flow** (simplified):
+```go
+// All memories now route through STM
+recordCodingMemory() → LogEpisodeToSTM() → STM batch → Sleep cycle → LTM
+```
+
+**Benefits**:
+1. **Architectural Simplicity**: Single consistent path for all memory types
+2. **Performance**: 6x batching efficiency, 2x consolidation frequency
+3. **Biomimicry Alignment**: Mirrors human memory consolidation (working → short-term → sleep → long-term)
+4. **Predictability**: Consistent 30-minute consolidation schedule for all memories
+5. **MRU Still Instant**: In-memory cache provides sub-second next-Ask context
+
+**Migration Impact**: Internal refactor only. No API changes, all public interfaces unchanged.
+
+**Code References**:
+- STM batching: `lib/sop/ai/memory/stm_store.go` (constants on lines 16-17)
+- Sleep cycle: `lib/sop/ai/agent/copilot_memory_workers.go` (30-min Deep Sleep schedule)
+- Memory routing: `lib/sop/ai/agent/copilot.go` (`recordCodingMemory()` function)
 
 ### 4. Hybrid Scripting Engine (Explicit Execution)
 The SOP Scripting Engine (`ai/agent`) follows a unique **"Explicit Execution"** design pattern.

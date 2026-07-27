@@ -767,7 +767,7 @@ func (a *CopilotAgent) toolMintToSpace(ctx context.Context, args map[string]any)
 	category, _ := args["category"].(string)
 
 	var targetDB *database.Database
-	if strings.HasPrefix(kbName, "ltm_") {
+	if strings.HasSuffix(kbName, "_ltm") {
 		if a.systemDB == nil {
 			return "", fmt.Errorf("systemDB is not initialized")
 		}

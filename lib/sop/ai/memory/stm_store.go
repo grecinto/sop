@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	stmBatchMaxItems = 500
-	stmBatchWindow   = 5 * time.Second
+	stmBatchMaxItems = 1000
+	stmBatchWindow   = 30 * time.Second
 )
 
 type ShortTermMemoryStore struct {
@@ -43,9 +43,9 @@ func BuildSTMStoreName(agentID string, userID string) string {
 		scope = strings.TrimSpace(agentID)
 	}
 	if scope == "" {
-		return "stm_default"
+		return "default_stm"
 	}
-	return fmt.Sprintf("stm_%s", strings.NewReplacer(" ", "_", "/", "_", "\\", "_").Replace(scope))
+	return fmt.Sprintf("%s_stm", strings.NewReplacer(" ", "_", "/", "_", "\\", "_").Replace(scope))
 }
 
 func BuildSTMTimeIndexName(agentID string, userID string) string {
@@ -58,9 +58,9 @@ func BuildLTMStoreName(agentID string, userID string) string {
 		scope = strings.TrimSpace(agentID)
 	}
 	if scope == "" {
-		return "ltm_default"
+		return "default_ltm"
 	}
-	return fmt.Sprintf("ltm_%s", strings.NewReplacer(" ", "_", "/", "_", "\\", "_").Replace(scope))
+	return fmt.Sprintf("%s_ltm", strings.NewReplacer(" ", "_", "/", "_", "\\", "_").Replace(scope))
 }
 
 func STMTimeIndexKey(createdAt int64, itemID string) string {
@@ -272,18 +272,13 @@ func (s *ShortTermMemoryStore) StartPeriodicCommitter(ctx context.Context, syste
 					continue
 				}
 
-				if removed, err := s.PruneExpired(ctx, time.Now()); err != nil {
-					log.Warn("ShortTermMemoryStore: prune failed", "agent_id", s.agentID, "error", err)
-				} else if removed > 0 {
-					log.Debug("ShortTermMemoryStore: pruned stale STM episodes", "agent_id", s.agentID, "count", removed)
-				}
-
+				// Note: Pruning is handled by sleep cycle consolidation (STM → LTM)
+				// which naturally drains STM every 30 minutes, keeping 0-30 min of data.
 				batchCount := 0
 				if err := s.UpsertEpisode(ctx, firstPayload); err != nil {
 					log.Warn("ShortTermMemoryStore: failed to add item", "agent_id", s.agentID, "error", err)
 				}
 				batchCount++
-
 				timeout := time.After(stmBatchWindow)
 				batching := true
 				for batching && batchCount < stmBatchMaxItems {

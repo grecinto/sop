@@ -133,8 +133,8 @@ func TestWorkQueueRBAC_DisplayNames(t *testing.T) {
 		{"wfq_checkpoints_alice", "AI Studio - Workflow Checkpoints"},
 		{"wfq_metrics_bob", "AI Studio - Workflow Metrics"},
 		{"wfq_bytimestamp_charlie", "AI Studio - Workflow Timeline"},
-		{"stm_alice", "Short-term Memory"},
-		{"ltm_bob", "Long-term Memory"},
+		{"alice_stm", "Short-term Memory"},
+		{"bob_ltm", "Long-term Memory"},
 		{"users", "users"}, // Regular stores keep their name
 	}
 

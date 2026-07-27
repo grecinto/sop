@@ -121,6 +121,20 @@ func convertToWorkItem(item interface{}) (WorkItem, bool) {
 
 // processQueueLoop is the SINGLE queue processor - dequeues items and calls Ask().
 // This is the only place that should loop over queue items.
+const ctxKeyQueueExecutionTurn = "queue_execution_turn"
+
+func isQueueExecutionTurn(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	isQueuedTurn, ok := ctx.Value(ctxKeyQueueExecutionTurn).(bool)
+	return ok && isQueuedTurn
+}
+
+func shouldExecuteQueuedTurnDirectly(ctx context.Context) bool {
+	return isQueueExecutionTurn(ctx)
+}
+
 func buildEffectiveQueueQuery(item WorkItem) string {
 	if item.Context == nil {
 		return item.Query
@@ -135,6 +149,21 @@ func buildEffectiveQueueQuery(item WorkItem) string {
 			}
 		}
 	}
+
+	var originalQuery string
+	if parentQuery, ok := item.Context["parent_query"].(string); ok && strings.TrimSpace(parentQuery) != "" {
+		originalQuery = parentQuery
+	} else if parentQuery, ok := item.Context["original_query"].(string); ok && strings.TrimSpace(parentQuery) != "" {
+		originalQuery = parentQuery
+	}
+
+	if strings.TrimSpace(originalQuery) != "" {
+		if strings.TrimSpace(item.Query) == "" {
+			return fmt.Sprintf("Original request: %s", originalQuery)
+		}
+		return fmt.Sprintf("Original request: %s\nCurrent step: %s", originalQuery, item.Query)
+	}
+
 	return item.Query
 }
 
@@ -168,6 +197,7 @@ func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, c
 
 		// Execute turn by calling Ask() - queue as prompt source!
 		turnCtx, cancel := context.WithTimeout(ctx, queue.GetTurnTimeout())
+		turnCtx = context.WithValue(turnCtx, ctxKeyQueueExecutionTurn, true)
 		effectiveQuery := buildEffectiveQueueQuery(item)
 
 		if payload, ok := item.Context["workflow_step"]; ok {

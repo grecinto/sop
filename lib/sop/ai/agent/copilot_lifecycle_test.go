@@ -103,7 +103,7 @@ func TestAgentFullMemoryLifeCycleTest(t *testing.T) {
 	time.Sleep(6 * time.Second) // wait for worker to batch and commit
 
 	tx2, _ := sysDB.BeginTransaction(ctx, sop.ForReading)
-	stmRead, _ := sysDB.OpenBtree(ctx, "stm_agent123", tx2)
+	stmRead, _ := sysDB.OpenBtree(ctx, "agent123_stm", tx2)
 	ok, _ := stmRead.First(ctx)
 	if !ok {
 		t.Fatalf("Failed to find episode in STM worker")
@@ -117,8 +117,8 @@ func TestAgentFullMemoryLifeCycleTest(t *testing.T) {
 
 	// 4. Sleep Cycle Consolidation logic (inline trigger)
 	tx3, _ := sysDB.BeginTransaction(ctx, sop.ForWriting)
-	kbWrite, _ := sysDB.OpenKnowledgeBase(ctx, "ltm_agent123", tx3, llm, embedder, false)
-	stmWrite, _ := sysDB.NewBtree(ctx, "stm_agent123", tx3)
+	kbWrite, _ := sysDB.OpenKnowledgeBase(ctx, "agent123_ltm", tx3, llm, embedder, false)
+	stmWrite, _ := sysDB.NewBtree(ctx, "agent123_stm", tx3)
 
 	var thoughts []memory.Thought[map[string]any]
 	thoughts = append(thoughts, memory.Thought[map[string]any]{
@@ -132,11 +132,11 @@ func TestAgentFullMemoryLifeCycleTest(t *testing.T) {
 	}
 	stmWrite.Remove(ctx, "ep_1")
 	tx3.Commit(ctx)
-	sysDB.Vectorize(ctx, "ltm_agent123", llm, embedder, 50)
+	sysDB.Vectorize(ctx, "agent123_ltm", llm, embedder, 50)
 
 	// Verify LTM count
 	tx4, _ := sysDB.BeginTransaction(ctx, sop.ForReading)
-	kbRead, _ := sysDB.OpenKnowledgeBase(ctx, "ltm_agent123", tx4, llm, embedder, false)
+	kbRead, _ := sysDB.OpenKnowledgeBase(ctx, "agent123_ltm", tx4, llm, embedder, false)
 	count, _ := kbRead.Store.Count(ctx)
 	if count == 0 {
 		t.Fatalf("LTM did not ingest thought")
@@ -145,13 +145,13 @@ func TestAgentFullMemoryLifeCycleTest(t *testing.T) {
 
 	// 5. Query / MRU Injection
 	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{
-		ActiveDomain: "ltm_agent123",
+		ActiveDomain: "agent123_ltm",
 		CurrentDB:    "test_db",
 	})
 	ag.service.domain = &mockDomain{emb: embedder}
 
-	db := ag.resolveDBForKB(ctx, "ltm_agent123")
-	res, err := ag.searchKnowledgeBase(ctx, db, "ltm_agent123", "learned something", "", "", 5)
+	db := ag.resolveDBForKB(ctx, "agent123_ltm")
+	res, err := ag.searchKnowledgeBase(ctx, db, "agent123_ltm", "learned something", "", "", 5)
 	if err != nil {
 		t.Fatalf("toolSearchDomainKB failed: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestAgentFullMemoryLifeCycleTest(t *testing.T) {
 
 	found := false
 	for _, item := range mruSnapshot {
-		if item.Category == "ltm_agent123" {
+		if item.Category == "agent123_ltm" {
 			found = true
 		}
 	}

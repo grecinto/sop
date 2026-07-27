@@ -414,6 +414,23 @@
 
     let lastTerminalOutput = '';
 
+    // Truncate terminal output to prevent UI performance issues with massive logs
+    function truncateTerminalOutput(text, maxLines = 2500) {
+        if (!text) return text;
+        
+        const lines = text.split('\n');
+        if (lines.length <= maxLines) {
+            return text;
+        }
+        
+        // Keep the most recent lines (like tail command)
+        const keptLines = lines.slice(-maxLines);
+        const omittedCount = lines.length - maxLines;
+        
+        // Add a header indicating truncation
+        return `... [${omittedCount.toLocaleString()} earlier lines omitted for UI performance] ...\n\n` + keptLines.join('\n');
+    }
+
     async function refreshAITerminal() {
         const output = document.getElementById('ai-terminal-output');
         if (!output) return;
@@ -442,7 +459,9 @@
             
             if (isRunning || newOutput !== lastTerminalOutput) {
                 if (data && data.output && data.output.trim()) {
-                    output.textContent = data.output;
+                    // Truncate output to prevent UI performance issues
+                    const truncatedOutput = truncateTerminalOutput(data.output);
+                    output.textContent = truncatedOutput;
                     output.dataset.hasOutput = 'true'; // Mark that we have real output
                     lastTerminalOutput = data.output;
                     // Always scroll to bottom to show latest output

@@ -1,6 +1,6 @@
 # SOP Documentation Index
 
-Comprehensive guide to SOP platform documentation. Last updated: 2026-07-15.
+Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 
 ---
 

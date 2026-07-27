@@ -28,8 +28,10 @@ type Config struct {
 	Verbose               bool              `json:"verbose,omitempty"`                 // Optional: Enable verbose output (e.g. tool instructions)
 	ProductionMode        bool              `json:"production_mode,omitempty"`         // Optional: Enable production-oriented hardening defaults (e.g. Phase 5)
 	// Cognitive Memory Consolidation (STM to LTM)
-	SleepCycleIntervalHours int            `json:"sleep_cycle_interval_hours,omitempty"` // e.g. 1 (run every X hours on the clock). 0 disables hourly.
-	IdleSleepTimeoutMinutes int            `json:"idle_sleep_timeout_minutes,omitempty"` // e.g. 5 (run cycle after X minutes of avatar inactivity).
+	// Deep Sleep runs every 30 minutes (fixed schedule)
+	// Quick Nap triggers after idle timeout (recommended: 5-10 minutes)
+	SleepCycleIntervalHours int            `json:"sleep_cycle_interval_hours,omitempty"` // Deprecated: Sleep cycle now runs every 30 min (fixed)
+	IdleSleepTimeoutMinutes int            `json:"idle_sleep_timeout_minutes,omitempty"` // e.g. 5-10 (trigger Quick Nap after X min of inactivity)
 	StubMode                bool           `json:"stub_mode,omitempty"`                  // Optional: If true, tools will return success without executing (for debugging LLM output)
 	Agents                  []Config       `json:"agents,omitempty"`                     // Optional: Define agents locally to be referenced by ID
 	Pipeline                []PipelineStep `json:"pipeline,omitempty"`                   // Optional: Define a chain of agents

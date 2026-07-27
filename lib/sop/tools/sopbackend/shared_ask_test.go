@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 )
 
@@ -70,5 +71,30 @@ func TestAskSharedAgentUsesAskParallelForParallelizableQueries(t *testing.T) {
 	}
 	if len(stub.parallelQueries) != 1 || stub.parallelQueries[0] != "run tests and check formatting" {
 		t.Fatalf("AskSharedAgent() parallel forwarded %v, want [run tests and check formatting]", stub.parallelQueries)
+	}
+}
+
+func TestAskSharedAgentSkipsUserLookupWhenAuthDisabled(t *testing.T) {
+	prevLoadedAgents := loadedAgents
+	prevDisableAuth := config.DisableAuth
+	config.DisableAuth = true
+	defer func() {
+		loadedAgents = prevLoadedAgents
+		config.DisableAuth = prevDisableAuth
+	}()
+
+	stub := &stubSharedAskAgent{}
+	loadedAgents = map[string]ai.Agent[map[string]any]{"copilot": stub}
+
+	ctx := sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "ghost-user"})
+	out, err := AskSharedAgent(ctx, "/c ls", nil)
+	if err != nil {
+		t.Fatalf("AskSharedAgent() error = %v", err)
+	}
+	if out != "shared-list-tools" {
+		t.Fatalf("AskSharedAgent() = %q, want %q", out, "shared-list-tools")
+	}
+	if len(stub.queries) != 1 || stub.queries[0] != "/c ls" {
+		t.Fatalf("AskSharedAgent() forwarded %v, want [/c ls]", stub.queries)
 	}
 }
