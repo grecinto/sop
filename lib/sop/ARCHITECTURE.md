@@ -898,6 +898,130 @@ To add custom command prefixes:
 - **Entitlement Checks**: Prefix routing respects capability entitlements (Premium tier, enabled status)
 - **Context Cancellation**: Handlers must respect `ctx.Done()` for request cancellation
 
+### 9.1. Capability Architecture Principle: Single-Loop Execution
+
+SOP's capability system follows a core architectural principle: **capabilities participate within the primary Ask/ReasoningEngine loop rather than creating secondary orchestration loops**.
+
+#### The Single-Loop Principle
+
+All agent execution should flow through a single authoritative state machine:
+
+```
+Primary Loop (Single Source of Truth):
+  Ask() → Routing/Gates → ReasoningEngine (ReAct) → Tool Execution → Epilogue/Memory
+```
+
+Capabilities should **participate in this loop** using one of these patterns:
+
+1. **Prefix Routing**: Direct command execution that bypasses ReAct (for deterministic commands)
+2. **Tool Provision**: Register tools that ReAct engine calls during normal reasoning
+3. **Lifecycle Hooks**: Observe and influence loop execution at specific points (OnStart, OnBeforePrompt, OnAfterToolResult, OnFinalize)
+
+#### Anti-Pattern: Secondary Orchestration Loops
+
+**Incorrect Pattern** (creates dual state machines):
+```
+User Query → Capability detects workflow
+           → Capability creates own execution queue
+           → Capability runs own orchestration loop:
+               - Own state machine (phases, progress tracking)
+               - Own memory persistence
+               - Own decision-making about next steps
+           → Parallel execution outside main Ask loop
+```
+
+**Problems with secondary loops:**
+- Two competing sources of truth for task state
+- Memory fragmentation (capability state vs. Ask memory)
+- State drift between layers when one mutates context the other doesn't track
+- Difficulty maintaining single point of control
+- Weaker continuity and rehydration
+
+#### Correct Pattern: Lifecycle Participation
+
+**Correct Pattern** (participates in single loop):
+```
+User Query → Ask() → Capability.OnStart() [initialize workflow state]
+           ↓
+        Capability.OnBeforePrompt() [inject workflow context]
+           ↓
+        ReasoningEngine runs (main ReAct loop)
+           ↓
+        Tool execution → Capability.OnAfterToolResult() [update workflow state]
+           ↓
+        Capability.OnAfterTurn() [decide if workflow continues]
+           ↓
+        If continue: next ReAct turn with updated context
+        If complete: Capability.OnFinalize() → Epilogue/Memory
+```
+
+**Benefits:**
+- Single state machine with one source of truth
+- Workflow state tracked in shared context
+- All memory writes through unified Ask epilogue
+- Natural clarification handling (ReAct loop handles this)
+- Simpler debugging and control
+
+#### Implementation Guidelines
+
+When building multi-step capabilities:
+
+1. **State Management**: Store workflow state in shared context, not separate capability state
+   ```go
+   type WorkflowState struct {
+       Phase    string              // "inspect", "plan", "edit", "verify"
+       Context  map[string]any      // Workflow-specific data
+   }
+   ctx = context.WithValue(ctx, ctxKeyWorkflowState, workflowState)
+   ```
+
+2. **Phase Transitions**: Update state in lifecycle hooks, not in separate loop
+   ```go
+   func (c *Capability) OnAfterToolResult(ctx, tool, result, state) (WorkflowState, error) {
+       if tool == "read_file" && state.Phase == "inspect" {
+           state.Phase = "plan"  // Transition happens in main loop
+       }
+       return state, nil
+   }
+   ```
+
+3. **Memory Persistence**: Use main Ask epilogue, not separate persistence
+   ```go
+   func (c *Capability) OnFinalize(ctx, result, state) (CapabilityResult, error) {
+       return CapabilityResult{
+           Summary: buildSummary(state),
+           Data:    state.Context,  // Goes into epilogue
+       }, nil
+   }
+   ```
+
+4. **Avoid Queue-Based Workflow Injection**: Don't inject prompts into queue for multi-step workflows
+   - Queue is for user-driven multi-turn conversations
+   - Workflow steps should advance through lifecycle hooks within single Ask call
+
+#### Refactoring Guidance
+
+If a capability currently creates a secondary loop:
+
+1. Identify the workflow phases (e.g., inspect → plan → edit → verify)
+2. Convert each phase into a state enum
+3. Implement lifecycle hooks to transition between phases
+4. Move state from separate tracking into `WorkflowState` in context
+5. Remove queue injection or separate orchestration loop
+6. Use `OnAfterTurn` to decide if workflow continues
+
+**Example**: The coding workflow capability is being refactored from queue-based multi-turn orchestration to lifecycle-based participation. See [docs/CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md](/Volumes/T7/sop-cloud/docs/CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md) for detailed migration guide.
+
+#### When Secondary Loops Are Acceptable
+
+Rare exceptions where secondary processing is appropriate:
+
+- **Background Jobs**: Async tasks that don't affect current conversation state (e.g., pre-indexing)
+- **Parallel Independent Tasks**: Truly independent operations with isolated state (e.g., running multiple tests in parallel)
+- **External System Integration**: Interfacing with external systems that have their own state management
+
+Even in these cases, **results should integrate back through the main Ask loop** rather than maintaining separate state.
+
 ### 10. Real-Time Command I/O (Phase 1 Enhancements)
 
 The command execution system supports real-time streaming of stdout/stderr and interactive stdin support, creating an "AI super terminal" experience in the floater window.

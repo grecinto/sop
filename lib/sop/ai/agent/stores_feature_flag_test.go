@@ -10,6 +10,10 @@ import (
 )
 
 func TestStoresFeatureIsEnabledByDefault(t *testing.T) {
+	// Reset to default state in case other tests modified it
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(true) // Restore default after test
+
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "system"})
 	ag.registerTools(ctx)

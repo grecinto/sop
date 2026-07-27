@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"fmt"
+	log "log/slog"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 // MarkMRUCategory adds or updates a category in the global working memory MRU.
@@ -199,6 +202,24 @@ func (a *CopilotAgent) clearAskProgressMRU() {
 }
 
 func (a *CopilotAgent) epilogueAndCleanup(ctx context.Context, query string, intent string, finalText string, toolCalls []ai.ToolCall, outcomeFacts []string, outcomeRecipes []ai.LearnedRecipe, carryoverState *ai.CarryoverState) {
+	// Step OnFinalize hook
+	if step, ok := ctx.Value(ctxKeyActiveStep).(cw.Step); ok && step != nil {
+		if cap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && cap != nil {
+			routingState := capabilities.RoutingState{
+				Domain:         "",
+				Gate:           "",
+				CapabilityHint: "",
+			}
+			if stepResult, stepErr := step.OnFinalize(ctx, routingState); stepErr != nil {
+				log.Warn("Step OnFinalize failed", "error", stepErr)
+			} else {
+				log.Info("Step finalized", "outcome", stepResult.Outcome, "message", stepResult.Message)
+				// Could store stepResult in context or return it somehow
+				_ = stepResult
+			}
+		}
+	}
+
 	if a.service != nil && a.service.session != nil {
 		if a.service.session.Memory == nil {
 			a.service.session.Memory = NewShortTermMemory()

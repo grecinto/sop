@@ -69,6 +69,8 @@ const (
 const (
 	ctxKeyDeferImplicitSessionTxClose = "_defer_implicit_session_tx_close"
 	ctxKeyWorkingDir                  = "working_dir"
+	ctxKeySelectedCapability          = "selected_capability"
+	ctxKeyActiveStep                  = "active_step"
 )
 
 const (
@@ -1608,8 +1610,18 @@ func WithCapability(cap capabilities.Capability) CapabilityOption {
 
 // WithCodingWorkflowCapability registers the local coding workflow capability for runtimes
 // that are expected to support repository editing and inspection locally.
+// DEPRECATED: Use WithWorkflowCapability instead. This uses the old queue-based approach.
+// Kept for backwards compatibility but disabled by default.
 func WithCodingWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOption {
 	return func(a *CopilotAgent) {
+		// OLD CAPABILITY DISABLED - Use WithWorkflowCapability instead
+		// This function is kept for backwards compatibility but does nothing.
+		// To re-enable: uncomment the implementation below.
+		_ = a
+		_ = orchestrator
+		return
+
+		/* OLD IMPLEMENTATION - DISABLED
 		if a == nil {
 			return
 		}
@@ -1663,6 +1675,69 @@ func WithCodingWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOptio
 			}
 		}
 		a.capabilityRegistry.RegisterAtFront(cw.NewCapability(orchestrator))
+		*/
+	}
+}
+
+// WithWorkflowCapability registers the new WorkflowManager-based coding capability
+// This replaces the old WithCodingWorkflowCapability with a Step-based architecture.
+func WithWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOption {
+	return func(a *CopilotAgent) {
+		if a == nil {
+			return
+		}
+		a.ensureCapabilityRegistry()
+		if orchestrator != nil {
+			// Initialize orchestrator components (same as old version)
+			if orchestrator.ChangedFileInspector == nil {
+				orchestrator.ChangedFileInspector = &cw.GitRepoInspector{}
+			}
+			prevMemorySink := orchestrator.MemorySink
+			orchestrator.MemorySink = func(mem cw.CodingMemory) {
+				if prevMemorySink != nil {
+					prevMemorySink(mem)
+				}
+				if a != nil {
+					a.recordCodingMemory(mem)
+				}
+			}
+			if inspector, ok := orchestrator.ChangedFileInspector.(*cw.GitRepoInspector); ok && inspector.Client == nil {
+				// TODO: Implement NewWorkflowGitToolAdapter if needed
+				_ = inspector // Acknowledge the inspector exists
+			}
+			if orchestrator.ContextManager == nil {
+				orchestrator.ContextManager = &cw.DefaultContextManager{}
+			}
+			if orchestrator.RepoIndexer == nil {
+				orchestrator.RepoIndexer = &cw.DefaultRepoIndexer{}
+			}
+			if orchestrator.PatchEngine == nil {
+				orchestrator.PatchEngine = &cw.DefaultPatchEngine{}
+			}
+			if orchestrator.DiffPreviewer == nil {
+				orchestrator.DiffPreviewer = &cw.DefaultDiffPreviewer{}
+			}
+			if orchestrator.RepoSearcher == nil {
+				orchestrator.RepoSearcher = &cw.FileSearchAdapter{}
+			}
+			if orchestrator.Memory == nil {
+				orchestrator.Memory = cw.NewInMemorySessionMemory()
+			}
+			if orchestrator.Policy == nil {
+				orchestrator.Policy = &cw.DefaultSafetyPolicy{}
+			}
+			if orchestrator.ExpertiseRetriever == nil {
+				orchestrator.ExpertiseRetriever = a
+			}
+			if orchestrator.KnowledgeBaseRetriever == nil {
+				orchestrator.KnowledgeBaseRetriever = &cw.DefaultKnowledgeBaseRetriever{}
+			}
+			if orchestrator.ProviderRouter == nil {
+				orchestrator.ProviderRouter = &cw.DefaultProviderRouter{}
+			}
+		}
+		// Register the new WorkflowCapability instead of old Capability
+		a.capabilityRegistry.RegisterAtFront(cw.NewWorkflowCapability(orchestrator))
 	}
 }
 
@@ -2898,7 +2973,21 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	a.trackEpisodeMetadata(ctx, intent)
 
 	// Gap 1 & 4: Try capability participation with authorization and metrics
-	if result, handled, err := a.tryCapabilityParticipation(ctx, query, capabilities.RoutingState{Domain: taskContext.Domain, Gate: taskContext.RoutingGate, CapabilityHint: taskContext.CapabilityHint}); err == nil && handled {
+	// Also resolve and store the selected capability in context for BuildContext/BuildInstructions
+	routingState := capabilities.RoutingState{Domain: taskContext.Domain, Gate: taskContext.RoutingGate, CapabilityHint: taskContext.CapabilityHint}
+	if cap, found := a.capabilityRegistry.Resolve(query, routingState); found {
+		ctx = context.WithValue(ctx, ctxKeySelectedCapability, cap)
+
+		// If this is a Step, initialize it
+		if step, isStep := cap.(cw.Step); isStep {
+			ctx = context.WithValue(ctx, ctxKeyActiveStep, step)
+			if err := step.OnStart(ctx, query, routingState); err != nil {
+				log.Warn("Step OnStart failed", "error", err)
+			}
+		}
+	}
+
+	if result, handled, err := a.tryCapabilityParticipation(ctx, query, routingState); err == nil && handled {
 		if result.Summary != "" {
 			log.Info("Ask flow consulted capability participation hook", "summary", result.Summary)
 		}
@@ -2924,6 +3013,23 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	if err != nil {
 		return "", err
 	}
+
+	// Step OnAfterTurn hook (called after reasoning completes)
+	if step, ok := ctx.Value(ctxKeyActiveStep).(cw.Step); ok && step != nil {
+		if cap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && cap != nil {
+			routingState := capabilities.RoutingState{
+				Domain:         taskContext.Domain,
+				Gate:           taskContext.RoutingGate,
+				CapabilityHint: taskContext.CapabilityHint,
+			}
+			if shouldContinue, stepErr := step.OnAfterTurn(ctx, 1, routingState); stepErr != nil {
+				log.Warn("Step OnAfterTurn failed", "error", stepErr)
+			} else if !shouldContinue {
+				log.Info("Step requested workflow termination")
+			}
+		}
+	}
+
 	log.Info("Copilot Ask Complete",
 		"session_id", sessionID,
 		"response_chars", len(finalText),
@@ -5352,6 +5458,25 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 	if toolDef, ok := a.registry.Get(toolName); ok {
 		log.Info("LLM Tool Call", "tool", toolName)
 		res, err := toolDef.Handler(ctx, args)
+
+		// Step OnAfterToolResult hook
+		if step, ok := ctx.Value(ctxKeyActiveStep).(cw.Step); ok && step != nil {
+			if cap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && cap != nil {
+				routingState := capabilities.RoutingState{
+					Domain:         "", // Would need to be passed through context if needed
+					Gate:           "",
+					CapabilityHint: "",
+				}
+				if updatedState, shouldContinue, stepErr := step.OnAfterToolResult(ctx, toolName, res, routingState); stepErr != nil {
+					log.Warn("Step OnAfterToolResult failed", "error", stepErr)
+				} else if !shouldContinue {
+					log.Info("Step requested early termination", "tool", toolName)
+					// Update context with new state
+					_ = updatedState
+				}
+			}
+		}
+
 		if deferClose, _ := ctx.Value(ctxKeyDeferImplicitSessionTxClose).(bool); !deferClose {
 			if pAfter := ai.GetSessionPayload(ctx); preExistingTx == nil && pAfter != nil && !pAfter.ExplicitTransaction {
 				if tx := resolvePayloadTx(pAfter, dbName); tx != nil {

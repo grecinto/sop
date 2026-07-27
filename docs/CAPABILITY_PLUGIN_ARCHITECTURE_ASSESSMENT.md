@@ -938,6 +938,148 @@ func (r *Registry) RecordExecution(capabilityID string, durationMs float64)
 
 ---
 
+## 8. Architectural Principle: Single-Loop Execution (2026-07-27)
+
+### Core Design Requirement
+
+**Principle**: Capabilities must participate **within** the primary Ask/ReasoningEngine loop rather than creating secondary orchestration loops.
+
+### The Single-Loop Architecture
+
+All agent execution flows through one authoritative state machine:
+
+```
+Primary Loop (Single Source of Truth):
+  Ask() → Routing/Gates → ReasoningEngine (ReAct) → Tool Execution → Epilogue/Memory
+```
+
+Capabilities participate using these approved patterns:
+
+1. **Prefix Routing** (§5): Direct command execution for deterministic operations
+2. **Tool Provision**: Register tools that ReAct engine calls during reasoning
+3. **Lifecycle Hooks**: Observe and influence loop at strategic points
+
+### ⚠️ Anti-Pattern: Secondary Orchestration Loops
+
+**Current Issue**: The `MultiTurnCapability.Orchestrate()` interface enables capabilities to create secondary execution loops:
+
+```
+INCORRECT (Current Implementation):
+User Query → Capability.Orchestrate()
+           → Injects work items into queue
+           → Creates parallel state machine:
+               - Own phases (inspect → plan → edit → verify)
+               - Own memory tracking (workflow state)
+               - Own decision-making (next steps)
+           → Bypasses main Ask loop for workflow execution
+```
+
+**Problems**:
+- Dual state machines competing for authority
+- Memory fragmentation (workflow state vs. Ask memory)
+- State drift between layers
+- Control complexity
+- Weaker continuity and rehydration
+
+### ✅ Correct Pattern: Lifecycle Participation
+
+**Proposed Pattern** (eliminates secondary loop):
+
+```
+CORRECT (Lifecycle-Based):
+User Query → Ask() → Capability.OnStart() [initialize workflow state]
+           ↓
+        Capability.OnBeforePrompt() [inject workflow context]
+           ↓
+        ReasoningEngine runs (single ReAct loop)
+           ↓
+        Tool execution → Capability.OnAfterToolResult() [update state]
+           ↓
+        Capability.OnAfterTurn() [decide if continue]
+           ↓
+        Continue: next ReAct turn | Complete: OnFinalize() → Epilogue
+```
+
+### Proposed Interface Extension
+
+```go
+// LifecycleCapability extends Capability to participate in Ask/ReAct loop
+type LifecycleCapability interface {
+    Capability
+    
+    // OnStart called when capability is selected
+    OnStart(ctx context.Context, query string, state RoutingState) (WorkflowState, error)
+    
+    // OnBeforePrompt called before constructing system prompt
+    OnBeforePrompt(ctx context.Context, promptState *PromptState, workflowState WorkflowState) error
+    
+    // OnAfterToolResult called after each tool execution
+    OnAfterToolResult(ctx context.Context, toolName string, args map[string]any, result string, workflowState WorkflowState) (WorkflowState, error)
+    
+    // OnAfterTurn called after each complete ReAct turn
+    OnAfterTurn(ctx context.Context, response string, toolCalls []ai.ToolCall, workflowState WorkflowState) (shouldContinue bool, nextPrompt string, updatedState WorkflowState, error)
+    
+    // OnFinalize called when Ask completes
+    OnFinalize(ctx context.Context, finalResult string, workflowState WorkflowState) (CapabilityResult, error)
+}
+
+// WorkflowState carries state through lifecycle hooks
+type WorkflowState struct {
+    Phase          string              // "inspect", "plan", "edit", "verify", "done"
+    TaskType       string              // "debugging", "implementation", etc.
+    Context        map[string]any      // Workflow-specific context
+    ValidationInfo ValidationResult    // KB validation state
+    TestStatus     string              // "pending", "passed", "failed"
+}
+```
+
+### Benefits of Single-Loop Architecture
+
+1. **Single State Machine**: One authoritative source of truth for all execution state
+2. **Unified Memory**: All workflow progress through main Ask memory path (MRU/STM/LTM)
+3. **Natural Clarifications**: ReAct loop handles LLM questions without special logic
+4. **Simpler Control**: No state leakage between competing orchestration layers
+5. **Better Debugging**: Clear execution path with single state inspection point
+
+### Migration Path for Coding Workflow
+
+The coding workflow capability (`lib/sop/ai/agent/codingworkflow/`) currently uses `MultiTurnCapability.Orchestrate()` to create a secondary loop. It will be refactored to:
+
+1. Implement `LifecycleCapability` instead of `MultiTurnCapability`
+2. Convert orchestrator logic to phase-based state machine (inspect → plan → edit → verify)
+3. Update state in `OnAfterToolResult` based on tool outcomes
+4. Remove queue injection for workflow steps
+5. Persist all workflow data through main Ask epilogue
+
+**Timeline**: 4-week phased rollout (interface → integration → refactor → testing → cleanup)
+
+**Details**: See [CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md](CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md)
+
+### Guideline for New Capabilities
+
+When building multi-step capabilities:
+
+✅ **DO**:
+- Store workflow state in shared context (not separate capability state)
+- Transition state through lifecycle hooks
+- Persist memory through main epilogue
+- Use ReAct loop for all tool execution
+
+❌ **DON'T**:
+- Create separate orchestration loops
+- Inject prompts into queue for workflow steps
+- Maintain parallel memory tracking
+- Implement own state machine outside Ask loop
+
+**Exception**: Secondary processing is acceptable only for:
+- Background jobs that don't affect conversation state
+- Parallel independent tasks with isolated state
+- External system integration with own state management
+
+Even in these cases, results must integrate back through main Ask loop.
+
+---
+
 ## Conclusion
 
 ### ✅ Assessment: Architecture Complete
@@ -947,8 +1089,9 @@ The capability system provides **full plugin lifecycle support** with clean sepa
 - ✅ **Classification**: Keyword-based (fast) + LLM fallback (accurate)
 - ✅ **Routing**: Three-gate system (Focused → Continuity → Discovery)
 - ⚠️ **Authorization**: Basic entitlements (needs progressive gates)
-- ✅ **Orchestration**: Multi-turn workflows via WorkQueue
+- ⚠️ **Orchestration**: Multi-turn workflows via WorkQueue (requires refactor to lifecycle pattern - see §8)
 - ✅ **Direct Execution**: Prefix handlers for low-latency commands
+- ⚠️ **Single-Loop Principle**: Needs enforcement via lifecycle-based capability pattern (§8)
 
 ### 🎯 Separation of Concerns Confirmed
 
@@ -958,11 +1101,19 @@ New capabilities plug in without touching core logic:
 3. Register in capability registry
 4. Done!
 
+**Important**: For multi-step workflows, use lifecycle hooks (§8) rather than queue-based orchestration to maintain single-loop architecture.
+
 ### 🔧 Recommendations
 
-1. **Add Progressive Authorization Gates** (Gate 0-4)
-2. **Extract Classification Engine** abstraction
-3. **Add Lifecycle Hooks** (OnEnable, OnDisable, OnError)
-4. **Add Telemetry** for capability metrics
+**High Priority** (Architectural Alignment):
+1. **Implement LifecycleCapability Interface** (§8) - Replace `MultiTurnCapability.Orchestrate()` with lifecycle hooks
+2. **Refactor Coding Workflow** - Convert from queue-based to lifecycle-based execution
+3. **Document Single-Loop Principle** - Establish as core architectural requirement ✅ (Complete)
 
-**Result**: The architecture is production-ready for V1 with clear enhancement paths for post-V1.
+**Medium Priority** (Enhancement):
+4. **Add Progressive Authorization Gates** (Gate 0-4)
+5. **Extract Classification Engine** abstraction
+6. **Add Lifecycle Hooks** (OnEnable, OnDisable, OnError)
+7. **Add Telemetry** for capability metrics
+
+**Result**: The architecture is production-ready for V1 with identified refactor path to eliminate dual-loop complexity.

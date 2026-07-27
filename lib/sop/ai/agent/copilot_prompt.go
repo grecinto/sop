@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 func (a *CopilotAgent) renderToolDefinitionContext(title string, toolNames []string) string {
@@ -137,6 +139,41 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = askOutcome
 		}
 	}
+	// Capability BuildContext integration (fixes gap: BuildContext never called)
+	if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && selectedCap != nil {
+		routingState := capabilities.RoutingState{
+			Domain:         taskClassification.Domain,
+			Gate:           taskClassification.RoutingGate,
+			CapabilityHint: taskClassification.CapabilityHint,
+		}
+		if capContext := selectedCap.BuildContext(query, routingState); capContext != "" {
+			if focusedExecutionContext != "" {
+				focusedExecutionContext = capContext + "\n\n" + focusedExecutionContext
+			} else {
+				focusedExecutionContext = capContext
+			}
+		}
+		if capInstructions := selectedCap.BuildInstructions(query, routingState); capInstructions != "" {
+			if focusedExecutionContext != "" {
+				focusedExecutionContext = capInstructions + "\n\n" + focusedExecutionContext
+			} else {
+				focusedExecutionContext = capInstructions
+			}
+		}
+
+		// Step OnBeforePrompt hook
+		if step, isStep := selectedCap.(cw.Step); isStep {
+			if stepContext, err := step.OnBeforePrompt(ctx, query, routingState); err == nil && stepContext != "" {
+				if focusedExecutionContext != "" {
+					focusedExecutionContext = stepContext + "\n\n" + focusedExecutionContext
+				} else {
+					focusedExecutionContext = stepContext
+				}
+			}
+		}
+	}
+
+	// Legacy coding workflow context (can be deprecated later)
 	if codingWorkflowContext := a.getCodingWorkflowContext(); codingWorkflowContext != "" {
 		if focusedExecutionContext != "" {
 			focusedExecutionContext = codingWorkflowContext + "\n\n" + focusedExecutionContext

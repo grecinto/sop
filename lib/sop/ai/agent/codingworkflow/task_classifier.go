@@ -195,13 +195,16 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 		scores[TaskTypeTesting] += 0.3
 	}
 
-	// Find highest score
+	// Find highest score and detect ties
 	maxScore := 0.0
-	maxType := TaskTypeUnknown
+	tiedTypes := []TaskType{}
+
 	for taskType, score := range scores {
 		if score > maxScore {
 			maxScore = score
-			maxType = taskType
+			tiedTypes = []TaskType{taskType}
+		} else if score == maxScore && score > 0 {
+			tiedTypes = append(tiedTypes, taskType)
 		}
 	}
 
@@ -210,13 +213,54 @@ func (tc *TaskClassifier) classifyTaskType(desc, fileExt string, keywords []stri
 		return TaskTypeImplementation, 0.5
 	}
 
+	// Handle ties
+	var maxType TaskType
+	var confidence float64
+
+	if len(tiedTypes) > 1 {
+		// Multiple types tied - use tie breaker
+		maxType, confidence = tc.resolveTie(desc, tiedTypes, maxScore)
+	} else {
+		// Single winner
+		maxType = tiedTypes[0]
+		confidence = maxScore
+	}
+
 	// Normalize confidence to 0.0-1.0 range
-	confidence := maxScore
 	if confidence > 1.0 {
 		confidence = 1.0
 	}
 
 	return maxType, confidence
+}
+
+// resolveTie breaks ties between multiple task types with the same score.
+// Uses deterministic priority order based on urgency and impact.
+func (tc *TaskClassifier) resolveTie(desc string, tiedTypes []TaskType, score float64) (TaskType, float64) {
+	// Use priority order based on urgency and workflow importance
+	// Priority: Debugging > Testing > Architecture > Implementation > Refactoring > Documentation
+	priorityOrder := []TaskType{
+		TaskTypeDebugging,      // Highest priority - fixing issues is urgent
+		TaskTypeTesting,        // Second - validating correctness
+		TaskTypeArchitecture,   // Third - design decisions
+		TaskTypeImplementation, // Fourth - building features
+		TaskTypeRefactoring,    // Fifth - improving existing code
+		TaskTypeDocumentation,  // Sixth - documenting code
+	}
+
+	// Find first type in priority order that appears in tied types
+	for _, priorityType := range priorityOrder {
+		for _, tiedType := range tiedTypes {
+			if tiedType == priorityType {
+				// Reduce confidence slightly to indicate tie was broken deterministically
+				confidence := score * 0.9
+				return tiedType, confidence
+			}
+		}
+	}
+
+	// Fallback to first tied type (shouldn't reach here)
+	return tiedTypes[0], score * 0.8
 }
 
 // recommendKBs generates ranked KB recommendations
