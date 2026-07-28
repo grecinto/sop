@@ -32,6 +32,51 @@ The Workflow Undo System treats each coding workflow run as an **atomic transact
 
 ---
 
+## Multi-Language Support
+
+### Test Runner
+The system automatically detects project type and runs appropriate test commands:
+
+| Language | Detection | Test Command | Notes |
+|----------|-----------|--------------|-------|
+| **Go** | `go.mod` | `go test ./...` | Full support with smart test selection |
+| **Python** | `requirements.txt`, `pyproject.toml`, `pytest.ini` | `pytest -v` or `python -m unittest` | Prefers pytest if available |
+| **Java** | `pom.xml`, `build.gradle` | `mvn test` or `gradle test` | Maven and Gradle supported |
+| **Rust** | `Cargo.toml` | `cargo test` | Full Cargo integration |
+| **C#** | `*.csproj`, `*.sln` | `dotnet test` | .NET Core/Framework |
+| **Node.js** | `package.json` | `npm test` or `yarn test` | Prefers npm if available |
+
+### Code Artifact Extraction
+AST-based code analysis for semantic categorization:
+
+| Language | Status | Functions | Types | Packages |
+|----------|--------|-----------|-------|----------|
+| **Go** | ✅ Full | `function_declaration`, `method_declaration` | `struct`, `interface`, `type` | `package` |
+| **Python** | 🔧 Framework Ready | `function_definition`, `method` | `class` | `module` |
+| **Java** | 🔧 Framework Ready | `method_declaration`, `constructor` | `class`, `interface`, `enum` | `package` |
+| **Rust** | 🔧 Framework Ready | `function_item`, `method` | `struct`, `enum`, `trait` | `mod`, `crate` |
+| **C#** | 🔧 Framework Ready | `method_declaration`, `constructor` | `class`, `interface`, `struct`, `enum` | `namespace` |
+
+**Enabling Additional Languages**: Add tree-sitter dependencies to `go.mod`:
+```bash
+go get github.com/smacker/go-tree-sitter/python
+go get github.com/smacker/go-tree-sitter/java
+go get github.com/smacker/go-tree-sitter/rust
+go get github.com/smacker/go-tree-sitter/c_sharp
+```
+
+Then uncomment the corresponding language cases in `undo_artifact_extractor.go`.
+
+### Fallback Behavior
+For languages without full AST support:
+- ✅ **File backup/restore** works (language-agnostic)
+- ✅ **Transaction rollback** works (language-agnostic)
+- ✅ **Semantic search** works (searches descriptions, file paths, metadata)
+- ✅ **Path-based inference** extracts package from directory structure
+- ⚠️ **Code artifact categorization** limited (no function/type extraction)
+
+---
+
 ## Architecture
 
 ### Three-Layer Storage Design

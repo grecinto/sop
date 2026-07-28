@@ -1309,7 +1309,21 @@ func (d *DefaultPatchEngine) Apply(task Task, patch *Patch, state RunState) erro
 	return nil
 }
 
+// ProjectType represents the detected project language/framework
+type ProjectType string
+
+const (
+	ProjectTypeGo      ProjectType = "go"
+	ProjectTypePython  ProjectType = "python"
+	ProjectTypeJava    ProjectType = "java"
+	ProjectTypeRust    ProjectType = "rust"
+	ProjectTypeCSharp  ProjectType = "csharp"
+	ProjectTypeNode    ProjectType = "node"
+	ProjectTypeUnknown ProjectType = "unknown"
+)
+
 // DefaultTestRunner runs package tests from the task working directory and reports pass/fail.
+// Supports multiple languages: Go, Python, Java, Rust, C#, Node.js
 type DefaultTestRunner struct{}
 
 func (d *DefaultTestRunner) Run(task Task, state RunState) (TestResult, error) {
@@ -1318,27 +1332,194 @@ func (d *DefaultTestRunner) Run(task Task, state RunState) (TestResult, error) {
 	if workingDir == "" {
 		workingDir = "."
 	}
-	args := []string{"test"}
+
+	// Detect project type
+	projectType := d.detectProjectType(workingDir)
+
+	// Dispatch to language-specific test runner
+	switch projectType {
+	case ProjectTypeGo:
+		return d.runGoTests(workingDir, task.ActiveFile)
+	case ProjectTypePython:
+		return d.runPythonTests(workingDir, task.ActiveFile)
+	case ProjectTypeJava:
+		return d.runJavaTests(workingDir)
+	case ProjectTypeRust:
+		return d.runRustTests(workingDir)
+	case ProjectTypeCSharp:
+		return d.runCSharpTests(workingDir)
+	case ProjectTypeNode:
+		return d.runNodeTests(workingDir)
+	default:
+		return TestResult{
+			Passed: false,
+			Output: fmt.Sprintf("Unknown project type in %s. Unable to determine test command.", workingDir),
+		}, nil
+	}
+}
+
+// detectProjectType identifies the project language based on marker files
+func (d *DefaultTestRunner) detectProjectType(workingDir string) ProjectType {
+	// Go: go.mod
 	if fileExists(filepath.Join(workingDir, "go.mod")) {
-		selectedTests := d.selectRelevantTestFiles(workingDir, task.ActiveFile)
-		if len(selectedTests) > 0 {
-			args = append(args, fmt.Sprintf("./..."), "-run", "Test")
-		} else {
-			args = append(args, "./...")
+		return ProjectTypeGo
+	}
+
+	// Python: requirements.txt, setup.py, pyproject.toml, pytest.ini
+	pythonMarkers := []string{"requirements.txt", "setup.py", "pyproject.toml", "pytest.ini", "setup.cfg"}
+	for _, marker := range pythonMarkers {
+		if fileExists(filepath.Join(workingDir, marker)) {
+			return ProjectTypePython
 		}
+	}
+
+	// Java: pom.xml (Maven) or build.gradle (Gradle)
+	if fileExists(filepath.Join(workingDir, "pom.xml")) || fileExists(filepath.Join(workingDir, "build.gradle")) {
+		return ProjectTypeJava
+	}
+
+	// Rust: Cargo.toml
+	if fileExists(filepath.Join(workingDir, "Cargo.toml")) {
+		return ProjectTypeRust
+	}
+
+	// C#: *.csproj or *.sln
+	entries, err := os.ReadDir(workingDir)
+	if err == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasSuffix(name, ".csproj") || strings.HasSuffix(name, ".sln") {
+				return ProjectTypeCSharp
+			}
+		}
+	}
+
+	// Node.js: package.json
+	if fileExists(filepath.Join(workingDir, "package.json")) {
+		return ProjectTypeNode
+	}
+
+	return ProjectTypeUnknown
+}
+
+// runGoTests executes Go tests
+func (d *DefaultTestRunner) runGoTests(workingDir, activeFile string) (TestResult, error) {
+	args := []string{"test"}
+	selectedTests := d.selectRelevantGoTestFiles(workingDir, activeFile)
+	if len(selectedTests) > 0 {
+		args = append(args, "./...", "-run", "Test")
 	} else {
 		args = append(args, "./...")
 	}
+
 	cmd := exec.Command("go", args...)
 	cmd.Dir = workingDir
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return TestResult{Passed: false, Output: string(output)}, nil
-	}
-	return TestResult{Passed: true, Output: string(output)}, nil
+
+	passed := err == nil
+	return TestResult{Passed: passed, Output: string(output)}, nil
 }
 
-func (d *DefaultTestRunner) selectRelevantTestFiles(workingDir, activeFile string) []string {
+// runPythonTests executes Python tests (pytest or unittest)
+func (d *DefaultTestRunner) runPythonTests(workingDir, activeFile string) (TestResult, error) {
+	var cmd *exec.Cmd
+
+	// Try pytest first (more common in modern Python projects)
+	if d.commandExists("pytest") {
+		args := []string{"-v"}
+		if activeFile != "" && strings.HasSuffix(activeFile, "_test.py") {
+			args = append(args, activeFile)
+		}
+		cmd = exec.Command("pytest", args...)
+	} else {
+		// Fallback to unittest
+		cmd = exec.Command("python", "-m", "unittest", "discover", "-v")
+	}
+
+	cmd.Dir = workingDir
+	output, err := cmd.CombinedOutput()
+
+	// pytest returns 0 for success, non-zero for failures
+	passed := err == nil
+	return TestResult{Passed: passed, Output: string(output)}, nil
+}
+
+// runJavaTests executes Java tests (Maven or Gradle)
+func (d *DefaultTestRunner) runJavaTests(workingDir string) (TestResult, error) {
+	var cmd *exec.Cmd
+
+	// Check if Maven or Gradle
+	if fileExists(filepath.Join(workingDir, "pom.xml")) {
+		cmd = exec.Command("mvn", "test")
+	} else if fileExists(filepath.Join(workingDir, "build.gradle")) {
+		cmd = exec.Command("gradle", "test")
+	} else {
+		return TestResult{
+			Passed: false,
+			Output: "No Maven (pom.xml) or Gradle (build.gradle) configuration found",
+		}, nil
+	}
+
+	cmd.Dir = workingDir
+	output, err := cmd.CombinedOutput()
+
+	// Check output for success indicators
+	outputStr := string(output)
+	passed := err == nil && (strings.Contains(outputStr, "BUILD SUCCESS") || strings.Contains(outputStr, "BUILD SUCCESSFUL"))
+
+	return TestResult{Passed: passed, Output: outputStr}, nil
+}
+
+// runRustTests executes Rust tests
+func (d *DefaultTestRunner) runRustTests(workingDir string) (TestResult, error) {
+	cmd := exec.Command("cargo", "test")
+	cmd.Dir = workingDir
+	output, err := cmd.CombinedOutput()
+
+	// cargo test returns 0 for success
+	passed := err == nil
+	return TestResult{Passed: passed, Output: string(output)}, nil
+}
+
+// runCSharpTests executes C# tests
+func (d *DefaultTestRunner) runCSharpTests(workingDir string) (TestResult, error) {
+	cmd := exec.Command("dotnet", "test")
+	cmd.Dir = workingDir
+	output, err := cmd.CombinedOutput()
+
+	// Check output for success indicators
+	outputStr := string(output)
+	passed := err == nil && !strings.Contains(outputStr, "Failed!")
+
+	return TestResult{Passed: passed, Output: outputStr}, nil
+}
+
+// runNodeTests executes Node.js tests (via npm test or yarn test)
+func (d *DefaultTestRunner) runNodeTests(workingDir string) (TestResult, error) {
+	var cmd *exec.Cmd
+
+	// Try npm first, then yarn
+	if d.commandExists("npm") {
+		cmd = exec.Command("npm", "test")
+	} else if d.commandExists("yarn") {
+		cmd = exec.Command("yarn", "test")
+	} else {
+		return TestResult{
+			Passed: false,
+			Output: "Neither npm nor yarn found. Cannot run Node.js tests.",
+		}, nil
+	}
+
+	cmd.Dir = workingDir
+	output, err := cmd.CombinedOutput()
+
+	// npm/yarn test returns 0 for success
+	passed := err == nil
+	return TestResult{Passed: passed, Output: string(output)}, nil
+}
+
+// selectRelevantGoTestFiles selects relevant Go test files based on active file
+func (d *DefaultTestRunner) selectRelevantGoTestFiles(workingDir, activeFile string) []string {
 	if activeFile == "" {
 		return nil
 	}
@@ -1370,6 +1551,12 @@ func (d *DefaultTestRunner) selectRelevantTestFiles(workingDir, activeFile strin
 		}
 	}
 	return files
+}
+
+// commandExists checks if a command is available in PATH
+func (d *DefaultTestRunner) commandExists(cmd string) bool {
+	_, err := exec.LookPath(cmd)
+	return err == nil
 }
 
 // DefaultSafetyPolicy allows read-only tasks but blocks destructive actions unless explicitly enabled.

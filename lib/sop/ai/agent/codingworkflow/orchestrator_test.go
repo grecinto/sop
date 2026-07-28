@@ -443,7 +443,7 @@ func TestDefaultTestRunnerSelectsRelatedTestFiles(t *testing.T) {
 	}
 
 	runner := &DefaultTestRunner{}
-	files := runner.selectRelevantTestFiles(tmpDir, "main.go")
+	files := runner.selectRelevantGoTestFiles(tmpDir, "main.go")
 	if !contains(files, "main_test.go") {
 		t.Fatalf("expected main_test.go to be selected, got %v", files)
 	}
