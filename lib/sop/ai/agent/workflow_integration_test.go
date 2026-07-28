@@ -42,28 +42,31 @@ func TestWorkflowManager_Integration(t *testing.T) {
 	}
 
 	// Test execution
-	queue := newMockWorkQueue()
+	queue := NewWorkQueue()
 	if err := wm.Execute(ctx, workflow, queue, "original query text"); err != nil {
 		t.Fatalf("Failed to execute workflow: %v", err)
 	}
 
 	// Verify work item was created
-	if len(queue.items) != 1 {
-		t.Errorf("Expected 1 work item, got %d", len(queue.items))
+	if queue.Depth() != 1 {
+		t.Errorf("Expected 1 work item, got %d", queue.Depth())
 	}
 
-	if len(queue.items) > 0 {
-		item := queue.items[0]
-		if item.Actor != "test.actor" {
-			t.Errorf("Expected actor 'test.actor', got %q", item.Actor)
-		}
-		if item.Priority != 100 {
-			t.Errorf("Expected priority 100, got %d", item.Priority)
-		}
-		expectedQuery := "Test query: original query text"
-		if item.Query != expectedQuery {
-			t.Errorf("Expected query %q, got %q", expectedQuery, item.Query)
-		}
+	// Try to dequeue and check the item
+	wi, err := queue.Dequeue()
+	if err != nil {
+		t.Fatalf("Failed to dequeue item: %v", err)
+	}
+
+	if wi.Actor != "test.actor" {
+		t.Errorf("Expected actor 'test.actor', got %q", wi.Actor)
+	}
+	if wi.Priority != 100 {
+		t.Errorf("Expected priority 100, got %d", wi.Priority)
+	}
+	expectedQuery := "Test query: original query text"
+	if wi.Query != expectedQuery {
+		t.Errorf("Expected query %q, got %q", expectedQuery, wi.Query)
 	}
 }
 

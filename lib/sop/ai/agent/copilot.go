@@ -70,6 +70,7 @@ const (
 	ctxKeyDeferImplicitSessionTxClose = "_defer_implicit_session_tx_close"
 	ctxKeyWorkingDir                  = "working_dir"
 	ctxKeySelectedCapability          = "selected_capability"
+	ctxKeyCapabilityResult            = "capability_result"
 	ctxKeyActiveStep                  = "active_step"
 )
 
@@ -2278,6 +2279,9 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 	// Only initialize if feature flag is enabled
 	if systemDB != nil && KBWorkflowsEnabled() {
 		agent.workflowManager = NewWorkflowManager(nil) // KB initialized lazily on first use
+		// Register WorkflowManager as a capability (participant pattern, not controller)
+		workflowCapability := NewWorkflowManagerCapability(agent.workflowManager)
+		agent.capabilityRegistry.RegisterAtFront(workflowCapability)
 	}
 
 	// Wire default coding workflow orchestrator with MemorySink for LTM integration
@@ -3034,6 +3038,21 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		}
 	}
 
+	// WorkflowPlanner OnFinish hook - called after Ask/ReAct loop completes
+	// This allows planners to set up workflows and enqueue triggers for next Ask iteration
+	if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && selectedCap != nil {
+		if planner, ok := selectedCap.(capabilities.WorkflowPlanner); ok {
+			// Extract capability result if stored in context
+			if capResult, ok := ctx.Value(ctxKeyCapabilityResult).(capabilities.CapabilityResult); ok {
+				if finishErr := planner.OnFinish(ctx, capResult); finishErr != nil {
+					log.Warn("WorkflowPlanner OnFinish failed", "capability", selectedCap.ID(), "error", finishErr)
+				} else {
+					log.Info("WorkflowPlanner OnFinish completed", "capability", selectedCap.ID())
+				}
+			}
+		}
+	}
+
 	log.Info("Copilot Ask Complete",
 		"session_id", sessionID,
 		"response_chars", len(finalText),
@@ -3156,14 +3175,25 @@ func (a *CopilotAgent) tryKBWorkflowExecution(ctx context.Context, query string,
 		OriginalQuery:  query,
 	}
 
-	// Inject queue into context for capability access (only for capability interface)
-	queueAdapter := &workQueueAdapter{queue: queue}
+	// Inject queue into context for capability access
 	ctx = WithWorkQueue(ctx, queue)
-	ctx = context.WithValue(ctx, "work_queue", queueAdapter)
 
-	// Execute workflow via WorkflowManager (injects work items into queue)
-	if err := a.workflowManager.Execute(ctx, workflow, queueAdapter, query); err != nil {
-		return "", false, fmt.Errorf("workflow execution failed: %w", err)
+	// Execute workflow via WorkflowManager (participant pattern - enqueues one step at a time)
+	// Use the WorkflowManagerCapability to enqueue first step
+	var workflowCap *WorkflowManagerCapability
+	for _, cap := range a.capabilityRegistry.ListAll() {
+		if wfCap, ok := cap.(*WorkflowManagerCapability); ok {
+			workflowCap = wfCap
+			break
+		}
+	}
+	if workflowCap == nil {
+		return "", false, fmt.Errorf("workflow capability not registered")
+	}
+
+	// Start workflow execution (enqueues first step only)
+	if _, err := workflowCap.RunWithQueue(ctx, query, queue); err != nil {
+		return "", false, fmt.Errorf("workflow start failed: %w", err)
 	}
 
 	// Process queue using the single clean loop - queue as prompt source!
@@ -3232,11 +3262,8 @@ func (a *CopilotAgent) enqueueWorkflowSteps(ctx context.Context, workflow *Workf
 	queue.SetMaxPerActor("coding_workflow", 8)
 	queue.SetMaxPerActor("test_runner", 5)
 
-	// Create queue adapter for capability interface
-	queueAdapter := &workQueueAdapter{queue: queue}
-
-	// Execute workflow (injects work items into queue via capability)
-	return a.workflowManager.Execute(ctx, workflow, queueAdapter, query)
+	// Execute workflow (injects work items into queue)
+	return a.workflowManager.Execute(ctx, workflow, queue, query)
 }
 
 // enqueueMultiTurnTasks injects multi-turn subtasks into the queue
@@ -3424,58 +3451,10 @@ func (a *CopilotAgent) executeWorkflow(ctx context.Context, workflow *WorkflowDe
 	return finalResponse.String(), nil
 }
 
-// executeMultiTurn creates a queue, lets capability orchestrate, and processes
+// executeMultiTurn is deprecated - multi-turn behavior now happens naturally
+// through the ReAct loop where the LLM intelligently calls capability tools.
 func (a *CopilotAgent) executeMultiTurn(ctx context.Context, query string, taskContext *TaskContextClassification, cfg *ai.ConfigMap) (string, error) {
-	queue := NewWorkQueue()
-	queue.SetMaxPerActor("coding_workflow", 8)
-	queue.SetMaxPerActor("test_runner", 5)
-	queue.SetMaxPerActor("test_debugger.repair", 3)
-
-	// Enqueue initial query
-	if err := queue.Enqueue(WorkItem{Query: query, Actor: "user", ID: "turn-0"}); err != nil {
-		return "", err
-	}
-
-	// Let capability populate queue
-	queueAdapter := &workQueueAdapter{queue: queue}
-	ctx = context.WithValue(ctx, "work_queue", queueAdapter)
-	ctx = context.WithValue(ctx, "multi_turn_query", query)
-
-	if a.capabilityRegistry != nil && taskContext.CapabilityHint != "" {
-		state := capabilities.RoutingState{
-			Domain:         taskContext.Domain,
-			Gate:           taskContext.RoutingGate,
-			CapabilityHint: taskContext.CapabilityHint,
-		}
-		cap, ok := a.capabilityRegistry.Resolve(query, state)
-		if ok {
-			if multiTurnCap, isMultiTurn := cap.(capabilities.MultiTurnCapability); isMultiTurn {
-				log.Info("Calling capability Orchestrate", "capability", cap.Name())
-				if _, err := multiTurnCap.Orchestrate(ctx, state); err != nil {
-					return "", fmt.Errorf("multi-turn orchestration failed: %w", err)
-				}
-			}
-		}
-	}
-
-	// Process queue
-	results := a.processQueueLoop(ctx, queue, cfg, 15)
-
-	// Aggregate and epilogue
-	finalResponse := a.aggregateMultiTurnResults(results)
-	if len(results) > 0 {
-		lastResult := results[len(results)-1]
-		var toolCalls []ai.ToolCall
-		if lastResult.ToolCalls != nil {
-			for _, tc := range lastResult.ToolCalls {
-				if toolCall, ok := tc.(ai.ToolCall); ok {
-					toolCalls = append(toolCalls, toolCall)
-				}
-			}
-		}
-		a.epilogueAndCleanup(ctx, query, ai.IntentOmni, finalResponse, toolCalls, nil, nil, nil)
-	}
-	return finalResponse, nil
+	return "", fmt.Errorf("executeMultiTurn is deprecated - use normal Ask flow with capability tools")
 }
 
 func isExplicitNewTopic(ctx context.Context) bool {

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
-	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/memory"
 )
 
@@ -45,7 +44,7 @@ type ScriptExecutor interface {
 // Ensure WorkflowManager implements the interface needed by codingworkflow
 var _ interface {
 	GetWorkflow(ctx context.Context, query string) (interface{}, error)
-	Execute(ctx context.Context, workflow interface{}, queue capabilities.WorkQueue, originalQuery string) error
+	Execute(ctx context.Context, workflow interface{}, queue *WorkQueue, originalQuery string) error
 } = (*WorkflowManager)(nil)
 
 // NewWorkflowManager creates a new WorkflowManager with the given KnowledgeBase.
@@ -500,7 +499,7 @@ func parseIntValue(raw any) (int, error) {
 // Execute executes a workflow by injecting work items into the queue.
 // Each workflow step becomes a work item with the specified actor and priority.
 // Accepts interface{} for compatibility with codingworkflow package interface.
-func (wm *WorkflowManager) Execute(ctx context.Context, workflowInterface interface{}, queue capabilities.WorkQueue, originalQuery string) error {
+func (wm *WorkflowManager) Execute(ctx context.Context, workflowInterface interface{}, queue *WorkQueue, originalQuery string) error {
 	workflow, ok := workflowInterface.(*WorkflowDefinition)
 	if !ok {
 		return fmt.Errorf("invalid workflow type")
@@ -509,13 +508,17 @@ func (wm *WorkflowManager) Execute(ctx context.Context, workflowInterface interf
 }
 
 // executeInternal is the typed internal method.
-func (wm *WorkflowManager) executeInternal(workflow *WorkflowDefinition, queue capabilities.WorkQueue, originalQuery string) error {
+func (wm *WorkflowManager) executeInternal(workflow *WorkflowDefinition, queue *WorkQueue, originalQuery string) error {
 	if workflow == nil {
 		return fmt.Errorf("workflow is nil")
 	}
 	if queue == nil {
 		return fmt.Errorf("queue is nil")
 	}
+
+	// DEPRECATED: Controller pattern - enqueues all steps upfront
+	// This is kept for backwards compatibility only
+	// New code should use WorkflowManagerCapability which enqueues one step at a time
 
 	// Inject work items for each step
 	for _, step := range workflow.Steps {
@@ -561,11 +564,63 @@ func (wm *WorkflowManager) executeInternal(workflow *WorkflowDefinition, queue c
 	}
 
 	// Apply actor limits if specified
-	// Note: We can't type assert capabilities.WorkQueue to *WorkQueue due to interface signature differences
 	// Actor limits are applied at queue construction time instead
 	_ = workflow.ActorLimits // Acknowledge the field exists for future use
 
 	return nil
+}
+
+// EnqueueNextStep enqueues only the specified step (participant pattern, not controller).
+// This is used by WorkflowManagerCapability to process one step at a time.
+func (wm *WorkflowManager) EnqueueNextStep(workflow *WorkflowDefinition, stepIndex int, queue *WorkQueue, originalQuery string) error {
+	if workflow == nil {
+		return fmt.Errorf("workflow is nil")
+	}
+	if queue == nil {
+		return fmt.Errorf("queue is nil")
+	}
+	if stepIndex < 0 || stepIndex >= len(workflow.Steps) {
+		return fmt.Errorf("step index %d out of range (0-%d)", stepIndex, len(workflow.Steps)-1)
+	}
+
+	step := workflow.Steps[stepIndex]
+	query := wm.expandTemplate(step.QueryTemplate, originalQuery)
+
+	// Build condition function if specified
+	var condition func(TurnResult) bool
+	if step.Condition != nil {
+		if evaluator, ok := wm.conditionRegistry[step.Condition.Type]; ok {
+			condition = evaluator
+		}
+	}
+
+	workflowContext := WorkflowExecutionContext{
+		WorkflowID:          workflow.ID,
+		WorkflowName:        workflow.Name,
+		WorkflowDescription: workflow.Description,
+		ProtocolGuidance:    workflow.ProtocolGuidance,
+		StepNumber:          step.Step,
+		StepTitle:           step.Title,
+		StepActor:           step.Actor,
+		StepInstructions:    step.Instructions,
+		RequiredContext:     append([]string(nil), step.RequiredContext...),
+		SuccessCriteria:     append([]string(nil), step.SuccessCriteria...),
+		IterationPolicy:     step.IterationPolicy,
+		ToolsExpected:       append([]string(nil), step.ToolsExpected...),
+	}
+
+	// Create work item
+	workItem := WorkItem{
+		Query:     query,
+		Actor:     step.Actor,
+		Priority:  step.Priority,
+		Condition: condition,
+		Context: map[string]any{
+			"workflow_step": workflowContext,
+		},
+	}
+
+	return queue.Enqueue(workItem)
 }
 
 // expandTemplate replaces placeholders in a query template with actual values.

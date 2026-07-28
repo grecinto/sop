@@ -168,7 +168,7 @@ func TestWorkflowManager_Execute(t *testing.T) {
 		},
 	}
 
-	queue := newMockWorkQueue()
+	queue := NewWorkQueue()
 
 	err := wm.Execute(context.Background(), workflow, queue, "tests")
 	if err != nil {
@@ -176,11 +176,17 @@ func TestWorkflowManager_Execute(t *testing.T) {
 	}
 
 	// Verify work items were enqueued
-	if len(queue.items) != 2 {
-		t.Errorf("Expected 2 work items, got %d", len(queue.items))
+	if queue.Depth() != 2 {
+		t.Errorf("Expected 2 work items, got %d", queue.Depth())
 	}
-	if queue.items[0].Query != "Run tests" {
-		t.Errorf("First item query = %q, want %q", queue.items[0].Query, "Run tests")
+
+	// Dequeue and check first item
+	wi1, err := queue.Dequeue()
+	if err != nil {
+		t.Fatalf("Failed to dequeue first item: %v", err)
+	}
+	if wi1.Query != "Run tests" {
+		t.Errorf("First item query = %q, want %q", wi1.Query, "Run tests")
 	}
 
 	// Note: Actor limits can't be set through capabilities.WorkQueue interface
@@ -373,19 +379,22 @@ func TestWorkflowManager_Execute_PopulatesWorkflowStepContext(t *testing.T) {
 		}},
 	}
 
-	queue := newMockWorkQueue()
+	queue := NewWorkQueue()
 	if err := wm.Execute(context.Background(), workflow, queue, "fix failing tests"); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	if len(queue.items) != 1 {
-		t.Fatalf("Expected 1 work item, got %d", len(queue.items))
+	if queue.Depth() != 1 {
+		t.Fatalf("Expected 1 work item, got %d", queue.Depth())
 	}
 
-	item := queue.items[0]
-	payload, ok := item.Context["workflow_step"]
+	wi, err := queue.Dequeue()
+	if err != nil {
+		t.Fatalf("Failed to dequeue item: %v", err)
+	}
+	payload, ok := wi.Context["workflow_step"]
 	if !ok {
-		t.Fatalf("expected workflow_step context in work item, got %#v", item.Context)
+		t.Fatalf("expected workflow_step context in work item, got %#v", wi.Context)
 	}
 
 	ctxPayload, ok := payload.(WorkflowExecutionContext)

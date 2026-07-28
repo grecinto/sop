@@ -52,20 +52,13 @@ AST-based code analysis for semantic categorization:
 | Language | Status | Functions | Types | Packages |
 |----------|--------|-----------|-------|----------|
 | **Go** | ✅ Full | `function_declaration`, `method_declaration` | `struct`, `interface`, `type` | `package` |
-| **Python** | 🔧 Framework Ready | `function_definition`, `method` | `class` | `module` |
-| **Java** | 🔧 Framework Ready | `method_declaration`, `constructor` | `class`, `interface`, `enum` | `package` |
-| **Rust** | 🔧 Framework Ready | `function_item`, `method` | `struct`, `enum`, `trait` | `mod`, `crate` |
-| **C#** | 🔧 Framework Ready | `method_declaration`, `constructor` | `class`, `interface`, `struct`, `enum` | `namespace` |
+| **Python** | ✅ Full | `function_definition`, methods in classes | `class` | module inference |
+| **Java** | ✅ Full | `method_declaration`, `constructor` | `class`, `interface`, `enum` | `package` |
+| **Rust** | ✅ Full | `function_item`, methods in impl | `struct`, `enum`, `trait` | `mod`, `crate` |
+| **JavaScript** | ✅ Full | `function_declaration`, `method_definition`, arrow functions | `class` | directory-based |
+| **TypeScript** | ✅ Full | `function_declaration`, `method_definition`, arrow functions | `class`, `interface`, `type` | directory-based |
 
-**Enabling Additional Languages**: Add tree-sitter dependencies to `go.mod`:
-```bash
-go get github.com/smacker/go-tree-sitter/python
-go get github.com/smacker/go-tree-sitter/java
-go get github.com/smacker/go-tree-sitter/rust
-go get github.com/smacker/go-tree-sitter/c_sharp
-```
-
-Then uncomment the corresponding language cases in `undo_artifact_extractor.go`.
+**All languages now enabled!** The system automatically detects file type and extracts code artifacts using tree-sitter parsers.
 
 ### Fallback Behavior
 For languages without full AST support:

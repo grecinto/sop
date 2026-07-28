@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop/ai"
-	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
 // EnablePhase5 activates production hardening features (retry, circuit breaker, metrics, persistence).
@@ -276,6 +275,35 @@ func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, c
 		turnResults = append(turnResults, result)
 		log.Info("Turn completed", "turn_number", turnNumber, "actor", item.Actor, "response_chars", len(result.Response))
 
+		// Check if this turn was part of a KB workflow, and if so, enqueue next step
+		if payload, ok := item.Context["workflow_step"]; ok {
+			if workflowContext, ok := payload.(WorkflowExecutionContext); ok {
+				// This was a workflow step - check if we should continue
+				if a.workflowManager != nil && KBWorkflowsEnabled() {
+					// Get the workflow capability to enqueue next step
+					var workflowCap *WorkflowManagerCapability
+					for _, cap := range a.capabilityRegistry.ListAll() {
+						if wfCap, ok := cap.(*WorkflowManagerCapability); ok {
+							workflowCap = wfCap
+							break
+						}
+					}
+					if workflowCap != nil {
+						// Check if the step completed successfully
+						if execErr == nil {
+							// Advance and enqueue next step (participant pattern)
+							if advanced := workflowCap.AdvanceStep(result); advanced {
+								// Next step enqueued by RunWithQueue
+								if _, err := workflowCap.RunWithQueue(ctx, workflowContext.WorkflowName, queue); err != nil {
+									log.Warn("Failed to enqueue next workflow step", "error", err, "workflow", workflowContext.WorkflowName)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
 		turnNumber++
 	}
 
@@ -503,31 +531,8 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// shouldUseMultiTurn determines if a capability should use multi-turn orchestration.
+// shouldUseMultiTurn is deprecated - multi-turn behavior now happens naturally
+// through the ReAct loop where capabilities expose tools that the LLM calls intelligently.
 func (a *CopilotAgent) shouldUseMultiTurn(ctx context.Context, query string, taskContext *TaskContextClassification) bool {
-	if a.capabilityRegistry == nil {
-		return false
-	}
-
-	// Multi-turn orchestration is currently only for coding tasks, not data queries
-	// Skip if domain is Stores, Spaces, or other data-oriented domains
-	if taskContext.Domain == "Stores" || taskContext.Domain == "Spaces" {
-		return false
-	}
-
-	// Check if capability is multi-turn capable
-	state := capabilities.RoutingState{
-		Domain:         taskContext.Domain,
-		Gate:           taskContext.RoutingGate,
-		CapabilityHint: taskContext.CapabilityHint,
-	}
-
-	cap, ok := a.capabilityRegistry.Resolve(query, state)
-	if !ok {
-		return false
-	}
-
-	// Check if capability implements MultiTurnCapability
-	_, isMultiTurn := cap.(capabilities.MultiTurnCapability)
-	return isMultiTurn
+	return false
 }

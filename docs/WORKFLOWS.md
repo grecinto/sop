@@ -1,8 +1,16 @@
 # SOP Cloud Workflows - Complete Documentation
 
-**Last Updated**: 2026-07-24  
-**Status**: 🚧 V1: KB Workflows Disabled - Pure Code-Driven Capabilities  
+**Last Updated**: 2026-07-28  
+**Status**: ✅ Participant Pattern Implemented - Dynamic Planner + KB Workflows  
 **Post-V1 Vision**: Data-Driven Workflows with Infrastructure Integration
+
+**Recent Changes (2026-07-28)**:
+- Implemented participant pattern for all workflow execution
+- Added Dynamic Planner capability with OnFinish hook
+- Refactored WorkflowManagerCapability for single-step enqueueing
+- Deprecated controller pattern (Execute method)
+- Achieved 100% Ask pipeline reuse for all workflow steps
+- Note: `WORKFLOW_CAPABILITY_REFACTORING.md` has been superseded by this document's Architecture Evolution section
 
 ---
 
@@ -17,16 +25,22 @@
 
 ## V1 Status & Direction
 
-### Current State: Pure Code-Driven Capabilities
+### Current State: Dual Workflow System (Code-Driven + AI-Generated)
 
-**Strategic Decision for V1**: KB-driven workflows are **disabled** via feature flag. V1 ships with **pure code-driven capabilities** backed by robust infrastructure.
+**Strategic Evolution**: V1 now ships with **two complementary workflow approaches**, both executing through the unified Ask pipeline:
 
-**Why This Decision:**
-1. **Infrastructure Matters**: Text-based workflow definitions lack the power of compiled code with AST parsing, tree-sitter integration, patch engines, and test runners
-2. **Quality Over Flexibility**: Code-driven workflows (7-step test fix, 5-step architecture design) deliver consistent, proven results
-3. **Proven at Scale**: The coding workflow capability demonstrates that infrastructure-backed orchestration is what makes workflows powerful
+1. **Code-Driven Capabilities** - Proven, infrastructure-backed workflows
+2. **Dynamic Planner** - AI-generated workflows tailored to specific tasks
 
-**V1 Capabilities** (All Code-Driven):
+**Why This Hybrid Approach:**
+1. **Infrastructure Power**: Code-driven workflows leverage AST parsing, tree-sitter integration, patch engines, and test runners
+2. **Adaptive Intelligence**: Dynamic Planner generates custom workflows for unique or complex scenarios
+3. **Best of Both Worlds**: Proven templates for common tasks, AI flexibility for novel situations
+4. **Unified Execution**: Both approaches use 100% Ask pipeline with provider continuity
+
+**V1 Capabilities**:
+- ✅ **Dynamic Planner**: AI-generated workflows with OnFinish hook pattern
+- ✅ **KB Workflows**: Template-based workflows from knowledge bases (participant pattern)
 - ✅ **Test Fix Workflow**: 7-step orchestrated process (analyze → isolate → patch → validate → test → iterate → document)
 - ✅ **Architecture Workflow**: 5-step design process (analyze → map dependencies → design → validate → document)
 - ✅ **Documentation Workflow**: 4-step generation process (analyze → extract structure → generate → review)
@@ -34,29 +48,187 @@
 - ✅ **Desktop Automation**: Shell/git/postgres command execution with PTY persistence
 - 🚀 **Workflow Undo System**: Multi-dimensional semantic undo with time-ranked search (see [WORKFLOW_UNDO_SYSTEM.md](WORKFLOW_UNDO_SYSTEM.md))
 
-**Feature Flag**: `kbWorkflowsEnabled = false` in `copilottools.automation.go`
-
 **Routing Optimization**: 80%+ of queries use keyword-based fast path (zero LLM calls), falling back to LLM only for ambiguous queries.
 
 ---
 
-## Architecture Evolution (2026-07-27)
+## Architecture Evolution (2026-07-27 & 2026-07-28)
 
-The workflow stack has evolved from a queue-driven execution model toward a clearer separation of concerns:
+### Participant Pattern Implementation (July 2026)
 
-- **Ask/Queue refactor**: The earlier queue-based model was useful for multi-turn interaction and clarification handling, but it introduced a secondary orchestration loop that could drift from the main Ask/ReAct state machine.
-- **Workflow Manager + Step model**: The current preferred shape is a workflow manager that sequences steps, tracks outcomes, and applies retries and short-circuit behavior. Each step is a coherent unit of work and can be retried independently.
-- **Lifecycle-aware capabilities**: The best fit for the main Ask pipeline is to let capabilities participate through lifecycle hooks such as OnStart, OnBeforePrompt, OnAfterToolResult, OnAfterTurn, and OnFinalize. This keeps a single authoritative execution state for the conversation while still allowing workflow-specific behavior.
-- **Implementation relationship**: The coding workflow implementation now lives in the workflow-manager and step-based layer under the coding workflow package, while this document captures the architectural rationale and the intended integration points with the main Ask pipeline.
+The workflow stack has evolved to a **pure participant pattern** where capabilities are passive responders and the Ask pipeline maintains complete control of execution flow.
 
-### What this means in practice
+**Key Architectural Principles:**
+- **Ask Pipeline is the Controller**: The Ask/ReAct loop is the single authoritative execution engine
+- **Capabilities are Participants**: Workflows respond to requests but never control flow
+- **100% Pipeline Reuse**: Every workflow step executes through the full Ask pipeline with provider reasoning
+- **OnFinish Hook Pattern**: Post-execution hooks enable workflow setup without bypassing the pipeline
 
-1. The main Ask/ReAct loop remains the primary execution path.
-2. Workflow orchestration is handled by a manager/step layer rather than by a second queue-driven loop.
-3. Each step can contribute prompt context and state updates without owning the entire conversation.
-4. The outcome is cleaner memory continuity, simpler debugging, and a more scalable capability model.
+### Two Workflow Approaches (Both Participant Pattern)
 
-This consolidation replaces the earlier one-off notes on queue refactoring, transaction boundaries, lifecycle assessment, and workflow-manager design. The key ideas are now captured here and in [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md).
+#### 1. Dynamic Planner (AI-Generated Workflows)
+
+The **PlannerCapability** generates custom workflows based on task analysis:
+
+```
+User Query
+    ↓
+Ask Pipeline Routing → PlannerCapability selected
+    ↓
+PlannerCapability.Run()
+    ├─ Analyzes task type (debugging, implementation, testing, etc.)
+    ├─ Generates WorkflowPlan with phases
+    ├─ Returns CapabilityResult with plan in Data
+    └─ Marks as "workflow_ready"
+    ↓
+Ask/ReAct Loop Completes (provider handles conversation)
+    ↓
+OnFinish() Hook Called (Post-Execution)
+    ├─ Extract WorkflowPlan from result.Data
+    ├─ Convert phases to concrete Steps via planToSteps()
+    ├─ Store steps in result.Data["workflow_steps_ready"]
+    └─ Mark "workflow_trigger_needed" = true
+    ↓
+Ask Pipeline Detects Trigger Needed
+    ├─ Creates WorkItem with actor="workflow_manager"
+    └─ Enqueues to WorkQueue
+    ↓
+Next Ask Iteration Processes Workflow Steps
+    └─ Each step executes through full Ask pipeline
+```
+
+**Key Components:**
+- **PlannerCapability** (`lib/sop/ai/agent/codingworkflow/planner_capability.go`)
+  - Implements `WorkflowPlanner` interface with `OnFinish()` hook
+  - Generates plans using task classification and heuristics
+  - Converts plans to executable Steps using public API
+  
+- **WorkflowPlanner Interface** (`lib/sop/ai/agent/capabilities/capability.go`)
+  ```go
+  type WorkflowPlanner interface {
+      Capability
+      OnFinish(ctx context.Context, result CapabilityResult) error
+  }
+  ```
+
+- **Step Conversion** - Reuses coding workflow public functions:
+  - `NewAnalyzeCodeStep()` - Code analysis and context gathering
+  - `NewGeneratePatchStep()` - Generate code changes
+  - `NewApplyFixStep()` - Apply patches to files
+  - `NewVerifyFixStep()` - Run tests and verify
+  - `NewDesignStep()` - Architecture and design work
+
+#### 2. Knowledge Base Workflows (Pre-Defined Templates)
+
+**WorkflowManager** handles KB-driven workflows using the same participant pattern:
+
+```
+User Query
+    ↓
+tryKBWorkflowExecution detects matching workflow
+    ↓
+WorkflowManagerCapability.RunWithQueue()
+    ├─ Initializes workflow state
+    ├─ Sets currentStepIndex = 0
+    └─ Enqueues FIRST STEP ONLY ← Participant Pattern
+    ↓
+processQueueLoop processes steps
+    ↓
+For each step completion:
+    ├─ Detects workflow_step in context
+    ├─ Calls AdvanceStep(result) if successful
+    └─ Enqueues NEXT STEP ONLY ← One at a time
+    ↓
+Workflow completes naturally
+```
+
+**Key Components:**
+- **WorkflowManagerCapability** (`lib/sop/ai/agent/workflow_capability.go`)
+  - Wraps WorkflowManager as a standard Capability
+  - Tracks state: current workflow, step index, turn results
+  - `RunWithQueue()` - Enqueues single step (participant pattern)
+  - `AdvanceStep()` - Advances after successful completion
+  
+- **WorkflowManager** (`lib/sop/ai/agent/workflow_manager.go`)
+  - `GetWorkflow()` - Retrieves workflow from KB via semantic search
+  - `EnqueueNextStep()` - Enqueues one step at a time
+  - Deprecated: `Execute()` - Old controller pattern (kept for compatibility)
+
+### Participant vs Controller Pattern
+
+**❌ Controller Pattern (Anti-Pattern - Removed):**
+```
+Capability.Orchestrate() {
+    for each step {
+        queue.Enqueue(step)  // Enqueues ALL steps upfront
+    }
+}
+→ Capability controls execution flow
+→ Bypasses Ask pipeline for step execution
+→ Loses provider continuity and memory
+```
+
+**✅ Participant Pattern (Current):**
+```
+Capability.Run() {
+    // Generate plan/result
+    return CapabilityResult
+}
+
+Capability.OnFinish(result) {
+    // Set up workflow trigger
+    result.Data["workflow_steps_ready"] = steps
+    result.Data["workflow_trigger_needed"] = true
+}
+
+Ask Pipeline {
+    → Calls Run()
+    → Calls OnFinish() after reasoning
+    → Detects workflow_trigger_needed
+    → Enqueues trigger to queue
+    → Processes queue naturally
+    → Each step goes through full Ask iteration
+}
+```
+
+### Benefits of Participant Pattern
+
+1. **100% Ask Pipeline Reuse**: Every workflow step inherits:
+   - Provider conversation continuity (Gemini, Claude, GPT-4)
+   - Memory integration (short-term + long-term)
+   - Tool framework with authorization
+   - Observable execution with metrics
+   - Battle-tested ReAct loops
+
+2. **Adaptive Execution**:
+   - Steps execute one at a time
+   - Workflow adapts based on intermediate results
+   - Conditions evaluated after execution
+   - Natural error handling and recovery
+
+3. **Architectural Integrity**:
+   - Ask pipeline remains single source of control
+   - No separate execution engine needed
+   - Capabilities are passive plugins
+   - Consistent with all other capabilities
+
+4. **Developer Experience**:
+   - Clear separation of concerns
+   - Easy to debug (single execution path)
+   - Maintainable and extensible
+   - Reusable workflow components
+
+### Implementation Timeline
+
+- **2026-07-24**: Queue-based multi-turn model evaluated
+- **2026-07-27**: Workflow Undo System implemented with multi-dimensional indexing
+- **2026-07-28**: Participant pattern implemented
+  - Dynamic Planner with OnFinish hook
+  - WorkflowManagerCapability refactoring
+  - Controller pattern deprecated
+  - 100% Ask pipeline reuse achieved
+
+This consolidates the earlier notes on queue refactoring, transaction boundaries, lifecycle assessment, and workflow-manager design into a coherent participant pattern architecture.
 
 ### Workflow Undo System (2026-07-27)
 

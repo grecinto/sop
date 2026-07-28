@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -93,45 +92,20 @@ func TestMultiTurnContextPropagation(t *testing.T) {
 	}
 }
 
-func TestExecuteMultiTurnReturnsGenericOrchestrationError(t *testing.T) {
+func TestExecuteMultiTurn_Deprecated(t *testing.T) {
+	// executeMultiTurn is deprecated - multi-turn now happens through ReAct loop
 	agent := &CopilotAgent{
-		capabilityRegistry: capabilities.NewRegistry(&stubMultiTurnCapability{err: errors.New("boom")}),
+		capabilityRegistry: capabilities.NewRegistry(&stubCapability{}),
 	}
 
 	_, err := agent.executeMultiTurn(context.Background(), "fix parser bug", &TaskContextClassification{CapabilityHint: "stub"}, nil)
 	if err == nil {
-		t.Fatal("expected orchestration error")
+		t.Fatal("expected error from deprecated method")
 	}
 
-	if !strings.Contains(err.Error(), "multi-turn orchestration failed") {
-		t.Fatalf("expected generic orchestration error, got %q", err.Error())
+	if !strings.Contains(err.Error(), "deprecated") {
+		t.Fatalf("expected deprecated error, got %q", err.Error())
 	}
-}
-
-type stubMultiTurnCapability struct {
-	err error
-}
-
-func (s *stubMultiTurnCapability) ID() string   { return "stub" }
-func (s *stubMultiTurnCapability) Name() string { return "Stub" }
-func (s *stubMultiTurnCapability) Entitlement() capabilities.Entitlement {
-	return capabilities.Entitlement{}
-}
-func (s *stubMultiTurnCapability) CanHandle(query string, state capabilities.RoutingState) bool {
-	return true
-}
-func (s *stubMultiTurnCapability) BuildContext(query string, state capabilities.RoutingState) string {
-	return ""
-}
-func (s *stubMultiTurnCapability) ExposeTools() []capabilities.ToolDefinition { return nil }
-func (s *stubMultiTurnCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	return ""
-}
-func (s *stubMultiTurnCapability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	return capabilities.CapabilityResult{}, nil
-}
-func (s *stubMultiTurnCapability) Orchestrate(ctx context.Context, state capabilities.RoutingState) (bool, error) {
-	return false, s.err
 }
 
 func TestIsQueueExecutionTurn(t *testing.T) {

@@ -24,6 +24,8 @@ The SDK provides:
 - **Integration Options**: Use the SDK through UI, API, or tool calls
 - **Parallel Ask Flow**: Split complex requests into parallel sub-asks, gather the results at the end, and keep each execution (proess) isolated so one failing task does not bring down the others or the daemon
 - **KB-driven workflows**: The agent can follow knowledge-base-defined workflows(data driven!) for tasks such as "fix failing tests", orchestrating the steps from failure capture to analysis and verification
+- **Dynamic Planner & Workflow Architecture**: AI-generated workflows with participant pattern execution through the Ask pipeline, ensuring 100% pipeline reuse with provider continuity and memory integration
+- **Workflow Undo System**: Semantic, domain-aware undo with multi-dimensional indexing, natural language search, and time-ranked results. Each workflow runs as an atomic transaction that can be intelligently searched and restored
 
 ## Why this matters for AI platforms
 
@@ -41,3 +43,5 @@ Key advantages include:
 
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
+- Understand the [Workflow Architecture](./workflow-architecture) - Dynamic Planner, KB workflows, and the Ask pipeline execution model
+- Read about the [Workflow Undo System](./undo-system) - Transaction management, multi-dimensional indexing, and semantic search integration

@@ -2068,12 +2068,37 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// globTestFiles returns test files for the detected project type
 func globTestFiles(workingDir string) []string {
-	matches, err := filepath.Glob(filepath.Join(workingDir, "*_test.go"))
-	if err != nil {
-		return nil
+	var patterns []string
+
+	// Detect project type
+	projectType := detectProjectTypeFromDir(workingDir)
+
+	switch projectType {
+	case ProjectTypeGo:
+		patterns = []string{"*_test.go"}
+	case ProjectTypePython:
+		patterns = []string{"test_*.py", "*_test.py"}
+	case ProjectTypeJava:
+		patterns = []string{"*Test.java", "*Tests.java"}
+	case ProjectTypeRust:
+		patterns = []string{"*.rs"} // Rust tests are in same files with #[test]
+	case ProjectTypeNode:
+		patterns = []string{"*.test.js", "*.spec.js", "*.test.ts", "*.spec.ts"}
+	default:
+		// Try all patterns if type unknown
+		patterns = []string{"*_test.go", "test_*.py", "*Test.java", "*.test.js", "*.spec.ts"}
 	}
-	return matches
+
+	var allMatches []string
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(workingDir, pattern))
+		if err == nil {
+			allMatches = append(allMatches, matches...)
+		}
+	}
+	return allMatches
 }
 
 func inferSymbolName(input string) string {
@@ -2105,13 +2130,63 @@ func extensionToLanguage(ext string) string {
 		return "go"
 	case ".py":
 		return "python"
-	case ".js":
+	case ".js", ".jsx":
 		return "javascript"
-	case ".ts":
+	case ".ts", ".tsx":
 		return "typescript"
+	case ".java":
+		return "java"
+	case ".rs":
+		return "rust"
+	case ".cs":
+		return "csharp"
 	default:
 		return ""
 	}
+}
+
+// detectProjectTypeFromDir identifies project type from directory (helper for context gathering)
+func detectProjectTypeFromDir(workingDir string) ProjectType {
+	// Go: go.mod
+	if fileExists(filepath.Join(workingDir, "go.mod")) {
+		return ProjectTypeGo
+	}
+
+	// Python: requirements.txt, setup.py, pyproject.toml
+	pythonMarkers := []string{"requirements.txt", "setup.py", "pyproject.toml", "pytest.ini"}
+	for _, marker := range pythonMarkers {
+		if fileExists(filepath.Join(workingDir, marker)) {
+			return ProjectTypePython
+		}
+	}
+
+	// Java: pom.xml or build.gradle
+	if fileExists(filepath.Join(workingDir, "pom.xml")) || fileExists(filepath.Join(workingDir, "build.gradle")) {
+		return ProjectTypeJava
+	}
+
+	// Rust: Cargo.toml
+	if fileExists(filepath.Join(workingDir, "Cargo.toml")) {
+		return ProjectTypeRust
+	}
+
+	// C#: *.csproj or *.sln
+	entries, err := os.ReadDir(workingDir)
+	if err == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasSuffix(name, ".csproj") || strings.HasSuffix(name, ".sln") {
+				return ProjectTypeCSharp
+			}
+		}
+	}
+
+	// Node.js: package.json
+	if fileExists(filepath.Join(workingDir, "package.json")) {
+		return ProjectTypeNode
+	}
+
+	return ProjectTypeUnknown
 }
 
 func collectASTLeafNodes(content, workingDir, activeFile string) ([]string, string) {
@@ -2213,10 +2288,13 @@ func collectSymbolsLegacy(content string) []string {
 	return collectSymbols(content)
 }
 
+// collectSymbols extracts symbols from content (multi-language)
 func collectSymbols(content string) []string {
 	var symbols []string
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
+
+		// Go: func, type, var, const
 		if strings.HasPrefix(trimmed, "func ") || strings.HasPrefix(trimmed, "type ") || strings.HasPrefix(trimmed, "var ") || strings.HasPrefix(trimmed, "const ") {
 			parts := strings.Fields(trimmed)
 			if len(parts) > 1 {
@@ -2233,11 +2311,94 @@ func collectSymbols(content string) []string {
 					symbols = append(symbols, name)
 				}
 			}
+			continue
+		}
+
+		// Python: def, class (must come before Java check)
+		if strings.HasPrefix(trimmed, "def ") {
+			parts := strings.Fields(trimmed)
+			if len(parts) > 1 {
+				name := parts[1]
+				if idx := strings.IndexAny(name, "(:"); idx > 0 {
+					name = name[:idx]
+				}
+				if name != "" && !contains(symbols, name) {
+					symbols = append(symbols, name)
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "class ") && strings.Contains(trimmed, ":") {
+			// Python class (has colon)
+			parts := strings.Fields(trimmed)
+			if len(parts) > 1 {
+				name := parts[1]
+				if idx := strings.IndexAny(name, "(:"); idx > 0 {
+					name = name[:idx]
+				}
+				if name != "" && !contains(symbols, name) {
+					symbols = append(symbols, name)
+				}
+			}
+			continue
+		}
+
+		// Java/C#: public/private/protected class/interface/method
+		if strings.Contains(trimmed, "class ") || strings.Contains(trimmed, "interface ") || strings.Contains(trimmed, "enum ") {
+			for _, keyword := range []string{"class ", "interface ", "enum "} {
+				if idx := strings.Index(trimmed, keyword); idx >= 0 {
+					after := trimmed[idx+len(keyword):]
+					parts := strings.Fields(after)
+					if len(parts) > 0 {
+						name := strings.TrimSuffix(parts[0], "{")
+						if name != "" && !contains(symbols, name) {
+							symbols = append(symbols, name)
+						}
+					}
+					break
+				}
+			}
+			continue
+		}
+
+		// Rust: fn, struct, impl, trait
+		if strings.HasPrefix(trimmed, "fn ") || strings.HasPrefix(trimmed, "struct ") || strings.HasPrefix(trimmed, "trait ") {
+			parts := strings.Fields(trimmed)
+			if len(parts) > 1 {
+				name := parts[1]
+				if idx := strings.IndexAny(name, "(<{"); idx > 0 {
+					name = name[:idx]
+				}
+				if name != "" && !contains(symbols, name) {
+					symbols = append(symbols, name)
+				}
+			}
+			continue
+		}
+
+		// JavaScript/TypeScript: function, const, class, export
+		if strings.HasPrefix(trimmed, "function ") || strings.HasPrefix(trimmed, "const ") ||
+			strings.HasPrefix(trimmed, "export function ") || strings.HasPrefix(trimmed, "export const ") ||
+			strings.HasPrefix(trimmed, "export class ") {
+			for _, prefix := range []string{"export function ", "export const ", "export class ", "function ", "const ", "class "} {
+				if strings.HasPrefix(trimmed, prefix) {
+					after := strings.TrimPrefix(trimmed, prefix)
+					parts := strings.FieldsFunc(after, func(r rune) bool {
+						return r == '(' || r == '=' || r == '{' || r == ' '
+					})
+					if len(parts) > 0 && parts[0] != "" && !contains(symbols, parts[0]) {
+						symbols = append(symbols, parts[0])
+					}
+					break
+				}
+			}
+			continue
 		}
 	}
 	return symbols
 }
 
+// collectImports extracts imports from content (multi-language)
 func collectImports(content string) []string {
 	var imports []string
 	inBlock := false
@@ -2246,6 +2407,8 @@ func collectImports(content string) []string {
 		if trimmed == "" {
 			continue
 		}
+
+		// Go: import "..." or import ( ... )
 		if strings.HasPrefix(trimmed, "import ") {
 			if strings.Contains(trimmed, "(") {
 				inBlock = true
@@ -2263,6 +2426,68 @@ func collectImports(content string) []string {
 			}
 			if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
 				imports = append(imports, strings.Trim(trimmed, "\""))
+			}
+		}
+
+		// Python: import x or from x import y
+		if strings.HasPrefix(trimmed, "import ") || strings.HasPrefix(trimmed, "from ") {
+			if strings.HasPrefix(trimmed, "from ") {
+				parts := strings.Fields(trimmed)
+				if len(parts) >= 2 {
+					imports = append(imports, parts[1])
+				}
+			} else {
+				after := strings.TrimPrefix(trimmed, "import ")
+				parts := strings.Split(after, ",")
+				for _, part := range parts {
+					modName := strings.TrimSpace(strings.Split(part, " as ")[0])
+					if modName != "" {
+						imports = append(imports, modName)
+					}
+				}
+			}
+			continue
+		}
+
+		// Java/C#: import x.y.z;
+		if strings.HasPrefix(trimmed, "import ") && strings.HasSuffix(trimmed, ";") {
+			importPath := strings.TrimSuffix(strings.TrimPrefix(trimmed, "import "), ";")
+			importPath = strings.TrimSpace(importPath)
+			if importPath != "" {
+				imports = append(imports, importPath)
+			}
+			continue
+		}
+
+		// Rust: use x::y;
+		if strings.HasPrefix(trimmed, "use ") && strings.HasSuffix(trimmed, ";") {
+			usePath := strings.TrimSuffix(strings.TrimPrefix(trimmed, "use "), ";")
+			usePath = strings.TrimSpace(usePath)
+			if usePath != "" {
+				imports = append(imports, usePath)
+			}
+			continue
+		}
+
+		// JavaScript/TypeScript: import { x } from 'y' or require('x')
+		if strings.HasPrefix(trimmed, "import ") {
+			if idx := strings.Index(trimmed, "from "); idx > 0 {
+				after := strings.TrimSpace(trimmed[idx+5:])
+				after = strings.Trim(after, "';\"")
+				if after != "" {
+					imports = append(imports, after)
+				}
+			}
+		}
+		if strings.Contains(trimmed, "require(") {
+			if start := strings.Index(trimmed, "require("); start >= 0 {
+				after := trimmed[start+8:]
+				if end := strings.IndexAny(after, ")')"); end > 0 {
+					modName := strings.Trim(after[:end], "'\"")
+					if modName != "" {
+						imports = append(imports, modName)
+					}
+				}
 			}
 		}
 	}
@@ -2346,8 +2571,15 @@ func extractSymbolSnippet(content, symbolName string) string {
 	return snippet
 }
 
+// collectRelatedFiles finds related source files (multi-language)
 func collectRelatedFiles(workingDir, activeFile string) []string {
 	var files []string
+	sourceExts := map[string]bool{
+		".go": true, ".py": true, ".java": true, ".rs": true,
+		".js": true, ".ts": true, ".jsx": true, ".tsx": true,
+		".c": true, ".cpp": true, ".h": true, ".cs": true,
+		".md": true, ".txt": true, ".json": true, ".yaml": true,
+	}
 	err := filepath.WalkDir(workingDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -2363,7 +2595,7 @@ func collectRelatedFiles(workingDir, activeFile string) []string {
 			return nil
 		}
 		ext := filepath.Ext(relPath)
-		if ext == ".go" || ext == ".md" || ext == ".txt" {
+		if sourceExts[ext] {
 			files = append(files, filepath.ToSlash(relPath))
 		}
 		return nil
@@ -2374,12 +2606,17 @@ func collectRelatedFiles(workingDir, activeFile string) []string {
 	return files
 }
 
+// collectDependencyFiles finds files containing symbols (multi-language)
 func collectDependencyFiles(workingDir, activeFile, content string, symbols []string) []string {
 	if activeFile == "" {
 		return nil
 	}
 	var deps []string
 	normalizedContent := strings.ToLower(content)
+	sourceExts := map[string]bool{
+		".go": true, ".py": true, ".java": true, ".rs": true,
+		".js": true, ".ts": true, ".jsx": true, ".tsx": true, ".cs": true,
+	}
 	err := filepath.WalkDir(workingDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -2394,7 +2631,8 @@ func collectDependencyFiles(workingDir, activeFile, content string, symbols []st
 		if relPath == "." || relPath == activeFile || filepath.ToSlash(relPath) == filepath.ToSlash(activeFile) {
 			return nil
 		}
-		if filepath.Ext(relPath) != ".go" {
+		// Check if it's a source file
+		if !sourceExts[filepath.Ext(relPath)] {
 			return nil
 		}
 		candidateContent, err := os.ReadFile(path)
@@ -2447,21 +2685,68 @@ func collectRepositoryFiles(workingDir string) []string {
 	return files
 }
 
+// inferModuleName extracts module/package name for detected project type
 func inferModuleName(workingDir string) string {
-	goModPath := filepath.Join(workingDir, "go.mod")
-	data, err := os.ReadFile(goModPath)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				return parts[1]
+	// Go: go.mod
+	if data, err := os.ReadFile(filepath.Join(workingDir, "go.mod")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "module ") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					return parts[1]
+				}
 			}
 		}
 	}
+
+	// Python: setup.py or pyproject.toml
+	if data, err := os.ReadFile(filepath.Join(workingDir, "setup.py")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, "name=") {
+				if start := strings.Index(line, "name="); start >= 0 {
+					after := line[start+5:]
+					after = strings.Trim(strings.TrimSpace(after), "'\"")
+					if idx := strings.IndexAny(after, "',\""); idx > 0 {
+						return after[:idx]
+					}
+				}
+			}
+		}
+	}
+
+	// Java: pom.xml
+	if data, err := os.ReadFile(filepath.Join(workingDir, "pom.xml")); err == nil {
+		content := string(data)
+		if start := strings.Index(content, "<artifactId>"); start >= 0 {
+			start += 12
+			if end := strings.Index(content[start:], "</artifactId>"); end > 0 {
+				return strings.TrimSpace(content[start : start+end])
+			}
+		}
+	}
+
+	// Rust: Cargo.toml
+	if data, err := os.ReadFile(filepath.Join(workingDir, "Cargo.toml")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "name = ") {
+				after := strings.TrimPrefix(strings.TrimSpace(line), "name = ")
+				after = strings.Trim(after, "'\"")
+				return after
+			}
+		}
+	}
+
+	// Node.js: package.json
+	if data, err := os.ReadFile(filepath.Join(workingDir, "package.json")); err == nil {
+		var pkg map[string]interface{}
+		if err := json.Unmarshal(data, &pkg); err == nil {
+			if name, ok := pkg["name"].(string); ok {
+				return name
+			}
+		}
+	}
+
 	return ""
 }
 

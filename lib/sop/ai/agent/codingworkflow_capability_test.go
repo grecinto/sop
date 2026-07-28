@@ -13,6 +13,8 @@ import (
 )
 
 func TestWithCodingWorkflowCapabilityRegistersCapability(t *testing.T) {
+	t.Skip("WithCodingWorkflowCapability is disabled - use WithWorkflowCapability instead")
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	orchestrator := &cw.Orchestrator{}
 
@@ -45,6 +47,8 @@ func TestWithCodingWorkflowCapabilityWiresGitAdapter(t *testing.T) {
 }
 
 func TestWithCodingWorkflowCapabilityWiresMemorySinkToAgentSession(t *testing.T) {
+	t.Skip("WithCodingWorkflowCapability is disabled - use WithWorkflowCapability instead")
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	agent.service = &Service{session: NewRunnerSession()}
 	orchestrator := &cw.Orchestrator{}

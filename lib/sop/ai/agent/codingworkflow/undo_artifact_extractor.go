@@ -9,13 +9,11 @@ import (
 
 	ts "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
-	// TODO: Add these imports when needed:
-	// "github.com/smacker/go-tree-sitter/python"
-	// "github.com/smacker/go-tree-sitter/java"
-	// "github.com/smacker/go-tree-sitter/rust"
-	// "github.com/smacker/go-tree-sitter/c_sharp"
-	// "github.com/smacker/go-tree-sitter/javascript"
-	// "github.com/smacker/go-tree-sitter/typescript/typescript"
+	"github.com/smacker/go-tree-sitter/java"
+	"github.com/smacker/go-tree-sitter/javascript"
+	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
+	"github.com/smacker/go-tree-sitter/typescript/typescript"
 )
 
 // CodeArtifactExtractor extracts code artifacts from modified files using AST analysis.
@@ -85,79 +83,76 @@ func (cae *CodeArtifactExtractor) extractFromFile(filePath string, content []byt
 		Types:     []string{},
 	}
 
+	// Determine file extension for language-specific extraction
+	ext := filepath.Ext(filePath)
+
 	// Extract package/namespace
-	artifact.Package = cae.extractPackageName(root, content)
+	artifact.Package = cae.extractPackageName(root, content, ext)
 	artifact.Namespace = cae.inferNamespace(filePath)
 
 	// Extract functions/methods
-	artifact.Functions = cae.extractFunctions(root, content)
+	artifact.Functions = cae.extractFunctions(root, content, ext)
 
 	// Extract types (structs, interfaces, classes)
-	artifact.Types = cae.extractTypes(root, content)
+	artifact.Types = cae.extractTypes(root, content, ext)
 
 	return artifact, nil
 }
 
 // getLanguageFromPath returns the tree-sitter language for a file path.
+// Supports: Go, Python, Java, Rust, JavaScript, TypeScript
 func (cae *CodeArtifactExtractor) getLanguageFromPath(filePath string) *ts.Language {
 	ext := filepath.Ext(filePath)
 
 	switch ext {
 	case ".go":
 		return golang.GetLanguage()
-	// Multi-language support - currently only Go is enabled
-	// To enable other languages, add the tree-sitter dependencies to go.mod:
-	//   go get github.com/smacker/go-tree-sitter/python
-	//   go get github.com/smacker/go-tree-sitter/java
-	//   go get github.com/smacker/go-tree-sitter/rust
-	//   go get github.com/smacker/go-tree-sitter/c_sharp
-	// Then uncomment the corresponding cases below:
-	//
-	// case ".py":
-	//     return python.GetLanguage()
-	// case ".java":
-	//     return java.GetLanguage()
-	// case ".rs":
-	//     return rust.GetLanguage()
+	case ".py":
+		return python.GetLanguage()
+	case ".java":
+		return java.GetLanguage()
+	case ".rs":
+		return rust.GetLanguage()
+	case ".js", ".jsx":
+		return javascript.GetLanguage()
+	case ".ts", ".tsx":
+		return typescript.GetLanguage()
+	// Note: C# support unavailable (tree-sitter package issues)
 	// case ".cs":
 	//     return c_sharp.GetLanguage()
-	// case ".js", ".jsx":
-	//     return javascript.GetLanguage()
-	// case ".ts", ".tsx":
-	//     return typescript.GetLanguage()
 	default:
 		return nil
 	}
 }
 
 // extractPackageName extracts the package/namespace name from AST.
-// Supports multiple languages with language-specific queries.
-func (cae *CodeArtifactExtractor) extractPackageName(root *ts.Node, content []byte) string {
-	// Determine language from root node type
-	rootType := root.Type()
-
+// Supports: Go, Python, Java, Rust, JavaScript/TypeScript
+func (cae *CodeArtifactExtractor) extractPackageName(root *ts.Node, content []byte, fileExt string) string {
 	var query string
 	var lang *ts.Language
 
-	// Language-specific package extraction
-	if strings.Contains(rootType, "source_file") {
-		// Go: package declaration
+	// Language-specific package extraction based on file extension
+	switch fileExt {
+	case ".go":
 		query = `(package_clause (package_identifier) @package)`
 		lang = golang.GetLanguage()
+	case ".py":
+		// Python: extract module name from first import or class/function
+		query = `(module . (comment)* @doc)`
+		lang = python.GetLanguage()
+	case ".java":
+		query = `(package_declaration (scoped_identifier) @package)`
+		lang = java.GetLanguage()
+	case ".rs":
+		// Rust: look for crate or mod declarations
+		query = `(mod_item name: (identifier) @mod)`
+		lang = rust.GetLanguage()
+	case ".js", ".jsx", ".ts", ".tsx":
+		// JavaScript/TypeScript: typically no package declaration (use directory)
+		return ""
+	default:
+		return ""
 	}
-	// TODO: Add language-specific queries when parsers are available:
-	//
-	// Python: module docstring or __init__.py inference
-	// query = `(module) @module`
-	//
-	// Java: package declaration
-	// query = `(package_declaration (scoped_identifier) @package)`
-	//
-	// Rust: crate name from Cargo.toml or mod declaration
-	// query = `(mod_item name: (identifier) @mod)`
-	//
-	// C#: namespace declaration
-	// query = `(namespace_declaration name: (qualified_name) @namespace)`
 
 	if query == "" || lang == nil {
 		return ""
@@ -188,48 +183,56 @@ func (cae *CodeArtifactExtractor) extractPackageName(root *ts.Node, content []by
 }
 
 // extractFunctions extracts function/method names from AST.
-// Supports multiple languages with language-specific queries.
-func (cae *CodeArtifactExtractor) extractFunctions(root *ts.Node, content []byte) []string {
+// Supports: Go, Python, Java, Rust, JavaScript/TypeScript
+func (cae *CodeArtifactExtractor) extractFunctions(root *ts.Node, content []byte, fileExt string) []string {
 	functions := []string{}
-	rootType := root.Type()
 
 	var queries []string
 	var lang *ts.Language
 
-	// Go-specific function and method extraction
-	if strings.Contains(rootType, "source_file") {
+	// Language-specific function extraction
+	switch fileExt {
+	case ".go":
 		queries = []string{
 			`(function_declaration name: (identifier) @function)`,
 			`(method_declaration name: (field_identifier) @method)`,
 		}
 		lang = golang.GetLanguage()
+	case ".py":
+		queries = []string{
+			`(function_definition name: (identifier) @function)`,
+			`(class_definition body: (block (function_definition name: (identifier) @method)))`,
+		}
+		lang = python.GetLanguage()
+	case ".java":
+		queries = []string{
+			`(method_declaration name: (identifier) @method)`,
+			`(constructor_declaration name: (identifier) @constructor)`,
+		}
+		lang = java.GetLanguage()
+	case ".rs":
+		queries = []string{
+			`(function_item name: (identifier) @function)`,
+			`(impl_item (function_item name: (identifier) @method))`,
+		}
+		lang = rust.GetLanguage()
+	case ".js", ".jsx":
+		queries = []string{
+			`(function_declaration name: (identifier) @function)`,
+			`(method_definition name: (property_identifier) @method)`,
+			`(arrow_function) @arrow`,
+		}
+		lang = javascript.GetLanguage()
+	case ".ts", ".tsx":
+		queries = []string{
+			`(function_declaration name: (identifier) @function)`,
+			`(method_definition name: (property_identifier) @method)`,
+			`(arrow_function) @arrow`,
+		}
+		lang = typescript.GetLanguage()
+	default:
+		return functions
 	}
-
-	// TODO: Add language-specific queries when parsers are available:
-	//
-	// Python:
-	// queries = []string{
-	//     `(function_definition name: (identifier) @function)`,
-	//     `(class_definition body: (block (function_definition name: (identifier) @method)))`,
-	// }
-	//
-	// Java:
-	// queries = []string{
-	//     `(method_declaration name: (identifier) @method)`,
-	//     `(constructor_declaration name: (identifier) @constructor)`,
-	// }
-	//
-	// Rust:
-	// queries = []string{
-	//     `(function_item name: (identifier) @function)`,
-	//     `(impl_item (function_item name: (identifier) @method))`,
-	// }
-	//
-	// C#:
-	// queries = []string{
-	//     `(method_declaration name: (identifier) @method)`,
-	//     `(constructor_declaration name: (identifier) @constructor)`,
-	// }
 
 	if len(queries) == 0 || lang == nil {
 		return functions
@@ -252,7 +255,9 @@ func (cae *CodeArtifactExtractor) extractFunctions(root *ts.Node, content []byte
 
 			for _, capture := range match.Captures {
 				name := capture.Node.Content(content)
-				functions = append(functions, name)
+				if name != "" {
+					functions = append(functions, name)
+				}
 			}
 		}
 
@@ -264,50 +269,54 @@ func (cae *CodeArtifactExtractor) extractFunctions(root *ts.Node, content []byte
 }
 
 // extractTypes extracts type/class/struct/interface names from AST.
-// Supports multiple languages with language-specific queries.
-func (cae *CodeArtifactExtractor) extractTypes(root *ts.Node, content []byte) []string {
+// Supports: Go, Python, Java, Rust, JavaScript/TypeScript
+func (cae *CodeArtifactExtractor) extractTypes(root *ts.Node, content []byte, fileExt string) []string {
 	types := []string{}
-	rootType := root.Type()
 
 	var queries []string
 	var lang *ts.Language
 
-	// Go: type declarations (structs, interfaces, aliases)
-	if strings.Contains(rootType, "source_file") {
+	// Language-specific type extraction
+	switch fileExt {
+	case ".go":
 		queries = []string{
 			`(type_declaration (type_spec name: (type_identifier) @type))`,
 		}
 		lang = golang.GetLanguage()
+	case ".py":
+		queries = []string{
+			`(class_definition name: (identifier) @class)`,
+		}
+		lang = python.GetLanguage()
+	case ".java":
+		queries = []string{
+			`(class_declaration name: (identifier) @class)`,
+			`(interface_declaration name: (identifier) @interface)`,
+			`(enum_declaration name: (identifier) @enum)`,
+		}
+		lang = java.GetLanguage()
+	case ".rs":
+		queries = []string{
+			`(struct_item name: (type_identifier) @struct)`,
+			`(enum_item name: (type_identifier) @enum)`,
+			`(trait_item name: (type_identifier) @trait)`,
+		}
+		lang = rust.GetLanguage()
+	case ".js", ".jsx":
+		queries = []string{
+			`(class_declaration name: (identifier) @class)`,
+		}
+		lang = javascript.GetLanguage()
+	case ".ts", ".tsx":
+		queries = []string{
+			`(class_declaration name: (type_identifier) @class)`,
+			`(interface_declaration name: (type_identifier) @interface)`,
+			`(type_alias_declaration name: (type_identifier) @type)`,
+		}
+		lang = typescript.GetLanguage()
+	default:
+		return types
 	}
-
-	// TODO: Add language-specific queries when parsers are available:
-	//
-	// Python:
-	// queries = []string{
-	//     `(class_definition name: (identifier) @class)`,
-	// }
-	//
-	// Java:
-	// queries = []string{
-	//     `(class_declaration name: (identifier) @class)`,
-	//     `(interface_declaration name: (identifier) @interface)`,
-	//     `(enum_declaration name: (identifier) @enum)`,
-	// }
-	//
-	// Rust:
-	// queries = []string{
-	//     `(struct_item name: (type_identifier) @struct)`,
-	//     `(enum_item name: (type_identifier) @enum)`,
-	//     `(trait_item name: (type_identifier) @trait)`,
-	// }
-	//
-	// C#:
-	// queries = []string{
-	//     `(class_declaration name: (identifier) @class)`,
-	//     `(interface_declaration name: (identifier) @interface)`,
-	//     `(struct_declaration name: (identifier) @struct)`,
-	//     `(enum_declaration name: (identifier) @enum)`,
-	// }
 
 	if len(queries) == 0 || lang == nil {
 		return types
@@ -330,7 +339,9 @@ func (cae *CodeArtifactExtractor) extractTypes(root *ts.Node, content []byte) []
 
 			for _, capture := range match.Captures {
 				name := capture.Node.Content(content)
-				types = append(types, name)
+				if name != "" {
+					types = append(types, name)
+				}
 			}
 		}
 

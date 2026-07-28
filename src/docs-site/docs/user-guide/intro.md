@@ -21,7 +21,17 @@ AI Studio is a self-hosted AI platform that helps you code, debug, test, and man
 ## Key Features
 
 ### Intelligent Coding Workflows
-AI Studio automatically breaks down complex coding tasks into structured multi-step workflows. When you ask it to implement a feature, fix a bug, or refactor code, it creates an appropriate workflow and guides the AI through each step.
+AI Studio breaks down complex tasks into structured, multi-step workflows that guide you from problem to solution:
+
+**Smart Planning** 🤖 - Just describe what you want to accomplish, and AI Studio figures out the steps needed. Whether you're debugging a tricky issue, implementing a new feature, or refactoring code, it creates a custom plan that fits your specific situation.
+
+**Proven Templates** 📚 - For common tasks like testing, debugging, or refactoring, AI Studio can follow battle-tested patterns from your team's knowledge base. This ensures consistency and lets you encode your team's best practices.
+
+**Real-Time Adjustments** - Change your mind mid-workflow? Just type your modification and the AI adapts without starting over. Add error handling, include extra validation, or refine the approach as you go.
+
+**Intelligent Undo** 🔄 - Experiment fearlessly with an industry-leading undo system that treats each workflow as a searchable transaction. Find and restore past changes using natural language: "undo authentication middleware changes" just works. No git history pollution, no manual bisecting.
+
+**Multi-language support**: Works seamlessly with Go, Python, Java, Rust, JavaScript, TypeScript, and C#. Automatically detects your project type and uses the right tools for testing, analysis, and code generation.
 
 [Learn about Coding Workflows →](./coding-workflows)
 
