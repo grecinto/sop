@@ -75,25 +75,17 @@ Turn 4: Terminal execution
 
 **See**: [Multi-Turn Queue-Based Orchestration](../lib/sop/ai/README.md#multi-turn-queue-based-orchestration) in the main AI architecture doc for full technical details.
 
-### ⚠️ Architectural Issue Identified (2026-07-27)
+### Architecture Evolution and Consolidation (2026-07-27)
 
-**Problem**: The current queue-based multi-turn orchestration creates a **secondary orchestration loop** that runs parallel to the main Ask/ReasoningEngine pipeline. This violates the core architectural principle of maintaining a single authoritative state machine.
+The earlier queue-based orchestration approach helped the system support multi-turn clarifications, but it also created a secondary orchestration loop beside the main Ask/ReAct pipeline. The current direction is to keep one authoritative execution loop and let the coding workflow participate through lifecycle hooks and a workflow-manager/step layer.
 
-**Impact**:
-- Dual state machines (main Ask loop + coding workflow loop)
-- Memory fragmentation (workflow state separate from main Ask memory)
-- State leakage between layers
-- Increased control complexity
+This means:
+- the main Ask pipeline remains the primary state machine
+- workflow steps are orchestrated through a manager/step abstraction rather than a parallel queue loop
+- prompt context, tool outcomes, and finalization are all handled in a unified flow
+- workflow state is preserved without fragmenting memory across separate loops
 
-**Planned Refactor**: Collapse the coding workflow into a lifecycle-aware capability that participates **inside** the main Ask/ReAct loop rather than creating its own separate execution flow.
-
-**Details**: See [CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md](CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md) for comprehensive refactor plan, including:
-- Lifecycle-based capability interface (OnStart, OnBeforePrompt, OnAfterToolResult, OnAfterTurn, OnFinalize)
-- Phase-based state machine that advances within ReAct loop
-- Single shared context for all workflow state
-- Unified memory persistence through main Ask epilogue
-
-**Migration Timeline**: 4-week phased rollout (interface definition → integration → refactor → testing → cleanup)
+For the full consolidated rationale and decision history, see [WORKFLOWS.md](WORKFLOWS.md). This implementation doc remains the product-facing companion that focuses on the coding workflow experience, while the workflow doc captures the broader architectural intent.
 
 ---
 

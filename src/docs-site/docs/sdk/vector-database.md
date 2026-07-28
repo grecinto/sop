@@ -6,6 +6,19 @@ The new vector database removes the traditional K-Means, centroid, and overnight
 
 That means the system is not limited by the cost and latency of centroid-based index maintenance. It scales with available hardware, keeps updates immediate, and returns results in real time.
 
+## Spaces and semantic memory
+
+From an SDK and architecture perspective, a Space is the product-facing container for a semantic knowledge base. It is backed by a nested category hierarchy and by vectorized content that can be retrieved through semantic search.
+
+The technical relationship is:
+
+- **Spaces** provide the user-facing structure for organizing knowledge.
+- **Categories** define the nested hierarchy used for human-readable navigation and retrieval.
+- **Vectorization** turns content into embeddings so the system can perform semantic lookup.
+- **Triangulation** uses the category tree and vector similarity to retrieve the most relevant content efficiently.
+
+In other words, the user guide page on Spaces is about how to use the feature, while this SDK page explains the underlying storage, retrieval, and vectorization model that powers it.
+
 ## Traditional vs Northstar Architecture
 
 <div class="ascii-diagram">

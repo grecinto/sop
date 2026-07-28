@@ -1,12 +1,10 @@
 # Stores Management
 
-## Professional database tooling for the SOP open source project
+## Technical reference for developers
 
-**Stores** is a production-ready database management UI built for the SOP open source project. As part of our commitment to the SOP community, we're providing this professional-grade tooling to make database development, debugging, and operations accessible to all SOP developers—whether you're building AI applications, distributed systems, or embedded storage solutions.
+**Stores** provide a visual database management experience for the SOP platform and are also part of the broader SDK and AI Studio workflow. This page is intended for developers who want to understand how Stores fit into the platform, how to work with them programmatically, and how they differ from other data-oriented features.
 
-Available as part of AI Studio, Stores brings visual database management to SOP's ACID transactional B-trees, lowering the barrier to entry and accelerating development for the entire SOP ecosystem.
-
-SOP is an open-source project (MIT License) available at [github.com/sharedcode/sop](https://github.com/sharedcode/sop).
+This document focuses on technical usage, integration patterns, and implementation workflows rather than day-to-day UI guidance.
 
 ## Development workflows: Code-First vs Data-First
 

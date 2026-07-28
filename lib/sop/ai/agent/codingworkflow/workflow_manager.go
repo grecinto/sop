@@ -21,6 +21,8 @@ const (
 	StepOutcomeNeedsClarify StepOutcome = "needs_clarify" // Step needs user clarification
 	StepOutcomeSkipped      StepOutcome = "skipped"       // Step was skipped (condition not met)
 	StepOutcomeShortCircuit StepOutcome = "short_circuit" // Step detected terminal failure, stop workflow
+	StepOutcomeUserRedirect StepOutcome = "user_redirect" // User wants to change workflow direction
+	StepOutcomeUserModify   StepOutcome = "user_modify"   // User wants to modify current step behavior
 )
 
 // StepResult captures the outcome and data from a Step execution.
@@ -120,6 +122,14 @@ type StepSignal struct {
 	StepFactory func(signal StepSignal) Step
 }
 
+// WorkflowRedirect tracks when a user redirects the workflow to a different direction
+type WorkflowRedirect struct {
+	FromStep     string    // Step ID where redirect occurred
+	UserFeedback string    // User's message that triggered redirect
+	NewDirection string    // New workflow direction (TaskType or description)
+	Timestamp    time.Time // When the redirect occurred
+}
+
 // WorkflowState flows through all steps, accumulating context and research findings.
 // Each step can read previous steps' results and research data.
 type WorkflowState struct {
@@ -131,6 +141,12 @@ type WorkflowState struct {
 	WorkflowID  string
 	StartTime   time.Time
 	CurrentStep int
+
+	// Re-entrancy and user interaction support
+	OriginalWorkflowType string             // Original workflow type before any redirects
+	RedirectHistory      []WorkflowRedirect // History of workflow redirects
+	PreviousSteps        []StepResult       // Steps from abandoned workflows
+	UserInterrupted      bool               // Flag indicating user interrupted workflow
 }
 
 // SetResearchData stores research findings for a specific signal type
@@ -551,11 +567,15 @@ func (wm *WorkflowManager) Execute(ctx context.Context, steps []Step, task Task,
 
 	// Create workflow state for cross-step data sharing
 	workflowState := &WorkflowState{
-		SharedData:   make(map[string]interface{}),
-		StepHistory:  []StepResult{},
-		ResearchData: make(map[string]interface{}),
-		WorkflowID:   fmt.Sprintf("wf_%d", time.Now().UnixNano()),
-		StartTime:    startTime,
+		SharedData:           make(map[string]interface{}),
+		StepHistory:          []StepResult{},
+		ResearchData:         make(map[string]interface{}),
+		WorkflowID:           fmt.Sprintf("wf_%d", time.Now().UnixNano()),
+		StartTime:            startTime,
+		OriginalWorkflowType: task.TaskType,
+		RedirectHistory:      []WorkflowRedirect{},
+		PreviousSteps:        []StepResult{},
+		UserInterrupted:      false,
 	}
 
 	result := WorkflowResult{
@@ -645,6 +665,89 @@ func (wm *WorkflowManager) Execute(ctx context.Context, steps []Step, task Task,
 
 		case StepOutcomeSkipped:
 			// Step was skipped, continue to next
+			continue
+
+		case StepOutcomeUserRedirect:
+			// User wants to change workflow direction
+			result.CompletedSteps = append(result.CompletedSteps, stepID)
+
+			// Mark workflow as interrupted
+			workflowState.UserInterrupted = true
+
+			// Extract user feedback and new direction
+			userFeedback := ""
+			newDirection := ""
+			if feedback, ok := stepResult.Data["user_feedback"].(string); ok {
+				userFeedback = feedback
+			}
+			if direction, ok := stepResult.Data["new_direction"].(string); ok {
+				newDirection = direction
+			}
+
+			// Record the redirect in history
+			redirect := WorkflowRedirect{
+				FromStep:     stepID,
+				UserFeedback: userFeedback,
+				NewDirection: newDirection,
+				Timestamp:    time.Now(),
+			}
+			workflowState.RedirectHistory = append(workflowState.RedirectHistory, redirect)
+
+			// Store current progress before redirect
+			if len(workflowState.PreviousSteps) == 0 {
+				// First redirect - preserve original steps
+				workflowState.PreviousSteps = make([]StepResult, len(workflowState.StepHistory))
+				copy(workflowState.PreviousSteps, workflowState.StepHistory)
+			}
+
+			// Re-classify user's new direction to determine workflow type
+			// Use the feedback as the query for classification
+			classifier := DefaultTaskClassifier()
+			classification := classifier.Classify(userFeedback, "", "")
+
+			// Create new workflow steps based on classification
+			newSteps := wm.createWorkflowSteps(classification.TaskType, task)
+
+			// Replace remaining steps with new workflow
+			// Keep completed steps, replace upcoming steps
+			steps = append(steps[:i+1], newSteps...)
+
+			// Log the redirect
+			fmt.Printf("Workflow redirected at step %s: %s -> %s\n",
+				stepID, workflowState.OriginalWorkflowType, classification.TaskType)
+
+			continue
+
+		case StepOutcomeUserModify:
+			// User wants to modify current step behavior
+			result.CompletedSteps = append(result.CompletedSteps, stepID)
+
+			// Extract user modifications
+			userFeedback := ""
+			if feedback, ok := stepResult.Data["user_feedback"].(string); ok {
+				userFeedback = feedback
+			}
+
+			// Store modification in workflow state for next steps to use
+			if workflowState.SharedData == nil {
+				workflowState.SharedData = make(map[string]interface{})
+			}
+
+			// Store latest modification
+			workflowState.SharedData["user_modifications"] = userFeedback
+			workflowState.SharedData["modified_at_step"] = stepID
+
+			// Accumulate modification history for context
+			var modHistory []string
+			if existing, ok := workflowState.SharedData["modification_history"].([]string); ok {
+				modHistory = existing
+			}
+			modificationEntry := fmt.Sprintf("[Step %s] %s", stepID, userFeedback)
+			modHistory = append(modHistory, modificationEntry)
+			workflowState.SharedData["modification_history"] = modHistory
+
+			// Continue with modified context
+			fmt.Printf("Workflow modified at step %s: %s\n", stepID, userFeedback)
 			continue
 
 		default:
@@ -872,6 +975,63 @@ func (wm *WorkflowManager) PruneCache() int {
 // GetCacheSize returns the current number of cached entries.
 func (wm *WorkflowManager) GetCacheSize() int {
 	return wm.signalCache.Size()
+}
+
+// createWorkflowSteps creates workflow steps based on task type.
+// This is a helper for workflow redirection support.
+// Returns a basic set of steps appropriate for the task type.
+func (wm *WorkflowManager) createWorkflowSteps(taskType TaskType, task Task) []Step {
+	// This is a simplified implementation for redirect support
+	// In a full implementation, this would delegate to WorkflowCapability
+	// or use a more sophisticated workflow factory
+
+	switch taskType {
+	case TaskTypeDebugging:
+		return []Step{
+			NewAnalyzeCodeStep("Analyze code to identify issues"),
+			NewGeneratePatchStep("Generate fix for identified issues"),
+			NewApplyFixStep(nil),
+		}
+
+	case TaskTypeTesting:
+		return []Step{
+			NewRunTestsStep(".", []string{"./..."}),
+			NewAnalyzeErrorsStep(),
+		}
+
+	case TaskTypeImplementation:
+		return []Step{
+			NewDesignStep("Design implementation approach"),
+			NewGenerateCodeStep("Generate implementation code"),
+			NewApplyFixStep(nil),
+		}
+
+	case TaskTypeRefactoring:
+		return []Step{
+			NewAnalyzeCodeStep("Analyze code structure for refactoring"),
+			NewGeneratePlanStep("Generate refactoring plan"),
+			NewApplyRefactoringStep(),
+		}
+
+	case TaskTypeArchitecture:
+		return []Step{
+			NewAnalyzeCodeStep("Analyze codebase structure"),
+			NewDesignArchitectureStep("Design architecture proposal"),
+			NewDocumentDecisionStep("Document architecture decision"),
+		}
+
+	case TaskTypeDocumentation:
+		return []Step{
+			NewAnalyzeCodeStep("Analyze code structure"),
+			NewGenerateDocsStep("Generate documentation"),
+		}
+
+	default:
+		// General workflow
+		return []Step{
+			NewGeneralStep("Process request"),
+		}
+	}
 }
 
 // mergeSignals combines signals from multiple sources and deduplicates.

@@ -1,6 +1,6 @@
 ---
-sidebar_position: 5
-title: AI Studio Remote Daemon Access
+sidebar_position: 4
+title: Remote Daemon Access
 description: Connect AI Studio to a local or remote daemon securely after signing in to HQ.
 ---
 

@@ -15,6 +15,18 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 const sidebars: SidebarsConfig = {
   tutorialSidebar: [
     'intro',
+    {
+      type: 'category',
+      label: 'User Guide',
+      items: [
+        'user-guide/intro',
+        'user-guide/ai-window',
+        'user-guide/coding-workflows',
+        'user-guide/space-management',
+        'user-guide/store-management',
+        'user-guide/remote-daemon-access',
+      ],
+    },
     'fleet-learning',
     'green-earth-tech',
     'ai-studio-memory-advantage',
@@ -22,11 +34,6 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'SDK Documentation',
       items: ['sdk/intro', 'sdk/vector-database', 'sdk/ai-database', 'sdk/stores-management'],
-    },
-    {
-      type: 'category',
-      label: 'Space Management',
-      items: ['spaces/content-management'],
     },
   ],
 };

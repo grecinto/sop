@@ -1053,7 +1053,7 @@ The coding workflow capability (`lib/sop/ai/agent/codingworkflow/`) currently us
 
 **Timeline**: 4-week phased rollout (interface → integration → refactor → testing → cleanup)
 
-**Details**: See [CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md](CODING_WORKFLOW_SINGLE_LOOP_REFACTOR.md)
+**Details**: See [WORKFLOWS.md](WORKFLOWS.md) and [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md)
 
 ### Guideline for New Capabilities
 

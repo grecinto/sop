@@ -1,3 +1,9 @@
+---
+sidebar_position: 3
+title: Space Content Management
+description: Organize knowledge in Spaces, manage categories, and vectorize content for AI retrieval.
+---
+
 # Space Content Management
 
 ## Overview

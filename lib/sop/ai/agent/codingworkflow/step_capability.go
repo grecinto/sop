@@ -3,8 +3,16 @@ package codingworkflow
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+)
+
+// Context keys for user interruption support
+type contextKey string
+
+const (
+	ctxKeyLatestUserQuery contextKey = "latest_user_query"
 )
 
 // BaseStep provides a default implementation of the Step interface.
@@ -81,8 +89,33 @@ func (b *BaseStep) OnStart(ctx context.Context, query string, state capabilities
 }
 
 // OnBeforePrompt returns additional context for the prompt.
-// Default implementation returns empty string.
+// Default implementation automatically injects user modifications if present.
 func (b *BaseStep) OnBeforePrompt(ctx context.Context, query string, state capabilities.RoutingState) (string, error) {
+	var contextParts []string
+
+	// Check for user modifications from previous steps
+	if b.workflowState != nil && b.workflowState.SharedData != nil {
+		if modifications, ok := b.workflowState.SharedData["user_modifications"].(string); ok && modifications != "" {
+			if modifiedAtStep, ok := b.workflowState.SharedData["modified_at_step"].(string); ok {
+				contextParts = append(contextParts, fmt.Sprintf("User Modification (from step '%s'):\n%s\n", modifiedAtStep, modifications))
+			} else {
+				contextParts = append(contextParts, fmt.Sprintf("User Modification:\n%s\n", modifications))
+			}
+		}
+
+		// Check for multiple accumulated modifications
+		if modHistory, ok := b.workflowState.SharedData["modification_history"].([]string); ok && len(modHistory) > 0 {
+			contextParts = append(contextParts, "\nPrevious User Modifications:")
+			for i, mod := range modHistory {
+				contextParts = append(contextParts, fmt.Sprintf("%d. %s", i+1, mod))
+			}
+		}
+	}
+
+	if len(contextParts) > 0 {
+		return strings.Join(contextParts, "\n"), nil
+	}
+
 	return "", nil
 }
 
@@ -98,15 +131,58 @@ func (b *BaseStep) OnAfterToolResult(
 }
 
 // OnAfterTurn decides whether to continue the step.
-// Default implementation returns true (continue).
+// Default implementation checks for user redirects/modifications.
 func (b *BaseStep) OnAfterTurn(ctx context.Context, turnNumber int, state capabilities.RoutingState) (bool, error) {
+	// Check if user wants to redirect workflow
+	if isRedirect, feedback := b.DetectUserRedirect(ctx); isRedirect {
+		b.SetStepState("user_redirect_detected", true)
+		b.SetStepState("user_feedback", feedback)
+		b.StopContinuation()
+		return false, nil
+	}
+
+	// Check if user wants to modify current step
+	if isModify, feedback := b.DetectUserModification(ctx); isModify {
+		b.SetStepState("user_modify_detected", true)
+		b.SetStepState("user_feedback", feedback)
+		// Continue but note the modification
+	}
+
 	return b.continueSteps, nil
 }
 
 // OnFinalize returns the final step result.
-// Default implementation returns success.
-// Subclasses should override this to provide meaningful results.
+// Default implementation checks for redirect/modify and returns appropriate outcome.
+// Subclasses can override this to provide more specific results.
 func (b *BaseStep) OnFinalize(ctx context.Context, state capabilities.RoutingState) (StepResult, error) {
+	// Check if user requested redirect
+	if redirectDetected, _ := b.GetStepStateValue("user_redirect_detected"); redirectDetected == true {
+		userFeedback, _ := b.GetStepStateValue("user_feedback")
+		return StepResult{
+			Outcome: StepOutcomeUserRedirect,
+			Message: "User requested workflow direction change",
+			Data: map[string]interface{}{
+				"user_feedback": userFeedback,
+				"new_direction": userFeedback, // Use feedback as new direction
+				"step_state":    b.stepState,
+			},
+		}, nil
+	}
+
+	// Check if user requested modification
+	if modifyDetected, _ := b.GetStepStateValue("user_modify_detected"); modifyDetected == true {
+		userFeedback, _ := b.GetStepStateValue("user_feedback")
+		return StepResult{
+			Outcome: StepOutcomeUserModify,
+			Message: "User requested step behavior modification",
+			Data: map[string]interface{}{
+				"user_feedback": userFeedback,
+				"step_state":    b.stepState,
+			},
+		}, nil
+	}
+
+	// Normal success
 	return StepResult{
 		Outcome: StepOutcomeSuccess,
 		Message: "Step completed",
@@ -139,6 +215,111 @@ func (b *BaseStep) GetStepStateValue(key string) (interface{}, bool) {
 // StopContinuation signals that the step should stop after current turn.
 func (b *BaseStep) StopContinuation() {
 	b.continueSteps = false
+}
+
+// DetectUserRedirect checks if user input indicates a workflow direction change.
+// Returns true and the user feedback if redirect detected.
+func (b *BaseStep) DetectUserRedirect(ctx context.Context) (bool, string) {
+	userMessage := extractLastUserMessage(ctx)
+	if userMessage == "" {
+		return false, ""
+	}
+
+	lowerMsg := strings.ToLower(userMessage)
+
+	// Keywords that indicate user wants to change direction
+	redirectKeywords := []string{
+		"no,",       // "No, I want to..."
+		"wait,",     // "Wait, let's..."
+		"actually,", // "Actually, ..."
+		"instead",   // "Instead, let's..."
+		"first",     // "Test first", "Debug first"
+		"before",    // "Before that..."
+		"stop",      // "Stop, let's..."
+		"change",    // "Change direction"
+		"switch",    // "Switch to..."
+	}
+
+	for _, keyword := range redirectKeywords {
+		if strings.Contains(lowerMsg, keyword) {
+			return true, userMessage
+		}
+	}
+
+	// Check for explicit task type mentions that conflict with current workflow
+	taskMentions := []string{
+		"test", "testing",
+		"debug", "debugging", "fix",
+		"refactor", "refactoring",
+		"document", "documentation",
+		"implement", "implementation",
+		"architect", "architecture", "design",
+	}
+
+	// If user mentions a task type with "first", "instead", etc., it's likely a redirect
+	for _, mention := range taskMentions {
+		if strings.Contains(lowerMsg, mention+" first") ||
+			strings.Contains(lowerMsg, mention+" instead") ||
+			strings.Contains(lowerMsg, "do "+mention) ||
+			strings.Contains(lowerMsg, "run "+mention) {
+			return true, userMessage
+		}
+	}
+
+	return false, ""
+}
+
+// DetectUserModification checks if user input indicates they want to modify current step.
+// Returns true and the user feedback if modification detected.
+func (b *BaseStep) DetectUserModification(ctx context.Context) (bool, string) {
+	userMessage := extractLastUserMessage(ctx)
+	if userMessage == "" {
+		return false, ""
+	}
+
+	lowerMsg := strings.ToLower(userMessage)
+
+	// Keywords that indicate user wants to modify current approach
+	modifyKeywords := []string{
+		"also",         // "Also add..."
+		"but",          // "But make sure..."
+		"however",      // "However, ..."
+		"include",      // "Include this..."
+		"add",          // "Add this..."
+		"consider",     // "Consider..."
+		"make sure",    // "Make sure to..."
+		"remember",     // "Remember to..."
+		"don't forget", // "Don't forget..."
+	}
+
+	for _, keyword := range modifyKeywords {
+		if strings.Contains(lowerMsg, keyword) {
+			return true, userMessage
+		}
+	}
+
+	return false, ""
+}
+
+// extractLastUserMessage extracts the last user message from context.
+// This is a helper to access the user's latest query for interruption detection.
+func extractLastUserMessage(ctx context.Context) string {
+	// Extract from context (set by CopilotAgent.ask)
+	if query := ctx.Value("latest_user_query"); query != nil {
+		if strQuery, ok := query.(string); ok && strQuery != "" {
+			return strQuery
+		}
+	}
+
+	// Try the typed context key as fallback
+	if query := ctx.Value(ctxKeyLatestUserQuery); query != nil {
+		if strQuery, ok := query.(string); ok && strQuery != "" {
+			return strQuery
+		}
+	}
+
+	// No user message found
+	return ""
 }
 
 // Example concrete steps for test fix workflow

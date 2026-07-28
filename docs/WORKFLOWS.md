@@ -39,6 +39,26 @@
 
 ---
 
+## Architecture Evolution (2026-07-27)
+
+The workflow stack has evolved from a queue-driven execution model toward a clearer separation of concerns:
+
+- **Ask/Queue refactor**: The earlier queue-based model was useful for multi-turn interaction and clarification handling, but it introduced a secondary orchestration loop that could drift from the main Ask/ReAct state machine.
+- **Workflow Manager + Step model**: The current preferred shape is a workflow manager that sequences steps, tracks outcomes, and applies retries and short-circuit behavior. Each step is a coherent unit of work and can be retried independently.
+- **Lifecycle-aware capabilities**: The best fit for the main Ask pipeline is to let capabilities participate through lifecycle hooks such as OnStart, OnBeforePrompt, OnAfterToolResult, OnAfterTurn, and OnFinalize. This keeps a single authoritative execution state for the conversation while still allowing workflow-specific behavior.
+- **Implementation relationship**: The coding workflow implementation now lives in the workflow-manager and step-based layer under the coding workflow package, while this document captures the architectural rationale and the intended integration points with the main Ask pipeline.
+
+### What this means in practice
+
+1. The main Ask/ReAct loop remains the primary execution path.
+2. Workflow orchestration is handled by a manager/step layer rather than by a second queue-driven loop.
+3. Each step can contribute prompt context and state updates without owning the entire conversation.
+4. The outcome is cleaner memory continuity, simpler debugging, and a more scalable capability model.
+
+This consolidation replaces the earlier one-off notes on queue refactoring, transaction boundaries, lifecycle assessment, and workflow-manager design. The key ideas are now captured here and in [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md).
+
+---
+
 ## Post-V1 Vision
 
 ### Vision: Data-Driven Workflows WITH Infrastructure Integration

@@ -179,10 +179,19 @@ func (c *WorkflowCapability) Execute(ctx context.Context, query string, state ca
 		}
 	}
 
+	// Determine TaskType string for Task
+	taskTypeStr := ""
+	if isTestFix {
+		taskTypeStr = "test_fix"
+	} else {
+		taskTypeStr = string(classification.TaskType)
+	}
+
 	// Create task from query
 	task := Task{
 		WorkingDir:  ".",
 		Description: query,
+		TaskType:    taskTypeStr,
 	}
 
 	// Create RunState from RoutingState

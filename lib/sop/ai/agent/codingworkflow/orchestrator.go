@@ -33,6 +33,7 @@ type Task struct {
 	WorkingDir       string
 	ActiveFile       string
 	Description      string
+	TaskType         string // Workflow type (debugging, testing, implementation, etc.)
 	Patch            *Patch
 	Patches          []*Patch
 	AllowDestructive bool

@@ -2890,6 +2890,10 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	ctx = a.applyAskConfig(ctx, cfg)
 	a.clearAskProgressMRU()
 
+	// Store latest user query in context for user interruption detection
+	// This allows Steps to detect redirect/modification keywords via DetectUserRedirect()
+	ctx = context.WithValue(ctx, "latest_user_query", query)
+
 	// Extract ProviderDetails from ConfigMap
 	var providerDetails *ProviderDetails
 	if cfg != nil {
