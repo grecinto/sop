@@ -1,0 +1,721 @@
+{{define "undoPanel"}}
+<!-- Workflow Undo Panel - Collapsible side panel for AI chat interface -->
+<style>
+    /* Undo Panel Styles */
+    .undo-panel-container {
+        position: fixed;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 380px;
+        background: var(--bg-color, #1e1e1e);
+        border-left: 1px solid var(--border-color, #3e3e42);
+        transform: translateX(100%);
+        transition: transform 0.3s ease;
+        z-index: 1000;
+        display: flex;
+        flex-direction: column;
+        box-shadow: -2px 0 8px rgba(0,0,0,0.3);
+    }
+
+    .undo-panel-container.open {
+        transform: translateX(0);
+    }
+
+    .undo-panel-header {
+        padding: 12px 16px;
+        background: var(--sidebar-bg, #252526);
+        border-bottom: 1px solid var(--border-color, #3e3e42);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .undo-panel-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-color, #cccccc);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .undo-panel-close {
+        background: none;
+        border: none;
+        color: var(--text-muted, #858585);
+        cursor: pointer;
+        padding: 4px;
+        font-size: 18px;
+        line-height: 1;
+        transition: color 0.2s;
+    }
+
+    .undo-panel-close:hover {
+        color: var(--text-color, #cccccc);
+    }
+
+    .undo-search-bar {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border-color, #3e3e42);
+    }
+
+    .undo-search-input {
+        width: 100%;
+        padding: 8px 12px;
+        background: var(--input-bg, #3c3c3c);
+        border: 1px solid var(--border-color, #3e3e42);
+        border-radius: 4px;
+        color: var(--text-color, #cccccc);
+        font-size: 12px;
+        font-family: inherit;
+    }
+
+    .undo-search-input:focus {
+        outline: none;
+        border-color: var(--accent, #007acc);
+    }
+
+    .undo-search-input::placeholder {
+        color: var(--text-muted, #858585);
+    }
+
+    .undo-panel-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 16px;
+    }
+
+    .undo-timeline-section {
+        margin-bottom: 20px;
+    }
+
+    .undo-timeline-date {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted, #858585);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+        padding: 0 4px;
+    }
+
+    .undo-transaction-card {
+        background: var(--surface-bg, #2d2d30);
+        border: 1px solid var(--border-color, #3e3e42);
+        border-radius: 6px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .undo-transaction-card:hover {
+        background: var(--hover-bg, #37373d);
+        border-color: var(--accent, #007acc);
+    }
+
+    .undo-transaction-header {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-bottom: 6px;
+    }
+
+    .undo-status-indicator {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-top: 4px;
+        flex-shrink: 0;
+    }
+
+    .undo-status-indicator.success {
+        background: #4ec9b0;
+    }
+
+    .undo-status-indicator.failed {
+        background: #f48771;
+    }
+
+    .undo-status-indicator.undone {
+        background: #858585;
+    }
+
+    .undo-status-indicator.in-progress {
+        background: #569cd6;
+        animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+
+    .undo-transaction-info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .undo-transaction-time {
+        font-size: 11px;
+        color: var(--text-muted, #858585);
+        margin-bottom: 3px;
+    }
+
+    .undo-transaction-desc {
+        font-size: 13px;
+        color: var(--text-color, #cccccc);
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 4px;
+    }
+
+    .undo-workflow-icon {
+        font-size: 14px;
+    }
+
+    .undo-transaction-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--text-muted, #858585);
+        margin-top: 6px;
+    }
+
+    .undo-files-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 2px 6px;
+        background: rgba(78, 201, 176, 0.15);
+        border-radius: 3px;
+        color: #4ec9b0;
+    }
+
+    .undo-component-tag {
+        padding: 2px 6px;
+        background: rgba(86, 156, 214, 0.15);
+        border-radius: 3px;
+        color: #569cd6;
+    }
+
+    .undo-transaction-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
+    }
+
+    .undo-action-btn {
+        flex: 1;
+        padding: 6px 10px;
+        background: var(--button-bg, #0e639c);
+        border: 1px solid var(--button-border, #007acc);
+        color: white;
+        border-radius: 3px;
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .undo-action-btn:hover {
+        background: var(--button-hover, #1177bb);
+    }
+
+    .undo-action-btn.secondary {
+        background: transparent;
+        color: var(--text-color, #cccccc);
+        border-color: var(--border-color, #3e3e42);
+    }
+
+    .undo-action-btn.secondary:hover {
+        background: var(--hover-bg, #37373d);
+    }
+
+    .undo-action-btn.disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        pointer-events: none;
+    }
+
+    .undo-panel-footer {
+        padding: 12px 16px;
+        border-top: 1px solid var(--border-color, #3e3e42);
+        background: var(--sidebar-bg, #252526);
+    }
+
+    .undo-view-all-btn {
+        width: 100%;
+        padding: 8px 12px;
+        background: transparent;
+        border: 1px solid var(--border-color, #3e3e42);
+        color: var(--text-color, #cccccc);
+        border-radius: 4px;
+        font-size: 12px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        transition: all 0.2s;
+    }
+
+    .undo-view-all-btn:hover {
+        background: var(--hover-bg, #37373d);
+        border-color: var(--accent, #007acc);
+    }
+
+    .undo-empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--text-muted, #858585);
+    }
+
+    .undo-empty-state svg {
+        opacity: 0.3;
+        margin-bottom: 12px;
+    }
+
+    .undo-empty-state p {
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    /* Toggle button in chat header */
+    .undo-toggle-btn {
+        background: transparent;
+        border: 1px solid var(--border-color, #3e3e42);
+        color: var(--text-color, #cccccc);
+        padding: 6px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        transition: all 0.2s;
+    }
+
+    .undo-toggle-btn:hover {
+        background: var(--hover-bg, #37373d);
+        border-color: var(--accent, #007acc);
+    }
+
+    .undo-toggle-btn.active {
+        background: var(--accent, #007acc);
+        border-color: var(--accent, #007acc);
+        color: white;
+    }
+
+    .undo-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        background: #f48771;
+        color: white;
+        border-radius: 8px;
+        font-size: 10px;
+        font-weight: 600;
+    }
+</style>
+
+<!-- Undo Panel HTML -->
+<div id="undo-panel" class="undo-panel-container">
+    <div class="undo-panel-header">
+        <div class="undo-panel-title">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                <path fill-rule="evenodd" d="M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2v1z"/>
+                <path d="M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466z"/>
+            </svg>
+            Workflow Undo
+        </div>
+        <button class="undo-panel-close" onclick="toggleUndoPanel()">×</button>
+    </div>
+
+    <div class="undo-search-bar">
+        <input 
+            type="text" 
+            class="undo-search-input" 
+            id="undo-search-input"
+            placeholder="Search: 'undo auth changes from yesterday'"
+            onkeyup="searchUndoHistory(this.value)"
+        />
+    </div>
+
+    <div class="undo-panel-content" id="undo-panel-content">
+        <!-- Dynamic content populated by JavaScript -->
+        <div class="undo-empty-state">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="currentColor" viewBox="0 0 16 16">
+                <path fill-rule="evenodd" d="M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2v1z"/>
+                <path d="M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466z"/>
+            </svg>
+            <p>No workflow transactions yet.<br>Run a coding workflow to start tracking.</p>
+        </div>
+    </div>
+
+    <div class="undo-panel-footer">
+        <button class="undo-view-all-btn" onclick="viewFullUndoHistory()">
+            View Full History in Space
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                <path fill-rule="evenodd" d="M1 8a.5.5 0 0 1 .5-.5h11.793l-3.147-3.146a.5.5 0 0 1 .708-.708l4 4a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708-.708L13.293 8.5H1.5A.5.5 0 0 1 1 8z"/>
+            </svg>
+        </button>
+    </div>
+</div>
+
+<script>
+// Workflow Undo Panel JavaScript
+(function() {
+    let undoHistory = [];
+    let isUndoPanelOpen = false;
+
+    // Toggle panel visibility
+    window.toggleUndoPanel = function() {
+        const panel = document.getElementById('undo-panel');
+        const btn = document.getElementById('undo-toggle-btn');
+        
+        isUndoPanelOpen = !isUndoPanelOpen;
+        
+        if (isUndoPanelOpen) {
+            panel.classList.add('open');
+            btn.classList.add('active');
+            loadUndoHistory();
+        } else {
+            panel.classList.remove('open');
+            btn.classList.remove('active');
+        }
+    };
+
+    // Load undo history from backend
+    window.loadUndoHistory = async function() {
+        try {
+            // TODO: Replace with actual API endpoint
+            const response = await fetch('/api/workflow/undo/recent?limit=20');
+            if (!response.ok) throw new Error('Failed to load undo history');
+            
+            undoHistory = await response.json();
+            renderUndoHistory(undoHistory);
+        } catch (error) {
+            console.error('Failed to load undo history:', error);
+            renderEmptyState('Failed to load history. Please try again.');
+        }
+    };
+
+    // Render undo history grouped by date
+    function renderUndoHistory(transactions) {
+        const container = document.getElementById('undo-panel-content');
+        
+        if (!transactions || transactions.length === 0) {
+            renderEmptyState();
+            return;
+        }
+
+        // Group by date
+        const grouped = groupByDate(transactions);
+        
+        let html = '';
+        for (const [dateLabel, items] of Object.entries(grouped)) {
+            html += `<div class="undo-timeline-section">
+                <div class="undo-timeline-date">${dateLabel}</div>`;
+            
+            items.forEach(txn => {
+                html += renderTransactionCard(txn);
+            });
+            
+            html += '</div>';
+        }
+        
+        container.innerHTML = html;
+    }
+
+    // Render individual transaction card
+    function renderTransactionCard(txn) {
+        const icon = getWorkflowIcon(txn.workflow_type);
+        const statusClass = getStatusClass(txn.status);
+        const relativeTime = getRelativeTime(txn.timestamp);
+        const filesCount = txn.modified_files?.length || 0;
+        const isUndone = txn.status === 'undone';
+        
+        return `
+            <div class="undo-transaction-card" onclick="showTransactionDetails('${txn.id}')">
+                <div class="undo-transaction-header">
+                    <div class="undo-status-indicator ${statusClass}"></div>
+                    <div class="undo-transaction-info">
+                        <div class="undo-transaction-time">${relativeTime}</div>
+                        <div class="undo-transaction-desc">
+                            <span class="undo-workflow-icon">${icon}</span>
+                            ${escapeHtml(txn.description)}
+                        </div>
+                        <div class="undo-transaction-meta">
+                            <span class="undo-files-badge">
+                                📄 ${filesCount} file${filesCount !== 1 ? 's' : ''}
+                            </span>
+                            ${txn.application_domain ? `<span class="undo-component-tag">${txn.application_domain}</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="undo-transaction-actions">
+                    <button class="undo-action-btn ${isUndone ? 'disabled' : ''}" 
+                            onclick="event.stopPropagation(); undoTransaction('${txn.id}')"
+                            ${isUndone ? 'disabled' : ''}>
+                        ${isUndone ? '↩️ Already Undone' : '⏪ Undo'}
+                    </button>
+                    <button class="undo-action-btn secondary" 
+                            onclick="event.stopPropagation(); showTransactionDetails('${txn.id}')">
+                        Details
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
+    // Group transactions by date (Today, Yesterday, etc.)
+    function groupByDate(transactions) {
+        const groups = {};
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        transactions.forEach(txn => {
+            const txnDate = new Date(txn.timestamp);
+            const txnDay = new Date(txnDate.getFullYear(), txnDate.getMonth(), txnDate.getDate());
+            
+            let label;
+            if (txnDay.getTime() === today.getTime()) {
+                label = 'Today';
+            } else if (txnDay.getTime() === yesterday.getTime()) {
+                label = 'Yesterday';
+            } else {
+                label = txnDay.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            }
+            
+            if (!groups[label]) {
+                groups[label] = [];
+            }
+            groups[label].push(txn);
+        });
+        
+        return groups;
+    }
+
+    // Get workflow type icon
+    function getWorkflowIcon(type) {
+        const icons = {
+            'test_fix': '🧪',
+            'refactoring': '🎨',
+            'bug_fix': '🔧',
+            'feature': '✨',
+            'security_enhancement': '🔒',
+            'performance': '⚡',
+            'documentation': '📝'
+        };
+        return icons[type] || '💡';
+    }
+
+    // Get status CSS class
+    function getStatusClass(status) {
+        const classes = {
+            'successful': 'success',
+            'failed': 'failed',
+            'undone': 'undone',
+            'in_progress': 'in-progress'
+        };
+        return classes[status] || 'success';
+    }
+
+    // Get relative time string
+    function getRelativeTime(timestamp) {
+        const now = Date.now();
+        const then = new Date(timestamp).getTime();
+        const diff = now - then;
+        
+        const minutes = Math.floor(diff / 60000);
+        const hours = Math.floor(diff / 3600000);
+        const days = Math.floor(diff / 86400000);
+        
+        if (minutes < 1) return 'Just now';
+        if (minutes < 60) return `${minutes} min${minutes !== 1 ? 's' : ''} ago`;
+        if (hours < 24) return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+        if (days === 1) return 'Yesterday';
+        
+        return new Date(timestamp).toLocaleTimeString('en-US', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+    }
+
+    // Undo a transaction
+    window.undoTransaction = async function(txnId) {
+        if (!confirm('Restore files from this transaction?')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/workflow/undo/restore/${txnId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ create_backup: false })
+            });
+            
+            if (!response.ok) throw new Error('Failed to restore transaction');
+            
+            const result = await response.json();
+            alert(`Successfully restored ${result.files_restored} file(s)`);
+            loadUndoHistory(); // Refresh
+        } catch (error) {
+            console.error('Failed to restore transaction:', error);
+            alert('Failed to restore transaction. See console for details.');
+        }
+    };
+
+    // Quick undo last transaction (Cmd+Shift+Z)
+    window.quickUndoLastTransaction = async function() {
+        if (!undoHistory || undoHistory.length === 0) {
+            // Load history if not already loaded
+            await loadUndoHistory();
+        }
+        
+        // Find the most recent non-undone transaction
+        const lastTxn = undoHistory.find(txn => txn.status !== 'undone');
+        
+        if (!lastTxn) {
+            console.log('No transactions to undo');
+            return;
+        }
+        
+        // Auto-confirm for keyboard shortcut (quick operation)
+        try {
+            const response = await fetch(`/api/workflow/undo/restore/${lastTxn.id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ create_backup: false })
+            });
+            
+            if (!response.ok) throw new Error('Failed to restore transaction');
+            
+            const result = await response.json();
+            
+            // Show brief notification
+            showUndoNotification(`⏪ Undone: ${lastTxn.description} (${result.files_restored} files)`);
+            
+            // Refresh history if panel is open
+            if (isUndoPanelOpen) {
+                await loadUndoHistory();
+            }
+        } catch (error) {
+            console.error('Quick undo failed:', error);
+            showUndoNotification('❌ Quick undo failed', 'error');
+        }
+    };
+
+    // Show transaction details
+    window.showTransactionDetails = function(txnId) {
+        // TODO: Show modal with full transaction details
+        console.log('Show details for transaction:', txnId);
+    };
+
+    // Search undo history
+    window.searchUndoHistory = async function(query) {
+        if (!query.trim()) {
+            loadUndoHistory();
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/workflow/undo/search?q=${encodeURIComponent(query)}`);
+            if (!response.ok) throw new Error('Search failed');
+            
+            const results = await response.json();
+            renderUndoHistory(results);
+        } catch (error) {
+            console.error('Search failed:', error);
+        }
+    };
+
+    // View full history in Space
+    window.viewFullUndoHistory = function() {
+        // TODO: Navigate to Space view with undo history
+        window.location.href = '/space?filter=workflow_undo';
+    };
+
+    // Render empty state
+    function renderEmptyState(message) {
+        const container = document.getElementById('undo-panel-content');
+        const msg = message || 'No workflow transactions yet.<br>Run a coding workflow to start tracking.';
+        container.innerHTML = `
+            <div class="undo-empty-state">
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="currentColor" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2v1z"/>
+                    <path d="M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466z"/>
+                </svg>
+                <p>${msg}</p>
+            </div>
+        `;
+    }
+
+    // Utility: Escape HTML
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Show toast notification
+    function showUndoNotification(message, type = 'success') {
+        // Create or reuse notification element
+        let notification = document.getElementById('undo-toast-notification');
+        if (!notification) {
+            notification = document.createElement('div');
+            notification.id = 'undo-toast-notification';
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 12px 20px;
+                background: ${type === 'error' ? '#f48771' : '#4ec9b0'};
+                color: white;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 500;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                z-index: 10000;
+                opacity: 0;
+                transform: translateY(-10px);
+                transition: opacity 0.2s, transform 0.2s;
+            `;
+            document.body.appendChild(notification);
+        }
+        
+        notification.textContent = message;
+        notification.style.background = type === 'error' ? '#f48771' : '#4ec9b0';
+        
+        // Animate in
+        requestAnimationFrame(() => {
+            notification.style.opacity = '1';
+            notification.style.transform = 'translateY(0)';
+        });
+        
+        // Auto-hide after 3 seconds
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            notification.style.transform = 'translateY(-10px)';
+        }, 3000);
+    }
+
+    // Auto-refresh every 30 seconds if panel is open
+    setInterval(() => {
+        if (isUndoPanelOpen) {
+            loadUndoHistory();
+        }
+    }, 30000);
+})();
+</script>
+{{end}}

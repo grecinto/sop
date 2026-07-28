@@ -32,6 +32,7 @@
 - ✅ **Documentation Workflow**: 4-step generation process (analyze → extract structure → generate → review)
 - ✅ **Implementation Workflow**: 3-step build process (plan → implement → validate)
 - ✅ **Desktop Automation**: Shell/git/postgres command execution with PTY persistence
+- 🚀 **Workflow Undo System**: Multi-dimensional semantic undo with time-ranked search (see [WORKFLOW_UNDO_SYSTEM.md](WORKFLOW_UNDO_SYSTEM.md))
 
 **Feature Flag**: `kbWorkflowsEnabled = false` in `copilottools.automation.go`
 
@@ -56,6 +57,38 @@ The workflow stack has evolved from a queue-driven execution model toward a clea
 4. The outcome is cleaner memory continuity, simpler debugging, and a more scalable capability model.
 
 This consolidation replaces the earlier one-off notes on queue refactoring, transaction boundaries, lifecycle assessment, and workflow-manager design. The key ideas are now captured here and in [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md).
+
+### Workflow Undo System (2026-07-27)
+
+A **premium feature** that treats each workflow run as an atomic transaction with intelligent search and restore capabilities.
+
+**Key Innovation**: Multi-dimensional indexing with Space-backed semantic search:
+- **Date dimension**: Exact temporal filtering (fast metadata lookups)
+- **Code artifact dimension**: Semantic search by application component (AST-extracted, vectorized)
+- **Time-ranked results**: Hybrid scoring combines recency (30%) + relevance (70%)
+
+**Architecture**:
+```
+Storage Layers:
+├─ Space: Multi-path categories (date + code artifacts), vectorized semantic search
+├─ Filesystem: File backups with SHA256 verification
+└─ Index: Fast temporal lookups
+
+Query Flow:
+User query → Semantic search in Space → Date filtering → Hybrid time ranking → Results
+```
+
+**Example Queries**:
+- `sop workflow find "authentication middleware"` → Recent auth changes with semantic ranking
+- `sop workflow find "parser fixes" --after 2026-07-20` → Date + semantic combined
+- `sop workflow restore txn_xxx --dry-run` → Preview before restore
+
+**Value Proposition**:
+- vs. Git: No history pollution, workflow-scoped transactions, semantic search
+- vs. IDE undo: Application-domain aware, multi-day history, natural language queries
+- vs. Enterprise systems: Simple snapshot-based, no compensation logic, developer UX
+
+See complete documentation: [WORKFLOW_UNDO_SYSTEM.md](WORKFLOW_UNDO_SYSTEM.md)
 
 ---
 

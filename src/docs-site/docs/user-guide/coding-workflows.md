@@ -172,6 +172,142 @@ A: The system looks for common modification patterns. If unsure, be explicit: "A
 **Q: Can I interrupt during any step?**  
 A: Yes. Modifications are queued and incorporated at the next available step transition.
 
+---
+
+## Workflow Undo System 🚀
+
+AI Studio includes an **industry-leading workflow undo system** that treats each workflow run as a transaction you can intelligently search and restore.
+
+### Why This Matters
+
+Unlike traditional undo (Ctrl+Z) or git revert, the Workflow Undo System:
+
+- ✅ **Understands your codebase**: Search by application component ("auth middleware", "database layer")
+- ✅ **Combines time + relevance**: Recent changes rank higher, but old relevant changes still surface
+- ✅ **Preserves workflow context**: Know *why* changes were made, not just *what* changed
+- ✅ **No git pollution**: Experimental workflows don't clutter your commit history
+- ✅ **Multi-day history**: 30+ days of searchable workflow history
+
+### Natural Language Search
+
+Find past workflows using plain English:
+
+```bash
+# Semantic search with time ranking
+$ sop workflow find "authentication middleware"
+
+Found 5 matching workflows (ranked by recency + relevance):
+
+1. [Jul 27, 14:30] ⭐ Add JWT validation          (score: 0.95)
+   Component: Authentication System → Middleware
+   Files: auth/middleware.go, api/handler.go
+   Changes: +45 -12 lines
+   
+2. [Jul 26, 10:15] ⭐ Fix session timeout bug     (score: 0.88)
+   Component: Authentication System → Middleware
+   Files: auth/middleware.go
+   Changes: +8 -3 lines
+
+Restore to which point? (1-2, or 'browse'): _
+```
+
+### How It Works
+
+**Automatic Transaction Recording**:
+1. Each workflow run is captured as a transaction
+2. Files are backed up before modification
+3. Code artifacts (functions, classes) are extracted via AST analysis
+4. Transaction is indexed in multiple dimensions:
+   - **Date** (exact filtering)
+   - **Code artifacts** (semantic search)
+   - **Workflow metadata** (type, tags, description)
+
+**Intelligent Ranking**:
+- Combines **semantic relevance** (how well it matches your query)
+- With **time recency** (recent changes rank higher)
+- Default: 70% relevance + 30% recency (configurable)
+
+### Common Workflows
+
+**Find recent changes to a component:**
+```bash
+$ sop workflow find "parser engine" --date today
+```
+
+**Restore to a specific point:**
+```bash
+$ sop workflow restore txn_20260727_143022
+```
+
+**Preview before restoring:**
+```bash
+$ sop workflow restore txn_20260727_143022 --dry-run
+```
+
+**Selective file restore:**
+```bash
+$ sop workflow restore txn_20260727_143022 --files-only auth/middleware.go
+```
+
+**Browse by component:**
+```bash
+$ sop workflow list --component "Authentication System"
+```
+
+### Time-Ranked Results
+
+Results are automatically ranked to show the most relevant recent changes first:
+
+- **Today's changes**: Get maximum boost (recency = 1.0)
+- **This week**: Moderate boost (recency = 0.5)
+- **Older changes**: Minimal boost, but still surface if highly relevant
+
+**Example**: Searching "auth middleware" returns today's JWT changes first, but also surfaces a highly relevant authentication refactor from last month if it's semantically similar.
+
+### Multi-Dimensional Index
+
+Each transaction is accessible via multiple paths:
+
+```
+Date Path:        2026-07-27 → "Add JWT validation"
+Component Path:   Authentication System → Middleware → "Add JWT validation"
+Type Path:        security_enhancement → "Add JWT validation"
+```
+
+This enables both:
+- Fast date lookups: "What changed today?"
+- Semantic searches: "Authentication middleware changes"
+
+### Benefits for Developers
+
+**Time Savings**:
+- 10-30 minutes per undo operation (vs. manual git bisect)
+- 2-5 hours per week for frequent experimenters
+- 100+ hours per year
+
+**Confidence Boost**:
+- Experiment freely—undo is one semantic query away
+- No fear of breaking working code
+- Try multiple approaches in parallel
+
+**Context Preservation**:
+- Understand why changes were made
+- See full workflow context
+- Learn from past attempts
+
+### Storage & Retention
+
+- Default: 30 days of history
+- Automatic cleanup with milestone protection
+- ~48 KB per typical transaction
+- Compressed backups for older changes
+
+### Learn More
+
+For complete technical details, see the [Workflow Undo System documentation](../../../../docs/WORKFLOW_UNDO_SYSTEM.md).
+
+---
+
 ## Summary
 
 Coding workflows in AI Studio provide structured, intelligent task execution with the flexibility to make **simple additive modifications** on the fly. Use interruptions for quick refinements and enhancements, but stop and restart for major direction changes. This balance keeps workflows focused while staying responsive to your needs.

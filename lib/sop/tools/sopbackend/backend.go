@@ -312,6 +312,12 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/workflow/list", WithAuth(handleListWorkflows))
 	mux.HandleFunc("/api/workflow/get", WithAuth(handleGetWorkflow))
 
+	// Workflow Undo Endpoints
+	mux.HandleFunc("/api/workflow/undo/recent", WithAuth(handleUndoRecent))
+	mux.HandleFunc("/api/workflow/undo/restore/", WithAuth(handleUndoRestore)) // Trailing slash for path param
+	mux.HandleFunc("/api/workflow/undo/search", WithAuth(handleUndoSearch))
+	mux.HandleFunc("/api/workflow/undo/stats", WithAuth(handleUndoStats))
+
 	// Daemon Sync Endpoints
 	mux.HandleFunc("/api/daemon/hq-sync", HandleHQSync)
 

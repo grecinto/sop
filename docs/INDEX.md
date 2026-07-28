@@ -89,6 +89,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 | Document | Description |
 |----------|-------------|
 | [WORKFLOWS.md](WORKFLOWS.md) | ⭐ **Complete Guide**: Workflow architecture, lifecycle, implementation status, tool specifications, and best practices. Covers KB-based storage, multi-step orchestration, and automatic ingestion. |
+| [WORKFLOW_UNDO_SYSTEM.md](WORKFLOW_UNDO_SYSTEM.md) | 🚀 **Premium Feature**: Semantic workflow undo with multi-dimensional indexing, time-ranked search, and Space-backed storage. Industry-leading transaction management for AI-assisted coding. |
 | [../lib/sop/ai/memory/CATEGORY_HIERARCHY_INTEGRITY.md](../lib/sop/ai/memory/CATEGORY_HIERARCHY_INTEGRITY.md) | ⚠️ **Critical**: Semantic Path Search requires complete category hierarchies. Documents EnsureCategory fix for workflow category storage. |
 | [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Terminal-first coding workflow implementation |
 

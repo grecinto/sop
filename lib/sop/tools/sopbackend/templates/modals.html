@@ -345,6 +345,12 @@
                     </div>
                 </div>
             </div>
+            <button type="button" id="undo-toggle-btn" class="undo-toggle-btn" onclick="event.stopPropagation(); toggleUndoPanel()" title="Workflow Undo History (⌘Z)" style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: transparent; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color); font-size: 11px; cursor: pointer;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2v1z"/>
+                    <path d="M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466z"/>
+                </svg>
+            </button>
             <button type="button" id="chat-floater-btn" class="pip-btn" onclick="event.stopPropagation(); openChatPiP()" title="Open AI chat in a floating window" style="display: inline-flex; font-size: 12px;">⧉</button>
             <button type="button" id="chat-reset-btn" class="reset-btn" onclick="resetChatPosition(true)" title="Reset Position" style="font-size: 12px;">&#x21ba;</button>
             <button type="button" id="chat-minimize-btn" class="minimize-btn" onclick="handleChatMinimize()" style="font-size: 12px;" title="Close chat">

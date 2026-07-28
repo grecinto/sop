@@ -1,0 +1,416 @@
+{{define "workflowSettings"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workflow Settings - SOP Cloud</title>
+    {{template "styles" .}}
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: var(--surface-bg, white);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        .header {
+            margin-bottom: 30px;
+            border-bottom: 2px solid var(--border-color, #e0e0e0);
+            padding-bottom: 20px;
+        }
+        h1 {
+            font-size: 28px;
+            margin-bottom: 8px;
+            color: var(--text-color);
+        }
+        .subtitle {
+            color: var(--text-muted, #666);
+            font-size: 14px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding-bottom: 30px;
+            border-bottom: 1px solid var(--border-color, #e0e0e0);
+        }
+        .section:last-child {
+            border-bottom: none;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: var(--text-color);
+        }
+        .section-description {
+            font-size: 13px;
+            color: var(--text-muted, #666);
+            margin-bottom: 15px;
+        }
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+        }
+        .setting-info {
+            flex: 1;
+        }
+        .setting-label {
+            font-weight: 500;
+            color: var(--text-color);
+            margin-bottom: 4px;
+        }
+        .setting-description {
+            font-size: 13px;
+            color: var(--text-muted, #666);
+        }
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: 0.3s;
+            border-radius: 26px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #4CAF50;
+        }
+        input:checked + .slider:before {
+            transform: translateX(24px);
+        }
+        .info-box {
+            background-color: rgba(33, 150, 243, 0.1);
+            border: 1px solid rgba(33, 150, 243, 0.3);
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .info-box-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #1976D2;
+        }
+        .info-box-text {
+            font-size: 13px;
+            color: var(--text-color);
+            line-height: 1.5;
+        }
+        .warning-box {
+            background-color: rgba(255, 152, 0, 0.1);
+            border: 1px solid rgba(255, 152, 0, 0.3);
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+        .warning-box-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #F57C00;
+        }
+        .warning-box-text {
+            font-size: 13px;
+            color: var(--text-color);
+            line-height: 1.5;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status-enabled {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: #2E7D32;
+        }
+        .status-disabled {
+            background-color: rgba(158, 158, 158, 0.2);
+            color: #424242;
+        }
+        .premium-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-left: 8px;
+        }
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-color, #e0e0e0);
+        }
+        .button {
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            border: none;
+        }
+        .button-primary {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .button-primary:hover {
+            background-color: #45a049;
+        }
+        .button-secondary {
+            background-color: var(--border-color, #e0e0e0);
+            color: var(--text-color);
+        }
+        .button-secondary:hover {
+            background-color: #d0d0d0;
+        }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            display: none;
+            z-index: 1000;
+        }
+        .storage-info {
+            background-color: rgba(156, 39, 176, 0.1);
+            border: 1px solid rgba(156, 39, 176, 0.3);
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+        .storage-info-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #7B1FA2;
+        }
+        .storage-info-text {
+            font-size: 13px;
+            color: var(--text-color);
+            line-height: 1.5;
+        }
+        .storage-info ul {
+            margin: 8px 0 0 0;
+            padding-left: 20px;
+        }
+        .storage-info li {
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+    </style>
+</head>
+<body>
+    {{template "sidebar" .}}
+
+    <div class="container">
+        <div class="header">
+            <h1>Workflow Settings</h1>
+            <p class="subtitle">Configure coding workflow features and behavior</p>
+        </div>
+
+        <!-- Workflow Undo Feature -->
+        <div class="section">
+            <div class="section-title">
+                Workflow Undo System
+                <span class="premium-badge">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="currentColor" viewBox="0 0 16 16">
+                        <path d="M3.612 15.443c-.386.198-.824-.149-.746-.592l.83-4.73L.173 6.765c-.329-.314-.158-.888.283-.95l4.898-.696L7.538.792c.197-.39.73-.39.927 0l2.184 4.327 4.898.696c.441.062.612.636.282.95l-3.522 3.356.83 4.73c.078.443-.36.79-.746.592L8 13.187l-4.389 2.256z"/>
+                    </svg>
+                    Premium
+                </span>
+            </div>
+
+            <div class="info-box">
+                <div class="info-box-title">Semantic Time Travel for Your Code</div>
+                <div class="info-box-text">
+                    Treat each coding workflow as an atomic transaction. Search and restore workflow runs using natural language queries like "undo auth middleware changes from yesterday" or "restore parser improvements from last week."
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Enable Workflow Undo</div>
+                    <div class="setting-description">Track and store workflow transactions with semantic search and time-ranked results</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="workflowUndoEnabled" checked onchange="updateWorkflowUndoStatus()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div id="undoStatus" style="margin-top: 10px;">
+                <span class="status-badge status-enabled">Workflow Undo: Enabled</span>
+            </div>
+
+            <div class="storage-info">
+                <div class="storage-info-title">💾 Storage & Retention</div>
+                <div class="storage-info-text">
+                    <ul>
+                        <li><strong>Backups:</strong> Full file copies stored locally in <code>.workflow_undo/</code></li>
+                        <li><strong>Metadata:</strong> Indexed in your personal Space for semantic search</li>
+                        <li><strong>Retention:</strong> 30 days, 1000 transactions, or 500MB (whichever comes first)</li>
+                        <li><strong>Verification:</strong> SHA256 checksums ensure restore integrity</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="warning-box">
+                <div class="warning-box-title">⚠️ Experimental Feature</div>
+                <div class="warning-box-text">
+                    The Workflow Undo system is currently in beta. CLI commands for searching and restoring transactions will be available in the next release. Currently, transaction tracking happens automatically when workflows run.
+                </div>
+            </div>
+        </div>
+
+        <!-- Future: Auto-backup Before Workflows -->
+        <div class="section">
+            <div class="section-title">Workflow Safety</div>
+            <div class="section-description">
+                Additional safety features for workflow execution
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Auto-backup Before Destructive Operations</div>
+                    <div class="setting-description">Automatically create transaction snapshots before file deletions or large refactorings</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="autoBackupDestructive" checked onchange="updateSettings()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Verify Hashes on Restore</div>
+                    <div class="setting-description">Always verify SHA256 checksums when restoring files from undo history</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="verifyHashesOnRestore" checked onchange="updateSettings()">
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <button class="button button-primary" onclick="saveSettings()">Save Settings</button>
+            <button class="button button-secondary" onclick="loadSettings()">Reset to Saved</button>
+            <a href="/" class="button button-secondary">Back to Home</a>
+        </div>
+    </div>
+
+    <div class="notification" id="notification">Settings saved successfully!</div>
+
+    <script>
+        // Load settings from localStorage on page load
+        function loadSettings() {
+            try {
+                const settings = JSON.parse(localStorage.getItem('sop_workflow_settings') || '{}');
+                
+                // Set workflow undo toggle
+                const undoEnabled = settings.workflowUndoEnabled !== undefined ? settings.workflowUndoEnabled : true;
+                document.getElementById('workflowUndoEnabled').checked = undoEnabled;
+                updateWorkflowUndoStatus();
+
+                // Set other toggles
+                document.getElementById('autoBackupDestructive').checked = 
+                    settings.autoBackupDestructive !== undefined ? settings.autoBackupDestructive : true;
+                document.getElementById('verifyHashesOnRestore').checked = 
+                    settings.verifyHashesOnRestore !== undefined ? settings.verifyHashesOnRestore : true;
+            } catch (err) {
+                console.error('Failed to load workflow settings:', err);
+            }
+        }
+
+        function updateWorkflowUndoStatus() {
+            const enabled = document.getElementById('workflowUndoEnabled').checked;
+            const status = document.getElementById('undoStatus');
+            
+            if (enabled) {
+                status.innerHTML = '<span class="status-badge status-enabled">Workflow Undo: Enabled</span>';
+            } else {
+                status.innerHTML = '<span class="status-badge status-disabled">Workflow Undo: Disabled</span>';
+            }
+        }
+
+        function updateSettings() {
+            // Called when any setting changes (for future use)
+        }
+
+        function saveSettings() {
+            try {
+                const settings = {
+                    workflowUndoEnabled: document.getElementById('workflowUndoEnabled').checked,
+                    autoBackupDestructive: document.getElementById('autoBackupDestructive').checked,
+                    verifyHashesOnRestore: document.getElementById('verifyHashesOnRestore').checked,
+                    lastUpdated: new Date().toISOString()
+                };
+
+                localStorage.setItem('sop_workflow_settings', JSON.stringify(settings));
+                
+                // Show notification
+                const notification = document.getElementById('notification');
+                notification.style.display = 'block';
+                setTimeout(() => {
+                    notification.style.display = 'none';
+                }, 3000);
+            } catch (err) {
+                console.error('Failed to save workflow settings:', err);
+                alert('Failed to save settings. Please try again.');
+            }
+        }
+
+        // Initialize settings on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadSettings();
+        });
+    </script>
+</body>
+</html>
+{{end}}
