@@ -8,7 +8,6 @@ import (
 	"io"
 	log "log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -142,7 +141,7 @@ func importSpaceFromHQ(ctx context.Context, dbName, spaceName string, spaceData 
 
 // acknowledgeSpaceReceipt sends an acknowledgment to HQ that a Space was received.
 func acknowledgeSpaceReceipt(spaceName, dbName string) {
-	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
+	hqBaseURL := getHQBaseURLFromEnvOrSession()
 	if hqBaseURL == "" {
 		log.Debug("daemon acknowledge: no HQ URL configured, skipping acknowledgment")
 		return
@@ -273,7 +272,7 @@ func pushSpaceContentToHQ(ctx context.Context, spaceName, content, category stri
 		return nil
 	}
 
-	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
+	hqBaseURL := getHQBaseURLFromEnvOrSession()
 	if hqBaseURL == "" {
 		log.Debug("daemon push content: no HQ URL configured")
 		return nil

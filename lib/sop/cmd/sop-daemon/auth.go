@@ -269,7 +269,9 @@ func NewDaemonAuthHandler(config DaemonAuthConfig) (*DaemonAuthHandler, error) {
 	sessionStore := sopbackend.NewSessionStore(config.AccessTokenTTL)
 	// TODO: Set refreshTTL once sopbackend exports it or provides setter
 
-	// Initialize poll client if HQ is configured
+	// Initialize poll client if HQ is configured via environment variable
+	// Note: If HQ URL comes from UI session instead, poll client will be nil
+	// but syncWithHQ will still work using session store HQ URL
 	var pollClient *FederationPollClient
 	if hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")); hqBaseURL != "" {
 		daemonID := "local-daemon"
@@ -295,6 +297,26 @@ func getHQSigningSecret() string {
 		return secret
 	}
 	return "sop-daemon-hq-default-secret"
+}
+
+// getHQBaseURL retrieves HQ URL from environment or active session store
+func getHQBaseURLFromEnvOrSession() string {
+	// Try environment variable first (for standalone daemon mode)
+	if hqURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL")); hqURL != "" {
+		return hqURL
+	}
+
+	// Check for HQ URL from any active UI session
+	daemonSessionStore.mu.Lock()
+	defer daemonSessionStore.mu.Unlock()
+
+	for _, session := range daemonSessionStore.data {
+		if sessionHQURL := strings.TrimSpace(session.HQBaseURL); sessionHQURL != "" {
+			return sessionHQURL
+		}
+	}
+
+	return ""
 }
 
 func (h *DaemonAuthHandler) getHQSigningSecretValue() []byte {
@@ -496,7 +518,7 @@ func (h *DaemonAuthHandler) syncWithHQ(ctx context.Context) error {
 		return nil
 	}
 
-	hqBaseURL := strings.TrimSpace(os.Getenv("SOP_HQ_BASE_URL"))
+	hqBaseURL := getHQBaseURLFromEnvOrSession()
 	if hqBaseURL == "" {
 		logVerbose("HQ sync skipped (no HQ endpoint configured)")
 		return nil
