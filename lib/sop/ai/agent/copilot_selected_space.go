@@ -143,7 +143,7 @@ func (a *CopilotAgent) selectedSpaceConfigContext(ctx context.Context, kbRef ai.
 		return ""
 	}
 
-	tx, err := db.BeginTransaction(ctx, sop.ForReading)
+	tx, err := db.BeginTransaction(ctx, sop.NoCheck)
 	if err != nil {
 		return ""
 	}
@@ -180,7 +180,7 @@ func (a *CopilotAgent) selectedSpaceStructuredBriefContext(ctx context.Context, 
 		return ""
 	}
 
-	tx, err := db.BeginTransaction(ctx, sop.ForReading)
+	tx, err := db.BeginTransaction(ctx, sop.NoCheck)
 	if err != nil {
 		return ""
 	}
@@ -277,7 +277,7 @@ func (a *CopilotAgent) selectedSpaceBriefDigestHits(ctx context.Context, query s
 		return nil
 	}
 
-	tx, err := db.BeginTransaction(ctx, sop.ForReading)
+	tx, err := db.BeginTransaction(ctx, sop.NoCheck)
 	if err != nil {
 		return nil
 	}
@@ -334,7 +334,7 @@ func (a *CopilotAgent) selectedSpaceDigestContext(ctx context.Context, query str
 		return ""
 	}
 
-	tx, err := db.BeginTransaction(ctx, sop.ForReading)
+	tx, err := db.BeginTransaction(ctx, sop.NoCheck)
 	if err != nil {
 		return ""
 	}

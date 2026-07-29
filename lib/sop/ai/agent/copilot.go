@@ -2193,7 +2193,7 @@ func (a *CopilotAgent) retrieveCodingWorkflowExpertise(ctx context.Context, task
 	if strings.TrimSpace(query) == "" {
 		return cw.ExpertiseCapsule{}, fmt.Errorf("empty expertise query")
 	}
-	tx, err := a.systemDB.BeginTransaction(ctx, sop.ForReading)
+	tx, err := a.systemDB.BeginTransaction(ctx, sop.NoCheck)
 	if err != nil {
 		return cw.ExpertiseCapsule{}, fmt.Errorf("begin expertise tx: %w", err)
 	}
@@ -4694,7 +4694,7 @@ func (a *CopilotAgent) getPlaybooksContext(ctx context.Context, query string, ta
 			tempDB := database.NewDatabase(dbOpts)
 			kbs := func(ctx context.Context, tempDB *database.Database) []string {
 				var kbs []string
-				if tx, err := tempDB.BeginTransaction(ctx, sop.ForReading); err == nil {
+				if tx, err := tempDB.BeginTransaction(ctx, sop.NoCheck); err == nil {
 					if stores, err := tx.GetStores(ctx); err == nil {
 						for _, s := range stores {
 							if strings.HasSuffix(s, "/sys_config") {
@@ -4722,7 +4722,7 @@ func (a *CopilotAgent) getPlaybooksContext(ctx context.Context, query string, ta
 
 		hasGoodHits := false
 		if domainDB != nil {
-			if tx, err := domainDB.BeginTransaction(ctx, sop.ForReading); err == nil {
+			if tx, err := domainDB.BeginTransaction(ctx, sop.NoCheck); err == nil {
 				kb, err := domainDB.OpenKnowledgeBase(ctx, domain, tx, nil, nil, false)
 				if err == nil && a.service != nil && a.service.Domain() != nil && a.service.Domain().Embedder() != nil {
 					hits, err := memory.DigestKnowledgeBase(ctx, kb, a.service.Domain().Embedder(), memory.KBDigestRequest{

@@ -126,18 +126,607 @@ func phaseKeywords(phaseID string) []string {
 }
 
 func (c *PhaseCapability) BuildContext(query string, state capabilities.RoutingState) string {
+	return c.buildPhaseSpecificContext(query, state)
+}
+
+func (c *PhaseCapability) buildPhaseSpecificContext(query string, state capabilities.RoutingState) string {
+	switch c.phaseID {
+	case "intake":
+		return c.buildIntakeContext()
+	case "investigation":
+		return c.buildInvestigationContext()
+	case "planning":
+		return c.buildPlanningContext()
+	case "execution":
+		return c.buildExecutionContext()
+	case "review":
+		return c.buildReviewContext()
+	case "delivery":
+		return c.buildDeliveryContext()
+	default:
+		return c.buildGenericContext()
+	}
+}
+
+func (c *PhaseCapability) buildGenericContext() string {
 	return fmt.Sprintf("Phase capability: %s\n- Use this capability when the conversation is in the %s phase.\n- Capture the current artifact into memory so later Ask turns can continue from the same context.\n- If the user wants to move on, record a successor phase or signal an exit so the workflow can proceed fluidly.", c.name, c.description)
 }
 
+func (c *PhaseCapability) buildIntakeContext() string {
+	return `PHASE: Intake & Context Assembly
+
+OBJECTIVE:
+- Gather and clarify user requirements
+- Build initial context about the task
+- Identify scope, constraints, and success criteria
+- Output: Clear requirements list for investigation/planning
+
+INTERACTION MODES:
+This phase supports TWO interaction modes - choose based on request clarity and user engagement style:
+
+• TRADITIONAL MODE (Complete in one turn):
+  - User's request is clear and unambiguous
+  - Requirements can be documented without extensive back-and-forth
+  - Execute: Gather context → Document requirements → Capture artifact → Transition (all in one response)
+
+• ITERATIVE MODE (Short interactions):
+  - Request is ambiguous or has multiple interpretations
+  - User prefers collaborative refinement
+  - Execute: Ask 1-2 clarifying questions → Wait for user response → Continue in next Ask turn
+  - Capture intermediate artifact with status="gathering" or "clarifying"
+
+WORKFLOW:
+1. Ask clarifying questions to understand the request
+2. Call intake_build_context to gather repository context if applicable
+3. Document requirements, constraints, and goals
+4. Capture artifact with requirements list
+5. Transition to investigation when requirements are clear
+
+COMPLETION CRITERIA:
+□ User's intent is clearly documented
+□ Requirements list has >= 1 concrete requirement
+□ Scope is defined (what's included/excluded)
+□ Success criteria or acceptance criteria documented
+□ Artifact captured with status="complete"
+□ Ready to transition to investigation or planning
+
+PHASE TRANSITIONS:
+You can move FORWARD or BACKWARD. Capture transition intent when ready:
+
+• FORWARD to Investigation (typical path):
+  - Requirements are clear enough to research codebase
+  - Capture: status="complete", transition_to="investigation", transition_direction="forward"
+
+• FORWARD to Planning (skip investigation if context is very clear):
+  - Simple change with known implementation path
+  - Capture: status="complete", transition_to="planning", transition_direction="forward"
+
+• EXIT:
+  - User wants to pause or cancel
+  - Capture: exit_requested=true
+
+No backward transition from Intake (this is the first phase).
+
+ARTIFACT FIELDS:
+- summary: One-sentence description of what user wants
+- status: "gathering" | "clarifying" | "complete"
+- requirements: ["req 1", "req 2", ...] - concrete, testable requirements
+- notes: Constraints, assumptions, risks, dependencies
+- next_steps: Guidance for investigation phase
+
+USER INTERACTION:
+ASK WHEN: Requirements are ambiguous, scope unclear, multiple interpretations possible
+AUTONOMOUS: When request is clear and unambiguous
+
+QUALITY STANDARDS:
+✅ GOOD: "Add Redis caching to getUserByID() with 5-minute TTL"
+❌ BAD: "Make it faster"
+✅ GOOD: "Cache should invalidate on user update/delete operations"
+❌ BAD: "Add caching"`
+}
+
+func (c *PhaseCapability) buildInvestigationContext() string {
+	return `PHASE: Investigation & Analysis
+
+OBJECTIVE:
+- Understand current codebase state
+- Identify relevant files, functions, patterns
+- Trace dependencies and data flows
+- Output: Evidence and analysis for planning
+
+INTERACTION MODES:
+This phase supports TWO interaction modes - choose based on task complexity and user preference:
+
+• TRADITIONAL MODE (Complete in one turn):
+  - Task scope is well-defined from intake
+  - Repository is familiar or well-structured
+  - Execute: Build context → Search → Inspect → Document evidence → Capture → Transition (all in one response)
+
+• ITERATIVE MODE (Short interactions):
+  - Large/complex codebase requiring exploration
+  - User wants to see findings progressively
+  - Execute: Build context → Present initial findings → Wait for user direction → Continue investigation
+  - Capture intermediate artifact with status="exploring" after each batch of findings
+
+WORKFLOW:
+1. Call investigation_build_context to understand repository structure
+2. Call investigation_inspect_repo to see current state and changes
+3. Call investigation_search_repo to find relevant code, patterns, or similar implementations
+4. Call investigation_list_changed_files to avoid conflicts with in-progress work
+5. Document findings in evidence list
+6. Capture artifact with evidence and analysis
+7. Transition to planning when investigation is complete
+
+COMPLETION CRITERIA:
+□ Repository context gathered (structure understood)
+□ Relevant files/functions identified
+□ Similar patterns or implementations found (or documented as novel)
+□ Dependencies and data flows traced
+□ Evidence list has >= 3 findings
+□ Artifact captured with status="complete"
+□ Ready to transition to planning
+
+PHASE TRANSITIONS:
+You can move FORWARD or BACKWARD. Capture transition intent when ready:
+
+• FORWARD to Planning (typical path):
+  - Evidence gathered, ready to design solution
+  - Capture: status="complete", transition_to="planning", transition_from="intake", transition_direction="forward"
+
+• BACKWARD to Intake (rare, but valid):
+  - Investigation reveals requirements were misunderstood
+  - User changes scope during investigation
+  - Capture: transition_to="intake", transition_from="investigation", transition_direction="backward"
+
+• EXIT:
+  - User wants to pause after seeing findings
+  - Capture: exit_requested=true
+
+ARTIFACT FIELDS:
+- summary: One-sentence investigation summary
+- status: "exploring" | "analyzing" | "complete"
+- requirements: (from intake phase)
+- evidence: ["finding 1: file.go:123 does X", "finding 2: pattern Y in lib/", ...]
+- notes: Technical details, constraints, risks
+- next_steps: Recommendations for planning
+
+TOOL USAGE:
+- ALWAYS call investigation_build_context first
+- SEARCH before assuming patterns don't exist
+- INSPECT to understand current state
+- LIST changed files to avoid conflicts
+
+QUALITY STANDARDS:
+✅ GOOD: "getUserByID() in services/user_service.go:87 makes direct DB calls without caching"
+❌ BAD: "User service needs caching"
+✅ GOOD: "Found similar cache pattern in services/product_service.go:145 using shared/cache/manager.go"
+❌ BAD: "Caching exists elsewhere"`
+}
+
+func (c *PhaseCapability) buildPlanningContext() string {
+	return `PHASE: Planning & Design
+
+OBJECTIVE:
+- Design concrete, actionable implementation strategy
+- Create ordered list of implementation steps
+- Identify files, functions, and code locations
+- Output: Concrete execution plan with >= 3 steps
+
+INTERACTION MODES:
+This phase supports TWO interaction modes - choose based on change complexity and risk:
+
+• TRADITIONAL MODE (Complete in one turn):
+  - Changes are straightforward with clear implementation path
+  - Similar patterns exist in codebase (from investigation)
+  - Low risk (localized changes, good test coverage)
+  - Execute: Gather context → Research patterns → Generate plan → Present for approval → Capture (all in one response)
+
+• ITERATIVE MODE (Short interactions):
+  - Complex changes requiring architecture decisions
+  - Multiple implementation strategies possible
+  - High risk (breaking changes, cross-cutting concerns)
+  - User wants to validate approach before detailed planning
+  - Execute: Present high-level approach → Get feedback → Refine → Present detailed plan → Get approval
+  - Capture intermediate artifact with status="drafting" after each iteration
+
+WORKFLOW:
+1. Review requirements from intake and evidence from investigation
+2. Call planning_build_context to refresh repository understanding
+3. Call planning_search_repo to find implementation patterns
+4. Call planning_inspect_repo to understand current code structure
+5. Call planning_list_changed_files to check for conflicts
+6. Call planning_plan_changes to generate concrete plan
+7. Review plan quality: each step references specific files/functions
+8. Present plan to user for review
+9. If approved: Capture artifact with status="ready_for_execution" and transition_to="execution"
+10. If changes needed: Iterate on plan (update iteration counter)
+
+COMPLETION CRITERIA:
+□ Context gathered and patterns researched
+□ Plan has >= 3 concrete steps
+□ Each step references specific files, functions, or line numbers
+□ Dependencies are ordered correctly (types before usage, schema before queries)
+□ Test strategy is included
+□ User has reviewed and approved (or auto-approved for minor changes)
+□ Artifact captured with status="ready_for_execution"
+□ Transition signaled: transition_to="execution", transition_direction="forward"
+
+PHASE TRANSITIONS:
+You can move FORWARD or BACKWARD. Capture transition intent when ready:
+
+• FORWARD to Execution (typical path):
+  - Plan approved and ready for implementation
+  - Capture: status="ready_for_execution", transition_to="execution", transition_from="investigation", transition_direction="forward"
+
+• BACKWARD to Investigation (need more evidence):
+  - Plan reveals gaps in understanding
+  - User questions assumptions during review
+  - Novel approach needs validation
+  - Capture: transition_to="investigation", transition_from="planning", transition_direction="backward"
+
+• BACKWARD to Intake (requirements changed):
+  - User changes requirements during planning
+  - Original scope was wrong
+  - Capture: transition_to="intake", transition_from="planning", transition_direction="backward"
+
+• EXIT:
+  - User wants to review plan offline before proceeding
+  - Capture: exit_requested=true
+
+ARTIFACT FIELDS:
+- summary: One-sentence plan overview
+- status: "drafting" | "refining" | "ready_for_execution" | "blocked"
+- requirements: (from intake)
+- plan: ["step 1: specific action at file:line", "step 2: ...", ...]
+- notes: Constraints, risks, dependencies, rollback strategy
+- evidence: (from investigation - patterns found)
+- next_steps: Guidance for execution phase
+- transition_to: "execution"
+- transition_direction: "forward"
+
+TOOL SEQUENCE:
+1. planning_build_context (REQUIRED FIRST)
+2. planning_search_repo (research patterns BEFORE designing)
+3. planning_inspect_repo (understand current state)
+4. planning_list_changed_files (avoid conflicts)
+5. planning_plan_changes (generate concrete plan)
+6. planning_capture (save artifact)
+
+QUALITY STANDARDS:
+✅ CONCRETE: "Add CacheManager import to services/user_service.go (line 5)"
+❌ VAGUE: "Import cache library"
+✅ CONCRETE: "Wrap getUserByID() call in cache.Get() at line 87, key format: user:{id}"
+❌ VAGUE: "Add caching to user lookup"
+✅ CONCRETE: "Add unit tests for cache hit/miss/invalidation in user_service_test.go"
+❌ VAGUE: "Add tests"
+
+BLOCKING CONDITIONS:
+- Requirements unclear → Return to intake
+- Repository path invalid → Ask user for correct path
+- Novel approach unvalidated → Request architecture review
+- User rejects plan → Iterate (increment iteration counter)
+- Critical dependencies missing → Flag as blocked in status
+
+USER INTERACTION:
+ASK WHEN:
+- Requirements ambiguous or conflicting
+- Multiple implementation strategies exist (present options)
+- Risky changes require approval
+- Novel implementation without established patterns
+PRESENT FOR REVIEW:
+"Implementation plan: [formatted plan with steps]. Does this look correct?"`
+}
+
+func (c *PhaseCapability) buildExecutionContext() string {
+	return `PHASE: Execution & Implementation
+
+OBJECTIVE:
+- Apply planned changes to codebase
+- Follow the execution plan from planning phase
+- Validate changes through testing
+- Output: Applied patches and test results
+
+INTERACTION MODES:
+This phase supports TWO interaction modes - user approval is MANDATORY for safety in BOTH modes:
+
+• TRADITIONAL MODE (Batched execution):
+  - Plan has 3-5 related changes that are safe to batch
+  - Changes are independent (no cross-dependencies)
+  - Execute: Preview ALL changes → Get bulk approval → Apply all → Run tests → Capture (2-3 interactions total)
+
+• ITERATIVE MODE (Step-by-step execution):
+  - Plan has many changes (6+ steps)
+  - Changes have dependencies (must be applied in sequence)
+  - User wants to validate each change before proceeding
+  - High risk changes (schema migrations, refactoring)
+  - Execute: Preview step 1 → Approve → Apply → Test → Present results → Preview step 2 → ...
+  - Capture intermediate artifact with status="applying" after each step
+
+NOTE: Even in traditional mode, ALWAYS preview before apply and get user approval. Safety is non-negotiable.
+
+WORKFLOW:
+1. Review plan from planning phase artifact
+2. For each step in plan:
+   a. Call execution_preview_patch to preview changes
+   b. Get user approval for preview (MANDATORY for safety)
+   c. Call execution_apply_patch to apply changes
+   d. Call execution_run_tests to validate
+3. Capture artifact with results
+4. If tests pass: Transition to review
+5. If tests fail: Iterate or return to planning
+
+COMPLETION CRITERIA:
+□ All planned changes applied
+□ Each patch previewed before application (safety)
+□ Tests executed and passing
+□ No regressions introduced
+□ Artifact captured with status="complete"
+□ Ready to transition to review
+
+PHASE TRANSITIONS:
+You can move FORWARD or BACKWARD. Capture transition intent when ready:
+
+• FORWARD to Review (typical path):
+  - All changes applied and tests passing
+  - Capture: status="complete", transition_to="review", transition_from="planning", transition_direction="forward"
+
+• BACKWARD to Planning (plan was flawed):
+  - Implementation reveals plan won't work
+  - Better approach discovered during execution
+  - Tests fail due to design issues (not bugs)
+  - Capture: transition_to="planning", transition_from="execution", transition_direction="backward", notes=[reason]
+
+• EXIT:
+  - User wants to pause mid-implementation
+  - Capture: exit_requested=true
+
+ARTIFACT FIELDS:
+- summary: One-sentence execution summary
+- status: "applying" | "testing" | "complete" | "failed"
+- plan: (from planning - what was executed)
+- notes: Implementation details, issues encountered
+- evidence: Patches applied, test results
+- next_steps: Guidance for review phase
+- transition_to: "review"
+- transition_direction: "forward"
+
+SAFETY RULES (CRITICAL):
+⚠️  MUST preview patch before applying
+⚠️  MUST get user approval for destructive changes
+⚠️  MUST run tests after each significant change
+⚠️  MUST capture rollback information
+
+TOOL SEQUENCE:
+1. execution_preview_patch (show user what will change)
+2. [WAIT for approval]
+3. execution_apply_patch (apply after approval)
+4. execution_run_tests (validate changes)
+5. execution_capture (save results)
+
+QUALITY STANDARDS:
+✅ SAFE: Preview → Approval → Apply → Test
+❌ UNSAFE: Apply without preview
+✅ INCREMENTAL: Apply one logical change at a time
+❌ BULK: Apply all changes at once without validation
+
+USER INTERACTION:
+ALWAYS ASK:
+- Before applying patches (show preview)
+- When tests fail (explain failure, propose fix)
+- When encountering unexpected state`
+}
+
+func (c *PhaseCapability) buildReviewContext() string {
+	return `PHASE: Review & Validation
+
+OBJECTIVE:
+- Validate implementation meets requirements
+- Run comprehensive tests
+- Check code quality and standards
+- Output: Validation results and approval
+
+INTERACTION MODES:
+This phase supports TWO interaction modes - choose based on testing complexity and findings:
+
+• TRADITIONAL MODE (Complete in one turn):
+  - Simple changes with straightforward validation
+  - All tests pass on first run
+  - No issues found during review
+  - Execute: Build context → Run tests → Validate requirements → Capture → Transition (all in one response)
+
+• ITERATIVE MODE (Investigative validation):
+  - Tests fail and require investigation
+  - Quality issues need discussion
+  - Requirements partially met (need clarification)
+  - Execute: Run tests → Present results → Discuss failures → Fix → Re-test (multiple iterations)
+  - Capture intermediate artifact with status="reviewing" after each validation attempt
+
+WORKFLOW:
+1. Call review_build_context to understand current state
+2. Call review_inspect_repo to see applied changes
+3. Call review_run_tests to validate functionality
+4. Compare results against requirements from intake
+5. Check quality: code style, test coverage, documentation
+6. Capture artifact with validation results
+7. If approved: Transition to delivery
+8. If issues found: Return to execution or planning
+
+COMPLETION CRITERIA:
+□ All requirements validated
+□ Tests passing (unit, integration)
+□ Code quality meets standards
+□ No regressions detected
+□ Documentation updated if needed
+□ Artifact captured with status="approved"
+□ Ready to transition to delivery
+
+PHASE TRANSITIONS:
+You can move FORWARD or BACKWARD. Capture transition intent when ready:
+
+• FORWARD to Delivery (typical path):
+  - All tests pass, validation complete
+  - Capture: status="approved", transition_to="delivery", transition_from="execution", transition_direction="forward"
+
+• BACKWARD to Execution (tests fail, minor fixes):
+  - Test failures due to implementation bugs (not design issues)
+  - Edge cases need handling
+  - Capture: transition_to="execution", transition_from="review", transition_direction="backward", notes=[failures]
+
+• BACKWARD to Planning (fundamental issues):
+  - Design flaws discovered during testing
+  - Requirements not actually met by implementation
+  - Major refactoring needed
+  - Capture: transition_to="planning", transition_from="review", transition_direction="backward", notes=[issues]
+
+• EXIT:
+  - User wants to review failures before deciding next steps
+  - Capture: exit_requested=true
+
+ARTIFACT FIELDS:
+- summary: One-sentence review summary
+- status: "reviewing" | "approved" | "rejected"
+- requirements: (from intake - validation checklist)
+- evidence: Test results, quality checks
+- notes: Issues found, recommendations
+- next_steps: For delivery or for fixing issues
+- transition_to: "delivery" | "execution" (if issues found)
+- transition_direction: "forward" | "backward"
+
+VALIDATION CHECKLIST:
+□ Functional requirements met
+□ Tests passing
+□ No regressions
+□ Code quality acceptable
+□ Documentation updated
+□ Performance acceptable
+
+USER INTERACTION:
+ASK WHEN:
+- Tests fail (show results, explain issue)
+- Quality issues found (explain impact)
+- Requirements not fully met (show gap)`
+}
+
+func (c *PhaseCapability) buildDeliveryContext() string {
+	return `PHASE: Delivery & Handoff
+
+OBJECTIVE:
+- Summarize completed work
+- Document changes and decisions
+- Prepare handoff to user
+- Output: Comprehensive delivery summary
+
+INTERACTION MODES:
+This phase supports TWO interaction modes - choose based on delivery scope:
+
+• TRADITIONAL MODE (Complete in one turn):
+  - Standard delivery with straightforward summary
+  - No additional documentation or handoff needed
+  - Execute: Review artifacts → Summarize → Document changes → Capture → Done (all in one response)
+
+• ITERATIVE MODE (Collaborative handoff):
+  - Complex delivery requiring detailed documentation
+  - User wants to review summary sections before finalization
+  - Additional artifacts needed (diagrams, runbooks, migration guides)
+  - Execute: Present summary draft → Get feedback → Add documentation → Present → Finalize
+  - Capture intermediate artifact with status="drafting" while refining
+
+WORKFLOW:
+1. Review artifacts from all phases
+2. Summarize: requirements → investigation → plan → execution → validation
+3. Document changes made
+4. Capture artifact with delivery summary
+5. Signal exit to complete workflow
+
+COMPLETION CRITERIA:
+□ All phase artifacts reviewed
+□ Changes summarized clearly
+□ Decisions documented
+□ User questions answered
+□ Artifact captured with status="delivered"
+□ Exit requested
+
+PHASE TRANSITIONS:
+You can move FORWARD or BACKWARD. Capture transition intent when ready:
+
+• FORWARD / EXIT (typical path):
+  - Work is complete and user accepts delivery
+  - Capture: status="delivered", exit_requested=true
+
+• BACKWARD to Review (user requests changes):
+  - User wants modifications to delivered work
+  - Additional validation needed
+  - Capture: transition_to="review", transition_from="delivery", transition_direction="backward", notes=[requested changes]
+
+• BACKWARD to Execution (user requests significant changes):
+  - Major rework needed based on delivery review
+  - Capture: transition_to="execution", transition_from="delivery", transition_direction="backward", notes=[rework needed]
+
+No forward transition from Delivery (this is the final phase). Typically exit_requested=true.
+
+ARTIFACT FIELDS:
+- summary: Comprehensive delivery summary
+- status: "preparing" | "delivered"
+- requirements: (original requirements from intake)
+- evidence: Changes made, files modified
+- notes: Key decisions, future recommendations
+- exit_requested: true
+
+DELIVERY SUMMARY FORMAT:
+"Completed: [objective from intake]
+
+Changes Made:
+- [file 1]: [changes]
+- [file 2]: [changes]
+
+Testing:
+- [test results summary]
+
+Notes:
+- [key decisions or considerations]
+
+Next Steps:
+- [if any follow-up needed]"
+
+USER INTERACTION:
+- Present clear, readable summary
+- Answer questions about implementation
+- Provide guidance for future changes`
+}
+
 func (c *PhaseCapability) ExposeTools() []capabilities.ToolDefinition {
+	captureSchema := `{
+  "type": "object",
+  "required": ["summary", "status"],
+  "properties": {
+    "summary": {"type": "string", "description": "One-sentence phase summary (required)"},
+    "status": {"type": "string", "description": "Phase status: exploring|drafting|refining|ready_for_execution|complete|blocked|approved|delivered"},
+    "requirements": {"type": "array", "items": {"type": "string"}, "description": "List of requirements (from intake phase)"},
+    "plan": {"type": "array", "items": {"type": "string"}, "description": "Ordered implementation steps (concrete, file-specific)"},
+    "notes": {"type": "array", "items": {"type": "string"}, "description": "Constraints, risks, considerations"},
+    "evidence": {"type": "array", "items": {"type": "string"}, "description": "Findings, patterns, references"},
+    "next_steps": {"type": "array", "items": {"type": "string"}, "description": "Guidance for next phase"},
+    "transition_to": {"type": "string", "description": "Next phase ID: intake|investigation|planning|execution|review|delivery"},
+    "transition_from": {"type": "string", "description": "Previous phase ID"},
+    "transition_direction": {"type": "string", "description": "Transition direction: forward|backward"},
+    "exit": {"type": "boolean", "description": "Set true to signal phase completion and workflow exit"}
+  }
+}`
+
+	stateSchema := `{
+  "type": "object",
+  "properties": {},
+  "description": "No arguments required. Returns current phase artifact if it exists."
+}`
+
 	tools := []capabilities.ToolDefinition{{
 		Name:        c.captureTool,
-		Description: fmt.Sprintf("Records a phase artifact for %s.", c.name),
-		Schema:      "{}",
+		Description: fmt.Sprintf("Captures %s phase artifact to memory for cross-turn continuity. Call this to save progress, signal transitions, or mark completion. WHEN TO CALL: After gathering context, completing analysis, finalizing plans, applying changes, or delivering results.", c.name),
+		Schema:      captureSchema,
 	}, {
 		Name:        c.stateTool,
-		Description: fmt.Sprintf("Returns the latest persisted state for %s.", c.name),
-		Schema:      "{}",
+		Description: fmt.Sprintf("Returns the current persisted state for %s phase. WHEN TO CALL: At phase start to check if prior work exists, or when resuming after interruption.", c.name),
+		Schema:      stateSchema,
 	}}
 	for _, tool := range c.phaseWorkflowTools() {
 		tools = append(tools, tool)
@@ -146,7 +735,22 @@ func (c *PhaseCapability) ExposeTools() []capabilities.ToolDefinition {
 }
 
 func (c *PhaseCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	return fmt.Sprintf("Use the %s capability to gather or record the current phase state, preserve a meaningful artifact in memory, and hand the conversation forward with a clear summary for the next phase when the user chooses to move on.", c.name)
+	switch c.phaseID {
+	case "intake":
+		return "Use Intake capability to: 1) Ask clarifying questions, 2) Gather requirements, 3) Define scope and constraints, 4) Capture requirements artifact, 5) Transition to investigation when clear."
+	case "investigation":
+		return "Use Investigation capability to: 1) Build context, 2) Inspect current code, 3) Search for patterns, 4) List changed files, 5) Document evidence, 6) Transition to planning when analysis complete."
+	case "planning":
+		return "Use Planning capability to: 1) Build context, 2) Research patterns, 3) Generate concrete plan with file/function references, 4) Present plan to user, 5) Capture artifact with status='ready_for_execution', 6) Transition to execution when approved."
+	case "execution":
+		return "Use Execution capability to: 1) Preview patches, 2) Get user approval, 3) Apply patches incrementally, 4) Run tests after each change, 5) Capture results, 6) Transition to review when complete. SAFETY: Always preview before applying."
+	case "review":
+		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) Run comprehensive tests, 4) Validate against requirements, 5) Capture validation results, 6) Transition to delivery if approved or back to execution if issues found."
+	case "delivery":
+		return "Use Delivery capability to: 1) Review all phase artifacts, 2) Summarize changes made, 3) Document decisions, 4) Capture delivery summary, 5) Signal exit to complete workflow."
+	default:
+		return fmt.Sprintf("Use the %s capability to gather or record the current phase state, preserve a meaningful artifact in memory, and hand the conversation forward with a clear summary for the next phase when the user chooses to move on.", c.name)
+	}
 }
 
 func (c *PhaseCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
@@ -225,80 +829,110 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 }
 
 func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
+	taskSchema := `{
+  "type": "object",
+  "required": ["query"],
+  "properties": {
+    "query": {"type": "string", "description": "Task description or query"},
+    "working_dir": {"type": "string", "description": "Repository root path (optional, inferred if omitted)"},
+    "active_file": {"type": "string", "description": "Primary file for changes (optional, inferred if omitted)"}
+  }
+}`
+
+	searchSchema := `{
+  "type": "object",
+  "required": ["query"],
+  "properties": {
+    "query": {"type": "string", "description": "Task description"},
+    "search": {"type": "string", "description": "Search query for patterns or code (optional)"}
+  }
+}`
+
+	patchSchema := `{
+  "type": "object",
+  "required": ["file_path", "old_content", "new_content"],
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to file to modify"},
+    "old_content": {"type": "string", "description": "Content to replace"},
+    "new_content": {"type": "string", "description": "New content"},
+    "description": {"type": "string", "description": "Description of change"}
+  }
+}`
+
 	switch c.phaseID {
 	case "intake":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("build_context"),
-			Description: "Builds repository context for the current intake phase request.",
-			Schema:      "{}",
+			Description: "OPTIONAL: Builds repository context if task involves code. Call when user mentions files, repos, or code locations. Returns repository structure, files, dependencies.",
+			Schema:      taskSchema,
 		}}
 	case "investigation":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("build_context"),
-			Description: "Builds repository context for the investigation phase.",
-			Schema:      "{}",
+			Description: "REQUIRED FIRST STEP: Builds repository context (structure, files, dependencies). Must call before other investigation tools. Returns ContextPack with working directory, active file, repository summary.",
+			Schema:      taskSchema,
 		}, {
 			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects repository state and changed files for the investigation phase.",
-			Schema:      "{}",
+			Description: "Inspects current repository state and changed files. WHEN TO CALL: After build_context, to understand current state before analysis. Returns changed files list and diff preview.",
+			Schema:      taskSchema,
 		}, {
 			Name:        c.phaseToolName("search_repo"),
-			Description: "Searches repository content for evidence relevant to the investigation phase.",
-			Schema:      "{}",
+			Description: "Searches repository for patterns, implementations, or code. WHEN TO CALL: To find similar code, error patterns, or existing implementations before concluding something is novel. Returns matching code locations.",
+			Schema:      searchSchema,
 		}, {
 			Name:        c.phaseToolName("list_changed_files"),
-			Description: "Lists changed files that may affect the current investigation.",
-			Schema:      "{}",
+			Description: "Lists files with uncommitted changes. WHEN TO CALL: To identify in-progress work and avoid conflicts. Returns list of changed file paths.",
+			Schema:      taskSchema,
 		}}
 	case "planning":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("build_context"),
-			Description: "Builds repository context for the planning phase.",
-			Schema:      "{}",
+			Description: "REQUIRED FIRST STEP: Builds repository context for planning. Must call before planning_plan_changes. Returns ContextPack with repository structure needed for concrete plan generation.",
+			Schema:      taskSchema,
 		}, {
 			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects repository state for the planning phase.",
-			Schema:      "{}",
+			Description: "Inspects current repository state. WHEN TO CALL: Before planning, to understand existing code structure and patterns. Returns changed files and current state.",
+			Schema:      taskSchema,
 		}, {
 			Name:        c.phaseToolName("search_repo"),
-			Description: "Searches the repository for relevant implementation patterns before planning.",
-			Schema:      "{}",
+			Description: "Searches repository for implementation patterns. WHEN TO CALL: Before designing, to find similar implementations and follow established patterns rather than inventing new approaches. Returns matching patterns and code locations.",
+			Schema:      searchSchema,
 		}, {
 			Name:        c.phaseToolName("list_changed_files"),
-			Description: "Lists changed files that should be considered in the current plan.",
-			Schema:      "{}",
+			Description: "Lists changed files to avoid conflicts. WHEN TO CALL: Before finalizing plan, to ensure plan doesn't conflict with in-progress work. Returns list of changed files.",
+			Schema:      taskSchema,
 		}, {
 			Name:        c.phaseToolName("plan_changes"),
-			Description: "Generates a concrete execution plan from the assembled repository context.",
-			Schema:      "{}",
+			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After build_context, search_repo, and inspect_repo complete. This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
+			Schema:      taskSchema,
 		}}
 	case "execution":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("preview_patch"),
-			Description: "Previews a patch before applying it in the execution phase.",
-			Schema:      "{}",
+			Description: "SAFETY REQUIRED: Previews patch before applying. WHEN TO CALL: Before every apply_patch call. Shows user what will change. Returns patch preview with old/new content comparison.",
+			Schema:      patchSchema,
 		}, {
 			Name:        c.phaseToolName("apply_patch"),
-			Description: "Applies a patch in the execution phase with workflow safety checks.",
-			Schema:      "{}",
+			Description: "Applies patch to codebase. SAFETY RULE: Must call preview_patch and get user approval BEFORE calling this. WHEN TO CALL: Only after preview shown and approved. Returns confirmation of applied changes.",
+			Schema:      patchSchema,
 		}, {
 			Name:        c.phaseToolName("run_tests"),
-			Description: "Runs tests for the current execution phase task.",
-			Schema:      "{}",
+			Description: "Runs tests to validate changes. WHEN TO CALL: After each apply_patch call, to ensure changes work correctly and don't introduce regressions. Returns test results (pass/fail) and output.",
+			Schema:      taskSchema,
 		}}
 	case "review":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("build_context"),
-			Description: "Builds repository context for the review phase.",
-			Schema:      "{}",
+			Description: "Builds repository context for review. WHEN TO CALL: At review start, to understand current state after execution. Returns repository structure and current state.",
+			Schema:      taskSchema,
 		}, {
 			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects the repository state during the review phase.",
-			Schema:      "{}",
+			Description: "Inspects repository state to see applied changes. WHEN TO CALL: To review what was changed during execution phase. Returns changed files and diff.",
+			Schema:      taskSchema,
 		}, {
 			Name:        c.phaseToolName("run_tests"),
-			Description: "Runs tests during the review phase to validate the current state.",
-			Schema:      "{}",
+			Description: "Runs comprehensive tests for validation. WHEN TO CALL: To validate all requirements are met and no regressions introduced. Returns test results and coverage.",
+			Schema:      taskSchema,
 		}}
 	default:
 		return nil

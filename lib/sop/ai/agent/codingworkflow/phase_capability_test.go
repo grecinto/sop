@@ -21,6 +21,76 @@ func (s stubContextManager) BuildContext(task Task, state RunState) (ContextPack
 	return s.pack, nil
 }
 
+func TestPhaseCapabilityToolSchemasUseObjectLevelRequiredFields(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	tools := cap.ExposeTools()
+	toolMap := map[string]string{}
+	for _, tool := range tools {
+		toolMap[tool.Name] = tool.Schema
+	}
+
+	captureSchema, ok := toolMap["planning_capture"]
+	if !ok {
+		t.Fatalf("expected planning capture tool to be exposed")
+	}
+	var capture map[string]any
+	if err := json.Unmarshal([]byte(captureSchema), &capture); err != nil {
+		t.Fatalf("expected planning capture schema to be valid JSON: %v", err)
+	}
+
+	required, ok := capture["required"].([]any)
+	if !ok {
+		t.Fatalf("expected planning capture schema to define an object-level required array, got %#v", capture["required"])
+	}
+	if len(required) != 2 {
+		t.Fatalf("expected planning capture schema to require 2 fields, got %d", len(required))
+	}
+	if !containsRequiredString(required, "summary") || !containsRequiredString(required, "status") {
+		t.Fatalf("expected planning capture schema to require summary and status, got %#v", required)
+	}
+
+	properties, ok := capture["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected planning capture schema to expose properties")
+	}
+	for name, prop := range properties {
+		propMap, ok := prop.(map[string]any)
+		if !ok {
+			t.Fatalf("expected property %s to be an object", name)
+		}
+		if _, exists := propMap["required"]; exists {
+			t.Fatalf("expected property %s to avoid inline required flags, got %#v", name, propMap["required"])
+		}
+	}
+
+	contextSchema, ok := toolMap["planning_build_context"]
+	if !ok {
+		t.Fatalf("expected planning build_context tool to be exposed")
+	}
+	var context map[string]any
+	if err := json.Unmarshal([]byte(contextSchema), &context); err != nil {
+		t.Fatalf("expected planning build_context schema to be valid JSON: %v", err)
+	}
+	contextRequired, ok := context["required"].([]any)
+	if !ok {
+		t.Fatalf("expected planning build_context schema to define an object-level required array, got %#v", context["required"])
+	}
+	if !containsRequiredString(contextRequired, "query") {
+		t.Fatalf("expected planning build_context schema to require query, got %#v", contextRequired)
+	}
+}
+
+func containsRequiredString(values []any, target string) bool {
+	for _, value := range values {
+		if str, ok := value.(string); ok && str == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPlanningPhaseCapabilityExposesToolsAndPersistsArtifact(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewPlanningPhaseCapability(infra)

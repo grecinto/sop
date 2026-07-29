@@ -11,6 +11,37 @@ import (
 	"github.com/sharedcode/sop/ai/memory"
 )
 
+func TestSelectedSpaceConfigContextReturnsConfigForKnowledgeBase(t *testing.T) {
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ctx := context.Background()
+	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	kb, err := sysDB.OpenKnowledgeBase(ctx, "policy_space", tx, nil, nil, false)
+	if err != nil {
+		t.Fatalf("open kb: %v", err)
+	}
+	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{
+		Description:  "Policy space",
+		SystemPrompt: "You are the policy expert.",
+	}); err != nil {
+		t.Fatalf("set kb config: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	ag := NewCopilotAgent(Config{}, nil, sysDB)
+	contextText := ag.selectedSpaceConfigContext(ctx, ai.ArtifactReference{Name: "policy_space", DatabaseName: SystemDBName})
+	if contextText == "" {
+		t.Fatal("expected selected-space config context")
+	}
+	if !strings.Contains(contextText, "Policy space") || !strings.Contains(contextText, "policy expert") {
+		t.Fatalf("expected selected-space config context to include the KB config, got: %s", contextText)
+	}
+}
+
 func TestBuildSelectedSpaceResearchContextPartsUsesPriorSuccesses(t *testing.T) {
 	state := &ResearchWorkflowState{
 		SuccessfulCategoryPaths: []string{"Engineering/Code"},
