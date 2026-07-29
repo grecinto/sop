@@ -15,22 +15,17 @@ const (
 	PlannerCapabilityName = "Dynamic Workflow Planner"
 )
 
-// PlannerCapability uses task analysis to dynamically generate custom workflow steps.
-// It participates in the Ask flow by analyzing the task, generating a plan, and
-// enqueueing work items for each step to be executed by the Ask pipeline.
-//
-// Implements WorkflowPlanner interface: Run() generates plan, OnFinish() sets up workflow.
+// PlannerCapability generates a structured plan for planning-oriented requests.
+// It participates in the Ask flow by analyzing the task and presenting a plan to the user.
+// It does not execute workflows directly; execution remains the responsibility of the
+// main Ask orchestration and the dedicated coding capabilities.
 type PlannerCapability struct {
-	orchestrator    *Orchestrator
-	workflowManager *WorkflowManager // Injected or created for workflow execution
+	orchestrator *Orchestrator
 }
 
-// NewPlannerCapability creates a new dynamic planning capability
+// NewPlannerCapability creates a planning-focused capability.
 func NewPlannerCapability(orchestrator *Orchestrator) *PlannerCapability {
-	return &PlannerCapability{
-		orchestrator:    orchestrator,
-		workflowManager: NewWorkflowManager(orchestrator), // Create workflow manager for execution
-	}
+	return &PlannerCapability{orchestrator: orchestrator}
 }
 
 func (c *PlannerCapability) ID() string   { return PlannerCapabilityID }
@@ -59,25 +54,25 @@ func (c *PlannerCapability) Entitlement() capabilities.Entitlement {
 	}
 }
 
-func (c *PlannerCapability) CanHandle(query string, state capabilities.RoutingState) bool {
+func (c *PlannerCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
 	if c == nil || c.orchestrator == nil {
-		return false
+		return capabilities.ClassificationResult{}
 	}
 
 	// Check capability hint
 	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
 		if hint == "dynamic_planner" || hint == "planner" {
-			return true
+			return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModeSupporting}
 		}
 		// Don't handle if another capability is explicitly requested
 		if hint != "" {
-			return false
+			return capabilities.ClassificationResult{}
 		}
 	}
 
 	// This capability is opt-in via explicit routing or capability hint
 	// Default to false to avoid conflicting with WorkflowCapability
-	return false
+	return capabilities.ClassificationResult{}
 }
 
 func (c *PlannerCapability) BuildContext(query string, state capabilities.RoutingState) string {
@@ -120,61 +115,22 @@ func (c *PlannerCapability) ExposeTools() []capabilities.ToolDefinition {
 	}}
 }
 
-// Run implements the Capability interface
-func (c *PlannerCapability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	// Gather task context
-	taskContext := c.gatherTaskContext(query, state)
-
-	// Generate plan
-	plan, err := c.generatePlan(context.Background(), query, taskContext)
-	if err != nil {
-		return capabilities.CapabilityResult{}, fmt.Errorf("plan generation failed: %w", err)
-	}
-
-	if plan == nil || len(plan.Steps) == 0 {
-		return capabilities.CapabilityResult{}, fmt.Errorf("generated plan is empty")
-	}
-
-	// Format plan as summary
-	summary := c.formatPlanSummary(plan)
-
-	// Return plan - OnFinish() will be called after to set up workflow execution
-	return capabilities.CapabilityResult{
-		Summary: summary,
-		Data: map[string]any{
-			"plan":           plan,
-			"steps":          plan.Steps,
-			"original_query": query,
-			"workflow_ready": true,
-		},
-	}, nil
-}
-
-// OnFinish implements the WorkflowPlanner interface
-// Called after Run() completes, near the end of the Ask/ReAct loop.
-// Returns workflow steps in result data for Ask pipeline to enqueue.
+// OnFinish implements the WorkflowPlanner interface as a no-op for planning-only usage.
+// The planner capability surfaces the generated plan to the user instead of handing off
+// execution to the workflow manager.
 func (c *PlannerCapability) OnFinish(ctx context.Context, result capabilities.CapabilityResult) error {
-	// Extract plan from result
-	plan, ok := result.Data["plan"].(*WorkflowPlan)
-	if !ok || plan == nil {
-		return fmt.Errorf("no workflow plan found in result")
+	_ = ctx
+	if result.Data == nil {
+		result.Data = map[string]any{}
 	}
 
-	// Convert plan to concrete Steps
-	steps, err := c.planToSteps(plan)
-	if err != nil {
-		return fmt.Errorf("failed to convert plan to steps: %w", err)
+	if _, ok := result.Data["plan_summary"]; !ok {
+		if plan, ok := result.Data["plan"].(*WorkflowPlan); ok && plan != nil {
+			result.Data["plan_summary"] = c.formatPlanSummary(plan)
+		}
 	}
 
-	// Store steps back in result data for Ask pipeline to process
-	// The Ask pipeline will detect this and enqueue the workflow trigger
-	result.Data["workflow_steps_ready"] = steps
-	result.Data["workflow_trigger_needed"] = true
-
-	log.Info("Workflow steps prepared for execution",
-		"workflow", plan.Name,
-		"steps", len(steps))
-
+	log.Info("Planner capability produced a planning summary for the Ask loop")
 	return nil
 }
 
@@ -253,38 +209,35 @@ func (c *PlannerCapability) createFallbackPlan(query string, context string) *Wo
 		Rationale:   "Using default workflow structure as LLM plan generation was unavailable",
 	}
 
-	// Add steps based on task type
+	// Add steps based on task type. These steps are informational for the planner output,
+	// not a signal to hand off execution to the workflow manager.
 	switch taskType {
 	case "debugging":
 		plan.Steps = []PlanStep{
 			{Name: "Analyze Error", Description: "Analyze error messages and stack traces", Type: "analyze", Tags: []string{"error_analysis"}},
 			{Name: "Locate Issue", Description: "Identify files and functions causing the issue", Type: "research", Dependencies: []string{"Analyze Error"}, Tags: []string{"code_search"}},
 			{Name: "Generate Fix", Description: "Create patch to fix the issue", Type: "generate", Dependencies: []string{"Locate Issue"}, Tags: []string{"patch"}},
-			{Name: "Apply Fix", Description: "Apply the generated patch", Type: "apply", Dependencies: []string{"Generate Fix"}, Tags: []string{"file_write"}},
-			{Name: "Verify Fix", Description: "Run tests to verify fix", Type: "verify", Dependencies: []string{"Apply Fix"}, Tags: []string{"test"}},
+			{Name: "Verify Fix", Description: "Run tests to verify fix", Type: "verify", Dependencies: []string{"Generate Fix"}, Tags: []string{"test"}},
 		}
 	case "testing":
 		plan.Steps = []PlanStep{
 			{Name: "Run Tests", Description: "Execute test suite", Type: "verify", Tags: []string{"test"}},
 			{Name: "Analyze Failures", Description: "Analyze test failures", Type: "analyze", Dependencies: []string{"Run Tests"}, Tags: []string{"error_analysis"}},
 			{Name: "Generate Fixes", Description: "Create patches for failing tests", Type: "generate", Dependencies: []string{"Analyze Failures"}, Tags: []string{"patch"}},
-			{Name: "Apply Fixes", Description: "Apply patches", Type: "apply", Dependencies: []string{"Generate Fixes"}, Tags: []string{"file_write"}},
-			{Name: "Verify Tests", Description: "Re-run tests to verify fixes", Type: "verify", Dependencies: []string{"Apply Fixes"}, Tags: []string{"test"}},
+			{Name: "Verify Tests", Description: "Re-run tests to verify fixes", Type: "verify", Dependencies: []string{"Generate Fixes"}, Tags: []string{"test"}},
 		}
 	case "refactoring":
 		plan.Steps = []PlanStep{
 			{Name: "Analyze Code", Description: "Analyze code structure and patterns", Type: "analyze", Tags: []string{"code_analysis"}},
 			{Name: "Plan Refactoring", Description: "Design refactoring approach", Type: "design", Dependencies: []string{"Analyze Code"}, Tags: []string{"planning"}},
 			{Name: "Generate Changes", Description: "Create refactoring patches", Type: "generate", Dependencies: []string{"Plan Refactoring"}, Tags: []string{"patch"}},
-			{Name: "Apply Changes", Description: "Apply refactoring", Type: "apply", Dependencies: []string{"Generate Changes"}, Tags: []string{"file_write"}},
 		}
 	default: // implementation
 		plan.Steps = []PlanStep{
 			{Name: "Design Approach", Description: "Design implementation approach", Type: "design", Tags: []string{"planning"}},
 			{Name: "Research Context", Description: "Gather relevant code context", Type: "research", Dependencies: []string{"Design Approach"}, Tags: []string{"code_search"}},
 			{Name: "Generate Code", Description: "Generate implementation code", Type: "generate", Dependencies: []string{"Research Context"}, Tags: []string{"codegen"}},
-			{Name: "Apply Implementation", Description: "Apply generated code", Type: "apply", Dependencies: []string{"Generate Code"}, Tags: []string{"file_write"}},
-			{Name: "Verify Implementation", Description: "Run tests to verify", Type: "verify", Dependencies: []string{"Apply Implementation"}, Tags: []string{"test"}},
+			{Name: "Verify Implementation", Description: "Run tests to verify", Type: "verify", Dependencies: []string{"Generate Code"}, Tags: []string{"test"}},
 		}
 	}
 

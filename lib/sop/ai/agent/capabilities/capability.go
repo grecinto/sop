@@ -39,6 +39,38 @@ type ToolDefinition struct {
 	Schema      string
 }
 
+// ToolExecutor can handle capability-specific tool invocations from the Ask loop.
+type ToolExecutor interface {
+	Capability
+	ExecuteTool(ctx context.Context, toolName string, args map[string]any, state RoutingState) (string, error)
+}
+
+// CapabilityMode describes how a capability should participate in a request.
+type CapabilityMode int
+
+const (
+	CapabilityModeNone CapabilityMode = iota
+	CapabilityModePrimary
+	CapabilityModeSupporting
+	CapabilityModeFallback
+)
+
+// ClassificationResult captures the relevance of a capability for the current Ask.
+type ClassificationResult struct {
+	Relevant bool
+	Score    int
+	Mode     CapabilityMode
+	Domains  []string
+	Hints    []string
+	Metadata map[string]any
+}
+
+// ClassifiedCapability is a capability plus the classification outcome from that capability.
+type ClassifiedCapability struct {
+	Capability Capability
+	Result     ClassificationResult
+}
+
 // CapabilityResult captures the output produced by a capability run.
 type CapabilityResult struct {
 	Summary string
@@ -71,15 +103,19 @@ type WorkflowPlanner interface {
 }
 
 // Capability is the plug-in contract for Ask domains.
+//
+// Capabilities participate in the Ask pipeline by supplying context, tools, and
+// instructions. Execution is delegated to the LLM/tool loop rather than being
+// driven from a capability-level Run hook.
 type Capability interface {
 	ID() string
 	Name() string
 	Entitlement() Entitlement
-	CanHandle(query string, state RoutingState) bool
+	Classify(query string, state RoutingState) ClassificationResult
 	BuildContext(query string, state RoutingState) string
 	ExposeTools() []ToolDefinition
 	BuildInstructions(query string, state RoutingState) string
-	Run(query string, state RoutingState) (CapabilityResult, error)
+	// Run(query string, state RoutingState) (CapabilityResult, error)
 }
 
 // PrefixHandler extends Capability to enable direct command-prefix routing.
@@ -230,35 +266,116 @@ func (r *Registry) RegisterAtFront(cap Capability) {
 
 // Resolve returns the first capability that can handle the request.
 func (r *Registry) Resolve(query string, state RoutingState) (Capability, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, cap := range r.capabilities {
-		if cap.CanHandle(query, state) {
-			// Record selection in metrics
-			r.metrics.RecordSelection(cap.ID())
-			return cap, true
+	classified := r.Classify(query, state)
+	if len(classified) == 0 {
+		return nil, false
+	}
+	for _, entry := range classified {
+		if entry.Result.Mode == CapabilityModePrimary || entry.Result.Mode == CapabilityModeSupporting {
+			cap := entry.Capability
+			if cap != nil {
+				r.metrics.RecordSelection(cap.ID())
+				return cap, true
+			}
 		}
 	}
 	return nil, false
 }
 
-// TryParticipate asks each registered capability whether it wants to participate in the current Ask.
-// It stops at the first participating capability and returns its result.
-func (r *Registry) TryParticipate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error) {
+// Classify evaluates every registered capability and returns the ranked set of matches.
+func (r *Registry) Classify(query string, state RoutingState) []ClassifiedCapability {
 	if r == nil {
-		return ParticipationResult{}, false, nil
+		return nil
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	var matches []ClassifiedCapability
 	for _, cap := range r.capabilities {
-		if participant, ok := cap.(Participant); ok {
-			result, handled, err := participant.Participate(ctx, query, state)
-			if handled {
-				return result, true, err
+		if cap == nil {
+			continue
+		}
+		result := cap.Classify(query, state)
+		if result.Relevant {
+			matches = append(matches, ClassifiedCapability{Capability: cap, Result: result})
+		}
+	}
+
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].Result.Mode != matches[j].Result.Mode {
+			if matches[i].Result.Mode == CapabilityModePrimary {
+				return true
 			}
-			if err != nil {
-				return ParticipationResult{}, true, err
+			if matches[j].Result.Mode == CapabilityModePrimary {
+				return false
 			}
+			if matches[i].Result.Mode == CapabilityModeSupporting {
+				return true
+			}
+			if matches[j].Result.Mode == CapabilityModeSupporting {
+				return false
+			}
+		}
+		if matches[i].Result.Score != matches[j].Result.Score {
+			return matches[i].Result.Score > matches[j].Result.Score
+		}
+		return matches[i].Capability.ID() < matches[j].Capability.ID()
+	})
+	return matches
+}
+
+// TryParticipate asks the routed capability whether it wants to participate in the current Ask.
+// If no explicit capability is supplied, it falls back to the first capability that can handle
+// the current routing state, preserving backward-compatible behavior for existing callers.
+func (r *Registry) TryParticipate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error) {
+	return r.TryParticipateFor(ctx, query, state, nil)
+}
+
+// TryParticipateFor asks a specific capability whether it wants to participate in the current Ask.
+// This is the path used by the Ask pipeline after routing has already resolved the selected capability.
+func (r *Registry) TryParticipateFor(ctx context.Context, query string, state RoutingState, selected Capability) (ParticipationResult, bool, error) {
+	if r == nil {
+		return ParticipationResult{}, false, nil
+	}
+
+	if selected != nil {
+		if r.metrics != nil {
+			r.metrics.RecordSelection(selected.ID())
+		}
+		participant, ok := selected.(Participant)
+		if !ok {
+			return ParticipationResult{}, false, nil
+		}
+		result, handled, err := participant.Participate(ctx, query, state)
+		if handled {
+			return result, true, err
+		}
+		if err != nil {
+			return ParticipationResult{}, true, err
+		}
+		return ParticipationResult{}, false, nil
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, cap := range r.capabilities {
+		result := cap.Classify(query, state)
+		if !result.Relevant {
+			continue
+		}
+		if r.metrics != nil {
+			r.metrics.RecordSelection(cap.ID())
+		}
+		participant, ok := cap.(Participant)
+		if !ok {
+			continue
+		}
+		participation, handled, err := participant.Participate(ctx, query, state)
+		if handled {
+			return participation, true, err
+		}
+		if err != nil {
+			return ParticipationResult{}, true, err
 		}
 	}
 	return ParticipationResult{}, false, nil
@@ -271,7 +388,8 @@ func (r *Registry) Compose(query string, state RoutingState, entitlements map[st
 
 	var matched []Capability
 	for _, cap := range r.capabilities {
-		if !cap.CanHandle(query, state) {
+		result := cap.Classify(query, state)
+		if !result.Relevant {
 			continue
 		}
 		if !enabledByDefaultForEntitlements(cap, entitlements) {

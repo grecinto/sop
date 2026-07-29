@@ -643,16 +643,61 @@ func structuredContextSectionHeading(section string) string {
 	return ""
 }
 
-func (a *CopilotAgent) buildFocusedToolContext(taskCtx *TaskContextClassification) string {
+func containsStructuredContextSection(sections []string, candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return true
+	}
+	for _, section := range sections {
+		if strings.TrimSpace(section) == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *CopilotAgent) buildFocusedToolContext(ctx context.Context, query string, taskCtx *TaskContextClassification) string {
 	if taskCtx == nil {
 		return ""
 	}
 
+	var sections []string
 	if a != nil && a.capabilityRegistry != nil {
-		if cap, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate, CapabilityHint: taskCtx.CapabilityHint}); ok {
-			if ctx := cap.BuildContext("", capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate, CapabilityHint: taskCtx.CapabilityHint}); ctx != "" {
-				return strings.TrimSpace(ctx)
+		routingState := capabilities.RoutingState{Domain: taskCtx.Domain, Gate: taskCtx.RoutingGate, CapabilityHint: taskCtx.CapabilityHint}
+		classified := a.capabilityRegistry.Classify(query, routingState)
+		for _, entry := range classified {
+			if entry.Capability == nil {
+				continue
 			}
+			if capContext := strings.TrimSpace(entry.Capability.BuildContext(query, routingState)); capContext != "" && !containsStructuredContextSection(sections, capContext) {
+				sections = append(sections, capContext)
+			}
+			if capInstructions := strings.TrimSpace(entry.Capability.BuildInstructions(query, routingState)); capInstructions != "" && entry.Capability.ID() != "coding_workflow" && len(capInstructions) <= 800 && !containsStructuredContextSection(sections, capInstructions) {
+				sections = append(sections, capInstructions)
+			}
+		}
+		if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && selectedCap != nil {
+			if selectedCap != nil {
+				selectedID := selectedCap.ID()
+				seenSelected := false
+				for _, entry := range classified {
+					if entry.Capability != nil && entry.Capability.ID() == selectedID {
+						seenSelected = true
+						break
+					}
+				}
+				if !seenSelected {
+					if capContext := strings.TrimSpace(selectedCap.BuildContext(query, routingState)); capContext != "" && !containsStructuredContextSection(sections, capContext) {
+						sections = append(sections, capContext)
+					}
+					if capInstructions := strings.TrimSpace(selectedCap.BuildInstructions(query, routingState)); capInstructions != "" && selectedCap.ID() != "coding_workflow" && len(capInstructions) <= 800 && !containsStructuredContextSection(sections, capInstructions) {
+						sections = append(sections, capInstructions)
+					}
+				}
+			}
+		}
+		if len(sections) > 0 {
+			return strings.Join(sections, "\n\n")
 		}
 	}
 
@@ -667,9 +712,6 @@ func (a *CopilotAgent) buildFocusedToolContext(taskCtx *TaskContextClassificatio
 		}
 		if storesContext := a.buildStoresToolDescriptionContext(); storesContext != "" {
 			parts = append(parts, storesContext)
-		}
-		if spacesContext := a.buildSpacesToolDescriptionContext(); spacesContext != "" {
-			parts = append(parts, spacesContext)
 		}
 		return strings.Join(parts, "\n\n")
 	}

@@ -35,14 +35,38 @@ func TestRegistryComposeReturnsEnabledCapabilitiesInOrder(t *testing.T) {
 	}
 }
 
-func TestCapabilityRunUsesExplicitInputs(t *testing.T) {
-	cap := &testCapability{id: "stores", name: "Stores"}
-	result, err := cap.Run("show inventory", RoutingState{Domain: "Stores"})
-	if err != nil {
-		t.Fatalf("expected run to succeed, got %v", err)
+func TestRegistryClassifySupportsAdditiveCapabilityComposition(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&testCapability{
+		id:   "stores",
+		name: "Stores",
+		classifyFn: func(query string, state RoutingState) ClassificationResult {
+			if strings.Contains(strings.ToLower(query), "inventory") {
+				return ClassificationResult{Relevant: true, Score: 10, Mode: CapabilityModePrimary}
+			}
+			return ClassificationResult{}
+		},
+	})
+	reg.Register(&testCapability{
+		id:   "spaces",
+		name: "Spaces",
+		classifyFn: func(query string, state RoutingState) ClassificationResult {
+			if strings.Contains(strings.ToLower(query), "inventory") {
+				return ClassificationResult{Relevant: true, Score: 8, Mode: CapabilityModeSupporting}
+			}
+			return ClassificationResult{}
+		},
+	})
+
+	classified := reg.Classify("show inventory", RoutingState{Domain: "Stores"})
+	if len(classified) != 2 {
+		t.Fatalf("expected two classified capabilities, got %d", len(classified))
 	}
-	if result.Summary != "ok" {
-		t.Fatalf("expected summary ok, got %q", result.Summary)
+	if classified[0].Capability.ID() != "stores" {
+		t.Fatalf("expected primary capability stores first, got %s", classified[0].Capability.ID())
+	}
+	if classified[1].Capability.ID() != "spaces" {
+		t.Fatalf("expected supporting capability spaces second, got %s", classified[1].Capability.ID())
 	}
 }
 
@@ -62,6 +86,7 @@ type testCapability struct {
 	name         string
 	entitlement  Entitlement
 	canHandleFn  func(query string, state RoutingState) bool
+	classifyFn   func(query string, state RoutingState) ClassificationResult
 	buildContext func(query string, state RoutingState) string
 }
 
@@ -74,6 +99,18 @@ func (c *testCapability) CanHandle(query string, state RoutingState) bool {
 	}
 	return state.Domain == c.name || state.Domain == c.id
 }
+func (c *testCapability) Classify(query string, state RoutingState) ClassificationResult {
+	if c.classifyFn != nil {
+		return c.classifyFn(query, state)
+	}
+	if c.canHandleFn != nil && c.canHandleFn(query, state) {
+		return ClassificationResult{Relevant: true, Score: 1, Mode: CapabilityModePrimary}
+	}
+	if state.Domain == c.name || state.Domain == c.id {
+		return ClassificationResult{Relevant: true, Score: 1, Mode: CapabilityModePrimary}
+	}
+	return ClassificationResult{}
+}
 func (c *testCapability) BuildContext(query string, state RoutingState) string {
 	if c.buildContext != nil {
 		return c.buildContext(query, state)
@@ -82,9 +119,6 @@ func (c *testCapability) BuildContext(query string, state RoutingState) string {
 }
 func (c *testCapability) ExposeTools() []ToolDefinition                             { return nil }
 func (c *testCapability) BuildInstructions(query string, state RoutingState) string { return "" }
-func (c *testCapability) Run(query string, state RoutingState) (CapabilityResult, error) {
-	return CapabilityResult{Summary: "ok"}, nil
-}
 
 // Mock prefix capability for testing
 type mockPrefixCapability struct {
@@ -103,16 +137,16 @@ func (p *participatingCapability) Name() string { return "participating" }
 func (p *participatingCapability) Entitlement() Entitlement {
 	return Entitlement{EnabledByDefault: true, Tier: "test"}
 }
-func (p *participatingCapability) CanHandle(query string, state RoutingState) bool {
-	return state.Domain == "Desktop"
+func (p *participatingCapability) Classify(query string, state RoutingState) ClassificationResult {
+	if state.Domain == "Desktop" {
+		return ClassificationResult{Relevant: true, Score: 1, Mode: CapabilityModePrimary}
+	}
+	return ClassificationResult{}
 }
 func (p *participatingCapability) BuildContext(query string, state RoutingState) string { return "" }
 func (p *participatingCapability) ExposeTools() []ToolDefinition                        { return nil }
 func (p *participatingCapability) BuildInstructions(query string, state RoutingState) string {
 	return ""
-}
-func (p *participatingCapability) Run(query string, state RoutingState) (CapabilityResult, error) {
-	return CapabilityResult{}, nil
 }
 func (p *participatingCapability) Participate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error) {
 	return ParticipationResult{Summary: p.summary}, true, nil
@@ -123,16 +157,15 @@ func (m *mockPrefixCapability) Name() string { return "Mock " + m.id }
 func (m *mockPrefixCapability) Entitlement() Entitlement {
 	return Entitlement{EnabledByDefault: true, Tier: "test"}
 }
-func (m *mockPrefixCapability) CanHandle(query string, state RoutingState) bool { return false }
+func (m *mockPrefixCapability) Classify(query string, state RoutingState) ClassificationResult {
+	return ClassificationResult{}
+}
 func (m *mockPrefixCapability) BuildContext(query string, state RoutingState) string {
 	return ""
 }
 func (m *mockPrefixCapability) ExposeTools() []ToolDefinition { return nil }
 func (m *mockPrefixCapability) BuildInstructions(query string, state RoutingState) string {
 	return ""
-}
-func (m *mockPrefixCapability) Run(query string, state RoutingState) (CapabilityResult, error) {
-	return CapabilityResult{}, nil
 }
 func (m *mockPrefixCapability) GetHandledPrefixes() []string { return m.prefixes }
 func (m *mockPrefixCapability) HandlePrefix(ctx context.Context, query string, normalized string) (string, error) {
@@ -197,6 +230,25 @@ func TestTryPrefixRouting_EmptyQuery(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("Empty query should not return error, got %v", err)
+	}
+}
+
+func TestRegistryTryParticipateUsesResolvedCapability(t *testing.T) {
+	reg := NewRegistry()
+	unrelated := &participatingCapability{id: "stores", summary: "stores participation"}
+	selected := &participatingCapability{id: "desktop", summary: "desktop participation"}
+	reg.Register(unrelated)
+	reg.Register(selected)
+
+	result, handled, err := reg.TryParticipateFor(context.Background(), "pwd", RoutingState{Domain: "Desktop"}, selected)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !handled {
+		t.Fatal("expected participation hook to handle the query")
+	}
+	if result.Summary != "desktop participation" {
+		t.Fatalf("expected participation summary %q, got %q", "desktop participation", result.Summary)
 	}
 }
 

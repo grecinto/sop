@@ -247,14 +247,20 @@ func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
 					query = descArg
 				}
 
-				// Execute capability
-				result, err := capability.Run(query, state)
-				if err != nil {
-					return "", err
+				if executor, ok := capability.(capabilities.ToolExecutor); ok {
+					if result, err := executor.ExecuteTool(ctx, toolName, args, state); err == nil && strings.TrimSpace(result) != "" {
+						return result, nil
+					} else if err != nil {
+						log.Warn("Capability tool execution failed", "tool", toolName, "capability", capID, "error", err)
+					}
 				}
 
-				// Return summary as tool result
-				return result.Summary, nil
+				// Capabilities participate in the Ask loop through context, tools, and instructions.
+				// They do not execute deep workflows directly from this hook anymore.
+				if instructions := capability.BuildInstructions(query, state); strings.TrimSpace(instructions) != "" {
+					return fmt.Sprintf("Capability %s is available for the current Ask turn. Use the exposed tools and the context/instructions already provided to the LLM.", capID), nil
+				}
+				return fmt.Sprintf("Capability %s is participating in the Ask loop via its exposed tools and context.", capID), nil
 			}
 
 			a.registry.Register(

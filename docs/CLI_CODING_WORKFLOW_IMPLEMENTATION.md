@@ -1,12 +1,12 @@
 # CLI Coding Workflow Implementation
 
-**Last Updated**: 2026-07-24  
-**Status**: ✅ V1 Complete - Production Ready  
+**Last Updated**: 2026-07-28  
+**Status**: ✅ Capability-Based Service Adapter + Participant Pattern  
 **Post-V1**: Data-Driven Workflows with Infrastructure Integration
 
 ## Purpose
 
-This document captures the coding workflow capability that makes SOP feel like a high-quality terminal-first coding assistant. V1 is **pure code-driven** with proven infrastructure backing. Post-V1 will enable **data-driven workflow authoring** while preserving infrastructure power.
+This document captures the coding workflow capability that makes SOP feel like a high-quality terminal-first coding assistant. The current implementation uses a capability-based adapter over the shared CodingWorkflow framework so that Ask can reuse the useful coding helpers without reintroducing the legacy controller-style execution path. Post-V1 will enable **data-driven workflow authoring** while preserving infrastructure power.
 
 ## V1 Completion Status
 
@@ -30,6 +30,7 @@ This document captures the coding workflow capability that makes SOP feel like a
 - ✅ Fast-path keyword routing (80%+ queries, zero LLM calls)
 - ✅ Task classifier with 35+ keywords (design, architecture, document, spec, plan, etc.)
 - ✅ Backwards-compatible Stores/Spaces domain inference
+- ✅ Coding Workflow Services capability exposes reusable coding helpers through the Ask capability contract
 
 **SDLC Enhancements**:
 - ✅ Architecture/design workflow support
@@ -55,35 +56,19 @@ This document captures the coding workflow capability that makes SOP feel like a
 
 ---
 
-## Architecture Foundation: Multi-Turn Queue-Based Orchestration
+## Architecture Foundation: Capability-Based Participation
 
-The coding workflow capability leverages SOP's **queue-based multi-turn orchestration architecture** to execute complex, multi-step workflows across multiple ReAct turns.
+The coding workflow stack now integrates through the capability contract rather than through a legacy controller-style execution path. The shared CodingWorkflow framework remains reusable, but its public helpers are exposed to Ask through a thin ServiceCapability adapter.
 
-**Key Enabler**: Instead of completing all work in a single turn (hitting token/time limits) or implementing internal loops (bypassing ReAct tools), the coding workflow injects work items into an execution queue. Each injected prompt gets full access to the ReAct tool registry.
+This design keeps the main Ask/ReAct loop as the single authoritative execution engine while allowing coding-specific primitives to participate in a lightweight, capability-native way.
 
-**Workflow Example**:
-```
-Turn 1 (User): "Fix the parser bug"
-  ↓ Inject: "Generate patch for parser.go"
-Turn 2: Patch generation with full tool access
-  ↓ Inject: "Apply patch"
-Turn 3: File write with approval gate
-  ↓ Inject: "Run tests"
-Turn 4: Terminal execution
-  ↓ Conditional: If tests fail, inject "Analyze failures and fix"
-```
-
-**See**: [Multi-Turn Queue-Based Orchestration](../lib/sop/ai/README.md#multi-turn-queue-based-orchestration) in the main AI architecture doc for full technical details.
-
-### Architecture Evolution and Consolidation (2026-07-27)
-
-The earlier queue-based orchestration approach helped the system support multi-turn clarifications, but it also created a secondary orchestration loop beside the main Ask/ReAct pipeline. The current direction is to keep one authoritative execution loop and let the coding workflow participate through lifecycle hooks and a workflow-manager/step layer.
+**Key Enabler**: Instead of making the capability own execution flow, the Ask pipeline remains the coordinator. The capability contributes context, guidance, and structured tools for tasks such as repository inspection and context assembly, while workflow steps and more explicit sequencing can still be composed with the workflow-manager/step layer when needed.
 
 This means:
 - the main Ask pipeline remains the primary state machine
-- workflow steps are orchestrated through a manager/step abstraction rather than a parallel queue loop
-- prompt context, tool outcomes, and finalization are all handled in a unified flow
-- workflow state is preserved without fragmenting memory across separate loops
+- coding-workflow helpers participate through classification, context injection, and tool exposure
+- prompt context, tool outcomes, and finalization stay in a unified flow
+- workflow state is preserved without introducing a separate controller loop
 
 For the full consolidated rationale and decision history, see [WORKFLOWS.md](WORKFLOWS.md). This implementation doc remains the product-facing companion that focuses on the coding workflow experience, while the workflow doc captures the broader architectural intent.
 

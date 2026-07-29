@@ -1,15 +1,17 @@
 # SOP Cloud Workflows - Complete Documentation
 
 **Last Updated**: 2026-07-28  
-**Status**: ✅ Participant Pattern Implemented - Dynamic Planner + KB Workflows  
+**Status**: ✅ Capability-Based Coding Workflow Services + Participant Pattern  
 **Post-V1 Vision**: Data-Driven Workflows with Infrastructure Integration
 
 **Recent Changes (2026-07-28)**:
-- Implemented participant pattern for all workflow execution
+- Added a Coding Workflow Services capability that exposes reusable coding-workflow helpers through the capability contract
+- Kept Ask/ReAct as the authoritative execution loop while allowing coding-specific primitives to participate lightly
+- Implemented participant pattern for workflow execution and workflow setup hooks
 - Added Dynamic Planner capability with OnFinish hook
 - Refactored WorkflowManagerCapability for single-step enqueueing
-- Deprecated controller pattern (Execute method)
-- Achieved 100% Ask pipeline reuse for all workflow steps
+- Deprecated controller-style execution entry points for the capability layer
+- Achieved 100% Ask pipeline reuse for workflow steps and structured coding assistance
 - Note: `WORKFLOW_CAPABILITY_REFACTORING.md` has been superseded by this document's Architecture Evolution section
 
 ---
@@ -66,7 +68,22 @@ The workflow stack has evolved to a **pure participant pattern** where capabilit
 
 ### Two Workflow Approaches (Both Participant Pattern)
 
-#### 1. Dynamic Planner (AI-Generated Workflows)
+#### 1. Coding Workflow Services Capability (Reusable Coding Helpers)
+
+The shared CodingWorkflow framework is now exposed through a thin capability adapter rather than through a legacy controller-style execution path. The new service capability reuses the framework's public helpers for tasks such as repository context building and repo inspection, and it participates in the Ask flow through the capability contract.
+
+**Key Characteristics:**
+- **Capability-native participation**: It participates via classification, context injection, tool exposure, and lightweight participation hooks.
+- **No controller takeover**: It does not own Ask execution or replace the main Ask/ReAct loop.
+- **Reusable primitives**: It exposes useful coding functions for context gathering and repo-aware assistance without reintroducing the old controller pattern.
+
+**Key Components:**
+- **ServiceCapability** (`lib/sop/ai/agent/codingworkflow/service_capability.go`)
+  - Implements the capability interface for Ask integration
+  - Exposes tools such as `build_context` and `inspect_repo`
+  - Participates for coding-oriented requests without taking over orchestration
+
+#### 2. Dynamic Planner (AI-Generated Workflows)
 
 The **PlannerCapability** generates custom workflows based on task analysis:
 
@@ -118,7 +135,7 @@ Next Ask Iteration Processes Workflow Steps
   - `NewVerifyFixStep()` - Run tests and verify
   - `NewDesignStep()` - Architecture and design work
 
-#### 2. Knowledge Base Workflows (Pre-Defined Templates)
+#### 3. Knowledge Base Workflows (Pre-Defined Templates)
 
 **WorkflowManager** handles KB-driven workflows using the same participant pattern:
 

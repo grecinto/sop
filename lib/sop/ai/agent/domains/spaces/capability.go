@@ -35,11 +35,14 @@ func (c *Capability) Name() string { return CapabilityName }
 func (c *Capability) Entitlement() capabilities.Entitlement {
 	return capabilities.Entitlement{EnabledByDefault: true, Tier: "base"}
 }
-func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
+func (c *Capability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
 	if state.Domain == "" {
-		return false
+		return capabilities.ClassificationResult{}
 	}
-	return state.Domain == "Spaces" || state.Domain == CapabilityID || state.Domain == CapabilityName
+	if state.Domain == "Spaces" || state.Domain == CapabilityID || state.Domain == CapabilityName {
+		return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
+	}
+	return capabilities.ClassificationResult{}
 }
 func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
 	return strings.Join([]string{
@@ -83,19 +86,4 @@ func orderedCRUDFlags(flags map[string]bool) []string {
 func (c *Capability) ExposeTools() []capabilities.ToolDefinition { return nil }
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
 	return ""
-}
-func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	if c == nil || c.Orchestrator == nil {
-		return capabilities.CapabilityResult{Summary: "spaces capability placeholder"}, nil
-	}
-	metadata := map[string]string{"query": query}
-	if state.Domain != "" {
-		metadata["domain"] = state.Domain
-	}
-	result, err := c.Orchestrator.Execute(codingworkflow.Task{Description: query, ActiveFile: "", State: codingworkflow.RunState{Args: map[string]string{"query": query}, Metadata: metadata}})
-	if err != nil {
-		return capabilities.CapabilityResult{}, err
-	}
-	data := map[string]any{"message": result.Message, "task_type": result.TaskType, "plan": result.Plan, "resumed_from_state": result.ResumedFromState}
-	return capabilities.CapabilityResult{Summary: result.Message, Data: data}, nil
 }

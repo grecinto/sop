@@ -312,11 +312,18 @@ type Orchestrator struct {
 	MaxIterations          int
 }
 
-// Execute builds context, applies an optional patch, persists lightweight memory, and
-// returns a compact next-step message suitable for a simple tool-calling loop.
-// Guard rail: do not mutate files or state without an explicit policy decision and an
-// explicit task payload. Prefer preview/approval flows for destructive operations.
+// Execute used to provide a controller-style execution path, but that path is now
+// disabled. The shared coding workflow framework should participate through the
+// capability contract (for example via ServiceCapability/WorkflowCapability) and
+// keep Ask/ReAct as the authoritative orchestration loop.
 func (o *Orchestrator) Execute(task Task) (ExecutionResult, error) {
+	return ExecutionResult{}, fmt.Errorf("controller-style execution is disabled: use the capability-based participation flow instead")
+}
+
+// executeLegacy is retained only for historical context and should not be used by new code.
+// It mirrors the old controller-style behavior but is intentionally not wired into the
+// runtime anymore.
+func (o *Orchestrator) executeLegacy(task Task) (ExecutionResult, error) {
 	if o.Policy != nil {
 		if err := o.Policy.Allow(task, task.State); err != nil {
 			return ExecutionResult{}, err
@@ -1965,6 +1972,8 @@ func (d *DefaultProviderRouter) Resolve(task Task, state RunState, pack ContextP
 }
 
 // RunEvaluationSuite executes a lightweight evaluation harness for the workflow.
+// The controller-style orchestrator entrypoint is intentionally disabled; callers
+// should use the step-based workflow manager capability instead.
 func RunEvaluationSuite(orchestrator *Orchestrator, cases []EvaluationCase) []EvaluationResult {
 	results := make([]EvaluationResult, 0, len(cases))
 	for _, c := range cases {
@@ -1972,17 +1981,11 @@ func RunEvaluationSuite(orchestrator *Orchestrator, cases []EvaluationCase) []Ev
 			results = append(results, EvaluationResult{Name: c.Name, Passed: false, Message: "orchestrator is required"})
 			continue
 		}
-		result, err := orchestrator.Execute(c.Task)
-		if err != nil {
-			results = append(results, EvaluationResult{Name: c.Name, Passed: false, Message: err.Error()})
-			continue
-		}
-		message := strings.ToLower(strings.TrimSpace(result.Message))
-		passed := true
-		if c.ExpectContains != "" && !strings.Contains(message, strings.ToLower(strings.TrimSpace(c.ExpectContains))) {
-			passed = false
-		}
-		results = append(results, EvaluationResult{Name: c.Name, Passed: passed, Message: result.Message})
+		results = append(results, EvaluationResult{
+			Name:    c.Name,
+			Passed:  false,
+			Message: "controller-style execution is disabled: use the step-based workflow manager capability instead",
+		})
 	}
 	return results
 }

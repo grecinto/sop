@@ -165,7 +165,7 @@ func TestWorkflowRedirectInExecution(t *testing.T) {
 	}
 	state := RunState{}
 
-	result, err := manager.Execute(context.Background(), steps, task, state)
+	result, err := manager.runWorkflow(context.Background(), steps, task, state)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -224,7 +224,7 @@ func TestWorkflowModifyInExecution(t *testing.T) {
 	}
 	state := RunState{}
 
-	result, err := manager.Execute(context.Background(), steps, task, state)
+	result, err := manager.runWorkflow(context.Background(), steps, task, state)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -279,7 +279,7 @@ func TestWorkflowStateInitialization(t *testing.T) {
 	}
 	state := RunState{}
 
-	_, err := manager.Execute(context.Background(), steps, task, state)
+	_, err := manager.runWorkflow(context.Background(), steps, task, state)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestAutomaticModificationInjection(t *testing.T) {
 	}
 	state := RunState{}
 
-	result, err := manager.Execute(context.Background(), steps, task, state)
+	result, err := manager.runWorkflow(context.Background(), steps, task, state)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -406,7 +406,7 @@ func TestMultipleModificationAccumulation(t *testing.T) {
 	}
 	state := RunState{}
 
-	result, err := manager.Execute(context.Background(), steps, task, state)
+	result, err := manager.runWorkflow(context.Background(), steps, task, state)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)

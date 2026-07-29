@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
 func TestInferTaskInputsUsesPathLikeQueryTokens(t *testing.T) {
@@ -46,7 +44,7 @@ func TestOrchestratorBuildsContextWithAllComponents(t *testing.T) {
 		GrammarRegistry:        NewGrammarRegistry(),
 	}
 
-	result, err := orchestrator.Execute(Task{WorkingDir: tmpDir, Description: "inspect parser", State: RunState{}})
+	result, err := orchestrator.executeLegacy(Task{WorkingDir: tmpDir, Description: "inspect parser", State: RunState{}})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
@@ -76,10 +74,6 @@ func TestCapabilityRunIncludesKBMetadataInResult(t *testing.T) {
 		GrammarRegistry: NewGrammarRegistry(),
 	}
 
-	cap := &Capability{
-		Orchestrator: orchestrator,
-	}
-
 	// Create a task that will trigger KB consultation
 	task := Task{
 		WorkingDir:  tmpDir,
@@ -89,7 +83,7 @@ func TestCapabilityRunIncludesKBMetadataInResult(t *testing.T) {
 	}
 
 	// Execute directly through orchestrator (since Run() does complex path parsing)
-	result, err := orchestrator.Execute(task)
+	result, err := orchestrator.executeLegacy(task)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
@@ -116,11 +110,4 @@ func TestCapabilityRunIncludesKBMetadataInResult(t *testing.T) {
 		}
 	}
 
-	// Verify capability Run also works
-	capResult, err := cap.Run("implement validation for parser", capabilities.RoutingState{})
-	if err == nil {
-		if capResult.Data != nil {
-			t.Log("Capability result Data populated successfully")
-		}
-	}
 }

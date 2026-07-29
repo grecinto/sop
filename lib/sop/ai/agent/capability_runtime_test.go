@@ -18,7 +18,7 @@ func TestBuildFocusedToolContextUsesCapabilityRegistry(t *testing.T) {
 	ag.capabilityRegistry = reg
 
 	taskCtx := &TaskContextClassification{Domain: StoresDomain, RoutingGate: RoutingGateFocused}
-	got := ag.buildFocusedToolContext(taskCtx)
+	got := ag.buildFocusedToolContext(context.Background(), "", taskCtx)
 	if !strings.Contains(got, "capability context") {
 		t.Fatalf("expected focused tool context to include capability context, got %q", got)
 	}
@@ -75,6 +75,20 @@ func TestNewCopilotAgentRegistersCodingWorkflowCapabilityByDefault(t *testing.T)
 	}
 }
 
+func TestNewCopilotAgentRegistersServiceCapabilityByDefault(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	var found bool
+	for _, cap := range ag.capabilityRegistry.ListAll() {
+		if cap != nil && cap.ID() == "coding_workflow_services" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected coding workflow services capability to be registered by default")
+	}
+}
+
 func TestNewCopilotAgentAppliesCapabilityOptions(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil, WithCapability(&stubCapability{id: "stores", name: "Stores", context: "option context"}))
 	cap, ok := ag.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: "Stores"})
@@ -109,8 +123,11 @@ func (s *stubCapability) Name() string { return s.name }
 func (s *stubCapability) Entitlement() capabilities.Entitlement {
 	return capabilities.Entitlement{EnabledByDefault: true}
 }
-func (s *stubCapability) CanHandle(query string, state capabilities.RoutingState) bool {
-	return state.Domain == StoresDomain || state.Domain == s.id
+func (s *stubCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
+	if state.Domain == StoresDomain || state.Domain == s.id {
+		return capabilities.ClassificationResult{Relevant: true, Score: 1, Mode: capabilities.CapabilityModePrimary}
+	}
+	return capabilities.ClassificationResult{}
 }
 func (s *stubCapability) BuildContext(query string, state capabilities.RoutingState) string {
 	return s.context
@@ -118,7 +135,4 @@ func (s *stubCapability) BuildContext(query string, state capabilities.RoutingSt
 func (s *stubCapability) ExposeTools() []capabilities.ToolDefinition { return nil }
 func (s *stubCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
 	return ""
-}
-func (s *stubCapability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	return capabilities.CapabilityResult{}, nil
 }

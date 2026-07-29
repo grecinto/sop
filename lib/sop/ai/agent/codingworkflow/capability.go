@@ -2,7 +2,6 @@ package codingworkflow
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
@@ -51,30 +50,45 @@ func (c *Capability) Entitlement() capabilities.Entitlement {
 	}
 }
 
-func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
+func (c *Capability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
 	if c == nil || c.Orchestrator == nil {
-		return false
+		return capabilities.ClassificationResult{}
 	}
 	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
 		if hint == "coding_workflow" || hint == "codingworkflow" || hint == "repo_edit" {
-			return true
+			return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
 		}
 		if hint == "desktop_automation" || hint == "local_ops" {
-			return false
+			return capabilities.ClassificationResult{}
 		}
 	}
+	hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint))
+	if domain := strings.ToLower(strings.TrimSpace(state.Domain)); domain != "" {
+		switch domain {
+		case "stores", "spaces":
+			return capabilities.ClassificationResult{}
+		case "desktop", "desktop automation", "commandline", "automation", "general", "sop":
+			// Keep coding workflow available for desktop and general coding-oriented requests.
+		default:
+			if hint == "coding_workflow" || hint == "repo_edit" {
+				return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
+			}
+			return capabilities.ClassificationResult{}
+		}
+	}
+
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
-		return false
+		return capabilities.ClassificationResult{}
 	}
-	return strings.Contains(q, "fix") ||
+	if strings.Contains(q, "fix") ||
 		strings.Contains(q, "refactor") ||
 		strings.Contains(q, "patch") ||
 		strings.Contains(q, "implement") ||
 		strings.Contains(q, "modify") ||
-		strings.Contains(q, "search") ||
 		strings.Contains(q, "edit") ||
 		strings.Contains(q, "repo") ||
+		strings.Contains(q, "repository") ||
 		strings.Contains(q, "code") ||
 		strings.Contains(q, "parser") ||
 		strings.Contains(q, "function") ||
@@ -93,10 +107,13 @@ func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bo
 		strings.Contains(q, "plan") ||
 		strings.Contains(q, "architect") ||
 		strings.Contains(q, "propose") ||
-		strings.Contains(q, "document") ||
-		strings.Contains(q, "readme") ||
 		strings.Contains(q, "spec") ||
-		strings.Contains(q, "requirement")
+		strings.Contains(q, "requirement") ||
+		strings.Contains(q, "bug") ||
+		strings.Contains(q, "test") {
+		return capabilities.ClassificationResult{Relevant: true, Score: 12, Mode: capabilities.CapabilityModePrimary}
+	}
+	return capabilities.ClassificationResult{}
 }
 
 func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
@@ -109,59 +126,6 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
 	return "Use the coding workflow capability for local-runtime code, generation, and analysis tasks. Start from the design intent, make the plan explicit, and use TDD as an assistive practice by drafting or reviewing focused tests while implementing. Keep actions explicit, previewable, and safe, and preserve continuation context across turns.\n\n" + CodeFormatInstructions
-}
-
-func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	if c == nil || c.Orchestrator == nil {
-		return capabilities.CapabilityResult{}, fmt.Errorf("coding workflow capability requires an orchestrator")
-	}
-	workingDir, activeFile := inferTaskInputs(query)
-	metadata := map[string]string{"query": query}
-	if state.Domain != "" {
-		metadata["domain"] = state.Domain
-	}
-	if workingDir != "" {
-		metadata["working_dir"] = workingDir
-	}
-	if activeFile != "" {
-		metadata["active_file"] = activeFile
-	}
-	task := Task{Description: query, ActiveFile: activeFile, State: RunState{Args: map[string]string{"query": query}, Metadata: metadata}}
-	if workingDir != "" {
-		task.WorkingDir = workingDir
-	}
-	result, err := c.Orchestrator.Execute(task)
-	if err != nil {
-		// Check if this is an approval requirement
-		if approvalErr, ok := err.(*ApprovalRequiredError); ok {
-			// Return structured approval payload that can be emitted as ACTION_REQUIRED
-			return capabilities.CapabilityResult{
-				Summary: approvalErr.Error(),
-				Data:    approvalErr.ToActionPayload(),
-			}, fmt.Errorf("<<<ACTION_REQUIRED:%s>>>", mustMarshalJSON(approvalErr.ToActionPayload()))
-		}
-		return capabilities.CapabilityResult{}, err
-	}
-	data := map[string]any{
-		"message":            result.Message,
-		"applied_patches":    len(result.AppliedPatches),
-		"task_type":          result.TaskType,
-		"plan":               result.Plan,
-		"resumed_from_state": result.ResumedFromState,
-		"active_file":        result.ContextPack.ActiveFile,
-		"working_dir":        result.ContextPack.WorkingDir,
-		// Phase 4: KB metadata for frontend display
-		"kbs_used":          result.KBsConsulted,
-		"rules_applied":     result.RulesApplied,
-		"explanation":       result.Explanation,
-		"revision_attempts": result.RevisionAttempts,
-	}
-	if c.Orchestrator != nil {
-		data["continuity_signal"] = "task_outcome"
-	}
-
-	// Orchestrator now provides conclusive messages - pass through directly
-	return capabilities.CapabilityResult{Summary: result.Message, Data: data}, nil
 }
 
 func inferTaskInputs(query string) (string, string) {

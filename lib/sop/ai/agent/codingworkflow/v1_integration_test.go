@@ -116,32 +116,3 @@ func TestFileSearchAdapterFindsRelevantFiles(t *testing.T) {
 		t.Fatalf("expected parser.go in matches, got %v", matches)
 	}
 }
-
-func TestSimpleEvaluationSuiteExecution(t *testing.T) {
-	orchestrator := &Orchestrator{
-		ContextManager:         &DefaultContextManager{},
-		RepoIndexer:            &DefaultRepoIndexer{},
-		Memory:                 NewInMemorySessionMemory(),
-		Planner:                &DefaultPlanner{},
-		ExpertiseRetriever:     &DefaultExpertiseRetriever{},
-		KnowledgeBaseRetriever: &DefaultKnowledgeBaseRetriever{},
-		ProviderRouter:         &DefaultProviderRouter{},
-	}
-
-	cases := []EvaluationCase{
-		{
-			Name:           "context_test",
-			Task:           Task{Description: "inspect repository"},
-			ExpectContains: "context",
-		},
-	}
-
-	results := RunEvaluationSuite(orchestrator, cases)
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-
-	if !results[0].Passed {
-		t.Fatalf("expected test to pass, got: %s", results[0].Message)
-	}
-}

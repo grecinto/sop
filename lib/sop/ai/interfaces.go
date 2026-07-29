@@ -409,11 +409,6 @@ type CarryoverState struct {
 	LastResetReason        CarryoverResetReason
 }
 
-// ReasoningEngine isolates the orchestration loop from the service configuration.
-type ReasoningEngine interface {
-	Run(ctx context.Context, req ReasoningRequest) (ReasoningResponse, error)
-}
-
 // ReActLoop owns a full multi-turn ReAct loop lifecycle rather than just a
 // single-turn prompt adaptation.
 type ReActLoop interface {

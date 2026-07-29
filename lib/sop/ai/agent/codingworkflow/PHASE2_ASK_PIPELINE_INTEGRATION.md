@@ -15,7 +15,7 @@ The integration connects three layers:
 
 ### 1. OnStart Hook
 **Location**: `lib/sop/ai/agent/copilot.go:2912-2916`  
-**Integration**: Called immediately after capability resolution
+**Integration**: Called immediately after capability classification and composition
 
 ```go
 if step, isStep := cap.(cw.Step); isStep {
@@ -44,7 +44,7 @@ if isStep {
 ```
 
 **Purpose**: Inject step-specific context into the system prompt  
-**Context**: Called after capability BuildContext/BuildInstructions but before prompt finalization
+**Context**: Called after capability classification and after BuildContext/BuildInstructions have been assembled, but before prompt finalization
 
 ### 3. OnAfterToolResult Hook
 **Location**: `lib/sop/ai/agent/copilot.go:5375-5391`  

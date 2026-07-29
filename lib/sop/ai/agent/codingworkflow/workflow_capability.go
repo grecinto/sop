@@ -54,28 +54,28 @@ func (c *WorkflowCapability) Entitlement() capabilities.Entitlement {
 	}
 }
 
-func (c *WorkflowCapability) CanHandle(query string, state capabilities.RoutingState) bool {
+func (c *WorkflowCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
 	if c == nil || c.manager == nil {
-		return false
+		return capabilities.ClassificationResult{}
 	}
 
 	// Check capability hint
 	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
 		if hint == "workflow_manager" || hint == "coding_workflow" || hint == "codingworkflow" || hint == "repo_edit" {
-			return true
+			return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
 		}
 		if hint == "desktop_automation" || hint == "local_ops" {
-			return false
+			return capabilities.ClassificationResult{}
 		}
 	}
 
 	// Check query keywords
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
-		return false
+		return capabilities.ClassificationResult{}
 	}
 
-	return strings.Contains(q, "fix") ||
+	if strings.Contains(q, "fix") ||
 		strings.Contains(q, "refactor") ||
 		strings.Contains(q, "patch") ||
 		strings.Contains(q, "implement") ||
@@ -87,7 +87,10 @@ func (c *WorkflowCapability) CanHandle(query string, state capabilities.RoutingS
 		strings.Contains(q, "test") ||
 		strings.Contains(q, "debug") ||
 		strings.Contains(q, "architect") ||
-		strings.Contains(q, "document")
+		strings.Contains(q, "document") {
+		return capabilities.ClassificationResult{Relevant: true, Score: 8, Mode: capabilities.CapabilityModePrimary}
+	}
+	return capabilities.ClassificationResult{}
 }
 
 func (c *WorkflowCapability) BuildContext(query string, state capabilities.RoutingState) string {
@@ -104,27 +107,6 @@ func (c *WorkflowCapability) ExposeTools() []capabilities.ToolDefinition {
 		Description: "Executes structured multi-step workflows for coding tasks (test-fix, debugging, implementation, refactoring, architecture, documentation)",
 		Schema:      "{}",
 	}}
-}
-
-// Run implements the Capability interface
-// This is called when the capability is selected during routing
-func (c *WorkflowCapability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	// Execute the workflow in a background context
-	// Note: This is a synchronous execution within the capability
-	ctx := context.Background()
-	result, err := c.Execute(ctx, query, state)
-
-	if err != nil {
-		return capabilities.CapabilityResult{
-			Summary: fmt.Sprintf("Workflow execution failed: %v", err),
-			Data:    map[string]any{"error": err.Error()},
-		}, err
-	}
-
-	return capabilities.CapabilityResult{
-		Summary: result,
-		Data:    map[string]any{"result": result},
-	}, nil
 }
 
 // Execute implements the capability's main execution logic
@@ -200,8 +182,8 @@ func (c *WorkflowCapability) Execute(ctx context.Context, query string, state ca
 		Metadata: make(map[string]string),
 	}
 
-	// Execute workflow using WorkflowManager
-	result, err := c.manager.Execute(ctx, steps, task, runState)
+	// Execute workflow using the workflow manager's shared step runner.
+	result, err := c.manager.runWorkflow(ctx, steps, task, runState)
 	if err != nil {
 		return "", fmt.Errorf("workflow execution failed: %w", err)
 	}

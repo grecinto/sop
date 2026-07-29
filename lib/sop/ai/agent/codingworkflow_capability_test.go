@@ -92,6 +92,30 @@ func TestBuildSystemPromptIncludesCodingWorkflowMemory(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptIncludesPlannerPlanForLaterTurns(t *testing.T) {
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	agent.service = &Service{session: NewRunnerSession()}
+	agent.service.session.Memory = NewShortTermMemory()
+
+	// Simulate turn 1: user asks for a plan.
+	agent.recordPlannerPlan("outline the parser fix", "1. Inspect parser flow\n2. Implement the fix\n3. Verify tests")
+
+	// Simulate turn 2: user refines the plan and asks to continue.
+	refinedPrompt := agent.buildSystemPrompt(context.Background(), "refine the plan for the parser fix", TaskContextClassification{})
+	if !strings.Contains(refinedPrompt, "Inspect parser flow") {
+		t.Fatalf("expected refined prompt to carry the previously proposed plan, got %s", refinedPrompt)
+	}
+
+	// Simulate turn 3: user says implement it.
+	implementationPrompt := agent.buildSystemPrompt(context.Background(), "implement the plan", TaskContextClassification{})
+	if !strings.Contains(implementationPrompt, "Inspect parser flow") {
+		t.Fatalf("expected implementation prompt to still include the proposed plan, got %s", implementationPrompt)
+	}
+	if !strings.Contains(implementationPrompt, "Verify tests") {
+		t.Fatalf("expected implementation prompt to retain the plan steps, got %s", implementationPrompt)
+	}
+}
+
 func TestFormatLearnedKnowledgeHitUsesCanonicalDocumentSourceLabel(t *testing.T) {
 	ctx := context.Background()
 	cats := inmemory.NewBtree[sop.UUID, *memory.Category](true)
@@ -402,46 +426,12 @@ func containsStringSlice(items []string, target string) bool {
 	return false
 }
 
-func TestCodingWorkflowCapabilityExposesContinuitySignals(t *testing.T) {
-	orchestrator := &cw.Orchestrator{}
-	cap := cw.NewCapability(orchestrator)
-
-	result, err := cap.Run("fix parser", capabilities.RoutingState{Domain: "Desktop"})
-	if err != nil {
-		t.Fatalf("expected capability run to succeed in the current working directory context: %v", err)
-	}
-	if result.Summary == "" {
-		t.Fatal("expected capability run to return a summary")
-	}
-	if got, ok := result.Data["continuity_signal"]; !ok || got != "task_outcome" {
-		t.Fatalf("expected continuity signal payload to be exposed, got %#v", got)
-	}
-}
-
 func TestCodingWorkflowCapabilityHandlesGenerationAndAnalysisQueries(t *testing.T) {
 	cap := cw.NewCapability(&cw.Orchestrator{})
-	if !cap.CanHandle("generate a JSON script for a store workflow", capabilities.RoutingState{Domain: "Desktop"}) {
+	if result := cap.Classify("generate a JSON script for a store workflow", capabilities.RoutingState{Domain: "Desktop"}); !result.Relevant {
 		t.Fatal("expected capability to handle generation-style requests")
 	}
-	if !cap.CanHandle("analyze table records to find anomalies", capabilities.RoutingState{Domain: "Desktop"}) {
+	if result := cap.Classify("analyze table records to find anomalies", capabilities.RoutingState{Domain: "Desktop"}); !result.Relevant {
 		t.Fatal("expected capability to handle analysis-style requests")
-	}
-}
-
-func TestOrchestratorExecutionResultIncludesTaskClassificationAndPlan(t *testing.T) {
-	tmpDir := t.TempDir()
-	orchestrator := &cw.Orchestrator{ContextManager: &cw.DefaultContextManager{}, Planner: &cw.DefaultPlanner{}, RepoIndexer: &cw.DefaultRepoIndexer{}, PatchEngine: &cw.DefaultPatchEngine{}, ChangedFileInspector: &cw.GitRepoInspector{}, DiffPreviewer: &cw.DefaultDiffPreviewer{}, RepoSearcher: &cw.FileSearchAdapter{}, RepoInspector: &cw.GitRepoInspector{}, Memory: cw.NewInMemorySessionMemory(), Policy: &cw.DefaultSafetyPolicy{}, TestRunner: &cw.DefaultTestRunner{}}
-	result, err := orchestrator.Execute(cw.Task{WorkingDir: tmpDir, Description: "analyze store inventory and propose a SQL-based cleanup plan", State: cw.RunState{Metadata: map[string]string{"continuation_summary": "continue from prior analysis"}}})
-	if err != nil {
-		t.Fatalf("Execute returned error: %v", err)
-	}
-	if result.TaskType != "analysis" {
-		t.Fatalf("expected analysis task type, got %q", result.TaskType)
-	}
-	if !result.ResumedFromState {
-		t.Fatal("expected resumed-from-state flag to be set when continuation metadata is present")
-	}
-	if len(result.Plan) == 0 {
-		t.Fatal("expected execution result to include a plan")
 	}
 }

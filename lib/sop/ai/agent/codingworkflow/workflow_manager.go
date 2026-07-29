@@ -543,7 +543,17 @@ func (wm *WorkflowManager) registerDefaultHandlers() {
 	// For now, no default handlers - users can register their own
 }
 
-// Execute runs a sequence of Steps and returns the aggregated WorkflowResult.
+// Execute is intentionally disabled for the capability-based workflow model.
+// Callers should participate through the Workflow Manager capability in Ask.
+func (wm *WorkflowManager) Execute(ctx context.Context, steps []Step, task Task, state RunState) (WorkflowResult, error) {
+	_ = ctx
+	_ = steps
+	_ = task
+	_ = state
+	return WorkflowResult{}, fmt.Errorf("controller-style workflow execution is disabled: use the workflow manager capability via Ask")
+}
+
+// runWorkflow executes a sequence of Steps and returns the aggregated WorkflowResult.
 //
 // Execution flow:
 //  1. Initialize workflow state
@@ -562,7 +572,7 @@ func (wm *WorkflowManager) registerDefaultHandlers() {
 //
 // Guard rail: Each Step is executed as ONE Ask transaction. The WorkflowManager
 // coordinates the sequence but does NOT create a secondary orchestration loop.
-func (wm *WorkflowManager) Execute(ctx context.Context, steps []Step, task Task, state RunState) (WorkflowResult, error) {
+func (wm *WorkflowManager) runWorkflow(ctx context.Context, steps []Step, task Task, state RunState) (WorkflowResult, error) {
 	startTime := time.Now()
 
 	// Create workflow state for cross-step data sharing

@@ -47,9 +47,9 @@ func WithWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOption {
 The new `WorkflowCapability` implements the `capabilities.Capability` interface:
 
 - **ID**: `"workflow_manager"`
-- **CanHandle**: Same query detection as old capability (fix, refactor, implement, test, etc.)
-- **Execute**: Classifies task and creates appropriate workflow Steps
-- **Run**: Entry point called by capability system
+- **Classify**: Determines whether the workflow capability should participate in the request and whether it should act as primary or supporting context for the Ask prompt
+- **BuildContext / BuildInstructions**: Contribute workflow guidance to the Ask prompt
+- **Execute**: Creates the appropriate workflow Steps after the capability has been selected
 
 #### Supported Workflows
 

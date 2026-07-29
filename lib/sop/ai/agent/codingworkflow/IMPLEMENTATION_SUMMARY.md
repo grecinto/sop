@@ -64,7 +64,7 @@ All 5 lifecycle hooks are now integrated into the CopilotAgent Ask pipeline:
 #### 1. OnStart Hook
 **Location**: `copilot.go:2912-2916`  
 **Status**: ✅ Already existed, verified working  
-**Called**: After capability resolution, before prompt construction
+**Called**: After capability classification and composition, before prompt construction
 
 #### 2. OnBeforePrompt Hook  
 **Location**: `copilot_prompt.go:163`  

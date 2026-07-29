@@ -9,8 +9,9 @@ import (
 
 func TestDesktopCapabilityHandlesDesktopRouting(t *testing.T) {
 	cap := NewCapability()
-	if !cap.CanHandle("run tests", capabilities.RoutingState{Domain: "Desktop"}) {
-		t.Fatal("expected desktop capability to handle desktop routing")
+	result := cap.Classify("run tests", capabilities.RoutingState{Domain: "Desktop"})
+	if !result.Relevant {
+		t.Fatal("expected desktop capability to classify desktop routing as relevant")
 	}
 }
 

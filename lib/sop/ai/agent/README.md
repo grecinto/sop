@@ -39,8 +39,9 @@ Tools are no longer hardcoded strings. They are defined in a structured `Registr
 
 ### 5. Plug-and-Play Capabilities for Ask
 Ask now supports a modular capability layer that keeps domain behavior out of the core runtime and makes it easy to add or remove capabilities without changing the orchestration engine.
-*   **Capability Contract**: Each domain module implements a small interface that can classify requests, build focused context, expose tools, and optionally run domain-specific logic.
-*   **Registry-Based Routing**: The agent maintains a capability registry that resolves the first matching capability for a query and can also compose multiple enabled capabilities for the same routing state.
+*   **Capability Contract**: Each domain module implements a small interface that can classify requests, contribute domain-relevance signals, and provide focused context, tools, and instructions for Ask.
+*   **Classification-First Composition**: Ask consults capabilities early in the pipeline. Each capability can mark the request as primary, supporting, or fallback-relevant so the runtime can compose the relevant prompt material before execution.
+*   **Additive Participation**: Mixed-domain requests can involve multiple capabilities at once. For example, a query may need Stores and Spaces context together, or Stores plus CommandLine context, rather than forcing a single winner.
 *   **Routing State**: The runtime passes lightweight routing input such as domain and gate information, rather than relying on implicit context state inside the core Ask pipeline.
 *   **Entitlements and Enablement**: Capabilities can declare premium or default-enabled behavior, and the registry filters them according to the active entitlement map.
 *   **Runtime Extension**: New domains can be introduced by registering a capability implementation, enabling support for web research, custom verticals, or other services without branching the core Ask pipeline.
@@ -302,10 +303,9 @@ This pattern ensures that if Batch 2 fails, Batch 1 remains committed.
 A new domain capability can be added by implementing the capability interface and registering it with the shared registry. The pattern is intentionally small so teams can extend Ask without hard-coding logic into the main runtime.
 
 The interface is intentionally narrow and explicit:
-*   `CanHandle` decides whether the capability is relevant for the request.
+*   `Classify` tells Ask how the capability should participate in the request. It can mark the capability as primary, supporting, or fallback-relevant.
 *   `BuildContext` and `BuildInstructions` provide the focused prompt material that should be injected into Ask.
 *   `ExposeTools` contributes tool definitions when the capability should surface extra actions.
-*   `Run` is available for explicit capability execution when the workflow needs an actual domain handler.
 
 ```go
 package mydomain
@@ -321,17 +321,17 @@ func (c *Capability) Name() string { return "My Domain" }
 func (c *Capability) Entitlement() capabilities.Entitlement {
     return capabilities.Entitlement{EnabledByDefault: true, Tier: "base"}
 }
-func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
-    return state.Domain == "My Domain"
+func (c *Capability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
+    if state.Domain == "My Domain" {
+        return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
+    }
+    return capabilities.ClassificationResult{}
 }
 func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
     return "Structured Context: My Domain"
 }
 func (c *Capability) ExposeTools() []capabilities.ToolDefinition { return nil }
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string { return "" }
-func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-    return capabilities.CapabilityResult{}, nil
-}
 ```
 
 Register it when building the agent:

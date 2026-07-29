@@ -1,87 +1,13 @@
 package codingworkflow
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
-func TestPlannerCapability_Run(t *testing.T) {
-	// Create orchestrator with minimal dependencies
-	orchestrator := &Orchestrator{
-		ContextManager: &DefaultContextManager{},
-		RepoIndexer:    &DefaultRepoIndexer{},
-		PatchEngine:    &DefaultPatchEngine{},
-		Memory:         NewInMemorySessionMemory(),
-		TestRunner:     &DefaultTestRunner{},
-		Planner:        &DefaultPlanner{},
-		ProviderRouter: &DefaultProviderRouter{},
-	}
-
-	// Create planner capability
-	planner := NewPlannerCapability(orchestrator)
-
-	// Test cases for different task types
-	tests := []struct {
-		name  string
-		query string
-	}{
-		{
-			name:  "Debugging task",
-			query: "fix the bug in parser.go",
-		},
-		{
-			name:  "Implementation task",
-			query: "implement a new feature for user authentication",
-		},
-		{
-			name:  "Testing task",
-			query: "write tests for the authentication module",
-		},
-		{
-			name:  "Refactoring task",
-			query: "refactor the database layer to use interfaces",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			state := capabilities.RoutingState{
-				Domain:         "coding",
-				Gate:           "write",
-				CapabilityHint: "dynamic_planner",
-			}
-
-			// Call Run - should generate and return a plan
-			result, err := planner.Run(tt.query, state)
-
-			if err != nil {
-				t.Fatalf("Run failed: %v", err)
-			}
-
-			if result.Summary == "" {
-				t.Error("Run returned empty summary")
-			}
-
-			// Verify plan data is present
-			if result.Data == nil {
-				t.Fatal("Run returned nil Data")
-			}
-
-			if _, ok := result.Data["plan"]; !ok {
-				t.Error("Run result missing 'plan' key in Data")
-			}
-
-			if _, ok := result.Data["steps"]; !ok {
-				t.Error("Run result missing 'steps' key in Data")
-			}
-
-			t.Logf("Plan summary: %s", result.Summary)
-		})
-	}
-}
-
-func TestPlannerCapability_CanHandle(t *testing.T) {
+func TestPlannerCapability_Classify(t *testing.T) {
 	orchestrator := &Orchestrator{}
 	planner := NewPlannerCapability(orchestrator)
 
@@ -127,9 +53,9 @@ func TestPlannerCapability_CanHandle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := planner.CanHandle(tt.query, tt.state)
-			if result != tt.expected {
-				t.Errorf("CanHandle() = %v, expected %v", result, tt.expected)
+			result := planner.Classify(tt.query, tt.state)
+			if result.Relevant != tt.expected {
+				t.Errorf("Classify() relevant = %v, expected %v", result.Relevant, tt.expected)
 			}
 		})
 	}
@@ -219,5 +145,27 @@ func TestPlannerCapability_EmptyPlan(t *testing.T) {
 	_, err = planner.planToSteps(emptyPlan)
 	if err == nil {
 		t.Error("expected error for empty plan")
+	}
+}
+
+func TestPlannerCapability_FormatPlanSummary(t *testing.T) {
+	planner := NewPlannerCapability(&Orchestrator{})
+
+	plan := &WorkflowPlan{
+		Name:        "Plan",
+		Description: "A plan for the user",
+		Steps: []PlanStep{
+			{Name: "Inspect", Description: "Inspect the repository", Type: "analyze"},
+			{Name: "Implement", Description: "Implement the change", Type: "generate"},
+		},
+		Rationale: "This keeps the work focused",
+	}
+
+	summary := planner.formatPlanSummary(plan)
+	if !strings.Contains(summary, "Inspect") {
+		t.Fatalf("expected summary to include step names, got %q", summary)
+	}
+	if !strings.Contains(summary, "This keeps the work focused") {
+		t.Fatalf("expected summary to include rationale, got %q", summary)
 	}
 }

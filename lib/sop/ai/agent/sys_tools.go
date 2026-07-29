@@ -20,7 +20,7 @@ func (a *CopilotAgent) injectToolsForDomain(ctx context.Context, taskCtx *TaskCo
 		return
 	}
 
-	if focused := a.buildFocusedToolContext(taskCtx); focused != "" {
+	if focused := a.buildFocusedToolContext(ctx, "", taskCtx); focused != "" {
 		a.markMRUCategoryWithSource(SYSTEM_TOOLS, "\n"+focused, MRUSourceSystemTools)
 	}
 }

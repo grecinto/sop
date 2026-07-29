@@ -49,22 +49,22 @@ func (wmc *WorkflowManagerCapability) Entitlement() capabilities.Entitlement {
 	}
 }
 
-// CanHandle checks if there's a workflow matching the query.
-func (wmc *WorkflowManagerCapability) CanHandle(query string, state capabilities.RoutingState) bool {
+// Classify checks whether there's a workflow matching the query.
+func (wmc *WorkflowManagerCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
 	// If we're already executing a workflow, handle all queries until complete
 	if wmc.currentWorkflow != nil && !wmc.completed {
-		return true
+		return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
 	}
 
 	// Check if capability hint matches
 	if state.CapabilityHint == wmc.ID() || state.CapabilityHint == "workflow" {
-		return true
+		return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModeSupporting}
 	}
 
 	// Try to find a workflow (this is a quick check, actual execution happens in Run)
 	// For now, return false to avoid expensive KB lookups during routing
 	// The real workflow detection happens via tryKBWorkflowExecution
-	return false
+	return capabilities.ClassificationResult{}
 }
 
 // BuildContext returns context information for the LLM.
@@ -147,91 +147,6 @@ func (wmc *WorkflowManagerCapability) BuildInstructions(query string, state capa
 	}
 
 	return sb.String()
-}
-
-// Run executes the current workflow step and enqueues the next step if a queue is available.
-// This implements the participant pattern - it processes ONE step per call, not all steps upfront.
-// If a work queue exists in context, it enqueues the next step for processing.
-// Otherwise, it returns the step information for the LLM to execute directly.
-func (wmc *WorkflowManagerCapability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	// If no workflow is active, try to find one
-	if wmc.currentWorkflow == nil {
-		ctx := context.Background() // TODO: Get from state
-		workflow, err := wmc.manager.getWorkflowInternal(ctx, query)
-		if err != nil {
-			return capabilities.CapabilityResult{}, fmt.Errorf("no workflow found: %w", err)
-		}
-
-		wmc.currentWorkflow = workflow
-		wmc.currentStepIndex = 0
-		wmc.originalQuery = query
-		wmc.completed = false
-		wmc.turnResults = make([]TurnResult, 0)
-
-		log.Info("Workflow execution started", "workflow", workflow.Name, "steps", len(workflow.Steps))
-	}
-
-	// Check if workflow is complete
-	if wmc.currentStepIndex >= len(wmc.currentWorkflow.Steps) {
-		wmc.completed = true
-		return capabilities.CapabilityResult{
-			Summary: fmt.Sprintf("Workflow '%s' completed with %d steps", wmc.currentWorkflow.Name, len(wmc.currentWorkflow.Steps)),
-			Data: map[string]any{
-				"workflow_complete": true,
-				"steps_executed":    wmc.currentStepIndex,
-				"results":           wmc.turnResults,
-			},
-		}, nil
-	}
-
-	// Get current step
-	step := wmc.currentWorkflow.Steps[wmc.currentStepIndex]
-
-	// Expand query template
-	expandedQuery := wmc.manager.expandTemplate(step.QueryTemplate, wmc.originalQuery)
-
-	// Build workflow context for this step
-	workflowContext := WorkflowExecutionContext{
-		WorkflowID:          wmc.currentWorkflow.ID,
-		WorkflowName:        wmc.currentWorkflow.Name,
-		WorkflowDescription: wmc.currentWorkflow.Description,
-		ProtocolGuidance:    wmc.currentWorkflow.ProtocolGuidance,
-		StepNumber:          step.Step,
-		StepTitle:           step.Title,
-		StepActor:           step.Actor,
-		StepInstructions:    step.Instructions,
-		RequiredContext:     append([]string(nil), step.RequiredContext...),
-		SuccessCriteria:     append([]string(nil), step.SuccessCriteria...),
-		IterationPolicy:     step.IterationPolicy,
-		ToolsExpected:       append([]string(nil), step.ToolsExpected...),
-	}
-
-	log.Info("Workflow step executing",
-		"step", wmc.currentStepIndex+1,
-		"total", len(wmc.currentWorkflow.Steps),
-		"step_title", step.Title,
-		"actor", step.Actor)
-
-	// Return step execution info for LLM to process
-	// The step's instructions, context, and success criteria guide the LLM's actions
-	return capabilities.CapabilityResult{
-		Summary: workflowContext.RenderPrompt(expandedQuery),
-		Data: map[string]any{
-			"step_index":         wmc.currentStepIndex,
-			"step_number":        step.Step,
-			"step_title":         step.Title,
-			"query":              expandedQuery,
-			"actor":              step.Actor,
-			"instructions":       step.Instructions,
-			"required_context":   step.RequiredContext,
-			"success_criteria":   step.SuccessCriteria,
-			"tools_expected":     step.ToolsExpected,
-			"iteration_policy":   step.IterationPolicy,
-			"workflow_context":   workflowContext,
-			"workflow_active":    true,
-			"needs_continuation": wmc.currentStepIndex+1 < len(wmc.currentWorkflow.Steps),
-		},
-	}, nil
 }
 
 // RunWithQueue executes the current step and enqueues the next step to the queue.
@@ -382,6 +297,14 @@ func (wsc *WorkflowStepCapability) CanHandle(query string, state capabilities.Ro
 	return true
 }
 
+// Classify marks workflow-step capabilities as relevant for the current workflow execution.
+func (wsc *WorkflowStepCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
+	if wsc == nil {
+		return capabilities.ClassificationResult{}
+	}
+	return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
+}
+
 // BuildContext returns context for this step.
 func (wsc *WorkflowStepCapability) BuildContext(query string, state capabilities.RoutingState) string {
 	var sb strings.Builder
@@ -432,26 +355,4 @@ func (wsc *WorkflowStepCapability) BuildInstructions(query string, state capabil
 	}
 
 	return sb.String()
-}
-
-// Run executes this workflow step by returning instructions for the LLM to follow.
-// The actual work is done by the LLM using the instructions and tools.
-func (wsc *WorkflowStepCapability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	// The step doesn't execute directly - it provides context and instructions
-	// for the LLM to execute. The LLM will use tools based on the step's guidance.
-
-	return capabilities.CapabilityResult{
-		Summary: fmt.Sprintf("Execute step: %s", query),
-		Data: map[string]any{
-			"step_number":      wsc.step.Step,
-			"step_title":       wsc.step.Title,
-			"query":            query,
-			"actor":            wsc.step.Actor,
-			"instructions":     wsc.step.Instructions,
-			"required_context": wsc.step.RequiredContext,
-			"success_criteria": wsc.step.SuccessCriteria,
-			"tools_expected":   wsc.step.ToolsExpected,
-			"iteration_policy": wsc.step.IterationPolicy,
-		},
-	}, nil
 }

@@ -122,19 +122,22 @@ func (c *Capability) Entitlement() capabilities.Entitlement {
 		},
 	}
 }
-func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
+func (c *Capability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
 	if state.Domain == "" {
-		return false
+		return capabilities.ClassificationResult{}
 	}
 	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
 		if hint == "desktop_automation" || hint == "local_ops" {
-			return true
+			return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
 		}
 		if hint == "coding_workflow" || hint == "repo_edit" {
-			return false
+			return capabilities.ClassificationResult{}
 		}
 	}
-	return state.Domain == "Desktop" || state.Domain == "Desktop Automation" || state.Domain == CapabilityID || state.Domain == CapabilityName
+	if state.Domain == "Desktop" || state.Domain == "Desktop Automation" || state.Domain == CapabilityID || state.Domain == CapabilityName {
+		return capabilities.ClassificationResult{Relevant: true, Score: 10, Mode: capabilities.CapabilityModePrimary}
+	}
+	return capabilities.ClassificationResult{}
 }
 func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
 	return "Structured Context: Desktop Automation\n- Use local automation tools for shell, git, file, and workspace tasks when the request involves repository work, local file editing, or developer workflow operations."
@@ -181,10 +184,6 @@ Session Recovery:
 - Stuck sessions are automatically detected and reset
 - No manual intervention needed`
 }
-func (c *Capability) Run(query string, state capabilities.RoutingState) (capabilities.CapabilityResult, error) {
-	return capabilities.CapabilityResult{Summary: "desktop automation capability placeholder"}, nil
-}
-
 func (c *Capability) Participate(ctx context.Context, query string, state capabilities.RoutingState) (capabilities.ParticipationResult, bool, error) {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {

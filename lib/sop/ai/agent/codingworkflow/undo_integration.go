@@ -65,8 +65,8 @@ func (wmu *WorkflowManagerWithUndo) Execute(ctx context.Context, steps []Step, t
 	}
 	state.Metadata["undo_transaction_id"] = txn.ID
 
-	// Execute workflow
-	result, err := wmu.base.Execute(ctx, steps, task, state)
+	// Execute workflow through the shared step runner.
+	result, err := wmu.base.runWorkflow(ctx, steps, task, state)
 
 	// Complete transaction
 	success := result.Success && err == nil

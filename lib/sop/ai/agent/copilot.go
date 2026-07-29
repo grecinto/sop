@@ -563,6 +563,33 @@ func (a *CopilotAgent) recordCodingMemory(mem cw.CodingMemory) {
 	a.markMRUCategoryWithSource("CODING_WORKFLOW_LAST", ctx, MRUSourceAskOutcome)
 }
 
+func (a *CopilotAgent) recordPlannerPlan(query string, planText string) {
+	if a == nil {
+		return
+	}
+	if a.service == nil || a.service.session == nil {
+		return
+	}
+	sess := a.service.session
+	if sess.Memory == nil {
+		sess.Memory = NewShortTermMemory()
+	}
+
+	normalized := strings.TrimSpace(planText)
+	if normalized == "" {
+		return
+	}
+
+	summary := "Proposed plan"
+	if trimmedQuery := strings.TrimSpace(query); trimmedQuery != "" {
+		summary = fmt.Sprintf("Plan for: %s", trimmedQuery)
+	}
+
+	details := sanitizeAssistantContinuityText(normalized)
+	sess.Memory.AddRuntimeCaveat(summary, details, "planner", "planner", "planner_capability")
+	a.markMRUCategoryWithSource("PLANNER_PLAN_LAST", fmt.Sprintf("Planning context: %s\n- plan:\n%s", summary, details), MRUSourceAskOutcome)
+}
+
 func buildLTMMemoryCategoryPath(category, capability, scopeType, scopeID string) string {
 	category = strings.TrimSpace(category)
 	if category == "" {
@@ -1759,6 +1786,13 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	}
 
 	caps = append(caps, spaces.NewCapability())
+
+	// Register the local coding workflow capability by default so repository-oriented
+	// requests can still be routed through the established workflow entry point.
+	cwfOrchestrator := &cw.Orchestrator{}
+	caps = append(caps, cw.NewCapability(cwfOrchestrator))
+	caps = append(caps, cw.NewServiceCapability(cwfOrchestrator))
+
 	a.capabilityRegistry = capabilities.NewRegistry(caps...)
 }
 
@@ -2420,6 +2454,7 @@ func (a *CopilotAgent) tryCapabilityParticipation(
 	ctx context.Context,
 	query string,
 	state capabilities.RoutingState,
+	selectedCap capabilities.Capability,
 ) (capabilities.ParticipationResult, bool, error) {
 	if a.capabilityRegistry == nil {
 		return capabilities.ParticipationResult{}, false, nil
@@ -2427,13 +2462,15 @@ func (a *CopilotAgent) tryCapabilityParticipation(
 
 	startTime := time.Now()
 
-	// Find the capability that would handle this
-	cap, found := a.capabilityRegistry.Resolve(query, state)
-	if !found {
-		return capabilities.ParticipationResult{}, false, nil
+	if selectedCap == nil {
+		var found bool
+		selectedCap, found = a.capabilityRegistry.Resolve(query, state)
+		if !found {
+			return capabilities.ParticipationResult{}, false, nil
+		}
 	}
 
-	capID := cap.ID()
+	capID := selectedCap.ID()
 
 	// Gap 1: Check authorization
 	if a.authzManager != nil {
@@ -2447,7 +2484,7 @@ func (a *CopilotAgent) tryCapabilityParticipation(
 			},
 		}
 
-		authResult, authErr := a.authzManager.Authorize(ctx, cap, opCtx)
+		authResult, authErr := a.authzManager.Authorize(ctx, selectedCap, opCtx)
 		if authErr != nil {
 			a.capabilityRegistry.RecordError(capID, authErr)
 			log.Warn("Capability authorization error", "capability", capID, "error", authErr)
@@ -2468,7 +2505,7 @@ func (a *CopilotAgent) tryCapabilityParticipation(
 	}
 
 	// Execute the capability via registry
-	result, handled, err := a.capabilityRegistry.TryParticipate(ctx, query, state)
+	result, handled, err := a.capabilityRegistry.TryParticipateFor(ctx, query, state, selectedCap)
 
 	// Gap 4: Record metrics
 	durationMs := float64(time.Since(startTime).Milliseconds())
@@ -2995,7 +3032,12 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		}
 	}
 
-	if result, handled, err := a.tryCapabilityParticipation(ctx, query, routingState); err == nil && handled {
+	var selectedCap capabilities.Capability
+	if cap, found := a.capabilityRegistry.Resolve(query, routingState); found {
+		selectedCap = cap
+	}
+
+	if result, handled, err := a.tryCapabilityParticipation(ctx, query, routingState, selectedCap); err == nil && handled {
 		if result.Summary != "" {
 			log.Info("Ask flow consulted capability participation hook", "summary", result.Summary)
 		}
@@ -3038,9 +3080,11 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		}
 	}
 
-	// WorkflowPlanner OnFinish hook - called after Ask/ReAct loop completes
-	// This allows planners to set up workflows and enqueue triggers for next Ask iteration
+	// Persist planning output so later turns can reference the proposed plan.
 	if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && selectedCap != nil {
+		if selectedCap.ID() == cw.PlannerCapabilityID {
+			a.recordPlannerPlan(query, finalText)
+		}
 		if planner, ok := selectedCap.(capabilities.WorkflowPlanner); ok {
 			// Extract capability result if stored in context
 			if capResult, ok := ctx.Value(ctxKeyCapabilityResult).(capabilities.CapabilityResult); ok {
@@ -3274,11 +3318,19 @@ func (a *CopilotAgent) enqueueMultiTurnTasks(ctx context.Context, query string, 
 		ctx = context.WithValue(ctx, "work_queue", queueAdapter)
 
 		// Gap 1 & 4: Delegate to capability with authorization and metrics
+		var selectedCap capabilities.Capability
+		if a.capabilityRegistry != nil {
+			selectedCap, _ = a.capabilityRegistry.Resolve(query, capabilities.RoutingState{
+				Domain:         taskContext.Domain,
+				Gate:           taskContext.RoutingGate,
+				CapabilityHint: taskContext.CapabilityHint,
+			})
+		}
 		if result, handled, err := a.tryCapabilityParticipation(ctx, query, capabilities.RoutingState{
 			Domain:         taskContext.Domain,
 			Gate:           taskContext.RoutingGate,
 			CapabilityHint: taskContext.CapabilityHint,
-		}); err == nil && handled {
+		}, selectedCap); err == nil && handled {
 			log.Info("Capability populated queue", "summary", result.Summary, "queue_depth", queue.Depth())
 			return nil
 		}
@@ -4731,6 +4783,38 @@ func (a *CopilotAgent) captureRuntimeCaveatsFromText(text string) {
 		}
 		a.service.session.Memory.AddRuntimeCaveat(summary, details, kind, categoryRoot, "llm_generated")
 	}
+}
+
+func (a *CopilotAgent) getPlannerContext() string {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return ""
+	}
+	caveats := a.service.session.Memory.GetRuntimeCaveats(5)
+	var sb strings.Builder
+	var wrote bool
+	for _, caveat := range caveats {
+		categoryRoot := strings.TrimSpace(caveat.CategoryRoot)
+		source := strings.TrimSpace(caveat.Source)
+		kind := strings.TrimSpace(caveat.Kind)
+		if categoryRoot != "planner" && source != "planner_capability" && kind != "planner" {
+			continue
+		}
+		if !wrote {
+			sb.WriteString("Planner Memory:\n")
+			wrote = true
+		}
+		if summary := strings.TrimSpace(caveat.Summary); summary != "" {
+			sb.WriteString(fmt.Sprintf("- %s", summary))
+		}
+		if details := strings.TrimSpace(caveat.Details); details != "" {
+			sb.WriteString(fmt.Sprintf(": %s", details))
+		}
+		sb.WriteString("\n")
+	}
+	if !wrote {
+		return ""
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func (a *CopilotAgent) getCodingWorkflowContext() string {

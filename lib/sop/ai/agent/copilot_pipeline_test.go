@@ -10,6 +10,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 )
@@ -53,6 +54,51 @@ func TestBuildSystemPrompt_DoesNotRequireExplicitParametersGuardrailText(t *test
 	if strings.Contains(prompt, "Explicit Parameters Guardrail") {
 		t.Fatalf("did not expect buildSystemPrompt to include explicit parameters guardrail text, got: %s", prompt)
 	}
+}
+
+func TestBuildSystemPrompt_UsesMultipleRelevantCapabilities(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.capabilityRegistry = capabilities.NewRegistry()
+
+	first := &stubCapabilityForPromptTest{name: "first", context: "First capability context"}
+	second := &stubCapabilityForPromptTest{name: "second", context: "Second capability context"}
+	first.classification = capabilities.ClassificationResult{Relevant: true, Score: 90, Mode: capabilities.CapabilityModePrimary}
+	second.classification = capabilities.ClassificationResult{Relevant: true, Score: 80, Mode: capabilities.CapabilityModeSupporting}
+
+	ag.capabilityRegistry.Register(first)
+	ag.capabilityRegistry.Register(second)
+
+	ctx := context.WithValue(context.Background(), ctxKeySelectedCapability, first)
+	prompt := ag.buildSystemPrompt(ctx, "inspect the repo and explain the workflow", TaskContextClassification{Domain: "Desktop", RoutingGate: RoutingGateDiscovery})
+
+	if !strings.Contains(prompt, "First capability context") {
+		t.Fatalf("expected prompt to include first capability context")
+	}
+	if !strings.Contains(prompt, "Second capability context") {
+		t.Fatalf("expected prompt to include second capability context")
+	}
+}
+
+type stubCapabilityForPromptTest struct {
+	name           string
+	context        string
+	classification capabilities.ClassificationResult
+}
+
+func (s *stubCapabilityForPromptTest) ID() string   { return s.name }
+func (s *stubCapabilityForPromptTest) Name() string { return s.name }
+func (s *stubCapabilityForPromptTest) Entitlement() capabilities.Entitlement {
+	return capabilities.Entitlement{EnabledByDefault: true}
+}
+func (s *stubCapabilityForPromptTest) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
+	return s.classification
+}
+func (s *stubCapabilityForPromptTest) BuildContext(query string, state capabilities.RoutingState) string {
+	return s.context
+}
+func (s *stubCapabilityForPromptTest) ExposeTools() []capabilities.ToolDefinition { return nil }
+func (s *stubCapabilityForPromptTest) BuildInstructions(query string, state capabilities.RoutingState) string {
+	return ""
 }
 
 func TestRewriteRetryMetaAsk_UsesLatestAskOutcomeQuery(t *testing.T) {

@@ -3,6 +3,7 @@ package codingworkflow
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,9 +39,9 @@ func TestWorkflowManagerBasicFlow(t *testing.T) {
 		Description: "Test workflow",
 	}
 
-	// Execute workflow
+	// Execute workflow through the shared step runner.
 	ctx := context.Background()
-	result, err := wm.Execute(ctx, steps, task, RunState{})
+	result, err := wm.runWorkflow(ctx, steps, task, RunState{})
 
 	// Verify results
 	if err != nil {
@@ -230,10 +231,10 @@ func TestStepRetryLogic(t *testing.T) {
 	task := Task{Description: "Test retry"}
 	ctx := context.Background()
 
-	// Execute with retries
+	// Execute with retries through the shared step runner.
 	startTime := time.Now()
 	steps := []Step{failingStep}
-	result, err := wm.Execute(ctx, steps, task, RunState{})
+	result, err := wm.runWorkflow(ctx, steps, task, RunState{})
 
 	elapsed := time.Since(startTime)
 
@@ -255,6 +256,17 @@ func TestStepRetryLogic(t *testing.T) {
 	}
 
 	t.Logf("Retry test completed in %v", elapsed)
+}
+
+func TestWorkflowManagerExecuteIsDisabled(t *testing.T) {
+	wm := NewWorkflowManager(&Orchestrator{})
+	_, err := wm.Execute(context.Background(), nil, Task{}, RunState{})
+	if err == nil {
+		t.Fatal("expected disabled controller-style execution to return an error")
+	}
+	if !strings.Contains(err.Error(), "controller-style workflow execution is disabled") {
+		t.Fatalf("expected disabled guidance in error, got %v", err)
+	}
 }
 
 // TestTerminalStep demonstrates terminal step behavior.
@@ -280,7 +292,7 @@ func TestTerminalStep(t *testing.T) {
 	task := Task{Description: "Test terminal"}
 	ctx := context.Background()
 
-	result, err := wm.Execute(ctx, steps, task, RunState{})
+	result, err := wm.runWorkflow(ctx, steps, task, RunState{})
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
