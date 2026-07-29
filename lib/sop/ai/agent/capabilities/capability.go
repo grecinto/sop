@@ -77,6 +77,13 @@ type CapabilityResult struct {
 	Data    map[string]any
 }
 
+// Handoff captures a follow-up prompt that Ask can enqueue when a capability wants to hand the conversation to another phase or step.
+type Handoff struct {
+	Direction string
+	Target    string
+	Prompt    string
+}
+
 // ParticipationResult captures the outcome of a capability participation hook.
 type ParticipationResult struct {
 	Summary string
@@ -115,6 +122,7 @@ type Capability interface {
 	BuildContext(query string, state RoutingState) string
 	ExposeTools() []ToolDefinition
 	BuildInstructions(query string, state RoutingState) string
+	Handoff(ctx context.Context, query string, state RoutingState) *Handoff
 	// Run(query string, state RoutingState) (CapabilityResult, error)
 }
 

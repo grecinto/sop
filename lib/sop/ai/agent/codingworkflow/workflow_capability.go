@@ -16,15 +16,18 @@ const (
 // WorkflowCapability is the new capability that uses WorkflowManager
 // to execute structured workflows instead of the old queue-based approach.
 type WorkflowCapability struct {
-	manager      *WorkflowManager
-	orchestrator *Orchestrator
+	manager     *WorkflowManager
+	sharedInfra *SharedInfrastructure
 }
 
 // NewWorkflowCapability creates a new workflow-based capability
-func NewWorkflowCapability(orchestrator *Orchestrator) *WorkflowCapability {
+func NewWorkflowCapability(sharedInfra *SharedInfrastructure) *WorkflowCapability {
+	if sharedInfra == nil {
+		sharedInfra = NewDefaultSharedInfrastructure()
+	}
 	return &WorkflowCapability{
-		manager:      NewWorkflowManager(orchestrator),
-		orchestrator: orchestrator,
+		manager:     NewWorkflowManager(sharedInfra),
+		sharedInfra: sharedInfra,
 	}
 }
 
@@ -109,10 +112,17 @@ func (c *WorkflowCapability) ExposeTools() []capabilities.ToolDefinition {
 	}}
 }
 
+func (c *WorkflowCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
 // Execute implements the capability's main execution logic
 // This is called when the LLM invokes the workflow_manager tool
 func (c *WorkflowCapability) Execute(ctx context.Context, query string, state capabilities.RoutingState) (string, error) {
-	if c == nil || c.manager == nil || c.orchestrator == nil {
+	if c == nil || c.manager == nil || c.sharedInfra == nil {
 		return "", fmt.Errorf("workflow capability not properly initialized")
 	}
 

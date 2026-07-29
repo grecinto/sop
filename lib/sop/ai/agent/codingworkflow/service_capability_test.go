@@ -16,7 +16,7 @@ func TestServiceCapabilityBuildContextTool(t *testing.T) {
 		t.Fatalf("write parser.go: %v", err)
 	}
 
-	cap := NewServiceCapability(&Orchestrator{
+	cap := NewServiceCapability(&SharedInfrastructure{
 		ContextManager: &DefaultContextManager{},
 		RepoIndexer:    &DefaultRepoIndexer{},
 	})
@@ -34,7 +34,7 @@ func TestServiceCapabilityBuildContextTool(t *testing.T) {
 }
 
 func TestServiceCapabilityParticipatesForCodingQueries(t *testing.T) {
-	cap := NewServiceCapability(&Orchestrator{})
+	cap := NewServiceCapability(&SharedInfrastructure{})
 	result, handled, err := cap.Participate(context.Background(), "fix the failing parser test", capabilities.RoutingState{Domain: "desktop"})
 	if err != nil {
 		t.Fatalf("Participate returned error: %v", err)

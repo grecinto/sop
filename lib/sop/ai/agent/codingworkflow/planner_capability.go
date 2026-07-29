@@ -20,12 +20,15 @@ const (
 // It does not execute workflows directly; execution remains the responsibility of the
 // main Ask orchestration and the dedicated coding capabilities.
 type PlannerCapability struct {
-	orchestrator *Orchestrator
+	sharedInfra *SharedInfrastructure
 }
 
 // NewPlannerCapability creates a planning-focused capability.
-func NewPlannerCapability(orchestrator *Orchestrator) *PlannerCapability {
-	return &PlannerCapability{orchestrator: orchestrator}
+func NewPlannerCapability(sharedInfra *SharedInfrastructure) *PlannerCapability {
+	if sharedInfra == nil {
+		sharedInfra = NewDefaultSharedInfrastructure()
+	}
+	return &PlannerCapability{sharedInfra: sharedInfra}
 }
 
 func (c *PlannerCapability) ID() string   { return PlannerCapabilityID }
@@ -55,7 +58,7 @@ func (c *PlannerCapability) Entitlement() capabilities.Entitlement {
 }
 
 func (c *PlannerCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
-	if c == nil || c.orchestrator == nil {
+	if c == nil || c.sharedInfra == nil {
 		return capabilities.ClassificationResult{}
 	}
 
@@ -113,6 +116,13 @@ func (c *PlannerCapability) ExposeTools() []capabilities.ToolDefinition {
 		Description: "Analyzes coding task and generates custom workflow plan with tailored Steps",
 		Schema:      "{}",
 	}}
+}
+
+func (c *PlannerCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
 }
 
 // OnFinish implements the WorkflowPlanner interface as a no-op for planning-only usage.

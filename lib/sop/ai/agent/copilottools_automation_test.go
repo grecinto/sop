@@ -66,6 +66,40 @@ func TestRunLocalAutomationCommandUsesStreamedOutputWhenExecutorPayloadIsEmpty(t
 	}
 }
 
+func TestRunLocalAutomationCommandWrapsKnownCommandsForTextAnalysis(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	var seenCommand string
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		seenCommand = req.Command
+		return `{"stdout":"--- FAIL: TestExample\npanic: boom\n","stderr":"","exit_code":1}`, nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{}
+	_, err := ag.runLocalAutomationCommand(context.Background(), map[string]any{"command": "go test ."}, "go test .", "", "", 60)
+	if err != nil {
+		t.Fatalf("runLocalAutomationCommand() error = %v", err)
+	}
+	if !strings.Contains(seenCommand, "go test . 2>&1 | grep -E") {
+		t.Fatalf("expected go test command to be wrapped for text analysis, got %q", seenCommand)
+	}
+	if !strings.Contains(seenCommand, "--- FAIL") {
+		t.Fatalf("expected wrapped command to preserve the original command, got %q", seenCommand)
+	}
+}
+
+func TestWrapKnownCommandForTextAnalysisDoesNotDoubleWrap(t *testing.T) {
+	wrapped, shouldWrap := wrapKnownCommandForTextAnalysis("go test . 2>&1 | grep -E 'FAIL|panic' || true")
+	if shouldWrap {
+		t.Fatalf("expected already-wrapped command to be left unchanged, got %q", wrapped)
+	}
+	if wrapped != "go test . 2>&1 | grep -E 'FAIL|panic' || true" {
+		t.Fatalf("expected command to remain unchanged, got %q", wrapped)
+	}
+}
+
 func TestRunLocalAutomationCommandEmitsProgressCommentaryForGoTests(t *testing.T) {
 	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
 	defer SetAutomationPolicy(DefaultAutomationPolicy())

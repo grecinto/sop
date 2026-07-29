@@ -282,11 +282,14 @@ func (a *CopilotAgent) epilogueAndCleanup(ctx context.Context, query string, int
 		a.captureRuntimeCaveatsFromText(finalText)
 	}
 
-	if a.service != nil && a.service.EnableShortTermMemory {
+	if a.Memory != nil {
 		thoughtPayload := map[string]any{
-			"query":          query,
-			"response":       finalText,
-			"active_context": mruSnapshot,
+			"query":            query,
+			"response":         finalText,
+			"active_context":   mruSnapshot,
+			"tool_calls":       toolCalls,
+			"outcome_facts":    outcomeFacts,
+			"interaction_kind": "user_interaction",
 		}
 
 		go a.Memory.LogEpisodeToSTM(context.Background(), "user_interaction", thoughtPayload, "Interacted with user", nil)

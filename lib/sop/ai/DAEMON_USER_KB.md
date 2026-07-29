@@ -12,19 +12,16 @@
   Workflow items are displayed as expandable tree leaves in the UI.
 -->
 
-These workflows give the assistant a repeatable way to handle common tasks such as debugging failures or carrying out implementation work.
-
-Each workflow below is written so the assistant can follow a clear sequence of steps, understand the goal, and apply the right tools to complete the task effectively.
+These workflows are intentionally limited to a small set of stable, repeatable coding patterns. For more ad hoc or context-dependent work, the assistant should rely on the Ask pipeline and adapt dynamically rather than depend on a predefined workflow.
 
 ## Coding Workflows [DISABLED]
 
 **Note:** KB-driven workflows are disabled in V1. The Coding Workflow Capability uses compiled, infrastructure-backed workflows with AST parsing, tree-sitter, and semantic analysis. These data-driven workflow definitions are preserved for future development but are not active.
 
 - Item: Fix failing tests
-  Summary: Reproduce the failing behavior, inspect the root cause, apply a focused fix, and verify the result with tests.
-  Summary: Use this workflow when a test is failing and the goal is to repair the underlying issue safely and systematically.
+  Summary: Reproduce the failure, inspect the root cause, apply a focused fix, and verify the result with tests.
   Body:
-  Use this workflow when a repository test fails and the goal is to diagnose and correct the underlying issue without introducing regressions.
+  Use this workflow for a well-understood bug-fix loop where the failure already has a clear reproduction path.
 
   Workflow payload:
   ```json
@@ -35,429 +32,86 @@ Each workflow below is written so the assistant can follow a clear sequence of s
       "schema_version": "1.0",
       "name": "Fix failing tests",
       "description": "Reproduce the failure, inspect the root cause, apply a focused fix, and verify the result with tests.",
-      "protocol_guidance": "Always capture the failing output before changing code. Read the relevant test and implementation files before editing. Prefer a focused patch and re-run the relevant tests before claiming success.",
+      "protocol_guidance": "Always capture the failing output before changing code, read the relevant test and implementation files before editing, and verify the fix with the same test afterward.",
       "steps": [
         {
           "step": 1,
-          "title": "Reproduce and inspect the failure",
-          "instructions": "Run the relevant test or command that reproduces the failure and capture the error output. Read the failing stack trace, assertion, or log before changing code.",
-          "required_context": ["test output", "failing stack trace", "relevant code paths"],
-          "success_criteria": ["The failure has been reproduced and summarized."],
-          "iteration_policy": "Retry up to 3 times if the failure is not yet understood.",
-          "tools_expected": ["run_tests", "read_file", "search"]
+          "title": "Reproduce the failure",
+          "instructions": "Run the relevant test or command and capture the failing output.",
+          "required_context": ["test output", "failing stack trace"],
+          "success_criteria": ["The failure is reproduced and summarized."],
+          "iteration_policy": "Retry up to 3 times if the failure is unclear.",
+          "tools_expected": ["run_tests", "read_file"]
         },
         {
           "step": 2,
-          "title": "Analyze the root cause",
-          "instructions": "Inspect the relevant test and implementation files. Determine the likely root cause before editing the code.",
+          "title": "Inspect the relevant code",
+          "instructions": "Read the relevant test and implementation files, then identify the likely root cause.",
           "required_context": ["test file", "implementation file", "error context"],
-          "success_criteria": ["The likely root cause is identified and explained."],
+          "success_criteria": ["The likely root cause is identified."],
           "tools_expected": ["read_file", "search", "grep"]
         },
         {
           "step": 3,
           "title": "Apply a focused fix",
-          "instructions": "Make the smallest change that addresses the root cause. Avoid large rewrites unless necessary.",
+          "instructions": "Make the smallest change that addresses the root cause while preserving behavior.",
           "required_context": ["root cause analysis", "implementation context"],
-          "success_criteria": ["The fix is applied with minimal change and preserves intended behavior."],
+          "success_criteria": ["The fix is applied with minimal change."],
           "tools_expected": ["edit_file", "patch_file"]
         },
         {
           "step": 4,
-          "title": "Verify the result",
-          "instructions": "Re-run the relevant tests and confirm the change resolves the failure without introducing regressions.",
+          "title": "Verify the fix",
+          "instructions": "Re-run the relevant tests and confirm the original failure no longer occurs.",
           "required_context": ["test command", "changed files"],
-          "success_criteria": ["Relevant tests pass and the original failure is resolved."],
-          "iteration_policy": "Retry up to 3 times if the fix is incomplete.",
+          "success_criteria": ["The relevant tests pass and the issue is resolved."],
+          "iteration_policy": "Retry up to 3 times if verification is incomplete.",
           "tools_expected": ["run_tests", "read_file"]
         }
       ]
     }
   }
   ```
-  Sources: https://go.dev/doc/effective_go, https://go.dev/wiki/CodeReviewComments
 
-- Item: General implementation
-  Summary: Follow a structured implementation workflow that covers planning, design, coding, testing, and review.
-  Summary: Use this workflow for feature work and general code changes that need a disciplined delivery path.
+- Item: Add regression coverage
+  Summary: Add focused tests for a behavior change or bug fix so the change is protected going forward.
   Body:
-  Use this workflow for general software implementation tasks that need a structured path from request to verified change.
+  Use this workflow when a change needs targeted test coverage and the expected behavior is clear.
 
   Workflow payload:
   ```json
   {
-    "workflow_name": "General implementation",
-    "description": "Plan the work, design the approach, implement the change, verify it with tests, and review the final result.",
+    "workflow_name": "Add regression coverage",
+    "description": "Analyze the behavior, add focused tests, and verify them with the relevant test suite.",
     "workflow_template": {
       "schema_version": "1.0",
-      "name": "General implementation",
-      "description": "Plan the work, design the approach, implement the change, verify it with tests, and review the final result.",
-      "protocol_guidance": "Start by understanding the requirement, design the approach before coding, keep changes focused, and verify the result with relevant tests and review.",
+      "name": "Add regression coverage",
+      "description": "Analyze the behavior, add focused tests, and verify them with the relevant test suite.",
+      "protocol_guidance": "Read the implementation first, define the expected behavior, and add tests that cover the main success and failure cases.",
       "steps": [
         {
           "step": 1,
-          "title": "Planning and analysis",
-          "instructions": "Clarify the request, identify constraints, and define the success criteria before implementation begins.",
-          "required_context": ["requirements", "repo context", "constraints"],
-          "success_criteria": ["The task is clearly scoped and the implementation target is understood."],
-          "tools_expected": ["read_file", "search", "reasoning"]
-        },
-        {
-          "step": 2,
-          "title": "Design",
-          "instructions": "Choose the approach, identify affected components, and outline the implementation plan before editing code.",
-          "required_context": ["current architecture", "affected modules"],
-          "success_criteria": ["A clear implementation strategy is defined."],
-          "tools_expected": ["read_file", "search"]
-        },
-        {
-          "step": 3,
-          "title": "Coding",
-          "instructions": "Implement the change in a focused way that matches the chosen approach and keeps the codebase maintainable.",
-          "required_context": ["implementation plan", "relevant files"],
-          "success_criteria": ["The implementation is complete and aligned with the plan."],
-          "tools_expected": ["edit_file", "patch_file"]
-        },
-        {
-          "step": 4,
-          "title": "Testing and verification",
-          "instructions": "Run the relevant tests and validation steps to confirm the change behaves as intended and does not regress existing behavior.",
-          "required_context": ["test commands", "changed files"],
-          "success_criteria": ["Relevant tests pass and the change is verified."],
-          "iteration_policy": "Retry up to 3 times if the verification is incomplete.",
-          "tools_expected": ["run_tests", "read_file"]
-        },
-        {
-          "step": 5,
-          "title": "Review and polish",
-          "instructions": "Review the final diff for clarity, correctness, maintainability, and any follow-up work needed before completion.",
-          "required_context": ["diff", "final implementation"],
-          "success_criteria": ["The result is understandable, complete, and ready for handoff."],
-          "tools_expected": ["read_file", "review_diff"]
-        }
-      ]
-    }
-  }
-  ```
-  Sources: https://go.dev/doc/effective_go, https://go.dev/wiki/CodeReviewComments
-
-- Item: Add unit tests
-  Summary: Add focused unit tests for existing code paths to improve reliability and guard against regressions.
-  Body:
-  Use this workflow when a change needs test coverage, a feature needs verification, or an existing module should become more robust through tests.
-
-  Workflow payload:
-  ```json
-  {
-    "workflow_name": "Add Unit Tests Workflow",
-    "description": "Systematically add unit test coverage for existing code before finalizing changes.",
-    "workflow_template": {
-      "schema_version": "1.0",
-      "name": "Add Unit Tests Workflow",
-      "description": "Analyze the implementation, identify missing test cases, add tests, run them, and improve coverage where needed.",
-      "protocol_guidance": "Read the implementation first, then define test scenarios covering normal, edge, and failure cases.",
-      "steps": [
-        {
-          "step": 1,
-          "title": "Analyze the code",
-          "instructions": "Read the implementation and identify what needs test coverage.",
-          "required_context": ["implementation code"],
+          "title": "Inspect the behavior",
+          "instructions": "Read the relevant code and clarify what behavior should be exercised by tests.",
+          "required_context": ["implementation code", "behavior expectations"],
           "success_criteria": ["The target behavior is understood."],
           "tools_expected": ["read_file", "search"]
         },
         {
           "step": 2,
-          "title": "Plan test cases",
-          "instructions": "List happy path, edge cases, and error conditions that should be covered.",
-          "required_context": ["behavior expectations"],
-          "success_criteria": ["Relevant tests are identified."],
-          "tools_expected": ["reasoning"]
-        },
-        {
-          "step": 3,
-          "title": "Write tests",
-          "instructions": "Add tests in the repository's established style and framework.",
-          "required_context": ["test conventions"],
-          "success_criteria": ["Tests are added and readable."],
+          "title": "Write targeted tests",
+          "instructions": "Add focused tests that exercise the intended behavior and the most relevant edge cases.",
+          "required_context": ["test conventions", "target behavior"],
+          "success_criteria": ["Relevant tests are added."],
           "tools_expected": ["write_file", "read_file"]
         },
         {
-          "step": 4,
-          "title": "Verify coverage",
-          "instructions": "Run the relevant tests and confirm they pass.",
+          "step": 3,
+          "title": "Verify the tests",
+          "instructions": "Run the relevant test commands and confirm the new coverage passes.",
           "required_context": ["test command"],
-          "success_criteria": ["Relevant tests pass."],
+          "success_criteria": ["The new tests pass and provide meaningful protection."],
           "tools_expected": ["run_tests"]
-        }
-      ]
-    }
-  }
-  ```
-
-- Item: Code review
-  Summary: Review code for correctness, clarity, security, performance, and test coverage.
-  Body:
-  Use this workflow when a change needs a structured review before merge or handoff.
-
-  Workflow payload:
-  ```json
-  {
-    "workflow_name": "Code Review Workflow",
-    "description": "Perform a structured review that checks correctness, style, security, performance, and tests.",
-    "workflow_template": {
-      "schema_version": "1.0",
-      "name": "Code Review Workflow",
-      "description": "Review the implementation for correctness, readability, security, efficiency, and test quality.",
-      "protocol_guidance": "Read the changed code first, then evaluate correctness, style, security, performance, and test coverage.",
-      "steps": [
-        {
-          "step": 1,
-          "title": "Review the code",
-          "instructions": "Understand the purpose of the change and how the implementation works.",
-          "required_context": ["changed files"],
-          "success_criteria": ["The implementation is understood."],
-          "tools_expected": ["read_file", "search"]
-        },
-        {
-          "step": 2,
-          "title": "Check correctness",
-          "instructions": "Look for logical errors, edge cases, and missing error handling.",
-          "required_context": ["logic paths"],
-          "success_criteria": ["Major correctness issues are identified."],
-          "tools_expected": ["read_file"]
-        },
-        {
-          "step": 3,
-          "title": "Assess quality",
-          "instructions": "Consider readability, maintainability, security, and performance.",
-          "required_context": ["design context"],
-          "success_criteria": ["Actionable review feedback is prepared."],
-          "tools_expected": ["review_diff"]
-        }
-      ]
-    }
-  }
-  ```
-
-- Item: General debugging
-  Summary: Debug code systematically by reproducing the issue, identifying the root cause, and validating the fix.
-  Body:
-  Use this workflow when a bug needs investigation and a targeted fix.
-
-  Workflow payload:
-  ```json
-  {
-    "workflow_name": "General Code Debugging Workflow",
-    "description": "Systematically debug code by reproducing the issue, tracing the cause, and validating the fix.",
-    "workflow_template": {
-      "schema_version": "1.0",
-      "name": "General Code Debugging Workflow",
-      "description": "Diagnose the problem, isolate the root cause, implement a focused fix, and verify the result.",
-      "protocol_guidance": "Reproduce the issue before editing code and verify the fix after implementation.",
-      "steps": [
-        {
-          "step": 1,
-          "title": "Reproduce the bug",
-          "instructions": "Capture the symptoms and gather any error output or failing behavior.",
-          "required_context": ["error output"],
-          "success_criteria": ["The bug is reproduced."],
-          "tools_expected": ["read_file", "run_tests"]
-        },
-        {
-          "step": 2,
-          "title": "Find the root cause",
-          "instructions": "Trace the relevant code path and identify the underlying issue.",
-          "required_context": ["relevant code"],
-          "success_criteria": ["The root cause is identified."],
-          "tools_expected": ["search", "read_file"]
-        },
-        {
-          "step": 3,
-          "title": "Implement and verify",
-          "instructions": "Apply a focused fix and validate it with tests or reproduction steps.",
-          "required_context": ["fix plan"],
-          "success_criteria": ["The fix is verified."],
-          "tools_expected": ["patch_file", "run_tests"]
-        }
-      ]
-    }
-  }
-  ```
-
-- Item: Git operations
-  Summary: Handle common git tasks such as reviewing changes, committing, pushing, and creating pull requests.
-  Body:
-  Use this workflow when repository operations need a safe and structured sequence.
-
-  Workflow payload:
-  ```json
-  {
-    "workflow_name": "Git Operations Workflow",
-    "description": "Perform safe git operations including review, commit, push, and PR creation.",
-    "workflow_template": {
-      "schema_version": "1.0",
-      "name": "Git Operations Workflow",
-      "description": "Review current changes, prepare a commit, push safely, and create a PR when needed.",
-      "protocol_guidance": "Check the repository state before committing and verify the branch before pushing.",
-      "steps": [
-        {
-          "step": 1,
-          "title": "Review repository state",
-          "instructions": "Inspect git status and pending changes before acting.",
-          "required_context": ["git status"],
-          "success_criteria": ["The working state is understood."],
-          "tools_expected": ["run_tests"]
-        },
-        {
-          "step": 2,
-          "title": "Prepare the change",
-          "instructions": "Review the diff and write a suitable commit message.",
-          "required_context": ["diff"],
-          "success_criteria": ["A clear commit message is prepared."],
-          "tools_expected": ["read_file"]
-        },
-        {
-          "step": 3,
-          "title": "Commit and push",
-          "instructions": "Stage the relevant files and push the changes if appropriate.",
-          "required_context": ["commit message"],
-          "success_criteria": ["The change is committed and pushed."],
-          "tools_expected": ["run_tests"]
-        }
-      ]
-    }
-  }
-  ```
-
-- Item: Feature implementation
-  Summary: Implement new features using a design-first approach with planning, coding, testing, and documentation.
-  Body:
-  Use this workflow when building a new capability or extending an existing one.
-
-  Workflow payload:
-  ```json
-  {
-    "workflow_name": "Feature Implementation Workflow",
-    "description": "Design the feature, plan the implementation, write the code, add tests, and document the result.",
-    "workflow_template": {
-      "schema_version": "1.0",
-      "name": "Feature Implementation Workflow",
-      "description": "Approach the work in a structured sequence from design to verification.",
-      "protocol_guidance": "Start by understanding the requirement, then design the change before coding.",
-      "steps": [
-        {
-          "step": 1,
-          "title": "Design the feature",
-          "instructions": "Read the relevant modules and define how the feature should fit into the system.",
-          "required_context": ["architecture context"],
-          "success_criteria": ["The implementation approach is defined."],
-          "tools_expected": ["read_file", "search"]
-        },
-        {
-          "step": 2,
-          "title": "Implement the change",
-          "instructions": "Write the feature code in a focused and maintainable way.",
-          "required_context": ["implementation plan"],
-          "success_criteria": ["The feature is implemented."],
-          "tools_expected": ["patch_file", "write_file"]
-        },
-        {
-          "step": 3,
-          "title": "Verify the result",
-          "instructions": "Run tests and validate the behavior before completion.",
-          "required_context": ["test command"],
-          "success_criteria": ["The feature is verified."],
-          "tools_expected": ["run_tests"]
-        }
-      ]
-    }
-  }
-  ```
-
-- Item: Refactor code
-  Summary: Refactor existing code safely by preserving behavior, improving structure, and verifying the result.
-  Body:
-  Use this workflow when code needs cleanup, simplification, or structural improvement.
-
-  Workflow payload:
-  ```json
-  {
-    "workflow_name": "Code Refactoring Workflow",
-    "description": "Refactor code incrementally while preserving behavior and validating the result.",
-    "workflow_template": {
-      "schema_version": "1.0",
-      "name": "Code Refactoring Workflow",
-      "description": "Analyze the existing structure, plan a safe refactoring approach, and verify behavior after changes.",
-      "protocol_guidance": "Preserve external behavior and keep changes incremental while verifying with tests.",
-      "steps": [
-        {
-          "step": 1,
-          "title": "Inspect the current code",
-          "instructions": "Understand the current structure, dependencies, and behavior before altering it.",
-          "required_context": ["existing implementation"],
-          "success_criteria": ["The refactoring target is understood."],
-          "tools_expected": ["read_file", "search"]
-        },
-        {
-          "step": 2,
-          "title": "Apply refactoring",
-          "instructions": "Adjust the structure incrementally while preserving behavior.",
-          "required_context": ["refactoring plan"],
-          "success_criteria": ["The code is structurally improved."],
-          "tools_expected": ["patch_file"]
-        },
-        {
-          "step": 3,
-          "title": "Verify and clean up",
-          "instructions": "Run tests and remove any leftover issues or dead code.",
-          "required_context": ["tests"],
-          "success_criteria": ["The refactor is verified and cleaned up."],
-          "tools_expected": ["run_tests"]
-        }
-      ]
-    }
-  }
-  ```
-
-- Item: Go test debugging
-  Summary: Use a structured seven-step workflow to debug failing Go tests and verify fixes.
-  Body:
-  Use this workflow when a Go unit test fails and you need to diagnose and repair the underlying issue.
-
-  Workflow payload:
-  ```json
-  {
-    "workflow_name": "Go Test Debugging Workflow",
-    "description": "Systematically debug failing Go tests by running them, reading the errors, inspecting the test and implementation, applying a fix, and verifying the result.",
-    "workflow_template": {
-      "schema_version": "1.0",
-      "name": "Go Test Debugging Workflow",
-      "description": "Run tests, inspect the failure, understand the code paths, apply the fix, and verify the outcome.",
-      "protocol_guidance": "Always capture the failing output first and verify the fix with the same test afterward.",
-      "steps": [
-        {
-          "step": 1,
-          "title": "Reproduce the failure",
-          "instructions": "Run the relevant Go test and capture the error output.",
-          "required_context": ["failing test output"],
-          "success_criteria": ["The failure is reproduced."],
-          "tools_expected": ["run_tests"]
-        },
-        {
-          "step": 2,
-          "title": "Inspect relevant code",
-          "instructions": "Read the failing test and the implementation it exercises.",
-          "required_context": ["test file", "implementation file"],
-          "success_criteria": ["The failing path is understood."],
-          "tools_expected": ["read_file", "search"]
-        },
-        {
-          "step": 3,
-          "title": "Apply and verify the fix",
-          "instructions": "Implement a minimal fix and rerun the test to confirm the issue is resolved.",
-          "required_context": ["fix plan"],
-          "success_criteria": ["The fix is verified."],
-          "tools_expected": ["patch_file", "run_tests"]
         }
       ]
     }

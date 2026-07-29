@@ -118,17 +118,20 @@ func determineWorkflowType(task Task) string {
 	return "general"
 }
 
-// EnableUndoForOrchestrator wraps an orchestrator's PatchEngine with undo support.
-func EnableUndoForOrchestrator(orchestrator *Orchestrator, undoManager *UndoManager) {
+// EnableUndoForSharedInfrastructure wraps SharedInfrastructure's PatchEngine with undo support.
+func EnableUndoForSharedInfrastructure(sharedInfra *SharedInfrastructure, undoManager *UndoManager) {
+	if sharedInfra == nil {
+		return
+	}
 	// Wrap the existing patch engine
-	orchestrator.PatchEngine = NewUndoAwarePatchEngine(orchestrator.PatchEngine, undoManager)
+	sharedInfra.PatchEngine = NewUndoAwarePatchEngine(sharedInfra.PatchEngine, undoManager)
 }
 
 // EnableUndoForWorkflowManager enables undo support for a workflow manager.
 func EnableUndoForWorkflowManager(workflowManager *WorkflowManager, undoManager *UndoManager) *WorkflowManagerWithUndo {
-	// Also wrap the orchestrator's patch engine
-	if workflowManager.orchestrator != nil {
-		EnableUndoForOrchestrator(workflowManager.orchestrator, undoManager)
+	// Wrap the shared infrastructure's patch engine
+	if workflowManager != nil && workflowManager.sharedInfra != nil {
+		EnableUndoForSharedInfrastructure(workflowManager.sharedInfra, undoManager)
 	}
 
 	return NewWorkflowManagerWithUndo(workflowManager, undoManager)

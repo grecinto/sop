@@ -1,6 +1,7 @@
 package spaces
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -19,15 +20,15 @@ type ExecutionContextInput struct {
 }
 
 type Capability struct {
-	Orchestrator *codingworkflow.Orchestrator
+	SharedInfra *codingworkflow.SharedInfrastructure
 }
 
-func NewCapability(orchestrator ...*codingworkflow.Orchestrator) *Capability {
-	var orch *codingworkflow.Orchestrator
-	if len(orchestrator) > 0 {
-		orch = orchestrator[0]
+func NewCapability(sharedInfra ...*codingworkflow.SharedInfrastructure) *Capability {
+	var infra *codingworkflow.SharedInfrastructure
+	if len(sharedInfra) > 0 {
+		infra = sharedInfra[0]
 	}
-	return &Capability{Orchestrator: orch}
+	return &Capability{SharedInfra: infra}
 }
 
 func (c *Capability) ID() string   { return CapabilityID }
@@ -45,7 +46,9 @@ func (c *Capability) Classify(query string, state capabilities.RoutingState) cap
 	return capabilities.ClassificationResult{}
 }
 func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
-	return strings.Join([]string{
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
+	domain := strings.ToLower(strings.TrimSpace(state.Domain))
+	parts := []string{
 		"Structured Context: Spaces Tools",
 		"- Space mutations are business-critical because they change persisted knowledge. The tool that performs the write also defines the durability boundary for that change.",
 		"- When a Space tool manages its own transaction path, treat that tool call as the commit boundary for the requested knowledge mutation.",
@@ -57,7 +60,14 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 		"- vectorize_space: Refresh embeddings for the whole Space only when the user explicitly asks for vectorization or semantic refresh.",
 		"- vectorize_space_categories: Refresh embeddings for specific categories when the request is narrower than full-space vectorization.",
 		"- vectorize_space_items: Refresh embeddings for specific items when the user wants the tightest possible vectorization scope.",
-	}, "\n")
+	}
+	if strings.Contains(lowerQuery, "test") || strings.Contains(lowerQuery, "testing") || strings.Contains(lowerQuery, "fail") || strings.Contains(lowerQuery, "failing") {
+		parts = append(parts, "- For testing or validation requests, inspect the relevant Space behavior, validate the expected mutation or retrieval path, and preserve the failure context while fixing the issue.")
+	}
+	if domain != "" {
+		parts = append(parts, "- Follow the current domain context so the workflow stays aligned with the active Space task rather than falling back to a generic coding path.")
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (c *Capability) BuildExecutionContext(input ExecutionContextInput) string {
@@ -85,5 +95,15 @@ func orderedCRUDFlags(flags map[string]bool) []string {
 
 func (c *Capability) ExposeTools() []capabilities.ToolDefinition { return nil }
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	return ""
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
+	if strings.Contains(lowerQuery, "test") || strings.Contains(lowerQuery, "testing") || strings.Contains(lowerQuery, "fail") || strings.Contains(lowerQuery, "failing") {
+		return "For testing or validation requests, investigate the relevant Space behavior, validate the expected mutation or retrieval path, and prefer targeted fixes that preserve the current knowledge contract."
+	}
+	return "Use the Spaces capability to execute the relevant Space operations and keep the workflow aligned with the current domain context."
+}
+func (c *Capability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
 }

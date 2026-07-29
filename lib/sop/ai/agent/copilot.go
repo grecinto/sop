@@ -1640,13 +1640,13 @@ func WithCapability(cap capabilities.Capability) CapabilityOption {
 // that are expected to support repository editing and inspection locally.
 // DEPRECATED: Use WithWorkflowCapability instead. This uses the old queue-based approach.
 // Kept for backwards compatibility but disabled by default.
-func WithCodingWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOption {
+func WithCodingWorkflowCapability(sharedInfra *cw.SharedInfrastructure) CapabilityOption {
 	return func(a *CopilotAgent) {
 		// OLD CAPABILITY DISABLED - Use WithWorkflowCapability instead
 		// This function is kept for backwards compatibility but does nothing.
 		// To re-enable: uncomment the implementation below.
 		_ = a
-		_ = orchestrator
+		_ = sharedInfra
 		return
 
 		/* OLD IMPLEMENTATION - DISABLED
@@ -1709,63 +1709,64 @@ func WithCodingWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOptio
 
 // WithWorkflowCapability registers the new WorkflowManager-based coding capability
 // This replaces the old WithCodingWorkflowCapability with a Step-based architecture.
-func WithWorkflowCapability(orchestrator *cw.Orchestrator) CapabilityOption {
+func WithWorkflowCapability(sharedInfra *cw.SharedInfrastructure) CapabilityOption {
 	return func(a *CopilotAgent) {
 		if a == nil {
 			return
 		}
 		a.ensureCapabilityRegistry()
-		if orchestrator != nil {
-			// Initialize orchestrator components (same as old version)
-			if orchestrator.ChangedFileInspector == nil {
-				orchestrator.ChangedFileInspector = &cw.GitRepoInspector{}
+		if sharedInfra == nil {
+			sharedInfra = cw.NewDefaultSharedInfrastructure()
+		}
+		// Initialize SharedInfrastructure components
+		if sharedInfra.ChangedFileInspector == nil {
+			sharedInfra.ChangedFileInspector = &cw.GitRepoInspector{}
+		}
+		prevMemorySink := sharedInfra.MemorySink
+		sharedInfra.MemorySink = func(mem cw.CodingMemory) {
+			if prevMemorySink != nil {
+				prevMemorySink(mem)
 			}
-			prevMemorySink := orchestrator.MemorySink
-			orchestrator.MemorySink = func(mem cw.CodingMemory) {
-				if prevMemorySink != nil {
-					prevMemorySink(mem)
-				}
-				if a != nil {
-					a.recordCodingMemory(mem)
-				}
-			}
-			if inspector, ok := orchestrator.ChangedFileInspector.(*cw.GitRepoInspector); ok && inspector.Client == nil {
-				// TODO: Implement NewWorkflowGitToolAdapter if needed
-				_ = inspector // Acknowledge the inspector exists
-			}
-			if orchestrator.ContextManager == nil {
-				orchestrator.ContextManager = &cw.DefaultContextManager{}
-			}
-			if orchestrator.RepoIndexer == nil {
-				orchestrator.RepoIndexer = &cw.DefaultRepoIndexer{}
-			}
-			if orchestrator.PatchEngine == nil {
-				orchestrator.PatchEngine = &cw.DefaultPatchEngine{}
-			}
-			if orchestrator.DiffPreviewer == nil {
-				orchestrator.DiffPreviewer = &cw.DefaultDiffPreviewer{}
-			}
-			if orchestrator.RepoSearcher == nil {
-				orchestrator.RepoSearcher = &cw.FileSearchAdapter{}
-			}
-			if orchestrator.Memory == nil {
-				orchestrator.Memory = cw.NewInMemorySessionMemory()
-			}
-			if orchestrator.Policy == nil {
-				orchestrator.Policy = &cw.DefaultSafetyPolicy{}
-			}
-			if orchestrator.ExpertiseRetriever == nil {
-				orchestrator.ExpertiseRetriever = a
-			}
-			if orchestrator.KnowledgeBaseRetriever == nil {
-				orchestrator.KnowledgeBaseRetriever = &cw.DefaultKnowledgeBaseRetriever{}
-			}
-			if orchestrator.ProviderRouter == nil {
-				orchestrator.ProviderRouter = &cw.DefaultProviderRouter{}
+			if a != nil {
+				a.recordCodingMemory(mem)
 			}
 		}
-		// Register the new WorkflowCapability instead of old Capability
-		a.capabilityRegistry.RegisterAtFront(cw.NewWorkflowCapability(orchestrator))
+		if inspector, ok := sharedInfra.ChangedFileInspector.(*cw.GitRepoInspector); ok && inspector.Client == nil {
+			// TODO: Implement NewWorkflowGitToolAdapter if needed
+			_ = inspector // Acknowledge the inspector exists
+		}
+		if sharedInfra.ContextManager == nil {
+			sharedInfra.ContextManager = &cw.DefaultContextManager{}
+		}
+		if sharedInfra.RepoIndexer == nil {
+			sharedInfra.RepoIndexer = &cw.DefaultRepoIndexer{}
+		}
+		if sharedInfra.PatchEngine == nil {
+			sharedInfra.PatchEngine = &cw.DefaultPatchEngine{}
+		}
+		if sharedInfra.DiffPreviewer == nil {
+			sharedInfra.DiffPreviewer = &cw.DefaultDiffPreviewer{}
+		}
+		if sharedInfra.RepoSearcher == nil {
+			sharedInfra.RepoSearcher = &cw.FileSearchAdapter{}
+		}
+		if sharedInfra.Memory == nil {
+			sharedInfra.Memory = cw.NewInMemorySessionMemory()
+		}
+		if sharedInfra.Policy == nil {
+			sharedInfra.Policy = &cw.DefaultSafetyPolicy{}
+		}
+		if sharedInfra.ExpertiseRetriever == nil {
+			sharedInfra.ExpertiseRetriever = a
+		}
+		if sharedInfra.KBRetriever == nil {
+			sharedInfra.KBRetriever = &cw.DefaultKnowledgeBaseRetriever{}
+		}
+		if sharedInfra.ProviderRouter == nil {
+			sharedInfra.ProviderRouter = &cw.DefaultProviderRouter{}
+		}
+		// Register the new WorkflowCapability
+		a.capabilityRegistry.RegisterAtFront(cw.NewWorkflowCapability(sharedInfra))
 	}
 }
 
@@ -1789,9 +1790,16 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 
 	// Register the local coding workflow capability by default so repository-oriented
 	// requests can still be routed through the established workflow entry point.
-	cwfOrchestrator := &cw.Orchestrator{}
-	caps = append(caps, cw.NewCapability(cwfOrchestrator))
-	caps = append(caps, cw.NewServiceCapability(cwfOrchestrator))
+	cwfInfra := cw.NewDefaultSharedInfrastructure()
+	caps = append(caps, cw.NewServiceCapability(cwfInfra))
+	caps = append(caps,
+		cw.NewIntakePhaseCapability(cwfInfra),
+		cw.NewInvestigationPhaseCapability(cwfInfra),
+		cw.NewPlanningPhaseCapability(cwfInfra),
+		cw.NewExecutionPhaseCapability(cwfInfra),
+		cw.NewReviewPhaseCapability(cwfInfra),
+		cw.NewDeliveryPhaseCapability(cwfInfra),
+	)
 
 	a.capabilityRegistry = capabilities.NewRegistry(caps...)
 }
@@ -2318,14 +2326,14 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		agent.capabilityRegistry.RegisterAtFront(workflowCapability)
 	}
 
-	// Wire default coding workflow orchestrator with MemorySink for LTM integration
-	orchestrator := &cw.Orchestrator{}
-	orchestrator.MemorySink = func(mem cw.CodingMemory) {
+	// Wire default coding workflow SharedInfrastructure with MemorySink for LTM integration
+	sharedInfra := cw.NewDefaultSharedInfrastructure()
+	sharedInfra.MemorySink = func(mem cw.CodingMemory) {
 		if agent != nil {
 			agent.recordCodingMemory(mem)
 		}
 	}
-	agent.capabilityRegistry.RegisterAtFront(cw.NewCapability(orchestrator))
+	// Phase capabilities now handle tool registration
 	for _, opt := range opts {
 		if opt != nil {
 			opt(agent)
@@ -2594,6 +2602,9 @@ func (a *CopilotAgent) Close(ctx context.Context) error {
 		if err := a.lifecycleManager.ShutdownAll(ctx); err != nil {
 			log.Warn("Error during capability shutdown", "error", err)
 		}
+	}
+	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		a.recordSessionBoundary(ctx, string(SessionBoundaryEnd), "Session ended", "agent closed")
 	}
 
 	// Transaction lifecycle is managed by Service.Close(), not here.
@@ -3080,6 +3091,30 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		}
 	}
 
+	if selectedCap != nil {
+		if handoff := selectedCap.Handoff(ctx, query, routingState); handoff != nil && strings.TrimSpace(handoff.Prompt) != "" {
+			queue := a.GetSessionQueue()
+			if queue != nil {
+				item := WorkItem{
+					Query:    strings.TrimSpace(handoff.Prompt),
+					Actor:    selectedCap.ID(),
+					ID:       fmt.Sprintf("handoff-%s-%d", selectedCap.ID(), time.Now().UnixNano()),
+					Priority: 100,
+					Context: map[string]any{
+						"handoff_direction": handoff.Direction,
+						"handoff_target":    handoff.Target,
+						"capability_id":     selectedCap.ID(),
+					},
+				}
+				if err := queue.Enqueue(item); err != nil {
+					log.Warn("Failed to enqueue capability handoff prompt", "capability", selectedCap.ID(), "error", err)
+				} else {
+					log.Info("Enqueued capability handoff prompt", "capability", selectedCap.ID(), "prompt", handoff.Prompt)
+				}
+			}
+		}
+	}
+
 	// Persist planning output so later turns can reference the proposed plan.
 	if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && selectedCap != nil {
 		if selectedCap.ID() == cw.PlannerCapabilityID {
@@ -3519,6 +3554,17 @@ func isExplicitNewTopic(ctx context.Context) bool {
 	return false
 }
 
+func (a *CopilotAgent) recordSessionBoundary(ctx context.Context, kind string, summary string, details string) {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return
+	}
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return
+	}
+	a.service.session.Memory.RecordSessionBoundary(SessionBoundaryKind(kind), summary, details, "ask")
+}
+
 func (a *CopilotAgent) logAskStart(ctx context.Context, query string, gen ai.Generator) string {
 	var sessionID string
 	var currentDB string
@@ -3533,6 +3579,7 @@ func (a *CopilotAgent) logAskStart(ctx context.Context, query string, gen ai.Gen
 		if thread := a.service.session.Memory.GetCurrentThread(); thread != nil {
 			currentThreadID = fmt.Sprintf("%v", thread.ID)
 		}
+		a.recordSessionBoundary(ctx, string(SessionBoundaryStart), "Session started", fmt.Sprintf("query=%s", truncateString(query, 220)))
 	}
 	log.Info("Copilot Ask Start", "generator", gen.Name(), "default_format", getRequestedOutputFormat(ctx), "session_id", sessionID,
 		"current_db", currentDB, "active_domain", activeDomain, "thread_id", currentThreadID, "query_chars", len(query))

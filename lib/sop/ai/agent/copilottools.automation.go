@@ -409,6 +409,7 @@ const gitPushArgsSchema = `{"type":"object","properties":{"path":{"type":"string
 const listToolResultsArgsSchema = `{"type":"object","properties":{}}`
 const readToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"start_line":{"type":"integer","description":"Starting line number (1-indexed)."},"end_line":{"type":"integer","description":"Ending line number (inclusive)."}},"required":["file_path"]}`
 const grepToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"pattern":{"type":"string","description":"Text pattern to search for within the file."},"max_matches":{"type":"integer","description":"Maximum number of matching lines to return (default: 100)."}},"required":["file_path","pattern"]}`
+const analyzeToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"operation":{"type":"string","description":"Analysis operation to run: grep, awk, sed, head, tail, wc, or cat."},"pattern":{"type":"string","description":"Text pattern to search for when using grep or awk."},"start_line":{"type":"integer","description":"First line number to include for sed operations (1-indexed)."},"end_line":{"type":"integer","description":"Last line number to include for sed operations (inclusive)."},"max_matches":{"type":"integer","description":"Maximum number of lines to return for grep/awk/head/tail operations."}},"required":["file_path","operation"]}`
 
 const postgresQueryArgsSchema = `{"type":"object","properties":{"query":{"type":"string","description":"Read-only SQL query to run against PostgreSQL."},"connection_string":{"type":"string","description":"Optional PostgreSQL connection string such as postgresql://user:pass@host:5432/dbname."},"host":{"type":"string","description":"Optional PostgreSQL host name."},"port":{"type":"string","description":"Optional PostgreSQL port."},"database":{"type":"string","description":"Optional PostgreSQL database name."},"user":{"type":"string","description":"Optional PostgreSQL user name."},"password":{"type":"string","description":"Optional PostgreSQL password."}},"required":["query"]}`
 
@@ -474,6 +475,7 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 		a.registry.Register("list_tool_results", "Lists all stored tool result files from the current session. When a tool produces large output (>20KB), it's stored to a file. Use this to see what result files are available for analysis.", listToolResultsArgsSchema, wrapStringTool(a.toolListToolResults))
 		a.registry.Register("read_tool_result", "Reads a specific line range from a stored tool result file. Use this after identifying line numbers with grep_tool_result, or to view specific sections of large test/build outputs.", readToolResultArgsSchema, wrapStringTool(a.toolReadToolResult))
 		a.registry.Register("grep_tool_result", "Searches for a text pattern within a stored tool result file and returns matching lines with line numbers. Use this to find errors, failures, or specific patterns in large outputs.", grepToolResultArgsSchema, wrapStringTool(a.toolGrepToolResult))
+		a.registry.Register("analyze_tool_result", "Analyzes a stored tool result file using a lightweight operation such as grep, awk, sed, head, tail, wc, or cat. This is the preferred path for targeted inspection when the LLM wants a slice of the output without forcing the full temp file into context.", analyzeToolResultArgsSchema, wrapStringTool(a.toolAnalyzeToolResult))
 
 		if policy.isPostgresReadEnabled() {
 			a.registry.Register("postgres_query", "Runs a read-only SQL query against PostgreSQL through the local psql CLI using a connection string or host/database/user/password fields.", postgresQueryArgsSchema, wrapStringTool(a.toolPostgresQuery))
@@ -1380,6 +1382,103 @@ func (a *CopilotAgent) toolGrepToolResult(ctx context.Context, args map[string]a
 	return sb.String(), nil
 }
 
+func (a *CopilotAgent) toolAnalyzeToolResult(ctx context.Context, args map[string]any) (string, error) {
+	filePathRaw, ok := args["file_path"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'file_path'")
+	}
+	filePath, ok := filePathRaw.(string)
+	if !ok || strings.TrimSpace(filePath) == "" {
+		return "", fmt.Errorf("'file_path' must be a non-empty string")
+	}
+
+	operationRaw, ok := args["operation"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument 'operation'")
+	}
+	operation, ok := operationRaw.(string)
+	if !ok || strings.TrimSpace(operation) == "" {
+		return "", fmt.Errorf("'operation' must be a non-empty string")
+	}
+
+	storage := getOrCreateToolResultStorage(ctx)
+	if storage == nil {
+		return "", fmt.Errorf("no tool result storage available")
+	}
+
+	pattern := ""
+	if patternRaw, ok := args["pattern"]; ok {
+		if value, ok := patternRaw.(string); ok {
+			pattern = value
+		}
+	}
+
+	startLine := 1
+	if startLineRaw, ok := args["start_line"]; ok {
+		switch v := startLineRaw.(type) {
+		case int:
+			startLine = v
+		case float64:
+			startLine = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				startLine = int(parsed)
+			}
+		}
+	}
+
+	endLine := -1
+	if endLineRaw, ok := args["end_line"]; ok {
+		switch v := endLineRaw.(type) {
+		case int:
+			endLine = v
+		case float64:
+			endLine = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				endLine = int(parsed)
+			}
+		}
+	}
+
+	maxMatches := 50
+	if maxMatchesRaw, ok := args["max_matches"]; ok {
+		switch v := maxMatchesRaw.(type) {
+		case int:
+			maxMatches = v
+		case float64:
+			maxMatches = int(v)
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				maxMatches = int(parsed)
+			}
+		}
+	}
+
+	result, err := storage.AnalyzeResult(filePath, operation, pattern, startLine, endLine, maxMatches)
+	if err != nil {
+		return "", fmt.Errorf("failed to analyze tool result: %w", err)
+	}
+
+	if strings.TrimSpace(result) == "" {
+		return fmt.Sprintf("No content returned for operation '%s' on %s", operation, filepath.Base(filePath)), nil
+	}
+
+	prefix := strings.ToLower(strings.TrimSpace(operation))
+	switch prefix {
+	case "grep", "awk":
+		return fmt.Sprintf("[%s result for %s]\n\n%s", prefix, filepath.Base(filePath), result), nil
+	case "sed":
+		return fmt.Sprintf("[sed result for %s]\n\n%s", filepath.Base(filePath), result), nil
+	case "head", "tail", "cat":
+		return fmt.Sprintf("[%s result for %s]\n\n%s", prefix, filepath.Base(filePath), result), nil
+	case "wc":
+		return fmt.Sprintf("[wc result for %s]\n\n%s", filepath.Base(filePath), result), nil
+	default:
+		return result, nil
+	}
+}
+
 func (a *CopilotAgent) toolPostgresQuery(ctx context.Context, args map[string]any) (string, error) {
 	queryRaw, ok := args["query"]
 	if !ok {
@@ -1680,6 +1779,52 @@ func shouldEmitAutomationProgressCommentary(command, workingDir string) bool {
 	}
 	if _, err := os.Stat(filepath.Join(trimmedDir, "go.mod")); err == nil {
 		return strings.Contains(trimmedCommand, "go") || strings.Contains(trimmedCommand, "test")
+	}
+	return false
+}
+
+func wrapKnownCommandForTextAnalysis(command string) (string, bool) {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return trimmed, false
+	}
+
+	lower := strings.ToLower(trimmed)
+	if isAlreadyWrappedCommand(lower) {
+		return trimmed, false
+	}
+	if containsAnalysisPipeline(lower) {
+		return trimmed, true
+	}
+	if strings.HasPrefix(lower, "go test") {
+		pattern := `(^ok|^FAIL$|^FAIL\t|^--- FAIL:|^panic:|^Error:|^error:|^=== RUN)`
+		return fmt.Sprintf("%s 2>&1 | grep -E '%s' || true", trimmed, pattern), true
+	}
+	if strings.HasPrefix(lower, "npm test") || strings.HasPrefix(lower, "yarn test") {
+		pattern := `(failing|failed|passing|error|Error)`
+		return fmt.Sprintf("%s 2>&1 | grep -E '%s' || true", trimmed, pattern), true
+	}
+	if strings.HasPrefix(lower, "pytest") {
+		pattern := `(^FAILED|^ERROR|^PASSED|^passed|^failed|^error)`
+		return fmt.Sprintf("%s 2>&1 | grep -E '%s' || true", trimmed, pattern), true
+	}
+	return trimmed, false
+}
+
+func isAlreadyWrappedCommand(command string) bool {
+	for _, token := range []string{"2>&1 | grep -e", "2>&1 | grep -E", "| grep -e", "| grep -E", "| awk ", "| sed ", "| head ", "| tail ", "| wc "} {
+		if strings.Contains(command, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnalysisPipeline(command string) bool {
+	for _, token := range []string{" | grep ", " | awk ", " | sed ", " | head ", " | tail ", " | wc ", "grep ", "awk ", "sed ", "head ", "tail ", "wc "} {
+		if strings.Contains(command, token) {
+			return true
+		}
 	}
 	return false
 }
@@ -2086,8 +2231,13 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		sessionID = "" // Strip session to route to exec.Command instead of PTY
 	}
 
+	executedCommand := command
+	if wrappedCommand, shouldWrap := wrapKnownCommandForTextAnalysis(command); shouldWrap {
+		executedCommand = wrappedCommand
+	}
+
 	request := LocalCommandRequest{
-		Command:        command,
+		Command:        executedCommand,
 		Reasoning:      reasoning,
 		WorkingDir:     workingDir,
 		TimeoutSeconds: timeoutSeconds,

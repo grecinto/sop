@@ -18,11 +18,11 @@ const (
 // explicit tools for context building and repo inspection without taking over the
 // main orchestration path.
 type ServiceCapability struct {
-	Orchestrator *Orchestrator
+	SharedInfra *SharedInfrastructure
 }
 
-func NewServiceCapability(orchestrator *Orchestrator) *ServiceCapability {
-	return &ServiceCapability{Orchestrator: orchestrator}
+func NewServiceCapability(sharedInfra *SharedInfrastructure) *ServiceCapability {
+	return &ServiceCapability{SharedInfra: sharedInfra}
 }
 
 func (c *ServiceCapability) ID() string   { return ServiceCapabilityID }
@@ -116,6 +116,13 @@ func (c *ServiceCapability) BuildInstructions(query string, state capabilities.R
 	return "Use the coding workflow services capability when the task needs repository context, repo inspection, or a structured next step. Prefer the exposed tools to gather evidence before acting, and preserve continuity across turns.\n\n" + CodeFormatInstructions
 }
 
+func (c *ServiceCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
 func (c *ServiceCapability) Participate(ctx context.Context, query string, state capabilities.RoutingState) (capabilities.ParticipationResult, bool, error) {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
@@ -159,48 +166,39 @@ func (c *ServiceCapability) ExecuteTool(ctx context.Context, toolName string, ar
 }
 
 func (c *ServiceCapability) runBuildContext(args map[string]any) (string, error) {
-	orchestrator := c.ensureOrchestrator()
+	infra := c.ensureSharedInfrastructure()
 	task := c.buildTask(args)
-	pack, err := orchestrator.ContextManager.BuildContext(task, task.State)
+	pack, err := infra.ContextManager.BuildContext(task, task.State)
 	if err != nil {
 		return "", fmt.Errorf("build context: %w", err)
 	}
-	if orchestrator.RepoIndexer != nil {
-		_, _ = orchestrator.RepoIndexer.Index(task, task.State)
+	if infra.RepoIndexer != nil {
+		_, _ = infra.RepoIndexer.Index(task, task.State)
 	}
 	return formatContextPack(pack), nil
 }
 
 func (c *ServiceCapability) runInspectRepo(args map[string]any) (string, error) {
-	orchestrator := c.ensureOrchestrator()
+	infra := c.ensureSharedInfrastructure()
 	task := c.buildTask(args)
-	if orchestrator.RepoInspector == nil {
+	if infra.RepoInspector == nil {
 		return "", fmt.Errorf("repo inspector not configured")
 	}
-	summary, err := orchestrator.RepoInspector.Inspect(task, task.State)
+	summary, err := infra.RepoInspector.Inspect(task, task.State)
 	if err != nil {
 		return "", fmt.Errorf("inspect repo: %w", err)
 	}
 	return fmt.Sprintf("Repository Inspection\nChangedFiles: %s\nDiffPreview: %s", strings.Join(summary.ChangedFiles, ", "), summary.DiffPreview), nil
 }
 
-func (c *ServiceCapability) ensureOrchestrator() *Orchestrator {
+func (c *ServiceCapability) ensureSharedInfrastructure() *SharedInfrastructure {
 	if c == nil {
-		return &Orchestrator{}
+		return NewDefaultSharedInfrastructure()
 	}
-	if c.Orchestrator == nil {
-		c.Orchestrator = &Orchestrator{}
+	if c.SharedInfra == nil {
+		c.SharedInfra = NewDefaultSharedInfrastructure()
 	}
-	if c.Orchestrator.ContextManager == nil {
-		c.Orchestrator.ContextManager = &DefaultContextManager{}
-	}
-	if c.Orchestrator.RepoIndexer == nil {
-		c.Orchestrator.RepoIndexer = &DefaultRepoIndexer{}
-	}
-	if c.Orchestrator.RepoInspector == nil {
-		c.Orchestrator.RepoInspector = &GitRepoInspector{}
-	}
-	return c.Orchestrator
+	return c.SharedInfra.ensureDefaults()
 }
 
 func (c *ServiceCapability) buildTask(args map[string]any) Task {

@@ -8,6 +8,102 @@ import (
 	"github.com/smacker/go-tree-sitter/golang"
 )
 
+const (
+	CapabilityID   = "coding_workflow"
+	CapabilityName = "Coding Workflow"
+)
+
+// ContextManager builds a concise context pack for a task.
+type ContextManager interface {
+	BuildContext(Task, RunState) (ContextPack, error)
+}
+
+// Planner produces a structured execution plan for a task based on the assembled context.
+type Planner interface {
+	Plan(Task, RunState, ContextPack) ([]string, error)
+}
+
+// ExpertiseRetriever produces a short, high-signal guidance capsule for a task.
+type ExpertiseRetriever interface {
+	Retrieve(Task, RunState, ContextPack) (ExpertiseCapsule, error)
+}
+
+// ExpertiseCapsule carries a compact guidance summary that can be injected near the point of action.
+type ExpertiseCapsule struct {
+	Summary  string
+	Category string
+	Sources  []string
+}
+
+// RepoIndexer provides lightweight repository metadata.
+type RepoIndexer interface {
+	Index(Task, RunState) ([]string, error)
+}
+
+// PatchEngine applies a patch to disk.
+type PatchEngine interface {
+	Apply(Task, *Patch, RunState) error
+}
+
+// ChangedFileInspector reports changed files in a repository.
+type ChangedFileInspector interface {
+	ListChangedFiles(Task, RunState) ([]string, error)
+}
+
+// DiffPreviewer creates a preview for a proposed patch.
+type DiffPreviewer interface {
+	Preview(Task, *Patch, RunState) (string, error)
+}
+
+// RepoSearcher collects repository matches for a query.
+type RepoSearcher interface {
+	Search(Task, RunState, string) ([]string, error)
+}
+
+// RepoInspector produces a concise repo-state summary for the workflow.
+type RepoInspector interface {
+	Inspect(Task, RunState) (RepoInspectionSummary, error)
+}
+
+// SessionMemory persists lightweight task state across turns.
+type SessionMemory interface {
+	Save(string, map[string]string) error
+	Load(string) (map[string]string, error)
+}
+
+// KnowledgeBaseRetriever reads grounded guidance from repository docs and knowledge files.
+type KnowledgeBaseRetriever interface {
+	Retrieve(Task, RunState, ContextPack) (ExpertiseCapsule, error)
+}
+
+// ProviderRouter resolves the active LLM provider and source for a workflow run.
+type ProviderRouter interface {
+	Resolve(Task, RunState, ContextPack) (ProviderSelection, error)
+}
+
+// ProviderSelection captures the active provider and source used for a workflow run.
+type ProviderSelection struct {
+	Provider string
+	Source   string
+	Model    string
+}
+
+// SafetyPolicy controls whether a task is allowed to mutate files.
+type SafetyPolicy interface {
+	Allow(Task, RunState) error
+}
+
+// TestRunner executes repository tests and returns a concise result for the workflow loop.
+type TestRunner interface {
+	Run(Task, RunState) (TestResult, error)
+}
+
+// TestResult captures the outcome of a test run.
+type TestResult struct {
+	Passed bool
+	Output string
+}
+
 // SharedInfrastructure bundles reusable coding workflow tools for use by WorkflowManager Steps.
 // This enables Steps to access AST analysis, tree-sitter parsing, patch application,
 // test execution, and other repository operations without duplicating infrastructure.
@@ -20,9 +116,9 @@ import (
 //   - Test execution (run tests, parse results)
 //   - Repository operations (search, index, inspect)
 //
-// Guard rail: SharedInfrastructure wraps the existing Orchestrator tools without
+// Guard rail: SharedInfrastructure wraps the existing workflow tools without
 // modifying their behavior. This allows WorkflowManager to reuse proven infrastructure
-// while maintaining backward compatibility with legacy codingworkflow.
+// while maintaining backward compatibility with the older codingworkflow entry points.
 type SharedInfrastructure struct {
 	// Core infrastructure from Orchestrator
 	ContextManager       ContextManager
@@ -43,33 +139,63 @@ type SharedInfrastructure struct {
 
 	// Validation infrastructure (Phase 1 enhancement)
 	ValidationOrchestrator *ValidationOrchestrator
+
+	// Memory sink for LTM integration
+	MemorySink func(CodingMemory)
 }
 
-// NewSharedInfrastructure creates a SharedInfrastructure from an existing Orchestrator.
-// This allows WorkflowManager to reuse all the existing coding workflow tools.
-func NewSharedInfrastructure(orchestrator *Orchestrator) *SharedInfrastructure {
-	if orchestrator == nil {
-		return nil
-	}
+// NewDefaultSharedInfrastructure creates a SharedInfrastructure with default runtime components.
+func NewDefaultSharedInfrastructure() *SharedInfrastructure {
+	return (&SharedInfrastructure{}).ensureDefaults()
+}
 
-	return &SharedInfrastructure{
-		ContextManager:         orchestrator.ContextManager,
-		RepoIndexer:            orchestrator.RepoIndexer,
-		PatchEngine:            orchestrator.PatchEngine,
-		ChangedFileInspector:   orchestrator.ChangedFileInspector,
-		DiffPreviewer:          orchestrator.DiffPreviewer,
-		RepoSearcher:           orchestrator.RepoSearcher,
-		RepoInspector:          orchestrator.RepoInspector,
-		TestRunner:             orchestrator.TestRunner,
-		Planner:                orchestrator.Planner,
-		ExpertiseRetriever:     orchestrator.ExpertiseRetriever,
-		KBRetriever:            orchestrator.KnowledgeBaseRetriever,
-		ProviderRouter:         orchestrator.ProviderRouter,
-		GrammarRegistry:        orchestrator.GrammarRegistry,
-		Memory:                 orchestrator.Memory,
-		Policy:                 orchestrator.Policy,
-		ValidationOrchestrator: orchestrator.ValidationOrchestrator,
+func (s *SharedInfrastructure) ensureDefaults() *SharedInfrastructure {
+	if s == nil {
+		return NewDefaultSharedInfrastructure()
 	}
+	if s.Memory == nil {
+		s.Memory = NewInMemorySessionMemory()
+	}
+	if s.ContextManager == nil {
+		s.ContextManager = &DefaultContextManager{}
+	}
+	if s.RepoIndexer == nil {
+		s.RepoIndexer = &DefaultRepoIndexer{}
+	}
+	if s.ChangedFileInspector == nil {
+		s.ChangedFileInspector = &GitRepoInspector{}
+	}
+	if s.DiffPreviewer == nil {
+		s.DiffPreviewer = &DefaultDiffPreviewer{}
+	}
+	if s.RepoSearcher == nil {
+		s.RepoSearcher = &FileSearchAdapter{}
+	}
+	if s.RepoInspector == nil {
+		s.RepoInspector = &GitRepoInspector{}
+	}
+	if s.TestRunner == nil {
+		s.TestRunner = &DefaultTestRunner{}
+	}
+	if s.Planner == nil {
+		s.Planner = &DefaultPlanner{}
+	}
+	if s.ExpertiseRetriever == nil {
+		s.ExpertiseRetriever = &DefaultExpertiseRetriever{}
+	}
+	if s.KBRetriever == nil {
+		s.KBRetriever = &DefaultKnowledgeBaseRetriever{}
+	}
+	if s.ProviderRouter == nil {
+		s.ProviderRouter = &DefaultProviderRouter{}
+	}
+	if s.Policy == nil {
+		s.Policy = &DefaultSafetyPolicy{}
+	}
+	if s.GrammarRegistry == nil {
+		s.GrammarRegistry = NewGrammarRegistry()
+	}
+	return s
 }
 
 // ASTOperations provides high-level AST analysis operations for Steps.

@@ -185,8 +185,8 @@ func TestSignalCachePrune(t *testing.T) {
 
 // TestWorkflowManagerCacheConfiguration verifies cache config methods
 func TestWorkflowManagerCacheConfiguration(t *testing.T) {
-	orchestrator := &Orchestrator{}
-	wm := NewWorkflowManager(orchestrator)
+	sharedInfra := NewDefaultSharedInfrastructure()
+	wm := NewWorkflowManager(sharedInfra)
 
 	// Check default state
 	if !wm.cacheEnabled {
@@ -266,8 +266,8 @@ func TestSignalCacheKeyGeneration(t *testing.T) {
 
 // TestBuiltInResearchStepFactory verifies built-in step creation
 func TestBuiltInResearchStepFactory(t *testing.T) {
-	orchestrator := &Orchestrator{}
-	wm := NewWorkflowManager(orchestrator)
+	sharedInfra := NewDefaultSharedInfrastructure()
+	wm := NewWorkflowManager(sharedInfra)
 
 	tests := []struct {
 		signalType SignalType
@@ -304,8 +304,8 @@ func TestBuiltInResearchStepFactory(t *testing.T) {
 
 // TestCachingInProcessFunctionCallSignal verifies caching in function calls
 func TestCachingInProcessFunctionCallSignal(t *testing.T) {
-	orchestrator := &Orchestrator{}
-	wm := NewWorkflowManager(orchestrator)
+	sharedInfra := NewDefaultSharedInfrastructure()
+	wm := NewWorkflowManager(sharedInfra)
 
 	// Create a signal with custom handler that tracks executions
 	executionCount := 0
@@ -355,8 +355,8 @@ func TestCachingInProcessFunctionCallSignal(t *testing.T) {
 
 // TestCacheDisabled verifies behavior when cache is disabled
 func TestCacheDisabled(t *testing.T) {
-	orchestrator := &Orchestrator{}
-	wm := NewWorkflowManager(orchestrator)
+	sharedInfra := NewDefaultSharedInfrastructure()
+	wm := NewWorkflowManager(sharedInfra)
 	wm.EnableCache(false)
 
 	executionCount := 0

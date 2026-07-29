@@ -92,6 +92,60 @@ func TestToolResultStorage_ListReadGrep(t *testing.T) {
 	}
 }
 
+func TestToolResultAnalysis_AnalyzeToolResultOperations(t *testing.T) {
+	storage, err := NewToolResultStorage("test-analysis-ops")
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
+	output := "INFO: start\nERROR: first\nWARN: caution\nERROR: second\nINFO: end\n"
+	_, filePath, _, err := storage.StoreResult("integration_test", output)
+	if err != nil {
+		t.Fatalf("failed to store test result: %v", err)
+	}
+
+	agent := &CopilotAgent{}
+
+	result, err := agent.toolAnalyzeToolResult(ctx, map[string]any{
+		"file_path": filePath,
+		"operation": "grep",
+		"pattern":   "ERROR",
+	})
+	if err != nil {
+		t.Fatalf("toolAnalyzeToolResult grep failed: %v", err)
+	}
+	if !strings.Contains(result, "ERROR: first") || !strings.Contains(result, "ERROR: second") {
+		t.Fatalf("expected grep output to include both error lines, got: %s", result)
+	}
+
+	result, err = agent.toolAnalyzeToolResult(ctx, map[string]any{
+		"file_path":  filePath,
+		"operation":  "sed",
+		"start_line": 2,
+		"end_line":   4,
+	})
+	if err != nil {
+		t.Fatalf("toolAnalyzeToolResult sed failed: %v", err)
+	}
+	if !strings.Contains(result, "ERROR: first") || !strings.Contains(result, "WARN: caution") {
+		t.Fatalf("expected sed output to include the requested range, got: %s", result)
+	}
+
+	result, err = agent.toolAnalyzeToolResult(ctx, map[string]any{
+		"file_path":   filePath,
+		"operation":   "tail",
+		"max_matches": 2,
+	})
+	if err != nil {
+		t.Fatalf("toolAnalyzeToolResult tail failed: %v", err)
+	}
+	if !strings.Contains(result, "ERROR: second") || !strings.Contains(result, "INFO: end") {
+		t.Fatalf("expected tail output to include the last lines, got: %s", result)
+	}
+}
+
 func TestToolResultAnalysis_AgentTools(t *testing.T) {
 	// Create agent with storage
 	agent := &CopilotAgent{}

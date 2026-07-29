@@ -100,6 +100,10 @@ func (s *stubCapabilityForPromptTest) ExposeTools() []capabilities.ToolDefinitio
 func (s *stubCapabilityForPromptTest) BuildInstructions(query string, state capabilities.RoutingState) string {
 	return ""
 }
+func (s *stubCapabilityForPromptTest) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	_ = ctx
+	return nil
+}
 
 func TestRewriteRetryMetaAsk_UsesLatestAskOutcomeQuery(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)

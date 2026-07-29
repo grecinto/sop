@@ -119,6 +119,9 @@ func (c *testCapability) BuildContext(query string, state RoutingState) string {
 }
 func (c *testCapability) ExposeTools() []ToolDefinition                             { return nil }
 func (c *testCapability) BuildInstructions(query string, state RoutingState) string { return "" }
+func (c *testCapability) Handoff(ctx context.Context, query string, state RoutingState) *Handoff {
+	return nil
+}
 
 // Mock prefix capability for testing
 type mockPrefixCapability struct {
@@ -148,6 +151,9 @@ func (p *participatingCapability) ExposeTools() []ToolDefinition                
 func (p *participatingCapability) BuildInstructions(query string, state RoutingState) string {
 	return ""
 }
+func (p *participatingCapability) Handoff(ctx context.Context, query string, state RoutingState) *Handoff {
+	return nil
+}
 func (p *participatingCapability) Participate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error) {
 	return ParticipationResult{Summary: p.summary}, true, nil
 }
@@ -166,6 +172,9 @@ func (m *mockPrefixCapability) BuildContext(query string, state RoutingState) st
 func (m *mockPrefixCapability) ExposeTools() []ToolDefinition { return nil }
 func (m *mockPrefixCapability) BuildInstructions(query string, state RoutingState) string {
 	return ""
+}
+func (m *mockPrefixCapability) Handoff(ctx context.Context, query string, state RoutingState) *Handoff {
+	return nil
 }
 func (m *mockPrefixCapability) GetHandledPrefixes() []string { return m.prefixes }
 func (m *mockPrefixCapability) HandlePrefix(ctx context.Context, query string, normalized string) (string, error) {

@@ -2,9 +2,63 @@
 
 ## Overview
 
-The Workflow Manager architecture enables clean separation of concerns for multi-step coding workflows. This implementation extracts reusable infrastructure from the coding workflow and provides a composable Step-based system.
+The Workflow Manager architecture enables clean separation of concerns for multi-step coding workflows. This implementation extracts reusable infrastructure from the coding workflow and provides a composable Step-based system that can also be surfaced as reusable capabilities.
 
 ## Architecture
+
+### Phase-as-Capability Model
+
+The coding workflow should be implemented as a set of reusable phase capabilities rather than a single hard-coded execution loop. Each phase capability exposes context, tools, and conversation guidance so the LLM can dynamically activate the right phase as the user interacts and the task evolves.
+
+The system should support a simple conversational flow over the same underlying artifact model:
+
+1. **Move forward** when the user wants to continue into a later phase such as implementation, review, or delivery.
+2. **Move backward** when the user wants to revisit earlier context such as planning, investigation, or intake.
+3. **Exit** when the user is done or wants to pause without further phase progression.
+
+This is not a rigid ladder. It is a lightweight phase-tracking model where each capture can record a transition target, a transition source, a direction, and an exit signal. That makes iteration feel fluid and conversation-driven rather than procedural.
+
+1. **Intake and context assembly capability**
+   - Owns the initial conversation with the user and gathers requirements, repository context, constraints, and policy requirements.
+   - Exposes tools such as context building, repo inspection, and requirement extraction.
+   - Produces a phase artifact describing the clarified task and its initial constraints.
+
+2. **Investigation and analysis capability**
+   - Helps the LLM inspect the relevant code, errors, dependencies, and patterns.
+   - Exposes tools such as repository search, AST analysis, error classification, and knowledge retrieval.
+   - Produces a structured understanding of the implementation surface.
+
+3. **Planning and design capability**
+   - Helps the LLM produce a concrete implementation plan, identify impacted files, and consult coding best practices from the Core Playbook.
+   - Exposes tools such as planning, impact analysis, dependency analysis, and best-practice retrieval.
+   - Produces a design artifact that can be reviewed with the user before implementation.
+
+4. **Execution and implementation capability**
+   - Applies the planned change, generates patches, updates code, and enforces policy checks.
+   - Exposes tools such as patch application, file editing, code generation, and rollback support.
+   - Produces implementation artifacts plus validation readiness.
+
+5. **Review and validation capability**
+   - Validates behavior through tests, static checks, diff review, and code review-style assessment.
+   - Exposes tools such as test execution, linting, diff previewing, and review checks.
+   - Produces a validation report that can be accepted, revised, or returned for more work.
+
+6. **Delivery and handoff capability**
+   - Summarizes the change, verifies completion, and prepares the handoff artifact.
+   - Exposes tools such as change summary generation, approval gating, and handoff reporting.
+   - Produces the final delivery state for the user or downstream system.
+
+The key idea is that the LLM can move between these capabilities dynamically during conversation. The phases are not a rigid script; they are reusable capabilities that provide the context and tools needed to guide the user and complete the work.
+
+### Memory and Continuity Across Asks
+
+Each phase capability should produce artifacts that are persisted into the runtime memory system so later turns can continue from the correct state. The workflow should record the current objective, clarified requirements, design decisions, implementation progress, validation results, and unresolved questions in a layered memory model:
+
+- **MRU / short-term working memory** for the active conversation and current phase state.
+- **STM / session memory** for the in-flight task context across multiple turns.
+- **LTM / long-term memory** for durable facts such as repo-specific patterns, prior design decisions, accepted requirements, and repeated implementation guidance.
+
+This ensures that the LLM and retrieval layer can reconstruct the same workflow state across Ask turns, even when the user pauses and resumes later. The memory artifacts should be updated whenever a phase produces a meaningful outcome, especially after requirement gathering, planning, implementation, review, or delivery.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

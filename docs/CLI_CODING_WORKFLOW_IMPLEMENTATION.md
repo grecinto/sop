@@ -102,6 +102,63 @@ Results aggregated: "Tests passed ✓, Formatting OK ✓"
 
 **Implementation**: Wrapper around existing `Ask()` - no modifications to core orchestration logic required.
 
+## Phase-as-Capability SDLC Model
+
+For implementation planning and delivery, the coding workflow should be organized around reusable SDLC phase capabilities rather than a single generic editing loop. This gives the system a clearer contract for execution, review, and validation while keeping the runtime flexible and conversational.
+
+### Recommended phase capabilities
+
+1. **Intake and context assembly capability**
+   - Guides the conversation with the user to gather the task, repository context, constraints, and policy requirements.
+   - Provides the context needed for the LLM to ask good follow-up questions and frame the work.
+
+2. **Investigation and analysis capability**
+   - Helps the LLM inspect the relevant files, errors, dependencies, and implementation context.
+   - Enables grounded analysis before any implementation decision is made.
+
+3. **Planning and design capability**
+   - Helps the LLM produce an implementation plan, identify impacted files, and incorporate coding best practices from the Core Playbook.
+   - Best practices should be a first-class input during planning and a guardrail during execution.
+
+4. **Execution and implementation capability**
+   - Applies the proposed change, generates patches, updates tests, and enforces policy checks.
+
+5. **Review and validation capability**
+   - Runs tests, static checks, and code review-style assessment before final acceptance.
+   - Code review should be treated as a structured validation gate, not merely an informal follow-up comment.
+
+6. **Delivery and handoff capability**
+   - Summarizes the change, verification evidence, and any remaining follow-up work.
+
+### Tooling by capability
+
+- **Intake**: context builder, repo indexer, requirement extractor, clarification prompts
+- **Investigation**: repo searcher, AST analyzer, error classifier, KB retriever
+- **Planning and design**: planner, dependency analyzer, impact assessor, Core Playbook retriever
+- **Execution**: patch engine, editor, code generator, policy gate
+- **Review and validation**: test runner, formatter/linter, diff previewer, reviewer
+- **Delivery**: change summary generator, approval gate, handoff artifact generator
+
+The important shift is that the LLM can invoke these capabilities dynamically during conversation. Phase 1 is not just a passive preamble; it is a capability that provides the context and interaction surface for requirements gathering, design refinement, and a clear handoff into later phases.
+
+### Memory and continuity across Ask turns
+
+Each phase capability should produce artifacts that are recorded into the runtime memory system so the workflow can continue coherently across later user turns. The system should persist:
+
+- the current objective and clarified requirements,
+- design decisions and implementation plan,
+- implementation progress and validation results,
+- unresolved questions and pending approvals,
+- and repo-specific facts that should survive beyond the current turn.
+
+This should be stored in a layered memory model:
+
+- **MRU / short-term working memory** for the active conversation and current phase state.
+- **STM / session memory** for the in-flight task context across multiple turns.
+- **LTM / long-term memory** for durable repo and workflow facts that should be reused later.
+
+In this model, the LLM and RAG layer build memory artifacts as the user specifies requirements and the workflow progresses, allowing the system to continue from where it left off without losing the design context.
+
 ## V1 Product Direction
 
 For V1, the coding workflow should be designed to compete with high-quality coding copilots on everyday repository work. The bar is not merely “answer questions about code”; it is to help a developer inspect, edit, test, debug, and continue work with minimal friction.

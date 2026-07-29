@@ -534,7 +534,7 @@ result.Data["full_plan_path"] = "/tmp/plan_12345.json"
 - Plan with 5 steps: ~5-10 KB
 - TurnResult history: ~10-50 KB per workflow
 
-Total memory impact is minimal for typical workflows (<100 KB).
+Total memory impact is minimal for typical workflows (under 100 KB).
 
 ## Testing and Observability
 

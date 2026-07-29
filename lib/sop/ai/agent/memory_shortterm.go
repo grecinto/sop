@@ -131,6 +131,22 @@ type RuntimeCaveat struct {
 	Active         bool
 }
 
+type SessionBoundaryKind string
+
+const (
+	SessionBoundaryStart       SessionBoundaryKind = "start"
+	SessionBoundaryTopicSwitch SessionBoundaryKind = "topic_switch"
+	SessionBoundaryEnd         SessionBoundaryKind = "end"
+)
+
+type SessionBoundary struct {
+	Kind      SessionBoundaryKind
+	Summary   string
+	Details   string
+	Timestamp int64
+	Source    string
+}
+
 type CodingWorkflowExecutionState struct {
 	ActiveFile      string
 	Description     string
@@ -160,6 +176,7 @@ type ShortTermMemory struct {
 	Order                 []sop.UUID // Maintains the sequence of threads
 	CurrentThreadID       sop.UUID   // The currently active thread
 	RuntimeCaveats        []RuntimeCaveat
+	SessionBoundaries     []SessionBoundary
 	LastRoutingState      *TaskContextClassification
 	LastMRUSnapshot       []MRUItem
 	LastRecipeSnapshot    []RecipeItem
@@ -272,6 +289,66 @@ func (stm *ShortTermMemory) AddRuntimeCaveat(summary, details, kind, categoryRoo
 		LastInjectedAt: time.Now().UnixMilli(),
 		Active:         true,
 	})
+}
+
+func (stm *ShortTermMemory) RecordSessionBoundary(kind SessionBoundaryKind, summary, details, source string) {
+	if stm == nil {
+		return
+	}
+	kind = normalizeSessionBoundaryKind(kind)
+	if kind == "" {
+		return
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		summary = string(kind)
+	}
+	details = strings.TrimSpace(details)
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "agent"
+	}
+	if kind == SessionBoundaryStart {
+		for _, existing := range stm.SessionBoundaries {
+			if existing.Kind == kind {
+				return
+			}
+		}
+	}
+	stm.SessionBoundaries = append(stm.SessionBoundaries, SessionBoundary{
+		Kind:      kind,
+		Summary:   summary,
+		Details:   details,
+		Timestamp: time.Now().UnixMilli(),
+		Source:    source,
+	})
+}
+
+func normalizeSessionBoundaryKind(kind SessionBoundaryKind) SessionBoundaryKind {
+	switch SessionBoundaryKind(strings.ToLower(strings.TrimSpace(string(kind)))) {
+	case SessionBoundaryStart:
+		return SessionBoundaryStart
+	case SessionBoundaryTopicSwitch:
+		return SessionBoundaryTopicSwitch
+	case SessionBoundaryEnd:
+		return SessionBoundaryEnd
+	default:
+		return ""
+	}
+}
+
+func (stm *ShortTermMemory) GetSessionBoundaries(limit int) []SessionBoundary {
+	if stm == nil || len(stm.SessionBoundaries) == 0 {
+		return nil
+	}
+	if limit <= 0 || limit >= len(stm.SessionBoundaries) {
+		return append([]SessionBoundary(nil), stm.SessionBoundaries...)
+	}
+	start := len(stm.SessionBoundaries) - limit
+	if start < 0 {
+		start = 0
+	}
+	return append([]SessionBoundary(nil), stm.SessionBoundaries[start:]...)
 }
 
 func (stm *ShortTermMemory) GetRuntimeCaveats(limit int) []RuntimeCaveat {

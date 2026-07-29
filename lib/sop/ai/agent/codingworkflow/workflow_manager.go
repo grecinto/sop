@@ -356,7 +356,6 @@ type WorkflowResult struct {
 // Instead, it feeds each Step to the Ask pipeline as a single transaction, respecting
 // the natural boundaries of the Ask pipeline's lifecycle.
 type WorkflowManager struct {
-	orchestrator     *Orchestrator
 	sharedInfra      *SharedInfrastructure
 	defaultMaxRetry  int
 	retryBackoffBase time.Duration
@@ -459,11 +458,13 @@ func generateSignalCacheKey(signal StepSignal) string {
 	return fmt.Sprintf("%s_%x", signal.Type, hash[:8])
 }
 
-// NewWorkflowManager creates a WorkflowManager that wraps an existing Orchestrator.
-func NewWorkflowManager(orchestrator *Orchestrator) *WorkflowManager {
+// NewWorkflowManager creates a WorkflowManager with the provided SharedInfrastructure.
+func NewWorkflowManager(sharedInfra *SharedInfrastructure) *WorkflowManager {
+	if sharedInfra == nil {
+		sharedInfra = NewDefaultSharedInfrastructure()
+	}
 	wm := &WorkflowManager{
-		orchestrator:     orchestrator,
-		sharedInfra:      NewSharedInfrastructure(orchestrator),
+		sharedInfra:      sharedInfra,
 		defaultMaxRetry:  2,               // Default: retry failed steps up to 2 times
 		retryBackoffBase: 1 * time.Second, // Base backoff for exponential retry
 		eventHandlers:    []StepEventHandler{},

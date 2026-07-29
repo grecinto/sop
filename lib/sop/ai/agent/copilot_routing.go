@@ -60,6 +60,7 @@ func (a *CopilotAgent) resetRoutingForTopicSwitch(query string, payload *ai.Sess
 		delete(payload.Variables, "RoutingState")
 	}
 	a.clearMRUForTopicSwitch()
+	a.recordSessionBoundary(context.Background(), string(SessionBoundaryTopicSwitch), "Topic switch", strings.TrimSpace(query))
 	if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
 		newThreadID := sop.NewUUID()
 		thread := &ConversationThread{

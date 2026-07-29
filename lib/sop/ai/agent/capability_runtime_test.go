@@ -66,12 +66,16 @@ func TestNewCopilotAgentRegistersSpacesCapability(t *testing.T) {
 
 func TestNewCopilotAgentRegistersCodingWorkflowCapabilityByDefault(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
-	cap, ok := ag.capabilityRegistry.Resolve("fix this bug in the repository", capabilities.RoutingState{Domain: "Desktop"})
-	if !ok {
-		t.Fatal("expected coding workflow capability to be registered by default")
+	// Phase capabilities should be registered by default
+	var foundPhaseCapability bool
+	for _, cap := range ag.capabilityRegistry.ListAll() {
+		if cap != nil && strings.HasPrefix(cap.ID(), "phase_") {
+			foundPhaseCapability = true
+			break
+		}
 	}
-	if cap.ID() != "coding_workflow" {
-		t.Fatalf("expected coding workflow capability id %q, got %q", "coding_workflow", cap.ID())
+	if !foundPhaseCapability {
+		t.Fatal("expected phase capabilities to be registered by default")
 	}
 }
 
@@ -135,4 +139,8 @@ func (s *stubCapability) BuildContext(query string, state capabilities.RoutingSt
 func (s *stubCapability) ExposeTools() []capabilities.ToolDefinition { return nil }
 func (s *stubCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
 	return ""
+}
+func (s *stubCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	_ = ctx
+	return nil
 }

@@ -149,6 +149,13 @@ func (wmc *WorkflowManagerCapability) BuildInstructions(query string, state capa
 	return sb.String()
 }
 
+func (wmc *WorkflowManagerCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
 // RunWithQueue executes the current step and enqueues the next step to the queue.
 // This is the queue-aware version for use with KB workflow execution.
 func (wmc *WorkflowManagerCapability) RunWithQueue(ctx context.Context, query string, queue *WorkQueue) (capabilities.CapabilityResult, error) {

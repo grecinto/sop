@@ -211,11 +211,11 @@ func (s *ToolResultStorage) createStandardSummary(result, filePath string, sizeK
 	// Guide the LLM on how to analyze the full output
 	sb.WriteString("\n---\n")
 	sb.WriteString(fmt.Sprintf("Full output: %s (%.1fKB)\n", filePath, sizeKB))
-	sb.WriteString("To analyze based on user's request:\n")
-	sb.WriteString("  • Tests/results: grep \"PASS\\|FAIL\\|error\" <file>\n")
-	sb.WriteString("  • Find specific: grep \"<keyword>\" <file>\n")
-	sb.WriteString("  • Count: grep -c \"<pattern>\" <file> or wc -l <file>\n")
-	sb.WriteString("  • Extract: sed -n '10,50p' <file> or awk 'NR>=10 && NR<=50' <file>\n")
+	sb.WriteString("To analyze based on your request:\n")
+	sb.WriteString("  • Targeted search: analyze_tool_result(file_path=\"\", operation=\"grep\", pattern=\"PATTERN\")\n")
+	sb.WriteString("  • Slice lines: analyze_tool_result(file_path=\"\", operation=\"sed\", start_line=X, end_line=Y)\n")
+	sb.WriteString("  • Inspect boundaries: analyze_tool_result(file_path=\"\", operation=\"head\" or \"tail\", max_matches=N)\n")
+	sb.WriteString("  • Count content: analyze_tool_result(file_path=\"\", operation=\"wc\")\n")
 
 	return sb.String()
 }
@@ -471,6 +471,101 @@ func (s *ToolResultStorage) GrepResult(filePath, pattern string, maxMatches int)
 	}
 
 	return matches, nil
+}
+
+// AnalyzeResult performs lightweight line-oriented analysis on a stored result file.
+// Supported operations: grep, awk, sed, head, tail, wc, cat.
+func (s *ToolResultStorage) AnalyzeResult(filePath, operation, pattern string, startLine, endLine, maxMatches int) (string, error) {
+	if !strings.HasPrefix(filePath, s.baseDir) {
+		return "", fmt.Errorf("file path is outside session directory")
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to read result file: %w", err)
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	op := strings.ToLower(strings.TrimSpace(operation))
+	switch op {
+	case "grep", "awk":
+		if strings.TrimSpace(pattern) == "" {
+			return "", fmt.Errorf("pattern is required for %s operation", op)
+		}
+		var matches []string
+		for idx, line := range lines {
+			if strings.Contains(line, pattern) {
+				matches = append(matches, fmt.Sprintf("Line %d: %s", idx+1, line))
+				if maxMatches > 0 && len(matches) >= maxMatches {
+					break
+				}
+			}
+		}
+		if len(matches) == 0 {
+			return fmt.Sprintf("No matches found for pattern '%s' in %s", pattern, filepath.Base(filePath)), nil
+		}
+		return strings.Join(matches, "\n"), nil
+	case "sed":
+		if startLine < 1 {
+			startLine = 1
+		}
+		if endLine < 1 || endLine > len(lines) {
+			endLine = len(lines)
+		}
+		if startLine > endLine {
+			return "", fmt.Errorf("start line (%d) must be <= end line (%d)", startLine, endLine)
+		}
+		if startLine > len(lines) {
+			return "", nil
+		}
+		selected := lines[startLine-1 : endLine]
+		if len(selected) == 0 {
+			return "", nil
+		}
+		return strings.Join(selected, "\n"), nil
+	case "head":
+		if maxMatches < 1 {
+			maxMatches = 20
+		}
+		if maxMatches > len(lines) {
+			maxMatches = len(lines)
+		}
+		if maxMatches <= 0 {
+			return "", nil
+		}
+		return strings.Join(lines[:maxMatches], "\n"), nil
+	case "tail":
+		if maxMatches < 1 {
+			maxMatches = 20
+		}
+		if maxMatches > len(lines) {
+			maxMatches = len(lines)
+		}
+		if maxMatches <= 0 {
+			return "", nil
+		}
+		return strings.Join(lines[len(lines)-maxMatches:], "\n"), nil
+	case "wc":
+		lineCount := len(lines)
+		wordCount := 0
+		charCount := 0
+		for _, line := range lines {
+			wordCount += len(strings.Fields(line))
+			charCount += len(line)
+		}
+		return fmt.Sprintf("lines=%d words=%d chars=%d", lineCount, wordCount, charCount), nil
+	case "cat":
+		return strings.Join(lines, "\n"), nil
+	default:
+		return "", fmt.Errorf("unsupported operation %q", operation)
+	}
 }
 
 // StoredResult represents metadata about a stored tool result file

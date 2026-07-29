@@ -16,6 +16,48 @@ Want to understand the technical architecture? See the SDK documentation:
 
 ## How It Works
 
+### Available Coding Phases
+
+As AI Studio works through a coding task, it can move through a structured set of phases so the work stays organized and easy to follow. A single Ask does not always require every phase: one prompt may map to a single phase, a small subset of phases, or a full sequence. These phases are general-purpose and apply to many kinds of work, from feature development to maintenance, debugging, refactoring, and test fixes.
+
+For example, a request like "fix failing tests" often flows through Investigation & Analysis, Planning & Design, Execution & Implementation, Review & Validation, and Delivery & Handoff. The workflow can also stop in the middle and resume later, or revisit an earlier phase if new information changes the direction of the work.
+
+The workflow typically progresses through these stages:
+
+1. **Intake & Context** — Understand the request, gather constraints, and capture the goal.
+2. **Investigation & Analysis** — Inspect the repository, relevant files, tests, and surrounding implementation details.
+3. **Planning & Design** — Turn the findings into a concrete plan for the change.
+4. **Execution & Implementation** — Apply the code changes and update the affected parts of the project.
+5. **Review & Validation** — Run tests, build checks, and verify the result.
+6. **Delivery & Handoff** — Summarize what changed and outline any follow-up steps.
+
+### Available Coding Automation Tools
+
+The coding workflow capability exposes a single, consolidated public tool surface for repository-aware automation. Rather than making each phase depend on one fixed tool, the system should use a layered model:
+
+- **Phases** describe the lifecycle stage of the work, such as investigation, planning, execution, validation, or delivery.
+- **Tools** provide the concrete actions that can be used within that stage.
+- **Context and domain** determine which tool set is most relevant for the request. A testing-focused prompt should prefer test-aware actions such as running tests, inspecting failures, and validating fixes, while a feature request should lean more heavily on planning, implementation, build, and patching.
+
+This keeps the overall workflow familiar and general-purpose, while allowing the tool surface to grow as we discover new domains or specialized needs. As the system learns more domain variation, we can extend the tooling and the phase guidance together without changing the shared SDLC structure.
+
+The tool contract should be owned by the main coding workflow capability and registered through `ExposeTools()`, while the implementation details can live in the shared workflow helpers underneath it.
+
+#### Public tools in the coding workflow capability
+
+These are the callable tools that should be available for workflow authors and the Ask loop when a coding task needs structured assistance. The public surface stays simple and consistent, while the implementation can still be distributed across the shared workflow package behind those entry points:
+
+| Tool | Purpose |
+|------|---------|
+| `plan_design` | Turn a request into a concrete implementation plan or design before editing code |
+| `analyze_repo` | Inspect repository state, changed files, and code structure using repo and AST-aware helpers |
+| `generate_code` | Draft or propose implementation changes for the current task |
+| `build_project` | Run build or compile steps for the current project |
+| `run_tests` | Execute the relevant test suite and report pass/fail results |
+| `apply_patch` | Apply a patch with the shared workflow safety and previewing checks |
+
+This keeps the public contract centralized and makes the workflow authoring experience easier to reason about. The underlying implementation may still be organized across helper files, but the callable surface should be exposed from the coding workflow capability in one coherent place.
+
 ### Smart Planning 🤖
 
 AI Studio analyzes your request and creates a custom plan:

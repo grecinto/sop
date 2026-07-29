@@ -184,6 +184,13 @@ Session Recovery:
 - Stuck sessions are automatically detected and reset
 - No manual intervention needed`
 }
+func (c *Capability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
 func (c *Capability) Participate(ctx context.Context, query string, state capabilities.RoutingState) (capabilities.ParticipationResult, bool, error) {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {

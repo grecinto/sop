@@ -13,6 +13,17 @@ To ensure system stability and prevent "dangling transactions," the Copilot oper
     *   This allows scripts to perform complex, multi-step atomic operations (e.g., "Transfer funds: Debit A, Credit B").
     *   If any step fails, the entire script transaction can be rolled back.
 
+## Session Lifecycle Model
+
+A session should be treated as a durable, replayable interaction container rather than as a single prompt.
+
+- **Session start**: A session begins when the user opens the AI window or sends the first message while no active session exists.
+- **Session end**: A session ends when the user closes the window, explicitly starts a new independent conversation, or the session becomes idle beyond a timeout.
+- **Session contents**: Each session stores ordered events such as user messages, assistant replies, planner-generated plans, executed commands, tool calls, and state snapshots.
+- **Session boundaries**: Start and end marks define the lifecycle; each turn is simply an event inside that lifecycle.
+
+This model supports future capabilities such as reviewing prior sessions over time, replaying a sequence of work, and cherry-picking a specific step or plan to resume in the AI window.
+
 ---
 
 ## 1. Natural Language Data Access
