@@ -2471,11 +2471,7 @@ func (a *CopilotAgent) tryCapabilityParticipation(
 	startTime := time.Now()
 
 	if selectedCap == nil {
-		var found bool
-		selectedCap, found = a.capabilityRegistry.Resolve(query, state)
-		if !found {
-			return capabilities.ParticipationResult{}, false, nil
-		}
+		return capabilities.ParticipationResult{}, false, nil
 	}
 
 	capID := selectedCap.ID()
@@ -2935,65 +2931,210 @@ func resolveParallelWorkingDir(ctx context.Context, query string) string {
 	return ""
 }
 
+// Helper functions for ask() modularization
+
+func extractProviderDetails(cfg *ai.ConfigMap) *ProviderDetails {
+	if cfg == nil {
+		return nil
+	}
+	if po, ok := cfg.Get("provider_details"); ok {
+		if override, ok := po.(*ProviderDetails); ok {
+			return override
+		}
+	}
+	return nil
+}
+
+func (a *CopilotAgent) noAPIKeyMessage() string {
+	return "⚠️ **AI Copilot Disabled**: No valid API Key found.\n\nPlease go to **Environment Settings** (HDD icon in bottom left) -> **LLM API Key** to configure your Google Gemini or OpenAI key."
+}
+
+func (a *CopilotAgent) applyMetaTalkRewrite(ctx context.Context, query string) string {
+	if rewrittenQuery, rewritten := a.tryMetaTalkBasedRouting(ctx, query); rewritten {
+		log.Info("Copilot Ask MetaTalkBasedRouting Rewrite", "original_query", query, "effective_query", rewrittenQuery)
+		return rewrittenQuery
+	}
+	return query
+}
+
+func (a *CopilotAgent) shouldDirectDisplayKB(taskContext *TaskContextClassification) bool {
+	return taskContext.DirectDisplay && taskContext.KBSearchResults != ""
+}
+
+func (a *CopilotAgent) handleKBDirectDisplay(ctx context.Context, rawQuery string, intent string, taskContext *TaskContextClassification) (string, error) {
+	log.Info("KB routing: Direct display path", "match_count", taskContext.KBMatchCount)
+	a.trackEpisodeMetadata(ctx, intent)
+	response := a.formatKBSearchResultsForDisplay(taskContext.KBSearchResults, taskContext.KBMatchCount)
+	a.epilogueAndCleanup(ctx, rawQuery, intent, response, nil, nil, nil, nil)
+	return response, nil
+}
+
+func (a *CopilotAgent) resolveAndInitializeCapability(ctx context.Context, query string, taskContext *TaskContextClassification) (context.Context, capabilities.Capability) {
+	routingState := capabilities.RoutingState{
+		Domain:         taskContext.Domain,
+		Gate:           taskContext.RoutingGate,
+		CapabilityHint: taskContext.CapabilityHint,
+	}
+
+	var selectedCap capabilities.Capability
+	if cap, found := a.capabilityRegistry.Resolve(query, routingState); found {
+		selectedCap = cap
+		ctx = context.WithValue(ctx, ctxKeySelectedCapability, cap)
+
+		// If this is a Step, initialize it
+		if step, isStep := cap.(cw.Step); isStep {
+			ctx = context.WithValue(ctx, ctxKeyActiveStep, step)
+			if err := step.OnStart(ctx, query, routingState); err != nil {
+				log.Warn("Step OnStart failed", "error", err)
+			}
+		}
+	}
+
+	return ctx, selectedCap
+}
+
+func (a *CopilotAgent) enrichQueryWithKBResults(query string, taskContext *TaskContextClassification) string {
+	if !taskContext.DirectDisplay && taskContext.KBSearchResults != "" {
+		log.Info("KB routing: LLM processing path", "match_count", taskContext.KBMatchCount, "has_instruction", taskContext.LLMInstruction != "")
+		cleanQuery := taskContext.CleanQuery
+		if cleanQuery == "" {
+			cleanQuery = query
+		}
+		return a.buildKBEnrichedQuery(cleanQuery, taskContext.KBSearchResults, taskContext.LLMInstruction, taskContext.KBMatchCount)
+	}
+	return query
+}
+
+func (a *CopilotAgent) handleStepLifecycle(ctx context.Context, taskContext *TaskContextClassification) {
+	step, hasStep := ctx.Value(ctxKeyActiveStep).(cw.Step)
+	cap, hasCap := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability)
+
+	if !hasStep || step == nil || !hasCap || cap == nil {
+		return
+	}
+
+	routingState := capabilities.RoutingState{
+		Domain:         taskContext.Domain,
+		Gate:           taskContext.RoutingGate,
+		CapabilityHint: taskContext.CapabilityHint,
+	}
+
+	if shouldContinue, err := step.OnAfterTurn(ctx, 1, routingState); err != nil {
+		log.Warn("Step OnAfterTurn failed", "error", err)
+	} else if !shouldContinue {
+		log.Info("Step requested workflow termination")
+	}
+}
+
+func (a *CopilotAgent) handleCapabilityHandoff(ctx context.Context, selectedCap capabilities.Capability, query string, taskContext *TaskContextClassification) {
+	if selectedCap == nil {
+		return
+	}
+
+	routingState := capabilities.RoutingState{
+		Domain:         taskContext.Domain,
+		Gate:           taskContext.RoutingGate,
+		CapabilityHint: taskContext.CapabilityHint,
+	}
+
+	handoff := selectedCap.Handoff(ctx, query, routingState)
+	if handoff == nil || strings.TrimSpace(handoff.Prompt) == "" {
+		return
+	}
+
+	queue := a.GetSessionQueue()
+	if queue == nil {
+		return
+	}
+
+	item := WorkItem{
+		Query:    strings.TrimSpace(handoff.Prompt),
+		Actor:    selectedCap.ID(),
+		ID:       fmt.Sprintf("handoff-%s-%d", selectedCap.ID(), time.Now().UnixNano()),
+		Priority: 100,
+		Context: map[string]any{
+			"handoff_direction": handoff.Direction,
+			"handoff_target":    handoff.Target,
+			"capability_id":     selectedCap.ID(),
+		},
+	}
+
+	if err := queue.Enqueue(item); err != nil {
+		log.Warn("Failed to enqueue capability handoff prompt", "capability", selectedCap.ID(), "error", err)
+	} else {
+		log.Info("Enqueued capability handoff prompt", "capability", selectedCap.ID(), "prompt", handoff.Prompt)
+	}
+}
+
+func (a *CopilotAgent) handlePlannerResult(ctx context.Context, query string, finalText string) {
+	selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability)
+	if !ok || selectedCap == nil {
+		return
+	}
+
+	// Persist planner output
+	if selectedCap.ID() == cw.PlannerCapabilityID {
+		a.recordPlannerPlan(query, finalText)
+	}
+
+	// Call OnFinish for workflow planners
+	planner, isPlanner := selectedCap.(capabilities.WorkflowPlanner)
+	if !isPlanner {
+		return
+	}
+
+	capResult, ok := ctx.Value(ctxKeyCapabilityResult).(capabilities.CapabilityResult)
+	if !ok {
+		return
+	}
+
+	if err := planner.OnFinish(ctx, capResult); err != nil {
+		log.Warn("WorkflowPlanner OnFinish failed", "capability", selectedCap.ID(), "error", err)
+	} else {
+		log.Info("WorkflowPlanner OnFinish completed", "capability", selectedCap.ID())
+	}
+}
+
 // ask is the pure Ask→ReAct transaction with no queue awareness.
 // All routing, gates, KB enrichment, and ReAct delegation happen here.
 // Capabilities can enqueue next steps via GetSessionQueue() during tool execution.
 func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	// 1. Setup and early validation
 	ctx = a.applyAskConfig(ctx, cfg)
 	a.clearAskProgressMRU()
-
-	// Store latest user query in context for user interruption detection
-	// This allows Steps to detect redirect/modification keywords via DetectUserRedirect()
 	ctx = context.WithValue(ctx, "latest_user_query", query)
 
-	// Extract ProviderDetails from ConfigMap
-	var providerDetails *ProviderDetails
-	if cfg != nil {
-		if po, ok := cfg.Get("provider_details"); ok {
-			if override, ok := po.(*ProviderDetails); ok {
-				providerDetails = override
-			}
-		}
-	}
+	providerDetails := extractProviderDetails(cfg)
 
 	if handled, res, err := a.handlePendingUserConfirmation(ctx, query); handled {
 		return res, err
 	}
 
-	// Check for direct tool invocation (slash commands) BEFORE checking for API key
-	// This allows slash commands to work without an LLM provider configured
 	if handled, res, err := a.handleDirectToolInvocation(ctx, query, nil); handled {
 		return res, err
 	}
 
 	gen := a.resolveGeneratorWithOverride(ctx, providerDetails)
 	if gen == nil {
-		return "⚠️ **AI Copilot Disabled**: No valid API Key found.\n\nPlease go to **Environment Settings** (HDD icon in bottom left) -> **LLM API Key** to configure your Google Gemini or OpenAI key.", nil
+		return a.noAPIKeyMessage(), nil
 	}
 
 	sessionID := a.logAskStart(ctx, query, gen)
 	log.Info("Copilot Ask start", "query", query, "session_id", sessionID)
 
+	// 2. Query preprocessing
 	rawQuery := query
-	if rewrittenQuery, rewritten := a.tryMetaTalkBasedRouting(ctx, query); rewritten {
-		log.Info("Copilot Ask MetaTalkBasedRouting Rewrite", "original_query", query, "effective_query", rewrittenQuery)
-		query = rewrittenQuery
-	}
+	query = a.applyMetaTalkRewrite(ctx, query)
 
-	// 3. Intent Classification (Router)
+	// 3. Intent classification and routing
 	intent := a.classifyIntent(ctx, query, gen)
-
-	// Fast-path routing: If Avatar, execute Avatar Sub-Agent
 	if intent != ai.IntentOmni {
 		log.Info("Ask: Request classified for Avatar", "avatar", intent)
 		return a.executeAvatarSubAgent(ctx, intent, query)
 	}
 	log.Info("Ask: Request classified for OMNI")
 
-	// 4. Three-Gate Context Classification
-
-	// TODO: process unpacking IsNewTopic from Options, and use that as added signal for routing in Gate 2 (MRU).
-
+	// 4. Three-gate context classification
 	log.Info("Copilot Ask routing evaluation start", "query", query)
 	taskContext, err := a.evaluateRoutingGates(ctx, query, gen)
 	if err != nil {
@@ -3009,43 +3150,19 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		"query", query,
 	)
 
-	// Workflow and multi-turn detection removed from ask().
-	// Capabilities handle state tracking and enqueue next steps via GetSessionQueue().
-	// This keeps ask() pure and allows adaptive workflows based on ReAct results.
-
-	// 4c. KB Search Direct Display (Case 1: Few matches)
-	if taskContext.DirectDisplay && taskContext.KBSearchResults != "" {
-		log.Info("KB routing: Direct display path", "match_count", taskContext.KBMatchCount)
-		// Track episode metadata for MRU
-		a.trackEpisodeMetadata(ctx, intent)
-		// Format and return KB results immediately without LLM delegation
-		response := a.formatKBSearchResultsForDisplay(taskContext.KBSearchResults, taskContext.KBMatchCount)
-		// Track ask outcome for continuity
-		a.epilogueAndCleanup(ctx, rawQuery, intent, response, nil, nil, nil, nil)
-		return response, nil
+	// 5. KB direct display fast path
+	if a.shouldDirectDisplayKB(taskContext) {
+		return a.handleKBDirectDisplay(ctx, rawQuery, intent, taskContext)
 	}
 
-	// 5. Episode Metadata Tracking (MRU Cache)
+	// 6. Episode tracking and capability setup
 	a.trackEpisodeMetadata(ctx, intent)
+	ctx, selectedCap := a.resolveAndInitializeCapability(ctx, query, taskContext)
 
-	// Gap 1 & 4: Try capability participation with authorization and metrics
-	// Also resolve and store the selected capability in context for BuildContext/BuildInstructions
-	routingState := capabilities.RoutingState{Domain: taskContext.Domain, Gate: taskContext.RoutingGate, CapabilityHint: taskContext.CapabilityHint}
-	if cap, found := a.capabilityRegistry.Resolve(query, routingState); found {
-		ctx = context.WithValue(ctx, ctxKeySelectedCapability, cap)
-
-		// If this is a Step, initialize it
-		if step, isStep := cap.(cw.Step); isStep {
-			ctx = context.WithValue(ctx, ctxKeyActiveStep, step)
-			if err := step.OnStart(ctx, query, routingState); err != nil {
-				log.Warn("Step OnStart failed", "error", err)
-			}
-		}
-	}
-
-	var selectedCap capabilities.Capability
-	if cap, found := a.capabilityRegistry.Resolve(query, routingState); found {
-		selectedCap = cap
+	routingState := capabilities.RoutingState{
+		Domain:         taskContext.Domain,
+		Gate:           taskContext.RoutingGate,
+		CapabilityHint: taskContext.CapabilityHint,
 	}
 
 	if result, handled, err := a.tryCapabilityParticipation(ctx, query, routingState, selectedCap); err == nil && handled {
@@ -3054,90 +3171,24 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		}
 	}
 
-	// 6. System Prompt Construction
+	// 7. Prompt construction and query enrichment
 	fullPrompt := a.buildSystemPrompt(ctx, query, *taskContext)
+	query = a.enrichQueryWithKBResults(query, taskContext)
 
-	// 6a. KB Search LLM Integration (Case 2: :llm instruction, Case 3: Too many matches)
-	if !taskContext.DirectDisplay && taskContext.KBSearchResults != "" {
-		log.Info("KB routing: LLM processing path", "match_count", taskContext.KBMatchCount, "has_instruction", taskContext.LLMInstruction != "")
-		// Use clean query (without :llm meta-token) for LLM context
-		cleanQuery := taskContext.CleanQuery
-		if cleanQuery == "" {
-			cleanQuery = query // fallback to original if clean query not set
-		}
-		// Inject KB results into the query for LLM processing
-		query = a.buildKBEnrichedQuery(cleanQuery, taskContext.KBSearchResults, taskContext.LLMInstruction, taskContext.KBMatchCount)
-	}
-
-	// 7. Reasoning Engine Delegation
+	// 8. Reasoning engine delegation
 	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, err := a.delegateToReasoningEngine(ctx, query, gen, fullPrompt)
 	if err != nil {
 		return "", err
 	}
 
-	// Step OnAfterTurn hook (called after reasoning completes)
-	if step, ok := ctx.Value(ctxKeyActiveStep).(cw.Step); ok && step != nil {
-		if cap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && cap != nil {
-			routingState := capabilities.RoutingState{
-				Domain:         taskContext.Domain,
-				Gate:           taskContext.RoutingGate,
-				CapabilityHint: taskContext.CapabilityHint,
-			}
-			if shouldContinue, stepErr := step.OnAfterTurn(ctx, 1, routingState); stepErr != nil {
-				log.Warn("Step OnAfterTurn failed", "error", stepErr)
-			} else if !shouldContinue {
-				log.Info("Step requested workflow termination")
-			}
-		}
-	}
+	// 9. Post-execution lifecycle callbacks
+	a.handleStepLifecycle(ctx, taskContext)
+	a.handleCapabilityHandoff(ctx, selectedCap, query, taskContext)
+	a.handlePlannerResult(ctx, query, finalText)
 
-	if selectedCap != nil {
-		if handoff := selectedCap.Handoff(ctx, query, routingState); handoff != nil && strings.TrimSpace(handoff.Prompt) != "" {
-			queue := a.GetSessionQueue()
-			if queue != nil {
-				item := WorkItem{
-					Query:    strings.TrimSpace(handoff.Prompt),
-					Actor:    selectedCap.ID(),
-					ID:       fmt.Sprintf("handoff-%s-%d", selectedCap.ID(), time.Now().UnixNano()),
-					Priority: 100,
-					Context: map[string]any{
-						"handoff_direction": handoff.Direction,
-						"handoff_target":    handoff.Target,
-						"capability_id":     selectedCap.ID(),
-					},
-				}
-				if err := queue.Enqueue(item); err != nil {
-					log.Warn("Failed to enqueue capability handoff prompt", "capability", selectedCap.ID(), "error", err)
-				} else {
-					log.Info("Enqueued capability handoff prompt", "capability", selectedCap.ID(), "prompt", handoff.Prompt)
-				}
-			}
-		}
-	}
+	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
 
-	// Persist planning output so later turns can reference the proposed plan.
-	if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && selectedCap != nil {
-		if selectedCap.ID() == cw.PlannerCapabilityID {
-			a.recordPlannerPlan(query, finalText)
-		}
-		if planner, ok := selectedCap.(capabilities.WorkflowPlanner); ok {
-			// Extract capability result if stored in context
-			if capResult, ok := ctx.Value(ctxKeyCapabilityResult).(capabilities.CapabilityResult); ok {
-				if finishErr := planner.OnFinish(ctx, capResult); finishErr != nil {
-					log.Warn("WorkflowPlanner OnFinish failed", "capability", selectedCap.ID(), "error", finishErr)
-				} else {
-					log.Info("WorkflowPlanner OnFinish completed", "capability", selectedCap.ID())
-				}
-			}
-		}
-	}
-
-	log.Info("Copilot Ask Complete",
-		"session_id", sessionID,
-		"response_chars", len(finalText),
-	)
-
-	// 8. Epilogue & Cleanup
+	// 10. Epilogue and cleanup
 	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState)
 
 	return finalText, nil
