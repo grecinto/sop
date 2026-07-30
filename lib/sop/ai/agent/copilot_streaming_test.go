@@ -19,8 +19,8 @@ func TestCopilotAgent_DelegateToReasoningEngineStreamsToolEvents(t *testing.T) {
 		},
 	}
 
-	a.registry.Register("execute_script", "run a script", "{}", wrapStringTool(func(ctx context.Context, args map[string]any) (string, error) {
-		return `[{"name":"John Doe"}]`, nil
+	a.registry.Register("mock_tool", "run a mock operation", "{}", wrapStringTool(func(ctx context.Context, args map[string]any) (string, error) {
+		return `{"result":"success"}`, nil
 	}))
 
 	var events []string
@@ -30,11 +30,35 @@ func TestCopilotAgent_DelegateToReasoningEngineStreamsToolEvents(t *testing.T) {
 	ctx = context.WithValue(ctx, ai.CtxKeyExecutor, a)
 	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: "dev"})
 
-	_, _, _, _, _, err := a.delegateToReasoningEngine(ctx, "show me users", &loopMockGenerator{}, "system prompt")
+	generator := &mockToolStreamingGenerator{}
+	_, _, _, _, _, err := a.delegateToReasoningEngine(ctx, "show me users", generator, "system prompt")
 	if err != nil {
 		t.Fatalf("delegateToReasoningEngine failed: %v", err)
 	}
 	if len(events) == 0 {
 		t.Fatal("expected streamed reasoning events, got none")
 	}
+}
+
+type mockToolStreamingGenerator struct {
+	calls int
+}
+
+func (m *mockToolStreamingGenerator) Name() string { return "mock_tool_streaming" }
+
+func (m *mockToolStreamingGenerator) EstimateCost(inTokens, outTokens int) float64 { return 0 }
+
+func (m *mockToolStreamingGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
+}
+
+func (m *mockToolStreamingGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	m.calls++
+	if m.calls == 1 {
+		return ai.GenOutput{ToolCalls: []ai.ToolCall{{
+			Name: "mock_tool",
+			Args: map[string]any{},
+		}}}, nil
+	}
+	return ai.GenOutput{Text: "Final answer: Operation completed"}, nil
 }

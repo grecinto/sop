@@ -295,3 +295,196 @@ func TestPlanningPhaseCapabilityMaturesAcrossIterations(t *testing.T) {
 		t.Fatalf("expected compact iteration details to be preserved, got %v", artifact.NextSteps)
 	}
 }
+
+func TestPhaseCapability_ClassifySelectsCorrectStartingPhase(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	
+	tests := []struct {
+		name          string
+		query         string
+		expectedPhase string
+		expectedScore int
+		expectedMode  capabilities.CapabilityMode
+	}{
+		{
+			name:          "investigation for fix failing tests",
+			query:         "fix failing tests",
+			expectedPhase: "investigation",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "investigation for debug error",
+			query:         "debug error in authentication",
+			expectedPhase: "investigation",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "investigation for broken feature",
+			query:         "the login is broken",
+			expectedPhase: "investigation",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "planning for design task",
+			query:         "design the authentication flow",
+			expectedPhase: "planning",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "planning for architecture",
+			query:         "architect a caching system",
+			expectedPhase: "planning",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "execution for patch application",
+			query:         "apply this patch to the config",
+			expectedPhase: "execution",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "execution for version update",
+			query:         "update the version to 2.0",
+			expectedPhase: "execution",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "review for code review",
+			query:         "review code for security issues",
+			expectedPhase: "review",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "review for validation",
+			query:         "verify that the API works",
+			expectedPhase: "review",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+		{
+			name:          "intake as default",
+			query:         "add a new feature for user profiles",
+			expectedPhase: "intake",
+			expectedScore: 14,
+			expectedMode:  capabilities.CapabilityModePrimary,
+		},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var targetCap *PhaseCapability
+			switch tt.expectedPhase {
+			case "intake":
+				targetCap = NewIntakePhaseCapability(infra)
+			case "investigation":
+				targetCap = NewInvestigationPhaseCapability(infra)
+			case "planning":
+				targetCap = NewPlanningPhaseCapability(infra)
+			case "execution":
+				targetCap = NewExecutionPhaseCapability(infra)
+			case "review":
+				targetCap = NewReviewPhaseCapability(infra)
+			case "delivery":
+				targetCap = NewDeliveryPhaseCapability(infra)
+			}
+			
+			result := targetCap.Classify(tt.query, capabilities.RoutingState{})
+			
+			if !result.Relevant {
+				t.Errorf("expected %s phase to be relevant for %q", tt.expectedPhase, tt.query)
+			}
+			if result.Score != tt.expectedScore {
+				t.Errorf("expected score %d, got %d", tt.expectedScore, result.Score)
+			}
+			if result.Mode != tt.expectedMode {
+				t.Errorf("expected mode %v, got %v", tt.expectedMode, result.Mode)
+			}
+		})
+	}
+}
+
+func TestPhaseCapability_ClassifyCapabilityHintTakesPriority(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	
+	// Create execution phase capability
+	executionCap := NewExecutionPhaseCapability(infra)
+	
+	// Query matches investigation ("fix"), but hint specifies execution
+	result := executionCap.Classify("fix failing tests", capabilities.RoutingState{
+		CapabilityHint: "phase_execution",
+	})
+	
+	if !result.Relevant {
+		t.Errorf("expected execution phase to be relevant with explicit hint")
+	}
+	if result.Score != 15 {
+		t.Errorf("expected hint to have score 15 (highest priority), got %d", result.Score)
+	}
+	if result.Mode != capabilities.CapabilityModePrimary {
+		t.Errorf("expected Primary mode with explicit hint, got %v", result.Mode)
+	}
+}
+
+func TestPhaseCapability_ClassifyKeywordMatchingProvidesSupportingRole(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	
+	// Create review phase capability
+	reviewCap := NewReviewPhaseCapability(infra)
+	
+	// Query "fix failing tests" should start with investigation (Primary, score 14)
+	// but review phase has "test" keyword, so it should be Supporting (score 12)
+	result := reviewCap.Classify("fix failing tests", capabilities.RoutingState{})
+	
+	if !result.Relevant {
+		t.Errorf("expected review phase to be relevant due to 'test' keyword")
+	}
+	if result.Score != 12 {
+		t.Errorf("expected keyword match score 12, got %d", result.Score)
+	}
+	if result.Mode != capabilities.CapabilityModeSupporting {
+		t.Errorf("expected Supporting mode for keyword match, got %v", result.Mode)
+	}
+}
+
+func TestDetectStartingPhase(t *testing.T) {
+	tests := []struct {
+		query         string
+		expectedPhase string
+	}{
+		{"fix failing tests", "investigation"},
+		{"debug authentication error", "investigation"},
+		{"the app crashed", "investigation"},
+		{"what's wrong with the login", "investigation"},
+		{"troubleshoot the issue", "investigation"},
+		{"design a caching system", "planning"},
+		{"architect the api", "planning"},
+		{"how should I implement this", "planning"},
+		{"best way to add pagination", "planning"},
+		{"apply this patch", "execution"},
+		{"update the version", "execution"},
+		{"change the config file", "execution"},
+		{"review code for bugs", "review"},
+		{"audit the security", "review"},
+		{"verify that it works", "review"},
+		{"add a new feature", "intake"},
+		{"implement user profiles", "intake"},
+		{"create a dashboard", "intake"},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			result := detectStartingPhase(strings.ToLower(tt.query))
+			if result != tt.expectedPhase {
+				t.Errorf("expected phase %s for query %q, got %s", tt.expectedPhase, tt.query, result)
+			}
+		})
+	}
+}

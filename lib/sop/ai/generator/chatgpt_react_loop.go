@@ -258,14 +258,40 @@ func chatGPTResponsesSupportsTemperature(model string) bool {
 	return !strings.HasPrefix(trimmedModel, "gpt-5")
 }
 
-// buildToolChoiceForceCall pins tool_choice to execute_script when present,
-// otherwise falls back to "required" (any tool).
+// buildToolChoiceForceCall pins tool_choice when appropriate.
+// Phase capability tools (investigation, planning, execution) take precedence over execute_script
+// for repo/code work, allowing the agent to use the full workflow toolset.
+// Only force execute_script when it's the only action-oriented tool available.
 func buildToolChoiceForceCall(tools []openAIResponsesTool) any {
+	hasPhaseTools := false
+	hasExecuteScript := false
+
 	for _, t := range tools {
 		if t.Name == "execute_script" {
-			return map[string]any{"type": "function", "name": t.Name}
+			hasExecuteScript = true
+		}
+		// Phase capability tools for repo/code work
+		if strings.HasPrefix(t.Name, "investigation_") ||
+			strings.HasPrefix(t.Name, "planning_") ||
+			strings.HasPrefix(t.Name, "execution_") ||
+			strings.HasPrefix(t.Name, "review_") ||
+			strings.HasPrefix(t.Name, "intake_") ||
+			strings.HasPrefix(t.Name, "delivery_") {
+			hasPhaseTools = true
 		}
 	}
+
+	// If phase capability tools are available, don't force execute_script
+	// Let the model choose the appropriate tool for the workflow phase
+	if hasPhaseTools {
+		return "required"
+	}
+
+	// Only force execute_script if it's the sole action tool
+	if hasExecuteScript {
+		return map[string]any{"type": "function", "name": "execute_script"}
+	}
+
 	return "required"
 }
 
@@ -359,6 +385,9 @@ func buildChatGPTResponsesTools(tools []ai.ToolDefinition) ([]openAIResponsesToo
 			if err := json.Unmarshal([]byte(tool.Schema), &parameters); err != nil {
 				return nil, fmt.Errorf("invalid OpenAI tool schema for %q: %w", tool.Name, err)
 			}
+			if sanitized, ok := sanitizeOpenAIResponsesSchema(parameters).(map[string]any); ok {
+				parameters = sanitized
+			}
 		}
 		built = append(built, openAIResponsesTool{
 			Type:        "function",
@@ -369,6 +398,72 @@ func buildChatGPTResponsesTools(tools []ai.ToolDefinition) ([]openAIResponsesToo
 		})
 	}
 	return built, nil
+}
+
+func sanitizeOpenAIResponsesSchema(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		sanitized := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if key == "required" {
+				sanitized[key] = sanitizeRequiredField(child)
+				continue
+			}
+			sanitized[key] = sanitizeOpenAIResponsesSchema(child)
+		}
+		return sanitized
+	case []any:
+		sanitized := make([]any, len(typed))
+		for i, child := range typed {
+			sanitized[i] = sanitizeOpenAIResponsesSchema(child)
+		}
+		return sanitized
+	default:
+		return value
+	}
+}
+
+func sanitizeOpenAIResponsesRequest(req openAIResponsesRequest) openAIResponsesRequest {
+	if len(req.Tools) == 0 {
+		return req
+	}
+
+	sanitizedTools := make([]openAIResponsesTool, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		parameters := map[string]any(nil)
+		if tool.Parameters != nil {
+			if sanitized, ok := sanitizeOpenAIResponsesSchema(tool.Parameters).(map[string]any); ok {
+				parameters = sanitized
+			} else {
+				parameters = tool.Parameters
+			}
+		}
+		tool.Parameters = parameters
+		sanitizedTools = append(sanitizedTools, tool)
+	}
+	req.Tools = sanitizedTools
+	return req
+}
+
+func sanitizeRequiredField(value any) any {
+	switch typed := value.(type) {
+	case bool:
+		return []string{}
+	case string:
+		return []string{typed}
+	case []string:
+		return typed
+	case []any:
+		sanitized := make([]string, 0, len(typed))
+		for _, child := range typed {
+			if str, ok := child.(string); ok {
+				sanitized = append(sanitized, str)
+			}
+		}
+		return sanitized
+	default:
+		return []string{}
+	}
 }
 
 // ----------------------------------------------------------------------------

@@ -360,6 +360,91 @@ func TestChatGPTOwnedReActLoop_DefaultRunReturnsExplicitScaffoldError(t *testing
 	}
 }
 
+func TestBuildChatGPTResponsesRequest_SanitizesInvalidRequiredValues(t *testing.T) {
+	request, err := buildChatGPTResponsesRequest(ai.ReasoningRequest{
+		UserQuery: "Find John",
+	}, "gpt-5.4", []ai.ToolDefinition{{
+		Name:        "intake_capture",
+		Description: "Captures intake artifact",
+		Schema:      `{"type":"object","properties":{"summary":{"type":"string"},"status":{"type":"string"}},"required":true}`,
+	}})
+	if err != nil {
+		t.Fatalf("buildChatGPTResponsesRequest() error = %v", err)
+	}
+	if len(request.Tools) != 1 {
+		t.Fatalf("expected one tool, got %d", len(request.Tools))
+	}
+	switch value := request.Tools[0].Parameters["required"].(type) {
+	case []string:
+		if len(value) != 0 {
+			t.Fatalf("expected empty required array after sanitization, got %#v", value)
+		}
+	case []any:
+		if len(value) != 0 {
+			t.Fatalf("expected empty required array after sanitization, got %#v", value)
+		}
+	default:
+		t.Fatalf("expected required to be normalized to an array, got %#v", request.Tools[0].Parameters["required"])
+	}
+}
+
+func TestSanitizeOpenAIResponsesRequest_NormalizesRequiredValues(t *testing.T) {
+	request := sanitizeOpenAIResponsesRequest(openAIResponsesRequest{Tools: []openAIResponsesTool{{
+		Name: "intake_capture",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"summary": map[string]any{"type": "string"},
+				"status":  map[string]any{"type": "string"},
+			},
+			"required": true,
+		},
+	}}})
+	if len(request.Tools) != 1 {
+		t.Fatalf("expected one tool, got %d", len(request.Tools))
+	}
+	switch value := request.Tools[0].Parameters["required"].(type) {
+	case []string:
+		if len(value) != 0 {
+			t.Fatalf("expected empty required array after sanitization, got %#v", value)
+		}
+	case []any:
+		if len(value) != 0 {
+			t.Fatalf("expected empty required array after sanitization, got %#v", value)
+		}
+	default:
+		t.Fatalf("expected required to be normalized to an array, got %#v", request.Tools[0].Parameters["required"])
+	}
+}
+
+func TestBuildToolChoiceForceCall_AllowsPhaseCapabilityTools(t *testing.T) {
+	tools := []openAIResponsesTool{
+		{Name: "execute_script"},
+		{Name: "investigation_build_context"},
+		{Name: "investigation_inspect_repo"},
+	}
+	choice := buildToolChoiceForceCall(tools)
+	if choice != "required" {
+		t.Fatalf("expected tool_choice 'required' when phase capability tools are present, got %#v", choice)
+	}
+}
+
+func TestBuildToolChoiceForceCall_ForcesExecuteScriptWhenNoPhaseTools(t *testing.T) {
+	tools := []openAIResponsesTool{
+		{Name: "execute_script"},
+		{Name: "list_stores"},
+		{Name: "read_file"},
+	}
+	choice := buildToolChoiceForceCall(tools)
+	if choiceMap, ok := choice.(map[string]any); ok {
+		if choiceMap["name"] != "execute_script" {
+			t.Fatalf("expected execute_script to be forced when no phase tools present, got %#v", choice)
+		}
+	} else {
+		t.Fatalf("expected tool_choice to force execute_script, got %#v", choice)
+	}
+}
+
 func TestBuildChatGPTResponsesRequest_UsesConversationIDWhenPresent(t *testing.T) {
 	request, err := buildChatGPTResponsesRequest(ai.ReasoningRequest{
 		SystemPrompt: "You are a test assistant.",

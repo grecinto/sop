@@ -33,6 +33,7 @@ func (g *chatgpt) createResponses(ctx context.Context, reqBody openAIResponsesRe
 	if g.apiKey == "" {
 		return openAIResponsesResponse{}, fmt.Errorf("missing OpenAI API Key. Please provide api_key in generator configuration")
 	}
+	reqBody = sanitizeOpenAIResponsesRequest(reqBody)
 	log.Info("ChatGPT Responses API call", "url", g.responsesURL(), "model", reqBody.Model, "tool_choice", reqBody.ToolChoice, "tools", len(reqBody.Tools))
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -79,6 +80,7 @@ func (g *chatgpt) createResponsesStream(ctx context.Context, reqBody openAIRespo
 	}
 	stream := true
 	reqBody.Stream = &stream
+	reqBody = sanitizeOpenAIResponsesRequest(reqBody)
 	log.Info("ChatGPT Responses API call (stream)", "url", g.responsesURL(), "model", reqBody.Model, "tool_choice", reqBody.ToolChoice, "tools", len(reqBody.Tools))
 
 	jsonBody, err := json.Marshal(reqBody)

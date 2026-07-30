@@ -88,9 +88,17 @@ func (c *PhaseCapability) Classify(query string, state capabilities.RoutingState
 	if c == nil {
 		return capabilities.ClassificationResult{}
 	}
+
+	// If a domain is explicitly set (Spaces, Stores, etc.), defer to domain capabilities
+	// Phase capabilities only apply to coding workflow domain
+	if state.Domain != "" && state.Domain != "coding_workflow" && state.Domain != "CodingWorkflow" {
+		return capabilities.ClassificationResult{}
+	}
+
+	// Explicit capability hint takes highest priority
 	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
 		if strings.Contains(hint, c.phaseID) || strings.Contains(hint, strings.ReplaceAll(c.name, " ", "_")) {
-			return capabilities.ClassificationResult{Relevant: true, Score: 13, Mode: capabilities.CapabilityModePrimary}
+			return capabilities.ClassificationResult{Relevant: true, Score: 15, Mode: capabilities.CapabilityModePrimary}
 		}
 	}
 
@@ -98,12 +106,79 @@ func (c *PhaseCapability) Classify(query string, state capabilities.RoutingState
 	if lower == "" {
 		return capabilities.ClassificationResult{}
 	}
+
+	// Detect the appropriate starting phase based on task semantics
+	startingPhase := detectStartingPhase(lower)
+	if startingPhase == c.phaseID {
+		return capabilities.ClassificationResult{Relevant: true, Score: 14, Mode: capabilities.CapabilityModePrimary}
+	}
+
+	// Check for phase-specific keywords (supporting role)
 	for _, keyword := range phaseKeywords(c.phaseID) {
 		if strings.Contains(lower, keyword) {
 			return capabilities.ClassificationResult{Relevant: true, Score: 12, Mode: capabilities.CapabilityModeSupporting}
 		}
 	}
 	return capabilities.ClassificationResult{}
+}
+
+// detectStartingPhase analyzes the query to determine which phase should start the workflow.
+// This provides semantic routing based on task characteristics rather than simple keyword matching.
+func detectStartingPhase(queryLower string) string {
+	// Review-oriented tasks: validation, checking, auditing
+	// Check review first because phrases like "review code for bugs" should be review, not investigation
+	reviewSignals := []string{
+		"review code", "code review", "audit", "check for", "verify that",
+		"validate that", "ensure that", "confirm that",
+	}
+	for _, signal := range reviewSignals {
+		if strings.Contains(queryLower, signal) {
+			return "review"
+		}
+	}
+
+	// Investigation-oriented tasks: problems, bugs, errors, failures
+	// Start with investigation to understand the issue before planning fixes
+	// Use more specific phrases to avoid false positives (e.g., "fix bug" not just "bug")
+	investigationSignals := []string{
+		"fix", "debug", "error", "failing", "failed", "broken", "issue", "problem",
+		"not working", "doesn't work", "won't", "can't", "crash", "exception",
+		"incorrect", "wrong", "unexpected", "why", "what's wrong", "troubleshoot",
+		"fix bug", "find bug", "bug in", "bug with",
+	}
+	for _, signal := range investigationSignals {
+		if strings.Contains(queryLower, signal) {
+			return "investigation"
+		}
+	}
+
+	// Planning-oriented tasks: design, architecture, approach
+	// Start with planning when the task is about designing a solution
+	planningSignals := []string{
+		"design", "architect", "how should", "approach for", "strategy for",
+		"best way to", "should i", "how to implement",
+	}
+	for _, signal := range planningSignals {
+		if strings.Contains(queryLower, signal) {
+			return "planning"
+		}
+	}
+
+	// Direct execution tasks: specific changes with clear instructions
+	// Skip to execution when the task is a simple, well-defined change
+	executionSignals := []string{
+		"apply this patch", "update the version", "change the config",
+		"set the value", "add this line", "remove this code",
+	}
+	for _, signal := range executionSignals {
+		if strings.Contains(queryLower, signal) {
+			return "execution"
+		}
+	}
+
+	// Default to intake for feature requests, unclear tasks, or new work
+	// Intake phase will gather requirements and provide proper context
+	return "intake"
 }
 
 func phaseKeywords(phaseID string) []string {
