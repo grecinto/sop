@@ -1658,16 +1658,38 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	cwfInfra := cw.NewDefaultSharedInfrastructure()
 	// Inject STM accessor for phase succession (explicit parameter passing, not context)
 	cwfInfra.STMAccessor = a.getSTMForPhaseCapabilities
-	// ServiceCapability removed (2026-07-30) - phase capabilities provide all needed functionality
-	caps = append(caps,
-		plannerpkg.NewPlannerCapability(cwfInfra),
-		plannerpkg.NewIntakePhaseCapability(cwfInfra),
-		plannerpkg.NewInvestigationPhaseCapability(cwfInfra),
-		plannerpkg.NewPlanningPhaseCapability(cwfInfra),
-		plannerpkg.NewExecutionPhaseCapability(cwfInfra),
-		plannerpkg.NewReviewPhaseCapability(cwfInfra),
-		plannerpkg.NewDeliveryPhaseCapability(cwfInfra),
-	)
+
+	// Planner (universal - works across all domains)
+	caps = append(caps, plannerpkg.NewPlannerCapability(cwfInfra))
+
+	// Coding domain phases (full SDLC workflow)
+	for _, phaseID := range []string{"intake", "investigation", "planning", "execution", "review", "delivery"} {
+		caps = append(caps, plannerpkg.NewPhaseCapability(phaseID, "coding_workflow", cwfInfra))
+	}
+
+	// Stores domain phases (methodical query workflow)
+	// Investigation = Read-only (list, scan, describe)
+	// Planning = Query design
+	// Execution = Mutations (create, update, delete)
+	// Review = Validation
+	for _, phaseID := range []string{"investigation", "planning", "execution", "review"} {
+		caps = append(caps, plannerpkg.NewPhaseCapability(phaseID, "stores", cwfInfra))
+	}
+
+	// Spaces domain phases (knowledge management workflow)
+	// Investigation = Read-only (read_config, list_items)
+	// Execution = Mutations (mint, enrich)
+	// Review = Validation
+	for _, phaseID := range []string{"investigation", "execution", "review"} {
+		caps = append(caps, plannerpkg.NewPhaseCapability(phaseID, "spaces", cwfInfra))
+	}
+
+	// Desktop domain phases (automation workflow)
+	// Planning = Script creation
+	// Execution = Command execution
+	for _, phaseID := range []string{"planning", "execution"} {
+		caps = append(caps, plannerpkg.NewPhaseCapability(phaseID, "desktop", cwfInfra))
+	}
 
 	a.capabilityRegistry = capabilities.NewRegistry(caps...)
 }

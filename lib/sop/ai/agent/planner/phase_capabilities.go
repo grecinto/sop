@@ -1091,128 +1091,37 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 }
 
 func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
-	taskSchema := `{
-  "type": "object",
-  "required": ["query"],
-  "properties": {
-    "query": {"type": "string", "description": "Task description or query"},
-    "working_dir": {"type": "string", "description": "Repository root path (optional, inferred if omitted)"},
-    "active_file": {"type": "string", "description": "Primary file for changes (optional, inferred if omitted)"}
-  }
-}`
+	// Use domain-specific tool adapter if domain is specified
+	if c.domain != "" {
+		adapter := c.getToolAdapter()
+		if adapter != nil {
+			return adapter.GetTools(c.phaseID)
+		}
+	}
 
-	searchSchema := `{
-  "type": "object",
-  "required": ["query"],
-  "properties": {
-    "query": {"type": "string", "description": "Task description"},
-    "search": {"type": "string", "description": "Search query for patterns or code (optional)"}
-  }
-}`
+	// Fallback to coding tools for backward compatibility (empty domain)
+	// This maintains existing behavior for phases registered without explicit domain
+	adapter := NewCodingPhaseToolAdapter()
+	return adapter.GetTools(c.phaseID)
+}
 
-	patchSchema := `{
-  "type": "object",
-  "required": ["file_path", "old_content", "new_content"],
-  "properties": {
-    "file_path": {"type": "string", "description": "Path to file to modify"},
-    "old_content": {"type": "string", "description": "Content to replace"},
-    "new_content": {"type": "string", "description": "New content"},
-    "description": {"type": "string", "description": "Description of change"}
-  }
-}`
+// getToolAdapter returns the appropriate tool adapter for this phase's domain
+func (c *PhaseCapability) getToolAdapter() PhaseToolAdapter {
+	if c == nil || c.domain == "" {
+		return nil
+	}
 
-	switch c.phaseID {
-	case "intake":
-		return []capabilities.ToolDefinition{{
-			Name:        c.phaseToolName("build_context"),
-			Description: "OPTIONAL: Builds repository context if task involves code. Call when user mentions files, repos, or code locations. Returns repository structure, files, dependencies.",
-			Schema:      taskSchema,
-		}}
-	case "investigation":
-		return []capabilities.ToolDefinition{{
-			Name:        c.phaseToolName("build_context"),
-			Description: "REQUIRED FIRST STEP: Builds repository context (structure, files, dependencies). Must call before other investigation tools. Returns ContextPack with working directory, active file, repository summary.",
-			Schema:      taskSchema,
-		}, {
-			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects current repository state and changed files. WHEN TO CALL: After build_context, to understand current state before analysis. Returns changed files list and diff preview.",
-			Schema:      taskSchema,
-		}, {
-			Name:        c.phaseToolName("search_repo"),
-			Description: "Searches repository for patterns, implementations, or code. WHEN TO CALL: To find similar code, error patterns, or existing implementations before concluding something is novel. Returns matching code locations.",
-			Schema:      searchSchema,
-		}, {
-			Name:        c.phaseToolName("list_changed_files"),
-			Description: "Lists files with uncommitted changes. WHEN TO CALL: To identify in-progress work and avoid conflicts. Returns list of changed file paths.",
-			Schema:      taskSchema,
-		}}
-	case "planning":
-		return []capabilities.ToolDefinition{{
-			Name:        c.phaseToolName("assess_and_route"),
-			Description: "PLANNING-FIRST ARCHITECTURE: Assesses the user query and determines the appropriate starting phase. Always call this FIRST in planning phase to understand what needs to be done. Analyzes query semantics and creates execution strategy. Returns assessment with recommended starting phase and reasoning.",
-			Schema:      taskSchema,
-		}, {
-			Name:        c.phaseToolName("create_succession_path"),
-			Description: "Creates a phase succession path with checkpoints. Call after assess_and_route to define the full sequence of phases needed to complete the task. Returns planned path: [investigation, planning, execution, review, delivery] with checkpoints for re-assessment.",
-			Schema: `{
-  "type": "object",
-  "required": ["phases"],
-  "properties": {
-    "phases": {"type": "array", "items": {"type": "string"}, "description": "Ordered phase sequence: ['investigation', 'planning', 'execution', 'review', 'delivery']"},
-    "checkpoints": {"type": "array", "items": {"type": "string"}, "description": "Checkpoint names: ['after_investigation', 'after_execution']"},
-    "reasoning": {"type": "string", "description": "Why this path was chosen"},
-    "confidence": {"type": "string", "description": "Confidence level: high|medium|low"}
-  }
-}`,
-		}, {
-			Name:        c.phaseToolName("build_context"),
-			Description: "REQUIRED FIRST STEP: Builds repository context for planning. Must call before planning_plan_changes. Returns ContextPack with repository structure needed for concrete plan generation.",
-			Schema:      taskSchema,
-		}, {
-			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects current repository state. WHEN TO CALL: Before planning, to understand existing code structure and patterns. Returns changed files and current state.",
-			Schema:      taskSchema,
-		}, {
-			Name:        c.phaseToolName("search_repo"),
-			Description: "Searches repository for implementation patterns. WHEN TO CALL: Before designing, to find similar implementations and follow established patterns rather than inventing new approaches. Returns matching patterns and code locations.",
-			Schema:      searchSchema,
-		}, {
-			Name:        c.phaseToolName("list_changed_files"),
-			Description: "Lists changed files to avoid conflicts. WHEN TO CALL: Before finalizing plan, to ensure plan doesn't conflict with in-progress work. Returns list of changed files.",
-			Schema:      taskSchema,
-		}, {
-			Name:        c.phaseToolName("plan_changes"),
-			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After build_context, search_repo, and inspect_repo complete. This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
-			Schema:      taskSchema,
-		}}
-	case "execution":
-		return []capabilities.ToolDefinition{{
-			Name:        c.phaseToolName("preview_patch"),
-			Description: "SAFETY REQUIRED: Previews patch before applying. WHEN TO CALL: Before every apply_patch call. Shows user what will change. Returns patch preview with old/new content comparison.",
-			Schema:      patchSchema,
-		}, {
-			Name:        c.phaseToolName("apply_patch"),
-			Description: "Applies patch to codebase. SAFETY RULE: Must call preview_patch and get user approval BEFORE calling this. WHEN TO CALL: Only after preview shown and approved. Returns confirmation of applied changes.",
-			Schema:      patchSchema,
-		}, {
-			Name:        c.phaseToolName("run_tests"),
-			Description: "Runs tests to validate changes. WHEN TO CALL: After each apply_patch call, to ensure changes work correctly and don't introduce regressions. Returns test results (pass/fail) and output.",
-			Schema:      taskSchema,
-		}}
-	case "review":
-		return []capabilities.ToolDefinition{{
-			Name:        c.phaseToolName("build_context"),
-			Description: "Builds repository context for review. WHEN TO CALL: At review start, to understand current state after execution. Returns repository structure and current state.",
-			Schema:      taskSchema,
-		}, {
-			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects repository state to see applied changes. WHEN TO CALL: To review what was changed during execution phase. Returns changed files and diff.",
-			Schema:      taskSchema,
-		}, {
-			Name:        c.phaseToolName("run_tests"),
-			Description: "Runs comprehensive tests for validation. WHEN TO CALL: To validate all requirements are met and no regressions introduced. Returns test results and coverage.",
-			Schema:      taskSchema,
-		}}
+	// Normalize domain name for comparison
+	domain := strings.ToLower(strings.TrimSpace(c.domain))
+	switch domain {
+	case "coding", "coding_workflow", "codingworkflow":
+		return NewCodingPhaseToolAdapter()
+	case "stores":
+		return NewStoresPhaseToolAdapter()
+	case "spaces":
+		return NewSpacesPhaseToolAdapter()
+	case "desktop":
+		return NewDesktopPhaseToolAdapter()
 	default:
 		return nil
 	}
