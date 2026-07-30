@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
 func TestMultiTurnAskBasicWorkflow(t *testing.T) {
@@ -89,22 +87,6 @@ func TestMultiTurnContextPropagation(t *testing.T) {
 
 	if retrievedTurnCtx.SharedState["test_key"] != "test_value" {
 		t.Error("shared state not preserved in turn context")
-	}
-}
-
-func TestExecuteMultiTurn_Deprecated(t *testing.T) {
-	// executeMultiTurn is deprecated - multi-turn now happens through ReAct loop
-	agent := &CopilotAgent{
-		capabilityRegistry: capabilities.NewRegistry(&stubCapability{}),
-	}
-
-	_, err := agent.executeMultiTurn(context.Background(), "fix parser bug", &TaskContextClassification{CapabilityHint: "stub"}, nil)
-	if err == nil {
-		t.Fatal("expected error from deprecated method")
-	}
-
-	if !strings.Contains(err.Error(), "deprecated") {
-		t.Fatalf("expected deprecated error, got %q", err.Error())
 	}
 }
 

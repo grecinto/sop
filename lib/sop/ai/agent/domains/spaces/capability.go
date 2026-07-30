@@ -107,3 +107,18 @@ func (c *Capability) Handoff(ctx context.Context, query string, state capabiliti
 	_ = state
 	return nil
 }
+
+func (c *Capability) OnBefore(ctx context.Context, query string, state capabilities.RoutingState) error {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
+func (c *Capability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	_ = ctx
+	_ = query
+	_ = state
+	_ = result
+	return nil
+}

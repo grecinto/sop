@@ -1,11 +1,35 @@
 # Central Memory Federation - Design Summary
 
-**Status**: 🚀 **V2 Workflows Operational** - Production Ready  
-**Last Updated**: 2026-07-23  
+**Status**: � **Disabled (2026-07-30)** - Infrastructure Preserved  
+**Last Updated**: 2026-07-30  
+**Reason**: Static workflow federation not needed with adaptive Phase system  
 **V1**: 49 seed patterns (paused - injection disabled pending testing)  
-**V2**: Workflow federation with versioning and Core Playbook routing
+**V2**: Workflow federation (removed with static workflows)
 
-## Quick Reference: Federation Versions
+## Current Status (2026-07-30)
+
+**Fleet Learning infrastructure has been disabled:**
+- ❌ HQ sync loop disabled (`startHQSyncLoop` commented out)
+- ❌ Sync enqueuer registration disabled
+- ❌ Automatic promotion after Ask disabled
+- ❌ No daemon → HQ federation active
+
+**Why disabled:**
+- Static workflow federation not adaptive (same reason static workflows failed)
+- Phase system uses LLM orchestration, not static procedure replay
+- Infrastructure preserved for potential future use (project-specific facts, error mappings)
+
+**Infrastructure preserved (not deleted):**
+- `shared_memory.go` - Promotion/retrieval functions still exist
+- `sync_queue.go` - Queue infrastructure intact
+- `federation_content.go` - Categorization logic preserved
+- HQ sync handlers - Still functional if re-enabled
+
+**To re-enable:** Uncomment disabled sections in main.go and rag.go
+
+---
+
+## Quick Reference: Federation Versions (Historical)
 
 | Feature | V1 Status | V2 Status |
 |---------|-----------|-----------|

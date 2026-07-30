@@ -260,13 +260,15 @@ func printDaemonHelp() {
 func GetGlobalSyncQueue() *SyncQueue {
 	syncQueueOnce.Do(func() {
 		globalSyncQueue = NewSyncQueue()
-		// Register sync queue with agent package for V2 workflow federation integration
-		sharedagent.RegisterSyncEnqueuer(func(text, category string, metadata map[string]any) error {
-			if globalSyncQueue != nil {
-				return globalSyncQueue.Enqueue(text, category, metadata)
-			}
-			return nil
-		})
+		// Fleet Learning disabled (2026-07-30) - Sync enqueuer registration disabled
+		// Phase system doesn't need static workflow federation
+		// Infrastructure preserved for potential future use
+		// sharedagent.RegisterSyncEnqueuer(func(text, category string, metadata map[string]any) error {
+		// 	if globalSyncQueue != nil {
+		// 		return globalSyncQueue.Enqueue(text, category, metadata)
+		// 	}
+		// 	return nil
+		// })
 	})
 	return globalSyncQueue
 }

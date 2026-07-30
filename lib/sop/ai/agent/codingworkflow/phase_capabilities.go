@@ -865,6 +865,21 @@ func (c *PhaseCapability) Handoff(ctx context.Context, query string, state capab
 	return nil
 }
 
+func (c *PhaseCapability) OnBefore(ctx context.Context, query string, state capabilities.RoutingState) error {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
+func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	_ = ctx
+	_ = query
+	_ = state
+	_ = result
+	return nil
+}
+
 // buildHandoffPrompt creates a context-rich handoff prompt including artifacts from previous phases
 func (c *PhaseCapability) buildHandoffPrompt(direction, targetPhase string, currentArtifact phaseArtifact) string {
 	var prompt string
@@ -1175,6 +1190,26 @@ func (c *PhaseCapability) ensureSharedInfrastructure() *SharedInfrastructure {
 		c.sharedInfra = NewDefaultSharedInfrastructure()
 	}
 	return c.sharedInfra.ensureDefaults()
+}
+
+func formatContextPack(pack ContextPack) string {
+	parts := []string{"Context Pack"}
+	if pack.WorkingDir != "" {
+		parts = append(parts, fmt.Sprintf("WorkingDir: %s", pack.WorkingDir))
+	}
+	if pack.ActiveFile != "" {
+		parts = append(parts, fmt.Sprintf("ActiveFile: %s", pack.ActiveFile))
+	}
+	if len(pack.RelatedFiles) > 0 {
+		parts = append(parts, fmt.Sprintf("RelatedFiles: %s", strings.Join(pack.RelatedFiles, ", ")))
+	}
+	if len(pack.TestFiles) > 0 {
+		parts = append(parts, fmt.Sprintf("TestFiles: %s", strings.Join(pack.TestFiles, ", ")))
+	}
+	if pack.RepositorySummary != "" {
+		parts = append(parts, fmt.Sprintf("Summary: %s", pack.RepositorySummary))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (c *PhaseCapability) buildTask(args map[string]any) Task {

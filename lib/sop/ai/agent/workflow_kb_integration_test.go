@@ -8,43 +8,28 @@ import (
 )
 
 // TestWorkflowManagerIntegration verifies WorkflowManager is initialized in CopilotAgent
+// DEPRECATED: KB-driven workflows removed (2026-07-30) in favor of Phase system
 func TestWorkflowManagerIntegration(t *testing.T) {
+	t.Skip("KB-driven workflows removed - use Phase system instead")
+
 	// Without systemDB, WorkflowManager should not be initialized
 	agent := NewCopilotAgent(Config{}, nil, nil)
 
 	if agent == nil {
 		t.Fatal("NewCopilotAgent returned nil")
 	}
-
-	// WorkflowManager should be nil without systemDB
-	if agent.workflowManager != nil {
-		t.Error("WorkflowManager should not be initialized without systemDB")
-	}
-
-	// With systemDB, WorkflowManager should be initialized
-	// Note: We can't easily create a systemDB in this test, so we just verify the nil case
 }
 
 // TestKBWorkflowDetection verifies workflow detection logic
+// DEPRECATED: KB-driven workflows removed (2026-07-30) in favor of Phase system
 func TestKBWorkflowDetection(t *testing.T) {
+	t.Skip("KB-driven workflows removed - use Phase system instead")
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 
 	ctx := context.Background()
-
-	// Without KB, should return not handled
-	result, handled, err := agent.tryKBWorkflowExecution(ctx, "test query", nil)
-
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-
-	if handled {
-		t.Error("Should not handle without KB initialized")
-	}
-
-	if result != "" {
-		t.Error("Should return empty result when not handled")
-	}
+	_ = agent
+	_ = ctx
 }
 
 // TestWorkflowManagerWithMockKB tests workflow detection with a mock KB
@@ -71,25 +56,16 @@ func TestWorkflowManagerWithMockKB(t *testing.T) {
 }
 
 // TestWorkflowDetectionWithoutTransaction verifies graceful handling without transaction
+// DEPRECATED: KB-driven workflows removed (2026-07-30) in favor of Phase system
 func TestWorkflowDetectionWithoutTransaction(t *testing.T) {
+	t.Skip("KB-driven workflows removed - use Phase system instead")
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 
 	// Context without session payload
 	ctx := context.Background()
-
-	result, handled, err := agent.tryKBWorkflowExecution(ctx, "fix failing test", nil)
-
-	if err != nil {
-		t.Errorf("Should not error without transaction: %v", err)
-	}
-
-	if handled {
-		t.Error("Should not handle without transaction")
-	}
-
-	if result != "" {
-		t.Error("Should return empty result")
-	}
+	_ = agent
+	_ = ctx
 }
 
 // TestWorkflowTriggerPatternMatching tests trigger pattern matching logic

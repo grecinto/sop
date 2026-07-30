@@ -63,7 +63,7 @@ func (wmc *WorkflowManagerCapability) Classify(query string, state capabilities.
 
 	// Try to find a workflow (this is a quick check, actual execution happens in Run)
 	// For now, return false to avoid expensive KB lookups during routing
-	// The real workflow detection happens via tryKBWorkflowExecution
+	// KB-driven workflows are deprecated (2026-07-30) - Phase system is used instead
 	return capabilities.ClassificationResult{}
 }
 
@@ -153,6 +153,21 @@ func (wmc *WorkflowManagerCapability) Handoff(ctx context.Context, query string,
 	_ = ctx
 	_ = query
 	_ = state
+	return nil
+}
+
+func (wmc *WorkflowManagerCapability) OnBefore(ctx context.Context, query string, state capabilities.RoutingState) error {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
+func (wmc *WorkflowManagerCapability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	_ = ctx
+	_ = query
+	_ = state
+	_ = result
 	return nil
 }
 

@@ -467,9 +467,10 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 				sendEvent("error", err.Error())
 				return
 			}
-			if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
-				logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
-			}
+			// Fleet Learning disabled (2026-07-30) - No automatic promotion after Ask
+			// if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
+			// 	logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
+			// }
 			logVerbose("daemon handleAsk: completed via shared backend handler query=%q answer_len=%d", req.Query, len(answer))
 		}
 	}
@@ -488,9 +489,10 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 			sendEvent("error", err.Error())
 			return
 		}
-		if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
-			logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
-		}
+		// Fleet Learning disabled (2026-07-30) - No automatic promotion after Ask
+		// if err := promoteSharedMemoryArtifactForAsk(ctx, req.Query, answer, payload); err != nil {
+		// 	logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
+		// }
 		logVerbose("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
 	}
 

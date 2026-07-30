@@ -275,34 +275,8 @@ func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, c
 		turnResults = append(turnResults, result)
 		log.Info("Turn completed", "turn_number", turnNumber, "actor", item.Actor, "response_chars", len(result.Response))
 
-		// Check if this turn was part of a KB workflow, and if so, enqueue next step
-		if payload, ok := item.Context["workflow_step"]; ok {
-			if workflowContext, ok := payload.(WorkflowExecutionContext); ok {
-				// This was a workflow step - check if we should continue
-				if a.workflowManager != nil && KBWorkflowsEnabled() {
-					// Get the workflow capability to enqueue next step
-					var workflowCap *WorkflowManagerCapability
-					for _, cap := range a.capabilityRegistry.ListAll() {
-						if wfCap, ok := cap.(*WorkflowManagerCapability); ok {
-							workflowCap = wfCap
-							break
-						}
-					}
-					if workflowCap != nil {
-						// Check if the step completed successfully
-						if execErr == nil {
-							// Advance and enqueue next step (participant pattern)
-							if advanced := workflowCap.AdvanceStep(result); advanced {
-								// Next step enqueued by RunWithQueue
-								if _, err := workflowCap.RunWithQueue(ctx, workflowContext.WorkflowName, queue); err != nil {
-									log.Warn("Failed to enqueue next workflow step", "error", err, "workflow", workflowContext.WorkflowName)
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+		// KB-driven workflow step continuation removed (2026-07-30)
+		// Workflows are deprecated in favor of Phase system
 
 		turnNumber++
 	}

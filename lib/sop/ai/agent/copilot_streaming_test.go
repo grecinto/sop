@@ -31,7 +31,7 @@ func TestCopilotAgent_DelegateToReasoningEngineStreamsToolEvents(t *testing.T) {
 	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: "dev"})
 
 	generator := &mockToolStreamingGenerator{}
-	_, _, _, _, _, err := a.delegateToReasoningEngine(ctx, "show me users", generator, "system prompt")
+	_, _, _, _, _, err := a.reactLoop(ctx, "show me users", generator, "system prompt")
 	if err != nil {
 		t.Fatalf("delegateToReasoningEngine failed: %v", err)
 	}

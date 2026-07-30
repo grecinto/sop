@@ -102,6 +102,30 @@ func TestApplyCapabilityRoutingHintsSwitchesToCodingWorkflowForImplementationAsk
 	}
 }
 
+func TestFinalizeRoutingResultAppliesCapabilityHintsAndPersistsState(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}}}
+	ag.markMRUCategory(capabilityAffinityMRUCategory, "capability=desktop_automation; intent=local_ops", MRUSourceAskOutcome, MRUScopeSession)
+
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	taskCtx := &TaskContextClassification{Domain: "Desktop", RoutingGate: RoutingGateContinuity}
+	finalized := ag.finalizeRoutingResult(ctx, "implement a parser fix in the repository", &routingOutcome{taskCtx: taskCtx, matched: true, source: "test"}, RoutingGateContinuity)
+	if finalized == nil {
+		t.Fatal("expected finalized routing result")
+	}
+	if finalized.CapabilityHint != capabilityHintCodingWorkflow {
+		t.Fatalf("expected coding workflow hint after finalization, got %q", finalized.CapabilityHint)
+	}
+	if finalized.IntentFamily != intentFamilyRepoEdit {
+		t.Fatalf("expected repo edit intent family after finalization, got %q", finalized.IntentFamily)
+	}
+	if payload.Variables["RoutingState"] == nil {
+		t.Fatal("expected routing state to be persisted")
+	}
+}
+
 func TestInferCapabilityRoutingSignalPrefersKnowledgeForSummaryQueries(t *testing.T) {
 	intent, hint, _ := inferCapabilityRoutingSignal("Summarize the main Go packages and modules in this repository", "")
 
@@ -110,6 +134,29 @@ func TestInferCapabilityRoutingSignalPrefersKnowledgeForSummaryQueries(t *testin
 	}
 	if hint != capabilityHintGeneral {
 		t.Fatalf("expected general capability hint for summary query, got %q", hint)
+	}
+}
+
+func TestShouldRouteColdStartToPlannerCapability(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{name: "coding task", query: "fix the parser bug in the repository", want: true},
+		{name: "desktop automation task", query: "automate the deployment workflow with a shell script", want: true},
+		{name: "testing task", query: "write regression tests for the checkout flow", want: true},
+		{name: "stores query", query: "show me the store users", want: false},
+		{name: "spaces query", query: "show the space artifacts", want: false},
+		{name: "kb display query", query: "display the knowledge base entry for auth", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldRouteColdStartToPlanner(tc.query); got != tc.want {
+				t.Fatalf("shouldRouteColdStartToPlanner(%q) = %v, want %v", tc.query, got, tc.want)
+			}
+		})
 	}
 }
 

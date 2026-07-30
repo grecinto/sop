@@ -122,40 +122,18 @@ func (c *testCapability) BuildInstructions(query string, state RoutingState) str
 func (c *testCapability) Handoff(ctx context.Context, query string, state RoutingState) *Handoff {
 	return nil
 }
+func (c *testCapability) OnBefore(ctx context.Context, query string, state RoutingState) error {
+	return nil
+}
+func (c *testCapability) OnAfter(ctx context.Context, query string, state RoutingState, result CapabilityResult) error {
+	return nil
+}
 
 // Mock prefix capability for testing
 type mockPrefixCapability struct {
 	id       string
 	prefixes []string
 	handler  func(context.Context, string, string) (string, error)
-}
-
-type participatingCapability struct {
-	id      string
-	summary string
-}
-
-func (p *participatingCapability) ID() string   { return p.id }
-func (p *participatingCapability) Name() string { return "participating" }
-func (p *participatingCapability) Entitlement() Entitlement {
-	return Entitlement{EnabledByDefault: true, Tier: "test"}
-}
-func (p *participatingCapability) Classify(query string, state RoutingState) ClassificationResult {
-	if state.Domain == "Desktop" {
-		return ClassificationResult{Relevant: true, Score: 1, Mode: CapabilityModePrimary}
-	}
-	return ClassificationResult{}
-}
-func (p *participatingCapability) BuildContext(query string, state RoutingState) string { return "" }
-func (p *participatingCapability) ExposeTools() []ToolDefinition                        { return nil }
-func (p *participatingCapability) BuildInstructions(query string, state RoutingState) string {
-	return ""
-}
-func (p *participatingCapability) Handoff(ctx context.Context, query string, state RoutingState) *Handoff {
-	return nil
-}
-func (p *participatingCapability) Participate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error) {
-	return ParticipationResult{Summary: p.summary}, true, nil
 }
 
 func (m *mockPrefixCapability) ID() string   { return m.id }
@@ -174,6 +152,12 @@ func (m *mockPrefixCapability) BuildInstructions(query string, state RoutingStat
 	return ""
 }
 func (m *mockPrefixCapability) Handoff(ctx context.Context, query string, state RoutingState) *Handoff {
+	return nil
+}
+func (m *mockPrefixCapability) OnBefore(ctx context.Context, query string, state RoutingState) error {
+	return nil
+}
+func (m *mockPrefixCapability) OnAfter(ctx context.Context, query string, state RoutingState, result CapabilityResult) error {
 	return nil
 }
 func (m *mockPrefixCapability) GetHandledPrefixes() []string { return m.prefixes }
@@ -239,42 +223,6 @@ func TestTryPrefixRouting_EmptyQuery(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("Empty query should not return error, got %v", err)
-	}
-}
-
-func TestRegistryTryParticipateUsesResolvedCapability(t *testing.T) {
-	reg := NewRegistry()
-	unrelated := &participatingCapability{id: "stores", summary: "stores participation"}
-	selected := &participatingCapability{id: "desktop", summary: "desktop participation"}
-	reg.Register(unrelated)
-	reg.Register(selected)
-
-	result, handled, err := reg.TryParticipateFor(context.Background(), "pwd", RoutingState{Domain: "Desktop"}, selected)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if !handled {
-		t.Fatal("expected participation hook to handle the query")
-	}
-	if result.Summary != "desktop participation" {
-		t.Fatalf("expected participation summary %q, got %q", "desktop participation", result.Summary)
-	}
-}
-
-func TestRegistryTryParticipateUsesParticipationHook(t *testing.T) {
-	reg := NewRegistry()
-	cap := &participatingCapability{id: "desktop", summary: "shell output"}
-	reg.Register(cap)
-
-	result, handled, err := reg.TryParticipate(context.Background(), "pwd", RoutingState{Domain: "Desktop"})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if !handled {
-		t.Fatal("expected participation hook to handle the query")
-	}
-	if result.Summary != "shell output" {
-		t.Fatalf("expected participation summary %q, got %q", "shell output", result.Summary)
 	}
 }
 

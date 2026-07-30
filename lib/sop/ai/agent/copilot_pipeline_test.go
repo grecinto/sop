@@ -104,6 +104,12 @@ func (s *stubCapabilityForPromptTest) Handoff(ctx context.Context, query string,
 	_ = ctx
 	return nil
 }
+func (s *stubCapabilityForPromptTest) OnBefore(ctx context.Context, query string, state capabilities.RoutingState) error {
+	return nil
+}
+func (s *stubCapabilityForPromptTest) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	return nil
+}
 
 func TestRewriteRetryMetaAsk_UsesLatestAskOutcomeQuery(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
@@ -650,7 +656,7 @@ func TestCopilotPipeline_Phases(t *testing.T) {
 	// --- Phase 5: Delegating to Engine ---
 	// Mock a JSON payload wrapped in code blocks to simulate reasoning layer tool use output
 	fakeGen.Response = "I can definitely help with that. ```json\n[{\"tool\":\"search_space\",\"args\":{}}]\n```"
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, err := ag.delegateToReasoningEngine(ctx, query, fakeGen, prompt)
+	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, err := ag.reactLoop(ctx, query, fakeGen, prompt)
 	if err != nil {
 		t.Fatalf("Engine delegation failed: %v", err)
 	}

@@ -74,7 +74,6 @@ func (c *PlannerCapability) Classify(query string, state capabilities.RoutingSta
 	}
 
 	// This capability is opt-in via explicit routing or capability hint
-	// Default to false to avoid conflicting with WorkflowCapability
 	return capabilities.ClassificationResult{}
 }
 
@@ -122,6 +121,21 @@ func (c *PlannerCapability) Handoff(ctx context.Context, query string, state cap
 	_ = ctx
 	_ = query
 	_ = state
+	return nil
+}
+
+func (c *PlannerCapability) OnBefore(ctx context.Context, query string, state capabilities.RoutingState) error {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
+func (c *PlannerCapability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	_ = ctx
+	_ = query
+	_ = state
+	_ = result
 	return nil
 }
 

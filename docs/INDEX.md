@@ -89,6 +89,10 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 | Document | Description |
 |----------|-------------|
 | [WORKFLOWS.md](WORKFLOWS.md) | ⭐ **Complete Guide**: Workflow architecture, lifecycle, implementation status, tool specifications, and best practices. Covers KB-based storage, multi-step orchestration, and automatic ingestion. |
+| [PHASE_PLAN_IMPLEMENTATION_DESIGN.md](PHASE_PLAN_IMPLEMENTATION_DESIGN.md) | Phase Plan System implementation - Planning-First LLM orchestration with cursor-based progression |
+| [PHASE_PLAN_GUIDE.md](PHASE_PLAN_GUIDE.md) | Phase Plan System usage guide - Cognitive pattern for multi-step problem-solving |
+| [DOMAIN_AGNOSTIC_PHASE_SYSTEM.md](DOMAIN_AGNOSTIC_PHASE_SYSTEM.md) | 🚧 **Design Phase**: Domain-agnostic phase evolution - Making phases work across ALL domains (Stores, Spaces, Desktop, Coding) to improve success rate via methodical workflows |
+| [DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md](DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md) | 📋 **Quick Resume Guide**: TL;DR for resuming domain-agnostic phase system implementation - 90min implementation plan with code locations |
 | [WORKFLOW_UNDO_SYSTEM.md](WORKFLOW_UNDO_SYSTEM.md) | 🚀 **Premium Feature**: Semantic workflow undo with multi-dimensional indexing, time-ranked search, and Space-backed storage. Industry-leading transaction management for AI-assisted coding. |
 | [../lib/sop/ai/memory/CATEGORY_HIERARCHY_INTEGRITY.md](../lib/sop/ai/memory/CATEGORY_HIERARCHY_INTEGRITY.md) | ⚠️ **Critical**: Semantic Path Search requires complete category hierarchies. Documents EnsureCategory fix for workflow category storage. |
 | [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Terminal-first coding workflow implementation |

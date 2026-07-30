@@ -79,18 +79,10 @@ func TestNewCopilotAgentRegistersCodingWorkflowCapabilityByDefault(t *testing.T)
 	}
 }
 
+// TestNewCopilotAgentRegistersServiceCapabilityByDefault removed (2026-07-30)
+// ServiceCapability deprecated - phase capabilities provide all functionality
 func TestNewCopilotAgentRegistersServiceCapabilityByDefault(t *testing.T) {
-	ag := NewCopilotAgent(Config{}, nil, nil)
-	var found bool
-	for _, cap := range ag.capabilityRegistry.ListAll() {
-		if cap != nil && cap.ID() == "coding_workflow_services" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("expected coding workflow services capability to be registered by default")
-	}
+	t.Skip("ServiceCapability removed - phase capabilities provide all needed functionality")
 }
 
 func TestNewCopilotAgentAppliesCapabilityOptions(t *testing.T) {
@@ -142,5 +134,11 @@ func (s *stubCapability) BuildInstructions(query string, state capabilities.Rout
 }
 func (s *stubCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
 	_ = ctx
+	return nil
+}
+func (s *stubCapability) OnBefore(ctx context.Context, query string, state capabilities.RoutingState) error {
+	return nil
+}
+func (s *stubCapability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
 	return nil
 }

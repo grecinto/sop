@@ -58,7 +58,7 @@ This document captures the coding workflow capability that makes SOP feel like a
 
 ## Architecture Foundation: Capability-Based Participation
 
-The coding workflow stack now integrates through the capability contract rather than through a legacy controller-style execution path. The shared CodingWorkflow framework remains reusable, but its public helpers are exposed to Ask through a thin ServiceCapability adapter.
+The coding workflow stack now integrates through the capability contract via phase capabilities. The shared CodingWorkflow framework remains reusable, and its public helpers are exposed to Ask through phase-specific tools (investigation_build_context, planning_build_context, etc.) rather than generic tools.
 
 This design keeps the main Ask/ReAct loop as the single authoritative execution engine while allowing coding-specific primitives to participate in a lightweight, capability-native way.
 

@@ -68,20 +68,26 @@ The workflow stack has evolved to a **pure participant pattern** where capabilit
 
 ### Two Workflow Approaches (Both Participant Pattern)
 
-#### 1. Coding Workflow Services Capability (Reusable Coding Helpers)
+#### 1. Phase Capabilities (Comprehensive Workflow API)
 
-The shared CodingWorkflow framework is now exposed through a thin capability adapter rather than through a legacy controller-style execution path. The new service capability reuses the framework's public helpers for tasks such as repository context building and repo inspection, and it participates in the Ask flow through the capability contract.
+Phase capabilities expose the full coding workflow API through phase-specific tools:
+- `investigation_build_context`, `planning_build_context` - Repository context building
+- `investigation_inspect_repo`, `review_inspect_repo` - Repository inspection
+- `investigation_search_repo`, `planning_search_repo` - Code search
+- `execution_preview_patch`, `execution_apply_patch` - Patch operations
+- `execution_run_tests`, `review_run_tests` - Test execution
 
 **Key Characteristics:**
-- **Capability-native participation**: It participates via classification, context injection, tool exposure, and lightweight participation hooks.
-- **No controller takeover**: It does not own Ask execution or replace the main Ask/ReAct loop.
-- **Reusable primitives**: It exposes useful coding functions for context gathering and repo-aware assistance without reintroducing the old controller pattern.
+- **Phase-aware participation**: Each phase exposes relevant tools for that stage
+- **Higher priority**: Phase capabilities win classification with scores 14-15
+- **Complete API**: All coding workflow primitives available through phase tools
+- **Better organization**: Tool names indicate phase context (investigation_*, planning_*, execution_*, etc.)
 
 **Key Components:**
-- **ServiceCapability** (`lib/sop/ai/agent/codingworkflow/service_capability.go`)
+- **PhaseCapability** (`lib/sop/ai/agent/planner/phase_capabilities.go`)
   - Implements the capability interface for Ask integration
-  - Exposes tools such as `build_context` and `inspect_repo`
-  - Participates for coding-oriented requests without taking over orchestration
+  - Exposes phase-specific tools from shared infrastructure
+  - Manages phase state, transitions, and artifacts
 
 #### 2. Dynamic Planner (AI-Generated Workflows)
 

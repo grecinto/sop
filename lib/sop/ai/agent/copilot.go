@@ -28,6 +28,7 @@ import (
 	"github.com/sharedcode/sop/ai/agent/domains/spaces"
 	"github.com/sharedcode/sop/ai/agent/domains/stores"
 	"github.com/sharedcode/sop/ai/agent/parser"
+	plannerpkg "github.com/sharedcode/sop/ai/agent/planner"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/embed"
 	"github.com/sharedcode/sop/ai/generator"
@@ -426,9 +427,6 @@ type CopilotAgent struct {
 
 	// capabilityRegistry provides modular domain capabilities for Ask routing and context building.
 	capabilityRegistry *capabilities.Registry
-
-	// workflowManager orchestrates KB-driven workflows (Track A-D)
-	workflowManager *WorkflowManager
 
 	// Gap 1: Progressive authorization system
 	authzManager *capabilities.AuthorizationManager
@@ -1637,140 +1635,6 @@ func WithCapability(cap capabilities.Capability) CapabilityOption {
 	}
 }
 
-// WithCodingWorkflowCapability registers the local coding workflow capability for runtimes
-// that are expected to support repository editing and inspection locally.
-// DEPRECATED: Use WithWorkflowCapability instead. This uses the old queue-based approach.
-// Kept for backwards compatibility but disabled by default.
-func WithCodingWorkflowCapability(sharedInfra *cw.SharedInfrastructure) CapabilityOption {
-	return func(a *CopilotAgent) {
-		// OLD CAPABILITY DISABLED - Use WithWorkflowCapability instead
-		// This function is kept for backwards compatibility but does nothing.
-		// To re-enable: uncomment the implementation below.
-		_ = a
-		_ = sharedInfra
-		return
-
-		/* OLD IMPLEMENTATION - DISABLED
-		if a == nil {
-			return
-		}
-		a.ensureCapabilityRegistry()
-		if orchestrator != nil {
-			if orchestrator.ChangedFileInspector == nil {
-				orchestrator.ChangedFileInspector = &cw.GitRepoInspector{}
-			}
-			prevMemorySink := orchestrator.MemorySink
-			orchestrator.MemorySink = func(mem cw.CodingMemory) {
-				if prevMemorySink != nil {
-					prevMemorySink(mem)
-				}
-				if a != nil {
-					a.recordCodingMemory(mem)
-				}
-			}
-			if inspector, ok := orchestrator.ChangedFileInspector.(*cw.GitRepoInspector); ok && inspector.Client == nil {
-				// TODO: Implement NewWorkflowGitToolAdapter if needed
-				_ = inspector // Acknowledge the inspector exists
-			}
-			if orchestrator.ContextManager == nil {
-				orchestrator.ContextManager = &cw.DefaultContextManager{}
-			}
-			if orchestrator.RepoIndexer == nil {
-				orchestrator.RepoIndexer = &cw.DefaultRepoIndexer{}
-			}
-			if orchestrator.PatchEngine == nil {
-				orchestrator.PatchEngine = &cw.DefaultPatchEngine{}
-			}
-			if orchestrator.DiffPreviewer == nil {
-				orchestrator.DiffPreviewer = &cw.DefaultDiffPreviewer{}
-			}
-			if orchestrator.RepoSearcher == nil {
-				orchestrator.RepoSearcher = &cw.FileSearchAdapter{}
-			}
-			if orchestrator.Memory == nil {
-				orchestrator.Memory = cw.NewInMemorySessionMemory()
-			}
-			if orchestrator.Policy == nil {
-				orchestrator.Policy = &cw.DefaultSafetyPolicy{}
-			}
-			if orchestrator.ExpertiseRetriever == nil {
-				orchestrator.ExpertiseRetriever = a
-			}
-			if orchestrator.KnowledgeBaseRetriever == nil {
-				orchestrator.KnowledgeBaseRetriever = &cw.DefaultKnowledgeBaseRetriever{}
-			}
-			if orchestrator.ProviderRouter == nil {
-				orchestrator.ProviderRouter = &cw.DefaultProviderRouter{}
-			}
-		}
-		a.capabilityRegistry.RegisterAtFront(cw.NewCapability(orchestrator))
-		*/
-	}
-}
-
-// WithWorkflowCapability registers the new WorkflowManager-based coding capability
-// This replaces the old WithCodingWorkflowCapability with a Step-based architecture.
-func WithWorkflowCapability(sharedInfra *cw.SharedInfrastructure) CapabilityOption {
-	return func(a *CopilotAgent) {
-		if a == nil {
-			return
-		}
-		a.ensureCapabilityRegistry()
-		if sharedInfra == nil {
-			sharedInfra = cw.NewDefaultSharedInfrastructure()
-		}
-		// Initialize SharedInfrastructure components
-		if sharedInfra.ChangedFileInspector == nil {
-			sharedInfra.ChangedFileInspector = &cw.GitRepoInspector{}
-		}
-		prevMemorySink := sharedInfra.MemorySink
-		sharedInfra.MemorySink = func(mem cw.CodingMemory) {
-			if prevMemorySink != nil {
-				prevMemorySink(mem)
-			}
-			if a != nil {
-				a.recordCodingMemory(mem)
-			}
-		}
-		if inspector, ok := sharedInfra.ChangedFileInspector.(*cw.GitRepoInspector); ok && inspector.Client == nil {
-			// TODO: Implement NewWorkflowGitToolAdapter if needed
-			_ = inspector // Acknowledge the inspector exists
-		}
-		if sharedInfra.ContextManager == nil {
-			sharedInfra.ContextManager = &cw.DefaultContextManager{}
-		}
-		if sharedInfra.RepoIndexer == nil {
-			sharedInfra.RepoIndexer = &cw.DefaultRepoIndexer{}
-		}
-		if sharedInfra.PatchEngine == nil {
-			sharedInfra.PatchEngine = &cw.DefaultPatchEngine{}
-		}
-		if sharedInfra.DiffPreviewer == nil {
-			sharedInfra.DiffPreviewer = &cw.DefaultDiffPreviewer{}
-		}
-		if sharedInfra.RepoSearcher == nil {
-			sharedInfra.RepoSearcher = &cw.FileSearchAdapter{}
-		}
-		if sharedInfra.Memory == nil {
-			sharedInfra.Memory = cw.NewInMemorySessionMemory()
-		}
-		if sharedInfra.Policy == nil {
-			sharedInfra.Policy = &cw.DefaultSafetyPolicy{}
-		}
-		if sharedInfra.ExpertiseRetriever == nil {
-			sharedInfra.ExpertiseRetriever = a
-		}
-		if sharedInfra.KBRetriever == nil {
-			sharedInfra.KBRetriever = &cw.DefaultKnowledgeBaseRetriever{}
-		}
-		if sharedInfra.ProviderRouter == nil {
-			sharedInfra.ProviderRouter = &cw.DefaultProviderRouter{}
-		}
-		// Register the new WorkflowCapability
-		a.capabilityRegistry.RegisterAtFront(cw.NewWorkflowCapability(sharedInfra))
-	}
-}
-
 func (a *CopilotAgent) ensureCapabilityRegistry() {
 	if a == nil || a.capabilityRegistry != nil {
 		return
@@ -1794,14 +1658,15 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	cwfInfra := cw.NewDefaultSharedInfrastructure()
 	// Inject STM accessor for phase succession (explicit parameter passing, not context)
 	cwfInfra.STMAccessor = a.getSTMForPhaseCapabilities
-	caps = append(caps, cw.NewServiceCapability(cwfInfra))
+	// ServiceCapability removed (2026-07-30) - phase capabilities provide all needed functionality
 	caps = append(caps,
-		cw.NewIntakePhaseCapability(cwfInfra),
-		cw.NewInvestigationPhaseCapability(cwfInfra),
-		cw.NewPlanningPhaseCapability(cwfInfra),
-		cw.NewExecutionPhaseCapability(cwfInfra),
-		cw.NewReviewPhaseCapability(cwfInfra),
-		cw.NewDeliveryPhaseCapability(cwfInfra),
+		plannerpkg.NewPlannerCapability(cwfInfra),
+		plannerpkg.NewIntakePhaseCapability(cwfInfra),
+		plannerpkg.NewInvestigationPhaseCapability(cwfInfra),
+		plannerpkg.NewPlanningPhaseCapability(cwfInfra),
+		plannerpkg.NewExecutionPhaseCapability(cwfInfra),
+		plannerpkg.NewReviewPhaseCapability(cwfInfra),
+		plannerpkg.NewDeliveryPhaseCapability(cwfInfra),
 	)
 
 	a.capabilityRegistry = capabilities.NewRegistry(caps...)
@@ -2458,15 +2323,6 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		agent.EnablePhase5(nil, nil, nil, nil)
 	}
 
-	// Initialize WorkflowManager for KB-driven workflows (Track A-D)
-	// Only initialize if feature flag is enabled
-	if systemDB != nil && KBWorkflowsEnabled() {
-		agent.workflowManager = NewWorkflowManager(nil) // KB initialized lazily on first use
-		// Register WorkflowManager as a capability (participant pattern, not controller)
-		workflowCapability := NewWorkflowManagerCapability(agent.workflowManager)
-		agent.capabilityRegistry.RegisterAtFront(workflowCapability)
-	}
-
 	// Wire default coding workflow SharedInfrastructure with MemorySink for LTM integration
 	sharedInfra := cw.NewDefaultSharedInfrastructure()
 	sharedInfra.MemorySink = func(mem cw.CodingMemory) {
@@ -2596,71 +2452,6 @@ func (a *CopilotAgent) handleSecureInputApproval(ctx context.Context, opCtx capa
 		"privacy_guarantee", "input_bypasses_llm_context",
 		"flow", "user_prompt_via_chat_ui")
 	return true, nil
-}
-
-// tryCapabilityParticipation wraps capability participation with authorization and metrics (Gaps 1 & 4)
-func (a *CopilotAgent) tryCapabilityParticipation(
-	ctx context.Context,
-	query string,
-	state capabilities.RoutingState,
-	selectedCap capabilities.Capability,
-) (capabilities.ParticipationResult, bool, error) {
-	if a.capabilityRegistry == nil {
-		return capabilities.ParticipationResult{}, false, nil
-	}
-
-	startTime := time.Now()
-
-	if selectedCap == nil {
-		return capabilities.ParticipationResult{}, false, nil
-	}
-
-	capID := selectedCap.ID()
-
-	// Gap 1: Check authorization
-	if a.authzManager != nil {
-		opCtx := capabilities.OperationContext{
-			OperationType: "participate",
-			Resource:      query,
-			Action:        "execute",
-			Metadata: map[string]any{
-				"capability": capID,
-				"user":       "local",
-			},
-		}
-
-		authResult, authErr := a.authzManager.Authorize(ctx, selectedCap, opCtx)
-		if authErr != nil {
-			a.capabilityRegistry.RecordError(capID, authErr)
-			log.Warn("Capability authorization error", "capability", capID, "error", authErr)
-			return capabilities.ParticipationResult{}, false, authErr
-		}
-
-		if !authResult.Allowed {
-			// Gap 4: Record rejection as error
-			a.capabilityRegistry.RecordError(capID, fmt.Errorf("authorization denied: %s", authResult.Reason))
-			log.Warn("Capability authorization denied", "capability", capID, "reason", authResult.Reason)
-			return capabilities.ParticipationResult{}, false, fmt.Errorf("authorization denied: %s", authResult.Reason)
-		}
-
-		// Gap 4: Record approval if one was needed
-		if authResult.ApprovalGiven {
-			a.capabilityRegistry.RecordApproval(capID, true)
-		}
-	}
-
-	// Execute the capability via registry
-	result, handled, err := a.capabilityRegistry.TryParticipateFor(ctx, query, state, selectedCap)
-
-	// Gap 4: Record metrics
-	durationMs := float64(time.Since(startTime).Milliseconds())
-	a.capabilityRegistry.RecordExecution(capID, durationMs)
-
-	if err != nil {
-		a.capabilityRegistry.RecordError(capID, err)
-	}
-
-	return result, handled, err
 }
 
 // shouldObfuscate determines if obfuscation should be applied for a given database.
@@ -3110,7 +2901,7 @@ func (a *CopilotAgent) handleKBDirectDisplay(ctx context.Context, rawQuery strin
 	return response, nil
 }
 
-func (a *CopilotAgent) resolveAndInitializeCapability(ctx context.Context, query string, taskContext *TaskContextClassification) (context.Context, capabilities.Capability) {
+func (a *CopilotAgent) resolveCapability(ctx context.Context, query string, taskContext *TaskContextClassification) (context.Context, capabilities.Capability) {
 	routingState := capabilities.RoutingState{
 		Domain:         taskContext.Domain,
 		Gate:           taskContext.RoutingGate,
@@ -3146,96 +2937,6 @@ func (a *CopilotAgent) enrichQueryWithKBResults(query string, taskContext *TaskC
 	return query
 }
 
-func (a *CopilotAgent) handleStepLifecycle(ctx context.Context, taskContext *TaskContextClassification) {
-	step, hasStep := ctx.Value(ctxKeyActiveStep).(cw.Step)
-	cap, hasCap := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability)
-
-	if !hasStep || step == nil || !hasCap || cap == nil {
-		return
-	}
-
-	routingState := capabilities.RoutingState{
-		Domain:         taskContext.Domain,
-		Gate:           taskContext.RoutingGate,
-		CapabilityHint: taskContext.CapabilityHint,
-	}
-
-	if shouldContinue, err := step.OnAfterTurn(ctx, 1, routingState); err != nil {
-		log.Warn("Step OnAfterTurn failed", "error", err)
-	} else if !shouldContinue {
-		log.Info("Step requested workflow termination")
-	}
-}
-
-func (a *CopilotAgent) handleCapabilityHandoff(ctx context.Context, selectedCap capabilities.Capability, query string, taskContext *TaskContextClassification) {
-	if selectedCap == nil {
-		return
-	}
-
-	routingState := capabilities.RoutingState{
-		Domain:         taskContext.Domain,
-		Gate:           taskContext.RoutingGate,
-		CapabilityHint: taskContext.CapabilityHint,
-	}
-
-	handoff := selectedCap.Handoff(ctx, query, routingState)
-	if handoff == nil || strings.TrimSpace(handoff.Prompt) == "" {
-		return
-	}
-
-	queue := a.GetSessionQueue()
-	if queue == nil {
-		return
-	}
-
-	item := WorkItem{
-		Query:    strings.TrimSpace(handoff.Prompt),
-		Actor:    selectedCap.ID(),
-		ID:       fmt.Sprintf("handoff-%s-%d", selectedCap.ID(), time.Now().UnixNano()),
-		Priority: 100,
-		Context: map[string]any{
-			"handoff_direction": handoff.Direction,
-			"handoff_target":    handoff.Target,
-			"capability_id":     selectedCap.ID(),
-		},
-	}
-
-	if err := queue.Enqueue(item); err != nil {
-		log.Warn("Failed to enqueue capability handoff prompt", "capability", selectedCap.ID(), "error", err)
-	} else {
-		log.Info("Enqueued capability handoff prompt", "capability", selectedCap.ID(), "prompt", handoff.Prompt)
-	}
-}
-
-func (a *CopilotAgent) handlePlannerResult(ctx context.Context, query string, finalText string) {
-	selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability)
-	if !ok || selectedCap == nil {
-		return
-	}
-
-	// Persist planner output
-	if selectedCap.ID() == cw.PlannerCapabilityID {
-		a.recordPlannerPlan(query, finalText)
-	}
-
-	// Call OnFinish for workflow planners
-	planner, isPlanner := selectedCap.(capabilities.WorkflowPlanner)
-	if !isPlanner {
-		return
-	}
-
-	capResult, ok := ctx.Value(ctxKeyCapabilityResult).(capabilities.CapabilityResult)
-	if !ok {
-		return
-	}
-
-	if err := planner.OnFinish(ctx, capResult); err != nil {
-		log.Warn("WorkflowPlanner OnFinish failed", "capability", selectedCap.ID(), "error", err)
-	} else {
-		log.Info("WorkflowPlanner OnFinish completed", "capability", selectedCap.ID())
-	}
-}
-
 // ask is the pure Ask→ReAct transaction with no queue awareness.
 // All routing, gates, KB enrichment, and ReAct delegation happen here.
 // Capabilities can enqueue next steps via GetSessionQueue() during tool execution.
@@ -3250,18 +2951,16 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	if handled, res, err := a.handlePendingUserConfirmation(ctx, query); handled {
 		return res, err
 	}
-
 	if handled, res, err := a.handleDirectToolInvocation(ctx, query, nil); handled {
 		return res, err
 	}
 
-	gen := a.resolveGeneratorWithOverride(ctx, providerDetails)
+	gen := a.resolveLLM(ctx, providerDetails)
 	if gen == nil {
 		return a.noAPIKeyMessage(), nil
 	}
 
 	sessionID := a.logAskStart(ctx, query, gen)
-	log.Info("Copilot Ask start", "query", query, "session_id", sessionID)
 
 	// 2. Query preprocessing
 	rawQuery := query
@@ -3273,10 +2972,10 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		log.Info("Ask: Request classified for Avatar", "avatar", intent)
 		return a.executeAvatarSubAgent(ctx, intent, query)
 	}
-	log.Info("Ask: Request classified for OMNI")
+
+	//Request classified for OMNI
 
 	// 4. Three-gate context classification
-	log.Info("Copilot Ask routing evaluation start", "query", query)
 	taskContext, err := a.evaluateRoutingGates(ctx, query, gen)
 	if err != nil {
 		log.Info("Copilot Ask routing evaluation failed", "query", query, "error", err)
@@ -3285,11 +2984,7 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	if taskContext == nil {
 		taskContext = &TaskContextClassification{}
 	}
-	log.Info("Copilot Ask Routing",
-		"routing_gate", taskContext.RoutingGate,
-		"task_context", summarizeTaskContextForLog(*taskContext),
-		"query", query,
-	)
+	log.Info("Copilot Ask Routing", "routing_gate", taskContext.RoutingGate, "task_context", summarizeTaskContextForLog(*taskContext), "query", query)
 
 	// 5. KB direct display fast path
 	if a.shouldDirectDisplayKB(taskContext) {
@@ -3298,17 +2993,18 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 
 	// 6. Episode tracking and capability setup
 	a.trackEpisodeMetadata(ctx, intent)
-	ctx, selectedCap := a.resolveAndInitializeCapability(ctx, query, taskContext)
+	ctx, selectedCap := a.resolveCapability(ctx, query, taskContext)
 
+	// 6a. Capability lifecycle: OnBefore
 	routingState := capabilities.RoutingState{
 		Domain:         taskContext.Domain,
 		Gate:           taskContext.RoutingGate,
 		CapabilityHint: taskContext.CapabilityHint,
 	}
-
-	if result, handled, err := a.tryCapabilityParticipation(ctx, query, routingState, selectedCap); err == nil && handled {
-		if result.Summary != "" {
-			log.Info("Ask flow consulted capability participation hook", "summary", result.Summary)
+	if selectedCap != nil {
+		if err := selectedCap.OnBefore(ctx, query, routingState); err != nil {
+			log.Warn("Capability OnBefore failed", "capability", selectedCap.ID(), "error", err)
+			return "", err
 		}
 	}
 
@@ -3316,16 +3012,27 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	fullPrompt := a.buildSystemPrompt(ctx, query, *taskContext)
 	query = a.enrichQueryWithKBResults(query, taskContext)
 
-	// 8. Reasoning engine delegation
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, err := a.delegateToReasoningEngine(ctx, query, gen, fullPrompt)
+	// 8. Delegate to Reasoning engine/ReAct loop.
+	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, err := a.reactLoop(ctx, query, gen, fullPrompt)
 	if err != nil {
 		return "", err
 	}
 
-	// 9. Post-execution lifecycle callbacks
-	a.handleStepLifecycle(ctx, taskContext)
-	a.handleCapabilityHandoff(ctx, selectedCap, query, taskContext)
-	a.handlePlannerResult(ctx, query, finalText)
+	// 9. Capability lifecycle: OnAfter
+	if selectedCap != nil {
+		capResult := capabilities.CapabilityResult{
+			Summary: finalText,
+			Data: map[string]any{
+				"tool_calls":      toolCalls,
+				"outcome_facts":   outcomeFacts,
+				"outcome_recipes": outcomeRecipes,
+				"carryover_state": carryoverState,
+			},
+		}
+		if err := selectedCap.OnAfter(ctx, query, routingState, capResult); err != nil {
+			log.Warn("Capability OnAfter failed", "capability", selectedCap.ID(), "error", err)
+		}
+	}
 
 	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
 
@@ -3356,385 +3063,23 @@ func (a *CopilotAgent) applyAskConfig(ctx context.Context, cfg *ai.ConfigMap) co
 	return ctx
 }
 
-// tryKBWorkflowExecution attempts to match the query against KB workflows and execute if matched.
-// Returns (result, handled, error) where handled=true means a workflow was executed.
-func (a *CopilotAgent) tryKBWorkflowExecution(ctx context.Context, query string, cfg *ai.ConfigMap) (string, bool, error) {
-	// Check if KB workflows feature is enabled
-	if !KBWorkflowsEnabled() {
-		return "", false, nil
-	}
-
-	if a.workflowManager == nil || a.systemDB == nil {
-		return "", false, nil // No workflow support
-	}
-
-	// Lazily initialize KB if needed
-	if a.workflowManager.kb == nil {
-		p := ai.GetSessionPayload(ctx)
-		if p == nil || p.Transaction == nil {
-			// Need transaction for KB access
-			return "", false, nil
-		}
-
-		// Type assert transaction
-		tx, ok := p.Transaction.(sop.Transaction)
-		if !ok {
-			log.Warn("Invalid transaction type for KB access")
-			return "", false, nil
-		}
-
-		// Open Core Playbook for workflow search (always available)
-		embedder := a.service.Domain().Embedder()
-		kb, err := a.systemDB.OpenKnowledgeBase(ctx, ai.DefaultKBName, tx, a.brain, embedder, false, true)
-		if err != nil {
-			log.Warn("Failed to open Core Playbook for workflows", "error", err)
-			return "", false, nil
-		}
-		a.workflowManager.kb = kb
-
-		// Add selected Spaces as additional workflow sources
-		if len(p.SelectedKBs) > 0 {
-			selectedKBs := make([]*memory.KnowledgeBase[map[string]any], 0, len(p.SelectedKBs))
-			for _, kbRef := range p.SelectedKBs {
-				if strings.TrimSpace(kbRef.Name) == "" || strings.EqualFold(kbRef.Name, ai.DefaultKBName) {
-					continue // Skip empty or Core Playbook (already primary)
-				}
-				selectedKB, err := a.systemDB.OpenKnowledgeBase(ctx, kbRef.Name, tx, a.brain, embedder, false, true)
-				if err != nil {
-					log.Warn("Failed to open selected Space for workflows", "space", kbRef.Name, "error", err)
-					continue
-				}
-				selectedKBs = append(selectedKBs, selectedKB)
-			}
-			a.workflowManager.SetSelectedKBs(selectedKBs)
-			log.Info("Workflow search configured", "core_playbook", true, "additional_spaces", len(selectedKBs))
-		}
-	}
-
-	// Try to find matching workflow
-	workflow, err := a.workflowManager.GetWorkflow(ctx, query)
-	if err != nil {
-		// No workflow found - not an error, just means no match
-		log.Debug("No KB workflow matched", "query", query)
-		return "", false, nil
-	}
-
-	// Workflow found! Execute via multi-turn orchestration
-	log.Info("KB workflow matched", "query", query, "workflow", workflow)
-
-	// Initialize work queue
-	queue := NewWorkQueue()
-	queue.SetMaxPerActor("test_debugger.repair", 3) // Max 3 repair iterations
-	queue.SetMaxPerActor("coding_workflow", 8)      // Allow coding workflow more turns
-	queue.SetMaxPerActor("test_runner", 5)
-
-	// Enqueue initial user query
-	initialItem := WorkItem{
-		Query: query,
-		Actor: "user",
-		ID:    "turn-0",
-	}
-	if err := queue.Enqueue(initialItem); err != nil {
-		return "", false, fmt.Errorf("failed to enqueue initial query: %w", err)
-	}
-
-	// Create workflow execution state (explicit state management, not context)
-	workflowState := &WorkflowExecutionState{
-		InWorkflowMode: true,
-		Queue:          queue,
-		TurnResults:    make([]TurnResult, 0),
-		OriginalQuery:  query,
-	}
-
-	// Inject queue into context for capability access
-	ctx = WithWorkQueue(ctx, queue)
-
-	// Execute workflow via WorkflowManager (participant pattern - enqueues one step at a time)
-	// Use the WorkflowManagerCapability to enqueue first step
-	var workflowCap *WorkflowManagerCapability
-	for _, cap := range a.capabilityRegistry.ListAll() {
-		if wfCap, ok := cap.(*WorkflowManagerCapability); ok {
-			workflowCap = wfCap
-			break
-		}
-	}
-	if workflowCap == nil {
-		return "", false, fmt.Errorf("workflow capability not registered")
-	}
-
-	// Start workflow execution (enqueues first step only)
-	if _, err := workflowCap.RunWithQueue(ctx, query, queue); err != nil {
-		return "", false, fmt.Errorf("workflow start failed: %w", err)
-	}
-
-	// Process queue using the single clean loop - queue as prompt source!
-	workflowState.TurnResults = a.processQueueLoop(ctx, queue, cfg, 15)
-
-	// Compile results
-	var finalResponse strings.Builder
-	finalResponse.WriteString("✅ **Workflow Complete**\n\n")
-	for i, result := range workflowState.TurnResults {
-		if result.Response != "" {
-			finalResponse.WriteString(fmt.Sprintf("**Turn %d** (%s):\n%s\n\n", i+1, result.Actor, result.Response))
-		}
-	}
-
-	return finalResponse.String(), true, nil
-}
-
-// tryDetectWorkflow checks if a workflow exists for the query (no execution)
-func (a *CopilotAgent) tryDetectWorkflow(ctx context.Context, query string) (*WorkflowDefinition, error) {
-	// Check if KB workflows feature is enabled
-	if !KBWorkflowsEnabled() {
-		return nil, nil
-	}
-
-	if a.workflowManager == nil || a.systemDB == nil {
-		return nil, nil
-	}
-
-	// Lazily initialize KB if needed
-	if a.workflowManager.kb == nil {
-		p := ai.GetSessionPayload(ctx)
-		if p == nil || p.Transaction == nil {
-			return nil, nil
-		}
-
-		tx, ok := p.Transaction.(sop.Transaction)
-		if !ok {
-			return nil, nil
-		}
-
-		embedder := a.service.Domain().Embedder()
-		kb, err := a.systemDB.OpenKnowledgeBase(ctx, ai.DefaultKBName, tx, a.brain, embedder, false, true)
-		if err != nil {
-			return nil, nil
-		}
-		a.workflowManager.kb = kb
-	}
-
-	workflowIface, err := a.workflowManager.GetWorkflow(ctx, query)
-	if err != nil {
-		return nil, nil // No workflow found
-	}
-
-	// Type assert to *WorkflowDefinition
-	workflow, ok := workflowIface.(*WorkflowDefinition)
-	if !ok {
-		return nil, fmt.Errorf("invalid workflow type")
-	}
-	return workflow, nil
-}
-
-// enqueueWorkflowSteps injects workflow steps into the queue
-func (a *CopilotAgent) enqueueWorkflowSteps(ctx context.Context, workflow *WorkflowDefinition, queue *WorkQueue, query string) error {
-	// Set actor limits
-	queue.SetMaxPerActor("test_debugger.repair", 3)
-	queue.SetMaxPerActor("coding_workflow", 8)
-	queue.SetMaxPerActor("test_runner", 5)
-
-	// Execute workflow (injects work items into queue)
-	return a.workflowManager.Execute(ctx, workflow, queue, query)
-}
-
-// enqueueMultiTurnTasks injects multi-turn subtasks into the queue
-func (a *CopilotAgent) enqueueMultiTurnTasks(ctx context.Context, query string, taskContext *TaskContextClassification, queue *WorkQueue) error {
-	// Capability-driven multi-turn: Let capability decide what to enqueue
-	if a.capabilityRegistry != nil && taskContext.CapabilityHint != "" {
-		queueAdapter := &workQueueAdapter{queue: queue}
-		ctx = context.WithValue(ctx, "work_queue", queueAdapter)
-
-		// Gap 1 & 4: Delegate to capability with authorization and metrics
-		var selectedCap capabilities.Capability
-		if a.capabilityRegistry != nil {
-			selectedCap, _ = a.capabilityRegistry.Resolve(query, capabilities.RoutingState{
-				Domain:         taskContext.Domain,
-				Gate:           taskContext.RoutingGate,
-				CapabilityHint: taskContext.CapabilityHint,
-			})
-		}
-		if result, handled, err := a.tryCapabilityParticipation(ctx, query, capabilities.RoutingState{
-			Domain:         taskContext.Domain,
-			Gate:           taskContext.RoutingGate,
-			CapabilityHint: taskContext.CapabilityHint,
-		}, selectedCap); err == nil && handled {
-			log.Info("Capability populated queue", "summary", result.Summary, "queue_depth", queue.Depth())
-			return nil
-		}
-	}
-
-	// Fallback: Simple task decomposition (enqueue single item)
-	return queue.Enqueue(WorkItem{
-		Query:    query,
-		Actor:    "assistant",
-		Priority: 50,
-	})
-}
-
-// promoteWorkflowToFederation promotes a successful workflow execution to Federation V2.
-// Only workflows are promoted (not general patterns) per V2 scoped implementation.
-// Only SA (SystemAdmin) users can promote workflows to Core Playbook.
-func (a *CopilotAgent) promoteWorkflowToFederation(ctx context.Context, workflow *WorkflowDefinition, results []TurnResult, duration time.Duration) error {
-	if workflow == nil {
-		return fmt.Errorf("workflow is nil")
-	}
-
-	// SA Access Control: Only SystemAdmin users can promote workflows to Core Playbook
-	authCtx := sop.GetAuthFromContext(ctx)
-	isSA := false
-	for _, role := range authCtx.Roles {
-		if strings.EqualFold(role, sop.RoleSystemAdmin) {
-			isSA = true
-			break
-		}
-	}
-	if !isSA {
-		// Skip promotion for non-SA users - this is intentional and not an error
-		log.Debug("Skipping workflow promotion: user is not SA",
-			"workflow_id", workflow.ID,
-			"user_id", authCtx.UserID,
-		)
-		return nil
-	}
-
-	// Check if federation is enabled
-	p := ai.GetSessionPayload(ctx)
-	if p == nil {
-		return fmt.Errorf("session payload not available")
-	}
-
-	// Get daemon ID from environment or config
-	daemonID := os.Getenv("SOP_DAEMON_ID")
-	if daemonID == "" {
-		daemonID = "local-daemon"
-	}
-
-	// Prepare execution stats
-	executionStats := map[string]any{
-		"total_turns":      len(results),
-		"successful_turns": countSuccessfulTurns(results),
-		"duration_seconds": duration.Seconds(),
-		"actors_used":      extractActorsUsed(results),
-		"promoted_at":      time.Now().UTC().Format(time.RFC3339),
-		"promoted_by":      authCtx.UserID,
-		"promoted_by_role": sop.RoleSystemAdmin,
-	}
-
-	// Promote to federation (stores locally in Core Playbook)
-	// Auto-promotion uses targetVersion = 0 (auto-increment)
-	if err := PromoteWorkflowArtifactV2(
-		ctx,
-		a.systemDB,
-		nil, // LLM not required
-		a.service.Domain().Embedder(),
-		workflow,
-		daemonID,
-		executionStats,
-		0, // targetVersion = 0 means auto-increment
-	); err != nil {
-		return fmt.Errorf("promote workflow artifact: %w", err)
-	}
-
-	log.Info("Workflow promoted to federation",
-		"workflow_id", workflow.ID,
-		"workflow_name", workflow.Name,
-		"successful_turns", executionStats["successful_turns"],
-		"duration_seconds", executionStats["duration_seconds"],
-	)
-
-	return nil
-}
-
-// countSuccessfulTurns counts how many turns completed successfully (non-empty response, no error)
-func countSuccessfulTurns(results []TurnResult) int {
-	count := 0
-	for _, result := range results {
-		if result.Response != "" && result.Error == nil {
-			count++
-		}
-	}
-	return count
-}
-
-// extractActorsUsed extracts unique actor names from turn results
-func extractActorsUsed(results []TurnResult) []string {
-	actorSet := make(map[string]bool)
-	for _, result := range results {
-		if result.Actor != "" {
-			actorSet[result.Actor] = true
-		}
-	}
-
-	actors := make([]string, 0, len(actorSet))
-	for actor := range actorSet {
-		actors = append(actors, actor)
-	}
-	return actors
-}
-
-// executeWorkflow creates a queue, initializes it with the workflow, and processes
-func (a *CopilotAgent) executeWorkflow(ctx context.Context, workflow *WorkflowDefinition, query string, cfg *ai.ConfigMap) (string, error) {
-	queue := NewWorkQueue()
-	queue.SetMaxPerActor("test_debugger.repair", 3)
-	queue.SetMaxPerActor("coding_workflow", 8)
-	queue.SetMaxPerActor("test_runner", 5)
-
-	// Enqueue initial query
-	if err := queue.Enqueue(WorkItem{Query: query, Actor: "user", ID: "turn-0"}); err != nil {
-		return "", err
-	}
-
-	// Enqueue workflow steps
-	if err := a.enqueueWorkflowSteps(ctx, workflow, queue, query); err != nil {
-		return "", err
-	}
-
-	// Process queue
-	startTime := time.Now()
-	results := a.processQueueLoop(ctx, queue, cfg, 15)
-	duration := time.Since(startTime)
-
-	// Determine if workflow was successful (at least 2 steps completed without critical errors)
-	successCount := 0
-	hasError := false
-	for _, result := range results {
-		if result.Response != "" {
-			successCount++
-		}
-		if result.Error != nil {
-			hasError = true
-		}
-	}
-
-	workflowSuccessful := successCount >= 2 && !hasError
-
-	// Federation V2: Promote successful workflow execution
-	if workflowSuccessful {
-		if err := a.promoteWorkflowToFederation(ctx, workflow, results, duration); err != nil {
-			log.Warn("Failed to promote workflow to federation",
-				"workflow_id", workflow.ID,
-				"error", err,
-			)
-			// Don't fail the workflow execution if promotion fails
-		}
-	}
-
-	// Format results
-	var finalResponse strings.Builder
-	finalResponse.WriteString("✅ **Workflow Complete**\n\n")
-	for i, result := range results {
-		if result.Response != "" {
-			finalResponse.WriteString(fmt.Sprintf("**Turn %d** (%s):\n%s\n\n", i+1, result.Actor, result.Response))
-		}
-	}
-	return finalResponse.String(), nil
-}
-
-// executeMultiTurn is deprecated - multi-turn behavior now happens naturally
-// through the ReAct loop where the LLM intelligently calls capability tools.
-func (a *CopilotAgent) executeMultiTurn(ctx context.Context, query string, taskContext *TaskContextClassification, cfg *ai.ConfigMap) (string, error) {
-	return "", fmt.Errorf("executeMultiTurn is deprecated - use normal Ask flow with capability tools")
-}
+// ============================================================================
+// KB-DRIVEN WORKFLOW FUNCTIONS REMOVED (2026-07-30)
+// ============================================================================
+// The following functions were removed because KB-driven workflows have been
+// deprecated in favor of the Phase system. Workflows are STATIC and reduce
+// LLM orchestration capability, resulting in low success rates.
+//
+// Removed functions:
+//   - tryKBWorkflowExecution() - KB workflow matching and execution
+//   - tryDetectWorkflow() - Workflow detection
+//   - promoteWorkflowToFederation() - Workflow promotion to Core Playbook
+//   - countSuccessfulTurns() - Helper function
+//   - extractActorsUsed() - Helper function
+//
+// Replacement: Use Phase system (PlannerCapability + phase capabilities)
+// for dynamic, LLM-orchestrated workflows.
+// ============================================================================
 
 // ============================================================================
 // CONTROLLER PATTERN FUNCTIONS REMOVED (2026-07-29)
@@ -3795,6 +3140,7 @@ func (a *CopilotAgent) logAskStart(ctx context.Context, query string, gen ai.Gen
 		}
 		a.recordSessionBoundary(ctx, string(SessionBoundaryStart), "Session started", fmt.Sprintf("query=%s", truncateString(query, 220)))
 	}
+	//log.Info("Copilot Ask start", "query", query, "session_id", sessionID)
 	log.Info("Copilot Ask Start", "generator", gen.Name(), "default_format", getRequestedOutputFormat(ctx), "session_id", sessionID,
 		"current_db", currentDB, "active_domain", activeDomain, "thread_id", currentThreadID, "query_chars", len(query))
 	return sessionID
@@ -4257,6 +3603,7 @@ func (a *CopilotAgent) buildGeneralTaskContext(ctx context.Context, query string
 }
 
 func (a *CopilotAgent) evaluateRoutingGates(ctx context.Context, query string, gen ai.Generator) (*TaskContextClassification, error) {
+	log.Info("Copilot Ask routing evaluation start", "query", query)
 	a.rehydrateMRUFromMemory(ctx)
 	isTest := isRoutingTestGenerator(gen)
 	anchor := parseRoutingAnchor(query)
@@ -4267,31 +3614,21 @@ func (a *CopilotAgent) evaluateRoutingGates(ctx context.Context, query string, g
 		if handledTaskCtx, handled, err := a.trySpecializedFocusedRouting(ctx, query, "Omni", "Spaces", ""); err != nil {
 			return nil, err
 		} else if handled {
-			return handledTaskCtx, nil
+			return a.finalizeRoutingResult(ctx, query, &routingOutcome{taskCtx: handledTaskCtx, matched: true, source: "specialized"}, RoutingGateFocused), nil
 		}
 	}
 
 	if taskClassification, err := a.tryPrefixBasedRouting(ctx, query, gen, isTest, anchor); err != nil {
 		return nil, err
 	} else if taskClassification != nil {
-		if isGeneralTaskContext(taskClassification) {
-			return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
-		}
-		a.applyCapabilityRoutingHints(ctx, taskClassification, query)
-		a.persistCapabilityAffinityHint(taskClassification)
-		return taskClassification, nil
+		return a.finalizeRoutingResult(ctx, query, &routingOutcome{taskCtx: taskClassification, matched: true, source: "prefix"}, RoutingGateFocused), nil
 	}
 
 	if !isExplicitNewTopic(ctx) {
 		if taskClassification, err := a.tryAskContinuationBasedRouting(ctx, query, gen, isTest, anchor); err != nil {
 			return nil, err
 		} else if taskClassification != nil {
-			if isGeneralTaskContext(taskClassification) {
-				return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
-			}
-			a.applyCapabilityRoutingHints(ctx, taskClassification, query)
-			a.persistCapabilityAffinityHint(taskClassification)
-			return taskClassification, nil
+			return a.finalizeRoutingResult(ctx, query, &routingOutcome{taskCtx: taskClassification, matched: true, source: "continuation"}, RoutingGateContinuity), nil
 		}
 	} else {
 		log.Info("Explicit new-topic override: skipping continuation-based routing")
@@ -4300,12 +3637,7 @@ func (a *CopilotAgent) evaluateRoutingGates(ctx context.Context, query string, g
 	if taskClassification, err := a.tryColdStartBasedRouting(ctx, query, gen, isTest); err != nil {
 		return nil, err
 	} else if taskClassification != nil {
-		if isGeneralTaskContext(taskClassification) {
-			return a.buildGeneralTaskContext(ctx, query, taskClassification), nil
-		}
-		a.applyCapabilityRoutingHints(ctx, taskClassification, query)
-		a.persistCapabilityAffinityHint(taskClassification)
-		return taskClassification, nil
+		return a.finalizeRoutingResult(ctx, query, &routingOutcome{taskCtx: taskClassification, matched: true, source: "coldstart"}, RoutingGateDiscovery), nil
 	}
 
 	return nil, nil
@@ -4346,7 +3678,7 @@ func (a *CopilotAgent) trackEpisodeMetadata(ctx context.Context, intent string) 
 	}
 }
 
-func (a *CopilotAgent) delegateToReasoningEngine(ctx context.Context, query string, gen ai.Generator, fullPrompt string) (string, []ai.ToolCall, []string, []ai.LearnedRecipe, *ai.CarryoverState, error) {
+func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Generator, fullPrompt string) (string, []ai.ToolCall, []string, []ai.LearnedRecipe, *ai.CarryoverState, error) {
 	currentDB := ""
 	if p := ai.GetSessionPayload(ctx); p != nil {
 		currentDB = p.CurrentDB
@@ -4431,7 +3763,7 @@ func splitProviderAndModel(provider, model string) (string, string) {
 // HELPER METHODS
 // ----------------------------------------------------------------------------
 
-func (a *CopilotAgent) resolveGeneratorWithOverride(ctx context.Context, providerOverride *ProviderDetails) ai.Generator {
+func (a *CopilotAgent) resolveLLM(ctx context.Context, providerOverride *ProviderDetails) ai.Generator {
 	// Use explicit ProviderDetails parameter first
 	if providerOverride != nil && providerOverride.Provider != "" {
 		provider, resolvedModel := splitProviderAndModel(providerOverride.Provider, providerOverride.Model)
@@ -6432,12 +5764,14 @@ func shouldRouteToOmniInsteadOfAvatar(query string) bool {
 func (a *CopilotAgent) classifyIntent(ctx context.Context, query string, gen ai.Generator) string {
 	if flag.Lookup("test.v") != nil {
 		// Bypass intent routing in unit tests
+		log.Info("Ask: Request classified for OMNI")
 		return ai.IntentOmni
 	}
 
 	log.Info("classifyIntent ", "query", query)
 
 	if shouldRouteToOmniInsteadOfAvatar(query) {
+		log.Info("Ask: Request classified for OMNI")
 		return ai.IntentOmni
 	}
 
@@ -6449,6 +5783,7 @@ func (a *CopilotAgent) classifyIntent(ctx context.Context, query string, gen ai.
 		prefix := strings.ToUpper(strings.TrimSpace(parts[0]))
 
 		if prefix == ai.IntentOmni {
+			log.Info("Ask: Request classified for OMNI")
 			return ai.IntentOmni
 		}
 
@@ -6473,6 +5808,7 @@ func (a *CopilotAgent) classifyIntent(ctx context.Context, query string, gen ai.
 	}
 
 	// 3. Final Default
+	log.Info("Ask: Request classified for OMNI")
 	return ai.IntentOmni
 }
 

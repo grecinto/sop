@@ -20,6 +20,12 @@ type routingAnchor struct {
 	taskCtx  *TaskContextClassification
 }
 
+type routingOutcome struct {
+	taskCtx *TaskContextClassification
+	matched bool
+	source  string
+}
+
 func isRoutingTestGenerator(gen ai.Generator) bool {
 	if gen == nil {
 		return false
@@ -89,6 +95,26 @@ func (a *CopilotAgent) persistRoutingState(ctx context.Context, taskCtx *TaskCon
 	if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
 		a.service.session.Memory.SetRoutingState(taskCtx)
 	}
+}
+
+func (a *CopilotAgent) finalizeRoutingResult(ctx context.Context, query string, out *routingOutcome, gate string) *TaskContextClassification {
+	if out == nil || out.taskCtx == nil {
+		return nil
+	}
+
+	taskCtx := out.taskCtx
+	if gate != "" {
+		taskCtx.RoutingGate = gate
+	}
+
+	if isGeneralTaskContext(taskCtx) {
+		return a.buildGeneralTaskContext(ctx, query, taskCtx)
+	}
+
+	a.applyCapabilityRoutingHints(ctx, taskCtx, query)
+	a.persistCapabilityAffinityHint(taskCtx)
+	a.persistRoutingState(ctx, taskCtx)
+	return taskCtx
 }
 
 func (a *CopilotAgent) applyCapabilityRoutingHints(ctx context.Context, taskCtx *TaskContextClassification, query string) {
@@ -176,6 +202,21 @@ func (a *CopilotAgent) getCapabilityAffinityHintFromMRU() (string, string, bool)
 		}
 	}
 	return "", "", false
+}
+
+func shouldRouteColdStartToPlanner(query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return false
+	}
+	if strings.Contains(q, "store") || strings.Contains(q, "stores") || strings.Contains(q, "space") || strings.Contains(q, "spaces") {
+		return false
+	}
+	if strings.Contains(q, "knowledge base") || strings.Contains(q, "knowledge-base") || strings.Contains(q, "kb") {
+		return false
+	}
+	_, hint, _ := inferCapabilityRoutingSignal(q, "")
+	return hint == capabilityHintCodingWorkflow || hint == capabilityHintDesktopAutomation
 }
 
 func inferCapabilityRoutingSignal(query string, domain string) (string, string, string) {
@@ -278,10 +319,6 @@ func (a *CopilotAgent) tryPrefixBasedRouting(ctx context.Context, query string, 
 	}
 
 	annotateTaskContextIntent(taskCtx, query)
-	a.applyCapabilityRoutingHints(ctx, taskCtx, query)
-	taskCtx.RoutingGate = RoutingGateFocused
-	a.persistCapabilityAffinityHint(taskCtx)
-	a.persistRoutingState(ctx, taskCtx)
 	return taskCtx, nil
 }
 
@@ -309,10 +346,6 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 		if err == nil && updatedRS != nil {
 			log.Info("Ask-Continuation Routing Activated: Inheriting MRU Context with Updates", "domain", updatedRS.Domain)
 			annotateTaskContextIntent(updatedRS, query)
-			a.applyCapabilityRoutingHints(ctx, updatedRS, query)
-			updatedRS.RoutingGate = RoutingGateContinuity
-			a.persistCapabilityAffinityHint(updatedRS)
-			a.persistRoutingState(ctx, updatedRS)
 			return updatedRS, nil
 		}
 		return nil, err
@@ -320,10 +353,6 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 
 	log.Info("Ask-Continuation Routing Activated: Inheriting MRU Context (Test Mode)", "domain", rs.Domain)
 	annotateTaskContextIntent(rs, query)
-	a.applyCapabilityRoutingHints(ctx, rs, query)
-	rs.RoutingGate = RoutingGateContinuity
-	a.persistCapabilityAffinityHint(rs)
-	a.persistRoutingState(ctx, rs)
 	return rs, nil
 }
 
@@ -331,16 +360,20 @@ func (a *CopilotAgent) tryColdStartBasedRouting(ctx context.Context, query strin
 	if len(strings.Split(query, ":")) == 1 {
 		log.Info("Cold-Start Routing Activated")
 	}
-	if a != nil && a.capabilityRegistry != nil {
-		if result, handled, err := a.capabilityRegistry.TryParticipate(ctx, query, capabilities.RoutingState{}); err == nil && handled {
-			if result.Summary != "" {
-				log.Info("Capability participation hook handled follow-up", "summary", result.Summary)
-			}
-		}
-	}
-
 	// Fast path: Try keyword-based routing first (no LLM call)
 	inferredIntent, inferredHint, inferredDomain := inferCapabilityRoutingSignal(query, "")
+
+	if shouldRouteColdStartToPlanner(query) {
+		log.Info("Cold-start planner routing (direct selection)", "query", query, "intent", inferredIntent, "domain", inferredDomain)
+		taskCtx := &TaskContextClassification{
+			CapabilityHint: "planner",
+			IntentFamily:   inferredIntent,
+			Domain:         inferredDomain,
+			RoutingGate:    RoutingGateDiscovery,
+		}
+		annotateTaskContextIntent(taskCtx, query)
+		return taskCtx, nil
+	}
 
 	// If we have a clear capability hint (not general), use keyword routing
 	if inferredHint != capabilityHintGeneral {
@@ -352,8 +385,6 @@ func (a *CopilotAgent) tryColdStartBasedRouting(ctx context.Context, query strin
 			RoutingGate:    RoutingGateDiscovery,
 		}
 		annotateTaskContextIntent(taskCtx, query)
-		a.persistCapabilityAffinityHint(taskCtx)
-		a.persistRoutingState(ctx, taskCtx)
 		return taskCtx, nil
 	}
 
@@ -371,9 +402,5 @@ func (a *CopilotAgent) tryColdStartBasedRouting(ctx context.Context, query strin
 
 	log.Info("Cold-start routing classification success", "domain", taskCtx.Domain)
 	annotateTaskContextIntent(taskCtx, query)
-	a.applyCapabilityRoutingHints(ctx, taskCtx, query)
-	taskCtx.RoutingGate = RoutingGateDiscovery
-	a.persistCapabilityAffinityHint(taskCtx)
-	a.persistRoutingState(ctx, taskCtx)
 	return taskCtx, nil
 }

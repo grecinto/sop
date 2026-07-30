@@ -191,16 +191,19 @@ func (c *Capability) Handoff(ctx context.Context, query string, state capabiliti
 	return nil
 }
 
-func (c *Capability) Participate(ctx context.Context, query string, state capabilities.RoutingState) (capabilities.ParticipationResult, bool, error) {
-	trimmed := strings.TrimSpace(query)
-	if trimmed == "" {
-		return capabilities.ParticipationResult{}, false, nil
-	}
-	lower := strings.ToLower(trimmed)
-	if strings.Contains(lower, "pwd") || strings.Contains(lower, "ls") || strings.Contains(lower, "status") || strings.Contains(lower, "approve") || strings.Contains(lower, "continue") {
-		return capabilities.ParticipationResult{Summary: "desktop automation follow-up", Data: map[string]any{"continuation": true}}, true, nil
-	}
-	return capabilities.ParticipationResult{}, false, nil
+func (c *Capability) OnBefore(ctx context.Context, query string, state capabilities.RoutingState) error {
+	_ = ctx
+	_ = query
+	_ = state
+	return nil
+}
+
+func (c *Capability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	_ = ctx
+	_ = query
+	_ = state
+	_ = result
+	return nil
 }
 
 // GetHandledPrefixes returns the supported command prefixes this capability handles.

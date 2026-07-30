@@ -84,20 +84,6 @@ type Handoff struct {
 	Prompt    string
 }
 
-// ParticipationResult captures the outcome of a capability participation hook.
-type ParticipationResult struct {
-	Summary string
-	Data    map[string]any
-}
-
-// Participant extends capabilities with an optional lightweight hook for Ask continuity.
-// Implementations can use this to contribute pending-state, approval notes, or follow-up context
-// without taking over the core Ask routing loop.
-type Participant interface {
-	Capability
-	Participate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error)
-}
-
 // WorkflowPlanner extends capabilities with post-execution hooks for workflow setup.
 // After Run() completes (near end of Ask/ReAct loop), OnFinish() is called to:
 // - Convert plan to workflow Steps
@@ -114,6 +100,14 @@ type WorkflowPlanner interface {
 // Capabilities participate in the Ask pipeline by supplying context, tools, and
 // instructions. Execution is delegated to the LLM/tool loop rather than being
 // driven from a capability-level Run hook.
+//
+// Lifecycle Events:
+//   - OnBefore: Called before ReAct loop execution. Use for setup, validation, or state preparation.
+//     If not needed, implement as: func (c *Cap) OnBefore(...) error { return nil }
+//   - OnAfter: Called after ReAct loop completion. Use for cleanup, persistence, handoff logic,
+//     step lifecycle management, workflow planning finalization, or any other post-execution tasks.
+//     This is the single standardized hook for all post-turn capability logic.
+//     If not needed, implement as: func (c *Cap) OnAfter(...) error { return nil }
 type Capability interface {
 	ID() string
 	Name() string
@@ -123,6 +117,10 @@ type Capability interface {
 	ExposeTools() []ToolDefinition
 	BuildInstructions(query string, state RoutingState) string
 	Handoff(ctx context.Context, query string, state RoutingState) *Handoff
+
+	// Lifecycle event handlers
+	OnBefore(ctx context.Context, query string, state RoutingState) error
+	OnAfter(ctx context.Context, query string, state RoutingState, result CapabilityResult) error
 }
 
 // PrefixHandler extends Capability to enable direct command-prefix routing.
@@ -329,63 +327,6 @@ func (r *Registry) Classify(query string, state RoutingState) []ClassifiedCapabi
 		return matches[i].Capability.ID() < matches[j].Capability.ID()
 	})
 	return matches
-}
-
-// TryParticipate asks the routed capability whether it wants to participate in the current Ask.
-// If no explicit capability is supplied, it falls back to the first capability that can handle
-// the current routing state, preserving backward-compatible behavior for existing callers.
-func (r *Registry) TryParticipate(ctx context.Context, query string, state RoutingState) (ParticipationResult, bool, error) {
-	return r.TryParticipateFor(ctx, query, state, nil)
-}
-
-// TryParticipateFor asks a specific capability whether it wants to participate in the current Ask.
-// This is the path used by the Ask pipeline after routing has already resolved the selected capability.
-func (r *Registry) TryParticipateFor(ctx context.Context, query string, state RoutingState, selected Capability) (ParticipationResult, bool, error) {
-	if r == nil {
-		return ParticipationResult{}, false, nil
-	}
-
-	if selected != nil {
-		if r.metrics != nil {
-			r.metrics.RecordSelection(selected.ID())
-		}
-		participant, ok := selected.(Participant)
-		if !ok {
-			return ParticipationResult{}, false, nil
-		}
-		result, handled, err := participant.Participate(ctx, query, state)
-		if handled {
-			return result, true, err
-		}
-		if err != nil {
-			return ParticipationResult{}, true, err
-		}
-		return ParticipationResult{}, false, nil
-	}
-
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, cap := range r.capabilities {
-		result := cap.Classify(query, state)
-		if !result.Relevant {
-			continue
-		}
-		if r.metrics != nil {
-			r.metrics.RecordSelection(cap.ID())
-		}
-		participant, ok := cap.(Participant)
-		if !ok {
-			continue
-		}
-		participation, handled, err := participant.Participate(ctx, query, state)
-		if handled {
-			return participation, true, err
-		}
-		if err != nil {
-			return ParticipationResult{}, true, err
-		}
-	}
-	return ParticipationResult{}, false, nil
 }
 
 // Compose returns all enabled capabilities that can handle the request, sorted by precedence.

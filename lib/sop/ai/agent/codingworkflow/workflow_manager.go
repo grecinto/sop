@@ -993,7 +993,6 @@ func (wm *WorkflowManager) GetCacheSize() int {
 // Returns a basic set of steps appropriate for the task type.
 func (wm *WorkflowManager) createWorkflowSteps(taskType TaskType, task Task) []Step {
 	// This is a simplified implementation for redirect support
-	// In a full implementation, this would delegate to WorkflowCapability
 	// or use a more sophisticated workflow factory
 
 	switch taskType {
