@@ -784,7 +784,8 @@ func (c *PhaseCapability) ExposeTools() []capabilities.ToolDefinition {
     "transition_to": {"type": "string", "description": "Next phase ID: intake|investigation|planning|execution|review|delivery"},
     "transition_from": {"type": "string", "description": "Previous phase ID"},
     "transition_direction": {"type": "string", "description": "Transition direction: forward|backward"},
-    "exit": {"type": "boolean", "description": "Set true to signal phase completion and workflow exit"}
+    "exit": {"type": "boolean", "description": "Set true to signal phase completion and workflow exit"},
+    "structured_data": {"type": "object", "description": "Phase-specific structured data (test results, findings objects, metrics, etc.)"}
   }
 }`
 
@@ -854,20 +855,144 @@ func (c *PhaseCapability) Handoff(ctx context.Context, query string, state capab
 		target = strings.TrimSpace(artifact.TransitionFrom)
 	}
 	if direction == "forward" && target != "" {
-		prompt := fmt.Sprintf("Continue the workflow by moving to the %s phase.", target)
-		if artifact.Summary != "" {
-			prompt = fmt.Sprintf("%s %s", prompt, strings.TrimSpace(artifact.Summary))
-		}
+		prompt := c.buildHandoffPrompt("forward", target, artifact)
 		return &capabilities.Handoff{Direction: "forward", Target: target, Prompt: prompt}
 	}
 	if direction == "backward" && target != "" {
-		prompt := fmt.Sprintf("Return to the %s phase and continue the workflow.", target)
-		if artifact.Summary != "" {
-			prompt = fmt.Sprintf("%s %s", prompt, strings.TrimSpace(artifact.Summary))
-		}
+		prompt := c.buildHandoffPrompt("backward", target, artifact)
 		return &capabilities.Handoff{Direction: "backward", Target: target, Prompt: prompt}
 	}
 	return nil
+}
+
+// buildHandoffPrompt creates a context-rich handoff prompt including artifacts from previous phases
+func (c *PhaseCapability) buildHandoffPrompt(direction, targetPhase string, currentArtifact phaseArtifact) string {
+	var prompt string
+	if direction == "forward" {
+		prompt = fmt.Sprintf("Continue the workflow by moving to the %s phase.", targetPhase)
+	} else {
+		prompt = fmt.Sprintf("Return to the %s phase and continue the workflow.", targetPhase)
+	}
+
+	// Add summary from current phase
+	if currentArtifact.Summary != "" {
+		prompt = fmt.Sprintf("%s %s", prompt, strings.TrimSpace(currentArtifact.Summary))
+	}
+
+	// Add context from previous phases (if available)
+	contextParts := c.gatherPreviousPhaseContext()
+	if len(contextParts) > 0 {
+		prompt += "\n\nContext from previous phases:"
+		for _, part := range contextParts {
+			prompt += "\n- " + part
+		}
+	}
+
+	// Add structured data highlights if available
+	if currentArtifact.StructuredData != nil && len(currentArtifact.StructuredData) > 0 {
+		if findings, ok := currentArtifact.StructuredData["findings"]; ok {
+			prompt += fmt.Sprintf("\n\nFindings: %v", findings)
+		}
+		if testResults, ok := currentArtifact.StructuredData["test_results"]; ok {
+			prompt += fmt.Sprintf("\n\nTest Results: %v", testResults)
+		}
+	}
+
+	// Add next steps guidance
+	if len(currentArtifact.NextSteps) > 0 {
+		prompt += "\n\nNext steps:"
+		for i, step := range currentArtifact.NextSteps {
+			if i < 3 { // Limit to top 3 next steps
+				prompt += "\n" + fmt.Sprintf("%d. %s", i+1, step)
+			}
+		}
+	}
+
+	return prompt
+}
+
+// gatherPreviousPhaseContext collects key information from previous phase artifacts
+func (c *PhaseCapability) gatherPreviousPhaseContext() []string {
+	var context []string
+
+	// Try to load artifacts from previous phases in typical workflow order
+	previousPhases := c.getPreviousPhases()
+
+	for _, phaseID := range previousPhases {
+		artifact := c.loadArtifactForPhase(phaseID)
+		if artifact.PhaseID == "" {
+			continue
+		}
+
+		// Include key summary from each previous phase
+		if artifact.Summary != "" {
+			context = append(context, fmt.Sprintf("%s: %s", phaseID, artifact.Summary))
+		}
+
+		// Include requirements if from intake
+		if phaseID == "intake" && len(artifact.Requirements) > 0 && len(artifact.Requirements) <= 3 {
+			for _, req := range artifact.Requirements {
+				context = append(context, fmt.Sprintf("Requirement: %s", req))
+			}
+		}
+
+		// Include key evidence if from investigation
+		if phaseID == "investigation" && len(artifact.Evidence) > 0 && len(artifact.Evidence) <= 3 {
+			for _, ev := range artifact.Evidence {
+				context = append(context, fmt.Sprintf("Evidence: %s", ev))
+			}
+		}
+
+		// Include plan highlights if from planning
+		if phaseID == "planning" && len(artifact.Plan) > 0 && len(artifact.Plan) <= 3 {
+			for _, step := range artifact.Plan {
+				context = append(context, fmt.Sprintf("Plan: %s", step))
+			}
+		}
+	}
+
+	return context
+}
+
+// getPreviousPhases returns the phases that come before the current phase in typical workflow order
+func (c *PhaseCapability) getPreviousPhases() []string {
+	// Define typical phase progression
+	allPhases := []string{"intake", "investigation", "planning", "execution", "review", "delivery"}
+
+	var previous []string
+	for _, phase := range allPhases {
+		if phase == c.phaseID {
+			break
+		}
+		previous = append(previous, phase)
+	}
+
+	return previous
+}
+
+// loadArtifactForPhase loads an artifact for a specific phase ID
+func (c *PhaseCapability) loadArtifactForPhase(phaseID string) phaseArtifact {
+	storage := c.ensureSharedInfrastructure()
+	if storage.Memory == nil {
+		return phaseArtifact{}
+	}
+
+	values, err := storage.Memory.Load("phase-artifact:" + phaseID)
+	if err != nil {
+		return phaseArtifact{}
+	}
+
+	artifactJSON := values["artifact_json"]
+	if artifactJSON == "" {
+		return phaseArtifact{}
+	}
+
+	var artifact phaseArtifact
+	if err := json.Unmarshal([]byte(artifactJSON), &artifact); err != nil {
+		return phaseArtifact{}
+	}
+
+	return artifact
 }
 
 func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args map[string]any, state capabilities.RoutingState) (string, error) {
@@ -882,6 +1007,10 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 		return c.runCapture(args)
 	case strings.ToLower(c.stateTool):
 		return c.runState(args)
+	case strings.ToLower(c.phaseToolName("assess_and_route")):
+		return c.runAssessAndRoute(args)
+	case strings.ToLower(c.phaseToolName("create_succession_path")):
+		return c.runCreateSuccessionPath(args)
 	case strings.ToLower(c.phaseToolName("build_context")):
 		return c.runBuildContext(args)
 	case strings.ToLower(c.phaseToolName("inspect_repo")):
@@ -961,6 +1090,23 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 		}}
 	case "planning":
 		return []capabilities.ToolDefinition{{
+			Name:        c.phaseToolName("assess_and_route"),
+			Description: "PLANNING-FIRST ARCHITECTURE: Assesses the user query and determines the appropriate starting phase. Always call this FIRST in planning phase to understand what needs to be done. Analyzes query semantics and creates execution strategy. Returns assessment with recommended starting phase and reasoning.",
+			Schema:      taskSchema,
+		}, {
+			Name:        c.phaseToolName("create_succession_path"),
+			Description: "Creates a phase succession path with checkpoints. Call after assess_and_route to define the full sequence of phases needed to complete the task. Returns planned path: [investigation, planning, execution, review, delivery] with checkpoints for re-assessment.",
+			Schema: `{
+  "type": "object",
+  "required": ["phases"],
+  "properties": {
+    "phases": {"type": "array", "items": {"type": "string"}, "description": "Ordered phase sequence: ['investigation', 'planning', 'execution', 'review', 'delivery']"},
+    "checkpoints": {"type": "array", "items": {"type": "string"}, "description": "Checkpoint names: ['after_investigation', 'after_execution']"},
+    "reasoning": {"type": "string", "description": "Why this path was chosen"},
+    "confidence": {"type": "string", "description": "Confidence level: high|medium|low"}
+  }
+}`,
+		}, {
 			Name:        c.phaseToolName("build_context"),
 			Description: "REQUIRED FIRST STEP: Builds repository context for planning. Must call before planning_plan_changes. Returns ContextPack with repository structure needed for concrete plan generation.",
 			Schema:      taskSchema,
@@ -1230,6 +1376,187 @@ func (c *PhaseCapability) runTests(args map[string]any) (string, error) {
 	return fmt.Sprintf("Tests failed\n%s", result.Output), nil
 }
 
+// runAssessAndRoute performs Planning-First assessment of the query
+func (c *PhaseCapability) runAssessAndRoute(args map[string]any) (string, error) {
+	query := readPhaseString(args, "query", "")
+	if query == "" {
+		query = readPhaseString(args, "task", "")
+	}
+	if query == "" {
+		return "", fmt.Errorf("query is required for assessment")
+	}
+
+	// Use semantic detection as initial heuristic
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	detectedPhase := detectStartingPhase(queryLower)
+
+	// Analyze query characteristics
+	characteristics := []string{}
+
+	// Check for bug/error indicators (investigation)
+	if strings.Contains(queryLower, "fix") || strings.Contains(queryLower, "bug") ||
+		strings.Contains(queryLower, "error") || strings.Contains(queryLower, "failing") {
+		characteristics = append(characteristics, "🔍 Bug/error fixing - requires investigation")
+	}
+
+	// Check for feature indicators (intake → planning → execution)
+	if strings.Contains(queryLower, "add") || strings.Contains(queryLower, "implement") ||
+		strings.Contains(queryLower, "create") || strings.Contains(queryLower, "new feature") {
+		characteristics = append(characteristics, "✨ Feature implementation - full workflow")
+	}
+
+	// Check for validation indicators (review)
+	if strings.Contains(queryLower, "review") || strings.Contains(queryLower, "validate") ||
+		strings.Contains(queryLower, "check") || strings.Contains(queryLower, "verify") {
+		characteristics = append(characteristics, "✅ Validation/review task")
+	}
+
+	// Check for planning/design indicators
+	if strings.Contains(queryLower, "design") || strings.Contains(queryLower, "architect") ||
+		strings.Contains(queryLower, "plan") || strings.Contains(queryLower, "approach") {
+		characteristics = append(characteristics, "📐 Design/planning task")
+	}
+
+	// Build assessment result
+	result := fmt.Sprintf(`PHASE ASSESSMENT
+
+Query: %s
+
+Detected Starting Phase: %s
+
+Characteristics:
+%s
+
+Recommended Action:
+- Start in %s phase
+- This phase will assess context and determine next steps
+- Use planning_create_succession_path to define full workflow
+
+Analysis Method: Semantic heuristics (keyword-based detection)
+Confidence: Medium (heuristic-based, LLM confirmation recommended)`,
+		query,
+		detectedPhase,
+		strings.Join(characteristics, "\n"),
+		detectedPhase)
+
+	return result, nil
+}
+
+// runCreateSuccessionPath creates a phase succession path
+func (c *PhaseCapability) runCreateSuccessionPath(args map[string]any) (string, error) {
+	phases := readPhaseStringSlice(args, "phases")
+	if len(phases) == 0 {
+		return "", fmt.Errorf("phases array is required")
+	}
+
+	// Validate phase names
+	validPhases := map[string]bool{
+		"intake": true, "investigation": true, "planning": true,
+		"execution": true, "review": true, "delivery": true,
+	}
+	for _, phase := range phases {
+		if !validPhases[phase] {
+			return "", fmt.Errorf("invalid phase name: %s (must be one of: intake, investigation, planning, execution, review, delivery)", phase)
+		}
+	}
+
+	checkpoints := readPhaseStringSlice(args, "checkpoints")
+	reasoning := readPhaseString(args, "reasoning", "No reasoning provided")
+	confidence := readPhaseString(args, "confidence", "medium")
+
+	// Build checkpoints map
+	checkpointMap := make(map[string]bool)
+	for _, cp := range checkpoints {
+		checkpointMap[cp] = true
+	}
+
+	// Store PhasePlan in work stream context via STM
+	if c.sharedInfra != nil && c.sharedInfra.STMAccessor != nil {
+		stm := c.sharedInfra.STMAccessor()
+		if stm != nil {
+			if err := stm.CreatePhasePlan(phases, checkpointMap, reasoning, confidence); err != nil {
+				return "", fmt.Errorf("failed to store phase plan: %w", err)
+			}
+		}
+	}
+
+	result := fmt.Sprintf(`✅ PHASE PLAN CREATED
+
+Planned Phases: %s
+Total Phases: %d
+
+Checkpoints:
+%s
+
+Reasoning:
+%s
+
+Confidence: %s
+
+📋 EXECUTION ROADMAP:
+%s
+
+The plan has been stored in WorkStream and will guide phase execution.
+Each phase will automatically transition to the next phase upon completion.
+At checkpoints, you can reassess and adjust the plan if needed.
+
+🚀 Next: Begin execution with the first phase (%s)`,
+		strings.Join(phases, " → "),
+		len(phases),
+		formatCheckpoints(checkpointMap),
+		reasoning,
+		confidence,
+		formatPhaseRoadmap(phases, checkpointMap),
+		phases[0])
+
+	return result, nil
+}
+
+func formatCheckpoints(checkpoints map[string]bool) string {
+	if len(checkpoints) == 0 {
+		return "  None defined"
+	}
+	parts := []string{}
+	for cp := range checkpoints {
+		parts = append(parts, fmt.Sprintf("  ✓ %s", cp))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func formatPhaseRoadmap(phases []string, checkpoints map[string]bool) string {
+	var roadmap strings.Builder
+	for i, phase := range phases {
+		// Phase number and name
+		roadmap.WriteString(fmt.Sprintf("%d. %s", i+1, formatPhaseName(phase)))
+
+		// Check if this is a checkpoint phase
+		checkpointKey := fmt.Sprintf("after_%s", phase)
+		if checkpoints[checkpointKey] {
+			roadmap.WriteString(" 🔍 (checkpoint)")
+		}
+
+		if i < len(phases)-1 {
+			roadmap.WriteString("\n   ↓\n")
+		}
+	}
+	return roadmap.String()
+}
+
+func formatPhaseName(phaseID string) string {
+	names := map[string]string{
+		"intake":        "Intake & Context",
+		"investigation": "Investigation & Analysis",
+		"planning":      "Planning & Design",
+		"execution":     "Execution & Implementation",
+		"review":        "Review & Validation",
+		"delivery":      "Delivery & Handoff",
+	}
+	if name, ok := names[phaseID]; ok {
+		return name
+	}
+	return phaseID
+}
+
 func (c *PhaseCapability) readPatch(args map[string]any) *Patch {
 	if args == nil {
 		return nil
@@ -1260,6 +1587,15 @@ func (c *PhaseCapability) runCapture(args map[string]any) (string, error) {
 		return "", err
 	}
 
+	// Extract structured_data if provided
+	var structuredData map[string]any
+	if sd, ok := args["structured_data"].(map[string]any); ok && sd != nil {
+		structuredData = sd
+	} else if previous.StructuredData != nil {
+		// Preserve previous structured data if not provided in this call
+		structuredData = previous.StructuredData
+	}
+
 	artifact := phaseArtifact{
 		PhaseID:             c.phaseID,
 		Summary:             readPhaseString(args, "summary", previous.Summary),
@@ -1275,6 +1611,7 @@ func (c *PhaseCapability) runCapture(args map[string]any) (string, error) {
 		ExitRequested:       readPhaseBool(args, "exit") || previous.ExitRequested,
 		Iteration:           previous.Iteration + 1,
 		UpdatedAt:           time.Now().UTC(),
+		StructuredData:      structuredData,
 	}
 	if artifact.Iteration <= 0 {
 		artifact.Iteration = 1
@@ -1297,14 +1634,80 @@ func (c *PhaseCapability) runCapture(args map[string]any) (string, error) {
 	if artifact.TransitionDirection == "" && previous.TransitionDirection != "" {
 		artifact.TransitionDirection = previous.TransitionDirection
 	}
+
+	// Phase Succession: Determine next phase from PhasePlan if complete
+	// Priority Rules:
+	// 1. Exit requests: Always honored (artifact.ExitRequested)
+	// 2. Explicit transitions: LLM-provided transition_to overrides plan (checkpoints or user requests)
+	// 3. Automatic succession: Use plan if no explicit transition
+	if strings.ToLower(strings.TrimSpace(artifact.Status)) == "complete" {
+		if artifact.TransitionTo == "" && !artifact.ExitRequested {
+			// No explicit transition provided - use plan's next phase
+			nextPhase, direction := c.determineNextPhaseFromPlan()
+			if nextPhase != "" {
+				artifact.TransitionTo = nextPhase
+				artifact.TransitionDirection = direction
+			}
+		}
+	}
+
 	if err := c.persistArtifact(artifact); err != nil {
 		return "", err
 	}
+
+	// Build response message
 	payload, err := json.MarshalIndent(artifact, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal artifact: %w", err)
 	}
-	return fmt.Sprintf("Recorded %s phase artifact:\n%s", c.name, string(payload)), nil
+
+	response := fmt.Sprintf("Recorded %s phase artifact:\n%s", c.name, string(payload))
+
+	// Add completion notice if status is "complete"
+	if strings.ToLower(strings.TrimSpace(artifact.Status)) == "complete" {
+		response += fmt.Sprintf("\n\n✅ Phase %s marked as COMPLETE", c.name)
+
+		// Check if this is a checkpoint phase
+		isCheckpoint := c.isCheckpointPhase()
+		if isCheckpoint {
+			response += " 🔍 (CHECKPOINT PHASE)"
+		}
+
+		// Show progress through plan
+		progressInfo := c.getProgressInfo()
+		if progressInfo != "" {
+			response += "\n\n" + progressInfo
+		}
+
+		if artifact.TransitionTo != "" {
+			response += fmt.Sprintf("\n\n→ Next phase: %s", formatPhaseName(artifact.TransitionTo))
+			if isCheckpoint {
+				response += "\n\n💡 TIP: At checkpoints, you can override the planned path by specifying a different transition_to if the situation has changed."
+			}
+		} else if artifact.ExitRequested {
+			response += "\n\n→ Exiting workflow"
+		}
+	} else if artifact.Status == "blocked" || artifact.Status == "failed" {
+		// Handle blocked/failed states
+		response += fmt.Sprintf("\n\n⚠️  Phase %s status: %s", c.name, strings.ToUpper(artifact.Status))
+
+		if artifact.ExitRequested {
+			response += "\n\n→ Exit requested. Workflow will stop."
+		} else {
+			response += "\n\n🔧 OPTIONS:"
+			response += "\n   1. Retry this phase after addressing the issue"
+			response += "\n   2. Skip to a different phase by setting transition_to"
+			response += "\n   3. Request exit by setting exit=true"
+
+			// Show what's remaining in the plan
+			progressInfo := c.getProgressInfo()
+			if progressInfo != "" {
+				response += "\n\n" + progressInfo
+			}
+		}
+	}
+
+	return response, nil
 }
 
 func (c *PhaseCapability) runState(args map[string]any) (string, error) {
@@ -1372,6 +1775,183 @@ func (c *PhaseCapability) persistArtifact(artifact phaseArtifact) error {
 		_ = storage
 	}
 	return nil
+}
+
+// determineNextPhaseFromPlan reads the PhasePlan and determines the next phase
+// Returns (nextPhase, direction) or ("", "") if no plan or no next phase
+func (c *PhaseCapability) determineNextPhaseFromPlan() (string, string) {
+	if c == nil || c.sharedInfra == nil || c.sharedInfra.STMAccessor == nil {
+		return "", ""
+	}
+
+	// Get STM and current thread
+	stm := c.sharedInfra.STMAccessor()
+	if stm == nil {
+		return "", ""
+	}
+
+	thread := stm.GetCurrentThread()
+	if thread == nil {
+		return "", ""
+	}
+
+	streamCtx := thread.GetStreamContext()
+	if streamCtx == nil {
+		return "", ""
+	}
+
+	plan := streamCtx.GetPhasePlan()
+	if plan == nil {
+		return "", ""
+	}
+
+	// Find current phase in plan
+	plannedPhases := plan.GetPlannedPhases()
+	currentIdx := plan.GetCurrentIndex()
+
+	// Verify we're at the right phase
+	if currentIdx < 0 || currentIdx >= len(plannedPhases) {
+		return "", ""
+	}
+
+	if plannedPhases[currentIdx] != c.phaseID {
+		// Plan is out of sync - try to find current phase
+		for i, phase := range plannedPhases {
+			if phase == c.phaseID {
+				// Update plan index
+				plan.SetCurrentIndex(i)
+				currentIdx = i
+				break
+			}
+		}
+	}
+
+	// Advance to next phase
+	nextPhase, hasNext := plan.AdvancePhase()
+	if !hasNext {
+		return "", "" // No more phases
+	}
+
+	// Check if next phase is a checkpoint
+	checkpoints := plan.GetCheckpoints()
+	checkpointKey := fmt.Sprintf("after_%s", c.phaseID)
+	isCheckpoint := checkpoints != nil && checkpoints[checkpointKey]
+
+	direction := "forward"
+	if isCheckpoint {
+		// Checkpoint: Handoff() will re-assess and potentially change direction
+		// For now, still advance forward, Handoff will handle re-routing
+		direction = "forward"
+	}
+
+	return nextPhase, direction
+}
+
+// isCheckpointPhase checks if the current phase is a checkpoint in the PhasePlan
+func (c *PhaseCapability) isCheckpointPhase() bool {
+	if c == nil || c.sharedInfra == nil || c.sharedInfra.STMAccessor == nil {
+		return false
+	}
+
+	stm := c.sharedInfra.STMAccessor()
+	if stm == nil {
+		return false
+	}
+
+	thread := stm.GetCurrentThread()
+	if thread == nil {
+		return false
+	}
+
+	streamCtx := thread.GetStreamContext()
+	if streamCtx == nil {
+		return false
+	}
+
+	plan := streamCtx.GetPhasePlan()
+	if plan == nil {
+		return false
+	}
+
+	checkpoints := plan.GetCheckpoints()
+	if checkpoints == nil {
+		return false
+	}
+
+	// Check for checkpoint after current phase
+	checkpointKey := fmt.Sprintf("after_%s", c.phaseID)
+	return checkpoints[checkpointKey]
+}
+
+// getProgressInfo returns a formatted string showing progress through the phase plan
+func (c *PhaseCapability) getProgressInfo() string {
+	if c == nil || c.sharedInfra == nil || c.sharedInfra.STMAccessor == nil {
+		return ""
+	}
+
+	stm := c.sharedInfra.STMAccessor()
+	if stm == nil {
+		return ""
+	}
+
+	thread := stm.GetCurrentThread()
+	if thread == nil {
+		return ""
+	}
+
+	streamCtx := thread.GetStreamContext()
+	if streamCtx == nil {
+		return ""
+	}
+
+	plan := streamCtx.GetPhasePlan()
+	if plan == nil {
+		return ""
+	}
+
+	phases := plan.GetPlannedPhases()
+	currentIdx := plan.GetCurrentIndex()
+
+	if currentIdx < 0 || currentIdx >= len(phases) {
+		return ""
+	}
+
+	// Calculate progress
+	// Note: CurrentIndex points to the NEXT phase to execute (cursor already advanced)
+	// So CurrentIndex itself is the number of completed phases
+	completed := currentIdx
+	total := len(phases)
+
+	if completed > total {
+		completed = total // Safety check
+	}
+
+	percentage := 0
+	if total > 0 {
+		percentage = (completed * 100) / total
+	}
+
+	var progress strings.Builder
+	progress.WriteString(fmt.Sprintf("📊 PROGRESS: %d/%d phases complete (%d%%)", completed, total, percentage))
+	progress.WriteString("\n\n")
+
+	// Show visual progress bar
+	progress.WriteString("   ")
+	for i, phase := range phases {
+		if i < completed {
+			progress.WriteString("✅ ")
+		} else if i == completed {
+			progress.WriteString("⏭️  ")
+		} else {
+			progress.WriteString("⬜ ")
+		}
+		progress.WriteString(formatPhaseName(phase))
+		if i < len(phases)-1 {
+			progress.WriteString("\n   ")
+		}
+	}
+
+	return progress.String()
 }
 
 func readPhaseString(args map[string]any, key, fallback string) string {
@@ -1460,18 +2040,19 @@ func readPhaseBool(args map[string]any, key string) bool {
 }
 
 type phaseArtifact struct {
-	PhaseID             string    `json:"phase_id"`
-	Summary             string    `json:"summary"`
-	Status              string    `json:"status"`
-	Requirements        []string  `json:"requirements,omitempty"`
-	Plan                []string  `json:"plan,omitempty"`
-	Notes               []string  `json:"notes,omitempty"`
-	Evidence            []string  `json:"evidence,omitempty"`
-	NextSteps           []string  `json:"next_steps,omitempty"`
-	TransitionTo        string    `json:"transition_to,omitempty"`
-	TransitionFrom      string    `json:"transition_from,omitempty"`
-	TransitionDirection string    `json:"transition_direction,omitempty"`
-	ExitRequested       bool      `json:"exit_requested,omitempty"`
-	Iteration           int       `json:"iteration"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	PhaseID             string         `json:"phase_id"`
+	Summary             string         `json:"summary"`
+	Status              string         `json:"status"`
+	Requirements        []string       `json:"requirements,omitempty"`
+	Plan                []string       `json:"plan,omitempty"`
+	Notes               []string       `json:"notes,omitempty"`
+	Evidence            []string       `json:"evidence,omitempty"`
+	NextSteps           []string       `json:"next_steps,omitempty"`
+	TransitionTo        string         `json:"transition_to,omitempty"`
+	TransitionFrom      string         `json:"transition_from,omitempty"`
+	TransitionDirection string         `json:"transition_direction,omitempty"`
+	ExitRequested       bool           `json:"exit_requested,omitempty"`
+	Iteration           int            `json:"iteration"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+	StructuredData      map[string]any `json:"structured_data,omitempty"` // Phase-specific structured data (test results, findings, etc.)
 }

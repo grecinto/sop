@@ -1,12 +1,18 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	log "log/slog"
+
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/btree"
 )
 
 // RunnerSession holds the state for the current agent execution session,
@@ -99,8 +105,78 @@ type Interaction struct {
 	ActiveKB  string           `json:"active_kb,omitempty"` // The target KB evaluated in this sequence
 }
 
+// WorkStreamState represents the lifecycle state of a work stream
+type WorkStreamState string
+
+const (
+	WorkStreamActive    WorkStreamState = "active"    // Currently executing
+	WorkStreamPaused    WorkStreamState = "paused"    // Paused due to interjection
+	WorkStreamCompleted WorkStreamState = "completed" // Successfully finished
+	WorkStreamAbandoned WorkStreamState = "abandoned" // User canceled or error
+)
+
+// InterjectionType defines how a work stream was created from user input
+type InterjectionType string
+
+const (
+	InterjectionNone         InterjectionType = "none"          // Initial query
+	InterjectionPauseNew     InterjectionType = "pause_new"     // Pause current, start new
+	InterjectionClearRestart InterjectionType = "clear_restart" // Clear all, start fresh
+	InterjectionRefine       InterjectionType = "refine"        // Stay in current, jump phase
+)
+
+// PhasePlan defines the planned sequence of phases for a work stream
+type PhasePlan struct {
+	PlannedPhases   []string        `json:"planned_phases"`   // Full planned path: ["investigation", "planning", "execution", "review", "delivery"]
+	CurrentIndex    int             `json:"current_index"`    // Which phase we're on (0-based)
+	CompletedPhases []string        `json:"completed_phases"` // Phases already completed
+	RemainingPhases []string        `json:"remaining_phases"` // Phases yet to execute
+	Checkpoints     map[string]bool `json:"checkpoints"`      // Re-assess triggers: {"after_investigation": true}
+	Reasoning       string          `json:"reasoning"`        // Why this path was chosen
+	Confidence      string          `json:"confidence"`       // "high", "medium", "low"
+	LastUpdated     int64           `json:"last_updated"`     // Timestamp of last path modification
+}
+
+// LoopDetectionState tracks iteration patterns to prevent infinite loops
+type LoopDetectionState struct {
+	MaxIterations   int      `json:"max_iterations"`    // e.g., 20 total phases (prevents runaway)
+	MaxPhaseRepeats int      `json:"max_phase_repeats"` // e.g., 3 times in same phase (prevents stuck phases)
+	PatternWindow   int      `json:"pattern_window"`    // e.g., detect loops in last 10 phases
+	DetectedLoops   []string `json:"detected_loops"`    // Patterns detected (for logging/debugging)
+	EscalationLevel int      `json:"escalation_level"`  // 0=none, 1=warning, 2=user prompt, 3=abort
+}
+
+// WorkStreamContext captures the phase progression and artifacts
+type WorkStreamContext struct {
+	CurrentPhase   string                    `json:"current_phase"`   // Current executing phase
+	PhaseHistory   []string                  `json:"phase_history"`   // All phases executed: [intake, investigation, planning, ...]
+	PhasePlan      *PhasePlan                `json:"phase_plan"`      // THE PLAN - persisted across pause/resume
+	PhaseArtifacts map[string]map[string]any `json:"phase_artifacts"` // Artifacts from each phase
+	LastToolCalls  []string                  `json:"last_tool_calls"` // Tools called in this stream
+
+	// Loop Detection & Iteration Tracking
+	IterationCount     int                 `json:"iteration_count"`      // Total phase executions (for loop detection)
+	PhaseIterations    map[string]int      `json:"phase_iterations"`     // Per-phase counters: {"investigation": 3, "execution": 2}
+	RecentPhasePattern []string            `json:"recent_phase_pattern"` // Last 10 phases for pattern detection
+	LoopDetectionState *LoopDetectionState `json:"loop_detection"`       // Loop tracking configuration
+
+	// Timestamps
+	StartedAt   int64 `json:"started_at"`   // When stream created
+	PausedAt    int64 `json:"paused_at"`    // When paused (0 if active)
+	CompletedAt int64 `json:"completed_at"` // When completed (0 if not done)
+
+	// Work Stream Relationships
+	ParentStreamID   sop.UUID         `json:"parent_stream_id"`  // The stream that was paused to start this
+	InterjectionType InterjectionType `json:"interjection_type"` // How this stream was created
+
+	// Manual Resume Control
+	RequiresManualResume bool   `json:"requires_manual_resume"` // If true, won't auto-resume on completion of child stream
+	PauseReason          string `json:"pause_reason"`           // Why this stream was paused (for user reminder)
+}
+
 // ConversationThread represents a single conversational thread.
 // It starts with a root prompt and spins up a Q&A exchange, eventually leading to a conclusion.
+// Now also supports work stream context for phase-based execution with succession paths.
 type ConversationThread struct {
 	ID         sop.UUID `json:"id"`
 	RootPrompt string   `json:"root_prompt"` // The seed sentence that started this thread
@@ -116,6 +192,10 @@ type ConversationThread struct {
 	// Termination
 	Conclusion string `json:"conclusion"` // Summary or Agreement
 	Status     string `json:"status"`     // "active", "concluded"
+
+	// Work Stream Support (Planning-First Architecture)
+	StreamState   WorkStreamState    `json:"stream_state"`   // Lifecycle state
+	StreamContext *WorkStreamContext `json:"stream_context"` // Phase progression and artifacts
 }
 
 // ShortTermMemory manages the history of conversation threads.
@@ -234,6 +314,452 @@ func (stm *ShortTermMemory) GetCurrentThread() *ConversationThread {
 		return nil
 	}
 	return stm.Threads[stm.CurrentThreadID]
+}
+
+// NewWorkStreamContext creates a new work stream context with loop detection
+func NewWorkStreamContext(initialPhase string, parentStreamID sop.UUID, interjectionType InterjectionType) *WorkStreamContext {
+	return &WorkStreamContext{
+		CurrentPhase:       initialPhase,
+		PhaseHistory:       []string{},
+		PhaseArtifacts:     make(map[string]map[string]any),
+		LastToolCalls:      []string{},
+		IterationCount:     0,
+		PhaseIterations:    make(map[string]int),
+		RecentPhasePattern: []string{},
+		LoopDetectionState: &LoopDetectionState{
+			MaxIterations:   20, // Max 20 phases total
+			MaxPhaseRepeats: 3,  // Max 3 times in same phase
+			PatternWindow:   10, // Detect in last 10 phases
+			DetectedLoops:   []string{},
+			EscalationLevel: 0, // Start at no escalation
+		},
+		StartedAt:        time.Now().Unix(),
+		PausedAt:         0,
+		CompletedAt:      0,
+		ParentStreamID:   parentStreamID,
+		InterjectionType: interjectionType,
+	}
+}
+
+// InitializeWorkStream sets up work stream support for a conversation thread
+func (thread *ConversationThread) InitializeWorkStream(initialPhase string) {
+	if thread.StreamContext == nil {
+		thread.StreamState = WorkStreamActive
+		thread.StreamContext = NewWorkStreamContext(initialPhase, sop.UUID{}, InterjectionNone)
+	}
+}
+
+// RecordPhaseExecution updates work stream tracking when a phase executes
+func (ctx *WorkStreamContext) RecordPhaseExecution(phaseName string) {
+	if ctx == nil {
+		return
+	}
+
+	// Update iteration tracking
+	ctx.IterationCount++
+	ctx.PhaseIterations[phaseName]++
+
+	// Update phase history
+	if len(ctx.PhaseHistory) == 0 || ctx.PhaseHistory[len(ctx.PhaseHistory)-1] != phaseName {
+		ctx.PhaseHistory = append(ctx.PhaseHistory, phaseName)
+	}
+
+	// Update pattern tracking for loop detection
+	ctx.RecentPhasePattern = append(ctx.RecentPhasePattern, phaseName)
+	if len(ctx.RecentPhasePattern) > ctx.LoopDetectionState.PatternWindow {
+		ctx.RecentPhasePattern = ctx.RecentPhasePattern[1:]
+	}
+}
+
+// CheckForLoop detects if the work stream is stuck in a loop
+func (ctx *WorkStreamContext) CheckForLoop() (bool, string) {
+	if ctx == nil || ctx.LoopDetectionState == nil {
+		return false, ""
+	}
+
+	// Check 1: Total iterations exceeded (CRITICAL - abort)
+	if ctx.IterationCount >= ctx.LoopDetectionState.MaxIterations {
+		ctx.LoopDetectionState.EscalationLevel = 3 // Abort
+		msg := fmt.Sprintf("Exceeded max %d iterations", ctx.LoopDetectionState.MaxIterations)
+		ctx.LoopDetectionState.DetectedLoops = append(ctx.LoopDetectionState.DetectedLoops, msg)
+		return true, msg
+	}
+
+	// Check 2: Same phase repeated too many times (MEDIUM - user prompt)
+	currentRepeats := ctx.PhaseIterations[ctx.CurrentPhase]
+	if currentRepeats >= ctx.LoopDetectionState.MaxPhaseRepeats {
+		ctx.LoopDetectionState.EscalationLevel = 2 // User prompt
+		msg := fmt.Sprintf("Phase '%s' repeated %d times", ctx.CurrentPhase, currentRepeats)
+		ctx.LoopDetectionState.DetectedLoops = append(ctx.LoopDetectionState.DetectedLoops, msg)
+		return true, msg
+	}
+
+	// Check 3: Repeating pattern (e.g., A→B→C→A→B→C) (LOW - warning)
+	if isRepeatingPattern(ctx.RecentPhasePattern) {
+		if ctx.LoopDetectionState.EscalationLevel < 1 {
+			ctx.LoopDetectionState.EscalationLevel = 1 // Warning
+		}
+		pattern := strings.Join(ctx.RecentPhasePattern, "→")
+		msg := fmt.Sprintf("Detected repeating pattern: %s", pattern)
+		ctx.LoopDetectionState.DetectedLoops = append(ctx.LoopDetectionState.DetectedLoops, msg)
+		return true, msg
+	}
+
+	return false, ""
+}
+
+// isRepeatingPattern detects if a sequence has a repeating sub-pattern
+func isRepeatingPattern(phases []string) bool {
+	n := len(phases)
+	if n < 4 {
+		return false // Need at least 4 items to detect a 2-item pattern
+	}
+
+	// Try pattern lengths from 2 to n/2
+	for patternLen := 2; patternLen <= n/2; patternLen++ {
+		if n%patternLen != 0 {
+			continue // Pattern must divide evenly
+		}
+
+		// Check if this pattern repeats
+		pattern := phases[:patternLen]
+		isRepeating := true
+		for i := patternLen; i < n; i += patternLen {
+			segment := phases[i : i+patternLen]
+			if !slicesEqual(pattern, segment) {
+				isRepeating = false
+				break
+			}
+		}
+
+		if isRepeating {
+			return true
+		}
+	}
+
+	return false
+}
+
+// PauseWorkStreamWithReason marks a work stream as paused and optionally requires manual resume
+func (thread *ConversationThread) PauseWorkStreamWithReason(reason string, requireManualResume bool) {
+	if thread == nil || thread.StreamContext == nil {
+		return
+	}
+
+	thread.StreamState = WorkStreamPaused
+	thread.StreamContext.PausedAt = time.Now().Unix()
+	thread.StreamContext.PauseReason = reason
+	thread.StreamContext.RequiresManualResume = requireManualResume
+}
+
+// CanAutoResume checks if a paused work stream can be automatically resumed
+func (thread *ConversationThread) CanAutoResume() bool {
+	if thread == nil || thread.StreamContext == nil {
+		return false
+	}
+
+	// Cannot auto-resume if:
+	// 1. Not in paused state
+	// 2. Requires manual resume flag is set
+	if thread.StreamState != WorkStreamPaused {
+		return false
+	}
+
+	return !thread.StreamContext.RequiresManualResume
+}
+
+// IsWaitingForManualResume checks if a thread is paused and waiting for explicit user resume
+func (thread *ConversationThread) IsWaitingForManualResume() bool {
+	if thread == nil || thread.StreamContext == nil {
+		return false
+	}
+
+	return thread.StreamState == WorkStreamPaused && thread.StreamContext.RequiresManualResume
+}
+
+// ResumeWorkStream marks a paused work stream as active again
+func (thread *ConversationThread) ResumeWorkStream() {
+	if thread == nil || thread.StreamContext == nil {
+		return
+	}
+
+	if thread.StreamState == WorkStreamPaused {
+		thread.StreamState = WorkStreamActive
+		thread.StreamContext.PausedAt = 0
+		thread.StreamContext.RequiresManualResume = false
+		thread.StreamContext.PauseReason = ""
+	}
+}
+
+// GetPausedWorkStreams returns all paused threads from short-term memory
+func (stm *ShortTermMemory) GetPausedWorkStreams() []*ConversationThread {
+	if stm == nil {
+		return nil
+	}
+
+	paused := []*ConversationThread{}
+	for _, thread := range stm.Threads {
+		if thread.StreamState == WorkStreamPaused {
+			paused = append(paused, thread)
+		}
+	}
+
+	return paused
+}
+
+// GetManualResumeWorkStreams returns threads that are paused and require manual resume
+func (stm *ShortTermMemory) GetManualResumeWorkStreams() []*ConversationThread {
+	if stm == nil {
+		return nil
+	}
+
+	manualResume := []*ConversationThread{}
+	for _, thread := range stm.Threads {
+		if thread.IsWaitingForManualResume() {
+			manualResume = append(manualResume, thread)
+		}
+	}
+
+	return manualResume
+}
+
+// FormatPausedWorkStreamsReminder creates a user-friendly reminder about paused work streams
+func (stm *ShortTermMemory) FormatPausedWorkStreamsReminder() string {
+	paused := stm.GetManualResumeWorkStreams()
+	if len(paused) == 0 {
+		return ""
+	}
+
+	var lines []string
+	lines = append(lines, "📌 **Paused Work Streams** (require manual resume):")
+
+	for i, thread := range paused {
+		label := thread.Label
+		if label == "" {
+			label = thread.RootPrompt
+			if len(label) > 50 {
+				label = label[:47] + "..."
+			}
+		}
+
+		pausedDuration := ""
+		if thread.StreamContext != nil && thread.StreamContext.PausedAt > 0 {
+			duration := time.Now().Unix() - thread.StreamContext.PausedAt
+			if duration < 60 {
+				pausedDuration = fmt.Sprintf("%ds ago", duration)
+			} else if duration < 3600 {
+				pausedDuration = fmt.Sprintf("%dm ago", duration/60)
+			} else if duration < 86400 {
+				pausedDuration = fmt.Sprintf("%dh ago", duration/3600)
+			} else {
+				pausedDuration = fmt.Sprintf("%dd ago", duration/86400)
+			}
+		}
+
+		reason := ""
+		if thread.StreamContext != nil && thread.StreamContext.PauseReason != "" {
+			reason = fmt.Sprintf(" - %s", thread.StreamContext.PauseReason)
+		}
+
+		currentPhase := ""
+		if thread.StreamContext != nil && thread.StreamContext.CurrentPhase != "" {
+			currentPhase = fmt.Sprintf(" (paused in %s phase)", thread.StreamContext.CurrentPhase)
+		}
+
+		lines = append(lines, fmt.Sprintf("   %d. **%s**%s%s %s",
+			i+1, label, currentPhase, reason, pausedDuration))
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "💡 Use 'resume [number]' to continue a paused task")
+
+	return strings.Join(lines, "\n")
+}
+
+// slicesEqual checks if two string slices are equal
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// WorkStreamSessionTTL defines how long saved session states are kept
+const WorkStreamSessionTTL = 7 * 24 * time.Hour
+
+// Persist saves the entire ShortTermMemory state to B-tree
+func (stm *ShortTermMemory) Persist(ctx context.Context, btree btree.BtreeInterface[string, any]) error {
+	if stm == nil {
+		return nil
+	}
+
+	// Serialize threads (handle nested structs)
+	threadsJSON, err := json.Marshal(stm.Threads)
+	if err != nil {
+		return fmt.Errorf("failed to marshal threads: %w", err)
+	}
+
+	orderJSON, err := json.Marshal(stm.Order)
+	if err != nil {
+		return fmt.Errorf("failed to marshal order: %w", err)
+	}
+
+	currentIDStr := ""
+	if !stm.CurrentThreadID.IsNil() {
+		currentIDStr = stm.CurrentThreadID.String()
+	}
+
+	payload := map[string]any{
+		"id":           "stm_session_state",
+		"version":      1,
+		"threads_json": string(threadsJSON),
+		"order_json":   string(orderJSON),
+		"current_id":   currentIDStr,
+		"updated_at":   time.Now().Unix(),
+		"expires_at":   time.Now().Add(WorkStreamSessionTTL).Unix(),
+	}
+
+	// Optionally persist caveats and boundaries (they're session-specific)
+	if len(stm.RuntimeCaveats) > 0 {
+		if caveatsJSON, err := json.Marshal(stm.RuntimeCaveats); err == nil {
+			payload["caveats_json"] = string(caveatsJSON)
+		}
+	}
+	if len(stm.SessionBoundaries) > 0 {
+		if boundariesJSON, err := json.Marshal(stm.SessionBoundaries); err == nil {
+			payload["boundaries_json"] = string(boundariesJSON)
+		}
+	}
+
+	_, err = btree.Add(ctx, "stm_session_state", payload)
+	if err != nil {
+		return fmt.Errorf("failed to persist session state: %w", err)
+	}
+
+	log.Debug("Persisted ShortTermMemory session state",
+		"threads", len(stm.Threads),
+		"current", currentIDStr)
+
+	return nil
+}
+
+// Rehydrate restores ShortTermMemory state from B-tree
+func (stm *ShortTermMemory) Rehydrate(ctx context.Context, btree btree.BtreeInterface[string, any]) error {
+	if stm == nil {
+		return nil
+	}
+
+	// Try to load saved state
+	found, err := btree.Find(ctx, "stm_session_state", false)
+	if err != nil || !found {
+		// No saved state is OK (fresh session)
+		return nil
+	}
+
+	valItem, err := btree.GetCurrentValue(ctx)
+	if err != nil {
+		return nil
+	}
+	payload, ok := valItem.(map[string]any)
+	if !ok {
+		// Invalid type, start fresh
+		return nil
+	}
+
+	// Check expiration
+	if expiresAt, ok := payload["expires_at"].(int64); ok {
+		if time.Now().Unix() > expiresAt {
+			log.Info("Session state expired, starting fresh")
+			return nil
+		}
+	}
+
+	// Deserialize threads
+	if threadsJSON, ok := payload["threads_json"].(string); ok && threadsJSON != "" {
+		threads := make(map[sop.UUID]*ConversationThread)
+		if err := json.Unmarshal([]byte(threadsJSON), &threads); err != nil {
+			log.Warn("Failed to unmarshal threads, starting fresh", "error", err)
+			return nil // Graceful degradation
+		}
+		stm.Threads = threads
+	}
+
+	// Deserialize order
+	if orderJSON, ok := payload["order_json"].(string); ok && orderJSON != "" {
+		order := []sop.UUID{}
+		if err := json.Unmarshal([]byte(orderJSON), &order); err != nil {
+			log.Warn("Failed to unmarshal order, starting fresh", "error", err)
+			return nil
+		}
+		stm.Order = order
+	}
+
+	// Restore current thread ID
+	if currentIDStr, ok := payload["current_id"].(string); ok && currentIDStr != "" {
+		if parsedID, err := sop.ParseUUID(currentIDStr); err == nil {
+			stm.CurrentThreadID = parsedID
+		}
+	}
+
+	// Restore caveats (optional)
+	if caveatsJSON, ok := payload["caveats_json"].(string); ok && caveatsJSON != "" {
+		caveats := []RuntimeCaveat{}
+		if err := json.Unmarshal([]byte(caveatsJSON), &caveats); err == nil {
+			stm.RuntimeCaveats = caveats
+		}
+	}
+
+	// Restore boundaries (optional)
+	if boundariesJSON, ok := payload["boundaries_json"].(string); ok && boundariesJSON != "" {
+		boundaries := []SessionBoundary{}
+		if err := json.Unmarshal([]byte(boundariesJSON), &boundaries); err == nil {
+			stm.SessionBoundaries = boundaries
+		}
+	}
+
+	log.Info("Rehydrated ShortTermMemory session state",
+		"threads", len(stm.Threads),
+		"current", stm.CurrentThreadID.String())
+
+	return nil
+}
+
+// PruneExpiredSessions removes old session states (called during sleep cycle)
+func PruneExpiredSessions(ctx context.Context, btree btree.BtreeInterface[string, any], now time.Time) (int, error) {
+	if btree == nil {
+		return 0, nil
+	}
+
+	found, err := btree.Find(ctx, "stm_session_state", false)
+	if err != nil || !found {
+		return 0, nil // No session state to prune
+	}
+
+	valItem, err := btree.GetCurrentValue(ctx)
+	if err != nil {
+		return 0, nil
+	}
+	payload, ok := valItem.(map[string]any)
+	if !ok {
+		return 0, nil
+	}
+
+	if expiresAt, ok := payload["expires_at"].(int64); ok {
+		if now.Unix() > expiresAt {
+			if _, err := btree.Remove(ctx, "stm_session_state"); err != nil {
+				return 0, err
+			}
+			log.Info("Pruned expired session state")
+			return 1, nil
+		}
+	}
+
+	return 0, nil
 }
 
 func (stm *ShortTermMemory) AddCaveat(caveat string) {

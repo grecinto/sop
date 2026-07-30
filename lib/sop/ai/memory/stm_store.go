@@ -23,6 +23,9 @@ type ShortTermMemoryStore struct {
 	primary btree.BtreeInterface[string, any]
 	byTime  btree.BtreeInterface[string, any]
 	maxAge  time.Duration
+
+	// Hook for session state persistence (work streams, conversation threads)
+	sessionStatePersister func(context.Context, btree.BtreeInterface[string, any]) error
 }
 
 func buildMemoryScopeID(agentID string, userID string) string {
@@ -149,6 +152,15 @@ func (s *ShortTermMemoryStore) StoreName() string {
 
 func (s *ShortTermMemoryStore) TimeIndexName() string {
 	return BuildSTMTimeIndexName(s.agentID, s.userID)
+}
+
+// SetSessionStatePersister allows external code to hook into batch commits
+// for persisting session state (work streams, conversation threads)
+func (s *ShortTermMemoryStore) SetSessionStatePersister(fn func(context.Context, btree.BtreeInterface[string, any]) error) {
+	if s == nil {
+		return
+	}
+	s.sessionStatePersister = fn
 }
 
 func (s *ShortTermMemoryStore) Primary() btree.BtreeInterface[string, any] {
@@ -296,6 +308,15 @@ func (s *ShortTermMemoryStore) StartPeriodicCommitter(ctx context.Context, syste
 						batching = false
 					case <-ctx.Done():
 						batching = false
+					}
+				}
+
+				// Persist session state (work streams) in the same transaction
+				if s.sessionStatePersister != nil {
+					if err := s.sessionStatePersister(ctx, s.primary); err != nil {
+						log.Warn("ShortTermMemoryStore: failed to persist session state",
+							"agent_id", s.agentID, "error", err)
+						// Don't rollback - episodes are more important than session state
 					}
 				}
 

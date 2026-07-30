@@ -123,7 +123,6 @@ type Capability interface {
 	ExposeTools() []ToolDefinition
 	BuildInstructions(query string, state RoutingState) string
 	Handoff(ctx context.Context, query string, state RoutingState) *Handoff
-	// Run(query string, state RoutingState) (CapabilityResult, error)
 }
 
 // PrefixHandler extends Capability to enable direct command-prefix routing.

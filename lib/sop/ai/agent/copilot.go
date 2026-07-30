@@ -33,6 +33,7 @@ import (
 	"github.com/sharedcode/sop/ai/generator"
 	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/ai/obfuscation"
+	"github.com/sharedcode/sop/btree"
 	"github.com/sharedcode/sop/jsondb"
 )
 
@@ -1791,6 +1792,8 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// Register the local coding workflow capability by default so repository-oriented
 	// requests can still be routed through the established workflow entry point.
 	cwfInfra := cw.NewDefaultSharedInfrastructure()
+	// Inject STM accessor for phase succession (explicit parameter passing, not context)
+	cwfInfra.STMAccessor = a.getSTMForPhaseCapabilities
 	caps = append(caps, cw.NewServiceCapability(cwfInfra))
 	caps = append(caps,
 		cw.NewIntakePhaseCapability(cwfInfra),
@@ -1802,6 +1805,144 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	)
 
 	a.capabilityRegistry = capabilities.NewRegistry(caps...)
+}
+
+// getSTMForPhaseCapabilities returns the agent's STM for phase succession access
+func (a *CopilotAgent) getSTMForPhaseCapabilities() cw.STMReader {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return nil
+	}
+	return &stmAdapter{stm: a.service.session.Memory}
+}
+
+// stmAdapter adapts ShortTermMemory to STMReader interface
+type stmAdapter struct {
+	stm *ShortTermMemory
+}
+
+func (s *stmAdapter) GetCurrentThread() cw.WorkStreamReader {
+	if s == nil || s.stm == nil {
+		return nil
+	}
+	thread := s.stm.GetCurrentThread()
+	if thread == nil {
+		return nil
+	}
+	return &workStreamAdapter{thread: thread}
+}
+
+func (s *stmAdapter) CreatePhasePlan(phases []string, checkpoints map[string]bool, reasoning, confidence string) error {
+	if s == nil || s.stm == nil {
+		return fmt.Errorf("no STM available")
+	}
+
+	thread := s.stm.GetCurrentThread()
+	if thread == nil {
+		return fmt.Errorf("no active thread")
+	}
+
+	// Initialize WorkStream if needed
+	if thread.StreamContext == nil {
+		thread.InitializeWorkStream(phases[0])
+	}
+
+	// Create PhasePlan
+	plan := &PhasePlan{
+		PlannedPhases:   phases,
+		CurrentIndex:    0,
+		CompletedPhases: []string{},
+		RemainingPhases: phases,
+		Checkpoints:     checkpoints,
+		Reasoning:       reasoning,
+		Confidence:      confidence,
+		LastUpdated:     time.Now().UnixMilli(),
+	}
+
+	thread.StreamContext.PhasePlan = plan
+	thread.StreamState = WorkStreamActive
+
+	return nil
+}
+
+// workStreamAdapter adapts ConversationThread to WorkStreamReader
+type workStreamAdapter struct {
+	thread *ConversationThread
+}
+
+func (w *workStreamAdapter) GetStreamContext() cw.WorkStreamContextReader {
+	if w == nil || w.thread == nil || w.thread.StreamContext == nil {
+		return nil
+	}
+	return &workStreamContextAdapter{ctx: w.thread.StreamContext}
+}
+
+// workStreamContextAdapter adapts WorkStreamContext to WorkStreamContextReader
+type workStreamContextAdapter struct {
+	ctx *WorkStreamContext
+}
+
+func (w *workStreamContextAdapter) GetPhasePlan() cw.PhasePlanReader {
+	if w == nil || w.ctx == nil || w.ctx.PhasePlan == nil {
+		return nil
+	}
+	return &phasePlanAdapter{plan: w.ctx.PhasePlan}
+}
+
+func (w *workStreamContextAdapter) SetPhasePlan(plan cw.PhasePlanReader) {
+	if w == nil || w.ctx == nil {
+		return
+	}
+	// Note: This is a simplified setter - in practice, plan is already in ctx
+	// The adapter pattern allows phase capabilities to work with the plan
+}
+
+// phasePlanAdapter adapts PhasePlan to PhasePlanReader interface
+type phasePlanAdapter struct {
+	plan *PhasePlan
+}
+
+func (p *phasePlanAdapter) GetPlannedPhases() []string {
+	if p == nil || p.plan == nil {
+		return nil
+	}
+	return p.plan.PlannedPhases
+}
+
+func (p *phasePlanAdapter) GetCurrentIndex() int {
+	if p == nil || p.plan == nil {
+		return -1
+	}
+	return p.plan.CurrentIndex
+}
+
+func (p *phasePlanAdapter) SetCurrentIndex(idx int) {
+	if p == nil || p.plan == nil {
+		return
+	}
+	p.plan.CurrentIndex = idx
+}
+
+func (p *phasePlanAdapter) GetCheckpoints() map[string]bool {
+	if p == nil || p.plan == nil {
+		return nil
+	}
+	return p.plan.Checkpoints
+}
+
+func (p *phasePlanAdapter) AdvancePhase() (nextPhase string, hasNext bool) {
+	if p == nil || p.plan == nil {
+		return "", false
+	}
+
+	// Advance to next phase
+	p.plan.CurrentIndex++
+
+	// Check if there's a next phase
+	if p.plan.CurrentIndex >= len(p.plan.PlannedPhases) {
+		return "", false // No more phases
+	}
+
+	return p.plan.PlannedPhases[p.plan.CurrentIndex], true
 }
 
 // InjectShellSessionManager injects a shell session manager into the desktop capability
@@ -3595,6 +3736,28 @@ func (a *CopilotAgent) executeMultiTurn(ctx context.Context, query string, taskC
 	return "", fmt.Errorf("executeMultiTurn is deprecated - use normal Ask flow with capability tools")
 }
 
+// ============================================================================
+// CONTROLLER PATTERN FUNCTIONS REMOVED (2026-07-29)
+// ============================================================================
+// The following functions were removed because they implemented Controller Pattern,
+// which violates the Participant Pattern architecture of the Ask Domain.
+//
+// Removed functions:
+//   - executePhasePlan() - Controller loop executing phases
+//   - executePhaseWithRecovery() - Retry controller
+//   - applyCheckpointReassessment() - Checkpoint controller logic
+//   - executePhase() - Phase executor
+//   - getPhaseCapability() - Helper function
+//
+// Correct Pattern (Participant):
+//   - Phase capture tools read succession path from WorkStream
+//   - Each capture advances CurrentIndex
+//   - Each capture enqueues NEXT phase only
+//   - Ask pipeline is the ONLY controller
+//
+// See: /memories/repo/participant-pattern-not-controller.md
+// ============================================================================
+
 func isExplicitNewTopic(ctx context.Context) bool {
 	if ctx == nil {
 		return false
@@ -5308,6 +5471,40 @@ func (a *CopilotAgent) InitializePhysicalMemory(ctx context.Context) error {
 		tx.Rollback(ctx)
 		return fmt.Errorf("failed to open STM: %w", err)
 	}
+
+	// Rehydrate session state (work streams, conversation threads)
+	if a.service != nil && a.service.session != nil {
+		if a.service.session.Memory == nil {
+			a.service.session.Memory = NewShortTermMemory()
+		}
+
+		// Try to load saved session from B-tree
+		btreeSTM := a.Memory.STMStore().Primary()
+		if btreeSTM != nil {
+			if err := a.service.session.Memory.Rehydrate(ctx, btreeSTM); err != nil {
+				log.Warn("Failed to rehydrate session state, starting fresh", "error", err)
+			}
+
+			// Show reminder about paused work streams
+			reminder := a.service.session.Memory.FormatPausedWorkStreamsReminder()
+			if reminder != "" {
+				log.Info("Restored paused work streams", "reminder", reminder)
+				// TODO: Show to user via system message in first response
+			}
+		}
+
+		// Hook into periodic STM commits for automatic session state persistence
+		stmStore := a.Memory.STMStore()
+		if stmStore != nil {
+			stmStore.SetSessionStatePersister(func(ctx context.Context, bt btree.BtreeInterface[string, any]) error {
+				if a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+					return nil
+				}
+				return a.service.session.Memory.Persist(ctx, bt)
+			})
+		}
+	}
+
 	_, err = a.Memory.OpenLongTermMemory(ctx, a.systemDB, tx, a.brain, embedder)
 	if err != nil {
 		tx.Rollback(ctx)

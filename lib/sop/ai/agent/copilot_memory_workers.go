@@ -124,6 +124,13 @@ func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, 
 			}
 		}
 
+		// Prune expired session states (7-day TTL)
+		if removed, err := PruneExpiredSessions(ctx, stm, nowFn()); err != nil {
+			log.Warn("CopilotAgent: Failed to prune expired sessions", "agent_id", a.Memory.AgentID, "error", err)
+		} else if removed > 0 {
+			log.Debug("CopilotAgent: Pruned expired session states", "agent_id", a.Memory.AgentID, "count", removed)
+		}
+
 		tx.Commit(ctx)
 		a.Memory.CloseShortTermMemory()
 		log.Debug("CopilotAgent: Sleep Cycle completed successfully.", "agent_id", a.Memory.AgentID)

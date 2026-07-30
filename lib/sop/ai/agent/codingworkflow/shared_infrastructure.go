@@ -71,6 +71,32 @@ type SessionMemory interface {
 	Load(string) (map[string]string, error)
 }
 
+// STMReader provides read access to ShortTermMemory for phase succession
+type STMReader interface {
+	GetCurrentThread() WorkStreamReader
+	CreatePhasePlan(phases []string, checkpoints map[string]bool, reasoning, confidence string) error
+}
+
+// WorkStreamReader provides read access to ConversationThread for phase succession
+type WorkStreamReader interface {
+	GetStreamContext() WorkStreamContextReader
+}
+
+// WorkStreamContextReader provides read/write access to WorkStreamContext
+type WorkStreamContextReader interface {
+	GetPhasePlan() PhasePlanReader
+	SetPhasePlan(PhasePlanReader)
+}
+
+// PhasePlanReader provides read/write access to PhasePlan
+type PhasePlanReader interface {
+	GetPlannedPhases() []string
+	GetCurrentIndex() int
+	SetCurrentIndex(int)
+	GetCheckpoints() map[string]bool
+	AdvancePhase() (nextPhase string, hasNext bool)
+}
+
 // KnowledgeBaseRetriever reads grounded guidance from repository docs and knowledge files.
 type KnowledgeBaseRetriever interface {
 	Retrieve(Task, RunState, ContextPack) (ExpertiseCapsule, error)
@@ -142,6 +168,10 @@ type SharedInfrastructure struct {
 
 	// Memory sink for LTM integration
 	MemorySink func(CodingMemory)
+
+	// STMAccessor provides access to the agent's ShortTermMemory for phase succession
+	// This allows phase capabilities to read/update PhasePlan in WorkStreamContext
+	STMAccessor func() STMReader
 }
 
 // NewDefaultSharedInfrastructure creates a SharedInfrastructure with default runtime components.
