@@ -544,3 +544,404 @@ func (p *PhaseCapability) ExecuteTool(ctx, toolName, args, state) {
 | **LLM Orchestration** | ✅ | LLM sees all tools, decides which to call |
 
 **Validation**: All architectural patterns from `.github/copilot-instructions.md` are followed in V2 implementation.
+
+---
+
+## Conversational Feedback System
+
+**Status**: Proposed Enhancement  
+**Purpose**: Provide user-facing transparency and control over V2 Ask pipeline execution
+
+### Motivation
+
+The V2 Ask pipeline operates with full LLM orchestration, but users need visibility into:
+1. **Understanding**: What did the LLM understand from my query?
+2. **Planning**: What is the LLM planning to do?
+3. **Discovery**: What significant information was found?
+
+Without this transparency, users experience:
+- ❌ Uncertainty about whether their intent was understood correctly
+- ❌ No opportunity to interject before execution starts
+- ❌ Hidden reasoning that makes debugging difficult
+- ❌ Overwhelming chatter in final responses
+
+### Design Goals
+
+1. **Grounding Confirmation**: Echo back LLM understanding before tool execution
+2. **Plan Transparency**: Describe intended approach before ReAct loop
+3. **Findings Visibility**: Summarize significant discoveries during execution
+4. **User Control**: Make all conversational chatter collapsible/expandable
+
+### Architecture
+
+#### Event Emission Points
+
+The V2 Ask pipeline adds **three conversational feedback points** at the orchestrator level:
+
+```go
+// In askV2Core() - lib/sop/ai/agent/copilot_v2.go
+
+// 1. GROUNDING ECHO - After classification, before tool execution
+if v2Class, ok := ctx.Value("v2_classification").(*TaskContextV2); ok && v2Class != nil {
+    a.emitGroundingSummary(ctx, query, v2Class)
+}
+
+// 2. PLAN DESCRIPTION - Before ReAct loop starts
+if v2Class, ok := ctx.Value("v2_classification").(*TaskContextV2); ok && v2Class != nil {
+    a.emitPlanDescription(ctx, query, v2Class, phases)
+}
+
+// 3. FINDINGS SUMMARY - During tool execution (in reactLoop)
+// Hook into tool result processing
+a.emitFindingsSummary(ctx, toolName, result, significance)
+```
+
+**Pattern Compliance**:
+- ✅ **Emissions at orchestrator level** (askV2Core), NOT in phases
+- ✅ **Phases remain passive** - they don't emit conversational events
+- ✅ **LLM still orchestrates** - emissions are observation, not control
+- ✅ **Explicit parameters** - classification passed to emission helpers
+
+#### Streaming Event System
+
+**Phase Constants** (`lib/sop/ai/stream_events.go`):
+```go
+const (
+    PhaseGrounding  = "grounding"   // Understanding confirmation
+    PhasePlanning   = "planning"    // Approach description
+    PhaseFindings   = "findings"    // Discovery summary
+    PhaseCommentary = "commentary"  // General chatter
+)
+```
+
+**Event Builders**:
+```go
+func BuildGroundingEvent(classification *TaskContextV2) map[string]any {
+    return map[string]any{
+        "type":   "assistant_message",
+        "phase":  "grounding",
+        "text":   formatGroundingSummary(classification),
+    }
+}
+
+func BuildPlanningEvent(plan []string, tools []string) map[string]any {
+    return map[string]any{
+        "type":   "assistant_message", 
+        "phase":  "planning",
+        "text":   formatPlanDescription(plan, tools),
+    }
+}
+
+func BuildFindingsEvent(summary string, significance string) map[string]any {
+    return map[string]any{
+        "type":   "assistant_message",
+        "phase":  "findings", 
+        "text":   summary,
+    }
+}
+```
+
+**Streaming Flow**:
+```
+askV2Core → emitGroundingSummary → streamer callback
+                                        ↓
+                            BuildAssistantMessageEvent("grounding", text)
+                                        ↓
+                                NDJSON over HTTP
+                                        ↓
+                            Backend SetupStream (filter/forward)
+                                        ↓
+                                    UI Renderer
+                                        ↓
+                            Collapsible <details> element
+```
+
+#### Emission Helpers
+
+**Implementation** (`lib/sop/ai/agent/copilot_v2.go`):
+
+```go
+// emitGroundingSummary sends understanding confirmation to user
+func (a *CopilotAgent) emitGroundingSummary(ctx context.Context, query string, classification *TaskContextV2) {
+    streamer := a.getStreamer(ctx)
+    if streamer == nil {
+        return
+    }
+    
+    summary := fmt.Sprintf(
+        "I understand you want to: **%s**\n\n"+
+        "- **Domains**: %s\n"+
+        "- **Phase**: %s\n"+
+        "- **Approach**: %s\n"+
+        "- **Confidence**: %s",
+        query,
+        strings.Join(classification.Domains, ", "),
+        classification.Phase,
+        classification.Reasoning,
+        classification.Confidence,
+    )
+    
+    streamer(ai.ReasoningEventAssistantMessage, ai.BuildAssistantMessageEvent("grounding", summary))
+}
+
+// emitPlanDescription sends execution plan to user
+func (a *CopilotAgent) emitPlanDescription(ctx context.Context, query string, classification *TaskContextV2, phases []capabilities.Capability) {
+    streamer := a.getStreamer(ctx)
+    if streamer == nil {
+        return
+    }
+    
+    toolSummary := []string{}
+    for _, phase := range phases {
+        tools := phase.ExposeTools()
+        toolSummary = append(toolSummary, fmt.Sprintf("%d tools", len(tools)))
+    }
+    
+    plan := fmt.Sprintf(
+        "**Phase Plan**: %s\n\n"+
+        "I'll proceed through these phases:\n%s\n\n"+
+        "Available capabilities: %s\n\n"+
+        "Starting with **%s** phase...",
+        strings.Join(classification.PhasePlan, " → "),
+        buildPhasePlanDescription(classification.PhasePlan),
+        strings.Join(toolSummary, ", "),
+        classification.Phase,
+    )
+    
+    streamer(ai.ReasoningEventAssistantMessage, ai.BuildAssistantMessageEvent("planning", plan))
+}
+
+// emitFindingsSummary sends significant discoveries to user
+func (a *CopilotAgent) emitFindingsSummary(ctx context.Context, toolName string, result string, hint *ai.ToolProgressHint) {
+    streamer := a.getStreamer(ctx)
+    if streamer == nil || hint == nil || hint.Significance != "high" {
+        return
+    }
+    
+    summary := fmt.Sprintf(
+        "**Discovery from %s**:\n\n%s\n\n"+
+        "Next: %s",
+        toolName,
+        truncateForSummary(result, 500),
+        hint.NextAction,
+    )
+    
+    streamer(ai.ReasoningEventAssistantMessage, ai.BuildAssistantMessageEvent("findings", summary))
+}
+
+// getStreamer retrieves streaming callback from context
+func (a *CopilotAgent) getStreamer(ctx context.Context) func(string, any) {
+    if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok {
+        return streamer
+    }
+    return nil
+}
+```
+
+#### UI Rendering
+
+**Collapsible Pattern** (`lib/sop/tools/sopbackend/templates/scripts_part05.html`):
+
+```javascript
+// Detect conversational phases
+const conversationalPhases = ['grounding', 'planning', 'findings', 'commentary'];
+
+if (event.type === 'assistant_message') {
+    const phase = payload.phase || 'commentary';
+    
+    if (conversationalPhases.includes(phase)) {
+        renderCollapsibleChatter(phase, payload.text);
+        return;
+    }
+    
+    // Regular assistant message (final answer)
+    renderNormalAssistantMessage(payload.text);
+}
+
+function renderCollapsibleChatter(phase, text) {
+    const history = document.getElementById('chat-history');
+    
+    // Create collapsible container using <details> element
+    const details = document.createElement('details');
+    details.className = `chat-chatter chat-chatter-${phase}`;
+    details.open = false; // Collapsed by default
+    
+    const summary = document.createElement('summary');
+    summary.innerHTML = getPhaseIcon(phase) + ' ' + getPhaseLabel(phase);
+    
+    const content = document.createElement('div');
+    content.className = 'chat-chatter-content';
+    content.innerHTML = renderChatContent(text);
+    
+    details.appendChild(summary);
+    details.appendChild(content);
+    history.appendChild(details);
+}
+
+function getPhaseIcon(phase) {
+    const icons = {
+        'grounding': '🎯',
+        'planning': '📋',
+        'findings': '🔍',
+        'commentary': '💬'
+    };
+    return icons[phase] || '💬';
+}
+
+function getPhaseLabel(phase) {
+    const labels = {
+        'grounding': 'Understanding',
+        'planning': 'Plan',
+        'findings': 'Findings',
+        'commentary': 'Commentary'
+    };
+    return labels[phase] || 'Commentary';
+}
+```
+
+**Styling** (`lib/sop/tools/sopbackend/templates/styles.html`):
+
+```css
+.chat-chatter {
+    margin: 8px 0;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--sidebar-bg);
+    overflow: hidden;
+}
+
+.chat-chatter summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-color);
+    background: rgba(255, 255, 255, 0.03);
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.chat-chatter summary:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.chat-chatter[open] summary {
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 8px;
+}
+
+.chat-chatter-content {
+    padding: 12px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+/* Phase-specific color accents */
+.chat-chatter-grounding { border-left: 3px solid #4ade80; }
+.chat-chatter-planning { border-left: 3px solid #60a5fa; }
+.chat-chatter-findings { border-left: 3px solid #fbbf24; }
+.chat-chatter-commentary { border-left: 3px solid #a78bfa; }
+```
+
+### User Experience
+
+**Before** (V2 without conversational feedback):
+```
+User: "Fix the authentication bug"
+[LLM immediately starts executing tools]
+[Final answer appears]
+```
+
+**After** (V2 with conversational feedback):
+```
+User: "Fix the authentication bug"
+
+🎯 Understanding ▼
+   I understand you want to: Fix the authentication bug
+   - Domains: coding_workflow
+   - Phase: investigation
+   - Confidence: high
+
+📋 Plan ▼
+   Phase Plan: investigation → execution → review
+   
+   I'll proceed through these phases:
+   1. Investigation: Search codebase for auth-related files
+   2. Execution: Apply fixes based on findings
+   3. Review: Validate changes and run tests
+   
+   Available capabilities: 12 tools
+   Starting with investigation phase...
+
+[LLM executes search_codebase tool]
+
+🔍 Findings ▼
+   Discovery from search_codebase:
+   Found 3 authentication-related files:
+   - lib/auth/session.go (session validation)
+   - lib/auth/token.go (token expiration bug found)
+   - handlers/login.go (uses token.go)
+   
+   Next: Read token.go to analyze bug
+
+[LLM continues execution]
+
+[Final answer with solution]
+```
+
+**User Benefits**:
+- ✅ **Understand intent** - Confirm LLM understood correctly before execution
+- ✅ **See the plan** - Know what steps will happen before they start
+- ✅ **Track progress** - Collapsible findings show what was discovered
+- ✅ **Control verbosity** - Expand/collapse chatter as needed
+- ✅ **Enable interjection** - User can stop/correct before execution
+- ✅ **Debug reasoning** - Visible thought process for troubleshooting
+
+### Implementation Phases
+
+#### Phase 1: Backend Event Emissions
+- **File**: `lib/sop/ai/agent/copilot_v2.go`
+- **Work**: Add emission helpers and call sites in askV2Core()
+- **Impact**: ~100 lines of new code
+
+#### Phase 2: Event Streaming Layer  
+- **File**: `lib/sop/ai/stream_events.go`
+- **Work**: Add phase constants and event builder functions
+- **Impact**: ~50 lines of new code
+
+#### Phase 3: UI Rendering
+- **File**: `lib/sop/tools/sopbackend/templates/scripts_part05.html`
+- **Work**: Add collapsible rendering logic
+- **Impact**: ~80 lines of JavaScript
+
+#### Phase 4: Styling
+- **File**: `lib/sop/tools/sopbackend/templates/styles.html`
+- **Work**: Add CSS for chatter blocks
+- **Impact**: ~40 lines of CSS
+
+#### Phase 5: Integration Testing
+- **Work**: Verify end-to-end with representative V2 Ask queries
+- **Validation**: Ensure pattern compliance maintained
+
+### Pattern Compliance
+
+| Pattern | Compliance | How |
+|---------|-----------|-----|
+| **Explicit Parameters** | ✅ | classification passed explicitly to emission helpers |
+| **Participant Pattern** | ✅ | Emissions at orchestrator level, NOT in phases |
+| **Ask is Orchestrator** | ✅ | AskV2Core controls all emission timing |
+| **No Phase Controllers** | ✅ | Phases don't emit events, only respond to queries |
+| **LLM Orchestration** | ✅ | Emissions are observation, not control flow |
+
+**Architectural Impact**: This enhancement adds **user-facing transparency** without violating any core V2 patterns. The Ask pipeline remains the sole orchestrator, phases remain passive, and the LLM continues to control execution flow via ReAct.
+
+### Related Documents
+
+- `docs/ASK_V2_IMPLEMENTATION_SUMMARY.md` - V2 implementation guide
+- `docs/PHASE_SYSTEM_ARCHITECTURE.md` - Phase system fundamentals
+- `docs/USER_INTERJECTION_QUEUE_DESIGN.md` - User interruption patterns
+- `.github/copilot-instructions.md` - Participant Pattern requirements

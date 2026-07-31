@@ -294,6 +294,22 @@ Expected Behavior:
 3. Remove heuristic code
 4. Clean up capability system
 
+### Proposed Enhancements
+
+**Conversational Feedback System** (Documented in [ASK_V2_ARCHITECTURE.md](ASK_V2_ARCHITECTURE.md#conversational-feedback-system)):
+- **Grounding Echo**: Confirm LLM understanding after classification, before execution
+- **Plan Description**: Show execution plan before ReAct loop starts
+- **Findings Summary**: Highlight significant discoveries during tool execution
+- **Collapsible UI**: User-controlled visibility for all conversational chatter
+
+**Benefits**:
+- Transparency in LLM reasoning
+- Opportunity for user interjection before execution
+- Better debugging visibility
+- Improved user confidence in agent understanding
+
+**Status**: Architecture designed, ready for implementation
+
 ---
 
 ## Files Modified Summary

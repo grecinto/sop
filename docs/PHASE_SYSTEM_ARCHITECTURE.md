@@ -699,3 +699,12 @@ The phase system implements **LLM-as-Orchestrator** with:
 5. **Domain Agnostic**: Factory pattern supports coding_workflow, stores, spaces, desktop
 
 **Key Principle**: The LLM is always in control. Plans, phases, and tools are optional utilities that the LLM chooses to use based on query complexity and user intent.
+
+---
+
+## Related Documents
+
+- [ASK_V2_ARCHITECTURE.md](ASK_V2_ARCHITECTURE.md) - V2 Ask pipeline architecture with conversational feedback system for user transparency during phase execution
+- [PHASE_PLAN_IMPLEMENTATION_DESIGN.md](PHASE_PLAN_IMPLEMENTATION_DESIGN.md) - Phase Plan implementation details and planning-first orchestration
+- [DOMAIN_AGNOSTIC_PHASE_SYSTEM.md](DOMAIN_AGNOSTIC_PHASE_SYSTEM.md) - Domain-agnostic phase evolution across all capabilities
+- [USER_INTERJECTION_QUEUE_DESIGN.md](USER_INTERJECTION_QUEUE_DESIGN.md) - User interruption and interjection patterns
