@@ -115,7 +115,7 @@ func TestPhaseCapabilityDomainMatching(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			phase := NewPhaseCapability(tc.phaseID, tc.phaseDomain, nil)
+			phase := NewPhase(tc.phaseDomain, tc.phaseID, nil)
 			state := capabilities.RoutingState{Domain: tc.queryDomain}
 			result := phase.Classify(tc.query, state)
 
@@ -358,7 +358,7 @@ func TestPhaseCapabilityUsesCorrectAdapter(t *testing.T) {
 			name:         "spaces execution uses spaces tools",
 			phaseID:      "execution",
 			domain:       "spaces",
-			expectedTool: "execution_mint_to_space",
+			expectedTool: "execution_create_content",
 		},
 		{
 			name:         "desktop execution uses desktop tools",
@@ -370,7 +370,7 @@ func TestPhaseCapabilityUsesCorrectAdapter(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			phase := NewPhaseCapability(tc.phaseID, tc.domain, nil)
+			phase := NewPhase(tc.domain, tc.phaseID, nil)
 			tools := phase.ExposeTools()
 
 			found := false

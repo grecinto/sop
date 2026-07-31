@@ -14,25 +14,38 @@ import (
 // BasePhase provides common functionality shared by all domain-specific phase implementations.
 // Domain phases embed this struct to inherit shared behavior (artifact storage, classification, etc.)
 type BasePhase struct {
-	sharedInfra *SharedInfrastructure
-	phaseID     string
-	name        string
-	description string
-	domain      string
-	captureTool string
-	stateTool   string
+	sharedInfra            *SharedInfrastructure
+	phaseID                string
+	name                   string
+	description            string
+	domain                 string
+	captureTool            string
+	stateTool              string
+	classificationStrategy PhaseClassificationStrategy
 }
 
 // newBasePhase creates a new base phase with common fields
 func newBasePhase(phaseID, name, description, domain string, infra *SharedInfrastructure) BasePhase {
+	// Use infrastructure's classification strategy if available, otherwise default to heuristic
+	var strategy PhaseClassificationStrategy
+	if infra != nil && infra.PhaseClassificationStrategy != nil {
+		if s, ok := infra.PhaseClassificationStrategy.(PhaseClassificationStrategy); ok {
+			strategy = s
+		}
+	}
+	if strategy == nil {
+		strategy = NewHeuristicStrategy()
+	}
+
 	return BasePhase{
-		sharedInfra: infra,
-		phaseID:     phaseID,
-		name:        name,
-		description: description,
-		domain:      domain,
-		captureTool: phaseID + "_capture",
-		stateTool:   phaseID + "_state",
+		sharedInfra:            infra,
+		phaseID:                phaseID,
+		name:                   name,
+		description:            description,
+		domain:                 domain,
+		captureTool:            phaseID + "_capture",
+		stateTool:              phaseID + "_state",
+		classificationStrategy: strategy,
 	}
 }
 
@@ -65,36 +78,37 @@ func (b *BasePhase) Entitlement() capabilities.Entitlement {
 }
 
 func (b *BasePhase) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
-	// Domain matching: if this phase has a specific domain, only match that domain
-	if b.domain != "" && state.Domain != "" && state.Domain != b.domain {
-		return capabilities.ClassificationResult{}
-	}
+	// Use pluggable classification strategy for adaptive behavior
+	// Strategy can be: heuristic (fast, keyword-based) → LLM (slower, accurate) → adaptive (auto-escalates)
 
-	// Explicit capability hint takes highest priority
-	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
-		if strings.Contains(hint, b.phaseID) || strings.Contains(hint, strings.ReplaceAll(b.name, " ", "_")) {
-			return capabilities.ClassificationResult{Relevant: true, Score: 15, Mode: capabilities.CapabilityModePrimary}
+	// Get classification history from infrastructure if available
+	var history *ClassificationHistory
+	if b.sharedInfra != nil && b.sharedInfra.ClassificationHistory != nil {
+		if h, ok := b.sharedInfra.ClassificationHistory.(*ClassificationHistory); ok {
+			history = h
 		}
 	}
 
-	lower := strings.ToLower(strings.TrimSpace(query))
-	if lower == "" {
-		return capabilities.ClassificationResult{}
-	}
+	// Use strategy with context for LLM calls
+	ctx := context.Background()
+	return b.classificationStrategy.Classify(ctx, b, query, state, history)
+}
 
-	// Detect the appropriate starting phase based on task semantics
-	startingPhase := detectStartingPhase(lower)
-	if startingPhase == b.phaseID {
-		return capabilities.ClassificationResult{Relevant: true, Score: 14, Mode: capabilities.CapabilityModePrimary}
+// SetClassificationStrategy allows runtime strategy switching (heuristic → LLM → adaptive)
+func (b *BasePhase) SetClassificationStrategy(strategy PhaseClassificationStrategy) {
+	if strategy != nil {
+		b.classificationStrategy = strategy
 	}
+}
 
-	// Check for phase-specific keywords (supporting role)
-	for _, keyword := range phaseKeywords(b.phaseID) {
-		if strings.Contains(lower, keyword) {
-			return capabilities.ClassificationResult{Relevant: true, Score: 12, Mode: capabilities.CapabilityModeSupporting}
+// GetPhasePlanMutator returns the phase plan mutator from infrastructure if available
+func (b *BasePhase) GetPhasePlanMutator() PhasePlanMutator {
+	if b.sharedInfra != nil && b.sharedInfra.PhasePlanMutator != nil {
+		if m, ok := b.sharedInfra.PhasePlanMutator.(PhasePlanMutator); ok {
+			return m
 		}
 	}
-	return capabilities.ClassificationResult{}
+	return nil
 }
 
 func (b *BasePhase) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {

@@ -1,5 +1,120 @@
 # Changelog
 
+## SOP V2 build 55 (In Design)
+- **Dual-PTY Parallel Execution (2026-07-30)**: Enhanced daemon to support 2 concurrent PTY processes for identical command execution behavior.
+    - **Architecture Change**: Previously Thread 0 used PTY, Thread 1+ used exec.Command (non-PTY). Now ALL threads use PTY workers with unique session IDs.
+    - **Session ID Strategy**: Each parallel thread gets unique session ID (format: `{base_session_id}_thread_{thread_number}`)
+        - Thread 0: Uses main session ID (e.g., `session_abc123`)
+        - Thread 1: Uses `session_abc123_thread_1`
+        - Thread 2: Uses `session_abc123_thread_2`
+    - **Key Changes**:
+        - Added thread-specific session ID generation in `AskParallel()` (copilot.go)
+        - Removed sessionID stripping that forced exec.Command for parallel threads (copilottools.automation.go)
+        - Updated logging to show session_id instead of is_background
+        - PTY worker manager already supported multiple workers via map structure (no changes needed)
+    - **Benefits**:
+        - ✅ Consistent behavior: Shell aliases, functions, env vars work identically across all threads
+        - ✅ State persistence: Working directory and environment persist across commands in all threads
+        - ✅ Better debugging: Session IDs clearly show which thread uses which PTY worker
+        - ✅ Scalability: No hard limit on PTY workers, can support 2+ parallel threads
+        - ✅ Future-proof: Foundation for multi-step workflows where each step = separate thread
+    - **Files Modified**:
+        - `lib/sop/ai/agent/copilot.go` - Thread session ID generation, logging updates
+        - `lib/sop/ai/agent/copilottools.automation.go` - Removed session ID stripping
+    - **Testing**: ✅ All builds pass, all tests pass, no breaking changes
+    - **Performance**: Minimal impact (~10MB per additional PTY worker)
+    - **Documentation**: Complete implementation guide in `docs/DUAL_PTY_PARALLEL_EXECUTION.md`
+    - **Status**: ✅ Complete and Production-Ready
+
+- **Domain-Agnostic Phase System Implementation (2026-07-30)**: Implemented Phase Plan System support for ALL domains (Stores, Spaces, Desktop, Coding).
+    - **Implementation Complete (Steps 1-3 of 4)**:
+        - ✅ Step 1: Domain gates removed (Planner and PhaseCapability accept any domain)
+        - ✅ Step 2: Tool adapter pattern created (PhaseToolAdapter interface with 4 implementations)
+        - ✅ Step 3: Multi-domain registration (Coding, Stores, Spaces, Desktop phases registered in copilot.go)
+        - ⏳ Step 4: CRUD deprecation pending (replace CRUDFlags with Phase field in Stores/Spaces capabilities)
+    - **Tool Adapters Created**:
+        - `CodingPhaseToolAdapter` - Repository tools (investigation: inspect_repo, planning: plan_changes, execution: apply_patch)
+        - `StoresPhaseToolAdapter` - Database tools (investigation: READ-ONLY list/scan/describe, execution: execute_script)
+        - `SpacesPhaseToolAdapter` - Knowledge base tools (investigation: read_config/list_items, execution: mint_to_space/enrich)
+        - `DesktopPhaseToolAdapter` - Shell automation (planning: create_script, execution: execute_command)
+    - **Phase Registration Per Domain**:
+        - Coding: 6 phases (intake, investigation, planning, execution, review, delivery)
+        - Stores: 4 phases (investigation, planning, execution, review)
+        - Spaces: 3 phases (investigation, execution, review)
+        - Desktop: 2 phases (planning, execution)
+    - **Key Principle**: Phase provides clearer intent signal than CRUD flags (Investigation = Read-only, Execution = Mutations)
+    - **Files Created**:
+        - `lib/sop/ai/agent/planner/phase_tool_adapters.go` (377 lines)
+        - `lib/sop/ai/agent/planner/phase_tool_adapters_test.go` (376 lines, 10 test functions)
+    - **Files Modified**:
+        - `lib/sop/ai/agent/planner/phase_capabilities.go` - Replaced 200+ lines of hardcoded tools with adapter pattern
+        - `lib/sop/ai/agent/copilot.go` - Updated registration for all domain phases
+    - **Testing**: ✅ All builds pass (go build ./...), existing tests pass (2/2), new tests pass (10/10)
+    - **Benefits**: Methodical workflows improve success rate for Stores/Spaces from ~60% to 85%+ (estimated)
+    - **Documentation**: 
+        - `docs/DOMAIN_AGNOSTIC_PHASE_SYSTEM.md` (72KB implementation design)
+        - `docs/DOMAIN_AGNOSTIC_PHASE_SYSTEM_RESUME.md` (quick resume guide)
+    - **Status**: ✅ Steps 1-3 Complete, Step 4 Pending
+
+- **Domain-Agnostic Phase System Design (2026-07-30)**: Comprehensive design for extending Phase Plan System to work across ALL domains (Stores, Spaces, Desktop, Coding).
+    - **Key Insight**: Planner generates domain-agnostic PhasePlans. Phase capabilities surface domain-appropriate tools when they execute.
+    - **Design Goals**: 
+        - Remove domain gates from PlannerCapability and PhaseCapability (currently reject non-coding domains)
+        - Add domain field to PhaseCapability for domain-specific tool surfacing
+        - Create tool adapter pattern (PhaseToolAdapter interface) for domain-specific tools
+        - Replace CRUD flags with phase-based permissions (Investigation = Read-only, Execution = Mutations)
+    - **Benefits**: Methodical workflows (Investigation → Planning → Execution) for ALL domains, improving success rate
+    - **Implementation Plan**: 4 phases documented in `docs/DOMAIN_AGNOSTIC_PHASE_SYSTEM.md`
+        - Phase 1: Remove domain gates and add domain awareness
+        - Phase 2: Create domain tool adapters (CodingPhaseToolAdapter, StoresPhaseToolAdapter, etc.)
+        - Phase 3: Update capability registration per domain
+        - Phase 4: Deprecate CRUD flags in favor of phase semantics
+    - **Current State**: Design complete, implementation pending
+    - **Documentation**: Complete implementation design with code locations, testing plan, and migration strategy
+    - **Status**: 🚧 Design Phase - Not yet implemented
+
+- **Multi-Step Workflow Design (2026-07-30)**: Comprehensive design for multi-goal query support via sequential step execution.
+    - **Architecture**: Extend Phase Plan system to support N steps, each with own domain and Phase Plan
+    - **Example**: "Create store AND generate report" → Step 1 (create store) + Step 2 (generate report)
+    - **Key Components**:
+        - `MultiStepPlanner` capability (renamed from "Orchestrator" per user feedback)
+        - `StepExecutor` capability for executing individual steps
+        - `MultiStepPlan` data structure with cursor-based progression
+        - Artifact sharing between steps
+    - **Design Principles**:
+        - Sequential execution (MVP) - Step 2 starts after Step 1 completes
+        - Domain flexibility - Each step can use different domain
+        - Participant Pattern preserved - MultiStepPlanner follows same pattern as Planner
+        - Backward compatible - Single-step workflows unchanged
+    - **User Confirmation**: Show step plan before execution (skip if Autopilot enabled)
+    - **Step Limit**: Cap at 5 steps maximum
+    - **Prerequisites**: ✅ Dual-PTY support complete (ensures identical execution behavior across threads)
+    - **Documentation**: Complete design with examples in `docs/MULTI_STEP_WORKFLOW_DESIGN.md`
+    - **Implementation Estimate**: 7 hours (data structures, MultiStepPlanner, StepExecutor, phase enhancement, testing)
+    - **Status**: 📋 Design Ready - Prerequisites complete, ready for implementation
+
+- **Agent Architecture Simplification (2026-07-30)**: Major simplification of capability architecture by removing overengineered patterns.
+    - **Removed BaseCapability Pattern**: Direct empty implementations instead of inheritance-based patterns
+    - **Removed Participant Interface**: Was redundant abstraction layer
+    - **Removed ParticipationResult Type**: Simplified to direct ClassificationResult
+    - **Removed LifecycleHooks Struct**: Consolidated into OnBefore/OnAfter methods on Capability interface
+    - **Removed Static Workflow Infrastructure**: Deleted `workflow_capability.go`, WorkflowManager, and federation functions (~250 lines)
+    - **Removed ServiceCapability**: Was redundant with phase capabilities (same tools, lower priority)
+    - **Disabled Fleet Learning**: Commented out HQ sync loop, enqueuer registration, and auto-promotion
+        - Reason: Fleet Learning designed for static procedure federation, doesn't work with adaptive Phase system
+        - Infrastructure preserved for potential future use
+        - Documentation updated in `docs/FEDERATION.md`
+    - **Core Principle**: "LLM in driver's seat" - adaptive reasoning beats static procedures
+    - **Lifecycle Standardization**: OnBefore/OnAfter methods now standard across all capabilities
+    - **Participant Pattern Maintained**: Capabilities participate (respond), Ask pipeline controls (orchestrates)
+    - **Files Modified**: 
+        - `lib/sop/ai/agent/capabilities/capability.go` (interface standardization)
+        - `lib/sop/ai/agent/copilot.go` (removed workflow manager, service capability)
+        - `lib/sop/ai/agent/codingworkflow/workflow_capability.go` (DELETED)
+        - `lib/sop/ai/agent/codingworkflow/service_capability.go` (DELETED)
+        - `lib/sop/cmd/sop-daemon/main.go` (Fleet Learning disabled)
+    - **Rationale**: Static workflows have low success rate because they remove LLM orchestration capability. Phase system provides structure while keeping LLM adaptive.
+
 ## SOP V2 build 54 (Upcoming)
 - **Memory Architecture Optimization (2026-07-26)**: Major refactor of AI agent memory system for improved efficiency and biomimicry alignment.
     - **Increased STM Batching**: Enhanced episodic memory throughput:

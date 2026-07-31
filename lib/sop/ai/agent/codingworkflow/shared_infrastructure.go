@@ -204,6 +204,19 @@ type SharedInfrastructure struct {
 	// GetSessionQueue provides access to the agent's work queue for enqueueing next steps
 	// This allows capabilities to route work to other capabilities (Participant Pattern)
 	GetSessionQueue func() WorkQueueAccessor
+
+	// Adaptive classification support - enables switching between heuristic/LLM classification
+	// When nil, defaults to heuristic (fast keyword matching)
+	// Set to enable LLM-based or adaptive classification strategies
+	PhaseClassificationStrategy any // Type: planner.PhaseClassificationStrategy (avoiding import cycle)
+
+	// Classification history tracks user corrections and failures to enable adaptive classification
+	// Allows system to learn from user feedback and escalate to LLM when heuristics fail
+	ClassificationHistory any // Type: *planner.ClassificationHistory (avoiding import cycle)
+
+	// Phase plan mutator enables dynamic phase plan modification during conversation
+	// Allows LLM to add/remove/reorder phases based on user feedback or discoveries
+	PhasePlanMutator any // Type: planner.PhasePlanMutator (avoiding import cycle)
 }
 
 // WorkQueueAccessor provides a generic interface for enqueueing work items

@@ -1663,12 +1663,27 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// Inject session queue accessor for work item enqueueing (Participant Pattern)
 	cwfInfra.GetSessionQueue = a.getSessionQueueForCapabilities
 
+	// Enable adaptive classification and dynamic plan mutation (LLM orchestration)
+	classificationHistory := plannerpkg.NewClassificationHistory()
+	wrappedGenerator := plannerpkg.WrapGenerator(a.brain)
+	cwfInfra.PhaseClassificationStrategy = plannerpkg.NewAdaptiveStrategy(
+		wrappedGenerator, // LLM generator for classification escalation
+		classificationHistory,
+	)
+	cwfInfra.ClassificationHistory = classificationHistory
+	cwfInfra.PhasePlanMutator = plannerpkg.NewSTMPhasePlanMutator(a.getSTMForPhaseCapabilities)
+
 	// Planner (universal - works across all domains)
 	caps = append(caps, plannerpkg.NewPlannerCapability(cwfInfra))
 
 	// Multi-Step Planner (decomposes multi-goal queries into sequential steps)
 	// Note: No StepExecutor - phases execute directly (Participant Pattern)
 	caps = append(caps, multistepplanner.NewMultiStepPlannerCapability(cwfInfra))
+
+	// Note: No explicit InterjectionInterpreter needed
+	// LLM interprets user interjections naturally and calls mutation tools directly
+	// The tool calls (mutate_phase_plan, etc.) ARE the interpretation signals
+	// This aligns with implicit orchestration model used in Stores/Spaces domains
 
 	// Coding domain phases (full SDLC workflow)
 	for _, phaseID := range []string{"intake", "investigation", "planning", "execution", "review", "delivery"} {
