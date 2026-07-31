@@ -1,97 +1,114 @@
 ---
 sidebar_position: 2
-title: Coding Workflows
-description: Guide your AI assistant through multi-step coding tasks with intelligent workflows and mid-execution modifications.
+title: Intelligent Coding
+description: AI Studio's Dynamic Planner and Phase system for intelligent multi-step coding tasks.
 ---
 
-# Coding Workflows
+# Intelligent Coding with AI Studio
 
-AI Studio breaks down complex coding tasks into clear, manageable steps. Just describe what you want, and it figures out the best way to get there—whether that's debugging a tricky issue, implementing a feature, or refactoring code.
+AI Studio uses the **LLM as Orchestrator** paradigm—the AI makes all decisions about how to approach your task. Through a **Dynamic Planner** and **Phase-based execution system**, it analyzes your request, generates a custom plan, and executes it intelligently. No rigid workflows, no pre-programmed scripts—just pure AI reasoning adapting to your specific needs.
+
+### LLM as Orchestrator: Intelligence in Control
+
+AI Studio's approach is fundamentally different from traditional automation:
+
+**Traditional Systems:**
+- Fixed workflows triggered by keywords
+- Rule-based routing ("if debugging, then run steps 1-5")
+- Rigid, pre-programmed execution paths
+
+**AI Studio (LLM as Orchestrator):**
+- 🤖 **AI analyzes your task** and determines the best approach
+- 🎯 **Dynamic planning** tailored to your specific situation
+- 🔄 **Adaptive execution** that adjusts based on discoveries
+- 💬 **Natural language control** throughout the process
+
+You describe what you want, and the AI orchestrates everything—from task classification to tool selection to execution flow.
 
 :::tip For Developers
 Want to understand the technical architecture? See the SDK documentation:
-- **[Workflow Architecture](../sdk/workflow-architecture)** - Dynamic Planner, Ask pipeline, participant pattern, OnFinish hooks
+- **[Workflow Architecture](../sdk/workflow-architecture)** - Dynamic Planner, Ask pipeline, participant pattern, conversational feedback
 - **[Undo System](../sdk/undo-system)** - Transaction management, semantic search, multi-dimensional indexing
 :::
 
-## How It Works
+## How It Works: Dynamic Planner + Phase System
 
-### Available Coding Phases
+### Dynamic Planning 🤖
 
-As AI Studio works through a coding task, it can move through a structured set of phases so the work stays organized and easy to follow. A single Ask does not always require every phase: one prompt may map to a single phase, a small subset of phases, or a full sequence. These phases are general-purpose and apply to many kinds of work, from feature development to maintenance, debugging, refactoring, and test fixes.
+The **Dynamic Planner** is AI Studio's intelligent task analyzer that:
 
-For example, a request like "fix failing tests" often flows through Investigation & Analysis, Planning & Design, Execution & Implementation, Review & Validation, and Delivery & Handoff. The workflow can also stop in the middle and resume later, or revisit an earlier phase if new information changes the direction of the work.
+- **Classifies your task** - Determines task type (debugging, implementation, testing, refactoring)
+- **Generates a custom plan** - Creates phase sequence tailored to your specific request
+- **Adapts to complexity** - Simple tasks get streamlined plans, complex tasks get comprehensive multi-phase approaches
+- **Adjusts on the fly** - Modifies the plan based on your feedback and discoveries during execution
 
-The workflow typically progresses through these stages:
+**How LLM Orchestration works:**
+1. **You describe your coding task** in natural language
+2. **LLM analyzes and classifies** - Task type, complexity, required capabilities
+3. **Dynamic Planner generates custom plan** - Phase sequence tailored to your situation
+4. **LLM orchestrates execution** - Selects tools, controls flow, adapts to findings
+5. **Continuous reasoning** - LLM adjusts plan based on your feedback and discoveries
 
-1. **Intake & Context** — Understand the request, gather constraints, and capture the goal.
-2. **Investigation & Analysis** — Inspect the repository, relevant files, tests, and surrounding implementation details.
-3. **Planning & Design** — Turn the findings into a concrete plan for the change.
-4. **Execution & Implementation** — Apply the code changes and update the affected parts of the project.
-5. **Review & Validation** — Run tests, build checks, and verify the result.
-6. **Delivery & Handoff** — Summarize what changed and outline any follow-up steps.
-
-### Available Coding Automation Tools
-
-The coding workflow capability exposes a single, consolidated public tool surface for repository-aware automation. Rather than making each phase depend on one fixed tool, the system should use a layered model:
-
-- **Phases** describe the lifecycle stage of the work, such as investigation, planning, execution, validation, or delivery.
-- **Tools** provide the concrete actions that can be used within that stage.
-- **Context and domain** determine which tool set is most relevant for the request. A testing-focused prompt should prefer test-aware actions such as running tests, inspecting failures, and validating fixes, while a feature request should lean more heavily on planning, implementation, build, and patching.
-
-This keeps the overall workflow familiar and general-purpose, while allowing the tool surface to grow as we discover new domains or specialized needs. As the system learns more domain variation, we can extend the tooling and the phase guidance together without changing the shared SDLC structure.
-
-The tool contract should be owned by the main coding workflow capability and registered through `ExposeTools()`, while the implementation details can live in the shared workflow helpers underneath it.
-
-#### Public tools in the coding workflow capability
-
-These are the callable tools that should be available for workflow authors and the Ask loop when a coding task needs structured assistance. The public surface stays simple and consistent, while the implementation can still be distributed across the shared workflow package behind those entry points:
-
-| Tool | Purpose |
-|------|---------|
-| `plan_design` | Turn a request into a concrete implementation plan or design before editing code |
-| `analyze_repo` | Inspect repository state, changed files, and code structure using repo and AST-aware helpers |
-| `generate_code` | Draft or propose implementation changes for the current task |
-| `build_project` | Run build or compile steps for the current project |
-| `run_tests` | Execute the relevant test suite and report pass/fail results |
-| `apply_patch` | Apply a patch with the shared workflow safety and previewing checks |
-
-This keeps the public contract centralized and makes the workflow authoring experience easier to reason about. The underlying implementation may still be organized across helper files, but the callable surface should be exposed from the coding workflow capability in one coherent place.
-
-### Smart Planning 🤖
-
-AI Studio analyzes your request and creates a custom plan:
-
-- **Understands your task** - Figures out what type of work you need (debugging, implementation, testing, etc.)
-- **Creates a step-by-step plan** - Breaks down complex tasks into clear actions
-- **Adapts to your codebase** - Uses what it knows about your project structure and patterns
-- **Stays flexible** - Adjusts the plan as you provide feedback
+Every decision—from which phase to enter, which tools to use, when to pivot—is made by the LLM reasoning about your specific context, not by pre-programmed rules.
 
 **Example:**
 ```
 You: Debug the authentication timeout issue
 
-AI Studio: Creating workflow...
+AI Studio: Analyzing task...
+          Task Type: Debugging
+          Complexity: Medium
           
-          Plan: "Fix Authentication Timeout"
-          1. Analyze session middleware code
-          2. Check timeout configuration
-          3. Generate and apply fix
-          4. Verify with tests
+          Generated Plan:
+          Phase 1: Investigation - Analyze session middleware
+          Phase 2: Planning - Identify timeout configuration issues  
+          Phase 3: Execution - Generate and apply fix
+          Phase 4: Review - Verify with tests
           
-          Starting Step 1...
+          Starting Phase 1 (Investigation)...
 ```
 
-### Using Team Templates 📚
+### Phase-Based Execution
 
-For common tasks, AI Studio can follow proven patterns your team has defined:
+AI Studio executes through **structured phases** that organize the work into clear stages:
 
-- **Debugging**: Analyze → Generate Fix → Apply → Verify
-- **Testing**: Run Tests → Analyze Failures → Fix → Re-test
-- **Refactoring**: Analyze Structure → Plan Changes → Apply
-- **Implementation**: Design → Generate Code → Apply → Test
+**Standard Phase Sequence** (adapted per task):
 
-These templates ensure consistency and let you encode best practices that everyone follows.
+1. **Investigation** — Inspect repository, files, tests, and gather context
+   - Tools: `search_codebase`, `read_file`, `analyze_structure`
+   - Focus: Understanding the problem and current state
+
+2. **Planning** — Design the solution approach
+   - Tools: `plan_design`, `analyze_dependencies`
+   - Focus: Creating a concrete implementation strategy
+
+3. **Execution** — Apply code changes
+   - Tools: `generate_code`, `apply_patch`, `build_project`
+   - Focus: Implementing the planned changes
+
+4. **Review** — Validate changes
+   - Tools: `run_tests`, `verify_build`
+   - Focus: Ensuring changes work correctly
+
+5. **Delivery** — Summarize and handoff
+   - Tools: `document_changes`, `create_summary`
+   - Focus: Providing clear description of what changed
+
+**Phase Characteristics:**
+- **Adaptive**: Not all tasks need all phases (simple fix might skip Planning)
+- **Resumable**: Can pause and resume between phases
+- **Revisitable**: Can return to earlier phase if new information emerges
+- **Tool-aware**: Each phase has access to relevant coding tools
+
+### Knowledge Base Templates (Optional)
+
+For common, well-defined tasks, you can optionally use **team-defined templates** stored in Knowledge Bases:
+
+- **Test Fixing**: Analyze failures → Isolate → Apply fix → Validate → Re-test
+- **Refactoring**: Analyze structure → Plan changes → Apply → Verify
+- **Feature Implementation**: Design → Generate code → Apply → Test
+
+These are **pre-defined phase sequences** that encode your team's best practices. The Dynamic Planner can use these as starting points and adapt them to your specific situation.
 
 ## Multi-Language Support
 
@@ -519,14 +536,18 @@ For complete technical details and SDK integration:
 
 ## Summary
 
-Coding workflows in AI Studio make complex tasks manageable:
+AI Studio's **LLM as Orchestrator** paradigm delivers truly intelligent coding assistance:
 
-- **Smart planning** creates custom workflows for your specific needs
-- **Team templates** ensure consistent execution of common tasks
-- **Real-time adjustments** let you refine as you go
-- **Multi-language** support works with Go, Python, Java, Rust, JavaScript, TypeScript, and C#
+- **LLM makes all decisions** - No rigid workflows, pure AI reasoning drives everything
+- **Dynamic Planner** generates custom plans tailored to your specific task
+- **Phase-based execution** organizes work into clear, manageable stages
+- **Adaptive intelligence** adjusts approach based on discoveries and feedback
+- **Real-time adjustments** let you guide the AI's reasoning as work progresses
+- **Knowledge Base templates** (optional) provide proven patterns as starting points
+- **Multi-language support** works seamlessly with Go, Python, Java, Rust, JavaScript, TypeScript, and C#
+- **Transparent reasoning** shows you what AI Studio understood and plans to do
 
-Just describe what you want to accomplish, and AI Studio figures out the steps to get there. Whether it's debugging, implementing features, or refactoring code, the workflows adapt to your codebase and keep you in control.
+Just describe what you want to accomplish. The LLM analyzes your task, reasons about the best approach, generates an appropriate phase plan, and orchestrates execution with the right tools. This is agentic AI at its best—intelligent, adaptive, and in control.
 
 ---
 

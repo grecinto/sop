@@ -11,9 +11,22 @@ AI Studio provides two complementary workflow approaches that both execute throu
 
 Both approaches implement a **participant pattern** where workflows are passive responders and the Ask pipeline maintains control of execution flow.
 
-## The Ask Pipeline: Core Architecture
+## The Ask Pipeline: LLM as Orchestrator Architecture
 
-The Ask pipeline (`CopilotAgent.ask()`) is the central execution engine for all AI interactions in AI Studio. It provides:
+The Ask pipeline (`CopilotAgent.ask()`) embodies the **LLM as Orchestrator** paradigm—the central architectural principle where the LLM makes all execution decisions, controls flow, and orchestrates capabilities dynamically.
+
+### Core Principle: LLM Controls Everything
+
+Unlike traditional systems with rule-based routing and fixed workflows:
+- ❌ **NOT**: Heuristics decide which tools to call
+- ❌ **NOT**: Pre-programmed workflows control execution flow  
+- ❌ **NOT**: Configuration files determine task handling
+
+✅ **INSTEAD**: The LLM reasons about the task, chooses capabilities, selects tools, and controls execution flow through natural language understanding and multi-turn reasoning.
+
+### Pipeline Architecture
+
+The Ask pipeline provides:
 
 ### Pipeline Stages
 

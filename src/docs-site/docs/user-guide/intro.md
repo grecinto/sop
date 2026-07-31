@@ -13,21 +13,33 @@ Welcome to AI Studio - an intelligent coding assistant that runs on your own inf
 AI Studio is a self-hosted AI platform that helps you code, debug, test, and manage knowledge without relying on third-party cloud services. Unlike consumer copilots that operate through closed wrappers, AI Studio gives you:
 
 - **Full control**: Runs on your infrastructure, uses your chosen LLM provider
+- **LLM as Orchestrator**: The AI makes all decisions—no rigid scripts, pure intelligent reasoning
 - **Persistent memory**: Learns from your codebase and workflow patterns
-- **Structured workflows**: Multi-step intelligent task execution
 - **Privacy-first**: Your code and data never leave your environment
 - **Open source**: Inspect, extend, and customize everything
 
+### The LLM as Orchestrator Paradigm
+
+AI Studio's architecture is built on a fundamental principle: **the LLM is always in control**. Unlike traditional automation systems with fixed workflows and rule-based routing, AI Studio lets the AI reason about your task and orchestrate the solution dynamically.
+
+**What this means for you:**
+- 🎯 **Adaptive execution** - The AI chooses the right approach for your specific situation, not a pre-programmed script
+- 🧠 **Intelligent decision-making** - Task classification, tool selection, and flow control all driven by AI reasoning
+- 🔄 **Natural adjustments** - The AI can pivot, revisit phases, or change strategy based on what it discovers
+- 💬 **Conversational control** - You guide with natural language, not configuration files
+
+This is the core difference between AI Studio and rigid workflow systems—the intelligence orchestrates everything.
+
 ## Key Features
 
-### Intelligent Coding Workflows
-AI Studio breaks down complex tasks into structured, multi-step workflows that guide you from problem to solution:
+### Intelligent Coding with LLM Orchestration
+Built on the **LLM as Orchestrator** paradigm, AI Studio breaks down complex tasks intelligently—the AI reasons about your task and orchestrates the solution dynamically:
 
-**Smart Planning** 🤖 - Just describe what you want to accomplish, and AI Studio figures out the steps needed. Whether you're debugging a tricky issue, implementing a new feature, or refactoring code, it creates a custom plan that fits your specific situation.
+**Smart Planning** 🤖 - Just describe what you want to accomplish, and the AI analyzes your task, determines the best approach, and generates a custom plan. Whether debugging, implementing features, or refactoring, it adapts to your specific situation—no pre-programmed scripts.
 
 **Proven Templates** 📚 - For common tasks like testing, debugging, or refactoring, AI Studio can follow battle-tested patterns from your team's knowledge base. This ensures consistency and lets you encode your team's best practices.
 
-**Real-Time Adjustments** - Change your mind mid-workflow? Just type your modification and the AI adapts without starting over. Add error handling, include extra validation, or refine the approach as you go.
+**Real-Time Adjustments** - Change your mind mid-execution? Just type your modification and the AI adapts its orchestration without starting over. Add error handling, include extra validation, or refine the approach as you go.
 
 **Transparent Reasoning** 💬 - AI Studio shows you what it understood from your request before taking action. See the execution plan, significant discoveries during analysis, and LLM thinking—all in collapsible sections so you control the level of detail. This transparency lets you interject or correct before execution begins.
 
@@ -35,7 +47,7 @@ AI Studio breaks down complex tasks into structured, multi-step workflows that g
 
 **Multi-language support**: Works seamlessly with Go, Python, Java, Rust, JavaScript, TypeScript, and C#. Automatically detects your project type and uses the right tools for testing, analysis, and code generation.
 
-[Learn about Coding Workflows →](./coding-workflows)
+[Learn about Intelligent Coding →](./coding-workflows)
 
 ### Persistent Memory System
 Unlike stateless copilots, AI Studio maintains context across sessions through structured knowledge spaces. It remembers your coding patterns, project structure, and preferences.
