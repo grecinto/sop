@@ -269,33 +269,37 @@ SAVINGS: 90% 🎯
 
 #### Fast-Path Candidates (Heuristic Classification)
 
-**1. Direct Commands**: `/cmd`, `@terminal`
+**Note**: Gate 1 already handles slash commands (`/cmd`, `/c`, `/shell`), prefix routing (`omni:`, `SOP:`), and continuation queries. These examples are for patterns NOT yet covered.
+
+**1. Simple Store Operations**: Clear domain + CRUD keywords
 ```go
-if strings.HasPrefix(query, "/cmd") || strings.HasPrefix(query, "@terminal") {
-    // Skip ClassifyTaskContextV2, route directly to desktop domain
+if matches := regexp.MustCompile(`^(list|show|get) (all )?stores?`).FindString(query); matches != "" {
     return &TaskContextV2{
-        Domains: []string{"desktop"},
-        Phase: "execution",
-        PhasePlan: []string{"execution"},
+        Domains: []string{"stores"},
+        Phase: "investigation",
+        PhasePlan: []string{"investigation"},
+        Intent: "read_data",
     }
 }
 ```
+**Example queries**: "list stores", "show all stores", "get store production"
 **Savings**: 400-700 tokens per query
 
-**2. Git Operations**: Strong git keywords
+**2. Simple Space Operations**: Clear domain + search keywords
 ```go
-if containsGitKeywords(query) { // "git status", "git commit", "git push", etc.
+if matches := regexp.MustCompile(`^(search|find in|query) spaces?`).FindString(query); matches != "" {
     return &TaskContextV2{
-        Domains: []string{"desktop"},
-        Phase: "execution",
-        PhasePlan: []string{"execution"},
-        Intent: "mutate_data",
+        Domains: []string{"spaces"},
+        Phase: "investigation",
+        PhasePlan: []string{"investigation"},
+        Intent: "read_data",
     }
 }
 ```
+**Example queries**: "search spaces for authentication", "find in spaces kubernetes"
 **Savings**: 400-700 tokens per query
 
-**3. Simple Reads**: "list", "show", "get" + domain keywords
+**3. Clear File Operations**: "read", "show", "list" + file paths
 ```go
 if isSimpleReadQuery(query) { // "list stores", "show spaces", "get store X"
     domain := extractDomain(query) // stores/spaces
@@ -309,16 +313,19 @@ if isSimpleReadQuery(query) { // "list stores", "show spaces", "get store X"
 ```
 **Savings**: 400-700 tokens per query
 
-**4. Single-Phase Queries**: "read file X", "show directory Y"
+**4. Natural Language Git Operations** (WITHOUT `/cmd` prefix)
 ```go
-if isSinglePhaseOperation(query) {
+if matches := regexp.MustCompile(`^(commit|push|pull|checkout|branch|merge) `).FindString(query); matches != "" {
     return &TaskContextV2{
-        Domains: []string{"coding_workflow"},
-        Phase: "investigation",
-        PhasePlan: []string{"investigation"}, // Single phase
+        Domains: []string{"desktop"},
+        Phase: "execution",
+        PhasePlan: []string{"execution"},
+        Intent: "mutate_data",
     }
 }
 ```
+**Example queries**: "commit the changes", "push to main", "checkout feature-branch"
+**Note**: `/cmd git commit` already handled by Gate 1 slash command routing
 **Savings**: 400-700 tokens per query
 
 #### LLM Classification (Ambiguous Cases)

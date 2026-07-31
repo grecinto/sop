@@ -159,7 +159,9 @@ tools = 15 tools for stores ✅
 - ✅ V2 Pure: "Here's a map with ALL roads in the city" (LLM decides)
 - ✅ V2 Hybrid: "Here's a map with roads you can reach from here" (LLM still decides route, just filtered to reachable roads)
 
-**Verdict**: Hybrid is still "LLM as Orchestrator" - we just don't ask LLM for trivial decisions like "Is `/cmd ls` a desktop operation?"
+**Verdict**: Hybrid is still "LLM as Orchestrator" - we just don't ask LLM for trivial decisions like "Is 'list stores' a stores domain operation?"
+
+**Note**: Gate 1 already handles slash commands (`/cmd ls`), prefix routing (`omni:`), and continuation. Hybrid adds fast-paths for simple domain-specific patterns.
 
 ---
 
