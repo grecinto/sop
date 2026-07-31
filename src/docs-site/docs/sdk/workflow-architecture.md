@@ -55,6 +55,136 @@ The Ask pipeline is "our moat" because it provides:
 
 By executing workflows *through* the Ask pipeline rather than *bypassing* it, every workflow step inherits these capabilities.
 
+### Conversational Feedback System
+
+The V2 Ask pipeline includes an advanced **conversational feedback system** that provides user-facing transparency during execution. This system gives users visibility into LLM reasoning and control over verbosity without breaking the participant pattern.
+
+#### Design Goals
+
+1. **Grounding Confirmation** - Echo back what the LLM understood before executing tools
+2. **Plan Transparency** - Show the execution approach before the ReAct loop begins
+3. **Discovery Visibility** - Highlight significant findings during tool execution
+4. **User Control** - Make all conversational chatter collapsible and expandable
+
+#### Architecture
+
+The feedback system adds **three emission points** at the orchestrator level in `askV2Core()`:
+
+```go
+// 1. GROUNDING ECHO - After classification, before tool execution
+if v2Class, ok := ctx.Value("v2_classification").(*TaskContextV2); ok {
+    a.emitGroundingSummary(ctx, query, v2Class)
+}
+
+// 2. PLAN DESCRIPTION - Before ReAct loop starts
+if v2Class, ok := ctx.Value("v2_classification").(*TaskContextV2); ok {
+    a.emitPlanDescription(ctx, query, v2Class, phases)
+}
+
+// 3. FINDINGS SUMMARY - During tool execution (in reactLoop)
+a.emitFindingsSummary(ctx, toolName, result, significance)
+```
+
+**Pattern Compliance:**
+- ✅ Emissions happen at **orchestrator level** (askV2Core), NOT in phases
+- ✅ Phases remain **passive participants** - they don't emit conversational events
+- ✅ LLM still **orchestrates execution** - emissions are observation, not control
+- ✅ **Explicit parameters** - classification passed to emission helpers
+
+#### Event Types
+
+The system uses specialized phase constants to categorize conversational messages:
+
+```go
+const (
+    PhaseGrounding  = "grounding"   // Understanding confirmation
+    PhasePlanning   = "planning"    // Approach description  
+    PhaseFindings   = "findings"    // Discovery summary
+    PhaseCommentary = "commentary"  // General chatter
+)
+```
+
+Each event flows through the existing streaming infrastructure:
+
+```
+askV2Core → emitGroundingSummary → streamer callback
+                                        ↓
+                        BuildAssistantMessageEvent("grounding", text)
+                                        ↓
+                                NDJSON over HTTP
+                                        ↓
+                            Backend SetupStream (filter)
+                                        ↓
+                                    UI Renderer
+                                        ↓
+                        Collapsible <details> element
+```
+
+#### User Experience
+
+**Before** (without conversational feedback):
+```
+User: "Fix the authentication bug"
+[LLM immediately starts executing tools]
+[Final answer appears]
+```
+
+**After** (with conversational feedback):
+```
+User: "Fix the authentication bug"
+
+🎯 Understanding ▼
+   I understand you want to: Fix the authentication bug
+   - Domains: coding_workflow
+   - Phase: investigation
+   - Confidence: high
+
+📋 Plan ▼
+   Phase Plan: investigation → execution → review
+   
+   I'll proceed through these phases:
+   1. Investigation: Search codebase for auth-related files
+   2. Execution: Apply fixes based on findings
+   3. Review: Validate changes and run tests
+   
+   Available capabilities: 12 tools
+   Starting with investigation phase...
+
+[LLM executes search_codebase tool]
+
+🔍 Findings ▼
+   Discovery from search_codebase:
+   Found 3 authentication-related files:
+   - lib/auth/session.go (session validation)
+   - lib/auth/token.go (token expiration bug found)
+   - handlers/login.go (uses token.go)
+   
+   Next: Read token.go to analyze bug
+
+[Final answer with solution]
+```
+
+**Benefits:**
+- ✅ **Understand intent** - Confirm LLM understood correctly before execution
+- ✅ **See the plan** - Know what steps will happen before they start  
+- ✅ **Track progress** - Collapsible findings show what was discovered
+- ✅ **Control verbosity** - Expand/collapse chatter as needed
+- ✅ **Enable interjection** - User can stop/correct before execution
+- ✅ **Debug reasoning** - Visible thought process for troubleshooting
+
+#### Implementation Status
+
+**Status**: Architecture designed, documented in [ASK_V2_ARCHITECTURE.md](https://github.com/grecinto/sop-cloud/blob/main/docs/ASK_V2_ARCHITECTURE.md#conversational-feedback-system)
+
+**Implementation Phases:**
+1. Backend event emissions (`lib/sop/ai/agent/copilot_v2.go`)
+2. Event streaming layer (`lib/sop/ai/stream_events.go`)
+3. UI rendering with collapsible `<details>` elements
+4. CSS styling for phase-specific visual accents
+5. Integration testing and validation
+
+This enhancement provides user-facing transparency while maintaining all core V2 patterns. The Ask pipeline remains the sole orchestrator, phases remain passive, and the LLM continues to control execution flow via ReAct.
+
 ## Dynamic Planner Architecture
 
 ### Component Overview

@@ -29,6 +29,8 @@ AI Studio breaks down complex tasks into structured, multi-step workflows that g
 
 **Real-Time Adjustments** - Change your mind mid-workflow? Just type your modification and the AI adapts without starting over. Add error handling, include extra validation, or refine the approach as you go.
 
+**Transparent Reasoning** 💬 - AI Studio shows you what it understood from your request before taking action. See the execution plan, significant discoveries during analysis, and LLM thinking—all in collapsible sections so you control the level of detail. This transparency lets you interject or correct before execution begins.
+
 **Intelligent Undo** 🔄 - Experiment fearlessly with an industry-leading undo system that treats each workflow as a searchable transaction. Find and restore past changes using natural language: "undo authentication middleware changes" just works. No git history pollution, no manual bisecting.
 
 **Multi-language support**: Works seamlessly with Go, Python, Java, Rust, JavaScript, TypeScript, and C#. Automatically detects your project type and uses the right tools for testing, analysis, and code generation.
