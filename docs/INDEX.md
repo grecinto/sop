@@ -58,6 +58,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 | [V2_ASK_LLM_ORCHESTRATOR_GAPS.md](V2_ASK_LLM_ORCHESTRATOR_GAPS.md) | V2 Ask gaps analysis and future improvements |
 | [TOKEN_CONSUMPTION_ANALYSIS.md](TOKEN_CONSUMPTION_ANALYSIS.md) | **Token Cost Analysis**: V2 (LLM Orchestrator) uses 2.5-6x more tokens vs V1 (Heuristics) - hybrid approach can achieve cost parity while maintaining orchestration benefits |
 | [TOKEN_CONSUMPTION_SUMMARY.md](TOKEN_CONSUMPTION_SUMMARY.md) | **Token Cost TL;DR**: Executive summary with hybrid optimization strategy - fast-path classification + domain pre-filtering recommendations |
+| [PHASE_DOMAIN_OPERATION_TOOL_FILTERING.md](PHASE_DOMAIN_OPERATION_TOOL_FILTERING.md) | **🎯 CRUD Tool Filtering Proposal**: Extend existing V1 CRUD infrastructure to filter tools in V2 Ask - 40-60% additional token reduction by reusing proven LayerInfo.CRUD flags |
 | [FILE_BACKED_TOOL_RESULTS.md](FILE_BACKED_TOOL_RESULTS.md) | ✅ Production-ready: File-backed tool results for large outputs, strategic analysis tools |
 | [SHELL_SESSION_PERSISTENCE.md](SHELL_SESSION_PERSISTENCE.md) | Persistent shell sessions for commands |
 | [DUAL_PTY_PARALLEL_EXECUTION.md](DUAL_PTY_PARALLEL_EXECUTION.md) | ✅ **Complete**: Dual-PTY support for parallel execution - 2 concurrent PTY processes for identical command behavior |
