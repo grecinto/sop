@@ -27,6 +27,7 @@ import (
 	"github.com/sharedcode/sop/ai/agent/domains/desktop"
 	"github.com/sharedcode/sop/ai/agent/domains/spaces"
 	"github.com/sharedcode/sop/ai/agent/domains/stores"
+	multistepplanner "github.com/sharedcode/sop/ai/agent/multistepplanner"
 	"github.com/sharedcode/sop/ai/agent/parser"
 	plannerpkg "github.com/sharedcode/sop/ai/agent/planner"
 	"github.com/sharedcode/sop/ai/database"
@@ -1659,12 +1660,19 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// Inject STM accessor for phase succession (explicit parameter passing, not context)
 	cwfInfra.STMAccessor = a.getSTMForPhaseCapabilities
 
+	// Inject session queue accessor for work item enqueueing (Participant Pattern)
+	cwfInfra.GetSessionQueue = a.getSessionQueueForCapabilities
+
 	// Planner (universal - works across all domains)
 	caps = append(caps, plannerpkg.NewPlannerCapability(cwfInfra))
 
+	// Multi-Step Planner (decomposes multi-goal queries into sequential steps)
+	// Note: No StepExecutor - phases execute directly (Participant Pattern)
+	caps = append(caps, multistepplanner.NewMultiStepPlannerCapability(cwfInfra))
+
 	// Coding domain phases (full SDLC workflow)
 	for _, phaseID := range []string{"intake", "investigation", "planning", "execution", "review", "delivery"} {
-		caps = append(caps, plannerpkg.NewPhaseCapability(phaseID, "coding_workflow", cwfInfra))
+		caps = append(caps, plannerpkg.NewPhase("coding_workflow", phaseID, cwfInfra))
 	}
 
 	// Stores domain phases (methodical query workflow)
@@ -1673,7 +1681,7 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// Execution = Mutations (create, update, delete)
 	// Review = Validation
 	for _, phaseID := range []string{"investigation", "planning", "execution", "review"} {
-		caps = append(caps, plannerpkg.NewPhaseCapability(phaseID, "stores", cwfInfra))
+		caps = append(caps, plannerpkg.NewPhase("stores", phaseID, cwfInfra))
 	}
 
 	// Spaces domain phases (knowledge management workflow)
@@ -1681,14 +1689,14 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// Execution = Mutations (mint, enrich)
 	// Review = Validation
 	for _, phaseID := range []string{"investigation", "execution", "review"} {
-		caps = append(caps, plannerpkg.NewPhaseCapability(phaseID, "spaces", cwfInfra))
+		caps = append(caps, plannerpkg.NewPhase("spaces", phaseID, cwfInfra))
 	}
 
 	// Desktop domain phases (automation workflow)
 	// Planning = Script creation
 	// Execution = Command execution
 	for _, phaseID := range []string{"planning", "execution"} {
-		caps = append(caps, plannerpkg.NewPhaseCapability(phaseID, "desktop", cwfInfra))
+		caps = append(caps, plannerpkg.NewPhase("desktop", phaseID, cwfInfra))
 	}
 
 	a.capabilityRegistry = capabilities.NewRegistry(caps...)
@@ -1700,6 +1708,48 @@ func (a *CopilotAgent) getSTMForPhaseCapabilities() cw.STMReader {
 		return nil
 	}
 	return &stmAdapter{stm: a.service.session.Memory}
+}
+
+// getSessionQueueForCapabilities returns a WorkQueueAccessor for capabilities to enqueue work
+func (a *CopilotAgent) getSessionQueueForCapabilities() cw.WorkQueueAccessor {
+	if a == nil || a.service == nil || a.service.session == nil {
+		return nil
+	}
+	queue := a.GetSessionQueue()
+	if queue == nil {
+		return nil
+	}
+	return &sessionWorkQueueAdapter{queue: queue}
+}
+
+// sessionWorkQueueAdapter adapts WorkQueue to WorkQueueAccessor interface
+type sessionWorkQueueAdapter struct {
+	queue *WorkQueue
+}
+
+func (w *sessionWorkQueueAdapter) Enqueue(item any) error {
+	if w == nil || w.queue == nil {
+		return fmt.Errorf("no queue available")
+	}
+
+	// Try direct type assertion first
+	if workItem, ok := item.(WorkItem); ok {
+		return w.queue.Enqueue(workItem)
+	}
+
+	// Handle struct literals by marshaling/unmarshaling through JSON
+	// This allows capabilities to pass anonymous structs with the right fields
+	itemJSON, err := json.Marshal(item)
+	if err != nil {
+		return fmt.Errorf("failed to marshal work item: %w", err)
+	}
+
+	var workItem WorkItem
+	if err := json.Unmarshal(itemJSON, &workItem); err != nil {
+		return fmt.Errorf("failed to unmarshal work item: %w", err)
+	}
+
+	return w.queue.Enqueue(workItem)
 }
 
 // stmAdapter adapts ShortTermMemory to STMReader interface
@@ -1751,6 +1801,42 @@ func (s *stmAdapter) CreatePhasePlan(phases []string, checkpoints map[string]boo
 	return nil
 }
 
+func (s *stmAdapter) StoreMultiStepPlan(planData any) error {
+	if s == nil || s.stm == nil {
+		return fmt.Errorf("no STM available")
+	}
+
+	thread := s.stm.GetCurrentThread()
+	if thread == nil {
+		return fmt.Errorf("no active thread")
+	}
+
+	if thread.StreamContext == nil {
+		thread.InitializeWorkStream("")
+	}
+
+	// Marshal and unmarshal to convert to agent.MultiStepPlan type
+	planJSON, err := json.Marshal(planData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal plan: %w", err)
+	}
+
+	var multiStepPlan MultiStepPlan
+	if err := json.Unmarshal(planJSON, &multiStepPlan); err != nil {
+		return fmt.Errorf("failed to unmarshal plan: %w", err)
+	}
+
+	thread.StreamContext.MultiStepPlan = &multiStepPlan
+	thread.StreamContext.CurrentStepIndex = 0
+
+	// Set the first step's PhasePlan as the active plan
+	if len(multiStepPlan.Steps) > 0 && multiStepPlan.Steps[0].PhasePlan != nil {
+		thread.StreamContext.PhasePlan = multiStepPlan.Steps[0].PhasePlan
+	}
+
+	return nil
+}
+
 // workStreamAdapter adapts ConversationThread to WorkStreamReader
 type workStreamAdapter struct {
 	thread *ConversationThread
@@ -1781,6 +1867,156 @@ func (w *workStreamContextAdapter) SetPhasePlan(plan cw.PhasePlanReader) {
 	}
 	// Note: This is a simplified setter - in practice, plan is already in ctx
 	// The adapter pattern allows phase capabilities to work with the plan
+}
+
+func (w *workStreamContextAdapter) GetMultiStepPlan() cw.MultiStepPlanReader {
+	if w == nil || w.ctx == nil {
+		return nil
+	}
+	if w.ctx.MultiStepPlan == nil {
+		return nil
+	}
+	return &multiStepPlanAdapter{plan: w.ctx.MultiStepPlan}
+}
+
+func (w *workStreamContextAdapter) SetMultiStepPlan(plan cw.MultiStepPlanReader) {
+	if w == nil || w.ctx == nil {
+		return
+	}
+	// Adapter already wraps the pointer, so the plan is already updated
+}
+
+func (w *workStreamContextAdapter) GetPhaseArtifacts() map[string]map[string]any {
+	if w == nil || w.ctx == nil {
+		return nil
+	}
+	return w.ctx.PhaseArtifacts
+}
+
+// multiStepPlanAdapter adapts MultiStepPlan to MultiStepPlanReader interface
+type multiStepPlanAdapter struct {
+	plan *MultiStepPlan
+}
+
+func (m *multiStepPlanAdapter) GetSteps() []cw.StepReader {
+	if m == nil || m.plan == nil {
+		return nil
+	}
+	steps := make([]cw.StepReader, len(m.plan.Steps))
+	for i := range m.plan.Steps {
+		steps[i] = &stepAdapter{step: &m.plan.Steps[i]}
+	}
+	return steps
+}
+
+func (m *multiStepPlanAdapter) GetCurrentStepIndex() int {
+	if m == nil || m.plan == nil {
+		return -1
+	}
+	return m.plan.CurrentStepIndex
+}
+
+func (m *multiStepPlanAdapter) SetCurrentStepIndex(idx int) {
+	if m == nil || m.plan == nil {
+		return
+	}
+	m.plan.CurrentStepIndex = idx
+}
+
+func (m *multiStepPlanAdapter) GetCompletedSteps() []string {
+	if m == nil || m.plan == nil {
+		return nil
+	}
+	return m.plan.CompletedSteps
+}
+
+func (m *multiStepPlanAdapter) SetCompletedSteps(steps []string) {
+	if m == nil || m.plan == nil {
+		return
+	}
+	m.plan.CompletedSteps = steps
+}
+
+func (m *multiStepPlanAdapter) GetTotalSteps() int {
+	if m == nil || m.plan == nil {
+		return 0
+	}
+	return m.plan.TotalSteps
+}
+
+// stepAdapter adapts StepDefinition to StepReader interface
+type stepAdapter struct {
+	step *StepDefinition
+}
+
+func (s *stepAdapter) GetStepID() string {
+	if s == nil || s.step == nil {
+		return ""
+	}
+	return s.step.StepID
+}
+
+func (s *stepAdapter) GetStepNumber() int {
+	if s == nil || s.step == nil {
+		return 0
+	}
+	return s.step.StepNumber
+}
+
+func (s *stepAdapter) GetGoal() string {
+	if s == nil || s.step == nil {
+		return ""
+	}
+	return s.step.Goal
+}
+
+func (s *stepAdapter) GetDomain() string {
+	if s == nil || s.step == nil {
+		return ""
+	}
+	return s.step.Domain
+}
+
+func (s *stepAdapter) GetStatus() string {
+	if s == nil || s.step == nil {
+		return ""
+	}
+	return s.step.Status
+}
+
+func (s *stepAdapter) SetStatus(status string) {
+	if s == nil || s.step == nil {
+		return
+	}
+	s.step.Status = status
+}
+
+func (s *stepAdapter) GetArtifacts() map[string]any {
+	if s == nil || s.step == nil {
+		return nil
+	}
+	return s.step.Artifacts
+}
+
+func (s *stepAdapter) SetArtifacts(artifacts map[string]any) {
+	if s == nil || s.step == nil {
+		return
+	}
+	s.step.Artifacts = artifacts
+}
+
+func (s *stepAdapter) SetCompletedAt(t int64) {
+	if s == nil || s.step == nil {
+		return
+	}
+	s.step.CompletedAt = t
+}
+
+func (s *stepAdapter) GetPhasePlan() cw.PhasePlanReader {
+	if s == nil || s.step == nil || s.step.PhasePlan == nil {
+		return nil
+	}
+	return &phasePlanAdapter{plan: s.step.PhasePlan}
 }
 
 // phasePlanAdapter adapts PhasePlan to PhasePlanReader interface
@@ -2675,7 +2911,7 @@ func (a *CopilotAgent) GetSessionQueue() *WorkQueue {
 
 // AskParallel executes independent subqueries in parallel threads.
 // Each thread gets its own isolated queue and execution context.
-// Main thread (index 0) uses PTY child process, background threads use exec.Command.
+// All threads use PTY workers with unique session IDs for identical command execution behavior.
 func (a *CopilotAgent) AskParallel(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// 1. Detect parallelizable subqueries
 	subQueries := detectParallelSubqueries(query)
@@ -2696,11 +2932,35 @@ func (a *CopilotAgent) AskParallel(ctx context.Context, query string, cfg *ai.Co
 	for i, subQuery := range subQueries {
 		wg.Add(1)
 
-		// First thread = main (PTY child process)
-		// Subsequent threads = background (exec.Command)
+		// Each thread gets its own PTY worker via unique session ID
+		// Thread 0 = main session, Thread 1+ = parallel sessions
 		threadCtx := ctx
 		if i > 0 {
 			threadCtx = context.WithValue(ctx, "parallel_execution_mode", true)
+
+			// Create unique session ID for this parallel thread
+			// Format: {base_session_id}_thread_{thread_number}
+			baseSessionID := ""
+			if payload, ok := ctx.Value("session_payload").(*ai.SessionPayload); ok && payload != nil {
+				baseSessionID = payload.SessionID
+			}
+			if baseSessionID == "" {
+				baseSessionID = "parallel"
+			}
+			threadSessionID := fmt.Sprintf("%s_thread_%d", baseSessionID, i)
+
+			// Create new session payload for this thread
+			threadPayload := &ai.SessionPayload{
+				SessionID: threadSessionID,
+			}
+			if origPayload, ok := ctx.Value("session_payload").(*ai.SessionPayload); ok && origPayload != nil {
+				// Copy other fields from original payload
+				threadPayload.UserID = origPayload.UserID
+				threadPayload.ClientID = origPayload.ClientID
+				threadPayload.ActiveDomain = origPayload.ActiveDomain
+				threadPayload.ActiveRepo = origPayload.ActiveRepo
+			}
+			threadCtx = context.WithValue(threadCtx, "session_payload", threadPayload)
 		}
 
 		normalizedSubQuery, explicitWorkingDir := extractParallelTaskWorkingDir(subQuery)
@@ -2712,9 +2972,13 @@ func (a *CopilotAgent) AskParallel(ctx context.Context, query string, cfg *ai.Co
 
 		go func(idx int, q string, tCtx context.Context) {
 			defer wg.Done()
-			log.Info("Parallel thread start", "thread", idx, "query", q, "is_background", idx > 0, "working_dir", resolveParallelWorkingDir(tCtx, q))
+			sessionID := ""
+			if payload, ok := tCtx.Value("session_payload").(*ai.SessionPayload); ok && payload != nil {
+				sessionID = payload.SessionID
+			}
+			log.Info("Parallel thread start", "thread", idx, "query", q, "session_id", sessionID, "working_dir", resolveParallelWorkingDir(tCtx, q))
 			results[idx], errors[idx] = a.Ask(tCtx, q, cfg)
-			log.Info("Parallel thread complete", "thread", idx, "error", errors[idx] != nil)
+			log.Info("Parallel thread complete", "thread", idx, "session_id", sessionID, "error", errors[idx] != nil)
 		}(i, normalizedSubQuery, threadCtx)
 	}
 

@@ -75,6 +75,7 @@ type SessionMemory interface {
 type STMReader interface {
 	GetCurrentThread() WorkStreamReader
 	CreatePhasePlan(phases []string, checkpoints map[string]bool, reasoning, confidence string) error
+	StoreMultiStepPlan(planData any) error // Stores a multi-step plan (handles JSON marshaling)
 }
 
 // WorkStreamReader provides read access to ConversationThread for phase succession
@@ -86,6 +87,9 @@ type WorkStreamReader interface {
 type WorkStreamContextReader interface {
 	GetPhasePlan() PhasePlanReader
 	SetPhasePlan(PhasePlanReader)
+	GetMultiStepPlan() MultiStepPlanReader
+	SetMultiStepPlan(MultiStepPlanReader)
+	GetPhaseArtifacts() map[string]map[string]any
 }
 
 // PhasePlanReader provides read/write access to PhasePlan
@@ -95,6 +99,30 @@ type PhasePlanReader interface {
 	SetCurrentIndex(int)
 	GetCheckpoints() map[string]bool
 	AdvancePhase() (nextPhase string, hasNext bool)
+}
+
+// MultiStepPlanReader provides read/write access to MultiStepPlan
+type MultiStepPlanReader interface {
+	GetSteps() []StepReader
+	GetCurrentStepIndex() int
+	SetCurrentStepIndex(int)
+	GetCompletedSteps() []string
+	SetCompletedSteps([]string)
+	GetTotalSteps() int
+}
+
+// StepReader provides read access to a single step in a multi-step plan
+type StepReader interface {
+	GetStepID() string
+	GetStepNumber() int
+	GetGoal() string
+	GetDomain() string
+	GetStatus() string
+	SetStatus(string)
+	GetArtifacts() map[string]any
+	SetArtifacts(map[string]any)
+	SetCompletedAt(int64)
+	GetPhasePlan() PhasePlanReader // Access to step's phase plan
 }
 
 // KnowledgeBaseRetriever reads grounded guidance from repository docs and knowledge files.
@@ -172,6 +200,15 @@ type SharedInfrastructure struct {
 	// STMAccessor provides access to the agent's ShortTermMemory for phase succession
 	// This allows phase capabilities to read/update PhasePlan in WorkStreamContext
 	STMAccessor func() STMReader
+
+	// GetSessionQueue provides access to the agent's work queue for enqueueing next steps
+	// This allows capabilities to route work to other capabilities (Participant Pattern)
+	GetSessionQueue func() WorkQueueAccessor
+}
+
+// WorkQueueAccessor provides a generic interface for enqueueing work items
+type WorkQueueAccessor interface {
+	Enqueue(item any) error
 }
 
 // NewDefaultSharedInfrastructure creates a SharedInfrastructure with default runtime components.

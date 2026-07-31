@@ -54,6 +54,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 |----------|-------------|
 | [FILE_BACKED_TOOL_RESULTS.md](FILE_BACKED_TOOL_RESULTS.md) | ✅ Production-ready: File-backed tool results for large outputs, strategic analysis tools |
 | [SHELL_SESSION_PERSISTENCE.md](SHELL_SESSION_PERSISTENCE.md) | Persistent shell sessions for commands |
+| [DUAL_PTY_PARALLEL_EXECUTION.md](DUAL_PTY_PARALLEL_EXECUTION.md) | ✅ **Complete**: Dual-PTY support for parallel execution - 2 concurrent PTY processes for identical command behavior |
 | [PHASE4_PARALLEL_EXECUTION.md](PHASE4_PARALLEL_EXECUTION.md) | Phase 4 parallel execution architecture, thread routing, PTY vs exec.Command |
 
 ### Knowledge Base Quality
@@ -88,6 +89,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 
 | Document | Description |
 |----------|-------------|
+| [MULTI_STEP_WORKFLOW_DESIGN.md](MULTI_STEP_WORKFLOW_DESIGN.md) | 📋 **Design Ready**: Multi-step workflow system for multi-goal queries - Sequential step execution with artifact sharing (pending implementation) |
 | [WORKFLOWS.md](WORKFLOWS.md) | ⭐ **Complete Guide**: Workflow architecture, lifecycle, implementation status, tool specifications, and best practices. Covers KB-based storage, multi-step orchestration, and automatic ingestion. |
 | [PHASE_PLAN_IMPLEMENTATION_DESIGN.md](PHASE_PLAN_IMPLEMENTATION_DESIGN.md) | Phase Plan System implementation - Planning-First LLM orchestration with cursor-based progression |
 | [PHASE_PLAN_GUIDE.md](PHASE_PLAN_GUIDE.md) | Phase Plan System usage guide - Cognitive pattern for multi-step problem-solving |

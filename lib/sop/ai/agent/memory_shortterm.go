@@ -146,6 +146,32 @@ type LoopDetectionState struct {
 	EscalationLevel int      `json:"escalation_level"`  // 0=none, 1=warning, 2=user prompt, 3=abort
 }
 
+// MultiStepPlan represents a workflow with multiple sequential steps.
+// Each step has its own goal and Phase Plan.
+type MultiStepPlan struct {
+	Steps            []StepDefinition `json:"steps"`              // Ordered list of steps
+	CurrentStepIndex int              `json:"current_step_index"` // Cursor: which step we're on (0-based)
+	CompletedSteps   []string         `json:"completed_steps"`    // Step IDs completed
+	RemainingSteps   []string         `json:"remaining_steps"`    // Step IDs yet to execute
+	Reasoning        string           `json:"reasoning"`          // Why this decomposition
+	TotalSteps       int              `json:"total_steps"`        // Number of steps
+	CreatedAt        int64            `json:"created_at"`         // Timestamp
+}
+
+// StepDefinition represents a single step in a multi-step workflow.
+type StepDefinition struct {
+	StepID        string         `json:"step_id"`       // "step_1_create_store"
+	StepNumber    int            `json:"step_number"`   // 1, 2, 3...
+	Goal          string         `json:"goal"`          // "Create new store with products"
+	Domain        string         `json:"domain"`        // "stores", "coding_workflow", "spaces", "desktop"
+	PhasePlan     *PhasePlan     `json:"phase_plan"`    // Phase sequence for THIS step
+	Status        string         `json:"status"`        // "pending", "active", "complete", "failed"
+	Prerequisites []string       `json:"prerequisites"` // Step IDs that must complete first (for future parallel support)
+	Artifacts     map[string]any `json:"artifacts"`     // Results from this step
+	StartedAt     int64          `json:"started_at"`    // Timestamp
+	CompletedAt   int64          `json:"completed_at"`  // Timestamp
+}
+
 // WorkStreamContext captures the phase progression and artifacts
 type WorkStreamContext struct {
 	CurrentPhase   string                    `json:"current_phase"`   // Current executing phase
@@ -172,6 +198,10 @@ type WorkStreamContext struct {
 	// Manual Resume Control
 	RequiresManualResume bool   `json:"requires_manual_resume"` // If true, won't auto-resume on completion of child stream
 	PauseReason          string `json:"pause_reason"`           // Why this stream was paused (for user reminder)
+
+	// Multi-Step Workflow Support
+	MultiStepPlan    *MultiStepPlan `json:"multi_step_plan,omitempty"`    // Multi-step plan (if applicable)
+	CurrentStepIndex int            `json:"current_step_index,omitempty"` // Which step we're on (mirrors MultiStepPlan.CurrentStepIndex)
 }
 
 // ConversationThread represents a single conversational thread.

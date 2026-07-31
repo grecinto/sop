@@ -2224,11 +2224,13 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		}
 	}
 
-	// Phase 4: Force background execution for parallel threads
+	// Phase 4: Enable background execution for parallel threads
+	// Each parallel thread gets its own PTY worker via unique session ID
 	sessionID := sessionIDFromContext(ctx)
 	if isParallelExecution(ctx) {
 		background = true
-		sessionID = "" // Strip session to route to exec.Command instead of PTY
+		// DO NOT strip sessionID - parallel threads use PTY too!
+		// Each thread has unique session ID (e.g., "session_123_thread_1")
 	}
 
 	executedCommand := command
