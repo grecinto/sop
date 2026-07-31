@@ -627,6 +627,11 @@ func (a *CopilotAgent) buildSystemPromptV2(ctx context.Context, query string, cl
 		strings.Join(classification.PhasePlan, " → "),
 		strings.Join(phaseInstructions, "\n\n---\n\n"))
 
+	// Gap Fix #1: Include classification reasoning to help LLM make better tool decisions
+	if classification.Reasoning != "" {
+		phaseContext += fmt.Sprintf("\n\n=== Classification Context ===\n%s\n", classification.Reasoning)
+	}
+
 	builder.With(ComponentFocusedContext, phaseContext)
 
 	// 5. Conversation history

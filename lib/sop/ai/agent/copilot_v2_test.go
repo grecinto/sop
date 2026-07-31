@@ -112,7 +112,14 @@ func TestV2PhaseFactoryIntegration(t *testing.T) {
 	t.Logf("✅ Phase Factory created %d phases for domains %v", len(phases), domains)
 
 	// Test tool aggregation
-	allTools := agent.aggregatePhaseToolsV2(phases)
+	classification := &TaskContextV2{
+		Domains:   domains,
+		Phase:     phase,
+		PhasePlan: []string{phase},
+		CRUD:      []string{"R"}, // Read-only for test
+	}
+
+	allTools := agent.aggregatePhaseToolsV2(phases, classification)
 
 	if len(allTools) == 0 {
 		t.Fatal("Should have aggregated tools from phases")

@@ -993,7 +993,53 @@ func formatNativeToolResultSummary(result nativeToolResult) string {
 	if err != nil {
 		return ""
 	}
-	return string(bytes)
+	formattedSummary := string(bytes)
+
+	// Gap Fix #5: Surface ToolProgressHint visibly to LLM for better retry/continuation decisions
+	if result.Hint != nil {
+		hintText := formatToolProgressHintForLLM(result.Hint)
+		if hintText != "" {
+			formattedSummary += "\n\n" + hintText
+		}
+	}
+
+	return formattedSummary
+}
+
+// formatToolProgressHintForLLM formats ToolProgressHint as visible guidance for the LLM.
+// This surfaces tool feedback that was previously only in metadata.
+func formatToolProgressHintForLLM(hint *ai.ToolProgressHint) string {
+	if hint == nil {
+		return ""
+	}
+
+	var parts []string
+
+	if len(hint.Tips) > 0 {
+		parts = append(parts, "💡 Tips: "+strings.Join(hint.Tips, "; "))
+	}
+
+	if len(hint.Clues) > 0 {
+		parts = append(parts, "🔍 Clues: "+strings.Join(hint.Clues, "; "))
+	}
+
+	if len(hint.Missing) > 0 {
+		parts = append(parts, "⚠️  Missing: "+strings.Join(hint.Missing, ", "))
+	}
+
+	if len(hint.SuggestedNextTools) > 0 {
+		parts = append(parts, "🛠️  Suggested Next: "+strings.Join(hint.SuggestedNextTools, ", "))
+	}
+
+	if hint.Status != "" {
+		parts = append(parts, "📊 Status: "+hint.Status)
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return "=== Tool Guidance ===\n" + strings.Join(parts, "\n")
 }
 
 func formatNativeProgressionHistory(toolResults []nativeToolResult) string {
