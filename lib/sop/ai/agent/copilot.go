@@ -1680,9 +1680,29 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// Note: No StepExecutor - phases execute directly (Participant Pattern)
 	caps = append(caps, multistepplanner.NewMultiStepPlannerCapability(cwfInfra))
 
+	// WorkStream Management (LLM orchestrates pause/resume/jump via tools)
+	// Provides: list_workstreams, get_workstream_details, jump_to_phase,
+	//           pause_workstream, resume_workstream, abandon_workstream
+	// Note: Uses adapter to convert codingworkflow.STMReader -> capabilities.STMReader
+	caps = append(caps, capabilities.NewWorkStreamManagement(
+		func() capabilities.STMReader {
+			// Adapter: Convert codingworkflow.STMReader to capabilities.STMReader
+			cwSTM := a.getSTMForPhaseCapabilities()
+			return &stmReaderAdapter{cwSTM: cwSTM}
+		},
+		func() capabilities.PhasePlanMutator {
+			if cwfInfra.PhasePlanMutator != nil {
+				if m, ok := cwfInfra.PhasePlanMutator.(capabilities.PhasePlanMutator); ok {
+					return m
+				}
+			}
+			return nil
+		},
+	))
+
 	// Note: No explicit InterjectionInterpreter needed
-	// LLM interprets user interjections naturally and calls mutation tools directly
-	// The tool calls (mutate_phase_plan, etc.) ARE the interpretation signals
+	// LLM interprets user interjections naturally and calls WorkStream management tools
+	// The tool calls (jump_to_phase, pause_workstream, etc.) ARE the orchestration signals
 	// This aligns with implicit orchestration model used in Stores/Spaces domains
 
 	// Coding domain phases (full SDLC workflow)
@@ -2081,6 +2101,175 @@ func (p *phasePlanAdapter) AdvancePhase() (nextPhase string, hasNext bool) {
 	}
 
 	return p.plan.PlannedPhases[p.plan.CurrentIndex], true
+}
+
+// stmReaderAdapter adapts codingworkflow.STMReader to capabilities.STMReader
+// This allows WorkStreamManagement capability to work with the existing STM infrastructure
+type stmReaderAdapter struct {
+	cwSTM cw.STMReader
+}
+
+func (s *stmReaderAdapter) GetCurrentThread() capabilities.ThreadReader {
+	if s == nil || s.cwSTM == nil {
+		return nil
+	}
+	thread := s.cwSTM.GetCurrentThread()
+	if thread == nil {
+		return nil
+	}
+	return &threadReaderAdapter{cwThread: thread}
+}
+
+// threadReaderAdapter adapts codingworkflow.WorkStreamReader to capabilities.ThreadReader
+type threadReaderAdapter struct {
+	cwThread cw.WorkStreamReader
+}
+
+func (t *threadReaderAdapter) GetStreamContext() capabilities.WorkStreamContextReader {
+	if t == nil || t.cwThread == nil {
+		return nil
+	}
+	ctx := t.cwThread.GetStreamContext()
+	if ctx == nil {
+		return nil
+	}
+	return &wsContextReaderAdapter{cwCtx: ctx}
+}
+
+func (t *threadReaderAdapter) GetStreamState() capabilities.WorkStreamState {
+	// Note: codingworkflow.WorkStreamReader doesn't have GetStreamState
+	// Return default active state
+	return capabilities.WorkStreamActive
+}
+
+func (t *threadReaderAdapter) SetStreamState(state capabilities.WorkStreamState) {
+	// Note: codingworkflow.WorkStreamReader doesn't have SetStreamState
+	// This is a no-op for now
+}
+
+// wsContextReaderAdapter adapts codingworkflow.WorkStreamContextReader to capabilities.WorkStreamContextReader
+type wsContextReaderAdapter struct {
+	cwCtx cw.WorkStreamContextReader
+}
+
+func (w *wsContextReaderAdapter) GetCurrentPhase() string {
+	// Note: codingworkflow.WorkStreamContextReader doesn't have GetCurrentPhase
+	// Extract from PhasePlan if available
+	plan := w.GetPhasePlan()
+	if plan == nil {
+		return ""
+	}
+	phases := plan.GetPlannedPhases()
+	idx := plan.GetCurrentIndex()
+	if idx >= 0 && idx < len(phases) {
+		return phases[idx]
+	}
+	return ""
+}
+
+func (w *wsContextReaderAdapter) GetPhaseHistory() []string {
+	// Note: codingworkflow.WorkStreamContextReader doesn't have GetPhaseHistory
+	// Return completed phases from plan if available
+	plan := w.GetPhasePlan()
+	if plan == nil {
+		return nil
+	}
+	phases := plan.GetPlannedPhases()
+	idx := plan.GetCurrentIndex()
+	if idx <= 0 {
+		return nil
+	}
+	if idx > len(phases) {
+		return phases
+	}
+	return phases[:idx]
+}
+
+func (w *wsContextReaderAdapter) GetPhasePlan() capabilities.PhasePlanReader {
+	if w == nil || w.cwCtx == nil {
+		return nil
+	}
+	plan := w.cwCtx.GetPhasePlan()
+	if plan == nil {
+		return nil
+	}
+	return &phasePlanReaderAdapter{cwPlan: plan}
+}
+
+func (w *wsContextReaderAdapter) GetPhaseArtifacts() map[string]any {
+	if w == nil || w.cwCtx == nil {
+		return nil
+	}
+	// Note: codingworkflow returns map[string]map[string]any
+	// capabilities expects map[string]any
+	// Flatten the structure
+	cwArtifacts := w.cwCtx.GetPhaseArtifacts()
+	if cwArtifacts == nil {
+		return nil
+	}
+	result := make(map[string]any)
+	for phaseID, artifact := range cwArtifacts {
+		result[phaseID] = artifact
+	}
+	return result
+}
+
+func (w *wsContextReaderAdapter) GetIterationCount() int {
+	// Note: codingworkflow.WorkStreamContextReader doesn't have GetIterationCount
+	return 0
+}
+
+func (w *wsContextReaderAdapter) GetPhaseIterations() map[string]int {
+	// Note: codingworkflow.WorkStreamContextReader doesn't have GetPhaseIterations
+	return nil
+}
+
+// phasePlanReaderAdapter adapts codingworkflow.PhasePlanReader to capabilities.PhasePlanReader
+type phasePlanReaderAdapter struct {
+	cwPlan cw.PhasePlanReader
+}
+
+func (p *phasePlanReaderAdapter) GetPlannedPhases() []string {
+	if p == nil || p.cwPlan == nil {
+		return nil
+	}
+	return p.cwPlan.GetPlannedPhases()
+}
+
+func (p *phasePlanReaderAdapter) GetCurrentIndex() int {
+	if p == nil || p.cwPlan == nil {
+		return -1
+	}
+	return p.cwPlan.GetCurrentIndex()
+}
+
+func (p *phasePlanReaderAdapter) GetCompletedPhases() []string {
+	// Extract from plan
+	if p == nil || p.cwPlan == nil {
+		return nil
+	}
+	phases := p.cwPlan.GetPlannedPhases()
+	idx := p.cwPlan.GetCurrentIndex()
+	if idx <= 0 {
+		return nil
+	}
+	if idx > len(phases) {
+		return phases
+	}
+	return phases[:idx]
+}
+
+func (p *phasePlanReaderAdapter) GetRemainingPhases() []string {
+	// Extract from plan
+	if p == nil || p.cwPlan == nil {
+		return nil
+	}
+	phases := p.cwPlan.GetPlannedPhases()
+	idx := p.cwPlan.GetCurrentIndex()
+	if idx < 0 || idx >= len(phases) {
+		return nil
+	}
+	return phases[idx:]
 }
 
 // InjectShellSessionManager injects a shell session manager into the desktop capability

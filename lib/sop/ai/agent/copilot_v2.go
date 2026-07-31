@@ -623,46 +623,56 @@ func (a *CopilotAgent) buildSystemPromptV2(ctx context.Context, query string, cl
 
 // isPhaseCompleteV2 determines if the current phase is complete.
 //
-// USER SPECIFICATION:
-// Check if phase is complete based on:
-// - Tool calls executed (certain tools signal completion)
-// - Response content (completion indicators)
-// - Phase-specific completion criteria
+// IMPLEMENTATION:
+// Checks the actual artifact status instead of heuristics.
+// Phase is complete when artifact status is one of:
+// - "complete", "approved", "delivered"
 func (a *CopilotAgent) isPhaseCompleteV2(ctx context.Context, currentPhase string, toolCalls []ai.ToolCall, response string) bool {
-	// Simple heuristic: Phase is complete if:
-	// 1. At least one tool was called
-	// 2. Response doesn't indicate "in progress" or "next step"
-
-	if len(toolCalls) == 0 {
-		return false
-	}
-
-	// Check for completion tool calls
+	// Check if capture tool was called
+	captureToolCalled := false
 	for _, tc := range toolCalls {
-		// Tools with "capture" or "complete" in name signal phase end
-		if strings.Contains(tc.Name, "capture") || strings.Contains(tc.Name, "complete") {
-			return true
+		if strings.Contains(tc.Name, "capture") {
+			captureToolCalled = true
+			break
 		}
 	}
 
-	// Check response for continuation signals
-	responseLower := strings.ToLower(response)
-	continuationSignals := []string{
-		"next step",
-		"will now",
-		"proceeding to",
-		"let me",
-		"i will",
+	if !captureToolCalled {
+		return false // Not complete until artifact captured
 	}
 
-	for _, signal := range continuationSignals {
-		if strings.Contains(responseLower, signal) {
-			return false // Still in progress
+	// Load the actual artifact and check its status
+	stm := a.getSTMForPhaseCapabilities()
+	if stm == nil {
+		// Fallback to heuristic if STM not available
+		return len(toolCalls) > 0
+	}
+
+	thread := stm.GetCurrentThread()
+	if thread == nil {
+		return len(toolCalls) > 0
+	}
+
+	streamCtx := thread.GetStreamContext()
+	if streamCtx == nil {
+		return len(toolCalls) > 0
+	}
+
+	// Get artifact for current phase
+	artifacts := streamCtx.GetPhaseArtifacts()
+	if phaseArtifacts, ok := artifacts[currentPhase]; ok {
+		// PhaseArtifacts is map[string]any with artifact data
+		if phaseArtifacts != nil {
+			status, _ := phaseArtifacts["status"].(string)
+			status = strings.ToLower(strings.TrimSpace(status))
+			// Phase is complete when status indicates completion
+			return status == "complete" || status == "approved" || status == "delivered"
 		}
 	}
 
-	// Default: Phase complete if tools were called and response provided
-	return len(toolCalls) > 0 && len(strings.TrimSpace(response)) > 0
+	// Fallback: If artifact not found but capture was called, assume complete
+	// (artifact may be in different storage location)
+	return captureToolCalled
 }
 
 // getNextPhase returns the next phase in the plan after currentPhase.

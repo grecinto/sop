@@ -201,6 +201,7 @@ func (b *BasePhase) runCapture(args map[string]any) (string, error) {
 		return "", fmt.Errorf("status is required")
 	}
 
+	// Build artifact first to validate completion criteria
 	artifact := phaseArtifact{
 		PhaseID:   b.phaseID,
 		Summary:   summary,
@@ -260,6 +261,11 @@ func (b *BasePhase) runCapture(args map[string]any) (string, error) {
 		artifact.StructuredData = structData
 	}
 
+	// Validate phase completion criteria before allowing status="complete"
+	if err := b.validateCompletionCriteria(artifact); err != nil {
+		return "", err
+	}
+
 	artifactJSON, err := json.Marshal(artifact)
 	if err != nil {
 		return "", fmt.Errorf("failed to serialize artifact: %w", err)
@@ -301,6 +307,71 @@ func (b *BasePhase) runState(args map[string]any) (string, error) {
 	}
 
 	return string(artifactJSON), nil
+}
+
+// validateCompletionCriteria checks if phase-specific success criteria are met
+// before allowing the phase to be marked as complete.
+func (b *BasePhase) validateCompletionCriteria(artifact phaseArtifact) error {
+	status := strings.ToLower(strings.TrimSpace(artifact.Status))
+
+	// Only validate when marking phase as complete
+	if status != "complete" && status != "approved" && status != "delivered" {
+		return nil // In-progress statuses don't need validation
+	}
+
+	// Phase-specific validation
+	switch b.phaseID {
+	case "intake":
+		// Intake phase must document at least one requirement
+		if len(artifact.Requirements) == 0 {
+			return fmt.Errorf("intake phase requires at least 1 requirement before marking complete. Add requirements to the requirements array")
+		}
+		if strings.TrimSpace(artifact.Summary) == "" {
+			return fmt.Errorf("intake phase requires a summary of user intent")
+		}
+
+	case "investigation":
+		// Investigation must gather evidence
+		if len(artifact.Evidence) < 2 {
+			return fmt.Errorf("investigation phase requires at least 2 pieces of evidence (file locations, patterns, findings). Current: %d", len(artifact.Evidence))
+		}
+		if strings.TrimSpace(artifact.Summary) == "" {
+			return fmt.Errorf("investigation phase requires a summary of findings or root cause")
+		}
+
+	case "planning":
+		// Planning must create an implementation plan
+		if len(artifact.Plan) == 0 {
+			return fmt.Errorf("planning phase requires at least 1 implementation step in the plan array before marking complete")
+		}
+		if strings.TrimSpace(artifact.Summary) == "" {
+			return fmt.Errorf("planning phase requires a summary of the approach")
+		}
+
+	case "execution":
+		// Execution must document what was done
+		if strings.TrimSpace(artifact.Summary) == "" {
+			return fmt.Errorf("execution phase requires a summary of changes made")
+		}
+		// Note: Could add stricter validation like:
+		// - Require structured_data with test results
+		// - Require evidence of file modifications
+		// But keeping flexible for now
+
+	case "review":
+		// Review must use "approved" status, not just "complete"
+		if status == "complete" {
+			return fmt.Errorf("review phase should use status='approved' when validation passes, or document issues in notes")
+		}
+
+	case "delivery":
+		// Delivery must have final summary
+		if strings.TrimSpace(artifact.Summary) == "" {
+			return fmt.Errorf("delivery phase requires a final summary of work completed")
+		}
+	}
+
+	return nil
 }
 
 func (b *BasePhase) loadExistingArtifact() (phaseArtifact, error) {
