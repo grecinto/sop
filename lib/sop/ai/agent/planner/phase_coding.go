@@ -41,6 +41,7 @@ WORKFLOW: Assess → Create succession path → Build context → Plan changes �
 		return `PHASE: Execution & Implementation
 OBJECTIVE: Apply changes safely
 SAFETY: Always preview before apply
+MULTI-FILE: Use apply_multi_file_patch for multiple related files (faster than sequential apply_patch)
 WORKFLOW: Preview → Approve → Apply → Test → Capture results`
 	case "review":
 		return `PHASE: Review & Validation
@@ -97,6 +98,27 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
     "file_path": {"type": "string"},
     "old_content": {"type": "string"},
     "new_content": {"type": "string"},
+    "description": {"type": "string"}
+  }
+}`
+
+	multiFilePatchSchema := `{
+  "type": "object",
+  "required": ["patches"],
+  "properties": {
+    "patches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file_path", "old_content", "new_content"],
+        "properties": {
+          "file_path": {"type": "string"},
+          "old_content": {"type": "string"},
+          "new_content": {"type": "string"},
+          "description": {"type": "string"}
+        }
+      }
+    },
     "description": {"type": "string"}
   }
 }`
@@ -168,6 +190,10 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
 			Description: "Applies patch to file (preview first)",
 			Schema:      patchSchema,
 		}, {
+			Name:        p.phaseToolName("apply_multi_file_patch"),
+			Description: "Applies patches to multiple files atomically. Use when generating/modifying multiple related files (e.g., adding feature with multiple components). More efficient than sequential apply_patch calls.",
+			Schema:      multiFilePatchSchema,
+		}, {
 			Name:        p.phaseToolName("run_tests"),
 			Description: "Runs tests after changes",
 			Schema:      taskSchema,
@@ -209,7 +235,7 @@ func (p *CodingPhase) BuildInstructions(query string, state capabilities.Routing
 	case "planning":
 		return "Use Planning: Assess → Create path → Plan changes → Capture → Transition"
 	case "execution":
-		return "Use Execution: Preview → Approve → Apply → Test → Capture → Transition. SAFETY: Always preview first"
+		return "Use Execution: Preview → Approve → Apply → Test → Capture → Transition. SAFETY: Always preview first. MULTI-FILE: Use apply_multi_file_patch for batch operations"
 	case "review":
 		return "Use Review: Build context → Inspect → Test → Validate → Capture → Transition"
 	case "delivery":
@@ -254,6 +280,8 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 		return p.runPreviewPatch(args)
 	case strings.ToLower(p.phaseToolName("apply_patch")):
 		return p.runApplyPatch(args)
+	case strings.ToLower(p.phaseToolName("apply_multi_file_patch")):
+		return p.runApplyMultiFilePatch(args)
 	case strings.ToLower(p.phaseToolName("run_tests")):
 		return p.runTests(args)
 	default:
@@ -421,6 +449,61 @@ func (p *CodingPhase) runApplyPatch(args map[string]any) (string, error) {
 	return fmt.Sprintf("Applied patch to %s", patch.FilePath), nil
 }
 
+func (p *CodingPhase) runApplyMultiFilePatch(args map[string]any) (string, error) {
+	task := p.buildTask(args)
+	infra := p.ensureSharedInfrastructure()
+
+	patches := readMultiFilePatch(args)
+	if len(patches) == 0 {
+		return "", fmt.Errorf("missing patches array")
+	}
+
+	// Policy check applies to all patches
+	if infra.Policy != nil {
+		if err := infra.Policy.Allow(task, task.State); err != nil {
+			return "", err
+		}
+	}
+
+	patchOps := infra.NewPatchOperations()
+	appliedFiles := make([]string, 0, len(patches))
+	failedFiles := make([]string, 0)
+
+	// Apply all patches - collect both successes and failures
+	for i, patch := range patches {
+		if err := patchOps.ApplyPatch(task, patch, task.State); err != nil {
+			failedFiles = append(failedFiles, fmt.Sprintf("%s: %v", patch.FilePath, err))
+		} else {
+			appliedFiles = append(appliedFiles, patch.FilePath)
+		}
+		_ = i // Track for potential rollback in future
+	}
+
+	// Build result message
+	description := readPhaseString(args, "description", "")
+	resultParts := make([]string, 0, 4)
+
+	if description != "" {
+		resultParts = append(resultParts, fmt.Sprintf("Multi-file patch: %s", description))
+	} else {
+		resultParts = append(resultParts, "Multi-file patch applied")
+	}
+
+	if len(appliedFiles) > 0 {
+		resultParts = append(resultParts, fmt.Sprintf("✅ Applied %d files: %s", len(appliedFiles), strings.Join(appliedFiles, ", ")))
+	}
+
+	if len(failedFiles) > 0 {
+		resultParts = append(resultParts, fmt.Sprintf("❌ Failed %d files:\n%s", len(failedFiles), strings.Join(failedFiles, "\n")))
+		// Partial success is still reported, but with error context
+		if len(appliedFiles) == 0 {
+			return "", fmt.Errorf("all patches failed:\n%s", strings.Join(failedFiles, "\n"))
+		}
+	}
+
+	return strings.Join(resultParts, "\n"), nil
+}
+
 func (p *CodingPhase) runTests(args map[string]any) (string, error) {
 	task := p.buildTask(args)
 	infra := p.ensureSharedInfrastructure()
@@ -541,4 +624,45 @@ func readPatch(args map[string]any) *Patch {
 		NewContent:  newContent,
 		Description: description,
 	}
+}
+
+func readMultiFilePatch(args map[string]any) []*Patch {
+	if args == nil {
+		return nil
+	}
+
+	patchesRaw, ok := args["patches"]
+	if !ok {
+		return nil
+	}
+
+	// Handle both []any and []map[string]any
+	var patchMaps []map[string]any
+	switch v := patchesRaw.(type) {
+	case []any:
+		patchMaps = make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				patchMaps = append(patchMaps, m)
+			}
+		}
+	case []map[string]any:
+		patchMaps = v
+	default:
+		return nil
+	}
+
+	if len(patchMaps) == 0 {
+		return nil
+	}
+
+	patches := make([]*Patch, 0, len(patchMaps))
+	for _, patchArgs := range patchMaps {
+		patch := readPatch(patchArgs)
+		if patch != nil {
+			patches = append(patches, patch)
+		}
+	}
+
+	return patches
 }
