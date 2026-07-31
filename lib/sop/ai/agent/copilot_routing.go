@@ -222,13 +222,10 @@ func shouldRouteColdStartToPlanner(query string) bool {
 func inferCapabilityRoutingSignal(query string, domain string) (string, string, string) {
 	q := strings.ToLower(strings.TrimSpace(query))
 
-	// Infer domain from keywords (for Stores/Spaces backwards compatibility)
+	// Domain inference removed - LLM-as-Orchestrator pattern
+	// Let LLM classify capabilities via Classify() instead of keyword pre-routing
+	// This allows adaptive classification to work properly
 	inferredDomain := ""
-	if strings.Contains(q, "store") || strings.Contains(q, "stores") {
-		inferredDomain = StoresDomain
-	} else if strings.Contains(q, "space") || strings.Contains(q, "spaces") {
-		inferredDomain = SpacesDomain
-	}
 
 	if q == "" {
 		return inferIntentFamily(domain, ""), capabilityHintGeneral, inferredDomain

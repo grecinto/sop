@@ -4,63 +4,64 @@ import (
 	"testing"
 )
 
-// TestInferCapabilityRoutingSignal_StoresDomainBackwardsCompatibility verifies
-// that domain inference still works for Stores/Spaces queries in the keyword routing fast path.
-func TestInferCapabilityRoutingSignal_StoresDomainBackwardsCompatibility(t *testing.T) {
+// TestInferCapabilityRoutingSignal_LLMOrchestrator verifies
+// that domain inference has been removed in favor of LLM-driven classification.
+// The LLM should see all capabilities and use their Classify() methods to determine relevance.
+func TestInferCapabilityRoutingSignal_LLMOrchestrator(t *testing.T) {
 	tests := []struct {
 		name           string
 		query          string
 		expectIntent   string
 		expectHint     string
-		expectDomain   string
-		expectFastPath bool // True if should use keyword routing, not LLM
+		expectDomain   string // Should always be "" - no keyword pre-routing
+		expectFastPath bool  // True if should use keyword routing, not LLM
 	}{
 		{
-			name:           "Fix tests with Stores domain",
+			name:           "Fix tests with Stores keyword - NO pre-routing",
 			query:          "fix failing tests in Stores",
 			expectIntent:   intentFamilyRepoEdit,
 			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   StoresDomain,
+			expectDomain:   "", // LLM will decide via Classify()
 			expectFastPath: true,
 		},
 		{
-			name:           "Update users table in Stores",
+			name:           "Update users table with Stores keyword - NO pre-routing",
 			query:          "update the users table in Stores",
 			expectIntent:   intentFamilyRepoEdit,
 			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   StoresDomain,
+			expectDomain:   "", // LLM will decide via Classify()
 			expectFastPath: true,
 		},
 		{
-			name:           "Query with 'store' keyword (singular)",
+			name:           "Query with 'store' keyword (singular) - NO pre-routing",
 			query:          "fix the store database connection",
 			expectIntent:   intentFamilyRepoEdit,
 			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   StoresDomain,
+			expectDomain:   "", // LLM will decide via Classify()
 			expectFastPath: true,
 		},
 		{
-			name:           "Spaces domain inference",
+			name:           "Spaces keyword - NO pre-routing",
 			query:          "refactor code in Spaces",
 			expectIntent:   intentFamilyRepoEdit,
 			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   SpacesDomain,
+			expectDomain:   "", // LLM will decide via Classify()
 			expectFastPath: true,
 		},
 		{
-			name:           "Query with 'space' keyword (singular)",
+			name:           "Query with 'space' keyword (singular) - NO pre-routing",
 			query:          "add tests for space management",
 			expectIntent:   intentFamilyRepoEdit,
 			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   SpacesDomain,
+			expectDomain:   "", // LLM will decide via Classify()
 			expectFastPath: true,
 		},
 		{
-			name:           "Desktop automation with Stores",
+			name:           "Desktop automation with Stores - NO pre-routing",
 			query:          "run shell command to query Stores",
 			expectIntent:   intentFamilyLocalOps,
 			expectHint:     capabilityHintDesktopAutomation,
-			expectDomain:   StoresDomain,
+			expectDomain:   "", // LLM will decide via Classify()
 			expectFastPath: true,
 		},
 		{
