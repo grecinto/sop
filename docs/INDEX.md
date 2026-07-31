@@ -60,6 +60,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 | [TOKEN_CONSUMPTION_SUMMARY.md](TOKEN_CONSUMPTION_SUMMARY.md) | **Token Cost TL;DR**: Executive summary with hybrid optimization strategy - fast-path classification + domain pre-filtering recommendations |
 | [PHASE_DOMAIN_OPERATION_TOOL_FILTERING.md](PHASE_DOMAIN_OPERATION_TOOL_FILTERING.md) | **🎯 CRUD Tool Filtering Proposal**: Extend existing V1 CRUD infrastructure to filter tools in V2 Ask - 40-60% additional token reduction by reusing proven LayerInfo.CRUD flags |
 | [CRUD_TOOL_FILTERING_IMPLEMENTATION_SUMMARY.md](CRUD_TOOL_FILTERING_IMPLEMENTATION_SUMMARY.md) | **✅ Phase 3 Implementation Complete**: CRUD-based tool filtering fully implemented and tested - 40+ tools tagged, all tests passing, 87% total token reduction achieved |
+| [HYBRID_CLASSIFICATION_REASSESSMENT.md](HYBRID_CLASSIFICATION_REASSESSMENT.md) | **🔄 Post-CRUD Re-Assessment**: Pure LLM classification beats hybrid heuristics after CRUD filtering (complete economic analysis with math) |
 | [FILE_BACKED_TOOL_RESULTS.md](FILE_BACKED_TOOL_RESULTS.md) | ✅ Production-ready: File-backed tool results for large outputs, strategic analysis tools |
 | [SHELL_SESSION_PERSISTENCE.md](SHELL_SESSION_PERSISTENCE.md) | Persistent shell sessions for commands |
 | [DUAL_PTY_PARALLEL_EXECUTION.md](DUAL_PTY_PARALLEL_EXECUTION.md) | ✅ **Complete**: Dual-PTY support for parallel execution - 2 concurrent PTY processes for identical command behavior |
