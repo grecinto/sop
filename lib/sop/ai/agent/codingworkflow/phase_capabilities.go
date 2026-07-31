@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	"github.com/sharedcode/sop/ai/agent/teampatterns"
+	"github.com/sharedcode/sop/ai/memory"
 )
 
 // PhaseCapability exposes a phase of the coding workflow as a capability that the
@@ -1034,6 +1036,10 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 		return c.runSearchRepo(args)
 	case strings.ToLower(c.phaseToolName("list_changed_files")):
 		return c.runListChangedFiles(args)
+	case strings.ToLower(c.phaseToolName("search_team_patterns")):
+		return c.runSearchTeamPatterns(ctx, args)
+	case strings.ToLower(c.phaseToolName("vectorize_team_patterns")):
+		return c.runVectorizeTeamPatterns(ctx, args)
 	case strings.ToLower(c.phaseToolName("plan_changes")):
 		return c.runPlanChanges(args)
 	case strings.ToLower(c.phaseToolName("preview_patch")):
@@ -1102,6 +1108,36 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 			Name:        c.phaseToolName("list_changed_files"),
 			Description: "Lists files with uncommitted changes. WHEN TO CALL: To identify in-progress work and avoid conflicts. Returns list of changed file paths.",
 			Schema:      taskSchema,
+		}, {
+			Name:        c.phaseToolName("search_team_patterns"),
+			Description: "Searches team-specific coding conventions and patterns in Long-Term Memory. Use when planning code generation to find team's preferred helpers, anti-patterns, and conventions. Returns pattern details including convention, anti-pattern, examples, and file references. WHEN TO CALL: Before designing or implementing features to ensure code follows team standards.",
+			Schema: `{
+  "type": "object",
+  "required": ["query"],
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Semantic search query for team patterns (e.g., 'authentication HTTP handlers', 'error handling', 'database queries', 'testing utilities')"
+    },
+    "pattern_type": {
+      "type": "string",
+      "description": "Optional filter by pattern type",
+      "enum": ["authentication", "error_handling", "database", "testing", "api_design", "background_jobs"]
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Maximum number of patterns to return (default 5)",
+      "default": 5
+    }
+  }
+}`,
+		}, {
+			Name:        c.phaseToolName("vectorize_team_patterns"),
+			Description: "Vectorizes all team patterns for semantic search. WORKFLOW: After user adds/updates patterns, ASK THE USER DIRECTLY: 'Are you done specifying all your team's patterns?' Wait for user confirmation (yes/done/that's all). Once confirmed, call this tool to index patterns. Do NOT call without asking first. Performance: ~1-2 seconds.",
+			Schema: `{
+  "type": "object",
+  "properties": {}
+}`,
 		}}
 	case "planning":
 		return []capabilities.ToolDefinition{{
@@ -1328,6 +1364,116 @@ func (c *PhaseCapability) runListChangedFiles(args map[string]any) (string, erro
 		return "Changed Files: none", nil
 	}
 	return fmt.Sprintf("Changed Files:\n%s", strings.Join(files, "\n")), nil
+}
+
+func (c *PhaseCapability) runSearchTeamPatterns(ctx context.Context, args map[string]any) (string, error) {
+	// Check if LTM accessor is configured
+	if c.sharedInfra == nil || c.sharedInfra.LTMAccessor == nil {
+		return "Team patterns not available (LTM not configured)", nil
+	}
+
+	// Get LTM instance
+	ltmInterface, err := c.sharedInfra.LTMAccessor(ctx)
+	if err != nil {
+		return "Team patterns not available (LTM access failed)", nil
+	}
+
+	// Type assert to concrete KnowledgeBase type
+	ltm, ok := ltmInterface.(*memory.KnowledgeBase[map[string]any])
+	if !ok {
+		return "Team patterns not available (LTM type mismatch)", nil
+	}
+
+	// Extract arguments
+	query, ok := args["query"].(string)
+	if !ok || strings.TrimSpace(query) == "" {
+		return "", fmt.Errorf("query is required")
+	}
+
+	patternType := ""
+	if pt, ok := args["pattern_type"].(string); ok {
+		patternType = pt
+	}
+
+	limit := 5
+	if l, ok := args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	// Call team patterns library
+	patterns, err := teampatterns.SearchTeamPatterns(ctx, ltm, query, patternType, limit)
+	if err != nil {
+		return "", fmt.Errorf("team pattern search failed: %w", err)
+	}
+
+	if len(patterns) == 0 {
+		return fmt.Sprintf("No team patterns found for: %s", query), nil
+	}
+
+	// Format results using existing formatter
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("Found %d team patterns:\n\n", len(patterns)))
+
+	for i, pattern := range patterns {
+		output.WriteString(teampatterns.FormatPatternForDisplay(pattern, i+1))
+	}
+
+	return output.String(), nil
+}
+
+func (c *PhaseCapability) runVectorizeTeamPatterns(ctx context.Context, args map[string]any) (string, error) {
+	// Validate all required accessors are configured
+	if c.sharedInfra == nil {
+		return "Team patterns vectorization not available (infrastructure not configured)", nil
+	}
+
+	if c.sharedInfra.DatabaseAccessor == nil {
+		return "Team patterns vectorization not available (database accessor not configured)", nil
+	}
+
+	if c.sharedInfra.LTMName == nil {
+		return "Team patterns vectorization not available (LTM name not configured)", nil
+	}
+
+	if c.sharedInfra.LLMAccessor == nil {
+		return "Team patterns vectorization not available (LLM accessor not configured)", nil
+	}
+
+	if c.sharedInfra.EmbedderAccessor == nil {
+		return "Team patterns vectorization not available (embedder accessor not configured)", nil
+	}
+
+	// Get database instance
+	dbInterface, err := c.sharedInfra.DatabaseAccessor(ctx)
+	if err != nil {
+		return "Team patterns vectorization not available (database access failed)", nil
+	}
+
+	// Get LLM instance
+	llmInterface, err := c.sharedInfra.LLMAccessor(ctx)
+	if err != nil {
+		return "Team patterns vectorization not available (LLM access failed)", nil
+	}
+
+	// Get embedder instance
+	embedderInterface, err := c.sharedInfra.EmbedderAccessor(ctx)
+	if err != nil {
+		return "Team patterns vectorization not available (embedder access failed)", nil
+	}
+
+	// Get LTM name
+	kbName := c.sharedInfra.LTMName()
+	if kbName == "" {
+		return "Team patterns vectorization not available (LTM name is empty)", nil
+	}
+
+	// Call vectorization function with database-level vectorization
+	// This vectorizes ONLY the "Team Patterns" category, not the entire LTM
+	if err := teampatterns.VectorizeTeamPatterns(ctx, dbInterface, kbName, llmInterface, embedderInterface); err != nil {
+		return "", fmt.Errorf("team pattern vectorization failed: %w", err)
+	}
+
+	return "✅ Team patterns are now indexed and ready for search.", nil
 }
 
 func (c *PhaseCapability) runPlanChanges(args map[string]any) (string, error) {

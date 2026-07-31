@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/sharedcode/sop/ai"
@@ -15,20 +14,20 @@ func TestAskV2_BasicClassification(t *testing.T) {
 	}
 
 	// Create minimal agent for testing
-	agent := &CopilotAgent{
-		registry: NewToolRegistry(),
-	}
+	// agent := &CopilotAgent{
+	// 	registry: NewToolRegistry(),
+	// }
 
 	// Enable V2 pipeline
 	cfg := ai.NewConfigMap()
 	cfg.Set("use_v2_pipeline", true)
 
-	ctx := context.Background()
-	query := "List stores in production database"
+	// ctx := context.Background()
+	// query := "List stores in production database"
 
 	// This should route to V2
 	// Note: Will fail if no LLM provider configured, but compilation should work
-	t.Logf("Testing V2 pipeline with query: %s", query)
+	// t.Logf("Testing V2 pipeline with query: %s", query)
 
 	// For now, just test that the feature flag routing works
 	// We can't fully test without a configured LLM provider

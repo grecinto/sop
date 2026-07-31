@@ -29,6 +29,11 @@ func (r *recordingSTMReader) CreatePhasePlan(phases []string, checkpoints map[st
 	return nil
 }
 
+func (r *recordingSTMReader) StoreMultiStepPlan(planData any) error {
+	// Test stub - just return nil
+	return nil
+}
+
 func TestPlannerCapability_ClassifiesCodingWorkflowRequests(t *testing.T) {
 	cap := plannerpkg.NewPlannerCapability(nil)
 	result := cap.Classify("fix the parser bug in the repository", capabilities.RoutingState{CapabilityHint: "planner"})

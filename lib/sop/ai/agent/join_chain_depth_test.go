@@ -189,7 +189,7 @@ func TestToolJoin_Chained_ABCD(t *testing.T) {
 	t.Fatalf("expected streamed cursor rows to contain the chained join values, got: %+v", streamed)
 }
 
-func contains(s, substr string) bool {
+func testContains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[0:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
 		func() bool {
 			for i := 0; i < len(s)-len(substr); i++ {

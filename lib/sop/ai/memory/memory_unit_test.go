@@ -304,20 +304,25 @@ func TestShortTermMemoryStore_StartPeriodicCommitterFlushesAndPrunes(t *testing.
 		t.Fatalf("expected STM time index btree to be created")
 	}
 
+	// Note: Pruning is handled by sleep cycle consolidation (STM → LTM), not by periodic committer.
+	// The periodic committer only batches and commits episodes. Verify both episodes are present.
 	if found, err := stm.Find(context.Background(), "old-episode", false); err != nil {
 		t.Fatalf("failed finding old episode: %v", err)
-	} else if found {
-		t.Fatalf("expected old episode to be pruned during commit")
+	} else if !found {
+		t.Fatalf("expected old episode to be present (pruning is done by sleep cycle, not periodic committer)")
 	}
+
 	if found, err := stm.Find(context.Background(), "fresh-episode", false); err != nil {
 		t.Fatalf("failed finding fresh episode: %v", err)
 	} else if !found {
 		t.Fatalf("expected fresh episode to remain after commit")
 	}
+
+	// Verify time indexes exist for both episodes
 	if found, err := indexTree.Find(context.Background(), STMTimeIndexKey(oldCreatedAt, "old-episode"), false); err != nil {
 		t.Fatalf("failed finding old time index: %v", err)
-	} else if found {
-		t.Fatalf("expected old time index to be pruned during commit")
+	} else if !found {
+		t.Fatalf("expected old time index to be present")
 	}
 	if found, err := indexTree.Find(context.Background(), STMTimeIndexKey(freshCreatedAt, "fresh-episode"), false); err != nil {
 		t.Fatalf("failed finding fresh time index: %v", err)

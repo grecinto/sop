@@ -30,6 +30,7 @@ import (
 	multistepplanner "github.com/sharedcode/sop/ai/agent/multistepplanner"
 	"github.com/sharedcode/sop/ai/agent/parser"
 	plannerpkg "github.com/sharedcode/sop/ai/agent/planner"
+	"github.com/sharedcode/sop/ai/agent/teampatterns"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/embed"
 	"github.com/sharedcode/sop/ai/generator"
@@ -1663,6 +1664,45 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// Inject session queue accessor for work item enqueueing (Participant Pattern)
 	cwfInfra.GetSessionQueue = a.getSessionQueueForCapabilities
 
+	// Inject LTM accessor for team patterns (explicit parameter passing, not context)
+	cwfInfra.LTMAccessor = func(ctx context.Context) (any, error) {
+		return a.getOrCreateLTM(ctx)
+	}
+
+	// Inject database accessor for team patterns vectorization
+	cwfInfra.DatabaseAccessor = func(ctx context.Context) (any, error) {
+		if a.systemDB == nil {
+			return nil, fmt.Errorf("systemDB not available")
+		}
+		return a.systemDB, nil
+	}
+
+	// Inject LTM name accessor for team patterns vectorization
+	cwfInfra.LTMName = func() string {
+		a.Memory.BindSession(context.Background())
+		return a.Memory.LongTermMemoryName()
+	}
+
+	// Inject LLM accessor for team patterns vectorization
+	cwfInfra.LLMAccessor = func(ctx context.Context) (any, error) {
+		if a.brain == nil {
+			return nil, fmt.Errorf("LLM (brain) not available")
+		}
+		return a.brain, nil
+	}
+
+	// Inject embedder accessor for team patterns vectorization
+	cwfInfra.EmbedderAccessor = func(ctx context.Context) (any, error) {
+		if a.service == nil || a.service.Domain() == nil {
+			return nil, fmt.Errorf("service domain not available")
+		}
+		embedder := a.service.Domain().Embedder()
+		if embedder == nil {
+			return nil, fmt.Errorf("embedder not available")
+		}
+		return embedder, nil
+	}
+
 	// Enable adaptive classification and dynamic plan mutation (LLM orchestration)
 	classificationHistory := plannerpkg.NewClassificationHistory()
 	wrappedGenerator := plannerpkg.WrapGenerator(a.brain)
@@ -2791,6 +2831,45 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		if agent != nil {
 			agent.recordCodingMemory(mem)
 		}
+	}
+	// Inject LTM accessor for team patterns
+	sharedInfra.LTMAccessor = func(ctx context.Context) (any, error) {
+		if agent != nil {
+			return agent.getOrCreateLTM(ctx)
+		}
+		return nil, fmt.Errorf("agent not initialized")
+	}
+	// Inject database accessor for team patterns vectorization
+	sharedInfra.DatabaseAccessor = func(ctx context.Context) (any, error) {
+		if agent != nil && agent.systemDB != nil {
+			return agent.systemDB, nil
+		}
+		return nil, fmt.Errorf("systemDB not available")
+	}
+	// Inject LTM name accessor
+	sharedInfra.LTMName = func() string {
+		if agent != nil {
+			agent.Memory.BindSession(context.Background())
+			return agent.Memory.LongTermMemoryName()
+		}
+		return ""
+	}
+	// Inject LLM accessor
+	sharedInfra.LLMAccessor = func(ctx context.Context) (any, error) {
+		if agent != nil && agent.brain != nil {
+			return agent.brain, nil
+		}
+		return nil, fmt.Errorf("LLM (brain) not available")
+	}
+	// Inject embedder accessor
+	sharedInfra.EmbedderAccessor = func(ctx context.Context) (any, error) {
+		if agent != nil && agent.service != nil && agent.service.Domain() != nil {
+			embedder := agent.service.Domain().Embedder()
+			if embedder != nil {
+				return embedder, nil
+			}
+		}
+		return nil, fmt.Errorf("embedder not available")
 	}
 	// Phase capabilities now handle tool registration
 	for _, opt := range opts {
@@ -4525,6 +4604,31 @@ func (a *CopilotAgent) resolvePersonaWithMetadata(ctx context.Context) (string, 
 		"   • For 'check in files', typical flow: git_status (assess) → git_commit with files (stage & commit) → done\n" +
 		"   • Binary executables (.exe, .dylib, .so, compiled binaries) and build artifacts should NOT be committed\n\n"
 
+	// Inject team patterns context if available
+	if a.systemDB != nil {
+		if ltm, err := a.getOrCreateLTM(ctx); err == nil {
+			if hasPatterns, _ := teampatterns.HasTeamPatterns(ctx, ltm); hasPatterns {
+				persona += "## Team-Specific Coding Conventions Available\n\n" +
+					"This user has team-specific coding conventions in Long-Term Memory.\n" +
+					"When generating or planning code, you SHOULD search for relevant patterns.\n\n" +
+					"Pattern types available:\n" +
+					"- Authentication patterns (JWT, OAuth, sessions)\n" +
+					"- Error handling conventions (wrappers, logging, response format)\n" +
+					"- Database patterns (query builders, transactions, migrations)\n" +
+					"- Testing utilities (fixtures, mocks, integration tests)\n" +
+					"- API design patterns (REST conventions, validation)\n" +
+					"- Background job patterns (async processing, queues)\n\n" +
+					"Use investigation_search_team_patterns tool to find relevant conventions.\n\n" +
+					"CRITICAL: Always prefer team conventions over generic approaches when patterns exist.\n" +
+					"Team patterns contain project-specific helpers, security requirements, and team decisions.\n\n" +
+					"**Team Patterns Workflow:**\n" +
+					"When user adds/updates patterns, watch for completion signals: 'done', 'completed', 'all specified', 'that's all', etc.\n" +
+					"Upon completion signal, call investigation_vectorize_team_patterns to index patterns for search.\n" +
+					"User doesn't need technical details - just confirm patterns are indexed when vectorization completes.\n\n"
+			}
+		}
+	}
+
 	// 2. Cache in MRU for future turns
 	a.markMRUCategoryWithSource(cacheKey, persona, MRUSourcePersona)
 	if personaFromKB {
@@ -4581,6 +4685,37 @@ func (a *CopilotAgent) getActiveRepoHint(ctx context.Context) string {
 		}
 	}
 	return ""
+}
+
+// getOrCreateLTM returns the Long-Term Memory knowledge base for team patterns and other persistent memory.
+// This is used by team patterns integration to provide access to LTM from phase capabilities.
+func (a *CopilotAgent) getOrCreateLTM(ctx context.Context) (*memory.KnowledgeBase[map[string]any], error) {
+	if a.systemDB == nil {
+		return nil, fmt.Errorf("systemDB not available")
+	}
+
+	// Bind session to get proper LTM name
+	a.Memory.BindSession(ctx)
+	kbName := a.Memory.LongTermMemoryName()
+
+	tx, err := a.systemDB.BeginTransaction(ctx, sop.ForReading)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Get embedder if available
+	var embedder ai.Embeddings
+	if a.service != nil && a.service.Domain() != nil {
+		embedder = a.service.Domain().Embedder()
+	}
+
+	kb, err := a.systemDB.OpenKnowledgeBase(ctx, kbName, tx, nil, embedder, false, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open LTM knowledge base: %w", err)
+	}
+
+	return kb, nil
 }
 
 func (a *CopilotAgent) getLTMSemanticContext(ctx context.Context, query string) string {

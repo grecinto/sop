@@ -217,6 +217,26 @@ type SharedInfrastructure struct {
 	// Phase plan mutator enables dynamic phase plan modification during conversation
 	// Allows LLM to add/remove/reorder phases based on user feedback or discoveries
 	PhasePlanMutator any // Type: planner.PhasePlanMutator (avoiding import cycle)
+
+	// LTMAccessor provides access to Long-Term Memory for team patterns
+	// This allows phase capabilities to search team-specific coding conventions
+	// Returns any to avoid import cycle, caller should type assert to *memory.KnowledgeBase[map[string]any]
+	LTMAccessor func(ctx context.Context) (any, error)
+
+	// DatabaseAccessor provides access to the database for operations like vectorization
+	// Returns any to avoid import cycle, caller should type assert to *database.Database
+	DatabaseAccessor func(ctx context.Context) (any, error)
+
+	// LTMName returns the name of the Long-Term Memory knowledge base
+	LTMName func() string
+
+	// LLMAccessor provides access to the LLM generator for operations like vectorization
+	// Returns any to avoid import cycle, caller should type assert to ai.Generator
+	LLMAccessor func(ctx context.Context) (any, error)
+
+	// EmbedderAccessor provides access to the embeddings provider for vectorization
+	// Returns any to avoid import cycle, caller should type assert to ai.Embeddings
+	EmbedderAccessor func(ctx context.Context) (any, error)
 }
 
 // WorkQueueAccessor provides a generic interface for enqueueing work items

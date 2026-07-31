@@ -439,6 +439,15 @@ func (a *stmTestAdapter) CreatePhasePlan(phases []string, checkpoints map[string
 	return nil
 }
 
+func (a *stmTestAdapter) StoreMultiStepPlan(planData any) error {
+	if a.thread == nil || a.thread.StreamContext == nil {
+		return nil
+	}
+	// Store the plan data - in tests we can just ignore it or store it in a simple way
+	// The real implementation would marshal and store it properly
+	return nil
+}
+
 // threadTestAdapter implements WorkStreamReader for testing
 type threadTestAdapter struct {
 	thread *ConversationThread
@@ -469,6 +478,22 @@ func (a *contextTestAdapter) SetPhasePlan(plan codingworkflow.PhasePlanReader) {
 	}
 	// For testing, we just update the existing plan reference
 	// In production, this would properly copy the plan data
+}
+
+func (a *contextTestAdapter) GetMultiStepPlan() codingworkflow.MultiStepPlanReader {
+	// Test stub - return nil
+	return nil
+}
+
+func (a *contextTestAdapter) SetMultiStepPlan(plan codingworkflow.MultiStepPlanReader) {
+	// Test stub - no-op
+}
+
+func (a *contextTestAdapter) GetPhaseArtifacts() map[string]map[string]any {
+	if a.ctx == nil {
+		return nil
+	}
+	return a.ctx.PhaseArtifacts
 }
 
 // planTestAdapter implements PhasePlanReader for testing

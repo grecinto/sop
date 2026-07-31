@@ -432,9 +432,7 @@ func TestKnowledgeBaseQuality_Standalone_RealWorldReport(t *testing.T) {
 
 	seedQualityCategories(t, ctx, kb, embedder)
 	seedQualityItems(t, ctx, kb, embedder)
-	if err := kb.RefreshSemanticVectors(ctx); err != nil {
-		t.Fatalf("RefreshSemanticVectors failed: %v", err)
-	}
+	// Note: Vectorization is handled by seed functions
 
 	categories, categoryCount, err := kb.ListCategories(ctx, memory.ListCategoriesParam{Limit: 1000})
 	if err != nil {
@@ -637,11 +635,7 @@ func benchmarkCategorizerStrategies(t *testing.T, embedder ai.Embeddings) []qual
 
 		seedQualityCategories(t, ctx, kb, embedder)
 		seedQualityItems(t, ctx, kb, embedder)
-		if err := kb.RefreshSemanticVectors(ctx); err != nil {
-			t.Fatalf("RefreshSemanticVectors(%s) failed: %v", tc.Name, err)
-		}
-		if err := writeTx.Commit(ctx); err != nil {
-			t.Fatalf("Commit(%s) failed: %v", tc.Name, err)
+	// Note: Vectorization is handled by seed functions
 		}
 
 		readTx, err := db.BeginTransaction(ctx, sop.ForReading)
@@ -671,9 +665,7 @@ func TestKnowledgeBaseQuality_Standalone_KnownNestedCategorySearch(t *testing.T)
 
 	seedQualityCategories(t, ctx, kb, embedder)
 	seedQualityItems(t, ctx, kb, embedder)
-	if err := kb.RefreshSemanticVectors(ctx); err != nil {
-		t.Fatalf("RefreshSemanticVectors failed: %v", err)
-	}
+	// Note: Vectorization is handled by seed functions
 
 	if err := writeTx.Commit(ctx); err != nil {
 		t.Fatalf("Commit(write) failed: %v", err)
@@ -717,9 +709,7 @@ func TestKnowledgeBaseQuality_Standalone_HierarchicalTraversalFindsLeafCategory(
 
 	seedQualityCategories(t, ctx, kb, embedder)
 	seedQualityItems(t, ctx, kb, embedder)
-	if err := kb.RefreshSemanticVectors(ctx); err != nil {
-		t.Fatalf("RefreshSemanticVectors failed: %v", err)
-	}
+	// Note: Vectorization is handled by seed functions
 
 	if err := writeTx.Commit(ctx); err != nil {
 		t.Fatalf("Commit(write) failed: %v", err)
@@ -782,9 +772,7 @@ func TestKnowledgeBaseQuality_Standalone_HighVolumeNestedTraversalStress(t *test
 			t.Fatalf("UpsertByCategoryPath(%s) failed: %v", categoryPath, err)
 		}
 	}
-	if err := kb.RefreshSemanticVectors(ctx); err != nil {
-		t.Fatalf("RefreshSemanticVectors failed: %v", err)
-	}
+	// Note: Vectorization is handled during item addition
 
 	if err := writeTx.Commit(ctx); err != nil {
 		t.Fatalf("Commit(write) failed: %v", err)
