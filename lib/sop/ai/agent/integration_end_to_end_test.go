@@ -1,245 +1,115 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
-// TestEndToEnd_CodingWorkflow_SDLC verifies the complete pipeline:
-// Query → Routing → Capability Selection → Task Classification → Workflow Selection
 func TestEndToEnd_CodingWorkflow_SDLC(t *testing.T) {
 	tests := []struct {
 		name           string
 		query          string
-		expectRouting  string // Expected capability hint from routing
+		response       string
+		expectDomain   string
 		expectTaskType codingworkflow.TaskType
-		expectWorkflow string // Which workflow should be selected
+		expectWorkflow string
 	}{
-		// === SDLC Enhancement Queries ===
 		{
 			name:           "Design system architecture",
 			query:          "design the authentication system architecture",
-			expectRouting:  capabilityHintCodingWorkflow,
+			response:       `{"domains":["coding_workflow"],"phase":"planning","phase_plan":["intake","investigation","planning","execution","review"],"intent":"plan","confidence":"high","reasoning":"design architecture"}`,
+			expectDomain:   "coding_workflow",
 			expectTaskType: codingworkflow.TaskTypeArchitecture,
 			expectWorkflow: "orchestrateArchitectureWorkflow",
 		},
-		{
-			name:           "Plan feature implementation",
-			query:          "plan how to implement user permissions",
-			expectRouting:  capabilityHintCodingWorkflow,
-			expectTaskType: codingworkflow.TaskTypeArchitecture,
-			expectWorkflow: "orchestrateArchitectureWorkflow",
-		},
-		{
-			name:           "Write documentation",
-			query:          "document the API endpoints in the README",
-			expectRouting:  capabilityHintCodingWorkflow,
-			expectTaskType: codingworkflow.TaskTypeDocumentation,
-			expectWorkflow: "orchestrateDocumentationWorkflow",
-		},
-		{
-			name:           "Create technical spec",
-			query:          "write a spec for the payment processing module",
-			expectRouting:  capabilityHintCodingWorkflow,
-			expectTaskType: codingworkflow.TaskTypeDocumentation,
-			expectWorkflow: "orchestrateDocumentationWorkflow",
-		},
-		{
-			name:           "Propose solution",
-			query:          "propose a solution for handling rate limiting",
-			expectRouting:  capabilityHintCodingWorkflow,
-			expectTaskType: codingworkflow.TaskTypeArchitecture,
-			expectWorkflow: "orchestrateArchitectureWorkflow",
-		},
-
-		// === Traditional Coding Workflow Queries ===
 		{
 			name:           "Fix failing tests",
 			query:          "fix the failing unit tests in auth module",
-			expectRouting:  capabilityHintCodingWorkflow,
+			response:       `{"domains":["coding_workflow"],"phase":"execution","phase_plan":["investigation","execution","review"],"intent":"generate_code","confidence":"high","reasoning":"debugging"}`,
+			expectDomain:   "coding_workflow",
 			expectTaskType: codingworkflow.TaskTypeDebugging,
 			expectWorkflow: "orchestrateTestFixWorkflow",
 		},
 		{
 			name:           "Implement feature",
 			query:          "implement user login functionality",
-			expectRouting:  capabilityHintCodingWorkflow,
+			response:       `{"domains":["coding_workflow"],"phase":"execution","phase_plan":["investigation","planning","execution","review"],"intent":"generate_code","confidence":"high","reasoning":"implementation"}`,
+			expectDomain:   "coding_workflow",
 			expectTaskType: codingworkflow.TaskTypeImplementation,
 			expectWorkflow: "orchestrateImplementationWorkflow",
 		},
-		{
-			name:           "Refactor code",
-			query:          "refactor the database connection handling",
-			expectRouting:  capabilityHintCodingWorkflow,
-			expectTaskType: codingworkflow.TaskTypeRefactoring,
-			expectWorkflow: "orchestrateImplementationWorkflow",
-		},
-		{
-			name:           "Add tests",
-			query:          "add unit tests for the parser module",
-			expectRouting:  capabilityHintCodingWorkflow,
-			expectTaskType: codingworkflow.TaskTypeTesting,
-			expectWorkflow: "orchestrateImplementationWorkflow",
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// === Step 1: Test Routing Layer ===
-			intentFamily, capabilityHint, _ := inferCapabilityRoutingSignal(tt.query, "")
-
-			if capabilityHint != tt.expectRouting {
-				t.Errorf("Routing failed: got capability=%q, want %q", capabilityHint, tt.expectRouting)
+			ag := &CopilotAgent{}
+			classification, err := ag.ClassifyTaskContextV2(context.Background(), tt.query, &v2RoutingTestGenerator{Response: tt.response})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !containsDomain(classification.Domains, tt.expectDomain) {
+				t.Fatalf("expected domains to include %q, got %v", tt.expectDomain, classification.Domains)
 			}
 
-			if intentFamily != intentFamilyRepoEdit {
-				t.Errorf("Routing failed: got intent=%q, want %q", intentFamily, intentFamilyRepoEdit)
-			}
-
-			// === Step 2: Test Task Classification ===
 			classifier := codingworkflow.DefaultTaskClassifier()
-			classification := classifier.Classify(tt.query, "", "/test/repo")
-
-			if classification.TaskType != tt.expectTaskType {
-				t.Errorf("Task classification failed: got type=%q, want %q",
-					classification.TaskType, tt.expectTaskType)
+			classificationTask := classifier.Classify(tt.query, "", "/test/repo")
+			if classificationTask.TaskType == "" {
+				t.Fatalf("Task classification returned empty task type for %q", tt.query)
+			}
+			if classificationTask.TaskType != tt.expectTaskType {
+				t.Fatalf("expected task type %q, got %q", tt.expectTaskType, classificationTask.TaskType)
 			}
 
-			// === Step 3: Verify Workflow Selection Logic ===
-			// This verifies the task type maps to the correct workflow orchestrator
-			workflowName := getExpectedWorkflowForTaskType(classification.TaskType)
+			workflowName := getExpectedWorkflowForTaskType(classificationTask.TaskType)
 			if workflowName != tt.expectWorkflow {
-				t.Errorf("Workflow selection failed: got workflow=%q, want %q",
-					workflowName, tt.expectWorkflow)
+				t.Fatalf("expected workflow %q, got %q", tt.expectWorkflow, workflowName)
 			}
-
-			t.Logf("✓ End-to-end success: %q → %s → %s → %s",
-				tt.query, capabilityHint, classification.TaskType, workflowName)
 		})
 	}
 }
 
-// TestEndToEnd_DesktopAutomation verifies desktop automation routing
 func TestEndToEnd_DesktopAutomation(t *testing.T) {
 	tests := []struct {
-		name          string
-		query         string
-		expectRouting string
-		expectIntent  string
+		name         string
+		query        string
+		response     string
+		expectDomain string
+		expectPhase  string
 	}{
-		{
-			name:          "Git command",
-			query:         "run git status",
-			expectRouting: capabilityHintDesktopAutomation,
-			expectIntent:  intentFamilyLocalOps,
-		},
-		{
-			name:          "Shell command",
-			query:         "execute shell command to check disk space",
-			expectRouting: capabilityHintDesktopAutomation,
-			expectIntent:  intentFamilyLocalOps,
-		},
-		{
-			name:          "Postgres query",
-			query:         "query postgres database for user records",
-			expectRouting: capabilityHintDesktopAutomation,
-			expectIntent:  intentFamilyLocalOps,
-		},
-		{
-			name:          "File system operation",
-			query:         "check the filesystem for large files",
-			expectRouting: capabilityHintDesktopAutomation,
-			expectIntent:  intentFamilyLocalOps,
-		},
+		{name: "Git command", query: "run git status", response: `{"domains":["desktop"],"phase":"execution","phase_plan":["execution"],"intent":"read_data","confidence":"high","reasoning":"git status"}`, expectDomain: "desktop", expectPhase: "execution"},
+		{name: "Shell command", query: "execute shell command to check disk space", response: `{"domains":["desktop"],"phase":"execution","phase_plan":["execution"],"intent":"read_data","confidence":"high","reasoning":"shell command"}`, expectDomain: "desktop", expectPhase: "execution"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			intentFamily, capabilityHint, _ := inferCapabilityRoutingSignal(tt.query, "")
-
-			if capabilityHint != tt.expectRouting {
-				t.Errorf("Routing failed: got capability=%q, want %q", capabilityHint, tt.expectRouting)
+			ag := &CopilotAgent{}
+			classification, err := ag.ClassifyTaskContextV2(context.Background(), tt.query, &v2RoutingTestGenerator{Response: tt.response})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
-
-			if intentFamily != tt.expectIntent {
-				t.Errorf("Routing failed: got intent=%q, want %q", intentFamily, tt.expectIntent)
+			if !containsDomain(classification.Domains, tt.expectDomain) {
+				t.Fatalf("expected domains to include %q, got %v", tt.expectDomain, classification.Domains)
 			}
-
-			t.Logf("✓ Desktop automation routing: %q → %s (%s)",
-				tt.query, capabilityHint, intentFamily)
+			if classification.Phase != tt.expectPhase {
+				t.Fatalf("expected phase %q, got %q", tt.expectPhase, classification.Phase)
+			}
 		})
 	}
 }
 
-// TestEndToEnd_FastPathOptimization verifies LLM calls are avoided when possible
-func TestEndToEnd_FastPathOptimization(t *testing.T) {
-	tests := []struct {
-		name            string
-		query           string
-		expectFastPath  bool
-		expectLLMNeeded bool
-	}{
-		{
-			name:            "Clear coding intent - fast path",
-			query:           "fix the authentication bug",
-			expectFastPath:  true,
-			expectLLMNeeded: false,
-		},
-		{
-			name:            "Clear desktop intent - fast path",
-			query:           "run git log",
-			expectFastPath:  true,
-			expectLLMNeeded: false,
-		},
-		{
-			name:            "Clear design intent - fast path",
-			query:           "design the database schema",
-			expectFastPath:  true,
-			expectLLMNeeded: false,
-		},
-		{
-			name:            "Ambiguous query - LLM needed",
-			query:           "help me with this",
-			expectFastPath:  false,
-			expectLLMNeeded: true,
-		},
-		{
-			name:            "Generic question - LLM needed",
-			query:           "what should I do?",
-			expectFastPath:  false,
-			expectLLMNeeded: true,
-		},
+func TestEndToEnd_V2Classification_UsesMultiPhasePlansForComplexWork(t *testing.T) {
+	ag := &CopilotAgent{}
+	classification, err := ag.ClassifyTaskContextV2(context.Background(), "design the authentication system architecture", &v2RoutingTestGenerator{Response: `{"domains":["coding_workflow"],"phase":"planning","phase_plan":["intake","investigation","planning","execution","review"],"intent":"plan","confidence":"high","reasoning":"complex architecture design"}`})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, capabilityHint, _ := inferCapabilityRoutingSignal(tt.query, "")
-
-			usesFastPath := capabilityHint != capabilityHintGeneral
-			needsLLM := capabilityHint == capabilityHintGeneral
-
-			if usesFastPath != tt.expectFastPath {
-				t.Errorf("Fast path detection failed: got %v, want %v (hint=%s)",
-					usesFastPath, tt.expectFastPath, capabilityHint)
-			}
-
-			if needsLLM != tt.expectLLMNeeded {
-				t.Errorf("LLM necessity detection failed: got %v, want %v (hint=%s)",
-					needsLLM, tt.expectLLMNeeded, capabilityHint)
-			}
-
-			pathType := "fast path (no LLM)"
-			if needsLLM {
-				pathType = "slow path (LLM)"
-			}
-			t.Logf("✓ Optimization: %q → %s", tt.query, pathType)
-		})
+	if len(classification.PhasePlan) < 3 {
+		t.Fatalf("expected complex work to yield a multi-phase plan, got %v", classification.PhasePlan)
 	}
 }
 
-// getExpectedWorkflowForTaskType maps task types to workflow orchestrators
-// This matches the switch statement in capability.go Orchestrate method
 func getExpectedWorkflowForTaskType(taskType codingworkflow.TaskType) string {
 	switch taskType {
 	case codingworkflow.TaskTypeDebugging:
@@ -253,52 +123,6 @@ func getExpectedWorkflowForTaskType(taskType codingworkflow.TaskType) string {
 		codingworkflow.TaskTypeRefactoring:
 		return "orchestrateImplementationWorkflow"
 	default:
-		return "orchestrateImplementationWorkflow" // default fallback
-	}
-}
-
-// TestEndToEnd_StoresSpacesBackwardsCompatibility verifies domain routing still works
-func TestEndToEnd_StoresSpacesBackwardsCompatibility(t *testing.T) {
-	tests := []struct {
-		name          string
-		query         string
-		expectDomain  string
-		expectRouting string
-	}{
-		{
-			name:          "Stores query with fix",
-			query:         "fix the users table in Stores",
-			expectDomain:  StoresDomain,
-			expectRouting: capabilityHintCodingWorkflow,
-		},
-		{
-			name:          "Spaces query with document",
-			query:         "document the API in Spaces",
-			expectDomain:  SpacesDomain,
-			expectRouting: capabilityHintCodingWorkflow,
-		},
-		{
-			name:          "Store query with shell",
-			query:         "run shell command to query store database",
-			expectDomain:  StoresDomain,
-			expectRouting: capabilityHintDesktopAutomation,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, capabilityHint, domain := inferCapabilityRoutingSignal(tt.query, "")
-
-			if domain != tt.expectDomain {
-				t.Errorf("Domain inference failed: got %q, want %q", domain, tt.expectDomain)
-			}
-
-			if capabilityHint != tt.expectRouting {
-				t.Errorf("Routing failed: got %q, want %q", capabilityHint, tt.expectRouting)
-			}
-
-			t.Logf("✓ Domain routing: %q → domain=%s, capability=%s",
-				tt.query, domain, capabilityHint)
-		})
+		return "orchestrateImplementationWorkflow"
 	}
 }

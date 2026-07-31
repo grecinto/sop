@@ -1,10 +1,36 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sharedcode/sop/ai"
 )
+
+type v2RoutingTestGenerator struct {
+	Response string
+}
+
+func (m *v2RoutingTestGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	return ai.GenOutput{Text: m.Response}, nil
+}
+
+func (m *v2RoutingTestGenerator) Name() string { return "v2RoutingTestGenerator" }
+
+func (m *v2RoutingTestGenerator) EstimateCost(inTokens, outTokens int) float64 { return 0.0 }
+
+func (m *v2RoutingTestGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
+}
+
+func containsDomain(domains []string, want string) bool {
+	for _, domain := range domains {
+		if domain == want {
+			return true
+		}
+	}
+	return false
+}
 
 // TestAskV2_BasicClassification tests that V2 pipeline can be invoked and classification works
 func TestAskV2_BasicClassification(t *testing.T) {

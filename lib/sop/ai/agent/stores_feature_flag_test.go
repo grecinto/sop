@@ -58,15 +58,13 @@ func TestStoresCapabilityNotRegisteredWhenDisabled(t *testing.T) {
 	defer SetStoresFeatureEnabled(false)
 
 	ag := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "system"})
+	ag.registerTools(ctx)
 
-	// Verify Stores capability is NOT in registry
-	if ag.capabilityRegistry == nil {
-		t.Fatal("expected capability registry to be initialized")
-	}
-
-	_, ok := ag.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: "Stores"})
-	if ok {
-		t.Fatal("expected Stores capability to NOT be registered when feature is disabled")
+	for _, tool := range ag.registry.List() {
+		if isStoreTool(tool.Name) {
+			t.Fatalf("expected Store tools to be omitted when feature is disabled, found %q", tool.Name)
+		}
 	}
 }
 

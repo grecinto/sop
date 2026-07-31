@@ -1,174 +1,85 @@
 package agent
 
 import (
+	"context"
 	"testing"
+
+	"github.com/sharedcode/sop/ai"
 )
 
-// TestInferCapabilityRoutingSignal_LLMOrchestrator verifies
-// that domain inference has been removed in favor of LLM-driven classification.
-// The LLM should see all capabilities and use their Classify() methods to determine relevance.
-func TestInferCapabilityRoutingSignal_LLMOrchestrator(t *testing.T) {
+func TestClassifyTaskContextV2_MapsStoreQueriesToStoreDomains(t *testing.T) {
 	tests := []struct {
-		name           string
-		query          string
-		expectIntent   string
-		expectHint     string
-		expectDomain   string // Should always be "" - no keyword pre-routing
-		expectFastPath bool   // True if should use keyword routing, not LLM
+		name       string
+		query      string
+		response   string
+		wantDomain string
+		wantIntent string
+		wantPhase  string
 	}{
 		{
-			name:           "Fix tests with Stores keyword - NO pre-routing",
-			query:          "fix failing tests in Stores",
-			expectIntent:   intentFamilyRepoEdit,
-			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   "", // LLM will decide via Classify()
-			expectFastPath: true,
+			name:       "stores bug fix",
+			query:      "fix the users table in Stores",
+			response:   `{"domains":["stores"],"phase":"execution","phase_plan":["investigation","execution"],"intent":"generate_code","confidence":"high","reasoning":"store bug fix"}`,
+			wantDomain: "stores",
+			wantIntent: "generate_code",
+			wantPhase:  "execution",
 		},
 		{
-			name:           "Update users table with Stores keyword - NO pre-routing",
-			query:          "update the users table in Stores",
-			expectIntent:   intentFamilyRepoEdit,
-			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   "", // LLM will decide via Classify()
-			expectFastPath: true,
+			name:       "stores read query",
+			query:      "show me the store users",
+			response:   `{"domains":["stores"],"phase":"investigation","phase_plan":["investigation"],"intent":"read_data","confidence":"high","reasoning":"read data"}`,
+			wantDomain: "stores",
+			wantIntent: "read_data",
+			wantPhase:  "investigation",
 		},
 		{
-			name:           "Query with 'store' keyword (singular) - NO pre-routing",
-			query:          "fix the store database connection",
-			expectIntent:   intentFamilyRepoEdit,
-			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   "", // LLM will decide via Classify()
-			expectFastPath: true,
-		},
-		{
-			name:           "Spaces keyword - NO pre-routing",
-			query:          "refactor code in Spaces",
-			expectIntent:   intentFamilyRepoEdit,
-			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   "", // LLM will decide via Classify()
-			expectFastPath: true,
-		},
-		{
-			name:           "Query with 'space' keyword (singular) - NO pre-routing",
-			query:          "add tests for space management",
-			expectIntent:   intentFamilyRepoEdit,
-			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   "", // LLM will decide via Classify()
-			expectFastPath: true,
-		},
-		{
-			name:           "Desktop automation with Stores - NO pre-routing",
-			query:          "run shell command to query Stores",
-			expectIntent:   intentFamilyLocalOps,
-			expectHint:     capabilityHintDesktopAutomation,
-			expectDomain:   "", // LLM will decide via Classify()
-			expectFastPath: true,
-		},
-		{
-			name:           "Knowledge query without domain",
-			query:          "explain how the architecture works",
-			expectIntent:   intentFamilyKnowledge,
-			expectHint:     capabilityHintGeneral,
-			expectDomain:   "",
-			expectFastPath: false, // General hint triggers LLM fallback
-		},
-		{
-			name:           "Clear capability without domain",
-			query:          "fix the parser bug",
-			expectIntent:   intentFamilyRepoEdit,
-			expectHint:     capabilityHintCodingWorkflow,
-			expectDomain:   "",
-			expectFastPath: true,
-		},
-		{
-			name:           "Ambiguous query",
-			query:          "I need help with something",
-			expectIntent:   intentFamilyGeneral,
-			expectHint:     capabilityHintGeneral,
-			expectDomain:   "",
-			expectFastPath: false, // General hint triggers LLM fallback
+			name:       "desktop automation over stores",
+			query:      "run shell command to query Stores",
+			response:   `{"domains":["desktop","stores"],"phase":"execution","phase_plan":["execution"],"intent":"read_data","confidence":"high","reasoning":"desktop command"}`,
+			wantDomain: "desktop",
+			wantIntent: "read_data",
+			wantPhase:  "execution",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			intent, hint, domain := inferCapabilityRoutingSignal(tt.query, "")
-
-			if intent != tt.expectIntent {
-				t.Errorf("Intent mismatch: got %q, want %q", intent, tt.expectIntent)
+			ag := &CopilotAgent{}
+			classification, err := ag.ClassifyTaskContextV2(context.Background(), tt.query, &v2RoutingTestGenerator{Response: tt.response})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
-			if hint != tt.expectHint {
-				t.Errorf("Capability hint mismatch: got %q, want %q", hint, tt.expectHint)
+			if len(classification.Domains) == 0 {
+				t.Fatal("expected classification domains")
 			}
-			if domain != tt.expectDomain {
-				t.Errorf("Domain mismatch: got %q, want %q", domain, tt.expectDomain)
+			if !containsDomain(classification.Domains, tt.wantDomain) {
+				t.Fatalf("expected domains to include %q, got %v", tt.wantDomain, classification.Domains)
 			}
-
-			// Verify fast path behavior
-			usesFastPath := hint != capabilityHintGeneral
-			if usesFastPath != tt.expectFastPath {
-				t.Errorf("Fast path mismatch: got %v, want %v (hint=%q)", usesFastPath, tt.expectFastPath, hint)
+			if classification.Intent != tt.wantIntent {
+				t.Fatalf("expected intent %q, got %q", tt.wantIntent, classification.Intent)
+			}
+			if classification.Phase != tt.wantPhase {
+				t.Fatalf("expected phase %q, got %q", tt.wantPhase, classification.Phase)
 			}
 		})
 	}
 }
 
-// TestColdStartRouting_FastPathVsLLMFallback verifies that cold-start routing
-// uses keyword fast path when possible and LLM fallback when needed.
-func TestColdStartRouting_FastPathVsLLMFallback(t *testing.T) {
-	tests := []struct {
-		name            string
-		query           string
-		expectFastPath  bool
-		expectLLMNeeded bool
-	}{
-		{
-			name:            "Fix tests - fast path",
-			query:           "fix failing tests",
-			expectFastPath:  true,
-			expectLLMNeeded: false,
-		},
-		{
-			name:            "Git command - fast path",
-			query:           "run git status",
-			expectFastPath:  true,
-			expectLLMNeeded: false,
-		},
-		{
-			name:            "Stores query - fast path with domain",
-			query:           "fix users table in Stores",
-			expectFastPath:  true,
-			expectLLMNeeded: false,
-		},
-		{
-			name:            "Ambiguous - LLM fallback",
-			query:           "help me",
-			expectFastPath:  false,
-			expectLLMNeeded: true,
-		},
-		{
-			name:            "Generic question - LLM fallback",
-			query:           "what should I do next?",
-			expectFastPath:  false,
-			expectLLMNeeded: true,
-		},
+func TestEvaluateRoutingGatesV2_UsesDiscoveryGateForStoreColdStart(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{Variables: make(map[string]any)})
+
+	taskCtx, err := ag.evaluateRoutingGatesV2(ctx, "fix the users table in Stores", &v2RoutingTestGenerator{Response: `{"domains":["stores"],"phase":"investigation","phase_plan":["investigation"],"intent":"read_data","confidence":"high","reasoning":"read data"}`})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			intent, hint, _ := inferCapabilityRoutingSignal(tt.query, "")
-
-			usesFastPath := hint != capabilityHintGeneral
-			needsLLM := hint == capabilityHintGeneral
-
-			if usesFastPath != tt.expectFastPath {
-				t.Errorf("Fast path mismatch: got %v, want %v (intent=%q, hint=%q)",
-					usesFastPath, tt.expectFastPath, intent, hint)
-			}
-			if needsLLM != tt.expectLLMNeeded {
-				t.Errorf("LLM needed mismatch: got %v, want %v (intent=%q, hint=%q)",
-					needsLLM, tt.expectLLMNeeded, intent, hint)
-			}
-		})
+	if taskCtx == nil {
+		t.Fatal("expected a routing classification")
+	}
+	if taskCtx.RoutingGate != RoutingGateDiscovery {
+		t.Fatalf("expected discovery gate, got %q", taskCtx.RoutingGate)
+	}
+	if taskCtx.Domain != "stores" {
+		t.Fatalf("expected stores domain, got %q", taskCtx.Domain)
 	}
 }

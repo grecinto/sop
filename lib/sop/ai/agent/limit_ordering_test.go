@@ -130,7 +130,7 @@ func TestProjectLimitOrdering(t *testing.T) {
 		t.Fatal("No results")
 	}
 
-	// Check keys are ALIASES
+	// Check keys are ALIASES when present
 	if _, ok := resList[0]["my_alias"]; !ok {
 		t.Error("Expected key 'my_alias' from alias mapping")
 	}
