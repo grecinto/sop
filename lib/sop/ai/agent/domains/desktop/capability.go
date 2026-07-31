@@ -143,7 +143,12 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 	return "Structured Context: Desktop Automation\n- Use local automation tools for shell, git, file, and workspace tasks when the request involves repository work, local file editing, or developer workflow operations."
 }
 func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
-	return []capabilities.ToolDefinition{{Name: "execute_local_command", Description: "Executes a shell command on the user's local machine after approval.", Schema: "{}"}}
+	return []capabilities.ToolDefinition{{
+		Name:        "execute_local_command",
+		Description: "Executes a shell command on the user's local machine after approval.",
+		Schema:      "{}",
+		Tags:        []string{"R", "U"}, // Can read (ls, cat) or update (write, modify files)
+	}}
 }
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
 	return `Desktop Automation Workflow Guide:

@@ -801,10 +801,12 @@ func (c *PhaseCapability) ExposeTools() []capabilities.ToolDefinition {
 		Name:        c.captureTool,
 		Description: fmt.Sprintf("Captures %s phase artifact to memory for cross-turn continuity. Call this to save progress, signal transitions, or mark completion. WHEN TO CALL: After gathering context, completing analysis, finalizing plans, applying changes, or delivering results.", c.name),
 		Schema:      captureSchema,
+		Tags:        []string{"C", "U"}, // Creates new or updates existing phase artifacts
 	}, {
 		Name:        c.stateTool,
 		Description: fmt.Sprintf("Returns the current persisted state for %s phase. WHEN TO CALL: At phase start to check if prior work exists, or when resuming after interruption.", c.name),
 		Schema:      stateSchema,
+		Tags:        []string{"R"}, // Reads existing phase state
 	}}
 	for _, tool := range c.phaseWorkflowTools() {
 		tools = append(tools, tool)
@@ -1090,24 +1092,29 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 			Name:        c.phaseToolName("build_context"),
 			Description: "OPTIONAL: Builds repository context if task involves code. Call when user mentions files, repos, or code locations. Returns repository structure, files, dependencies.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only context building
 		}}
 	case "investigation":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("build_context"),
 			Description: "REQUIRED FIRST STEP: Builds repository context (structure, files, dependencies). Must call before other investigation tools. Returns ContextPack with working directory, active file, repository summary.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only context building
 		}, {
 			Name:        c.phaseToolName("inspect_repo"),
 			Description: "Inspects current repository state and changed files. WHEN TO CALL: After build_context, to understand current state before analysis. Returns changed files list and diff preview.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only inspection
 		}, {
 			Name:        c.phaseToolName("search_repo"),
 			Description: "Searches repository for patterns, implementations, or code. WHEN TO CALL: To find similar code, error patterns, or existing implementations before concluding something is novel. Returns matching code locations.",
 			Schema:      searchSchema,
+			Tags:        []string{"R"}, // Read-only search
 		}, {
 			Name:        c.phaseToolName("list_changed_files"),
 			Description: "Lists files with uncommitted changes. WHEN TO CALL: To identify in-progress work and avoid conflicts. Returns list of changed file paths.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only list
 		}, {
 			Name:        c.phaseToolName("search_team_patterns"),
 			Description: "Searches team-specific coding conventions and patterns in Long-Term Memory. Use when planning code generation to find team's preferred helpers, anti-patterns, and conventions. Returns pattern details including convention, anti-pattern, examples, and file references. WHEN TO CALL: Before designing or implementing features to ensure code follows team standards.",
@@ -1131,6 +1138,7 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
     }
   }
 }`,
+			Tags: []string{"R"}, // Read-only search
 		}, {
 			Name:        c.phaseToolName("vectorize_team_patterns"),
 			Description: "Vectorizes all team patterns for semantic search. WORKFLOW: After user adds/updates patterns, ASK THE USER DIRECTLY: 'Are you done specifying all your team's patterns?' Wait for user confirmation (yes/done/that's all). Once confirmed, call this tool to index patterns. Do NOT call without asking first. Performance: ~1-2 seconds.",
@@ -1138,12 +1146,14 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
   "type": "object",
   "properties": {}
 }`,
+			Tags: []string{"U"}, // Updates/indexes pattern embeddings
 		}}
 	case "planning":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("assess_and_route"),
 			Description: "PLANNING-FIRST ARCHITECTURE: Assesses the user query and determines the appropriate starting phase. Always call this FIRST in planning phase to understand what needs to be done. Analyzes query semantics and creates execution strategy. Returns assessment with recommended starting phase and reasoning.",
 			Schema:      taskSchema,
+			Tags:        []string{"C"}, // Creates assessment/strategy
 		}, {
 			Name:        c.phaseToolName("create_succession_path"),
 			Description: "Creates a phase succession path with checkpoints. Call after assess_and_route to define the full sequence of phases needed to complete the task. Returns planned path: [investigation, planning, execution, review, delivery] with checkpoints for re-assessment.",
@@ -1157,54 +1167,66 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
     "confidence": {"type": "string", "description": "Confidence level: high|medium|low"}
   }
 }`,
+			Tags: []string{"C"}, // Creates phase succession path
 		}, {
 			Name:        c.phaseToolName("build_context"),
 			Description: "REQUIRED FIRST STEP: Builds repository context for planning. Must call before planning_plan_changes. Returns ContextPack with repository structure needed for concrete plan generation.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only context building
 		}, {
 			Name:        c.phaseToolName("inspect_repo"),
 			Description: "Inspects current repository state. WHEN TO CALL: Before planning, to understand existing code structure and patterns. Returns changed files and current state.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only inspection
 		}, {
 			Name:        c.phaseToolName("search_repo"),
 			Description: "Searches repository for implementation patterns. WHEN TO CALL: Before designing, to find similar implementations and follow established patterns rather than inventing new approaches. Returns matching patterns and code locations.",
 			Schema:      searchSchema,
+			Tags:        []string{"R"}, // Read-only search
 		}, {
 			Name:        c.phaseToolName("list_changed_files"),
 			Description: "Lists changed files to avoid conflicts. WHEN TO CALL: Before finalizing plan, to ensure plan doesn't conflict with in-progress work. Returns list of changed files.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only list
 		}, {
 			Name:        c.phaseToolName("plan_changes"),
 			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After build_context, search_repo, and inspect_repo complete. This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
 			Schema:      taskSchema,
+			Tags:        []string{"C"}, // Creates execution plan
 		}}
 	case "execution":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("preview_patch"),
 			Description: "SAFETY REQUIRED: Previews patch before applying. WHEN TO CALL: Before every apply_patch call. Shows user what will change. Returns patch preview with old/new content comparison.",
 			Schema:      patchSchema,
+			Tags:        []string{"R"}, // Read-only preview
 		}, {
 			Name:        c.phaseToolName("apply_patch"),
 			Description: "Applies patch to codebase. SAFETY RULE: Must call preview_patch and get user approval BEFORE calling this. WHEN TO CALL: Only after preview shown and approved. Returns confirmation of applied changes.",
 			Schema:      patchSchema,
+			Tags:        []string{"U"}, // Updates code files
 		}, {
 			Name:        c.phaseToolName("run_tests"),
 			Description: "Runs tests to validate changes. WHEN TO CALL: After each apply_patch call, to ensure changes work correctly and don't introduce regressions. Returns test results (pass/fail) and output.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only test execution
 		}}
 	case "review":
 		return []capabilities.ToolDefinition{{
 			Name:        c.phaseToolName("build_context"),
 			Description: "Builds repository context for review. WHEN TO CALL: At review start, to understand current state after execution. Returns repository structure and current state.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only context building
 		}, {
 			Name:        c.phaseToolName("inspect_repo"),
 			Description: "Inspects repository state to see applied changes. WHEN TO CALL: To review what was changed during execution phase. Returns changed files and diff.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only inspection
 		}, {
 			Name:        c.phaseToolName("run_tests"),
 			Description: "Runs comprehensive tests for validation. WHEN TO CALL: To validate all requirements are met and no regressions introduced. Returns test results and coverage.",
 			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only test execution
 		}}
 	default:
 		return nil

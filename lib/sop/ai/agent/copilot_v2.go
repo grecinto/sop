@@ -192,9 +192,9 @@ func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.Conf
 		phases := a.createPhaseProxiesV2(v2Class.Domains, currentPhase)
 		log.Info("Phase proxies created", "count", len(phases), "domains", v2Class.Domains)
 
-		// Aggregate tools from all phases
-		tools := a.aggregatePhaseToolsV2(phases)
-		log.Info("Phase tools aggregated", "tool_count", len(tools))
+		// Aggregate tools from all phases with CRUD filtering
+		tools := a.aggregatePhaseToolsV2(phases, v2Class)
+		log.Info("Phase tools aggregated with CRUD filtering", "tool_count", len(tools), "crud", v2Class.CRUD)
 
 		// Register phase tools with ReAct
 		a.registerPhaseToolsV2(ctx, tools, phases, v2Class)
@@ -443,22 +443,35 @@ func (a *CopilotAgent) createPhaseProxiesV2(domains []string, currentPhase strin
 //
 // USER SPECIFICATION:
 // - Collect ALL tools from all phases
-// - NO pre-filtering or heuristics
-// - LLM will decide which tools to call
-func (a *CopilotAgent) aggregatePhaseToolsV2(phases []capabilities.Capability) []capabilities.ToolDefinition {
+// - Phase 3 optimization: Apply CRUD filtering based on classification
+// - LLM will decide which tools to call from the filtered set
+func (a *CopilotAgent) aggregatePhaseToolsV2(phases []capabilities.Capability, classification *TaskContextV2) []capabilities.ToolDefinition {
 	allTools := []capabilities.ToolDefinition{}
+
+	// Collect CRUD flags from classification
+	crudFlags := make(map[string]bool)
+	for _, crud := range classification.CRUD {
+		crudFlags[crud] = true
+	}
 
 	for _, phase := range phases {
 		phaseTools := phase.ExposeTools()
-		allTools = append(allTools, phaseTools...)
-		log.Debug("Phase tools collected",
+
+		// Phase 3 optimization: Filter tools by CRUD flags
+		filteredTools := capabilities.FilterToolsByCRUD(phaseTools, crudFlags)
+
+		allTools = append(allTools, filteredTools...)
+		log.Debug("Phase tools collected and filtered",
 			"phase_id", phase.ID(),
-			"tool_count", len(phaseTools))
+			"original_tool_count", len(phaseTools),
+			"filtered_tool_count", len(filteredTools),
+			"crud_flags", classification.CRUD)
 	}
 
-	log.Info("All tools aggregated",
+	log.Info("All tools aggregated with CRUD filtering",
 		"total_tool_count", len(allTools),
-		"phase_count", len(phases))
+		"phase_count", len(phases),
+		"crud_flags", classification.CRUD)
 
 	return allTools
 }
@@ -478,10 +491,17 @@ func (a *CopilotAgent) aggregatePhaseToolsV2(phases []capabilities.Capability) [
 func (a *CopilotAgent) registerPhaseToolsV2(ctx context.Context, allTools []capabilities.ToolDefinition, phases []capabilities.Capability, classification *TaskContextV2) {
 	// Build routing state for ExecuteTool calls
 	// ✅ EXPLICIT PARAMETERS: routingState passed to ExecuteTool, not hidden in context
+	// ✅ Phase 3 optimization: Include CRUD flags for tool filtering
+	crudFlags := make(map[string]bool)
+	for _, crud := range classification.CRUD {
+		crudFlags[crud] = true
+	}
+
 	routingState := capabilities.RoutingState{
 		Domain:         strings.Join(classification.Domains, ","),
 		Gate:           "v2_phase_factory",
 		CapabilityHint: classification.Phase,
+		CRUDFlags:      crudFlags,
 	}
 
 	// Register each tool
@@ -564,11 +584,19 @@ func (a *CopilotAgent) buildSystemPromptV2(ctx context.Context, query string, cl
 
 	// 4. Phase-specific instructions from ALL phases
 	var phaseInstructions []string
+
+	// Build CRUD flags map for routing state
+	crudFlags := make(map[string]bool)
+	for _, crud := range classification.CRUD {
+		crudFlags[crud] = true
+	}
+
 	for _, phase := range phases {
 		routingState := capabilities.RoutingState{
 			Domain:         strings.Join(classification.Domains, ","),
 			Gate:           "v2_phase_factory",
 			CapabilityHint: classification.Phase,
+			CRUDFlags:      crudFlags,
 		}
 
 		// Get context and instructions from phase

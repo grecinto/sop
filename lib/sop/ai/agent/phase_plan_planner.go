@@ -88,6 +88,7 @@ func (c *PlannerCapability) ExposeTools() []capabilities.ToolDefinition {
 		Name:        "create_phase_plan",
 		Description: "Creates a phase-based plan for a coding task and stores it in the current work stream.",
 		Schema:      `{"type":"object","properties":{"query":{"type":"string","description":"The user request or task to plan"},"reasoning":{"type":"string","description":"Why this phase sequence was chosen"},"confidence":{"type":"string","description":"Confidence level for the plan"},"checkpoints":{"type":"array","items":{"type":"string"},"description":"Optional checkpoint names such as after_investigation"}},"required":["query"]}`,
+		Tags:        []string{"C"}, // Creates a new phase plan
 	}}
 }
 

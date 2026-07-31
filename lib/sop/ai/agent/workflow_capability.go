@@ -107,6 +107,7 @@ func (wmc *WorkflowManagerCapability) ExposeTools() []capabilities.ToolDefinitio
 			Name:        "execute_workflow",
 			Description: "Execute a KB-driven workflow",
 			Schema:      `{"workflow_query": "string describing the task"}`,
+			Tags:        []string{"R", "U"}, // Reads workflow, updates execution state
 		},
 	}
 }

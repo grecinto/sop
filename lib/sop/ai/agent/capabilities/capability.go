@@ -13,6 +13,7 @@ type RoutingState struct {
 	Domain         string
 	Gate           string
 	CapabilityHint string
+	CRUDFlags      map[string]bool // C/R/U/D flags from classification (Phase 3 optimization)
 }
 
 // Entitlement describes whether a capability is available under the current plan.
@@ -37,6 +38,7 @@ type ToolDefinition struct {
 	Name        string
 	Description string
 	Schema      string
+	Tags        []string // CRUD tags: C, R, U, D for tool filtering (Phase 3 optimization)
 }
 
 // ToolExecutor can handle capability-specific tool invocations from the Ask loop.
@@ -531,4 +533,48 @@ func trimSpace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// FilterToolsByCRUD filters tools based on CRUD flags from classification.
+// Phase 3 Optimization: Reduces exposed tools by only showing relevant CRUD operations.
+//
+// Logic:
+// - If no CRUD flags: return all tools (no filtering)
+// - If CRUD flags present: return only tools matching at least one flag
+// - Safety: If filtering results in 0 tools, return all tools (prevents over-filtering)
+func FilterToolsByCRUD(tools []ToolDefinition, crudFlags map[string]bool) []ToolDefinition {
+	// No CRUD filtering if flags are empty
+	if len(crudFlags) == 0 {
+		return tools
+	}
+
+	filtered := []ToolDefinition{}
+	for _, tool := range tools {
+		// Tools without tags are always included (backward compatibility)
+		if len(tool.Tags) == 0 {
+			filtered = append(filtered, tool)
+			continue
+		}
+
+		// Check if tool has at least one matching CRUD tag
+		hasMatch := false
+		for _, tag := range tool.Tags {
+			if crudFlags[tag] {
+				hasMatch = true
+				break
+			}
+		}
+
+		if hasMatch {
+			filtered = append(filtered, tool)
+		}
+	}
+
+	// Safety: If filtering removes ALL tools, return original set
+	// This prevents over-filtering from breaking functionality
+	if len(filtered) == 0 {
+		return tools
+	}
+
+	return filtered
 }

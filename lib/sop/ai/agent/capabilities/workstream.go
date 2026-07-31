@@ -132,31 +132,37 @@ func (w *WorkStreamManagement) ExposeTools() []ToolDefinition {
 			Name:        "list_workstreams",
 			Description: "List all active and paused WorkStreams with their current state and progress. Use this to see what tasks are in progress.",
 			Schema:      `{"type": "object", "properties": {}}`,
+			Tags:        []string{"R"}, // Read-only operation
 		},
 		{
 			Name:        "get_workstream_details",
 			Description: "Get detailed information about the current WorkStream including phase plan, current phase, completed phases, and remaining work.",
 			Schema:      `{"type": "object", "properties": {}}`,
+			Tags:        []string{"R"}, // Read-only operation
 		},
 		{
 			Name:        "jump_to_phase",
 			Description: "Jump to a specific phase in the current WorkStream. Use when user wants to skip ahead (e.g., 'just implement it now') or go back (e.g., 'review requirements first'). Updates the phase plan and continues from the target phase.",
 			Schema:      `{"type": "object", "properties": {"phase": {"type": "string", "enum": ["intake", "investigation", "planning", "execution", "review", "delivery"], "description": "Target phase to jump to"}}, "required": ["phase"]}`,
+			Tags:        []string{"U"}, // Updates WorkStream phase
 		},
 		{
 			Name:        "pause_workstream",
 			Description: "Pause the current active WorkStream. Use when the user wants to switch to a different task. The WorkStream can be resumed later. Calling this tool IS the decision to pause.",
 			Schema:      `{"type": "object", "properties": {}}`,
+			Tags:        []string{"U"}, // Updates WorkStream status
 		},
 		{
 			Name:        "resume_workstream",
 			Description: "Resume a paused WorkStream. Use when user wants to continue a previously paused task. Calling this tool IS the decision to resume.",
 			Schema:      `{"type": "object", "properties": {}}`,
+			Tags:        []string{"U"}, // Updates WorkStream status
 		},
 		{
 			Name:        "abandon_workstream",
 			Description: "Permanently abandon the current WorkStream. Use when user wants to cancel a task entirely, not just pause it. This cannot be undone. Calling this tool IS the decision to abandon.",
 			Schema:      `{"type": "object", "properties": {}}`,
+			Tags:        []string{"D"}, // Deletes/removes WorkStream
 		},
 	}
 }

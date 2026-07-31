@@ -163,6 +163,7 @@ func (c *MultiStepPlannerCapability) ExposeTools() []capabilities.ToolDefinition
 		{
 			Name:        "decompose_multi_step_plan",
 			Description: fmt.Sprintf("Decompose a multi-goal query into N sequential steps (max %d). Each step has a goal, domain, and estimated phases.", MaxSteps),
+			Tags:        []string{"C"}, // Creates a multi-step plan
 			Schema: `{
 				"type": "object",
 				"properties": {

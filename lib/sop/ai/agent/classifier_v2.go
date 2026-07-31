@@ -34,6 +34,11 @@ type TaskContextV2 struct {
 	// Values: "read_data", "mutate_data", "generate_code", "analyze", "plan"
 	Intent string `json:"intent"`
 
+	// CRUD: Operation type flags for tool filtering (Phase 3 optimization)
+	// Values: ["C"], ["R"], ["C", "U"], ["R", "U", "D"], etc.
+	// Used to filter which tools are exposed to LLM based on operation intent
+	CRUD []string `json:"crud"`
+
 	// Confidence: LLM's confidence in this classification
 	// Values: "high", "medium", "low"
 	Confidence string `json:"confidence"`
@@ -161,6 +166,7 @@ Analyze the query and return a JSON object with this structure:
   "phase": "phase_name",              // Current phase for this query
   "phase_plan": ["phase1", "phase2"], // Full sequence of phases (can be single phase)
   "intent": "intent_category",        // High-level intent
+  "crud": ["C", "R", "U", "D"],       // CRUD operations (one or more: C=Create, R=Read, U=Update, D=Delete)
   "confidence": "high|medium|low",    // Your confidence level
   "reasoning": "explanation"          // Why you chose these domains/phases
 }
@@ -191,6 +197,13 @@ Analyze the query and return a JSON object with this structure:
    - "analyze": Analysis, investigation, understanding
    - "plan": Planning, design, strategy
 
+5. **CRUD Classification (Phase 3 Optimization):**
+   - "C" (Create): Insert, add, create new records/files/resources
+   - "R" (Read): Query, list, get, search, scan, describe, read
+   - "U" (Update): Modify, edit, update, patch existing records/files
+   - "D" (Delete): Remove, delete, drop records/files/resources
+   - Include ALL operations the query might need (e.g., ["R", "U"] for "update after checking")
+
 **Examples:**
 
 Query: "List stores in production database"
@@ -199,6 +212,7 @@ Query: "List stores in production database"
   "phase": "investigation",
   "phase_plan": ["investigation"],
   "intent": "read_data",
+  "crud": ["R"],
   "confidence": "high",
   "reasoning": "Simple read-only store listing operation"
 }
@@ -209,6 +223,7 @@ Query: "Query stores and search spaces for 'authentication'"
   "phase": "investigation",
   "phase_plan": ["investigation"],
   "intent": "read_data",
+  "crud": ["R"],
   "confidence": "high",
   "reasoning": "Read-only operations across two domains"
 }
@@ -219,8 +234,9 @@ Query: "Refactor authentication to use OAuth2"
   "phase": "intake",
   "phase_plan": ["intake", "investigation", "planning", "execution", "review"],
   "intent": "generate_code",
+  "crud": ["R", "U"],
   "confidence": "high",
-  "reasoning": "Complex code refactoring requires full SDLC"
+  "reasoning": "Complex code refactoring requires full SDLC, needs reading and updating code"
 }
 
 Query: "Migrate user data from stores to spaces"
@@ -229,8 +245,9 @@ Query: "Migrate user data from stores to spaces"
   "phase": "investigation",
   "phase_plan": ["investigation", "planning", "execution", "review"],
   "intent": "mutate_data",
+  "crud": ["R", "C", "D"],
   "confidence": "high",
-  "reasoning": "Data migration across domains requires investigation, planning, execution, and validation"
+  "reasoning": "Data migration across domains requires reading from stores, creating in spaces, potentially deleting from stores"
 }
 
 Query: "/cmd ls -la"
@@ -239,8 +256,31 @@ Query: "/cmd ls -la"
   "phase": "execution",
   "phase_plan": ["execution"],
   "intent": "read_data",
+  "crud": ["R"],
   "confidence": "high",
-  "reasoning": "Direct shell command execution"
+  "reasoning": "Direct shell command execution, read-only"
+}
+
+Query: "Create a new store called 'users'"
+{
+  "domains": ["stores"],
+  "phase": "execution",
+  "phase_plan": ["execution"],
+  "intent": "mutate_data",
+  "crud": ["C"],
+  "confidence": "high",
+  "reasoning": "Direct create operation"
+}
+
+Query: "Delete old logs from stores"
+{
+  "domains": ["stores"],
+  "phase": "execution",
+  "phase_plan": ["investigation", "execution"],
+  "intent": "mutate_data",
+  "crud": ["R", "D"],
+  "confidence": "high",
+  "reasoning": "Need to read/find logs first, then delete them"
 }
 
 Return ONLY the JSON object, no other text.`, query, storesHint, spacesHint)
