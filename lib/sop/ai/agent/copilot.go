@@ -2865,7 +2865,39 @@ func (a *CopilotAgent) Search(ctx context.Context, query string, limit int) ([]a
 // Ask is the public API that processes queries through a session queue.
 // The queue enables workflow automation where capabilities can enqueue next steps.
 // ReAct loop handles multi-turn execution and clarifications natively.
+// Ask is the main entry point for Copilot queries.
+// Routes to V2 (LLM-as-Orchestrator) or V1 (legacy heuristic-based) pipeline.
+//
+// DEFAULT: V2 Pipeline (pure LLM orchestration with Phase Factory)
+// V1 Pipeline: DEPRECATED - Contains heuristics that violate architectural patterns.
+//
+//	Use ONLY for emergency fallback via "use_v1_pipeline" flag.
+//	V1 is UNSHIPPABLE and will be removed after V2 validation.
 func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	// Check for V1 opt-out flag (emergency fallback only)
+	useV1 := false
+	if cfg != nil {
+		if v1Flag, ok := cfg.Get("use_v1_pipeline"); ok {
+			if v1Bool, ok := v1Flag.(bool); ok {
+				useV1 = v1Bool
+			}
+		}
+	}
+
+	// Route to appropriate pipeline
+	if useV1 {
+		log.Warn("Using V1 Pipeline (DEPRECATED - emergency fallback only, will be removed)")
+		return a.askV1(ctx, query, cfg)
+	}
+
+	// Default: V2 Pipeline
+	log.Info("Using V2 Pipeline (LLM-as-Orchestrator + Phase Factory)")
+	return a.AskV2(ctx, query, cfg)
+}
+
+// askV1 is the legacy Ask implementation with heuristic routing.
+// This is the original pipeline, kept for backward compatibility.
+func (a *CopilotAgent) askV1(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// Get or create session queue
 	queue := a.getOrCreateSessionQueue()
 

@@ -14,7 +14,7 @@ func TestInferCapabilityRoutingSignal_LLMOrchestrator(t *testing.T) {
 		expectIntent   string
 		expectHint     string
 		expectDomain   string // Should always be "" - no keyword pre-routing
-		expectFastPath bool  // True if should use keyword routing, not LLM
+		expectFastPath bool   // True if should use keyword routing, not LLM
 	}{
 		{
 			name:           "Fix tests with Stores keyword - NO pre-routing",

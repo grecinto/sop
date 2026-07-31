@@ -1,498 +1,553 @@
 # User Interjection Queue Design
 
+**Status**: ✅ Implemented (LLM-as-Orchestrator pattern)  
+**Last Updated**: 2026-07-30  
+**Implementation**: Tool-based WorkStream management
+
 ## Problem Statement
 
-**Current Behavior**: When a user sends a new prompt while an Ask request is being processed, it goes to event handlers but doesn't interrupt the current Ask flow.
+**Original Behavior**: When a user sends a new prompt while an Ask request is being processed, it goes to event handlers but doesn't interrupt the current Ask flow.
 
-**Desired Behavior**: User interjections should:
-1. Be enqueued into the WorkQueue (not event handlers)
-2. **Pause/interrupt** the current Ask flow
-3. Trigger **LLM analysis** to understand interjection context
-4. Resume or redirect based on LLM classification
-
----
-
-## Current Architecture
-
-### WorkQueue System ✅
-**Location**: `lib/sop/ai/agent/workqueue.go`
-
-```go
-type WorkItem struct {
-    Query         string
-    Actor         string           // "user", "coding_workflow", etc.
-    Priority      int              // Higher = processed first
-    Context       map[string]any
-    ParentItemID  string
-    TurnNumber    int
-    ID            string
-}
-
-type WorkQueue struct {
-    items       []WorkItem        // Priority-sorted
-    mu          sync.Mutex
-    maxDepth    int
-    maxPerActor map[string]int
-    actorCount  map[string]int
-}
-```
-
-**How it works**:
-- Items sorted by Priority (higher first)
-- Per-actor limits enforced
-- Currently used by capabilities to enqueue follow-up work
-
-### Ask Flow ✅
-**Location**: `lib/sop/ai/agent/copilot.go:2664`
-
-```go
-func (a *CopilotAgent) Ask(ctx, query, cfg) (string, error) {
-    queue := a.getOrCreateSessionQueue()
-    
-    // Enqueue initial user query
-    queue.Enqueue(WorkItem{Query: query, Actor: "user"})
-    
-    // Process until empty
-    for !queue.IsEmpty() {
-        item := queue.Dequeue()
-        response := a.ask(ctx, item.Query, cfg)  // Pure ReAct transaction
-        // Capabilities may have enqueued next steps
-    }
-    
-    return lastResponse, nil
-}
-```
-
-**Current flow**:
-1. User query enqueued
-2. Queue processed sequentially
-3. Each item goes through full ReAct pipeline
-4. Capabilities can enqueue follow-up work during execution
-
-**Missing**: No mechanism to handle user interjection DURING Ask execution
+**Implemented Solution**: User interjections are handled via **LLM-as-Orchestrator pattern**:
+1. LLM sees WorkStream state in context (active/paused streams)
+2. LLM decides when to pause/resume/jump phases based on user intent
+3. LLM calls atomic tools (`pause_workstream`, `resume_workstream`, `jump_to_phase`)
+4. No automatic detection - LLM makes all orchestration decisions
 
 ---
 
-## Enhanced Design
+## Implemented Architecture (V2)
 
-### 1. Two Types of Queue Items
+### Core Principle: LLM-as-Orchestrator
 
+**Pattern**: Agent code provides **tools as infrastructure**, LLM sees state and **orchestrates via tool calls**.
+
+- ❌ No automatic detection of interjections
+- ❌ No automatic handling of pause/resume
+- ❌ No InterjectionContext or detectInterjection() functions
+- ✅ LLM sees WorkStream state in system prompt
+- ✅ LLM decides when to pause/resume/jump based on user intent
+- ✅ LLM calls atomic tools to manage WorkStreams
+
+### Implementation Files
+
+**WorkQueue with Priorities** (`lib/sop/ai/agent/workqueue.go`):
 ```go
-// Enhanced WorkItem with source type
+const (
+    PriorityUser           = 100  // User queries always processed first
+    PrioritySystemResume   = 50   // System-triggered resume
+    PriorityPhaseSuccession = 10  // Normal phase-to-phase transitions
+)
+
 type WorkItem struct {
-    Query         string
-    Actor         string           // "user", "coding_workflow", "test_runner"
-    Priority      int
-    Source        WorkItemSource   // NEW: Distinguishes origin
-    Context       map[string]any
-    ParentItemID  string
-    TurnNumber    int
-    ID            string
-    Timestamp     time.Time        // NEW: For interjection detection
-    IsInterjection bool            // NEW: User sent while Ask active
-}
-
-type WorkItemSource string
-
-const (
-    SourceUserInitial      WorkItemSource = "user_initial"      // User's original query
-    SourceUserInterjection WorkItemSource = "user_interjection" // User sent during Ask
-    SourceCapability       WorkItemSource = "capability"        // Capability enqueued
-)
-```
-
-**Priority Scheme**:
-```go
-const (
-    PriorityUserInterjection = 1000  // HIGHEST - pause everything
-    PriorityUserInitial      = 100   // High - normal user queries
-    PriorityCapabilityUrgent = 50    // Medium - critical capability work
-    PriorityCapabilityNormal = 10    // Low - regular capability work
-)
-```
-
-### 2. Interjection Detection
-
-**Location**: New file `lib/sop/ai/agent/interjection.go`
-
-```go
-// InterjectionManager handles user interjections during Ask execution
-type InterjectionManager struct {
-    activeAskID   string
-    activeStarted time.Time
-    mu            sync.RWMutex
-    llmClassifier LLMInterjectionClassifier
-}
-
-// HandleUserInterjection is called when user sends message during active Ask
-func (m *InterjectionManager) HandleUserInterjection(
-    ctx context.Context,
-    userQuery string,
-    currentPhase string,
-    conversationHistory []Exchange,
-    queue *WorkQueue,
-) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-    
-    // Create high-priority interjection item
-    item := WorkItem{
-        Query:          userQuery,
-        Actor:          "user",
-        Priority:       PriorityUserInterjection,
-        Source:         SourceUserInterjection,
-        IsInterjection: true,
-        Timestamp:      time.Now(),
-        ID:             fmt.Sprintf("interjection-%d", time.Now().UnixNano()),
-        Context: map[string]any{
-            "active_ask_id":  m.activeAskID,
-            "current_phase":  currentPhase,
-            "interrupted_at": time.Now(),
-        },
-    }
-    
-    // Enqueue with highest priority (will be processed next)
-    if err := queue.Enqueue(item); err != nil {
-        return fmt.Errorf("failed to enqueue interjection: %w", err)
-    }
-    
-    log.Info("User interjection enqueued",
-        "query", truncateString(userQuery, 50),
-        "current_phase", currentPhase,
-        "queue_depth", queue.Depth())
-    
-    // Trigger LLM classification (async to avoid blocking)
-    go m.classifyInterjectionIntent(ctx, userQuery, currentPhase, conversationHistory)
-    
-    return nil
+    Query    string
+    Actor    string
+    Priority int    // Higher = processed first
+    Context  map[string]any
+    // ...
 }
 ```
 
-### 3. LLM Interjection Classification
-
-**Location**: `lib/sop/ai/agent/interjection_classifier.go`
-
+**WorkStream Management Capability** (`lib/sop/ai/agent/capabilities/workstream.go`):
 ```go
-// InterjectionIntent describes why user interjected
-type InterjectionIntent struct {
-    Type            InterjectionType
-    TargetPhase     string           // Phase user wants to jump to
-    IsRejection     bool             // User rejecting current approach
-    IsRedirection   bool             // User changing scope/goal
-    IsClarification bool             // User providing info
-    IsCancel        bool             // User wants to abort
-    Confidence      float64          // 0.0-1.0
-    Reasoning       string           // LLM explanation
+type WorkStreamManagement struct {
+    stmAccessor     func() STMReader        // Access to short-term memory
+    mutatorAccessor func() PhasePlanMutator // Access to phase plan mutator
 }
 
-type InterjectionType string
-
-const (
-    InterjectionReject     InterjectionType = "reject"      // "No, do X instead"
-    InterjectionRedirect   InterjectionType = "redirect"    // "Actually, let's focus on Y"
-    InterjectionClarify    InterjectionType = "clarify"     // "By the way, Z is important"
-    InterjectionCancel     InterjectionType = "cancel"      // "Stop, nevermind"
-    InterjectionContinue   InterjectionType = "continue"    // "Yes, proceed"
-    InterjectionQuestion   InterjectionType = "question"    // "What are you doing?"
-)
-
-// ClassifyInterjection uses LLM to understand user intent
-func (c *LLMInterjectionClassifier) ClassifyInterjection(
-    ctx context.Context,
-    userQuery string,
-    currentPhase string,
-    currentAction string,
-    conversationHistory []Exchange,
-    gen ai.Generator,
-) (*InterjectionIntent, error) {
-    systemPrompt := `You are an interjection classifier. The user has sent a message while the agent is actively working.
-
-Analyze the user's message to determine their intent:
-
-**Interjection Types:**
-- reject: User disagrees with current approach ("No, don't do that", "Actually, that's wrong")
-- redirect: User wants to change scope or goal ("Let's focus on X instead", "Change of plans")
-- clarify: User providing additional information ("By the way, ...", "Also, ...")
-- cancel: User wants to abort ("Stop", "Never mind", "Cancel that")
-- continue: User confirming/encouraging ("Yes", "Go ahead", "Looks good")
-- question: User asking about status ("What are you doing?", "Why is this taking so long?")
-
-**Current Context:**
-Phase: ` + currentPhase + `
-Current Action: ` + currentAction + `
-
-**User Message:** "` + userQuery + `"
-
-**Recent Conversation:**
-` + formatConversationHistory(conversationHistory) + `
-
-Respond with JSON:
-{
-  "type": "reject|redirect|clarify|cancel|continue|question",
-  "target_phase": "investigation|planning|execution|review|intake|delivery|null",
-  "is_rejection": true/false,
-  "is_redirection": true/false,
-  "is_clarification": true/false,
-  "is_cancel": true/false,
-  "confidence": 0.0-1.0,
-  "reasoning": "Brief explanation of intent"
-}
-`
-
-    response, err := gen.Generate(ctx, systemPrompt)
-    if err != nil {
-        return nil, fmt.Errorf("LLM classification failed: %w", err)
-    }
-    
-    var intent InterjectionIntent
-    if err := json.Unmarshal([]byte(response), &intent); err != nil {
-        return nil, fmt.Errorf("failed to parse LLM response: %w", err)
-    }
-    
-    return &intent, nil
-}
+// 6 atomic tools exposed to LLM:
+// 1. list_workstreams()           - No parameters
+// 2. get_workstream_details()     - No parameters  
+// 3. jump_to_phase(phase: string) - phase enum: [intake, investigation, planning, execution, review, delivery]
+// 4. pause_workstream()           - No parameters
+// 5. resume_workstream()          - No parameters
+// 6. abandon_workstream()         - No parameters
 ```
 
-### 4. Ask Flow Enhancement
-
-**Location**: Modify `lib/sop/ai/agent/copilot.go`
-
+**V2 Ask Pipeline** (`lib/sop/ai/agent/copilot_v2.go`):
 ```go
-func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+func (a *CopilotAgent) AskV2(ctx, query, cfg) (string, error) {
     queue := a.getOrCreateSessionQueue()
-    interjectionMgr := a.getOrCreateInterjectionManager()
     
-    // Mark Ask as active for interjection detection
-    askID := fmt.Sprintf("ask-%d", time.Now().UnixNano())
-    interjectionMgr.SetActive(askID)
-    defer interjectionMgr.SetInactive()
-    
-    // Enqueue initial user query
-    if err := queue.Enqueue(WorkItem{
+    // Enqueue user query with highest priority
+    queue.Enqueue(WorkItem{
         Query:    query,
         Actor:    "user",
-        Priority: PriorityUserInitial,
-        Source:   SourceUserInitial,
-        ID:       fmt.Sprintf("user-initial-%d", time.Now().UnixNano()),
-    }); err != nil {
-        return "", fmt.Errorf("failed to enqueue query: %w", err)
-    }
+        Priority: PriorityUser,
+    })
     
-    // Inject queue into context for interjection handler access
-    ctx = WithWorkQueue(ctx, queue)
-    ctx = WithInterjectionManager(ctx, interjectionMgr)
-    
-    var lastResponse string
-    var turnResults []TurnResult
-    
-    // Process queue with interjection awareness
+    // Process until queue empty
     for !queue.IsEmpty() {
-        item, err := queue.Dequeue()
-        if err != nil {
-            break
-        }
-        
-        // Check if this is an interjection
-        if item.IsInterjection {
-            log.Info("Processing user interjection",
-                "query", truncateString(item.Query, 50),
-                "interrupted_phase", item.Context["current_phase"])
-            
-            // Classify interjection intent
-            currentPhase := a.getCurrentPhase()
-            intent, err := interjectionMgr.ClassifyInterjection(
-                ctx,
-                item.Query,
-                currentPhase,
-                a.getCurrentAction(),
-                a.getConversationHistory(),
-                a.generator,
-            )
-            
-            if err != nil {
-                log.Warn("Interjection classification failed", "error", err)
-                // Fall through to normal processing
-            } else {
-                // Handle based on intent
-                handled, response := a.handleInterjectionIntent(ctx, intent, item, cfg)
-                if handled {
-                    return response, nil
-                }
-            }
-        }
-        
-        log.Info("Processing queue item",
-            "actor", item.Actor,
-            "source", item.Source,
-            "priority", item.Priority,
-            "query_preview", truncateString(item.Query, 80))
-        
-        // Execute pure ask (delegates to ReAct)
-        response, err := a.ask(ctx, item.Query, cfg)
-        if err != nil {
-            return response, err
-        }
-        
-        lastResponse = response
-        turnResults = append(turnResults, TurnResult{
-            Actor:    item.Actor,
-            Query:    item.Query,
-            Response: response,
-        })
-        
-        // Check for new interjections after each turn
-        // (queue may have been modified by interjection handler)
+        item := queue.Dequeue()  // Highest priority first
+        response := a.askV2Core(ctx, item.Query, cfg)
+        // LLM may have called tools that enqueued more work
     }
     
     return lastResponse, nil
 }
 ```
 
-### 5. Interjection Intent Handling
+---
 
-**Location**: `lib/sop/ai/agent/copilot_interjection.go`
+## WorkStream Tools Reference
 
-```go
-// handleInterjectionIntent decides how to respond to user interjection
-func (a *CopilotAgent) handleInterjectionIntent(
-    ctx context.Context,
-    intent *InterjectionIntent,
-    item WorkItem,
-    cfg *ai.ConfigMap,
-) (handled bool, response string) {
-    
-    switch intent.Type {
-    case InterjectionCancel:
-        // User wants to abort
-        return true, "Canceling current operation. How can I help you?"
-        
-    case InterjectionReject:
-        // User rejecting current approach
-        if intent.TargetPhase != "" {
-            // Force route to target phase
-            state := a.buildRoutingState()
-            state.CapabilityHint = intent.TargetPhase + "_phase"
-            log.Info("Interjection rejected current phase",
-                "from", a.getCurrentPhase(),
-                "to", intent.TargetPhase,
-                "reasoning", intent.Reasoning)
-        }
-        // Continue processing with new routing
-        return false, ""
-        
-    case InterjectionRedirect:
-        // User changing scope/goal
-        // Clear queue of capability-enqueued items (they're obsolete)
-        queue := a.GetSessionQueue()
-        queue.ClearCapabilityItems()
-        log.Info("Interjection redirected goal, cleared capability queue")
-        // Continue processing with new query
-        return false, ""
-        
-    case InterjectionClarify:
-        // User providing additional info
-        // Add to context, continue current phase
-        a.addConversationContext(item.Query)
-        log.Info("Interjection added clarification to context")
-        return false, ""
-        
-    case InterjectionContinue:
-        // User confirming, just acknowledge
-        return true, "Continuing..."
-        
-    case InterjectionQuestion:
-        // User asking status
-        currentAction := a.getCurrentAction()
-        currentPhase := a.getCurrentPhase()
-        return true, fmt.Sprintf("I'm currently in the %s phase, %s. %s",
-            currentPhase,
-            currentAction,
-            intent.Reasoning)
-        
-    default:
-        // Unknown intent, treat as new query
-        return false, ""
-    }
+### 1. `list_workstreams()`
+
+**Purpose**: Show active/paused WorkStream state with progress indicators
+
+**Parameters**: None (calling IS the decision)
+
+**Example Output**:
+```
+Active WorkStream: Add Redis caching
+  ✓ intake (complete)
+  ✓ investigation (complete)
+  → planning (current - 3/6 phases complete)
+  - execution
+  - review
+  - delivery
+
+Paused: Fix auth bug (investigation - 1/6 phases complete)
+```
+
+**When LLM uses**:
+- User asks "what am I working on?"
+- User says "show me the progress"
+- Before pausing to show context
+
+---
+
+### 2. `get_workstream_details()`
+
+**Purpose**: Get full JSON dump of current WorkStream context
+
+**Parameters**: None
+
+**Example Output**:
+```json
+{
+  "stream_id": "uuid-123",
+  "state": "active",
+  "created_at": 1722288000,
+  "phase_plan": {
+    "phases": ["intake", "investigation", "planning", "execution", "review", "delivery"],
+    "current_index": 2,
+    "completed": ["intake", "investigation"],
+    "remaining": ["execution", "review", "delivery"]
+  },
+  "artifacts": {
+    "intake": { "summary": "...", "requirements": [...] },
+    "investigation": { "summary": "...", "evidence": [...] }
+  }
 }
 ```
 
-### 6. HTTP Handler Integration
+**When LLM uses**:
+- Need detailed artifact data
+- Debugging phase progression
+- Before making phase plan mutations
 
-**Location**: `lib/sop/cmd/sop-daemon/rag.go`
+---
 
+### 3. `jump_to_phase(phase: string)` ⭐ NEW
+
+**Purpose**: Skip forward or backward to a specific phase
+
+**Parameters**:
+- `phase` (required, enum): `intake`, `investigation`, `planning`, `execution`, `review`, `delivery`
+
+**Example Output**:
+```
+✓ Jumped forward from phase 'investigation' to 'execution' (skipped 1 phases). Continuing from 'execution'.
+```
+
+**When LLM uses**:
+- User says "skip investigation" → `jump_to_phase(phase="planning")`
+- User says "just implement it now" → `jump_to_phase(phase="execution")`
+- User says "go back to requirements" → `jump_to_phase(phase="intake")`
+- User says "review first" → `jump_to_phase(phase="review")`
+
+**Implementation**:
 ```go
-func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
-    // ... existing setup
+func (w *WorkStreamManagement) jumpToPhase(targetPhase string) (string, error) {
+    // 1. Get STM accessor and current thread
+    stm := w.stmAccessor()
+    thread := stm.GetCurrentThread()
+    streamCtx := thread.GetStreamContext()
     
-    // Check if there's an active Ask for this session
-    sessionID := payload.SessionID
-    activeAsk := getActiveAsk(sessionID)
+    // 2. Get phase plan mutator
+    mutator := w.mutatorAccessor()
     
-    if activeAsk != nil {
-        // Ask is already running for this session
-        // This is an interjection!
-        
-        copilotAgent := getCopilotAgentForSession(sessionID)
-        if copilotAgent != nil {
-            interjectionMgr := copilotAgent.GetInterjectionManager()
-            queue := copilotAgent.GetSessionQueue()
-            
-            // Enqueue as interjection (will interrupt current Ask)
-            err := interjectionMgr.HandleUserInterjection(
-                ctx,
-                req.Query,
-                activeAsk.CurrentPhase,
-                activeAsk.ConversationHistory,
-                queue,
-            )
-            
-            if err != nil {
-                log.Printf("Failed to handle interjection: %v", err)
-                // Fall through to normal handling
-            } else {
-                // Return immediately - interjection enqueued
-                sendEvent("interjection", map[string]any{
-                    "status":  "enqueued",
-                    "message": "Your message has been prioritized",
-                })
-                return
-            }
-        }
-    }
+    // 3. Validate target phase exists in plan
+    plan := streamCtx.GetPhasePlan()
+    plannedPhases := plan.GetPlannedPhases()
+    // ... validation logic ...
     
-    // Normal Ask flow
-    // ... existing code
+    // 4. Jump to target phase
+    err := mutator.JumpToPhase(targetPhase)
+    
+    // 5. Return success message
+    return "✓ Jumped to phase 'execution'. Continuing from 'execution'.", nil
 }
 ```
+
+---
+
+### 4. `pause_workstream()`
+
+**Purpose**: Pause current WorkStream (can be resumed later)
+
+**Parameters**: None
+
+**Example Output**:
+```
+✓ WorkStream paused. You can resume it anytime with resume_workstream.
+```
+
+**When LLM uses**:
+- User starts new task: "Actually, work on the payment bug first"
+- User explicitly says: "Pause this"
+- User switches context: "Let me work on something else"
+
+**State Transition**: `active` → `paused`
+
+---
+
+### 5. `resume_workstream()`
+
+**Purpose**: Resume a paused WorkStream
+
+**Parameters**: None
+
+**Example Output**:
+```
+✓ WorkStream resumed. Continuing from phase 'planning' (3/6 complete).
+```
+
+**When LLM uses**:
+- User says "resume", "continue", "back to the previous task"
+- User asks "what was I working on?" and then wants to continue
+
+**Validation**: Only works if current state is `paused`
+
+---
+
+### 6. `abandon_workstream()`
+
+**Purpose**: Permanently cancel a WorkStream (cannot be resumed)
+
+**Parameters**: None
+
+**Example Output**:
+```
+✓ WorkStream abandoned. Previous work discarded.
+```
+
+**When LLM uses**:
+- User says "cancel that", "never mind", "forget about it"
+- User explicitly wants to discard work
+
+**State Transition**: Any state → `abandoned` (terminal state)
 
 ---
 
 ## Example Scenarios
 
-### Scenario 1: Reject Current Approach
+### Scenario 1: Skip Investigation Phase
 
 ```
 [Agent in Investigation Phase]
 Agent: "Let me analyze the test failures by reading each test file..."
 
-User: "No, just run the tests first to see the error output"
-↓
-Interjection detected
-↓
-LLM Classification:
-  type: "reject"
-  target_phase: "execution"
-  is_rejection: true
-  reasoning: "User wants direct execution, not investigation"
-↓
-Queue reprioritized:
-  1. User interjection (priority 1000)
-  2. [Investigation items cleared]
-↓
-Agent: "Running tests to capture error output..."
+User: "Skip investigation, I know what's wrong. Just fix it."
+
+LLM Analysis:
+  - User wants to skip current phase
+  - User wants to jump to execution
+  - Decision: Call jump_to_phase
+
+Tool Call: jump_to_phase(phase="execution")
+
+Agent: "✓ Jumped forward from phase 'investigation' to 'execution' (skipped 1 phases). 
+        What would you like me to implement?"
 ```
 
-### Scenario 2: Redirect Goal
+### Scenario 2: Go Back to Requirements
+
+```
+[Agent in Execution Phase]
+Agent: "I've implemented the caching layer. Let me run tests..."
+
+User: "Wait, I need to review the requirements first. Go back."
+
+LLM Analysis:
+  - User wants to revisit earlier phase
+  - Decision: Jump backward to intake
+
+Tool Call: jump_to_phase(phase="intake")
+
+Agent: "✓ Jumped backward from phase 'execution' to 'intake' (skipped 2 phases).
+        Let's review the requirements together."
+```
+
+### Scenario 3: Pause for Urgent Work
+### Scenario 3: Pause for Urgent Work
+
+```
+[Agent in Planning Phase for "Add Redis caching"]
+Agent: "Here's my implementation plan: 1. Create cache service..."
+
+User: "Actually, pause that. There's a critical payment bug I need to fix first."
+
+LLM Analysis:
+  - User wants to switch tasks
+  - Current work should be paused, not abandoned
+  - Decision: Pause current stream
+
+Tool Call: pause_workstream()
+
+Agent: "✓ WorkStream paused. The Redis caching work is saved.
+        Let's focus on the payment bug. What's the issue?"
+
+[Later, after fixing payment bug]
+User: "Okay, back to the Redis work."
+
+LLM Analysis:
+  - User wants to resume paused work
+  - Decision: Resume previous stream
+
+Tool Call: resume_workstream()
+
+Agent: "✓ WorkStream resumed. Continuing from phase 'planning' (2/6 complete).
+        We were working on the Redis caching implementation plan..."
+```
+
+### Scenario 4: Direct Execution (Skip Planning)
+
+```
+User: "Add a config flag to disable rate limiting"
+
+[Agent starts intake phase]
+Agent: "Let me gather requirements..."
+
+User: "No need, just add 'DISABLE_RATE_LIMIT=true' to the config"
+
+LLM Analysis:
+  - User provided exact implementation
+  - No investigation/planning needed
+  - Decision: Jump directly to execution
+
+Tool Call: jump_to_phase(phase="execution")
+
+Agent: "✓ Jumped forward from phase 'intake' to 'execution' (skipped 2 phases).
+        Adding DISABLE_RATE_LIMIT flag to config..."
+```
+
+---
+
+## Design Rationale
+
+### Why Tool-Based Instead of Automatic?
+
+**Original Design** (Rejected):
+- Agent code detects interjections via `detectInterjection()`
+- Agent code calls `handleInterjection()` automatically
+- LLM is informed of decisions after the fact
+
+**Problems**:
+1. ❌ Violates **LLM-as-Orchestrator** pattern
+2. ❌ Agent code making orchestration decisions
+3. ❌ Removes LLM's control over workflow
+4. ❌ No way for LLM to reason about interjections
+5. ❌ Hard to debug (black box decisions)
+
+**Current Design** (Implemented):
+- Agent code provides tools (`pause_workstream`, `jump_to_phase`, etc.)
+- LLM sees state in context
+- LLM decides when to call tools
+- Agent code executes tool (participant, not controller)
+
+**Benefits**:
+1. ✅ LLM has full orchestration control
+2. ✅ LLM reasoning is visible in tool calls
+3. ✅ User can see why decisions were made
+4. ✅ Simpler agent code (no detection logic)
+5. ✅ Easier to debug (tool calls are logged)
+
+### Why Atomic Tools (No Parameters)?
+
+**Original Design**: Tools with parameters
+```go
+pause_workstream(reason: string, confirm: bool)
+resume_workstream(stream_id: string, phase: string)
+```
+
+**Problems**:
+1. ❌ Slower LLM response (must generate parameters)
+2. ❌ Parameter overhead (reason, confirm) unnecessary
+3. ❌ Conversation context already shows "why"
+4. ❌ More tokens = more cost
+
+**Current Design**: Atomic tools (minimal parameters)
+```go
+pause_workstream()        // No parameters - calling IS the decision
+resume_workstream()       // No parameters - operates on current stream
+jump_to_phase(phase)      // Only essential parameter
+```
+
+**Benefits**:
+1. ✅ Faster LLM response (fewer tokens to generate)
+2. ✅ Lower cost (fewer tokens)
+3. ✅ Simpler tool definitions
+4. ✅ Calling the tool IS the decision
+5. ✅ Context shows why (no need for reason parameter)
+
+**Exception**: `jump_to_phase(phase)` needs the target phase as a parameter since there are multiple valid targets. All other tools operate on implicit context (current WorkStream).
+
+---
+
+## Implementation Status
+
+### ✅ Completed
+
+1. **Priority Queue** (`workqueue.go`)
+   - Priority constants: `PriorityUser=100`, `PrioritySystemResume=50`, `PriorityPhaseSuccession=10`
+   - Priority-based insertion in `Enqueue()`
+   - FIFO within same priority
+
+2. **V2 Ask Pipeline** (`copilot_v2.go`)
+   - `AskV2()` processes work queue with priority ordering
+   - User queries always dequeued first (`PriorityUser`)
+   - No automatic interjection handling (removed `InterjectionContext`, `detectInterjection()`, `handleInterjection()`)
+
+3. **WorkStream Management Capability** (`capabilities/workstream.go`)
+   - 6 atomic tools exposed to LLM
+   - `BuildContext()` shows WorkStream state in system prompt
+   - `BuildInstructions()` guides LLM on when to use tools
+   - All tools implemented and tested
+
+4. **Phase Jump Implementation** (`workstream.go::jumpToPhase()`)
+   - Validates target phase exists in plan
+   - Uses `PhasePlanMutator.JumpToPhase()` to update current index
+   - Returns success message with direction and skipped count
+   - Supports forward and backward jumps
+
+5. **STM Integration**
+   - `STMReader` interface for accessing WorkStream context
+   - `PhasePlanMutator` interface for phase plan mutations
+   - Injected via `SharedInfrastructure` in `getOrCreateSharedInfra()`
+
+### 📋 Pending
+
+1. **WorkStreamManagement Registration**
+   - Need to register capability with `CopilotAgent`
+   - Wire `stmAccessor` and `mutatorAccessor` into constructor
+   - Ensure tools are exposed in V2 pipeline
+
+2. **End-to-End Testing**
+   - Test jump_to_phase in real scenarios
+   - Verify LLM can discover and use tools
+   - Test pause → jump → resume workflows
+
+3. **Documentation Updates**
+   - ✅ This document updated
+   - ⏸️ Update `PHASE_SYSTEM_ARCHITECTURE.md` with jump_to_phase details
+   - ⏸️ Update `WORKFLOWS.md` with LLM-orchestrated interjection handling
+
+---
+
+## Code Locations
+
+### Core Implementation
+
+- **Priority Queue**: `/lib/sop/ai/agent/workqueue.go`
+  - Lines 13-18: Priority constants
+  - WorkItem struct with Priority field
+  - Enqueue/Dequeue with priority sorting
+
+- **V2 Ask Pipeline**: `/lib/sop/ai/agent/copilot_v2.go`
+  - Lines 65-101: `AskV2()` priority queue loop
+  - Lines 108-210: `askV2Core()` pure ReAct turn
+  - Lines 721+: `getOrCreateSharedInfra()` STM/PhasePlanMutator injection
+
+- **WorkStream Capability**: `/lib/sop/ai/agent/capabilities/workstream.go`
+  - Lines 1-25: Struct and constructor
+  - Lines 40-60: `Classify()` - keyword detection
+  - Lines 62-80: `BuildContext()` - shows WorkStream state
+  - Lines 89-103: `BuildInstructions()` - LLM guidance
+  - Lines 105-165: `ExposeTools()` - 6 tool definitions
+  - Lines 167-200: `ExecuteTool()` - routing switch
+  - Lines 202-280: Tool implementations (list, details, pause, resume, abandon)
+  - Lines 282-340: `jumpToPhase()` - NEW phase jumping implementation
+  - Lines 400+: Interfaces (`STMReader`, `PhasePlanMutator`)
+
+- **Phase Base**: `/lib/sop/ai/agent/planner/phase_base.go`
+  - Line 105: `GetPhasePlanMutator()` - access from base phase
+
+### Related Documentation
+
+- `/docs/ARCHITECTURE_PATTERNS.md` - Participant Pattern details
+- `/docs/PLANNING_FIRST_LLM_ORCHESTRATION.md` - Phase succession design
+- `/docs/WORKFLOWS.md` - Workflow architecture evolution
+- `/docs/PHASE_PLAN_IMPLEMENTATION_DESIGN.md` - PhasePlan data structures
+
+---
+
+## Migration Notes
+
+### From Automatic Detection to LLM-Orchestrated
+
+**Before** (Rejected Design):
+```go
+// Agent code made orchestration decisions
+if detectInterjection(query, state) {
+    handleInterjection(query, currentPhase)
+    // LLM informed after the fact
+}
+```
+
+**After** (Current Design):
+```go
+// LLM sees state and makes decisions
+// Agent code provides tools
+func (w *WorkStreamManagement) ExposeTools() []ToolDefinition {
+    return []ToolDefinition{
+        {Name: "jump_to_phase", Schema: "..."}, 
+        {Name: "pause_workstream", Schema: "..."},
+        // LLM decides when to call
+    }
+}
+```
+
+**Key Changes**:
+1. Removed: `InterjectionContext`, `detectInterjection()`, `handleInterjection()`
+2. Added: `WorkStreamManagement` capability with 6 tools
+3. Shifted: Decision-making from agent code to LLM
+4. Pattern: Controller → Participant (agent provides infrastructure, LLM orchestrates)
+
+---
+
+## Future Enhancements
+
+### Phase 1: Current Implementation ✅
+- Priority queue
+- WorkStream management tools
+- Phase jumping
+- Pause/resume/abandon
+
+### Phase 2: Planned Features 📋
+- **Multi-WorkStream Support**: Handle multiple paused streams
+- **WorkStream Naming**: User-friendly names for paused work
+- **Stream Switching**: `switch_to_workstream(name)` tool
+- **Progress Indicators**: Visual progress in list_workstreams
+- **Phase Plan Customization**: `mutate_phase_plan` for insert/remove/reorder
+
+### Phase 3: Advanced Features 💡
+- **Checkpoint System**: Save/restore phase state
+- **WorkStream Forking**: Branch from current phase
+- **Undo/Redo**: Reverse phase jumps
+- **Phase Templates**: Custom phase sequences per domain
+- **WorkStream Analytics**: Time spent per phase, success metrics
 
 ```
 [Agent in Planning Phase]

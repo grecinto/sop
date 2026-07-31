@@ -188,42 +188,161 @@ Rigid phase succession prevents:
 - Dynamic discovery: "We need an extra investigation phase for database schema"
 - Course correction: "Go back to planning, the requirements changed"
 
-### Solution: PhasePlanMutator Interface
+### Solution: WorkStream Management Tools
 
-```go
-type PhasePlanMutator interface {
-    InsertPhase(ctx, phaseID, position int) error  // Add phase at index
-    AppendPhase(ctx, phaseID) error                 // Add to end
-    RemovePhase(ctx, phaseID) error                 // Delete phase
-    JumpToPhase(ctx, phaseID) error                 // Skip to phase immediately
-    GetCurrentPlan(ctx) ([]string, int, error)      // Show plan
-    SetCheckpoint(ctx, phaseID) error               // Mark validation point
-}
+**Status**: ✅ Implemented (`lib/sop/ai/agent/capabilities/workstream.go`)
+
+**Pattern**: LLM-as-Orchestrator with atomic tools (not parameter-heavy mutation tool)
+
+#### Implemented Tools
+
+**1. Phase Navigation**: `jump_to_phase(phase: string)`
+```
+Purpose: Skip forward or backward to specific phase
+Parameter: phase (enum) - intake|investigation|planning|execution|review|delivery
+Example: jump_to_phase(phase="execution") → Skips from investigation to execution
 ```
 
-### Exposed as LLM Tool
+**2. State Management**: Atomic tools (no parameters)
+```
+pause_workstream()    → Pause current work (can resume later)
+resume_workstream()   → Continue paused work from current phase
+abandon_workstream()  → Permanently cancel work (cannot resume)
+```
 
+**3. Inspection**: View state (no parameters)
+```
+list_workstreams()         → Show active/paused streams with progress
+get_workstream_details()   → Full JSON dump of WorkStream context
+```
+
+#### Why Atomic Tools (Not Mutation Tool)?
+
+**Old Design** (rejected):
 ```json
 {
   "name": "mutate_phase_plan",
-  "description": "Dynamically modify the phase plan during conversation",
   "parameters": {
     "action": "insert|append|remove|jump|checkpoint|show",
-    "phase_id": "intake|investigation|planning|execution|review|delivery",
+    "phase_id": "intake|investigation|...",
     "position": 0
   }
 }
 ```
 
+**Problems**:
+- ❌ Too many parameters slow down LLM response
+- ❌ Action parameter adds unnecessary overhead
+- ❌ Combining multiple operations complicates schema
+
+**Current Design** (implemented):
+```go
+// 6 separate atomic tools, each with clear purpose
+jump_to_phase(phase)       // Only essential parameter
+pause_workstream()         // No parameters - calling IS decision
+resume_workstream()        // No parameters
+abandon_workstream()       // No parameters
+list_workstreams()         // No parameters
+get_workstream_details()   // No parameters
+```
+
+**Benefits**:
+- ✅ Faster LLM response (fewer tokens)
+- ✅ Simpler tool schemas
+- ✅ Tool name = intent (clear semantics)
+- ✅ Lower cost (minimal parameters)
+
+### PhasePlanMutator Interface
+
+**File**: `lib/sop/ai/agent/capabilities/workstream.go:400+`
+
+```go
+type PhasePlanMutator interface {
+    JumpToPhase(phaseID string) error         // Used by jump_to_phase tool
+    InsertPhase(position int, phaseID string) error
+    AppendPhase(phaseID string) error
+    RemovePhase(phaseID string) error
+    GetCurrentPlan() (phases []string, currentIndex int)
+    SetCheckpoint(name string) error
+}
+```
+
+**Access Pattern**:
+```go
+// In WorkStreamManagement capability
+mutator := w.mutatorAccessor()  // Get from SharedInfrastructure
+err := mutator.JumpToPhase(targetPhase)  // Update plan
+```
+
+**Access from Phase Capabilities** (`phase_base.go:105`):
+```go
+func (b *BasePhase) GetPhasePlanMutator() PhasePlanMutator {
+    if b.sharedInfra != nil && b.sharedInfra.PhasePlanMutator != nil {
+        if m, ok := b.sharedInfra.PhasePlanMutator.(PhasePlanMutator); ok {
+            return m
+        }
+    }
+    return nil
+}
+```
+
 ### Implementation: STMPhasePlanMutator
 
-Uses STM (Short-Term Memory) as source of truth:
-- Reads current plan from workstream state
-- Applies mutations
+**Pattern**: Uses STM (Short-Term Memory) as source of truth
+- Reads current plan from WorkStream context
+- Applies mutations (JumpToPhase updates CurrentIndex)
 - Writes back to STM
-- Enqueues next phase as WorkItem
+- State survives across turns, enabling pause/resume
 
-**Key Advantage**: State survives across turns, enabling pause/resume.
+**Key Advantage**: Persistent state across conversation turns
+
+### Example: jump_to_phase Implementation
+
+**File**: `lib/sop/ai/agent/capabilities/workstream.go:282-340`
+
+```go
+func (w *WorkStreamManagement) jumpToPhase(targetPhase string) (string, error) {
+    // 1. Get STM and current WorkStream context
+    stm := w.stmAccessor()
+    thread := stm.GetCurrentThread()
+    streamCtx := thread.GetStreamContext()
+    plan := streamCtx.GetPhasePlan()
+    
+    // 2. Validate target phase exists in plan
+    plannedPhases := plan.GetPlannedPhases()
+    currentIndex := plan.GetCurrentIndex()
+    
+    targetIndex := -1
+    for i, phase := range plannedPhases {
+        if phase == targetPhase {
+            targetIndex = i
+            break
+        }
+    }
+    
+    if targetIndex == -1 {
+        return fmt.Sprintf("Phase '%s' not found in current plan. Available: %v", 
+            targetPhase, plannedPhases), nil
+    }
+    
+    // 3. Jump using PhasePlanMutator
+    mutator := w.mutatorAccessor()
+    err := mutator.JumpToPhase(targetPhase)
+    if err != nil {
+        return "", fmt.Errorf("failed to jump to phase: %w", err)
+    }
+    
+    // 4. Return success with context
+    direction := "forward"
+    if targetIndex < currentIndex {
+        direction = "backward"
+    }
+    skipped := abs(targetIndex - currentIndex) - 1
+    
+    return fmt.Sprintf("✓ Jumped %s from phase '%s' to '%s' (skipped %d phases). Continuing from '%s'.", 
+        direction, currentPhase, targetPhase, skipped, targetPhase), nil
+}
+```
 
 ---
 
@@ -283,21 +402,187 @@ func NewPhase(domain, phaseID string, infra *SharedInfrastructure) Capability {
 
 ## How User Interjections Work
 
-### Flow Diagram
+### Pattern: LLM-as-Orchestrator (Not Automatic Detection)
+
+**Core Principle**: LLM sees state, LLM decides action, LLM calls tools
+
+- ❌ No automatic interjection detection
+- ❌ No InterjectionInterpreter capability
+- ✅ LLM sees WorkStream state in BuildContext()
+- ✅ LLM decides when to pause/resume/jump
+- ✅ LLM calls atomic tools to manage WorkStreams
+
+### Flow Diagram (Implemented)
 
 ```
 User Interjection: "Actually, skip investigation"
          ↓
 Ask Pipeline receives query
          ↓
-LLM Context:
+LLM Context (from WorkStreamManagement.BuildContext()):
   - User input: "Actually, skip investigation"
+  - Current WorkStream: Active
   - Current phase: "investigation"  
-  - Current plan: ["investigation", "planning", "execution", "review"]
-  - Available tools: [..., mutate_phase_plan, get_current_plan, ...]
+  - Phase plan: ["investigation", "planning", "execution", "review"]
+  - Available tools: jump_to_phase, pause_workstream, resume_workstream, ...
          ↓
 LLM Natural Reasoning:
   "User wants to skip current phase and jump to planning"
+         ↓
+LLM Tool Call:
+  jump_to_phase(phase="planning")
+         ↓
+Agent executes tool:
+  1. Get STM accessor
+  2. Get current WorkStream context
+  3. Validate "planning" exists in plan
+  4. Call mutator.JumpToPhase("planning")
+  5. Update CurrentIndex in PhasePlan
+  6. Return success message
+         ↓
+Response to user:
+  "✓ Jumped forward from phase 'investigation' to 'planning' (skipped 0 phases). 
+   Continuing from 'planning'."
+         ↓
+Next turn:
+  Planning phase capability becomes active
+  LLM continues with planning phase tools
+```
+
+### Example Scenarios
+
+**Scenario 1: Skip Investigation**
+```
+[In investigation phase]
+User: "Skip investigation, I know the issue is in auth.go"
+
+LLM sees:
+  - Active WorkStream
+  - Current phase: investigation
+  - Planned phases: [investigation, planning, execution, review]
+
+LLM reasons: User wants to skip to execution (knows the problem)
+
+Tool call: jump_to_phase(phase="execution")
+
+Result: "✓ Jumped forward from 'investigation' to 'execution' (skipped 1 phases)"
+```
+
+**Scenario 2: Go Back to Requirements**
+```
+[In execution phase]
+User: "Wait, let me review the requirements first"
+
+LLM sees:
+  - Active WorkStream
+  - Current phase: execution
+  - Completed phases: [intake, investigation, planning]
+
+LLM reasons: User wants to revisit intake phase
+
+Tool call: jump_to_phase(phase="intake")
+
+Result: "✓ Jumped backward from 'execution' to 'intake' (skipped 2 phases)"
+```
+
+**Scenario 3: Pause for Urgent Work**
+```
+[In planning phase for Feature A]
+User: "Actually, there's a critical bug. Work on that first."
+
+LLM sees:
+  - Active WorkStream: Feature A (planning phase)
+  - User wants to switch tasks
+
+LLM reasons: Should pause current work, not abandon
+
+Tool call: pause_workstream()
+
+Result: "✓ WorkStream paused. You can resume it anytime."
+
+[Agent starts new WorkStream for bug fix]
+
+[Later]
+User: "Back to Feature A"
+
+LLM sees:
+  - Paused WorkStream: Feature A (planning phase, 2/6 complete)
+  - User wants to continue
+
+Tool call: resume_workstream()
+
+Result: "✓ WorkStream resumed. Continuing from phase 'planning' (2/6 complete)."
+```
+
+**Scenario 4: Direct Execution (Skip Planning)**
+```
+User: "Add a config flag ENABLE_DEBUG=true"
+
+[Agent starts intake]
+
+User: "No planning needed, just add it to config.json"
+
+LLM sees:
+  - Active WorkStream
+  - Current phase: intake
+  - User provided exact implementation
+
+LLM reasons: Skip to execution (no investigation/planning needed)
+
+Tool call: jump_to_phase(phase="execution")
+
+Result: "✓ Jumped forward from 'intake' to 'execution' (skipped 2 phases)"
+```
+
+### Why This Design Works
+
+**1. LLM Has Full Context**
+- WorkStreamManagement.BuildContext() shows active/paused streams
+- Current phase and progress visible
+- Phase plan shows what phases are available
+
+**2. LLM Makes Decisions**
+- No black box automatic detection
+- LLM reasoning visible in tool calls
+- User can see why decisions were made
+
+**3. Tools Are Simple**
+- Atomic operations (single purpose)
+- Minimal parameters (faster LLM response)
+- Clear semantics (tool name = intent)
+
+**4. Agent Code Is Clean**
+- No detection logic
+- No interjection classification
+- Just tool execution (participant pattern)
+
+### Comparison: Automatic vs. Tool-Based
+
+**Automatic Detection (Rejected)**:
+```go
+// Agent code making decisions ❌
+if detectInterjection(query) {
+    intent := classifyInterjection(query)
+    if intent.Type == "skip_phase" {
+        jumpToPhase(intent.TargetPhase)
+    }
+}
+// LLM informed after the fact
+```
+
+**Tool-Based Orchestration (Implemented)**:
+```go
+// LLM sees state ✅
+BuildContext() → "Current phase: investigation, Plan: [...]"
+// LLM decides ✅
+"User wants to skip, I'll call jump_to_phase"
+// LLM calls tool ✅
+ExecuteTool("jump_to_phase", {"phase": "execution"})
+// Agent executes ✅
+mutator.JumpToPhase("execution")
+```
+
+---
          ↓
 LLM Calls Tool:
   mutate_phase_plan(action="jump", phase="planning")

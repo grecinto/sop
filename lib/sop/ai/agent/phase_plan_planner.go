@@ -53,6 +53,10 @@ func (c *PlannerCapability) Classify(query string, state capabilities.RoutingSta
 		return capabilities.ClassificationResult{}
 	}
 
+	// ✅ Domain-based classification only (LLM-classified domain via ClassifyTaskContext)
+	// NO keyword matching - let LLM decide via tool descriptions
+
+	// 1. Explicit capability hint (from session continuity or LLM classification)
 	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
 		switch hint {
 		case "phase_plan_planner", "coding_workflow", "codingworkflow", "repo_edit", "planner":
@@ -60,21 +64,14 @@ func (c *PlannerCapability) Classify(query string, state capabilities.RoutingSta
 		}
 	}
 
-	if state.Domain != "" && state.Domain != "coding_workflow" && !strings.EqualFold(state.Domain, "CodingWorkflow") {
-		return capabilities.ClassificationResult{}
+	// 2. Domain-based relevance (domain was LLM-classified in tryColdStartBasedRouting)
+	domain := strings.TrimSpace(strings.ToLower(state.Domain))
+	if domain == "coding_workflow" || domain == "codingworkflow" {
+		// LLM determined this is coding domain - planner is relevant for new coding tasks
+		return capabilities.ClassificationResult{Relevant: true, Score: 15, Mode: capabilities.CapabilityModePrimary}
 	}
 
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return capabilities.ClassificationResult{}
-	}
-
-	codingSignals := []string{"fix", "debug", "bug", "refactor", "patch", "implement", "modify", "edit", "repo", "repository", "code", "parser", "test", "feature", "design", "plan", "architect"}
-	for _, signal := range codingSignals {
-		if strings.Contains(q, signal) {
-			return capabilities.ClassificationResult{Relevant: true, Score: 16, Mode: capabilities.CapabilityModePrimary}
-		}
-	}
+	// 3. Not relevant for other domains - LLM will classify domain correctly
 	return capabilities.ClassificationResult{}
 }
 

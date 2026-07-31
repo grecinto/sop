@@ -128,35 +128,20 @@ func (a *CopilotAgent) applyCapabilityRoutingHints(ctx context.Context, taskCtx 
 			}
 		}
 	}
-	inferredIntent, inferredHint, _ := inferCapabilityRoutingSignal(query, taskCtx.Domain)
+
+	// For continuity gate, inherit from previous turn MRU
 	if taskCtx.RoutingGate == RoutingGateContinuity {
 		if prevCapability, prevIntent, ok := a.getCapabilityAffinityHintFromMRU(); ok {
-			if inferredHint != "" && inferredHint != capabilityHintGeneral {
-				if inferredIntent == intentFamilyRepoEdit {
-					taskCtx.CapabilityHint = inferredHint
-					taskCtx.IntentFamily = inferredIntent
-					return
-				}
-			}
 			taskCtx.CapabilityHint = prevCapability
-			if inferredIntent == intentFamilyGeneral || inferredIntent == "" {
-				taskCtx.IntentFamily = prevIntent
-			} else {
-				taskCtx.IntentFamily = inferredIntent
-			}
-			if taskCtx.CapabilityHint == "" {
-				taskCtx.CapabilityHint = inferredHint
-			}
+			taskCtx.IntentFamily = prevIntent
 			return
 		}
 	}
-	if inferredHint != "" && inferredHint != capabilityHintGeneral {
-		taskCtx.CapabilityHint = inferredHint
-		taskCtx.IntentFamily = inferredIntent
-		return
-	}
-	if taskCtx.CapabilityHint == "" {
-		taskCtx.IntentFamily = inferredIntent
+
+	// ✅ No keyword inference - let capabilities self-classify via Classify()
+	// IntentFamily can be inferred from domain if needed
+	if taskCtx.IntentFamily == "" {
+		taskCtx.IntentFamily = inferIntentFamily(taskCtx.Domain, "")
 	}
 }
 
@@ -204,74 +189,15 @@ func (a *CopilotAgent) getCapabilityAffinityHintFromMRU() (string, string, bool)
 	return "", "", false
 }
 
-func shouldRouteColdStartToPlanner(query string) bool {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return false
-	}
-	if strings.Contains(q, "store") || strings.Contains(q, "stores") || strings.Contains(q, "space") || strings.Contains(q, "spaces") {
-		return false
-	}
-	if strings.Contains(q, "knowledge base") || strings.Contains(q, "knowledge-base") || strings.Contains(q, "kb") {
-		return false
-	}
-	_, hint, _ := inferCapabilityRoutingSignal(q, "")
-	return hint == capabilityHintCodingWorkflow || hint == capabilityHintDesktopAutomation
-}
-
-func inferCapabilityRoutingSignal(query string, domain string) (string, string, string) {
-	q := strings.ToLower(strings.TrimSpace(query))
-
-	// Domain inference removed - LLM-as-Orchestrator pattern
-	// Let LLM classify capabilities via Classify() instead of keyword pre-routing
-	// This allows adaptive classification to work properly
-	inferredDomain := ""
-
-	if q == "" {
-		return inferIntentFamily(domain, ""), capabilityHintGeneral, inferredDomain
-	}
-	// Check explicit knowledge queries first (highest priority for clear intent signals)
-	if strings.Contains(q, "summarize") || strings.Contains(q, "summary") || strings.Contains(q, "overview") || strings.Contains(q, "explain") || strings.Contains(q, "describe") || strings.Contains(q, "walk through") {
-		return intentFamilyKnowledge, capabilityHintGeneral, inferredDomain
-	}
-	// Check desktop automation (specific technology keywords should take priority)
-	// Use word boundary check for "process" to avoid matching "processing"
-	hasProcess := false
-	if idx := strings.Index(q, "process"); idx >= 0 {
-		// Check if "process" is a standalone word (not part of "processing")
-		before := idx == 0 || !isAlphaNumeric(rune(q[idx-1]))
-		after := idx+7 >= len(q) || !isAlphaNumeric(rune(q[idx+7]))
-		hasProcess = before && after
-	}
-	if strings.Contains(q, "git") || strings.Contains(q, "cmd") || strings.Contains(q, "shell") || strings.Contains(q, "postgres") || strings.Contains(q, "splunk") || strings.Contains(q, "docker") || strings.Contains(q, "service") || hasProcess || strings.Contains(q, "terminal") || strings.Contains(q, "file system") || strings.Contains(q, "filesystem") || strings.Contains(q, "local") {
-		return intentFamilyLocalOps, capabilityHintDesktopAutomation, inferredDomain
-	}
-	// Check coding workflow (general code editing keywords)
-	if strings.Contains(q, "fix") || strings.Contains(q, "refactor") || strings.Contains(q, "patch") || strings.Contains(q, "edit") || strings.Contains(q, "implement") || strings.Contains(q, "modify") || strings.Contains(q, "add test") || strings.Contains(q, "update") || strings.Contains(q, "repo") || strings.Contains(q, "code") || strings.Contains(q, "parser") || strings.Contains(q, "function") || strings.Contains(q, "class") || strings.Contains(q, "module") || strings.Contains(q, "generate") || strings.Contains(q, "json") || strings.Contains(q, "script") || strings.Contains(q, "analysis") || strings.Contains(q, "analy") || strings.Contains(q, "sql") || strings.Contains(q, "table") || strings.Contains(q, "record") || strings.Contains(q, "search") || strings.Contains(q, "design") || strings.Contains(q, "plan") || strings.Contains(q, "architect") || strings.Contains(q, "propose") || strings.Contains(q, "document") || strings.Contains(q, "readme") || strings.Contains(q, "spec") || strings.Contains(q, "write") || strings.Contains(q, "test") {
-		return intentFamilyRepoEdit, capabilityHintCodingWorkflow, inferredDomain
-	}
-	if strings.Contains(q, "research") || strings.Contains(q, "what") || strings.Contains(q, "why") || strings.Contains(q, "how") || strings.Contains(q, "concept") || strings.Contains(q, "docs") {
-		return intentFamilyKnowledge, capabilityHintGeneral, inferredDomain
-	}
-	return inferIntentFamily(domain, q), capabilityHintGeneral, inferredDomain
-}
-
-func isAlphaNumeric(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
-}
-
+// inferIntentFamily is only used for basic intent classification from domain
+// NOT for capability pre-selection (that's done by capability.Classify())
 func inferIntentFamily(domain string, query string) string {
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	if domain == "desktop" || domain == "desktop automation" {
 		return intentFamilyLocalOps
 	}
-	if query != "" {
-		if strings.Contains(query, "git") || strings.Contains(query, "postgres") || strings.Contains(query, "splunk") || strings.Contains(query, "cmd") || strings.Contains(query, "shell") {
-			return intentFamilyLocalOps
-		}
-		if strings.Contains(query, "fix") || strings.Contains(query, "refactor") || strings.Contains(query, "patch") || strings.Contains(query, "implement") || strings.Contains(query, "repo") || strings.Contains(query, "code") || strings.Contains(query, "parser") || strings.Contains(query, "script") || strings.Contains(query, "json") || strings.Contains(query, "analysis") || strings.Contains(query, "analy") || strings.Contains(query, "sql") {
-			return intentFamilyRepoEdit
-		}
+	if domain == "coding_workflow" || domain == "CodingWorkflow" {
+		return intentFamilyRepoEdit
 	}
 	return intentFamilyGeneral
 }
@@ -354,50 +280,50 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 }
 
 func (a *CopilotAgent) tryColdStartBasedRouting(ctx context.Context, query string, gen ai.Generator, isTest bool) (*TaskContextClassification, error) {
-	if len(strings.Split(query, ":")) == 1 {
-		log.Info("Cold-Start Routing Activated")
-	}
-	// Fast path: Try keyword-based routing first (no LLM call)
-	inferredIntent, inferredHint, inferredDomain := inferCapabilityRoutingSignal(query, "")
+	log.Info("Cold-Start Routing: LLM classification (no heuristics)")
 
-	if shouldRouteColdStartToPlanner(query) {
-		log.Info("Cold-start planner routing (direct selection)", "query", query, "intent", inferredIntent, "domain", inferredDomain)
-		taskCtx := &TaskContextClassification{
-			CapabilityHint: "planner",
-			IntentFamily:   inferredIntent,
-			Domain:         inferredDomain,
-			RoutingGate:    RoutingGateDiscovery,
-		}
-		annotateTaskContextIntent(taskCtx, query)
-		return taskCtx, nil
-	}
-
-	// If we have a clear capability hint (not general), use keyword routing
-	if inferredHint != capabilityHintGeneral {
-		log.Info("Cold-start keyword routing (fast path)", "capability", inferredHint, "intent", inferredIntent, "domain", inferredDomain)
-		taskCtx := &TaskContextClassification{
-			CapabilityHint: inferredHint,
-			IntentFamily:   inferredIntent,
-			Domain:         inferredDomain,
-			RoutingGate:    RoutingGateDiscovery,
-		}
-		annotateTaskContextIntent(taskCtx, query)
-		return taskCtx, nil
-	}
-
-	// Slow path: Ambiguous query requires LLM classification
 	if gen == nil || isTest {
 		return nil, nil
 	}
 
-	log.Info("Cold-start LLM classification (ambiguous query)")
+	// ✅ Always use LLM classification - let LLM decide, not keywords
+	// Capabilities will self-classify via their Classify() methods
 	taskCtx, err := a.ClassifyTaskContext(ctx, query, gen)
 	if err != nil || taskCtx == nil {
 		log.Warn("Cold-start routing classification failed or returned nil", "error", err)
 		return nil, err
 	}
 
-	log.Info("Cold-start routing classification success", "domain", taskCtx.Domain)
+	log.Info("Cold-start classification complete", "domain", taskCtx.Domain)
 	annotateTaskContextIntent(taskCtx, query)
 	return taskCtx, nil
+}
+
+// inferCapabilityRoutingSignal is DEPRECATED - kept for backward compatibility with tests only
+// ⚠️ DO NOT USE for routing decisions - violates LLM-as-Orchestrator pattern
+// LLM should classify domains via ClassifyTaskContext(), capabilities self-classify via Classify()
+func inferCapabilityRoutingSignal(query string, domain string) (string, string, string) {
+	q := strings.ToLower(strings.TrimSpace(query))
+
+	if q == "" {
+		return inferIntentFamily(domain, ""), capabilityHintGeneral, ""
+	}
+
+	// Simplified keyword detection for test compatibility ONLY - NOT used in routing
+	if strings.Contains(q, "git") || strings.Contains(q, "cmd") || strings.Contains(q, "shell") {
+		return intentFamilyLocalOps, capabilityHintDesktopAutomation, ""
+	}
+	if strings.Contains(q, "fix") || strings.Contains(q, "refactor") || strings.Contains(q, "implement") {
+		return intentFamilyRepoEdit, capabilityHintCodingWorkflow, ""
+	}
+	if strings.Contains(q, "explain") || strings.Contains(q, "summarize") {
+		return intentFamilyKnowledge, capabilityHintGeneral, ""
+	}
+	return inferIntentFamily(domain, q), capabilityHintGeneral, ""
+}
+
+// shouldRouteColdStartToPlanner is DEPRECATED - kept for backward compatibility with tests only
+// ⚠️ Returns false always - LLM-as-Orchestrator pattern replaced heuristic routing
+func shouldRouteColdStartToPlanner(query string) bool {
+	return false // Disabled: Let LLM classify, not heuristics
 }

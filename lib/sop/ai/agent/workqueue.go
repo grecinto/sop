@@ -10,6 +10,13 @@ import (
 	"github.com/sharedcode/sop/btree"
 )
 
+// Work item priorities - higher numbers = higher priority
+const (
+	PriorityUser            = 100 // User interjections - ALWAYS processed first
+	PrioritySystemResume    = 50  // Auto-resume paused WorkStream
+	PriorityPhaseSuccession = 10  // Code-enqueued next phase (default)
+)
+
 // WorkQueue manages the execution queue for multi-turn orchestration.
 // It enables capabilities to inject work items that execute as separate ReAct turns.
 type WorkQueue struct {
