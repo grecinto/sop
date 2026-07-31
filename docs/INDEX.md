@@ -63,6 +63,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 | [HYBRID_CLASSIFICATION_REASSESSMENT.md](HYBRID_CLASSIFICATION_REASSESSMENT.md) | **🔄 Post-CRUD Re-Assessment**: Pure LLM classification beats hybrid heuristics after CRUD filtering (complete economic analysis with math) |
 | [V2_ASK_REACT_LOOP_GAP_ANALYSIS.md](V2_ASK_REACT_LOOP_GAP_ANALYSIS.md) | **🔍 ReAct Loop Gap Analysis**: 7 gaps preventing optimal LLM orchestration with **enhanced adaptive/progressive retry system** (3-phase learning approach: LLM-controlled → progressive escalation → adaptive learning) |
 | [TIER1_REACT_GAP_FIXES_IMPLEMENTATION.md](TIER1_REACT_GAP_FIXES_IMPLEMENTATION.md) | **✅ IMPLEMENTED - Tier 1 Fixes**: Classification reasoning in system prompt + ToolProgressHint visibility (37 lines → +20-30% quality improvement) |
+| [TIER2A_LLM_CONTROLLED_RETRY_IMPLEMENTATION.md](TIER2A_LLM_CONTROLLED_RETRY_IMPLEMENTATION.md) | **✅ IMPLEMENTED - Tier 2A**: LLM-controlled retry via ToolProgressHint.SuggestedAction (45 lines → +10% retry efficiency, foundation for progressive escalation) |
 | [FILE_BACKED_TOOL_RESULTS.md](FILE_BACKED_TOOL_RESULTS.md) | ✅ Production-ready: File-backed tool results for large outputs, strategic analysis tools |
 | [SHELL_SESSION_PERSISTENCE.md](SHELL_SESSION_PERSISTENCE.md) | Persistent shell sessions for commands |
 | [DUAL_PTY_PARALLEL_EXECUTION.md](DUAL_PTY_PARALLEL_EXECUTION.md) | ✅ **Complete**: Dual-PTY support for parallel execution - 2 concurrent PTY processes for identical command behavior |
