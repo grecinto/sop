@@ -310,7 +310,9 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 		if err != nil {
 			emitReasoningEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), err, iteration+1))
 			if isRecoverableToolExecutionError(err) {
-				repairPlan := classifyRecoverableToolRepair(toolCall.Name, err)
+				// Tier 2A: Check if previous tool provided hint about retry strategy
+				lastHint := getLatestToolHint(toolResults)
+				repairPlan := classifyRecoverableToolRepair(toolCall.Name, err, lastHint)
 				if shouldEscalateRepairToClarification(repairAttempts) {
 					emitVerboseProgress(ctx, "Repair remained unresolved after the first retry; switching to clarification.")
 					pendingRepair = nil
@@ -2641,8 +2643,37 @@ func (r pendingToolRepair) allowsTool(toolName string) bool {
 	return toolName == r.ToolName
 }
 
-func classifyRecoverableToolRepair(toolName string, err error) pendingToolRepair {
+// Tier 2A: LLM-controlled retry strategy via ToolProgressHint
+func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProgressHint) pendingToolRepair {
 	repair := pendingToolRepair{ToolName: toolName, Strategy: nativeRepairStrategySameTool}
+	
+	// Tier 2A: Respect hint's suggested action if present
+	if hint != nil && hint.SuggestedAction != "" {
+		switch hint.SuggestedAction {
+		case "research_before_retry":
+			repair.Strategy = nativeRepairStrategyResearchFirst
+			repair.ResearchTool = "list_stores"
+			if len(hint.SuggestedNextTools) > 0 {
+				repair.ResearchTool = hint.SuggestedNextTools[0]
+			}
+			if len(hint.Tips) > 0 {
+				repair.ResearchReason = hint.Tips[0]
+			} else {
+				repair.ResearchReason = "Tool suggested research before retry"
+			}
+			log.Info("Tier 2A: Using hint-driven retry strategy",
+				"tool", toolName,
+				"strategy", "research_first",
+				"research_tool", repair.ResearchTool,
+				"reason", repair.ResearchReason)
+			return repair
+		case "give_up_and_clarify":
+			// Tool explicitly says this is unrecoverable - could escalate immediately
+			log.Info("Tier 2A: Tool suggests giving up", "tool", toolName)
+			// Fall through to default logic for now
+		}
+	}
+	
 	if toolName != "execute_script" || err == nil {
 		return repair
 	}
@@ -2666,6 +2697,15 @@ func classifyRecoverableToolRepair(toolName string, err error) pendingToolRepair
 		repair.ResearchReason = "The failure text points to unresolved schema or relation ambiguity."
 	}
 	return repair
+}
+
+// getLatestToolHint returns the hint from the most recent tool result, if any.
+// This is used by Tier 2A to allow tools to guide retry strategy.
+func getLatestToolHint(toolResults []nativeToolResult) *ai.ToolProgressHint {
+	if len(toolResults) == 0 {
+		return nil
+	}
+	return toolResults[len(toolResults)-1].Hint
 }
 
 func collectExecuteScriptValidationIssues(err error) []*executeScriptValidationError {

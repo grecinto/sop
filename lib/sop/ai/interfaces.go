@@ -852,6 +852,8 @@ type ToolProgressHint struct {
 	Tips               []string `json:"tips,omitempty"`
 	Clues              []string `json:"clues,omitempty"`
 	SuggestedNextTools []string `json:"suggested_next_tools,omitempty"`
+	// SuggestedAction guides retry strategy: "research_before_retry", "retry_with_changes", "give_up_and_clarify"
+	SuggestedAction    string   `json:"suggested_action,omitempty"`
 }
 
 // ToolResultEnvelope is an optional JSON result shape that tools can return.

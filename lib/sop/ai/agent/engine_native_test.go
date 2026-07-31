@@ -2670,11 +2670,11 @@ func TestEngineNative_RepairFormattingAndClassification(t *testing.T) {
 		"join mapping placeholder",
 		`{"relation":"users_orders","target":"orders_store"}`,
 	)
-	researchRepair := classifyRecoverableToolRepair("execute_script", validationErr)
+	researchRepair := classifyRecoverableToolRepair("execute_script", validationErr, nil)
 	if researchRepair.Strategy != nativeRepairStrategyResearchFirst || researchRepair.ResearchTool != "list_stores" {
 		t.Fatalf("expected validation error to trigger research-first repair, got %+v", researchRepair)
 	}
-	sameToolRepair := classifyRecoverableToolRepair("execute_script", fmt.Errorf("missing required args"))
+	sameToolRepair := classifyRecoverableToolRepair("execute_script", fmt.Errorf("missing required args"), nil)
 	if sameToolRepair.Strategy != nativeRepairStrategySameTool {
 		t.Fatalf("expected generic arg error to stay same-tool, got %+v", sameToolRepair)
 	}
