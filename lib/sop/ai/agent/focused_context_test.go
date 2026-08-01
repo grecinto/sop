@@ -210,6 +210,61 @@ func TestBuildSystemPrompt_IncludesAutomationToolFamilyContext(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_IncludesTaskGuidanceSynthesis(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+
+	prompt := ag.buildSystemPrompt(ctx, "fix failing tests", TaskContextClassification{
+		Domain:         "General",
+		RoutingGate:    RoutingGateFocused,
+		CapabilityHint: "investigation",
+	})
+
+	for _, expected := range []string{"Task Guidance Synthesis", "Selected Phase: investigation", "Selected Domain: General"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("expected prompt to contain %q, got: %s", expected, prompt)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_PrioritizesCompactTaskGuidanceSynthesis(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+
+	prompt := ag.buildSystemPrompt(ctx, "fix failing tests", TaskContextClassification{
+		Domain:         "General",
+		RoutingGate:    RoutingGateFocused,
+		CapabilityHint: "investigation",
+	})
+
+	var elements []PromptElement
+	if err := json.Unmarshal([]byte(prompt), &elements); err != nil {
+		t.Fatalf("expected buildSystemPrompt to return JSON prompt elements: %v\nPrompt: %s", err, prompt)
+	}
+
+	focusedContent := ""
+	for _, element := range elements {
+		if element.Component == ComponentFocusedContext {
+			focusedContent = element.Content
+			break
+		}
+	}
+	if focusedContent == "" {
+		t.Fatalf("expected focused execution context component in prompt: %s", prompt)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(focusedContent), "Task Guidance Synthesis") {
+		t.Fatalf("expected task guidance synthesis to lead the focused context, got: %s", focusedContent)
+	}
+	if !strings.Contains(focusedContent, "Primary directive") {
+		t.Fatalf("expected compact task guidance synthesis to include a primary directive, got: %s", focusedContent)
+	}
+	if strings.Contains(focusedContent, "Objective:") {
+		t.Fatalf("expected compact guidance to avoid verbose objective text, got: %s", focusedContent)
+	}
+}
+
 func TestBuildSystemPrompt_UsesClassifiedAutomationFamilies(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})

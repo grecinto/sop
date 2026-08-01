@@ -791,6 +791,30 @@ type SessionPayload struct {
 	LastInteractionSteps int
 	// ConversationHistory stores the active memory/transcript for the session.
 	ConversationHistory string
+	// CognitiveState is the shared session-brain snapshot that can be observed by
+	// the Ask pipeline, ReAct loop, workstreams, and governance policies.
+	CognitiveState *SessionCognitiveState
+}
+
+// SessionCognitiveState is a compact, shared view of the current session's
+// cognitive state. It is intentionally lightweight so it can be updated
+// automatically from the existing Ask/ReAct/phase machinery without becoming a
+// separate controller.
+type SessionCognitiveState struct {
+	CurrentTurn          int
+	CurrentActor         string
+	CurrentPhase         string
+	CurrentQuery         string
+	PendingClarification bool
+	ClarificationStatus  string
+	QueuePaused          bool
+	RetryTier            int
+	EscalationTier       int
+	LastToolOutcome      string
+	TerminalReason       string
+	LastDecision         string
+	LastDecisionReason   string
+	MemorySignals        []string
 }
 
 // ClarificationState tracks a pending assistant clarification before the target ask resumes.

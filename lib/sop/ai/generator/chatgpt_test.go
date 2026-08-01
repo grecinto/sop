@@ -578,6 +578,13 @@ func TestBuildChatGPTResponsesRequest_SetsTemperatureZeroForGPT4O(t *testing.T) 
 	}
 }
 
+func TestChatGPTSystemInstructions_IncludeStructuredRepairStateGuidance(t *testing.T) {
+	instructions := chatGPTSystemInstructions("Use tools when needed.", true)
+	if !strings.Contains(instructions, "structured envelope with retry_guidance and repair_directive") {
+		t.Fatalf("expected structured repair state guidance in system instructions, got %q", instructions)
+	}
+}
+
 func TestChatGPTOwnedReActLoop_RunReturnsBuildErrorForInvalidToolSchema(t *testing.T) {
 	loop := newChatGPTOwnedReActLoop(&chatgpt{model: "gpt-4o"})
 	_, err := loop.Run(context.Background(), ai.ReasoningRequest{

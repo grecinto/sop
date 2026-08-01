@@ -378,7 +378,7 @@ func chatGPTSystemInstructions(systemPrompt string, hasTools bool) string {
 	if !hasTools {
 		return base
 	}
-	guardrail := "If a tool is needed, emit a native function_call instead of assistant text. Do not print tool names, tool arguments, script parameters, JSON ASTs, CSV step tables, or markdown code blocks as a substitute for a tool call. For execute_script specifically, place the script only inside the function_call arguments and never display the script body in assistant text."
+	guardrail := "If a tool is needed, emit a native function_call instead of assistant text. Do not print tool names, tool arguments, script parameters, JSON ASTs, CSV step tables, or markdown code blocks as a substitute for a tool call. For execute_script specifically, place the script only inside the function_call arguments and never display the script body in assistant text. When a tool result contains a structured envelope with retry_guidance and repair_directive, treat that envelope as the primary repair state and follow it over any older prose-only retry hint."
 	if base == "" {
 		return guardrail
 	}
@@ -637,7 +637,25 @@ func summarizeChatGPTContinuationToolOutput(result ai.ReActToolResult) string {
 	executionMode := result.ExecutionMode
 	trimmed := strings.TrimSpace(resultText)
 	if strings.Contains(trimmed, "Retry instruction:") || strings.Contains(trimmed, "Clarification required:") || strings.Contains(trimmed, "Tool execution error:") {
-		return ai.AppendRetryGuidanceState(trimmed, result.RetryGuidance)
+		base := ai.AppendRetryGuidanceState(trimmed, result.RetryGuidance)
+		if result.RetryGuidance == nil {
+			return base
+		}
+		directive := ai.BuildRepairDirectiveFromRetryGuidance(toolName, result.RetryGuidance)
+		envelope := map[string]any{
+			"tool_error": map[string]any{
+				"message": trimmed,
+			},
+			"retry_guidance":   result.RetryGuidance,
+			"repair_directive": directive,
+		}
+		if raw, err := json.Marshal(envelope); err == nil {
+			if strings.TrimSpace(base) != "" {
+				return base + "\n" + string(raw)
+			}
+			return string(raw)
+		}
+		return base
 	}
 	return SummarizeToolResultForLLM(toolName, resultText, executionMode)
 }

@@ -130,6 +130,30 @@ func TestAsk_PersistsPhasePlanForDiscoveryColdStart(t *testing.T) {
 	}
 }
 
+func TestShouldPauseAskQueue_WhenClarificationStateIsPending(t *testing.T) {
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		Variables: make(map[string]any),
+		ClarificationState: &ai.ClarificationState{
+			Status: "pending",
+		},
+	})
+	if !shouldPauseAskQueue(ctx) {
+		t.Fatal("expected pending clarification state to pause ask queue processing")
+	}
+}
+
+func TestShouldPauseAskQueue_WhenClarificationStateIsResolved(t *testing.T) {
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		Variables: make(map[string]any),
+		ClarificationState: &ai.ClarificationState{
+			Status: "resolved",
+		},
+	})
+	if shouldPauseAskQueue(ctx) {
+		t.Fatal("did not expect resolved clarification state to pause ask queue processing")
+	}
+}
+
 func TestAskCore_QueuedPhaseActorUsesPersistedAskClassification(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.registry = NewRegistry()

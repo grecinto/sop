@@ -61,6 +61,29 @@ func TestSummarizeChatGPTContinuationToolOutput_AppendsStructuredRetryGuidance(t
 	}
 }
 
+func TestSummarizeChatGPTContinuationToolOutput_WrapsRetryGuidanceInStructuredEnvelope(t *testing.T) {
+	got := summarizeChatGPTContinuationToolOutput(ai.ReActToolResult{
+		Name:   "execute_script",
+		Result: "Tool execution error: missing required field",
+		RetryGuidance: &ai.RetryGuidance{
+			ToolName:        "execute_script",
+			Tier:            ai.RetryTierQuickFix,
+			Strategy:        ai.RepairStrategySameTool,
+			AllowedTool:     "execute_script",
+			NextAction:      ai.ReActNextActionRetrySameTool,
+			FailureCount:    1,
+			SoftRetryBudget: 2,
+			HardRetryBudget: 4,
+		},
+	})
+	if !strings.Contains(got, "\"retry_guidance\"") {
+		t.Fatalf("expected structured retry guidance envelope, got %q", got)
+	}
+	if !strings.Contains(got, "\"repair_directive\"") {
+		t.Fatalf("expected repair directive in structured envelope, got %q", got)
+	}
+}
+
 func TestSummarizeGeminiContinuationToolOutput_UsesPreviewForNonFinalResults(t *testing.T) {
 	got := summarizeGeminiContinuationToolOutput("execute_script", map[string]any{"result": `[{"id":1},{"id":2},{"id":3}]`}, ai.ReActToolResultExecutionModeStructuredSummary)
 	payload, ok := got.(map[string]any)

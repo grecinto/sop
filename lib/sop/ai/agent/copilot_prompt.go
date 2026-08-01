@@ -48,6 +48,66 @@ func (a *CopilotAgent) buildStoresToolDescriptionContext() string {
 	}, "\n")
 }
 
+func buildTaskGuidanceSynthesis(query string, taskClassification TaskContextClassification) string {
+	trimmedQuery := strings.TrimSpace(query)
+	if trimmedQuery == "" {
+		return ""
+	}
+
+	phase := strings.TrimSpace(taskClassification.CapabilityHint)
+	if phase == "" {
+		lower := strings.ToLower(trimmedQuery)
+		switch {
+		case strings.Contains(lower, "fix") || strings.Contains(lower, "debug") || strings.Contains(lower, "error") || strings.Contains(lower, "failing") || strings.Contains(lower, "broken") || strings.Contains(lower, "problem"):
+			phase = "investigation"
+		case strings.Contains(lower, "plan") || strings.Contains(lower, "design") || strings.Contains(lower, "architecture") || strings.Contains(lower, "approach"):
+			phase = "planning"
+		case strings.Contains(lower, "review") || strings.Contains(lower, "validate") || strings.Contains(lower, "check") || strings.Contains(lower, "verify"):
+			phase = "review"
+		case strings.Contains(lower, "deliver") || strings.Contains(lower, "summary") || strings.Contains(lower, "handoff"):
+			phase = "delivery"
+		case strings.Contains(lower, "implement") || strings.Contains(lower, "add") || strings.Contains(lower, "update") || strings.Contains(lower, "patch") || strings.Contains(lower, "change"):
+			phase = "execution"
+		default:
+			phase = "intake"
+		}
+	}
+
+	domain := strings.TrimSpace(taskClassification.Domain)
+	if domain == "" {
+		domain = "General"
+	}
+
+	lines := []string{
+		"Task Guidance Synthesis",
+		fmt.Sprintf("- Selected Phase: %s", phase),
+		fmt.Sprintf("- Selected Domain: %s", domain),
+	}
+
+	switch phase {
+	case "investigation":
+		lines = append(lines, "- Primary directive: inspect the situation, gather evidence, and form a clear hypothesis before acting.")
+	case "planning":
+		lines = append(lines, "- Primary directive: outline a concrete plan, identify dependencies, and state the main risks or assumptions.")
+	case "execution":
+		lines = append(lines, "- Primary directive: make the smallest plausible change that addresses the request and validate it immediately.")
+	case "review":
+		lines = append(lines, "- Primary directive: validate the work against the requirements, check for regressions, and call out unresolved issues clearly.")
+	case "delivery":
+		lines = append(lines, "- Primary directive: provide a concise handoff summary of the outcome, evidence, and follow-up actions.")
+	default:
+		lines = append(lines, "- Primary directive: clarify the scope if needed, then proceed with the most relevant next step.")
+	}
+
+	lower := strings.ToLower(trimmedQuery)
+	if strings.Contains(lower, "test") || strings.Contains(lower, "failing") || strings.Contains(lower, "error") {
+		lines = append(lines, "- Validation note: prefer targeted verification and rerun the relevant checks after changes.")
+	}
+
+	lines = append(lines, "- Guardrail: avoid broad or speculative changes and stay grounded in the available evidence.")
+	return strings.Join(lines, "\n")
+}
+
 func (a *CopilotAgent) buildSpacesToolDescriptionContext() string {
 	return strings.Join([]string{
 		"Structured Context: Spaces Tools",
@@ -137,12 +197,11 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			focusedExecutionContext = askOutcome
 		}
 	}
-	// Legacy coding workflow context (can be deprecated later)
-	if codingWorkflowContext := a.getCodingWorkflowContext(); codingWorkflowContext != "" {
+	if guidance := buildTaskGuidanceSynthesis(query, taskClassification); guidance != "" {
 		if focusedExecutionContext != "" {
-			focusedExecutionContext = codingWorkflowContext + "\n\n" + focusedExecutionContext
+			focusedExecutionContext = guidance + "\n\n" + focusedExecutionContext
 		} else {
-			focusedExecutionContext = codingWorkflowContext
+			focusedExecutionContext = guidance
 		}
 	}
 	if plannerContext := a.getPlannerContext(); plannerContext != "" {

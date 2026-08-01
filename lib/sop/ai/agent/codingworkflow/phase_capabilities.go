@@ -246,7 +246,7 @@ OBJECTIVE:
 - Gather and clarify user requirements
 - Build initial context about the task
 - Identify scope, constraints, and success criteria
-- Output: Clear requirements list for investigation/planning
+- Output: A clear requirements artifact for downstream phases
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on request clarity and user engagement style:
@@ -316,10 +316,10 @@ func (c *PhaseCapability) buildInvestigationContext() string {
 	return `PHASE: Investigation & Analysis
 
 OBJECTIVE:
-- Understand current codebase state
-- Identify relevant files, functions, patterns
-- Trace dependencies and data flows
-- Output: Evidence and analysis for planning
+- Understand the relevant codebase state
+- Identify relevant files, functions, patterns, and dependencies
+- Produce evidence that can support planning or execution
+- Output: A structured investigation artifact with findings and next-step guidance
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on task complexity and user preference:
@@ -337,12 +337,14 @@ This phase supports TWO interaction modes - choose based on task complexity and 
 
 WORKFLOW:
 1. Call investigation_build_context to understand repository structure
-2. Call investigation_inspect_repo to see current state and changes
-3. Call investigation_search_repo to find relevant code, patterns, or similar implementations
-4. Call investigation_list_changed_files to avoid conflicts with in-progress work
-5. Document findings in evidence list
-6. Capture artifact with evidence and analysis
-7. Transition to planning when investigation is complete
+2. Inspect the request, the current evidence, and any relevant failure or error signals before proposing a fix.
+3. Gather evidence from the repository, tests, and surrounding code before moving to planning.
+4. Call investigation_inspect_repo to see current state and changes
+5. Call investigation_search_repo to find relevant code, patterns, or similar implementations
+6. Call investigation_list_changed_files to avoid conflicts with in-progress work
+7. Document findings in evidence list
+8. Capture artifact with evidence and analysis
+9. Transition to planning when investigation is complete
 
 COMPLETION CRITERIA:
 □ Repository context gathered (structure understood)
@@ -394,10 +396,10 @@ func (c *PhaseCapability) buildPlanningContext() string {
 	return `PHASE: Planning & Design
 
 OBJECTIVE:
-- Design concrete, actionable implementation strategy
-- Create ordered list of implementation steps
-- Identify files, functions, and code locations
-- Output: Concrete execution plan with >= 3 steps
+- Turn gathered context into a concrete implementation strategy
+- Create an ordered set of implementation steps
+- Identify relevant files, functions, and code locations
+- Output: A concrete execution plan with >= 3 steps
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on change complexity and risk:
@@ -508,10 +510,10 @@ func (c *PhaseCapability) buildExecutionContext() string {
 	return `PHASE: Execution & Implementation
 
 OBJECTIVE:
-- Apply planned changes to codebase
-- Follow the execution plan from planning phase
-- Validate changes through testing
-- Output: Applied patches and test results
+- Apply planned changes to the codebase
+- Follow the execution plan from the planning phase
+- Validate the work with the most relevant evidence
+- Output: Applied changes and validation results
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - user approval is MANDATORY for safety in BOTH modes:
@@ -540,7 +542,7 @@ WORKFLOW:
    d. Call execution_run_tests to validate
 3. Capture artifact with results
 4. If tests pass: Transition to review
-5. If tests fail: Iterate or return to planning
+5. If tests fail: inspect the failure, adjust the patch, and rerun the same targeted tests before expanding scope or returning to planning
 
 COMPLETION CRITERIA:
 □ All planned changes applied
@@ -591,15 +593,16 @@ TOOL SEQUENCE:
 5. execution_capture (save results)
 
 QUALITY STANDARDS:
-✅ SAFE: Preview → Approval → Apply → Test
+✅ SAFE: Preview → Approval → Apply → Validate
 ❌ UNSAFE: Apply without preview
 ✅ INCREMENTAL: Apply one logical change at a time
 ❌ BULK: Apply all changes at once without validation
+✅ GROUNDED: Validate changes with the most relevant evidence and keep the fix scoped to the observed need
 
 USER INTERACTION:
 ALWAYS ASK:
 - Before applying patches (show preview)
-- When tests fail (explain failure, propose fix)
+- When validation fails (explain the result, propose the next step)
 - When encountering unexpected state`
 }
 
@@ -607,10 +610,10 @@ func (c *PhaseCapability) buildReviewContext() string {
 	return `PHASE: Review & Validation
 
 OBJECTIVE:
-- Validate implementation meets requirements
-- Run comprehensive tests
-- Check code quality and standards
-- Output: Validation results and approval
+- Validate that the implementation meets the requirements
+- Review the resulting changes and evidence
+- Check for regressions or unresolved issues
+- Output: Validation results and approval status
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on testing complexity and findings:
@@ -699,9 +702,9 @@ func (c *PhaseCapability) buildDeliveryContext() string {
 
 OBJECTIVE:
 - Summarize completed work
-- Document changes and decisions
-- Prepare handoff to user
-- Output: Comprehensive delivery summary
+- Document key changes and decisions
+- Prepare a clear handoff to the user
+- Output: A concise delivery summary
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on delivery scope:
@@ -829,13 +832,13 @@ func (c *PhaseCapability) BuildInstructions(query string, state capabilities.Rou
 	case "intake":
 		return "Use Intake capability to: 1) Ask clarifying questions, 2) Gather requirements, 3) Define scope and constraints, 4) Capture requirements artifact, 5) Transition to investigation when clear."
 	case "investigation":
-		return "Use Investigation capability to: 1) Build context, 2) Inspect current code, 3) Search for patterns, 4) List changed files, 5) Document evidence, 6) Transition to planning when analysis complete."
+		return "Use Investigation capability to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) Document evidence, 6) Transition to planning when analysis complete."
 	case "planning":
 		return "Use Planning capability to: 1) Build context, 2) Research patterns, 3) Generate concrete plan with file/function references, 4) Present plan to user, 5) Capture artifact with status='ready_for_execution', 6) Transition to execution when approved."
 	case "execution":
-		return "Use Execution capability to: 1) Preview patches, 2) Get user approval, 3) Apply patches incrementally, 4) Run tests after each change, 5) Capture results, 6) Transition to review when complete. SAFETY: Always preview before applying."
+		return "Use Execution capability to: 1) Preview patches, 2) Get user approval, 3) Apply patches incrementally, 4) Run relevant validation after each change, 5) Capture results, 6) Transition to review when complete. SAFETY: Always preview before applying."
 	case "review":
-		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) Run comprehensive tests, 4) Validate against requirements, 5) Capture validation results, 6) Transition to delivery if approved or back to execution if issues found."
+		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) Run relevant validation, 4) Validate against requirements, 5) Capture validation results, 6) Transition to delivery if approved or back to execution if issues found."
 	case "delivery":
 		return "Use Delivery capability to: 1) Review all phase artifacts, 2) Summarize changes made, 3) Document decisions, 4) Capture delivery summary, 5) Signal exit to complete workflow."
 	default:

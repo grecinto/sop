@@ -92,6 +92,42 @@ func containsRequiredString(values []any, target string) bool {
 	return false
 }
 
+func TestInvestigationPhaseBuildContext_UsesGeneralInvestigationGuidance(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewInvestigationPhaseCapability(infra)
+
+	result := cap.BuildContext("fix failing tests", capabilities.RoutingState{})
+	checks := []string{"Inspect the request", "Gather evidence", "Transition to planning"}
+	for _, check := range checks {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected investigation context to include %q, got %q", check, result)
+		}
+	}
+	for _, disallowed := range []string{"reproduce the failure", "go test", "pytest", "rerun the same tests", "smallest plausible fix"} {
+		if strings.Contains(result, disallowed) {
+			t.Fatalf("expected investigation context to avoid hard-coded %q guidance, got %q", disallowed, result)
+		}
+	}
+}
+
+func TestExecutionPhaseBuildContext_UsesGeneralValidationGuidance(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewExecutionPhaseCapability(infra)
+
+	result := cap.BuildContext("apply a small change", capabilities.RoutingState{})
+	checks := []string{"preview", "user approval", "validate"}
+	for _, check := range checks {
+		if !strings.Contains(strings.ToLower(result), check) {
+			t.Fatalf("expected execution context to include %q, got %q", check, result)
+		}
+	}
+	for _, disallowed := range []string{"TEST-FIX LOOP", "reproduce → inspect → patch → rerun targeted tests until green"} {
+		if strings.Contains(result, disallowed) {
+			t.Fatalf("expected execution context to avoid legacy guidance %q, got %q", disallowed, result)
+		}
+	}
+}
+
 func TestPlanningPhaseCapabilityExposesToolsAndPersistsArtifact(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewPlanningPhaseCapability(infra)

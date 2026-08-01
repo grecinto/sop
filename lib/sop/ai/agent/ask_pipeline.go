@@ -110,6 +110,10 @@ func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai
 		// - Completed answer: continue to next queue item
 		// - Clarification question: pause queue, return to user
 		// Capabilities may have enqueued next steps during execution
+		if shouldPauseAskQueue(itemCtx) {
+			log.Info("Pausing queue after pending clarification state", "actor", item.Actor)
+			break
+		}
 	}
 
 	return lastResponse, nil
@@ -118,6 +122,18 @@ func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai
 // askCore is the core Ask→ReAct transaction with Ask routing for Gate 3.
 // Preserves all shared infrastructure (Gates 1/2, intent, KB, lifecycle, epilogue).
 // ONLY Cold Start gate (Gate 3) uses Phase Factory + LLM classification.
+func shouldPauseAskQueue(ctx context.Context) bool {
+	payload := ai.GetSessionPayload(ctx)
+	if payload == nil || payload.ClarificationState == nil {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(payload.ClarificationState.Status))
+	if status == "" {
+		status = "pending"
+	}
+	return status == "pending" || status == "clarifying" || status == "needs_clarification"
+}
+
 func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// 1. Setup and early validation (same as V1)
 	ctx = a.applyAskConfig(ctx, cfg)
@@ -657,6 +673,11 @@ func (a *CopilotAgent) buildPhasePrompt(ctx context.Context, query string, class
 		strings.Join(classification.Domains, ", "),
 		strings.Join(classification.PhasePlan, " → "),
 		strings.Join(phaseInstructions, "\n\n---\n\n"))
+
+	phaseContext += "\n\n" + buildTaskGuidanceSynthesis(query, TaskContextClassification{
+		Domain:         strings.Join(classification.Domains, ","),
+		CapabilityHint: classification.Phase,
+	})
 
 	// Gap Fix #1: Include classification reasoning to help LLM make better tool decisions
 	if classification.Reasoning != "" {
