@@ -138,6 +138,7 @@ func (rc *RetryCoordinator) ClassifyRepair(
 	toolName string,
 	err error,
 	hint *ai.ToolProgressHint,
+	recentlyResearched bool,
 ) RepairPlan {
 	plan := RepairPlan{
 		ToolName: toolName,
@@ -182,9 +183,13 @@ func (rc *RetryCoordinator) ClassifyRepair(
 	if strings.Contains(message, "relation") ||
 		strings.Contains(message, "schema") ||
 		strings.Contains(message, "join mapping") {
-		plan.Strategy = RepairStrategyResearchFirst
-		plan.ResearchTool = "list_stores"
-		plan.ResearchReason = "The failure text points to unresolved schema or relation ambiguity."
+		// Only suggest research if we haven't already done it recently
+		if !recentlyResearched {
+			plan.Strategy = RepairStrategyResearchFirst
+			plan.ResearchTool = "list_stores"
+			plan.ResearchReason = "The failure text points to unresolved schema or relation ambiguity."
+		}
+		// If we already researched, keep same_tool strategy for direct retry
 	}
 
 	return plan
@@ -221,7 +226,7 @@ func (rc *RetryCoordinator) FormatRepairDirective(plan RepairPlan, attemptedTool
 }
 
 // AllowsTool checks if a tool is allowed under the current repair plan.
-// For research_first strategy, only the research tool is allowed.
+// For research_first strategy, only the research tool is allowed (must complete research first).
 // For same_tool strategy, only the failed tool is allowed.
 func (rc *RetryCoordinator) AllowsTool(plan RepairPlan, toolName string) bool {
 	if plan.Strategy == RepairStrategyResearchFirst {

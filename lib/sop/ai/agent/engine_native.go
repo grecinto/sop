@@ -123,380 +123,17 @@ func resolveOwnedReActLoop(req ai.ReasoningRequest) ai.ReActLoop {
 }
 
 func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
-	if req.Generator == nil {
-		if e.EnableObfuscation {
-			return ai.ReasoningResponse{FinalText: obfuscation.GlobalObfuscator.DeobfuscateText(req.ContextText)}, nil
-		}
-		return ai.ReasoningResponse{FinalText: req.ContextText}, nil
-	}
+	// Phase 2: Use unified engine with native adapter
+	adapter := NewNativeAdapter(e.EnableObfuscation, e.MaxTokens)
+	unifiedEngine := NewUnifiedReActEngine(adapter)
+	unifiedEngine.EnableObfuscation = e.EnableObfuscation
+	unifiedEngine.MaxTokens = e.MaxTokens
 
-	var tools []ai.ToolDefinition
-	var err error
-	if req.Executor != nil {
-		tools, err = req.Executor.ListTools(ctx)
-		if err != nil {
-			return ai.ReasoningResponse{}, fmt.Errorf("failed to list tools: %w", err)
-		}
-	}
-	log.Info("Native ReAct Engine Start",
-		"generator", req.Generator.Name(),
-		"default_format", getRequestedOutputFormat(ctx),
-		"tool_count", len(tools),
-		"tools", summarizeToolDefinitions(tools),
-		"query_chars", len(req.UserQuery),
-		"system_prompt_chars", len(req.SystemPrompt),
-	)
-	emitVerboseProgress(ctx, "Planning request with native multi-step loop.")
+	log.Info("Native ReAct Engine using Unified Engine",
+		"adapter", adapter.Name(),
+		"max_iterations", adapter.MaxIterations())
 
-	executedToolCalls := make([]ai.ToolCall, 0)
-	toolResults := make([]nativeToolResult, 0)
-	budgetState := newAskLoopBudgetState()
-	repairAttempts := 0
-	var pendingRepair *pendingToolRepair
-	var pendingMalformedCall *pendingGenerationRepair
-	var pendingContinuation *ai.ToolCallContinuation
-	var escalationState map[string]any // Track Tier 3 escalation for phase succession
-	strategy := resolveReActTurnStrategy(req)
-	for iteration := 0; iteration < budgetState.maxIterations && iteration < budgetState.allowedIterations; iteration++ {
-		// Check for context cancellation at the start of each iteration
-		select {
-		case <-ctx.Done():
-			log.Warn("Native ReAct Engine: Request canceled by client", "iteration", iteration+1, "error", ctx.Err())
-			return ai.ReasoningResponse{}, fmt.Errorf("request canceled during iteration %d: %w", iteration+1, ctx.Err())
-		default:
-		}
-
-		emitVerboseProgress(ctx, "Reasoning iteration %d of %d.", iteration+1, budgetState.allowedIterations)
-		temperature := nativeReActToolCallTemperature
-		thinkingLevel := "low" // Default: strict schema adherence for tool calls
-		if pendingRepair != nil || pendingMalformedCall != nil {
-			temperature = nativeReActRepairTemperature
-			thinkingLevel = "medium" // More reasoning for repair strategies
-		}
-		thinkingLevel = NormalizeThinkingLevelForGenerator(req.Generator, "", "", thinkingLevel)
-		genOpts := ai.GenOptions{
-			SystemPrompt:  req.SystemPrompt,
-			MaxTokens:     e.MaxTokens,
-			Temperature:   temperature,
-			ThinkingLevel: thinkingLevel,
-			Tools:         tools,
-			ToolCallContinuations: func() []ai.ToolCallContinuation {
-				if pendingContinuation == nil {
-					return nil
-				}
-				return []ai.ToolCallContinuation{*pendingContinuation}
-			}(),
-		}
-		turn := ai.ReActTurn{
-			Iteration:       iteration + 1,
-			UserQuery:       req.UserQuery,
-			RepairDirective: latestNativeRepairDirective(toolResults),
-			LoopState:       snapshotReActLoopState(iteration+1, budgetState, repairAttempts, pendingRepair, pendingMalformedCall != nil, toolResults, genOpts.ToolCallContinuations),
-			Options:         genOpts,
-			ToolResults:     cloneReActToolResults(toolResults),
-			FinalTurn:       false,
-		}
-		mainPrompt := ""
-		promptProfile := PromptBudgetProfile{}
-		promptReport := PromptBudgetReport{}
-		if !shouldBypassReActPrompt(strategy, turn) {
-			promptProfile = nativeReActPromptBudgetProfile()
-			mainPrompt, promptReport = buildNativeReActPromptWithReport(req, toolResults, buildAskAnchoredMRUState(toolResults), promptProfile)
-		}
-		effectivePrompt, effectiveOpts := prepareReActTurn(ctx, strategy, turn, mainPrompt)
-		log.Info("Native ReAct Iteration Context",
-			"iteration", iteration+1,
-			"tool_results_count", len(toolResults),
-			"prompt_chars", len(mainPrompt),
-			"prompt", formatLogSeparatedMessage("prompt", mainPrompt),
-			"effective_prompt_chars", len(effectivePrompt),
-			"effective_prompt", formatLogSeparatedMessage("effective_prompt", effectivePrompt),
-		)
-		if firstTrimmed := firstTrimmedPromptComponent(promptProfile, promptReport); firstTrimmed != "" {
-			emitVerboseProgress(ctx, "Prompt budget trimmed %s first; reduced components: %s.", firstTrimmed, summarizePromptBudgetTrim(promptReport))
-			log.Info("Native ReAct Prompt Budget Applied", "phase", "iteration", "iteration", iteration+1, "trimmed_first", firstTrimmed, "trimmed", summarizePromptBudgetTrim(promptReport), "final_chars", len(mainPrompt))
-		}
-		emitVerboseProgress(ctx, "Waiting for model response.")
-		output, err := req.Generator.Generate(ctx, effectivePrompt, effectiveOpts)
-		pendingContinuation = nil
-		if err != nil {
-			if isRecoverableGenerationError(err) {
-				emitVerboseProgress(ctx, "Model emitted a malformed native tool call; retrying.")
-				pendingMalformedCall = &pendingGenerationRepair{}
-				toolResults = append(toolResults, nativeToolResult{
-					Name:   "native_tool_call",
-					Result: formatRecoverableGenerationError(err),
-				})
-				log.Warn("Native ReAct Engine Recoverable Generation Failure", "error", err)
-				continue
-			}
-			return ai.ReasoningResponse{}, fmt.Errorf("generation failed: %w", err)
-		}
-		pendingMalformedCall = nil
-		rawOutputText := output.Text
-		recoveredTextualToolCall := false
-		if len(output.ToolCalls) == 0 {
-			if recoveredCall, ok, recoverErr := extractEmbeddedNativeToolCall(output.Text); ok {
-				if recoverErr != nil {
-					emitVerboseProgress(ctx, "Model emitted a malformed native tool call; retrying.")
-					pendingMalformedCall = &pendingGenerationRepair{}
-					toolResults = append(toolResults, nativeToolResult{
-						Name:   "native_tool_call",
-						Result: formatRecoverableGenerationError(recoverErr),
-					})
-					log.Warn("Native ReAct Engine Recoverable Textual Tool Call Failure", "error", recoverErr)
-					continue
-				}
-				recoveredTextualToolCall = true
-				log.Info("Native ReAct Engine Recovered Textual Tool Call",
-					"iteration", iteration+1,
-					"tool", recoveredCall.Name,
-					"recovered_textual_tool_call", true,
-					"arg_keys", summarizeToolArgKeys(recoveredCall.Args),
-					"llm_generated_script", formatLLMGeneratedScriptForLog(recoveredCall.Name, recoveredCall.Args),
-				)
-				output.ToolCalls = []ai.ToolCall{recoveredCall}
-				output.Text = ""
-			}
-		}
-		log.Info("Native ReAct Engine Output",
-			"iteration", iteration+1,
-			"text_chars", len(rawOutputText),
-			"text", formatLogSeparatedMessage("model_output", rawOutputText),
-			"tool_call_count", len(output.ToolCalls),
-			"recovered_textual_tool_call", recoveredTextualToolCall,
-		)
-
-		if req.Executor == nil || len(output.ToolCalls) == 0 {
-			emitVerboseProgress(ctx, "No further tools required; preparing final answer.")
-			outcomeRecipes := summarizeOutcomeRecipes(toolResults)
-			if shouldPreserveStructuredToolResult(ctx, toolResults) {
-				return ai.ReasoningResponse{
-					FinalText:       preserveStructuredToolResult(toolResults[len(toolResults)-1].Result, e.EnableObfuscation),
-					ToolCalls:       executedToolCalls,
-					OutcomeFacts:    summarizeOutcomeFacts(toolResults),
-					OutcomeRecipes:  outcomeRecipes,
-					EscalationState: escalationState,
-				}, nil
-			}
-
-			finalText := output.Text
-			if e.EnableObfuscation {
-				finalText = obfuscation.GlobalObfuscator.DeobfuscateText(output.Text)
-			}
-
-			return ai.ReasoningResponse{
-				FinalText:       finalText,
-				ToolCalls:       executedToolCalls,
-				OutcomeFacts:    summarizeOutcomeFacts(toolResults),
-				OutcomeRecipes:  outcomeRecipes,
-				EscalationState: escalationState,
-			}, nil
-		}
-
-		toolCall := output.ToolCalls[0]
-		if pendingRepair != nil && !pendingRepair.allowsTool(toolCall.Name) {
-			emitVerboseProgress(ctx, "Tool `%s` must be corrected before other actions.", pendingRepair.ToolName)
-			toolResults = append(toolResults, nativeToolResult{
-				Name:   pendingRepair.ToolName,
-				Result: formatPendingRepairReminder(*pendingRepair, toolCall.Name),
-			})
-			log.Warn("Native ReAct Engine Deferred Non-Repair Tool Call", "expected_tool", pendingRepair.ToolName, "received_tool", toolCall.Name)
-			continue
-		}
-		// The model produced a native tool call such as "search_space".
-		// This is the dispatch point: the engine hands that name + args to the executor.
-		emitVerboseProgress(ctx, "Calling tool `%s`.", toolCall.Name)
-		log.Info("Native React Engine Tool Call",
-			"iteration", iteration+1,
-			"tool", toolCall.Name,
-			"arg_keys", summarizeToolArgKeys(toolCall.Args),
-			"llm_generated_script", formatLLMGeneratedScriptForLog(toolCall.Name, toolCall.Args),
-		)
-
-		sanitizeToolCallArgs(toolCall.Args, e.EnableObfuscation)
-		emitReasoningEvent(req, ai.ReasoningEventToolCall, ai.BuildToolCallEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), iteration+1))
-
-		execCtx := context.WithValue(ctx, ai.CtxKeyNativeToolHints, true)
-		priorRepair := pendingRepair
-		// req.Executor is the registered runtime (CopilotAgent). Execute() resolves
-		// the tool name from the registry and runs the matching handler.
-		// Execute now handles file-backed storage internally for all engines.
-		rawResult, err := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
-		if err != nil {
-			emitReasoningEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), err, iteration+1))
-			if isRecoverableToolExecutionError(err) {
-				// Tier 2A/2B: Check hint and determine appropriate retry tier
-				lastHint := getLatestToolHint(toolResults)
-				errorMessage := err.Error()
-				retryTier := determineRetryTier(errorMessage, repairAttempts, lastHint)
-				
-				repairPlan := classifyRecoverableToolRepair(toolCall.Name, err, lastHint)
-				repairPlan.Tier = retryTier
-				
-				// Tier 2B: Log tier decision
-				log.Info("Tier 2B: Progressive retry tier determined",
-					"tool", toolCall.Name,
-					"tier", int(retryTier),
-					"failure_count", repairAttempts,
-					"strategy", repairPlan.Strategy)
-				
-				if retryTier == TierClarify || shouldEscalateRepairToClarification(repairAttempts) {
-					emitVerboseProgress(ctx, "Tier 3 (Clarify): Escalating to user after %d failures.", repairAttempts)
-					
-					// Capture escalation state for phase succession (backward transitions)
-					escalationState = map[string]any{
-						"tier":             3,
-						"failed_tool":      toolCall.Name,
-						"failure_count":    repairAttempts,
-						"strategy":         repairPlan.Strategy,
-						"suggested_action": "backward_phase_transition",
-						"error_type":       errorMessage,
-					}
-					
-					pendingRepair = nil
-					toolResults = appendOrReplaceRetriedToolResult(toolResults, nativeToolResult{
-						Name:   toolCall.Name,
-						Result: formatClarificationRequiredToolError(repairPlan, toolCall.Args, err),
-						Args:   cloneToolEventMap(toolCall.Args),
-					}, priorRepair, toolCall.Name)
-					log.Warn("Native ReAct Engine Escalated Repair To Clarification (Tier 3)", "tool", toolCall.Name, "error", err, "attempts", repairAttempts)
-					continue
-				}
-				repairAttempts++
-				
-				// Tier 2B: Emit tier-specific progress message
-				switch retryTier {
-				case TierQuickFix:
-					emitVerboseProgress(ctx, "Tier 1 (Quick Fix): Tool `%s` needs corrected arguments; retrying.", toolCall.Name)
-				case TierResearch:
-					emitVerboseProgress(ctx, "Tier 2 (Research): Tool `%s` requires research before retry.", toolCall.Name)
-				default:
-					emitVerboseProgress(ctx, "Tool `%s` needs corrected arguments; retrying.", toolCall.Name)
-				}
-				
-				pendingRepair = &repairPlan
-				toolResults = appendOrReplaceRetriedToolResult(toolResults, nativeToolResult{
-					Name:   toolCall.Name,
-					Result: formatRecoverableToolError(repairPlan, toolCall.Args, err),
-					Args:   cloneToolEventMap(toolCall.Args),
-				}, priorRepair, toolCall.Name)
-				log.Warn("Native ReAct Engine Recoverable Tool Failure", "tool", toolCall.Name, "error", err)
-				continue
-			}
-			log.Error("Native ReAct Engine Tool Failure", "tool", toolCall.Name, "error", err)
-			return ai.ReasoningResponse{}, fmt.Errorf("tool execution failed")
-		}
-		// Extract result, hint, and file metadata from envelope
-		result, hint, resultFile, resultSize := unwrapToolResultEnvelopeFull(rawResult)
-		emitVerboseProgress(ctx, "Tool `%s` completed.", toolCall.Name)
-		if shouldResetRepairAttempts(priorRepair, toolCall.Name) {
-			repairAttempts = 0
-		}
-		pendingRepair = nil
-
-		log.Info("Native ReAct Engine Tool Success", "iteration", iteration+1, "tool", toolCall.Name, "result_chars", len(result), "file_backed", resultFile != "")
-		// Stream file-backed metadata to UI (extracted from envelope)
-		emitReasoningEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), result, hint, iteration+1, resultFile, resultSize))
-
-		executedToolCalls = append(executedToolCalls, toolCall)
-		previousResults := append([]nativeToolResult(nil), toolResults...)
-		toolResults = appendOrReplaceRetriedToolResult(toolResults, nativeToolResult{
-			Name:       toolCall.Name,
-			Result:     result,
-			ResultFile: resultFile,
-			ResultSize: resultSize,
-			Args:       cloneToolEventMap(toolCall.Args),
-			Hint:       cloneToolProgressHint(hint),
-		}, priorRepair, toolCall.Name)
-		pendingContinuation = &ai.ToolCallContinuation{
-			ToolCall: toolCall,
-			Response: coerceToolCallContinuationResponse(result),
-		}
-		if shouldShortCircuitAskLoopOnToolHint(hint) {
-			emitVerboseProgress(ctx, "Tool `%s` reported a terminal hard error; short-circuiting the Ask loop.", toolCall.Name)
-			outcomeRecipes := summarizeOutcomeRecipes(toolResults)
-			return ai.ReasoningResponse{
-				FinalText:      preserveStructuredToolResult(result, e.EnableObfuscation),
-				ToolCalls:      executedToolCalls,
-				OutcomeFacts:   summarizeOutcomeFacts(toolResults),
-				OutcomeRecipes: outcomeRecipes,
-			}, nil
-		}
-		_ = detectAskLoopProgress(previousResults, toolResults)
-		if shouldPreserveStructuredToolResult(ctx, toolResults) {
-			outcomeRecipes := summarizeOutcomeRecipes(toolResults)
-			return ai.ReasoningResponse{
-				FinalText:      preserveStructuredToolResult(result, e.EnableObfuscation),
-				ToolCalls:      executedToolCalls,
-				OutcomeFacts:   summarizeOutcomeFacts(toolResults),
-				OutcomeRecipes: outcomeRecipes,
-			}, nil
-		}
-	}
-
-	emitVerboseProgress(ctx, "Reached retry cap; switching to clarification.")
-	if shouldPreserveStructuredToolResult(ctx, toolResults) {
-		outcomeRecipes := summarizeOutcomeRecipes(toolResults)
-		return ai.ReasoningResponse{
-			FinalText:      preserveStructuredToolResult(toolResults[len(toolResults)-1].Result, e.EnableObfuscation),
-			ToolCalls:      executedToolCalls,
-			OutcomeFacts:   summarizeOutcomeFacts(toolResults),
-			OutcomeRecipes: outcomeRecipes,
-		}, nil
-	}
-
-	log.Warn("Native ReAct Engine Reached Tool Iteration Limit", "limit", budgetState.allowedIterations, "hard_cap", budgetState.maxIterations)
-	finalOpts := ai.GenOptions{
-		SystemPrompt:  req.SystemPrompt,
-		MaxTokens:     e.MaxTokens,
-		Temperature:   0.7,
-		ThinkingLevel: NormalizeThinkingLevelForGenerator(req.Generator, "", "", "high"), // Higher reasoning for final synthesis and explanation
-		ToolCallContinuations: func() []ai.ToolCallContinuation {
-			if pendingContinuation == nil {
-				return nil
-			}
-			return []ai.ToolCallContinuation{*pendingContinuation}
-		}(),
-	}
-	finalTurn := ai.ReActTurn{
-		Iteration:       budgetState.allowedIterations + 1,
-		UserQuery:       req.UserQuery,
-		RepairDirective: latestNativeRepairDirective(toolResults),
-		LoopState:       snapshotReActLoopState(budgetState.allowedIterations+1, budgetState, repairAttempts, pendingRepair, pendingMalformedCall != nil, toolResults, finalOpts.ToolCallContinuations),
-		Options:         finalOpts,
-		ToolResults:     cloneReActToolResults(toolResults),
-		FinalTurn:       true,
-	}
-	finalPrompt := ""
-	promptProfile := PromptBudgetProfile{}
-	promptReport := PromptBudgetReport{}
-	if !shouldBypassReActPrompt(strategy, finalTurn) {
-		promptProfile = nativeReActPromptBudgetProfile()
-		finalPrompt, promptReport = buildNativeReActPromptWithReport(req, toolResults, buildAskAnchoredMRUState(toolResults), promptProfile)
-		finalPrompt += "\n\nUser: We have hit the retry cap. Do not call any more tools. Briefly explain what is still blocking progress and ask one short, concrete clarification question that would unblock the task."
-	}
-	if firstTrimmed := firstTrimmedPromptComponent(promptProfile, promptReport); firstTrimmed != "" {
-		emitVerboseProgress(ctx, "Prompt budget trimmed %s first; reduced components: %s.", firstTrimmed, summarizePromptBudgetTrim(promptReport))
-		log.Info("Native ReAct Prompt Budget Applied", "phase", "final", "trimmed_first", firstTrimmed, "trimmed", summarizePromptBudgetTrim(promptReport), "final_chars", len(finalPrompt))
-	}
-	effectiveFinalPrompt, effectiveFinalOpts := prepareReActTurn(ctx, strategy, finalTurn, finalPrompt)
-	emitVerboseProgress(ctx, "Waiting for model response.")
-	output, err := req.Generator.Generate(ctx, effectiveFinalPrompt, effectiveFinalOpts)
-	if err != nil {
-		return ai.ReasoningResponse{}, fmt.Errorf("final synthesis generation failed: %w", err)
-	}
-	finalText := output.Text
-	if e.EnableObfuscation {
-		finalText = obfuscation.GlobalObfuscator.DeobfuscateText(output.Text)
-	}
-	return ai.ReasoningResponse{
-		FinalText:       finalText,
-		ToolCalls:       executedToolCalls,
-		OutcomeFacts:    summarizeOutcomeFacts(toolResults),
-		OutcomeRecipes:  summarizeOutcomeRecipes(toolResults),
-		EscalationState: escalationState,
-	}, nil
+	return unifiedEngine.Run(ctx, req)
 }
 
 func resolveReActTurnStrategy(req ai.ReasoningRequest) ai.ReActTurnStrategy {
@@ -685,7 +322,19 @@ func isRecoverableGenerationError(err error) bool {
 	if message == "" {
 		return false
 	}
-	return strings.Contains(message, "malformed_function_call") || strings.Contains(message, "malformed function call")
+	// MALFORMED_FUNCTION_CALL from LLM provider
+	if strings.Contains(message, "malformed_function_call") || strings.Contains(message, "malformed function call") {
+		return true
+	}
+	// Truncated textual tool call (incomplete JSON in printed format)
+	if strings.Contains(message, "truncated json args") || strings.Contains(message, "truncated json") {
+		return true
+	}
+	// Invalid JSON in textual tool call
+	if strings.Contains(message, "invalid json args") {
+		return true
+	}
+	return false
 }
 
 func emitVerboseProgress(ctx context.Context, format string, args ...any) {
@@ -2631,18 +2280,18 @@ func determineRetryTier(errorType string, failureCount int, hint *ai.ToolProgres
 	if hint != nil && hint.SuggestedAction == "research_before_retry" {
 		return TierResearch
 	}
-	
+
 	// Override: Tool explicitly suggests giving up
 	if hint != nil && hint.SuggestedAction == "give_up_and_clarify" {
 		return TierClarify
 	}
-	
+
 	// Progressive escalation based on failure count
 	if failureCount == 0 {
 		// First failure - try quick fix
 		return TierQuickFix
 	}
-	
+
 	if failureCount == 1 {
 		// Second failure - escalate to research if error is researchable
 		if isResearchableError(errorType) {
@@ -2651,7 +2300,7 @@ func determineRetryTier(errorType string, failureCount int, hint *ai.ToolProgres
 		// Otherwise stay in quick fix
 		return TierQuickFix
 	}
-	
+
 	// Third+ failure - escalate to clarification
 	return TierClarify
 }
@@ -2744,7 +2393,7 @@ func (r pendingToolRepair) allowsTool(toolName string) bool {
 // Tier 2A: LLM-controlled retry strategy via ToolProgressHint
 func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProgressHint) pendingToolRepair {
 	repair := pendingToolRepair{ToolName: toolName, Strategy: nativeRepairStrategySameTool}
-	
+
 	// Tier 2A: Respect hint's suggested action if present
 	if hint != nil && hint.SuggestedAction != "" {
 		switch hint.SuggestedAction {
@@ -2771,7 +2420,7 @@ func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProg
 			// Fall through to default logic for now
 		}
 	}
-	
+
 	if toolName != "execute_script" || err == nil {
 		return repair
 	}

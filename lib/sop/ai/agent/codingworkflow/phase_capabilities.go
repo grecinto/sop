@@ -948,7 +948,7 @@ func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capab
 		Actor:    "phase:" + artifact.TransitionTo,
 		Priority: 10, // PriorityPhaseSuccession
 		Context: map[string]any{
-			"from_phase":          c.phaseID,
+			"from_phase":           c.phaseID,
 			"transition_direction": artifact.TransitionDirection,
 		},
 	}

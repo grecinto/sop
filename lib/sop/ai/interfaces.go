@@ -469,9 +469,9 @@ const (
 type ReActToolResult struct {
 	Name          string
 	Args          map[string]any
-	Result        string             // Inline result or summary if file-backed
-	ResultFile    string             // Path to full output file (if large)
-	ResultSize    int64              // Byte count of original result
+	Result        string // Inline result or summary if file-backed
+	ResultFile    string // Path to full output file (if large)
+	ResultSize    int64  // Byte count of original result
 	Hint          *ToolProgressHint
 	ExecutionMode ReActToolResultExecutionMode
 }
@@ -860,7 +860,7 @@ type ToolProgressHint struct {
 	Clues              []string `json:"clues,omitempty"`
 	SuggestedNextTools []string `json:"suggested_next_tools,omitempty"`
 	// SuggestedAction guides retry strategy: "research_before_retry", "retry_with_changes", "give_up_and_clarify"
-	SuggestedAction    string   `json:"suggested_action,omitempty"`
+	SuggestedAction string `json:"suggested_action,omitempty"`
 }
 
 // ToolResultEnvelope is an optional JSON result shape that tools can return.

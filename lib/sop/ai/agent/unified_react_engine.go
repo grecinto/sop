@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	log "log/slog"
+	"strings"
 
 	"github.com/sharedcode/sop/ai"
 )
@@ -19,10 +20,10 @@ import (
 // Provider-specific behavior (LLM invocation, continuation handling, etc) is delegated
 // to the ReActLoopAdapter implementation.
 type UnifiedReActEngine struct {
-	Adapter          ReActLoopAdapter
-	RetryCoordinator *RetryCoordinator
+	Adapter           ReActLoopAdapter
+	RetryCoordinator  *RetryCoordinator
 	EnableObfuscation bool
-	MaxTokens        int
+	MaxTokens         int
 }
 
 // NewUnifiedReActEngine creates a new unified engine with the given adapter.
@@ -55,6 +56,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 		"tool_count", len(tools),
 		"max_iterations", e.Adapter.MaxIterations(),
 	)
+	emitVerboseProgress(ctx, "Planning request with %s multi-step loop.", e.Adapter.Name())
 
 	// Restore continuations from carryover state (provider-specific)
 	restoredContinuations, _ := e.Adapter.RestoreContinuations(req.CarryoverState)
@@ -85,7 +87,9 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			return ai.ReasoningResponse{}, fmt.Errorf("request canceled during iteration %d: %w", state.Iteration, ctx.Err())
 		default:
 		}
-
+		
+		emitVerboseProgress(ctx, "Reasoning iteration %d of %d.", state.Iteration, e.Adapter.MaxIterations())
+		
 		log.Info("Unified ReAct Iteration",
 			"iteration", state.Iteration,
 			"adapter", e.Adapter.Name(),
@@ -107,26 +111,80 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			return ai.ReasoningResponse{}, fmt.Errorf("failed to prepare LLM request: %w", err)
 		}
 
+		emitVerboseProgress(ctx, "Waiting for model response.")
+		
 		// Invoke LLM (provider-specific)
 		output, err := e.Adapter.InvokeLLM(ctx, prompt, opts, req)
 		if err != nil {
-			// TODO: Handle recoverable generation errors (malformed tool calls)
+			// Handle recoverable generation errors (malformed tool calls)
+			if isRecoverableGenerationError(err) {
+				emitVerboseProgress(ctx, "Model emitted a malformed native tool call; retrying.")
+				malformedResult := ai.ReActToolResult{
+					Name:   "native_tool_call",
+					Result: formatRecoverableGenerationError(err),
+				}
+				state.ToolResults = append(state.ToolResults, malformedResult)
+				state.RepairDirective = "Repair directive: The last model output produced an invalid native tool call. Your next step should be to call exactly one valid tool using arguments that conform to the provided tool schema and repair guidance below. Do not summarize the error as a final answer unless correction is impossible."
+				log.Warn("Unified ReAct Engine Recoverable Generation Failure",
+					"adapter", e.Adapter.Name(),
+					"error", err)
+				continue
+			}
 			return ai.ReasoningResponse{}, fmt.Errorf("LLM invocation failed: %w", err)
 		}
-
 		// Extract tool calls (provider-specific)
 		toolCalls, finalText, err := e.Adapter.ExtractToolCalls(output)
 		if err != nil {
+			// Check if this is a recoverable generation error (e.g., truncated JSON)
+			if isRecoverableGenerationError(err) {
+				// Handle as a malformed generation error - add result and retry
+				log.Warn("Unified ReAct Engine Recoverable Generation Error",
+					"iteration", state.Iteration,
+					"adapter", e.Adapter.Name(),
+					"error", err.Error())
+
+				emitVerboseProgress(ctx, "Recoverable generation error; retrying.")
+
+				// Format the error for the model
+				errResult := ai.ReActToolResult{
+					Name:   "",
+					Result: formatRecoverableGenerationError(err),
+				}
+				state.ToolResults = append(state.ToolResults, errResult)
+				state.RepairDirective = "Repair directive: The last model output produced an invalid native tool call."
+				pendingRepair = nil // Clear any pending repair
+				continue
+			}
 			return ai.ReasoningResponse{}, fmt.Errorf("failed to extract tool calls: %w", err)
 		}
 
 		// No tool calls → final response
 		if req.Executor == nil || len(toolCalls) == 0 {
+			emitVerboseProgress(ctx, "No further tools required; preparing final answer.")
+			
 			log.Info("Unified ReAct Engine Final Response (no tool calls)",
 				"iteration", state.Iteration,
 				"adapter", e.Adapter.Name(),
 				"text_chars", len(finalText))
+			
+			// Check if we should preserve structured result
+			if e.shouldPreserveStructuredResult(ctx, state.ToolResults) {
+				lastResult := state.ToolResults[len(state.ToolResults)-1]
+				return e.Adapter.BuildFinalResponse(
+					preserveStructuredToolResult(lastResult.Result, e.EnableObfuscation),
+					state.ExecutedToolCalls,
+					state.ToolResults,
+					state.Continuations,
+					state.EscalationState,
+				), nil
+			}
+			
 			return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
+		}
+
+		// Sanitize tool call arguments (remove markdown artifacts, deobfuscate)
+		for i := range toolCalls {
+			sanitizeToolCallArgs(toolCalls[i].Args, e.EnableObfuscation)
 		}
 
 		// Execute first tool call
@@ -134,31 +192,43 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 
 		// Validate tool call against pending repair
 		if pendingRepair != nil && !e.RetryCoordinator.AllowsTool(*pendingRepair, toolCall.Name) {
+			emitVerboseProgress(ctx, "Tool `%s` must be corrected before other actions.", pendingRepair.ToolName)
+			
 			log.Warn("Unified ReAct Engine Deferred Non-Repair Tool Call",
 				"expected_tool", pendingRepair.ToolName,
 				"received_tool", toolCall.Name,
 				"adapter", e.Adapter.Name())
 
 			// Add repair reminder to tool results
+			reminderDirective := e.RetryCoordinator.FormatRepairDirective(*pendingRepair, toolCall.Name)
 			reminderResult := ai.ReActToolResult{
 				Name:   pendingRepair.ToolName,
-				Result: e.RetryCoordinator.FormatRepairDirective(*pendingRepair, toolCall.Name),
+				Result: reminderDirective,
 			}
 			state.ToolResults = append(state.ToolResults, reminderResult)
-			state.RepairDirective = e.RetryCoordinator.FormatRepairDirective(*pendingRepair, toolCall.Name)
+			state.RepairDirective = reminderDirective
 			continue
 		}
 
 		// Execute tool
+		emitVerboseProgress(ctx, "Calling tool `%s`.", toolCall.Name)
+		
 		log.Info("Unified ReAct Engine Tool Call",
 			"iteration", state.Iteration,
 			"adapter", e.Adapter.Name(),
 			"tool", toolCall.Name)
 
+		// Emit tool call event
+		emitReasoningEvent(req, ai.ReasoningEventToolCall, ai.BuildToolCallEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), state.Iteration))
+
 		execCtx := context.WithValue(ctx, ai.CtxKeyNativeToolHints, true)
+		priorRepair := pendingRepair
 		rawResult, err := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
 
 		if err != nil {
+			// Emit tool error event
+			emitReasoningEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), err, state.Iteration))
+			
 			// Check if error is recoverable
 			if !e.RetryCoordinator.IsRecoverableToolError(err) {
 				log.Error("Unified ReAct Engine Unrecoverable Tool Failure",
@@ -173,12 +243,18 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			lastHint := e.getLatestToolHint(state.ToolResults)
 			errorMessage := err.Error()
 
+			// Check if we recently did research for this tool
+			recentlyResearched := e.wasResearchRecentlyDone(state.ToolResults, toolCall.Name)
+
 			// Determine retry tier (Tier 2B)
 			tier := e.RetryCoordinator.DetermineRetryTier(errorMessage, currentFailureCount, lastHint)
 
 			// Classify repair strategy (Tier 2A)
-			repairPlan := e.RetryCoordinator.ClassifyRepair(toolCall.Name, err, lastHint)
+			repairPlan := e.RetryCoordinator.ClassifyRepair(toolCall.Name, err, lastHint, recentlyResearched)
 			repairPlan.Tier = tier
+
+			// Convert RepairPlan to pendingToolRepair for error formatting
+			nativePendingRepair := e.convertRepairPlanToNative(repairPlan)
 
 			log.Info("Unified ReAct Engine Progressive Retry",
 				"tool", toolCall.Name,
@@ -189,6 +265,8 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 
 			// Tier 3 (Clarify) → escalate to phase succession
 			if tier == RetryTierClarify {
+				emitVerboseProgress(ctx, "Tier 3 (Clarify): Escalating to user after %d failures.", currentFailureCount)
+				
 				log.Warn("Unified ReAct Engine Tier 3 Escalation",
 					"tool", toolCall.Name,
 					"adapter", e.Adapter.Name(),
@@ -204,12 +282,14 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 					"error_type":       errorMessage,
 				}
 
-				// Add clarification-required result
+				// Add clarification-required result with proper formatting
 				clarificationResult := ai.ReActToolResult{
 					Name:   toolCall.Name,
-					Result: fmt.Sprintf("ERROR (Tier 3 - Clarification Required): %s", err.Error()),
+					Result: formatClarificationRequiredToolError(nativePendingRepair, toolCall.Args, err),
+					Args:   cloneToolEventMap(toolCall.Args),
 				}
 				state.ToolResults = append(state.ToolResults, clarificationResult)
+				state.RepairDirective = "Clarification directive: The last tool failure still remains unresolved after the first repair attempt. Do not call another tool yet. Ask the user one short, concrete clarification question that names the blocker and wait for the answer."
 				pendingRepair = nil
 				continue
 			}
@@ -217,14 +297,25 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			// Tier 1/2 → continue retry
 			state.FailureCounts[toolCall.Name] = currentFailureCount + 1
 			pendingRepair = &repairPlan
-			state.RepairDirective = e.RetryCoordinator.FormatRepairDirective(repairPlan, toolCall.Name)
 
-			// Add repair result
+			// Emit tier-specific progress message
+			switch tier {
+			case RetryTierQuickFix:
+				emitVerboseProgress(ctx, "Tier 1 (Quick Fix): Tool `%s` needs corrected arguments; retrying.", toolCall.Name)
+			case RetryTierResearch:
+				emitVerboseProgress(ctx, "Tier 2 (Research): Tool `%s` requires research before retry.", toolCall.Name)
+			default:
+				emitVerboseProgress(ctx, "Tool `%s` needs corrected arguments; retrying.", toolCall.Name)
+			}
+
+			// Add repair result with proper formatting
 			repairResult := ai.ReActToolResult{
 				Name:   toolCall.Name,
-				Result: fmt.Sprintf("ERROR (Tier %d - %s): %s\n\n%s", int(tier), repairPlan.Strategy, err.Error(), state.RepairDirective),
+				Result: formatRecoverableToolError(nativePendingRepair, toolCall.Args, err),
+				Args:   cloneToolEventMap(toolCall.Args),
 			}
 			state.ToolResults = append(state.ToolResults, repairResult)
+			state.RepairDirective = e.buildRepairDirective(state.ToolResults)
 
 			log.Warn("Unified ReAct Engine Recoverable Tool Failure",
 				"tool", toolCall.Name,
@@ -237,6 +328,8 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 		// Tool execution succeeded
 		result, hint, resultFile, resultSize := unwrapToolResultEnvelopeFull(rawResult)
 
+		emitVerboseProgress(ctx, "Tool `%s` completed.", toolCall.Name)
+
 		log.Info("Unified ReAct Engine Tool Success",
 			"iteration", state.Iteration,
 			"adapter", e.Adapter.Name(),
@@ -244,11 +337,23 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			"result_chars", len(result),
 			"file_backed", resultFile != "")
 
+		// Emit tool result event
+		emitReasoningEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), result, hint, state.Iteration, resultFile, resultSize))
+
 		// Reset repair state on success
-		if pendingRepair != nil && pendingRepair.ToolName == toolCall.Name {
-			state.FailureCounts[toolCall.Name] = 0
-			pendingRepair = nil
-			state.RepairDirective = ""
+		if priorRepair != nil {
+			// If we just completed the research tool for a research_first strategy, clear the repair
+			// so the next attempt at the original tool is treated as a fresh retry
+			if priorRepair.Strategy == RepairStrategyResearchFirst && toolCall.Name != priorRepair.ToolName {
+				// Successfully completed research, clear the repair
+				pendingRepair = nil
+				state.RepairDirective = ""
+			} else if toolCall.Name == priorRepair.ToolName {
+				// Successfully completed the tool that was failing, reset failure count and clear repair
+				state.FailureCounts[toolCall.Name] = 0
+				pendingRepair = nil
+				state.RepairDirective = ""
+			}
 		}
 
 		// Record successful tool call
@@ -258,24 +363,82 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			Result:     result,
 			ResultFile: resultFile,
 			ResultSize: resultSize,
+			Args:       cloneToolEventMap(toolCall.Args),
 			Hint:       hint,
 		}
 		state.ToolResults = append(state.ToolResults, successResult)
 
 		// Format continuation for next iteration (provider-specific)
 		state.Continuations = e.Adapter.FormatContinuation(toolCall, successResult, state.Continuations)
+		
+		// Check for short-circuit on terminal hints
+		if shouldShortCircuitAskLoopOnToolHint(hint) {
+			emitVerboseProgress(ctx, "Tool `%s` reported a terminal hard error; short-circuiting the Ask loop.", toolCall.Name)
+			return e.Adapter.BuildFinalResponse(
+				preserveStructuredToolResult(result, e.EnableObfuscation),
+				state.ExecutedToolCalls,
+				state.ToolResults,
+				state.Continuations,
+				state.EscalationState,
+			), nil
+		}
+		
+		// Check if we should preserve structured result
+		if e.shouldPreserveStructuredResult(ctx, state.ToolResults) {
+			return e.Adapter.BuildFinalResponse(
+				preserveStructuredToolResult(result, e.EnableObfuscation),
+				state.ExecutedToolCalls,
+				state.ToolResults,
+				state.Continuations,
+				state.EscalationState,
+			), nil
+		}
 	}
 
-	// Reached max iterations → final clarification request
+	// Reached max iterations → invoke LLM one more time for clarification
+	emitVerboseProgress(ctx, "Reached retry cap; switching to clarification.")
+	
 	log.Warn("Unified ReAct Engine Reached Max Iterations",
 		"adapter", e.Adapter.Name(),
 		"max_iterations", e.Adapter.MaxIterations())
 
-	// Build final response asking for clarification
-	finalText := fmt.Sprintf(
-		"We have reached the maximum number of iterations (%d). "+
-			"Please provide additional guidance to help complete the task.",
+	// Set repair directive for retry cap
+	state.RepairDirective = fmt.Sprintf(
+		"We have hit the retry cap. The query has reached the iteration limit (%d) without completing. "+
+			"Please ask the user one concrete clarification question that identifies the missing input or blocker.",
 		e.Adapter.MaxIterations())
+
+	// Prepare LLM request with retry cap directive
+	prompt, opts, err := e.Adapter.PrepareLLMRequest(ctx, state)
+	if err != nil {
+		// Fallback: return generic message if preparation fails
+		finalText := fmt.Sprintf(
+			"We have reached the maximum number of iterations (%d). "+
+				"Please provide additional guidance to help complete the task.",
+			e.Adapter.MaxIterations())
+		return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
+	}
+
+	// Invoke LLM to generate clarification question
+	output, err := e.Adapter.InvokeLLM(ctx, prompt, opts, req)
+	if err != nil {
+		// Fallback: return generic message if invocation fails
+		finalText := fmt.Sprintf(
+			"We have reached the maximum number of iterations (%d). "+
+				"Please provide additional guidance to help complete the task.",
+			e.Adapter.MaxIterations())
+		return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
+	}
+
+	// Extract clarification text
+	_, finalText, err := e.Adapter.ExtractToolCalls(output)
+	if err != nil || finalText == "" {
+		// Fallback: return generic message if extraction fails
+		finalText = fmt.Sprintf(
+			"We have reached the maximum number of iterations (%d). "+
+				"Please provide additional guidance to help complete the task.",
+			e.Adapter.MaxIterations())
+	}
 
 	return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
 }
@@ -286,4 +449,98 @@ func (e *UnifiedReActEngine) getLatestToolHint(toolResults []ai.ReActToolResult)
 		return nil
 	}
 	return toolResults[len(toolResults)-1].Hint
+}
+
+// wasResearchRecentlyDone checks if research (list_stores) was recently performed
+// after the last failure of the given tool.
+func (e *UnifiedReActEngine) wasResearchRecentlyDone(toolResults []ai.ReActToolResult, failedTool string) bool {
+	if len(toolResults) < 2 {
+		return false
+	}
+	
+	// Look backwards through tool results for the pattern:
+	// 1. Failed tool with error
+	// 2. Followed by successful list_stores
+	for i := len(toolResults) - 1; i >= 0; i-- {
+		result := toolResults[i]
+		
+		// Check if this is a successful list_stores result
+		if result.Name == "list_stores" && !strings.Contains(strings.ToLower(result.Result), "error") {
+			// Check if there was a failure of our tool before this research
+			for j := i - 1; j >= 0 && j >= i-3; j-- {
+				prevResult := toolResults[j]
+				if prevResult.Name == failedTool && 
+					(strings.Contains(prevResult.Result, "Retry instruction:") || 
+					 strings.Contains(prevResult.Result, "Tool execution error:")) {
+					return true
+				}
+			}
+		}
+		
+		// Only look back a limited number of results
+		if i < len(toolResults)-6 {
+			break
+		}
+	}
+	
+	return false
+}
+
+// shouldPreserveStructuredResult checks if the last tool result should be preserved as-is.
+func (e *UnifiedReActEngine) shouldPreserveStructuredResult(ctx context.Context, toolResults []ai.ReActToolResult) bool {
+	if len(toolResults) == 0 {
+		return false
+	}
+	// Convert to native format for legacy function
+	nativeResults := e.convertToNativeResults(toolResults)
+	return shouldPreserveStructuredToolResult(ctx, nativeResults)
+}
+
+// convertToNativeResults converts shared ReActToolResult to native nativeToolResult.
+func (e *UnifiedReActEngine) convertToNativeResults(shared []ai.ReActToolResult) []nativeToolResult {
+	if len(shared) == 0 {
+		return nil
+	}
+	native := make([]nativeToolResult, 0, len(shared))
+	for _, result := range shared {
+		native = append(native, nativeToolResult{
+			Name:          result.Name,
+			Result:        result.Result,
+			ResultFile:    result.ResultFile,
+			ResultSize:    result.ResultSize,
+			Args:          result.Args,
+			Hint:          result.Hint,
+			ExecutionMode: result.ExecutionMode,
+		})
+	}
+	return native
+}
+
+// convertRepairPlanToNative converts RepairPlan to pendingToolRepair for error formatting.
+func (e *UnifiedReActEngine) convertRepairPlanToNative(plan RepairPlan) pendingToolRepair {
+	var strategy nativeRepairStrategy
+	switch plan.Strategy {
+	case RepairStrategyResearchFirst:
+		strategy = nativeRepairStrategyResearchFirst
+	default:
+		strategy = nativeRepairStrategySameTool
+	}
+	
+	return pendingToolRepair{
+		ToolName:       plan.ToolName,
+		Strategy:       strategy,
+		ResearchTool:   plan.ResearchTool,
+		ResearchReason: plan.ResearchReason,
+		Tier:           nativeRetryTier(plan.Tier),
+	}
+}
+
+// buildRepairDirective builds the repair directive string from tool results.
+func (e *UnifiedReActEngine) buildRepairDirective(toolResults []ai.ReActToolResult) string {
+	if len(toolResults) == 0 {
+		return ""
+	}
+	// Convert to native format for legacy function
+	nativeResults := e.convertToNativeResults(toolResults)
+	return buildNativeRepairDirective(nativeResults[len(nativeResults)-1])
 }

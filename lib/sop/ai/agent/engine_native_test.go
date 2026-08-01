@@ -1542,7 +1542,7 @@ func (m *discoveryClarificationGenerator) Generate(ctx context.Context, prompt s
 			},
 		}}}, nil
 	case 4:
-		// Tier 2B: Third retry before escalation
+		// Tier 2B: Third execute_script attempt (will trigger tier 3 on failure)
 		return ai.GenOutput{ToolCalls: []ai.ToolCall{{
 			Name: "execute_script",
 			Args: map[string]any{
@@ -1559,7 +1559,13 @@ func (m *discoveryClarificationGenerator) Generate(ctx context.Context, prompt s
 		}}}, nil
 	default:
 		// Tier 2B: Clarification happens on call 5 (after 3 execute_script failures)
-		// Just return the clarification question - the prompt format may vary
+		// Check for clarification directive in prompt
+		if !strings.Contains(prompt, "Clarification directive: The last tool failure still remains unresolved") {
+			return ai.GenOutput{Text: "missing clarification directive"}, nil
+		}
+		if !strings.Contains(prompt, "Clarification required:") {
+			return ai.GenOutput{Text: "missing clarification result context"}, nil
+		}
 		return ai.GenOutput{Text: "Which join mapping should I use between users and users_orders: users.key -> users_orders.user_id, or a different relation?"}, nil
 	}
 }
@@ -1753,11 +1759,11 @@ func TestNativeReActEngine_RoutedAmbiguityEscalatesToClarificationAfterFirstRepa
 	if resp.FinalText != "Which join mapping should I use between users and users_orders: users.key -> users_orders.user_id, or a different relation?" {
 		t.Fatalf("expected clarification question, got %q", resp.FinalText)
 	}
-	if gen.calls != 4 {
-		t.Fatalf("expected four generator calls before clarification handoff, got %d", gen.calls)
+	if gen.calls != 5 {
+		t.Fatalf("expected five generator calls before clarification handoff, got %d", gen.calls)
 	}
-	if executor.callCount != 3 {
-		t.Fatalf("expected execute_script, list_stores, execute_script before clarification, got %d", executor.callCount)
+	if executor.callCount != 4 {
+		t.Fatalf("expected execute_script, list_stores, execute_script, execute_script (tier 3 attempt) before clarification, got %d", executor.callCount)
 	}
 	// Tier 2B: Check for new escalation message
 	if !containsProgressMessage(progress, "Tier 3 (Clarify):") {

@@ -3624,11 +3624,11 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		capResult := capabilities.CapabilityResult{
 			Summary: finalText,
 			Data: map[string]any{
-				"tool_calls":        toolCalls,
-				"outcome_facts":     outcomeFacts,
-				"outcome_recipes":   outcomeRecipes,
-				"carryover_state":   carryoverState,
-				"escalation_state":  escalationState,
+				"tool_calls":       toolCalls,
+				"outcome_facts":    outcomeFacts,
+				"outcome_recipes":  outcomeRecipes,
+				"carryover_state":  carryoverState,
+				"escalation_state": escalationState,
 			},
 		}
 		if err := selectedCap.OnAfter(ctx, query, routingState, capResult); err != nil {
