@@ -527,20 +527,22 @@ func (ltm *LTM) SearchTeamPatterns(ctx context.Context, query string, limit int)
 ## Implementation Phases
 
 ### Phase 1: Core Storage & Retrieval (Week 1)
-- [ ] Add "Team Patterns" top-level category to LTM
-- [ ] Define TeamPattern schema
-- [ ] Implement `SearchTeamPatterns()` with semantic search
-- [ ] Add lifecycle metadata (usage_count, last_used_at)
-- [ ] Basic tests for storage/retrieval
+- [x] Add "Team Patterns" top-level category to LTM
+- [x] Define TeamPattern schema
+- [x] Implement `SearchTeamPatterns()` with semantic search
+- [x] Add lifecycle metadata (usage_count, last_used_at)
+- [x] Basic tests for storage/retrieval
 
-### Phase 2: Tool & Context Injection (Week 2)
-- [ ] Add `investigation_search_team_patterns` tool
-- [ ] Modify Ask pipeline to inject "Team Patterns Available" context
-- [ ] Add auto-lookup in Investigation phase
-- [ ] Add auto-lookup in Coding phase based on task type
-- [ ] Tests for tool execution and context injection
+### Phase 2: Tool & Context Injection (Week 2) - ✅ COMPLETE (2026-07-31)
+- [x] Add `investigation_search_team_patterns` tool
+- [x] Modify Ask pipeline to inject "Team Patterns Available" context
+- [x] Add LTM accessor to SharedInfrastructure
+- [x] Wire LTM accessor in agent initialization
+- [x] Tool execution handler with graceful error handling
+- [ ] Add auto-lookup in Coding phase based on task type (future enhancement)
+- [ ] Tests for tool execution and context injection (in progress)
 
-### Phase 3: Validation & Enforcement (Week 3)
+### Phase 3: Validation & Enforcement (Future)
 - [ ] Implement pattern validation logic
 - [ ] Add auto-revision on violation (up to 2 attempts)
 - [ ] Add violation warnings in generated code

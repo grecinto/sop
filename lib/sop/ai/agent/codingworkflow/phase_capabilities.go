@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	log "log/slog"
 	"strings"
 	"time"
 
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/agent/teampatterns"
 	"github.com/sharedcode/sop/ai/memory"
@@ -876,12 +878,105 @@ func (c *PhaseCapability) OnBefore(ctx context.Context, query string, state capa
 	return nil
 }
 
+// OnAfter handles phase succession after ReAct loop completes.
+// This is called AFTER all provider-specific ReAct loops (ChatGPT, Anthropic, Gemini, default)
+// complete, making it provider-agnostic and the single source of truth for phase transitions.
 func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
-	_ = ctx
-	_ = query
-	_ = state
-	_ = result
+	// 1. Check if a capture tool was called (phase completion signal)
+	if !c.wasCaptureToolCalled(result) {
+		return nil // Phase still in progress
+	}
+
+	// 2. Load artifact to check transition intent
+	artifact, err := c.loadExistingArtifact()
+	if err != nil {
+		// No artifact yet or load failed - not an error, just no transition
+		return nil
+	}
+
+	// 3. Check if exit was requested
+	if artifact.ExitRequested {
+		log.Info("Phase succession: Exit requested, workflow complete",
+			"phase", c.phaseID,
+			"artifact_status", artifact.Status)
+		return nil
+	}
+
+	// 4. Check if next phase is specified
+	if artifact.TransitionTo == "" {
+		// No transition specified - phase may be incomplete or workflow complete
+		log.Debug("Phase succession: No transition specified",
+			"phase", c.phaseID,
+			"artifact_status", artifact.Status)
+		return nil
+	}
+
+	// 5. Enqueue next phase (AFTER ReAct, in common pipeline)
+	if c.sharedInfra == nil || c.sharedInfra.GetSessionQueue == nil {
+		log.Warn("Phase succession: No queue accessor available",
+			"phase", c.phaseID,
+			"next_phase", artifact.TransitionTo)
+		return nil // Not an error - infrastructure may not support queueing
+	}
+
+	queue := c.sharedInfra.GetSessionQueue()
+	if queue == nil {
+		log.Warn("Phase succession: Queue accessor returned nil",
+			"phase", c.phaseID,
+			"next_phase", artifact.TransitionTo)
+		return nil
+	}
+
+	// Build work item for next phase
+	// Use anonymous struct to avoid import cycle - WorkQueueAccessor handles conversion
+	workItem := struct {
+		Query    string
+		Actor    string
+		Priority int
+		Context  map[string]any
+	}{
+		Query:    query, // Carry forward original query
+		Actor:    "phase:" + artifact.TransitionTo,
+		Priority: 10, // PriorityPhaseSuccession
+		Context: map[string]any{
+			"from_phase":          c.phaseID,
+			"transition_direction": artifact.TransitionDirection,
+		},
+	}
+
+	if err := queue.Enqueue(workItem); err != nil {
+		log.Error("Phase succession: Failed to enqueue next phase",
+			"phase", c.phaseID,
+			"next_phase", artifact.TransitionTo,
+			"error", err)
+		return fmt.Errorf("failed to enqueue next phase %s: %w", artifact.TransitionTo, err)
+	}
+
+	log.Info("Phase succession: Enqueued next phase",
+		"from_phase", c.phaseID,
+		"to_phase", artifact.TransitionTo,
+		"direction", artifact.TransitionDirection,
+		"artifact_status", artifact.Status)
+
 	return nil
+}
+
+// wasCaptureToolCalled checks if any tool call in the result was a capture tool.
+// Capture tools signal phase completion (e.g., "investigation_capture", "planning_capture").
+func (c *PhaseCapability) wasCaptureToolCalled(result capabilities.CapabilityResult) bool {
+	toolCalls, ok := result.Data["tool_calls"].([]ai.ToolCall)
+	if !ok {
+		return false
+	}
+
+	for _, tc := range toolCalls {
+		// Check if tool name ends with "_capture" and matches our phase
+		if strings.HasSuffix(tc.Name, "_capture") && strings.HasPrefix(tc.Name, c.phaseID+"_") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // buildHandoffPrompt creates a context-rich handoff prompt including artifacts from previous phases

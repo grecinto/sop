@@ -1,0 +1,45 @@
+{
+    "port": 8080,
+    "databases": [
+        {
+            "name": "dev_db",
+            "path": "/Volumes/T7/sop-cloud/.sop-data/db",
+            "stores_folders": [
+                "/Volumes/T7/sop-cloud/.sop-data/db"
+            ],
+            "mode": "standalone",
+            "redis": "",
+            "erasure_configs": [
+                {
+                    "key": "",
+                    "data_chunks": 1,
+                    "parity_chunks": 1,
+                    "base_paths": [
+                        "/Volumes/T7/sop-cloud/.sop-data/db1",
+                        "/Volumes/T7/sop-cloud/.sop-data/db2"
+                    ]
+                }
+            ]
+        }
+    ],
+    "pageSize": 0,
+    "system_db": {
+        "name": "system",
+        "path": "/Volumes/T7/sop-cloud/.sop-data/system",
+        "mode": "standalone",
+        "redis": "",
+        "is_system": true,
+        "erasure_configs": [
+            {
+                "key": "",
+                "data_chunks": 1,
+                "parity_chunks": 1,
+                "base_paths": [
+                    "/Volumes/T7/sop-cloud/.sop-data/sdb1",
+                    "/Volumes/T7/sop-cloud/.sop-data/sdb2"
+                ]
+            }
+        ]
+    },
+    "production_mode": true
+}
