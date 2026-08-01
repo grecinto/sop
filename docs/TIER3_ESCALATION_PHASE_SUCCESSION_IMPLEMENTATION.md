@@ -7,14 +7,14 @@
 
 ## Overview
 
-Integrated progressive retry Tier 3 escalation with automatic backward phase transitions. When the native ReAct engine exhausts retry attempts (Tier 3: Clarify), capabilities can now automatically transition backward to a previous phase for error recovery.
+Integrated progressive retry Tier 3 escalation with automatic backward phase transitions. When the compatible/shared ReAct path exhausts retry attempts (Tier 3: Clarify), capabilities can now automatically transition backward to a previous phase for error recovery.
 
 ## Architecture
 
 ### Data Flow Path
 
 ```
-engine_native.go (Tier 3 escalation)
+engine_compatible.go (compatible-path Tier 3 escalation)
     ↓ EscalationState map[string]any
 ai.ReasoningResponse
     ↓ resp.EscalationState
@@ -45,8 +45,8 @@ type ReasoningResponse struct {
 }
 ```
 
-#### 2. engine_native.go - Capture Escalation State
-**File**: `lib/sop/ai/agent/engine_native.go`  
+#### 2. engine_compatible.go - Capture Escalation State
+**File**: `lib/sop/ai/agent/engine_compatible.go`
 **Lines**: +15 lines (1 declaration, 11 in escalation block, 3 in returns)
 
 **Tracking variable**:

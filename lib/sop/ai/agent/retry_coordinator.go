@@ -6,6 +6,8 @@ type RetryCoordinator = ai.RetryCoordinator
 type RetryTier = ai.RetryTier
 type RepairStrategy = ai.RepairStrategy
 type RepairPlan = ai.RepairPlan
+type RetryPolicySurface = ai.RetryPolicySurface
+type RetryDecisionInput = ai.RetryDecisionInput
 
 const (
 	RetryTierQuickFix = ai.RetryTierQuickFix
@@ -18,4 +20,8 @@ const (
 
 func NewRetryCoordinator() *RetryCoordinator {
 	return ai.NewRetryCoordinator()
+}
+
+func NewDefaultRetryPolicySurface() RetryPolicySurface {
+	return ai.NewDefaultRetryPolicySurface()
 }

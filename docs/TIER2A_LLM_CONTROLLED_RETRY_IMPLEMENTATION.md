@@ -32,7 +32,7 @@ type ToolProgressHint struct {
 - `"retry_with_changes"` - Same-tool retry with corrections (future)
 - `"give_up_and_clarify"` - Escalate to user clarification (future)
 
-### 2. Retry Strategy Enhancement (`lib/sop/ai/agent/engine_native.go`)
+### 2. Retry Strategy Enhancement (`lib/sop/ai/agent/engine_compatible.go`)
 
 #### Function Signature Update
 
@@ -50,13 +50,13 @@ func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProg
 
 ```go
 func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProgressHint) pendingToolRepair {
-    repair := pendingToolRepair{ToolName: toolName, Strategy: nativeRepairStrategySameTool}
+    repair := compatiblePendingToolRepair{ToolName: toolName, Strategy: compatibleRepairStrategySameTool}
     
     // TIER 2A: Check hint-driven strategy first
     if hint != nil && hint.SuggestedAction != "" {
         switch hint.SuggestedAction {
         case "research_before_retry":
-            repair.Strategy = nativeRepairStrategyResearchFirst
+            repair.Strategy = compatibleRepairStrategyResearchFirst
             repair.ResearchTool = "list_stores" // Default
             if len(hint.SuggestedNextTools) > 0 {
                 repair.ResearchTool = hint.SuggestedNextTools[0]
@@ -84,7 +84,7 @@ func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProg
 Added `getLatestToolHint()` to extract hint from previous tool call:
 
 ```go
-func getLatestToolHint(toolResults []nativeToolResult) *ai.ToolProgressHint {
+func getLatestToolHint(toolResults []compatibleToolResult) *ai.ToolProgressHint {
     if len(toolResults) == 0 {
         return nil
     }
@@ -97,14 +97,14 @@ func getLatestToolHint(toolResults []nativeToolResult) *ai.ToolProgressHint {
 Modified error handling in `runDefaultLoop()`:
 
 ```go
-// Line ~315 in engine_native.go
+// Line ~315 in engine_compatible.go
 hint := getLatestToolHint(toolResults)
 repair := classifyRecoverableToolRepair(toolName, err, hint)
 ```
 
 ### 3. Test Updates
 
-#### Updated Existing Tests (`engine_native_test.go`)
+#### Updated Existing Tests (`engine_compatible_test.go`)
 
 Fixed function signature in existing tests:
 
@@ -118,7 +118,7 @@ researchRepair := classifyRecoverableToolRepair("execute_script", validationErr,
 sameToolRepair := classifyRecoverableToolRepair("execute_script", fmt.Errorf("missing required args"), nil)
 ```
 
-#### New Tier 2A Tests (`engine_native_tier2a_test.go`)
+#### New Tier 2A Tests (`engine_compatible_tier2a_test.go`)
 
 Created comprehensive test coverage:
 
@@ -233,8 +233,8 @@ ok      github.com/sharedcode/sop/ai/agent      37.241s
 
 - **New Code**: ~45 lines
   - `interfaces.go`: 1 line (new field)
-  - `engine_native.go`: ~30 lines (hint logic + helper)
-  - `engine_native_tier2a_test.go`: ~65 lines (comprehensive tests)
+    - `engine_compatible.go`: ~30 lines (hint logic + helper)
+    - `engine_compatible_tier2a_test.go`: ~65 lines (comprehensive tests)
 - **Updated Code**: 2 test call signatures
 - **Files Modified**: 4 total
 

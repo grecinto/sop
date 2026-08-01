@@ -586,6 +586,78 @@ func TestAnthropicOwnedLoopPrompt_IncludesOriginalAskFromCarryoverState(t *testi
 	}
 }
 
+func TestAnthropicContinuationPrompt_UsesRetryGuidanceForRepairState(t *testing.T) {
+	prompt := anthropicContinuationPrompt(ai.ReasoningRequest{UserQuery: "continue the script"}, []ai.ReActToolResult{{
+		Name:   "execute_script",
+		Result: "repair required",
+		RetryGuidance: &ai.RetryGuidance{
+			ToolName:    "execute_script",
+			Strategy:    ai.RepairStrategyResearchFirst,
+			AllowedTool: "list_stores",
+			NextAction:  ai.ReActNextActionCallTool,
+		},
+	}}, false)
+	if !contains(prompt, "react_state.retry_guidance") {
+		t.Fatalf("expected repair prompt to reference structured retry guidance, got %q", prompt)
+	}
+	if !contains(prompt, "do not switch tools unless react_state.retry_guidance explicitly requires it") {
+		t.Fatalf("expected repair prompt to defer tool switching to retry guidance, got %q", prompt)
+	}
+}
+
+func TestAnthropicContinuationPrompt_FinalTurnUsesRetryGuidance(t *testing.T) {
+	prompt := anthropicContinuationPrompt(ai.ReasoningRequest{UserQuery: "continue the script"}, []ai.ReActToolResult{{
+		Name:   "execute_script",
+		Result: "repair required",
+		RetryGuidance: &ai.RetryGuidance{
+			ToolName:    "execute_script",
+			Strategy:    ai.RepairStrategySameTool,
+			AllowedTool: "execute_script",
+			NextAction:  ai.ReActNextActionRetrySameTool,
+		},
+	}}, true)
+	if !contains(prompt, "do not call more tools") || !contains(prompt, "react_state.retry_guidance") {
+		t.Fatalf("expected final-turn repair prompt to be driven by structured retry guidance, got %q", prompt)
+	}
+}
+
+func TestAnthropicToolCallContinuations_WrapsLatestReactState(t *testing.T) {
+	wrapped := anthropicToolCallContinuations("Find orders for John", []ai.ReActToolResult{{
+		Name:   "execute_script",
+		Result: "repair required",
+		RetryGuidance: &ai.RetryGuidance{
+			ToolName:    "execute_script",
+			Strategy:    ai.RepairStrategyResearchFirst,
+			AllowedTool: "list_stores",
+			NextAction:  ai.ReActNextActionCallTool,
+		},
+	}}, []ai.ToolCallContinuation{{
+		ToolCall: ai.ToolCall{Name: "execute_script", NativeID: "toolu_123"},
+		Response: map[string]any{"tool_error": map[string]any{"message": "Retry instruction: Call list_stores first."}},
+	}}, 2, false)
+	if len(wrapped) != 1 {
+		t.Fatalf("expected one wrapped continuation, got %#v", wrapped)
+	}
+	response, ok := wrapped[0].Response.(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured continuation response, got %#v", wrapped[0].Response)
+	}
+	reactState, ok := response["react_state"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected react_state in continuation response, got %#v", response)
+	}
+	if reactState["task_status"] != "repair_required" {
+		t.Fatalf("expected repair_required task status, got %#v", reactState)
+	}
+	if reactState["retry_guidance"] == nil {
+		t.Fatalf("expected retry_guidance in continuation state, got %#v", reactState)
+	}
+	actions, ok := reactState["allowed_next_actions"].([]string)
+	if !ok || len(actions) != 2 || actions[0] != string(ai.ReActNextActionCallTool) || actions[1] != string(ai.ReActNextActionAskClarification) {
+		t.Fatalf("expected research-first repair actions in continuation state, got %#v", reactState)
+	}
+}
+
 func contains(value, needle string) bool {
 	return len(needle) == 0 || (len(value) >= len(needle) && (value == needle || containsAt(value, needle)))
 }
@@ -747,6 +819,12 @@ func TestExecuteAnthropicOwnedLoopToolCall_FormatsRecoverableRetryResult(t *test
 	message, _ := toolErr["message"].(string)
 	if !strings.Contains(message, "Retry instruction:") {
 		t.Fatalf("expected retry instruction in continuation message, got %q", message)
+	}
+	if !strings.Contains(message, "Retry policy state:") {
+		t.Fatalf("expected structured retry guidance state in continuation message, got %q", message)
+	}
+	if _, ok := response["retry_guidance"].(*ai.RetryGuidance); !ok {
+		t.Fatalf("expected retry guidance in continuation envelope, got %#v", response)
 	}
 }
 

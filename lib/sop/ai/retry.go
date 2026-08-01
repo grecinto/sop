@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"encoding/json"
 	"fmt"
 	log "log/slog"
 	"strings"
@@ -64,6 +65,260 @@ type RetryLearningRecommendation struct {
 	Strategy RepairStrategy
 	Score    float64
 	Reason   string
+}
+
+type RetryGuidance struct {
+	ToolName             string          `json:"tool_name,omitempty"`
+	Tier                 RetryTier       `json:"tier,omitempty"`
+	Strategy             RepairStrategy  `json:"strategy,omitempty"`
+	FailureCount         int             `json:"failure_count,omitempty"`
+	SoftRetryBudget      int             `json:"soft_retry_budget,omitempty"`
+	HardRetryBudget      int             `json:"hard_retry_budget,omitempty"`
+	AllowedTool          string          `json:"allowed_tool,omitempty"`
+	ResearchTool         string          `json:"research_tool,omitempty"`
+	ClarificationNeeded  bool            `json:"clarification_needed,omitempty"`
+	RecommendedStrategy  RepairStrategy  `json:"recommended_strategy,omitempty"`
+	RecommendationScore  float64         `json:"recommendation_score,omitempty"`
+	RecommendationReason string          `json:"recommendation_reason,omitempty"`
+	NextAction           ReActNextAction `json:"next_action,omitempty"`
+}
+
+type RecoverabilityPolicy interface {
+	IsRecoverable(err error) bool
+}
+
+type RetryDecisionPolicy interface {
+	EvaluateRetryDecision(input RetryDecisionInput) RetryDecision
+}
+
+type RetryBudgetPolicy interface {
+	InitialRetryBudget(input RetryBudgetInput) RetryBudgetDecision
+	EvaluateRetryBudgetExtension(input RetryBudgetExtensionInput) RetryBudgetExtensionDecision
+}
+
+type RepairEnforcementPolicy interface {
+	AllowsTool(plan RepairPlan, toolName string) bool
+	FormatRepairDirective(plan RepairPlan, attemptedToolName string) string
+}
+
+type RetryPolicySurface interface {
+	RecoverabilityPolicy
+	RetryDecisionPolicy
+	RetryBudgetPolicy
+	RepairEnforcementPolicy
+}
+
+// Candidate for interface capture toward LAO: if advisory model guidance and
+// heuristic hard-rail enforcement keep evolving independently, split this input
+// into narrower advisory vs enforcement contracts instead of growing one mixed surface.
+
+type RetryDecisionInput struct {
+	ToolName           string
+	Err                error
+	FailureCount       int
+	Hint               *ToolProgressHint
+	RecentlyResearched bool
+	Learnings          []RetryLearning
+	LearningContext    RetryLearningContext
+}
+
+type RetryDecision struct {
+	Tier              RetryTier
+	Plan              RepairPlan
+	Recommendation    *RetryLearningRecommendation
+	RequiresClarify   bool
+	IsRecoverable     bool
+	EnforcementReason string
+}
+
+type RetryBudgetInput struct {
+	BaseTurns int
+	Query     string
+	Learnings []RetryLearning
+}
+
+type RetryBudgetDecision struct {
+	SoftLimit int
+	HardLimit int
+}
+
+type RetryBudgetExtensionInput struct {
+	AllowedTurns     int
+	MaxAllowedTurns  int
+	CurrentIteration int
+	ProgressHint     *ToolProgressHint
+	ExplicitProgress bool
+}
+
+type RetryBudgetExtensionDecision struct {
+	Allow           bool
+	AdditionalTurns int
+}
+
+type DefaultRetryPolicySurface struct {
+	coordinator *RetryCoordinator
+}
+
+func NewDefaultRetryPolicySurface() RetryPolicySurface {
+	return NewDefaultRetryPolicySurfaceWithCoordinator(nil)
+}
+
+func NewDefaultRetryPolicySurfaceWithCoordinator(coordinator *RetryCoordinator) RetryPolicySurface {
+	if coordinator == nil {
+		coordinator = NewRetryCoordinator()
+	}
+	return &DefaultRetryPolicySurface{coordinator: coordinator}
+}
+
+func (p *DefaultRetryPolicySurface) IsRecoverable(err error) bool {
+	return p.coordinator.IsRecoverableToolError(err)
+}
+
+func (p *DefaultRetryPolicySurface) EvaluateRetryDecision(input RetryDecisionInput) RetryDecision {
+	// Candidate for interface capture toward LAO and/or heuristic policy enforcer:
+	// this default implementation still composes heuristic tiering, repair selection,
+	// and learned guidance in one place. If provider-native LAO policy becomes richer,
+	// keep this as the hard-rail fallback and move advisory selection behind a dedicated interface.
+	plan := p.coordinator.ClassifyRepair(input.ToolName, input.Err, input.Hint, input.RecentlyResearched)
+	tier := p.coordinator.DetermineRetryTier(errorText(input.Err), input.FailureCount, input.Hint)
+	var recommendation *RetryLearningRecommendation
+	if learned, ok := p.coordinator.RecommendStrategyDetails(input.ToolName, input.Err, input.Learnings, input.LearningContext); ok {
+		recommendation = &learned
+	}
+	if plan.Strategy == RepairStrategyResearchFirst && tier < RetryTierResearch {
+		tier = RetryTierResearch
+	}
+	plan.Tier = tier
+	return RetryDecision{
+		Tier:            tier,
+		Plan:            plan,
+		Recommendation:  recommendation,
+		RequiresClarify: tier == RetryTierClarify,
+		IsRecoverable:   p.coordinator.IsRecoverableToolError(input.Err),
+	}
+}
+
+func (p *DefaultRetryPolicySurface) InitialRetryBudget(input RetryBudgetInput) RetryBudgetDecision {
+	softLimit := p.coordinator.CalculateAdaptiveBudget(input.BaseTurns, input.Query, input.Learnings)
+	hardLimit := input.BaseTurns + 3
+	if hardLimit < softLimit {
+		hardLimit = softLimit
+	}
+	return RetryBudgetDecision{SoftLimit: softLimit, HardLimit: hardLimit}
+}
+
+func (p *DefaultRetryPolicySurface) EvaluateRetryBudgetExtension(input RetryBudgetExtensionInput) RetryBudgetExtensionDecision {
+	// Candidate for interface capture toward LAO: the hard ceiling belongs here,
+	// but the meaning of "progress" may later need a separate advisory policy so
+	// providers can surface budget tradeoffs to the model in a native way.
+	if input.CurrentIteration < input.AllowedTurns || input.AllowedTurns >= input.MaxAllowedTurns || !input.ExplicitProgress {
+		return RetryBudgetExtensionDecision{}
+	}
+	additionalTurns := 1
+	if input.ProgressHint != nil && input.ProgressHint.CompletionDelta >= 0.25 {
+		additionalTurns = 2
+	}
+	if input.AllowedTurns+additionalTurns > input.MaxAllowedTurns {
+		additionalTurns = input.MaxAllowedTurns - input.AllowedTurns
+	}
+	if additionalTurns <= 0 {
+		return RetryBudgetExtensionDecision{}
+	}
+	return RetryBudgetExtensionDecision{Allow: true, AdditionalTurns: additionalTurns}
+}
+
+func (p *DefaultRetryPolicySurface) AllowsTool(plan RepairPlan, toolName string) bool {
+	return p.coordinator.AllowsTool(plan, toolName)
+}
+
+func (p *DefaultRetryPolicySurface) FormatRepairDirective(plan RepairPlan, attemptedToolName string) string {
+	return p.coordinator.FormatRepairDirective(plan, attemptedToolName)
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func BuildRetryGuidance(toolName string, plan RepairPlan, recommendation *RetryLearningRecommendation, failureCount int, softBudget int, hardBudget int, clarificationNeeded bool) *RetryGuidance {
+	guidance := &RetryGuidance{
+		ToolName:            strings.TrimSpace(toolName),
+		Tier:                plan.Tier,
+		Strategy:            plan.Strategy,
+		FailureCount:        failureCount,
+		SoftRetryBudget:     softBudget,
+		HardRetryBudget:     hardBudget,
+		AllowedTool:         strings.TrimSpace(plan.ToolName),
+		ResearchTool:        strings.TrimSpace(plan.ResearchTool),
+		ClarificationNeeded: clarificationNeeded,
+	}
+	if clarificationNeeded {
+		guidance.NextAction = ReActNextActionAskClarification
+	} else if plan.Strategy == RepairStrategyResearchFirst {
+		researchTool := strings.TrimSpace(plan.ResearchTool)
+		if researchTool == "" {
+			researchTool = "list_stores"
+		}
+		guidance.AllowedTool = researchTool
+		guidance.NextAction = ReActNextActionCallTool
+	} else {
+		guidance.NextAction = ReActNextActionRetrySameTool
+	}
+	if recommendation != nil {
+		guidance.RecommendedStrategy = recommendation.Strategy
+		guidance.RecommendationScore = recommendation.Score
+		guidance.RecommendationReason = recommendation.Reason
+	}
+	return guidance
+}
+
+func FormatRetryGuidanceForLLM(guidance *RetryGuidance) string {
+	if guidance == nil {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	if guidance.RecommendedStrategy != "" {
+		parts = append(parts, fmt.Sprintf("LLM retry guidance: A learned pattern suggests strategy=%s (score=%.2f, %s). Use this as guidance, not as a mandatory action.", guidance.RecommendedStrategy, guidance.RecommendationScore, guidance.RecommendationReason))
+	}
+	parts = append(parts, fmt.Sprintf("Retry context: failure_count=%d, soft_retry_budget=%d, hard_retry_budget=%d.", guidance.FailureCount, guidance.SoftRetryBudget, guidance.HardRetryBudget))
+	parts = append(parts, fmt.Sprintf("Retry policy: tier=%d, strategy=%s, allowed_tool=%s, next_action=%s.", guidance.Tier, guidance.Strategy, guidance.AllowedTool, guidance.NextAction))
+	parts = append(parts, "The model should decide whether to retry the same tool, research first, change tools appropriately, or ask for clarification within these hard limits.")
+	return "\n" + strings.Join(parts, "\n")
+}
+
+func AppendRetryGuidanceState(resultText string, guidance *RetryGuidance) string {
+	trimmed := strings.TrimSpace(resultText)
+	if guidance == nil {
+		return trimmed
+	}
+	raw, err := json.Marshal(guidance)
+	if err != nil {
+		return trimmed
+	}
+	if trimmed == "" {
+		return "Retry policy state: " + string(raw)
+	}
+	return trimmed + "\nRetry policy state: " + string(raw)
+}
+
+func BuildRepairDirectiveFromRetryGuidance(toolName string, guidance *RetryGuidance) string {
+	if guidance == nil {
+		return ""
+	}
+	toolName = strings.TrimSpace(toolName)
+	if guidance.ClarificationNeeded {
+		return "Clarification directive: The last tool failure still remains unresolved after the first repair attempt. Do not call another tool yet. Ask the user one short, concrete clarification question that names the blocker and wait for the answer."
+	}
+	if guidance.Strategy == RepairStrategyResearchFirst {
+		allowedTool := strings.TrimSpace(guidance.AllowedTool)
+		if allowedTool == "" {
+			allowedTool = "list_stores"
+		}
+		return fmt.Sprintf("Repair directive: The last tool call to %s failed because grounded schema or relation facts are still missing. Your next step should be to call %s first, prefer scoped stores:[...] for likely targets, reuse its schema/relations output as the source of truth, and only then return to %s if needed. Do not summarize the error as a final answer unless correction is impossible.", toolName, allowedTool, toolName)
+	}
+	return fmt.Sprintf("Repair directive: The last tool call to %s failed because its arguments were invalid. Your next step should be to call the same tool again with corrected arguments using the repair guidance below. Preserve valid script slices and change only the malformed condition or join. Do not summarize the error as a final answer unless correction is impossible.", toolName)
 }
 
 func (rc *RetryCoordinator) IsRecoverableToolError(err error) bool {

@@ -104,7 +104,7 @@ func (reActTurnStrategyMock) PrepareTurn(ctx context.Context, turn ai.ReActTurn)
 			turn.Prompt = fmt.Sprintf("loop state continuation mismatch: %#v", turn.LoopState.ToolCallContinuations)
 			return turn
 		}
-		turn.Prompt = "adapter prompt: continue with native tool state"
+		turn.Prompt = "adapter prompt: continue with compatible tool state"
 	}
 	return turn
 }
@@ -292,7 +292,7 @@ func (m *malformedFunctionCallRecoveryGenerator) Generate(ctx context.Context, p
 				return ai.GenOutput{Text: "missing malformed function call retry context: " + check}, nil
 			}
 		}
-		if opts.Temperature != nativeReActRepairTemperature {
+		if opts.Temperature != compatibleReActRepairTemperature {
 			return ai.GenOutput{Text: fmt.Sprintf("wrong retry temperature: %v", opts.Temperature)}, nil
 		}
 		return ai.GenOutput{ToolCalls: []ai.ToolCall{{
@@ -403,7 +403,7 @@ func (e *nativeHintContextExecutor) ListTools(ctx context.Context) ([]ai.ToolDef
 	return []ai.ToolDefinition{{Name: "execute_script"}}, nil
 }
 
-func TestNativeReActEngine_SynthesizesAfterToolResult(t *testing.T) {
+func TestCompatibleReActEngine_SynthesizesAfterToolResult(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
@@ -426,7 +426,7 @@ func TestNativeReActEngine_SynthesizesAfterToolResult(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_UsesLowTemperatureForToolCalls(t *testing.T) {
+func TestCompatibleReActEngine_UsesLowTemperatureForToolCalls(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &toolTemperatureMockGenerator{}
 	_, err := engine.Run(context.Background(), ai.ReasoningRequest{
@@ -438,13 +438,13 @@ func TestNativeReActEngine_UsesLowTemperatureForToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
-	if len(gen.temperatures) == 0 || gen.temperatures[0] != nativeReActToolCallTemperature {
-		t.Fatalf("expected first tool-call temperature %v, got %#v", nativeReActToolCallTemperature, gen.temperatures)
+	if len(gen.temperatures) == 0 || gen.temperatures[0] != compatibleReActToolCallTemperature {
+		t.Fatalf("expected first tool-call temperature %v, got %#v", compatibleReActToolCallTemperature, gen.temperatures)
 	}
 }
 
 func TestCloneReActToolResults_PreservesExecutionMode(t *testing.T) {
-	input := []nativeToolResult{{Name: "search_web", ExecutionMode: ai.ReActToolResultExecutionModeSummary}}
+	input := []compatibleToolResult{{Name: "search_web", ExecutionMode: ai.ReActToolResultExecutionModeSummary}}
 	got := cloneReActToolResults(input)
 	if len(got) != 1 {
 		t.Fatalf("expected one cloned result, got %d", len(got))
@@ -454,7 +454,7 @@ func TestCloneReActToolResults_PreservesExecutionMode(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_UsesProviderReActTurnStrategyForContinuationTurns(t *testing.T) {
+func TestCompatibleReActEngine_UsesProviderReActTurnStrategyForContinuationTurns(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &reActTurnStrategyMockGenerator{}
 	executor := &reActTurnStrategyMockExecutor{}
@@ -474,15 +474,86 @@ func TestNativeReActEngine_UsesProviderReActTurnStrategyForContinuationTurns(t *
 	if len(gen.prompts) != 2 {
 		t.Fatalf("expected two generator calls, got %#v", gen.prompts)
 	}
-	if gen.prompts[1] != "adapter prompt: continue with native tool state" {
+	if gen.prompts[1] != "adapter prompt: continue with compatible tool state" {
 		t.Fatalf("expected adapter prompt on continuation turn, got %q", gen.prompts[1])
 	}
 	if len(gen.options[1].ToolCallContinuations) != 1 {
 		t.Fatalf("expected tool-call continuation to be preserved for strategy turn, got %#v", gen.options[1].ToolCallContinuations)
 	}
+	response, ok := gen.options[1].ToolCallContinuations[0].Response.(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured continuation response envelope, got %#v", gen.options[1].ToolCallContinuations[0].Response)
+	}
+	if response["tool_result"] == nil {
+		t.Fatalf("expected tool_result in continuation envelope, got %#v", response)
+	}
+	reactState, ok := response["react_state"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected react_state in continuation envelope, got %#v", response)
+	}
+	if reactState["task_status"] != "tool_progressed" {
+		t.Fatalf("expected tool_progressed task status, got %#v", reactState)
+	}
+	actions, ok := reactState["allowed_next_actions"].([]string)
+	if !ok || len(actions) != 2 || actions[0] != string(ai.ReActNextActionCallTool) || actions[1] != string(ai.ReActNextActionAnswerUser) {
+		t.Fatalf("expected active continuation actions, got %#v", reactState)
+	}
 }
 
-func TestNativeReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.T) {
+func TestCompatibleReActAdapter_WrapsContinuationWithRetryGuidance(t *testing.T) {
+	adapter := NewCompatibleReActAdapter(false, 4096)
+	prompt, opts, err := adapter.PrepareLLMRequest(context.Background(), ReActLoopState{
+		Iteration: 2,
+		Request: ai.ReasoningRequest{
+			SystemPrompt: "You are a test assistant.",
+			UserQuery:    "Join users with orders",
+		},
+		ToolResults: []ai.ReActToolResult{{
+			Name:   "execute_script",
+			Result: "Tool execution error: invalid join",
+			RetryGuidance: &ai.RetryGuidance{
+				ToolName:    "execute_script",
+				Strategy:    ai.RepairStrategyResearchFirst,
+				AllowedTool: "list_stores",
+				NextAction:  ai.ReActNextActionCallTool,
+			},
+		}},
+		Continuations: []ai.ToolCallContinuation{{
+			ToolCall: ai.ToolCall{Name: "list_stores", NativeID: "call_123"},
+			Response: map[string]any{"result": "users schema=..."},
+		}},
+		RepairDirective: "Repair directive: The last tool call to execute_script failed because grounded schema or relation facts are still missing.",
+	})
+	if err != nil {
+		t.Fatalf("PrepareLLMRequest failed: %v", err)
+	}
+	if prompt == "" {
+		t.Fatal("expected prompt to be built")
+	}
+	if len(opts.ToolCallContinuations) != 1 {
+		t.Fatalf("expected wrapped continuation, got %#v", opts.ToolCallContinuations)
+	}
+	response, ok := opts.ToolCallContinuations[0].Response.(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured continuation response, got %#v", opts.ToolCallContinuations[0].Response)
+	}
+	reactState, ok := response["react_state"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected react_state in continuation response, got %#v", response)
+	}
+	if reactState["task_status"] != "repair_required" {
+		t.Fatalf("expected repair_required task status, got %#v", reactState)
+	}
+	if reactState["retry_guidance"] == nil {
+		t.Fatalf("expected retry_guidance in continuation response, got %#v", reactState)
+	}
+	actions, ok := reactState["allowed_next_actions"].([]string)
+	if !ok || len(actions) != 2 || actions[0] != string(ai.ReActNextActionCallTool) || actions[1] != string(ai.ReActNextActionAskClarification) {
+		t.Fatalf("expected research-first repair actions, got %#v", reactState)
+	}
+}
+
+func TestCompatibleReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &ownedReActLoopMockGenerator{}
 
@@ -499,7 +570,7 @@ func TestNativeReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_CleansUpToolResultStorageAfterLoop(t *testing.T) {
+func TestCompatibleReActEngine_CleansUpToolResultStorageAfterLoop(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	executor := &loopMockExecutor{}
@@ -523,7 +594,7 @@ func TestNativeReActEngine_CleansUpToolResultStorageAfterLoop(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_HandlesDirectSlashCommandBeforeDefaultLoop(t *testing.T) {
+func TestCompatibleReActEngine_HandlesDirectSlashCommandBeforeDefaultLoop(t *testing.T) {
 	t.Skip("Slash command handling moved to Agent layer (handleDirectToolInvocation) via capability routing")
 	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
@@ -552,7 +623,7 @@ func TestNativeReActEngine_HandlesDirectSlashCommandBeforeDefaultLoop(t *testing
 	}
 }
 
-func TestNativeReActEngine_HandlesDirectSlashCommandBeforeOwnedLoop(t *testing.T) {
+func TestCompatibleReActEngine_HandlesDirectSlashCommandBeforeOwnedLoop(t *testing.T) {
 	t.Skip("Slash command handling moved to Agent layer (handleDirectToolInvocation) via capability routing")
 	engine := &CompatibleReActEngine{}
 	gen := &ownedReActLoopMockGenerator{}
@@ -575,7 +646,7 @@ func TestNativeReActEngine_HandlesDirectSlashCommandBeforeOwnedLoop(t *testing.T
 	}
 }
 
-func TestNativeReActEngine_BypassesSyntheticPromptWhenStrategyRequestsIt(t *testing.T) {
+func TestCompatibleReActEngine_BypassesSyntheticPromptWhenStrategyRequestsIt(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &bypassReActPromptMockGenerator{}
 	executor := &reActTurnStrategyMockExecutor{}
@@ -594,7 +665,7 @@ func TestNativeReActEngine_BypassesSyntheticPromptWhenStrategyRequestsIt(t *test
 	}
 }
 
-func TestNativeReActEngine_UsesZeroTemperatureForRepairRetry(t *testing.T) {
+func TestCompatibleReActEngine_UsesZeroTemperatureForRepairRetry(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &recoverableTempMockGenerator{}
 	_, err := engine.Run(context.Background(), ai.ReasoningRequest{
@@ -609,11 +680,11 @@ func TestNativeReActEngine_UsesZeroTemperatureForRepairRetry(t *testing.T) {
 	if len(gen.temperatures) < 2 {
 		t.Fatalf("expected at least two generation calls, got %#v", gen.temperatures)
 	}
-	if gen.temperatures[0] != nativeReActToolCallTemperature {
-		t.Fatalf("expected initial tool-call temperature %v, got %#v", nativeReActToolCallTemperature, gen.temperatures)
+	if gen.temperatures[0] != compatibleReActToolCallTemperature {
+		t.Fatalf("expected initial tool-call temperature %v, got %#v", compatibleReActToolCallTemperature, gen.temperatures)
 	}
-	if gen.temperatures[1] != nativeReActRepairTemperature {
-		t.Fatalf("expected repair temperature %v, got %#v", nativeReActRepairTemperature, gen.temperatures)
+	if gen.temperatures[1] != compatibleReActRepairTemperature {
+		t.Fatalf("expected repair temperature %v, got %#v", compatibleReActRepairTemperature, gen.temperatures)
 	}
 }
 
@@ -632,7 +703,7 @@ func TestFormatLLMGeneratedScriptForLog_NonExecuteScript(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_MarksToolExecutionForNativeHints(t *testing.T) {
+func TestCompatibleReActEngine_MarksToolExecutionForNativeHints(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &toolTemperatureMockGenerator{}
 	executor := &nativeHintContextExecutor{}
@@ -651,7 +722,7 @@ func TestNativeReActEngine_MarksToolExecutionForNativeHints(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_RetriesRecoverableMalformedFunctionCall(t *testing.T) {
+func TestCompatibleReActEngine_RetriesRecoverableMalformedFunctionCall(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &malformedFunctionCallRecoveryGenerator{}
 	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
@@ -740,7 +811,7 @@ func (e *csvMetaToolMockExecutor) ListTools(ctx context.Context) ([]ai.ToolDefin
 	return []ai.ToolDefinition{{Name: "list_tools"}}, nil
 }
 
-func TestNativeReActEngine_PreservesCSVToolResult(t *testing.T) {
+func TestCompatibleReActEngine_PreservesCSVToolResult(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &csvLoopMockGenerator{}
 	ctx := context.WithValue(context.Background(), ai.CtxKeyDefaultFormat, "csv")
@@ -761,7 +832,7 @@ func TestNativeReActEngine_PreservesCSVToolResult(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_DoesNotPreserveMetaToolResultForCSV(t *testing.T) {
+func TestCompatibleReActEngine_DoesNotPreserveMetaToolResultForCSV(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &csvMetaToolMockGenerator{}
 	ctx := context.WithValue(context.Background(), ai.CtxKeyDefaultFormat, "csv")
@@ -782,7 +853,7 @@ func TestNativeReActEngine_DoesNotPreserveMetaToolResultForCSV(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_UsesSessionPayloadVerboseForRuntimeProgress(t *testing.T) {
+func TestCompatibleReActEngine_UsesSessionPayloadVerboseForRuntimeProgress(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	var progress []string
@@ -801,7 +872,7 @@ func TestNativeReActEngine_UsesSessionPayloadVerboseForRuntimeProgress(t *testin
 		t.Fatalf("Run failed: %v", err)
 	}
 	want := []string{
-		"Planning request with native multi-step loop.",
+		"Planning request with compatible multi-step loop.",
 		"Reasoning iteration 1 of 5.",
 		"Waiting for model response.",
 		"Calling tool `execute_script`.",
@@ -815,7 +886,7 @@ func TestNativeReActEngine_UsesSessionPayloadVerboseForRuntimeProgress(t *testin
 	}
 }
 
-func TestNativeReActEngine_RecoversPrintedTextualToolCall(t *testing.T) {
+func TestCompatibleReActEngine_RecoversPrintedTextualToolCall(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &textualToolCallRecoveryGenerator{}
 
@@ -836,7 +907,7 @@ func TestNativeReActEngine_RecoversPrintedTextualToolCall(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_RepairsTruncatedPrintedTextualToolCall(t *testing.T) {
+func TestCompatibleReActEngine_RepairsTruncatedPrintedTextualToolCall(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &truncatedTextualToolCallRecoveryGenerator{}
 
@@ -860,7 +931,7 @@ func TestNativeReActEngine_RepairsTruncatedPrintedTextualToolCall(t *testing.T) 
 	}
 }
 
-func TestNativeReActEngine_RespectsVerboseFalse(t *testing.T) {
+func TestCompatibleReActEngine_RespectsVerboseFalse(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	var progress []string
@@ -909,7 +980,7 @@ func TestEmitReasoningEvent_AlwaysStreamsWhenStreamerPresent(t *testing.T) {
 	}
 }
 
-func TestNativeReActEngine_StreamsStructuredToolEvents(t *testing.T) {
+func TestCompatibleReActEngine_StreamsStructuredToolEvents(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 
@@ -1012,7 +1083,7 @@ func (e *recoverableArgErrorExecutor) ListTools(ctx context.Context) ([]ai.ToolD
 	return []ai.ToolDefinition{{Name: "mint_to_space"}}, nil
 }
 
-func TestNativeReActEngine_RetriesRecoverableToolArgumentErrors(t *testing.T) {
+func TestCompatibleReActEngine_RetriesRecoverableToolArgumentErrors(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &recoverableArgErrorGenerator{}
 	executor := &recoverableArgErrorExecutor{}
@@ -1117,7 +1188,7 @@ func (e *delayedRepairExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinit
 	return []ai.ToolDefinition{{Name: "mint_to_space"}, {Name: "list_tools"}}, nil
 }
 
-func TestNativeReActEngine_RequiresRepairBeforeSwitchingTools(t *testing.T) {
+func TestCompatibleReActEngine_RequiresRepairBeforeSwitchingTools(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &delayedRepairGenerator{}
 	executor := &delayedRepairExecutor{}
@@ -1163,7 +1234,7 @@ func TestFormatRecoverableToolError_IncludesValidationCategoryAndExample(t *test
 		`{"op":"filter","args":{"condition":{"first_name":{"$eq":"<value>"}}}}`,
 	)
 
-	formatted := formatRecoverableToolError(pendingToolRepair{ToolName: "execute_script", Strategy: nativeRepairStrategySameTool}, map[string]any{
+	formatted := formatRecoverableToolError(compatiblePendingToolRepair{ToolName: "execute_script", Strategy: compatibleRepairStrategySameTool}, map[string]any{
 		"script": []any{map[string]any{"op": "filter"}},
 	}, err)
 
@@ -1192,7 +1263,7 @@ func TestFormatRecoverableToolError_IncludesMultipleValidationIssues(t *testing.
 		),
 	})
 
-	formatted := formatRecoverableToolError(pendingToolRepair{ToolName: "execute_script", Strategy: nativeRepairStrategySameTool}, map[string]any{
+	formatted := formatRecoverableToolError(compatiblePendingToolRepair{ToolName: "execute_script", Strategy: compatibleRepairStrategySameTool}, map[string]any{
 		"script": []any{map[string]any{"op": "filter"}},
 	}, err)
 
@@ -1211,14 +1282,14 @@ func TestFormatRecoverableToolError_IncludesMultipleValidationIssues(t *testing.
 }
 
 func TestAppendOrReplaceRetriedToolResult_ReplacesLatestSameTool(t *testing.T) {
-	results := []nativeToolResult{
+	results := []compatibleToolResult{
 		{Name: "list_stores", Result: "grounded"},
 		{Name: "execute_script", Result: "Retry instruction: fix first attempt"},
 	}
 	updated := appendOrReplaceRetriedToolResult(
 		results,
-		nativeToolResult{Name: "execute_script", Result: "ok"},
-		&pendingToolRepair{ToolName: "execute_script", Strategy: nativeRepairStrategySameTool},
+		compatibleToolResult{Name: "execute_script", Result: "ok"},
+		&compatiblePendingToolRepair{ToolName: "execute_script", Strategy: compatibleRepairStrategySameTool},
 		"execute_script",
 	)
 	if len(updated) != 2 {
@@ -1233,7 +1304,7 @@ func TestAppendOrReplaceRetriedToolResult_ReplacesLatestSameTool(t *testing.T) {
 }
 
 func TestAppendOrReplaceRetriedToolResult_ExecuteScriptRetryDropsEarlierExecuteScriptEntries(t *testing.T) {
-	results := []nativeToolResult{
+	results := []compatibleToolResult{
 		{Name: "list_stores", Result: "grounded users/orders"},
 		{Name: "execute_script", Result: "first bad script"},
 		{Name: "list_stores", Result: "grounded bridge relation"},
@@ -1241,8 +1312,8 @@ func TestAppendOrReplaceRetriedToolResult_ExecuteScriptRetryDropsEarlierExecuteS
 	}
 	updated := appendOrReplaceRetriedToolResult(
 		results,
-		nativeToolResult{Name: "execute_script", Result: "final repaired script"},
-		&pendingToolRepair{ToolName: "execute_script", Strategy: nativeRepairStrategySameTool},
+		compatibleToolResult{Name: "execute_script", Result: "final repaired script"},
+		&compatiblePendingToolRepair{ToolName: "execute_script", Strategy: compatibleRepairStrategySameTool},
 		"execute_script",
 	)
 	if len(updated) != 3 {
@@ -1340,7 +1411,7 @@ func (e *executeScriptRepairExecutor) ListTools(ctx context.Context) ([]ai.ToolD
 	return []ai.ToolDefinition{{Name: "execute_script"}}, nil
 }
 
-func TestNativeReActEngine_RetriesExecuteScriptWithValidationGuidance(t *testing.T) {
+func TestCompatibleReActEngine_RetriesExecuteScriptWithValidationGuidance(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &executeScriptRepairGenerator{}
 	executor := &executeScriptRepairExecutor{}
@@ -1368,8 +1439,8 @@ func TestNativeReActEngine_RetriesExecuteScriptWithValidationGuidance(t *testing
 	if executor.callCount != 2 {
 		t.Fatalf("expected two execute_script attempts, got %d", executor.callCount)
 	}
-	if !containsProgressMessage(progress, "Tool `execute_script` needs corrected arguments; retrying.") {
-		t.Fatalf("expected execute_script retry progress message, got %#v", progress)
+	if !containsProgressMessage(progress, "Tier 1 (Quick Fix): Tool `execute_script` needs corrected arguments; retrying.") {
+		t.Fatalf("expected execute_script quick-fix retry progress message, got %#v", progress)
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "execute_script" {
 		t.Fatalf("expected only the successful repaired execute_script call to be recorded, got %#v", resp.ToolCalls)
@@ -1644,7 +1715,7 @@ func (m *routedSameToolClarificationGenerator) Generate(ctx context.Context, pro
 	}
 }
 
-func TestNativeReActEngine_RoutedSameToolRepairEscalatesToClarificationAfterFirstRetry(t *testing.T) {
+func TestCompatibleReActEngine_RoutedSameToolRepairEscalatesToClarificationAfterFirstRetry(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &routedSameToolClarificationGenerator{}
 	executor := &recoverableArgErrorExecutor{}
@@ -1687,7 +1758,7 @@ func TestNativeReActEngine_RoutedSameToolRepairEscalatesToClarificationAfterFirs
 	}
 }
 
-func TestNativeReActEngine_RetriesExecuteScriptJoinWithValidationGuidance(t *testing.T) {
+func TestCompatibleReActEngine_RetriesExecuteScriptJoinWithValidationGuidance(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &executeScriptJoinRepairGenerator{}
 	executor := &executeScriptJoinRepairExecutor{}
@@ -1715,8 +1786,8 @@ func TestNativeReActEngine_RetriesExecuteScriptJoinWithValidationGuidance(t *tes
 	if executor.callCount != 3 {
 		t.Fatalf("expected execute_script failure, list_stores research, and execute_script retry, got %d calls", executor.callCount)
 	}
-	if !containsProgressMessage(progress, "Tool `execute_script` needs corrected arguments; retrying.") {
-		t.Fatalf("expected execute_script retry progress message, got %#v", progress)
+	if !containsProgressMessage(progress, "Tier 2 (Research): Tool `execute_script` requires research before retry.") {
+		t.Fatalf("expected execute_script research-before-retry progress message, got %#v", progress)
 	}
 	if len(resp.ToolCalls) != 2 || resp.ToolCalls[0].Name != "list_stores" || resp.ToolCalls[1].Name != "execute_script" {
 		t.Fatalf("expected list_stores research followed by repaired execute_script, got %#v", resp.ToolCalls)
@@ -1733,7 +1804,7 @@ func TestNativeReActEngine_RetriesExecuteScriptJoinWithValidationGuidance(t *tes
 	}
 }
 
-func TestNativeReActEngine_RoutedAmbiguityEscalatesToClarificationAfterFirstRepairAttempt(t *testing.T) {
+func TestCompatibleReActEngine_RoutedAmbiguityEscalatesToClarificationAfterFirstRepairAttempt(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &discoveryClarificationGenerator{}
 	executor := &discoveryClarificationExecutor{}
@@ -1777,7 +1848,7 @@ func TestNativeReActEngine_RoutedAmbiguityEscalatesToClarificationAfterFirstRepa
 	}
 }
 
-func TestNativeReActEngine_NonRoutedAmbiguityEscalatesToClarificationAfterFirstRepairAttempt(t *testing.T) {
+func TestCompatibleReActEngine_NonRoutedAmbiguityEscalatesToClarificationAfterFirstRepairAttempt(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &discoveryClarificationGenerator{}
 	executor := &discoveryClarificationExecutor{}
@@ -1941,7 +2012,7 @@ func (e *progressionHistoryJoinRepairExecutor) ListTools(ctx context.Context) ([
 	return []ai.ToolDefinition{{Name: "execute_script"}, {Name: "list_stores"}}, nil
 }
 
-func TestNativeReActEngine_UsesProgressionHistoryToRepairExecuteScriptJoin(t *testing.T) {
+func TestCompatibleReActEngine_UsesProgressionHistoryToRepairExecuteScriptJoin(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &progressionHistoryJoinRepairGenerator{}
 	executor := &progressionHistoryJoinRepairExecutor{}
@@ -1980,7 +2051,7 @@ func TestNativeReActEngine_UsesProgressionHistoryToRepairExecuteScriptJoin(t *te
 }
 
 func TestBuildAskAnchoredMRUState_TypesConfirmedStoreFacts(t *testing.T) {
-	state := buildAskAnchoredMRUState([]nativeToolResult{{
+	state := buildAskAnchoredMRUState([]compatibleToolResult{{
 		Name:   "list_stores",
 		Result: "users schema=key:string, first_name:string relations=[users_orders(key->users.key)]\nusers_orders schema=key:string, user_id:string",
 	}})
@@ -2013,7 +2084,7 @@ func TestBuildAskAnchoredMRUState_TypesConfirmedStoreFacts(t *testing.T) {
 }
 
 func TestBuildAskAnchoredMRUState_TypesExecuteScriptJoinSelection(t *testing.T) {
-	state := buildAskAnchoredMRUState([]nativeToolResult{{
+	state := buildAskAnchoredMRUState([]compatibleToolResult{{
 		Name:   "execute_script",
 		Result: `[{"users.key":"u1","users_orders.value":"o1"}]`,
 		Args: map[string]any{"script": []any{
@@ -2046,7 +2117,7 @@ func TestBuildAskAnchoredMRUState_TypesExecuteScriptJoinSelection(t *testing.T) 
 }
 
 func TestBuildAskAnchoredMRUState_TypesExecuteScriptFilterSelection(t *testing.T) {
-	state := buildAskAnchoredMRUState([]nativeToolResult{{
+	state := buildAskAnchoredMRUState([]compatibleToolResult{{
 		Name:   "execute_script",
 		Result: `[{"first_name":"John"}]`,
 		Args: map[string]any{"script": []any{
@@ -2078,7 +2149,7 @@ func TestBuildAskAnchoredMRUState_TypesExecuteScriptFilterSelection(t *testing.T
 }
 
 func TestSummarizeOutcomeRecipes_ExtractsExecuteScriptRepairPatterns(t *testing.T) {
-	recipes := summarizeOutcomeRecipes([]nativeToolResult{
+	recipes := summarizeOutcomeRecipes([]compatibleToolResult{
 		{
 			Name:   "execute_script",
 			Result: "Tool execution error: missing schema\nTool: execute_script\nRepair strategy: research_first\nAttempted args:\n{}\nRetry instruction: Call list_stores first and prefer scoped args like stores:[\"users\",\"orders\"] when likely targets are already known to research the missing schema or relation facts, then return to execute_script with corrected grounded arguments. Preserve valid arguments and do not restart the whole plan.",
@@ -2123,8 +2194,75 @@ func TestSummarizeOutcomeRecipes_ExtractsExecuteScriptRepairPatterns(t *testing.
 	}
 }
 
+func TestSummarizeOutcomeRecipes_UsesStructuredRetryGuidance(t *testing.T) {
+	recipes := summarizeOutcomeRecipes([]compatibleToolResult{
+		{
+			Name:   "execute_script",
+			Result: "Tool execution error: missing schema",
+			RetryGuidance: &ai.RetryGuidance{
+				ToolName:    "execute_script",
+				Strategy:    ai.RepairStrategyResearchFirst,
+				AllowedTool: "list_stores",
+				NextAction:  ai.ReActNextActionCallTool,
+			},
+		},
+		{
+			Name:   "list_stores",
+			Result: "users schema=key:string, first_name:string relations=[users_orders(key->users.key)]",
+		},
+		{
+			Name: "execute_script",
+			Args: map[string]any{"script": []any{
+				map[string]any{"op": "filter", "args": map[string]any{"condition": map[string]any{"first_name": map[string]any{"$eq": "John"}}}},
+			}},
+			Result: `[ {"first_name":"John"} ]`,
+		},
+	})
+	if len(recipes) != 1 || recipes[0].ID != "implicit.execute_script.research_then_retry" {
+		t.Fatalf("expected structured research-first recipe, got %+v", recipes)
+	}
+}
+
+func TestBuildAskAnchoredMRUState_UsesStructuredRetryGuidance(t *testing.T) {
+	state := buildAskAnchoredMRUState([]compatibleToolResult{{
+		Name:   "execute_script",
+		Result: "Tool execution error: invalid join",
+		RetryGuidance: &ai.RetryGuidance{
+			ToolName:    "execute_script",
+			Strategy:    ai.RepairStrategyResearchFirst,
+			AllowedTool: "list_stores",
+			NextAction:  ai.ReActNextActionCallTool,
+		},
+	}})
+	formatted := formatAskAnchoredMRUState(state)
+	if !strings.Contains(formatted, "- Last outcome: repair_required") {
+		t.Fatalf("expected repair outcome from structured guidance, got %s", formatted)
+	}
+	if !strings.Contains(formatted, "Research missing schema or relation facts") {
+		t.Fatalf("expected research-first next delta from structured guidance, got %s", formatted)
+	}
+}
+
+func TestBuildCompatibleReActPrompt_UsesStructuredRetryGuidanceForDirective(t *testing.T) {
+	baseReq := ai.ReasoningRequest{ContextText: "ctx", UserQuery: "query"}
+	result := compatibleToolResult{
+		Name:   "execute_script",
+		Result: "Tool execution error",
+		RetryGuidance: &ai.RetryGuidance{
+			ToolName:    "execute_script",
+			Strategy:    ai.RepairStrategyResearchFirst,
+			AllowedTool: "list_stores",
+			NextAction:  ai.ReActNextActionCallTool,
+		},
+	}
+	prompt := buildCompatibleReActPrompt(baseReq, []compatibleToolResult{result}, buildAskAnchoredMRUState([]compatibleToolResult{result}))
+	if !strings.Contains(prompt, "call list_stores first") {
+		t.Fatalf("expected repair directive from structured guidance, got %s", prompt)
+	}
+}
+
 func TestDetectAskLoopProgress_TreatsNewRecipeAsProgressWithoutFreshHint(t *testing.T) {
-	previousResults := []nativeToolResult{
+	previousResults := []compatibleToolResult{
 		{
 			Name: "execute_script",
 			Args: map[string]any{"script": []any{
@@ -2134,7 +2272,7 @@ func TestDetectAskLoopProgress_TreatsNewRecipeAsProgressWithoutFreshHint(t *test
 		},
 	}
 
-	currentResults := []nativeToolResult{
+	currentResults := []compatibleToolResult{
 		{
 			Name:   "execute_script",
 			Result: "Tool execution error: invalid join\nTool: execute_script\nRepair strategy: same_tool\nAttempted args:\n{}\nRetry instruction: Return a corrected call for the same tool. Preserve valid arguments, fix invalid or missing arguments, and do not repeat the same malformed shape.",
@@ -2166,12 +2304,12 @@ func TestDetectAskLoopProgress_TreatsNewRecipeAsProgressWithoutFreshHint(t *test
 	if budget.extendIfProgressing(delta) {
 		t.Fatal("did not expect retry budget to extend from progress")
 	}
-	if budget.allowedIterations != nativeReActBaseToolIterations {
-		t.Fatalf("expected budget to remain at %d, got %d", nativeReActBaseToolIterations, budget.allowedIterations)
+	if budget.allowedIterations != compatibleReActBaseToolIterations {
+		t.Fatalf("expected budget to remain at %d, got %d", compatibleReActBaseToolIterations, budget.allowedIterations)
 	}
 }
 
-func TestEngineNative_HelperClassifiers(t *testing.T) {
+func TestCompatibleReActEngine_HelperClassifiers(t *testing.T) {
 	if !isRecoverableToolExecutionError(fmt.Errorf("missing required field")) {
 		t.Fatal("expected missing/required message to be recoverable")
 	}
@@ -2186,13 +2324,13 @@ func TestEngineNative_HelperClassifiers(t *testing.T) {
 	}
 }
 
-func TestBuildNativeReActPrompt_IncludesRepairDirectiveVariants(t *testing.T) {
+func TestBuildCompatibleReActPrompt_IncludesRepairDirectiveVariants(t *testing.T) {
 	baseReq := ai.ReasoningRequest{ContextText: "ctx", UserQuery: "query"}
 
-	nativeCallPrompt := buildNativeReActPrompt(baseReq, []nativeToolResult{{
+	nativeCallPrompt := buildCompatibleReActPrompt(baseReq, []compatibleToolResult{{
 		Name:   "native_tool_call",
 		Result: "Model generation error: bad call\nRetry instruction: Return exactly one valid native tool call.",
-	}}, buildAskAnchoredMRUState([]nativeToolResult{{
+	}}, buildAskAnchoredMRUState([]compatibleToolResult{{
 		Name:   "native_tool_call",
 		Result: "Model generation error: bad call\nRetry instruction: Return exactly one valid native tool call.",
 	}}))
@@ -2200,10 +2338,10 @@ func TestBuildNativeReActPrompt_IncludesRepairDirectiveVariants(t *testing.T) {
 		t.Fatalf("expected native tool call repair directive, got %s", nativeCallPrompt)
 	}
 
-	researchPrompt := buildNativeReActPrompt(baseReq, []nativeToolResult{{
+	researchPrompt := buildCompatibleReActPrompt(baseReq, []compatibleToolResult{{
 		Name:   "execute_script",
 		Result: "Tool execution error\nRepair strategy: research_first\nRetry instruction: Call list_stores first and prefer scoped args like stores:[\"users\",\"orders\"] when likely targets are already known",
-	}}, buildAskAnchoredMRUState([]nativeToolResult{{
+	}}, buildAskAnchoredMRUState([]compatibleToolResult{{
 		Name:   "execute_script",
 		Result: "Tool execution error\nRepair strategy: research_first\nRetry instruction: Call list_stores first and prefer scoped args like stores:[\"users\",\"orders\"] when likely targets are already known",
 	}}))
@@ -2211,10 +2349,10 @@ func TestBuildNativeReActPrompt_IncludesRepairDirectiveVariants(t *testing.T) {
 		t.Fatalf("expected research-first repair directive, got %s", researchPrompt)
 	}
 
-	sameToolPrompt := buildNativeReActPrompt(baseReq, []nativeToolResult{{
+	sameToolPrompt := buildCompatibleReActPrompt(baseReq, []compatibleToolResult{{
 		Name:   "execute_script",
 		Result: "Tool execution error\nRetry instruction: Return a corrected call for the same tool.",
-	}}, buildAskAnchoredMRUState([]nativeToolResult{{
+	}}, buildAskAnchoredMRUState([]compatibleToolResult{{
 		Name:   "execute_script",
 		Result: "Tool execution error\nRetry instruction: Return a corrected call for the same tool.",
 	}}))
@@ -2223,9 +2361,9 @@ func TestBuildNativeReActPrompt_IncludesRepairDirectiveVariants(t *testing.T) {
 	}
 }
 
-func TestBuildNativeReActPrompt_ExposesToolArgsWithRetryContext(t *testing.T) {
+func TestBuildCompatibleReActPrompt_ExposesToolArgsWithRetryContext(t *testing.T) {
 	baseReq := ai.ReasoningRequest{ContextText: "ctx", UserQuery: "query"}
-	prompt := buildNativeReActPrompt(baseReq, []nativeToolResult{
+	prompt := buildCompatibleReActPrompt(baseReq, []compatibleToolResult{
 		{
 			Name: "list_stores",
 			Args: map[string]any{"database": "system", "store": "users"},
@@ -2244,7 +2382,7 @@ func TestBuildNativeReActPrompt_ExposesToolArgsWithRetryContext(t *testing.T) {
 			}},
 			Result: "Tool execution error: invalid filter\nTool: execute_script\nAttempted args:\n{}\nRetry instruction: Return a corrected call for the same tool.",
 		},
-	}, buildAskAnchoredMRUState([]nativeToolResult{
+	}, buildAskAnchoredMRUState([]compatibleToolResult{
 		{
 			Name: "list_stores",
 			Args: map[string]any{"database": "system", "store": "users"},
@@ -2294,8 +2432,8 @@ func TestBuildNativeReActPrompt_ExposesToolArgsWithRetryContext(t *testing.T) {
 	}
 }
 
-func TestFormatNativeProgressionHistory_UsesStructuredIngredientsCallAndResult(t *testing.T) {
-	history := formatNativeProgressionHistory([]nativeToolResult{
+func TestFormatCompatibleProgressionHistory_UsesStructuredIngredientsCallAndResult(t *testing.T) {
+	history := formatCompatibleProgressionHistory([]compatibleToolResult{
 		{
 			Name: "list_stores",
 			Args: map[string]any{"database": "system", "store": "users"},
@@ -2401,8 +2539,8 @@ func TestExtractListStoresSchemaSnapshot_PreservesBracedSchemaAndJSONRelations(t
 	}
 }
 
-func TestFormatNativePromptArgs_CompactsExecuteScriptPayload(t *testing.T) {
-	formatted := formatNativePromptArgs(map[string]any{"script": []any{
+func TestFormatCompatiblePromptArgs_CompactsExecuteScriptPayload(t *testing.T) {
+	formatted := formatCompatiblePromptArgs(map[string]any{"script": []any{
 		map[string]any{"op": "begin_tx", "args": map[string]any{"mode": "read"}, "result_var": "tx"},
 		map[string]any{"op": "open_store", "args": map[string]any{"name": "users", "transaction": "tx"}, "result_var": "users_store"},
 		map[string]any{"op": "filter", "args": map[string]any{"condition": map[string]any{"first_name": map[string]any{"$eq": "John"}}}, "input_var": "users_store", "result_var": "john_users"},
@@ -2429,8 +2567,8 @@ func TestFormatNativePromptArgs_CompactsExecuteScriptPayload(t *testing.T) {
 	}
 }
 
-func TestFormatNativeProgressionHistory_KeepsAnchorAndLatestCompactsMiddle(t *testing.T) {
-	history := formatNativeProgressionHistory([]nativeToolResult{
+func TestFormatCompatibleProgressionHistory_KeepsAnchorAndLatestCompactsMiddle(t *testing.T) {
+	history := formatCompatibleProgressionHistory([]compatibleToolResult{
 		{
 			Name:   "list_stores",
 			Args:   map[string]any{"stores": []any{"users", "users_orders"}},
@@ -2469,8 +2607,8 @@ func TestFormatNativeProgressionHistory_KeepsAnchorAndLatestCompactsMiddle(t *te
 	}
 }
 
-func TestBuildNativeReActPrompt_CollapsesMiddleToolResults(t *testing.T) {
-	prompt := buildNativeReActPrompt(ai.ReasoningRequest{ContextText: "ctx", UserQuery: "query"}, []nativeToolResult{
+func TestBuildCompatibleReActPrompt_CollapsesMiddleToolResults(t *testing.T) {
+	prompt := buildCompatibleReActPrompt(ai.ReasoningRequest{ContextText: "ctx", UserQuery: "query"}, []compatibleToolResult{
 		{
 			Name:   "list_stores",
 			Args:   map[string]any{"stores": []any{"users"}},
@@ -2490,7 +2628,7 @@ func TestBuildNativeReActPrompt_CollapsesMiddleToolResults(t *testing.T) {
 			}},
 			Result: `[ {"users.key":"u1"} ]`,
 		},
-	}, buildAskAnchoredMRUState([]nativeToolResult{
+	}, buildAskAnchoredMRUState([]compatibleToolResult{
 		{
 			Name:   "list_stores",
 			Args:   map[string]any{"stores": []any{"users"}},
@@ -2533,29 +2671,29 @@ func TestBuildNativeReActPrompt_CollapsesMiddleToolResults(t *testing.T) {
 	}
 }
 
-func TestBuildNativeReActPrompt_EnforcesHardBudgetAndReportsFirstTrim(t *testing.T) {
+func TestBuildCompatibleReActPrompt_EnforcesHardBudgetAndReportsFirstTrim(t *testing.T) {
 	profile := PromptBudgetProfile{
 		TotalChars: 1200,
 		ComponentCharBudgets: map[PromptComponent]int{
 			ComponentFocusedContext:        250,
 			ComponentHistory:               180,
 			ComponentUserQuery:             120,
-			componentNativeAskAnchoredMRU:  180,
-			componentNativeProgression:     320,
-			componentNativeRepairDirective: 220,
-			componentNativeToolResults:     320,
+			componentCompatibleAskAnchoredMRU:  180,
+			componentCompatibleProgression:     320,
+			componentCompatibleRepairDirective: 220,
+			componentCompatibleToolResults:     320,
 		},
 		TrimPriorityLowToHigh: []PromptComponent{
-			componentNativeAskAnchoredMRU,
+			componentCompatibleAskAnchoredMRU,
 			ComponentHistory,
-			componentNativeProgression,
+			componentCompatibleProgression,
 			ComponentFocusedContext,
-			componentNativeToolResults,
-			componentNativeRepairDirective,
+			componentCompatibleToolResults,
+			componentCompatibleRepairDirective,
 			ComponentUserQuery,
 		},
 	}
-	prompt, report := buildNativeReActPromptWithReport(ai.ReasoningRequest{
+	prompt, report := buildCompatibleReActPromptWithReport(ai.ReasoningRequest{
 		ContextText: strings.Join([]string{
 			"Focused execution context:",
 			"- keep joins grounded in list_stores",
@@ -2564,7 +2702,7 @@ func TestBuildNativeReActPrompt_EnforcesHardBudgetAndReportsFirstTrim(t *testing
 		}, "\n"),
 		HistoryText: strings.Repeat("history detail ", 120),
 		UserQuery:   "Find orders for John over 500",
-	}, []nativeToolResult{
+	}, []compatibleToolResult{
 		{
 			Name:   "list_stores",
 			Args:   map[string]any{"database": "system", "store": "users"},
@@ -2584,7 +2722,7 @@ func TestBuildNativeReActPrompt_EnforcesHardBudgetAndReportsFirstTrim(t *testing
 			}},
 			Result: strings.Repeat(`[ {"users.key":"u1","users_orders.value":"o1"} ]`, 20),
 		},
-	}, buildAskAnchoredMRUState([]nativeToolResult{
+	}, buildAskAnchoredMRUState([]compatibleToolResult{
 		{Name: "list_stores", Args: map[string]any{"database": "system", "store": "users"}, Result: strings.Repeat("users schema=key:string, first_name:string\n", 8)},
 		{Name: "execute_script", Args: map[string]any{"script": []any{map[string]any{"op": "join", "args": map[string]any{"store": "users_orders", "on": map[string]any{"users.key": true}}}}}, Result: strings.Repeat("Tool execution error: invalid join\nRetry instruction: Return a corrected call for the same tool.\n", 10)},
 		{Name: "execute_script", Args: map[string]any{"script": []any{map[string]any{"op": "join", "args": map[string]any{"store": "users_orders", "on": map[string]any{"users.key": "key"}}}}}, Result: strings.Repeat(`[ {"users.key":"u1"} ]`, 10)},
@@ -2596,7 +2734,7 @@ func TestBuildNativeReActPrompt_EnforcesHardBudgetAndReportsFirstTrim(t *testing
 	if report.OriginalTotalChars <= report.FinalTotalChars {
 		t.Fatalf("expected budgeting to reduce prompt, got original=%d final=%d", report.OriginalTotalChars, report.FinalTotalChars)
 	}
-	if firstTrimmed := firstTrimmedPromptComponent(profile, report); firstTrimmed != componentNativeAskAnchoredMRU {
+	if firstTrimmed := firstTrimmedPromptComponent(profile, report); firstTrimmed != componentCompatibleAskAnchoredMRU {
 		t.Fatalf("expected ask-anchored MRU to trim first, got %q with report %+v", firstTrimmed, report)
 	}
 	checks := []string{
@@ -2612,7 +2750,7 @@ func TestBuildNativeReActPrompt_EnforcesHardBudgetAndReportsFirstTrim(t *testing
 	}
 }
 
-func TestCompactNativePromptSectionText_PreservesSectionShape(t *testing.T) {
+func TestCompactCompatiblePromptSectionText_PreservesSectionShape(t *testing.T) {
 	text := strings.Join([]string{
 		"Focused execution context:",
 		"- stores: users, orders, users_orders",
@@ -2627,7 +2765,7 @@ func TestCompactNativePromptSectionText_PreservesSectionShape(t *testing.T) {
 		"- another detail that can be compacted",
 	}, "\n")
 
-	formatted := compactNativePromptSectionText(text, 220)
+	formatted := compactCompatiblePromptSectionText(text, 220)
 	checks := []string{
 		"Focused execution context:",
 		"- stores: users, orders, users_orders",
@@ -2648,11 +2786,11 @@ func TestCompactNativePromptSectionText_PreservesSectionShape(t *testing.T) {
 	}
 }
 
-func TestEngineNative_RepairHelpers(t *testing.T) {
-	if got := summarizeNextRepairNeed(nativeToolResult{Name: "native_tool_call"}); !strings.Contains(got, "valid tool call") {
+func TestCompatibleReActEngine_RepairHelpers(t *testing.T) {
+	if got := summarizeNextRepairNeed(compatibleToolResult{Name: "native_tool_call"}); !strings.Contains(got, "valid tool call") {
 		t.Fatalf("unexpected native tool next-repair summary: %q", got)
 	}
-	if got := summarizeNextRepairNeed(nativeToolResult{Name: "execute_script", Result: "Repair strategy: research_first"}); !strings.Contains(got, "list_stores") {
+	if got := summarizeNextRepairNeed(compatibleToolResult{Name: "execute_script", Result: "Repair strategy: research_first"}); !strings.Contains(got, "list_stores") {
 		t.Fatalf("unexpected research-first next-repair summary: %q", got)
 	}
 	if got := summarizeAttemptedArgs("Tool execution error\nAttempted args:\n{\n  \"script\": []\n}\nRetry instruction: fix it"); !strings.Contains(got, "Reuse the valid structure") {
@@ -2664,21 +2802,40 @@ func TestEngineNative_RepairHelpers(t *testing.T) {
 	if got := summarizeAttemptedArgs("no attempted args marker"); got != "" {
 		t.Fatalf("expected no attempted args summary, got %q", got)
 	}
+	if got := summarizeAttemptedArgsFromResult(compatibleToolResult{Args: map[string]any{"script": []any{map[string]any{"op": "join"}}}}); !strings.Contains(got, "Reuse the valid structure") || !strings.Contains(got, "\"join\"") {
+		t.Fatalf("expected structured attempted args summary, got %q", got)
+	}
+	if got := summarizeAttemptedArgsFromResult(compatibleToolResult{}); got != "" {
+		t.Fatalf("expected empty structured attempted args summary when no args or marker exist, got %q", got)
+	}
+	if got := buildCompatibleRetryInstruction(compatibleToolResult{
+		Name: "execute_script",
+		Args: map[string]any{"script": []any{map[string]any{"op": "join", "args": map[string]any{"store": "users_orders"}}}},
+		RetryGuidance: &ai.RetryGuidance{ToolName: "execute_script", Strategy: ai.RepairStrategyResearchFirst, AllowedTool: "list_stores"},
+	}); !strings.Contains(got, "Call list_stores first") || !strings.Contains(got, "return to execute_script") {
+		t.Fatalf("expected structured research-first retry instruction, got %q", got)
+	}
+	if got := buildCompatibleRetryInstruction(compatibleToolResult{
+		Name:          "execute_script",
+		RetryGuidance: &ai.RetryGuidance{ToolName: "execute_script", Strategy: ai.RepairStrategySameTool},
+	}); !strings.Contains(got, "Return a corrected call for the same tool") {
+		t.Fatalf("expected structured same-tool retry instruction, got %q", got)
+	}
 
-	repairResult := nativeToolResult{Name: "execute_script", Result: "Repair strategy: same_tool\nRetry instruction: fix"}
-	if !isRecoverableRepairResult(repairResult, "execute_script", nativeRepairStrategySameTool) {
+	repairResult := compatibleToolResult{Name: "execute_script", Result: "Repair strategy: same_tool\nRetry instruction: fix"}
+	if !isRecoverableRepairResult(repairResult, "execute_script", compatibleRepairStrategySameTool) {
 		t.Fatal("expected recoverable same-tool result to match")
 	}
-	if isRecoverableRepairResult(repairResult, "list_stores", nativeRepairStrategySameTool) {
+	if isRecoverableRepairResult(repairResult, "list_stores", compatibleRepairStrategySameTool) {
 		t.Fatal("did not expect tool-name mismatch to match")
 	}
-	if !hasSuccessfulTool([]nativeToolResult{{Name: "execute_script", Result: "ok"}}, "execute_script") {
+	if !hasSuccessfulTool([]compatibleToolResult{{Name: "execute_script", Result: "ok"}}, "execute_script") {
 		t.Fatal("expected successful tool detection")
 	}
-	if hasSuccessfulTool([]nativeToolResult{{Name: "execute_script", Result: "Retry instruction: fix"}}, "execute_script") {
+	if hasSuccessfulTool([]compatibleToolResult{{Name: "execute_script", Result: "Retry instruction: fix"}}, "execute_script") {
 		t.Fatal("did not expect repair-only result to count as successful")
 	}
-	if !hasSuccessfulToolSequence([]nativeToolResult{{Name: "execute_script", Result: "Retry instruction: fix"}, {Name: "list_stores", Result: "ok"}, {Name: "execute_script", Result: "ok"}}, "list_stores", "execute_script") {
+	if !hasSuccessfulToolSequence([]compatibleToolResult{{Name: "execute_script", Result: "Retry instruction: fix"}, {Name: "list_stores", Result: "ok"}, {Name: "execute_script", Result: "ok"}}, "list_stores", "execute_script") {
 		t.Fatal("expected successful tool sequence to ignore repair-only entries")
 	}
 	if hasSuccessfulToolSequence(nil, "list_stores") {
@@ -2686,18 +2843,18 @@ func TestEngineNative_RepairHelpers(t *testing.T) {
 	}
 }
 
-func TestEngineNative_RepairFormattingAndClassification(t *testing.T) {
+func TestCompatibleReActEngine_RepairFormattingAndClassification(t *testing.T) {
 	validationErr := newExecuteScriptValidationError(
 		"invalid_join_on_placeholder",
 		"join mapping placeholder",
 		`{"relation":"users_orders","target":"orders_store"}`,
 	)
 	researchRepair := classifyRecoverableToolRepair("execute_script", validationErr, nil)
-	if researchRepair.Strategy != nativeRepairStrategyResearchFirst || researchRepair.ResearchTool != "list_stores" {
+	if researchRepair.Strategy != compatibleRepairStrategyResearchFirst || researchRepair.ResearchTool != "list_stores" {
 		t.Fatalf("expected validation error to trigger research-first repair, got %+v", researchRepair)
 	}
 	sameToolRepair := classifyRecoverableToolRepair("execute_script", fmt.Errorf("missing required args"), nil)
-	if sameToolRepair.Strategy != nativeRepairStrategySameTool {
+	if sameToolRepair.Strategy != compatibleRepairStrategySameTool {
 		t.Fatalf("expected generic arg error to stay same-tool, got %+v", sameToolRepair)
 	}
 	if !researchRepair.allowsTool("list_stores") || researchRepair.allowsTool("execute_script") {
@@ -2729,7 +2886,7 @@ func TestEngineNative_RepairFormattingAndClassification(t *testing.T) {
 }
 
 func TestFormatRecoverableToolError_ResearchFirstInfersScopedStoresFromAttemptedArgs(t *testing.T) {
-	repair := pendingToolRepair{ToolName: "execute_script", Strategy: nativeRepairStrategyResearchFirst, ResearchTool: "list_stores"}
+	repair := compatiblePendingToolRepair{ToolName: "execute_script", Strategy: compatibleRepairStrategyResearchFirst, ResearchTool: "list_stores"}
 	err := newExecuteScriptValidationError(
 		"invalid_join_on_placeholder",
 		"invalid type for join.on[\"users.key\"]: got boolean placeholder true",
@@ -2761,7 +2918,7 @@ func TestUnwrapToolResultEnvelope_ExtractsProgressHint(t *testing.T) {
 }
 
 func TestBuildAskAnchoredMRUState_IncludesProgressHints(t *testing.T) {
-	state := buildAskAnchoredMRUState([]nativeToolResult{{
+	state := buildAskAnchoredMRUState([]compatibleToolResult{{
 		Name:   "list_stores",
 		Result: "users schema=key:string, first_name:string",
 		Hint: &ai.ToolProgressHint{
@@ -2796,7 +2953,7 @@ func (m *progressBudgetGenerator) Generate(ctx context.Context, prompt string, o
 	if strings.Contains(prompt, "We have hit the retry cap.") {
 		return ai.GenOutput{Text: "Which specific store or field should I focus on next to unblock this query?"}, nil
 	}
-	if m.calls <= nativeReActBaseToolIterations {
+	if m.calls <= compatibleReActBaseToolIterations {
 		return ai.GenOutput{ToolCalls: []ai.ToolCall{{
 			Name: "execute_script",
 			Args: map[string]any{"script": []any{map[string]any{"op": "scan"}}},
@@ -2816,7 +2973,7 @@ func (e *progressBudgetExecutor) ListTools(ctx context.Context) ([]ai.ToolDefini
 	return []ai.ToolDefinition{{Name: "execute_script"}}, nil
 }
 
-func TestNativeReActEngine_FixedLoopBudgetCapsEvenWhenProgressing(t *testing.T) {
+func TestCompatibleReActEngine_FixedLoopBudgetCapsEvenWhenProgressing(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &progressBudgetGenerator{}
 	executor := &progressBudgetExecutor{}
@@ -2836,8 +2993,8 @@ func TestNativeReActEngine_FixedLoopBudgetCapsEvenWhenProgressing(t *testing.T) 
 	if resp.FinalText != "Which specific store or field should I focus on next to unblock this query?" {
 		t.Fatalf("expected clarification after retry cap, got %q", resp.FinalText)
 	}
-	if executor.callCount != nativeReActBaseToolIterations {
-		t.Fatalf("expected fixed loop budget to stop at %d tool calls, got %d", nativeReActBaseToolIterations, executor.callCount)
+	if executor.callCount != compatibleReActBaseToolIterations {
+		t.Fatalf("expected fixed loop budget to stop at %d tool calls, got %d", compatibleReActBaseToolIterations, executor.callCount)
 	}
 	if containsProgressMessage(progress, "Loop budget extended to") {
 		t.Fatalf("did not expect loop budget extension progress message, got %#v", progress)
@@ -2845,7 +3002,7 @@ func TestNativeReActEngine_FixedLoopBudgetCapsEvenWhenProgressing(t *testing.T) 
 	if !containsProgressMessage(progress, "Reached retry cap; switching to clarification.") {
 		t.Fatalf("expected retry-cap clarification progress message, got %#v", progress)
 	}
-	if len(resp.ToolCalls) != nativeReActBaseToolIterations {
+	if len(resp.ToolCalls) != compatibleReActBaseToolIterations {
 		t.Fatalf("expected capped progressing tool calls to be recorded, got %#v", resp.ToolCalls)
 	}
 }
@@ -2880,7 +3037,7 @@ func (e *stalledBudgetExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinit
 	return []ai.ToolDefinition{{Name: "execute_script"}}, nil
 }
 
-func TestNativeReActEngine_DoesNotExtendLoopBudgetWithoutProgress(t *testing.T) {
+func TestCompatibleReActEngine_DoesNotExtendLoopBudgetWithoutProgress(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &stalledBudgetGenerator{}
 	executor := &stalledBudgetExecutor{}
@@ -2897,10 +3054,10 @@ func TestNativeReActEngine_DoesNotExtendLoopBudgetWithoutProgress(t *testing.T) 
 	if resp.FinalText != "What field or join should I correct to continue this query?" {
 		t.Fatalf("expected clarification after capped retries, got %q", resp.FinalText)
 	}
-	if executor.callCount != nativeReActBaseToolIterations {
-		t.Fatalf("expected no progress to stop at base loop budget %d, got %d", nativeReActBaseToolIterations, executor.callCount)
+	if executor.callCount != compatibleReActBaseToolIterations {
+		t.Fatalf("expected no progress to stop at base loop budget %d, got %d", compatibleReActBaseToolIterations, executor.callCount)
 	}
-	if gen.calls != nativeReActBaseToolIterations+1 {
+	if gen.calls != compatibleReActBaseToolIterations+1 {
 		t.Fatalf("expected capped retries plus one clarification call, got %d", gen.calls)
 	}
 }
@@ -2965,7 +3122,7 @@ func (e *antiSuccessExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinitio
 	return []ai.ToolDefinition{{Name: "execute_script"}}, nil
 }
 
-func TestNativeReActEngine_ProgressAwareBudgetStillCapsAtFixedLimit(t *testing.T) {
+func TestCompatibleReActEngine_ProgressAwareBudgetStillCapsAtFixedLimit(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &cappedBudgetGenerator{}
 	executor := &cappedBudgetExecutor{}
@@ -2982,15 +3139,15 @@ func TestNativeReActEngine_ProgressAwareBudgetStillCapsAtFixedLimit(t *testing.T
 	if resp.FinalText != "What concrete next constraint should I use to continue narrowing the result?" {
 		t.Fatalf("expected clarification after hard cap, got %q", resp.FinalText)
 	}
-	if executor.callCount != nativeReActMaxToolIterations {
-		t.Fatalf("expected progressing loop to stop at fixed cap %d, got %d", nativeReActMaxToolIterations, executor.callCount)
+	if executor.callCount != compatibleReActMaxToolIterations {
+		t.Fatalf("expected progressing loop to stop at fixed cap %d, got %d", compatibleReActMaxToolIterations, executor.callCount)
 	}
-	if gen.calls != nativeReActMaxToolIterations+1 {
+	if gen.calls != compatibleReActMaxToolIterations+1 {
 		t.Fatalf("expected fixed cap plus one clarification call, got %d", gen.calls)
 	}
 }
 
-func TestNativeReActEngine_ShortCircuitsOnAntiSuccessHardErrorHint(t *testing.T) {
+func TestCompatibleReActEngine_ShortCircuitsOnAntiSuccessHardErrorHint(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &antiSuccessGenerator{}
 	executor := &antiSuccessExecutor{}
@@ -3024,7 +3181,7 @@ func TestNativeReActEngine_ShortCircuitsOnAntiSuccessHardErrorHint(t *testing.T)
 	}
 }
 
-func TestEngineNative_HelperClassifiers_RecognizeTerminalHintStatuses(t *testing.T) {
+func TestCompatibleReActEngine_HelperClassifiers_RecognizeTerminalHintStatuses(t *testing.T) {
 	if !shouldShortCircuitAskLoopOnToolHint(&ai.ToolProgressHint{Status: "hard_error"}) {
 		t.Fatal("expected hard_error to short-circuit the Ask loop")
 	}

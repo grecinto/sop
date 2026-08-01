@@ -8,7 +8,7 @@ import (
 )
 
 // Tier 2A: Test hint-driven retry strategy
-func TestEngineNative_Tier2A_HintDrivenRetryStrategy(t *testing.T) {
+func TestCompatibleReActEngine_Tier2A_HintDrivenRetryStrategy(t *testing.T) {
 	// Test that hint with SuggestedAction overrides default strategy
 	hint := &ai.ToolProgressHint{
 		SuggestedAction:    "research_before_retry",
@@ -18,7 +18,7 @@ func TestEngineNative_Tier2A_HintDrivenRetryStrategy(t *testing.T) {
 
 	repair := classifyRecoverableToolRepair("execute_script", fmt.Errorf("column not found"), hint)
 
-	if repair.Strategy != nativeRepairStrategyResearchFirst {
+	if repair.Strategy != compatibleRepairStrategyResearchFirst {
 		t.Fatalf("expected hint to trigger research-first strategy, got %v", repair.Strategy)
 	}
 
@@ -33,24 +33,24 @@ func TestEngineNative_Tier2A_HintDrivenRetryStrategy(t *testing.T) {
 	// Test that without hint, falls back to error-based classification
 	repairNoHint := classifyRecoverableToolRepair("execute_script", fmt.Errorf("column not found"), nil)
 
-	if repairNoHint.Strategy != nativeRepairStrategySameTool {
+	if repairNoHint.Strategy != compatibleRepairStrategySameTool {
 		t.Fatalf("expected error without hint to use default same-tool strategy, got %v", repairNoHint.Strategy)
 	}
 }
 
 // Test getLatestToolHint helper
-func TestEngineNative_Tier2A_GetLatestToolHint(t *testing.T) {
+func TestCompatibleReActEngine_Tier2A_GetLatestToolHint(t *testing.T) {
 	// Empty results should return nil
 	if hint := getLatestToolHint(nil); hint != nil {
 		t.Fatal("expected nil hint from empty results")
 	}
 
-	if hint := getLatestToolHint([]nativeToolResult{}); hint != nil {
+	if hint := getLatestToolHint([]compatibleToolResult{}); hint != nil {
 		t.Fatal("expected nil hint from empty results")
 	}
 
 	// Should return hint from latest result
-	results := []nativeToolResult{
+	results := []compatibleToolResult{
 		{Name: "tool1", Hint: &ai.ToolProgressHint{Tips: []string{"old hint"}}},
 		{Name: "tool2", Hint: &ai.ToolProgressHint{Tips: []string{"latest hint"}}},
 	}
@@ -62,7 +62,7 @@ func TestEngineNative_Tier2A_GetLatestToolHint(t *testing.T) {
 }
 
 // Tier 2B: Test progressive retry tier determination
-func TestEngineNative_Tier2B_DetermineRetryTier(t *testing.T) {
+func TestCompatibleReActEngine_Tier2B_DetermineRetryTier(t *testing.T) {
 	// Test progressive escalation based on failure count
 	
 	// First failure (0) -> Quick Fix
@@ -105,7 +105,7 @@ func TestEngineNative_Tier2B_DetermineRetryTier(t *testing.T) {
 }
 
 // Test researchable error classification
-func TestEngineNative_Tier2B_IsResearchableError(t *testing.T) {
+func TestCompatibleReActEngine_Tier2B_IsResearchableError(t *testing.T) {
 	researchable := []string{
 		"table 'users' not found",
 		"relation does not exist",
@@ -136,7 +136,7 @@ func TestEngineNative_Tier2B_IsResearchableError(t *testing.T) {
 }
 
 // Test escalation threshold
-func TestEngineNative_Tier2B_EscalationThreshold(t *testing.T) {
+func TestCompatibleReActEngine_Tier2B_EscalationThreshold(t *testing.T) {
 	// Should not escalate on first two failures
 	if shouldEscalateRepairToClarification(0) {
 		t.Fatal("should not escalate on first failure")

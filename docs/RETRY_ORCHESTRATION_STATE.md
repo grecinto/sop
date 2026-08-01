@@ -133,11 +133,20 @@ The shared retry machinery lives in:
 
 It should be understood as shared policy substrate, not a shared orchestrator.
 
+The current code shape now exposes explicit policy interfaces:
+
+- `RecoverabilityPolicy`
+- `RetryDecisionPolicy`
+- `RetryBudgetPolicy`
+- `RepairEnforcementPolicy`
+- `RetryPolicySurface`
+
 It currently owns:
 
 - retry tiers
 - repair strategies
 - retry learnings
+- structured `RetryGuidance` payload construction
 - scope-aware recommendation logic
 - error fingerprint normalization
 
@@ -183,6 +192,12 @@ What exists now:
 - provider-owned retry state
 - learned retry persistence
 - model-visible retry guidance in provider-owned loops
+- structured retry guidance carried on `ReActToolResult.RetryGuidance`
+- provider request builders now consume structured retry guidance in native continuation state instead of relying only on reparsed retry prose
+- Gemini continuation/final-turn phase selection and allowed-next-action shaping now derive from structured retry guidance rather than `RepairDirective` string presence alone
+- Anthropic latest-turn continuation state and repair/final prompt shaping now derive from structured retry guidance rather than relying only on tool-error prose
+- the shared-compatible adapter summary, repair-directive, and ask-anchored MRU helpers now prefer `RetryGuidance` over retry-text parsing when both are available
+- the shared-compatible adapter now also wraps carried tool continuations with structured `react_state` and `retry_guidance`, so strategy consumers do not need to infer retry intent from raw tool-result prose alone
 - heuristic enforcement for hard rails
 
 What still needs architectural tightening:

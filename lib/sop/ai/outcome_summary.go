@@ -55,7 +55,7 @@ func SummarizeOutcomeFacts(toolResults []ReActToolResult) []string {
 	seen := make(map[string]bool, outcomeFactsLimit)
 	for i := len(toolResults) - 1; i >= 0 && len(facts) < outcomeFactsLimit; i-- {
 		result := toolResults[i]
-		if strings.Contains(result.Result, "Retry instruction:") {
+		if hasRetryState(result) {
 			continue
 		}
 		for _, fact := range SummarizeSuccessfulToolResult(result) {
@@ -430,18 +430,21 @@ func formatListStoresFactRelations(relations []listStoreFactRelation) string {
 }
 
 func isRecoverableRepairResult(result ReActToolResult, toolName string, strategy string) bool {
-	if result.Name != toolName || !strings.Contains(result.Result, "Retry instruction:") {
+	if result.Name != toolName || !hasRetryState(result) {
 		return false
 	}
 	if strategy == "" {
 		return true
+	}
+	if result.RetryGuidance != nil && strings.TrimSpace(string(result.RetryGuidance.Strategy)) != "" {
+		return string(result.RetryGuidance.Strategy) == strategy
 	}
 	return strings.Contains(result.Result, fmt.Sprintf("Repair strategy: %s", strategy))
 }
 
 func hasSuccessfulTool(results []ReActToolResult, toolName string) bool {
 	for _, result := range results {
-		if result.Name == toolName && !strings.Contains(result.Result, "Retry instruction:") {
+		if result.Name == toolName && !hasRetryState(result) {
 			return true
 		}
 	}
@@ -454,7 +457,7 @@ func hasSuccessfulToolSequence(results []ReActToolResult, names ...string) bool 
 	}
 	nameIdx := 0
 	for _, result := range results {
-		if strings.Contains(result.Result, "Retry instruction:") {
+		if hasRetryState(result) {
 			continue
 		}
 		if result.Name != names[nameIdx] {
@@ -466,4 +469,11 @@ func hasSuccessfulToolSequence(results []ReActToolResult, names ...string) bool 
 		}
 	}
 	return false
+}
+
+func hasRetryState(result ReActToolResult) bool {
+	if result.RetryGuidance != nil {
+		return true
+	}
+	return strings.Contains(result.Result, "Retry instruction:") || strings.Contains(result.Result, "Clarification required:")
 }

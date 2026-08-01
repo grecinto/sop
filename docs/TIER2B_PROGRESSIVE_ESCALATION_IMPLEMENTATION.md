@@ -16,21 +16,21 @@ This provides more intelligent retry behavior, giving the LLM multiple opportuni
 
 ## Implementation Summary
 
-### 1. Retry Tier System (`lib/sop/ai/agent/engine_native.go`)
+### 1. Retry Tier System (`lib/sop/ai/agent/engine_compatible.go`)
 
 Added tier type and constants:
 
 ```go
 // Tier 2B: Progressive escalation tiers
-type nativeRetryTier int
+type compatibleRetryTier int
 
 const (
 	// TierQuickFix: First failure - retry same tool with corrections
-	TierQuickFix nativeRetryTier = 1
+	TierQuickFix compatibleRetryTier = 1
 	// TierResearch: Second failure - research before retry
-	TierResearch nativeRetryTier = 2
+	TierResearch compatibleRetryTier = 2
 	// TierClarify: Third+ failure - escalate to user clarification
-	TierClarify nativeRetryTier = 3
+	TierClarify compatibleRetryTier = 3
 )
 ```
 
@@ -192,7 +192,7 @@ if isRecoverableToolExecutionError(err) {
 - Tier-specific progress messages for user transparency
 - Clear escalation reasoning in logs
 
-### 6. Test Coverage (`engine_native_tier2a_test.go`)
+### 6. Test Coverage (`engine_compatible_tier2a_test.go`)
 
 Added comprehensive Tier 2B tests:
 
@@ -416,7 +416,7 @@ Result: Tier 2A hint overrode default progression, triggered research on first f
   - shouldEscalateRepairToClarification update: 2 lines
   - Integration + logging: ~8 lines
 - **Test Code**: ~90 lines (comprehensive coverage)
-- **Files Modified**: 2 (engine_native.go, engine_native_tier2a_test.go)
+- **Files Modified**: 2 (engine_compatible.go, engine_compatible_tier2a_test.go)
 
 ## Participant Pattern Compliance ✅
 

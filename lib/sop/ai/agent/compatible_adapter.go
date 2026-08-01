@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	log "log/slog"
+	"strings"
 
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/obfuscation"
@@ -35,32 +36,32 @@ func NewNativeAdapter(enableObfuscation bool, maxTokens int) *CompatibleReActAda
 
 // Name returns the adapter identifier.
 func (a *CompatibleReActAdapter) Name() string {
-	return "native"
+	return "compatible"
 }
 
-// MaxIterations returns the iteration limit for native loops.
+// MaxIterations returns the iteration limit for the compatible shared loop.
 func (a *CompatibleReActAdapter) MaxIterations() int {
-	return nativeReActMaxToolIterations
+	return compatibleReActMaxToolIterations
 }
 
-// PrepareLLMRequest builds the native prompt with MRU state and budget management.
+// PrepareLLMRequest builds the compatible-loop prompt with MRU state and budget management.
 func (a *CompatibleReActAdapter) PrepareLLMRequest(ctx context.Context, state ReActLoopState) (string, ai.GenOptions, error) {
-	// Convert ReActToolResult back to nativeToolResult for legacy functions
-	nativeResults := a.convertToNativeResults(state.ToolResults)
+	// Convert ReActToolResult back to compatibleToolResult for compatibility-path helpers.
+	compatibleResults := a.convertToCompatibleResults(state.ToolResults)
 
 	// Determine temperature and thinking level
-	temperature := nativeReActToolCallTemperature
+	temperature := compatibleReActToolCallTemperature
 	thinkingLevel := "low" // Default: strict schema adherence for tool calls
 	if state.RepairDirective != "" {
-		temperature = nativeReActRepairTemperature
+		temperature = compatibleReActRepairTemperature
 		thinkingLevel = "medium" // More reasoning for repair strategies
 	}
 	thinkingLevel = NormalizeThinkingLevelForGenerator(state.Request.Generator, "", "", thinkingLevel)
 
-	// Build prompt using existing native functions
-	promptProfile := nativeReActPromptBudgetProfile()
-	askState := buildAskAnchoredMRUState(nativeResults)
-	mainPrompt, promptReport := buildNativeReActPromptWithReport(state.Request, nativeResults, askState, promptProfile)
+	// Build prompt using the reserved compatible-path helpers.
+	promptProfile := compatibleReActPromptBudgetProfile()
+	askState := buildAskAnchoredMRUState(compatibleResults)
+	mainPrompt, promptReport := buildCompatibleReActPromptWithReport(state.Request, compatibleResults, askState, promptProfile)
 
 	// If there's a repair directive from unified engine, append it to the prompt
 	// This handles special cases like retry cap that aren't part of tool results
@@ -70,7 +71,7 @@ func (a *CompatibleReActAdapter) PrepareLLMRequest(ctx context.Context, state Re
 
 	// Log prompt budget application
 	if firstTrimmed := firstTrimmedPromptComponent(promptProfile, promptReport); firstTrimmed != "" {
-		log.Info("Native Adapter Prompt Budget Applied",
+		log.Info("Compatible Adapter Prompt Budget Applied",
 			"iteration", state.Iteration,
 			"trimmed_first", firstTrimmed,
 			"trimmed", summarizePromptBudgetTrim(promptReport),
@@ -93,10 +94,10 @@ func (a *CompatibleReActAdapter) PrepareLLMRequest(ctx context.Context, state Re
 		Temperature:           temperature,
 		ThinkingLevel:         thinkingLevel,
 		Tools:                 tools,
-		ToolCallContinuations: state.Continuations,
+		ToolCallContinuations: a.wrapToolCallContinuations(state),
 	}
 
-	log.Info("Native Adapter Prepared Request",
+	log.Info("Compatible Adapter Prepared Request",
 		"iteration", state.Iteration,
 		"prompt_chars", len(mainPrompt),
 		"tool_count", len(tools),
@@ -112,19 +113,19 @@ func (a *CompatibleReActAdapter) InvokeLLM(ctx context.Context, prompt string, o
 
 // ExtractToolCalls parses tool calls from the LLM response, including textual recovery.
 func (a *CompatibleReActAdapter) ExtractToolCalls(output ai.GenOutput) ([]ai.ToolCall, string, error) {
-	// Check for native tool calls
+	// Check for direct tool calls first.
 	if len(output.ToolCalls) > 0 {
 		return output.ToolCalls, "", nil
 	}
 
-	// Try to recover embedded textual tool call
+	// Try to recover embedded textual tool call using the native tool-call format.
 	if recoveredCall, ok, recoverErr := extractEmbeddedNativeToolCall(output.Text); ok {
 		if recoverErr != nil {
 			// Malformed textual tool call
 			return nil, "", recoverErr
 		}
 
-		log.Info("Native Adapter Recovered Textual Tool Call",
+		log.Info("Compatible Adapter Recovered Textual Tool Call",
 			"tool", recoveredCall.Name)
 		return []ai.ToolCall{recoveredCall}, "", nil
 	}
@@ -139,7 +140,7 @@ func (a *CompatibleReActAdapter) ExtractToolCalls(output ai.GenOutput) ([]ai.Too
 }
 
 // FormatContinuation builds the continuation for the next iteration.
-// Native adapter uses single-continuation stateless pattern.
+// Compatible adapter uses a single-continuation stateless pattern.
 func (a *CompatibleReActAdapter) FormatContinuation(
 	toolCall ai.ToolCall,
 	result ai.ReActToolResult,
@@ -153,6 +154,83 @@ func (a *CompatibleReActAdapter) FormatContinuation(
 	}
 }
 
+func (a *CompatibleReActAdapter) wrapToolCallContinuations(state ReActLoopState) []ai.ToolCallContinuation {
+	if len(state.Continuations) == 0 {
+		return nil
+	}
+	wrapped := make([]ai.ToolCallContinuation, 0, len(state.Continuations))
+	for idx, continuation := range state.Continuations {
+		response := continuation.Response
+		if idx == len(state.Continuations)-1 {
+			response = map[string]any{
+				"tool_result": continuation.Response,
+				"react_state": map[string]any{
+					"user_query":           strings.TrimSpace(state.Request.UserQuery),
+					"latest_tool":          strings.TrimSpace(continuation.ToolCall.Name),
+					"repair_directive":     strings.TrimSpace(state.RepairDirective),
+					"retry_guidance":       sharedLatestRetryGuidance(state.ToolResults),
+					"iteration":            state.Iteration,
+					"task_status":          sharedContinuationTaskStatus(state),
+					"phase":                string(sharedContinuationPhase(state)),
+					"allowed_next_actions": sharedAllowedNextActions(state),
+					"has_more_tool_work":   true,
+				},
+			}
+		}
+		wrapped = append(wrapped, ai.ToolCallContinuation{ToolCall: continuation.ToolCall, Response: response})
+	}
+	return wrapped
+}
+
+func sharedLatestRetryGuidance(results []ai.ReActToolResult) *ai.RetryGuidance {
+	for idx := len(results) - 1; idx >= 0; idx-- {
+		if results[idx].RetryGuidance != nil {
+			return results[idx].RetryGuidance
+		}
+	}
+	return nil
+}
+
+func sharedContinuationPhase(state ReActLoopState) ai.ReActLoopPhase {
+	if sharedContinuationHasRepairState(state) {
+		return ai.ReActLoopPhaseRepair
+	}
+	return ai.ReActLoopPhaseActive
+}
+
+func sharedContinuationTaskStatus(state ReActLoopState) string {
+	if sharedContinuationHasRepairState(state) {
+		return "repair_required"
+	}
+	if len(state.ToolResults) > 0 {
+		return "tool_progressed"
+	}
+	return "active"
+}
+
+func sharedAllowedNextActions(state ReActLoopState) []string {
+	if guidance := sharedLatestRetryGuidance(state.ToolResults); guidance != nil {
+		actions := make([]string, 0, 2)
+		next := guidance.NextAction
+		if next == "" {
+			next = ai.ReActNextActionRetrySameTool
+		}
+		actions = append(actions, string(next))
+		if next != ai.ReActNextActionAskClarification {
+			actions = append(actions, string(ai.ReActNextActionAskClarification))
+		}
+		return actions
+	}
+	if strings.TrimSpace(state.RepairDirective) != "" {
+		return []string{string(ai.ReActNextActionRetrySameTool), string(ai.ReActNextActionAskClarification)}
+	}
+	return []string{string(ai.ReActNextActionCallTool), string(ai.ReActNextActionAnswerUser)}
+}
+
+func sharedContinuationHasRepairState(state ReActLoopState) bool {
+	return sharedLatestRetryGuidance(state.ToolResults) != nil || strings.TrimSpace(state.RepairDirective) != ""
+}
+
 // BuildFinalResponse assembles the final ReasoningResponse with outcome facts/recipes.
 func (a *CompatibleReActAdapter) BuildFinalResponse(
 	finalText string,
@@ -161,8 +239,8 @@ func (a *CompatibleReActAdapter) BuildFinalResponse(
 	continuations []ai.ToolCallContinuation,
 	escalationState map[string]any,
 ) ai.ReasoningResponse {
-	// Convert to native results for legacy functions
-	nativeResults := a.convertToNativeResults(toolResults)
+	// Convert to compatible results for compatibility-path helpers.
+	compatibleResults := a.convertToCompatibleResults(toolResults)
 
 	// Deobfuscate final text if needed
 	if a.EnableObfuscation && finalText != "" {
@@ -172,13 +250,13 @@ func (a *CompatibleReActAdapter) BuildFinalResponse(
 	return ai.ReasoningResponse{
 		FinalText:       finalText,
 		ToolCalls:       toolCalls,
-		OutcomeFacts:    summarizeOutcomeFacts(nativeResults),
-		OutcomeRecipes:  summarizeOutcomeRecipes(nativeResults),
+		OutcomeFacts:    summarizeOutcomeFacts(compatibleResults),
+		OutcomeRecipes:  summarizeOutcomeRecipes(compatibleResults),
 		EscalationState: escalationState,
 	}
 }
 
-// ShouldTerminateEarly checks native-specific termination conditions.
+// ShouldTerminateEarly checks compatible-loop termination conditions.
 func (a *CompatibleReActAdapter) ShouldTerminateEarly(state ReActLoopState) (bool, string) {
 	// Check for terminal hints (anti_success, blocked, fatal, etc)
 	if len(state.ToolResults) > 0 {
@@ -188,35 +266,36 @@ func (a *CompatibleReActAdapter) ShouldTerminateEarly(state ReActLoopState) (boo
 		}
 	}
 
-	// Native adapter doesn't have budget-based early termination
+	// Compatible adapter doesn't have budget-based early termination
 	// (that's handled by MaxIterations)
 	return false, ""
 }
 
 // RestoreContinuations deserializes continuations from carryover state.
-// Native adapter typically doesn't preserve continuations across Ask turns.
+// Compatible adapter typically doesn't preserve continuations across Ask turns.
 func (a *CompatibleReActAdapter) RestoreContinuations(carryover *ai.CarryoverState) ([]ai.ToolCallContinuation, error) {
-	// Native loop is stateless per Ask - no continuations to restore
+	// Compatible loop is stateless per Ask - no continuations to restore.
 	return nil, nil
 }
 
-// convertToNativeResults converts shared ReActToolResult to native nativeToolResult.
-// This is needed to reuse existing helper functions during migration.
-func (a *CompatibleReActAdapter) convertToNativeResults(shared []ai.ReActToolResult) []nativeToolResult {
+// convertToCompatibleResults converts shared ReActToolResult to compatibleToolResult.
+// This is needed to reuse the compatibility-path helper functions.
+func (a *CompatibleReActAdapter) convertToCompatibleResults(shared []ai.ReActToolResult) []compatibleToolResult {
 	if len(shared) == 0 {
 		return nil
 	}
-	native := make([]nativeToolResult, 0, len(shared))
+	compatible := make([]compatibleToolResult, 0, len(shared))
 	for _, result := range shared {
-		native = append(native, nativeToolResult{
+		compatible = append(compatible, compatibleToolResult{
 			Name:          result.Name,
 			Result:        result.Result,
 			ResultFile:    result.ResultFile,
 			ResultSize:    result.ResultSize,
 			Args:          result.Args,
 			Hint:          result.Hint,
+			RetryGuidance: result.RetryGuidance,
 			ExecutionMode: result.ExecutionMode,
 		})
 	}
-	return native
+	return compatible
 }

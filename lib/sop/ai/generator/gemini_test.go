@@ -316,7 +316,7 @@ func TestGeminiReActTurnStrategy_UsesContinuationFirstPrompt(t *testing.T) {
 				Response: map[string]any{"status": "error"},
 			}},
 		},
-		ToolResults: []ai.ReActToolResult{{Name: "execute_script", Result: "repair required"}},
+		ToolResults: []ai.ReActToolResult{{Name: "execute_script", Result: "repair required", RetryGuidance: &ai.RetryGuidance{ToolName: "execute_script", Strategy: ai.RepairStrategySameTool, AllowedTool: "execute_script", NextAction: ai.ReActNextActionRetrySameTool}}},
 	})
 	if strings.Contains(turn.Prompt, "full synthetic retry frame") {
 		t.Fatalf("expected Gemini ReAct turn strategy to replace synthetic retry frame, got %q", turn.Prompt)
@@ -326,6 +326,9 @@ func TestGeminiReActTurnStrategy_UsesContinuationFirstPrompt(t *testing.T) {
 	}
 	if !strings.Contains(turn.Prompt, "apply that exact field, operator, and literal value shape directly") {
 		t.Fatalf("expected repair prompt to require literal example-fix reuse, got %q", turn.Prompt)
+	}
+	if !strings.Contains(turn.Prompt, "react_state.retry_guidance") {
+		t.Fatalf("expected repair prompt to reference structured retry guidance, got %q", turn.Prompt)
 	}
 	if strings.Contains(turn.Prompt, "Original user query:") {
 		t.Fatalf("expected original user query to move into carried state, got %q", turn.Prompt)
@@ -359,6 +362,9 @@ func TestGeminiReActTurnStrategy_UsesContinuationFirstPrompt(t *testing.T) {
 	if reactState["repair_directive"] != "Repair directive: Retry execute_script with corrected arguments." {
 		t.Fatalf("expected repair directive in carried state, got %#v", reactState)
 	}
+	if reactState["retry_guidance"] == nil {
+		t.Fatalf("expected retry guidance in carried state, got %#v", reactState)
+	}
 	if reactState["task_status"] != "repair_required" {
 		t.Fatalf("expected repair task status in carried state, got %#v", reactState)
 	}
@@ -391,7 +397,7 @@ func TestGeminiReActTurnStrategy_UsesReducedClarificationPromptOnFinalTurn(t *te
 				Response: map[string]any{"status": "error"},
 			}},
 		},
-		ToolResults: []ai.ReActToolResult{{Name: "execute_script", Result: "repair required"}},
+		ToolResults: []ai.ReActToolResult{{Name: "execute_script", Result: "repair required", RetryGuidance: &ai.RetryGuidance{ToolName: "execute_script", Strategy: ai.RepairStrategySameTool, AllowedTool: "execute_script", NextAction: ai.ReActNextActionRetrySameTool}}},
 		FinalTurn:   true,
 	})
 	if strings.Contains(turn.Prompt, "full retry-cap clarification frame") {
@@ -419,6 +425,9 @@ func TestGeminiReActTurnStrategy_UsesReducedClarificationPromptOnFinalTurn(t *te
 	}
 	if reactState["task_status"] != "repair_budget_exhausted" {
 		t.Fatalf("expected repair-budget task status in carried state, got %#v", reactState)
+	}
+	if reactState["retry_guidance"] == nil {
+		t.Fatalf("expected retry guidance in carried state, got %#v", reactState)
 	}
 	if reactState["phase"] != string(ai.ReActLoopPhaseRepair) {
 		t.Fatalf("expected repair phase in carried state, got %#v", reactState)
@@ -915,6 +924,9 @@ func (m *geminiOwnedLoopRepairDirectiveGenerator) Generate(ctx context.Context, 
 		if !ok {
 			return ai.GenOutput{Text: fmt.Sprintf("expected react_state in continuation response, got %#v", response)}, nil
 		}
+		if reactState["retry_guidance"] == nil {
+			return ai.GenOutput{Text: fmt.Sprintf("expected retry_guidance in continuation response, got %#v", reactState)}, nil
+		}
 		directive, _ := reactState["repair_directive"].(string)
 		if !strings.Contains(directive, "call the same tool again with corrected arguments") {
 			return ai.GenOutput{Text: fmt.Sprintf("expected repair directive, got %#v", reactState)}, nil
@@ -963,6 +975,57 @@ func TestGeminiOwnedReActLoop_CarriesRepairDirectiveAfterValidationFailure(t *te
 	}
 	if resp.FinalText != "Need corrected execute_script args." {
 		t.Fatalf("unexpected final text: %q", resp.FinalText)
+	}
+}
+
+func TestGeminiReActTurnStrategy_UsesRetryGuidanceWithoutRepairDirective(t *testing.T) {
+	g := &gemini{}
+	provider, ok := any(g).(ai.ReActTurnStrategyProvider)
+	if !ok {
+		t.Fatalf("expected gemini generator to provide ReAct turn strategy")
+	}
+	turn := provider.ReActTurnStrategy().PrepareTurn(context.Background(), ai.ReActTurn{
+		Iteration: 2,
+		UserQuery: "Find orders for John",
+		Prompt:    "full synthetic retry frame",
+		Options: ai.GenOptions{
+			ToolCallContinuations: []ai.ToolCallContinuation{{
+				ToolCall: ai.ToolCall{Name: "execute_script", NativeID: "call_123"},
+				Response: map[string]any{"status": "error"},
+			}},
+		},
+		ToolResults: []ai.ReActToolResult{{
+			Name:   "execute_script",
+			Result: "repair required",
+			RetryGuidance: &ai.RetryGuidance{
+				ToolName:     "execute_script",
+				Strategy:     ai.RepairStrategyResearchFirst,
+				AllowedTool:  "list_stores",
+				ResearchTool: "list_stores",
+				NextAction:   ai.ReActNextActionCallTool,
+			},
+		}},
+	})
+	if !strings.Contains(turn.Prompt, "react_state.retry_guidance") {
+		t.Fatalf("expected retry guidance to drive the repair prompt, got %q", turn.Prompt)
+	}
+	response, ok := turn.Options.ToolCallContinuations[0].Response.(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured continuation response envelope, got %#v", turn.Options.ToolCallContinuations[0].Response)
+	}
+	reactState, ok := response["react_state"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected react_state in continuation response envelope, got %#v", response)
+	}
+	if reactState["task_status"] != "repair_required" {
+		t.Fatalf("expected repair_required task status from retry guidance, got %#v", reactState)
+	}
+	actions, ok := reactState["allowed_next_actions"].([]string)
+	if !ok {
+		t.Fatalf("expected allowed_next_actions in carried state, got %#v", reactState)
+	}
+	if len(actions) != 2 || actions[0] != string(ai.ReActNextActionCallTool) || actions[1] != string(ai.ReActNextActionAskClarification) {
+		t.Fatalf("expected research-first actions from retry guidance, got %#v", actions)
 	}
 }
 

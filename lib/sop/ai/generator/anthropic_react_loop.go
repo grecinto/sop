@@ -74,13 +74,13 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 			"repair_directive", strings.TrimSpace(latestAnthropicRepairDirective(toolResults)) != "",
 		)
 
-		prompt := anthropicOwnedLoopPrompt(req)
+		prompt := anthropicContinuationPrompt(req, toolResults, false)
 		opts := ai.GenOptions{
 			SystemPrompt:          req.SystemPrompt,
 			Tools:                 tools,
 			Temperature:           0.0,
 			ForceTemperature:      true,
-			ToolCallContinuations: append([]ai.ToolCallContinuation(nil), continuations...),
+			ToolCallContinuations: anthropicToolCallContinuations(req.UserQuery, toolResults, continuations, iteration, false),
 		}
 
 		log.Debug("Anthropic owned loop calling generator",
@@ -179,11 +179,11 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 	}
 
 	// Final turn without tools
-	finalPrompt := anthropicOwnedLoopPrompt(req)
+	finalPrompt := anthropicContinuationPrompt(req, toolResults, true)
 	finalOpts := ai.GenOptions{
 		SystemPrompt:          req.SystemPrompt,
 		Temperature:           0.2,
-		ToolCallContinuations: append([]ai.ToolCallContinuation(nil), continuations...),
+		ToolCallContinuations: anthropicToolCallContinuations(req.UserQuery, toolResults, continuations, retryState.allowedTurns+1, true),
 	}
 	log.Debug("Anthropic owned loop entering final turn",
 		"iteration", retryState.allowedTurns+1,
@@ -291,6 +291,111 @@ func anthropicOwnedLoopPrompt(req ai.ReasoningRequest) string {
 	return strings.Join(parts, "\n\n")
 }
 
+func anthropicContinuationPrompt(req ai.ReasoningRequest, toolResults []ai.ReActToolResult, finalTurn bool) string {
+	if anthropicHasRepairState(toolResults) {
+		if finalTurn {
+			return "Using the supplied tool-call state, do not call more tools. Use react_state.retry_guidance as the primary policy state and react_state.repair_directive as supporting repair context. Briefly explain what is still malformed or missing using the grounded tool state already confirmed, and ask one short clarification question only if a required user fact is genuinely missing. Do not dump a full tool call, do not dump a full script, and do not ignore the current repair path."
+		}
+		return "Continue from the supplied tool-call state. The latest tool call requires repair. Use react_state.retry_guidance as the primary policy state and react_state.repair_directive plus the structured tool response as supporting context. Emit exactly one corrected tool call next, preserve valid script slices, change only the malformed condition or join, and do not switch tools unless react_state.retry_guidance explicitly requires it."
+	}
+	if finalTurn {
+		return "Using the supplied tool-call state, do not call more tools. Briefly explain what is still blocking progress and ask one short, concrete clarification question."
+	}
+	return anthropicOwnedLoopPrompt(req)
+}
+
+func anthropicToolCallContinuations(userQuery string, toolResults []ai.ReActToolResult, continuations []ai.ToolCallContinuation, iteration int, finalTurn bool) []ai.ToolCallContinuation {
+	if len(continuations) == 0 {
+		return nil
+	}
+	wrapped := make([]ai.ToolCallContinuation, 0, len(continuations))
+	for idx, continuation := range continuations {
+		response := continuation.Response
+		if idx == len(continuations)-1 {
+			phase, actions := anthropicLoopMetadata(toolResults, finalTurn)
+			response = map[string]any{
+				"tool_result": continuation.Response,
+				"react_state": map[string]any{
+					"user_query":           strings.TrimSpace(userQuery),
+					"latest_tool":          strings.TrimSpace(continuation.ToolCall.Name),
+					"repair_directive":     strings.TrimSpace(latestAnthropicRepairDirective(toolResults)),
+					"retry_guidance":       latestAnthropicRetryGuidance(toolResults),
+					"iteration":            iteration,
+					"task_status":          anthropicTaskStatus(toolResults, finalTurn),
+					"has_more_tool_work":   !finalTurn,
+					"phase":                string(phase),
+					"allowed_next_actions": anthropicAllowedActions(actions),
+				},
+			}
+		}
+		wrapped = append(wrapped, ai.ToolCallContinuation{ToolCall: continuation.ToolCall, Response: response})
+	}
+	return wrapped
+}
+
+func latestAnthropicRetryGuidance(results []ai.ReActToolResult) *ai.RetryGuidance {
+	for idx := len(results) - 1; idx >= 0; idx-- {
+		if results[idx].RetryGuidance != nil {
+			return results[idx].RetryGuidance
+		}
+	}
+	return nil
+}
+
+func anthropicHasRepairState(results []ai.ReActToolResult) bool {
+	return latestAnthropicRetryGuidance(results) != nil || strings.TrimSpace(latestAnthropicRepairDirective(results)) != ""
+}
+
+func anthropicTaskStatus(results []ai.ReActToolResult, finalTurn bool) string {
+	if finalTurn && anthropicHasRepairState(results) {
+		return "repair_budget_exhausted"
+	}
+	if finalTurn {
+		return "clarification_required"
+	}
+	if anthropicHasRepairState(results) {
+		return "repair_required"
+	}
+	if len(results) > 0 {
+		return "tool_progressed"
+	}
+	return "active"
+}
+
+func anthropicLoopMetadata(results []ai.ReActToolResult, finalTurn bool) (ai.ReActLoopPhase, []ai.ReActNextAction) {
+	if finalTurn && anthropicHasRepairState(results) {
+		return ai.ReActLoopPhaseRepair, []ai.ReActNextAction{ai.ReActNextActionAnswerUser, ai.ReActNextActionAskClarification}
+	}
+	if finalTurn {
+		return ai.ReActLoopPhaseClarification, []ai.ReActNextAction{ai.ReActNextActionAskClarification, ai.ReActNextActionAnswerUser}
+	}
+	if anthropicHasRepairState(results) {
+		nextAction := ai.ReActNextActionRetrySameTool
+		if guidance := latestAnthropicRetryGuidance(results); guidance != nil {
+			if guidance.NextAction != "" {
+				nextAction = guidance.NextAction
+			}
+		}
+		actions := []ai.ReActNextAction{nextAction}
+		if nextAction != ai.ReActNextActionAskClarification {
+			actions = append(actions, ai.ReActNextActionAskClarification)
+		}
+		return ai.ReActLoopPhaseRepair, actions
+	}
+	return ai.ReActLoopPhaseActive, []ai.ReActNextAction{ai.ReActNextActionCallTool, ai.ReActNextActionAnswerUser}
+}
+
+func anthropicAllowedActions(actions []ai.ReActNextAction) []string {
+	if len(actions) == 0 {
+		return nil
+	}
+	allowed := make([]string, 0, len(actions))
+	for _, action := range actions {
+		allowed = append(allowed, string(action))
+	}
+	return allowed
+}
+
 func latestAnthropicRepairDirective(results []ai.ReActToolResult) string {
 	if len(results) == 0 {
 		return ""
@@ -299,6 +404,9 @@ func latestAnthropicRepairDirective(results []ai.ReActToolResult) string {
 }
 
 func buildAnthropicRepairDirective(last ai.ReActToolResult) string {
+	if directive := ai.BuildRepairDirectiveFromRetryGuidance(last.Name, last.RetryGuidance); directive != "" {
+		return directive
+	}
 	result := strings.TrimSpace(last.Result)
 	if result == "" {
 		return ""
@@ -334,10 +442,10 @@ func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequ
 	if effectiveErr == nil && toolResultSignalsRecoverableFailure(resultText) {
 		effectiveErr = fmt.Errorf("%s", strings.TrimSpace(resultText))
 	}
-	if effectiveErr != nil && retryState != nil && retryState.coordinator.IsRecoverableToolError(effectiveErr) {
+	if effectiveErr != nil && retryState != nil && retryState.isRecoverableFailure(effectiveErr) {
 		result, _ := retryState.handleRecoverableFailure(toolCall, effectiveErr, existingResults)
 		result.Hint = cloneAnthropicToolProgressHint(hint)
-		continuationResponse = map[string]any{"tool_error": map[string]any{"message": result.Result}}
+		continuationResponse = map[string]any{"tool_error": map[string]any{"message": ai.AppendRetryGuidanceState(result.Result, result.RetryGuidance)}, "retry_guidance": result.RetryGuidance}
 		if shouldStreamAnthropicToolResult(req, iteration >= maxIterations) {
 			emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), result.Result, cloneAnthropicToolProgressHint(hint), iteration, filePath, fileSize))
 		}

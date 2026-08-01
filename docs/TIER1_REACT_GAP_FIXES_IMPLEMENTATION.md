@@ -89,7 +89,7 @@ Format ToolProgressHint as **visible guidance** with clear markers (ðŸ’¡ Tips, ð
 
 ### Code Changes
 
-**File**: `lib/sop/ai/agent/engine_native.go`  
+**File**: `lib/sop/ai/agent/engine_compatible.go`
 **Function**: `formatNativeToolResultSummary()`  
 **Lines Added**: 33 (7 core logic + 26 helper function)
 
@@ -268,7 +268,7 @@ $ go test ./lib/sop/ai/agent/... -v
 1. **lib/sop/ai/agent/copilot_v2.go** (+4 lines)
    - Add classification reasoning to system prompt
 
-2. **lib/sop/ai/agent/engine_native.go** (+33 lines)
+2. **lib/sop/ai/agent/engine_compatible.go** (+33 lines)
    - Surface ToolProgressHint in tool results
    - New helper function: `formatToolProgressHintForLLM()`
 

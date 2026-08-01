@@ -238,6 +238,25 @@ func (g *anthropic) Generate(ctx context.Context, prompt string, opts ai.GenOpti
 // buildMessages constructs the messages array with tool call continuations
 // Parameters passed explicitly, NOT extracted from Context
 func summarizeAnthropicContinuationToolOutput(toolName string, response any, executionMode ai.ReActToolResultExecutionMode) any {
+	if payload, ok := response.(map[string]any); ok {
+		cloned := make(map[string]any, len(payload))
+		for key, value := range payload {
+			cloned[key] = value
+		}
+		if toolError, ok := payload["tool_error"]; ok {
+			message := ExtractToolResultText(toolError)
+			if strings.Contains(message, "Retry instruction:") || strings.Contains(message, "Clarification required:") || strings.Contains(message, "Tool execution error:") {
+				cloned["tool_error"] = map[string]any{"message": message}
+				return cloned
+			}
+			cloned["tool_error"] = summarizeAnthropicContinuationToolOutput(toolName, toolError, executionMode)
+			return cloned
+		}
+		if result, ok := payload["result"].(string); ok {
+			cloned["result"] = SummarizeToolResultForLLM(toolName, result, executionMode)
+			return cloned
+		}
+	}
 	resultText := ExtractToolResultText(response)
 	if strings.EqualFold(strings.TrimSpace(toolName), "execute_script") {
 		return map[string]any{"result": SummarizeToolResultForLLM(toolName, resultText, executionMode)}

@@ -2,6 +2,7 @@ package ai
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -27,5 +28,106 @@ func TestRetryCoordinator_RecommendStrategy_UsesScopeContext(t *testing.T) {
 	}
 	if strategy != RepairStrategyResearchFirst {
 		t.Fatalf("expected scoped research-first strategy, got %q", strategy)
+	}
+}
+
+func TestDefaultRetryPolicySurface_EvaluateRetryDecision(t *testing.T) {
+	rc := NewRetryCoordinator()
+	policy := NewDefaultRetryPolicySurfaceWithCoordinator(rc)
+	pattern := rc.ErrorPattern("execute_script", errors.New("join mapping unresolved"))
+	decision := policy.EvaluateRetryDecision(RetryDecisionInput{
+		ToolName:     "execute_script",
+		Err:          errors.New("join mapping unresolved"),
+		FailureCount: 0,
+		Learnings: []RetryLearning{{
+			ToolName:          "execute_script",
+			ErrorPattern:      pattern,
+			PreferredStrategy: RepairStrategyResearchFirst,
+			SuccessCount:      3,
+		}},
+	})
+	if decision.Plan.ToolName != "execute_script" {
+		t.Fatalf("expected plan tool name to be preserved, got %#v", decision.Plan)
+	}
+	if decision.Tier != RetryTierResearch {
+		t.Fatalf("expected research tier for join ambiguity, got %d", decision.Tier)
+	}
+	if decision.Recommendation == nil || decision.Recommendation.Strategy != RepairStrategyResearchFirst {
+		t.Fatalf("expected learned recommendation to be surfaced, got %#v", decision.Recommendation)
+	}
+}
+
+func TestDefaultRetryPolicySurface_BudgetDecisions(t *testing.T) {
+	policy := NewDefaultRetryPolicySurfaceWithCoordinator(NewRetryCoordinator())
+	budget := policy.InitialRetryBudget(RetryBudgetInput{BaseTurns: 2, Query: "refactor this workflow"})
+	if budget.SoftLimit < 2 {
+		t.Fatalf("expected soft limit to respect base turns, got %#v", budget)
+	}
+	if budget.HardLimit < budget.SoftLimit {
+		t.Fatalf("expected hard limit to bound soft limit, got %#v", budget)
+	}
+	extension := policy.EvaluateRetryBudgetExtension(RetryBudgetExtensionInput{
+		AllowedTurns:     2,
+		MaxAllowedTurns:  4,
+		CurrentIteration: 2,
+		ProgressHint:     &ToolProgressHint{CompletionDelta: 0.5},
+		ExplicitProgress: true,
+	})
+	if !extension.Allow || extension.AdditionalTurns != 2 {
+		t.Fatalf("expected progress-driven extension, got %#v", extension)
+	}
+}
+
+func TestBuildRetryGuidance_ResearchFirstSetsAllowedToolAndNextAction(t *testing.T) {
+	guidance := BuildRetryGuidance("execute_script", RepairPlan{
+		ToolName:     "execute_script",
+		Strategy:     RepairStrategyResearchFirst,
+		Tier:         RetryTierResearch,
+		ResearchTool: "list_stores",
+	}, &RetryLearningRecommendation{
+		Strategy: RepairStrategyResearchFirst,
+		Score:    2.5,
+		Reason:   "repo-scoped",
+	}, 2, 5, 7, false)
+	if guidance == nil {
+		t.Fatal("expected retry guidance")
+	}
+	if guidance.AllowedTool != "list_stores" || guidance.NextAction != ReActNextActionCallTool {
+		t.Fatalf("expected research-first guidance to target list_stores, got %#v", guidance)
+	}
+	if guidance.RecommendedStrategy != RepairStrategyResearchFirst {
+		t.Fatalf("expected learned recommendation to be preserved, got %#v", guidance)
+	}
+}
+
+func TestAppendRetryGuidanceState_AppendsStructuredState(t *testing.T) {
+	text := AppendRetryGuidanceState("Retry instruction: Call execute_script next.", &RetryGuidance{
+		ToolName:        "execute_script",
+		Tier:            RetryTierQuickFix,
+		Strategy:        RepairStrategySameTool,
+		AllowedTool:     "execute_script",
+		NextAction:      ReActNextActionRetrySameTool,
+		FailureCount:    1,
+		SoftRetryBudget: 2,
+		HardRetryBudget: 4,
+	})
+	if !strings.Contains(text, "Retry policy state:") {
+		t.Fatalf("expected structured state to be appended, got %q", text)
+	}
+	if !strings.Contains(text, `"next_action":"retry_same_tool"`) {
+		t.Fatalf("expected next_action in appended state, got %q", text)
+	}
+}
+
+func TestBuildRepairDirectiveFromRetryGuidance_UsesStructuredStrategy(t *testing.T) {
+	directive := BuildRepairDirectiveFromRetryGuidance("execute_script", &RetryGuidance{
+		ToolName:     "execute_script",
+		Strategy:     RepairStrategyResearchFirst,
+		AllowedTool:  "list_stores",
+		NextAction:   ReActNextActionCallTool,
+		FailureCount: 2,
+	})
+	if !strings.Contains(directive, "call list_stores first") {
+		t.Fatalf("expected research-first directive from structured guidance, got %q", directive)
 	}
 }

@@ -211,10 +211,10 @@ func TestCopilotAsk_RewritesRetryMetaAskBeforeRoutingAndEngine(t *testing.T) {
 		t.Fatalf("unexpected response: %q", resp)
 	}
 	if !strings.Contains(gen.CapturedPrompt, "User Query: Find John orders") {
-		t.Fatalf("expected native loop prompt to use rewritten query, got: %s", gen.CapturedPrompt)
+		t.Fatalf("expected compatible/shared loop prompt to use rewritten query, got: %s", gen.CapturedPrompt)
 	}
 	if strings.Contains(gen.CapturedPrompt, "Can we retry the same ask?") {
-		t.Fatalf("did not expect meta ask to reach native loop prompt, got: %s", gen.CapturedPrompt)
+		t.Fatalf("did not expect meta ask to reach compatible/shared loop prompt, got: %s", gen.CapturedPrompt)
 	}
 	if payload.CurrentUserQuery != "Find John orders" {
 		t.Fatalf("expected payload current query to match rewritten ask, got %q", payload.CurrentUserQuery)
@@ -250,10 +250,10 @@ func TestCopilotAsk_RewritesQualifiedRetryMetaAskBeforeRoutingAndEngine(t *testi
 		t.Fatalf("unexpected response: %q", resp)
 	}
 	if !strings.Contains(gen.CapturedPrompt, "User Query: Find John orders") {
-		t.Fatalf("expected native loop prompt to use rewritten query, got: %s", gen.CapturedPrompt)
+		t.Fatalf("expected compatible/shared loop prompt to use rewritten query, got: %s", gen.CapturedPrompt)
 	}
 	if strings.Contains(gen.CapturedPrompt, query) {
-		t.Fatalf("did not expect qualified meta ask to reach native loop prompt, got: %s", gen.CapturedPrompt)
+		t.Fatalf("did not expect qualified meta ask to reach compatible/shared loop prompt, got: %s", gen.CapturedPrompt)
 	}
 	if payload.CurrentUserQuery != "Find John orders" {
 		t.Fatalf("expected payload current query to match rewritten ask, got %q", payload.CurrentUserQuery)
@@ -519,10 +519,10 @@ func TestCopilotAsk_RewritesConversationalMetaAskBeforeRoutingAndEngine(t *testi
 		t.Fatalf("unexpected response: %q", resp)
 	}
 	if !strings.Contains(gen.CapturedPrompt, "Target ask: Find John orders") || !strings.Contains(gen.CapturedPrompt, "Assistant clarification question: Wait, join outputs a combined record. Do you want flat joined fields or nested objects?") || !strings.Contains(gen.CapturedPrompt, "User clarification: Flat joined fields. Keep dotted names.") {
-		t.Fatalf("expected native loop prompt to use conversational rewrite, got: %s", gen.CapturedPrompt)
+		t.Fatalf("expected compatible/shared loop prompt to use conversational rewrite, got: %s", gen.CapturedPrompt)
 	}
 	if strings.Contains(gen.CapturedPrompt, "User Query: Flat joined fields. Keep dotted names.") {
-		t.Fatalf("did not expect raw meta reply to reach native loop prompt, got: %s", gen.CapturedPrompt)
+		t.Fatalf("did not expect raw meta reply to reach compatible/shared loop prompt, got: %s", gen.CapturedPrompt)
 	}
 	if payload.ClarificationState != nil {
 		t.Fatalf("expected clarification state to clear after resumed ask completes, got %+v", payload.ClarificationState)

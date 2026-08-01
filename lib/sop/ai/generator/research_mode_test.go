@@ -22,7 +22,7 @@ func TestSelectToolResultExecutionMode_UsesCompactModeForWriteTools(t *testing.T
 }
 
 func TestSummarizeChatGPTContinuationToolOutput_UsesPreviewForNonFinalResults(t *testing.T) {
-	got := summarizeChatGPTContinuationToolOutput("execute_script", `[{"id":1},{"id":2},{"id":3}]`, ai.ReActToolResultExecutionModeStructuredSummary)
+	got := summarizeChatGPTContinuationToolOutput(ai.ReActToolResult{Name: "execute_script", Result: `[{"id":1},{"id":2},{"id":3}]`, ExecutionMode: ai.ReActToolResultExecutionModeStructuredSummary})
 	if !strings.Contains(got, "Preview (first 3 rows)") {
 		t.Fatalf("expected capped preview rows, got %q", got)
 	}
@@ -32,12 +32,32 @@ func TestSummarizeChatGPTContinuationToolOutput_UsesPreviewForNonFinalResults(t 
 }
 
 func TestSummarizeChatGPTContinuationToolOutput_FinalResultUsesCompactSummary(t *testing.T) {
-	got := summarizeChatGPTContinuationToolOutput("execute_script", `[{"id":1},{"id":2},{"id":3}]`, ai.ReActToolResultExecutionModeSummary)
+	got := summarizeChatGPTContinuationToolOutput(ai.ReActToolResult{Name: "execute_script", Result: `[{"id":1},{"id":2},{"id":3}]`, ExecutionMode: ai.ReActToolResultExecutionModeSummary})
 	if !strings.Contains(got, "The full row payload was already streamed") {
 		t.Fatalf("expected compact summary for final result, got %q", got)
 	}
 	if strings.Contains(got, "Preview (first") {
 		t.Fatalf("did not expect preview rows for final result, got %q", got)
+	}
+}
+
+func TestSummarizeChatGPTContinuationToolOutput_AppendsStructuredRetryGuidance(t *testing.T) {
+	got := summarizeChatGPTContinuationToolOutput(ai.ReActToolResult{
+		Name:   "execute_script",
+		Result: "Tool execution error: missing required field\nRetry instruction: Call execute_script next with corrected arguments.",
+		RetryGuidance: &ai.RetryGuidance{
+			ToolName:        "execute_script",
+			Tier:            ai.RetryTierQuickFix,
+			Strategy:        ai.RepairStrategySameTool,
+			AllowedTool:     "execute_script",
+			NextAction:      ai.ReActNextActionRetrySameTool,
+			FailureCount:    1,
+			SoftRetryBudget: 2,
+			HardRetryBudget: 4,
+		},
+	})
+	if !strings.Contains(got, "Retry policy state:") {
+		t.Fatalf("expected structured retry guidance state, got %q", got)
 	}
 }
 
@@ -65,6 +85,28 @@ func TestSummarizeGeminiContinuationToolOutput_FinalResultUsesCompactSummary(t *
 	}
 }
 
+func TestSummarizeGeminiContinuationToolOutput_PreservesRetryGuidanceEnvelope(t *testing.T) {
+	got := summarizeGeminiContinuationToolOutput("execute_script", map[string]any{
+		"tool_result": map[string]any{"result": `[{"id":1},{"id":2},{"id":3}]`},
+		"react_state": map[string]any{"retry_guidance": map[string]any{"strategy": "research_first"}},
+	}, ai.ReActToolResultExecutionModeSummary)
+	payload, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map payload, got %T", got)
+	}
+	if payload["react_state"] == nil {
+		t.Fatalf("expected react_state to be preserved, got %#v", payload)
+	}
+	toolResult, ok := payload["tool_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested tool_result to be preserved, got %#v", payload)
+	}
+	result, _ := toolResult["result"].(string)
+	if !strings.Contains(result, "The full row payload was already streamed") {
+		t.Fatalf("expected nested result summary, got %q", result)
+	}
+}
+
 func TestSummarizeAnthropicContinuationToolOutput_UsesPreviewForNonFinalResults(t *testing.T) {
 	got := summarizeAnthropicContinuationToolOutput("execute_script", map[string]any{"result": `[{"id":1},{"id":2},{"id":3}]`}, ai.ReActToolResultExecutionModeStructuredSummary)
 	payload, ok := got.(map[string]any)
@@ -86,6 +128,31 @@ func TestSummarizeAnthropicContinuationToolOutput_FinalResultUsesCompactSummary(
 	result, _ := payload["result"].(string)
 	if !strings.Contains(result, "The full row payload was already streamed") {
 		t.Fatalf("expected compact summary in default mode, got %q", result)
+	}
+}
+
+func TestSummarizeAnthropicContinuationToolOutput_PreservesRetryGuidanceEnvelope(t *testing.T) {
+	got := summarizeAnthropicContinuationToolOutput("execute_script", map[string]any{
+		"tool_error":     map[string]any{"message": "Tool execution error: invalid join\nRetry instruction: Call list_stores first."},
+		"retry_guidance": map[string]any{"strategy": "research_first"},
+	}, ai.ReActToolResultExecutionModeSummary)
+	payload, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map payload, got %T", got)
+	}
+	if payload["retry_guidance"] == nil {
+		t.Fatalf("expected retry_guidance to be preserved, got %#v", payload)
+	}
+	toolErr, ok := payload["tool_error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested tool_error to be preserved, got %#v", payload)
+	}
+	message, _ := toolErr["result"].(string)
+	if message == "" {
+		message, _ = toolErr["message"].(string)
+	}
+	if !strings.Contains(message, "Retry instruction:") {
+		t.Fatalf("expected nested retry message to be preserved, got %#v", toolErr)
 	}
 }
 func TestSummarizeToolResultForLLM_FullSmallOnlyKeepsShortPayloads(t *testing.T) {

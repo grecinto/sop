@@ -41,7 +41,7 @@ func (m *sharedModeOwnedLoopMockGenerator) Generate(ctx context.Context, prompt 
 	return ai.GenOutput{Text: "Final answer: shared loop used"}, nil
 }
 
-func TestNativeReActEngine_SharedModeOverridesOwnedLoopProvider(t *testing.T) {
+func TestCompatibleReActEngine_SharedModeOverridesOwnedLoopProvider(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &sharedModeOwnedLoopMockGenerator{}
 
@@ -87,7 +87,7 @@ func (m *explicitOwnedLoopMockGenerator) Generate(ctx context.Context, prompt st
 	return ai.GenOutput{Text: "unexpected shared loop"}, nil
 }
 
-func TestNativeReActEngine_ExplicitOwnedModeUsesProviderLoop(t *testing.T) {
+func TestCompatibleReActEngine_ExplicitOwnedModeUsesProviderLoop(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &explicitOwnedLoopMockGenerator{}
 

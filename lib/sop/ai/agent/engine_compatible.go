@@ -28,58 +28,59 @@ type CompatibleReActEngine struct {
 
 const ctxKeyToolResultStorage contextKey = "tool_result_storage"
 
-const nativeReActBaseToolIterations = 5
-const nativeReActMaxToolIterations = 5
-const nativeReActToolCallTemperature float32 = 0.1
-const nativeReActRepairTemperature float32 = 0.0
+const compatibleReActBaseToolIterations = 5
+const compatibleReActMaxToolIterations = 5
+const compatibleReActToolCallTemperature float32 = 0.1
+const compatibleReActRepairTemperature float32 = 0.0
 
-type nativeToolResult struct {
+type compatibleToolResult struct {
 	Name          string
 	Result        string // Inline result or summary if file-backed
 	ResultFile    string // Path to full output file (if large)
 	ResultSize    int64  // Byte count of original result
 	Args          map[string]any
 	Hint          *ai.ToolProgressHint
+	RetryGuidance *ai.RetryGuidance
 	ExecutionMode ai.ReActToolResultExecutionMode
 }
 
 type askAnchoredMRUState []MRUItem
 
 // Tier 2B: Progressive escalation tiers
-type nativeRetryTier int
+type compatibleRetryTier int
 
 const (
 	// TierQuickFix: First failure - retry same tool with corrections
-	TierQuickFix nativeRetryTier = 1
+	TierQuickFix compatibleRetryTier = 1
 	// TierResearch: Second failure - research before retry
-	TierResearch nativeRetryTier = 2
+	TierResearch compatibleRetryTier = 2
 	// TierClarify: Third+ failure - escalate to user clarification
-	TierClarify nativeRetryTier = 3
+	TierClarify compatibleRetryTier = 3
 )
 
-type pendingToolRepair struct {
+type compatiblePendingToolRepair struct {
 	ToolName       string
-	Strategy       nativeRepairStrategy
+	Strategy       compatibleRepairStrategy
 	ResearchTool   string
 	ResearchReason string
-	Tier           nativeRetryTier // Tier 2B: tracks escalation level
+	Tier           compatibleRetryTier // Tier 2B: tracks escalation level
 }
 
-type pendingGenerationRepair struct{}
+type compatiblePendingGenerationRepair struct{}
 
-type askLoopBudgetState struct {
+type compatibleLoopBudgetState struct {
 	allowedIterations int
 	maxIterations     int
 }
 
-type askLoopProgressDelta struct {
+type compatibleLoopProgressDelta struct {
 	Progressing bool
 	NewFacts    []string
 	NewRecipes  []string
 	HintSignal  *ai.ToolProgressHint
 }
 
-type nativeRepairStrategy string
+type compatibleRepairStrategy string
 
 const (
 	askMRUCategoryConfirmed                = "ASK_CONFIRMED"
@@ -88,13 +89,14 @@ const (
 	askMRUCategoryConfirmedJoinSelection   = "ASK_CONFIRMED_JOIN_SELECTION"
 	askMRUCategoryConfirmedFilterSelection = "ASK_CONFIRMED_FILTER_SELECTION"
 
-	nativeRepairStrategySameTool      nativeRepairStrategy = "same_tool"
-	nativeRepairStrategyResearchFirst nativeRepairStrategy = "research_first"
+	compatibleRepairStrategySameTool      compatibleRepairStrategy = "same_tool"
+	compatibleRepairStrategyResearchFirst compatibleRepairStrategy = "research_first"
 )
 
 type progressSink func(string)
 
-// Run executes the orchestration loop relying on native tool calls.
+// Run executes the reserved compatible/shared orchestration loop while still
+// relying on the native tool-call format for tool execution and recovery.
 func (e *CompatibleReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
 	// Initialize file-backed tool result storage for this session (all engines)
 	storage := getOrCreateToolResultStorage(ctx)
@@ -148,7 +150,7 @@ func (e *CompatibleReActEngine) runDefaultLoop(ctx context.Context, req ai.Reaso
 	unifiedEngine.EnableObfuscation = e.EnableObfuscation
 	unifiedEngine.MaxTokens = e.MaxTokens
 
-	log.Info("Native ReAct Engine using Unified Engine",
+	log.Info("Compatible ReAct Engine using Unified Engine",
 		"adapter", adapter.Name(),
 		"max_iterations", adapter.MaxIterations())
 
@@ -189,7 +191,7 @@ func prepareReActTurn(ctx context.Context, strategy ai.ReActTurnStrategy, turn a
 	return turn.Prompt, turn.Options
 }
 
-func cloneReActToolResults(results []nativeToolResult) []ai.ReActToolResult {
+func cloneReActToolResults(results []compatibleToolResult) []ai.ReActToolResult {
 	if len(results) == 0 {
 		return nil
 	}
@@ -200,13 +202,14 @@ func cloneReActToolResults(results []nativeToolResult) []ai.ReActToolResult {
 			Args:          cloneToolEventMap(result.Args),
 			Result:        result.Result,
 			Hint:          cloneToolProgressHint(result.Hint),
+			RetryGuidance: result.RetryGuidance,
 			ExecutionMode: result.ExecutionMode,
 		})
 	}
 	return cloned
 }
 
-func snapshotReActLoopState(iteration int, budgetState askLoopBudgetState, repairAttempts int, pendingRepair *pendingToolRepair, pendingMalformedCall bool, toolResults []nativeToolResult, continuations []ai.ToolCallContinuation) ai.ReActLoopState {
+func snapshotReActLoopState(iteration int, budgetState compatibleLoopBudgetState, repairAttempts int, pendingRepair *compatiblePendingToolRepair, pendingMalformedCall bool, toolResults []compatibleToolResult, continuations []ai.ToolCallContinuation) ai.ReActLoopState {
 	phase, allowedNextActions := deriveReActLoopPhase(iteration, budgetState, pendingRepair, pendingMalformedCall)
 	state := ai.ReActLoopState{
 		Iteration:                iteration,
@@ -231,7 +234,7 @@ func snapshotReActLoopState(iteration int, budgetState askLoopBudgetState, repai
 	return state
 }
 
-func deriveReActLoopPhase(iteration int, budgetState askLoopBudgetState, pendingRepair *pendingToolRepair, pendingMalformedCall bool) (ai.ReActLoopPhase, []ai.ReActNextAction) {
+func deriveReActLoopPhase(iteration int, budgetState compatibleLoopBudgetState, pendingRepair *compatiblePendingToolRepair, pendingMalformedCall bool) (ai.ReActLoopPhase, []ai.ReActNextAction) {
 	if iteration > budgetState.allowedIterations {
 		return ai.ReActLoopPhaseClarification, []ai.ReActNextAction{ai.ReActNextActionAskClarification, ai.ReActNextActionAnswerUser}
 	}
@@ -239,7 +242,7 @@ func deriveReActLoopPhase(iteration int, budgetState askLoopBudgetState, pending
 		return ai.ReActLoopPhaseMalformedToolCall, []ai.ReActNextAction{ai.ReActNextActionCallTool, ai.ReActNextActionAskClarification}
 	}
 	if pendingRepair != nil {
-		if pendingRepair.Strategy == nativeRepairStrategySameTool {
+		if pendingRepair.Strategy == compatibleRepairStrategySameTool {
 			return ai.ReActLoopPhaseRepair, []ai.ReActNextAction{ai.ReActNextActionRetrySameTool, ai.ReActNextActionAskClarification}
 		}
 		return ai.ReActLoopPhaseRepair, []ai.ReActNextAction{ai.ReActNextActionCallTool, ai.ReActNextActionAskClarification}
@@ -247,11 +250,11 @@ func deriveReActLoopPhase(iteration int, budgetState askLoopBudgetState, pending
 	return ai.ReActLoopPhaseActive, []ai.ReActNextAction{ai.ReActNextActionCallTool, ai.ReActNextActionAnswerUser}
 }
 
-func latestNativeRepairDirective(results []nativeToolResult) string {
+func latestCompatibleRepairDirective(results []compatibleToolResult) string {
 	if len(results) == 0 {
 		return ""
 	}
-	return buildNativeRepairDirective(results[len(results)-1])
+	return buildCompatibleRepairDirective(results[len(results)-1])
 }
 
 func coerceToolCallContinuationResponse(result string) any {
@@ -268,14 +271,14 @@ func coerceToolCallContinuationResponse(result string) any {
 	return map[string]any{"result": result}
 }
 
-func newAskLoopBudgetState() askLoopBudgetState {
-	return askLoopBudgetState{
-		allowedIterations: nativeReActBaseToolIterations,
-		maxIterations:     nativeReActMaxToolIterations,
+func newAskLoopBudgetState() compatibleLoopBudgetState {
+	return compatibleLoopBudgetState{
+		allowedIterations: compatibleReActBaseToolIterations,
+		maxIterations:     compatibleReActMaxToolIterations,
 	}
 }
 
-func (s *askLoopBudgetState) extendIfProgressing(delta askLoopProgressDelta) bool {
+func (s *compatibleLoopBudgetState) extendIfProgressing(delta compatibleLoopProgressDelta) bool {
 	_ = delta
 	return false
 }
@@ -435,30 +438,30 @@ func getSessionIDFromContext(ctx context.Context) string {
 }
 
 const (
-	componentNativeAskAnchoredMRU  PromptComponent = "ask_anchored_mru"
-	componentNativeProgression     PromptComponent = "progression_history"
-	componentNativeRepairDirective PromptComponent = "repair_directive"
-	componentNativeToolResults     PromptComponent = "tool_results"
-	nativeReActPromptTotalChars                    = 16000
+	componentCompatibleAskAnchoredMRU  PromptComponent = "ask_anchored_mru"
+	componentCompatibleProgression     PromptComponent = "progression_history"
+	componentCompatibleRepairDirective PromptComponent = "repair_directive"
+	componentCompatibleToolResults     PromptComponent = "tool_results"
+	compatibleReActPromptTotalChars                    = 16000
 )
 
-func buildNativeReActPrompt(req ai.ReasoningRequest, toolResults []nativeToolResult, askState askAnchoredMRUState) string {
-	rendered, _ := buildNativeReActPromptWithReport(req, toolResults, askState, nativeReActPromptBudgetProfile())
+func buildCompatibleReActPrompt(req ai.ReasoningRequest, toolResults []compatibleToolResult, askState askAnchoredMRUState) string {
+	rendered, _ := buildCompatibleReActPromptWithReport(req, toolResults, askState, compatibleReActPromptBudgetProfile())
 	return rendered
 }
 
-func buildNativeReActPromptWithReport(req ai.ReasoningRequest, toolResults []nativeToolResult, askState askAnchoredMRUState, profile PromptBudgetProfile) (string, PromptBudgetReport) {
-	sections := buildNativeReActPromptSections(req, toolResults, askState)
-	trimmed, report := budgetNativePromptSections(sections, profile)
-	return renderNativePromptSections(trimmed), report
+func buildCompatibleReActPromptWithReport(req ai.ReasoningRequest, toolResults []compatibleToolResult, askState askAnchoredMRUState, profile PromptBudgetProfile) (string, PromptBudgetReport) {
+	sections := buildCompatibleReActPromptSections(req, toolResults, askState)
+	trimmed, report := budgetCompatiblePromptSections(sections, profile)
+	return renderCompatiblePromptSections(trimmed), report
 }
 
-func buildNativeReActPromptSections(req ai.ReasoningRequest, toolResults []nativeToolResult, askState askAnchoredMRUState) []PromptElement {
+func buildCompatibleReActPromptSections(req ai.ReasoningRequest, toolResults []compatibleToolResult, askState askAnchoredMRUState) []PromptElement {
 	sections := make([]PromptElement, 0, 7)
-	if contextText := compactNativePromptSectionText(req.ContextText, 6000); contextText != "" {
+	if contextText := compactCompatiblePromptSectionText(req.ContextText, 6000); contextText != "" {
 		sections = append(sections, PromptElement{Component: ComponentFocusedContext, Content: "Context:\n" + contextText})
 	}
-	if historyText := compactNativePromptSectionText(req.HistoryText, 2500); historyText != "" {
+	if historyText := compactCompatiblePromptSectionText(req.HistoryText, 2500); historyText != "" {
 		sections = append(sections, PromptElement{Component: ComponentHistory, Content: "History:\n" + historyText})
 	}
 	sections = append(sections, PromptElement{Component: ComponentUserQuery, Content: fmt.Sprintf("User Query: %s", strings.TrimSpace(req.UserQuery))})
@@ -467,44 +470,44 @@ func buildNativeReActPromptSections(req ai.ReasoningRequest, toolResults []nativ
 	}
 
 	sections = append(sections,
-		PromptElement{Component: componentNativeAskAnchoredMRU, Content: "Ask-anchored MRU:\n" + formatAskAnchoredMRUState(askState)},
-		PromptElement{Component: componentNativeProgression, Content: "Progression history:\n" + strings.TrimSpace(formatNativeProgressionHistory(toolResults))},
+		PromptElement{Component: componentCompatibleAskAnchoredMRU, Content: "Ask-anchored MRU:\n" + formatAskAnchoredMRUState(askState)},
+		PromptElement{Component: componentCompatibleProgression, Content: "Progression history:\n" + strings.TrimSpace(formatCompatibleProgressionHistory(toolResults))},
 	)
-	if directive := buildNativeRepairDirective(toolResults[len(toolResults)-1]); directive != "" {
-		sections = append(sections, PromptElement{Component: componentNativeRepairDirective, Content: directive})
+	if directive := buildCompatibleRepairDirective(toolResults[len(toolResults)-1]); directive != "" {
+		sections = append(sections, PromptElement{Component: componentCompatibleRepairDirective, Content: directive})
 	}
 	sections = append(sections,
-		PromptElement{Component: componentNativeToolResults, Content: buildNativeToolResultsSection(toolResults)},
+		PromptElement{Component: componentCompatibleToolResults, Content: buildCompatibleToolResultsSection(toolResults)},
 		PromptElement{Component: ComponentUserQuery, Content: "User: Analyze the tool response and continue the task. If another tool is required, call it. Otherwise provide the final answer to the user."},
 	)
 	return sections
 }
 
-func nativeReActPromptBudgetProfile() PromptBudgetProfile {
+func compatibleReActPromptBudgetProfile() PromptBudgetProfile {
 	return PromptBudgetProfile{
-		TotalChars: nativeReActPromptTotalChars,
+		TotalChars: compatibleReActPromptTotalChars,
 		ComponentCharBudgets: map[PromptComponent]int{
-			ComponentFocusedContext:        6000,
-			ComponentHistory:               2500,
-			ComponentUserQuery:             900,
-			componentNativeAskAnchoredMRU:  1800,
-			componentNativeProgression:     5200,
-			componentNativeRepairDirective: 1100,
-			componentNativeToolResults:     5200,
+			ComponentFocusedContext:            6000,
+			ComponentHistory:                   2500,
+			ComponentUserQuery:                 900,
+			componentCompatibleAskAnchoredMRU:  1800,
+			componentCompatibleProgression:     5200,
+			componentCompatibleRepairDirective: 1100,
+			componentCompatibleToolResults:     5200,
 		},
 		TrimPriorityLowToHigh: []PromptComponent{
-			componentNativeAskAnchoredMRU,
+			componentCompatibleAskAnchoredMRU,
 			ComponentHistory,
-			componentNativeProgression,
+			componentCompatibleProgression,
 			ComponentFocusedContext,
-			componentNativeToolResults,
-			componentNativeRepairDirective,
+			componentCompatibleToolResults,
+			componentCompatibleRepairDirective,
 			ComponentUserQuery,
 		},
 	}
 }
 
-func budgetNativePromptSections(sections []PromptElement, profile PromptBudgetProfile) ([]PromptElement, PromptBudgetReport) {
+func budgetCompatiblePromptSections(sections []PromptElement, profile PromptBudgetProfile) ([]PromptElement, PromptBudgetReport) {
 	if len(sections) == 0 {
 		return nil, PromptBudgetReport{}
 	}
@@ -515,7 +518,7 @@ func budgetNativePromptSections(sections []PromptElement, profile PromptBudgetPr
 		original := strings.TrimSpace(section.Content)
 		content := original
 		if maxChars, ok := profile.ComponentCharBudgets[section.Component]; ok && maxChars > 0 {
-			content = trimNativePromptSectionContent(section.Component, content, maxChars)
+			content = trimCompatiblePromptSectionContent(section.Component, content, maxChars)
 		}
 		content = strings.TrimSpace(content)
 		report.OriginalTotalChars += len(original)
@@ -532,18 +535,18 @@ func budgetNativePromptSections(sections []PromptElement, profile PromptBudgetPr
 		return filterEmptyPromptElements(working), report
 	}
 
-	working, report = trimNativePromptSectionsToTotalBudget(working, profile, report, true)
-	if renderedNativePromptChars(working) > profile.TotalChars {
-		working, report = trimNativePromptSectionsToTotalBudget(working, profile, report, false)
+	working, report = trimCompatiblePromptSectionsToTotalBudget(working, profile, report, true)
+	if renderedCompatiblePromptChars(working) > profile.TotalChars {
+		working, report = trimCompatiblePromptSectionsToTotalBudget(working, profile, report, false)
 	}
 	return filterEmptyPromptElements(working), report
 }
 
-func trimNativePromptSectionsToTotalBudget(sections []PromptElement, profile PromptBudgetProfile, report PromptBudgetReport, useFloor bool) ([]PromptElement, PromptBudgetReport) {
+func trimCompatiblePromptSectionsToTotalBudget(sections []PromptElement, profile PromptBudgetProfile, report PromptBudgetReport, useFloor bool) ([]PromptElement, PromptBudgetReport) {
 	working := append([]PromptElement(nil), sections...)
-	excess := renderedNativePromptChars(working) - profile.TotalChars
+	excess := renderedCompatiblePromptChars(working) - profile.TotalChars
 	if excess <= 0 {
-		report.FinalTotalChars = renderedNativePromptChars(working)
+		report.FinalTotalChars = renderedCompatiblePromptChars(working)
 		return filterEmptyPromptElements(working), report
 	}
 
@@ -566,7 +569,7 @@ func trimNativePromptSectionsToTotalBudget(sections []PromptElement, profile Pro
 			if target < floor {
 				target = floor
 			}
-			trimmed := trimNativePromptSectionContent(component, working[i].Content, target)
+			trimmed := trimCompatiblePromptSectionContent(component, working[i].Content, target)
 			reducedBy := len(working[i].Content) - len(trimmed)
 			working[i].Content = strings.TrimSpace(trimmed)
 			for idx := range report.ComponentStats {
@@ -580,11 +583,11 @@ func trimNativePromptSectionsToTotalBudget(sections []PromptElement, profile Pro
 	}
 
 	working = filterEmptyPromptElements(working)
-	report.FinalTotalChars = renderedNativePromptChars(working)
+	report.FinalTotalChars = renderedCompatiblePromptChars(working)
 	return working, report
 }
 
-func trimNativePromptSectionContent(component PromptComponent, content string, maxChars int) string {
+func trimCompatiblePromptSectionContent(component PromptComponent, content string, maxChars int) string {
 	content = strings.TrimSpace(content)
 	if maxChars <= 0 || len(content) <= maxChars {
 		return content
@@ -594,12 +597,12 @@ func trimNativePromptSectionContent(component PromptComponent, content string, m
 	}
 
 	switch component {
-	case ComponentFocusedContext, componentNativeAskAnchoredMRU:
-		return compactNativePromptSectionText(content, maxChars)
+	case ComponentFocusedContext, componentCompatibleAskAnchoredMRU:
+		return compactCompatiblePromptSectionText(content, maxChars)
 	case ComponentHistory:
 		return trimPromptComponentContent(component, content, maxChars)
-	case componentNativeProgression, componentNativeToolResults:
-		return compactNativePromptText(content, maxChars)
+	case componentCompatibleProgression, componentCompatibleToolResults:
+		return compactCompatiblePromptText(content, maxChars)
 	default:
 		return trimPromptComponentContent(component, content, maxChars)
 	}
@@ -616,7 +619,7 @@ func filterEmptyPromptElements(elements []PromptElement) []PromptElement {
 	return filtered
 }
 
-func renderedNativePromptChars(sections []PromptElement) int {
+func renderedCompatiblePromptChars(sections []PromptElement) int {
 	filtered := filterEmptyPromptElements(sections)
 	if len(filtered) == 0 {
 		return 0
@@ -629,7 +632,7 @@ func renderedNativePromptChars(sections []PromptElement) int {
 	return total
 }
 
-func renderNativePromptSections(sections []PromptElement) string {
+func renderCompatiblePromptSections(sections []PromptElement) string {
 	filtered := filterEmptyPromptElements(sections)
 	parts := make([]string, 0, len(filtered))
 	for _, section := range filtered {
@@ -638,7 +641,10 @@ func renderNativePromptSections(sections []PromptElement) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func buildNativeRepairDirective(last nativeToolResult) string {
+func buildCompatibleRepairDirective(last compatibleToolResult) string {
+	if directive := ai.BuildRepairDirectiveFromRetryGuidance(last.Name, last.RetryGuidance); directive != "" {
+		return directive
+	}
 	if strings.Contains(last.Result, "Clarification required:") {
 		return "Clarification directive: The last tool failure still remains unresolved after the first repair attempt. Do not call another tool yet. Ask the user one short, concrete clarification question that names the blocker and wait for the answer."
 	}
@@ -654,22 +660,22 @@ func buildNativeRepairDirective(last nativeToolResult) string {
 	return fmt.Sprintf("Repair directive: The last tool call to %s failed because its arguments were invalid. Your next step should be to call the same tool again with corrected arguments using the repair guidance below. Do not summarize the error as a final answer unless correction is impossible.", last.Name)
 }
 
-func buildNativeToolResultsSection(toolResults []nativeToolResult) string {
+func buildCompatibleToolResultsSection(toolResults []compatibleToolResult) string {
 	var sb strings.Builder
 	sb.WriteString("Tool results:\n")
 	for i, result := range toolResults {
-		keepExpanded := shouldRetainNativePromptBlob(i, len(toolResults)) || len(toolResults) == 1
+		keepExpanded := shouldRetainCompatiblePromptBlob(i, len(toolResults)) || len(toolResults) == 1
 		sb.WriteString(fmt.Sprintf("Step %d Tool: %s\n", i+1, result.Name))
 		if len(toolResults) > 2 && !keepExpanded {
-			if summary := formatNativeToolResultSummary(result); summary != "" {
+			if summary := formatCompatibleToolResultSummary(result); summary != "" {
 				sb.WriteString(fmt.Sprintf("[Tool Summary]:\n%s\n\n", summary))
 				continue
 			}
 		}
-		if formattedArgs := formatNativePromptArgs(result.Args, keepExpanded); formattedArgs != "" {
+		if formattedArgs := formatCompatiblePromptArgs(result.Args, keepExpanded); formattedArgs != "" {
 			sb.WriteString(fmt.Sprintf("[Tool Args]:\n%s\n", formattedArgs))
 		}
-		sb.WriteString(fmt.Sprintf("[System Tool Response]:\n%s\n\n", formatNativePromptToolResponse(result.Result, keepExpanded)))
+		sb.WriteString(fmt.Sprintf("[System Tool Response]:\n%s\n\n", formatCompatibleToolResultResponse(result, keepExpanded)))
 	}
 	return strings.TrimSpace(sb.String())
 }
@@ -685,7 +691,7 @@ func firstTrimmedPromptComponent(profile PromptBudgetProfile, report PromptBudge
 	return ""
 }
 
-func formatNativePromptArgs(args map[string]any, keepExpanded bool) string {
+func formatCompatiblePromptArgs(args map[string]any, keepExpanded bool) string {
 	if len(args) == 0 {
 		return ""
 	}
@@ -700,16 +706,16 @@ func formatNativePromptArgs(args map[string]any, keepExpanded bool) string {
 	return string(bytes)
 }
 
-func formatNativeToolResultSummary(result nativeToolResult) string {
+func formatCompatibleToolResultSummary(result compatibleToolResult) string {
 	summary := make(map[string]any, 3)
 	if len(result.Args) > 0 {
 		summary["args"] = compactNativePromptArgs(result.Args)
 	}
-	if response := formatNativePromptToolResponse(result.Result, false); response != "" {
+	if response := formatCompatibleToolResultResponse(result, false); response != "" {
 		summary["response"] = response
 	}
 	if result.Hint != nil {
-		if metadata := buildNativeProgressionMetadata(result); len(metadata) > 0 {
+		if metadata := buildCompatibleProgressionMetadata(result); len(metadata) > 0 {
 			summary["progression"] = metadata
 		}
 	}
@@ -769,12 +775,12 @@ func formatToolProgressHintForLLM(hint *ai.ToolProgressHint) string {
 	return "=== Tool Guidance ===\n" + strings.Join(parts, "\n")
 }
 
-func formatNativeProgressionHistory(toolResults []nativeToolResult) string {
+func formatCompatibleProgressionHistory(toolResults []compatibleToolResult) string {
 	entries := make([]map[string]any, 0, len(toolResults))
 	anchorHash := ""
 	for i, result := range toolResults {
-		keepExpanded := shouldRetainNativePromptBlob(i, len(toolResults))
-		ingredients, nextAnchorHash := buildNativeProgressionIngredients(result, i, len(toolResults), anchorHash)
+		keepExpanded := shouldRetainCompatiblePromptBlob(i, len(toolResults))
+		ingredients, nextAnchorHash := buildCompatibleProgressionIngredients(result, i, len(toolResults), anchorHash)
 		if anchorHash == "" && nextAnchorHash != "" {
 			anchorHash = nextAnchorHash
 		}
@@ -783,8 +789,8 @@ func formatNativeProgressionHistory(toolResults []nativeToolResult) string {
 			"tool":           result.Name,
 			"ingredients":    ingredients,
 			"generated_call": compactNativePromptArgs(result.Args),
-			"result":         formatNativePromptToolResponse(result.Result, keepExpanded),
-			"progression":    buildNativeProgressionMetadata(result),
+			"result":         formatCompatiblePromptToolResponse(result.Result, keepExpanded),
+			"progression":    buildCompatibleProgressionMetadata(result),
 		}
 		if keepExpanded {
 			entry["generated_call"] = expandNativePromptArgs(result.Args)
@@ -798,12 +804,16 @@ func formatNativeProgressionHistory(toolResults []nativeToolResult) string {
 	return string(bytes) + "\n"
 }
 
-func shouldRetainNativePromptBlob(index int, total int) bool {
+func shouldRetainCompatiblePromptBlob(index int, total int) bool {
 	if total <= 2 {
 		return false
 	}
 	return index == 0 || index == total-1
 }
+
+// The helper block below intentionally keeps `native*` naming because it formats
+// and recovers the native tool-call/script payload shape itself, not the reserved
+// compatible loop architecture that now uses `compatible*` naming above.
 
 func compactNativePromptArgs(args map[string]any) map[string]any {
 	if len(args) == 0 {
@@ -838,7 +848,7 @@ func expandNativePromptArgs(args map[string]any) map[string]any {
 func compactNativePromptValue(value any) any {
 	switch typed := value.(type) {
 	case string:
-		return compactNativePromptText(typed, 240)
+		return compactCompatiblePromptText(typed, 240)
 	case []string:
 		if len(typed) <= 8 {
 			return typed
@@ -963,7 +973,7 @@ func summarizeNativeScriptStep(index int, step map[string]any) string {
 	if resultVar := strings.TrimSpace(firstNativeString(step, "result_var")); resultVar != "" {
 		parts = append(parts, "-> "+resultVar)
 	}
-	return compactNativePromptText(strings.Join(filterEmptyStrings(parts), " | "), 180)
+	return compactCompatiblePromptText(strings.Join(filterEmptyStrings(parts), " | "), 180)
 }
 
 func summarizeBeginTxArgs(args map[string]any) string {
@@ -1014,7 +1024,7 @@ func summarizeProjectArgs(args map[string]any) string {
 	if !ok {
 		return summarizeGenericArgs(args)
 	}
-	return "fields=" + compactNativePromptText(fmt.Sprintf("%v", fields), 80)
+	return "fields=" + compactCompatiblePromptText(fmt.Sprintf("%v", fields), 80)
 }
 
 func summarizeLimitArgs(args map[string]any) string {
@@ -1044,7 +1054,7 @@ func summarizeGenericArgs(args map[string]any) string {
 	for _, key := range keys {
 		parts = append(parts, fmt.Sprintf("%s=%v", key, compactNativePromptValue(args[key])))
 	}
-	return compactNativePromptText(strings.Join(parts, ", "), 120)
+	return compactCompatiblePromptText(strings.Join(parts, ", "), 120)
 }
 
 func summarizeConditionMap(condition map[string]any) string {
@@ -1057,7 +1067,7 @@ func summarizeConditionMap(condition map[string]any) string {
 	for _, key := range keys {
 		parts = append(parts, fmt.Sprintf("%s:%s", key, summarizeConditionValue(condition[key])))
 	}
-	return compactNativePromptText(strings.Join(parts, "; "), 120)
+	return compactCompatiblePromptText(strings.Join(parts, "; "), 120)
 }
 
 func summarizeConditionValue(value any) string {
@@ -1086,10 +1096,10 @@ func summarizeJoinOnMap(on map[string]any) string {
 	for _, key := range keys {
 		parts = append(parts, fmt.Sprintf("%s->%v", key, on[key]))
 	}
-	return compactNativePromptText(strings.Join(parts, "; "), 100)
+	return compactCompatiblePromptText(strings.Join(parts, "; "), 100)
 }
 
-func formatNativePromptToolResponse(result string, keepExpanded bool) string {
+func formatCompatiblePromptToolResponse(result string, keepExpanded bool) string {
 	trimmed := strings.TrimSpace(result)
 	if trimmed == "" {
 		return ""
@@ -1106,7 +1116,7 @@ func formatNativePromptToolResponse(result string, keepExpanded bool) string {
 				continue
 			}
 			if len(kept) == 0 || strings.HasPrefix(line, "Tool:") || strings.HasPrefix(line, "Repair ") || strings.HasPrefix(line, "Research ") || strings.HasPrefix(line, "Retry instruction:") || strings.HasPrefix(line, "Suggested fix example:") {
-				kept = append(kept, compactNativePromptText(line, 260))
+				kept = append(kept, compactCompatiblePromptText(line, 260))
 			}
 		}
 		return strings.Join(kept, "\n")
@@ -1121,7 +1131,7 @@ func formatNativePromptToolResponse(result string, keepExpanded bool) string {
 		if line == "" {
 			continue
 		}
-		kept = append(kept, compactNativePromptText(line, 220))
+		kept = append(kept, compactCompatiblePromptText(line, 220))
 		if len(kept) == 6 {
 			break
 		}
@@ -1133,7 +1143,58 @@ func formatNativePromptToolResponse(result string, keepExpanded bool) string {
 	return strings.Join(kept, "\n")
 }
 
-func compactNativePromptText(text string, maxChars int) string {
+func formatCompatibleToolResultResponse(result compatibleToolResult, keepExpanded bool) string {
+	if keepExpanded {
+		return formatCompatiblePromptToolResponse(result.Result, true)
+	}
+	if !compatibleResultHasRetryState(result) {
+		return formatCompatiblePromptToolResponse(result.Result, false)
+	}
+	trimmed := strings.TrimSpace(result.Result)
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	kept := make([]string, 0, 6)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(kept) == 0 || strings.HasPrefix(line, "Tool execution error:") || strings.HasPrefix(line, "Clarification required:") {
+			kept = append(kept, compactCompatiblePromptText(line, 260))
+			break
+		}
+	}
+	if result.Name != "" && result.Name != "native_tool_call" {
+		kept = append(kept, compactCompatiblePromptText("Tool: "+result.Name, 260))
+	}
+	if strategy := compatibleResultRepairStrategy(result); strategy != "" {
+		kept = append(kept, compactCompatiblePromptText("Repair strategy: "+strategy, 260))
+	}
+	if retryInstruction := buildCompatibleRetryInstruction(result); retryInstruction != "" {
+		kept = append(kept, compactCompatiblePromptText("Retry instruction: "+retryInstruction, 260))
+	}
+	if example := extractSuggestedFixExampleLine(result.Result); example != "" {
+		kept = append(kept, compactCompatiblePromptText(example, 260))
+	}
+	if len(kept) == 0 {
+		return formatCompatiblePromptToolResponse(result.Result, false)
+	}
+	return strings.Join(kept, "\n")
+}
+
+func extractSuggestedFixExampleLine(resultText string) string {
+	for _, line := range strings.Split(strings.TrimSpace(resultText), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Suggested fix example:") {
+			return line
+		}
+	}
+	return ""
+}
+
+func compactCompatiblePromptText(text string, maxChars int) string {
 	trimmed := strings.TrimSpace(text)
 	if maxChars <= 0 || len(trimmed) <= maxChars {
 		return trimmed
@@ -1151,7 +1212,7 @@ func compactNativePromptText(text string, maxChars int) string {
 	return trimmed[:head] + "\n... [truncated] ...\n" + trimmed[len(trimmed)-tail:]
 }
 
-func compactNativePromptSectionText(text string, maxChars int) string {
+func compactCompatiblePromptSectionText(text string, maxChars int) string {
 	trimmed := strings.TrimSpace(text)
 	if maxChars <= 0 || len(trimmed) <= maxChars {
 		return trimmed
@@ -1165,7 +1226,7 @@ func compactNativePromptSectionText(text string, maxChars int) string {
 		if plain == "" {
 			continue
 		}
-		if isNativePromptSectionHeader(plain) {
+		if isCompatiblePromptSectionHeader(plain) {
 			selected = append(selected, plain)
 			contentInSection = 0
 			continue
@@ -1176,23 +1237,23 @@ func compactNativePromptSectionText(text string, maxChars int) string {
 		}
 	}
 	if len(selected) == 0 {
-		return compactNativePromptText(trimmed, maxChars)
+		return compactCompatiblePromptText(trimmed, maxChars)
 	}
 	for len(selected) > 0 {
 		joined := strings.Join(selected, "\n")
 		if len(joined) <= maxChars {
 			return joined
 		}
-		removeIdx := lastRemovableNativePromptLine(selected)
+		removeIdx := lastRemovableCompatiblePromptLine(selected)
 		if removeIdx == -1 {
 			break
 		}
 		selected = append(selected[:removeIdx], selected[removeIdx+1:]...)
 	}
-	return compactNativePromptText(strings.Join(selected, "\n"), maxChars)
+	return compactCompatiblePromptText(strings.Join(selected, "\n"), maxChars)
 }
 
-func isNativePromptSectionHeader(line string) bool {
+func isCompatiblePromptSectionHeader(line string) bool {
 	if line == "" {
 		return false
 	}
@@ -1208,12 +1269,12 @@ func isNativePromptSectionHeader(line string) bool {
 	return strings.ToUpper(line) == line && len(line) <= 80
 }
 
-func lastRemovableNativePromptLine(lines []string) int {
+func lastRemovableCompatiblePromptLine(lines []string) int {
 	protected := make(map[int]bool, len(lines))
 	awaitingFirstContent := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if isNativePromptSectionHeader(trimmed) {
+		if isCompatiblePromptSectionHeader(trimmed) {
 			protected[i] = true
 			awaitingFirstContent = true
 			continue
@@ -1250,10 +1311,10 @@ func filterEmptyStrings(values []string) []string {
 	return filtered
 }
 
-func buildNativeProgressionIngredients(result nativeToolResult, index int, total int, anchorHash string) (map[string]any, string) {
-	envelope := buildNativeIngredientEnvelope(result)
-	envelopeHash := hashNativeIngredientEnvelope(envelope)
-	keepAnchorOutsideHistory := index == 0 && shouldRetainNativePromptBlob(index, total)
+func buildCompatibleProgressionIngredients(result compatibleToolResult, index int, total int, anchorHash string) (map[string]any, string) {
+	envelope := buildCompatibleIngredientEnvelope(result)
+	envelopeHash := hashCompatibleIngredientEnvelope(envelope)
+	keepAnchorOutsideHistory := index == 0 && shouldRetainCompatiblePromptBlob(index, total)
 	if keepAnchorOutsideHistory {
 		payload := map[string]any{
 			"anchor_hash":          envelopeHash,
@@ -1282,11 +1343,11 @@ func buildNativeProgressionIngredients(result nativeToolResult, index int, total
 	return ingredients, anchorHash
 }
 
-func buildNativeIngredientEnvelope(result nativeToolResult) map[string]any {
+func buildCompatibleIngredientEnvelope(result compatibleToolResult) map[string]any {
 	envelope := map[string]any{
 		"tool_info": result.Name,
 	}
-	if !strings.Contains(result.Result, "Retry instruction:") {
+	if !compatibleResultHasRetryState(result) {
 		if facts := summarizeSuccessfulToolResult(result); len(facts) > 0 {
 			envelope["confirmed_facts"] = facts
 		}
@@ -1296,13 +1357,13 @@ func buildNativeIngredientEnvelope(result nativeToolResult) map[string]any {
 			}
 		}
 	}
-	if repairStrategy := extractRepairStrategy(result.Result); repairStrategy != "" {
+	if repairStrategy := compatibleResultRepairStrategy(result); repairStrategy != "" {
 		envelope["repair_strategy"] = repairStrategy
 	}
 	return envelope
 }
 
-func hashNativeIngredientEnvelope(envelope map[string]any) string {
+func hashCompatibleIngredientEnvelope(envelope map[string]any) string {
 	if len(envelope) == 0 {
 		return ""
 	}
@@ -1310,18 +1371,21 @@ func hashNativeIngredientEnvelope(envelope map[string]any) string {
 	if err != nil {
 		return ""
 	}
-	return "ing_env_" + shortNativeIngredientHash(string(bytes))
+	return "ing_env_" + shortCompatibleIngredientHash(string(bytes))
 }
 
-func shortNativeIngredientHash(value string) string {
+func shortCompatibleIngredientHash(value string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
 	return hex.EncodeToString(sum[:6])
 }
 
-func buildNativeProgressionMetadata(result nativeToolResult) map[string]any {
+func buildCompatibleProgressionMetadata(result compatibleToolResult) map[string]any {
 	metadata := make(map[string]any)
-	if retryInstruction := extractRetryInstruction(result.Result); retryInstruction != "" {
+	if retryInstruction := buildCompatibleRetryInstruction(result); retryInstruction != "" {
 		metadata["retry_instruction"] = retryInstruction
+	}
+	if result.RetryGuidance != nil {
+		metadata["retry_guidance"] = result.RetryGuidance
 	}
 	if result.Hint != nil {
 		if status := strings.TrimSpace(result.Hint.Status); status != "" {
@@ -1358,6 +1422,29 @@ func extractRetryInstruction(resultText string) string {
 	return strings.TrimSpace(resultText[idx+len(marker):])
 }
 
+func buildCompatibleRetryInstruction(result compatibleToolResult) string {
+	if guidance := result.RetryGuidance; guidance != nil {
+		if guidance.ClarificationNeeded {
+			return "Ask one short clarification question that resolves the ambiguity blocking this tool call before more tool calls."
+		}
+		if guidance.Strategy == ai.RepairStrategyResearchFirst {
+			toolName := strings.TrimSpace(guidance.AllowedTool)
+			if toolName == "" {
+				toolName = strings.TrimSpace(guidance.ResearchTool)
+			}
+			if toolName == "" {
+				toolName = "list_stores"
+			}
+			return fmt.Sprintf("Call %s first%s to research the missing schema or relation facts, then return to %s with corrected grounded arguments. Preserve valid arguments and do not restart the whole plan.", toolName, formatScopedListStoresHint(result.Args), firstNonEmpty(strings.TrimSpace(guidance.ToolName), result.Name))
+		}
+		if result.Name == "native_tool_call" {
+			return "Return exactly one valid native tool call that conforms to the provided tool schema."
+		}
+		return "Return a corrected call for the same tool. Preserve valid arguments, fix invalid or missing arguments, and do not repeat the same malformed shape."
+	}
+	return extractRetryInstruction(result.Result)
+}
+
 func extractRepairStrategy(resultText string) string {
 	const marker = "Repair strategy:"
 	idx := strings.Index(resultText, marker)
@@ -1371,7 +1458,7 @@ func extractRepairStrategy(resultText string) string {
 	return strings.TrimSpace(remaining)
 }
 
-func buildAskAnchoredMRUState(toolResults []nativeToolResult) askAnchoredMRUState {
+func buildAskAnchoredMRUState(toolResults []compatibleToolResult) askAnchoredMRUState {
 	state := make(askAnchoredMRUState, 0, 8)
 	if len(toolResults) == 0 {
 		return state
@@ -1381,11 +1468,11 @@ func buildAskAnchoredMRUState(toolResults []nativeToolResult) askAnchoredMRUStat
 	last := toolResults[len(toolResults)-1]
 	state = appendAskMRUItem(state, "ASK_LAST_TOOL", last.Name)
 
-	if strings.Contains(last.Result, "Retry instruction:") {
+	if compatibleResultHasRetryState(last) {
 		state = appendAskMRUItem(state, "ASK_LAST_OUTCOME", "repair_required")
 		state = appendAskMRUItem(state, "ASK_CURRENT_FOCUS", "Preserve valid work, classify the failure, and change only the broken slice in the next call.")
 		state = appendAskMRUItem(state, "ASK_NEXT_DELTA", summarizeNextRepairNeed(last))
-		if attempted := summarizeAttemptedArgs(last.Result); attempted != "" {
+		if attempted := summarizeAttemptedArgsFromResult(last); attempted != "" {
 			state = appendAskMRUItem(state, "ASK_PRESERVE", attempted)
 		}
 	} else {
@@ -1399,7 +1486,7 @@ func buildAskAnchoredMRUState(toolResults []nativeToolResult) askAnchoredMRUStat
 
 	for i := len(toolResults) - 2; i >= 0; i-- {
 		result := toolResults[i]
-		if strings.Contains(result.Result, "Retry instruction:") {
+		if compatibleResultHasRetryState(result) {
 			continue
 		}
 		for _, fact := range summarizeSuccessfulToolResult(result) {
@@ -1523,11 +1610,11 @@ func askMRUHasCategoryPrefix(state askAnchoredMRUState, prefix string) bool {
 	return false
 }
 
-func summarizeNextRepairNeed(result nativeToolResult) string {
+func summarizeNextRepairNeed(result compatibleToolResult) string {
 	if result.Name == "native_tool_call" {
 		return "Return exactly one valid tool call and avoid malformed function-call output."
 	}
-	if strings.Contains(result.Result, "Repair strategy: research_first") {
+	if compatibleResultRepairStrategy(result) == string(compatibleRepairStrategyResearchFirst) {
 		return "Research missing schema or relation facts with scoped list_stores calls before retrying execute_script."
 	}
 	return fmt.Sprintf("Repair %s without restarting the whole plan or broadening scope.", result.Name)
@@ -1615,65 +1702,89 @@ func summarizeAttemptedArgs(resultText string) string {
 	return fmt.Sprintf("Reuse the valid structure from attempted args before changing invalid fields:\n%s", args)
 }
 
-func summarizeSuccessfulToolResult(result nativeToolResult) []string {
-	return ai.SummarizeSuccessfulToolResult(nativeToolResultAsShared(result))
+func summarizeAttemptedArgsFromResult(result compatibleToolResult) string {
+	if len(result.Args) > 0 {
+		b, err := json.MarshalIndent(result.Args, "", "  ")
+		if err == nil {
+			args := strings.TrimSpace(string(b))
+			if args == "" || args == "{}" {
+				return "Previous call shape existed but carried no reusable arguments."
+			}
+			return fmt.Sprintf("Reuse the valid structure from attempted args before changing invalid fields:\n%s", args)
+		}
+	}
+	return summarizeAttemptedArgs(result.Result)
 }
 
-func summarizeOutcomeFacts(toolResults []nativeToolResult) []string {
-	return ai.SummarizeOutcomeFacts(nativeToolResultsAsShared(toolResults))
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
-func summarizeOutcomeRecipes(toolResults []nativeToolResult) []ai.LearnedRecipe {
-	return ai.SummarizeOutcomeRecipes(nativeToolResultsAsShared(toolResults))
+func summarizeSuccessfulToolResult(result compatibleToolResult) []string {
+	return ai.SummarizeSuccessfulToolResult(compatibleToolResultAsShared(result))
 }
 
-func nativeToolResultAsShared(result nativeToolResult) ai.ReActToolResult {
+func summarizeOutcomeFacts(toolResults []compatibleToolResult) []string {
+	return ai.SummarizeOutcomeFacts(compatibleToolResultsAsShared(toolResults))
+}
+
+func summarizeOutcomeRecipes(toolResults []compatibleToolResult) []ai.LearnedRecipe {
+	return ai.SummarizeOutcomeRecipes(compatibleToolResultsAsShared(toolResults))
+}
+
+func compatibleToolResultAsShared(result compatibleToolResult) ai.ReActToolResult {
 	return ai.ReActToolResult{
 		Name:          result.Name,
 		Result:        result.Result,
 		Args:          result.Args,
 		Hint:          result.Hint,
+		RetryGuidance: result.RetryGuidance,
 		ExecutionMode: result.ExecutionMode,
 	}
 }
 
-func nativeToolResultsAsShared(results []nativeToolResult) []ai.ReActToolResult {
+func compatibleToolResultsAsShared(results []compatibleToolResult) []ai.ReActToolResult {
 	if len(results) == 0 {
 		return nil
 	}
 	shared := make([]ai.ReActToolResult, 0, len(results))
 	for _, result := range results {
-		shared = append(shared, nativeToolResultAsShared(result))
+		shared = append(shared, compatibleToolResultAsShared(result))
 	}
 	return shared
 }
 
-func isRecoverableRepairResult(result nativeToolResult, toolName string, strategy nativeRepairStrategy) bool {
-	if result.Name != toolName || !strings.Contains(result.Result, "Retry instruction:") {
+func isRecoverableRepairResult(result compatibleToolResult, toolName string, strategy compatibleRepairStrategy) bool {
+	if result.Name != toolName || !compatibleResultHasRetryState(result) {
 		return false
 	}
 	if strategy == "" {
 		return true
 	}
-	return strings.Contains(result.Result, fmt.Sprintf("Repair strategy: %s", strategy))
+	return compatibleResultRepairStrategy(result) == string(strategy)
 }
 
-func hasSuccessfulTool(results []nativeToolResult, toolName string) bool {
+func hasSuccessfulTool(results []compatibleToolResult, toolName string) bool {
 	for _, result := range results {
-		if result.Name == toolName && !strings.Contains(result.Result, "Retry instruction:") {
+		if result.Name == toolName && !compatibleResultHasRetryState(result) {
 			return true
 		}
 	}
 	return false
 }
 
-func hasSuccessfulToolSequence(results []nativeToolResult, names ...string) bool {
+func hasSuccessfulToolSequence(results []compatibleToolResult, names ...string) bool {
 	if len(names) == 0 {
 		return false
 	}
 	nameIdx := 0
 	for _, result := range results {
-		if strings.Contains(result.Result, "Retry instruction:") {
+		if compatibleResultHasRetryState(result) {
 			continue
 		}
 		if result.Name != names[nameIdx] {
@@ -1687,21 +1798,35 @@ func hasSuccessfulToolSequence(results []nativeToolResult, names ...string) bool
 	return false
 }
 
-func detectAskLoopProgress(previousResults []nativeToolResult, currentResults []nativeToolResult) askLoopProgressDelta {
+func detectAskLoopProgress(previousResults []compatibleToolResult, currentResults []compatibleToolResult) compatibleLoopProgressDelta {
 	if len(currentResults) == 0 {
-		return askLoopProgressDelta{}
+		return compatibleLoopProgressDelta{}
 	}
 	latest := currentResults[len(currentResults)-1]
-	if strings.Contains(latest.Result, "Retry instruction:") {
-		return askLoopProgressDelta{}
+	if compatibleResultHasRetryState(latest) {
+		return compatibleLoopProgressDelta{}
 	}
-	delta := askLoopProgressDelta{
+	delta := compatibleLoopProgressDelta{
 		NewFacts:   diffStringsAsSet(summarizeOutcomeFacts(currentResults), summarizeOutcomeFacts(previousResults)),
 		NewRecipes: diffRecipeIDs(summarizeOutcomeRecipes(currentResults), summarizeOutcomeRecipes(previousResults)),
 		HintSignal: cloneToolProgressHint(latest.Hint),
 	}
 	delta.Progressing = len(delta.NewFacts) > 0 || len(delta.NewRecipes) > 0 || toolProgressHintSignalsProgress(latest.Hint)
 	return delta
+}
+
+func compatibleResultHasRetryState(result compatibleToolResult) bool {
+	if result.RetryGuidance != nil {
+		return true
+	}
+	return strings.Contains(result.Result, "Retry instruction:") || strings.Contains(result.Result, "Clarification required:")
+}
+
+func compatibleResultRepairStrategy(result compatibleToolResult) string {
+	if result.RetryGuidance != nil && strings.TrimSpace(string(result.RetryGuidance.Strategy)) != "" {
+		return string(result.RetryGuidance.Strategy)
+	}
+	return extractRepairStrategy(result.Result)
 }
 
 func diffStringsAsSet(current []string, previous []string) []string {
@@ -2030,7 +2155,7 @@ func findBalancedSegmentEnd(text string, open, close rune) int {
 	return -1
 }
 
-func formatRecoverableToolError(repair pendingToolRepair, args map[string]any, err error) string {
+func formatRecoverableToolError(repair compatiblePendingToolRepair, args map[string]any, err error) string {
 	argsJSON := "{}"
 	if len(args) > 0 {
 		if b, marshalErr := json.MarshalIndent(args, "", "  "); marshalErr == nil {
@@ -2085,13 +2210,13 @@ func formatRecoverableToolError(repair pendingToolRepair, args map[string]any, e
 	}
 	if repair.Strategy != "" {
 		strategyLine = fmt.Sprintf("\nRepair strategy: %s", repair.Strategy)
-		if repair.Strategy == nativeRepairStrategyResearchFirst && repair.ResearchReason != "" {
+		if repair.Strategy == compatibleRepairStrategyResearchFirst && repair.ResearchReason != "" {
 			strategyLine += fmt.Sprintf("\nResearch reason: %s", repair.ResearchReason)
 		}
 	}
 
 	retryInstruction := "Retry instruction: Return a corrected call for the same tool. Preserve valid arguments, fix invalid or missing arguments, and do not repeat the same malformed shape."
-	if repair.Strategy == nativeRepairStrategyResearchFirst {
+	if repair.Strategy == compatibleRepairStrategyResearchFirst {
 		researchTool := repair.ResearchTool
 		if researchTool == "" {
 			researchTool = "list_stores"
@@ -2112,7 +2237,7 @@ func formatRecoverableToolError(repair pendingToolRepair, args map[string]any, e
 	)
 }
 
-func formatClarificationRequiredToolError(repair pendingToolRepair, args map[string]any, err error) string {
+func formatClarificationRequiredToolError(repair compatiblePendingToolRepair, args map[string]any, err error) string {
 	argsJSON := "{}"
 	if len(args) > 0 {
 		if b, marshalErr := json.MarshalIndent(args, "", "  "); marshalErr == nil {
@@ -2278,8 +2403,8 @@ func extractBalancedJSONObject(text string) (string, error) {
 	return "", fmt.Errorf("printed native tool call contains truncated JSON args")
 }
 
-func formatPendingRepairReminder(repair pendingToolRepair, attemptedToolName string) string {
-	if repair.Strategy == nativeRepairStrategyResearchFirst {
+func formatPendingRepairReminder(repair compatiblePendingToolRepair, attemptedToolName string) string {
+	if repair.Strategy == compatibleRepairStrategyResearchFirst {
 		allowedTool := repair.ResearchTool
 		if allowedTool == "" {
 			allowedTool = "list_stores"
@@ -2301,7 +2426,7 @@ func formatPendingRepairReminder(repair pendingToolRepair, attemptedToolName str
 }
 
 // Tier 2B: Determine retry tier based on failure count, error type, and hint
-func determineRetryTier(errorType string, failureCount int, hint *ai.ToolProgressHint) nativeRetryTier {
+func determineRetryTier(errorType string, failureCount int, hint *ai.ToolProgressHint) compatibleRetryTier {
 	// Override: Tool explicitly suggests research (from Tier 2A)
 	if hint != nil && hint.SuggestedAction == "research_before_retry" {
 		return TierResearch
@@ -2364,11 +2489,11 @@ func isRoutedAskContext(ctx context.Context) bool {
 	return strings.TrimSpace(routingState.RoutingGate) != ""
 }
 
-func shouldResetRepairAttempts(priorRepair *pendingToolRepair, toolName string) bool {
+func shouldResetRepairAttempts(priorRepair *compatiblePendingToolRepair, toolName string) bool {
 	if priorRepair == nil {
 		return true
 	}
-	if priorRepair.Strategy == nativeRepairStrategyResearchFirst {
+	if priorRepair.Strategy == compatibleRepairStrategyResearchFirst {
 		researchTool := priorRepair.ResearchTool
 		if researchTool == "" {
 			researchTool = "list_stores"
@@ -2380,12 +2505,12 @@ func shouldResetRepairAttempts(priorRepair *pendingToolRepair, toolName string) 
 	return true
 }
 
-func appendOrReplaceRetriedToolResult(results []nativeToolResult, next nativeToolResult, priorRepair *pendingToolRepair, toolName string) []nativeToolResult {
+func appendOrReplaceRetriedToolResult(results []compatibleToolResult, next compatibleToolResult, priorRepair *compatiblePendingToolRepair, toolName string) []compatibleToolResult {
 	if priorRepair == nil || strings.TrimSpace(priorRepair.ToolName) != strings.TrimSpace(toolName) {
 		return append(results, next)
 	}
 	if strings.EqualFold(strings.TrimSpace(toolName), "execute_script") {
-		collapsed := make([]nativeToolResult, 0, len(results))
+		collapsed := make([]compatibleToolResult, 0, len(results))
 		for _, result := range results {
 			if strings.EqualFold(strings.TrimSpace(result.Name), "execute_script") {
 				continue
@@ -2398,15 +2523,15 @@ func appendOrReplaceRetriedToolResult(results []nativeToolResult, next nativeToo
 		if strings.TrimSpace(results[index].Name) != strings.TrimSpace(toolName) {
 			continue
 		}
-		replaced := append([]nativeToolResult(nil), results...)
+		replaced := append([]compatibleToolResult(nil), results...)
 		replaced[index] = next
 		return replaced
 	}
 	return append(results, next)
 }
 
-func (r pendingToolRepair) allowsTool(toolName string) bool {
-	if r.Strategy == nativeRepairStrategyResearchFirst {
+func (r compatiblePendingToolRepair) allowsTool(toolName string) bool {
+	if r.Strategy == compatibleRepairStrategyResearchFirst {
 		researchTool := r.ResearchTool
 		if researchTool == "" {
 			researchTool = "list_stores"
@@ -2417,14 +2542,14 @@ func (r pendingToolRepair) allowsTool(toolName string) bool {
 }
 
 // Tier 2A: LLM-controlled retry strategy via ToolProgressHint
-func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProgressHint) pendingToolRepair {
-	repair := pendingToolRepair{ToolName: toolName, Strategy: nativeRepairStrategySameTool}
+func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProgressHint) compatiblePendingToolRepair {
+	repair := compatiblePendingToolRepair{ToolName: toolName, Strategy: compatibleRepairStrategySameTool}
 
 	// Tier 2A: Respect hint's suggested action if present
 	if hint != nil && hint.SuggestedAction != "" {
 		switch hint.SuggestedAction {
 		case "research_before_retry":
-			repair.Strategy = nativeRepairStrategyResearchFirst
+			repair.Strategy = compatibleRepairStrategyResearchFirst
 			repair.ResearchTool = "list_stores"
 			if len(hint.SuggestedNextTools) > 0 {
 				repair.ResearchTool = hint.SuggestedNextTools[0]
@@ -2454,18 +2579,18 @@ func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProg
 	for _, validationErr := range collectExecuteScriptValidationIssues(err) {
 		switch validationErr.Category {
 		case "invalid_join_on_placeholder", "invalid_join_on_field_placeholder", "invalid_filter_field_placeholder":
-			repair.Strategy = nativeRepairStrategyResearchFirst
+			repair.Strategy = compatibleRepairStrategyResearchFirst
 			repair.ResearchTool = "list_stores"
 			repair.ResearchReason = "The failure indicates missing grounded schema or relation mapping facts."
 			return repair
 		case "invalid_filter_input_shape", "invalid_filter_query_mismatch", "invalid_filter_placeholder", "invalid_filter_operator_placeholder":
-			repair.Strategy = nativeRepairStrategySameTool
+			repair.Strategy = compatibleRepairStrategySameTool
 		}
 	}
 
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	if strings.Contains(message, "relation") || strings.Contains(message, "schema") || strings.Contains(message, "join mapping") {
-		repair.Strategy = nativeRepairStrategyResearchFirst
+		repair.Strategy = compatibleRepairStrategyResearchFirst
 		repair.ResearchTool = "list_stores"
 		repair.ResearchReason = "The failure text points to unresolved schema or relation ambiguity."
 	}
@@ -2474,7 +2599,7 @@ func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProg
 
 // getLatestToolHint returns the hint from the most recent tool result, if any.
 // This is used by Tier 2A to allow tools to guide retry strategy.
-func getLatestToolHint(toolResults []nativeToolResult) *ai.ToolProgressHint {
+func getLatestToolHint(toolResults []compatibleToolResult) *ai.ToolProgressHint {
 	if len(toolResults) == 0 {
 		return nil
 	}
@@ -2572,7 +2697,7 @@ func getRequestedOutputFormat(ctx context.Context) string {
 	return strings.ToLower(strings.TrimSpace(format))
 }
 
-func shouldPreserveStructuredToolResult(ctx context.Context, toolResults []nativeToolResult) bool {
+func shouldPreserveStructuredToolResult(ctx context.Context, toolResults []compatibleToolResult) bool {
 	if len(toolResults) == 0 {
 		return false
 	}

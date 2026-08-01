@@ -381,8 +381,8 @@ func (c *PhaseCapability) ExecuteTool(ctx, toolName, args) (string, error) {
 
 **Retry Logic** (Hardcoded):
 ```go
-// engine_native.go
-func (e *NativeReActEngine) runDefaultLoop(ctx, req) (ai.ReasoningResponse, error) {
+// engine_compatible.go
+func (e *CompatibleReActEngine) runDefaultLoop(ctx, req) (ai.ReasoningResponse, error) {
     budgetState := newAskLoopBudgetState()
     repairAttempts := 0
     
@@ -502,7 +502,7 @@ return result, &ai.ToolProgressHint{
 
 **Implementation** (uses existing ToolProgressHint from Gap #5):
 ```go
-// engine_native.go - Modify retry logic to respect hint
+// engine_compatible.go - Modify retry logic to respect hint
 if err != nil && isRecoverableError(err) {
     hint := extractHintFromError(err)  // Tools can include hint in error
     
@@ -776,7 +776,7 @@ Session 2:
 
 **File-Backed Tool Results**:
 ```go
-// engine_native.go
+// engine_compatible.go
 result, err := req.Executor.Execute(ctx, toolCall.Name, toolCall.Args)
 
 // If result is large, save to file
@@ -910,7 +910,7 @@ func (c *Capability) ExecuteTool(ctx, toolName, args) (string, error) {
 **Problem: Hint NOT visible to LLM!**
 
 ```go
-// engine_native.go
+// engine_compatible.go
 result, hint, err := req.Executor.Execute(ctx, toolCall.Name, toolCall.Args)
 
 // ❌ Hint stored but not shown to LLM
@@ -974,7 +974,7 @@ Turn 2:
 **Surface hints in tool result:**
 
 ```go
-// engine_native.go
+// engine_compatible.go
 result, hint, err := req.Executor.Execute(ctx, toolCall.Name, toolCall.Args)
 
 // ✅ Include hint in result shown to LLM
@@ -1254,7 +1254,7 @@ Resume Instructions: %s`,
 
 **Implementation**:
 ```go
-// engine_native.go - Respect hint in retry logic
+// engine_compatible.go - Respect hint in retry logic
 if err != nil && isRecoverableError(err) {
     hint := extractHintFromError(err)
     
@@ -1407,7 +1407,7 @@ func formatToolProgressHintForLLM(hint *ai.ToolProgressHint) string {
 **Focus**: Let LLM choose retry strategy via ToolProgressHint
 
 ```go
-// engine_native.go - Respect hint in retry decision
+// engine_compatible.go - Respect hint in retry decision
 if err != nil && isRecoverableError(err) {
     hint := extractHintFromError(err)
     
@@ -1427,7 +1427,7 @@ if err != nil && isRecoverableError(err) {
 ```
 
 **Files to modify**:
-- `lib/sop/ai/agent/engine_native.go` (20-30 lines)
+- `lib/sop/ai/agent/engine_compatible.go` (20-30 lines)
 
 **Expected outcomes**:
 - LLM-driven retry strategy selection
@@ -1481,7 +1481,7 @@ func isPhaseCompleteV2(captureStatus string) bool {
 ```
 
 **Files to modify**:
-- `lib/sop/ai/agent/engine_native.go` (40-50 lines for escalation)
+- `lib/sop/ai/agent/engine_compatible.go` (40-50 lines for escalation)
 - `lib/sop/ai/agent/copilot_v2.go` (10 lines for phase control)
 
 **Expected outcomes**:
@@ -1586,7 +1586,7 @@ func (l *RetryPatternLearner) RecordOutcome(err error, strategy RetryStrategy, s
 ```
 
 **Files to modify**:
-- `lib/sop/ai/agent/engine_native.go` (100-150 lines)
+- `lib/sop/ai/agent/engine_compatible.go` (100-150 lines)
 - `lib/sop/ai/agent/retry_learner.go` (NEW - 150 lines)
 - `lib/sop/ai/agent/progress_detector.go` (NEW - 100 lines)
 

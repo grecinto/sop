@@ -9,6 +9,40 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
+type stubRetryPolicySurface struct {
+	recoverable bool
+	decision    ai.RetryDecision
+	budget      ai.RetryBudgetDecision
+	extension   ai.RetryBudgetExtensionDecision
+}
+
+func (p stubRetryPolicySurface) IsRecoverable(err error) bool {
+	return p.recoverable && err != nil
+}
+
+func (p stubRetryPolicySurface) EvaluateRetryDecision(input ai.RetryDecisionInput) ai.RetryDecision {
+	return p.decision
+}
+
+func (p stubRetryPolicySurface) InitialRetryBudget(input ai.RetryBudgetInput) ai.RetryBudgetDecision {
+	if p.budget.SoftLimit == 0 {
+		return ai.RetryBudgetDecision{SoftLimit: input.BaseTurns, HardLimit: input.BaseTurns + 1}
+	}
+	return p.budget
+}
+
+func (p stubRetryPolicySurface) EvaluateRetryBudgetExtension(input ai.RetryBudgetExtensionInput) ai.RetryBudgetExtensionDecision {
+	return p.extension
+}
+
+func (p stubRetryPolicySurface) AllowsTool(plan ai.RepairPlan, toolName string) bool {
+	return toolName == plan.ToolName
+}
+
+func (p stubRetryPolicySurface) FormatRepairDirective(plan ai.RepairPlan, attemptedToolName string) string {
+	return "repair directive"
+}
+
 func TestOwnedLoopRetryState_UsesCarryoverLearnedStrategy(t *testing.T) {
 	state := newOwnedLoopRetryState(2, "join users and orders", &ai.CarryoverState{
 		RetryLearnings: []ai.RetryLearning{{
@@ -33,6 +67,9 @@ func TestOwnedLoopRetryState_UsesCarryoverLearnedStrategy(t *testing.T) {
 	}
 	if !containsString(result.Result, "Repair strategy: research_first") {
 		t.Fatalf("expected retry result to include learned research strategy, got %q", result.Result)
+	}
+	if result.RetryGuidance == nil || result.RetryGuidance.Strategy != ai.RepairStrategyResearchFirst {
+		t.Fatalf("expected structured retry guidance for research-first repair, got %#v", result.RetryGuidance)
 	}
 }
 
@@ -86,6 +123,61 @@ func TestOwnedLoopRetryState_PrefersScopedLearningContext(t *testing.T) {
 	}
 	if !strings.Contains(result.Result, "Repair strategy: research_first") {
 		t.Fatalf("expected retry result to mention research_first, got %q", result.Result)
+	}
+}
+
+func TestOwnedLoopRetryState_UsesPolicySurfaceForBudget(t *testing.T) {
+	state := newOwnedLoopRetryStateWithPolicy(2, "fix task", nil, stubRetryPolicySurface{
+		budget: ai.RetryBudgetDecision{SoftLimit: 4, HardLimit: 6},
+	})
+	if state.allowedTurns != 4 {
+		t.Fatalf("expected soft limit from policy, got %d", state.allowedTurns)
+	}
+	if state.maxAllowedTurns != 6 {
+		t.Fatalf("expected hard limit from policy, got %d", state.maxAllowedTurns)
+	}
+}
+
+func TestOwnedLoopRetryState_UsesPolicySurfaceForRetryDecision(t *testing.T) {
+	decision := ai.RetryDecision{
+		Tier: ai.RetryTierResearch,
+		Plan: ai.RepairPlan{
+			ToolName:       "execute_script",
+			Strategy:       ai.RepairStrategyResearchFirst,
+			Tier:           ai.RetryTierResearch,
+			ResearchTool:   "list_stores",
+			ResearchReason: "policy selected research",
+		},
+		Recommendation: &ai.RetryLearningRecommendation{Strategy: ai.RepairStrategyResearchFirst, Score: 1.0, Reason: "policy test"},
+	}
+	state := newOwnedLoopRetryStateWithPolicy(2, "join users and orders", nil, stubRetryPolicySurface{
+		recoverable: true,
+		decision:    decision,
+		budget:      ai.RetryBudgetDecision{SoftLimit: 2, HardLimit: 4},
+	})
+	result, escalated := state.handleRecoverableFailure(ai.ToolCall{Name: "execute_script", Args: map[string]any{}}, errors.New("join mapping unresolved"), nil)
+	if escalated {
+		t.Fatal("did not expect clarification escalation")
+	}
+	if state.pendingRepair == nil || state.pendingRepair.Strategy != ai.RepairStrategyResearchFirst {
+		t.Fatalf("expected policy-selected repair strategy, got %#v", state.pendingRepair)
+	}
+	if !strings.Contains(result.Result, "Repair strategy: research_first") {
+		t.Fatalf("expected retry result to include policy-selected strategy, got %q", result.Result)
+	}
+	if !strings.Contains(result.Result, "policy test") {
+		t.Fatalf("expected retry result to include policy recommendation details, got %q", result.Result)
+	}
+}
+
+func TestOwnedLoopRetryState_UsesPolicySurfaceForRecoverability(t *testing.T) {
+	state := newOwnedLoopRetryStateWithPolicy(1, "fix task", nil, stubRetryPolicySurface{recoverable: true})
+	if !state.isRecoverableFailure(errors.New("recoverable")) {
+		t.Fatal("expected policy surface to classify error as recoverable")
+	}
+	state = newOwnedLoopRetryStateWithPolicy(1, "fix task", nil, stubRetryPolicySurface{recoverable: false})
+	if state.isRecoverableFailure(errors.New("recoverable")) {
+		t.Fatal("expected policy surface to classify error as non-recoverable")
 	}
 }
 

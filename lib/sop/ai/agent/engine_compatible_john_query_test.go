@@ -102,7 +102,7 @@ func (m *johnOrdersOver500Generator) Generate(ctx context.Context, prompt string
 	}
 }
 
-func TestNativeReActEngine_EndToEndFindJohnOrdersOver500(t *testing.T) {
+func TestCompatibleReActEngine_EndToEndFindJohnOrdersOver500(t *testing.T) {
 	SetStoresFeatureEnabled(true)
 	defer SetStoresFeatureEnabled(false)
 
@@ -220,7 +220,7 @@ func TestNativeReActEngine_EndToEndFindJohnOrdersOver500(t *testing.T) {
 	if !seenRecipe {
 		t.Fatalf("expected research-then-retry recipe to be learned, got %#v", resp.OutcomeRecipes)
 	}
-	if !containsProgressMessage(progress, "Tool `execute_script` needs corrected arguments; retrying.") {
-		t.Fatalf("expected repair progress message, got %#v", progress)
+	if !containsProgressMessage(progress, "Tier 2 (Research): Tool `execute_script` requires research before retry.") {
+		t.Fatalf("expected research-before-retry progress message, got %#v", progress)
 	}
 }

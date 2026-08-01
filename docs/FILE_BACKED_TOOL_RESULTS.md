@@ -65,7 +65,7 @@ Result: ✅ No information loss, token-efficient, accurate
 
 1. ✅ **General-Purpose**: Implemented at `CopilotAgent.Execute()` - works for ALL tools automatically
 2. ✅ **Envelope Pattern**: Used existing `ToolResultEnvelope` pattern instead of prompt changes
-3. ✅ **Universal Provider Support**: Works with Anthropic, ChatGPT, Gemini, and Native loops
+3. ✅ **Universal Provider Support**: Works with Anthropic, ChatGPT, Gemini, and the compatible/shared loop path
 4. ✅ **Analysis Tools**: LLM uses registered tools instead of shell commands in prompts
 5. ✅ **Type-Safe**: Structured data via ToolResultEnvelope, not string manipulation
 
@@ -275,10 +275,10 @@ func (a *CopilotAgent) toolGrepToolResult(ctx context.Context, args map[string]a
 ```
 
 #### 6. Lifecycle Management
-**File**: `lib/sop/ai/agent/engine_native.go`
+**File**: `lib/sop/ai/agent/engine_compatible.go`
 
 ```go
-func (e *NativeReActEngine) Run(ctx context.Context, req ai.TaskExecRequest) error {
+func (e *CompatibleReActEngine) Run(ctx context.Context, req ai.TaskExecRequest) error {
     // Create storage once at engine start
     storage := getOrCreateToolResultStorage(ctx)
     if storage != nil {
@@ -286,8 +286,8 @@ func (e *NativeReActEngine) Run(ctx context.Context, req ai.TaskExecRequest) err
         defer storage.Cleanup()  // Clean up on exit
     }
     
-    // Context propagates to all provider loops
-    // → Anthropic, ChatGPT, Gemini all inherit storage
+    // Context propagates to all provider loops and the compatible/shared path
+    // → Anthropic, ChatGPT, Gemini, and the compatible adapter all inherit storage
 }
 ```
 
@@ -440,7 +440,7 @@ LLM: "Found 2 failed orders: #1001 and #1045"
 - `lib/sop/ai/interfaces.go` - Added ToolFileMetadata, extended ToolResultEnvelope
 - `lib/sop/ai/agent/copilot.go` - Added wrapToolResultWithStorage()
 - `lib/sop/ai/agent/copilottools.automation.go` - Added 3 analysis tools
-- `lib/sop/ai/agent/engine_native.go` - Storage lifecycle, envelope extraction
+- `lib/sop/ai/agent/engine_compatible.go` - Storage lifecycle, envelope extraction
 - `lib/sop/ai/stream_events.go` - Extended BuildToolResultEvent signature
 - `lib/sop/ai/generator/anthropic_react_loop.go` - Envelope extraction
 - `lib/sop/ai/generator/chatgpt_react_loop.go` - Envelope extraction

@@ -325,6 +325,16 @@ func latestGeminiRepairDirective(results []ai.ReActToolResult) string {
 }
 
 func buildGeminiRepairDirective(last ai.ReActToolResult) string {
+	directive := ai.BuildRepairDirectiveFromRetryGuidance(last.Name, last.RetryGuidance)
+	if directive != "" {
+		if guidance := geminiValidationRepairGuidance(last.Result); guidance != "" {
+			directive += " " + guidance
+		}
+		if strings.Contains(directive, "Example fix:") {
+			directive += " When an Example fix matches the malformed slice, copy that exact field path, predicate operator, and literal value shape into the retry instead of inventing aliases, placeholders, or paraphrased predicate objects."
+		}
+		return directive
+	}
 	result := strings.TrimSpace(last.Result)
 	if result == "" {
 		return ""
@@ -338,7 +348,7 @@ func buildGeminiRepairDirective(last ai.ReActToolResult) string {
 	if strings.Contains(result, "Repair strategy: research_first") {
 		return fmt.Sprintf("Repair directive: The last tool call to %s failed because grounded schema or relation facts are still missing. Your next step should be to call list_stores first, prefer scoped stores:[...] for likely targets, reuse its schema/relations output as the source of truth, and only then return to %s if needed. Do not summarize the error as a final answer unless correction is impossible.", last.Name, last.Name)
 	}
-	directive := fmt.Sprintf("Repair directive: The last tool call to %s failed because its arguments were invalid. Your next step should be to call the same tool again with corrected arguments using the repair guidance below. Preserve valid script slices and change only the malformed condition or join. Do not summarize the error as a final answer unless correction is impossible.", last.Name)
+	directive = fmt.Sprintf("Repair directive: The last tool call to %s failed because its arguments were invalid. Your next step should be to call the same tool again with corrected arguments using the repair guidance below. Preserve valid script slices and change only the malformed condition or join. Do not summarize the error as a final answer unless correction is impossible.", last.Name)
 	if guidance := geminiValidationRepairGuidance(result); guidance != "" {
 		directive += " " + guidance
 	}
@@ -399,10 +409,34 @@ func geminiValidationErrorParts(line string) (string, string, string) {
 }
 
 func summarizeGeminiContinuationToolOutput(toolName string, response any, executionMode ai.ReActToolResultExecutionMode) any {
+	if payload, ok := response.(map[string]any); ok {
+		cloned := make(map[string]any, len(payload))
+		for key, value := range payload {
+			cloned[key] = value
+		}
+		if toolResult, ok := payload["tool_result"]; ok {
+			cloned["tool_result"] = summarizeGeminiContinuationToolOutput(toolName, toolResult, executionMode)
+			return cloned
+		}
+		if !strings.EqualFold(strings.TrimSpace(toolName), "execute_script") {
+			return cloned
+		}
+		cloned["result"] = SummarizeToolResultForLLM(toolName, ExtractToolResultText(response), executionMode)
+		return cloned
+	}
 	if !strings.EqualFold(strings.TrimSpace(toolName), "execute_script") {
 		return response
 	}
 	return map[string]any{"result": SummarizeToolResultForLLM(toolName, ExtractToolResultText(response), executionMode)}
+}
+
+func latestGeminiRetryGuidance(results []ai.ReActToolResult) *ai.RetryGuidance {
+	for idx := len(results) - 1; idx >= 0; idx-- {
+		if results[idx].RetryGuidance != nil {
+			return results[idx].RetryGuidance
+		}
+	}
+	return nil
 }
 
 func geminiOwnedLoopCarryoverState(continuations []ai.ToolCallContinuation, provider, model, finalText string, toolCalls []ai.ToolCall, toolResults []ai.ReActToolResult) *ai.CarryoverState {
@@ -481,8 +515,8 @@ func prepareGeminiContinuationTurn(turn ai.ReActTurn, maxIterations int) ai.ReAc
 		turn.Options.Tools = nil
 		return turn
 	}
-	if strings.TrimSpace(turn.RepairDirective) != "" {
-		turn.Prompt = "Continue from the supplied tool-call state. The latest tool call requires repair. Use react_state.repair_directive and the structured function response as the source of truth, emit exactly one corrected tool call next, preserve valid script slices, and change only the malformed condition or join. If the repair directive includes an Example fix for the malformed slice, apply that exact field, operator, and literal value shape directly instead of paraphrasing it. Do not answer the user, do not switch tools unless the repair directive explicitly requires it, and do not repeat placeholder-only or previously rejected argument shapes."
+	if geminiHasRepairState(turn) {
+		turn.Prompt = "Continue from the supplied tool-call state. The latest tool call requires repair. Use react_state.retry_guidance as the primary policy state and react_state.repair_directive plus the structured function response as supporting context, emit exactly one corrected tool call next, preserve valid script slices, and change only the malformed condition or join. If the repair directive includes an Example fix for the malformed slice, apply that exact field, operator, and literal value shape directly instead of paraphrasing it. Do not answer the user, do not switch tools unless react_state.retry_guidance or the repair directive explicitly requires it, and do not repeat placeholder-only or previously rejected argument shapes."
 		return turn
 	}
 	turn.Prompt = "Continue from the supplied tool-call state. Use the structured function response as the source of truth, avoid replaying prior history, emit the next tool call if more work is needed, and otherwise answer the user directly."
@@ -490,8 +524,8 @@ func prepareGeminiContinuationTurn(turn ai.ReActTurn, maxIterations int) ai.ReAc
 }
 
 func geminiFinalTurnPrompt(turn ai.ReActTurn) string {
-	if strings.TrimSpace(turn.RepairDirective) != "" {
-		return "Using the supplied tool-call state, do not call more tools. If the remaining issue is a recoverable retry with no missing user fact, do not ask for permission and do not ask a clarification question. Briefly explain what is still malformed and state the corrected filter or join slice the engine would need next, using the grounded schema, joins, and predicate operators already confirmed by the tool state. If react_state.repair_directive includes an Example fix for the malformed slice, reuse that exact field, operator, and literal value shape in the correction you describe. Do not dump a full tool call, do not dump a full script, do not describe steps, and do not include placeholder or dummy fields. Ask one short, concrete clarification question only if a required user fact is genuinely missing."
+	if geminiHasRepairState(turn) {
+		return "Using the supplied tool-call state, do not call more tools. If the remaining issue is a recoverable retry with no missing user fact, do not ask for permission and do not ask a clarification question. Briefly explain what is still malformed and state the corrected filter or join slice the engine would need next, using the grounded schema, joins, and predicate operators already confirmed by the tool state. Use react_state.retry_guidance as the primary policy state and react_state.repair_directive as supporting repair context. If react_state.repair_directive includes an Example fix for the malformed slice, reuse that exact field, operator, and literal value shape in the correction you describe. Do not dump a full tool call, do not dump a full script, do not describe steps, and do not include placeholder or dummy fields. Ask one short, concrete clarification question only if a required user fact is genuinely missing."
 	}
 	return "Using the supplied tool-call state, do not call more tools. Briefly explain what is still blocking progress and ask one short, concrete clarification question."
 }
@@ -507,12 +541,14 @@ func geminiToolCallContinuations(turn ai.ReActTurn, maxIterations int) []ai.Tool
 		response := continuation.Response
 		if idx == len(continuations)-1 {
 			phase, actions, remainingToolCalls := geminiLoopMetadata(turn, maxIterations)
+			retryGuidance := latestGeminiRetryGuidance(turn.ToolResults)
 			response = map[string]any{
 				"tool_result": continuation.Response,
 				"react_state": map[string]any{
 					"user_query":           strings.TrimSpace(turn.UserQuery),
 					"latest_tool":          strings.TrimSpace(continuation.ToolCall.Name),
 					"repair_directive":     strings.TrimSpace(turn.RepairDirective),
+					"retry_guidance":       retryGuidance,
 					"iteration":            turn.Iteration,
 					"task_status":          geminiTaskStatus(turn),
 					"has_more_tool_work":   !turn.FinalTurn,
@@ -531,13 +567,13 @@ func geminiToolCallContinuations(turn ai.ReActTurn, maxIterations int) []ai.Tool
 }
 
 func geminiTaskStatus(turn ai.ReActTurn) string {
-	if turn.FinalTurn && strings.TrimSpace(turn.RepairDirective) != "" {
+	if turn.FinalTurn && geminiHasRepairState(turn) {
 		return "repair_budget_exhausted"
 	}
 	if turn.FinalTurn {
 		return "clarification_required"
 	}
-	if strings.TrimSpace(turn.RepairDirective) != "" {
+	if geminiHasRepairState(turn) {
 		return "repair_required"
 	}
 	if len(turn.ToolResults) > 0 {
@@ -547,14 +583,19 @@ func geminiTaskStatus(turn ai.ReActTurn) string {
 }
 
 func geminiLoopMetadata(turn ai.ReActTurn, maxIterations int) (ai.ReActLoopPhase, []ai.ReActNextAction, int) {
-	if turn.FinalTurn && strings.TrimSpace(turn.RepairDirective) != "" {
+	if turn.FinalTurn && geminiHasRepairState(turn) {
 		return ai.ReActLoopPhaseRepair, []ai.ReActNextAction{ai.ReActNextActionAnswerUser, ai.ReActNextActionAskClarification}, 0
 	}
 	if turn.FinalTurn {
 		return ai.ReActLoopPhaseClarification, []ai.ReActNextAction{ai.ReActNextActionAskClarification, ai.ReActNextActionAnswerUser}, 0
 	}
-	if strings.TrimSpace(turn.RepairDirective) != "" {
-		return ai.ReActLoopPhaseRepair, []ai.ReActNextAction{ai.ReActNextActionRetrySameTool, ai.ReActNextActionAskClarification}, 0
+	if geminiHasRepairState(turn) {
+		nextAction := geminiRepairNextAction(turn)
+		actions := []ai.ReActNextAction{nextAction}
+		if nextAction != ai.ReActNextActionAskClarification {
+			actions = append(actions, ai.ReActNextActionAskClarification)
+		}
+		return ai.ReActLoopPhaseRepair, actions, 0
 	}
 	remainingToolCalls := 0
 	if maxIterations <= 0 {
@@ -578,6 +619,22 @@ func geminiAllowedActions(actions []ai.ReActNextAction) []string {
 		allowed = append(allowed, string(action))
 	}
 	return allowed
+}
+
+func geminiHasRepairState(turn ai.ReActTurn) bool {
+	return latestGeminiRetryGuidance(turn.ToolResults) != nil || strings.TrimSpace(turn.RepairDirective) != ""
+}
+
+func geminiRepairNextAction(turn ai.ReActTurn) ai.ReActNextAction {
+	if guidance := latestGeminiRetryGuidance(turn.ToolResults); guidance != nil {
+		if guidance.NextAction != "" {
+			return guidance.NextAction
+		}
+		if guidance.ClarificationNeeded {
+			return ai.ReActNextActionAskClarification
+		}
+	}
+	return ai.ReActNextActionRetrySameTool
 }
 
 func shouldShortCircuitGeminiOwnedLoopOnToolHint(hint *ai.ToolProgressHint) bool {
@@ -668,14 +725,15 @@ func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest
 	if effectiveErr == nil && toolResultSignalsRecoverableFailure(resultText) {
 		effectiveErr = fmt.Errorf("%s", strings.TrimSpace(resultText))
 	}
-	if effectiveErr != nil && retryState != nil && retryState.coordinator.IsRecoverableToolError(effectiveErr) {
+	if effectiveErr != nil && retryState != nil && retryState.isRecoverableFailure(effectiveErr) {
 		result, _ := retryState.handleRecoverableFailure(toolCall, effectiveErr, existingResults)
 		result.Hint = cloneGeminiToolProgressHint(hint)
 		result.ExecutionMode = ai.ReActToolResultExecutionModeStructuredSummary
 		continuationResponse = map[string]any{
 			"tool_error": map[string]any{
-				"message": result.Result,
+				"message": ai.AppendRetryGuidanceState(result.Result, result.RetryGuidance),
 			},
+			"retry_guidance": result.RetryGuidance,
 		}
 		if shouldStreamGeminiToolResult(req, iteration >= maxIterations) {
 			emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), result.Result, cloneGeminiToolProgressHint(hint), iteration, filePath, fileSize))

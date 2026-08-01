@@ -474,6 +474,7 @@ type ReActToolResult struct {
 	ResultFile    string // Path to full output file (if large)
 	ResultSize    int64  // Byte count of original result
 	Hint          *ToolProgressHint
+	RetryGuidance *RetryGuidance
 	ExecutionMode ReActToolResultExecutionMode
 }
 

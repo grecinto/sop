@@ -505,7 +505,7 @@ func executeToolCalls(ctx context.Context, req ai.ReasoningRequest, iteration, m
 			outputItems = append(outputItems, openAIResponsesInputItem{
 				Type:   "function_call_output",
 				CallID: strings.TrimSpace(toolCall.NativeID),
-				Output: summarizeChatGPTContinuationToolOutput(toolCall.Name, reminder.Result, ai.ReActToolResultExecutionModeStructuredSummary),
+				Output: summarizeChatGPTContinuationToolOutput(ai.ReActToolResult{Name: toolCall.Name, Result: reminder.Result, ExecutionMode: ai.ReActToolResultExecutionModeStructuredSummary}),
 			})
 			continue
 		}
@@ -572,7 +572,7 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 		effectiveErr = fmt.Errorf("%s", strings.TrimSpace(resultText))
 	}
 
-	if effectiveErr != nil && retryState != nil && retryState.coordinator.IsRecoverableToolError(effectiveErr) {
+	if effectiveErr != nil && retryState != nil && retryState.isRecoverableFailure(effectiveErr) {
 		result, _ := retryState.handleRecoverableFailure(toolCall, effectiveErr, existingResults)
 		result.ResultFile = filePath
 		result.ResultSize = fileSize
@@ -588,7 +588,7 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 		return result, openAIResponsesInputItem{
 			Type:   "function_call_output",
 			CallID: strings.TrimSpace(toolCall.NativeID),
-			Output: summarizeChatGPTContinuationToolOutput(toolCall.Name, result.Result, result.ExecutionMode),
+			Output: summarizeChatGPTContinuationToolOutput(result),
 		}
 	}
 
@@ -616,14 +616,17 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 		}, openAIResponsesInputItem{
 			Type:   "function_call_output",
 			CallID: strings.TrimSpace(toolCall.NativeID),
-			Output: summarizeChatGPTContinuationToolOutput(toolCall.Name, resultText, executionMode),
+			Output: summarizeChatGPTContinuationToolOutput(ai.ReActToolResult{Name: toolCall.Name, Result: resultText, ExecutionMode: executionMode}),
 		}
 }
 
-func summarizeChatGPTContinuationToolOutput(toolName, resultText string, executionMode ai.ReActToolResultExecutionMode) string {
+func summarizeChatGPTContinuationToolOutput(result ai.ReActToolResult) string {
+	toolName := result.Name
+	resultText := result.Result
+	executionMode := result.ExecutionMode
 	trimmed := strings.TrimSpace(resultText)
 	if strings.Contains(trimmed, "Retry instruction:") || strings.Contains(trimmed, "Clarification required:") || strings.Contains(trimmed, "Tool execution error:") {
-		return trimmed
+		return ai.AppendRetryGuidanceState(trimmed, result.RetryGuidance)
 	}
 	return SummarizeToolResultForLLM(toolName, resultText, executionMode)
 }

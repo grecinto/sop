@@ -13,15 +13,18 @@ import (
 // It handles:
 //   - Iteration control and loop lifecycle
 //   - Tool execution orchestration
-//   - Progressive retry logic (Tier 1/2A/2B/3) via RetryCoordinator
+//   - Progressive retry policy evaluation via RetryPolicySurface
 //   - Failure tracking and escalation state management
 //   - Response building with EscalationState
 //
 // Provider-specific behavior (LLM invocation, continuation handling, etc) is delegated
 // to the ReActLoopAdapter implementation.
 type UnifiedReActEngine struct {
-	Adapter           ReActLoopAdapter
-	RetryCoordinator  *RetryCoordinator
+	Adapter ReActLoopAdapter
+	// Candidate for interface capture toward LAO and/or heuristic policy enforcer:
+	// the shared-compatible path should depend on policy contracts, not coordinator internals,
+	// so this path can stay a fallback runtime instead of becoming a hidden control center.
+	RetryPolicy       RetryPolicySurface
 	EnableObfuscation bool
 	MaxTokens         int
 }
@@ -29,9 +32,9 @@ type UnifiedReActEngine struct {
 // NewUnifiedReActEngine creates a new unified engine with the given adapter.
 func NewUnifiedReActEngine(adapter ReActLoopAdapter) *UnifiedReActEngine {
 	return &UnifiedReActEngine{
-		Adapter:          adapter,
-		RetryCoordinator: NewRetryCoordinator(),
-		MaxTokens:        4096,
+		Adapter:     adapter,
+		RetryPolicy: NewDefaultRetryPolicySurface(),
+		MaxTokens:   4096,
 	}
 }
 
@@ -213,7 +216,10 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 		toolCall := toolCalls[0]
 
 		// Validate tool call against pending repair
-		if pendingRepair != nil && !e.RetryCoordinator.AllowsTool(*pendingRepair, toolCall.Name) {
+		// Candidate for interface capture toward LAO: repair gating is a valid hard rail,
+		// but the user-facing continuation shape around that gate could move behind a
+		// dedicated policy-enforcer interface if shared and owned loops diverge further.
+		if pendingRepair != nil && !e.RetryPolicy.AllowsTool(*pendingRepair, toolCall.Name) {
 			emitVerboseProgress(ctx, "Tool `%s` must be corrected before other actions.", pendingRepair.ToolName)
 
 			log.Warn("Unified ReAct Engine Deferred Non-Repair Tool Call",
@@ -221,11 +227,13 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 				"received_tool", toolCall.Name,
 				"adapter", e.Adapter.Name())
 
+			reminderGuidance := ai.BuildRetryGuidance(pendingRepair.ToolName, *pendingRepair, nil, state.FailureCounts[pendingRepair.ToolName], e.Adapter.MaxIterations(), e.Adapter.MaxIterations(), false)
 			// Add repair reminder to tool results
-			reminderDirective := e.RetryCoordinator.FormatRepairDirective(*pendingRepair, toolCall.Name)
+			reminderDirective := e.RetryPolicy.FormatRepairDirective(*pendingRepair, toolCall.Name)
 			reminderResult := ai.ReActToolResult{
-				Name:   pendingRepair.ToolName,
-				Result: reminderDirective,
+				Name:          pendingRepair.ToolName,
+				Result:        reminderDirective,
+				RetryGuidance: reminderGuidance,
 			}
 			state.ToolResults = append(state.ToolResults, reminderResult)
 			state.RepairDirective = reminderDirective
@@ -252,7 +260,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			emitReasoningEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), err, state.Iteration))
 
 			// Check if error is recoverable
-			if !e.RetryCoordinator.IsRecoverableToolError(err) {
+			if !e.RetryPolicy.IsRecoverable(err) {
 				log.Error("Unified ReAct Engine Unrecoverable Tool Failure",
 					"tool", toolCall.Name,
 					"adapter", e.Adapter.Name(),
@@ -268,15 +276,19 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			// Check if we recently did research for this tool
 			recentlyResearched := e.wasResearchRecentlyDone(state.ToolResults, toolCall.Name)
 
-			// Determine retry tier (Tier 2B)
-			tier := e.RetryCoordinator.DetermineRetryTier(errorMessage, currentFailureCount, lastHint)
+			decision := e.RetryPolicy.EvaluateRetryDecision(RetryDecisionInput{
+				ToolName:           toolCall.Name,
+				Err:                err,
+				FailureCount:       currentFailureCount,
+				Hint:               lastHint,
+				RecentlyResearched: recentlyResearched,
+			})
+			tier := decision.Tier
+			repairPlan := decision.Plan
+			retryGuidance := ai.BuildRetryGuidance(toolCall.Name, repairPlan, decision.Recommendation, currentFailureCount+1, e.Adapter.MaxIterations(), e.Adapter.MaxIterations(), decision.RequiresClarify || tier == RetryTierClarify)
 
-			// Classify repair strategy (Tier 2A)
-			repairPlan := e.RetryCoordinator.ClassifyRepair(toolCall.Name, err, lastHint, recentlyResearched)
-			repairPlan.Tier = tier
-
-			// Convert RepairPlan to pendingToolRepair for error formatting
-			nativePendingRepair := e.convertRepairPlanToNative(repairPlan)
+			// Convert RepairPlan to the compatibility-path repair state for error formatting.
+			compatiblePendingRepair := e.convertRepairPlanToCompatible(repairPlan)
 
 			log.Info("Unified ReAct Engine Progressive Retry",
 				"tool", toolCall.Name,
@@ -286,7 +298,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 				"strategy", repairPlan.Strategy)
 
 			// Tier 3 (Clarify) → escalate to phase succession
-			if tier == RetryTierClarify {
+			if decision.RequiresClarify || tier == RetryTierClarify {
 				emitVerboseProgress(ctx, "Tier 3 (Clarify): Escalating to user after %d failures.", currentFailureCount)
 
 				log.Warn("Unified ReAct Engine Tier 3 Escalation",
@@ -306,9 +318,10 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 
 				// Add clarification-required result with proper formatting
 				clarificationResult := ai.ReActToolResult{
-					Name:   toolCall.Name,
-					Result: formatClarificationRequiredToolError(nativePendingRepair, toolCall.Args, err),
-					Args:   cloneToolEventMap(toolCall.Args),
+					Name:          toolCall.Name,
+					Result:        formatClarificationRequiredToolError(compatiblePendingRepair, toolCall.Args, err),
+					Args:          cloneToolEventMap(toolCall.Args),
+					RetryGuidance: retryGuidance,
 				}
 				state.ToolResults = append(state.ToolResults, clarificationResult)
 				state.RepairDirective = "Clarification directive: The last tool failure still remains unresolved after the first repair attempt. Do not call another tool yet. Ask the user one short, concrete clarification question that names the blocker and wait for the answer."
@@ -332,9 +345,10 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 
 			// Add repair result with proper formatting
 			repairResult := ai.ReActToolResult{
-				Name:   toolCall.Name,
-				Result: formatRecoverableToolError(nativePendingRepair, toolCall.Args, err),
-				Args:   cloneToolEventMap(toolCall.Args),
+				Name:          toolCall.Name,
+				Result:        formatRecoverableToolError(compatiblePendingRepair, toolCall.Args, err),
+				Args:          cloneToolEventMap(toolCall.Args),
+				RetryGuidance: retryGuidance,
 			}
 			state.ToolResults = append(state.ToolResults, repairResult)
 			state.RepairDirective = e.buildRepairDirective(state.ToolResults)
@@ -513,47 +527,48 @@ func (e *UnifiedReActEngine) shouldPreserveStructuredResult(ctx context.Context,
 	if len(toolResults) == 0 {
 		return false
 	}
-	// Convert to native format for legacy function
-	nativeResults := e.convertToNativeResults(toolResults)
-	return shouldPreserveStructuredToolResult(ctx, nativeResults)
+	// Convert to compatibility-path format for the shared helper functions.
+	compatibleResults := e.convertToCompatibleResults(toolResults)
+	return shouldPreserveStructuredToolResult(ctx, compatibleResults)
 }
 
-// convertToNativeResults converts shared ReActToolResult to native nativeToolResult.
-func (e *UnifiedReActEngine) convertToNativeResults(shared []ai.ReActToolResult) []nativeToolResult {
+// convertToCompatibleResults converts shared ReActToolResult to compatibleToolResult.
+func (e *UnifiedReActEngine) convertToCompatibleResults(shared []ai.ReActToolResult) []compatibleToolResult {
 	if len(shared) == 0 {
 		return nil
 	}
-	native := make([]nativeToolResult, 0, len(shared))
+	compatible := make([]compatibleToolResult, 0, len(shared))
 	for _, result := range shared {
-		native = append(native, nativeToolResult{
+		compatible = append(compatible, compatibleToolResult{
 			Name:          result.Name,
 			Result:        result.Result,
 			ResultFile:    result.ResultFile,
 			ResultSize:    result.ResultSize,
 			Args:          result.Args,
 			Hint:          result.Hint,
+			RetryGuidance: result.RetryGuidance,
 			ExecutionMode: result.ExecutionMode,
 		})
 	}
-	return native
+	return compatible
 }
 
-// convertRepairPlanToNative converts RepairPlan to pendingToolRepair for error formatting.
-func (e *UnifiedReActEngine) convertRepairPlanToNative(plan RepairPlan) pendingToolRepair {
-	var strategy nativeRepairStrategy
+// convertRepairPlanToCompatible converts RepairPlan to compatibility-path repair state for error formatting.
+func (e *UnifiedReActEngine) convertRepairPlanToCompatible(plan RepairPlan) compatiblePendingToolRepair {
+	var strategy compatibleRepairStrategy
 	switch plan.Strategy {
 	case RepairStrategyResearchFirst:
-		strategy = nativeRepairStrategyResearchFirst
+		strategy = compatibleRepairStrategyResearchFirst
 	default:
-		strategy = nativeRepairStrategySameTool
+		strategy = compatibleRepairStrategySameTool
 	}
 
-	return pendingToolRepair{
+	return compatiblePendingToolRepair{
 		ToolName:       plan.ToolName,
 		Strategy:       strategy,
 		ResearchTool:   plan.ResearchTool,
 		ResearchReason: plan.ResearchReason,
-		Tier:           nativeRetryTier(plan.Tier),
+		Tier:           compatibleRetryTier(plan.Tier),
 	}
 }
 
@@ -562,7 +577,7 @@ func (e *UnifiedReActEngine) buildRepairDirective(toolResults []ai.ReActToolResu
 	if len(toolResults) == 0 {
 		return ""
 	}
-	// Convert to native format for legacy function
-	nativeResults := e.convertToNativeResults(toolResults)
-	return buildNativeRepairDirective(nativeResults[len(nativeResults)-1])
+	// Convert to compatibility-path format for the shared helper function.
+	compatibleResults := e.convertToCompatibleResults(toolResults)
+	return buildCompatibleRepairDirective(compatibleResults[len(compatibleResults)-1])
 }
