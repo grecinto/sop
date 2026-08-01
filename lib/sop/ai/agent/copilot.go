@@ -127,6 +127,19 @@ func cloneTaskContextClassification(taskCtx *TaskContextClassification) *TaskCon
 	if taskCtx.Layers != nil {
 		cloned.Layers = append([]LayerInfo(nil), taskCtx.Layers...)
 	}
+	if taskCtx.AskClassification != nil {
+		askCtxClone := *taskCtx.AskClassification
+		if taskCtx.AskClassification.Domains != nil {
+			askCtxClone.Domains = append([]string(nil), taskCtx.AskClassification.Domains...)
+		}
+		if taskCtx.AskClassification.PhasePlan != nil {
+			askCtxClone.PhasePlan = append([]string(nil), taskCtx.AskClassification.PhasePlan...)
+		}
+		if taskCtx.AskClassification.CRUD != nil {
+			askCtxClone.CRUD = append([]string(nil), taskCtx.AskClassification.CRUD...)
+		}
+		cloned.AskClassification = &askCtxClone
+	}
 	return &cloned
 }
 

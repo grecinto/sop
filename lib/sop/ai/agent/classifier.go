@@ -32,11 +32,12 @@ type TaskContextClassification struct {
 	CapabilityHint      string      `json:"-"`
 	IntentFamily        string      `json:"-"`
 	// KB Search Results (for specialized KB routing)
-	KBSearchResults string `json:"-"`
-	KBMatchCount    int    `json:"-"`
-	LLMInstruction  string `json:"-"`
-	CleanQuery      string `json:"-"` // Query without :llm meta-token
-	DirectDisplay   bool   `json:"-"`
+	KBSearchResults   string          `json:"-"`
+	KBMatchCount      int             `json:"-"`
+	LLMInstruction    string          `json:"-"`
+	CleanQuery        string          `json:"-"` // Query without :llm meta-token
+	DirectDisplay     bool            `json:"-"`
+	AskClassification *AskTaskContext `json:"-"`
 }
 
 type continuityDigest struct {

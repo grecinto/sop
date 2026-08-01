@@ -13,6 +13,8 @@ import (
 	"github.com/sharedcode/sop/ai/agent/planner"
 )
 
+const ctxKeyAskWorkItemActor = "ask_work_item_actor"
+
 // ============================================================================
 // Ask Pipeline - Critical Architectural Patterns
 // ============================================================================
@@ -96,7 +98,8 @@ func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai
 			"query_preview", truncateString(item.Query, 80))
 
 		// Execute ask (LLM orchestrates WorkStream management via tools)
-		response, err := a.askCore(ctx, item.Query, cfg)
+		itemCtx := context.WithValue(ctx, ctxKeyAskWorkItemActor, item.Actor)
+		response, err := a.askCore(itemCtx, item.Query, cfg)
 		if err != nil {
 			return response, err
 		}
@@ -140,6 +143,7 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	// 2. Query preprocessing (same as V1)
 	rawQuery := query
 	query = a.applyMetaTalkRewrite(ctx, query)
+	persistedAskCtx := a.getPersistedAskClassification()
 
 	// 3. Intent classification and routing (same as V1)
 	intent := a.classifyIntent(ctx, query, gen)
@@ -157,6 +161,7 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	if taskContext == nil {
 		taskContext = &TaskContextClassification{}
 	}
+	taskContext = a.applyQueuedPhaseActorContext(ctx, taskContext, persistedAskCtx)
 	log.Info("Copilot Ask Routing", "routing_gate", taskContext.RoutingGate, "task_context", summarizeTaskContextForLog(*taskContext), "query", query)
 
 	// 5. KB direct display fast path (same as V1)
@@ -181,8 +186,8 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		}
 	}
 
-	// 6b. Phase Factory Integration (only for Gate 3 Discovery)
-	if askCtx, ok := ctx.Value("ask_classification").(*AskTaskContext); ok && askCtx != nil {
+	// 6b. Phase Factory Integration
+	if askCtx := taskContext.AskClassification; askCtx != nil {
 		log.Info("Using Ask Phase Factory for WorkStream + tool registration")
 
 		// Resolve phase plan from WorkStream or classification
@@ -304,16 +309,45 @@ func (a *CopilotAgent) tryAskColdStartRouting(ctx context.Context, query string,
 
 	// Convert Ask classification to TaskContextClassification for compatibility
 	taskCtx := &TaskContextClassification{
-		Domain:         strings.Join(classification.Domains, ","), // Multi-domain support
-		CapabilityHint: classification.Phase,                      // Phase name as hint
-		RoutingGate:    RoutingGateDiscovery,
+		Domain:            strings.Join(classification.Domains, ","), // Multi-domain support
+		CapabilityHint:    classification.Phase,                      // Phase name as hint
+		RoutingGate:       RoutingGateDiscovery,
+		AskClassification: classification,
 	}
 
-	// Store Ask-specific metadata in context for later use
-	ctx = context.WithValue(ctx, "ask_classification", classification)
-	ctx = context.WithValue(ctx, "ask_phase_plan", classification.PhasePlan)
-
 	return taskCtx, nil
+}
+
+func (a *CopilotAgent) applyQueuedPhaseActorContext(ctx context.Context, taskContext *TaskContextClassification, persisted *AskTaskContext) *TaskContextClassification {
+	actor, _ := ctx.Value(ctxKeyAskWorkItemActor).(string)
+	phaseName, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(actor)), "phase:")
+	if !ok || strings.TrimSpace(phaseName) == "" {
+		return taskContext
+	}
+	if taskContext == nil {
+		taskContext = &TaskContextClassification{}
+	}
+	phaseName = normalizePhase(phaseName)
+	if persisted != nil {
+		persisted.Phase = phaseName
+		taskContext.AskClassification = persisted
+		if len(persisted.Domains) == 1 {
+			taskContext.Domain = persisted.Domains[0]
+		}
+	}
+	taskContext.CapabilityHint = phaseName
+	return taskContext
+}
+
+func (a *CopilotAgent) getPersistedAskClassification() *AskTaskContext {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return nil
+	}
+	routingState := a.service.session.Memory.GetRoutingState()
+	if routingState == nil {
+		return nil
+	}
+	return cloneAskTaskContext(routingState.AskClassification)
 }
 
 // resolvePhasePlan resolves the PhasePlan from classification or WorkStream.

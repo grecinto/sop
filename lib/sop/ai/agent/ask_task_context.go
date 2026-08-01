@@ -347,6 +347,23 @@ func (a *CopilotAgent) buildFallbackClassification(query string) *AskTaskContext
 	}
 }
 
+func cloneAskTaskContext(taskCtx *AskTaskContext) *AskTaskContext {
+	if taskCtx == nil {
+		return nil
+	}
+	cloned := *taskCtx
+	if taskCtx.Domains != nil {
+		cloned.Domains = append([]string(nil), taskCtx.Domains...)
+	}
+	if taskCtx.PhasePlan != nil {
+		cloned.PhasePlan = append([]string(nil), taskCtx.PhasePlan...)
+	}
+	if taskCtx.CRUD != nil {
+		cloned.CRUD = append([]string(nil), taskCtx.CRUD...)
+	}
+	return &cloned
+}
+
 // normalizeDomainName normalizes domain names to standard values.
 func normalizeDomainName(domain string) string {
 	domain = strings.ToLower(strings.TrimSpace(domain))
