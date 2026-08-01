@@ -2329,8 +2329,22 @@ func (s *Service) executeReasoningEngineWithRequest(ctx context.Context, query s
 		Streamer:       eventStreamer,
 		Verbose:        verbose,
 	}
-
-	return engine.Run(ctx, req)
+	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		req.CarryoverState = hydrateRetryLearningsIntoCarryover(ctx, s.systemDB, payload, genCfg.generator, req.CarryoverState)
+	}
+	resp, err := engine.Run(ctx, req)
+	if err != nil {
+		return resp, err
+	}
+	if payload := ai.GetSessionPayload(ctx); payload != nil && resp.CarryoverState != nil {
+		provider := strings.TrimSpace(genCfg.generator.Name())
+		model := ""
+		if capability, ok := carryoverCapability(genCfg.generator); ok {
+			model = strings.TrimSpace(capability.Model)
+		}
+		_ = persistRetryLearnings(ctx, s.systemDB, payload, provider, model, resp.CarryoverState.RetryLearnings)
+	}
+	return resp, nil
 }
 
 // updateSessionMemoryWithRequest is the explicit-parameter version with explicit session

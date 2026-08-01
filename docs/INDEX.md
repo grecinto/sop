@@ -1,6 +1,6 @@
 # SOP Documentation Index
 
-Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
+Comprehensive guide to SOP platform documentation. Last updated: 2026-07-31.
 
 ---
 
@@ -68,6 +68,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-26.
 | [TIER3_ESCALATION_PHASE_SUCCESSION_IMPLEMENTATION.md](TIER3_ESCALATION_PHASE_SUCCESSION_IMPLEMENTATION.md) | **✅ COMPLETE - Tier 3 Integration**: Connects Tier 3 escalation to automatic backward phase transitions (120 lines → enables error recovery workflow) |
 | [REACT_LOOP_SYNC_GAP_ASSESSMENT.md](REACT_LOOP_SYNC_GAP_ASSESSMENT.md) | **✅ RESOLVED**: Provider-owned ReAct loops now share the progressive retry kernel and enforce repair sequencing without outer-loop unification |
 | [PROVIDER_OWNED_REACT_LOOPS_ARCHITECTURE.md](PROVIDER_OWNED_REACT_LOOPS_ARCHITECTURE.md) | **✅ ACTIVE**: Provider-owned ReAct loops architecture - provider-owned by default, with a narrow shared-loop exception where it naturally fits |
+| [RETRY_ORCHESTRATION_STATE.md](RETRY_ORCHESTRATION_STATE.md) | **✅ ACTIVE**: LAO-first retry/orchestration architecture, explicit policy surfaces, bounded enforcement rails, adaptive budgets, and retry-memory persistence |
 | [FILE_BACKED_TOOL_RESULTS.md](FILE_BACKED_TOOL_RESULTS.md) | ✅ Production-ready: File-backed tool results for large outputs, strategic analysis tools |
 | [SHELL_SESSION_PERSISTENCE.md](SHELL_SESSION_PERSISTENCE.md) | Persistent shell sessions for commands |
 | [DUAL_PTY_PARALLEL_EXECUTION.md](DUAL_PTY_PARALLEL_EXECUTION.md) | ✅ **Complete**: Dual-PTY support for parallel execution - 2 concurrent PTY processes for identical command behavior |

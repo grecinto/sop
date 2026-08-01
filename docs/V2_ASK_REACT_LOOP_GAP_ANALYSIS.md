@@ -1297,6 +1297,8 @@ func determineRetryTier(errorType string, failureCount int, hint *ai.ToolProgres
 
 ### Tier 2C: Adaptive & Learning 🚀 ADVANCED (Week 5-6)
 
+Status update: the first-pass Tier 2C machinery is now implemented, but the architectural framing has been corrected. The target is not “heuristics first, then expose guidance.” The target is **LAO-first**, with explicit policy surfaces where either LLM guidance or heuristic/rules enforcement can be used intentionally.
+
 6. **Gap 3 Phase 3: Adaptive Budget & Error Learning**
    - Effort: 100-150 lines (progress detection + learning + persistence)
    - Impact: System learns optimal strategies, adaptive budgets
@@ -1309,6 +1311,18 @@ func determineRetryTier(errorType string, failureCount int, hint *ai.ToolProgres
 - **Progress Detection**: Extend budget when making measurable progress
 - **Error Pattern Learning**: Learn which strategies work for which errors
 - **Cross-Session Memory**: Remember successful patterns
+
+Current refinement direction:
+- keep hard safety rails in code
+- keep learning and persistence infrastructure in shared machinery
+- define explicit policy points for recoverability, tiering, repair, budget, and clarification
+- default advisory decisions toward model-visible policy context
+- avoid letting heuristics become the hidden orchestrator
+
+Architectural correction:
+- orchestration authority belongs to the provider-owned LAO loop
+- policy modules should advise, validate, or enforce narrow rules
+- policy modules should not become a shared outer controller
 
 **Implementation**:
 ```go

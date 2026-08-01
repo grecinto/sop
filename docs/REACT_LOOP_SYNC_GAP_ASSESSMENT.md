@@ -17,6 +17,7 @@ The provider-owned loops for ChatGPT, Anthropic, and Gemini now share the lower-
 - repair directives carried into subsequent turns
 - repair-step enforcement when the model attempts to switch tools mid-repair
 - Tier 3 escalation state propagation
+- adaptive retry budgets and retry learnings
 
 ## What Changed
 
@@ -55,8 +56,8 @@ The architecture is now aligned with the chosen design:
 
 The original sync gap is resolved, but the broader roadmap still has room for future improvements such as:
 
-- adaptive learning beyond the current progressive retry tiers
-- cross-session retry learning
+- making more of the adaptive retry state LLM-visible rather than silently heuristic-driven
+- formalizing the retry/recovery policy surface so advisory decisions and enforcement rails are explicit
 - provider-specific optimization on top of the shared retry kernel
 
 Those are forward-looking enhancements, not unresolved sync gaps.

@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,22 +10,23 @@ import (
 )
 
 type ownedLoopRetryState struct {
-	coordinator     *ai.RetryCoordinator
-	failureCounts   map[string]int
-	escalationState map[string]any
-	pendingRepair   *ai.RepairPlan
-	learnings       []ai.RetryLearning
-	allowedTurns    int
-	maxAllowedTurns int
-	lastFailures    map[string]ownedLoopFailureContext
+	coordinator        *ai.RetryCoordinator
+	failureCounts      map[string]int
+	escalationState    map[string]any
+	pendingRepair      *ai.RepairPlan
+	learnings          []ai.RetryLearning
+	learningContext    ai.RetryLearningContext
+	allowedTurns       int
+	maxAllowedTurns    int
+	lastFailures       map[string]ownedLoopFailureContext
 	progressExtensions int
+	lastRecommendation *ai.RetryLearningRecommendation
 }
 
 type ownedLoopFailureContext struct {
 	err  error
 	plan ai.RepairPlan
 }
-
 
 func newOwnedLoopRetryState(baseTurns int, query string, carryover *ai.CarryoverState) *ownedLoopRetryState {
 	var learnings []ai.RetryLearning
@@ -38,13 +40,17 @@ func newOwnedLoopRetryState(baseTurns int, query string, carryover *ai.Carryover
 		maxAllowed = allowed
 	}
 	return &ownedLoopRetryState{
-		coordinator:   coordinator,
-		failureCounts: make(map[string]int),
-		learnings:     learnings,
-		allowedTurns:  allowed,
+		coordinator:     coordinator,
+		failureCounts:   make(map[string]int),
+		learnings:       learnings,
+		allowedTurns:    allowed,
 		maxAllowedTurns: maxAllowed,
-		lastFailures:  make(map[string]ownedLoopFailureContext),
+		lastFailures:    make(map[string]ownedLoopFailureContext),
 	}
+}
+
+func (s *ownedLoopRetryState) configureLearningContext(ctx ai.RetryLearningContext) {
+	s.learningContext = ctx
 }
 
 func (s *ownedLoopRetryState) resetTool(toolName string) {
@@ -79,7 +85,7 @@ func (s *ownedLoopRetryState) completeSuccessfulTool(toolName string) {
 		return
 	}
 	if ctx, ok := s.lastFailures[toolName]; ok {
-		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolName, ctx.err, ctx.plan, true)
+		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolName, ctx.err, ctx.plan, true, s.learningContext)
 		delete(s.lastFailures, toolName)
 	}
 	if s.pendingRepair == nil {
@@ -102,19 +108,25 @@ func (s *ownedLoopRetryState) handleRecoverableFailure(toolCall ai.ToolCall, err
 	recentlyResearched := wasOwnedLoopResearchRecentlyDone(toolResults, toolCall.Name)
 	tier := s.coordinator.DetermineRetryTier(err.Error(), currentFailureCount, lastHint)
 	plan := s.coordinator.ClassifyRepair(toolCall.Name, err, lastHint, recentlyResearched)
-	plan = s.coordinator.ApplyLearnedStrategy(plan, toolCall.Name, err, s.learnings)
+	var recommendation *ai.RetryLearningRecommendation
+	if learned, ok := s.coordinator.RecommendStrategyDetails(toolCall.Name, err, s.learnings, s.learningContext); ok {
+		recommendation = &learned
+		s.lastRecommendation = recommendation
+	} else {
+		s.lastRecommendation = nil
+	}
 	if plan.Strategy == ai.RepairStrategyResearchFirst && tier < ai.RetryTierResearch {
 		tier = ai.RetryTierResearch
 	}
 	plan.Tier = tier
 	if previous, ok := s.lastFailures[toolCall.Name]; ok {
-		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolCall.Name, previous.err, previous.plan, false)
+		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolCall.Name, previous.err, previous.plan, false, s.learningContext)
 	}
 	s.failureCounts[toolCall.Name] = currentFailureCount + 1
 	s.lastFailures[toolCall.Name] = ownedLoopFailureContext{err: err, plan: plan}
 
 	if tier == ai.RetryTierClarify {
-		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolCall.Name, err, plan, false)
+		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolCall.Name, err, plan, false, s.learningContext)
 		delete(s.lastFailures, toolCall.Name)
 		s.pendingRepair = nil
 		s.escalationState = map[string]any{
@@ -128,7 +140,7 @@ func (s *ownedLoopRetryState) handleRecoverableFailure(toolCall ai.ToolCall, err
 		return ai.ReActToolResult{
 			Name:   toolCall.Name,
 			Args:   cloneRetryArgs(toolCall.Args),
-			Result: formatOwnedLoopClarificationResult(plan, toolCall.Args, err),
+			Result: formatOwnedLoopClarificationResult(plan, toolCall.Args, err, recommendation, currentFailureCount, s.allowedTurns, s.maxAllowedTurns),
 			Hint:   lastHint,
 		}, true
 	}
@@ -138,7 +150,7 @@ func (s *ownedLoopRetryState) handleRecoverableFailure(toolCall ai.ToolCall, err
 	return ai.ReActToolResult{
 		Name:   toolCall.Name,
 		Args:   cloneRetryArgs(toolCall.Args),
-		Result: formatOwnedLoopRetryResult(plan, toolCall.Args, err),
+		Result: formatOwnedLoopRetryResult(plan, toolCall.Args, err, recommendation, currentFailureCount, s.allowedTurns, s.maxAllowedTurns),
 		Hint:   lastHint,
 	}, false
 }
@@ -147,23 +159,20 @@ func (s *ownedLoopRetryState) maybeExtendBudget(toolResults []ai.ReActToolResult
 	if s == nil || currentIteration < s.allowedTurns || s.allowedTurns >= s.maxAllowedTurns {
 		return false
 	}
-	explicitProgress, implicitProgress := ownedLoopProgressSignals(toolResults)
-	if !explicitProgress && !implicitProgress {
+	explicitProgress, _ := ownedLoopProgressSignals(toolResults)
+	if !explicitProgress {
 		return false
 	}
-	if implicitProgress && s.progressExtensions > 0 {
-		return false
+	extension := 1
+	if hint := latestOwnedLoopHint(toolResults); hint != nil && hint.CompletionDelta >= 0.25 {
+		extension = 2
 	}
-		extension := 1
-		if hint := latestOwnedLoopHint(toolResults); hint != nil && hint.CompletionDelta >= 0.25 {
-			extension = 2
-		}
-		s.allowedTurns += extension
-		if s.allowedTurns > s.maxAllowedTurns {
-			s.allowedTurns = s.maxAllowedTurns
-		}
-		s.progressExtensions++
-		return true
+	s.allowedTurns += extension
+	if s.allowedTurns > s.maxAllowedTurns {
+		s.allowedTurns = s.maxAllowedTurns
+	}
+	s.progressExtensions++
+	return true
 }
 
 func (s *ownedLoopRetryState) exportedLearnings() []ai.RetryLearning {
@@ -238,7 +247,7 @@ func ownedLoopProgressSignals(toolResults []ai.ReActToolResult) (explicit bool, 
 	return false, false
 }
 
-func formatOwnedLoopRetryResult(plan ai.RepairPlan, args map[string]any, err error) string {
+func formatOwnedLoopRetryResult(plan ai.RepairPlan, args map[string]any, err error, recommendation *ai.RetryLearningRecommendation, failureCount int, softBudget int, hardBudget int) string {
 	strategyLine := ""
 	if plan.Strategy != "" {
 		strategyLine = fmt.Sprintf("\nRepair strategy: %s", plan.Strategy)
@@ -251,29 +260,43 @@ func formatOwnedLoopRetryResult(plan ai.RepairPlan, args map[string]any, err err
 		}
 		retryInstruction = fmt.Sprintf("Retry instruction: Call %s next, preferably with scoped stores:[...] for the likely targets, use its schema or relations output as source of truth, then return to %s. Do not switch tools or provide a final answer until the research attempt is made.", researchTool, plan.ToolName)
 	}
+	guidance := formatOwnedLoopLLMGuidance(recommendation, failureCount, softBudget, hardBudget)
 	return fmt.Sprintf(
-		"Tool execution error: %v\nTool: %s%s\nAttempted args:\n%s\n%s",
+		"Tool execution error: %v\nTool: %s%s\nAttempted args:\n%s\n%s%s",
 		err,
 		plan.ToolName,
 		strategyLine,
 		formatRetryArgs(args),
 		retryInstruction,
+		guidance,
 	)
 }
 
-func formatOwnedLoopClarificationResult(plan ai.RepairPlan, args map[string]any, err error) string {
+func formatOwnedLoopClarificationResult(plan ai.RepairPlan, args map[string]any, err error, recommendation *ai.RetryLearningRecommendation, failureCount int, softBudget int, hardBudget int) string {
 	strategyLine := ""
 	if plan.Strategy != "" {
 		strategyLine = fmt.Sprintf("\nRepair strategy: %s", plan.Strategy)
 	}
+	guidance := formatOwnedLoopLLMGuidance(recommendation, failureCount, softBudget, hardBudget)
 	return fmt.Sprintf(
-		"Clarification required: The tool %s failed repeatedly and still needs user guidance before more tool calls.\nTool execution error: %v\nTool: %s%s\nAttempted args:\n%s\nUser-facing next step: Ask one short clarification question that resolves the ambiguity blocking this tool call. Do not call more tools until the user answers.",
+		"Clarification required: The tool %s failed repeatedly and still needs user guidance before more tool calls.\nTool execution error: %v\nTool: %s%s\nAttempted args:\n%s\nUser-facing next step: Ask one short clarification question that resolves the ambiguity blocking this tool call. Do not call more tools until the user answers.%s",
 		plan.ToolName,
 		err,
 		plan.ToolName,
 		strategyLine,
 		formatRetryArgs(args),
+		guidance,
 	)
+}
+
+func formatOwnedLoopLLMGuidance(recommendation *ai.RetryLearningRecommendation, failureCount int, softBudget int, hardBudget int) string {
+	parts := make([]string, 0, 3)
+	if recommendation != nil {
+		parts = append(parts, fmt.Sprintf("LLM retry guidance: A learned pattern suggests strategy=%s (score=%.2f, %s). Use this as guidance, not as a mandatory action.", recommendation.Strategy, recommendation.Score, recommendation.Reason))
+	}
+	parts = append(parts, fmt.Sprintf("Retry context: failure_count=%d, soft_retry_budget=%d, hard_retry_budget=%d.", failureCount+1, softBudget, hardBudget))
+	parts = append(parts, "The model should decide whether to retry the same tool, research first, change tools appropriately, or ask for clarification within these hard limits.")
+	return "\n" + strings.Join(parts, "\n")
 }
 
 func formatRetryArgs(args map[string]any) string {
@@ -296,4 +319,35 @@ func cloneRetryArgs(args map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func deriveRetryLearningContext(ctx context.Context, req ai.ReasoningRequest, provider, model string) ai.RetryLearningContext {
+	learningContext := ai.RetryLearningContext{
+		Provider:  strings.TrimSpace(provider),
+		Model:     strings.TrimSpace(model),
+		TaskClass: deriveRetryTaskClass(req.UserQuery),
+	}
+	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		learningContext.DomainScope = strings.TrimSpace(payload.ActiveDomain)
+		learningContext.RepoScope = strings.TrimSpace(payload.ActiveRepo)
+	}
+	return learningContext
+}
+
+func deriveRetryTaskClass(query string) string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	switch {
+	case strings.Contains(query, "refactor"):
+		return "refactor"
+	case strings.Contains(query, "test"):
+		return "testing"
+	case strings.Contains(query, "bug") || strings.Contains(query, "fix"):
+		return "debugging"
+	case strings.Contains(query, "implement") || strings.Contains(query, "build"):
+		return "implementation"
+	case strings.Contains(query, "join") || strings.Contains(query, "query") || strings.Contains(query, "store"):
+		return "data"
+	default:
+		return "general"
+	}
 }

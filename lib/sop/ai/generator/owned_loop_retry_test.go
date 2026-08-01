@@ -1,7 +1,9 @@
 package generator
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sharedcode/sop/ai"
@@ -62,6 +64,28 @@ func TestOwnedLoopRetryState_RecordsSuccessLearning(t *testing.T) {
 	learning := state.exportedLearnings()[0]
 	if learning.SuccessCount != 1 {
 		t.Fatalf("expected success count 1, got %#v", learning)
+	}
+}
+
+func TestOwnedLoopRetryState_PrefersScopedLearningContext(t *testing.T) {
+	pattern := ai.NewRetryCoordinator().ErrorPattern("execute_script", errors.New("join mapping unresolved"))
+	state := newOwnedLoopRetryState(2, "join users and orders", &ai.CarryoverState{
+		RetryLearnings: []ai.RetryLearning{
+			{ToolName: "execute_script", ErrorPattern: pattern, PreferredStrategy: ai.RepairStrategySameTool, SuccessCount: 5, RepoScope: "other-repo", DomainScope: "coding_workflow", TaskClass: "data"},
+			{ToolName: "execute_script", ErrorPattern: pattern, PreferredStrategy: ai.RepairStrategyResearchFirst, SuccessCount: 3, RepoScope: "sop-cloud", DomainScope: "coding_workflow", TaskClass: "data"},
+		},
+	})
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{ActiveRepo: "sop-cloud", ActiveDomain: "coding_workflow"})
+	state.configureLearningContext(deriveRetryLearningContext(ctx, ai.ReasoningRequest{UserQuery: "join users and orders"}, "chatgpt", "gpt-5.4"))
+	result, escalated := state.handleRecoverableFailure(ai.ToolCall{Name: "execute_script", Args: map[string]any{}}, errors.New("join mapping unresolved"), nil)
+	if escalated {
+		t.Fatal("did not expect immediate escalation")
+	}
+	if state.pendingRepair == nil || state.pendingRepair.Strategy != ai.RepairStrategyResearchFirst {
+		t.Fatalf("expected scoped research-first learning to win, got %#v", state.pendingRepair)
+	}
+	if !strings.Contains(result.Result, "Repair strategy: research_first") {
+		t.Fatalf("expected retry result to mention research_first, got %q", result.Result)
 	}
 }
 

@@ -130,6 +130,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 	toolResults := make([]ai.ReActToolResult, 0)
 	executedToolCalls := make([]ai.ToolCall, 0)
 	retryState := newOwnedLoopRetryState(l.maxIterations, req.UserQuery, req.CarryoverState)
+	retryState.configureLearningContext(deriveRetryLearningContext(ctx, req, l.generator.Name(), geminiGeneratorModel(l.generator)))
 
 	for iteration := 1; iteration <= retryState.allowedTurns; iteration++ {
 		log.Debug("Gemini owned loop iteration started",

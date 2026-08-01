@@ -39,12 +39,31 @@ type RepairPlan struct {
 }
 
 type RetryLearning struct {
+	Provider            string         `json:"provider,omitempty"`
+	Model               string         `json:"model,omitempty"`
+	RepoScope           string         `json:"repo_scope,omitempty"`
+	DomainScope         string         `json:"domain_scope,omitempty"`
+	TaskClass           string         `json:"task_class,omitempty"`
 	ToolName            string         `json:"tool_name,omitempty"`
 	ErrorPattern        string         `json:"error_pattern,omitempty"`
 	PreferredStrategy   RepairStrategy `json:"preferred_strategy,omitempty"`
 	SuccessCount        int            `json:"success_count,omitempty"`
 	FailureCount        int            `json:"failure_count,omitempty"`
 	LastUsedAtUnixMilli int64          `json:"last_used_at_unix_milli,omitempty"`
+}
+
+type RetryLearningContext struct {
+	Provider    string
+	Model       string
+	RepoScope   string
+	DomainScope string
+	TaskClass   string
+}
+
+type RetryLearningRecommendation struct {
+	Strategy RepairStrategy
+	Score    float64
+	Reason   string
 }
 
 func (rc *RetryCoordinator) IsRecoverableToolError(err error) bool {
@@ -147,8 +166,8 @@ func (rc *RetryCoordinator) ClassifyRepair(toolName string, err error, hint *Too
 	return plan
 }
 
-func (rc *RetryCoordinator) ApplyLearnedStrategy(plan RepairPlan, toolName string, err error, learnings []RetryLearning) RepairPlan {
-	strategy, ok := rc.RecommendStrategy(toolName, err, learnings)
+func (rc *RetryCoordinator) ApplyLearnedStrategy(plan RepairPlan, toolName string, err error, learnings []RetryLearning, context RetryLearningContext) RepairPlan {
+	strategy, ok := rc.RecommendStrategy(toolName, err, learnings, context)
 	if !ok {
 		return plan
 	}
@@ -167,15 +186,57 @@ func (rc *RetryCoordinator) ApplyLearnedStrategy(plan RepairPlan, toolName strin
 	return plan
 }
 
-func (rc *RetryCoordinator) RecommendStrategy(toolName string, err error, learnings []RetryLearning) (RepairStrategy, bool) {
+func (rc *RetryCoordinator) RecommendStrategyDetails(toolName string, err error, learnings []RetryLearning, context RetryLearningContext) (RetryLearningRecommendation, bool) {
 	pattern := rc.ErrorPattern(toolName, err)
-	bestScore := -1
+	bestScore := -1.0
+	var bestStrategy RepairStrategy
+	var matched RetryLearning
+	for _, learning := range learnings {
+		if learning.ToolName != toolName || learning.ErrorPattern != pattern {
+			continue
+		}
+		if !rc.learningMatchesContext(learning, context) {
+			continue
+		}
+		score := rc.learningScore(learning, context)
+		if score > bestScore && learning.SuccessCount > 0 {
+			bestScore = score
+			bestStrategy = learning.PreferredStrategy
+			matched = learning
+		}
+	}
+	if bestScore <= 0 || bestStrategy == "" {
+		return RetryLearningRecommendation{}, false
+	}
+	reasonParts := []string{fmt.Sprintf("prior successes=%d failures=%d", matched.SuccessCount, matched.FailureCount)}
+	if strings.TrimSpace(matched.RepoScope) != "" {
+		reasonParts = append(reasonParts, "repo-scoped")
+	}
+	if strings.TrimSpace(matched.DomainScope) != "" {
+		reasonParts = append(reasonParts, "domain-scoped")
+	}
+	if strings.TrimSpace(matched.TaskClass) != "" {
+		reasonParts = append(reasonParts, "task-class="+matched.TaskClass)
+	}
+	return RetryLearningRecommendation{
+		Strategy: bestStrategy,
+		Score:    bestScore,
+		Reason:   strings.Join(reasonParts, ", "),
+	}, true
+}
+
+func (rc *RetryCoordinator) RecommendStrategy(toolName string, err error, learnings []RetryLearning, context RetryLearningContext) (RepairStrategy, bool) {
+	pattern := rc.ErrorPattern(toolName, err)
+	bestScore := -1.0
 	var bestStrategy RepairStrategy
 	for _, learning := range learnings {
 		if learning.ToolName != toolName || learning.ErrorPattern != pattern {
 			continue
 		}
-		score := learning.SuccessCount - learning.FailureCount
+		if !rc.learningMatchesContext(learning, context) {
+			continue
+		}
+		score := rc.learningScore(learning, context)
 		if score > bestScore && learning.SuccessCount > 0 {
 			bestScore = score
 			bestStrategy = learning.PreferredStrategy
@@ -187,11 +248,14 @@ func (rc *RetryCoordinator) RecommendStrategy(toolName string, err error, learni
 	return bestStrategy, true
 }
 
-func (rc *RetryCoordinator) RecordOutcome(learnings []RetryLearning, toolName string, err error, plan RepairPlan, success bool) []RetryLearning {
+func (rc *RetryCoordinator) RecordOutcome(learnings []RetryLearning, toolName string, err error, plan RepairPlan, success bool, context RetryLearningContext) []RetryLearning {
 	pattern := rc.ErrorPattern(toolName, err)
 	now := time.Now().UnixMilli()
 	for i := range learnings {
 		if learnings[i].ToolName != toolName || learnings[i].ErrorPattern != pattern || learnings[i].PreferredStrategy != plan.Strategy {
+			continue
+		}
+		if !rc.learningMatchesContext(learnings[i], context) {
 			continue
 		}
 		if success {
@@ -203,6 +267,11 @@ func (rc *RetryCoordinator) RecordOutcome(learnings []RetryLearning, toolName st
 		return learnings
 	}
 	learning := RetryLearning{
+		Provider:            strings.TrimSpace(context.Provider),
+		Model:               strings.TrimSpace(context.Model),
+		RepoScope:           strings.TrimSpace(context.RepoScope),
+		DomainScope:         strings.TrimSpace(context.DomainScope),
+		TaskClass:           strings.TrimSpace(context.TaskClass),
 		ToolName:            toolName,
 		ErrorPattern:        pattern,
 		PreferredStrategy:   plan.Strategy,
@@ -250,7 +319,7 @@ func (rc *RetryCoordinator) ErrorPattern(toolName string, err error) string {
 		return strings.TrimSpace(toolName) + ":unknown"
 	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	message = strings.Join(strings.Fields(message), " ")
+	message = rc.normalizeErrorPattern(message)
 	if idx := strings.Index(message, " example fix:"); idx >= 0 {
 		message = strings.TrimSpace(message[:idx])
 	}
@@ -258,6 +327,77 @@ func (rc *RetryCoordinator) ErrorPattern(toolName string, err error) string {
 		message = message[:160]
 	}
 	return strings.TrimSpace(toolName) + ":" + message
+}
+
+func (rc *RetryCoordinator) learningScore(learning RetryLearning, context RetryLearningContext) float64 {
+	if learning.SuccessCount <= 0 {
+		return -1
+	}
+	score := float64(learning.SuccessCount*2 - learning.FailureCount)
+	if strings.TrimSpace(context.RepoScope) != "" && strings.EqualFold(strings.TrimSpace(learning.RepoScope), strings.TrimSpace(context.RepoScope)) {
+		score += 2
+	}
+	if strings.TrimSpace(context.DomainScope) != "" && strings.EqualFold(strings.TrimSpace(learning.DomainScope), strings.TrimSpace(context.DomainScope)) {
+		score += 1.5
+	}
+	if strings.TrimSpace(context.TaskClass) != "" && strings.EqualFold(strings.TrimSpace(learning.TaskClass), strings.TrimSpace(context.TaskClass)) {
+		score += 1
+	}
+	if strings.TrimSpace(context.Model) != "" && strings.EqualFold(strings.TrimSpace(learning.Model), strings.TrimSpace(context.Model)) {
+		score += 0.5
+	}
+	if learning.LastUsedAtUnixMilli > 0 {
+		ageHours := float64(time.Now().UnixMilli()-learning.LastUsedAtUnixMilli) / float64(time.Hour.Milliseconds())
+		if ageHours > 0 {
+			decay := 1.0 / (1.0 + (ageHours / 168.0))
+			score *= decay
+		}
+	}
+	return score
+}
+
+func (rc *RetryCoordinator) learningMatchesContext(learning RetryLearning, context RetryLearningContext) bool {
+	if strings.TrimSpace(learning.Provider) != "" && !strings.EqualFold(strings.TrimSpace(learning.Provider), strings.TrimSpace(context.Provider)) {
+		return false
+	}
+	if strings.TrimSpace(learning.Model) != "" && !strings.EqualFold(strings.TrimSpace(learning.Model), strings.TrimSpace(context.Model)) {
+		return false
+	}
+	if strings.TrimSpace(learning.DomainScope) != "" && !strings.EqualFold(strings.TrimSpace(learning.DomainScope), strings.TrimSpace(context.DomainScope)) {
+		return false
+	}
+	if strings.TrimSpace(learning.RepoScope) != "" && !strings.EqualFold(strings.TrimSpace(learning.RepoScope), strings.TrimSpace(context.RepoScope)) {
+		return false
+	}
+	if strings.TrimSpace(learning.TaskClass) != "" && !strings.EqualFold(strings.TrimSpace(learning.TaskClass), strings.TrimSpace(context.TaskClass)) {
+		return false
+	}
+	return true
+}
+
+func (rc *RetryCoordinator) normalizeErrorPattern(message string) string {
+	message = strings.Join(strings.Fields(message), " ")
+	if strings.HasPrefix(message, "execute_script validation error [") {
+		remainder := strings.TrimPrefix(message, "execute_script validation error [")
+		if closeIdx := strings.Index(remainder, "]:"); closeIdx >= 0 {
+			category := strings.TrimSpace(remainder[:closeIdx])
+			return "validation:" + category
+		}
+	}
+	if strings.Contains(message, "argument '") {
+		start := strings.Index(message, "argument '") + len("argument '")
+		if end := strings.Index(message[start:], "'"); end >= 0 {
+			field := strings.TrimSpace(message[start : start+end])
+			if strings.Contains(message, "missing") {
+				return "argument_missing:" + field
+			}
+			if strings.Contains(message, "not a string") {
+				return "argument_type:" + field
+			}
+		}
+	}
+	message = strings.ReplaceAll(message, "\"<value>\"", "<value>")
+	return message
 }
 
 func (rc *RetryCoordinator) ShouldEscalateToClarification(repairAttempts int) bool {

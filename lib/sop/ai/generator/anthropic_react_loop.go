@@ -64,6 +64,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 	toolResults := make([]ai.ReActToolResult, 0)
 	executedToolCalls := make([]ai.ToolCall, 0)
 	retryState := newOwnedLoopRetryState(l.maxIterations, req.UserQuery, req.CarryoverState)
+	retryState.configureLearningContext(deriveRetryLearningContext(ctx, req, l.generator.Name(), l.generator.model))
 
 	for iteration := 1; iteration <= retryState.allowedTurns; iteration++ {
 		log.Debug("Anthropic owned loop iteration started",

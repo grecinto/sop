@@ -631,19 +631,14 @@ func (m *geminiOwnedLoopFinalTurnGuardrailGenerator) Generate(ctx context.Contex
 		}
 		return ai.GenOutput{ToolCalls: []ai.ToolCall{{Name: "list_stores", Args: map[string]any{}}}}, nil
 	case 2:
-		if len(opts.Tools) == 0 {
-			return ai.GenOutput{Text: "expected adaptive extension turn to still allow tools"}, nil
-		}
-		return ai.GenOutput{ToolCalls: []ai.ToolCall{{Name: "list_stores", Args: map[string]any{}}}}, nil
-	case 3:
 		if len(opts.Tools) != 0 {
 			return ai.GenOutput{Text: fmt.Sprintf("expected final turn tools to be disabled, got %d", len(opts.Tools))}, nil
 		}
 		if !strings.Contains(prompt, "do not call more tools") {
 			return ai.GenOutput{Text: "missing final-turn hard-stop prompt"}, nil
 		}
-		if len(opts.ToolCallContinuations) != 2 {
-			return ai.GenOutput{Text: fmt.Sprintf("expected two continuations on final turn, got %d", len(opts.ToolCallContinuations))}, nil
+		if len(opts.ToolCallContinuations) != 1 {
+			return ai.GenOutput{Text: fmt.Sprintf("expected one continuation on final turn, got %d", len(opts.ToolCallContinuations))}, nil
 		}
 		return ai.GenOutput{Text: "Need one clarification before continuing."}, nil
 	default:
@@ -669,7 +664,7 @@ func TestGeminiOwnedReActLoop_DisablesToolsOnFinalTurn(t *testing.T) {
 	if resp.FinalText != "Need one clarification before continuing." {
 		t.Fatalf("expected clarification text, got %q", resp.FinalText)
 	}
-	if len(resp.ToolCalls) != 2 || resp.ToolCalls[0].Name != "list_stores" || resp.ToolCalls[1].Name != "list_stores" {
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "list_stores" {
 		t.Fatalf("unexpected executed tool calls: %#v", resp.ToolCalls)
 	}
 }

@@ -84,6 +84,7 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 	executedToolCalls := make([]ai.ToolCall, 0)
 	toolResults := make([]ai.ReActToolResult, 0)
 	retryState := newOwnedLoopRetryState(maxIterations, req.UserQuery, req.CarryoverState)
+	retryState.configureLearningContext(deriveRetryLearningContext(ctx, req, l.generator.Name(), l.modelName()))
 
 	for iteration := 1; iteration <= retryState.allowedTurns; iteration++ {
 		if err := ctx.Err(); err != nil {

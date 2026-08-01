@@ -14,6 +14,8 @@ We do **not** force providers through one shared outer loop. Instead:
 - allow a narrow shared-loop path only where it is a natural fit
 - share lower-level policy and helper code whenever that improves consistency without hurting provider efficiency
 
+The design center is still **LLM-as-Orchestrator**. Shared logic should be extracted only after the orchestration authority and policy boundaries are clear.
+
 ## Current Runtime Shape
 
 | Provider / Path | Default Loop Shape | Why |
@@ -39,6 +41,8 @@ These pieces are worth sharing across providers when possible:
 - event normalization helpers
 - common test patterns for retry and escalation semantics
 
+The current retry layer also includes adaptive retry budget and learned retry memory. Those should be modeled as explicit policy surfaces, with LLM-visible guidance by default and heuristic enforcement only where hard guarantees are required.
+
 ## Why Full Outer-Loop Unification Was Rejected
 
 The earlier adapter design was too narrow for some providers because it assumed:
@@ -56,6 +60,36 @@ The shared loop still has value, but its promise is narrow:
 
 - it is for providers compatible with the shared loop model
 - it is not a universal replacement for all provider-owned loops
+
+## LLM as Orchestrator Note
+
+Provider-owned loops are not just a transport decision. They are also where model-visible orchestration context can be preserved most naturally.
+
+The correct direction is:
+
+- design the loop for LAO first
+- identify explicit policy points for retry/recovery behavior
+- keep state tracking and persistence in shared machinery
+- implement each policy point with either LLM-guided recommendations or heuristic/rules enforcement, depending on whether the point is advisory or safety-critical
+
+This keeps the policy layer modular without letting it become a hidden controller.
+
+## Policy Boundary Rule
+
+If a shared component decides overall next-step control flow, it is too high in the stack.
+
+Shared policy code may:
+
+- classify
+- validate
+- recommend
+- enforce bounded rules
+
+Shared policy code should not:
+
+- own the outer retry loop
+- silently replace model choice where the model can reason adequately
+- turn provider-owned loops into thin shells around a heuristic controller
 
 ## Architecture Rule Of Thumb
 
