@@ -605,6 +605,9 @@ type ReasoningResponse struct {
 	ToolCalls      []ToolCall // For audit/logging
 	OutcomeFacts   []string   // Compact grounded facts safe to carry into outer MRU continuity
 	OutcomeRecipes []LearnedRecipe
+	// ClarificationRequest carries a structured clarification handoff emitted by
+	// a loop when one missing fact blocks further progress.
+	ClarificationRequest *ClarificationRequest
 	// CarryoverState lets provider-owned loops return updated continuity metadata,
 	// such as a reusable live conversation handle, without exposing transport
 	// details to the service layer.
@@ -798,6 +801,20 @@ type ClarificationState struct {
 	UserClarification  string
 	EffectiveResumeAsk string
 	Status             string
+	Source             string
+	MissingFact        string
+	Reason             string
+}
+
+// ClarificationRequest carries a structured clarification handoff emitted by a
+// reasoning loop when one missing fact blocks further tool progress.
+type ClarificationRequest struct {
+	TargetQuery       string `json:"target_query,omitempty"`
+	AssistantQuestion string `json:"assistant_question,omitempty"`
+	MissingFact       string `json:"missing_fact,omitempty"`
+	Reason            string `json:"reason,omitempty"`
+	Source            string `json:"source,omitempty"`
+	Status            string `json:"status,omitempty"`
 }
 
 // RetryRewriteState tracks a retry-the-same-ask rewrite through Gate 0.

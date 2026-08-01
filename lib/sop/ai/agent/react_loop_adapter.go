@@ -85,6 +85,7 @@ type ReActLoopAdapter interface {
 		toolResults []ai.ReActToolResult,
 		continuations []ai.ToolCallContinuation,
 		escalationState map[string]any,
+		clarificationRequest *ai.ClarificationRequest,
 	) ai.ReasoningResponse
 
 	// ShouldTerminateEarly checks provider-specific termination conditions.

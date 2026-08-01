@@ -198,6 +198,7 @@ What exists now:
 - Anthropic latest-turn continuation state and repair/final prompt shaping now derive from structured retry guidance rather than relying only on tool-error prose
 - the shared-compatible adapter summary, repair-directive, and ask-anchored MRU helpers now prefer `RetryGuidance` over retry-text parsing when both are available
 - the shared-compatible adapter now also wraps carried tool continuations with structured `react_state` and `retry_guidance`, so strategy consumers do not need to infer retry intent from raw tool-result prose alone
+- clarification handoff is now also structured via `ClarificationRequest`, allowing pending clarification state and resume metadata to persist without relying only on assistant question text heuristics
 - heuristic enforcement for hard rails
 
 What still needs architectural tightening:

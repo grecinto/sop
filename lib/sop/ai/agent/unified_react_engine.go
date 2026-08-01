@@ -75,6 +75,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 		RepairDirective:   "",
 		EscalationState:   nil,
 	}
+	var clarificationRequest *ai.ClarificationRequest
 
 	var pendingRepair *RepairPlan
 	strategy := resolveReActTurnStrategy(req)
@@ -106,7 +107,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 				"iteration", state.Iteration,
 				"adapter", e.Adapter.Name(),
 				"reason", reason)
-			return e.Adapter.BuildFinalResponse("", state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
+			return e.Adapter.BuildFinalResponse("", state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState, clarificationRequest), nil
 		}
 
 		// Prepare LLM request (provider-specific)
@@ -201,10 +202,11 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 					state.ToolResults,
 					state.Continuations,
 					state.EscalationState,
+					clarificationRequest,
 				), nil
 			}
 
-			return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
+			return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState, clarificationRequest), nil
 		}
 
 		// Sanitize tool call arguments (remove markdown artifacts, deobfuscate)
@@ -323,6 +325,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 					Args:          cloneToolEventMap(toolCall.Args),
 					RetryGuidance: retryGuidance,
 				}
+				clarificationRequest = ai.BuildClarificationRequest(req.UserQuery, retryGuidance, "Ask one short clarification question that resolves the ambiguity blocking this tool call.")
 				state.ToolResults = append(state.ToolResults, clarificationResult)
 				state.RepairDirective = "Clarification directive: The last tool failure still remains unresolved after the first repair attempt. Do not call another tool yet. Ask the user one short, concrete clarification question that names the blocker and wait for the answer."
 				pendingRepair = nil
@@ -416,6 +419,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 				state.ToolResults,
 				state.Continuations,
 				state.EscalationState,
+				clarificationRequest,
 			), nil
 		}
 
@@ -427,6 +431,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 				state.ToolResults,
 				state.Continuations,
 				state.EscalationState,
+				clarificationRequest,
 			), nil
 		}
 	}
@@ -452,7 +457,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			"We have reached the maximum number of iterations (%d). "+
 				"Please provide additional guidance to help complete the task.",
 			e.Adapter.MaxIterations())
-		return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
+		return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState, clarificationRequest), nil
 	}
 
 	// Invoke LLM to generate clarification question
@@ -463,7 +468,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			"We have reached the maximum number of iterations (%d). "+
 				"Please provide additional guidance to help complete the task.",
 			e.Adapter.MaxIterations())
-		return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
+		return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState, clarificationRequest), nil
 	}
 
 	// Extract clarification text
@@ -476,7 +481,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			e.Adapter.MaxIterations())
 	}
 
-	return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
+	return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState, clarificationRequest), nil
 }
 
 // getLatestToolHint returns the hint from the most recent tool result, if any.

@@ -221,6 +221,12 @@ func anthropicOwnedLoopResponse(finalText string, toolCalls []ai.ToolCall, toolR
 		OutcomeFacts:   ai.SummarizeOutcomeFacts(toolResults),
 		OutcomeRecipes: ai.SummarizeOutcomeRecipes(toolResults),
 	}
+	if len(toolResults) > 0 {
+		last := toolResults[len(toolResults)-1]
+		if last.RetryGuidance != nil && last.RetryGuidance.ClarificationNeeded {
+			resp.ClarificationRequest = ai.BuildClarificationRequest("", last.RetryGuidance, strings.TrimSpace(finalText))
+		}
+	}
 	if carryState := anthropicOwnedLoopCarryoverState(continuations); carryState != nil {
 		resp.CarryoverState = carryState
 	}

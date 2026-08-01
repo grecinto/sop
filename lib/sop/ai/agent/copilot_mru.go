@@ -201,7 +201,7 @@ func (a *CopilotAgent) clearAskProgressMRU() {
 	a.clearMRUBySourceAndScope(MRUSourceAskProgress, MRUScopeAsk)
 }
 
-func (a *CopilotAgent) epilogueAndCleanup(ctx context.Context, query string, intent string, finalText string, toolCalls []ai.ToolCall, outcomeFacts []string, outcomeRecipes []ai.LearnedRecipe, carryoverState *ai.CarryoverState) {
+func (a *CopilotAgent) epilogueAndCleanup(ctx context.Context, query string, intent string, finalText string, toolCalls []ai.ToolCall, outcomeFacts []string, outcomeRecipes []ai.LearnedRecipe, carryoverState *ai.CarryoverState, clarificationRequest *ai.ClarificationRequest) {
 	// Step OnFinalize hook
 	if step, ok := ctx.Value(ctxKeyActiveStep).(cw.Step); ok && step != nil {
 		if cap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && cap != nil {
@@ -265,7 +265,7 @@ func (a *CopilotAgent) epilogueAndCleanup(ctx context.Context, query string, int
 	}
 	a.persistAskOutcomeMRU(ctx, query, finalText, toolCalls, outcomeFacts)
 	a.clearAskProgressMRU()
-	a.updateClarificationState(ctx, query, finalText, toolCalls)
+	a.updateClarificationState(ctx, query, finalText, toolCalls, clarificationRequest)
 	a.clearRetryRewriteState(ctx)
 
 	mruSnapshot := a.getMRUSnapshot()
@@ -302,9 +302,28 @@ func (a *CopilotAgent) clearRetryRewriteState(ctx context.Context) {
 	}
 }
 
-func (a *CopilotAgent) updateClarificationState(ctx context.Context, query string, finalText string, toolCalls []ai.ToolCall) {
+func (a *CopilotAgent) updateClarificationState(ctx context.Context, query string, finalText string, toolCalls []ai.ToolCall, clarificationRequest *ai.ClarificationRequest) {
 	p := ai.GetSessionPayload(ctx)
 	if p == nil {
+		return
+	}
+	if clarificationRequest != nil {
+		targetQuery := strings.TrimSpace(clarificationRequest.TargetQuery)
+		if targetQuery == "" {
+			targetQuery = strings.TrimSpace(askOutcomeQueryForPersistence(ctx, query))
+		}
+		if targetQuery == "" {
+			targetQuery = strings.TrimSpace(query)
+		}
+		p.ClarificationState = &ai.ClarificationState{
+			TargetQuery:       targetQuery,
+			AssistantQuestion: strings.TrimSpace(clarificationRequest.AssistantQuestion),
+			OriginalUserQuery: strings.TrimSpace(query),
+			Status:            firstNonEmptyStatus(strings.TrimSpace(clarificationRequest.Status), "pending"),
+			Source:            strings.TrimSpace(clarificationRequest.Source),
+			MissingFact:       strings.TrimSpace(clarificationRequest.MissingFact),
+			Reason:            strings.TrimSpace(clarificationRequest.Reason),
+		}
 		return
 	}
 	if strings.TrimSpace(finalText) == "" {
@@ -326,6 +345,15 @@ func (a *CopilotAgent) updateClarificationState(ctx context.Context, query strin
 	if p.ClarificationState != nil {
 		p.ClarificationState = nil
 	}
+}
+
+func firstNonEmptyStatus(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func summarizeAskOutcomeMRU(ctx context.Context, query string, finalText string, toolCalls []ai.ToolCall, outcomeFacts []string) string {

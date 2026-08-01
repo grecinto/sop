@@ -308,7 +308,7 @@ func TestRewriteConversationalMetaAsk_UsesLastAssistantQuestionAndTargetAsk(t *t
 		Scope:    MRUScopeSession,
 	}}
 	ag.service.session.Memory.AddThread(&ConversationThread{ID: sop.NewUUID(), RootPrompt: "Find John orders", Exchanges: []Interaction{{Role: RoleUser, Content: "Find John orders"}, {Role: RoleAssistant, Content: "Wait, join outputs a combined record. Do you want flat joined fields or nested objects?"}}})
-	payload := &ai.SessionPayload{Variables: make(map[string]any), ClarificationState: &ai.ClarificationState{TargetQuery: "Find John orders", AssistantQuestion: "Wait, join outputs a combined record. Do you want flat joined fields or nested objects?", Status: "pending"}}
+	payload := &ai.SessionPayload{Variables: make(map[string]any), ClarificationState: &ai.ClarificationState{TargetQuery: "Find John orders", AssistantQuestion: "Wait, join outputs a combined record. Do you want flat joined fields or nested objects?", Status: "pending", Source: "execute_script", MissingFact: "join mapping", Reason: "retry_policy_requested_clarification"}}
 	ctx := context.WithValue(context.Background(), "session_payload", payload)
 
 	rewritten, ok := ag.rewriteConversationalMetaAsk(ctx, "Flat joined fields. Keep dotted names.")
@@ -326,6 +326,29 @@ func TestRewriteConversationalMetaAsk_UsesLastAssistantQuestionAndTargetAsk(t *t
 	}
 	if payload.ClarificationState.TargetQuery != "Find John orders" || payload.ClarificationState.UserClarification != "Flat joined fields. Keep dotted names." || payload.ClarificationState.Status != "resolved" {
 		t.Fatalf("unexpected explicit clarification state after rewrite: %+v", payload.ClarificationState)
+	}
+	if payload.ClarificationState.Source != "execute_script" || payload.ClarificationState.MissingFact != "join mapping" || payload.ClarificationState.Reason != "retry_policy_requested_clarification" {
+		t.Fatalf("expected structured clarification metadata to survive resume rewrite, got %+v", payload.ClarificationState)
+	}
+}
+
+func TestUpdateClarificationState_UsesStructuredClarificationRequest(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	ag.updateClarificationState(ctx, "Find John orders", "Which field is missing for execute_script?", nil, &ai.ClarificationRequest{
+		TargetQuery:       "Find John orders",
+		AssistantQuestion: "Which field is missing for execute_script?",
+		MissingFact:       "join mapping",
+		Reason:            "retry_policy_requested_clarification",
+		Source:            "execute_script",
+		Status:            "pending",
+	})
+	if payload.ClarificationState == nil {
+		t.Fatal("expected structured clarification state to be set")
+	}
+	if payload.ClarificationState.TargetQuery != "Find John orders" || payload.ClarificationState.MissingFact != "join mapping" || payload.ClarificationState.Source != "execute_script" {
+		t.Fatalf("unexpected structured clarification state: %+v", payload.ClarificationState)
 	}
 }
 
@@ -471,7 +494,7 @@ func TestEpilogueAndCleanup_SetsPendingClarificationState(t *testing.T) {
 	payload := &ai.SessionPayload{Variables: make(map[string]any)}
 	ctx := context.WithValue(context.Background(), "session_payload", payload)
 
-	ag.epilogueAndCleanup(ctx, "Find John orders", ai.IntentOmni, "Before I proceed, which output shape do you want for joined rows: flat dotted fields or nested objects?", nil, nil, nil, nil)
+	ag.epilogueAndCleanup(ctx, "Find John orders", ai.IntentOmni, "Before I proceed, which output shape do you want for joined rows: flat dotted fields or nested objects?", nil, nil, nil, nil, nil)
 
 	if payload.ClarificationState == nil {
 		t.Fatal("expected pending clarification state to be set")
@@ -486,7 +509,7 @@ func TestEpilogueAndCleanup_ClearsPendingClarificationStateOnNormalAnswer(t *tes
 	payload := &ai.SessionPayload{Variables: make(map[string]any), ClarificationState: &ai.ClarificationState{TargetQuery: "Find John orders", AssistantQuestion: "Which output shape?", Status: "pending"}}
 	ctx := context.WithValue(context.Background(), "session_payload", payload)
 
-	ag.epilogueAndCleanup(ctx, "Find John orders", ai.IntentOmni, "Found matching orders.", nil, nil, nil, nil)
+	ag.epilogueAndCleanup(ctx, "Find John orders", ai.IntentOmni, "Found matching orders.", nil, nil, nil, nil, nil)
 
 	if payload.ClarificationState != nil {
 		t.Fatalf("expected pending clarification state to clear on normal answer, got %+v", payload.ClarificationState)
@@ -656,11 +679,12 @@ func TestCopilotPipeline_Phases(t *testing.T) {
 	// --- Phase 5: Delegating to Engine ---
 	// Mock a JSON payload wrapped in code blocks to simulate reasoning layer tool use output
 	fakeGen.Response = "I can definitely help with that. ```json\n[{\"tool\":\"search_space\",\"args\":{}}]\n```"
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, err := ag.reactLoop(ctx, query, fakeGen, prompt)
+	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest, err := ag.reactLoop(ctx, query, fakeGen, prompt)
 	if err != nil {
 		t.Fatalf("Engine delegation failed: %v", err)
 	}
 	_ = escalationState // Test doesn't validate escalation state yet
+	_ = clarificationRequest
 	if carryoverState != nil {
 		t.Fatalf("expected no carryover state from baseline mock delegation path, got %+v", carryoverState)
 	}
@@ -1458,7 +1482,7 @@ func TestEpilogueAndCleanup_FinalAskOutcomeWinsOverAskProgress(t *testing.T) {
 		OutcomeFacts: []string{"list_stores confirmed users schema=id,first_name"},
 	})
 
-	ag.epilogueAndCleanup(context.Background(), "Find John", ai.IntentOmni, "Found John Jones.", []ai.ToolCall{{Name: "execute_script"}}, []string{"execute_script returned: [{\"first_name\":\"John Jones\"}]"}, nil, nil)
+	ag.epilogueAndCleanup(context.Background(), "Find John", ai.IntentOmni, "Found John Jones.", []ai.ToolCall{{Name: "execute_script"}}, []string{"execute_script returned: [{\"first_name\":\"John Jones\"}]"}, nil, nil, nil)
 
 	snapshot := ag.getMRUSnapshot()
 	for _, item := range snapshot {
@@ -1575,7 +1599,7 @@ func TestEpilogueAndCleanup_PersistsMRUSnapshotWithoutSleepCycleLogging(t *testi
 		Invariants: []string{"Preserve valid script slices."},
 		Confidence: 0.95,
 		Source:     "inner_loop_success",
-	}}, nil)
+	}}, nil, nil)
 
 	snapshot := ag.service.session.Memory.GetMRUSnapshot()
 	if len(snapshot) == 0 {
@@ -1648,7 +1672,7 @@ func TestEpilogueAndCleanup_MergesRecipeSnapshotsAcrossAsks(t *testing.T) {
 		Invariants: []string{"Do not switch to unrelated tools before the repair attempt."},
 		Confidence: 0.9,
 		Source:     "inner_loop_success",
-	}}, nil)
+	}}, nil, nil)
 
 	recipeSnapshot := ag.service.session.Memory.GetRecipeSnapshot()
 	if len(recipeSnapshot) != 2 {

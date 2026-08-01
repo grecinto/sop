@@ -311,6 +311,12 @@ func geminiOwnedLoopResponse(finalText string, toolCalls []ai.ToolCall, toolResu
 		OutcomeFacts:   ai.SummarizeOutcomeFacts(toolResults),
 		OutcomeRecipes: ai.SummarizeOutcomeRecipes(toolResults),
 	}
+	if len(toolResults) > 0 {
+		last := toolResults[len(toolResults)-1]
+		if last.RetryGuidance != nil && last.RetryGuidance.ClarificationNeeded {
+			resp.ClarificationRequest = ai.BuildClarificationRequest("", last.RetryGuidance, strings.TrimSpace(finalText))
+		}
+	}
 	if carryState := geminiOwnedLoopCarryoverState(continuations, provider, model, finalText, toolCalls, toolResults); carryState != nil {
 		resp.CarryoverState = carryState
 	}

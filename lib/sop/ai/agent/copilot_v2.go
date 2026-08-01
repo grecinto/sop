@@ -206,7 +206,7 @@ func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.Conf
 	query = a.enrichQueryWithKBResults(query, taskContext)
 
 	// 8. Delegate to Reasoning engine/ReAct loop (same as V1)
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, err := a.reactLoop(ctx, query, gen, fullPrompt)
+	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest, err := a.reactLoop(ctx, query, gen, fullPrompt)
 	if err != nil {
 		return "", err
 	}
@@ -231,7 +231,7 @@ func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.Conf
 	log.Info("Copilot AskV2 Complete", "session_id", sessionID, "response_chars", len(finalText))
 
 	// 10. Epilogue and cleanup (same as V1)
-	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState)
+	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, clarificationRequest)
 
 	return finalText, nil
 }

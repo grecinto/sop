@@ -238,6 +238,7 @@ func (a *CompatibleReActAdapter) BuildFinalResponse(
 	toolResults []ai.ReActToolResult,
 	continuations []ai.ToolCallContinuation,
 	escalationState map[string]any,
+	clarificationRequest *ai.ClarificationRequest,
 ) ai.ReasoningResponse {
 	// Convert to compatible results for compatibility-path helpers.
 	compatibleResults := a.convertToCompatibleResults(toolResults)
@@ -246,13 +247,24 @@ func (a *CompatibleReActAdapter) BuildFinalResponse(
 	if a.EnableObfuscation && finalText != "" {
 		finalText = obfuscation.GlobalObfuscator.DeobfuscateText(finalText)
 	}
+	if clarificationRequest != nil && strings.TrimSpace(finalText) != "" {
+		clarificationRequest = &ai.ClarificationRequest{
+			TargetQuery:       clarificationRequest.TargetQuery,
+			AssistantQuestion: strings.TrimSpace(finalText),
+			MissingFact:       clarificationRequest.MissingFact,
+			Reason:            clarificationRequest.Reason,
+			Source:            clarificationRequest.Source,
+			Status:            clarificationRequest.Status,
+		}
+	}
 
 	return ai.ReasoningResponse{
-		FinalText:       finalText,
-		ToolCalls:       toolCalls,
-		OutcomeFacts:    summarizeOutcomeFacts(compatibleResults),
-		OutcomeRecipes:  summarizeOutcomeRecipes(compatibleResults),
-		EscalationState: escalationState,
+		FinalText:             finalText,
+		ToolCalls:             toolCalls,
+		OutcomeFacts:          summarizeOutcomeFacts(compatibleResults),
+		OutcomeRecipes:        summarizeOutcomeRecipes(compatibleResults),
+		EscalationState:       escalationState,
+		ClarificationRequest:  clarificationRequest,
 	}
 }
 

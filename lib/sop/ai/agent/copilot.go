@@ -3498,7 +3498,7 @@ func (a *CopilotAgent) handleKBDirectDisplay(ctx context.Context, rawQuery strin
 	log.Info("KB routing: Direct display path", "match_count", taskContext.KBMatchCount)
 	a.trackEpisodeMetadata(ctx, intent)
 	response := a.formatKBSearchResultsForDisplay(taskContext.KBSearchResults, taskContext.KBMatchCount)
-	a.epilogueAndCleanup(ctx, rawQuery, intent, response, nil, nil, nil, nil)
+	a.epilogueAndCleanup(ctx, rawQuery, intent, response, nil, nil, nil, nil, nil)
 	return response, nil
 }
 
@@ -3614,7 +3614,7 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	query = a.enrichQueryWithKBResults(query, taskContext)
 
 	// 8. Delegate to Reasoning engine/ReAct loop.
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, err := a.reactLoop(ctx, query, gen, fullPrompt)
+	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest, err := a.reactLoop(ctx, query, gen, fullPrompt)
 	if err != nil {
 		return "", err
 	}
@@ -3639,7 +3639,7 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
 
 	// 10. Epilogue and cleanup
-	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState)
+	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, clarificationRequest)
 
 	return finalText, nil
 }
@@ -4280,7 +4280,7 @@ func (a *CopilotAgent) trackEpisodeMetadata(ctx context.Context, intent string) 
 	}
 }
 
-func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Generator, fullPrompt string) (string, []ai.ToolCall, []string, []ai.LearnedRecipe, *ai.CarryoverState, map[string]any, error) {
+func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Generator, fullPrompt string) (string, []ai.ToolCall, []string, []ai.LearnedRecipe, *ai.CarryoverState, map[string]any, *ai.ClarificationRequest, error) {
 	currentDB := ""
 	if p := ai.GetSessionPayload(ctx); p != nil {
 		currentDB = p.CurrentDB
@@ -4337,7 +4337,7 @@ func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Gener
 
 	resp, err := engine.Run(ctx, req)
 	if err != nil {
-		return "", nil, nil, nil, nil, nil, err
+		return "", nil, nil, nil, nil, nil, nil, err
 	}
 
 	finalText := resp.FinalText
@@ -4345,7 +4345,7 @@ func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Gener
 		finalText = obfuscation.GlobalObfuscator.DeobfuscateText(finalText)
 	}
 
-	return finalText, resp.ToolCalls, resp.OutcomeFacts, resp.OutcomeRecipes, resp.CarryoverState, resp.EscalationState, nil
+	return finalText, resp.ToolCalls, resp.OutcomeFacts, resp.OutcomeRecipes, resp.CarryoverState, resp.EscalationState, resp.ClarificationRequest, nil
 }
 
 func splitProviderAndModel(provider, model string) (string, string) {

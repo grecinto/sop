@@ -1741,6 +1741,9 @@ func TestCompatibleReActEngine_RoutedSameToolRepairEscalatesToClarificationAfter
 	if resp.FinalText != "What content should I mint into the Tasks space?" {
 		t.Fatalf("expected clarification question, got %q", resp.FinalText)
 	}
+	if resp.ClarificationRequest == nil || resp.ClarificationRequest.AssistantQuestion != "What content should I mint into the Tasks space?" {
+		t.Fatalf("expected structured clarification request, got %#v", resp.ClarificationRequest)
+	}
 	// Tier 2B: Now expects 4 generator calls (3 tool attempts + 1 clarification)
 	if gen.calls != 4 {
 		t.Fatalf("expected four generator calls before clarification handoff, got %d", gen.calls)
@@ -1829,6 +1832,12 @@ func TestCompatibleReActEngine_RoutedAmbiguityEscalatesToClarificationAfterFirst
 	}
 	if resp.FinalText != "Which join mapping should I use between users and users_orders: users.key -> users_orders.user_id, or a different relation?" {
 		t.Fatalf("expected clarification question, got %q", resp.FinalText)
+	}
+	if resp.ClarificationRequest == nil || resp.ClarificationRequest.AssistantQuestion != "Which join mapping should I use between users and users_orders: users.key -> users_orders.user_id, or a different relation?" {
+		t.Fatalf("expected structured clarification request for research-to-clarify flow, got %#v", resp.ClarificationRequest)
+	}
+	if resp.ClarificationRequest.Source != "execute_script" {
+		t.Fatalf("expected execute_script clarification source, got %#v", resp.ClarificationRequest)
 	}
 	if gen.calls != 5 {
 		t.Fatalf("expected five generator calls before clarification handoff, got %d", gen.calls)

@@ -642,6 +642,12 @@ func buildFinalResponse(model string, finalText string, toolCalls []ai.ToolCall,
 		OutcomeFacts:   append([]string(nil), ai.SummarizeOutcomeFacts(toolResults)...),
 		OutcomeRecipes: append([]ai.LearnedRecipe(nil), ai.SummarizeOutcomeRecipes(toolResults)...),
 	}
+	if len(toolResults) > 0 {
+		last := toolResults[len(toolResults)-1]
+		if last.RetryGuidance != nil && last.RetryGuidance.ClarificationNeeded {
+			resp.ClarificationRequest = ai.BuildClarificationRequest("", last.RetryGuidance, strings.TrimSpace(finalText))
+		}
+	}
 	if carryState := buildCarryoverState(responseID, conversationID, toolCalls); carryState != nil {
 		carryState.Provider = "chatgpt"
 		carryState.Model = model

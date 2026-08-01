@@ -83,6 +83,36 @@ type RetryGuidance struct {
 	NextAction           ReActNextAction `json:"next_action,omitempty"`
 }
 
+func BuildClarificationRequest(targetQuery string, guidance *RetryGuidance, question string) *ClarificationRequest {
+	question = strings.TrimSpace(question)
+	targetQuery = strings.TrimSpace(targetQuery)
+	if question == "" && guidance == nil {
+		return nil
+	}
+	request := &ClarificationRequest{
+		TargetQuery:       targetQuery,
+		AssistantQuestion: question,
+		Status:            "pending",
+	}
+	if guidance != nil {
+		request.Source = strings.TrimSpace(guidance.ToolName)
+		request.MissingFact = strings.TrimSpace(firstNonEmptyString(guidance.RecommendationReason, guidance.ToolName))
+		if guidance.ClarificationNeeded {
+			request.Reason = "retry_policy_requested_clarification"
+		}
+	}
+	return request
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 type RecoverabilityPolicy interface {
 	IsRecoverable(err error) bool
 }

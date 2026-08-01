@@ -782,6 +782,9 @@ func TestChatGPTOwnedReActLoop_SetsEscalationStateAfterRepeatedRecoverableFailur
 	if resp.EscalationState["failed_tool"] != "execute_script" {
 		t.Fatalf("expected execute_script escalation, got %#v", resp.EscalationState)
 	}
+	if resp.ClarificationRequest == nil || resp.ClarificationRequest.AssistantQuestion != "Which field is missing for execute_script?" {
+		t.Fatalf("expected structured clarification request, got %#v", resp.ClarificationRequest)
+	}
 }
 
 func TestChatGPTOwnedReActLoop_UsesCarryoverRetryLearnings(t *testing.T) {
