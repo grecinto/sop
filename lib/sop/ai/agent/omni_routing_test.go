@@ -103,7 +103,7 @@ func TestOmni_HandoffToAvatar(t *testing.T) {
 	agent.registerTools(ctx)
 
 	// 4. Create ReAct Engine simulating Omni Level Execution
-	engine := &NativeReActEngine{
+	engine := &CompatibleReActEngine{
 		EnableObfuscation: false,
 	}
 
@@ -203,7 +203,7 @@ func TestOmni_RestrictedAvatarTools(t *testing.T) {
 	agent.brain = mockGen
 	agent.registerTools(ctx)
 
-	engine := &NativeReActEngine{EnableObfuscation: false}
+	engine := &CompatibleReActEngine{EnableObfuscation: false}
 	req := ai.ReasoningRequest{
 		SystemPrompt: "You are Omni, route tasks.",
 		UserQuery:    "Please use the avatar.",

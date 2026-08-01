@@ -6,8 +6,9 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
-// ReActLoopAdapter allows providers to customize specific parts of the ReAct loop
-// while inheriting common orchestration, retry logic, and state management.
+// ReActLoopAdapter allows providers that fit the shared loop model to customize
+// specific parts of the ReAct loop while inheriting common orchestration, retry
+// logic, and state management.
 //
 // The unified engine handles:
 //   - Iteration control and loop lifecycle
@@ -22,6 +23,10 @@ import (
 //   - Continuation handling (previous_response_id, message threads, etc)
 //   - Carryover state formatting
 //   - Early termination conditions
+//
+// This interface is intentionally for providers compatible with the shared loop.
+// Providers with transport-native outer-loop semantics can stay on owned loops
+// via ai.ReActLoopProvider plus ai.ReActLoopModeProvider.
 type ReActLoopAdapter interface {
 	// Name returns the adapter identifier (e.g., "chatgpt", "anthropic", "gemini", "native")
 	Name() string
@@ -58,8 +63,7 @@ type ReActLoopAdapter interface {
 	// FormatContinuation builds the continuation payload for the next iteration.
 	// This is provider-specific:
 	//   - ChatGPT: tracks previous_response_id
-	//   - Anthropic: appends to message thread
-	//   - Gemini: accumulates tool call continuations
+	//   - Shared-compatible providers: append provider-specific replay state
 	//   - Native: typically empty (stateless per Ask)
 	//
 	// Returns:

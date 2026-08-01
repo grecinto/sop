@@ -38,6 +38,10 @@ func init() {
 // Name returns the name of the generator.
 func (g *gemini) Name() string { return "gemini" }
 
+// Gemini keeps an owned loop by default so it can preserve Gemini-native
+// continuation shaping and multi-tool turns.
+func (g *gemini) ReActLoopMode() ai.ReActLoopMode { return ai.ReActLoopModeOwned }
+
 func (g *gemini) CarryoverCapability() ai.CarryoverCapability {
 	return ai.CarryoverCapability{
 		Provider:        g.Name(),
@@ -125,6 +129,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 
 	toolResults := make([]ai.ReActToolResult, 0)
 	executedToolCalls := make([]ai.ToolCall, 0)
+	retryState := newOwnedLoopRetryState()
 
 	for iteration := 1; iteration <= l.maxIterations; iteration++ {
 		log.Debug("Gemini owned loop iteration started",
@@ -178,6 +183,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		)
 		if req.Executor == nil || len(output.ToolCalls) == 0 {
 			resp := geminiOwnedLoopResponse(output.Text, executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
+			resp.EscalationState = retryState.escalationState
 			log.Debug("Gemini owned loop completed without more tool calls",
 				"iteration", iteration,
 				"executed_tool_calls", len(executedToolCalls),
@@ -189,14 +195,26 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		}
 
 		for _, toolCall := range output.ToolCalls {
+			if _, deferTool := retryState.shouldDeferTool(toolCall.Name); deferTool {
+				reminder := retryState.reminderResult(toolCall.Name)
+				toolResults = append(toolResults, reminder)
+				continuations = append(continuations, ai.ToolCallContinuation{ToolCall: toolCall, Response: map[string]any{"tool_error": map[string]any{"message": reminder.Result}}})
+				partial := geminiOwnedLoopResponse("", executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
+				partial.EscalationState = retryState.escalationState
+				emitGeminiOwnedLoopHydration(req, partial)
+				continue
+			}
 			emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolCall, ai.BuildToolCallEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), iteration))
 			executedToolCalls = append(executedToolCalls, toolCall)
-			toolResult, continuation := executeGeminiOwnedLoopToolCall(ctx, req, iteration, l.maxIterations, toolCall)
+			toolResult, continuation := executeGeminiOwnedLoopToolCall(ctx, req, iteration, l.maxIterations, toolCall, retryState, toolResults)
 			toolResults = append(toolResults, toolResult)
 			continuations = append(continuations, continuation)
-			emitGeminiOwnedLoopHydration(req, geminiOwnedLoopResponse("", executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator)))
+			partial := geminiOwnedLoopResponse("", executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
+			partial.EscalationState = retryState.escalationState
+			emitGeminiOwnedLoopHydration(req, partial)
 			if shouldShortCircuitGeminiOwnedLoopOnToolHint(toolResult.Hint) {
 				resp := geminiOwnedLoopResponse(toolResult.Result, executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
+				resp.EscalationState = retryState.escalationState
 				log.Warn("Gemini owned loop short-circuited on terminal tool hint",
 					"iteration", iteration,
 					"tool", toolCall.Name,
@@ -223,6 +241,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 				"reason":    "repeated_validation_errors",
 			})
 			resp := geminiOwnedLoopResponse(errorMsg, executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
+			resp.EscalationState = retryState.escalationState
 			emitGeminiOwnedLoopHydration(req, resp)
 			return resp, nil
 		}
@@ -263,6 +282,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		return ai.ReasoningResponse{}, fmt.Errorf("final generation failed: %w", err)
 	}
 	resp := geminiOwnedLoopResponse(output.Text, executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
+	resp.EscalationState = retryState.escalationState
 	log.Debug("Gemini owned loop finished on final turn",
 		"executed_tool_calls", len(executedToolCalls),
 		"outcome_facts", len(resp.OutcomeFacts),
@@ -618,7 +638,7 @@ func cloneGeminiToolArgs(args map[string]any) map[string]any {
 	return cloned
 }
 
-func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest, iteration, maxIterations int, toolCall ai.ToolCall) (ai.ReActToolResult, ai.ToolCallContinuation) {
+func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest, iteration, maxIterations int, toolCall ai.ToolCall, retryState *ownedLoopRetryState, existingResults []ai.ReActToolResult) (ai.ReActToolResult, ai.ToolCallContinuation) {
 	log.Debug("Gemini owned loop executing tool",
 		"iteration", iteration,
 		"tool", toolCall.Name,
@@ -632,6 +652,30 @@ func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest
 	rawResult, execErr := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
 	resultText, hint, filePath, fileSize := unwrapGeminiToolResultEnvelopeFull(rawResult)
 	continuationResponse := coerceGeminiToolContinuationResponse(rawResult)
+	effectiveErr := execErr
+	if effectiveErr == nil && toolResultSignalsRecoverableFailure(resultText) {
+		effectiveErr = fmt.Errorf("%s", strings.TrimSpace(resultText))
+	}
+	if effectiveErr != nil && retryState != nil && retryState.coordinator.IsRecoverableToolError(effectiveErr) {
+		result, _ := retryState.handleRecoverableFailure(toolCall, effectiveErr, existingResults)
+		result.Hint = cloneGeminiToolProgressHint(hint)
+		result.ExecutionMode = ai.ReActToolResultExecutionModeStructuredSummary
+		continuationResponse = map[string]any{
+			"tool_error": map[string]any{
+				"message": result.Result,
+			},
+		}
+		if shouldStreamGeminiToolResult(req, iteration >= maxIterations) {
+			emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), result.Result, cloneGeminiToolProgressHint(hint), iteration, filePath, fileSize))
+		}
+		if execErr != nil {
+			emitGeminiOwnedLoopEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneGeminiToolArgs(toolCall.Args), execErr, iteration))
+		}
+		return result, ai.ToolCallContinuation{
+			ToolCall: toolCall,
+			Response: continuationResponse,
+		}
+	}
 	if execErr != nil {
 		log.Warn("Gemini owned loop tool execution failed",
 			"iteration", iteration,
@@ -651,6 +695,9 @@ func executeGeminiOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest
 			},
 		}
 	} else {
+		if retryState != nil && effectiveErr == nil {
+			retryState.completeSuccessfulTool(toolCall.Name)
+		}
 		log.Debug("Gemini owned loop tool execution completed",
 			"iteration", iteration,
 			"tool", toolCall.Name,

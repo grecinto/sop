@@ -83,6 +83,7 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 
 	executedToolCalls := make([]ai.ToolCall, 0)
 	toolResults := make([]ai.ReActToolResult, 0)
+	retryState := newOwnedLoopRetryState()
 
 	for iteration := 1; iteration <= maxIterations; iteration++ {
 		if err := ctx.Err(); err != nil {
@@ -105,12 +106,13 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 		// No tool calls — final answer reached.
 		if req.Executor == nil || len(toolCalls) == 0 {
 			resp := buildFinalResponse(l.modelName(), openAIResponseFinalText(response), executedToolCalls, toolResults, response.ID, conversationIDFromResponse(response))
+			resp.EscalationState = retryState.escalationState
 			emitChatGPTOwnedLoopHydration(req, resp)
 			return resp, nil
 		}
 
 		// Execute tool calls and build continuation input for the next turn.
-		toolOutputItems, newExecuted, newResults := executeToolCalls(ctx, req, iteration, maxIterations, toolCalls)
+		toolOutputItems, newExecuted, newResults := executeToolCalls(ctx, req, iteration, maxIterations, toolCalls, retryState, toolResults)
 		if err := ctx.Err(); err != nil {
 			return ai.ReasoningResponse{}, err
 		}
@@ -118,18 +120,20 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 		toolResults = append(toolResults, newResults...)
 
 		partial := buildFinalResponse(l.modelName(), "", executedToolCalls, toolResults, response.ID, conversationIDFromResponse(response))
+		partial.EscalationState = retryState.escalationState
 		emitChatGPTOwnedLoopHydration(req, partial)
 
 		request = buildContinuationRequest(l.modelName(), req, request, response, toolOutputItems)
 
 		// Force tool continuation if task requires more steps
-		if iteration < maxIterations && needsToolContinuation(req.UserQuery, toolResults) {
+		if iteration < maxIterations && needsToolContinuation(req.UserQuery, toolResults) && !strings.Contains(toolResults[len(toolResults)-1].Result, "Clarification required:") {
 			request.ToolChoice = buildToolChoiceForceCall(request.Tools)
 		}
 	}
 
 	finalText := openAIResponseFinalText(openAIResponsesResponse{OutputText: "I reached the tool-step limit while trying to answer. I’ll provide the best answer I can from the information gathered so far."})
 	resp := buildFinalResponse(l.modelName(), finalText, executedToolCalls, toolResults, "", "")
+	resp.EscalationState = retryState.escalationState
 	emitChatGPTOwnedLoopHydration(req, resp)
 	return resp, nil
 }
@@ -474,7 +478,7 @@ func sanitizeRequiredField(value any) any {
 //   - toolOutputItems: input items for the next Responses API request
 //   - executed: tool calls that were run
 //   - results: tool result records for carryover / outcome tracking
-func executeToolCalls(ctx context.Context, req ai.ReasoningRequest, iteration, maxIterations int, toolCalls []ai.ToolCall) ([]openAIResponsesInputItem, []ai.ToolCall, []ai.ReActToolResult) {
+func executeToolCalls(ctx context.Context, req ai.ReasoningRequest, iteration, maxIterations int, toolCalls []ai.ToolCall, retryState *ownedLoopRetryState, existingResults []ai.ReActToolResult) ([]openAIResponsesInputItem, []ai.ToolCall, []ai.ReActToolResult) {
 	outputItems := make([]openAIResponsesInputItem, 0, len(toolCalls))
 	executed := make([]ai.ToolCall, 0, len(toolCalls))
 	results := make([]ai.ReActToolResult, 0, len(toolCalls))
@@ -484,9 +488,19 @@ func executeToolCalls(ctx context.Context, req ai.ReasoningRequest, iteration, m
 			break
 		}
 		toolCall = normalizeChatGPTWrappedToolCall(toolCall)
+		if _, deferTool := retryState.shouldDeferTool(toolCall.Name); deferTool {
+			reminder := retryState.reminderResult(toolCall.Name)
+			results = append(results, reminder)
+			outputItems = append(outputItems, openAIResponsesInputItem{
+				Type:   "function_call_output",
+				CallID: strings.TrimSpace(toolCall.NativeID),
+				Output: summarizeChatGPTContinuationToolOutput(toolCall.Name, reminder.Result, ai.ReActToolResultExecutionModeStructuredSummary),
+			})
+			continue
+		}
 		emitChatGPTOwnedLoopEvent(req, ai.ReasoningEventToolCall, ai.BuildToolCallEvent(toolCall.Name, cloneChatGPTToolArgs(toolCall.Args), iteration))
 		executed = append(executed, toolCall)
-		result, outputItem := executeSingleToolCall(ctx, req, iteration, toolCall, iteration >= maxIterations)
+		result, outputItem := executeSingleToolCall(ctx, req, iteration, toolCall, iteration >= maxIterations, retryState, append(existingResults, results...))
 		results = append(results, result)
 		outputItems = append(outputItems, outputItem)
 	}
@@ -534,7 +548,7 @@ func normalizeChatGPTWrappedToolCall(toolCall ai.ToolCall) ai.ToolCall {
 	}
 }
 
-func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iteration int, toolCall ai.ToolCall, finalToolResult bool) (ai.ReActToolResult, openAIResponsesInputItem) {
+func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iteration int, toolCall ai.ToolCall, finalToolResult bool, retryState *ownedLoopRetryState, existingResults []ai.ReActToolResult) (ai.ReActToolResult, openAIResponsesInputItem) {
 	execCtx := context.WithValue(ctx, ai.CtxKeyNativeToolHints, true)
 	if req.Streamer != nil {
 		execCtx = context.WithValue(execCtx, ai.CtxKeyEventStreamer, req.Streamer)
@@ -542,6 +556,30 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 
 	rawResult, execErr := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
 	resultText, hint, filePath, fileSize := unwrapChatGPTToolResultEnvelopeFull(rawResult)
+	effectiveErr := execErr
+	if effectiveErr == nil && toolResultSignalsRecoverableFailure(resultText) {
+		effectiveErr = fmt.Errorf("%s", strings.TrimSpace(resultText))
+	}
+
+	if effectiveErr != nil && retryState != nil && retryState.coordinator.IsRecoverableToolError(effectiveErr) {
+		result, _ := retryState.handleRecoverableFailure(toolCall, effectiveErr, existingResults)
+		result.ResultFile = filePath
+		result.ResultSize = fileSize
+		result.ExecutionMode = selectToolResultExecutionMode(toolCall.Name, finalToolResult)
+		result.Hint = cloneChatGPTToolProgressHint(hint)
+		result.Args = cloneChatGPTToolArgs(toolCall.Args)
+		if shouldStreamChatGPTToolResult(req, finalToolResult) {
+			emitChatGPTOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneChatGPTToolArgs(toolCall.Args), result.Result, cloneChatGPTToolProgressHint(hint), iteration, filePath, fileSize))
+		}
+		if execErr != nil {
+			emitChatGPTOwnedLoopEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneChatGPTToolArgs(toolCall.Args), execErr, iteration))
+		}
+		return result, openAIResponsesInputItem{
+			Type:   "function_call_output",
+			CallID: strings.TrimSpace(toolCall.NativeID),
+			Output: summarizeChatGPTContinuationToolOutput(toolCall.Name, result.Result, result.ExecutionMode),
+		}
+	}
 
 	if execErr != nil {
 		resultText = execErr.Error()
@@ -554,6 +592,9 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 	}
 
 	executionMode := selectToolResultExecutionMode(toolCall.Name, finalToolResult)
+	if retryState != nil && effectiveErr == nil {
+		retryState.completeSuccessfulTool(toolCall.Name)
+	}
 
 	return ai.ReActToolResult{
 			Name:          toolCall.Name,
@@ -569,6 +610,10 @@ func executeSingleToolCall(ctx context.Context, req ai.ReasoningRequest, iterati
 }
 
 func summarizeChatGPTContinuationToolOutput(toolName, resultText string, executionMode ai.ReActToolResultExecutionMode) string {
+	trimmed := strings.TrimSpace(resultText)
+	if strings.Contains(trimmed, "Retry instruction:") || strings.Contains(trimmed, "Clarification required:") || strings.Contains(trimmed, "Tool execution error:") {
+		return trimmed
+	}
 	return SummarizeToolResultForLLM(toolName, resultText, executionMode)
 }
 

@@ -2303,7 +2303,7 @@ func (s *Service) resolveGeneratorAndCarryoverWithRequest(ctx context.Context, g
 
 // executeReasoningEngineWithRequest is the explicit-parameter version with explicit executor and streamer
 func (s *Service) executeReasoningEngineWithRequest(ctx context.Context, query string, prompts *promptInputs, genCfg *generatorConfig, db *database.Database, executor ai.ToolExecutor, eventStreamer func(string, any), verbose bool) (ai.ReasoningResponse, error) {
-	engine := &NativeReActEngine{
+	engine := &CompatibleReActEngine{
 		EnableObfuscation: s.EnableObfuscation,
 	}
 

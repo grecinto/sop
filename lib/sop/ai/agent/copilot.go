@@ -4292,7 +4292,7 @@ func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Gener
 	}
 
 	// Active Implementation: Native Tools (API-level tool calling)
-	engine := &NativeReActEngine{
+	engine := &CompatibleReActEngine{
 		EnableObfuscation: a.shouldObfuscate(currentDB),
 	}
 

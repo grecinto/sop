@@ -29,7 +29,7 @@ func (a *CopilotAgent) executeAvatarSubAgent(ctx context.Context, avatarName, ta
 
 	avatarPrompt := a.buildAvatarPrompt(ctx, avatarName, taskContext, customPersona, allowedTools)
 
-	engine := &NativeReActEngine{
+	engine := &CompatibleReActEngine{
 		EnableObfuscation: false, // Inherit or check ctx if needed
 	}
 

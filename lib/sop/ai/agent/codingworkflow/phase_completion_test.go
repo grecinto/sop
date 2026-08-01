@@ -205,6 +205,22 @@ func TestPhaseCapture_CompleteStatusTriggersNotice(t *testing.T) {
 	}
 }
 
+func TestPhaseCapture_RejectsCompleteWithoutRequiredCriteria(t *testing.T) {
+	sharedInfra := NewDefaultSharedInfrastructure()
+	capability := NewIntakePhaseCapability(sharedInfra)
+
+	_, err := capability.runCapture(map[string]any{
+		"summary": "User wants authentication",
+		"status":  "complete",
+	})
+	if err == nil {
+		t.Fatal("expected validation error when marking intake complete without requirements")
+	}
+	if !strings.Contains(err.Error(), "requires at least 1 requirement") {
+		t.Fatalf("expected missing requirements validation error, got %v", err)
+	}
+}
+
 // TestHandoff_IncludesPreviousPhaseContext verifies that handoff prompts include context from previous phases
 func TestHandoff_IncludesPreviousPhaseContext(t *testing.T) {
 	sharedInfra := NewDefaultSharedInfrastructure()

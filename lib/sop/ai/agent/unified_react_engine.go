@@ -74,6 +74,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 	}
 
 	var pendingRepair *RepairPlan
+	strategy := resolveReActTurnStrategy(req)
 
 	// Main ReAct iteration loop
 	for state.Iteration = 1; state.Iteration <= e.Adapter.MaxIterations(); state.Iteration++ {
@@ -87,9 +88,9 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			return ai.ReasoningResponse{}, fmt.Errorf("request canceled during iteration %d: %w", state.Iteration, ctx.Err())
 		default:
 		}
-		
+
 		emitVerboseProgress(ctx, "Reasoning iteration %d of %d.", state.Iteration, e.Adapter.MaxIterations())
-		
+
 		log.Info("Unified ReAct Iteration",
 			"iteration", state.Iteration,
 			"adapter", e.Adapter.Name(),
@@ -111,8 +112,29 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			return ai.ReasoningResponse{}, fmt.Errorf("failed to prepare LLM request: %w", err)
 		}
 
+		turn := ai.ReActTurn{
+			Iteration:       state.Iteration,
+			UserQuery:       req.UserQuery,
+			RepairDirective: state.RepairDirective,
+			LoopState: ai.ReActLoopState{
+				Iteration:             state.Iteration,
+				AllowedIterations:     e.Adapter.MaxIterations(),
+				MaxIterations:         e.Adapter.MaxIterations(),
+				RemainingToolCalls:    max(0, e.Adapter.MaxIterations()-state.Iteration+1),
+				ToolResults:           append([]ai.ReActToolResult(nil), state.ToolResults...),
+				ToolCallContinuations: append([]ai.ToolCallContinuation(nil), state.Continuations...),
+			},
+			Options:     opts,
+			ToolResults: append([]ai.ReActToolResult(nil), state.ToolResults...),
+			FinalTurn:   state.Iteration == e.Adapter.MaxIterations(),
+		}
+		if shouldBypassReActPrompt(strategy, turn) {
+			prompt = ""
+		}
+		prompt, opts = prepareReActTurn(ctx, strategy, turn, prompt)
+
 		emitVerboseProgress(ctx, "Waiting for model response.")
-		
+
 		// Invoke LLM (provider-specific)
 		output, err := e.Adapter.InvokeLLM(ctx, prompt, opts, req)
 		if err != nil {
@@ -161,12 +183,12 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 		// No tool calls → final response
 		if req.Executor == nil || len(toolCalls) == 0 {
 			emitVerboseProgress(ctx, "No further tools required; preparing final answer.")
-			
+
 			log.Info("Unified ReAct Engine Final Response (no tool calls)",
 				"iteration", state.Iteration,
 				"adapter", e.Adapter.Name(),
 				"text_chars", len(finalText))
-			
+
 			// Check if we should preserve structured result
 			if e.shouldPreserveStructuredResult(ctx, state.ToolResults) {
 				lastResult := state.ToolResults[len(state.ToolResults)-1]
@@ -178,7 +200,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 					state.EscalationState,
 				), nil
 			}
-			
+
 			return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState), nil
 		}
 
@@ -193,7 +215,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 		// Validate tool call against pending repair
 		if pendingRepair != nil && !e.RetryCoordinator.AllowsTool(*pendingRepair, toolCall.Name) {
 			emitVerboseProgress(ctx, "Tool `%s` must be corrected before other actions.", pendingRepair.ToolName)
-			
+
 			log.Warn("Unified ReAct Engine Deferred Non-Repair Tool Call",
 				"expected_tool", pendingRepair.ToolName,
 				"received_tool", toolCall.Name,
@@ -212,7 +234,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 
 		// Execute tool
 		emitVerboseProgress(ctx, "Calling tool `%s`.", toolCall.Name)
-		
+
 		log.Info("Unified ReAct Engine Tool Call",
 			"iteration", state.Iteration,
 			"adapter", e.Adapter.Name(),
@@ -228,7 +250,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 		if err != nil {
 			// Emit tool error event
 			emitReasoningEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), err, state.Iteration))
-			
+
 			// Check if error is recoverable
 			if !e.RetryCoordinator.IsRecoverableToolError(err) {
 				log.Error("Unified ReAct Engine Unrecoverable Tool Failure",
@@ -266,7 +288,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			// Tier 3 (Clarify) → escalate to phase succession
 			if tier == RetryTierClarify {
 				emitVerboseProgress(ctx, "Tier 3 (Clarify): Escalating to user after %d failures.", currentFailureCount)
-				
+
 				log.Warn("Unified ReAct Engine Tier 3 Escalation",
 					"tool", toolCall.Name,
 					"adapter", e.Adapter.Name(),
@@ -370,7 +392,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 
 		// Format continuation for next iteration (provider-specific)
 		state.Continuations = e.Adapter.FormatContinuation(toolCall, successResult, state.Continuations)
-		
+
 		// Check for short-circuit on terminal hints
 		if shouldShortCircuitAskLoopOnToolHint(hint) {
 			emitVerboseProgress(ctx, "Tool `%s` reported a terminal hard error; short-circuiting the Ask loop.", toolCall.Name)
@@ -382,7 +404,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 				state.EscalationState,
 			), nil
 		}
-		
+
 		// Check if we should preserve structured result
 		if e.shouldPreserveStructuredResult(ctx, state.ToolResults) {
 			return e.Adapter.BuildFinalResponse(
@@ -397,7 +419,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 
 	// Reached max iterations → invoke LLM one more time for clarification
 	emitVerboseProgress(ctx, "Reached retry cap; switching to clarification.")
-	
+
 	log.Warn("Unified ReAct Engine Reached Max Iterations",
 		"adapter", e.Adapter.Name(),
 		"max_iterations", e.Adapter.MaxIterations())
@@ -457,32 +479,32 @@ func (e *UnifiedReActEngine) wasResearchRecentlyDone(toolResults []ai.ReActToolR
 	if len(toolResults) < 2 {
 		return false
 	}
-	
+
 	// Look backwards through tool results for the pattern:
 	// 1. Failed tool with error
 	// 2. Followed by successful list_stores
 	for i := len(toolResults) - 1; i >= 0; i-- {
 		result := toolResults[i]
-		
+
 		// Check if this is a successful list_stores result
 		if result.Name == "list_stores" && !strings.Contains(strings.ToLower(result.Result), "error") {
 			// Check if there was a failure of our tool before this research
 			for j := i - 1; j >= 0 && j >= i-3; j-- {
 				prevResult := toolResults[j]
-				if prevResult.Name == failedTool && 
-					(strings.Contains(prevResult.Result, "Retry instruction:") || 
-					 strings.Contains(prevResult.Result, "Tool execution error:")) {
+				if prevResult.Name == failedTool &&
+					(strings.Contains(prevResult.Result, "Retry instruction:") ||
+						strings.Contains(prevResult.Result, "Tool execution error:")) {
 					return true
 				}
 			}
 		}
-		
+
 		// Only look back a limited number of results
 		if i < len(toolResults)-6 {
 			break
 		}
 	}
-	
+
 	return false
 }
 
@@ -525,7 +547,7 @@ func (e *UnifiedReActEngine) convertRepairPlanToNative(plan RepairPlan) pendingT
 	default:
 		strategy = nativeRepairStrategySameTool
 	}
-	
+
 	return pendingToolRepair{
 		ToolName:       plan.ToolName,
 		Strategy:       strategy,

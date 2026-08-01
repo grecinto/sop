@@ -2,7 +2,9 @@ package generator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,6 +63,27 @@ func TestAnthropicGenerate_BasicTextGeneration(t *testing.T) {
 
 	// For now, skip the actual call and verify the types and structure verified
 	t.Skip("Skipping actual HTTP call - types and structure verified")
+}
+
+func TestAnthropicReActLoopMode_DefaultsToOwned(t *testing.T) {
+	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022"}
+	if got := gen.ReActLoopMode(); got != ai.ReActLoopModeOwned {
+		t.Fatalf("expected owned loop mode, got %q", got)
+	}
+}
+
+func TestAnthropicReActLoop_DefaultsToOwnedLoop(t *testing.T) {
+	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022"}
+	loop, ok := gen.ReActLoop().(anthropicOwnedReActLoop)
+	if !ok {
+		t.Fatalf("expected anthropic owned loop, got %#v", gen.ReActLoop())
+	}
+	if loop.generator != gen {
+		t.Fatalf("expected owned loop to retain generator pointer, got %#v", loop.generator)
+	}
+	if loop.maxIterations != 5 {
+		t.Fatalf("expected default Anthropic owned loop budget to be 5, got %d", loop.maxIterations)
+	}
 }
 
 func TestAnthropicGenerate_WithTools(t *testing.T) {
@@ -684,4 +707,135 @@ func TestAnthropicGenerate_FollowsExplicitParameterDesign(t *testing.T) {
 	// Temperature would be set from opts.Temperature (explicit)
 	// Nothing extracted from Context!
 	t.Log("✅ Verified: All parameters passed explicitly through opts, not Context")
+}
+
+type anthropicOwnedLoopRetryExecutor struct{}
+
+func (e *anthropicOwnedLoopRetryExecutor) Execute(ctx context.Context, tool string, args map[string]any) (string, error) {
+	_ = ctx
+	_ = tool
+	_ = args
+	return "", errors.New("missing required field")
+}
+
+func (e *anthropicOwnedLoopRetryExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	_ = ctx
+	return []ai.ToolDefinition{{Name: "execute_script"}}, nil
+}
+
+func TestExecuteAnthropicOwnedLoopToolCall_FormatsRecoverableRetryResult(t *testing.T) {
+	result, continuation := executeAnthropicOwnedLoopToolCall(
+		context.Background(),
+		ai.ReasoningRequest{Executor: &anthropicOwnedLoopRetryExecutor{}},
+		1,
+		5,
+		ai.ToolCall{Name: "execute_script", Args: map[string]any{"script": []any{map[string]any{"op": "scan"}}}},
+		newOwnedLoopRetryState(),
+		nil,
+	)
+	if !strings.Contains(result.Result, "Retry instruction:") {
+		t.Fatalf("expected retry instruction in recoverable Anthropic tool result, got %q", result.Result)
+	}
+	response, ok := continuation.Response.(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured continuation response, got %#v", continuation.Response)
+	}
+	toolErr, ok := response["tool_error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool_error continuation envelope, got %#v", response)
+	}
+	message, _ := toolErr["message"].(string)
+	if !strings.Contains(message, "Retry instruction:") {
+		t.Fatalf("expected retry instruction in continuation message, got %q", message)
+	}
+}
+
+type anthropicOwnedLoopRepairEnforcementGenerator struct {
+	calls int
+}
+
+func (m *anthropicOwnedLoopRepairEnforcementGenerator) Name() string {
+	return "anthropic_owned_loop_repair_enforcement_test"
+}
+
+func (m *anthropicOwnedLoopRepairEnforcementGenerator) EstimateCost(inTokens, outTokens int) float64 {
+	return 0
+}
+
+func (m *anthropicOwnedLoopRepairEnforcementGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
+}
+
+func (m *anthropicOwnedLoopRepairEnforcementGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	_ = ctx
+	_ = prompt
+	m.calls++
+	switch m.calls {
+	case 1:
+		return ai.GenOutput{ToolCalls: []ai.ToolCall{{Name: "mint_to_space", Args: map[string]any{"space": "Tasks"}}}}, nil
+	case 2:
+		return ai.GenOutput{ToolCalls: []ai.ToolCall{{Name: "list_stores", Args: map[string]any{}}}}, nil
+	case 3:
+		if len(opts.ToolCallContinuations) == 0 {
+			return ai.GenOutput{Text: "missing repair continuation"}, nil
+		}
+		last := opts.ToolCallContinuations[len(opts.ToolCallContinuations)-1]
+		response, ok := last.Response.(map[string]any)
+		if !ok {
+			return ai.GenOutput{Text: "unexpected continuation envelope"}, nil
+		}
+		toolErr, _ := response["tool_error"].(map[string]any)
+		message, _ := toolErr["message"].(string)
+		if !strings.Contains(message, "Repair required before continuing") {
+			return ai.GenOutput{Text: "missing repair reminder"}, nil
+		}
+		return ai.GenOutput{ToolCalls: []ai.ToolCall{{Name: "mint_to_space", Args: map[string]any{"space": "Tasks", "content": "sample task"}}}}, nil
+	case 4:
+		return ai.GenOutput{Text: "Final answer: Added sample task to Tasks."}, nil
+	default:
+		return ai.GenOutput{Text: "unexpected extra call"}, nil
+	}
+}
+
+type anthropicOwnedLoopRepairEnforcementExecutor struct {
+	callCount int
+	tools     []string
+}
+
+func (e *anthropicOwnedLoopRepairEnforcementExecutor) Execute(ctx context.Context, tool string, args map[string]any) (string, error) {
+	_ = ctx
+	_ = args
+	e.callCount++
+	e.tools = append(e.tools, tool)
+	if e.callCount == 1 {
+		return "", errors.New("argument 'content' is missing or not a string")
+	}
+	return `{"tool_result":"ok"}`, nil
+}
+
+func (e *anthropicOwnedLoopRepairEnforcementExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	_ = ctx
+	return []ai.ToolDefinition{{Name: "mint_to_space"}, {Name: "list_stores"}}, nil
+}
+
+func TestAnthropicOwnedLoop_RequiresRepairBeforeSwitchingTools(t *testing.T) {
+	retryState := newOwnedLoopRetryState()
+	toolCall := ai.ToolCall{Name: "mint_to_space", Args: map[string]any{"space": "Tasks"}}
+	result, escalated := retryState.handleRecoverableFailure(toolCall, errors.New("argument 'content' is missing or not a string"), nil)
+	if escalated {
+		t.Fatal("did not expect clarification escalation on first recoverable failure")
+	}
+	if !strings.Contains(result.Result, "Retry instruction:") {
+		t.Fatalf("expected retry instruction in recoverable result, got %q", result.Result)
+	}
+	if _, deferTool := retryState.shouldDeferTool("list_stores"); !deferTool {
+		t.Fatal("expected unrelated tool to be deferred while repair is pending")
+	}
+	if _, deferTool := retryState.shouldDeferTool("mint_to_space"); deferTool {
+		t.Fatal("expected pending repair tool to remain allowed")
+	}
+	reminder := retryState.reminderResult("list_stores")
+	if !strings.Contains(reminder.Result, "Repair required before continuing") {
+		t.Fatalf("expected repair reminder, got %q", reminder.Result)
+	}
 }

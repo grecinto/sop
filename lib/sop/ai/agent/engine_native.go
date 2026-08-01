@@ -15,8 +15,13 @@ import (
 	"github.com/sharedcode/sop/ai/obfuscation"
 )
 
-// NativeReActEngine implements ReasoningEngine using native LLM API tool calling.
-type NativeReActEngine struct {
+// CompatibleReActEngine is the reserved shared/default serial ReAct path.
+//
+// It is not the active outer-loop shape for the currently supported provider-owned
+// providers (ChatGPT, Gemini, Anthropic). It is maintained for providers that may
+// fit the shared compatible behavior in the future, and still acts as the dispatcher
+// entry point that can delegate to provider-owned loops when required.
+type CompatibleReActEngine struct {
 	EnableObfuscation bool
 	MaxTokens         int
 }
@@ -90,7 +95,7 @@ const (
 type progressSink func(string)
 
 // Run executes the orchestration loop relying on native tool calls.
-func (e *NativeReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
+func (e *CompatibleReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
 	// Initialize file-backed tool result storage for this session (all engines)
 	storage := getOrCreateToolResultStorage(ctx)
 	if storage != nil {
@@ -114,7 +119,22 @@ func (e *NativeReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (a
 	return resp, err
 }
 
+func resolveReActLoopMode(req ai.ReasoningRequest) ai.ReActLoopMode {
+	if provider, ok := req.Generator.(ai.ReActLoopModeProvider); ok {
+		if mode := provider.ReActLoopMode(); mode != "" {
+			return mode
+		}
+	}
+	if _, ok := req.Generator.(ai.ReActLoopProvider); ok {
+		return ai.ReActLoopModeOwned
+	}
+	return ai.ReActLoopModeShared
+}
+
 func resolveOwnedReActLoop(req ai.ReasoningRequest) ai.ReActLoop {
+	if resolveReActLoopMode(req) != ai.ReActLoopModeOwned {
+		return nil
+	}
 	provider, ok := req.Generator.(ai.ReActLoopProvider)
 	if !ok {
 		return nil
@@ -122,9 +142,8 @@ func resolveOwnedReActLoop(req ai.ReasoningRequest) ai.ReActLoop {
 	return provider.ReActLoop()
 }
 
-func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
-	// Phase 2: Use unified engine with native adapter
-	adapter := NewNativeAdapter(e.EnableObfuscation, e.MaxTokens)
+func (e *CompatibleReActEngine) runDefaultLoop(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
+	adapter := resolveUnifiedReActAdapter(req, e.EnableObfuscation, e.MaxTokens)
 	unifiedEngine := NewUnifiedReActEngine(adapter)
 	unifiedEngine.EnableObfuscation = e.EnableObfuscation
 	unifiedEngine.MaxTokens = e.MaxTokens
@@ -134,6 +153,13 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 		"max_iterations", adapter.MaxIterations())
 
 	return unifiedEngine.Run(ctx, req)
+}
+
+func resolveUnifiedReActAdapter(req ai.ReasoningRequest, enableObfuscation bool, maxTokens int) ReActLoopAdapter {
+	if resolveReActLoopMode(req) == ai.ReActLoopModeOwned {
+		return NewCompatibleReActAdapter(enableObfuscation, maxTokens)
+	}
+	return NewCompatibleReActAdapter(enableObfuscation, maxTokens)
 }
 
 func resolveReActTurnStrategy(req ai.ReasoningRequest) ai.ReActTurnStrategy {

@@ -551,6 +551,23 @@ type ReActTurnStrategyProvider interface {
 	ReActTurnStrategy() ReActTurnStrategy
 }
 
+type ReActLoopMode string
+
+const (
+	ReActLoopModeShared ReActLoopMode = "shared"
+	ReActLoopModeOwned  ReActLoopMode = "owned"
+)
+
+// ReActLoopModeProvider lets a generator declare whether it should run through
+// the shared compatible loop or keep ownership of its provider-specific loop.
+//
+// Shared mode fits providers whose loop can be expressed via the common engine.
+// Owned mode fits providers with transport-native session state, hydration, or
+// multi-call semantics that still need a provider-specific outer loop.
+type ReActLoopModeProvider interface {
+	ReActLoopMode() ReActLoopMode
+}
+
 // ReActLoopProvider lets generators return a provider-owned ReAct loop that can
 // take over retry, repair, continuation, and termination policy end-to-end.
 type ReActLoopProvider interface {

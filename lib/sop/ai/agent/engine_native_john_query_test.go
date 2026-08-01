@@ -183,7 +183,7 @@ func TestNativeReActEngine_EndToEndFindJohnOrdersOver500(t *testing.T) {
 	query := "Find orders for users with first_name 'John' with total amount > 500"
 	runCtx := context.WithValue(ctx, "session_payload", &ai.SessionPayload{CurrentDB: "dev_db", CurrentUserQuery: query})
 	runCtx = context.WithValue(runCtx, RunnerSessionKey, &RunnerSession{Verbose: true})
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &johnOrdersOver500Generator{}
 	var progress []string
 	runCtx = context.WithValue(runCtx, ai.CtxKeyProgressSink, func(msg string) { progress = append(progress, msg) })

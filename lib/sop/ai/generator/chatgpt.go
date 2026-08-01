@@ -56,6 +56,10 @@ func init() {
 // Name returns the name of the generator.
 func (g *chatgpt) Name() string { return "chatgpt" }
 
+// ChatGPT keeps an owned loop by default so the Responses API can own server-side
+// continuation, previous_response_id chaining, and multi-tool turns.
+func (g *chatgpt) ReActLoopMode() ai.ReActLoopMode { return ai.ReActLoopModeOwned }
+
 func (g *chatgpt) CarryoverCapability() ai.CarryoverCapability {
 	return ai.CarryoverCapability{
 		Provider:        g.Name(),

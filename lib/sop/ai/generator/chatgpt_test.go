@@ -127,6 +127,13 @@ func TestChatGPTReActLoop_DefaultsToOwnedLoop(t *testing.T) {
 	}
 }
 
+func TestChatGPTReActLoopMode_DefaultsToOwned(t *testing.T) {
+	gen := &chatgpt{model: "gpt-4o", apiKey: "test-key"}
+	if got := gen.ReActLoopMode(); got != ai.ReActLoopModeOwned {
+		t.Fatalf("expected owned loop mode, got %q", got)
+	}
+}
+
 func TestChatGPTOwnedLoop_ReturnsFallbackResponseWhenIterationBudgetIsExceeded(t *testing.T) {
 	var calls int
 	loop := chatGPTOwnedReActLoop{
@@ -663,6 +670,172 @@ func TestChatGPTOwnedReActLoop_RunExecutesFunctionCallsViaResponsesAPI(t *testin
 	}
 }
 
+func TestChatGPTOwnedReActLoop_CarriesRetryInstructionAfterRecoverableToolError(t *testing.T) {
+	requests := make([]openAIResponsesRequest, 0, 2)
+	loop := chatGPTOwnedReActLoop{
+		generator:     &chatgpt{model: "gpt-5.4", apiKey: "test-key"},
+		maxIterations: 2,
+		create: func(ctx context.Context, request openAIResponsesRequest) (openAIResponsesResponse, error) {
+			_ = ctx
+			requests = append(requests, request)
+			switch len(requests) {
+			case 1:
+				return openAIResponsesResponse{
+					ID: "resp_first",
+					Output: []openAIResponsesOutputItem{{
+						ID:        "fc_1",
+						Type:      "function_call",
+						CallID:    "call_1",
+						Name:      "execute_script",
+						Arguments: `{"script":[{"op":"scan"}]}`,
+					}},
+				}, nil
+			case 2:
+				if len(request.Input) != 1 || request.Input[0].Type != "function_call_output" {
+					return openAIResponsesResponse{}, fmt.Errorf("unexpected continuation input: %#v", request.Input)
+				}
+				if !strings.Contains(request.Input[0].Output, "Retry instruction:") {
+					return openAIResponsesResponse{}, fmt.Errorf("missing retry instruction in continuation output: %s", request.Input[0].Output)
+				}
+				return openAIResponsesResponse{ID: "resp_final", OutputText: "Need corrected execute_script args."}, nil
+			default:
+				return openAIResponsesResponse{}, fmt.Errorf("unexpected extra request")
+			}
+		},
+	}
+
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Find John",
+		Executor: chatGPTToolExecutorStub{
+			tools: []ai.ToolDefinition{{
+				Name:        "execute_script",
+				Description: "Executes a script",
+				Schema:      `{"type":"object","properties":{"script":{"type":"array"}},"required":["script"]}`,
+			}},
+			executeErr: errors.New("missing required field"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.FinalText != "Need corrected execute_script args." {
+		t.Fatalf("unexpected final text: %q", resp.FinalText)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("expected two requests, got %d", len(requests))
+	}
+}
+
+func TestChatGPTOwnedReActLoop_SetsEscalationStateAfterRepeatedRecoverableFailures(t *testing.T) {
+	requests := make([]openAIResponsesRequest, 0, 4)
+	loop := chatGPTOwnedReActLoop{
+		generator:     &chatgpt{model: "gpt-5.4", apiKey: "test-key"},
+		maxIterations: 4,
+		create: func(ctx context.Context, request openAIResponsesRequest) (openAIResponsesResponse, error) {
+			_ = ctx
+			requests = append(requests, request)
+			switch len(requests) {
+			case 1, 2, 3:
+				return openAIResponsesResponse{
+					ID: fmt.Sprintf("resp_%d", len(requests)),
+					Output: []openAIResponsesOutputItem{{
+						ID:        fmt.Sprintf("fc_%d", len(requests)),
+						Type:      "function_call",
+						CallID:    fmt.Sprintf("call_%d", len(requests)),
+						Name:      "execute_script",
+						Arguments: `{"script":[{"op":"scan"}]}`,
+					}},
+				}, nil
+			case 4:
+				if len(request.Input) != 1 || !strings.Contains(request.Input[0].Output, "Clarification required:") {
+					return openAIResponsesResponse{}, fmt.Errorf("expected clarification directive in final continuation input, got %#v", request.Input)
+				}
+				return openAIResponsesResponse{ID: "resp_final", OutputText: "Which field is missing for execute_script?"}, nil
+			default:
+				return openAIResponsesResponse{}, fmt.Errorf("unexpected extra request")
+			}
+		},
+	}
+
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Find John",
+		Executor: chatGPTToolExecutorStub{
+			tools: []ai.ToolDefinition{{
+				Name:        "execute_script",
+				Description: "Executes a script",
+				Schema:      `{"type":"object","properties":{"script":{"type":"array"}},"required":["script"]}`,
+			}},
+			executeErr: errors.New("missing required field"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.EscalationState == nil {
+		t.Fatal("expected escalation state after repeated recoverable failures")
+	}
+	if resp.EscalationState["tier"] != 3 {
+		t.Fatalf("expected tier 3 escalation, got %#v", resp.EscalationState)
+	}
+	if resp.EscalationState["failed_tool"] != "execute_script" {
+		t.Fatalf("expected execute_script escalation, got %#v", resp.EscalationState)
+	}
+}
+
+func TestChatGPTOwnedReActLoop_RequiresRepairBeforeSwitchingTools(t *testing.T) {
+	requests := make([]openAIResponsesRequest, 0, 4)
+	executor := &chatGPTRepairEnforcementExecutor{}
+	loop := chatGPTOwnedReActLoop{
+		generator:     &chatgpt{model: "gpt-5.4", apiKey: "test-key"},
+		maxIterations: 4,
+		create: func(ctx context.Context, request openAIResponsesRequest) (openAIResponsesResponse, error) {
+			_ = ctx
+			requests = append(requests, request)
+			switch len(requests) {
+			case 1:
+				return openAIResponsesResponse{ID: "resp_1", Output: []openAIResponsesOutputItem{{ID: "fc_1", Type: "function_call", CallID: "call_1", Name: "mint_to_space", Arguments: `{"space":"Tasks"}`}}}, nil
+			case 2:
+				return openAIResponsesResponse{ID: "resp_2", Output: []openAIResponsesOutputItem{{ID: "fc_2", Type: "function_call", CallID: "call_2", Name: "list_stores", Arguments: `{}`}}}, nil
+			case 3:
+				if len(request.Input) != 1 || !strings.Contains(request.Input[0].Output, "Repair required before continuing") {
+					return openAIResponsesResponse{}, fmt.Errorf("expected repair reminder continuation, got %#v", request.Input)
+				}
+				return openAIResponsesResponse{ID: "resp_3", Output: []openAIResponsesOutputItem{{ID: "fc_3", Type: "function_call", CallID: "call_3", Name: "mint_to_space", Arguments: `{"space":"Tasks","content":"sample task"}`}}}, nil
+			case 4:
+				return openAIResponsesResponse{ID: "resp_final", OutputText: "Final answer: Added sample task to Tasks."}, nil
+			default:
+				return openAIResponsesResponse{}, fmt.Errorf("unexpected extra request")
+			}
+		},
+	}
+
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Generate sample tasks and add them to my Tasks space",
+		Executor:     executor,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.FinalText != "Final answer: Added sample task to Tasks." {
+		t.Fatalf("unexpected final text: %q", resp.FinalText)
+	}
+	if executor.callCount != 2 {
+		t.Fatalf("expected only failing and repaired tool executions, got %d", executor.callCount)
+	}
+	if !reflect.DeepEqual(executor.tools, []string{"mint_to_space", "mint_to_space"}) {
+		t.Fatalf("expected only mint_to_space to execute, got %#v", executor.tools)
+	}
+	if len(resp.ToolCalls) != 2 || resp.ToolCalls[0].Name != "mint_to_space" || resp.ToolCalls[1].Name != "mint_to_space" {
+		t.Fatalf("expected only executed mint_to_space calls to be recorded, got %#v", resp.ToolCalls)
+	}
+	if len(requests) != 4 {
+		t.Fatalf("expected four requests after repair enforcement, got %d", len(requests))
+	}
+}
+
 func TestChatGPTOwnedReActLoop_RunUsesStreamingTransportWhenStreamerPresent(t *testing.T) {
 	streamCalled := false
 	loop := chatGPTOwnedReActLoop{
@@ -1006,6 +1179,27 @@ func (s chatGPTToolExecutorStub) ListTools(ctx context.Context) ([]ai.ToolDefini
 		return nil, s.listToolsErr
 	}
 	return s.tools, nil
+}
+
+type chatGPTRepairEnforcementExecutor struct {
+	callCount int
+	tools     []string
+}
+
+func (e *chatGPTRepairEnforcementExecutor) Execute(ctx context.Context, tool string, args map[string]any) (string, error) {
+	_ = ctx
+	_ = args
+	e.callCount++
+	e.tools = append(e.tools, tool)
+	if e.callCount == 1 {
+		return "", errors.New("argument 'content' is missing or not a string")
+	}
+	return `{"tool_result":"ok"}`, nil
+}
+
+func (e *chatGPTRepairEnforcementExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	_ = ctx
+	return []ai.ToolDefinition{{Name: "mint_to_space"}, {Name: "list_stores"}}, nil
 }
 
 func TestChatGPTOwnedLoopCarryoverState_UsesHandleAndRawToolEstimate(t *testing.T) {

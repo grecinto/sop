@@ -10,7 +10,10 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
-// anthropicOwnedReActLoop implements Claude's native multi-turn conversation loop
+// anthropicOwnedReActLoop keeps Anthropic on a provider-owned outer loop.
+// Claude does not expose an OpenAI-style server-side response thread here, but it
+// does benefit from owning message replay, tool-result continuity, prompt caching,
+// hydration timing, and multi-tool turns directly at the provider seam.
 type anthropicOwnedReActLoop struct {
 	generator     *anthropic
 	maxIterations int
@@ -60,6 +63,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 
 	toolResults := make([]ai.ReActToolResult, 0)
 	executedToolCalls := make([]ai.ToolCall, 0)
+	retryState := newOwnedLoopRetryState()
 
 	for iteration := 1; iteration <= l.maxIterations; iteration++ {
 		log.Debug("Anthropic owned loop iteration started",
@@ -102,6 +106,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 
 		if req.Executor == nil || len(output.ToolCalls) == 0 {
 			resp := anthropicOwnedLoopResponse(output.Text, executedToolCalls, toolResults, continuations)
+			resp.EscalationState = retryState.escalationState
 			log.Debug("Anthropic owned loop completed without more tool calls",
 				"iteration", iteration,
 				"executed_tool_calls", len(executedToolCalls),
@@ -113,14 +118,26 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 		}
 
 		for _, toolCall := range output.ToolCalls {
+			if _, deferTool := retryState.shouldDeferTool(toolCall.Name); deferTool {
+				reminder := retryState.reminderResult(toolCall.Name)
+				toolResults = append(toolResults, reminder)
+				continuations = append(continuations, ai.ToolCallContinuation{ToolCall: toolCall, Response: map[string]any{"tool_error": map[string]any{"message": reminder.Result}}})
+				partial := anthropicOwnedLoopResponse("", executedToolCalls, toolResults, continuations)
+				partial.EscalationState = retryState.escalationState
+				emitAnthropicOwnedLoopHydration(req, partial)
+				continue
+			}
 			emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolCall, ai.BuildToolCallEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), iteration))
 			executedToolCalls = append(executedToolCalls, toolCall)
-			toolResult, continuation := executeAnthropicOwnedLoopToolCall(ctx, req, iteration, l.maxIterations, toolCall)
+			toolResult, continuation := executeAnthropicOwnedLoopToolCall(ctx, req, iteration, l.maxIterations, toolCall, retryState, toolResults)
 			toolResults = append(toolResults, toolResult)
 			continuations = append(continuations, continuation)
-			emitAnthropicOwnedLoopHydration(req, anthropicOwnedLoopResponse("", executedToolCalls, toolResults, continuations))
+			partial := anthropicOwnedLoopResponse("", executedToolCalls, toolResults, continuations)
+			partial.EscalationState = retryState.escalationState
+			emitAnthropicOwnedLoopHydration(req, partial)
 			if shouldShortCircuitAnthropicOwnedLoopOnToolHint(toolResult.Hint) {
 				resp := anthropicOwnedLoopResponse(toolResult.Result, executedToolCalls, toolResults, continuations)
+				resp.EscalationState = retryState.escalationState
 				log.Warn("Anthropic owned loop short-circuited on terminal tool hint",
 					"iteration", iteration,
 					"tool", toolCall.Name,
@@ -146,6 +163,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 				"reason":    "repeated_validation_errors",
 			})
 			resp := anthropicOwnedLoopResponse(errorMsg, executedToolCalls, toolResults, continuations)
+			resp.EscalationState = retryState.escalationState
 			emitAnthropicOwnedLoopHydration(req, resp)
 			return resp, nil
 		}
@@ -174,6 +192,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 		return ai.ReasoningResponse{}, fmt.Errorf("final generation failed: %w", err)
 	}
 	resp := anthropicOwnedLoopResponse(output.Text, executedToolCalls, toolResults, continuations)
+	resp.EscalationState = retryState.escalationState
 	log.Debug("Anthropic owned loop finished on final turn",
 		"executed_tool_calls", len(executedToolCalls),
 		"outcome_facts", len(resp.OutcomeFacts),
@@ -285,7 +304,7 @@ func buildAnthropicRepairDirective(last ai.ReActToolResult) string {
 	return directive
 }
 
-func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest, iteration, maxIterations int, toolCall ai.ToolCall) (ai.ReActToolResult, ai.ToolCallContinuation) {
+func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequest, iteration, maxIterations int, toolCall ai.ToolCall, retryState *ownedLoopRetryState, existingResults []ai.ReActToolResult) (ai.ReActToolResult, ai.ToolCallContinuation) {
 	log.Debug("Anthropic owned loop executing tool",
 		"iteration", iteration,
 		"tool", toolCall.Name,
@@ -299,6 +318,22 @@ func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequ
 	rawResult, execErr := req.Executor.Execute(execCtx, toolCall.Name, toolCall.Args)
 	resultText, hint, filePath, fileSize := unwrapAnthropicToolResultEnvelopeFull(rawResult)
 	continuationResponse := coerceAnthropicToolContinuationResponse(rawResult)
+	effectiveErr := execErr
+	if effectiveErr == nil && toolResultSignalsRecoverableFailure(resultText) {
+		effectiveErr = fmt.Errorf("%s", strings.TrimSpace(resultText))
+	}
+	if effectiveErr != nil && retryState != nil && retryState.coordinator.IsRecoverableToolError(effectiveErr) {
+		result, _ := retryState.handleRecoverableFailure(toolCall, effectiveErr, existingResults)
+		result.Hint = cloneAnthropicToolProgressHint(hint)
+		continuationResponse = map[string]any{"tool_error": map[string]any{"message": result.Result}}
+		if shouldStreamAnthropicToolResult(req, iteration >= maxIterations) {
+			emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolResult, ai.BuildToolResultEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), result.Result, cloneAnthropicToolProgressHint(hint), iteration, filePath, fileSize))
+		}
+		if execErr != nil {
+			emitAnthropicOwnedLoopEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneAnthropicToolArgs(toolCall.Args), execErr, iteration))
+		}
+		return result, ai.ToolCallContinuation{ToolCall: toolCall, Response: continuationResponse}
+	}
 	if execErr != nil {
 		log.Warn("Anthropic owned loop tool execution failed",
 			"iteration", iteration,
@@ -322,6 +357,9 @@ func executeAnthropicOwnedLoopToolCall(ctx context.Context, req ai.ReasoningRequ
 			"file_size", fileSize,
 		)
 	} else {
+		if retryState != nil && effectiveErr == nil {
+			retryState.completeSuccessfulTool(toolCall.Name)
+		}
 		log.Debug("Anthropic owned loop tool execution completed",
 			"iteration", iteration,
 			"tool", toolCall.Name,

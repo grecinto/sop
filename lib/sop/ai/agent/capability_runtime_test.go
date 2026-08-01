@@ -79,6 +79,20 @@ func TestNewCopilotAgentRegistersCodingWorkflowCapabilityByDefault(t *testing.T)
 	}
 }
 
+func TestNewCopilotAgentRegistersWorkStreamManagementCapability(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	var found bool
+	for _, cap := range ag.capabilityRegistry.ListAll() {
+		if cap != nil && cap.ID() == "workstream_management" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected WorkStreamManagement capability to be registered")
+	}
+}
+
 // TestNewCopilotAgentRegistersServiceCapabilityByDefault removed (2026-07-30)
 // ServiceCapability deprecated - phase capabilities provide all functionality
 func TestNewCopilotAgentRegistersServiceCapabilityByDefault(t *testing.T) {

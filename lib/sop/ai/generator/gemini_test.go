@@ -3,6 +3,7 @@ package generator
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -48,6 +49,13 @@ func TestGeminiReActLoop_DefaultsToFiveIterations(t *testing.T) {
 	}
 	if loop.maxIterations != 5 {
 		t.Fatalf("expected default Gemini owned loop budget to be 5, got %d", loop.maxIterations)
+	}
+}
+
+func TestGeminiReActLoopMode_DefaultsToOwned(t *testing.T) {
+	g := &gemini{model: "gemini-3.5-flash"}
+	if got := g.ReActLoopMode(); got != ai.ReActLoopModeOwned {
+		t.Fatalf("expected owned loop mode, got %q", got)
 	}
 }
 
@@ -955,6 +963,96 @@ func TestGeminiOwnedReActLoop_CarriesRepairDirectiveAfterValidationFailure(t *te
 	}
 	if resp.FinalText != "Need corrected execute_script args." {
 		t.Fatalf("unexpected final text: %q", resp.FinalText)
+	}
+}
+
+type geminiOwnedLoopRepairEnforcementGenerator struct {
+	calls int
+	prewarmNoop
+}
+
+func (m *geminiOwnedLoopRepairEnforcementGenerator) Name() string {
+	return "gemini_owned_loop_repair_enforcement_test"
+}
+
+func (m *geminiOwnedLoopRepairEnforcementGenerator) EstimateCost(inTokens, outTokens int) float64 {
+	return 0
+}
+
+func (m *geminiOwnedLoopRepairEnforcementGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	_ = ctx
+	_ = prompt
+	m.calls++
+	switch m.calls {
+	case 1:
+		return ai.GenOutput{ToolCalls: []ai.ToolCall{{Name: "mint_to_space", Args: map[string]any{"space": "Tasks"}}}}, nil
+	case 2:
+		return ai.GenOutput{ToolCalls: []ai.ToolCall{{Name: "list_stores", Args: map[string]any{}}}}, nil
+	case 3:
+		if len(opts.ToolCallContinuations) == 0 {
+			return ai.GenOutput{Text: "missing repair continuation"}, nil
+		}
+		response, ok := opts.ToolCallContinuations[len(opts.ToolCallContinuations)-1].Response.(map[string]any)
+		if !ok {
+			return ai.GenOutput{Text: "unexpected continuation envelope"}, nil
+		}
+		toolResult, _ := response["tool_result"].(map[string]any)
+		toolErr, _ := toolResult["tool_error"].(map[string]any)
+		message, _ := toolErr["message"].(string)
+		if !strings.Contains(message, "Repair required before continuing") {
+			return ai.GenOutput{Text: "missing repair reminder"}, nil
+		}
+		return ai.GenOutput{ToolCalls: []ai.ToolCall{{Name: "mint_to_space", Args: map[string]any{"space": "Tasks", "content": "sample task"}}}}, nil
+	case 4:
+		return ai.GenOutput{Text: "Final answer: Added sample task to Tasks."}, nil
+	default:
+		return ai.GenOutput{Text: "unexpected extra call"}, nil
+	}
+}
+
+type geminiOwnedLoopRepairEnforcementExecutor struct {
+	callCount int
+	tools     []string
+}
+
+func (e *geminiOwnedLoopRepairEnforcementExecutor) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	_ = ctx
+	_ = args
+	e.callCount++
+	e.tools = append(e.tools, toolName)
+	if e.callCount == 1 {
+		return "", fmt.Errorf("argument 'content' is missing or not a string")
+	}
+	return `{"tool_result":"ok"}`, nil
+}
+
+func (e *geminiOwnedLoopRepairEnforcementExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	_ = ctx
+	return []ai.ToolDefinition{{Name: "mint_to_space"}, {Name: "list_stores"}}, nil
+}
+
+func TestGeminiOwnedLoop_RequiresRepairBeforeSwitchingTools(t *testing.T) {
+	gen := &geminiOwnedLoopRepairEnforcementGenerator{}
+	loop := geminiOwnedReActLoop{generator: gen, maxIterations: 4}
+	executor := &geminiOwnedLoopRepairEnforcementExecutor{}
+
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Generate sample tasks and add them to my Tasks space",
+		Executor:     executor,
+		Generator:    gen,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if resp.FinalText != "Final answer: Added sample task to Tasks." {
+		t.Fatalf("unexpected final text: %q", resp.FinalText)
+	}
+	if executor.callCount != 2 {
+		t.Fatalf("expected only failing and repaired tool executions, got %d", executor.callCount)
+	}
+	if !reflect.DeepEqual(executor.tools, []string{"mint_to_space", "mint_to_space"}) {
+		t.Fatalf("expected only mint_to_space to execute, got %#v", executor.tools)
 	}
 }
 

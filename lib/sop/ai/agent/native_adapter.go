@@ -9,33 +9,42 @@ import (
 	"github.com/sharedcode/sop/ai/obfuscation"
 )
 
-// NativeAdapter implements ReActLoopAdapter for the native (default/fallback) ReAct loop.
-// This adapter uses standard Generator.Generate() calls and stateless per-Ask continuations.
-type NativeAdapter struct {
+// CompatibleReActAdapter implements ReActLoopAdapter for the reserved shared/default
+// serial ReAct path.
+//
+// It is maintained for providers that naturally fit the compatible one-tool-per-turn
+// shared behavior. The currently supported provider-owned loops do not use this as
+// their active outer-loop shape.
+type CompatibleReActAdapter struct {
 	EnableObfuscation bool
 	MaxTokens         int
 }
 
-// NewNativeAdapter creates a new native adapter instance.
-func NewNativeAdapter(enableObfuscation bool, maxTokens int) *NativeAdapter {
-	return &NativeAdapter{
+// NewCompatibleReActAdapter creates a new shared compatible adapter instance.
+func NewCompatibleReActAdapter(enableObfuscation bool, maxTokens int) *CompatibleReActAdapter {
+	return &CompatibleReActAdapter{
 		EnableObfuscation: enableObfuscation,
 		MaxTokens:         maxTokens,
 	}
 }
 
+// NewNativeAdapter is kept as a compatibility alias while older references are phased out.
+func NewNativeAdapter(enableObfuscation bool, maxTokens int) *CompatibleReActAdapter {
+	return NewCompatibleReActAdapter(enableObfuscation, maxTokens)
+}
+
 // Name returns the adapter identifier.
-func (a *NativeAdapter) Name() string {
+func (a *CompatibleReActAdapter) Name() string {
 	return "native"
 }
 
 // MaxIterations returns the iteration limit for native loops.
-func (a *NativeAdapter) MaxIterations() int {
+func (a *CompatibleReActAdapter) MaxIterations() int {
 	return nativeReActMaxToolIterations
 }
 
 // PrepareLLMRequest builds the native prompt with MRU state and budget management.
-func (a *NativeAdapter) PrepareLLMRequest(ctx context.Context, state ReActLoopState) (string, ai.GenOptions, error) {
+func (a *CompatibleReActAdapter) PrepareLLMRequest(ctx context.Context, state ReActLoopState) (string, ai.GenOptions, error) {
 	// Convert ReActToolResult back to nativeToolResult for legacy functions
 	nativeResults := a.convertToNativeResults(state.ToolResults)
 
@@ -97,12 +106,12 @@ func (a *NativeAdapter) PrepareLLMRequest(ctx context.Context, state ReActLoopSt
 }
 
 // InvokeLLM calls the standard Generator.Generate() method.
-func (a *NativeAdapter) InvokeLLM(ctx context.Context, prompt string, opts ai.GenOptions, req ai.ReasoningRequest) (ai.GenOutput, error) {
+func (a *CompatibleReActAdapter) InvokeLLM(ctx context.Context, prompt string, opts ai.GenOptions, req ai.ReasoningRequest) (ai.GenOutput, error) {
 	return req.Generator.Generate(ctx, prompt, opts)
 }
 
 // ExtractToolCalls parses tool calls from the LLM response, including textual recovery.
-func (a *NativeAdapter) ExtractToolCalls(output ai.GenOutput) ([]ai.ToolCall, string, error) {
+func (a *CompatibleReActAdapter) ExtractToolCalls(output ai.GenOutput) ([]ai.ToolCall, string, error) {
 	// Check for native tool calls
 	if len(output.ToolCalls) > 0 {
 		return output.ToolCalls, "", nil
@@ -131,7 +140,7 @@ func (a *NativeAdapter) ExtractToolCalls(output ai.GenOutput) ([]ai.ToolCall, st
 
 // FormatContinuation builds the continuation for the next iteration.
 // Native adapter uses single-continuation stateless pattern.
-func (a *NativeAdapter) FormatContinuation(
+func (a *CompatibleReActAdapter) FormatContinuation(
 	toolCall ai.ToolCall,
 	result ai.ReActToolResult,
 	existingContinuations []ai.ToolCallContinuation,
@@ -145,7 +154,7 @@ func (a *NativeAdapter) FormatContinuation(
 }
 
 // BuildFinalResponse assembles the final ReasoningResponse with outcome facts/recipes.
-func (a *NativeAdapter) BuildFinalResponse(
+func (a *CompatibleReActAdapter) BuildFinalResponse(
 	finalText string,
 	toolCalls []ai.ToolCall,
 	toolResults []ai.ReActToolResult,
@@ -170,7 +179,7 @@ func (a *NativeAdapter) BuildFinalResponse(
 }
 
 // ShouldTerminateEarly checks native-specific termination conditions.
-func (a *NativeAdapter) ShouldTerminateEarly(state ReActLoopState) (bool, string) {
+func (a *CompatibleReActAdapter) ShouldTerminateEarly(state ReActLoopState) (bool, string) {
 	// Check for terminal hints (anti_success, blocked, fatal, etc)
 	if len(state.ToolResults) > 0 {
 		lastResult := state.ToolResults[len(state.ToolResults)-1]
@@ -186,14 +195,14 @@ func (a *NativeAdapter) ShouldTerminateEarly(state ReActLoopState) (bool, string
 
 // RestoreContinuations deserializes continuations from carryover state.
 // Native adapter typically doesn't preserve continuations across Ask turns.
-func (a *NativeAdapter) RestoreContinuations(carryover *ai.CarryoverState) ([]ai.ToolCallContinuation, error) {
+func (a *CompatibleReActAdapter) RestoreContinuations(carryover *ai.CarryoverState) ([]ai.ToolCallContinuation, error) {
 	// Native loop is stateless per Ask - no continuations to restore
 	return nil, nil
 }
 
 // convertToNativeResults converts shared ReActToolResult to native nativeToolResult.
 // This is needed to reuse existing helper functions during migration.
-func (a *NativeAdapter) convertToNativeResults(shared []ai.ReActToolResult) []nativeToolResult {
+func (a *CompatibleReActAdapter) convertToNativeResults(shared []ai.ReActToolResult) []nativeToolResult {
 	if len(shared) == 0 {
 		return nil
 	}

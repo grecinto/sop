@@ -37,6 +37,10 @@ func init() {
 
 func (g *anthropic) Name() string { return "anthropic" }
 
+// Claude keeps an owned loop by default so it can exploit provider-native
+// multi-tool turns and message-replay continuity when that is advantageous.
+func (g *anthropic) ReActLoopMode() ai.ReActLoopMode { return ai.ReActLoopModeOwned }
+
 func (g *anthropic) CarryoverCapability() ai.CarryoverCapability {
 	return ai.CarryoverCapability{
 		Provider:        g.Name(),

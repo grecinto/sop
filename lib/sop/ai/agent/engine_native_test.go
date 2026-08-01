@@ -404,7 +404,7 @@ func (e *nativeHintContextExecutor) ListTools(ctx context.Context) ([]ai.ToolDef
 }
 
 func TestNativeReActEngine_SynthesizesAfterToolResult(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
 		SystemPrompt: "You are a test assistant.",
@@ -427,7 +427,7 @@ func TestNativeReActEngine_SynthesizesAfterToolResult(t *testing.T) {
 }
 
 func TestNativeReActEngine_UsesLowTemperatureForToolCalls(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &toolTemperatureMockGenerator{}
 	_, err := engine.Run(context.Background(), ai.ReasoningRequest{
 		SystemPrompt: "You are a test assistant.",
@@ -455,7 +455,7 @@ func TestCloneReActToolResults_PreservesExecutionMode(t *testing.T) {
 }
 
 func TestNativeReActEngine_UsesProviderReActTurnStrategyForContinuationTurns(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &reActTurnStrategyMockGenerator{}
 	executor := &reActTurnStrategyMockExecutor{}
 
@@ -483,7 +483,7 @@ func TestNativeReActEngine_UsesProviderReActTurnStrategyForContinuationTurns(t *
 }
 
 func TestNativeReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &ownedReActLoopMockGenerator{}
 
 	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
@@ -500,7 +500,7 @@ func TestNativeReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.T) {
 }
 
 func TestNativeReActEngine_CleansUpToolResultStorageAfterLoop(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	executor := &loopMockExecutor{}
 	storage := &ToolResultStorage{sessionID: "cleanup-test", baseDir: t.TempDir()}
@@ -525,7 +525,7 @@ func TestNativeReActEngine_CleansUpToolResultStorageAfterLoop(t *testing.T) {
 
 func TestNativeReActEngine_HandlesDirectSlashCommandBeforeDefaultLoop(t *testing.T) {
 	t.Skip("Slash command handling moved to Agent layer (handleDirectToolInvocation) via capability routing")
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	executor := &directSlashExecutor{}
 
@@ -554,7 +554,7 @@ func TestNativeReActEngine_HandlesDirectSlashCommandBeforeDefaultLoop(t *testing
 
 func TestNativeReActEngine_HandlesDirectSlashCommandBeforeOwnedLoop(t *testing.T) {
 	t.Skip("Slash command handling moved to Agent layer (handleDirectToolInvocation) via capability routing")
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &ownedReActLoopMockGenerator{}
 	executor := &directSlashExecutor{}
 
@@ -576,7 +576,7 @@ func TestNativeReActEngine_HandlesDirectSlashCommandBeforeOwnedLoop(t *testing.T
 }
 
 func TestNativeReActEngine_BypassesSyntheticPromptWhenStrategyRequestsIt(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &bypassReActPromptMockGenerator{}
 	executor := &reActTurnStrategyMockExecutor{}
 
@@ -595,7 +595,7 @@ func TestNativeReActEngine_BypassesSyntheticPromptWhenStrategyRequestsIt(t *test
 }
 
 func TestNativeReActEngine_UsesZeroTemperatureForRepairRetry(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &recoverableTempMockGenerator{}
 	_, err := engine.Run(context.Background(), ai.ReasoningRequest{
 		SystemPrompt: "You are a test assistant.",
@@ -633,7 +633,7 @@ func TestFormatLLMGeneratedScriptForLog_NonExecuteScript(t *testing.T) {
 }
 
 func TestNativeReActEngine_MarksToolExecutionForNativeHints(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &toolTemperatureMockGenerator{}
 	executor := &nativeHintContextExecutor{}
 
@@ -652,7 +652,7 @@ func TestNativeReActEngine_MarksToolExecutionForNativeHints(t *testing.T) {
 }
 
 func TestNativeReActEngine_RetriesRecoverableMalformedFunctionCall(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &malformedFunctionCallRecoveryGenerator{}
 	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
 		SystemPrompt: "You are a test assistant.",
@@ -741,7 +741,7 @@ func (e *csvMetaToolMockExecutor) ListTools(ctx context.Context) ([]ai.ToolDefin
 }
 
 func TestNativeReActEngine_PreservesCSVToolResult(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &csvLoopMockGenerator{}
 	ctx := context.WithValue(context.Background(), ai.CtxKeyDefaultFormat, "csv")
 	resp, err := engine.Run(ctx, ai.ReasoningRequest{
@@ -762,7 +762,7 @@ func TestNativeReActEngine_PreservesCSVToolResult(t *testing.T) {
 }
 
 func TestNativeReActEngine_DoesNotPreserveMetaToolResultForCSV(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &csvMetaToolMockGenerator{}
 	ctx := context.WithValue(context.Background(), ai.CtxKeyDefaultFormat, "csv")
 	resp, err := engine.Run(ctx, ai.ReasoningRequest{
@@ -783,7 +783,7 @@ func TestNativeReActEngine_DoesNotPreserveMetaToolResultForCSV(t *testing.T) {
 }
 
 func TestNativeReActEngine_UsesSessionPayloadVerboseForRuntimeProgress(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	var progress []string
 	ctx := context.WithValue(context.Background(), ai.CtxKeyProgressSink, func(msg string) {
@@ -816,7 +816,7 @@ func TestNativeReActEngine_UsesSessionPayloadVerboseForRuntimeProgress(t *testin
 }
 
 func TestNativeReActEngine_RecoversPrintedTextualToolCall(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &textualToolCallRecoveryGenerator{}
 
 	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
@@ -837,7 +837,7 @@ func TestNativeReActEngine_RecoversPrintedTextualToolCall(t *testing.T) {
 }
 
 func TestNativeReActEngine_RepairsTruncatedPrintedTextualToolCall(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &truncatedTextualToolCallRecoveryGenerator{}
 
 	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
@@ -861,7 +861,7 @@ func TestNativeReActEngine_RepairsTruncatedPrintedTextualToolCall(t *testing.T) 
 }
 
 func TestNativeReActEngine_RespectsVerboseFalse(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	var progress []string
 	ctx := context.WithValue(context.Background(), ai.CtxKeyProgressSink, func(msg string) {
@@ -910,7 +910,7 @@ func TestEmitReasoningEvent_AlwaysStreamsWhenStreamerPresent(t *testing.T) {
 }
 
 func TestNativeReActEngine_StreamsStructuredToolEvents(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 
 	type streamedEvent struct {
@@ -1013,7 +1013,7 @@ func (e *recoverableArgErrorExecutor) ListTools(ctx context.Context) ([]ai.ToolD
 }
 
 func TestNativeReActEngine_RetriesRecoverableToolArgumentErrors(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &recoverableArgErrorGenerator{}
 	executor := &recoverableArgErrorExecutor{}
 	var progress []string
@@ -1118,7 +1118,7 @@ func (e *delayedRepairExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinit
 }
 
 func TestNativeReActEngine_RequiresRepairBeforeSwitchingTools(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &delayedRepairGenerator{}
 	executor := &delayedRepairExecutor{}
 	var progress []string
@@ -1341,7 +1341,7 @@ func (e *executeScriptRepairExecutor) ListTools(ctx context.Context) ([]ai.ToolD
 }
 
 func TestNativeReActEngine_RetriesExecuteScriptWithValidationGuidance(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &executeScriptRepairGenerator{}
 	executor := &executeScriptRepairExecutor{}
 	var progress []string
@@ -1645,7 +1645,7 @@ func (m *routedSameToolClarificationGenerator) Generate(ctx context.Context, pro
 }
 
 func TestNativeReActEngine_RoutedSameToolRepairEscalatesToClarificationAfterFirstRetry(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &routedSameToolClarificationGenerator{}
 	executor := &recoverableArgErrorExecutor{}
 	var progress []string
@@ -1688,7 +1688,7 @@ func TestNativeReActEngine_RoutedSameToolRepairEscalatesToClarificationAfterFirs
 }
 
 func TestNativeReActEngine_RetriesExecuteScriptJoinWithValidationGuidance(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &executeScriptJoinRepairGenerator{}
 	executor := &executeScriptJoinRepairExecutor{}
 	var progress []string
@@ -1734,7 +1734,7 @@ func TestNativeReActEngine_RetriesExecuteScriptJoinWithValidationGuidance(t *tes
 }
 
 func TestNativeReActEngine_RoutedAmbiguityEscalatesToClarificationAfterFirstRepairAttempt(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &discoveryClarificationGenerator{}
 	executor := &discoveryClarificationExecutor{}
 	var progress []string
@@ -1778,7 +1778,7 @@ func TestNativeReActEngine_RoutedAmbiguityEscalatesToClarificationAfterFirstRepa
 }
 
 func TestNativeReActEngine_NonRoutedAmbiguityEscalatesToClarificationAfterFirstRepairAttempt(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &discoveryClarificationGenerator{}
 	executor := &discoveryClarificationExecutor{}
 	var progress []string
@@ -1942,7 +1942,7 @@ func (e *progressionHistoryJoinRepairExecutor) ListTools(ctx context.Context) ([
 }
 
 func TestNativeReActEngine_UsesProgressionHistoryToRepairExecuteScriptJoin(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &progressionHistoryJoinRepairGenerator{}
 	executor := &progressionHistoryJoinRepairExecutor{}
 
@@ -2817,7 +2817,7 @@ func (e *progressBudgetExecutor) ListTools(ctx context.Context) ([]ai.ToolDefini
 }
 
 func TestNativeReActEngine_FixedLoopBudgetCapsEvenWhenProgressing(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &progressBudgetGenerator{}
 	executor := &progressBudgetExecutor{}
 	var progress []string
@@ -2881,7 +2881,7 @@ func (e *stalledBudgetExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinit
 }
 
 func TestNativeReActEngine_DoesNotExtendLoopBudgetWithoutProgress(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &stalledBudgetGenerator{}
 	executor := &stalledBudgetExecutor{}
 
@@ -2966,7 +2966,7 @@ func (e *antiSuccessExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinitio
 }
 
 func TestNativeReActEngine_ProgressAwareBudgetStillCapsAtFixedLimit(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &cappedBudgetGenerator{}
 	executor := &cappedBudgetExecutor{}
 
@@ -2991,7 +2991,7 @@ func TestNativeReActEngine_ProgressAwareBudgetStillCapsAtFixedLimit(t *testing.T
 }
 
 func TestNativeReActEngine_ShortCircuitsOnAntiSuccessHardErrorHint(t *testing.T) {
-	engine := &NativeReActEngine{}
+	engine := &CompatibleReActEngine{}
 	gen := &antiSuccessGenerator{}
 	executor := &antiSuccessExecutor{}
 	var progress []string
