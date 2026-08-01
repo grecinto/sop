@@ -194,6 +194,16 @@ func TestBuildCarryoverState_MergesProviderRuntimeState(t *testing.T) {
 	threadID := sop.NewUUID()
 	thread := &ConversationThread{ID: threadID, RootPrompt: "Continue", Exchanges: []Interaction{{Role: RoleAssistant, Content: "Done", ActiveKB: "sop"}}}
 	session.Memory.AddThread(thread)
+	session.Memory.SetCarryoverState(&ai.CarryoverState{
+		Provider:         "chatgpt",
+		TopicFingerprint: threadID.String(),
+		RetryLearnings: []ai.RetryLearning{{
+			ToolName:          "execute_script",
+			ErrorPattern:      "execute_script:join mapping unresolved",
+			PreferredStrategy: ai.RepairStrategyResearchFirst,
+			SuccessCount:      2,
+		}},
+	})
 	gen := capabilityOnlyGenerator{provider: "chatgpt", model: "gpt-test", supportsCompact: true, supportsLive: true}
 	providerState := &ai.CarryoverState{
 		Mode:                   ai.CarryoverModeLive,
@@ -220,5 +230,8 @@ func TestBuildCarryoverState_MergesProviderRuntimeState(t *testing.T) {
 	}
 	if state.Provider != "chatgpt" || state.Model != "gpt-test" {
 		t.Fatalf("expected provider/model metadata, got %+v", state)
+	}
+	if len(state.RetryLearnings) != 1 || state.RetryLearnings[0].PreferredStrategy != ai.RepairStrategyResearchFirst {
+		t.Fatalf("expected retry learnings to be merged from previous carryover state, got %+v", state.RetryLearnings)
 	}
 }

@@ -129,9 +129,9 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 
 	toolResults := make([]ai.ReActToolResult, 0)
 	executedToolCalls := make([]ai.ToolCall, 0)
-	retryState := newOwnedLoopRetryState()
+	retryState := newOwnedLoopRetryState(l.maxIterations, req.UserQuery, req.CarryoverState)
 
-	for iteration := 1; iteration <= l.maxIterations; iteration++ {
+	for iteration := 1; iteration <= retryState.allowedTurns; iteration++ {
 		log.Debug("Gemini owned loop iteration started",
 			"iteration", iteration,
 			"tool_results", len(toolResults),
@@ -184,6 +184,9 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		if req.Executor == nil || len(output.ToolCalls) == 0 {
 			resp := geminiOwnedLoopResponse(output.Text, executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
 			resp.EscalationState = retryState.escalationState
+			if resp.CarryoverState != nil {
+				resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+			}
 			log.Debug("Gemini owned loop completed without more tool calls",
 				"iteration", iteration,
 				"executed_tool_calls", len(executedToolCalls),
@@ -242,13 +245,18 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 			})
 			resp := geminiOwnedLoopResponse(errorMsg, executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
 			resp.EscalationState = retryState.escalationState
+			if resp.CarryoverState != nil {
+				resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+			}
 			emitGeminiOwnedLoopHydration(req, resp)
 			return resp, nil
 		}
+
+		retryState.maybeExtendBudget(toolResults, iteration)
 	}
 
 	finalTurn := ai.ReActTurn{
-		Iteration:       l.maxIterations + 1,
+		Iteration:       retryState.allowedTurns + 1,
 		UserQuery:       req.UserQuery,
 		RepairDirective: latestGeminiRepairDirective(toolResults),
 		Options: ai.GenOptions{
@@ -259,7 +267,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		ToolResults: cloneGeminiReActToolResults(toolResults),
 		FinalTurn:   true,
 	}
-	finalTurn = prepareGeminiContinuationTurn(finalTurn, l.maxIterations)
+	finalTurn = prepareGeminiContinuationTurn(finalTurn, retryState.allowedTurns)
 	if l.turnStrategy != nil {
 		finalTurn = l.turnStrategy.PrepareTurn(ctx, finalTurn)
 	}
@@ -283,6 +291,9 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 	}
 	resp := geminiOwnedLoopResponse(output.Text, executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
 	resp.EscalationState = retryState.escalationState
+	if resp.CarryoverState != nil {
+		resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+	}
 	log.Debug("Gemini owned loop finished on final turn",
 		"executed_tool_calls", len(executedToolCalls),
 		"outcome_facts", len(resp.OutcomeFacts),

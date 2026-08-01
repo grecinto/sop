@@ -784,6 +784,63 @@ func TestChatGPTOwnedReActLoop_SetsEscalationStateAfterRepeatedRecoverableFailur
 	}
 }
 
+func TestChatGPTOwnedReActLoop_UsesCarryoverRetryLearnings(t *testing.T) {
+	requests := make([]openAIResponsesRequest, 0, 2)
+	pattern := ai.NewRetryCoordinator().ErrorPattern("execute_script", errors.New("join mapping unresolved"))
+	loop := chatGPTOwnedReActLoop{
+		generator:     &chatgpt{model: "gpt-5.4", apiKey: "test-key"},
+		maxIterations: 2,
+		create: func(ctx context.Context, request openAIResponsesRequest) (openAIResponsesResponse, error) {
+			_ = ctx
+			requests = append(requests, request)
+			switch len(requests) {
+			case 1:
+				return openAIResponsesResponse{
+					ID: "resp_first",
+					Output: []openAIResponsesOutputItem{{
+						ID:        "fc_1",
+						Type:      "function_call",
+						CallID:    "call_1",
+						Name:      "execute_script",
+						Arguments: `{"script":[{"op":"join"}]}`,
+					}},
+				}, nil
+			case 2:
+				if len(request.Input) != 1 || !strings.Contains(request.Input[0].Output, "Repair strategy: research_first") {
+					return openAIResponsesResponse{}, fmt.Errorf("expected learned research-first retry strategy, got %#v", request.Input)
+				}
+				return openAIResponsesResponse{ID: "resp_final", OutputText: "Need schema confirmation before continuing."}, nil
+			default:
+				return openAIResponsesResponse{}, fmt.Errorf("unexpected extra request")
+			}
+		},
+	}
+
+	_, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Join users and orders",
+		CarryoverState: &ai.CarryoverState{
+			RetryLearnings: []ai.RetryLearning{{
+				ToolName:          "execute_script",
+				ErrorPattern:      pattern,
+				PreferredStrategy: ai.RepairStrategyResearchFirst,
+				SuccessCount:      3,
+			}},
+		},
+		Executor: chatGPTToolExecutorStub{
+			tools: []ai.ToolDefinition{{
+				Name:        "execute_script",
+				Description: "Executes a script",
+				Schema:      `{"type":"object","properties":{"script":{"type":"array"}},"required":["script"]}`,
+			}},
+			executeErr: errors.New("join mapping unresolved"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
 func TestChatGPTOwnedReActLoop_RequiresRepairBeforeSwitchingTools(t *testing.T) {
 	requests := make([]openAIResponsesRequest, 0, 4)
 	executor := &chatGPTRepairEnforcementExecutor{}

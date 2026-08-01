@@ -83,9 +83,9 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 
 	executedToolCalls := make([]ai.ToolCall, 0)
 	toolResults := make([]ai.ReActToolResult, 0)
-	retryState := newOwnedLoopRetryState()
+	retryState := newOwnedLoopRetryState(maxIterations, req.UserQuery, req.CarryoverState)
 
-	for iteration := 1; iteration <= maxIterations; iteration++ {
+	for iteration := 1; iteration <= retryState.allowedTurns; iteration++ {
 		if err := ctx.Err(); err != nil {
 			return ai.ReasoningResponse{}, err
 		}
@@ -107,12 +107,15 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 		if req.Executor == nil || len(toolCalls) == 0 {
 			resp := buildFinalResponse(l.modelName(), openAIResponseFinalText(response), executedToolCalls, toolResults, response.ID, conversationIDFromResponse(response))
 			resp.EscalationState = retryState.escalationState
+			if resp.CarryoverState != nil {
+				resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+			}
 			emitChatGPTOwnedLoopHydration(req, resp)
 			return resp, nil
 		}
 
 		// Execute tool calls and build continuation input for the next turn.
-		toolOutputItems, newExecuted, newResults := executeToolCalls(ctx, req, iteration, maxIterations, toolCalls, retryState, toolResults)
+		toolOutputItems, newExecuted, newResults := executeToolCalls(ctx, req, iteration, retryState.allowedTurns, toolCalls, retryState, toolResults)
 		if err := ctx.Err(); err != nil {
 			return ai.ReasoningResponse{}, err
 		}
@@ -121,12 +124,16 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 
 		partial := buildFinalResponse(l.modelName(), "", executedToolCalls, toolResults, response.ID, conversationIDFromResponse(response))
 		partial.EscalationState = retryState.escalationState
+		if partial.CarryoverState != nil {
+			partial.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+		}
 		emitChatGPTOwnedLoopHydration(req, partial)
 
 		request = buildContinuationRequest(l.modelName(), req, request, response, toolOutputItems)
+		retryState.maybeExtendBudget(toolResults, iteration)
 
 		// Force tool continuation if task requires more steps
-		if iteration < maxIterations && needsToolContinuation(req.UserQuery, toolResults) && !strings.Contains(toolResults[len(toolResults)-1].Result, "Clarification required:") {
+		if iteration < retryState.allowedTurns && needsToolContinuation(req.UserQuery, toolResults) && !strings.Contains(toolResults[len(toolResults)-1].Result, "Clarification required:") {
 			request.ToolChoice = buildToolChoiceForceCall(request.Tools)
 		}
 	}
@@ -134,6 +141,9 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 	finalText := openAIResponseFinalText(openAIResponsesResponse{OutputText: "I reached the tool-step limit while trying to answer. I’ll provide the best answer I can from the information gathered so far."})
 	resp := buildFinalResponse(l.modelName(), finalText, executedToolCalls, toolResults, "", "")
 	resp.EscalationState = retryState.escalationState
+	if resp.CarryoverState != nil {
+		resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+	}
 	emitChatGPTOwnedLoopHydration(req, resp)
 	return resp, nil
 }

@@ -730,7 +730,7 @@ func TestExecuteAnthropicOwnedLoopToolCall_FormatsRecoverableRetryResult(t *test
 		1,
 		5,
 		ai.ToolCall{Name: "execute_script", Args: map[string]any{"script": []any{map[string]any{"op": "scan"}}}},
-		newOwnedLoopRetryState(),
+		newOwnedLoopRetryState(5, "test retry", nil),
 		nil,
 	)
 	if !strings.Contains(result.Result, "Retry instruction:") {
@@ -819,7 +819,7 @@ func (e *anthropicOwnedLoopRepairEnforcementExecutor) ListTools(ctx context.Cont
 }
 
 func TestAnthropicOwnedLoop_RequiresRepairBeforeSwitchingTools(t *testing.T) {
-	retryState := newOwnedLoopRetryState()
+	retryState := newOwnedLoopRetryState(4, "Generate sample tasks and add them to my Tasks space", nil)
 	toolCall := ai.ToolCall{Name: "mint_to_space", Args: map[string]any{"space": "Tasks"}}
 	result, escalated := retryState.handleRecoverableFailure(toolCall, errors.New("argument 'content' is missing or not a string"), nil)
 	if escalated {

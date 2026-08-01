@@ -404,6 +404,7 @@ type CarryoverState struct {
 	LastOutcomeFacts       []string
 	LastRecipeIDs          []string
 	LastToolNames          []string
+	RetryLearnings         []RetryLearning
 	LastUserQuery          string
 	LastAssistantSummary   string
 	LastResetReason        CarryoverResetReason

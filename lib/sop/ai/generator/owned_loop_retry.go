@@ -13,12 +13,37 @@ type ownedLoopRetryState struct {
 	failureCounts   map[string]int
 	escalationState map[string]any
 	pendingRepair   *ai.RepairPlan
+	learnings       []ai.RetryLearning
+	allowedTurns    int
+	maxAllowedTurns int
+	lastFailures    map[string]ownedLoopFailureContext
+	progressExtensions int
 }
 
-func newOwnedLoopRetryState() *ownedLoopRetryState {
+type ownedLoopFailureContext struct {
+	err  error
+	plan ai.RepairPlan
+}
+
+
+func newOwnedLoopRetryState(baseTurns int, query string, carryover *ai.CarryoverState) *ownedLoopRetryState {
+	var learnings []ai.RetryLearning
+	if carryover != nil && len(carryover.RetryLearnings) > 0 {
+		learnings = append([]ai.RetryLearning(nil), carryover.RetryLearnings...)
+	}
+	coordinator := ai.NewRetryCoordinator()
+	allowed := coordinator.CalculateAdaptiveBudget(baseTurns, query, learnings)
+	maxAllowed := baseTurns + 3
+	if maxAllowed < allowed {
+		maxAllowed = allowed
+	}
 	return &ownedLoopRetryState{
-		coordinator:   ai.NewRetryCoordinator(),
+		coordinator:   coordinator,
 		failureCounts: make(map[string]int),
+		learnings:     learnings,
+		allowedTurns:  allowed,
+		maxAllowedTurns: maxAllowed,
+		lastFailures:  make(map[string]ownedLoopFailureContext),
 	}
 }
 
@@ -53,6 +78,10 @@ func (s *ownedLoopRetryState) completeSuccessfulTool(toolName string) {
 	if s == nil {
 		return
 	}
+	if ctx, ok := s.lastFailures[toolName]; ok {
+		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolName, ctx.err, ctx.plan, true)
+		delete(s.lastFailures, toolName)
+	}
 	if s.pendingRepair == nil {
 		s.resetTool(toolName)
 		return
@@ -73,10 +102,20 @@ func (s *ownedLoopRetryState) handleRecoverableFailure(toolCall ai.ToolCall, err
 	recentlyResearched := wasOwnedLoopResearchRecentlyDone(toolResults, toolCall.Name)
 	tier := s.coordinator.DetermineRetryTier(err.Error(), currentFailureCount, lastHint)
 	plan := s.coordinator.ClassifyRepair(toolCall.Name, err, lastHint, recentlyResearched)
+	plan = s.coordinator.ApplyLearnedStrategy(plan, toolCall.Name, err, s.learnings)
+	if plan.Strategy == ai.RepairStrategyResearchFirst && tier < ai.RetryTierResearch {
+		tier = ai.RetryTierResearch
+	}
 	plan.Tier = tier
+	if previous, ok := s.lastFailures[toolCall.Name]; ok {
+		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolCall.Name, previous.err, previous.plan, false)
+	}
 	s.failureCounts[toolCall.Name] = currentFailureCount + 1
+	s.lastFailures[toolCall.Name] = ownedLoopFailureContext{err: err, plan: plan}
 
 	if tier == ai.RetryTierClarify {
+		s.learnings = s.coordinator.RecordOutcome(s.learnings, toolCall.Name, err, plan, false)
+		delete(s.lastFailures, toolCall.Name)
 		s.pendingRepair = nil
 		s.escalationState = map[string]any{
 			"tier":             3,
@@ -102,6 +141,36 @@ func (s *ownedLoopRetryState) handleRecoverableFailure(toolCall ai.ToolCall, err
 		Result: formatOwnedLoopRetryResult(plan, toolCall.Args, err),
 		Hint:   lastHint,
 	}, false
+}
+
+func (s *ownedLoopRetryState) maybeExtendBudget(toolResults []ai.ReActToolResult, currentIteration int) bool {
+	if s == nil || currentIteration < s.allowedTurns || s.allowedTurns >= s.maxAllowedTurns {
+		return false
+	}
+	explicitProgress, implicitProgress := ownedLoopProgressSignals(toolResults)
+	if !explicitProgress && !implicitProgress {
+		return false
+	}
+	if implicitProgress && s.progressExtensions > 0 {
+		return false
+	}
+		extension := 1
+		if hint := latestOwnedLoopHint(toolResults); hint != nil && hint.CompletionDelta >= 0.25 {
+			extension = 2
+		}
+		s.allowedTurns += extension
+		if s.allowedTurns > s.maxAllowedTurns {
+			s.allowedTurns = s.maxAllowedTurns
+		}
+		s.progressExtensions++
+		return true
+}
+
+func (s *ownedLoopRetryState) exportedLearnings() []ai.RetryLearning {
+	if s == nil || len(s.learnings) == 0 {
+		return nil
+	}
+	return append([]ai.RetryLearning(nil), s.learnings...)
 }
 
 func latestOwnedLoopHint(toolResults []ai.ReActToolResult) *ai.ToolProgressHint {
@@ -150,6 +219,23 @@ func toolResultSignalsRecoverableFailure(resultText string) bool {
 		}
 	}
 	return false
+}
+
+func ownedLoopProgressSignals(toolResults []ai.ReActToolResult) (explicit bool, implicit bool) {
+	if len(toolResults) == 0 {
+		return false, false
+	}
+	last := toolResults[len(toolResults)-1]
+	if hint := last.Hint; hint != nil {
+		status := strings.ToLower(strings.TrimSpace(hint.Status))
+		if status == "progressing" || hint.CompletionDelta > 0 || len(hint.Clues) > 0 || len(hint.SuggestedNextTools) > 0 {
+			return true, false
+		}
+	}
+	if last.Name == "list_stores" && !strings.Contains(strings.ToLower(last.Result), "error") {
+		return false, true
+	}
+	return false, false
 }
 
 func formatOwnedLoopRetryResult(plan ai.RepairPlan, args map[string]any, err error) string {

@@ -106,6 +106,7 @@ func cloneHydrationCarryoverState(state *CarryoverState) *CarryoverState {
 	cloned.LastOutcomeFacts = cloneHydrationFacts(state.LastOutcomeFacts)
 	cloned.LastRecipeIDs = append([]string(nil), state.LastRecipeIDs...)
 	cloned.LastToolNames = cloneHydrationToolNames(state.LastToolNames)
+	cloned.RetryLearnings = append([]RetryLearning(nil), state.RetryLearnings...)
 	cloned.LastAssistantSummary = trimHydrationText(state.LastAssistantSummary, MemoryHydrationTextCharLimit)
 	return &cloned
 }

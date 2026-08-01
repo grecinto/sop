@@ -23,7 +23,9 @@
 # **/kb/vectors/
 # **/fs.test
 .sop-data/
-# config.json
+config.json
+# Local knowledge seed / experimentation file
+lib/sop/ai/sop_base_knowledge.json
 # knowledge_compiler
 # sopbackend
 # lib/sop/tools/httpserver/scripts/

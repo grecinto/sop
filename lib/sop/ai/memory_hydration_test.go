@@ -16,6 +16,7 @@ func TestBuildMemoryHydrationUpdate_DelegatesToFromParts(t *testing.T) {
 			LastAssistantSummary: strings.Repeat("S", MemoryHydrationTextCharLimit+25),
 			LastOutcomeFacts:     []string{"carry_fact_1", "carry_fact_2", "carry_fact_3", "carry_fact_4", "carry_fact_5", "carry_fact_6", strings.Repeat("c", MemoryHydrationFactCharLimit+15)},
 			LastToolNames:        []string{"tool_1", "tool_2", "tool_3", "tool_4", "tool_5", "tool_6", "tool_7"},
+			RetryLearnings:       []RetryLearning{{ToolName: "execute_script", ErrorPattern: "execute_script:join mapping unresolved", PreferredStrategy: RepairStrategyResearchFirst, SuccessCount: 1}},
 		},
 	}
 
@@ -80,9 +81,16 @@ func TestBuildMemoryHydrationUpdateFromParts_BoundsAndClonesWithoutReasoningResp
 	if update.CarryoverState == nil || len(update.CarryoverState.LastToolNames) != MemoryHydrationToolCallLimit {
 		t.Fatalf("expected carryover tool names to be bounded, got %+v", update.CarryoverState)
 	}
+	if update.CarryoverState == nil || len(update.CarryoverState.RetryLearnings) != 1 {
+		t.Fatalf("expected retry learnings to be cloned into hydration update, got %+v", update.CarryoverState)
+	}
 
 	input.ToolCalls[6].Name = "mutated"
+	input.CarryoverState.RetryLearnings[0].ToolName = "mutated"
 	if update.ToolCalls[len(update.ToolCalls)-1].Name != "tool_7" {
 		t.Fatalf("expected tool calls to be cloned, got %+v", update.ToolCalls)
+	}
+	if update.CarryoverState.RetryLearnings[0].ToolName != "execute_script" {
+		t.Fatalf("expected retry learnings to be cloned, got %+v", update.CarryoverState.RetryLearnings)
 	}
 }

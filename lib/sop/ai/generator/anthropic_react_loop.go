@@ -63,9 +63,9 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 
 	toolResults := make([]ai.ReActToolResult, 0)
 	executedToolCalls := make([]ai.ToolCall, 0)
-	retryState := newOwnedLoopRetryState()
+	retryState := newOwnedLoopRetryState(l.maxIterations, req.UserQuery, req.CarryoverState)
 
-	for iteration := 1; iteration <= l.maxIterations; iteration++ {
+	for iteration := 1; iteration <= retryState.allowedTurns; iteration++ {
 		log.Debug("Anthropic owned loop iteration started",
 			"iteration", iteration,
 			"tool_results", len(toolResults),
@@ -107,6 +107,9 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 		if req.Executor == nil || len(output.ToolCalls) == 0 {
 			resp := anthropicOwnedLoopResponse(output.Text, executedToolCalls, toolResults, continuations)
 			resp.EscalationState = retryState.escalationState
+			if resp.CarryoverState != nil {
+				resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+			}
 			log.Debug("Anthropic owned loop completed without more tool calls",
 				"iteration", iteration,
 				"executed_tool_calls", len(executedToolCalls),
@@ -164,9 +167,14 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 			})
 			resp := anthropicOwnedLoopResponse(errorMsg, executedToolCalls, toolResults, continuations)
 			resp.EscalationState = retryState.escalationState
+			if resp.CarryoverState != nil {
+				resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+			}
 			emitAnthropicOwnedLoopHydration(req, resp)
 			return resp, nil
 		}
+
+		retryState.maybeExtendBudget(toolResults, iteration)
 	}
 
 	// Final turn without tools
@@ -177,7 +185,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 		ToolCallContinuations: append([]ai.ToolCallContinuation(nil), continuations...),
 	}
 	log.Debug("Anthropic owned loop entering final turn",
-		"iteration", l.maxIterations+1,
+		"iteration", retryState.allowedTurns+1,
 		"continuations", len(finalOpts.ToolCallContinuations),
 		"tool_results", len(toolResults),
 		"prompt_preview", anthropicPreview(finalPrompt, 320),
@@ -186,13 +194,16 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 	output, err := l.generator.Generate(ctx, finalPrompt, finalOpts)
 	if err != nil {
 		log.Error("Anthropic owned loop final generation failed",
-			"iteration", l.maxIterations+1,
+			"iteration", retryState.allowedTurns+1,
 			"error", err,
 		)
 		return ai.ReasoningResponse{}, fmt.Errorf("final generation failed: %w", err)
 	}
 	resp := anthropicOwnedLoopResponse(output.Text, executedToolCalls, toolResults, continuations)
 	resp.EscalationState = retryState.escalationState
+	if resp.CarryoverState != nil {
+		resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+	}
 	log.Debug("Anthropic owned loop finished on final turn",
 		"executed_tool_calls", len(executedToolCalls),
 		"outcome_facts", len(resp.OutcomeFacts),

@@ -28,6 +28,7 @@ func cloneCarryoverState(state *ai.CarryoverState) *ai.CarryoverState {
 	cloned.LastOutcomeFacts = append([]string(nil), state.LastOutcomeFacts...)
 	cloned.LastRecipeIDs = append([]string(nil), state.LastRecipeIDs...)
 	cloned.LastToolNames = append([]string(nil), state.LastToolNames...)
+	cloned.RetryLearnings = append([]ai.RetryLearning(nil), state.RetryLearnings...)
 	return &cloned
 }
 
@@ -100,6 +101,9 @@ func mergeCarryoverRuntimeState(state *ai.CarryoverState, previous *ai.Carryover
 		if state.EstimatedRawToolTokens == 0 {
 			state.EstimatedRawToolTokens = previous.EstimatedRawToolTokens
 		}
+		if len(state.RetryLearnings) == 0 && len(previous.RetryLearnings) > 0 {
+			state.RetryLearnings = append([]ai.RetryLearning(nil), previous.RetryLearnings...)
+		}
 	}
 	if providerState == nil {
 		return
@@ -115,6 +119,9 @@ func mergeCarryoverRuntimeState(state *ai.CarryoverState, previous *ai.Carryover
 	}
 	if providerState.EstimatedRawToolTokens > 0 {
 		state.EstimatedRawToolTokens = providerState.EstimatedRawToolTokens
+	}
+	if len(providerState.RetryLearnings) > 0 {
+		state.RetryLearnings = append([]ai.RetryLearning(nil), providerState.RetryLearnings...)
 	}
 	if providerState.LastResetReason != "" {
 		state.LastResetReason = providerState.LastResetReason
