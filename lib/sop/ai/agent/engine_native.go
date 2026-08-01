@@ -40,11 +40,24 @@ type nativeToolResult struct {
 
 type askAnchoredMRUState []MRUItem
 
+// Tier 2B: Progressive escalation tiers
+type nativeRetryTier int
+
+const (
+	// TierQuickFix: First failure - retry same tool with corrections
+	TierQuickFix nativeRetryTier = 1
+	// TierResearch: Second failure - research before retry
+	TierResearch nativeRetryTier = 2
+	// TierClarify: Third+ failure - escalate to user clarification
+	TierClarify nativeRetryTier = 3
+)
+
 type pendingToolRepair struct {
 	ToolName       string
 	Strategy       nativeRepairStrategy
 	ResearchTool   string
 	ResearchReason string
+	Tier           nativeRetryTier // Tier 2B: tracks escalation level
 }
 
 type pendingGenerationRepair struct{}
@@ -310,22 +323,44 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 		if err != nil {
 			emitReasoningEvent(req, ai.ReasoningEventToolError, ai.BuildToolErrorEvent(toolCall.Name, cloneToolEventMap(toolCall.Args), err, iteration+1))
 			if isRecoverableToolExecutionError(err) {
-				// Tier 2A: Check if previous tool provided hint about retry strategy
+				// Tier 2A/2B: Check hint and determine appropriate retry tier
 				lastHint := getLatestToolHint(toolResults)
+				errorMessage := err.Error()
+				retryTier := determineRetryTier(errorMessage, repairAttempts, lastHint)
+				
 				repairPlan := classifyRecoverableToolRepair(toolCall.Name, err, lastHint)
-				if shouldEscalateRepairToClarification(repairAttempts) {
-					emitVerboseProgress(ctx, "Repair remained unresolved after the first retry; switching to clarification.")
+				repairPlan.Tier = retryTier
+				
+				// Tier 2B: Log tier decision
+				log.Info("Tier 2B: Progressive retry tier determined",
+					"tool", toolCall.Name,
+					"tier", int(retryTier),
+					"failure_count", repairAttempts,
+					"strategy", repairPlan.Strategy)
+				
+				if retryTier == TierClarify || shouldEscalateRepairToClarification(repairAttempts) {
+					emitVerboseProgress(ctx, "Tier 3 (Clarify): Escalating to user after %d failures.", repairAttempts)
 					pendingRepair = nil
 					toolResults = appendOrReplaceRetriedToolResult(toolResults, nativeToolResult{
 						Name:   toolCall.Name,
 						Result: formatClarificationRequiredToolError(repairPlan, toolCall.Args, err),
 						Args:   cloneToolEventMap(toolCall.Args),
 					}, priorRepair, toolCall.Name)
-					log.Warn("Native ReAct Engine Escalated Repair To Clarification", "tool", toolCall.Name, "error", err)
+					log.Warn("Native ReAct Engine Escalated Repair To Clarification (Tier 3)", "tool", toolCall.Name, "error", err, "attempts", repairAttempts)
 					continue
 				}
 				repairAttempts++
-				emitVerboseProgress(ctx, "Tool `%s` needs corrected arguments; retrying.", toolCall.Name)
+				
+				// Tier 2B: Emit tier-specific progress message
+				switch retryTier {
+				case TierQuickFix:
+					emitVerboseProgress(ctx, "Tier 1 (Quick Fix): Tool `%s` needs corrected arguments; retrying.", toolCall.Name)
+				case TierResearch:
+					emitVerboseProgress(ctx, "Tier 2 (Research): Tool `%s` requires research before retry.", toolCall.Name)
+				default:
+					emitVerboseProgress(ctx, "Tool `%s` needs corrected arguments; retrying.", toolCall.Name)
+				}
+				
 				pendingRepair = &repairPlan
 				toolResults = appendOrReplaceRetriedToolResult(toolResults, nativeToolResult{
 					Name:   toolCall.Name,
@@ -2575,8 +2610,56 @@ func formatPendingRepairReminder(repair pendingToolRepair, attemptedToolName str
 	)
 }
 
+// Tier 2B: Determine retry tier based on failure count, error type, and hint
+func determineRetryTier(errorType string, failureCount int, hint *ai.ToolProgressHint) nativeRetryTier {
+	// Override: Tool explicitly suggests research (from Tier 2A)
+	if hint != nil && hint.SuggestedAction == "research_before_retry" {
+		return TierResearch
+	}
+	
+	// Override: Tool explicitly suggests giving up
+	if hint != nil && hint.SuggestedAction == "give_up_and_clarify" {
+		return TierClarify
+	}
+	
+	// Progressive escalation based on failure count
+	if failureCount == 0 {
+		// First failure - try quick fix
+		return TierQuickFix
+	}
+	
+	if failureCount == 1 {
+		// Second failure - escalate to research if error is researchable
+		if isResearchableError(errorType) {
+			return TierResearch
+		}
+		// Otherwise stay in quick fix
+		return TierQuickFix
+	}
+	
+	// Third+ failure - escalate to clarification
+	return TierClarify
+}
+
+// Helper to determine if an error type benefits from research
+func isResearchableError(errorType string) bool {
+	// Errors related to missing knowledge (schema, relations, stores)
+	researchable := []string{
+		"table", "relation", "schema", "store", "column",
+		"join", "mapping", "not found", "does not exist",
+	}
+	errorLower := strings.ToLower(errorType)
+	for _, keyword := range researchable {
+		if strings.Contains(errorLower, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
 func shouldEscalateRepairToClarification(repairAttempts int) bool {
-	return repairAttempts >= 1
+	// Tier 2B: Escalate after 2 failures (0 and 1 = quick fix/research, 2+ = clarify)
+	return repairAttempts >= 2
 }
 
 func isRoutedAskContext(ctx context.Context) bool {

@@ -60,3 +60,98 @@ func TestEngineNative_Tier2A_GetLatestToolHint(t *testing.T) {
 		t.Fatalf("expected latest hint, got %+v", hint)
 	}
 }
+
+// Tier 2B: Test progressive retry tier determination
+func TestEngineNative_Tier2B_DetermineRetryTier(t *testing.T) {
+	// Test progressive escalation based on failure count
+	
+	// First failure (0) -> Quick Fix
+	tier := determineRetryTier("table not found", 0, nil)
+	if tier != TierQuickFix {
+		t.Fatalf("expected TierQuickFix for first failure, got %v", tier)
+	}
+	
+	// Second failure (1) with researchable error -> Research
+	tier = determineRetryTier("table 'users' not found", 1, nil)
+	if tier != TierResearch {
+		t.Fatalf("expected TierResearch for second failure with researchable error, got %v", tier)
+	}
+	
+	// Second failure (1) with non-researchable error -> Quick Fix
+	tier = determineRetryTier("invalid syntax", 1, nil)
+	if tier != TierQuickFix {
+		t.Fatalf("expected TierQuickFix for second failure with non-researchable error, got %v", tier)
+	}
+	
+	// Third failure (2) -> Clarify
+	tier = determineRetryTier("any error", 2, nil)
+	if tier != TierClarify {
+		t.Fatalf("expected TierClarify for third failure, got %v", tier)
+	}
+	
+	// Hint override: research_before_retry (any failure count)
+	hint := &ai.ToolProgressHint{SuggestedAction: "research_before_retry"}
+	tier = determineRetryTier("any error", 0, hint)
+	if tier != TierResearch {
+		t.Fatalf("expected TierResearch when hint suggests research, got %v", tier)
+	}
+	
+	// Hint override: give_up_and_clarify (any failure count)
+	hint = &ai.ToolProgressHint{SuggestedAction: "give_up_and_clarify"}
+	tier = determineRetryTier("any error", 0, hint)
+	if tier != TierClarify {
+		t.Fatalf("expected TierClarify when hint suggests giving up, got %v", tier)
+	}
+}
+
+// Test researchable error classification
+func TestEngineNative_Tier2B_IsResearchableError(t *testing.T) {
+	researchable := []string{
+		"table 'users' not found",
+		"relation does not exist",
+		"schema validation failed",
+		"store not found",
+		"column 'id' does not exist",
+		"join mapping invalid",
+	}
+	
+	for _, errorMsg := range researchable {
+		if !isResearchableError(errorMsg) {
+			t.Fatalf("expected '%s' to be researchable", errorMsg)
+		}
+	}
+	
+	nonResearchable := []string{
+		"syntax error",
+		"invalid query",
+		"connection timeout",
+		"permission denied",
+	}
+	
+	for _, errorMsg := range nonResearchable {
+		if isResearchableError(errorMsg) {
+			t.Fatalf("expected '%s' to NOT be researchable", errorMsg)
+		}
+	}
+}
+
+// Test escalation threshold
+func TestEngineNative_Tier2B_EscalationThreshold(t *testing.T) {
+	// Should not escalate on first two failures
+	if shouldEscalateRepairToClarification(0) {
+		t.Fatal("should not escalate on first failure")
+	}
+	
+	if shouldEscalateRepairToClarification(1) {
+		t.Fatal("should not escalate on second failure")
+	}
+	
+	// Should escalate on third failure
+	if !shouldEscalateRepairToClarification(2) {
+		t.Fatal("should escalate on third failure")
+	}
+	
+	if !shouldEscalateRepairToClarification(3) {
+		t.Fatal("should escalate on fourth+ failures")
+	}
+}
