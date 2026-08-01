@@ -656,10 +656,11 @@ func TestCopilotPipeline_Phases(t *testing.T) {
 	// --- Phase 5: Delegating to Engine ---
 	// Mock a JSON payload wrapped in code blocks to simulate reasoning layer tool use output
 	fakeGen.Response = "I can definitely help with that. ```json\n[{\"tool\":\"search_space\",\"args\":{}}]\n```"
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, err := ag.reactLoop(ctx, query, fakeGen, prompt)
+	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, err := ag.reactLoop(ctx, query, fakeGen, prompt)
 	if err != nil {
 		t.Fatalf("Engine delegation failed: %v", err)
 	}
+	_ = escalationState // Test doesn't validate escalation state yet
 	if carryoverState != nil {
 		t.Fatalf("expected no carryover state from baseline mock delegation path, got %+v", carryoverState)
 	}

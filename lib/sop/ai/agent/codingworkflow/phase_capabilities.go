@@ -882,6 +882,15 @@ func (c *PhaseCapability) OnBefore(ctx context.Context, query string, state capa
 // This is called AFTER all provider-specific ReAct loops (ChatGPT, Anthropic, Gemini, default)
 // complete, making it provider-agnostic and the single source of truth for phase transitions.
 func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	// 0. Check for Tier 3 escalation FIRST (takes priority over normal phase succession)
+	if escalation, ok := result.Data["escalation_state"].(map[string]any); ok && escalation != nil {
+		tier, _ := escalation["tier"].(int)
+		if tier >= 3 {
+			// Progressive retry escalated to Tier 3 - trigger backward phase transition
+			return c.handleEscalation(ctx, query, escalation)
+		}
+	}
+
 	// 1. Check if a capture tool was called (phase completion signal)
 	if !c.wasCaptureToolCalled(result) {
 		return nil // Phase still in progress
@@ -977,6 +986,105 @@ func (c *PhaseCapability) wasCaptureToolCalled(result capabilities.CapabilityRes
 	}
 
 	return false
+}
+
+// handleEscalation processes Tier 3 progressive retry escalation by enqueueing a backward phase transition.
+// This enables automatic error recovery when the LLM exhausts retry attempts within a phase.
+func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, escalation map[string]any) error {
+	failedTool, _ := escalation["failed_tool"].(string)
+	failureCount, _ := escalation["failure_count"].(int)
+	errorType, _ := escalation["error_type"].(string)
+
+	log.Info("Phase succession: Handling Tier 3 escalation",
+		"current_phase", c.phaseID,
+		"failed_tool", failedTool,
+		"failure_count", failureCount,
+		"error_type", errorType)
+
+	// Determine backward phase transition based on current phase
+	var targetPhase string
+	var transitionReason string
+
+	switch c.phaseID {
+	case "execution":
+		targetPhase = "planning"
+		transitionReason = "Execution phase encountered repeated failures - returning to planning to revise approach"
+	case "planning":
+		targetPhase = "investigation"
+		transitionReason = "Planning phase encountered repeated failures - returning to investigation to gather more context"
+	case "review":
+		targetPhase = "execution"
+		transitionReason = "Review phase encountered repeated failures - returning to execution to fix issues"
+	case "delivery":
+		targetPhase = "review"
+		transitionReason = "Delivery phase encountered repeated failures - returning to review to verify outputs"
+	case "investigation":
+		// Investigation is the first phase - stay in phase and let LLM clarify with user
+		log.Info("Phase succession: Tier 3 escalation in investigation phase, no backward transition available",
+			"phase", c.phaseID,
+			"action", "staying_in_phase")
+		return nil
+	default:
+		// Unknown phase or no backward transition available
+		log.Warn("Phase succession: No backward transition available for phase",
+			"phase", c.phaseID)
+		return nil
+	}
+
+	// Get queue accessor
+	if c.sharedInfra == nil || c.sharedInfra.GetSessionQueue == nil {
+		log.Warn("Phase succession: No queue accessor available for escalation handling",
+			"phase", c.phaseID,
+			"target_phase", targetPhase)
+		return nil
+	}
+
+	queue := c.sharedInfra.GetSessionQueue()
+	if queue == nil {
+		log.Warn("Phase succession: Queue accessor returned nil for escalation handling",
+			"phase", c.phaseID,
+			"target_phase", targetPhase)
+		return nil
+	}
+
+	// Enqueue backward phase transition with high priority
+	workItem := struct {
+		Query    string
+		Actor    string
+		Priority int
+		Context  map[string]any
+	}{
+		Query:    query, // Carry forward original query
+		Actor:    "phase:" + targetPhase,
+		Priority: 15, // Higher than normal phase succession (10)
+		Context: map[string]any{
+			"transition_reason": "tier3_escalation",
+			"transition_type":   "backward",
+			"from_phase":        c.phaseID,
+			"failed_tool":       failedTool,
+			"failure_count":     failureCount,
+			"error_type":        errorType,
+			"escalation":        escalation,
+			"explanation":       transitionReason,
+		},
+	}
+
+	if err := queue.Enqueue(workItem); err != nil {
+		log.Error("Phase succession: Failed to enqueue backward transition",
+			"phase", c.phaseID,
+			"target_phase", targetPhase,
+			"error", err)
+		return fmt.Errorf("failed to enqueue backward transition to %s: %w", targetPhase, err)
+	}
+
+	log.Info("Phase succession: Enqueued backward phase transition due to Tier 3 escalation",
+		"from_phase", c.phaseID,
+		"to_phase", targetPhase,
+		"failed_tool", failedTool,
+		"failure_count", failureCount,
+		"reason", transitionReason)
+
+	return nil
 }
 
 // buildHandoffPrompt creates a context-rich handoff prompt including artifacts from previous phases

@@ -155,6 +155,7 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 	var pendingRepair *pendingToolRepair
 	var pendingMalformedCall *pendingGenerationRepair
 	var pendingContinuation *ai.ToolCallContinuation
+	var escalationState map[string]any // Track Tier 3 escalation for phase succession
 	strategy := resolveReActTurnStrategy(req)
 	for iteration := 0; iteration < budgetState.maxIterations && iteration < budgetState.allowedIterations; iteration++ {
 		// Check for context cancellation at the start of each iteration
@@ -271,10 +272,11 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 			outcomeRecipes := summarizeOutcomeRecipes(toolResults)
 			if shouldPreserveStructuredToolResult(ctx, toolResults) {
 				return ai.ReasoningResponse{
-					FinalText:      preserveStructuredToolResult(toolResults[len(toolResults)-1].Result, e.EnableObfuscation),
-					ToolCalls:      executedToolCalls,
-					OutcomeFacts:   summarizeOutcomeFacts(toolResults),
-					OutcomeRecipes: outcomeRecipes,
+					FinalText:       preserveStructuredToolResult(toolResults[len(toolResults)-1].Result, e.EnableObfuscation),
+					ToolCalls:       executedToolCalls,
+					OutcomeFacts:    summarizeOutcomeFacts(toolResults),
+					OutcomeRecipes:  outcomeRecipes,
+					EscalationState: escalationState,
 				}, nil
 			}
 
@@ -284,10 +286,11 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 			}
 
 			return ai.ReasoningResponse{
-				FinalText:      finalText,
-				ToolCalls:      executedToolCalls,
-				OutcomeFacts:   summarizeOutcomeFacts(toolResults),
-				OutcomeRecipes: outcomeRecipes,
+				FinalText:       finalText,
+				ToolCalls:       executedToolCalls,
+				OutcomeFacts:    summarizeOutcomeFacts(toolResults),
+				OutcomeRecipes:  outcomeRecipes,
+				EscalationState: escalationState,
 			}, nil
 		}
 
@@ -340,6 +343,17 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 				
 				if retryTier == TierClarify || shouldEscalateRepairToClarification(repairAttempts) {
 					emitVerboseProgress(ctx, "Tier 3 (Clarify): Escalating to user after %d failures.", repairAttempts)
+					
+					// Capture escalation state for phase succession (backward transitions)
+					escalationState = map[string]any{
+						"tier":             3,
+						"failed_tool":      toolCall.Name,
+						"failure_count":    repairAttempts,
+						"strategy":         repairPlan.Strategy,
+						"suggested_action": "backward_phase_transition",
+						"error_type":       errorMessage,
+					}
+					
 					pendingRepair = nil
 					toolResults = appendOrReplaceRetriedToolResult(toolResults, nativeToolResult{
 						Name:   toolCall.Name,
@@ -477,10 +491,11 @@ func (e *NativeReActEngine) runDefaultLoop(ctx context.Context, req ai.Reasoning
 		finalText = obfuscation.GlobalObfuscator.DeobfuscateText(output.Text)
 	}
 	return ai.ReasoningResponse{
-		FinalText:      finalText,
-		ToolCalls:      executedToolCalls,
-		OutcomeFacts:   summarizeOutcomeFacts(toolResults),
-		OutcomeRecipes: summarizeOutcomeRecipes(toolResults),
+		FinalText:       finalText,
+		ToolCalls:       executedToolCalls,
+		OutcomeFacts:    summarizeOutcomeFacts(toolResults),
+		OutcomeRecipes:  summarizeOutcomeRecipes(toolResults),
+		EscalationState: escalationState,
 	}, nil
 }
 

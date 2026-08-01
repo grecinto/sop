@@ -3614,7 +3614,7 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	query = a.enrichQueryWithKBResults(query, taskContext)
 
 	// 8. Delegate to Reasoning engine/ReAct loop.
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, err := a.reactLoop(ctx, query, gen, fullPrompt)
+	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, err := a.reactLoop(ctx, query, gen, fullPrompt)
 	if err != nil {
 		return "", err
 	}
@@ -3624,10 +3624,11 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 		capResult := capabilities.CapabilityResult{
 			Summary: finalText,
 			Data: map[string]any{
-				"tool_calls":      toolCalls,
-				"outcome_facts":   outcomeFacts,
-				"outcome_recipes": outcomeRecipes,
-				"carryover_state": carryoverState,
+				"tool_calls":        toolCalls,
+				"outcome_facts":     outcomeFacts,
+				"outcome_recipes":   outcomeRecipes,
+				"carryover_state":   carryoverState,
+				"escalation_state":  escalationState,
 			},
 		}
 		if err := selectedCap.OnAfter(ctx, query, routingState, capResult); err != nil {
@@ -4279,7 +4280,7 @@ func (a *CopilotAgent) trackEpisodeMetadata(ctx context.Context, intent string) 
 	}
 }
 
-func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Generator, fullPrompt string) (string, []ai.ToolCall, []string, []ai.LearnedRecipe, *ai.CarryoverState, error) {
+func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Generator, fullPrompt string) (string, []ai.ToolCall, []string, []ai.LearnedRecipe, *ai.CarryoverState, map[string]any, error) {
 	currentDB := ""
 	if p := ai.GetSessionPayload(ctx); p != nil {
 		currentDB = p.CurrentDB
@@ -4336,7 +4337,7 @@ func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Gener
 
 	resp, err := engine.Run(ctx, req)
 	if err != nil {
-		return "", nil, nil, nil, nil, err
+		return "", nil, nil, nil, nil, nil, err
 	}
 
 	finalText := resp.FinalText
@@ -4344,7 +4345,7 @@ func (a *CopilotAgent) reactLoop(ctx context.Context, query string, gen ai.Gener
 		finalText = obfuscation.GlobalObfuscator.DeobfuscateText(finalText)
 	}
 
-	return finalText, resp.ToolCalls, resp.OutcomeFacts, resp.OutcomeRecipes, resp.CarryoverState, nil
+	return finalText, resp.ToolCalls, resp.OutcomeFacts, resp.OutcomeRecipes, resp.CarryoverState, resp.EscalationState, nil
 }
 
 func splitProviderAndModel(provider, model string) (string, string) {

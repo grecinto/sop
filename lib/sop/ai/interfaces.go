@@ -469,7 +469,9 @@ const (
 type ReActToolResult struct {
 	Name          string
 	Args          map[string]any
-	Result        string
+	Result        string             // Inline result or summary if file-backed
+	ResultFile    string             // Path to full output file (if large)
+	ResultSize    int64              // Byte count of original result
 	Hint          *ToolProgressHint
 	ExecutionMode ReActToolResultExecutionMode
 }
@@ -588,6 +590,11 @@ type ReasoningResponse struct {
 	// such as a reusable live conversation handle, without exposing transport
 	// details to the service layer.
 	CarryoverState *CarryoverState
+	// EscalationState captures progressive retry escalation metadata when Tier 3
+	// (Clarify) is reached, enabling phase succession to trigger backward transitions.
+	// Fields: "tier" (int), "failed_tool" (string), "failure_count" (int),
+	// "strategy" (string), "suggested_action" (string), "error_type" (string)
+	EscalationState map[string]any
 }
 
 // PolicyEngine defines the interface for evaluating content against safety policies.
