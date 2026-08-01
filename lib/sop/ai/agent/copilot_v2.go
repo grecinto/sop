@@ -49,6 +49,10 @@ import (
 // ============================================================================
 
 // AskV2 is the next-generation Ask pipeline implementing pure LLM-as-Orchestrator pattern.
+// This is the canonical Ask implementation for active development.
+//
+// Deprecated replacement note: AskV2 replaces the legacy askV1 heuristic pipeline,
+// which remains available only as an emergency fallback behind use_v1_pipeline.
 //
 // ARCHITECTURE:
 // - Preserves ALL V1 infrastructure (queue, gates, intent, KB, lifecycle)
@@ -215,17 +219,12 @@ func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.Conf
 	if selectedCap != nil {
 		capResult := capabilities.CapabilityResult{
 			Summary: finalText,
-			Data: map[string]any{
-				"tool_calls":       toolCalls,
-				"outcome_facts":    outcomeFacts,
-				"outcome_recipes":  outcomeRecipes,
-				"carryover_state":  carryoverState,
-				"escalation_state": escalationState,
-			},
+			Data:    buildCapabilityResultData(toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest),
 		}
 		if err := selectedCap.OnAfter(ctx, query, routingState, capResult); err != nil {
 			log.Warn("Capability OnAfter failed", "capability", selectedCap.ID(), "error", err)
 		}
+		a.notifySupportingPostTurnObservers(ctx, query, routingState, selectedCap, capResult)
 	}
 
 	log.Info("Copilot AskV2 Complete", "session_id", sessionID, "response_chars", len(finalText))

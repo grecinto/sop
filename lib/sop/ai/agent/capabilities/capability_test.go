@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 func TestRegistryResolvesCapabilityByID(t *testing.T) {
@@ -251,6 +253,174 @@ func TestTryPrefixRouting_EmptyCommand(t *testing.T) {
 		}
 		if err != nil && !strings.Contains(err.Error(), "empty command") {
 			t.Errorf("Query %q error should mention 'empty command', got: %v", tc, err)
+		}
+	}
+}
+
+type stubSTMReader struct {
+	thread ThreadReader
+}
+
+func (s *stubSTMReader) GetCurrentThread() ThreadReader {
+	if s == nil {
+		return nil
+	}
+	return s.thread
+}
+
+type stubWorkStreamThread struct {
+	ctx                WorkStreamContextReader
+	state              WorkStreamState
+	pauseReason        string
+	manualResume       bool
+	pauseWithReasonHit int
+	resumeHit          int
+}
+
+func (s *stubWorkStreamThread) GetStreamContext() WorkStreamContextReader {
+	return s.ctx
+}
+
+func (s *stubWorkStreamThread) GetStreamState() WorkStreamState {
+	return s.state
+}
+
+func (s *stubWorkStreamThread) SetStreamState(state WorkStreamState) {
+	s.state = state
+}
+
+func (s *stubWorkStreamThread) PauseWorkStreamWithReason(reason string, requireManualResume bool) {
+	s.state = WorkStreamPaused
+	s.pauseReason = reason
+	s.manualResume = requireManualResume
+	s.pauseWithReasonHit++
+}
+
+func (s *stubWorkStreamThread) ResumeWorkStream() {
+	s.state = WorkStreamActive
+	s.pauseReason = ""
+	s.manualResume = false
+	s.resumeHit++
+}
+
+func (s *stubWorkStreamThread) GetPauseReason() string {
+	return s.pauseReason
+}
+
+func (s *stubWorkStreamThread) RequiresManualResume() bool {
+	return s.manualResume
+}
+
+type stubWorkStreamContext struct {
+	currentPhase string
+}
+
+func (s *stubWorkStreamContext) GetCurrentPhase() string {
+	return s.currentPhase
+}
+
+func (s *stubWorkStreamContext) GetPhaseHistory() []string {
+	return nil
+}
+
+func (s *stubWorkStreamContext) GetPhasePlan() PhasePlanReader {
+	return nil
+}
+
+func (s *stubWorkStreamContext) GetPhaseArtifacts() map[string]any {
+	return nil
+}
+
+func (s *stubWorkStreamContext) GetIterationCount() int {
+	return 0
+}
+
+func (s *stubWorkStreamContext) GetPhaseIterations() map[string]int {
+	return nil
+}
+
+func TestWorkStreamManagementOnAfter_PausesCurrentStreamForClarification(t *testing.T) {
+	thread := &stubWorkStreamThread{
+		ctx:   &stubWorkStreamContext{currentPhase: "planning"},
+		state: WorkStreamActive,
+	}
+	cap := NewWorkStreamManagement(func() STMReader {
+		return &stubSTMReader{thread: thread}
+	}, nil)
+
+	err := cap.OnAfter(context.Background(), "continue", RoutingState{}, CapabilityResult{
+		Data: map[string]any{
+			"clarification_request": &ai.ClarificationRequest{
+				AssistantQuestion: "Which output shape do you want?",
+				MissingFact:       "output shape",
+				Reason:            "retry_policy_requested_clarification",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("OnAfter returned error: %v", err)
+	}
+	if thread.state != WorkStreamPaused {
+		t.Fatalf("expected workstream to be paused, got %q", thread.state)
+	}
+	if thread.pauseWithReasonHit != 1 {
+		t.Fatalf("expected pause with reason to be used once, got %d", thread.pauseWithReasonHit)
+	}
+	if !thread.manualResume {
+		t.Fatal("expected clarification pause to require manual resume")
+	}
+	if !strings.Contains(thread.pauseReason, "output shape") {
+		t.Fatalf("expected pause reason to include missing fact, got %q", thread.pauseReason)
+	}
+}
+
+func TestWorkStreamManagementBuildContext_IncludesPauseReason(t *testing.T) {
+	thread := &stubWorkStreamThread{
+		ctx:          &stubWorkStreamContext{currentPhase: "planning"},
+		state:        WorkStreamPaused,
+		pauseReason:  "Waiting for clarification: output shape",
+		manualResume: true,
+	}
+	cap := NewWorkStreamManagement(func() STMReader {
+		return &stubSTMReader{thread: thread}
+	}, nil)
+
+	result := cap.BuildContext("continue", RoutingState{})
+	checks := []string{
+		"state: paused",
+		"pause_reason: Waiting for clarification: output shape",
+		"resume_mode: manual",
+	}
+	for _, check := range checks {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected build context to include %q, got %q", check, result)
+		}
+	}
+}
+
+func TestWorkStreamManagementListWorkStreams_IncludesPauseReason(t *testing.T) {
+	thread := &stubWorkStreamThread{
+		ctx:          &stubWorkStreamContext{currentPhase: "planning"},
+		state:        WorkStreamPaused,
+		pauseReason:  "Waiting for clarification: output shape",
+		manualResume: true,
+	}
+	cap := NewWorkStreamManagement(func() STMReader {
+		return &stubSTMReader{thread: thread}
+	}, nil)
+
+	result, err := cap.listWorkStreams()
+	if err != nil {
+		t.Fatalf("listWorkStreams returned error: %v", err)
+	}
+	checks := []string{
+		"Current WorkStream (state: paused):",
+		"- Pause Reason: Waiting for clarification: output shape",
+		"- Resume Mode: manual",
+	}
+	for _, check := range checks {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected workstream list to include %q, got %q", check, result)
 		}
 	}
 }

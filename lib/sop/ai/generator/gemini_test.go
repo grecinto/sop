@@ -978,6 +978,65 @@ func TestGeminiOwnedReActLoop_CarriesRepairDirectiveAfterValidationFailure(t *te
 	}
 }
 
+type geminiOwnedLoopClarificationActionGenerator struct {
+	calls int
+	prewarmNoop
+}
+
+func (m *geminiOwnedLoopClarificationActionGenerator) Name() string {
+	return "gemini_owned_loop_clarification_action_test"
+}
+func (m *geminiOwnedLoopClarificationActionGenerator) EstimateCost(inTokens, outTokens int) float64 {
+	return 0
+}
+func (m *geminiOwnedLoopClarificationActionGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	_ = ctx
+	_ = prompt
+	m.calls++
+	return ai.GenOutput{ToolCalls: []ai.ToolCall{{
+		Name: clarificationActionToolName,
+		Args: map[string]any{
+			"question":     "Which output shape do you want for the joined rows?",
+			"missing_fact": "output shape",
+			"target_query": "Find John orders",
+		},
+	}}}, nil
+}
+
+type geminiOwnedLoopClarificationActionExecutor struct{ callCount int }
+
+func (e *geminiOwnedLoopClarificationActionExecutor) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	e.callCount++
+	return "unexpected", nil
+}
+func (e *geminiOwnedLoopClarificationActionExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	return []ai.ToolDefinition{{Name: "execute_script"}}, nil
+}
+
+func TestGeminiOwnedLoop_HandlesExplicitClarificationAction(t *testing.T) {
+	gen := &geminiOwnedLoopClarificationActionGenerator{}
+	executor := &geminiOwnedLoopClarificationActionExecutor{}
+	loop := geminiOwnedReActLoop{generator: gen, maxIterations: 2}
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Find John orders",
+		Executor:     executor,
+		Generator:    gen,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if resp.FinalText != "Which output shape do you want for the joined rows?" {
+		t.Fatalf("unexpected final text: %q", resp.FinalText)
+	}
+	if resp.ClarificationRequest == nil || resp.ClarificationRequest.Source != clarificationActionToolName {
+		t.Fatalf("expected structured clarification request from explicit action, got %#v", resp.ClarificationRequest)
+	}
+	if executor.callCount != 0 {
+		t.Fatalf("expected explicit clarification action to avoid executor calls, got %d", executor.callCount)
+	}
+}
+
 func TestGeminiReActTurnStrategy_UsesRetryGuidanceWithoutRepairDirective(t *testing.T) {
 	g := &gemini{}
 	provider, ok := any(g).(ai.ReActTurnStrategyProvider)

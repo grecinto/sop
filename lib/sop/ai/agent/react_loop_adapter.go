@@ -57,8 +57,10 @@ type ReActLoopAdapter interface {
 	// Returns:
 	//   - toolCalls: List of tools the LLM wants to call
 	//   - finalText: Text to return if no tool calls (loop termination)
+	//   - clarificationRequest: Structured clarification handoff when the model
+	//     explicitly requests one missing fact instead of another tool call
 	//   - error: If extraction fails
-	ExtractToolCalls(output ai.GenOutput) (toolCalls []ai.ToolCall, finalText string, err error)
+	ExtractToolCalls(output ai.GenOutput) (toolCalls []ai.ToolCall, finalText string, clarificationRequest *ai.ClarificationRequest, err error)
 
 	// FormatContinuation builds the continuation payload for the next iteration.
 	// This is provider-specific:

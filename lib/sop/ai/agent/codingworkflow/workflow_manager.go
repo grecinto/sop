@@ -262,6 +262,11 @@ type StepEventHandler interface {
 //	    testResult, err := testOps.RunTests(task, state)
 //	    // Process test results...
 //	}
+//
+// Deprecated: Step is part of the legacy controller-style workflow system kept
+// only for compatibility and historical experiments. Do not build new features
+// on Step/WorkflowManager. Prefer PlannerCapability, MultiStepPlannerCapability,
+// and the Ask-driven phase/workstream system.
 type Step interface {
 	// Metadata returns static information about this step
 	Metadata() StepMetadata
@@ -351,6 +356,10 @@ type WorkflowResult struct {
 //	    &VerifyFixStep{isTerminal: true},
 //	}
 //	result, err := wm.Execute(ctx, steps, task, state)
+//
+// Deprecated: WorkflowManager is legacy controller-style orchestration kept only
+// as dormant compatibility code. New work should use PlannerCapability,
+// MultiStepPlannerCapability, and the phase/workstream system instead.
 //
 // Guard rail: WorkflowManager does NOT inject Steps into queue for secondary orchestration.
 // Instead, it feeds each Step to the Ask pipeline as a single transaction, respecting
@@ -458,7 +467,11 @@ func generateSignalCacheKey(signal StepSignal) string {
 	return fmt.Sprintf("%s_%x", signal.Type, hash[:8])
 }
 
-// NewWorkflowManager creates a WorkflowManager with the provided SharedInfrastructure.
+// NewWorkflowManager creates the deprecated WorkflowManager with the provided
+// SharedInfrastructure.
+//
+// Deprecated: prefer PlannerCapability, MultiStepPlannerCapability, and the
+// Ask-driven phase/workstream system for new orchestration work.
 func NewWorkflowManager(sharedInfra *SharedInfrastructure) *WorkflowManager {
 	if sharedInfra == nil {
 		sharedInfra = NewDefaultSharedInfrastructure()
@@ -545,7 +558,11 @@ func (wm *WorkflowManager) registerDefaultHandlers() {
 }
 
 // Execute is intentionally disabled for the capability-based workflow model.
-// Callers should participate through the Workflow Manager capability in Ask.
+// Deprecated: direct controller-style workflow execution is disabled. Keep this
+// entrypoint only as a guard rail for legacy callers and tests.
+//
+// Callers should participate through PlannerCapability, MultiStepPlannerCapability,
+// or the phase/workstream system in Ask.
 func (wm *WorkflowManager) Execute(ctx context.Context, steps []Step, task Task, state RunState) (WorkflowResult, error) {
 	_ = ctx
 	_ = steps
@@ -573,6 +590,8 @@ func (wm *WorkflowManager) Execute(ctx context.Context, steps []Step, task Task,
 //
 // Guard rail: Each Step is executed as ONE Ask transaction. The WorkflowManager
 // coordinates the sequence but does NOT create a secondary orchestration loop.
+// This path remains deprecated; future orchestration work should happen in the
+// Planner, Multi-Step Planner, and phase/workstream features.
 func (wm *WorkflowManager) runWorkflow(ctx context.Context, steps []Step, task Task, state RunState) (WorkflowResult, error) {
 	startTime := time.Now()
 

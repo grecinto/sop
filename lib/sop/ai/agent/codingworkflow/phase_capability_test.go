@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
 
@@ -153,6 +154,83 @@ func TestPlanningPhaseCapabilityExecutesWorkflowTool(t *testing.T) {
 	}
 }
 
+func TestPlanningPhaseCapabilityBuildContext_IncludesPendingClarification(t *testing.T) {
+	infra := &SharedInfrastructure{
+		Memory:         NewInMemorySessionMemory(),
+		ContextManager: stubContextManager{pack: ContextPack{WorkingDir: "/tmp/demo", RepositorySummary: "demo repo"}},
+	}
+	cap := NewPlanningPhaseCapability(infra)
+
+	_, err := cap.ExecuteTool(context.Background(), "planning_capture", map[string]any{
+		"summary": "Need clarification before execution",
+		"status":  "clarifying",
+		"structured_data": map[string]any{
+			"clarification_request": map[string]any{
+				"assistant_question": "Which output shape do you want?",
+				"missing_fact":       "output shape",
+				"reason":             "retry_policy_requested_clarification",
+				"source":             "execute_script",
+			},
+		},
+	}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("planning capture failed: %v", err)
+	}
+
+	result, err := cap.ExecuteTool(context.Background(), "planning_build_context", map[string]any{
+		"query": "plan the parser refactor",
+	}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("planning build context tool failed: %v", err)
+	}
+	checks := []string{
+		"Pending Clarification",
+		"Question: Which output shape do you want?",
+		"Missing Fact: output shape",
+		"Reason: retry_policy_requested_clarification",
+		"Source: execute_script",
+	}
+	for _, check := range checks {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected build context to include %q, got %q", check, result)
+		}
+	}
+}
+
+func TestPlanningPhaseCapabilityCapabilityContext_IncludesPendingClarification(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	_, err := cap.ExecuteTool(context.Background(), "planning_capture", map[string]any{
+		"summary": "Need clarification before execution",
+		"status":  "clarifying",
+		"structured_data": map[string]any{
+			"clarification_request": map[string]any{
+				"assistant_question": "Which output shape do you want?",
+				"missing_fact":       "output shape",
+				"reason":             "retry_policy_requested_clarification",
+				"source":             "execute_script",
+			},
+		},
+	}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("planning capture failed: %v", err)
+	}
+
+	result := cap.BuildContext("plan the parser refactor", capabilities.RoutingState{})
+	checks := []string{
+		"PHASE: Planning & Design",
+		"Pending Clarification",
+		"Question: Which output shape do you want?",
+		"Missing Fact: output shape",
+	}
+	for _, check := range checks {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected capability context to include %q, got %q", check, result)
+		}
+	}
+}
+
 func TestPhaseCapabilityCapturesTransitionAndExitSignals(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewPlanningPhaseCapability(infra)
@@ -296,9 +374,69 @@ func TestPlanningPhaseCapabilityMaturesAcrossIterations(t *testing.T) {
 	}
 }
 
+type stubWorkQueue struct{ enqueued int }
+
+func (q *stubWorkQueue) Enqueue(item any) error {
+	q.enqueued++
+	return nil
+}
+
+func TestPhaseCapabilityOnAfter_PersistsClarificationAndSkipsTransition(t *testing.T) {
+	queue := &stubWorkQueue{}
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory(), GetSessionQueue: func() WorkQueueAccessor { return queue }}
+	cap := NewPlanningPhaseCapability(infra)
+
+	_, err := cap.ExecuteTool(context.Background(), "planning_capture", map[string]any{
+		"summary":              "Ready to hand off",
+		"status":               "complete",
+		"transition_to":        "execution",
+		"transition_direction": "forward",
+	}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("planning capture failed: %v", err)
+	}
+
+	err = cap.OnAfter(context.Background(), "Find John orders", capabilities.RoutingState{}, capabilities.CapabilityResult{
+		Summary: "Which output shape do you want?",
+		Data: map[string]any{
+			"clarification_request": &ai.ClarificationRequest{
+				TargetQuery:       "Find John orders",
+				AssistantQuestion: "Which output shape do you want?",
+				MissingFact:       "output shape",
+				Reason:            "retry_policy_requested_clarification",
+				Source:            "execute_script",
+				Status:            "pending",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("OnAfter failed: %v", err)
+	}
+	if queue.enqueued != 0 {
+		t.Fatalf("expected clarification to suppress phase enqueue, got %d queued items", queue.enqueued)
+	}
+	artifact, err := cap.loadExistingArtifact()
+	if err != nil {
+		t.Fatalf("loadExistingArtifact failed: %v", err)
+	}
+	if artifact.Status != "clarifying" {
+		t.Fatalf("expected clarifying status, got %q", artifact.Status)
+	}
+	if artifact.TransitionTo != "" || artifact.TransitionDirection != "" {
+		t.Fatalf("expected clarification to clear pending transition, got %+v", artifact)
+	}
+	request, ok := artifact.StructuredData["clarification_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected clarification request in structured data, got %#v", artifact.StructuredData)
+	}
+	if request["missing_fact"] != "output shape" || request["source"] != "execute_script" {
+		t.Fatalf("unexpected clarification request payload in artifact: %#v", request)
+	}
+}
+
 func TestPhaseCapability_ClassifySelectsCorrectStartingPhase(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
-	
+
 	tests := []struct {
 		name          string
 		query         string
@@ -377,7 +515,7 @@ func TestPhaseCapability_ClassifySelectsCorrectStartingPhase(t *testing.T) {
 			expectedMode:  capabilities.CapabilityModePrimary,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var targetCap *PhaseCapability
@@ -395,9 +533,9 @@ func TestPhaseCapability_ClassifySelectsCorrectStartingPhase(t *testing.T) {
 			case "delivery":
 				targetCap = NewDeliveryPhaseCapability(infra)
 			}
-			
+
 			result := targetCap.Classify(tt.query, capabilities.RoutingState{})
-			
+
 			if !result.Relevant {
 				t.Errorf("expected %s phase to be relevant for %q", tt.expectedPhase, tt.query)
 			}
@@ -413,15 +551,15 @@ func TestPhaseCapability_ClassifySelectsCorrectStartingPhase(t *testing.T) {
 
 func TestPhaseCapability_ClassifyCapabilityHintTakesPriority(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
-	
+
 	// Create execution phase capability
 	executionCap := NewExecutionPhaseCapability(infra)
-	
+
 	// Query matches investigation ("fix"), but hint specifies execution
 	result := executionCap.Classify("fix failing tests", capabilities.RoutingState{
 		CapabilityHint: "phase_execution",
 	})
-	
+
 	if !result.Relevant {
 		t.Errorf("expected execution phase to be relevant with explicit hint")
 	}
@@ -435,14 +573,14 @@ func TestPhaseCapability_ClassifyCapabilityHintTakesPriority(t *testing.T) {
 
 func TestPhaseCapability_ClassifyKeywordMatchingProvidesSupportingRole(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
-	
+
 	// Create review phase capability
 	reviewCap := NewReviewPhaseCapability(infra)
-	
+
 	// Query "fix failing tests" should start with investigation (Primary, score 14)
 	// but review phase has "test" keyword, so it should be Supporting (score 12)
 	result := reviewCap.Classify("fix failing tests", capabilities.RoutingState{})
-	
+
 	if !result.Relevant {
 		t.Errorf("expected review phase to be relevant due to 'test' keyword")
 	}
@@ -478,7 +616,7 @@ func TestDetectStartingPhase(t *testing.T) {
 		{"implement user profiles", "intake"},
 		{"create a dashboard", "intake"},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
 			result := detectStartingPhase(strings.ToLower(tt.query))

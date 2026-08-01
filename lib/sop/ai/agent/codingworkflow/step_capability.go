@@ -18,6 +18,11 @@ const (
 // BaseStep provides a default implementation of the Step interface.
 // Concrete steps can embed BaseStep and override only the methods they need.
 //
+// Deprecated: BaseStep supports the legacy Step/WorkflowManager controller path.
+// Keep it only for compatibility and old experiments. New orchestration work
+// should target PlannerCapability, MultiStepPlannerCapability, and phase-based
+// execution instead.
+//
 // Example:
 //
 //	type RunTestsStep struct {

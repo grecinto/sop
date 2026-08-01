@@ -205,7 +205,15 @@ func phaseKeywords(phaseID string) []string {
 }
 
 func (c *PhaseCapability) BuildContext(query string, state capabilities.RoutingState) string {
-	return c.buildPhaseSpecificContext(query, state)
+	contextText := c.buildPhaseSpecificContext(query, state)
+	artifact, err := c.loadExistingArtifact()
+	if err != nil {
+		return contextText
+	}
+	if clarificationText := formatPhaseClarificationContext(artifact); clarificationText != "" {
+		return contextText + "\n\n" + clarificationText
+	}
+	return contextText
 }
 
 func (c *PhaseCapability) buildPhaseSpecificContext(query string, state capabilities.RoutingState) string {
@@ -891,6 +899,12 @@ func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capab
 		}
 	}
 
+	// 0b. Structured clarification request pauses phase succession and records the
+	// phase as clarifying until the user responds.
+	if clarificationRequest := clarificationRequestFromCapabilityResult(result); clarificationRequest != nil {
+		return c.handleClarificationRequest(query, clarificationRequest)
+	}
+
 	// 1. Check if a capture tool was called (phase completion signal)
 	if !c.wasCaptureToolCalled(result) {
 		return nil // Phase still in progress
@@ -968,6 +982,102 @@ func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capab
 		"artifact_status", artifact.Status)
 
 	return nil
+}
+
+func clarificationRequestFromCapabilityResult(result capabilities.CapabilityResult) *ai.ClarificationRequest {
+	if result.Data == nil {
+		return nil
+	}
+	if request, ok := result.Data["clarification_request"].(*ai.ClarificationRequest); ok && request != nil {
+		return request
+	}
+	if raw, ok := result.Data["clarification_request"].(map[string]any); ok && raw != nil {
+		request := &ai.ClarificationRequest{}
+		if value, ok := raw["target_query"].(string); ok {
+			request.TargetQuery = strings.TrimSpace(value)
+		}
+		if value, ok := raw["assistant_question"].(string); ok {
+			request.AssistantQuestion = strings.TrimSpace(value)
+		}
+		if value, ok := raw["missing_fact"].(string); ok {
+			request.MissingFact = strings.TrimSpace(value)
+		}
+		if value, ok := raw["reason"].(string); ok {
+			request.Reason = strings.TrimSpace(value)
+		}
+		if value, ok := raw["source"].(string); ok {
+			request.Source = strings.TrimSpace(value)
+		}
+		if value, ok := raw["status"].(string); ok {
+			request.Status = strings.TrimSpace(value)
+		}
+		if request.AssistantQuestion != "" || request.TargetQuery != "" {
+			return request
+		}
+	}
+	return nil
+}
+
+func (c *PhaseCapability) handleClarificationRequest(query string, request *ai.ClarificationRequest) error {
+	previous, err := c.loadExistingArtifact()
+	if err != nil {
+		return nil
+	}
+	structuredData := clonePhaseStructuredData(previous.StructuredData)
+	structuredData["clarification_request"] = map[string]any{
+		"target_query":       strings.TrimSpace(request.TargetQuery),
+		"assistant_question": strings.TrimSpace(request.AssistantQuestion),
+		"missing_fact":       strings.TrimSpace(request.MissingFact),
+		"reason":             strings.TrimSpace(request.Reason),
+		"source":             strings.TrimSpace(request.Source),
+		"status":             strings.TrimSpace(request.Status),
+	}
+	notes := append([]string(nil), previous.Notes...)
+	if question := strings.TrimSpace(request.AssistantQuestion); question != "" {
+		notes = append(notes, "Clarification requested: "+question)
+	}
+	if missingFact := strings.TrimSpace(request.MissingFact); missingFact != "" {
+		notes = append(notes, "Missing fact: "+missingFact)
+	}
+	if reason := strings.TrimSpace(request.Reason); reason != "" {
+		notes = append(notes, "Clarification reason: "+reason)
+	}
+	artifact := previous
+	artifact.PhaseID = c.phaseID
+	artifact.Status = "clarifying"
+	artifact.TransitionTo = ""
+	artifact.TransitionDirection = ""
+	artifact.ExitRequested = false
+	artifact.UpdatedAt = time.Now().UTC()
+	artifact.Iteration++
+	if artifact.Iteration <= 0 {
+		artifact.Iteration = 1
+	}
+	if strings.TrimSpace(artifact.Summary) == "" {
+		artifact.Summary = fmt.Sprintf("%s phase awaiting clarification", c.name)
+	}
+	artifact.Notes = notes
+	artifact.StructuredData = structuredData
+	if err := c.persistArtifact(artifact); err != nil {
+		return err
+	}
+	log.Info("Phase succession: Clarification requested, phase marked as clarifying",
+		"phase", c.phaseID,
+		"missing_fact", request.MissingFact,
+		"source", request.Source)
+	_ = query
+	return nil
+}
+
+func clonePhaseStructuredData(data map[string]any) map[string]any {
+	if len(data) == 0 {
+		return make(map[string]any)
+	}
+	cloned := make(map[string]any, len(data))
+	for key, value := range data {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // wasCaptureToolCalled checks if any tool call in the result was a capture tool.
@@ -1118,6 +1228,9 @@ func (c *PhaseCapability) buildHandoffPrompt(direction, targetPhase string, curr
 		if testResults, ok := currentArtifact.StructuredData["test_results"]; ok {
 			prompt += fmt.Sprintf("\n\nTest Results: %v", testResults)
 		}
+	}
+	if clarificationText := formatPhaseClarificationContext(currentArtifact); clarificationText != "" {
+		prompt += "\n\n" + clarificationText
 	}
 
 	// Add next steps guidance
@@ -1473,6 +1586,33 @@ func formatContextPack(pack ContextPack) string {
 	return strings.Join(parts, "\n")
 }
 
+func formatPhaseClarificationContext(artifact phaseArtifact) string {
+	if !strings.EqualFold(strings.TrimSpace(artifact.Status), "clarifying") || artifact.StructuredData == nil {
+		return ""
+	}
+	raw, ok := artifact.StructuredData["clarification_request"].(map[string]any)
+	if !ok || raw == nil {
+		return ""
+	}
+	parts := []string{"Pending Clarification"}
+	if question, ok := raw["assistant_question"].(string); ok && strings.TrimSpace(question) != "" {
+		parts = append(parts, fmt.Sprintf("Question: %s", strings.TrimSpace(question)))
+	}
+	if missingFact, ok := raw["missing_fact"].(string); ok && strings.TrimSpace(missingFact) != "" {
+		parts = append(parts, fmt.Sprintf("Missing Fact: %s", strings.TrimSpace(missingFact)))
+	}
+	if reason, ok := raw["reason"].(string); ok && strings.TrimSpace(reason) != "" {
+		parts = append(parts, fmt.Sprintf("Reason: %s", strings.TrimSpace(reason)))
+	}
+	if source, ok := raw["source"].(string); ok && strings.TrimSpace(source) != "" {
+		parts = append(parts, fmt.Sprintf("Source: %s", strings.TrimSpace(source)))
+	}
+	if len(parts) == 1 {
+		return ""
+	}
+	return strings.Join(parts, "\n")
+}
+
 func (c *PhaseCapability) buildTask(args map[string]any) Task {
 	query := readPhaseString(args, "query", "")
 	if query == "" {
@@ -1527,7 +1667,13 @@ func (c *PhaseCapability) runBuildContext(args map[string]any) (string, error) {
 	if infra.RepoIndexer != nil {
 		_, _ = infra.RepoIndexer.Index(task, task.State)
 	}
-	return formatContextPack(pack), nil
+	contextText := formatContextPack(pack)
+	if artifact, err := c.loadExistingArtifact(); err == nil {
+		if clarificationText := formatPhaseClarificationContext(artifact); clarificationText != "" {
+			contextText += "\n\n" + clarificationText
+		}
+	}
+	return contextText, nil
 }
 
 func (c *PhaseCapability) runInspectRepo(args map[string]any) (string, error) {

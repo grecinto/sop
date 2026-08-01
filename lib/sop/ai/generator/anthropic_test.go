@@ -917,3 +917,97 @@ func TestAnthropicOwnedLoop_RequiresRepairBeforeSwitchingTools(t *testing.T) {
 		t.Fatalf("expected repair reminder, got %q", reminder.Result)
 	}
 }
+
+type anthropicOwnedLoopClarificationActionGenerator struct{ calls int }
+
+func (m *anthropicOwnedLoopClarificationActionGenerator) Name() string {
+	return "anthropic_owned_loop_clarification_action_test"
+}
+func (m *anthropicOwnedLoopClarificationActionGenerator) EstimateCost(inTokens, outTokens int) float64 {
+	return 0
+}
+func (m *anthropicOwnedLoopClarificationActionGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
+}
+func (m *anthropicOwnedLoopClarificationActionGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	_ = ctx
+	_ = prompt
+	m.calls++
+	return ai.GenOutput{ToolCalls: []ai.ToolCall{{
+		Name: clarificationActionToolName,
+		Args: map[string]any{
+			"question":     "Which output shape do you want for the joined rows?",
+			"missing_fact": "output shape",
+			"target_query": "Find John orders",
+		},
+	}}}, nil
+}
+
+type anthropicOwnedLoopClarificationActionExecutor struct{ callCount int }
+
+func (e *anthropicOwnedLoopClarificationActionExecutor) Execute(ctx context.Context, tool string, args map[string]any) (string, error) {
+	e.callCount++
+	return "unexpected", nil
+}
+func (e *anthropicOwnedLoopClarificationActionExecutor) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	return []ai.ToolDefinition{{Name: "execute_script"}}, nil
+}
+
+func TestAnthropicOwnedLoop_HandlesExplicitClarificationAction(t *testing.T) {
+	executor := &anthropicOwnedLoopClarificationActionExecutor{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req anthropicRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
+		found := false
+		for _, tool := range req.Tools {
+			if tool.Name == clarificationActionToolName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected %s tool to be exposed, got %#v", clarificationActionToolName, req.Tools)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(anthropicResponse{
+			ID:   "msg_clarify",
+			Type: "message",
+			Role: "assistant",
+			Content: []anthropicContentBlock{{
+				Type:  "tool_use",
+				ID:    "toolu_clarify",
+				Name:  clarificationActionToolName,
+				Input: map[string]any{"question": "Which output shape do you want for the joined rows?", "missing_fact": "output shape", "target_query": "Find John orders"},
+			}},
+			StopReason: "tool_use",
+			Usage: struct {
+				InputTokens              int `json:"input_tokens"`
+				OutputTokens             int `json:"output_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+				CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+			}{InputTokens: 10, OutputTokens: 5},
+		})
+	}))
+	defer server.Close()
+	loop := anthropicOwnedReActLoop{generator: &anthropic{apiKey: "test-key", apiURL: server.URL + "/v1/messages", model: "claude-3-5-sonnet-20241022"}, maxIterations: 2}
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Find John orders",
+		Executor:     executor,
+		Generator:    loop.generator,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if resp.FinalText != "Which output shape do you want for the joined rows?" {
+		t.Fatalf("unexpected final text: %q", resp.FinalText)
+	}
+	if resp.ClarificationRequest == nil || resp.ClarificationRequest.Source != clarificationActionToolName {
+		t.Fatalf("expected structured clarification request from explicit action, got %#v", resp.ClarificationRequest)
+	}
+	if executor.callCount != 0 {
+		t.Fatalf("expected explicit clarification action to avoid executor calls, got %d", executor.callCount)
+	}
+}

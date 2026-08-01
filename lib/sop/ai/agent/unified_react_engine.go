@@ -159,7 +159,7 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 			return ai.ReasoningResponse{}, fmt.Errorf("LLM invocation failed: %w", err)
 		}
 		// Extract tool calls (provider-specific)
-		toolCalls, finalText, err := e.Adapter.ExtractToolCalls(output)
+		toolCalls, finalText, extractedClarificationRequest, err := e.Adapter.ExtractToolCalls(output)
 		if err != nil {
 			// Check if this is a recoverable generation error (e.g., truncated JSON)
 			if isRecoverableGenerationError(err) {
@@ -182,6 +182,9 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 				continue
 			}
 			return ai.ReasoningResponse{}, fmt.Errorf("failed to extract tool calls: %w", err)
+		}
+		if extractedClarificationRequest != nil {
+			clarificationRequest = extractedClarificationRequest
 		}
 
 		// No tool calls → final response
@@ -472,13 +475,16 @@ func (e *UnifiedReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (
 	}
 
 	// Extract clarification text
-	_, finalText, err := e.Adapter.ExtractToolCalls(output)
+	_, finalText, extractedClarificationRequest, err := e.Adapter.ExtractToolCalls(output)
 	if err != nil || finalText == "" {
 		// Fallback: return generic message if extraction fails
 		finalText = fmt.Sprintf(
 			"We have reached the maximum number of iterations (%d). "+
 				"Please provide additional guidance to help complete the task.",
 			e.Adapter.MaxIterations())
+	}
+	if extractedClarificationRequest != nil {
+		clarificationRequest = extractedClarificationRequest
 	}
 
 	return e.Adapter.BuildFinalResponse(finalText, state.ExecutedToolCalls, state.ToolResults, state.Continuations, state.EscalationState, clarificationRequest), nil

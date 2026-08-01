@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 // WorkStreamManagement provides tools for LLM to orchestrate WorkStreams.
@@ -88,17 +90,18 @@ func (w *WorkStreamManagement) BuildContext(query string, state RoutingState) st
 	streamState := thread.GetStreamState()
 
 	if streamCtx != nil && streamState != "" {
+		pauseContext := formatPauseMetadata(thread)
 		plan := streamCtx.GetPhasePlan()
 		if plan != nil {
 			plannedPhases := plan.GetPlannedPhases()
 			currentIndex := plan.GetCurrentIndex()
 			return fmt.Sprintf(
-				"Active WorkStream: %s (state: %s, phase: %s, progress: %d/%d)",
+				"Active WorkStream: %s (state: %s, phase: %s, progress: %d/%d)%s",
 				streamCtx.GetCurrentPhase(), streamState, streamCtx.GetCurrentPhase(),
-				currentIndex+1, len(plannedPhases),
+				currentIndex+1, len(plannedPhases), pauseContext,
 			)
 		}
-		return fmt.Sprintf("Active WorkStream: %s (state: %s)", streamCtx.GetCurrentPhase(), streamState)
+		return fmt.Sprintf("Active WorkStream: %s (state: %s)%s", streamCtx.GetCurrentPhase(), streamState, pauseContext)
 	}
 
 	return "No active WorkStream"
@@ -192,7 +195,39 @@ func (w *WorkStreamManagement) OnBefore(ctx context.Context, query string, state
 }
 
 func (w *WorkStreamManagement) OnAfter(ctx context.Context, query string, state RoutingState, result CapabilityResult) error {
+	request := clarificationRequestFromCapabilityResult(result)
+	if request == nil {
+		return nil
+	}
+
+	stm := w.stmAccessor()
+	if stm == nil {
+		return nil
+	}
+	thread := stm.GetCurrentThread()
+	if thread == nil || thread.GetStreamContext() == nil {
+		return nil
+	}
+
+	streamState := thread.GetStreamState()
+	if streamState == WorkStreamCompleted || streamState == WorkStreamAbandoned {
+		return nil
+	}
+
+	pauseReason := buildClarificationPauseReason(request)
+	if pauser, ok := thread.(interface {
+		PauseWorkStreamWithReason(string, bool)
+	}); ok {
+		pauser.PauseWorkStreamWithReason(pauseReason, true)
+		return nil
+	}
+
+	thread.SetStreamState(WorkStreamPaused)
 	return nil
+}
+
+func (w *WorkStreamManagement) ObserveAfterTurn(ctx context.Context, query string, state RoutingState, result CapabilityResult) error {
+	return w.OnAfter(ctx, query, state, result)
 }
 
 func (w *WorkStreamManagement) Handoff(ctx context.Context, query string, state RoutingState) *Handoff {
@@ -221,7 +256,19 @@ func (w *WorkStreamManagement) listWorkStreams() (string, error) {
 
 	plan := streamCtx.GetPhasePlan()
 	if plan == nil {
-		return fmt.Sprintf("WorkStream exists but has no phase plan (state: %s)", streamState), nil
+		result := strings.Builder{}
+		result.WriteString(fmt.Sprintf("Current WorkStream (state: %s):\n", streamState))
+		result.WriteString(fmt.Sprintf("- Current Phase: %s\n", streamCtx.GetCurrentPhase()))
+		if pauseReason, requiresManualResume, ok := readPauseMetadata(thread); ok {
+			result.WriteString(fmt.Sprintf("- Pause Reason: %s\n", pauseReason))
+			if requiresManualResume {
+				result.WriteString("- Resume Mode: manual\n")
+			} else {
+				result.WriteString("- Resume Mode: automatic\n")
+			}
+		}
+		result.WriteString("- Phase Plan: unavailable")
+		return result.String(), nil
 	}
 
 	plannedPhases := plan.GetPlannedPhases()
@@ -231,9 +278,17 @@ func (w *WorkStreamManagement) listWorkStreams() (string, error) {
 	result := strings.Builder{}
 	result.WriteString(fmt.Sprintf("Current WorkStream (state: %s):\n", streamState))
 	result.WriteString(fmt.Sprintf("- Current Phase: %s (%d/%d)\n", streamCtx.GetCurrentPhase(), currentIndex+1, len(plannedPhases)))
+	if pauseReason, requiresManualResume, ok := readPauseMetadata(thread); ok {
+		result.WriteString(fmt.Sprintf("- Pause Reason: %s\n", pauseReason))
+		if requiresManualResume {
+			result.WriteString("- Resume Mode: manual\n")
+		} else {
+			result.WriteString("- Resume Mode: automatic\n")
+		}
+	}
 	result.WriteString(fmt.Sprintf("- Completed: %d phases\n", len(completedPhases)))
 	result.WriteString(fmt.Sprintf("- Remaining: %d phases\n", len(plannedPhases)-currentIndex-1))
-	result.WriteString(fmt.Sprintf("\nPhase Plan:\n"))
+	result.WriteString("\nPhase Plan:\n")
 	for i, phase := range plannedPhases {
 		marker := "  "
 		if i < currentIndex {
@@ -273,6 +328,10 @@ func (w *WorkStreamManagement) getWorkStreamDetails() (string, error) {
 		"phase_artifacts":  artifacts,
 		"iteration_count":  streamCtx.GetIterationCount(),
 		"phase_iterations": streamCtx.GetPhaseIterations(),
+	}
+	if pauseReason, requiresManualResume, ok := readPauseMetadata(thread); ok {
+		details["pause_reason"] = pauseReason
+		details["requires_manual_resume"] = requiresManualResume
 	}
 
 	if plan != nil {
@@ -380,8 +439,13 @@ func (w *WorkStreamManagement) pauseWorkStream() (string, error) {
 		return "No active WorkStream to pause", nil
 	}
 
-	// Set state to paused
-	thread.SetStreamState(WorkStreamPaused)
+	if pauser, ok := thread.(interface {
+		PauseWorkStreamWithReason(string, bool)
+	}); ok {
+		pauser.PauseWorkStreamWithReason("Paused via workstream tool", true)
+	} else {
+		thread.SetStreamState(WorkStreamPaused)
+	}
 
 	currentPhase := streamCtx.GetCurrentPhase()
 	plan := streamCtx.GetPhasePlan()
@@ -413,8 +477,11 @@ func (w *WorkStreamManagement) resumeWorkStream() (string, error) {
 		return fmt.Sprintf("WorkStream is not paused (current state: %s). Cannot resume.", streamState), nil
 	}
 
-	// Set state to active
-	thread.SetStreamState(WorkStreamActive)
+	if resumer, ok := thread.(interface{ ResumeWorkStream() }); ok {
+		resumer.ResumeWorkStream()
+	} else {
+		thread.SetStreamState(WorkStreamActive)
+	}
 
 	currentPhase := streamCtx.GetCurrentPhase()
 	plan := streamCtx.GetPhasePlan()
@@ -452,6 +519,82 @@ func (w *WorkStreamManagement) abandonWorkStream() (string, error) {
 		abandonedWork = fmt.Sprintf(" (%d/%d phases completed)", plan.GetCurrentIndex(), len(plan.GetPlannedPhases()))
 	}
 	return fmt.Sprintf("✓ Abandoned WorkStream at phase '%s'%s. This WorkStream cannot be resumed.", currentPhase, abandonedWork), nil
+}
+
+func clarificationRequestFromCapabilityResult(result CapabilityResult) *ai.ClarificationRequest {
+	if result.Data == nil {
+		return nil
+	}
+	if request, ok := result.Data["clarification_request"].(*ai.ClarificationRequest); ok && request != nil {
+		return request
+	}
+	raw, ok := result.Data["clarification_request"].(map[string]any)
+	if !ok || raw == nil {
+		return nil
+	}
+	request := &ai.ClarificationRequest{}
+	if question, ok := raw["assistant_question"].(string); ok {
+		request.AssistantQuestion = strings.TrimSpace(question)
+	}
+	if missingFact, ok := raw["missing_fact"].(string); ok {
+		request.MissingFact = strings.TrimSpace(missingFact)
+	}
+	if reason, ok := raw["reason"].(string); ok {
+		request.Reason = strings.TrimSpace(reason)
+	}
+	if source, ok := raw["source"].(string); ok {
+		request.Source = strings.TrimSpace(source)
+	}
+	if request.AssistantQuestion == "" && request.MissingFact == "" && request.Reason == "" && request.Source == "" {
+		return nil
+	}
+	return request
+}
+
+func buildClarificationPauseReason(request *ai.ClarificationRequest) string {
+	if request == nil {
+		return "Waiting for clarification"
+	}
+	if missingFact := strings.TrimSpace(request.MissingFact); missingFact != "" {
+		return fmt.Sprintf("Waiting for clarification: %s", missingFact)
+	}
+	if question := strings.TrimSpace(request.AssistantQuestion); question != "" {
+		return fmt.Sprintf("Waiting for clarification: %s", question)
+	}
+	if reason := strings.TrimSpace(request.Reason); reason != "" {
+		return fmt.Sprintf("Waiting for clarification (%s)", reason)
+	}
+	return "Waiting for clarification"
+}
+
+func formatPauseMetadata(thread ThreadReader) string {
+	pauseReason, requiresManualResume, ok := readPauseMetadata(thread)
+	if !ok {
+		return ""
+	}
+	resumeMode := "auto"
+	if requiresManualResume {
+		resumeMode = "manual"
+	}
+	return fmt.Sprintf(", pause_reason: %s, resume_mode: %s", pauseReason, resumeMode)
+}
+
+func readPauseMetadata(thread ThreadReader) (string, bool, bool) {
+	if thread == nil {
+		return "", false, false
+	}
+	metadataReader, ok := thread.(interface {
+		GetPauseReason() string
+		RequiresManualResume() bool
+	})
+	if !ok {
+		return "", false, false
+	}
+	pauseReason := strings.TrimSpace(metadataReader.GetPauseReason())
+	if pauseReason == "" {
+		return "", false, false
+	}
+	return pauseReason, metadataReader.RequiresManualResume(), true
 }
 
 // STMReader interface for accessing WorkStream state

@@ -199,6 +199,7 @@ What exists now:
 - the shared-compatible adapter summary, repair-directive, and ask-anchored MRU helpers now prefer `RetryGuidance` over retry-text parsing when both are available
 - the shared-compatible adapter now also wraps carried tool continuations with structured `react_state` and `retry_guidance`, so strategy consumers do not need to infer retry intent from raw tool-result prose alone
 - clarification handoff is now also structured via `ClarificationRequest`, allowing pending clarification state and resume metadata to persist without relying only on assistant question text heuristics
+- the shared-compatible path now exposes an explicit `request_clarification` action/tool contract so the model can request one missing fact as a first-class terminal handoff instead of only falling back to final-text question conventions
 - heuristic enforcement for hard rails
 
 What still needs architectural tightening:

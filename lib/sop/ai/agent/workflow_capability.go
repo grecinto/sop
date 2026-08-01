@@ -12,6 +12,11 @@ import (
 
 // WorkflowManagerCapability wraps WorkflowManager as a Capability.
 // It tracks workflow execution state and delegates to individual step capabilities.
+//
+// Deprecated: this capability belongs to the legacy WorkflowManager path.
+// Keep it only as dormant compatibility code. PlannerCapability,
+// MultiStepPlannerCapability, and the phase/workstream system replace it for
+// active development.
 type WorkflowManagerCapability struct {
 	manager *WorkflowManager
 
@@ -23,7 +28,7 @@ type WorkflowManagerCapability struct {
 	completed        bool
 }
 
-// NewWorkflowManagerCapability creates a new workflow manager capability.
+// NewWorkflowManagerCapability creates the deprecated workflow manager capability.
 func NewWorkflowManagerCapability(manager *WorkflowManager) *WorkflowManagerCapability {
 	return &WorkflowManagerCapability{
 		manager:          manager,

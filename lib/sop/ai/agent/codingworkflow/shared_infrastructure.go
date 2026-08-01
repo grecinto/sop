@@ -158,21 +158,25 @@ type TestResult struct {
 	Output string
 }
 
-// SharedInfrastructure bundles reusable coding workflow tools for use by WorkflowManager Steps.
-// This enables Steps to access AST analysis, tree-sitter parsing, patch application,
-// test execution, and other repository operations without duplicating infrastructure.
+// SharedInfrastructure bundles reusable coding workflow tools for the active
+// planner, phase, and workstream system, while also remaining compatible with
+// deprecated workflow-manager code.
+// This enables orchestrated execution paths to access AST analysis, tree-sitter
+// parsing, patch application, test execution, and other repository operations
+// without duplicating infrastructure.
 //
-// Design: Each Step receives SharedInfrastructure via context during execution.
-// Steps call methods on this struct to perform operations like:
+// Design: active phase/planner code and legacy Step implementations call methods
+// on this struct to perform operations like:
 //   - AST analysis (analyze error messages, extract symbols)
 //   - Tree-sitter parsing (parse files, query syntax trees)
 //   - Patch operations (apply patches, preview diffs)
 //   - Test execution (run tests, parse results)
 //   - Repository operations (search, index, inspect)
 //
-// Guard rail: SharedInfrastructure wraps the existing workflow tools without
-// modifying their behavior. This allows WorkflowManager to reuse proven infrastructure
-// while maintaining backward compatibility with the older codingworkflow entry points.
+// Guard rail: SharedInfrastructure is not a signal to extend deprecated
+// WorkflowManager/Step orchestration. New features should plug into Planner,
+// Multi-Step Planner, or phase/workstream execution and only rely on this type
+// as a reusable tool bundle.
 type SharedInfrastructure struct {
 	// Core infrastructure from Orchestrator
 	ContextManager       ContextManager

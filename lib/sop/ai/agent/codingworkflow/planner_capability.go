@@ -81,7 +81,7 @@ func (c *PlannerCapability) BuildContext(query string, state capabilities.Routin
 	return `Dynamic Workflow Planner Context:
 - Analyzes coding tasks and generates custom workflow plans
 - Each plan consists of a sequence of Steps tailored to the specific task
-- Steps are executed through WorkflowManager which participates with Ask pipeline
+- Plans are consumed by the Ask-driven phase and workstream system
 - Plans adapt to codebase structure, available tools, and task complexity
 - Uses LLM analysis to determine optimal step sequence and dependencies`
 }
@@ -95,8 +95,8 @@ func (c *PlannerCapability) BuildInstructions(query string, state capabilities.R
    - Description: What the step accomplishes
    - Type: Step type (analyze, generate, apply, verify, research)
    - Dependencies: What the step needs from previous steps
-4. Hand the plan to WorkflowManager for execution
-5. WorkflowManager participates in Ask pipeline by enqueueing steps
+4. Surface the plan so the Ask-driven phase and workstream system can continue execution
+5. Keep planning output compatible with phase-based execution and user review
 
 Available Step Types:
 - analyze: Analyze code, errors, or requirements
@@ -141,7 +141,7 @@ func (c *PlannerCapability) OnAfter(ctx context.Context, query string, state cap
 
 // OnFinish implements the WorkflowPlanner interface as a no-op for planning-only usage.
 // The planner capability surfaces the generated plan to the user instead of handing off
-// execution to the workflow manager.
+// execution to a dedicated controller.
 func (c *PlannerCapability) OnFinish(ctx context.Context, result capabilities.CapabilityResult) error {
 	_ = ctx
 	if result.Data == nil {

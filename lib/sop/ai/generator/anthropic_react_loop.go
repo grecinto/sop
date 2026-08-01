@@ -45,6 +45,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 		if err != nil {
 			return ai.ReasoningResponse{}, fmt.Errorf("failed to list tools: %w", err)
 		}
+		tools = appendClarificationActionTool(tools)
 		log.Debug("Anthropic owned loop loaded tools",
 			"tool_count", len(tools),
 			"tools", anthropicToolNames(tools),
@@ -117,6 +118,16 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 				"outcome_facts", len(resp.OutcomeFacts),
 				"final_text_preview", anthropicPreview(resp.FinalText, 320),
 			)
+			emitAnthropicOwnedLoopHydration(req, resp)
+			return resp, nil
+		}
+		if clarificationRequest, ok := clarificationRequestFromToolCalls(output.ToolCalls, req.UserQuery); ok {
+			resp := anthropicOwnedLoopResponse(clarificationRequest.AssistantQuestion, executedToolCalls, toolResults, continuations)
+			resp.ClarificationRequest = clarificationRequest
+			resp.EscalationState = retryState.escalationState
+			if resp.CarryoverState != nil {
+				resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+			}
 			emitAnthropicOwnedLoopHydration(req, resp)
 			return resp, nil
 		}

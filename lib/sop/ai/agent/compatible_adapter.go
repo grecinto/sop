@@ -10,6 +10,10 @@ import (
 	"github.com/sharedcode/sop/ai/obfuscation"
 )
 
+const compatibleClarificationToolName = "request_clarification"
+
+const compatibleClarificationToolSchema = `{"type":"object","properties":{"question":{"type":"string","description":"One short, concrete clarification question to ask the user."},"missing_fact":{"type":"string","description":"The single missing fact blocking further tool progress."},"reason":{"type":"string","description":"Why the clarification is required before continuing."},"target_query":{"type":"string","description":"Optional target ask being clarified."}},"required":["question"]}`
+
 // CompatibleReActAdapter implements ReActLoopAdapter for the reserved shared/default
 // serial ReAct path.
 //
@@ -87,6 +91,7 @@ func (a *CompatibleReActAdapter) PrepareLLMRequest(ctx context.Context, state Re
 			return "", ai.GenOptions{}, fmt.Errorf("failed to list tools: %w", err)
 		}
 	}
+	tools = appendCompatibleMetaTools(tools)
 
 	opts := ai.GenOptions{
 		SystemPrompt:          state.Request.SystemPrompt,
@@ -112,22 +117,28 @@ func (a *CompatibleReActAdapter) InvokeLLM(ctx context.Context, prompt string, o
 }
 
 // ExtractToolCalls parses tool calls from the LLM response, including textual recovery.
-func (a *CompatibleReActAdapter) ExtractToolCalls(output ai.GenOutput) ([]ai.ToolCall, string, error) {
+func (a *CompatibleReActAdapter) ExtractToolCalls(output ai.GenOutput) ([]ai.ToolCall, string, *ai.ClarificationRequest, error) {
 	// Check for direct tool calls first.
 	if len(output.ToolCalls) > 0 {
-		return output.ToolCalls, "", nil
+		if clarificationRequest, ok := extractClarificationRequestFromToolCalls(output.ToolCalls); ok {
+			return nil, clarificationRequest.AssistantQuestion, clarificationRequest, nil
+		}
+		return output.ToolCalls, "", nil, nil
 	}
 
 	// Try to recover embedded textual tool call using the native tool-call format.
 	if recoveredCall, ok, recoverErr := extractEmbeddedNativeToolCall(output.Text); ok {
 		if recoverErr != nil {
 			// Malformed textual tool call
-			return nil, "", recoverErr
+			return nil, "", nil, recoverErr
+		}
+		if clarificationRequest, ok := extractClarificationRequestFromToolCalls([]ai.ToolCall{recoveredCall}); ok {
+			return nil, clarificationRequest.AssistantQuestion, clarificationRequest, nil
 		}
 
 		log.Info("Compatible Adapter Recovered Textual Tool Call",
 			"tool", recoveredCall.Name)
-		return []ai.ToolCall{recoveredCall}, "", nil
+		return []ai.ToolCall{recoveredCall}, "", nil, nil
 	}
 
 	// No tool calls → final text
@@ -136,7 +147,44 @@ func (a *CompatibleReActAdapter) ExtractToolCalls(output ai.GenOutput) ([]ai.Too
 		finalText = obfuscation.GlobalObfuscator.DeobfuscateText(output.Text)
 	}
 
-	return nil, finalText, nil
+	return nil, finalText, nil, nil
+}
+
+func appendCompatibleMetaTools(tools []ai.ToolDefinition) []ai.ToolDefinition {
+	for _, tool := range tools {
+		if strings.EqualFold(strings.TrimSpace(tool.Name), compatibleClarificationToolName) {
+			return tools
+		}
+	}
+	cloned := append([]ai.ToolDefinition(nil), tools...)
+	cloned = append(cloned, ai.ToolDefinition{
+		Name:        compatibleClarificationToolName,
+		Description: "Ask the user for one missing fact and end the current loop turn instead of calling another tool.",
+		Schema:      compatibleClarificationToolSchema,
+	})
+	return cloned
+}
+
+func extractClarificationRequestFromToolCalls(toolCalls []ai.ToolCall) (*ai.ClarificationRequest, bool) {
+	if len(toolCalls) == 0 {
+		return nil, false
+	}
+	toolCall := toolCalls[0]
+	if !strings.EqualFold(strings.TrimSpace(toolCall.Name), compatibleClarificationToolName) {
+		return nil, false
+	}
+	question := strings.TrimSpace(fmt.Sprintf("%v", toolCall.Args["question"]))
+	if question == "" {
+		return nil, false
+	}
+	return &ai.ClarificationRequest{
+		TargetQuery:       strings.TrimSpace(fmt.Sprintf("%v", toolCall.Args["target_query"])),
+		AssistantQuestion: question,
+		MissingFact:       strings.TrimSpace(fmt.Sprintf("%v", toolCall.Args["missing_fact"])),
+		Reason:            strings.TrimSpace(fmt.Sprintf("%v", toolCall.Args["reason"])),
+		Source:            compatibleClarificationToolName,
+		Status:            "pending",
+	}, true
 }
 
 // FormatContinuation builds the continuation for the next iteration.
@@ -259,12 +307,12 @@ func (a *CompatibleReActAdapter) BuildFinalResponse(
 	}
 
 	return ai.ReasoningResponse{
-		FinalText:             finalText,
-		ToolCalls:             toolCalls,
-		OutcomeFacts:          summarizeOutcomeFacts(compatibleResults),
-		OutcomeRecipes:        summarizeOutcomeRecipes(compatibleResults),
-		EscalationState:       escalationState,
-		ClarificationRequest:  clarificationRequest,
+		FinalText:            finalText,
+		ToolCalls:            toolCalls,
+		OutcomeFacts:         summarizeOutcomeFacts(compatibleResults),
+		OutcomeRecipes:       summarizeOutcomeRecipes(compatibleResults),
+		EscalationState:      escalationState,
+		ClarificationRequest: clarificationRequest,
 	}
 }
 

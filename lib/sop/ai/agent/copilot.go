@@ -1723,12 +1723,13 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// WorkStream Management (LLM orchestrates pause/resume/jump via tools)
 	// Provides: list_workstreams, get_workstream_details, jump_to_phase,
 	//           pause_workstream, resume_workstream, abandon_workstream
-	// Note: Uses adapter to convert codingworkflow.STMReader -> capabilities.STMReader
+	// Note: Uses direct session STM adapter so pause/resume state mutations persist.
 	caps = append(caps, capabilities.NewWorkStreamManagement(
 		func() capabilities.STMReader {
-			// Adapter: Convert codingworkflow.STMReader to capabilities.STMReader
-			cwSTM := a.getSTMForPhaseCapabilities()
-			return &stmReaderAdapter{cwSTM: cwSTM}
+			if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+				return nil
+			}
+			return &sessionSTMReaderAdapter{stm: a.service.session.Memory}
 		},
 		func() capabilities.PhasePlanMutator {
 			if cwfInfra.PhasePlanMutator != nil {
@@ -1775,6 +1776,160 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	}
 
 	a.capabilityRegistry = capabilities.NewRegistry(caps...)
+}
+
+type sessionSTMReaderAdapter struct {
+	stm *ShortTermMemory
+}
+
+func (s *sessionSTMReaderAdapter) GetCurrentThread() capabilities.ThreadReader {
+	if s == nil || s.stm == nil {
+		return nil
+	}
+	thread := s.stm.GetCurrentThread()
+	if thread == nil {
+		return nil
+	}
+	return &sessionThreadReaderAdapter{thread: thread}
+}
+
+type sessionThreadReaderAdapter struct {
+	thread *ConversationThread
+}
+
+func (t *sessionThreadReaderAdapter) GetStreamContext() capabilities.WorkStreamContextReader {
+	if t == nil || t.thread == nil || t.thread.StreamContext == nil {
+		return nil
+	}
+	return &sessionWorkStreamContextReaderAdapter{ctx: t.thread.StreamContext}
+}
+
+func (t *sessionThreadReaderAdapter) GetStreamState() capabilities.WorkStreamState {
+	if t == nil || t.thread == nil {
+		return capabilities.WorkStreamActive
+	}
+	return capabilities.WorkStreamState(t.thread.StreamState)
+}
+
+func (t *sessionThreadReaderAdapter) SetStreamState(state capabilities.WorkStreamState) {
+	if t == nil || t.thread == nil {
+		return
+	}
+	t.thread.StreamState = WorkStreamState(state)
+}
+
+func (t *sessionThreadReaderAdapter) PauseWorkStreamWithReason(reason string, requireManualResume bool) {
+	if t == nil || t.thread == nil {
+		return
+	}
+	t.thread.PauseWorkStreamWithReason(reason, requireManualResume)
+}
+
+func (t *sessionThreadReaderAdapter) ResumeWorkStream() {
+	if t == nil || t.thread == nil {
+		return
+	}
+	t.thread.ResumeWorkStream()
+}
+
+func (t *sessionThreadReaderAdapter) GetPauseReason() string {
+	if t == nil || t.thread == nil || t.thread.StreamContext == nil {
+		return ""
+	}
+	return t.thread.StreamContext.PauseReason
+}
+
+func (t *sessionThreadReaderAdapter) RequiresManualResume() bool {
+	if t == nil || t.thread == nil || t.thread.StreamContext == nil {
+		return false
+	}
+	return t.thread.StreamContext.RequiresManualResume
+}
+
+type sessionWorkStreamContextReaderAdapter struct {
+	ctx *WorkStreamContext
+}
+
+func (w *sessionWorkStreamContextReaderAdapter) GetCurrentPhase() string {
+	if w == nil || w.ctx == nil {
+		return ""
+	}
+	return w.ctx.CurrentPhase
+}
+
+func (w *sessionWorkStreamContextReaderAdapter) GetPhaseHistory() []string {
+	if w == nil || w.ctx == nil {
+		return nil
+	}
+	return w.ctx.PhaseHistory
+}
+
+func (w *sessionWorkStreamContextReaderAdapter) GetPhasePlan() capabilities.PhasePlanReader {
+	if w == nil || w.ctx == nil || w.ctx.PhasePlan == nil {
+		return nil
+	}
+	return &sessionPhasePlanReaderAdapter{plan: w.ctx.PhasePlan}
+}
+
+func (w *sessionWorkStreamContextReaderAdapter) GetPhaseArtifacts() map[string]any {
+	if w == nil || w.ctx == nil || w.ctx.PhaseArtifacts == nil {
+		return nil
+	}
+	result := make(map[string]any, len(w.ctx.PhaseArtifacts))
+	for phaseID, artifact := range w.ctx.PhaseArtifacts {
+		result[phaseID] = artifact
+	}
+	return result
+}
+
+func (w *sessionWorkStreamContextReaderAdapter) GetIterationCount() int {
+	if w == nil || w.ctx == nil {
+		return 0
+	}
+	return w.ctx.IterationCount
+}
+
+func (w *sessionWorkStreamContextReaderAdapter) GetPhaseIterations() map[string]int {
+	if w == nil || w.ctx == nil || w.ctx.PhaseIterations == nil {
+		return nil
+	}
+	result := make(map[string]int, len(w.ctx.PhaseIterations))
+	for phaseID, count := range w.ctx.PhaseIterations {
+		result[phaseID] = count
+	}
+	return result
+}
+
+type sessionPhasePlanReaderAdapter struct {
+	plan *PhasePlan
+}
+
+func (p *sessionPhasePlanReaderAdapter) GetPlannedPhases() []string {
+	if p == nil || p.plan == nil {
+		return nil
+	}
+	return p.plan.PlannedPhases
+}
+
+func (p *sessionPhasePlanReaderAdapter) GetCurrentIndex() int {
+	if p == nil || p.plan == nil {
+		return -1
+	}
+	return p.plan.CurrentIndex
+}
+
+func (p *sessionPhasePlanReaderAdapter) GetCompletedPhases() []string {
+	if p == nil || p.plan == nil {
+		return nil
+	}
+	return p.plan.CompletedPhases
+}
+
+func (p *sessionPhasePlanReaderAdapter) GetRemainingPhases() []string {
+	if p == nil || p.plan == nil {
+		return nil
+	}
+	return p.plan.RemainingPhases
 }
 
 // getSTMForPhaseCapabilities returns the agent's STM for phase succession access
@@ -3164,7 +3319,10 @@ func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 }
 
 // askV1 is the legacy Ask implementation with heuristic routing.
-// This is the original pipeline, kept for backward compatibility.
+// This is the original pipeline, kept only as an emergency fallback.
+//
+// Deprecated: do not add new behavior to askV1. Prefer AskV2 and the V2
+// phase/workstream pipeline for all active development.
 func (a *CopilotAgent) askV1(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// Get or create session queue
 	queue := a.getOrCreateSessionQueue()
@@ -3541,6 +3699,9 @@ func (a *CopilotAgent) enrichQueryWithKBResults(query string, taskContext *TaskC
 // ask is the pure Ask→ReAct transaction with no queue awareness.
 // All routing, gates, KB enrichment, and ReAct delegation happen here.
 // Capabilities can enqueue next steps via GetSessionQueue() during tool execution.
+//
+// Deprecated: this helper is the core transaction for the legacy V1 Ask path.
+// AskV2 uses askV2Core instead and is the canonical pipeline.
 func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// 1. Setup and early validation
 	ctx = a.applyAskConfig(ctx, cfg)
@@ -3623,17 +3784,12 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	if selectedCap != nil {
 		capResult := capabilities.CapabilityResult{
 			Summary: finalText,
-			Data: map[string]any{
-				"tool_calls":       toolCalls,
-				"outcome_facts":    outcomeFacts,
-				"outcome_recipes":  outcomeRecipes,
-				"carryover_state":  carryoverState,
-				"escalation_state": escalationState,
-			},
+			Data:    buildCapabilityResultData(toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest),
 		}
 		if err := selectedCap.OnAfter(ctx, query, routingState, capResult); err != nil {
 			log.Warn("Capability OnAfter failed", "capability", selectedCap.ID(), "error", err)
 		}
+		a.notifySupportingPostTurnObservers(ctx, query, routingState, selectedCap, capResult)
 	}
 
 	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
@@ -3642,6 +3798,49 @@ func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap)
 	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, clarificationRequest)
 
 	return finalText, nil
+}
+
+func (a *CopilotAgent) notifySupportingPostTurnObservers(ctx context.Context, query string, routingState capabilities.RoutingState, selectedCap capabilities.Capability, result capabilities.CapabilityResult) {
+	if a == nil || a.capabilityRegistry == nil {
+		return
+	}
+	selectedID := ""
+	if selectedCap != nil {
+		selectedID = selectedCap.ID()
+	}
+	classified := a.capabilityRegistry.Classify(query, routingState)
+	notified := make(map[string]struct{})
+	for _, entry := range classified {
+		cap := entry.Capability
+		if cap == nil || entry.Result.Mode != capabilities.CapabilityModeSupporting {
+			continue
+		}
+		if cap.ID() == selectedID {
+			continue
+		}
+		if _, ok := notified[cap.ID()]; ok {
+			continue
+		}
+		observer, ok := cap.(capabilities.PostTurnObserver)
+		if !ok {
+			continue
+		}
+		notified[cap.ID()] = struct{}{}
+		if err := observer.ObserveAfterTurn(ctx, query, routingState, result); err != nil {
+			log.Warn("Supporting post-turn observer failed", "capability", cap.ID(), "error", err)
+		}
+	}
+}
+
+func buildCapabilityResultData(toolCalls []ai.ToolCall, outcomeFacts []string, outcomeRecipes []ai.LearnedRecipe, carryoverState *ai.CarryoverState, escalationState map[string]any, clarificationRequest *ai.ClarificationRequest) map[string]any {
+	return map[string]any{
+		"tool_calls":            toolCalls,
+		"outcome_facts":         outcomeFacts,
+		"outcome_recipes":       outcomeRecipes,
+		"carryover_state":       carryoverState,
+		"escalation_state":      escalationState,
+		"clarification_request": clarificationRequest,
+	}
 }
 
 func (a *CopilotAgent) applyAskConfig(ctx context.Context, cfg *ai.ConfigMap) context.Context {
@@ -3792,11 +3991,21 @@ func (a *CopilotAgent) rewriteConversationalMetaAsk(ctx context.Context, query s
 		return query, false
 	}
 
-	effective := fmt.Sprintf("Target ask: %s\nAssistant clarification question: %s\nUser clarification: %s\nAnswer the clarification using the target ask context, then continue the target ask if the clarification resolves it.", targetQuery, question, strings.TrimSpace(query))
+	clarificationDetails := ""
 	if p := ai.GetSessionPayload(ctx); p != nil {
 		if p.ClarificationState == nil {
 			p.ClarificationState = &ai.ClarificationState{}
 		}
+		if missingFact := strings.TrimSpace(p.ClarificationState.MissingFact); missingFact != "" {
+			clarificationDetails += "\nMissing fact: " + missingFact
+		}
+		if reason := strings.TrimSpace(p.ClarificationState.Reason); reason != "" {
+			clarificationDetails += "\nClarification reason: " + reason
+		}
+		if source := strings.TrimSpace(p.ClarificationState.Source); source != "" {
+			clarificationDetails += "\nClarification source: " + source
+		}
+		effective := fmt.Sprintf("Target ask: %s\nAssistant clarification question: %s%s\nUser clarification: %s\nAnswer the clarification using the target ask context, then continue the target ask if the clarification resolves it.", targetQuery, question, clarificationDetails, strings.TrimSpace(query))
 		p.ClarificationState.TargetQuery = targetQuery
 		p.ClarificationState.AssistantQuestion = question
 		if strings.TrimSpace(p.ClarificationState.OriginalUserQuery) == "" {
@@ -3806,8 +4015,10 @@ func (a *CopilotAgent) rewriteConversationalMetaAsk(ctx context.Context, query s
 		p.ClarificationState.EffectiveResumeAsk = effective
 		p.ClarificationState.Status = "resolved"
 		p.CurrentUserQuery = effective
+		return effective, true
 	}
 
+	effective := fmt.Sprintf("Target ask: %s\nAssistant clarification question: %s\nUser clarification: %s\nAnswer the clarification using the target ask context, then continue the target ask if the clarification resolves it.", targetQuery, question, strings.TrimSpace(query))
 	return effective, true
 }
 

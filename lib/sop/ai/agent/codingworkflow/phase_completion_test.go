@@ -371,6 +371,57 @@ func TestHandoff_WithStructuredDataHighlights(t *testing.T) {
 	}
 }
 
+func TestHandoff_BackwardTransitionIncludesPendingClarification(t *testing.T) {
+	sharedInfra := NewDefaultSharedInfrastructure()
+	capability := NewPlanningPhaseCapability(sharedInfra)
+
+	args := map[string]any{
+		"summary":              "Need to revisit assumptions before finalizing the plan",
+		"status":               "clarifying",
+		"transition_from":      "investigation",
+		"transition_direction": "backward",
+		"structured_data": map[string]any{
+			"clarification_request": map[string]any{
+				"assistant_question": "Which data source is authoritative?",
+				"missing_fact":       "authoritative data source",
+				"reason":             "planning_requires_source_of_truth",
+				"source":             "planning",
+			},
+		},
+	}
+
+	_, err := capability.runCapture(args)
+	if err != nil {
+		t.Fatalf("runCapture failed: %v", err)
+	}
+
+	handoff := capability.Handoff(context.Background(), "", capabilities.RoutingState{})
+	if handoff == nil {
+		t.Fatal("Expected backward handoff, got nil")
+	}
+	if handoff.Direction != "backward" {
+		t.Fatalf("Expected backward direction, got %q", handoff.Direction)
+	}
+	if handoff.Target != "investigation" {
+		t.Fatalf("Expected backward target investigation, got %q", handoff.Target)
+	}
+
+	prompt := handoff.Prompt
+	checks := []string{
+		"Return to the investigation phase and continue the workflow.",
+		"Pending Clarification",
+		"Question: Which data source is authoritative?",
+		"Missing Fact: authoritative data source",
+		"Reason: planning_requires_source_of_truth",
+		"Source: planning",
+	}
+	for _, check := range checks {
+		if !strings.Contains(prompt, check) {
+			t.Fatalf("expected handoff prompt to include %q, got %q", check, prompt)
+		}
+	}
+}
+
 // TestPhaseArtifact_JSONMarshalWithStructuredData verifies that artifacts with structured data can be marshaled
 func TestPhaseArtifact_JSONMarshalWithStructuredData(t *testing.T) {
 	artifact := phaseArtifact{

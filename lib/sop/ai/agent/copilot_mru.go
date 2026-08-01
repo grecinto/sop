@@ -400,7 +400,23 @@ func buildAskOutcomeMRUItems(ctx context.Context, query string, finalText string
 	if toolPattern := summarizeAskOutcomeToolPattern(toolCalls); toolPattern != "" {
 		items = append(items, MRUItem{Category: askOutcomeMRUCategoryToolPattern, Context: fmt.Sprintf("- Tool pattern: %s", toolPattern), Source: MRUSourceAskOutcome, Scope: MRUScopeSession})
 	}
-	items = append(items, MRUItem{Category: askOutcomeMRUCategoryGuidance, Context: "- Reuse confirmed facts and successful patterns from this outcome before broadening scope.", Source: MRUSourceAskOutcome, Scope: MRUScopeSession})
+	guidance := "- Reuse confirmed facts and successful patterns from this outcome before broadening scope."
+	if p := ai.GetSessionPayload(ctx); p != nil && p.ClarificationState != nil {
+		parts := make([]string, 0, 3)
+		if source := strings.TrimSpace(p.ClarificationState.Source); source != "" {
+			parts = append(parts, "source="+source)
+		}
+		if missingFact := strings.TrimSpace(p.ClarificationState.MissingFact); missingFact != "" {
+			parts = append(parts, "missing_fact="+missingFact)
+		}
+		if reason := strings.TrimSpace(p.ClarificationState.Reason); reason != "" {
+			parts = append(parts, "reason="+reason)
+		}
+		if len(parts) > 0 {
+			guidance += " Clarification context: " + strings.Join(parts, "; ") + "."
+		}
+	}
+	items = append(items, MRUItem{Category: askOutcomeMRUCategoryGuidance, Context: guidance, Source: MRUSourceAskOutcome, Scope: MRUScopeSession})
 	return items
 }
 

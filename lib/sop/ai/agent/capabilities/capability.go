@@ -86,15 +86,27 @@ type Handoff struct {
 	Prompt    string
 }
 
-// WorkflowPlanner extends capabilities with post-execution hooks for workflow setup.
-// After Run() completes (near end of Ask/ReAct loop), OnFinish() is called to:
-// - Convert plan to workflow Steps
-// - Configure WorkflowManager
-// - Enqueue trigger to start workflow in next Ask iteration
-// This ensures 100% reuse of Ask pipeline for workflow execution.
+// WorkflowPlanner extends capabilities with a post-execution hook for planning
+// finalization.
+//
+// Deprecated: this interface exists for legacy planner/workflow integration and
+// historical compatibility. New orchestration work should prefer
+// PlannerCapability, MultiStepPlannerCapability, and the Ask-driven
+// phase/workstream system rather than converting plans into WorkflowManager
+// execution.
 type WorkflowPlanner interface {
 	Capability
 	OnFinish(ctx context.Context, result CapabilityResult) error
+}
+
+// PostTurnObserver is an opt-in hook for supporting capabilities that need to
+// observe the final result of an Ask turn without becoming the selected primary
+// capability.
+//
+// Use this sparingly for passive observers such as workstream/session state
+// updates. Primary capability post-turn behavior should remain in OnAfter.
+type PostTurnObserver interface {
+	ObserveAfterTurn(ctx context.Context, query string, state RoutingState, result CapabilityResult) error
 }
 
 // Capability is the plug-in contract for Ask domains.
@@ -107,7 +119,7 @@ type WorkflowPlanner interface {
 //   - OnBefore: Called before ReAct loop execution. Use for setup, validation, or state preparation.
 //     If not needed, implement as: func (c *Cap) OnBefore(...) error { return nil }
 //   - OnAfter: Called after ReAct loop completion. Use for cleanup, persistence, handoff logic,
-//     step lifecycle management, workflow planning finalization, or any other post-execution tasks.
+//     phase/workstream updates, legacy workflow planning finalization, or any other post-execution tasks.
 //     This is the single standardized hook for all post-turn capability logic.
 //     If not needed, implement as: func (c *Cap) OnAfter(...) error { return nil }
 type Capability interface {

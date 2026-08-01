@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/agent/domains/desktop"
 	"github.com/sharedcode/sop/ai/agent/domains/spaces"
@@ -90,6 +91,59 @@ func TestNewCopilotAgentRegistersWorkStreamManagementCapability(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected WorkStreamManagement capability to be registered")
+	}
+}
+
+func TestSessionSTMReaderAdapterPreservesWorkStreamState(t *testing.T) {
+	stm := NewShortTermMemory()
+	thread := &ConversationThread{
+		ID:          sop.NewUUID(),
+		RootPrompt:  "resume planning work",
+		StreamState: WorkStreamActive,
+	}
+	thread.InitializeWorkStream("planning")
+	stm.AddThread(thread)
+
+	reader := &sessionSTMReaderAdapter{stm: stm}
+	current := reader.GetCurrentThread()
+	if current == nil {
+		t.Fatal("expected current thread adapter")
+	}
+
+	current.SetStreamState(capabilities.WorkStreamPaused)
+	if thread.StreamState != WorkStreamPaused {
+		t.Fatalf("expected thread state to update through adapter, got %q", thread.StreamState)
+	}
+	if got := current.GetStreamState(); got != capabilities.WorkStreamPaused {
+		t.Fatalf("expected adapter to report paused state, got %q", got)
+	}
+
+	pauser, ok := current.(interface {
+		PauseWorkStreamWithReason(string, bool)
+	})
+	if !ok {
+		t.Fatal("expected thread adapter to support pause with reason")
+	}
+	pauser.PauseWorkStreamWithReason("Waiting for clarification: output shape", true)
+	if thread.StreamContext == nil || thread.StreamContext.PauseReason != "Waiting for clarification: output shape" {
+		t.Fatalf("expected pause reason to persist on thread, got %+v", thread.StreamContext)
+	}
+	if !thread.StreamContext.RequiresManualResume {
+		t.Fatal("expected manual resume flag to persist on thread")
+	}
+
+	metadataReader, ok := current.(interface {
+		GetPauseReason() string
+		RequiresManualResume() bool
+	})
+	if !ok {
+		t.Fatal("expected thread adapter to expose pause metadata")
+	}
+	if got := metadataReader.GetPauseReason(); got != "Waiting for clarification: output shape" {
+		t.Fatalf("expected adapter pause reason, got %q", got)
+	}
+	if !metadataReader.RequiresManualResume() {
+		t.Fatal("expected adapter manual resume flag to be true")
 	}
 }
 

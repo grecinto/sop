@@ -107,6 +107,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		if err != nil {
 			return ai.ReasoningResponse{}, fmt.Errorf("failed to list tools: %w", err)
 		}
+		tools = appendClarificationActionTool(tools)
 		log.Debug("Gemini owned loop loaded tools",
 			"tool_count", len(tools),
 			"tools", geminiToolNames(tools),
@@ -194,6 +195,16 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 				"outcome_facts", len(resp.OutcomeFacts),
 				"final_text_preview", geminiPreview(resp.FinalText, 320),
 			)
+			emitGeminiOwnedLoopHydration(req, resp)
+			return resp, nil
+		}
+		if clarificationRequest, ok := clarificationRequestFromToolCalls(output.ToolCalls, req.UserQuery); ok {
+			resp := geminiOwnedLoopResponse(clarificationRequest.AssistantQuestion, executedToolCalls, toolResults, continuations, l.generator.Name(), geminiGeneratorModel(l.generator))
+			resp.ClarificationRequest = clarificationRequest
+			resp.EscalationState = retryState.escalationState
+			if resp.CarryoverState != nil {
+				resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+			}
 			emitGeminiOwnedLoopHydration(req, resp)
 			return resp, nil
 		}

@@ -553,6 +553,83 @@ func TestCompatibleReActAdapter_WrapsContinuationWithRetryGuidance(t *testing.T)
 	}
 }
 
+func TestCompatibleReActAdapter_ExposesRequestClarificationAction(t *testing.T) {
+	adapter := NewCompatibleReActAdapter(false, 4096)
+	_, opts, err := adapter.PrepareLLMRequest(context.Background(), ReActLoopState{
+		Iteration: 1,
+		Request: ai.ReasoningRequest{
+			SystemPrompt: "You are a test assistant.",
+			UserQuery:    "Find users",
+			Executor:     &loopMockExecutor{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareLLMRequest failed: %v", err)
+	}
+	found := false
+	for _, tool := range opts.Tools {
+		if tool.Name == compatibleClarificationToolName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s meta action to be exposed, got %#v", compatibleClarificationToolName, opts.Tools)
+	}
+}
+
+type explicitClarificationActionGenerator struct{ calls int }
+
+func (m *explicitClarificationActionGenerator) Name() string {
+	return "explicit_clarification_action_mock"
+}
+func (m *explicitClarificationActionGenerator) EstimateCost(inTokens, outTokens int) float64 {
+	return 0
+}
+func (m *explicitClarificationActionGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
+}
+func (m *explicitClarificationActionGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	_ = ctx
+	_ = prompt
+	m.calls++
+	return ai.GenOutput{ToolCalls: []ai.ToolCall{{
+		Name: compatibleClarificationToolName,
+		Args: map[string]any{
+			"question":     "Which output shape do you want for the joined rows?",
+			"missing_fact": "output shape",
+			"reason":       "The join output format is still ambiguous.",
+			"target_query": "Find John orders",
+		},
+	}}}, nil
+}
+
+func TestCompatibleReActEngine_HandlesExplicitClarificationAction(t *testing.T) {
+	engine := &CompatibleReActEngine{}
+	gen := &explicitClarificationActionGenerator{}
+	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "You are a test assistant.",
+		UserQuery:    "Find John orders",
+		Executor:     &loopMockExecutor{},
+		Generator:    gen,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if resp.FinalText != "Which output shape do you want for the joined rows?" {
+		t.Fatalf("expected clarification question, got %q", resp.FinalText)
+	}
+	if resp.ClarificationRequest == nil {
+		t.Fatal("expected structured clarification request")
+	}
+	if resp.ClarificationRequest.TargetQuery != "Find John orders" || resp.ClarificationRequest.MissingFact != "output shape" || resp.ClarificationRequest.Source != compatibleClarificationToolName {
+		t.Fatalf("unexpected structured clarification request: %#v", resp.ClarificationRequest)
+	}
+	if len(resp.ToolCalls) != 0 {
+		t.Fatalf("expected explicit clarification action to avoid real tool execution, got %#v", resp.ToolCalls)
+	}
+}
+
 func TestCompatibleReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &ownedReActLoopMockGenerator{}
@@ -2684,9 +2761,9 @@ func TestBuildCompatibleReActPrompt_EnforcesHardBudgetAndReportsFirstTrim(t *tes
 	profile := PromptBudgetProfile{
 		TotalChars: 1200,
 		ComponentCharBudgets: map[PromptComponent]int{
-			ComponentFocusedContext:        250,
-			ComponentHistory:               180,
-			ComponentUserQuery:             120,
+			ComponentFocusedContext:            250,
+			ComponentHistory:                   180,
+			ComponentUserQuery:                 120,
 			componentCompatibleAskAnchoredMRU:  180,
 			componentCompatibleProgression:     320,
 			componentCompatibleRepairDirective: 220,
@@ -2818,8 +2895,8 @@ func TestCompatibleReActEngine_RepairHelpers(t *testing.T) {
 		t.Fatalf("expected empty structured attempted args summary when no args or marker exist, got %q", got)
 	}
 	if got := buildCompatibleRetryInstruction(compatibleToolResult{
-		Name: "execute_script",
-		Args: map[string]any{"script": []any{map[string]any{"op": "join", "args": map[string]any{"store": "users_orders"}}}},
+		Name:          "execute_script",
+		Args:          map[string]any{"script": []any{map[string]any{"op": "join", "args": map[string]any{"store": "users_orders"}}}},
 		RetryGuidance: &ai.RetryGuidance{ToolName: "execute_script", Strategy: ai.RepairStrategyResearchFirst, AllowedTool: "list_stores"},
 	}); !strings.Contains(got, "Call list_stores first") || !strings.Contains(got, "return to execute_script") {
 		t.Fatalf("expected structured research-first retry instruction, got %q", got)

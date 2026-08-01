@@ -16,6 +16,7 @@ type anthropic struct {
 	apiKey   string
 	model    string
 	cacheTTL string
+	apiURL   string
 }
 
 func init() {
@@ -31,7 +32,8 @@ func init() {
 		} else if v, ok := cfg["CacheTTL"].(string); ok && strings.TrimSpace(v) != "" {
 			cacheTTL = strings.TrimSpace(v)
 		}
-		return &anthropic{apiKey: apiKey, model: model, cacheTTL: cacheTTL}, nil
+		apiURL, _ := cfg["api_url"].(string)
+		return &anthropic{apiKey: apiKey, model: model, cacheTTL: cacheTTL, apiURL: strings.TrimSpace(apiURL)}, nil
 	})
 }
 
@@ -136,7 +138,10 @@ func (g *anthropic) Generate(ctx context.Context, prompt string, opts ai.GenOpti
 		return ai.GenOutput{}, fmt.Errorf("missing Anthropic API Key")
 	}
 
-	url := "https://api.anthropic.com/v1/messages"
+	url := strings.TrimSpace(g.apiURL)
+	if url == "" {
+		url = "https://api.anthropic.com/v1/messages"
+	}
 
 	reqBody := g.buildBaseRequest(prompt, opts)
 	if reqBody.MaxTokens <= 0 {
@@ -449,7 +454,10 @@ func (g *anthropic) PrewarmCache(ctx context.Context, opts ai.GenOptions) error 
 		return fmt.Errorf("missing Anthropic API Key")
 	}
 
-	url := "https://api.anthropic.com/v1/messages"
+	url := strings.TrimSpace(g.apiURL)
+	if url == "" {
+		url = "https://api.anthropic.com/v1/messages"
+	}
 
 	reqBody := g.buildBaseRequest("warmup", opts)
 	reqBody.MaxTokens = 0 // Required for pre-warming

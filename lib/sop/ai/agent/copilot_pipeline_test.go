@@ -83,6 +83,7 @@ type stubCapabilityForPromptTest struct {
 	name           string
 	context        string
 	classification capabilities.ClassificationResult
+	observedAfter  int
 }
 
 func (s *stubCapabilityForPromptTest) ID() string   { return s.name }
@@ -109,6 +110,71 @@ func (s *stubCapabilityForPromptTest) OnBefore(ctx context.Context, query string
 }
 func (s *stubCapabilityForPromptTest) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
 	return nil
+}
+
+func (s *stubCapabilityForPromptTest) ObserveAfterTurn(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	s.observedAfter++
+	return nil
+}
+
+func TestBuildCapabilityResultData_IncludesClarificationRequest(t *testing.T) {
+	request := &ai.ClarificationRequest{
+		TargetQuery:       "Find John orders",
+		AssistantQuestion: "Which output shape do you want?",
+		MissingFact:       "output shape",
+		Reason:            "retry_policy_requested_clarification",
+		Source:            "request_clarification",
+		Status:            "pending",
+	}
+	data := buildCapabilityResultData(
+		[]ai.ToolCall{{Name: "list_stores"}},
+		[]string{"list_stores confirmed users schema=key:string"},
+		[]ai.LearnedRecipe{{ID: "implicit.execute_script.research_then_retry"}},
+		&ai.CarryoverState{Provider: "chatgpt"},
+		map[string]any{"tier": 3},
+		request,
+	)
+	if got, ok := data["clarification_request"].(*ai.ClarificationRequest); !ok || got != request {
+		t.Fatalf("expected clarification_request in capability result data, got %#v", data)
+	}
+	if _, ok := data["escalation_state"].(map[string]any); !ok {
+		t.Fatalf("expected escalation_state to remain present, got %#v", data)
+	}
+}
+
+func TestNotifySupportingPostTurnObservers_OnlySupportingObserversReceiveResults(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.capabilityRegistry = capabilities.NewRegistry()
+
+	selected := &stubCapabilityForPromptTest{
+		name:           "selected",
+		classification: capabilities.ClassificationResult{Relevant: true, Score: 90, Mode: capabilities.CapabilityModePrimary},
+	}
+	supportingObserver := &stubCapabilityForPromptTest{
+		name:           "supporting-observer",
+		classification: capabilities.ClassificationResult{Relevant: true, Score: 80, Mode: capabilities.CapabilityModeSupporting},
+	}
+	supportingPlain := &stubCapabilityForPromptTest{
+		name:           "supporting-plain",
+		classification: capabilities.ClassificationResult{Relevant: true, Score: 70, Mode: capabilities.CapabilityModeSupporting},
+	}
+
+	ag.capabilityRegistry.Register(selected)
+	ag.capabilityRegistry.Register(supportingObserver)
+	ag.capabilityRegistry.Register(supportingPlain)
+
+	routingState := capabilities.RoutingState{Domain: "Desktop", Gate: RoutingGateDiscovery}
+	ag.notifySupportingPostTurnObservers(context.Background(), "inspect the repo", routingState, selected, capabilities.CapabilityResult{Summary: "done"})
+
+	if supportingObserver.observedAfter != 1 {
+		t.Fatalf("expected supporting observer to be notified once, got %d", supportingObserver.observedAfter)
+	}
+	if supportingPlain.observedAfter != 1 {
+		t.Fatalf("expected supporting plain capability implementing observer hook to be notified once, got %d", supportingPlain.observedAfter)
+	}
+	if selected.observedAfter != 0 {
+		t.Fatalf("expected selected capability not to be notified as supporting observer, got %d", selected.observedAfter)
+	}
 }
 
 func TestRewriteRetryMetaAsk_UsesLatestAskOutcomeQuery(t *testing.T) {
@@ -317,6 +383,9 @@ func TestRewriteConversationalMetaAsk_UsesLastAssistantQuestionAndTargetAsk(t *t
 	}
 	if !strings.Contains(rewritten, "Target ask: Find John orders") || !strings.Contains(rewritten, "Assistant clarification question: Wait, join outputs a combined record. Do you want flat joined fields or nested objects?") || !strings.Contains(rewritten, "User clarification: Flat joined fields. Keep dotted names.") {
 		t.Fatalf("unexpected conversational rewrite: %q", rewritten)
+	}
+	if !strings.Contains(rewritten, "Missing fact: join mapping") || !strings.Contains(rewritten, "Clarification reason: retry_policy_requested_clarification") || !strings.Contains(rewritten, "Clarification source: execute_script") {
+		t.Fatalf("expected structured clarification metadata in conversational rewrite, got %q", rewritten)
 	}
 	if payload.CurrentUserQuery != rewritten {
 		t.Fatalf("expected payload current query to update, got %q", payload.CurrentUserQuery)
@@ -564,6 +633,28 @@ func TestBuildAskOutcomeMRUItems_UsesAskOutcomeOverride(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected ask outcome MRU to persist the override target ask, got %+v", items)
+	}
+}
+
+func TestBuildAskOutcomeMRUItems_IncludesStructuredClarificationGuidance(t *testing.T) {
+	payload := &ai.SessionPayload{Variables: make(map[string]any), ClarificationState: &ai.ClarificationState{
+		TargetQuery: "Find John orders",
+		Status:      "resolved",
+		Source:      "execute_script",
+		MissingFact: "join mapping",
+		Reason:      "retry_policy_requested_clarification",
+	}}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	items := buildAskOutcomeMRUItems(ctx, "Flat joined fields. Keep dotted names.", "Found orders", nil, nil, nil)
+	found := false
+	for _, item := range items {
+		if item.Category != askOutcomeMRUCategoryGuidance {
+			continue
+		}
+		found = strings.Contains(item.Context, "Clarification context:") && strings.Contains(item.Context, "source=execute_script") && strings.Contains(item.Context, "missing_fact=join mapping") && strings.Contains(item.Context, "reason=retry_policy_requested_clarification")
+	}
+	if !found {
+		t.Fatalf("expected ask outcome MRU guidance to include structured clarification metadata, got %+v", items)
 	}
 }
 

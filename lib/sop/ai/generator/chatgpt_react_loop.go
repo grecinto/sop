@@ -65,6 +65,7 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 	if err != nil {
 		return ai.ReasoningResponse{}, err
 	}
+	tools = appendClarificationActionTool(tools)
 
 	request, err := buildChatGPTResponsesRequest(req, l.modelName(), tools)
 	if err != nil {
@@ -102,6 +103,16 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 		toolCalls, err := openAIResponseToolCalls(response)
 		if err != nil {
 			return ai.ReasoningResponse{}, err
+		}
+		if clarificationRequest, ok := clarificationRequestFromToolCalls(toolCalls, req.UserQuery); ok {
+			resp := buildFinalResponse(l.modelName(), clarificationRequest.AssistantQuestion, executedToolCalls, toolResults, response.ID, conversationIDFromResponse(response))
+			resp.ClarificationRequest = clarificationRequest
+			resp.EscalationState = retryState.escalationState
+			if resp.CarryoverState != nil {
+				resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+			}
+			emitChatGPTOwnedLoopHydration(req, resp)
+			return resp, nil
 		}
 
 		// No tool calls — final answer reached.

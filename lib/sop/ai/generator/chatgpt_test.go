@@ -787,6 +787,52 @@ func TestChatGPTOwnedReActLoop_SetsEscalationStateAfterRepeatedRecoverableFailur
 	}
 }
 
+func TestChatGPTOwnedReActLoop_HandlesExplicitClarificationAction(t *testing.T) {
+	requests := make([]openAIResponsesRequest, 0, 1)
+	loop := chatGPTOwnedReActLoop{
+		generator:     &chatgpt{model: "gpt-5.4", apiKey: "test-key"},
+		maxIterations: 2,
+		create: func(ctx context.Context, request openAIResponsesRequest) (openAIResponsesResponse, error) {
+			_ = ctx
+			requests = append(requests, request)
+			return openAIResponsesResponse{
+				ID: "resp_first",
+				Output: []openAIResponsesOutputItem{{
+					ID:        "fc_1",
+					Type:      "function_call",
+					CallID:    "call_1",
+					Name:      clarificationActionToolName,
+					Arguments: `{"question":"Which output shape do you want for the joined rows?","missing_fact":"output shape","target_query":"Find John orders"}`,
+				}},
+			}, nil
+		},
+	}
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Find John orders",
+		Executor: chatGPTToolExecutorStub{tools: []ai.ToolDefinition{{
+			Name:        "execute_script",
+			Description: "Executes a script",
+			Schema:      `{"type":"object","properties":{"script":{"type":"array"}},"required":["script"]}`,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.FinalText != "Which output shape do you want for the joined rows?" {
+		t.Fatalf("unexpected final text: %q", resp.FinalText)
+	}
+	if resp.ClarificationRequest == nil || resp.ClarificationRequest.Source != clarificationActionToolName {
+		t.Fatalf("expected structured clarification request from explicit action, got %#v", resp.ClarificationRequest)
+	}
+	if len(resp.ToolCalls) != 0 {
+		t.Fatalf("expected no executed tool calls for explicit clarification action, got %#v", resp.ToolCalls)
+	}
+	if len(requests) != 1 || len(requests[0].Tools) < 2 {
+		t.Fatalf("expected clarification action to be exposed alongside executor tools, got %#v", requests)
+	}
+}
+
 func TestChatGPTOwnedReActLoop_UsesCarryoverRetryLearnings(t *testing.T) {
 	requests := make([]openAIResponsesRequest, 0, 2)
 	pattern := ai.NewRetryCoordinator().ErrorPattern("execute_script", errors.New("join mapping unresolved"))

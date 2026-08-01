@@ -292,9 +292,12 @@ func buildConclusivePatchMessage(appliedPatches []Patch, testResult TestResult, 
 	return fmt.Sprintf("%s%s", status, conclusion)
 }
 
-// RunEvaluationSuite executes a lightweight evaluation harness for the workflow.
-// The controller-style orchestrator entrypoint is intentionally disabled; callers
-// should use the step-based workflow manager capability instead.
+// RunEvaluationSuite executes a lightweight evaluation harness for the legacy
+// workflow types.
+// The controller-style orchestrator entrypoint is intentionally disabled; new
+// callers should use PlannerCapability, MultiStepPlannerCapability, or the
+// Ask-driven phase/workstream system instead of reviving workflow-manager
+// execution.
 func RunEvaluationSuite(sharedInfra *SharedInfrastructure, cases []EvaluationCase) []EvaluationResult {
 	results := make([]EvaluationResult, 0, len(cases))
 	for _, c := range cases {
@@ -305,7 +308,7 @@ func RunEvaluationSuite(sharedInfra *SharedInfrastructure, cases []EvaluationCas
 		results = append(results, EvaluationResult{
 			Name:    c.Name,
 			Passed:  false,
-			Message: "controller-style execution is disabled: use the step-based workflow manager capability instead",
+			Message: "controller-style execution is disabled: use the Planner, Multi-Step Planner, or phase/workstream system instead",
 		})
 	}
 	return results
