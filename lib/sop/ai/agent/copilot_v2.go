@@ -14,7 +14,7 @@ import (
 )
 
 // ============================================================================
-// AskV2 Pipeline - Critical Architectural Patterns
+// Ask Pipeline - Critical Architectural Patterns
 // ============================================================================
 //
 // 1. EXPLICIT PARAMETER PASSING (No Context for State)
@@ -29,8 +29,8 @@ import (
 //    ❌ NEVER: ExecuteTool() calls other tools or enqueues multiple items
 //
 // 3. ASK/LLM IS ORCHESTRATOR (Single Point of Control)
-//    ✅ AskV2() controls: classification → phase creation → tool registration → ReAct
-//    ✅ AskV2() decides: when phase complete, which phase next, enqueue work
+//    ✅ Ask pipeline controls: classification → phase creation → tool registration → ReAct
+//    ✅ Ask pipeline decides: when phase complete, which phase next, enqueue work
 //    ✅ LLM decides: which tools to call, when, with what arguments
 //    ❌ NEVER: Phases decide workflow progression
 //
@@ -41,18 +41,15 @@ import (
 //    ❌ NEVER: ExecuteTool() → ExecuteTool() (recursive/chained calls)
 //
 // Example Correct Flow:
-//   AskV2() → createPhases(domains, phase) → registerTools()
+//   Ask pipeline → createPhases(domains, phase) → registerTools()
 //   → reactLoop() → LLM calls tool → phase.ExecuteTool(toolName, args)
-//   → phase returns result → AskV2() checks completion
-//   → AskV2() enqueues next phase if needed
+//   → phase returns result → Ask pipeline checks completion
+//   → Ask pipeline enqueues next phase if needed
 //
 // ============================================================================
 
-// AskV2 is the next-generation Ask pipeline implementing pure LLM-as-Orchestrator pattern.
-// This is the canonical Ask implementation for active development.
-//
-// Deprecated replacement note: AskV2 replaces the legacy askV1 heuristic pipeline,
-// which remains available only as an emergency fallback behind use_v1_pipeline.
+// runAskPipeline is the queue-aware Ask pipeline implementing pure
+// LLM-as-Orchestrator behavior.
 //
 // ARCHITECTURE:
 // - Preserves ALL V1 infrastructure (queue, gates, intent, KB, lifecycle)
@@ -71,7 +68,7 @@ import (
 // - User queries (100) > System resume (50) > Phase succession (10)
 // - User queries always processed before code-enqueued work
 // - LLM sees WorkStream state and decides via tools (pause/resume/abandon)
-func (a *CopilotAgent) AskV2(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// Get or create session queue
 	queue := a.getOrCreateSessionQueue()
 
@@ -99,7 +96,7 @@ func (a *CopilotAgent) AskV2(ctx context.Context, query string, cfg *ai.ConfigMa
 			"query_preview", truncateString(item.Query, 80))
 
 		// Execute ask (LLM orchestrates WorkStream management via tools)
-		response, err := a.askV2Core(ctx, item.Query, cfg)
+		response, err := a.askCore(ctx, item.Query, cfg)
 		if err != nil {
 			return response, err
 		}
@@ -115,10 +112,10 @@ func (a *CopilotAgent) AskV2(ctx context.Context, query string, cfg *ai.ConfigMa
 	return lastResponse, nil
 }
 
-// askV2Core is the core V2 Ask→ReAct transaction with V2 routing for Gate 3.
-// Preserves all V1 infrastructure (Gates 1/2, intent, KB, lifecycle, epilogue).
+// askCore is the core Ask→ReAct transaction with Ask routing for Gate 3.
+// Preserves all shared infrastructure (Gates 1/2, intent, KB, lifecycle, epilogue).
 // ONLY Cold Start gate (Gate 3) uses Phase Factory + LLM classification.
-func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// 1. Setup and early validation (same as V1)
 	ctx = a.applyAskConfig(ctx, cfg)
 	a.clearAskProgressMRU()
@@ -151,16 +148,16 @@ func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.Conf
 		return a.executeAvatarSubAgent(ctx, intent, query)
 	}
 
-	// 4. Three-gate context classification (V2: uses Phase Factory for Gate 3)
-	taskContext, err := a.evaluateRoutingGatesV2(ctx, query, gen)
+	// 4. Three-gate context classification (Ask pipeline uses Phase Factory for Gate 3)
+	taskContext, err := a.evaluateAskRoutingGates(ctx, query, gen)
 	if err != nil {
-		log.Info("Copilot AskV2 routing evaluation failed", "query", query, "error", err)
+		log.Info("Copilot Ask routing evaluation failed", "query", query, "error", err)
 		return "", err
 	}
 	if taskContext == nil {
 		taskContext = &TaskContextClassification{}
 	}
-	log.Info("Copilot AskV2 Routing", "routing_gate", taskContext.RoutingGate, "task_context", summarizeTaskContextForLog(*taskContext), "query", query)
+	log.Info("Copilot Ask Routing", "routing_gate", taskContext.RoutingGate, "task_context", summarizeTaskContextForLog(*taskContext), "query", query)
 
 	// 5. KB direct display fast path (same as V1)
 	if a.shouldDirectDisplayKB(taskContext) {
@@ -184,24 +181,24 @@ func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.Conf
 		}
 	}
 
-	// 6b. V2 Phase Factory Integration (only for Gate 3 Discovery)
-	if v2Class, ok := ctx.Value("v2_classification").(*TaskContextV2); ok && v2Class != nil {
-		log.Info("Using V2 Phase Factory for WorkStream + tool registration")
+	// 6b. Phase Factory Integration (only for Gate 3 Discovery)
+	if askCtx, ok := ctx.Value("ask_classification").(*AskTaskContext); ok && askCtx != nil {
+		log.Info("Using Ask Phase Factory for WorkStream + tool registration")
 
 		// Resolve phase plan from WorkStream or classification
-		plan, currentPhase := a.resolvePhasePlanV2(ctx, v2Class)
+		plan, currentPhase := a.resolvePhasePlan(ctx, askCtx)
 		log.Info("Phase plan resolved", "plan", plan, "current_phase", currentPhase)
 
 		// Create domain-specific phase proxies
-		phases := a.createPhaseProxiesV2(v2Class.Domains, currentPhase)
-		log.Info("Phase proxies created", "count", len(phases), "domains", v2Class.Domains)
+		phases := a.createPhaseProxies(askCtx.Domains, currentPhase)
+		log.Info("Phase proxies created", "count", len(phases), "domains", askCtx.Domains)
 
 		// Aggregate tools from all phases with CRUD filtering
-		tools := a.aggregatePhaseToolsV2(phases, v2Class)
-		log.Info("Phase tools aggregated with CRUD filtering", "tool_count", len(tools), "crud", v2Class.CRUD)
+		tools := a.aggregatePhaseTools(phases, askCtx)
+		log.Info("Phase tools aggregated with CRUD filtering", "tool_count", len(tools), "crud", askCtx.CRUD)
 
 		// Register phase tools with ReAct
-		a.registerPhaseToolsV2(ctx, tools, phases, v2Class)
+		a.registerPhaseTools(ctx, tools, phases, askCtx)
 		log.Info("Phase tools registered successfully")
 	}
 
@@ -227,7 +224,7 @@ func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.Conf
 		a.notifySupportingPostTurnObservers(ctx, query, routingState, selectedCap, capResult)
 	}
 
-	log.Info("Copilot AskV2 Complete", "session_id", sessionID, "response_chars", len(finalText))
+	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
 
 	// 10. Epilogue and cleanup (same as V1)
 	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, clarificationRequest)
@@ -235,11 +232,11 @@ func (a *CopilotAgent) askV2Core(ctx context.Context, query string, cfg *ai.Conf
 	return finalText, nil
 }
 
-// evaluateRoutingGatesV2 is the V2 version of three-gate routing.
+// evaluateAskRoutingGates is the Ask-pipeline version of three-gate routing.
 // Gates 1 (Focused) and 2 (Continuity) unchanged from V1.
 // Gate 3 (Discovery/Cold Start) uses Phase Factory + LLM classification instead of heuristics.
-func (a *CopilotAgent) evaluateRoutingGatesV2(ctx context.Context, query string, gen ai.Generator) (*TaskContextClassification, error) {
-	log.Info("Copilot AskV2 routing evaluation start", "query", query)
+func (a *CopilotAgent) evaluateAskRoutingGates(ctx context.Context, query string, gen ai.Generator) (*TaskContextClassification, error) {
+	log.Info("Copilot Ask routing evaluation start", "query", query)
 	a.rehydrateMRUFromMemory(ctx)
 	isTest := isRoutingTestGenerator(gen)
 	anchor := parseRoutingAnchor(query)
@@ -271,50 +268,50 @@ func (a *CopilotAgent) evaluateRoutingGatesV2(ctx context.Context, query string,
 		log.Info("Explicit new-topic override: skipping continuation-based routing")
 	}
 
-	// Gate 3 (Discovery/Cold Start): V2 uses Phase Factory + LLM classification
-	if taskClassification, err := a.tryColdStartBasedRoutingV2(ctx, query, gen, isTest); err != nil {
+	// Gate 3 (Discovery/Cold Start): Ask pipeline uses Phase Factory + LLM classification
+	if taskClassification, err := a.tryAskColdStartRouting(ctx, query, gen, isTest); err != nil {
 		return nil, err
 	} else if taskClassification != nil {
-		return a.finalizeRoutingResult(ctx, query, &routingOutcome{taskCtx: taskClassification, matched: true, source: "coldstart_v2"}, RoutingGateDiscovery), nil
+		return a.finalizeRoutingResult(ctx, query, &routingOutcome{taskCtx: taskClassification, matched: true, source: "coldstart_ask"}, RoutingGateDiscovery), nil
 	}
 
 	return nil, nil
 }
 
-// tryColdStartBasedRoutingV2 implements Gate 3 (Discovery) using Phase Factory.
+// tryAskColdStartRouting implements Gate 3 (Discovery) using Phase Factory.
 // This is the ONLY difference from V1 - pure LLM classification instead of heuristics.
-func (a *CopilotAgent) tryColdStartBasedRoutingV2(ctx context.Context, query string, gen ai.Generator, isTest bool) (*TaskContextClassification, error) {
-	log.Info("Gate 3 (Discovery): V2 Cold Start with Phase Factory")
+func (a *CopilotAgent) tryAskColdStartRouting(ctx context.Context, query string, gen ai.Generator, isTest bool) (*TaskContextClassification, error) {
+	log.Info("Gate 3 (Discovery): Ask Cold Start with Phase Factory")
 
 	// Skip if test mode without generator
 	if isTest && gen == nil {
 		return nil, nil
 	}
 
-	// Use V2 LLM classification (returns domains + phase + plan)
-	classification, err := a.ClassifyTaskContextV2(ctx, query, gen)
+	// Use Ask LLM classification (returns domains + phase + plan)
+	classification, err := a.ClassifyAskTaskContext(ctx, query, gen)
 	if err != nil {
-		log.Warn("V2 classification failed", "error", err)
+		log.Warn("Ask classification failed", "error", err)
 		return nil, err
 	}
 
-	log.Info("V2 Classification Result",
+	log.Info("Ask Classification Result",
 		"domains", classification.Domains,
 		"phase", classification.Phase,
 		"plan", classification.PhasePlan,
 		"intent", classification.Intent,
 		"confidence", classification.Confidence)
 
-	// Convert V2 classification to V1 TaskContextClassification for compatibility
+	// Convert Ask classification to TaskContextClassification for compatibility
 	taskCtx := &TaskContextClassification{
 		Domain:         strings.Join(classification.Domains, ","), // Multi-domain support
 		CapabilityHint: classification.Phase,                      // Phase name as hint
 		RoutingGate:    RoutingGateDiscovery,
 	}
 
-	// Store V2-specific metadata in context for later use
-	ctx = context.WithValue(ctx, "v2_classification", classification)
-	ctx = context.WithValue(ctx, "v2_phase_plan", classification.PhasePlan)
+	// Store Ask-specific metadata in context for later use
+	ctx = context.WithValue(ctx, "ask_classification", classification)
+	ctx = context.WithValue(ctx, "ask_phase_plan", classification.PhasePlan)
 
 	return taskCtx, nil
 }
@@ -327,7 +324,7 @@ func (a *CopilotAgent) tryColdStartBasedRoutingV2(ctx context.Context, query str
 // - If resuming: Use existing plan, advance from current index
 // - If new: Use LLM-generated plan or default to single phase
 // - Store plan in WorkStream via STM for persistence across turns
-func (a *CopilotAgent) resolvePhasePlanV2(ctx context.Context, classification *TaskContextV2) (plan []string, currentPhase string) {
+func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *AskTaskContext) (plan []string, currentPhase string) {
 	// Get STM accessor for WorkStream integration
 	stm := a.getSTMForPhaseCapabilities()
 	if stm == nil {
@@ -398,7 +395,7 @@ func (a *CopilotAgent) resolvePhasePlanV2(ctx context.Context, classification *T
 	return plan, currentPhase
 }
 
-// createPhaseProxiesV2 creates domain-specific phase capabilities via Phase Factory.
+// createPhaseProxies creates domain-specific phase capabilities via Phase Factory.
 //
 // USER SPECIFICATION:
 // For EACH domain in classification:
@@ -410,7 +407,7 @@ func (a *CopilotAgent) resolvePhasePlanV2(ctx context.Context, classification *T
 //
 //	domains=["stores", "spaces"], phase="investigation"
 //	→ StoresPhase("investigation") + SpacesPhase("investigation")
-func (a *CopilotAgent) createPhaseProxiesV2(domains []string, currentPhase string) []capabilities.Capability {
+func (a *CopilotAgent) createPhaseProxies(domains []string, currentPhase string) []capabilities.Capability {
 	phases := []capabilities.Capability{}
 
 	// Get or create shared infrastructure for phases
@@ -439,13 +436,13 @@ func (a *CopilotAgent) createPhaseProxiesV2(domains []string, currentPhase strin
 	return phases
 }
 
-// aggregatePhaseToolsV2 collects tools from ALL phase proxies.
+// aggregatePhaseTools collects tools from ALL phase proxies.
 //
 // USER SPECIFICATION:
 // - Collect ALL tools from all phases
 // - Phase 3 optimization: Apply CRUD filtering based on classification
 // - LLM will decide which tools to call from the filtered set
-func (a *CopilotAgent) aggregatePhaseToolsV2(phases []capabilities.Capability, classification *TaskContextV2) []capabilities.ToolDefinition {
+func (a *CopilotAgent) aggregatePhaseTools(phases []capabilities.Capability, classification *AskTaskContext) []capabilities.ToolDefinition {
 	allTools := []capabilities.ToolDefinition{}
 
 	// Collect CRUD flags from classification
@@ -476,7 +473,7 @@ func (a *CopilotAgent) aggregatePhaseToolsV2(phases []capabilities.Capability, c
 	return allTools
 }
 
-// registerPhaseToolsV2 registers all phase tools in the tool registry.
+// registerPhaseTools registers all phase tools in the tool registry.
 //
 // USER SPECIFICATION:
 // - Register ALL tools from all phases
@@ -487,8 +484,8 @@ func (a *CopilotAgent) aggregatePhaseToolsV2(phases []capabilities.Capability, c
 // - Tool handler calls phase.ExecuteTool(toolName, args, routingState)
 // - Phase executes ONE tool operation and returns result
 // - Phase does NOT enqueue work, call other tools, or control flow
-// - Ask pipeline (AskV2) is the orchestrator, not the phase
-func (a *CopilotAgent) registerPhaseToolsV2(ctx context.Context, allTools []capabilities.ToolDefinition, phases []capabilities.Capability, classification *TaskContextV2) {
+// - Ask pipeline is the orchestrator, not the phase
+func (a *CopilotAgent) registerPhaseTools(ctx context.Context, allTools []capabilities.ToolDefinition, phases []capabilities.Capability, classification *AskTaskContext) {
 	// Build routing state for ExecuteTool calls
 	// ✅ EXPLICIT PARAMETERS: routingState passed to ExecuteTool, not hidden in context
 	// ✅ Phase 3 optimization: Include CRUD flags for tool filtering
@@ -560,14 +557,14 @@ func (a *CopilotAgent) findOwningPhase(toolName string, phases []capabilities.Ca
 	return nil
 }
 
-// buildSystemPromptV2 builds unified system prompt from all phase proxies.
+// buildPhasePrompt builds unified system prompt from all phase proxies.
 //
 // USER SPECIFICATION:
 // - Call BuildInstructions() on each phase proxy
 // - Aggregate domain+phase-specific instructions
 // - Include conversation history
 // - Result: Unified system prompt with all phase guidance
-func (a *CopilotAgent) buildSystemPromptV2(ctx context.Context, query string, classification *TaskContextV2, phases []capabilities.Capability) string {
+func (a *CopilotAgent) buildPhasePrompt(ctx context.Context, query string, classification *AskTaskContext, phases []capabilities.Capability) string {
 	builder := NewSystemPromptBuilder()
 
 	// 1. Base persona
@@ -646,7 +643,7 @@ func (a *CopilotAgent) buildSystemPromptV2(ctx context.Context, query string, cl
 		Domain: strings.Join(classification.Domains, ","),
 	}))
 
-	log.Debug("System prompt built (V2)",
+	log.Debug("System prompt built (Ask phase pipeline)",
 		"original_chars", budgetReport.OriginalTotalChars,
 		"final_chars", budgetReport.FinalTotalChars,
 		"phase_count", len(phases))
@@ -654,13 +651,13 @@ func (a *CopilotAgent) buildSystemPromptV2(ctx context.Context, query string, cl
 	return fullPrompt
 }
 
-// isPhaseCompleteV2 determines if the current phase is complete.
+// isPhaseComplete determines if the current phase is complete.
 //
 // IMPLEMENTATION:
 // Checks the actual artifact status instead of heuristics.
 // Phase is complete when artifact status is one of:
 // - "complete", "approved", "delivered"
-func (a *CopilotAgent) isPhaseCompleteV2(ctx context.Context, currentPhase string, toolCalls []ai.ToolCall, response string) bool {
+func (a *CopilotAgent) isPhaseComplete(ctx context.Context, currentPhase string, toolCalls []ai.ToolCall, response string) bool {
 	// Check if capture tool was called
 	captureToolCalled := false
 	for _, tc := range toolCalls {

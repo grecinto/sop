@@ -7,7 +7,7 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
-func TestClassifyTaskContextV2_MapsStoreQueriesToStoreDomains(t *testing.T) {
+func TestClassifyAskTaskContext_MapsStoreQueriesToStoreDomains(t *testing.T) {
 	tests := []struct {
 		name       string
 		query      string
@@ -45,7 +45,7 @@ func TestClassifyTaskContextV2_MapsStoreQueriesToStoreDomains(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ag := &CopilotAgent{}
-			classification, err := ag.ClassifyTaskContextV2(context.Background(), tt.query, &v2RoutingTestGenerator{Response: tt.response})
+			classification, err := ag.ClassifyAskTaskContext(context.Background(), tt.query, &askRoutingTestGenerator{Response: tt.response})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -65,11 +65,11 @@ func TestClassifyTaskContextV2_MapsStoreQueriesToStoreDomains(t *testing.T) {
 	}
 }
 
-func TestEvaluateRoutingGatesV2_UsesDiscoveryGateForStoreColdStart(t *testing.T) {
+func TestEvaluateAskRoutingGates_UsesDiscoveryGateForStoreColdStart(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{Variables: make(map[string]any)})
 
-	taskCtx, err := ag.evaluateRoutingGatesV2(ctx, "fix the users table in Stores", &v2RoutingTestGenerator{Response: `{"domains":["stores"],"phase":"investigation","phase_plan":["investigation"],"intent":"read_data","confidence":"high","reasoning":"read data"}`})
+	taskCtx, err := ag.evaluateAskRoutingGates(ctx, "fix the users table in Stores", &askRoutingTestGenerator{Response: `{"domains":["stores"],"phase":"investigation","phase_plan":["investigation"],"intent":"read_data","confidence":"high","reasoning":"read data"}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

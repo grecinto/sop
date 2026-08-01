@@ -3288,79 +3288,11 @@ func (a *CopilotAgent) Search(ctx context.Context, query string, limit int) ([]a
 // Ask is the public API that processes queries through a session queue.
 // The queue enables workflow automation where capabilities can enqueue next steps.
 // ReAct loop handles multi-turn execution and clarifications natively.
-// Ask is the main entry point for Copilot queries.
-// Routes to V2 (LLM-as-Orchestrator) or V1 (legacy heuristic-based) pipeline.
-//
-// DEFAULT: V2 Pipeline (pure LLM orchestration with Phase Factory)
-// V1 Pipeline: DEPRECATED - Contains heuristics that violate architectural patterns.
-//
-//	Use ONLY for emergency fallback via "use_v1_pipeline" flag.
-//	V1 is UNSHIPPABLE and will be removed after V2 validation.
+// Ask is the main entry point for Copilot queries and delegates to the
+// canonical LLM-as-Orchestrator + Phase Factory pipeline.
 func (a *CopilotAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
-	// Check for V1 opt-out flag (emergency fallback only)
-	useV1 := false
-	if cfg != nil {
-		if v1Flag, ok := cfg.Get("use_v1_pipeline"); ok {
-			if v1Bool, ok := v1Flag.(bool); ok {
-				useV1 = v1Bool
-			}
-		}
-	}
-
-	// Route to appropriate pipeline
-	if useV1 {
-		log.Warn("Using V1 Pipeline (DEPRECATED - emergency fallback only, will be removed)")
-		return a.askV1(ctx, query, cfg)
-	}
-
-	// Default: V2 Pipeline
-	log.Info("Using V2 Pipeline (LLM-as-Orchestrator + Phase Factory)")
-	return a.AskV2(ctx, query, cfg)
-}
-
-// askV1 is the legacy Ask implementation with heuristic routing.
-// This is the original pipeline, kept only as an emergency fallback.
-//
-// Deprecated: do not add new behavior to askV1. Prefer AskV2 and the V2
-// phase/workstream pipeline for all active development.
-func (a *CopilotAgent) askV1(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
-	// Get or create session queue
-	queue := a.getOrCreateSessionQueue()
-
-	// Enqueue user query
-	if err := queue.Enqueue(WorkItem{
-		Query: query,
-		Actor: "user",
-		ID:    fmt.Sprintf("user-%d", time.Now().UnixNano()),
-	}); err != nil {
-		return "", fmt.Errorf("failed to enqueue query: %w", err)
-	}
-
-	// Process queue until empty
-	var lastResponse string
-	for !queue.IsEmpty() {
-		item, err := queue.Dequeue()
-		if err != nil {
-			break
-		}
-
-		log.Info("Processing queue item", "actor", item.Actor, "query_preview", truncateString(item.Query, 80))
-
-		// Execute pure ask (delegates to ReAct)
-		response, err := a.ask(ctx, item.Query, cfg)
-		if err != nil {
-			return response, err
-		}
-
-		lastResponse = response
-
-		// ReAct returns either:
-		// - Completed answer: continue to next queue item
-		// - Clarification question: pause queue, return to user
-		// Capabilities may have enqueued next steps during execution
-	}
-
-	return lastResponse, nil
+	log.Info("Using Ask pipeline (LLM-as-Orchestrator + Phase Factory)")
+	return a.runAskPipeline(ctx, query, cfg)
 }
 
 // getOrCreateSessionQueue returns the session-level queue for workflow automation
@@ -3622,7 +3554,7 @@ func resolveParallelWorkingDir(ctx context.Context, query string) string {
 	return ""
 }
 
-// Helper functions for ask() modularization
+// Helper functions for Ask modularization
 
 func extractProviderDetails(cfg *ai.ConfigMap) *ProviderDetails {
 	if cfg == nil {
@@ -3694,110 +3626,6 @@ func (a *CopilotAgent) enrichQueryWithKBResults(query string, taskContext *TaskC
 		return a.buildKBEnrichedQuery(cleanQuery, taskContext.KBSearchResults, taskContext.LLMInstruction, taskContext.KBMatchCount)
 	}
 	return query
-}
-
-// ask is the pure Ask→ReAct transaction with no queue awareness.
-// All routing, gates, KB enrichment, and ReAct delegation happen here.
-// Capabilities can enqueue next steps via GetSessionQueue() during tool execution.
-//
-// Deprecated: this helper is the core transaction for the legacy V1 Ask path.
-// AskV2 uses askV2Core instead and is the canonical pipeline.
-func (a *CopilotAgent) ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
-	// 1. Setup and early validation
-	ctx = a.applyAskConfig(ctx, cfg)
-	a.clearAskProgressMRU()
-	ctx = context.WithValue(ctx, "latest_user_query", query)
-
-	providerDetails := extractProviderDetails(cfg)
-
-	if handled, res, err := a.handlePendingUserConfirmation(ctx, query); handled {
-		return res, err
-	}
-	if handled, res, err := a.handleDirectToolInvocation(ctx, query, nil); handled {
-		return res, err
-	}
-
-	gen := a.resolveLLM(ctx, providerDetails)
-	if gen == nil {
-		return a.noAPIKeyMessage(), nil
-	}
-
-	sessionID := a.logAskStart(ctx, query, gen)
-
-	// 2. Query preprocessing
-	rawQuery := query
-	query = a.applyMetaTalkRewrite(ctx, query)
-
-	// 3. Intent classification and routing
-	intent := a.classifyIntent(ctx, query, gen)
-	if intent != ai.IntentOmni {
-		log.Info("Ask: Request classified for Avatar", "avatar", intent)
-		return a.executeAvatarSubAgent(ctx, intent, query)
-	}
-
-	//Request classified for OMNI
-
-	// 4. Three-gate context classification
-	taskContext, err := a.evaluateRoutingGates(ctx, query, gen)
-	if err != nil {
-		log.Info("Copilot Ask routing evaluation failed", "query", query, "error", err)
-		return "", err
-	}
-	if taskContext == nil {
-		taskContext = &TaskContextClassification{}
-	}
-	log.Info("Copilot Ask Routing", "routing_gate", taskContext.RoutingGate, "task_context", summarizeTaskContextForLog(*taskContext), "query", query)
-
-	// 5. KB direct display fast path
-	if a.shouldDirectDisplayKB(taskContext) {
-		return a.handleKBDirectDisplay(ctx, rawQuery, intent, taskContext)
-	}
-
-	// 6. Episode tracking and capability setup
-	a.trackEpisodeMetadata(ctx, intent)
-	ctx, selectedCap := a.resolveCapability(ctx, query, taskContext)
-
-	// 6a. Capability lifecycle: OnBefore
-	routingState := capabilities.RoutingState{
-		Domain:         taskContext.Domain,
-		Gate:           taskContext.RoutingGate,
-		CapabilityHint: taskContext.CapabilityHint,
-	}
-	if selectedCap != nil {
-		if err := selectedCap.OnBefore(ctx, query, routingState); err != nil {
-			log.Warn("Capability OnBefore failed", "capability", selectedCap.ID(), "error", err)
-			return "", err
-		}
-	}
-
-	// 7. Prompt construction and query enrichment
-	fullPrompt := a.buildSystemPrompt(ctx, query, *taskContext)
-	query = a.enrichQueryWithKBResults(query, taskContext)
-
-	// 8. Delegate to Reasoning engine/ReAct loop.
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest, err := a.reactLoop(ctx, query, gen, fullPrompt)
-	if err != nil {
-		return "", err
-	}
-
-	// 9. Capability lifecycle: OnAfter
-	if selectedCap != nil {
-		capResult := capabilities.CapabilityResult{
-			Summary: finalText,
-			Data:    buildCapabilityResultData(toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest),
-		}
-		if err := selectedCap.OnAfter(ctx, query, routingState, capResult); err != nil {
-			log.Warn("Capability OnAfter failed", "capability", selectedCap.ID(), "error", err)
-		}
-		a.notifySupportingPostTurnObservers(ctx, query, routingState, selectedCap, capResult)
-	}
-
-	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
-
-	// 10. Epilogue and cleanup
-	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, clarificationRequest)
-
-	return finalText, nil
 }
 
 func (a *CopilotAgent) notifySupportingPostTurnObservers(ctx context.Context, query string, routingState capabilities.RoutingState, selectedCap capabilities.Capability, result capabilities.CapabilityResult) {

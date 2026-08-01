@@ -226,68 +226,6 @@ func TestTrySpecializedFocusedRouting_ShortCircuitsSOPStyleQuery(t *testing.T) {
 	}
 }
 
-func TestEvaluateRoutingGates_HandlesBareSopQuery(t *testing.T) {
-	ctx := context.Background()
-	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
-
-	tx, err := sysDB.BeginTransaction(ctx, sop.ForWriting)
-	if err != nil {
-		t.Fatalf("BeginTransaction failed: %v", err)
-	}
-	kb, err := sysDB.OpenKnowledgeBase(ctx, "sop", tx, nil, nil, false)
-	if err != nil {
-		t.Fatalf("OpenKnowledgeBase failed: %v", err)
-	}
-	if err := kb.SetConfig(ctx, &memory.KnowledgeBaseConfig{TextSearchEnabled: true, LastVectorized: 1}); err != nil {
-		t.Fatalf("SetConfig failed: %v", err)
-	}
-	if err := kb.IngestThought(ctx, "Getting Started", "installation/setup", "Omni", nil, map[string]any{"description": "setup guide"}); err != nil {
-		t.Fatalf("IngestThought failed: %v", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("Commit failed: %v", err)
-	}
-
-	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
-	if ag.service == nil {
-		ag.service = &Service{}
-	}
-	ag.service.session = &RunnerSession{MRU: []MRUItem{}}
-
-	ctx = context.WithValue(ctx, "session_payload", &ai.SessionPayload{Variables: make(map[string]any)})
-
-	tests := []struct {
-		name                string
-		query               string
-		expectDirectDisplay bool
-	}{
-		{"bare sop", "sop", true},
-		{"sop with colon", "sop:", true},
-		{"sop with category", "sop:installation", false}, // No results, so not direct display
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			taskCtx, err := ag.evaluateRoutingGates(ctx, tc.query, nil)
-			if err != nil {
-				t.Fatalf("evaluateRoutingGates failed: %v", err)
-			}
-			if taskCtx == nil {
-				t.Fatal("expected a routing classification for sop query")
-			}
-			if taskCtx.RoutingGate != RoutingGateFocused {
-				t.Fatalf("expected specialized focused routing gate, got %q", taskCtx.RoutingGate)
-			}
-			if !hasLayer(taskCtx.Layers, "KBRoute") {
-				t.Fatalf("expected KBRoute layer to be attached, got %+v", taskCtx.Layers)
-			}
-			if taskCtx.DirectDisplay != tc.expectDirectDisplay {
-				t.Fatalf("expected direct display=%v, got %v", tc.expectDirectDisplay, taskCtx.DirectDisplay)
-			}
-		})
-	}
-}
-
 func TestTrySpecializedFocusedRouting_PreservesSourceLabelsInKBResults(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})

@@ -45,7 +45,7 @@ func TestEndToEnd_CodingWorkflow_SDLC(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ag := &CopilotAgent{}
-			classification, err := ag.ClassifyTaskContextV2(context.Background(), tt.query, &v2RoutingTestGenerator{Response: tt.response})
+			classification, err := ag.ClassifyAskTaskContext(context.Background(), tt.query, &askRoutingTestGenerator{Response: tt.response})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -85,7 +85,7 @@ func TestEndToEnd_DesktopAutomation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ag := &CopilotAgent{}
-			classification, err := ag.ClassifyTaskContextV2(context.Background(), tt.query, &v2RoutingTestGenerator{Response: tt.response})
+			classification, err := ag.ClassifyAskTaskContext(context.Background(), tt.query, &askRoutingTestGenerator{Response: tt.response})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -99,9 +99,9 @@ func TestEndToEnd_DesktopAutomation(t *testing.T) {
 	}
 }
 
-func TestEndToEnd_V2Classification_UsesMultiPhasePlansForComplexWork(t *testing.T) {
+func TestEndToEnd_AskClassification_UsesMultiPhasePlansForComplexWork(t *testing.T) {
 	ag := &CopilotAgent{}
-	classification, err := ag.ClassifyTaskContextV2(context.Background(), "design the authentication system architecture", &v2RoutingTestGenerator{Response: `{"domains":["coding_workflow"],"phase":"planning","phase_plan":["intake","investigation","planning","execution","review"],"intent":"plan","confidence":"high","reasoning":"complex architecture design"}`})
+	classification, err := ag.ClassifyAskTaskContext(context.Background(), "design the authentication system architecture", &askRoutingTestGenerator{Response: `{"domains":["coding_workflow"],"phase":"planning","phase_plan":["intake","investigation","planning","execution","review"],"intent":"plan","confidence":"high","reasoning":"complex architecture design"}`})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

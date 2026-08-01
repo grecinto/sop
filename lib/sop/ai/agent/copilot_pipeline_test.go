@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -670,126 +669,6 @@ func TestBuildAskOutcomeMRUItems_UsesRetryRewriteState(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected ask outcome MRU to persist the typed retry target ask, got %+v", items)
-	}
-}
-
-func TestCopilotPipeline_Phases(t *testing.T) {
-	ctx := context.Background()
-
-	os.RemoveAll("./test_data/pipeline")
-	defer os.RemoveAll("./test_data/pipeline")
-	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{"./test_data/pipeline"}}
-	sysDB := database.NewDatabase(sysDBOptions)
-
-	cfg := Config{}
-	ag := NewCopilotAgent(cfg, map[string]sop.DatabaseOptions{}, sysDB)
-
-	if ag.service == nil {
-		ag.service = &Service{}
-	}
-	ag.service.session = &RunnerSession{
-		MRU: []MRUItem{},
-	}
-
-	ag.Memory = memory.NewMemoryUnit("test_pipeline_agent")
-
-	// Create mock generator
-	fakeGen := &pipelineFakeGen{Response: "OMNI"}
-
-	query := "Help me create an SOP Space for my new project."
-
-	// --- Phase 1: Intent Routing ---
-	intent := ag.classifyIntent(ctx, query, fakeGen)
-	if intent != "OMNI" {
-		t.Fatalf("Expected OMNI, got %s", intent)
-	}
-
-	// --- Phase 2: Domain Classification ---
-	fakeGen.Response = `{"domain": "Spaces"}` // Simulate LLM returning 'Spaces' domain
-	taskCtx, err := ag.evaluateRoutingGates(ctx, query, fakeGen)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if taskCtx == nil {
-		t.Fatalf("Expected non-nil TaskContextClassification")
-	}
-	if taskCtx.Domain != "Spaces" {
-		t.Errorf("Expected 'Spaces' domain classification, got %v", taskCtx.Domain)
-	}
-
-	if toolsCtx := ag.getSystemToolsContext(ctx); toolsCtx != "" {
-		t.Fatalf("Expected evaluateRoutingGates to avoid mutating System_Tools, got %q", toolsCtx)
-	}
-
-	// --- Phase 3: MRU Tracking & Propagation Verification ---
-	// Let's manually inject "Spaces" MRU to simulate previous context
-	// --- Phase 3: MRU Tracking & Propagation Verification ---
-	// Let's manually inject "Spaces" MRU to simulate previous context
-	ag.markMRUCategoryWithSource(playbookMRUCategory("Spaces"), "MRU Context: The user likes blue theme spaces", MRUSourcePlaybook)
-
-	if ag.service.session.Memory == nil {
-		ag.service.session.Memory = NewShortTermMemory()
-	}
-	thread := &ConversationThread{
-		ID:        sop.NewUUID(),
-		Exchanges: []Interaction{{Entity: intent, ActiveKB: "sop", Content: "previous space query"}},
-	}
-	ag.service.session.Memory.AddThread(thread)
-	ag.service.session.Memory.CurrentThreadID = thread.ID
-
-	ag.trackEpisodeMetadata(ctx, intent) // This triggers the cross-domain propagation logic
-
-	// --- Phase 4: Prompt Construction Snapshotting ---
-	// Mock Session Payload so Domains are linked properly with MRU Cache pulling
-	payload := &ai.SessionPayload{
-		ActiveDomain: "Spaces",
-	}
-	ctx = context.WithValue(ctx, "session_payload", payload)
-
-	prompt := ag.buildSystemPrompt(ctx, query, *taskCtx)
-
-	if !strings.Contains(prompt, "\"component\": \"focused_execution_context\"") {
-		t.Fatalf("Snapshot Failure: Built prompt missing focused execution context component")
-	}
-	if !strings.Contains(prompt, "Domain: Spaces") || !strings.Contains(prompt, "CRUD Scope: R") {
-		t.Fatalf("Snapshot Failure: Built prompt missing focused Spaces execution context")
-	}
-	if !strings.Contains(prompt, "Structured Context: Spaces Tools") {
-		t.Fatalf("Snapshot Failure: Built prompt missing capability-based Spaces tool context")
-	}
-
-	if !strings.Contains(prompt, "System Tools") && !strings.Contains(prompt, "System_Tools") && !strings.Contains(prompt, "active memory") {
-		// "active memory" tests the Persona portion
-		t.Fatalf("Snapshot Failure: Built prompt is missing Persona/System Tools framework")
-	}
-
-	if !strings.Contains(prompt, "MRU Context: The user likes blue theme spaces") {
-		t.Errorf("Snapshot Failure: Built prompt missing MRU injected knowledge")
-	}
-
-	// --- Phase 5: Delegating to Engine ---
-	// Mock a JSON payload wrapped in code blocks to simulate reasoning layer tool use output
-	fakeGen.Response = "I can definitely help with that. ```json\n[{\"tool\":\"search_space\",\"args\":{}}]\n```"
-	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest, err := ag.reactLoop(ctx, query, fakeGen, prompt)
-	if err != nil {
-		t.Fatalf("Engine delegation failed: %v", err)
-	}
-	_ = escalationState // Test doesn't validate escalation state yet
-	_ = clarificationRequest
-	if carryoverState != nil {
-		t.Fatalf("expected no carryover state from baseline mock delegation path, got %+v", carryoverState)
-	}
-	if !strings.Contains(finalText, "I can definitely help") && !strings.Contains(finalText, "search_space") {
-		t.Errorf("Unexpected delegation output: %s", finalText)
-	}
-	if len(toolCalls) != 0 {
-		t.Fatalf("expected no native tool calls from baseline mock delegation path, got %#v", toolCalls)
-	}
-	if len(outcomeFacts) != 0 {
-		t.Fatalf("expected no grounded outcome facts from baseline mock delegation path, got %#v", outcomeFacts)
-	}
-	if len(outcomeRecipes) != 0 {
-		t.Fatalf("expected no learned outcome recipes from baseline mock delegation path, got %#v", outcomeRecipes)
 	}
 }
 

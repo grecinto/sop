@@ -11,10 +11,10 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
-// TaskContextV2 represents enhanced task classification for V2 Ask pipeline.
-// This is returned by ClassifyTaskContextV2 and contains ALL information needed
+// AskTaskContext represents enhanced task classification for the Ask pipeline.
+// This is returned by ClassifyAskTaskContext and contains all information needed
 // for LLM-as-Orchestrator pattern with Phase Factory integration.
-type TaskContextV2 struct {
+type AskTaskContext struct {
 	// Domains: One or more domains this query spans
 	// Examples: ["stores"], ["spaces"], ["stores", "spaces"], ["coding_workflow"]
 	Domains []string `json:"domains"`
@@ -50,7 +50,7 @@ type TaskContextV2 struct {
 	OriginalQuery string `json:"original_query"`
 }
 
-// ClassifyTaskContextV2 performs enhanced LLM-based classification that returns:
+// ClassifyAskTaskContext performs enhanced LLM-based classification that returns:
 // 1. Domain(s) - Can be multiple (e.g., ["stores", "spaces"])
 // 2. Phase - Current phase (e.g., "investigation")
 // 3. PhasePlan - Full sequence (e.g., ["investigation", "execution"])
@@ -66,7 +66,7 @@ type TaskContextV2 struct {
 // 3. Phase Factory uses this to create domain-specific phase proxies
 // 4. Each proxy exposes domain+phase-specific tools
 // 5. LLM sees ALL tools and decides which to call
-func (a *CopilotAgent) ClassifyTaskContextV2(ctx context.Context, query string, gen ai.Generator) (*TaskContextV2, error) {
+func (a *CopilotAgent) ClassifyAskTaskContext(ctx context.Context, query string, gen ai.Generator) (*AskTaskContext, error) {
 	if gen == nil {
 		return nil, fmt.Errorf("generator is required for V2 classification")
 	}
@@ -80,7 +80,7 @@ func (a *CopilotAgent) ClassifyTaskContextV2(ctx context.Context, query string, 
 	}
 
 	// Build classification prompt
-	prompt := a.buildClassificationPromptV2(query, storesList, spacesList)
+	prompt := a.buildAskClassificationPrompt(query, storesList, spacesList)
 
 	// Call LLM for classification
 	resp, err := gen.Generate(ctx, prompt, ai.GenOptions{
@@ -92,7 +92,7 @@ func (a *CopilotAgent) ClassifyTaskContextV2(ctx context.Context, query string, 
 	}
 
 	// Parse JSON response
-	var result TaskContextV2
+	var result AskTaskContext
 	if err := json.Unmarshal([]byte(resp.Text), &result); err != nil {
 		// Try to extract JSON from markdown code block
 		if cleaned := extractJSONFromMarkdown(resp.Text); cleaned != "" {
@@ -108,9 +108,9 @@ func (a *CopilotAgent) ClassifyTaskContextV2(ctx context.Context, query string, 
 
 	// Validate and normalize
 	result.OriginalQuery = query
-	result = a.normalizeClassificationV2(result)
+	result = a.normalizeAskTaskContext(result)
 
-	log.Info("TaskContextV2 Classification",
+	log.Info("AskTaskContext Classification",
 		"domains", result.Domains,
 		"phase", result.Phase,
 		"phase_plan", result.PhasePlan,
@@ -121,13 +121,13 @@ func (a *CopilotAgent) ClassifyTaskContextV2(ctx context.Context, query string, 
 	return &result, nil
 }
 
-// buildClassificationPromptV2 constructs the LLM prompt for enhanced classification.
+// buildAskClassificationPrompt constructs the LLM prompt for enhanced classification.
 // This prompt instructs the LLM to identify:
 // - Domain(s): Which domain(s) this query involves
 // - Phase: What phase this query represents
 // - PhasePlan: Full sequence of phases needed
 // - Intent: High-level intent category
-func (a *CopilotAgent) buildClassificationPromptV2(query string, stores, spaces []string) string {
+func (a *CopilotAgent) buildAskClassificationPrompt(query string, stores, spaces []string) string {
 	storesHint := ""
 	if len(stores) > 0 {
 		storesHint = fmt.Sprintf("\nAvailable Stores: %s", strings.Join(stores[:min(5, len(stores))], ", "))
@@ -286,8 +286,8 @@ Query: "Delete old logs from stores"
 Return ONLY the JSON object, no other text.`, query, storesHint, spacesHint)
 }
 
-// normalizeClassificationV2 validates and normalizes the LLM classification result.
-func (a *CopilotAgent) normalizeClassificationV2(result TaskContextV2) TaskContextV2 {
+// normalizeAskTaskContext validates and normalizes the LLM classification result.
+func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskContext {
 	// Ensure at least one domain
 	if len(result.Domains) == 0 {
 		result.Domains = []string{"general"}
@@ -335,8 +335,8 @@ func (a *CopilotAgent) normalizeClassificationV2(result TaskContextV2) TaskConte
 }
 
 // buildFallbackClassification creates a safe default classification when LLM fails.
-func (a *CopilotAgent) buildFallbackClassification(query string) *TaskContextV2 {
-	return &TaskContextV2{
+func (a *CopilotAgent) buildFallbackClassification(query string) *AskTaskContext {
+	return &AskTaskContext{
 		Domains:       []string{"general"},
 		Phase:         "investigation",
 		PhasePlan:     []string{"investigation"},
