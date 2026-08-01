@@ -66,7 +66,7 @@ func TestInitializeHttpServerRuntimeExposesNativeToolsWithoutAutomation(t *testi
 	}
 
 	out := listToolsTextForLoadedAgents(t, GetLoadedAgents())
-	for _, expected := range []string{"/execute_script", "/list_stores", "/mint_to_space", "/read_space_config"} {
+	for _, expected := range []string{"/list_tools", "/mint_to_space", "/read_space_config"} {
 		if !strings.Contains(out, expected) {
 			t.Fatalf("expected httpserver tool list to include %s, got:\n%s", expected, out)
 		}

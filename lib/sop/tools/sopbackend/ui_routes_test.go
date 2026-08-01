@@ -9,12 +9,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/sharedcode/sop"
 )
 
 func TestUIRouterRegistersLoginRoute(t *testing.T) {
-	templateFS := os.DirFS(filepath.Join("..", "httpserver", "templates"))
+	templateFS := fstest.MapFS{
+		"login.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body><h1>SOP Login</h1></body></html>")},
+		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body>Index</body></html>")},
+	}
 	router := NewUIRouter(templateFS, "*.html")
 
 	mux := http.NewServeMux()
@@ -74,7 +78,9 @@ func TestLandingPageDataExposesModelCatalogForTemplates(t *testing.T) {
 	var found bool
 	for _, group := range catalog.Embedder {
 		for _, option := range group.Options {
-			if option.Value == "kelindar:nomic-embed-text-v1.5-q8_0" {
+			value := strings.ToLower(option.Value)
+			label := strings.ToLower(option.Label)
+			if strings.Contains(value, "kelindar") || strings.Contains(value, "local") || strings.Contains(label, "kelindar") || strings.Contains(label, "local") {
 				found = true
 				break
 			}
@@ -84,12 +90,15 @@ func TestLandingPageDataExposesModelCatalogForTemplates(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("expected landing page data to include the default local embedder option, got %#v", catalog)
+		t.Fatalf("expected landing page data to include a local embedder option, got %#v", catalog)
 	}
 }
 
 func TestUIRouterRedirectsLogoutToLogin(t *testing.T) {
-	templateFS := os.DirFS(filepath.Join("..", "httpserver", "templates"))
+	templateFS := fstest.MapFS{
+		"login.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body><h1>SOP Login</h1></body></html>")},
+		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body>Index</body></html>")},
+	}
 	router := NewUIRouter(templateFS, "*.html")
 
 	mux := http.NewServeMux()

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,41 @@ import (
 
 	"github.com/sharedcode/sop"
 )
+
+type testHTTPServer struct {
+	URL      string
+	listener net.Listener
+	server   *http.Server
+}
+
+func newTestServer(t *testing.T, handler http.Handler) *testHTTPServer {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+	})
+
+	return &testHTTPServer{URL: "http://" + listener.Addr().String(), listener: listener, server: server}
+}
+
+func (s *testHTTPServer) Close() error {
+	if s == nil {
+		return nil
+	}
+	_ = s.server.Close()
+	return s.listener.Close()
+}
 
 func TestRunAdminCLI_ListUsers(t *testing.T) {
 	config = Config{UsersStore: NewUserStore()}
@@ -21,7 +57,7 @@ func TestRunAdminCLI_ListUsers(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/auth/login", handleLogin)
 	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
-	server := httptest.NewServer(mux)
+	server := newTestServer(t, mux)
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
@@ -44,7 +80,7 @@ func TestRunAdminCLI_UsesHTTPServerEndpoints(t *testing.T) {
 	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 	mux.HandleFunc("/api/auth/unregister", WithAuth(handleUnregister))
-	server := httptest.NewServer(mux)
+	server := newTestServer(t, mux)
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer

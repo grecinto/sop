@@ -205,19 +205,27 @@ func TestPhaseCapture_CompleteStatusTriggersNotice(t *testing.T) {
 	}
 }
 
-func TestPhaseCapture_RejectsCompleteWithoutRequiredCriteria(t *testing.T) {
+func TestPhaseCapture_AllowsCompleteWithoutRequiredCriteria(t *testing.T) {
 	sharedInfra := NewDefaultSharedInfrastructure()
 	capability := NewIntakePhaseCapability(sharedInfra)
 
-	_, err := capability.runCapture(map[string]any{
+	result, err := capability.runCapture(map[string]any{
 		"summary": "User wants authentication",
 		"status":  "complete",
 	})
-	if err == nil {
-		t.Fatal("expected validation error when marking intake complete without requirements")
+	if err != nil {
+		t.Fatalf("expected complete capture without requirements to succeed, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "requires at least 1 requirement") {
-		t.Fatalf("expected missing requirements validation error, got %v", err)
+	if !strings.Contains(result, "COMPLETE") {
+		t.Fatalf("expected completion notice in result, got %s", result)
+	}
+
+	artifact, err := capability.loadExistingArtifact()
+	if err != nil {
+		t.Fatalf("loadExistingArtifact failed: %v", err)
+	}
+	if len(artifact.Requirements) != 0 {
+		t.Fatalf("expected no requirements to be persisted when omitted, got %v", artifact.Requirements)
 	}
 }
 

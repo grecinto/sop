@@ -58,6 +58,7 @@ func TestBuildMemoryHydrationUpdateFromParts_BoundsAndClonesWithoutReasoningResp
 		CarryoverState: &CarryoverState{
 			LastAssistantSummary: strings.Repeat("C", MemoryHydrationTextCharLimit+20),
 			LastToolNames:        []string{"tool_1", "tool_2", "tool_3", "tool_4", "tool_5", "tool_6", "tool_7"},
+			RetryLearnings:       []RetryLearning{{ToolName: "execute_script", ErrorPattern: "execute_script:join mapping unresolved", PreferredStrategy: RepairStrategyResearchFirst, SuccessCount: 1}},
 		},
 	}
 
