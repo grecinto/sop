@@ -667,17 +667,22 @@ func (a *CopilotAgent) buildPhasePrompt(ctx context.Context, query string, class
 		}
 	}
 
-	// Add phase context header
-	phaseContext := fmt.Sprintf("=== Phase System V2 ===\nCurrent Phase: %s\nDomains: %s\nPhasePlan: %s\n\n%s",
+	// Add the compact synthesis first so the model prioritizes the dynamic steering signal.
+	synthesis := buildTaskGuidanceSynthesis(query, TaskContextClassification{
+		Domain:         strings.Join(classification.Domains, ","),
+		CapabilityHint: classification.Phase,
+	})
+
+	phaseContext := ""
+	if synthesis != "" {
+		phaseContext = synthesis + "\n\n"
+	}
+
+	phaseContext += fmt.Sprintf("=== Phase System V2 ===\nCurrent Phase: %s\nDomains: %s\nPhasePlan: %s\n\n%s",
 		classification.Phase,
 		strings.Join(classification.Domains, ", "),
 		strings.Join(classification.PhasePlan, " → "),
 		strings.Join(phaseInstructions, "\n\n---\n\n"))
-
-	phaseContext += "\n\n" + buildTaskGuidanceSynthesis(query, TaskContextClassification{
-		Domain:         strings.Join(classification.Domains, ","),
-		CapabilityHint: classification.Phase,
-	})
 
 	// Gap Fix #1: Include classification reasoning to help LLM make better tool decisions
 	if classification.Reasoning != "" {

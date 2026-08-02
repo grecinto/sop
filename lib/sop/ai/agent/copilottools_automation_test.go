@@ -42,6 +42,19 @@ func TestParseAndEmitTestStatusIncludesPassContext(t *testing.T) {
 	}
 }
 
+func TestParseAndEmitTestStatusIncludesStopAndReportInstruction(t *testing.T) {
+	output := `=== RUN   TestSomething
+--- FAIL: TestSomething (0.00s)
+panic: expected value
+FAIL
+`
+
+	summary := parseAndEmitTestStatus(context.Background(), "go test ./...", output)
+	if !strings.Contains(summary, "Stop and report the outcome") {
+		t.Fatalf("expected stop-and-report guidance in summary, got %q", summary)
+	}
+}
+
 func TestRunLocalAutomationCommandUsesStreamedOutputWhenExecutorPayloadIsEmpty(t *testing.T) {
 	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
 	defer SetAutomationPolicy(DefaultAutomationPolicy())

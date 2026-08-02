@@ -371,6 +371,10 @@ func emitVerboseProgress(ctx context.Context, format string, args ...any) {
 		return
 	}
 	msg := fmt.Sprintf(format, args...)
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer(ai.ReasoningEventAssistantMessage, ai.BuildAssistantMessageEvent("commentary", msg))
+		return
+	}
 	if sink, ok := ctx.Value(ai.CtxKeyProgressSink).(func(string)); ok && sink != nil {
 		sink(msg)
 	}

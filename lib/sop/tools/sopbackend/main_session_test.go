@@ -322,6 +322,26 @@ func TestSetupStream_EmitsVisibleContentForToolResults(t *testing.T) {
 	}
 }
 
+func TestSetupStream_EmitsAssistantCommentaryAsContent(t *testing.T) {
+	w := httptest.NewRecorder()
+	sendEvent, _ := SetupStream(w)
+
+	sendEvent(ai.ReasoningEventAssistantMessage, map[string]any{
+		"phase":        "commentary",
+		"text":         "Investigating the failing tests.",
+		"streaming":    true,
+		"stream_state": "delta",
+	})
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"type":"content"`) {
+		t.Fatalf("expected commentary assistant message to be emitted as content, got: %s", body)
+	}
+	if !strings.Contains(body, "Investigating the failing tests") {
+		t.Fatalf("expected commentary text to be preserved in stream, got: %s", body)
+	}
+}
+
 func TestSetupStream_HandlesListStoresResultAsContent(t *testing.T) {
 	w := httptest.NewRecorder()
 	sendEvent, _ := SetupStream(w)
@@ -482,9 +502,8 @@ func TestHandleAIChat_StreamsStructuredToolEvents(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	// SetupStream now converts tool_call events to user-friendly content
-	if !strings.Contains(body, "🔧 **Calling**") {
-		t.Fatalf("expected formatted tool call in NDJSON stream, got: %s", body)
+	if !strings.Contains(body, `"type":"tool_call"`) {
+		t.Fatalf("expected tool_call event in NDJSON stream, got: %s", body)
 	}
 	if !strings.Contains(body, `"type":"tool_result"`) {
 		t.Fatalf("expected tool_result event in NDJSON stream, got: %s", body)

@@ -963,6 +963,38 @@ func TestCompatibleReActEngine_UsesSessionPayloadVerboseForRuntimeProgress(t *te
 	}
 }
 
+func TestEmitVerboseProgress_UsesEventStreamerWhenPresent(t *testing.T) {
+	var streamed []string
+	ctx := context.WithValue(context.Background(), ai.CtxKeyEventStreamer, func(eventType string, payload any) {
+		streamed = append(streamed, eventType)
+		if payloadMap, ok := payload.(map[string]any); ok {
+			if text, ok := payloadMap["text"].(string); ok {
+				streamed = append(streamed, text)
+			}
+		}
+	})
+	var sinkMessages []string
+	ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, func(msg string) {
+		sinkMessages = append(sinkMessages, msg)
+	})
+	ctx = context.WithValue(ctx, RunnerSessionKey, &RunnerSession{Verbose: true})
+
+	emitVerboseProgress(ctx, "Inspecting %s", "tests")
+
+	if len(streamed) != 2 {
+		t.Fatalf("expected 2 streamed values, got %d: %#v", len(streamed), streamed)
+	}
+	if streamed[0] != ai.ReasoningEventAssistantMessage {
+		t.Fatalf("expected assistant_message event, got %q", streamed[0])
+	}
+	if streamed[1] != "Inspecting tests" {
+		t.Fatalf("expected commentary text to be streamed, got %q", streamed[1])
+	}
+	if len(sinkMessages) != 0 {
+		t.Fatalf("expected progress sink to be bypassed when event streamer is present, got %#v", sinkMessages)
+	}
+}
+
 func TestCompatibleReActEngine_RecoversPrintedTextualToolCall(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &textualToolCallRecoveryGenerator{}

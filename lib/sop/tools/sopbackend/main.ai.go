@@ -439,13 +439,12 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 			return
 		case ai.ReasoningEventAssistantMessage:
 			if message, ok := payload.(map[string]any); ok {
-				if streaming, _ := message["streaming"].(bool); streaming {
-					return
-				}
 				if source, _ := message["source"].(string); strings.EqualFold(strings.TrimSpace(source), "reasoning_summary") {
 					return
 				}
-				if phase, _ := message["phase"].(string); strings.EqualFold(strings.TrimSpace(phase), "commentary") {
+				phase, _ := message["phase"].(string)
+				streaming, _ := message["streaming"].(bool)
+				if streaming && !strings.EqualFold(strings.TrimSpace(phase), "commentary") {
 					return
 				}
 				if text, ok := message["text"].(string); ok && strings.TrimSpace(text) != "" {
@@ -552,6 +551,7 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 			}
 		case ai.ReasoningEventToolResult:
 			if result, ok := payload.(map[string]any); ok {
+				writeEvent(eventType, payload)
 				tool, _ := result["tool"].(string)
 				if text, ok := result["result"].(string); ok && strings.TrimSpace(text) != "" {
 					trimmed := strings.TrimSpace(text)
