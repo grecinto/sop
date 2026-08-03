@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sharedcode/sop/ai"
@@ -23,6 +24,29 @@ func (s stubGenerator) Generate(ctx context.Context, prompt string, opts ai.GenO
 func (s stubGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error { return nil }
 
 func (s stubGenerator) EstimateCost(inTokens, outTokens int) float64 { return 0 }
+
+type runtimeCapabilityStubGenerator struct {
+	stubGenerator
+	capability ai.ProviderRuntimeCapability
+}
+
+func (s runtimeCapabilityStubGenerator) ProviderRuntimeCapability() ai.ProviderRuntimeCapability {
+	return s.capability
+}
+
+type legacyCapabilityStubGenerator struct {
+	stubGenerator
+	carry ai.CarryoverCapability
+	mode  ai.ReActLoopMode
+}
+
+func (s legacyCapabilityStubGenerator) CarryoverCapability() ai.CarryoverCapability {
+	return s.carry
+}
+
+func (s legacyCapabilityStubGenerator) ReActLoopMode() ai.ReActLoopMode {
+	return s.mode
+}
 
 func TestNormalizeThinkingLevelForGenerator_UpgradesAnthropicLowToMedium(t *testing.T) {
 	got := NormalizeThinkingLevelForGenerator(stubGenerator{name: "anthropic"}, "anthropic", "claude-sonnet-4-5", "low")
@@ -160,5 +184,78 @@ func TestResolveThinkingLevelForContext_UsesExplicitOverrideOverCatalogDefault(t
 	got := ResolveThinkingLevelForContext(ctx, stubGenerator{name: "anthropic"}, "anthropic", "claude-sonnet-4-5", "")
 	if got != "high" {
 		t.Fatalf("expected explicit thinking-level override to win, got %q", got)
+	}
+}
+
+func TestResolveProviderRuntimeCapability_PrefersExplicitProviderRuntimeContract(t *testing.T) {
+	gen := runtimeCapabilityStubGenerator{
+		stubGenerator: stubGenerator{name: "fallback-name"},
+		capability: ai.ProviderRuntimeCapability{
+			Provider:                   "chatgpt",
+			Model:                      "gpt-5.4",
+			LoopMode:                   ai.ReActLoopModeOwned,
+			SupportsNativeToolCalls:    true,
+			SupportsNativeContinuation: true,
+			SupportsCompactCarryover:   true,
+			SupportsLiveCarryover:      true,
+			SupportsMultiToolTurns:     true,
+			SupportsStreaming:          true,
+		},
+	}
+	capability, ok := resolveProviderRuntimeCapability(gen)
+	if !ok {
+		t.Fatal("expected provider runtime capability to resolve")
+	}
+	if capability.Provider != "chatgpt" || capability.Model != "gpt-5.4" || capability.LoopMode != ai.ReActLoopModeOwned {
+		t.Fatalf("unexpected runtime capability: %+v", capability)
+	}
+	if !capability.SupportsNativeContinuation || !capability.SupportsStreaming {
+		t.Fatalf("expected explicit runtime flags to be preserved, got %+v", capability)
+	}
+}
+
+func TestResolveProviderRuntimeCapability_FallsBackToLegacyInterfaces(t *testing.T) {
+	gen := legacyCapabilityStubGenerator{
+		stubGenerator: stubGenerator{name: "legacy-gen"},
+		carry: ai.CarryoverCapability{
+			Provider:        "anthropic",
+			Model:           "claude-test",
+			SupportsCompact: true,
+			SupportsLive:    true,
+		},
+		mode: ai.ReActLoopModeOwned,
+	}
+	capability, ok := resolveProviderRuntimeCapability(gen)
+	if !ok {
+		t.Fatal("expected legacy runtime capability to resolve")
+	}
+	if capability.Provider != "anthropic" || capability.Model != "claude-test" || capability.LoopMode != ai.ReActLoopModeOwned {
+		t.Fatalf("unexpected fallback runtime capability: %+v", capability)
+	}
+	if !capability.SupportsCompactCarryover || !capability.SupportsLiveCarryover {
+		t.Fatalf("expected carryover flags to be populated from legacy capability, got %+v", capability)
+	}
+}
+
+func TestProviderRuntimeCapabilitySummary_FormatsDiagnosticString(t *testing.T) {
+	gen := runtimeCapabilityStubGenerator{
+		stubGenerator: stubGenerator{name: "gemini"},
+		capability: ai.ProviderRuntimeCapability{
+			Provider:                   "gemini",
+			Model:                      "gemini-2.5-pro",
+			LoopMode:                   ai.ReActLoopModeOwned,
+			SupportsNativeToolCalls:    true,
+			SupportsNativeContinuation: true,
+			SupportsCompactCarryover:   true,
+			SupportsLiveCarryover:      true,
+			SupportsMultiToolTurns:     true,
+			SupportsStreaming:          true,
+		},
+	}
+	summary := providerRuntimeCapabilitySummary(gen)
+	for _, expected := range []string{"loop=owned", "native_tool_calls=yes", "native_continuation=yes", "compact_carryover=yes", "live_carryover=yes", "multi_tool_turns=yes", "streaming=yes"} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("expected summary to contain %q, got %q", expected, summary)
+		}
 	}
 }

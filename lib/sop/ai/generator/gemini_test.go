@@ -2,6 +2,7 @@ package generator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -56,6 +57,20 @@ func TestGeminiReActLoopMode_DefaultsToOwned(t *testing.T) {
 	g := &gemini{model: "gemini-3.5-flash"}
 	if got := g.ReActLoopMode(); got != ai.ReActLoopModeOwned {
 		t.Fatalf("expected owned loop mode, got %q", got)
+	}
+}
+
+func TestGeminiProviderRuntimeCapability_AdvertisesOwnedThoughtSignatureContinuation(t *testing.T) {
+	g := &gemini{model: "gemini-2.5-flash"}
+	cap := g.ProviderRuntimeCapability()
+	if cap.Provider != "gemini" || cap.Model != "gemini-2.5-flash" {
+		t.Fatalf("unexpected provider runtime capability identity: %+v", cap)
+	}
+	if cap.LoopMode != ai.ReActLoopModeOwned || !cap.SupportsNativeToolCalls || !cap.SupportsNativeContinuation {
+		t.Fatalf("expected owned native tool/continuation capability, got %+v", cap)
+	}
+	if !cap.SupportsCompactCarryover || !cap.SupportsLiveCarryover || !cap.SupportsMultiToolTurns || !cap.SupportsStreaming {
+		t.Fatalf("expected full gemini runtime capabilities, got %+v", cap)
 	}
 }
 
@@ -148,6 +163,19 @@ func TestBuildGeminiRequest_OmitsToolConfigWithoutTools(t *testing.T) {
 	}
 	if len(req.Tools) != 0 {
 		t.Fatalf("expected no Gemini tools when none were provided, got %#v", req.Tools)
+	}
+}
+
+func TestBuildGeminiRequestForLegacyV1API_PrefixesSystemPromptAndOmitsSystemInstruction(t *testing.T) {
+	req := buildGeminiRequestForEndpoint("find users", ai.GenOptions{SystemPrompt: "system rules"}, "https://generativelanguage.googleapis.com/v1")
+	if req.SystemInstruction != nil {
+		t.Fatalf("expected legacy v1 request to omit systemInstruction, got %#v", req.SystemInstruction)
+	}
+	if len(req.Contents) != 1 || len(req.Contents[0].Parts) == 0 {
+		t.Fatalf("expected user content in request, got %#v", req.Contents)
+	}
+	if !strings.Contains(req.Contents[0].Parts[0].Text, "System message - follow these instructions in every response: system rules") {
+		t.Fatalf("expected legacy v1 request to fold system prompt into user text, got %#v", req.Contents[0].Parts)
 	}
 }
 
@@ -276,6 +304,43 @@ func TestGeminiOwnedLoopResponse_PopulatesCarryoverMetadata(t *testing.T) {
 	}
 	if len(resp.CarryoverState.LastToolNames) != 1 || resp.CarryoverState.LastToolNames[0] != "execute_script" {
 		t.Fatalf("expected tool names to be captured, got %+v", resp.CarryoverState.LastToolNames)
+	}
+}
+
+func TestGeminiContinuationCarryover_RoundTripsSerializedContinuations(t *testing.T) {
+	original := []ai.ToolCallContinuation{{
+		ToolCall: ai.ToolCall{
+			Name:     "lookup_user",
+			NativeID: "call_abc123",
+			Args:     map[string]any{"name": "John"},
+			TransportMeta: map[string]any{
+				"provider":          "gemini",
+				"function_call_id":  "call_abc123",
+				"thought_signature": "signature_abc123",
+			},
+		},
+		Response: map[string]any{"result": "ok"},
+	}}
+	state := geminiOwnedLoopCarryoverState(original, "gemini", "gemini-2.5-flash", "Done after tool", []ai.ToolCall{{Name: "lookup_user"}}, []ai.ReActToolResult{{Name: "lookup_user", Result: "ok"}})
+	if state == nil || state.Mode != ai.CarryoverModeLive {
+		t.Fatalf("expected live carryover state, got %+v", state)
+	}
+	var restored []ai.ToolCallContinuation
+	if err := json.Unmarshal([]byte(state.ConversationHandle), &restored); err != nil {
+		t.Fatalf("unmarshal ConversationHandle: %v", err)
+	}
+	if len(restored) != 1 {
+		t.Fatalf("expected one restored continuation, got %#v", restored)
+	}
+	if restored[0].ToolCall.Name != "lookup_user" || restored[0].ToolCall.NativeID != "call_abc123" {
+		t.Fatalf("expected function call metadata to survive round-trip, got %#v", restored[0].ToolCall)
+	}
+	if restored[0].ToolCall.TransportMeta["thought_signature"] != "signature_abc123" {
+		t.Fatalf("expected thought signature to survive round-trip, got %#v", restored[0].ToolCall.TransportMeta)
+	}
+	result, ok := restored[0].Response.(map[string]any)
+	if !ok || result["result"] != "ok" {
+		t.Fatalf("expected response payload to survive round-trip, got %#v", restored[0].Response)
 	}
 }
 
@@ -1498,6 +1563,20 @@ func TestBuildGeminiRequest_PreservesStructuredListStoresSchema(t *testing.T) {
 	}
 }
 
+func TestBuildGeminiRequest_NormalizesStringRequiredField(t *testing.T) {
+	req := buildGeminiRequest("sanitize", ai.GenOptions{
+		Tools: []ai.ToolDefinition{{
+			Name:        "execute_script",
+			Description: "Executes a script",
+			Schema:      `{"properties":{"script":{"type":"array"}},"required":"script"}`,
+		}},
+	})
+	params := req.Tools[0].FunctionDeclarations[0].Parameters
+	if required, ok := params["required"].([]string); !ok || len(required) != 1 || required[0] != "script" {
+		t.Fatalf("expected string required field to normalize to []string, got %#v", params["required"])
+	}
+}
+
 func TestExtractGeminiOutput_PreservesFunctionCallIDForTransportContinuity(t *testing.T) {
 	resp := geminiResponse{
 		Candidates: []struct {
@@ -1543,5 +1622,103 @@ func TestExtractGeminiOutput_PreservesFunctionCallIDForTransportContinuity(t *te
 	}
 	if out.ToolCalls[0].TransportMeta["thought_signature"] != "signature_12345xyz" {
 		t.Fatalf("expected Gemini thought_signature transport metadata, got %#v", out.ToolCalls[0].TransportMeta)
+	}
+}
+
+func TestExtractGeminiOutput_UsesFirstNonEmptyCandidate(t *testing.T) {
+	resp := geminiResponse{
+		Candidates: []struct {
+			FinishReason string `json:"finishReason,omitempty"`
+			Content      struct {
+				Parts []geminiPart `json:"parts"`
+			} `json:"content"`
+		}{
+			{},
+			{
+				Content: struct {
+					Parts []geminiPart `json:"parts"`
+				}{
+					Parts: []geminiPart{{Text: "second candidate text"}},
+				},
+			},
+		},
+	}
+	out, err := extractGeminiOutput(resp)
+	if err != nil {
+		t.Fatalf("extractGeminiOutput failed: %v", err)
+	}
+	if out.Text != "second candidate text" {
+		t.Fatalf("expected first non-empty candidate text, got %#v", out)
+	}
+}
+
+func TestExtractGeminiOutput_PreservesMixedTextAndFunctionCallParts(t *testing.T) {
+	resp := geminiResponse{
+		Candidates: []struct {
+			FinishReason string `json:"finishReason,omitempty"`
+			Content      struct {
+				Parts []geminiPart `json:"parts"`
+			} `json:"content"`
+		}{
+			{
+				Content: struct {
+					Parts []geminiPart `json:"parts"`
+				}{
+					Parts: []geminiPart{
+						{Text: "Checking the users store. "},
+						{FunctionCall: &geminiFunctionCall{Name: "lookup_user", Args: map[string]any{"name": "John"}, ID: "call_abc123"}, ThoughtSignature: "signature_abc123"},
+						{Text: "Waiting for tool output."},
+					},
+				},
+			},
+		},
+	}
+
+	out, err := extractGeminiOutput(resp)
+	if err != nil {
+		t.Fatalf("extractGeminiOutput failed: %v", err)
+	}
+	if out.Text != "Checking the users store. Waiting for tool output." {
+		t.Fatalf("expected text parts to be preserved around function call, got %#v", out)
+	}
+	if len(out.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %#v", out.ToolCalls)
+	}
+	if out.ToolCalls[0].Name != "lookup_user" || out.ToolCalls[0].NativeID != "call_abc123" {
+		t.Fatalf("expected function call metadata to round-trip, got %#v", out.ToolCalls[0])
+	}
+	if got := out.ToolCalls[0].Args["name"]; got != "John" {
+		t.Fatalf("expected function call args to round-trip, got %#v", out.ToolCalls[0].Args)
+	}
+	if out.ToolCalls[0].TransportMeta["thought_signature"] != "signature_abc123" {
+		t.Fatalf("expected thought signature to round-trip, got %#v", out.ToolCalls[0].TransportMeta)
+	}
+}
+
+func TestGeminiAPIEndpoint_NormalizesBaseURL(t *testing.T) {
+	g := &gemini{model: "gemini-2.5-pro"}
+	if got := g.apiEndpoint(); got != "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent" {
+		t.Fatalf("default apiEndpoint() = %q", got)
+	}
+	g.apiURL = "https://generativelanguage.googleapis.com/v1beta"
+	if got := g.apiEndpoint(); got != "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent" {
+		t.Fatalf("v1beta base apiEndpoint() = %q", got)
+	}
+	g.apiURL = "https://generativelanguage.googleapis.com/v1beta/models"
+	if got := g.apiEndpoint(); got != "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent" {
+		t.Fatalf("models base apiEndpoint() = %q", got)
+	}
+	g.apiURL = "https://example.test/custom/%s:generateContent"
+	if got := g.apiEndpoint(); got != "https://example.test/custom/gemini-2.5-pro:generateContent" {
+		t.Fatalf("templated apiEndpoint() = %q", got)
+	}
+}
+
+func TestGeminiUsesLegacyV1API(t *testing.T) {
+	if !geminiUsesLegacyV1API("https://generativelanguage.googleapis.com/v1") {
+		t.Fatal("expected v1 base to be treated as legacy")
+	}
+	if geminiUsesLegacyV1API("https://generativelanguage.googleapis.com/v1beta") {
+		t.Fatal("expected v1beta base to avoid legacy mode")
 	}
 }

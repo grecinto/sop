@@ -63,6 +63,21 @@ func carryoverCapability(gen ai.Generator) (ai.CarryoverCapability, bool) {
 	if gen == nil {
 		return ai.CarryoverCapability{}, false
 	}
+	if provider, ok := gen.(ai.ProviderRuntimeCapabilityProvider); ok {
+		runtimeCapability := provider.ProviderRuntimeCapability()
+		capability := ai.CarryoverCapability{
+			Provider:        strings.TrimSpace(runtimeCapability.Provider),
+			Model:           strings.TrimSpace(runtimeCapability.Model),
+			SupportsCompact: runtimeCapability.SupportsCompactCarryover,
+			SupportsLive:    runtimeCapability.SupportsLiveCarryover,
+		}
+		if capability.Provider == "" {
+			capability.Provider = providerName(gen)
+		}
+		if capability.Provider != "" {
+			return capability, true
+		}
+	}
 	provider, ok := gen.(ai.CarryoverCapabilityProvider)
 	if !ok {
 		return ai.CarryoverCapability{}, false

@@ -51,6 +51,20 @@ func (g *gemini) CarryoverCapability() ai.CarryoverCapability {
 	}
 }
 
+func (g *gemini) ProviderRuntimeCapability() ai.ProviderRuntimeCapability {
+	return ai.ProviderRuntimeCapability{
+		Provider:                   g.Name(),
+		Model:                      strings.TrimSpace(g.model),
+		LoopMode:                   g.ReActLoopMode(),
+		SupportsNativeToolCalls:    true,
+		SupportsNativeContinuation: true,
+		SupportsCompactCarryover:   true,
+		SupportsLiveCarryover:      true,
+		SupportsMultiToolTurns:     true,
+		SupportsStreaming:          true,
+	}
+}
+
 func (g *gemini) ReActLoop() ai.ReActLoop {
 	return geminiOwnedReActLoop{
 		generator:     g,
@@ -1035,12 +1049,13 @@ func extractGeminiOutput(resp geminiResponse) (ai.GenOutput, error) {
 		return ai.GenOutput{}, fmt.Errorf("gemini api returned error: %s", resp.Error.Message)
 	}
 
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+	parts := firstGeminiResponseParts(resp)
+	if len(parts) == 0 {
 		return ai.GenOutput{}, fmt.Errorf("%s", describeGeminiEmptyResponse(resp))
 	}
 
 	var out ai.GenOutput
-	for _, p := range resp.Candidates[0].Content.Parts {
+	for _, p := range parts {
 		if p.FunctionCall != nil {
 			toolCall := ai.ToolCall{
 				Name:     p.FunctionCall.Name,
@@ -1067,12 +1082,32 @@ func extractGeminiOutput(resp geminiResponse) (ai.GenOutput, error) {
 	return out, nil
 }
 
+func firstGeminiResponseParts(resp geminiResponse) []geminiPart {
+	for _, candidate := range resp.Candidates {
+		if len(candidate.Content.Parts) == 0 {
+			continue
+		}
+		return candidate.Content.Parts
+	}
+	return nil
+}
+
 func buildGeminiRequest(prompt string, opts ai.GenOptions) geminiRequest {
+	return buildGeminiRequestForEndpoint(prompt, opts, "")
+}
+
+func buildGeminiRequestForEndpoint(prompt string, opts ai.GenOptions, apiURL string) geminiRequest {
 	reqBody := geminiRequest{}
+	legacyV1API := geminiUsesLegacyV1API(apiURL)
+	effectivePrompt := prompt
+	if legacyV1API && strings.TrimSpace(opts.SystemPrompt) != "" {
+		prefix := fmt.Sprintf("System message - follow these instructions in every response: %s\n\n---\n\n", opts.SystemPrompt)
+		effectivePrompt = prefix + effectivePrompt
+	}
 
 	parts := make([]geminiPart, 0, 1+len(opts.InputParts))
-	if strings.TrimSpace(prompt) != "" {
-		parts = append(parts, geminiPart{Text: prompt})
+	if strings.TrimSpace(effectivePrompt) != "" {
+		parts = append(parts, geminiPart{Text: effectivePrompt})
 	}
 	for _, inputPart := range opts.InputParts {
 		switch strings.ToLower(strings.TrimSpace(inputPart.Type)) {
@@ -1130,7 +1165,7 @@ func buildGeminiRequest(prompt string, opts ai.GenOptions) geminiRequest {
 		)
 	}
 
-	if opts.SystemPrompt != "" {
+	if !legacyV1API && opts.SystemPrompt != "" {
 		reqBody.SystemInstruction = &geminiContent{
 			Parts: []geminiPart{{Text: opts.SystemPrompt}},
 		}
@@ -1333,6 +1368,11 @@ func sanitizeGeminiRequired(value any) []string {
 			}
 		}
 		return out
+	case string:
+		if strings.TrimSpace(required) == "" {
+			return nil
+		}
+		return []string{strings.TrimSpace(required)}
 	default:
 		return nil
 	}
@@ -1377,7 +1417,7 @@ func (g *gemini) Generate(ctx context.Context, prompt string, opts ai.GenOptions
 
 	apiURL := g.apiEndpoint()
 
-	reqBody := buildGeminiRequest(prompt, opts)
+	reqBody := buildGeminiRequestForEndpoint(prompt, opts, apiURL)
 	log.Debug("Gemini generate building request",
 		"model", strings.TrimSpace(g.model),
 		"prompt_preview", geminiPreview(prompt, 320),
@@ -1466,7 +1506,25 @@ func (g *gemini) apiEndpoint() string {
 	if strings.Contains(g.apiURL, "%s") {
 		return fmt.Sprintf(g.apiURL, g.model)
 	}
-	return g.apiURL
+	base := strings.TrimRight(strings.TrimSpace(g.apiURL), "/")
+	if strings.Contains(base, ":generateContent") || strings.Contains(base, ":streamGenerateContent") {
+		return base
+	}
+	if strings.HasSuffix(base, "/models") {
+		return base + "/" + g.model + ":generateContent"
+	}
+	return base + "/models/" + g.model + ":generateContent"
+}
+
+func geminiUsesLegacyV1API(apiURL string) bool {
+	trimmed := strings.TrimSpace(apiURL)
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, "/v1beta") {
+		return false
+	}
+	return strings.Contains(trimmed, "/v1/") || strings.HasSuffix(strings.TrimRight(trimmed, "/"), "/v1")
 }
 
 func geminiGeneratorModel(generator ai.Generator) string {

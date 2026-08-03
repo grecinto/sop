@@ -1680,6 +1680,7 @@ func (s *Service) resolveGeneratorAndCarryover(ctx context.Context, topicAssessm
 
 	log.Info("Carryover Decision",
 		"provider", providerName(gen),
+		"provider_runtime", providerRuntimeCapabilitySummary(gen),
 		"mode", carryover.Mode,
 		"reason", carryover.Reason,
 		"history_suppressed", carryover.SuppressHistory,
@@ -2288,6 +2289,7 @@ func (s *Service) resolveGeneratorAndCarryoverWithRequest(ctx context.Context, g
 
 	log.Info("Carryover Decision",
 		"provider", providerName(gen),
+		"provider_runtime", providerRuntimeCapabilitySummary(gen),
 		"mode", carryover.Mode,
 		"reason", carryover.Reason,
 		"history_suppressed", carryover.SuppressHistory,

@@ -52,6 +52,20 @@ func (g *anthropic) CarryoverCapability() ai.CarryoverCapability {
 	}
 }
 
+func (g *anthropic) ProviderRuntimeCapability() ai.ProviderRuntimeCapability {
+	return ai.ProviderRuntimeCapability{
+		Provider:                   g.Name(),
+		Model:                      g.model,
+		LoopMode:                   g.ReActLoopMode(),
+		SupportsNativeToolCalls:    true,
+		SupportsNativeContinuation: true,
+		SupportsCompactCarryover:   true,
+		SupportsLiveCarryover:      true,
+		SupportsMultiToolTurns:     true,
+		SupportsStreaming:          false,
+	}
+}
+
 // supportsTemperature checks if the model supports the temperature parameter.
 // Claude Opus 4.7+ has deprecated temperature (verified by API error).
 func (g *anthropic) supportsTemperature() bool {
@@ -138,10 +152,7 @@ func (g *anthropic) Generate(ctx context.Context, prompt string, opts ai.GenOpti
 		return ai.GenOutput{}, fmt.Errorf("missing Anthropic API Key")
 	}
 
-	url := strings.TrimSpace(g.apiURL)
-	if url == "" {
-		url = "https://api.anthropic.com/v1/messages"
-	}
+	url := g.messagesURL()
 
 	reqBody := g.buildBaseRequest(prompt, opts)
 	if reqBody.MaxTokens <= 0 {
@@ -213,31 +224,7 @@ func (g *anthropic) Generate(ctx context.Context, prompt string, opts ai.GenOpti
 		return ai.GenOutput{}, fmt.Errorf("anthropic error: %s", anthropicResp.Error.Message)
 	}
 
-	// Extract text and tool calls from response
-	var text strings.Builder
-	var toolCalls []ai.ToolCall
-
-	for _, block := range anthropicResp.Content {
-		switch block.Type {
-		case "text":
-			if block.Text != "" {
-				text.WriteString(block.Text)
-			}
-		case "tool_use":
-			toolCalls = append(toolCalls, ai.ToolCall{
-				Name:     block.Name,
-				Args:     ensureAnthropicToolInput(block.Input),
-				NativeID: block.ID,
-			})
-		}
-	}
-
-	return ai.GenOutput{
-		Text:       text.String(),
-		TokensUsed: anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
-		ToolCalls:  toolCalls,
-		Raw:        anthropicResp,
-	}, nil
+	return g.toGenOutput(anthropicResp), nil
 }
 
 // buildMessages constructs the messages array with tool call continuations
@@ -356,6 +343,7 @@ func (g *anthropic) convertTools(tools []ai.ToolDefinition) []anthropicTool {
 		} else {
 			inputSchema = map[string]any{"type": "object"}
 		}
+		inputSchema = sanitizeAnthropicSchema(inputSchema)
 
 		anthropicTools = append(anthropicTools, anthropicTool{
 			Name:        t.Name,
@@ -365,6 +353,172 @@ func (g *anthropic) convertTools(tools []ai.ToolDefinition) []anthropicTool {
 	}
 
 	return anthropicTools
+}
+
+var anthropicAllowedSchemaKeys = map[string]struct{}{
+	"additionalProperties": {},
+	"description":          {},
+	"enum":                 {},
+	"items":                {},
+	"properties":           {},
+	"required":             {},
+	"type":                 {},
+}
+
+func sanitizeAnthropicSchema(schema map[string]any) map[string]any {
+	sanitized, ok := sanitizeAnthropicSchemaNode(schema)
+	if !ok {
+		return map[string]any{"type": "object"}
+	}
+	if _, ok := sanitized["type"].(string); !ok || strings.TrimSpace(sanitized["type"].(string)) == "" {
+		sanitized["type"] = inferAnthropicSchemaType(sanitized, "object")
+	}
+	return sanitized
+}
+
+func sanitizeAnthropicSchemaNode(schema map[string]any) (map[string]any, bool) {
+	if len(schema) == 0 {
+		return nil, false
+	}
+
+	sanitized := make(map[string]any)
+	for key := range anthropicAllowedSchemaKeys {
+		value, ok := schema[key]
+		if !ok {
+			continue
+		}
+		switch key {
+		case "type":
+			typeName, ok := value.(string)
+			if ok && strings.TrimSpace(typeName) != "" {
+				sanitized[key] = strings.ToLower(strings.TrimSpace(typeName))
+			}
+		case "description":
+			description, ok := value.(string)
+			if ok && strings.TrimSpace(description) != "" {
+				sanitized[key] = description
+			}
+		case "enum":
+			if enumValues := sanitizeAnthropicEnum(value); len(enumValues) > 0 {
+				sanitized[key] = enumValues
+			}
+		case "required":
+			if required := sanitizeAnthropicRequired(value); len(required) > 0 {
+				sanitized[key] = required
+			}
+		case "properties":
+			if props := sanitizeAnthropicProperties(value); len(props) > 0 {
+				sanitized[key] = props
+			}
+		case "items":
+			if itemSchema, ok := value.(map[string]any); ok {
+				child, childOK := sanitizeAnthropicSchemaNode(itemSchema)
+				if childOK {
+					if _, hasType := child["type"]; !hasType {
+						child["type"] = inferAnthropicSchemaType(child, "string")
+					}
+					sanitized[key] = child
+				}
+			}
+		case "additionalProperties":
+			switch typed := value.(type) {
+			case bool:
+				sanitized[key] = typed
+			case map[string]any:
+				child, childOK := sanitizeAnthropicSchemaNode(typed)
+				if childOK {
+					if _, hasType := child["type"]; !hasType {
+						child["type"] = inferAnthropicSchemaType(child, "string")
+					}
+					sanitized[key] = child
+				}
+			}
+		}
+	}
+
+	if len(sanitized) == 0 {
+		return nil, false
+	}
+	return sanitized, true
+}
+
+func sanitizeAnthropicProperties(value any) map[string]any {
+	propMap, ok := value.(map[string]any)
+	if !ok || len(propMap) == 0 {
+		return nil
+	}
+	props := make(map[string]any)
+	for name, rawChild := range propMap {
+		childMap, ok := rawChild.(map[string]any)
+		if !ok {
+			continue
+		}
+		child, childOK := sanitizeAnthropicSchemaNode(childMap)
+		if !childOK {
+			continue
+		}
+		if _, hasType := child["type"]; !hasType {
+			child["type"] = inferAnthropicSchemaType(child, "string")
+		}
+		props[name] = child
+	}
+	if len(props) == 0 {
+		return nil
+	}
+	return props
+}
+
+func sanitizeAnthropicRequired(value any) []string {
+	switch required := value.(type) {
+	case []string:
+		out := make([]string, 0, len(required))
+		for _, name := range required {
+			if strings.TrimSpace(name) != "" {
+				out = append(out, name)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(required))
+		for _, item := range required {
+			name, ok := item.(string)
+			if ok && strings.TrimSpace(name) != "" {
+				out = append(out, name)
+			}
+		}
+		return out
+	case string:
+		if strings.TrimSpace(required) == "" {
+			return nil
+		}
+		return []string{strings.TrimSpace(required)}
+	default:
+		return nil
+	}
+}
+
+func sanitizeAnthropicEnum(value any) []any {
+	if enumValues, ok := value.([]any); ok && len(enumValues) > 0 {
+		return enumValues
+	}
+	if stringValues, ok := value.([]string); ok && len(stringValues) > 0 {
+		out := make([]any, 0, len(stringValues))
+		for _, item := range stringValues {
+			out = append(out, item)
+		}
+		return out
+	}
+	return nil
+}
+
+func inferAnthropicSchemaType(schema map[string]any, fallback string) string {
+	if _, ok := schema["properties"]; ok {
+		return "object"
+	}
+	if _, ok := schema["items"]; ok {
+		return "array"
+	}
+	return fallback
 }
 
 // convertToolsWithCaching converts tools and marks the LAST tool for caching
@@ -454,10 +608,7 @@ func (g *anthropic) PrewarmCache(ctx context.Context, opts ai.GenOptions) error 
 		return fmt.Errorf("missing Anthropic API Key")
 	}
 
-	url := strings.TrimSpace(g.apiURL)
-	if url == "" {
-		url = "https://api.anthropic.com/v1/messages"
-	}
+	url := g.messagesURL()
 
 	reqBody := g.buildBaseRequest("warmup", opts)
 	reqBody.MaxTokens = 0 // Required for pre-warming
@@ -515,6 +666,20 @@ func (g *anthropic) PrewarmCache(ctx context.Context, opts ai.GenOptions) error 
 
 	// Success, cache is pre-warmed.
 	return nil
+}
+
+func (g *anthropic) messagesURL() string {
+	if g == nil || strings.TrimSpace(g.apiURL) == "" {
+		return "https://api.anthropic.com/v1/messages"
+	}
+	base := strings.TrimRight(strings.TrimSpace(g.apiURL), "/")
+	if strings.HasSuffix(base, "/messages") {
+		return base
+	}
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/messages"
+	}
+	return base + "/v1/messages"
 }
 
 func (g *anthropic) toGenOutput(response anthropicResponse) ai.GenOutput {

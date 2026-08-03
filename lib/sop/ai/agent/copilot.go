@@ -3784,6 +3784,7 @@ func (a *CopilotAgent) logAskStart(ctx context.Context, query string, gen ai.Gen
 	}
 	//log.Info("Copilot Ask start", "query", query, "session_id", sessionID)
 	log.Info("Copilot Ask Start", "generator", gen.Name(), "default_format", getRequestedOutputFormat(ctx), "session_id", sessionID,
+		"provider_runtime", providerRuntimeCapabilitySummary(gen),
 		"current_db", currentDB, "active_domain", activeDomain, "thread_id", currentThreadID, "query_chars", len(query))
 	return sessionID
 }

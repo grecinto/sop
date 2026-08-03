@@ -189,6 +189,38 @@ func (g capabilityOnlyGenerator) CarryoverCapability() ai.CarryoverCapability {
 	return ai.CarryoverCapability{Provider: g.provider, Model: g.model, SupportsCompact: g.supportsCompact, SupportsLive: g.supportsLive}
 }
 
+type runtimeCapabilityOnlyGenerator struct {
+	provider        string
+	model           string
+	supportsCompact bool
+	supportsLive    bool
+	loopMode        ai.ReActLoopMode
+}
+
+func (g runtimeCapabilityOnlyGenerator) Name() string                                 { return g.provider }
+func (g runtimeCapabilityOnlyGenerator) EstimateCost(inTokens, outTokens int) float64 { return 0 }
+
+func (g runtimeCapabilityOnlyGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
+}
+
+func (g runtimeCapabilityOnlyGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	_ = ctx
+	_ = prompt
+	_ = opts
+	return ai.GenOutput{Text: "ok"}, nil
+}
+
+func (g runtimeCapabilityOnlyGenerator) ProviderRuntimeCapability() ai.ProviderRuntimeCapability {
+	return ai.ProviderRuntimeCapability{
+		Provider:                 g.provider,
+		Model:                    g.model,
+		LoopMode:                 g.loopMode,
+		SupportsCompactCarryover: g.supportsCompact,
+		SupportsLiveCarryover:    g.supportsLive,
+	}
+}
+
 func TestBuildCarryoverState_MergesProviderRuntimeState(t *testing.T) {
 	session := NewRunnerSession()
 	threadID := sop.NewUUID()
@@ -233,5 +265,27 @@ func TestBuildCarryoverState_MergesProviderRuntimeState(t *testing.T) {
 	}
 	if len(state.RetryLearnings) != 1 || state.RetryLearnings[0].PreferredStrategy != ai.RepairStrategyResearchFirst {
 		t.Fatalf("expected retry learnings to be merged from previous carryover state, got %+v", state.RetryLearnings)
+	}
+}
+
+func TestDecideCarryover_UsesProviderRuntimeCapabilityForCompactSupport(t *testing.T) {
+	session := NewRunnerSession()
+	threadID := sop.NewUUID()
+	session.Memory.AddThread(&ConversationThread{ID: threadID, RootPrompt: "Continue", Exchanges: []Interaction{{Role: RoleAssistant, Content: "Done", ActiveKB: "sop"}}})
+	testGen := runtimeCapabilityOnlyGenerator{provider: "gemini", model: "gemini-test", supportsCompact: true, loopMode: ai.ReActLoopModeOwned}
+	session.Memory.SetCarryoverState(&ai.CarryoverState{
+		Provider:             "gemini",
+		Model:                "gemini-test",
+		TopicFingerprint:     threadID.String(),
+		KBFingerprint:        "sop",
+		LastUsedAtUnixMilli:  time.Now().UnixMilli(),
+		AskCount:             1,
+		LastOutcomeFacts:     []string{"fact"},
+		LastUserQuery:        "continue",
+		LastAssistantSummary: "done",
+	})
+	decision := decideCarryover(context.Background(), session, testGen, &TopicAssessment{IsNewTopic: false, TopicUUID: threadID.String()}, "history")
+	if decision.Mode != ai.CarryoverModeCompact {
+		t.Fatalf("expected compact mode via provider runtime capability, got %+v", decision)
 	}
 }

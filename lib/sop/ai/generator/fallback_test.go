@@ -95,6 +95,19 @@ func TestFallbackGenerator_PrimarySuccess(t *testing.T) {
 	}
 }
 
+func TestFallbackGenerator_ProviderRuntimeCapability_PrefersPrimary(t *testing.T) {
+	primary := &chatgpt{model: "gpt-4o", apiKey: "test-key"}
+	fallback := &mockGenerator{name: "fallback"}
+	fg := NewFallbackGenerator(primary, []ai.Generator{fallback})
+	cap := fg.ProviderRuntimeCapability()
+	if cap.Provider != "chatgpt" || cap.Model != "gpt-4o" {
+		t.Fatalf("expected fallback runtime capability to mirror primary, got %+v", cap)
+	}
+	if cap.LoopMode != ai.ReActLoopModeOwned || !cap.SupportsNativeContinuation {
+		t.Fatalf("expected fallback runtime capability to preserve primary continuation model, got %+v", cap)
+	}
+}
+
 func TestFallbackGenerator_PrimaryFailsFallbackSucceeds(t *testing.T) {
 	primary := &mockGenerator{name: "primary", shouldFail: true}
 	fallback := &mockGenerator{name: "fallback"}

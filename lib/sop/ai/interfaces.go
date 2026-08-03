@@ -361,6 +361,26 @@ type CarryoverCapability struct {
 	SupportsLive    bool
 }
 
+// ProviderRuntimeCapability captures the higher-level runtime properties that
+// matter when deciding how a provider should integrate with Ask/ReAct.
+type ProviderRuntimeCapability struct {
+	Provider                   string
+	Model                      string
+	LoopMode                   ReActLoopMode
+	SupportsNativeToolCalls    bool
+	SupportsNativeContinuation bool
+	SupportsCompactCarryover   bool
+	SupportsLiveCarryover      bool
+	SupportsMultiToolTurns     bool
+	SupportsStreaming          bool
+}
+
+// ProviderRuntimeCapabilityProvider is an optional generator extension that
+// exposes the provider's runtime integration characteristics explicitly.
+type ProviderRuntimeCapabilityProvider interface {
+	ProviderRuntimeCapability() ProviderRuntimeCapability
+}
+
 // CarryoverCapabilityProvider is an optional generator extension that lets a
 // provider declare whether it can participate in compact or live carryover
 // across adjacent asks.

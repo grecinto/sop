@@ -103,3 +103,65 @@ func TestCompatibleReActEngine_ExplicitOwnedModeUsesProviderLoop(t *testing.T) {
 		t.Fatalf("expected provider owned loop response, got %q", resp.FinalText)
 	}
 }
+
+type runtimeCapabilityLoopModeMockGenerator struct {
+	calls int
+	mode  ai.ReActLoopMode
+}
+
+func (m *runtimeCapabilityLoopModeMockGenerator) Name() string {
+	return "runtime_capability_loop_mode_mock"
+}
+
+func (m *runtimeCapabilityLoopModeMockGenerator) EstimateCost(inTokens, outTokens int) float64 {
+	return 0
+}
+
+func (m *runtimeCapabilityLoopModeMockGenerator) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
+	return nil
+}
+
+func (m *runtimeCapabilityLoopModeMockGenerator) ProviderRuntimeCapability() ai.ProviderRuntimeCapability {
+	return ai.ProviderRuntimeCapability{Provider: m.Name(), LoopMode: m.mode}
+}
+
+func (m *runtimeCapabilityLoopModeMockGenerator) ReActLoop() ai.ReActLoop {
+	return ownedReActLoopMock{}
+}
+
+func (m *runtimeCapabilityLoopModeMockGenerator) Generate(ctx context.Context, prompt string, opts ai.GenOptions) (ai.GenOutput, error) {
+	_ = ctx
+	_ = prompt
+	_ = opts
+	m.calls++
+	if m.calls == 1 {
+		return ai.GenOutput{ToolCalls: []ai.ToolCall{{
+			Name: "execute_script",
+			Args: map[string]any{
+				"script": []any{map[string]any{"op": "scan"}},
+			},
+		}}}, nil
+	}
+	return ai.GenOutput{Text: "Final answer: runtime capability shared loop used"}, nil
+}
+
+func TestCompatibleReActEngine_RuntimeCapabilitySharedModeOverridesOwnedLoopProvider(t *testing.T) {
+	engine := &CompatibleReActEngine{}
+	gen := &runtimeCapabilityLoopModeMockGenerator{mode: ai.ReActLoopModeShared}
+
+	resp, err := engine.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "You are a test assistant.",
+		UserQuery:    "Find users",
+		Executor:     &loopMockExecutor{},
+		Generator:    gen,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if resp.FinalText != "Final answer: runtime capability shared loop used" {
+		t.Fatalf("expected shared loop response, got %q", resp.FinalText)
+	}
+	if gen.calls != 2 {
+		t.Fatalf("expected shared loop generator to be called twice, got %d", gen.calls)
+	}
+}

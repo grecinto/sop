@@ -74,6 +74,24 @@ func (fg *FallbackGenerator) CarryoverCapability() ai.CarryoverCapability {
 	return ai.CarryoverCapability{SupportsCompact: true}
 }
 
+func (fg *FallbackGenerator) ProviderRuntimeCapability() ai.ProviderRuntimeCapability {
+	if fg.primary != nil {
+		if ext, ok := fg.primary.(ai.ProviderRuntimeCapabilityProvider); ok {
+			return ext.ProviderRuntimeCapability()
+		}
+		capability := ai.ProviderRuntimeCapability{Provider: fg.primary.Name(), SupportsCompactCarryover: true}
+		if ext, ok := fg.primary.(interface{ CarryoverCapability() ai.CarryoverCapability }); ok {
+			carry := ext.CarryoverCapability()
+			capability.Provider = carry.Provider
+			capability.Model = carry.Model
+			capability.SupportsCompactCarryover = carry.SupportsCompact
+			capability.SupportsLiveCarryover = carry.SupportsLive
+		}
+		return capability
+	}
+	return ai.ProviderRuntimeCapability{SupportsCompactCarryover: true}
+}
+
 func (fg *FallbackGenerator) ReActLoop() ai.ReActLoop {
 	// Try to get ReAct loop from primary if it supports the extended interface
 	if fg.primary != nil {

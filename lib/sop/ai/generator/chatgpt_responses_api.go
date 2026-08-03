@@ -55,6 +55,9 @@ func (g *chatgpt) createResponses(ctx context.Context, reqBody openAIResponsesRe
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		if g.shouldFallbackResponsesToChatCompletions(resp.StatusCode) {
+			return g.createResponsesViaChatCompletions(ctx, reqBody)
+		}
 		return openAIResponsesResponse{}, fmt.Errorf("openai responses api error (status %d): %s", resp.StatusCode, string(body))
 	}
 	var response openAIResponsesResponse
@@ -102,9 +105,200 @@ func (g *chatgpt) createResponsesStream(ctx context.Context, reqBody openAIRespo
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if g.shouldFallbackResponsesToChatCompletions(resp.StatusCode) {
+			return g.createResponsesViaChatCompletions(ctx, reqBody)
+		}
 		return openAIResponsesResponse{}, fmt.Errorf("openai responses stream api error (status %d): %s", resp.StatusCode, string(body))
 	}
 	return parseChatGPTResponsesStream(ctx, resp.Body, streamer)
+}
+
+func (g *chatgpt) shouldFallbackResponsesToChatCompletions(statusCode int) bool {
+	if g == nil {
+		return false
+	}
+	apiURL := strings.TrimSpace(g.apiURL)
+	if apiURL == "" {
+		return false
+	}
+	trimmed := strings.TrimRight(apiURL, "/")
+	if strings.HasPrefix(trimmed, "https://api.openai.com/v1") {
+		return false
+	}
+	switch statusCode {
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *chatgpt) createResponsesViaChatCompletions(ctx context.Context, reqBody openAIResponsesRequest) (openAIResponsesResponse, error) {
+	reqBody = sanitizeOpenAIResponsesRequest(reqBody)
+	chatReq, err := g.chatCompletionsRequestFromResponses(reqBody)
+	if err != nil {
+		return openAIResponsesResponse{}, err
+	}
+	log.Info("ChatGPT chat-completions fallback for responses", "url", g.chatCompletionsURL(), "model", chatReq.Model, "tool_choice", chatReq.ToolChoice, "tools", len(chatReq.Tools))
+
+	jsonBody, err := json.Marshal(chatReq)
+	if err != nil {
+		return openAIResponsesResponse{}, fmt.Errorf("failed to marshal chat-completions fallback request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.chatCompletionsURL(), bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return openAIResponsesResponse{}, fmt.Errorf("failed to create chat-completions fallback request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+g.apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return openAIResponsesResponse{}, fmt.Errorf("openai chat-completions fallback request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return openAIResponsesResponse{}, fmt.Errorf("openai chat-completions fallback error (status %d): %s", resp.StatusCode, string(body))
+	}
+	var chatResp openAIResponse
+	if err := json.Unmarshal(body, &chatResp); err != nil {
+		return openAIResponsesResponse{}, fmt.Errorf("failed to unmarshal chat-completions fallback response: %w", err)
+	}
+	if chatResp.Error != nil {
+		return openAIResponsesResponse{}, fmt.Errorf("openai chat-completions fallback returned error: %s", chatResp.Error.Message)
+	}
+	return openAIResponsesResponseFromChatCompletion(chatResp)
+}
+
+func (g *chatgpt) chatCompletionsRequestFromResponses(reqBody openAIResponsesRequest) (openAIRequest, error) {
+	messages := make([]openAIMessage, 0, len(reqBody.Input)+1)
+	if instructions := strings.TrimSpace(reqBody.Instructions); instructions != "" {
+		role := "system"
+		if g.usesDeveloperRoleInChatCompletions() {
+			role = "developer"
+		}
+		messages = append(messages, openAIMessage{Role: role, Content: instructions})
+	}
+	for _, input := range reqBody.Input {
+		switch {
+		case strings.TrimSpace(input.Role) != "":
+			messages = append(messages, openAIMessage{Role: strings.TrimSpace(input.Role), Content: input.Content})
+		case input.Type == "function_call":
+			messages = append(messages, openAIMessage{Role: "assistant", Content: "", ToolCalls: []openAIChatToolCall{{
+				ID:   strings.TrimSpace(input.CallID),
+				Type: "function",
+				Function: struct {
+					Name      string `json:"name,omitempty"`
+					Arguments string `json:"arguments,omitempty"`
+				}{Name: strings.TrimSpace(input.Name), Arguments: strings.TrimSpace(input.Arguments)},
+			}}})
+		case input.Type == "function_call_output":
+			messages = append(messages, openAIMessage{Role: "tool", Content: input.Output, ToolCallID: strings.TrimSpace(input.CallID)})
+		}
+	}
+	chatReq := openAIRequest{
+		Model:    reqBody.Model,
+		Messages: messages,
+	}
+	if len(reqBody.Tools) > 0 {
+		chatReq.Tools = make([]openAIChatTool, 0, len(reqBody.Tools))
+		for _, tool := range reqBody.Tools {
+			chatTool := openAIChatTool{Type: tool.Type}
+			chatTool.Function.Name = tool.Name
+			chatTool.Function.Description = tool.Description
+			chatTool.Function.Parameters = tool.Parameters
+			chatTool.Function.Strict = tool.Strict
+			chatReq.Tools = append(chatReq.Tools, chatTool)
+		}
+	}
+	if reqBody.ToolChoice != nil {
+		chatReq.ToolChoice = remapResponsesToolChoiceToChatCompletions(reqBody.ToolChoice)
+	}
+	if reqBody.MaxOutputTokens > 0 {
+		chatReq.MaxTokens = reqBody.MaxOutputTokens
+	}
+	if reqBody.Temperature != nil {
+		chatReq.Temperature = *reqBody.Temperature
+	}
+	return chatReq, nil
+}
+
+func remapResponsesToolChoiceToChatCompletions(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		if typed["type"] == "function" {
+			if name, ok := typed["name"].(string); ok && strings.TrimSpace(name) != "" {
+				return map[string]any{"type": "function", "function": map[string]any{"name": strings.TrimSpace(name)}}
+			}
+		}
+	}
+	return value
+}
+
+func openAIResponsesResponseFromChatCompletion(response openAIResponse) (openAIResponsesResponse, error) {
+	if len(response.Choices) == 0 {
+		return openAIResponsesResponse{}, fmt.Errorf("no choices returned from openai chat-completions fallback")
+	}
+	message := response.Choices[0].Message
+	var output openAIResponsesResponse
+	if response.Usage.TotalTokens > 0 || response.Usage.PromptTokens > 0 || response.Usage.CompletionTokens > 0 {
+		output.Usage = &openAIResponsesUsage{
+			PromptTokens:     response.Usage.PromptTokens,
+			CompletionTokens: response.Usage.CompletionTokens,
+			TotalTokens:      response.Usage.TotalTokens,
+		}
+		if response.Usage.PromptTokensDetails != nil {
+			output.Usage.PromptTokensDetails = &struct {
+				CachedTokens int `json:"cached_tokens,omitempty"`
+			}{CachedTokens: response.Usage.PromptTokensDetails.CachedTokens}
+		}
+	}
+	assistantText := strings.TrimSpace(extractOpenAIMessageText(message))
+	if assistantText != "" {
+		output.Output = append(output.Output, openAIResponsesOutputItem{
+			Type:    "message",
+			Role:    "assistant",
+			Content: []openAIResponsesContentItem{{Type: "output_text", Text: assistantText}},
+		})
+		output.OutputText = assistantText
+	}
+	for _, toolCall := range message.ToolCalls {
+		output.Output = append(output.Output, openAIResponsesOutputItem{
+			Type:      "function_call",
+			CallID:    strings.TrimSpace(toolCall.ID),
+			Name:      strings.TrimSpace(toolCall.Function.Name),
+			Arguments: strings.TrimSpace(toolCall.Function.Arguments),
+		})
+	}
+	return output, nil
+}
+
+func extractOpenAIMessageText(message openAIMessage) string {
+	switch v := message.Content.(type) {
+	case string:
+		return v
+	case []any:
+		var text strings.Builder
+		for _, part := range v {
+			if m, ok := part.(map[string]any); ok {
+				if partText, ok := m["text"].(string); ok {
+					text.WriteString(partText)
+				}
+			}
+		}
+		return text.String()
+	case []map[string]any:
+		var text strings.Builder
+		for _, part := range v {
+			if partText, ok := part["text"].(string); ok {
+				text.WriteString(partText)
+			}
+		}
+		return text.String()
+	default:
+		return fmt.Sprintf("%v", message.Content)
+	}
 }
 
 // ----------------------------------------------------------------------------

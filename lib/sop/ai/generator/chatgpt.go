@@ -69,6 +69,20 @@ func (g *chatgpt) CarryoverCapability() ai.CarryoverCapability {
 	}
 }
 
+func (g *chatgpt) ProviderRuntimeCapability() ai.ProviderRuntimeCapability {
+	return ai.ProviderRuntimeCapability{
+		Provider:                   g.Name(),
+		Model:                      g.model,
+		LoopMode:                   g.ReActLoopMode(),
+		SupportsNativeToolCalls:    true,
+		SupportsNativeContinuation: true,
+		SupportsCompactCarryover:   true,
+		SupportsLiveCarryover:      true,
+		SupportsMultiToolTurns:     true,
+		SupportsStreaming:          true,
+	}
+}
+
 func (g *chatgpt) ReActLoop() ai.ReActLoop {
 	if g.ownedLoop == nil {
 		g.ownedLoop = newChatGPTOwnedReActLoop(g)
@@ -84,7 +98,11 @@ func (g *chatgpt) Generate(ctx context.Context, prompt string, opts ai.GenOption
 	}
 	messages := make([]openAIMessage, 0, 2)
 	if systemPrompt := strings.TrimSpace(opts.SystemPrompt); systemPrompt != "" {
-		messages = append(messages, openAIMessage{Role: "system", Content: systemPrompt})
+		role := "system"
+		if g.usesDeveloperRoleInChatCompletions() {
+			role = "developer"
+		}
+		messages = append(messages, openAIMessage{Role: role, Content: systemPrompt})
 	}
 	contentParts := make([]any, 0, 1+len(opts.InputParts))
 	if strings.TrimSpace(prompt) != "" {
@@ -137,6 +155,13 @@ func (g *chatgpt) Generate(ctx context.Context, prompt string, opts ai.GenOption
 		Model:       g.model,
 		Messages:    messages,
 		Temperature: temperature,
+	}
+	chatTools, err := buildChatGPTChatCompletionTools(opts.Tools)
+	if err != nil {
+		return ai.GenOutput{}, err
+	}
+	if len(chatTools) > 0 {
+		reqBody.Tools = chatTools
 	}
 
 	// GPT-5+ and o-series models use max_completion_tokens instead of max_tokens
@@ -216,9 +241,14 @@ func (g *chatgpt) Generate(ctx context.Context, prompt string, opts ai.GenOption
 	default:
 		text = fmt.Sprintf("%v", content)
 	}
+	toolCalls, err := extractChatCompletionToolCalls(response.Choices[0].Message.ToolCalls)
+	if err != nil {
+		return ai.GenOutput{}, err
+	}
 	return ai.GenOutput{
 		Text:       text,
 		TokensUsed: response.Usage.TotalTokens,
+		ToolCalls:  toolCalls,
 		Raw:        response,
 	}, nil
 }
@@ -230,6 +260,59 @@ func (g *chatgpt) EstimateCost(inTokens, outTokens int) float64 {
 
 func (g *chatgpt) PrewarmCache(ctx context.Context, opts ai.GenOptions) error {
 	return nil
+}
+
+func (g *chatgpt) usesDeveloperRoleInChatCompletions() bool {
+	if g == nil {
+		return false
+	}
+	apiURL := strings.TrimSpace(g.apiURL)
+	if apiURL != "" && !strings.HasPrefix(strings.TrimRight(apiURL, "/"), "https://api.openai.com/v1") {
+		return false
+	}
+	modelLower := strings.ToLower(strings.TrimSpace(g.model))
+	return strings.HasPrefix(modelLower, "gpt-5") || strings.HasPrefix(modelLower, "o")
+}
+
+func buildChatGPTChatCompletionTools(tools []ai.ToolDefinition) ([]openAIChatTool, error) {
+	if len(tools) == 0 {
+		return nil, nil
+	}
+	responsesTools, err := buildChatGPTResponsesTools(tools)
+	if err != nil {
+		return nil, err
+	}
+	built := make([]openAIChatTool, 0, len(responsesTools))
+	for _, tool := range responsesTools {
+		chatTool := openAIChatTool{Type: tool.Type}
+		chatTool.Function.Name = tool.Name
+		chatTool.Function.Description = tool.Description
+		chatTool.Function.Parameters = tool.Parameters
+		chatTool.Function.Strict = tool.Strict
+		built = append(built, chatTool)
+	}
+	return built, nil
+}
+
+func extractChatCompletionToolCalls(calls []openAIChatToolCall) ([]ai.ToolCall, error) {
+	if len(calls) == 0 {
+		return nil, nil
+	}
+	toolCalls := make([]ai.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		args := map[string]any(nil)
+		if strings.TrimSpace(call.Function.Arguments) != "" {
+			if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+				return nil, fmt.Errorf("invalid OpenAI chat-completions tool arguments for %q: %w", call.Function.Name, err)
+			}
+		}
+		toolCalls = append(toolCalls, ai.ToolCall{
+			Name:     strings.TrimSpace(call.Function.Name),
+			Args:     args,
+			NativeID: strings.TrimSpace(call.ID),
+		})
+	}
+	return toolCalls, nil
 }
 
 // ----------------------------------------------------------------------------

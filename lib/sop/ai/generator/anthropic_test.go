@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,8 +14,25 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
+func newIPv4HTTPTestServerURL(t *testing.T, handler http.HandlerFunc) string {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+	})
+	return "http://" + listener.Addr().String()
+}
+
 func TestAnthropicGenerate_BasicTextGeneration(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serverURL := newIPv4HTTPTestServerURL(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/messages" {
 			t.Fatalf("expected /v1/messages path, got %s", r.URL.Path)
 		}
@@ -53,22 +71,42 @@ func TestAnthropicGenerate_BasicTextGeneration(t *testing.T) {
 				CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 			}{InputTokens: 10, OutputTokens: 5},
 		})
-	}))
-	defer server.Close()
+	})
 
-	// Override API URL for testing
-	// Note: We can't easily override the URL in anthropic.go without refactoring,
-	// so this test verifies the mock server works. In production, we'd need to add
-	// an apiURL field like chatgpt has.
-
-	// For now, skip the actual call and verify the types and structure verified
-	t.Skip("Skipping actual HTTP call - types and structure verified")
+	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022", apiURL: serverURL}
+	out, err := gen.Generate(context.Background(), "Hello Claude", ai.GenOptions{})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if out.Text != "Hello from Claude!" {
+		t.Fatalf("expected text response, got %#v", out)
+	}
+	if out.TokensUsed != 15 {
+		t.Fatalf("expected token usage 15, got %#v", out)
+	}
 }
 
 func TestAnthropicReActLoopMode_DefaultsToOwned(t *testing.T) {
 	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022"}
 	if got := gen.ReActLoopMode(); got != ai.ReActLoopModeOwned {
 		t.Fatalf("expected owned loop mode, got %q", got)
+	}
+}
+
+func TestAnthropicProviderRuntimeCapability_AdvertisesOwnedReplayContinuation(t *testing.T) {
+	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022"}
+	cap := gen.ProviderRuntimeCapability()
+	if cap.Provider != "anthropic" || cap.Model != "claude-3-5-sonnet-20241022" {
+		t.Fatalf("unexpected provider runtime capability identity: %+v", cap)
+	}
+	if cap.LoopMode != ai.ReActLoopModeOwned || !cap.SupportsNativeToolCalls || !cap.SupportsNativeContinuation {
+		t.Fatalf("expected owned native tool/continuation capability, got %+v", cap)
+	}
+	if !cap.SupportsCompactCarryover || !cap.SupportsLiveCarryover || !cap.SupportsMultiToolTurns {
+		t.Fatalf("expected anthropic carryover and multi-tool capabilities, got %+v", cap)
+	}
+	if cap.SupportsStreaming {
+		t.Fatalf("expected anthropic go generator transport capability to report no native streaming surface yet, got %+v", cap)
 	}
 }
 
@@ -88,7 +126,10 @@ func TestAnthropicReActLoop_DefaultsToOwnedLoop(t *testing.T) {
 
 func TestAnthropicGenerate_WithTools(t *testing.T) {
 	var capturedRequest anthropicRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serverURL := newIPv4HTTPTestServerURL(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("expected /v1/messages path, got %s", r.URL.Path)
+		}
 		if err := json.NewDecoder(r.Body).Decode(&capturedRequest); err != nil {
 			t.Fatalf("failed to decode request: %v", err)
 		}
@@ -115,13 +156,31 @@ func TestAnthropicGenerate_WithTools(t *testing.T) {
 				CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 			}{InputTokens: 50, OutputTokens: 30},
 		})
-	}))
-	defer server.Close()
+	})
 
-	t.Skip("Skipping actual HTTP call - need apiURL field in anthropic struct")
+	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022", apiURL: serverURL}
+	out, err := gen.Generate(context.Background(), "Find John", ai.GenOptions{Tools: []ai.ToolDefinition{{
+		Name:        "lookup_user",
+		Description: "Looks up a user by name",
+		Schema:      `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`,
+	}}})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(capturedRequest.Tools) != 1 || capturedRequest.Tools[0].Name != "lookup_user" {
+		t.Fatalf("expected tool request to be sent, got %#v", capturedRequest.Tools)
+	}
+	if len(out.ToolCalls) != 1 || out.ToolCalls[0].Name != "lookup_user" {
+		t.Fatalf("expected tool call to be parsed, got %#v", out.ToolCalls)
+	}
+	if out.ToolCalls[0].NativeID != "toolu_123" {
+		t.Fatalf("expected tool call id to round-trip, got %#v", out.ToolCalls[0])
+	}
+	if got := out.ToolCalls[0].Args["name"]; got != "John" {
+		t.Fatalf("expected parsed tool args, got %#v", out.ToolCalls[0].Args)
+	}
 
 	// Verify tool conversion logic
-	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022"}
 	tools := []ai.ToolDefinition{
 		{
 			Name:        "lookup_user",
@@ -183,6 +242,93 @@ func TestAnthropicConvertTools_HandlesVariousSchemaFormats(t *testing.T) {
 				t.Fatalf("expected schema type %v, got %v", tt.expectedSchema["type"], converted[0].InputSchema["type"])
 			}
 		})
+	}
+}
+
+func TestAnthropicConvertTools_SanitizesUnsupportedSchemaKeywords(t *testing.T) {
+	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022"}
+	converted := gen.convertTools([]ai.ToolDefinition{{
+		Name:        "execute_script",
+		Description: "Executes a script",
+		Schema: `{
+			"properties": {
+				"script": {
+					"type": "array",
+					"items": {
+						"properties": {
+							"op": {
+								"type": "string",
+								"default": "scan"
+							}
+						},
+						"additionalProperties": false
+					}
+				},
+				"mode": {
+					"oneOf": [{"type": "string"}, {"type": "integer"}],
+					"description": "mode selector"
+				}
+			},
+			"required": "script",
+			"additionalProperties": false,
+			"default": {}
+		}`,
+	}})
+
+	if len(converted) != 1 {
+		t.Fatalf("expected 1 tool, got %#v", converted)
+	}
+	params := converted[0].InputSchema
+	if params["type"] != "object" {
+		t.Fatalf("expected object root schema, got %#v", params)
+	}
+	if _, found := params["default"]; found {
+		t.Fatalf("expected unsupported root default to be removed, got %#v", params)
+	}
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties map, got %#v", params)
+	}
+	mode, ok := props["mode"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected mode property, got %#v", props)
+	}
+	if _, found := mode["oneOf"]; found {
+		t.Fatalf("expected unsupported nested oneOf to be removed, got %#v", mode)
+	}
+	if mode["description"] != "mode selector" {
+		t.Fatalf("expected description to remain, got %#v", mode)
+	}
+	if mode["type"] != "string" {
+		t.Fatalf("expected missing type to fall back to string, got %#v", mode)
+	}
+	script, ok := props["script"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected script property, got %#v", props)
+	}
+	items, ok := script["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected array items schema, got %#v", script)
+	}
+	itemProps, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested item properties, got %#v", items)
+	}
+	op, ok := itemProps["op"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested op property, got %#v", itemProps)
+	}
+	if _, found := op["default"]; found {
+		t.Fatalf("expected unsupported nested default to be removed, got %#v", op)
+	}
+	if op["type"] != "string" {
+		t.Fatalf("expected op type to remain, got %#v", op)
+	}
+	if required, ok := params["required"].([]string); !ok || len(required) != 1 || required[0] != "script" {
+		t.Fatalf("expected required field to normalize to []string, got %#v", params["required"])
+	}
+	if additional, ok := params["additionalProperties"].(bool); !ok || additional {
+		t.Fatalf("expected supported additionalProperties=false to remain, got %#v", params["additionalProperties"])
 	}
 }
 
@@ -447,6 +593,67 @@ func TestAnthropicGenerate_ParsesToolCallsFromResponse(t *testing.T) {
 	}
 }
 
+func TestAnthropicMessagesURL_NormalizesBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		gen  *anthropic
+		want string
+	}{
+		{name: "default", gen: &anthropic{}, want: "https://api.anthropic.com/v1/messages"},
+		{name: "root base", gen: &anthropic{apiURL: "https://api.anthropic.com"}, want: "https://api.anthropic.com/v1/messages"},
+		{name: "version base", gen: &anthropic{apiURL: "https://api.anthropic.com/v1"}, want: "https://api.anthropic.com/v1/messages"},
+		{name: "full endpoint", gen: &anthropic{apiURL: "https://api.anthropic.com/v1/messages"}, want: "https://api.anthropic.com/v1/messages"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.gen.messagesURL(); got != tt.want {
+				t.Fatalf("messagesURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAnthropicBuildBaseRequest_OmitsTemperatureForOpus4Models(t *testing.T) {
+	gen := &anthropic{apiKey: "test-key", model: "claude-opus-4-20250514"}
+	req := gen.buildBaseRequest("hello", ai.GenOptions{Temperature: 0.2, ForceTemperature: true})
+	if req.Temperature != nil {
+		t.Fatalf("expected opus-4 request to omit temperature, got %#v", req.Temperature)
+	}
+}
+
+func TestAnthropicToGenOutput_PreservesMixedTextAndToolUseBlocks(t *testing.T) {
+	gen := &anthropic{apiKey: "test-key", model: "claude-3-5-sonnet-20241022"}
+	out := gen.toGenOutput(anthropicResponse{
+		Content: []anthropicContentBlock{
+			{Type: "text", Text: "Checking the users store. "},
+			{Type: "tool_use", ID: "toolu_123", Name: "lookup_user", Input: map[string]any{"name": "John"}},
+			{Type: "text", Text: "Waiting for tool result."},
+		},
+		Usage: struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+		}{InputTokens: 20, OutputTokens: 8},
+	})
+
+	if out.Text != "Checking the users store. Waiting for tool result." {
+		t.Fatalf("expected text blocks to be preserved in order, got %#v", out)
+	}
+	if len(out.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %#v", out.ToolCalls)
+	}
+	if out.ToolCalls[0].Name != "lookup_user" || out.ToolCalls[0].NativeID != "toolu_123" {
+		t.Fatalf("expected tool metadata to round-trip, got %#v", out.ToolCalls[0])
+	}
+	if got := out.ToolCalls[0].Args["name"]; got != "John" {
+		t.Fatalf("expected tool arguments to survive conversion, got %#v", out.ToolCalls[0].Args)
+	}
+	if out.TokensUsed != 28 {
+		t.Fatalf("expected token usage to round-trip, got %#v", out)
+	}
+}
+
 func TestAnthropicThinkingConfig_UsesMinimumBudgetForLowThinking(t *testing.T) {
 	gen := &anthropic{model: "claude-opus-4-20250514"}
 	cfg := gen.thinkingConfig("low")
@@ -676,7 +883,6 @@ func TestAnthropicOwnedLoopCarryoverState_UsesRicherLivePayload(t *testing.T) {
 		ToolCall: ai.ToolCall{Name: "execute_script", Args: map[string]any{"script": []any{"SELECT 1"}}},
 		Response: map[string]any{"result": "ok"},
 	}}
-
 	state := anthropicOwnedLoopCarryoverState(continuations)
 	if state == nil {
 		t.Fatal("expected carryover state")
@@ -692,6 +898,31 @@ func TestAnthropicOwnedLoopCarryoverState_UsesRicherLivePayload(t *testing.T) {
 	}
 	if state.EstimatedRawToolTokens <= 0 {
 		t.Fatalf("expected raw tool token estimate, got %+v", state)
+	}
+}
+
+func TestAnthropicContinuationCarryover_RoundTripsSerializedContinuations(t *testing.T) {
+	original := []ai.ToolCallContinuation{{
+		ToolCall: ai.ToolCall{Name: "execute_script", NativeID: "toolu_123", Args: map[string]any{"script": []any{"SELECT 1"}}},
+		Response: map[string]any{"result": "ok"},
+	}}
+	state := anthropicOwnedLoopCarryoverState(original)
+	if state == nil || state.Mode != ai.CarryoverModeLive {
+		t.Fatalf("expected live carryover state, got %+v", state)
+	}
+	restored, err := restoreAnthropicContinuations(state)
+	if err != nil {
+		t.Fatalf("restoreAnthropicContinuations() error = %v", err)
+	}
+	if len(restored) != 1 {
+		t.Fatalf("expected one restored continuation, got %#v", restored)
+	}
+	if restored[0].ToolCall.Name != "execute_script" || restored[0].ToolCall.NativeID != "toolu_123" {
+		t.Fatalf("expected tool metadata to survive round-trip, got %#v", restored[0].ToolCall)
+	}
+	result, ok := restored[0].Response.(map[string]any)
+	if !ok || result["result"] != "ok" {
+		t.Fatalf("expected response payload to survive round-trip, got %#v", restored[0].Response)
 	}
 }
 

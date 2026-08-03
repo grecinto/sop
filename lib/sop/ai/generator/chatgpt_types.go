@@ -125,16 +125,39 @@ type openAIResponsesAssistantMessage struct {
 // ----------------------------------------------------------------------------
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role       string               `json:"role"`
+	Content    any                  `json:"content"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
+	ToolCalls  []openAIChatToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAIRequest struct {
-	Model               string          `json:"model"`
-	Messages            []openAIMessage `json:"messages"`
-	MaxTokens           int             `json:"max_tokens,omitempty"`
-	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
-	Temperature         float32         `json:"temperature,omitempty"`
+	Model               string           `json:"model"`
+	Messages            []openAIMessage  `json:"messages"`
+	Tools               []openAIChatTool `json:"tools,omitempty"`
+	ToolChoice          any              `json:"tool_choice,omitempty"`
+	MaxTokens           int              `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int              `json:"max_completion_tokens,omitempty"`
+	Temperature         float32          `json:"temperature,omitempty"`
+}
+
+type openAIChatTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description,omitempty"`
+		Parameters  map[string]any `json:"parameters,omitempty"`
+		Strict      bool           `json:"strict,omitempty"`
+	} `json:"function"`
+}
+
+type openAIChatToolCall struct {
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	} `json:"function,omitempty"`
 }
 
 type openAIResponse struct {

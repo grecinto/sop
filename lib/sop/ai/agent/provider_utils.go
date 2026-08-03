@@ -57,6 +57,72 @@ func normalizeProviderName(provider string) string {
 	return provider
 }
 
+func resolveProviderRuntimeCapability(gen ai.Generator) (ai.ProviderRuntimeCapability, bool) {
+	if gen == nil {
+		return ai.ProviderRuntimeCapability{}, false
+	}
+	if provider, ok := gen.(ai.ProviderRuntimeCapabilityProvider); ok {
+		capability := provider.ProviderRuntimeCapability()
+		if strings.TrimSpace(capability.Provider) == "" {
+			capability.Provider = strings.TrimSpace(gen.Name())
+		}
+		if strings.TrimSpace(capability.Provider) != "" {
+			return capability, true
+		}
+	}
+
+	capability := ai.ProviderRuntimeCapability{
+		Provider: strings.TrimSpace(gen.Name()),
+	}
+	if provider, ok := gen.(ai.CarryoverCapabilityProvider); ok {
+		carry := provider.CarryoverCapability()
+		if strings.TrimSpace(carry.Provider) != "" {
+			capability.Provider = strings.TrimSpace(carry.Provider)
+		}
+		capability.Model = strings.TrimSpace(carry.Model)
+		capability.SupportsCompactCarryover = carry.SupportsCompact
+		capability.SupportsLiveCarryover = carry.SupportsLive
+	}
+	if provider, ok := gen.(ai.ReActLoopModeProvider); ok {
+		capability.LoopMode = provider.ReActLoopMode()
+	}
+	if capability.LoopMode == "" {
+		if _, ok := gen.(ai.ReActLoopProvider); ok {
+			capability.LoopMode = ai.ReActLoopModeOwned
+		} else {
+			capability.LoopMode = ai.ReActLoopModeShared
+		}
+	}
+	if strings.TrimSpace(capability.Provider) == "" {
+		return ai.ProviderRuntimeCapability{}, false
+	}
+	return capability, true
+}
+
+func providerRuntimeCapabilitySummary(gen ai.Generator) string {
+	capability, ok := resolveProviderRuntimeCapability(gen)
+	if !ok {
+		return ""
+	}
+	parts := []string{
+		"loop=" + string(capability.LoopMode),
+		"native_tool_calls=" + boolSummary(capability.SupportsNativeToolCalls),
+		"native_continuation=" + boolSummary(capability.SupportsNativeContinuation),
+		"compact_carryover=" + boolSummary(capability.SupportsCompactCarryover),
+		"live_carryover=" + boolSummary(capability.SupportsLiveCarryover),
+		"multi_tool_turns=" + boolSummary(capability.SupportsMultiToolTurns),
+		"streaming=" + boolSummary(capability.SupportsStreaming),
+	}
+	return strings.Join(parts, ", ")
+}
+
+func boolSummary(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
 func inferDefaultThinkingLevel(provider, model string) string {
 	provider = normalizeProviderName(provider)
 	model = strings.ToLower(strings.TrimSpace(model))

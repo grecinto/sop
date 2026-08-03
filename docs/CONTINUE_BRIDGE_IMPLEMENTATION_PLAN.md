@@ -1,10 +1,25 @@
 # Continue bridge implementation plan
 
-**Status**: Implementation-ready blueprint
+**Status**: Active plan / partial implementation already present
 
 ## Goal
 
-Define the minimal bridge between VS Code + Continue and the existing daemon-backed Ask/ReAct runtime so Continue can act as the editor-facing controller while the app remains the execution engine.
+Define the minimal bridge between VS Code + Continue and the existing daemon-backed Ask/ReAct runtime so Continue can act as the editor-facing client while the app remains the controller and execution engine.
+
+## Controller Rule
+
+The daemon must remain the controller.
+
+Continue cannot own the main conversation loop if AI Studio is expected to provide:
+
+- undo history
+- memory and retrieval
+- approvals and policy rails
+- provider-owned ReAct behavior
+- workstream continuity
+- durable multi-step workflow state
+
+If Continue becomes the controller, the daemon only receives partial downstream events and those features stop being native runtime behavior. That is not acceptable for the intended product shape.
 
 ## Recommended integration shape
 
@@ -24,9 +39,56 @@ VS Code + Continue
   -> tools: search, inspect, patch, test, resume
 ```
 
+## Current status
+
+Parts of this bridge already exist.
+
+Implemented today:
+
+- `/api/continue/chat`
+- `/api/continue/tools/<tool>`
+- `/api/continue/sessions/<sessionId>`
+- `/v1/chat/completions` OpenAI-compatible entrypoint
+- test coverage for the chat bridge, file-read tool bridge, patch preview/apply bridge, and OpenAI-compatible chat surface
+- a working Continue config that currently points at the daemon via an OpenAI-compatible model entry
+
+Still missing for the intended UX:
+
+- removal of visible bridge branding from model selection
+- shadow-model catalog generation and config sync
+- provider-compatible Anthropic facade
+- provider-compatible Gemini facade
+- unified auth/config sync between Continue and daemon UI
+
 ## Initial transport choice
 
 Start with a local HTTP bridge. It is the fastest path to a working integration and is sufficient for the first implementation milestone.
+
+## Transparent provider strategy
+
+There are two sensible rollout levels.
+
+### V1: Shadow models over daemon-owned transport
+
+Continue should display familiar model labels such as:
+
+- Claude Sonnet
+- Gemini 2.5
+- GPT-4.1
+
+But those labels should still route through daemon-owned transport surfaces. The user should not see `SOP Daemon Bridge` as an LLM choice.
+
+This is sufficient for V1 because it preserves the UX goal while keeping implementation scope moderate.
+
+### V2: Provider-compatible local facades
+
+The long-term target is to expose provider-native local ingress surfaces:
+
+- OpenAI-compatible facade
+- Anthropic-compatible facade
+- Gemini-compatible facade
+
+Continue can then keep using native provider assumptions while the daemon remains the actual runtime.
 
 ## Controlled-agent delegation pattern
 
@@ -188,23 +250,101 @@ This contract is intentionally narrow. Continue does not need the full workflow 
 
 That is enough to support the coding workflow experience without coupling the editor plugin to the full internal architecture.
 
+## V1 Scope
+
+V1 should include:
+
+- continue-to-daemon chat flow through the existing bridge
+- daemon-owned session continuity and streaming
+- friendly shadow models in Continue instead of bridge-branded entries
+- provider/model intent passed through to the daemon
+- default bridge tool catalog for repo inspection, patch preview/apply, test execution, and agent ask
+- auth and daemon-port synchronization good enough for daily use
+
+V1 should not require:
+
+- full Anthropic protocol emulation
+- full Gemini protocol emulation
+- moving orchestration into Continue
+
+## V2 Scope
+
+V2 can add:
+
+- provider-compatible local facades for Anthropic and Gemini
+- richer Continue config synchronization and auto-repair
+- daemon-to-Continue delegated coding subtasks with stronger editor-service contracts
+
 ## Implementation sequence
 
 For a concrete endpoint and payload contract, see [CONTINUE_BRIDGE_API_SPEC.md](CONTINUE_BRIDGE_API_SPEC.md).
 
-1. Implement the local HTTP bridge and the /api/continue/chat endpoint.
-2. Forward chat requests to the existing daemon /api/ask path with session context.
-3. Add the first tool set: repo inspection, read file, search code, and agent.ask.
-4. Add patch preview and apply patch tools.
-5. Add test running and workflow state tools.
-6. Optionally evolve the bridge toward an MCP-style interface later if richer tool discovery becomes necessary.
+### Already complete
+
+1. Local HTTP bridge shape exists.
+2. Chat requests can be forwarded into the daemon Ask path.
+3. Initial bridge tool set exists.
+4. OpenAI-compatible chat surface exists.
+
+### Remaining for V1
+
+1. Replace bridge-branded Continue model entries with friendly shadow models.
+2. Pass selected provider/model intent explicitly from Continue into daemon requests.
+3. Sync daemon port and auth state into Continue config.
+4. Validate that memory, undo, approvals, and workflow continuity remain daemon-owned in the Continue flow.
+5. Tighten bridge tool defaults and error handling for daily use.
+
+### Remaining for V2
+
+1. Add Anthropic-compatible local facade.
+2. Add Gemini-compatible local facade.
+3. Expand protocol-specific streaming and tool-call compatibility tests.
+4. Optionally evolve the bridge toward an MCP-style interface later if richer tool discovery becomes necessary.
+
+## Effort estimate
+
+For one engineer:
+
+### V1
+
+- approximately 5 to 10 working days for a usable version
+- approximately 2 to 3 weeks for a hardened V1 with config sync and auth polish
+
+### V2
+
+- approximately 3 to 6 weeks for true provider-compatible local facades beyond the current OpenAI-compatible surface
+
+## Resume checklist
+
+When resuming implementation, start here:
+
+### Code surfaces
+
+- `lib/sop/cmd/sop-daemon/main.go`
+- `lib/sop/cmd/sop-daemon/rag.go`
+- `lib/sop/tools/sopbackend/main.ai.go`
+- `.continuerc.json`
+- `continue-daemon-config.json`
+
+### Validate these first
+
+- current bridge flow still works end-to-end
+- OpenAI-compatible local model entry still points at daemon
+- selected provider/model intent can be surfaced in daemon request context
+- bridge sessions preserve daemon-owned state rather than Continue-owned state
 
 ## TODO tracker
 
+- [ ] Replace visible `SOP Daemon Bridge` model entry with shadow-model entries for V1.
+- [ ] Add config-sync logic so Continue model entries track daemon-selected port and runtime state.
+- [ ] Pass provider/model intent per request from Continue to daemon.
+- [ ] Validate daemon-owned undo, memory, approvals, and workflow continuity through the Continue flow.
 - [ ] Add daemon port configurability to the UI install/setup flow so users can choose an available port.
 - [ ] Persist the user-selected daemon port as a single source of truth (settings/state).
 - [ ] On VSIX activation, read the persisted daemon port and update Continue model `apiBase` entries to route through that port.
 - [ ] When user changes daemon port later, re-sync Continue model routing automatically without manual config edits.
+- [ ] Add Anthropic-compatible local facade.
+- [ ] Add Gemini-compatible local facade.
 
 ## Design guardrails
 
@@ -213,3 +353,5 @@ For a concrete endpoint and payload contract, see [CONTINUE_BRIDGE_API_SPEC.md](
 - Keep tool results structured so Continue can reason over them.
 - Use AST/tree-sitter and repo indexing as the foundation for code-aware tools.
 - Prefer a small, composable tool surface over a sprawling one.
+- Do not let Continue become the primary controller of workflow state.
+- Do not let daemon-only product value depend on post-hoc reconstruction from Continue history.

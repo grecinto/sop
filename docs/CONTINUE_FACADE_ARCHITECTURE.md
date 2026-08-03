@@ -1,6 +1,6 @@
 # VS Code and Continue facade architecture
 
-**Status**: Proposed / implementation-ready
+**Status**: Active design / implementation in progress
 
 ## Summary
 
@@ -20,11 +20,33 @@ The recommended model is a facade, not a replacement:
   - session continuity and memory
   - long-running automation
 
+## Architecture Rule
+
+The daemon must remain the controller.
+
+That is not just an implementation preference. It is a product requirement.
+
+If Continue becomes the primary controller of the LLM conversation loop, the daemon stops being the system of record for:
+
+- undo history
+- memory and retrieval
+- approvals and policy rails
+- workstream continuity
+- provider-owned ReAct state
+- long-running workflow execution
+
+Those features only remain first-class product capabilities when the daemon stays on the hot path for every meaningful request.
+
+The control rule is therefore:
+
+- Continue owns IDE UX and IDE services.
+- The daemon owns orchestration, provider routing, memory, undo, approvals, and workflow state.
+
 ## Recommended architecture
 
 The cleanest approach is a thin adapter layer between Continue and the existing daemon/backend Ask pipeline.
 
-Continue should not need to understand the full coding workflow engine directly. Instead, it should consume a compact tool surface exposed by the shared runtime. The coding-focused tools should be backed by the existing AST, tree-sitter, repo-indexing, patching, and validation infrastructure so that Continue can act as a controller over a code-aware toolset.
+Continue should not need to understand the full coding workflow engine directly. Instead, it should consume a compact tool surface exposed by the shared runtime. The coding-focused tools should be backed by the existing AST, tree-sitter, repo-indexing, patching, and validation infrastructure so that Continue can act as an editor-facing client over a code-aware toolset while the daemon remains the controller.
 
 ```text
 VS Code + Continue
@@ -39,23 +61,60 @@ VS Code + Continue
 1. **Editor surface (VS Code + Continue)**
    - Presents chat, context selection, and edit/diff actions.
    - Keeps the developer experience familiar and IDE-native.
+   - Exposes editor-aware services back to the daemon when the daemon needs IDE execution.
 
 2. **Adapter layer**
    - Maps Continue requests into the existing Ask payload.
    - Preserves streaming progress and session identity.
    - Converts editor context into the structured inputs expected by the workflow runtime.
+   - Optionally presents daemon-owned shadow models or local provider facades as native-looking provider choices.
 
 3. **Shared workflow runtime**
    - Owns orchestration, planning, execution, review, and validation.
    - Maintains approvals, tool policies, and state transitions.
    - Remains the single source of truth for workflow behavior.
 
+## Transparent Provider Facades
+
+The preferred long-term UX is that Continue should display familiar provider choices such as Anthropic, Gemini, and OpenAI without exposing a separate visible "SOP bridge" provider to the user.
+
+In that model:
+
+- Continue still shows normal provider/model choices.
+- Those choices route to daemon-owned local endpoints.
+- The daemon decides how to execute, route, persist, and enrich the request.
+
+This means the bridge becomes transport, not product surface.
+
+### Two implementation levels
+
+#### 1. Shadow-model V1
+
+Continue shows friendly model titles such as:
+
+- Claude Sonnet
+- Gemini 2.5
+- GPT-4.1
+
+But all of them still route through one daemon-owned protocol surface. This is sufficient for a strong V1 because it removes bridge branding while preserving daemon control.
+
+#### 2. Provider-compatible local facades
+
+The longer-term shape is to expose daemon-owned local endpoints that look provider-native to Continue:
+
+- Anthropic-compatible local facade
+- Gemini-compatible local facade
+- OpenAI-compatible local facade
+
+In that design, Continue believes it is using native provider transports, but the daemon remains the actual runtime and controller.
+
 ## Why this is the right shape
 
-This arrangement avoids two common mistakes:
+This arrangement avoids three common mistakes:
 
 - treating Continue as a full replacement for the workflow engine
 - embedding workflow orchestration logic inside the editor extension
+- letting Continue own the main conversation loop and then trying to reconstruct daemon-only product features after the fact
 
 The workflow runtime should stay in the backend/daemon layer because it already owns the important policy and execution concerns.
 
@@ -80,6 +139,26 @@ This is the preferred model for a future bidirectional setup. The user may start
 Continue should reuse the existing daemon/HQ bearer-token flow rather than introducing a separate auth system. Requests should carry an Authorization header with a short-lived access token, and the backend should validate that token through the existing auth middleware. The token lifecycle should follow the same login and renewal path used by the daemon/HQ experience so users do not need to manage a second identity model.
 
 For a simple user experience, Continue should expose a small sign-in affordance in its UI, such as a compact entry or button that opens the existing HQ/daemon login flow. When a request fails with 401 or 403 because the session is expired or invalid, the Continue client should show a lightweight modal over the VS Code window prompting the user to sign in again. If renewal succeeds, the client should retry the pending request automatically; if renewal fails, it should stop the current workflow gracefully and guide the user back through the login flow.
+
+## Current Status
+
+The integration is no longer design-only.
+
+Already present in the codebase:
+
+- daemon chat bridge endpoint: `/api/continue/chat`
+- daemon tool bridge endpoint: `/api/continue/tools/<tool>`
+- daemon session-state endpoint: `/api/continue/sessions/<sessionId>`
+- daemon OpenAI-compatible endpoint: `/v1/chat/completions`
+- a working Continue config that currently points at the daemon through an OpenAI-compatible entry
+
+What is not yet complete:
+
+- removal of bridge branding from the Continue model picker
+- generated shadow-model catalog for native-feeling model choices
+- provider-compatible local facades for Anthropic and Gemini
+- robust config sync between daemon-selected port/provider state and Continue model config
+- clear resume-oriented implementation milestones in the design docs
 
 ## Integration pattern
 
@@ -120,6 +199,31 @@ These tools should be implemented on top of the existing coding infrastructure r
 
 This keeps the editor experience lightweight while preserving the richer runtime behavior already built into the platform.
 
+## V1 Definition
+
+V1 should not be defined as full provider-protocol emulation.
+
+V1 should be defined as:
+
+- daemon remains the controller and system of record
+- Continue remains the IDE surface and IDE service layer
+- the visible "SOP bridge" model disappears from the Continue picker
+- Continue shows friendly shadow models for the providers users expect
+- all requests still flow through daemon-owned transport surfaces
+- memory, undo, approvals, workstreams, and provider-owned ReAct loops remain fully daemon-owned
+
+This is the fastest path to a real product outcome.
+
+## V2 Definition
+
+V2 can add true provider-compatible local facades:
+
+- OpenAI-compatible local surface refined beyond the current chat-only entry
+- Anthropic-compatible local messages facade
+- Gemini-compatible local generate/stream facade
+
+That lets Continue think in more native provider terms internally while still keeping the daemon on the hot path.
+
 ## Recommended implementation steps
 
 1. **Expose a local bridge endpoint**
@@ -138,6 +242,35 @@ This keeps the editor experience lightweight while preserving the richer runtime
 5. **Layer editor-specific features on top**
    - diff preview, file selection, workspace context, and apply actions can live in the VS Code/Continue layer.
 
+## Resume Checklist
+
+When resuming this work, inspect these surfaces first:
+
+### Runtime and bridge surfaces
+
+- daemon route wiring in `lib/sop/cmd/sop-daemon/main.go`
+- bridge handlers in `lib/sop/cmd/sop-daemon/rag.go`
+- authenticated backend equivalents in `lib/sop/tools/sopbackend/main.ai.go`
+
+### Current Continue config surface
+
+- `.continuerc.json`
+- `continue-daemon-config.json`
+
+### Design docs
+
+- `docs/CONTINUE_FACADE_ARCHITECTURE.md`
+- `docs/CONTINUE_BRIDGE_IMPLEMENTATION_PLAN.md`
+- `docs/CONTINUE_BRIDGE_API_SPEC.md`
+
+### First implementation questions to answer
+
+- How will shadow models be generated and synced into Continue config?
+- Which provider/model labels should V1 expose by default?
+- How will the selected provider intent be passed to the daemon per request?
+- How will daemon port and auth state be synchronized into Continue?
+- Which bridge-visible tools should be enabled by default in V1?
+
 ## Guardrails
 
 The following principles should govern the integration:
@@ -146,11 +279,12 @@ The following principles should govern the integration:
 - Use AST/tree-sitter and repo indexing as the foundation for symbol-aware tools.
 - Prefer structured tool results over free-form text where possible so Continue can make decisions reliably.
 - Keep the tool surface compact and composable rather than exposing a sprawling, hard-to-manage API.
-
 - Keep orchestration in the shared runtime.
 - Keep approvals, policy decisions, and workflow state explicit.
 - Treat Continue as a front-end surface, not as the source of truth for execution.
 - Preserve a clear boundary between editor UX and backend automation.
+- Do not let Continue become the effective controller of multi-turn workflow state.
+- Do not make daemon-only product features depend on reconstructing state from Continue history.
 
 ## Outcome
 

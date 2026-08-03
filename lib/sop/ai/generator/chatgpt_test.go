@@ -134,6 +134,20 @@ func TestChatGPTReActLoopMode_DefaultsToOwned(t *testing.T) {
 	}
 }
 
+func TestChatGPTProviderRuntimeCapability_AdvertisesOwnedNativeContinuation(t *testing.T) {
+	gen := &chatgpt{model: "gpt-4o", apiKey: "test-key"}
+	cap := gen.ProviderRuntimeCapability()
+	if cap.Provider != "chatgpt" || cap.Model != "gpt-4o" {
+		t.Fatalf("unexpected provider runtime capability identity: %+v", cap)
+	}
+	if cap.LoopMode != ai.ReActLoopModeOwned || !cap.SupportsNativeToolCalls || !cap.SupportsNativeContinuation {
+		t.Fatalf("expected owned native tool/continuation capability, got %+v", cap)
+	}
+	if !cap.SupportsCompactCarryover || !cap.SupportsLiveCarryover || !cap.SupportsMultiToolTurns || !cap.SupportsStreaming {
+		t.Fatalf("expected full chatgpt runtime capabilities, got %+v", cap)
+	}
+}
+
 func TestChatGPTOwnedLoop_ReturnsFallbackResponseWhenIterationBudgetIsExceeded(t *testing.T) {
 	var calls int
 	loop := chatGPTOwnedReActLoop{
@@ -257,6 +271,326 @@ func TestChatGPTCreateResponses_UsesConfiguredAPIURL(t *testing.T) {
 	}
 	if response.ID != "resp_123" {
 		t.Fatalf("expected response to decode, got %#v", response)
+	}
+}
+
+func TestChatGPTCreateResponses_UsesChatCompletionsFallbackForCustomRouter(t *testing.T) {
+	var capturedPath string
+	var captured openAIRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/router/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		capturedPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []struct {
+				Message openAIMessage `json:"message"`
+			}{{Message: openAIMessage{Role: "assistant", Content: "ok"}}},
+		})
+	}))
+	defer server.Close()
+
+	gen := &chatgpt{apiKey: "test-key", model: "gpt-4o", apiURL: server.URL + "/router"}
+	resp, err := gen.createResponses(context.Background(), openAIResponsesRequest{
+		Model:        "gpt-4o",
+		Instructions: "Use tools when needed.",
+		Input:        []openAIResponsesInputItem{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("createResponses() error = %v", err)
+	}
+	if capturedPath != "/router/chat/completions" {
+		t.Fatalf("expected chat-completions fallback path, got %q", capturedPath)
+	}
+	if len(captured.Messages) != 2 || captured.Messages[0].Role != "system" || captured.Messages[1].Role != "user" {
+		t.Fatalf("expected instructions + user messages in chat fallback, got %#v", captured.Messages)
+	}
+	if resp.OutputText != "ok" {
+		t.Fatalf("expected fallback response to convert assistant text, got %#v", resp)
+	}
+}
+
+func TestChatGPTCreateResponsesStream_UsesChatCompletionsFallbackForCustomRouter(t *testing.T) {
+	var capturedPaths []string
+	var captured openAIRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPaths = append(capturedPaths, r.URL.Path)
+		if r.URL.Path == "/router/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []struct {
+				Message openAIMessage `json:"message"`
+			}{{Message: openAIMessage{Role: "assistant", Content: "ok from stream fallback"}}},
+		})
+	}))
+	defer server.Close()
+
+	gen := &chatgpt{apiKey: "test-key", model: "gpt-4o", apiURL: server.URL + "/router"}
+	resp, err := gen.createResponsesStream(context.Background(), openAIResponsesRequest{
+		Model:        "gpt-4o",
+		Instructions: "Use tools when needed.",
+		Input:        []openAIResponsesInputItem{{Role: "user", Content: "hello"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("createResponsesStream() error = %v", err)
+	}
+	if !reflect.DeepEqual(capturedPaths, []string{"/router/responses", "/router/chat/completions"}) {
+		t.Fatalf("expected responses then chat-completions fallback paths, got %#v", capturedPaths)
+	}
+	if len(captured.Messages) != 2 || captured.Messages[0].Role != "system" || captured.Messages[1].Role != "user" {
+		t.Fatalf("expected instructions + user messages in stream fallback, got %#v", captured.Messages)
+	}
+	if resp.OutputText != "ok from stream fallback" {
+		t.Fatalf("expected stream fallback response to convert assistant text, got %#v", resp)
+	}
+}
+
+func TestChatGPTChatCompletionsRequestFromResponses_RoundTripsStatelessContinuationReplay(t *testing.T) {
+	gen := &chatgpt{apiKey: "test-key", model: "gpt-4o", apiURL: "http://router.local/v1"}
+	replayItems := buildChatGPTContinuationInput(openAIResponsesResponse{
+		Output: []openAIResponsesOutputItem{
+			{ID: "msg_1", Type: "message", Role: "assistant", Phase: "commentary", Content: []openAIResponsesContentItem{{Type: "output_text", Text: "Checking the users store."}}},
+			{ID: "rs_1", Type: "reasoning", EncryptedContent: "enc_1"},
+			{ID: "fc_1", Type: "function_call", CallID: "call_1", Name: "lookup_user", Arguments: `{"name":"John"}`},
+		},
+	}, []openAIResponsesInputItem{{Type: "function_call_output", CallID: "call_1", Output: "John is in the users store."}})
+
+	chatReq, err := gen.chatCompletionsRequestFromResponses(openAIResponsesRequest{
+		Model:        "gpt-4o",
+		Instructions: "Use tools when needed.",
+		Input:        replayItems,
+	})
+	if err != nil {
+		t.Fatalf("chatCompletionsRequestFromResponses() error = %v", err)
+	}
+	if len(chatReq.Messages) != 4 {
+		t.Fatalf("expected system + assistant commentary + assistant tool replay + tool output, got %#v", chatReq.Messages)
+	}
+	if chatReq.Messages[0].Role != "system" {
+		t.Fatalf("expected system instructions first, got %#v", chatReq.Messages)
+	}
+	if chatReq.Messages[1].Role != "assistant" || chatReq.Messages[1].Content != "Checking the users store." {
+		t.Fatalf("expected assistant commentary replay, got %#v", chatReq.Messages)
+	}
+	if chatReq.Messages[2].Role != "assistant" || len(chatReq.Messages[2].ToolCalls) != 1 || chatReq.Messages[2].ToolCalls[0].ID != "call_1" {
+		t.Fatalf("expected assistant function-call replay, got %#v", chatReq.Messages)
+	}
+	if chatReq.Messages[3].Role != "tool" || chatReq.Messages[3].ToolCallID != "call_1" || chatReq.Messages[3].Content != "John is in the users store." {
+		t.Fatalf("expected tool output replay, got %#v", chatReq.Messages)
+	}
+}
+
+func TestOpenAIResponsesResponseFromChatCompletion_PreservesMixedTextAndToolCalls(t *testing.T) {
+	resp, err := openAIResponsesResponseFromChatCompletion(openAIResponse{
+		Choices: []struct {
+			Message openAIMessage `json:"message"`
+		}{{Message: openAIMessage{
+			Role:    "assistant",
+			Content: "Checking the users store.",
+			ToolCalls: []openAIChatToolCall{{
+				ID:   "call_1",
+				Type: "function",
+				Function: struct {
+					Name      string `json:"name,omitempty"`
+					Arguments string `json:"arguments,omitempty"`
+				}{Name: "lookup_user", Arguments: `{"name":"John"}`},
+			}},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("openAIResponsesResponseFromChatCompletion() error = %v", err)
+	}
+	if resp.OutputText != "Checking the users store." {
+		t.Fatalf("expected assistant text to become output_text, got %#v", resp)
+	}
+	if len(resp.Output) != 2 {
+		t.Fatalf("expected assistant message plus function call output items, got %#v", resp.Output)
+	}
+	if resp.Output[0].Type != "message" || resp.Output[0].Role != "assistant" {
+		t.Fatalf("expected assistant message item first, got %#v", resp.Output)
+	}
+	if resp.Output[1].Type != "function_call" || resp.Output[1].CallID != "call_1" || resp.Output[1].Name != "lookup_user" {
+		t.Fatalf("expected function call item to round-trip, got %#v", resp.Output)
+	}
+}
+
+func TestChatGPTOwnedReActLoop_UsesChatCompletionsFallbackForCustomRouterAndContinuesServerSide(t *testing.T) {
+	requestCount := 0
+	var secondRequest openAIRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/router/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		requestCount++
+		if r.URL.Path != "/router/chat/completions" {
+			t.Fatalf("expected custom-router fallback to hit chat-completions path, got %q", r.URL.Path)
+		}
+		var req openAIRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch requestCount {
+		case 1:
+			_ = json.NewEncoder(w).Encode(openAIResponse{
+				Choices: []struct {
+					Message openAIMessage `json:"message"`
+				}{{Message: openAIMessage{
+					Role:    "assistant",
+					Content: "Checking the users store.",
+					ToolCalls: []openAIChatToolCall{{
+						ID:   "call_1",
+						Type: "function",
+						Function: struct {
+							Name      string `json:"name,omitempty"`
+							Arguments string `json:"arguments,omitempty"`
+						}{Name: "lookup_user", Arguments: `{"name":"John"}`},
+					}},
+				}}},
+			})
+		case 2:
+			secondRequest = req
+			_ = json.NewEncoder(w).Encode(openAIResponse{
+				Choices: []struct {
+					Message openAIMessage `json:"message"`
+				}{{Message: openAIMessage{Role: "assistant", Content: "John is in the users store."}}},
+			})
+		default:
+			t.Fatalf("unexpected extra fallback request %d", requestCount)
+		}
+	}))
+	defer server.Close()
+
+	gen := &chatgpt{apiKey: "test-key", model: "gpt-4o", apiURL: server.URL + "/router"}
+	loop := gen.ReActLoop()
+	resp, err := loop.Run(context.Background(), ai.ReasoningRequest{
+		SystemPrompt: "Use tools when needed.",
+		UserQuery:    "Find John",
+		Executor: chatGPTToolExecutorStub{
+			tools: []ai.ToolDefinition{{
+				Name:        "lookup_user",
+				Description: "Finds a user",
+				Schema:      `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`,
+			}},
+			executeResults: map[string]string{"lookup_user": `{"tool_result":"John is in the users store."}`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.FinalText != "John is in the users store." {
+		t.Fatalf("expected final output text, got %+v", resp)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected two fallback chat-completions requests, got %d", requestCount)
+	}
+	if len(secondRequest.Messages) < 3 {
+		t.Fatalf("expected replayed continuation messages in second request, got %#v", secondRequest.Messages)
+	}
+	if secondRequest.Messages[1].Role != "assistant" || secondRequest.Messages[1].Content != "Checking the users store." {
+		t.Fatalf("expected assistant commentary replay in second request, got %#v", secondRequest.Messages)
+	}
+	if secondRequest.Messages[2].Role != "assistant" || len(secondRequest.Messages[2].ToolCalls) != 1 || secondRequest.Messages[2].ToolCalls[0].ID != "call_1" {
+		t.Fatalf("expected assistant tool-call replay in second request, got %#v", secondRequest.Messages)
+	}
+	last := secondRequest.Messages[len(secondRequest.Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call_1" || last.Content != "John is in the users store." {
+		t.Fatalf("expected tool output replay in second request, got %#v", secondRequest.Messages)
+	}
+	if resp.CarryoverState == nil || resp.CarryoverState.Mode != ai.CarryoverModeCompact {
+		t.Fatalf("expected compact carryover when chat fallback has no response handle, got %+v", resp.CarryoverState)
+	}
+}
+
+func TestChatGPTUsesDeveloperRoleInChatCompletions_ForOfficialOpenAI(t *testing.T) {
+	gen := &chatgpt{apiKey: "test-key", model: "gpt-5.4"}
+	if !gen.usesDeveloperRoleInChatCompletions() {
+		t.Fatal("expected GPT-5 on official OpenAI base to use developer role")
+	}
+}
+
+func TestChatGPTGenerate_KeepsSystemRoleForCustomRouterChatCompletions(t *testing.T) {
+	var captured openAIRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []struct {
+				Message openAIMessage `json:"message"`
+			}{{Message: openAIMessage{Role: "assistant", Content: "ok"}}},
+		})
+	}))
+	defer server.Close()
+
+	gen := &chatgpt{apiKey: "test-key", model: "gpt-5.4", apiURL: server.URL + "/router"}
+	if _, err := gen.Generate(context.Background(), "hello", ai.GenOptions{SystemPrompt: "system"}); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(captured.Messages) == 0 || captured.Messages[0].Role != "system" {
+		t.Fatalf("expected first message to keep system role for custom router, got %#v", captured.Messages)
+	}
+}
+
+func TestChatGPTGenerate_SendsAndParsesChatCompletionToolCalls(t *testing.T) {
+	var captured openAIRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []struct {
+				Message openAIMessage `json:"message"`
+			}{{Message: openAIMessage{
+				Role:    "assistant",
+				Content: "",
+				ToolCalls: []openAIChatToolCall{{
+					ID:   "call_123",
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name,omitempty"`
+						Arguments string `json:"arguments,omitempty"`
+					}{Name: "lookup_user", Arguments: `{"name":"John"}`},
+				}},
+			}}},
+		})
+	}))
+	defer server.Close()
+
+	gen := &chatgpt{apiKey: "test-key", model: "gpt-4o", apiURL: server.URL + "/v1"}
+	out, err := gen.Generate(context.Background(), "find John", ai.GenOptions{Tools: []ai.ToolDefinition{{
+		Name:        "lookup_user",
+		Description: "Looks up a user",
+		Schema:      `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`,
+	}}})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(captured.Tools) != 1 || captured.Tools[0].Function.Name != "lookup_user" {
+		t.Fatalf("expected chat completions request to include tools, got %#v", captured.Tools)
+	}
+	if len(out.ToolCalls) != 1 || out.ToolCalls[0].Name != "lookup_user" {
+		t.Fatalf("expected tool call to be parsed from chat completions response, got %#v", out.ToolCalls)
+	}
+	if out.ToolCalls[0].NativeID != "call_123" {
+		t.Fatalf("expected native tool call id to be preserved, got %#v", out.ToolCalls[0])
+	}
+	if got := out.ToolCalls[0].Args["name"]; got != "John" {
+		t.Fatalf("expected parsed tool args, got %#v", out.ToolCalls[0].Args)
 	}
 }
 

@@ -122,6 +122,11 @@ func (e *CompatibleReActEngine) Run(ctx context.Context, req ai.ReasoningRequest
 }
 
 func resolveReActLoopMode(req ai.ReasoningRequest) ai.ReActLoopMode {
+	if provider, ok := req.Generator.(ai.ProviderRuntimeCapabilityProvider); ok {
+		if mode := provider.ProviderRuntimeCapability().LoopMode; mode != "" {
+			return mode
+		}
+	}
 	if provider, ok := req.Generator.(ai.ReActLoopModeProvider); ok {
 		if mode := provider.ReActLoopMode(); mode != "" {
 			return mode
