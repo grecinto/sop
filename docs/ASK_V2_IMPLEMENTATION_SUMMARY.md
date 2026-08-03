@@ -16,6 +16,7 @@ The current implementation is a session-oriented Ask pipeline with:
 - structured clarification state
 - structured retry guidance
 - a shared session-cognition snapshot
+- capability-level extension points for editor-native worker delegation
 
 The design is intentionally LAO-first: the model remains the primary orchestrator, while the system provides explicit policy surfaces for recovery, escalation, and guardrails.
 
@@ -45,6 +46,14 @@ A lightweight cognitive layer now collects turn state, memory signals, and polic
 Relevant implementation:
 - [lib/sop/ai/agent/cognitive_layer.go](lib/sop/ai/agent/cognitive_layer.go)
 
+### IDE worker wrapper capability
+Ask now also exposes a generic `ide_worker` capability that can inspect session-bound editor context and delegate one bounded coding subtask to a daemon-injected backend. Continue is currently the first backend implementation, but the capability is intentionally generic so the Ask pipeline does not become Continue-specific.
+
+Relevant implementation:
+- [lib/sop/ai/agent/domains/ideworker/capability.go](lib/sop/ai/agent/domains/ideworker/capability.go)
+- [lib/sop/ai/agent/copilot.go](lib/sop/ai/agent/copilot.go)
+- [lib/sop/cmd/sop-daemon/ide_worker_bridge.go](lib/sop/cmd/sop-daemon/ide_worker_bridge.go)
+
 ---
 
 ## Current validation
@@ -52,10 +61,10 @@ Relevant implementation:
 The current implementation was verified with:
 
 ```bash
-go test ./lib/sop/ai/agent/...
+go test ./lib/sop/ai/agent ./lib/sop/cmd/sop-daemon
 ```
 
-That suite passed successfully and covers the new clarification pause behavior, cognitive-state handling, and Ask routing integration.
+That suite passed successfully and covers the clarification pause behavior, cognitive-state handling, Ask routing integration, and the new daemon-backed IDE worker capability path.
 
 ---
 
@@ -68,3 +77,4 @@ The system is no longer described best as a simple “V2 pipeline with a feature
 - ReAct stays provider-native
 - state handoff is explicit and structured
 - a lightweight cognitive layer supports future policy growth
+- editor-native delegation can be added as a passive capability without creating a second controller

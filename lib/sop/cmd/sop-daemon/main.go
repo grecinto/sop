@@ -696,37 +696,7 @@ func main() {
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))
 	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff)))))
 
-	continueChatHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ragSvc == nil {
-			respondJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "official RAG is not configured"})
-			return
-		}
-		ragSvc.handleContinueChat(w, r)
-	})
-	mux.HandleFunc("/api/continue/chat", handleOptionsAndCORS(withRateLimit(localRegistry, continueChatHandler)))
-
-	openAICompatibleChatHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ragSvc == nil {
-			respondJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "official RAG is not configured"})
-			return
-		}
-		ragSvc.handleOpenAICompatibleChat(w, r)
-	})
-	mux.HandleFunc("/v1/chat/completions", handleOptionsAndCORS(withRateLimit(localRegistry, openAICompatibleChatHandler)))
-
-	continueToolsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ragSvc == nil {
-			respondJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "official RAG is not configured"})
-			return
-		}
-		toolName := strings.TrimPrefix(r.URL.Path, "/api/continue/tools/")
-		if toolName == "" {
-			respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "tool name is required"})
-			return
-		}
-		ragSvc.handleContinueTool(w, r, toolName)
-	})
-	mux.HandleFunc("/api/continue/tools/", handleOptionsAndCORS(withRateLimit(localRegistry, continueToolsHandler)))
+	ragSvc.registerBridgeRoutes(mux, localRegistry)
 
 	// IMPORTANT: /api/ask (daemon) vs /api/ai/chat (HQ) - Separate by Design
 	//

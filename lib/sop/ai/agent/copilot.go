@@ -25,6 +25,7 @@ import (
 	"github.com/sharedcode/sop/ai/agent/classification"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/ai/agent/domains/desktop"
+	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 	"github.com/sharedcode/sop/ai/agent/domains/spaces"
 	"github.com/sharedcode/sop/ai/agent/domains/stores"
 	multistepplanner "github.com/sharedcode/sop/ai/agent/multistepplanner"
@@ -1657,9 +1658,10 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	desktopCap := desktop.NewCapability()
 	desktopCap.SetCommandExecutor(a.toolExecuteLocalCommand)    // For LLM tool calls
 	desktopCap.SetRawCommandExecutor(a.rawLocalCommandExecutor) // For direct /c commands
+	ideWorkerCap := ideworker.NewCapability()
 
 	// Build capability list dynamically based on feature flags
-	caps := []capabilities.Capability{desktopCap}
+	caps := []capabilities.Capability{desktopCap, ideWorkerCap}
 
 	// Stores feature disabled by default for v1 (AI Copilot focus)
 	if StoresFeatureEnabled() {
@@ -2489,6 +2491,19 @@ func (a *CopilotAgent) InjectShellSessionManager(mgr desktop.ShellSessionManager
 	for _, cap := range a.capabilityRegistry.ListAll() {
 		if desktopCap, ok := cap.(*desktop.Capability); ok {
 			desktopCap.SetShellSessionManager(mgr)
+			return
+		}
+	}
+}
+
+// InjectIDEWorkerBackend injects an IDE worker backend into the IDE worker capability.
+func (a *CopilotAgent) InjectIDEWorkerBackend(backend ideworker.Backend) {
+	if a == nil || a.capabilityRegistry == nil {
+		return
+	}
+	for _, cap := range a.capabilityRegistry.ListAll() {
+		if ideCap, ok := cap.(*ideworker.Capability); ok {
+			ideCap.SetBackend(backend)
 			return
 		}
 	}

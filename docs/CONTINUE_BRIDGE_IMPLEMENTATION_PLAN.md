@@ -273,7 +273,7 @@ V2 can add:
 
 - provider-compatible local facades for Anthropic and Gemini
 - richer Continue config synchronization and auto-repair
-- daemon-to-Continue delegated coding subtasks with stronger editor-service contracts
+- stronger daemon-to-IDE delegated coding contracts beyond the current thin `ide_worker` wrapper
 
 ## Implementation sequence
 
@@ -285,14 +285,22 @@ For a concrete endpoint and payload contract, see [CONTINUE_BRIDGE_API_SPEC.md](
 2. Chat requests can be forwarded into the daemon Ask path.
 3. Initial bridge tool set exists.
 4. OpenAI-compatible chat surface exists.
+5. Worker registration, worker state, and delegated execution endpoints exist.
+6. Continue worker delegation is capability-aware rather than session-presence-only.
+7. Ask now exposes a generic `ide_worker` capability backed by a daemon-injected backend seam rather than a Continue-specific implementation.
+8. Continue editor context is copied into structured `SessionPayload.Variables` for Ask-side consumption.
+9. Planning, execution, and review phases now explicitly steer `inspect_ide_worker`, with planning limited to context gathering and execution/review allowing one bounded `delegate_ide_coding_task` subtask while keeping Ask as the controller.
+10. The OpenAI-compatible Continue chat path now infers structured editor context from prompt-shaped edit/apply requests when explicit fields are absent.
+11. The default daemon wiring now composes multiple `ide_worker` backends: Continue remains the editor-backed execution path, and a daemon-shell backend proves the abstraction is not Continue-specific while surfacing shell-session presence through the same interface.
+12. Continue/OpenAI-compatible model selection is now propagated explicitly into `SessionPayload.Variables` as `llm_provider` and `llm_model`, alongside the existing config/context override path.
 
 ### Remaining for V1
 
 1. Replace bridge-branded Continue model entries with friendly shadow models.
-2. Pass selected provider/model intent explicitly from Continue into daemon requests.
-3. Sync daemon port and auth state into Continue config.
-4. Validate that memory, undo, approvals, and workflow continuity remain daemon-owned in the Continue flow.
-5. Tighten bridge tool defaults and error handling for daily use.
+2. Sync daemon port and auth state into Continue config.
+3. Validate that memory, undo, approvals, and workflow continuity remain daemon-owned in the Continue flow.
+4. Tighten bridge tool defaults and error handling for daily use.
+5. Refine when additional phases beyond planning/execution/review should intentionally steer toward `inspect_ide_worker` and `delegate_ide_coding_task`.
 
 ### Remaining for V2
 
@@ -321,7 +329,11 @@ When resuming implementation, start here:
 ### Code surfaces
 
 - `lib/sop/cmd/sop-daemon/main.go`
+- `lib/sop/cmd/sop-daemon/client_bridge.go`
+- `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
 - `lib/sop/cmd/sop-daemon/rag.go`
+- `lib/sop/ai/agent/domains/ideworker/capability.go`
+- `lib/sop/ai/agent/copilot.go`
 - `lib/sop/tools/sopbackend/main.ai.go`
 - `.continuerc.json`
 - `continue-daemon-config.json`
@@ -330,15 +342,18 @@ When resuming implementation, start here:
 
 - current bridge flow still works end-to-end
 - OpenAI-compatible local model entry still points at daemon
-- selected provider/model intent can be surfaced in daemon request context
+- prompt-shaped OpenAI-compatible edit/apply requests still recover `selected_text`, `active_file`, and `open_files` into Ask payload variables
+- selected provider/model intent still reaches both daemon request context and explicit Ask payload variables
 - bridge sessions preserve daemon-owned state rather than Continue-owned state
+- `ide_worker` is still registered in Ask and injected with the daemon backend
+- Continue worker proxying still requires a capability match before delegation
 
 ## TODO tracker
 
 - [ ] Replace visible `SOP Daemon Bridge` model entry with shadow-model entries for V1.
 - [ ] Add config-sync logic so Continue model entries track daemon-selected port and runtime state.
-- [ ] Pass provider/model intent per request from Continue to daemon.
 - [ ] Validate daemon-owned undo, memory, approvals, and workflow continuity through the Continue flow.
+- [ ] Expand deliberate `inspect_ide_worker` and `delegate_ide_coding_task` steering beyond the current execution/review phases where it improves outcomes.
 - [ ] Add daemon port configurability to the UI install/setup flow so users can choose an available port.
 - [ ] Persist the user-selected daemon port as a single source of truth (settings/state).
 - [ ] On VSIX activation, read the persisted daemon port and update Continue model `apiBase` entries to route through that port.

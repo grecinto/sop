@@ -201,8 +201,10 @@ type continueToolRequest struct {
 }
 
 type localRAGService struct {
-	service       ai.Agent[map[string]any]
-	shellSessions *ptyShellSessionManager
+	service         ai.Agent[map[string]any]
+	shellSessions   *ptyShellSessionManager
+	continueState   *continueBridgeSessionStore
+	continueWorkers *continueBridgeWorkerStore
 }
 
 var globalShellSessionManager = newPTYShellSessionManager()
@@ -223,7 +225,9 @@ func newLocalRAGService(configPath string) (*localRAGService, error) {
 
 	if svc, err := autoProvisionSharedCopilotService(context.Background()); err == nil {
 		log.Printf("daemon newLocalRAGService: using auto-provisioned shared service")
-		return &localRAGService{service: svc, shellSessions: newPTYShellSessionManager()}, nil
+		localService := &localRAGService{service: svc, shellSessions: newPTYShellSessionManager(), continueState: newContinueBridgeSessionStore(), continueWorkers: newContinueBridgeWorkerStore()}
+		injectIDEWorkerBackend(localService.service, newDefaultIDEWorkerBackend(localService))
+		return localService, nil
 	} else {
 		log.Printf("daemon newLocalRAGService: shared RAG runtime unavailable: %v", err)
 		return nil, fmt.Errorf("shared RAG runtime unavailable: %w", err)
@@ -317,158 +321,244 @@ func injectShellSessionManager(agentSvc ai.Agent[map[string]any]) {
 }
 
 func (s *localRAGService) handleOpenAICompatibleChat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	s.handleBridgeChat(w, r, openAICompatibleBridgeTransport{})
+}
+
+func (s *localRAGService) askBridgeChat(baseCtx context.Context, req bridgeAskRequest, eventStreamer func(string, any)) (string, error) {
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	if s == nil || s.service == nil {
+		return "", fmt.Errorf("local RAG service is not initialized")
+	}
+	ctx := baseCtx
+	cfg := ai.NewConfigMap()
+	variables := cloneBridgeVariables(req.Variables)
+	if req.ProviderName != "" {
+		variables["llm_provider"] = req.ProviderName
+	}
+	if req.ModelName != "" {
+		variables["llm_model"] = req.ModelName
+	}
+	payload := &ai.SessionPayload{CurrentUserQuery: req.UserPrompt, SessionID: req.SessionID, UserID: req.SessionID, Variables: variables}
+	cfg.Set("payload", payload)
+	if req.ProviderName != "" {
+		providerDetails := &agent.ProviderDetails{Provider: req.ProviderName, Model: req.ModelName}
+		cfg.Set("provider_details", providerDetails)
+		ctx = context.WithValue(ctx, ai.CtxKeyProvider, req.ProviderName+":"+req.ModelName)
+	}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+	if eventStreamer != nil {
+		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, eventStreamer)
+	}
+	return s.service.Ask(ctx, req.FullPrompt, cfg)
+}
+
+func cloneBridgeVariables(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(src))
+	for key, value := range src {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+type openAICompatibleSSEWriter struct {
+	w              http.ResponseWriter
+	model          string
+	responseID     string
+	created        int64
+	started        bool
+	streamedText   strings.Builder
+	streamedAny    bool
+	streamFinished bool
+}
+
+func newOpenAICompatibleSSEWriter(w http.ResponseWriter, model string) *openAICompatibleSSEWriter {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	return &openAICompatibleSSEWriter{
+		w:          w,
+		model:      model,
+		responseID: "chatcmpl-sop-stream-1",
+		created:    time.Now().Unix(),
+	}
+}
+
+func (sse *openAICompatibleSSEWriter) writeChunk(delta map[string]any, finishReason any) {
+	if sse == nil || sse.w == nil || sse.streamFinished {
 		return
 	}
-
-	var req struct {
-		Model    string `json:"model"`
-		Messages []struct {
-			Role    string `json:"role"`
-			Content any    `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
-		return
-	}
-
-	var userPrompt string
-	for _, msg := range req.Messages {
-		if strings.EqualFold(msg.Role, "user") {
-			switch v := msg.Content.(type) {
-			case string:
-				userPrompt = v
-			case []any:
-				parts := make([]string, 0, len(v))
-				for _, part := range v {
-					if partStr, ok := part.(string); ok {
-						parts = append(parts, partStr)
-					}
-				}
-				userPrompt = strings.Join(parts, "\n")
-			}
-			break
-		}
-	}
-	if strings.TrimSpace(userPrompt) == "" {
-		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "user message is required"})
-		return
-	}
-
-	answer := "Hello from the local SOP runtime. I received your request and I’m ready to help."
-	if s != nil && s.service != nil {
-		ctx := context.Background()
-		cfg := ai.NewConfigMap()
-		payload := &ai.SessionPayload{CurrentUserQuery: userPrompt, SessionID: "openai-compatible", UserID: "openai-compatible"}
-		cfg.Set("payload", payload)
-		ctx = context.WithValue(ctx, "session_payload", payload)
-		ctx = sopbackend.InjectSharedRuntimeContext(ctx, func(eventType string, payload any) {}, w)
-		ctx = context.WithValue(ctx, ai.CtxKeyWriter, sopbackend.NewDirectFlushingWriter(w))
-		if resp, err := s.service.Ask(ctx, userPrompt, cfg); err == nil && strings.TrimSpace(resp) != "" {
-			answer = resp
-		}
-	}
-
-	response := map[string]any{
-		"id":      "chatcmpl-sop-1",
-		"object":  "chat.completion",
-		"created": time.Now().Unix(),
-		"model":   req.Model,
+	chunk := map[string]any{
+		"id":      sse.responseID,
+		"object":  "chat.completion.chunk",
+		"created": sse.created,
+		"model":   sse.model,
 		"choices": []map[string]any{{
-			"index": 0,
-			"message": map[string]any{
-				"role":    "assistant",
-				"content": answer,
-			},
-			"finish_reason": "stop",
+			"index":         0,
+			"delta":         delta,
+			"finish_reason": finishReason,
 		}},
-		"usage": map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
 	}
-	respondJSON(w, http.StatusOK, response)
+	bytes, err := json.Marshal(chunk)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintf(sse.w, "data: %s\n\n", bytes)
+	if f, ok := sse.w.(http.Flusher); ok {
+		f.Flush()
+	}
+	sse.streamedAny = true
+}
+
+func (sse *openAICompatibleSSEWriter) ensureStarted() {
+	if sse == nil || sse.started {
+		return
+	}
+	sse.writeChunk(map[string]any{"role": "assistant"}, nil)
+	sse.started = true
+}
+
+func (sse *openAICompatibleSSEWriter) writeContent(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	sse.ensureStarted()
+	sse.writeChunk(map[string]any{"content": text}, nil)
+	if sse.streamedText.Len() < 8192 {
+		sse.streamedText.WriteString(text)
+	}
+}
+
+func (sse *openAICompatibleSSEWriter) finish(finalAnswer string) {
+	if sse == nil || sse.streamFinished {
+		return
+	}
+	trimmedFinal := strings.TrimSpace(finalAnswer)
+	if trimmedFinal != "" {
+		streamed := strings.TrimSpace(sse.streamedText.String())
+		if streamed == "" || !strings.Contains(streamed, trimmedFinal) {
+			sse.writeContent(trimmedFinal)
+		}
+	}
+	sse.ensureStarted()
+	sse.writeChunk(map[string]any{}, "stop")
+	_, _ = fmt.Fprintf(sse.w, "data: [DONE]\n\n")
+	if f, ok := sse.w.(http.Flusher); ok {
+		f.Flush()
+	}
+	sse.streamFinished = true
+}
+
+func (s *localRAGService) handleOpenAICompatibleChatStream(w http.ResponseWriter, model, sessionID, userPrompt, fullPrompt, providerName, modelName string) {
+	sse := newOpenAICompatibleSSEWriter(w, model)
+	eventStreamer := func(eventType string, payload any) {
+		switch eventType {
+		case ai.ReasoningEventAssistantMessage:
+			if message, ok := payload.(map[string]any); ok {
+				if source, _ := message["source"].(string); strings.EqualFold(strings.TrimSpace(source), "reasoning_summary") {
+					return
+				}
+				if text, ok := message["text"].(string); ok {
+					sse.writeContent(text)
+				}
+			}
+		case "content":
+			sse.writeContent(fmt.Sprintf("%v", payload))
+		case "progress":
+			sse.writeContent(fmt.Sprintf("Progress: %v", payload))
+		case ai.ReasoningEventToolCall:
+			if event, ok := payload.(map[string]any); ok {
+				tool, _ := event["tool"].(string)
+				if strings.TrimSpace(tool) != "" {
+					sse.writeContent(fmt.Sprintf("Calling tool: %s", strings.TrimSpace(tool)))
+				}
+			}
+		case ai.ReasoningEventToolResult:
+			if event, ok := payload.(map[string]any); ok {
+				if summary := summarizeOpenAICompatibleToolResult(event); summary != "" {
+					sse.writeContent(summary)
+				}
+			}
+		case ai.ReasoningEventToolError:
+			if event, ok := payload.(map[string]any); ok {
+				tool, _ := event["tool"].(string)
+				errText, _ := event["error"].(string)
+				if strings.TrimSpace(tool) != "" || strings.TrimSpace(errText) != "" {
+					sse.writeContent(strings.TrimSpace(fmt.Sprintf("Tool error (%s): %s", strings.TrimSpace(tool), strings.TrimSpace(errText))))
+				}
+			}
+		case "terminal_command":
+			switch typed := payload.(type) {
+			case map[string]any:
+				if text, ok := typed["text"].(string); ok && strings.TrimSpace(text) != "" {
+					sse.writeContent(text)
+				}
+			case string:
+				if strings.TrimSpace(typed) != "" {
+					sse.writeContent(typed)
+				}
+			}
+		case "error":
+			sse.writeContent(fmt.Sprintf("Error: %v", payload))
+		}
+	}
+	answer, err := s.askBridgeChat(context.Background(), bridgeAskRequest{
+		SessionID:    sessionID,
+		UserPrompt:   userPrompt,
+		FullPrompt:   fullPrompt,
+		ProviderName: providerName,
+		ModelName:    modelName,
+	}, eventStreamer)
+	if err != nil {
+		sse.finish("Error: " + err.Error())
+		return
+	}
+	sse.finish(answer)
+}
+
+func summarizeOpenAICompatibleToolResult(event map[string]any) string {
+	tool := strings.TrimSpace(fmt.Sprintf("%v", event["tool"]))
+	if tool == "" {
+		return ""
+	}
+
+	result := strings.TrimSpace(fmt.Sprintf("%v", event["result"]))
+	if result == "" {
+		return ""
+	}
+
+	args, _ := event["args"].(map[string]any)
+	facts := ai.SummarizeSuccessfulToolResult(ai.ReActToolResult{
+		Name:   tool,
+		Args:   args,
+		Result: result,
+	})
+	if len(facts) == 0 {
+		return ""
+	}
+
+	trimmed := make([]string, 0, len(facts))
+	for _, fact := range facts {
+		fact = strings.TrimSpace(fact)
+		if fact != "" {
+			trimmed = append(trimmed, fact)
+		}
+	}
+	return strings.Join(trimmed, "\n")
 }
 
 func (s *localRAGService) handleContinueChat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req continueChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
-		return
-	}
-
-	if strings.TrimSpace(req.Message) == "" {
-		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "message cannot be empty"})
-		return
-	}
-
-	sendEvent, _ := sopbackend.SetupStream(w)
-	if strings.TrimSpace(req.SessionID) == "" {
-		req.SessionID = "continue-bridge"
-	}
-
-	sendEvent("progress", "Preparing local workspace context")
-	sendEvent("content", "I’m connecting your request to the local SOP runtime.")
-
-	askReq := AskRequest{
-		Query: req.Message,
-		HQ: struct {
-			BaseURL   string `json:"base_url"`
-			Port      string `json:"port,omitempty"`
-			UserID    string `json:"user_id"`
-			SessionID string `json:"session_id"`
-		}{
-			SessionID: req.SessionID,
-			UserID:    req.SessionID,
-		},
-	}
-	if strings.TrimSpace(req.Workspace.Root) != "" {
-		askReq.Query += fmt.Sprintf("\n[workspace_root=%s]", req.Workspace.Root)
-	}
-	if strings.TrimSpace(req.Workspace.Active) != "" {
-		askReq.Query += fmt.Sprintf("\n[active_file=%s]", req.Workspace.Active)
-	}
-	if strings.TrimSpace(req.Context.SelectedText) != "" {
-		askReq.Query += fmt.Sprintf("\n[selected_text=%s]", req.Context.SelectedText)
-	}
-	if len(req.Context.OpenFiles) > 0 {
-		askReq.Query += fmt.Sprintf("\n[open_files=%s]", strings.Join(req.Context.OpenFiles, ","))
-	}
-
-	ctx := context.Background()
-	payload := &ai.SessionPayload{
-		CurrentUserQuery: req.Message,
-		SessionID:        req.SessionID,
-		UserID:           req.SessionID,
-		Variables:        map[string]any{"continue_bridge": true, "workspace_root": req.Workspace.Root},
-	}
-	cfg := ai.NewConfigMap()
-	cfg.Set("payload", payload)
-	ctx = context.WithValue(ctx, "session_payload", payload)
-	ctx = sopbackend.InjectSharedRuntimeContext(ctx, sendEvent, w)
-	ctx = context.WithValue(ctx, ai.CtxKeyWriter, sopbackend.NewDirectFlushingWriter(w))
-
-	if s == nil || s.service == nil {
-		sendEvent("error", "local RAG service is not initialized")
-		sendEvent("done", nil)
-		return
-	}
-
-	answer, err := s.service.Ask(ctx, askReq.Query, cfg)
-	if err != nil {
-		sendEvent("error", err.Error())
-		sendEvent("done", nil)
-		return
-	}
-
-	if strings.TrimSpace(answer) != "" {
-		sendEvent("content", answer)
-	}
-	sendEvent("done", nil)
+	s.handleBridgeChat(w, r, continueBridgeTransport{})
 }
 
 func (s *localRAGService) handleContinueTool(w http.ResponseWriter, r *http.Request, toolName string) {
@@ -483,27 +573,14 @@ func (s *localRAGService) handleContinueTool(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var result any
-	var err error
-	switch toolName {
-	case "repo.read_file":
-		result, err = readContinueFile(req.Path, req.StartLine, req.EndLine)
-	case "repo.search_code":
-		result, err = searchContinueCode(req.Query, req.Path, req.Limit)
-	case "repo.list_files":
-		result, err = listContinueFiles(req.Path, req.Recursive)
-	case "code.apply_patch":
-		result, err = applyContinuePatch(req.Path, req.Selection)
-	case "code.preview_patch":
-		result, err = previewContinuePatch(req.Path, req.Selection)
-	case "test.run":
-		result, err = runContinueTest(req.Query, req.SessionID)
-	case "agent.ask":
-		result, err = s.delegateContinueAgent(req.Query, req.SessionID)
-	default:
+	handlers := s.continueToolHandlers()
+	handler, ok := handlers[toolName]
+	if !ok {
 		respondJSON(w, http.StatusNotImplemented, map[string]any{"ok": false, "error": "unsupported tool"})
 		return
 	}
+
+	result, err := handler(req)
 	if err != nil {
 		respondJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return

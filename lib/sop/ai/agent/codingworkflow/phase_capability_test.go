@@ -128,6 +128,69 @@ func TestExecutionPhaseBuildContext_UsesGeneralValidationGuidance(t *testing.T) 
 	}
 }
 
+func TestExecutionPhaseBuildContext_MentionsIDEWorkerDelegationPath(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewExecutionPhaseCapability(infra)
+
+	result := cap.BuildContext("apply a small change", capabilities.RoutingState{})
+	for _, check := range []string{"inspect_ide_worker", "delegate_ide_coding_task", "Ask as the controller"} {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected execution context to include %q, got %q", check, result)
+		}
+	}
+}
+
+func TestExecutionPhaseBuildInstructions_MentionsIDEWorkerDelegationPath(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewExecutionPhaseCapability(infra)
+
+	result := cap.BuildInstructions("apply a small change", capabilities.RoutingState{})
+	for _, check := range []string{"inspect_ide_worker", "delegate_ide_coding_task", "Ask as the controller"} {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected execution instructions to include %q, got %q", check, result)
+		}
+	}
+}
+
+func TestReviewPhaseBuildInstructions_MentionsIDEWorkerDelegationPath(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewReviewPhaseCapability(infra)
+
+	result := cap.BuildInstructions("review the applied patch", capabilities.RoutingState{})
+	for _, check := range []string{"inspect_ide_worker", "delegate_ide_coding_task"} {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected review instructions to include %q, got %q", check, result)
+		}
+	}
+}
+
+func TestPlanningPhaseBuildContext_MentionsIDEWorkerInspectionOnly(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	result := cap.BuildContext("plan a refactor", capabilities.RoutingState{})
+	for _, check := range []string{"inspect_ide_worker", "Keep Ask as the controller", "delegate implementation work yet"} {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected planning context to include %q, got %q", check, result)
+		}
+	}
+	if !strings.Contains(result, "delegate_ide_coding_task") {
+		t.Fatalf("expected planning context to explicitly constrain delegation, got %q", result)
+	}
+}
+
+func TestPlanningPhaseBuildInstructions_MentionsIDEWorkerInspectionOnly(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	result := cap.BuildInstructions("plan a refactor", capabilities.RoutingState{})
+	for _, check := range []string{"inspect_ide_worker", "delegate_ide_coding_task", "Ask as the controller"} {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected planning instructions to include %q, got %q", check, result)
+		}
+	}
+}
+
 func TestPlanningPhaseCapabilityExposesToolsAndPersistsArtifact(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewPlanningPhaseCapability(infra)

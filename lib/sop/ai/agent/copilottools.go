@@ -225,6 +225,9 @@ func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
 			if !shouldRegisterCapabilityTool(capability, toolName) {
 				continue
 			}
+			if _, exists := a.registry.Get(toolName); exists {
+				continue
+			}
 
 			handler := func(ctx context.Context, args map[string]any) (string, error) {
 				// Extract routing state from context if available

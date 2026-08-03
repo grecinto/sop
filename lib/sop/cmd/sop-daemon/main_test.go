@@ -20,6 +20,7 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
+	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 	sopfs "github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -151,6 +152,37 @@ func TestContinueChatHandlerStreamsProgressAndContent(t *testing.T) {
 	}
 }
 
+func TestContinueChatHandler_InjectsWorkflowProfileIntoAskQuery(t *testing.T) {
+	agent := &recordingQueryAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"sess-1","mode":"plan","message":"Implement a feature flag rollout for payments","workspace":{"root":".","active_file":"payments/service.go"},"context":{"open_files":["payments/service.go","payments/service_test.go"]}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.queries) != 1 {
+		t.Fatalf("expected one ask query, got %d", len(agent.queries))
+	}
+	query := agent.queries[0]
+	checks := []string{
+		"[continue_mode=plan]",
+		"[coding_workflow_profile=feature_implementation]",
+		"[coding_task_type=implementation]",
+		"[recommended_phase_plan=investigation -> planning -> execution -> review -> delivery]",
+		"[requested_phase=planning]",
+		"[active_file=payments/service.go]",
+	}
+	for _, check := range checks {
+		if !strings.Contains(query, check) {
+			t.Fatalf("expected continue workflow context %q in query, got %q", check, query)
+		}
+	}
+}
+
 func TestOpenAICompatibleChatHandlerReturnsStructuredCompletion(t *testing.T) {
 	service := &localRAGService{service: &recordingQueryAgent{}}
 
@@ -169,6 +201,326 @@ func TestOpenAICompatibleChatHandlerReturnsStructuredCompletion(t *testing.T) {
 	}
 	if !strings.Contains(body, "\"role\":\"assistant\"") {
 		t.Fatalf("expected assistant message in body, got %q", body)
+	}
+}
+
+func TestOpenAICompatibleChatHandler_PreservesSystemAndHistoryInAskQuery(t *testing.T) {
+	agent := &recordingQueryAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"daemon-bridge",
+		"messages":[
+			{"role":"system","content":"You are a code analysis assistant"},
+			{"role":"user","content":"Summarize the repo"},
+			{"role":"assistant","content":"I will inspect the codebase."},
+			{"role":"user","content":[{"type":"text","text":"Analyze the code base"}]}
+		]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.queries) != 1 {
+		t.Fatalf("expected one ask query, got %d", len(agent.queries))
+	}
+	query := agent.queries[0]
+	if !strings.Contains(query, "Continue system instructions:") || !strings.Contains(query, "You are a code analysis assistant") {
+		t.Fatalf("expected system instructions to be preserved, got %q", query)
+	}
+	if !strings.Contains(query, "Continue conversation history:") || !strings.Contains(query, "User: Summarize the repo") || !strings.Contains(query, "Assistant: I will inspect the codebase.") {
+		t.Fatalf("expected prior conversation history to be preserved, got %q", query)
+	}
+	if !strings.Contains(query, "Current Continue request:") || !strings.Contains(query, "Analyze the code base") {
+		t.Fatalf("expected latest user request to lead the prompt, got %q", query)
+	}
+}
+
+func TestOpenAICompatibleChatHandler_InjectsEditWorkflowContextIntoAskQuery(t *testing.T) {
+	agent := &recordingQueryAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
+		"\t\"model\":\"gpt-5.4\",\n"+
+		"\t\"messages\":[\n"+
+		"\t\t{\"role\":\"user\",\"content\":\"```go\\nfunc processPayment(p Payment) error {\\n    return nil\\n}\\n```\\n\\nYou are an expert programmer. You will rewrite the above code to do the following:\\n\\nRefactor the function to extract validation into a helper.\\n\\nLeave existing comments in place unless changes require modifying them. Output only a code block with the rewritten code:\"}\n"+
+		"\t]\n"+
+		"}"))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.queries) != 1 {
+		t.Fatalf("expected one ask query, got %d", len(agent.queries))
+	}
+	query := agent.queries[0]
+	checks := []string{
+		"Continue workflow context:",
+		"[continue_mode=edit]",
+		"[coding_workflow_profile=refactoring]",
+		"[coding_task_type=refactoring]",
+		"[requested_phase=execution]",
+	}
+	for _, check := range checks {
+		if !strings.Contains(query, check) {
+			t.Fatalf("expected openai-compatible edit workflow context %q in query, got %q", check, query)
+		}
+	}
+}
+
+func TestOpenAICompatibleChatHandler_ExtractsSelectedTextIntoPayloadFromEditPrompt(t *testing.T) {
+	agent := &recordingAskAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
+		"\t\"model\":\"gpt-5.4\",\n"+
+		"\t\"messages\":[\n"+
+		"\t\t{\"role\":\"user\",\"content\":\"```go\\nfunc processPayment(p Payment) error {\\n    return nil\\n}\\n```\\n\\nYou are an expert programmer. You will rewrite the above code to do the following:\\n\\nRefactor the function to extract validation into a helper.\\n\\nLeave existing comments in place unless changes require modifying them. Output only a code block with the rewritten code:\"}\n"+
+		"]\n"+
+		"}"))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	val, ok := agent.calls[0].cfg.Get("payload")
+	if !ok {
+		t.Fatal("expected payload in agent config")
+	}
+	payload, ok := val.(*ai.SessionPayload)
+	if !ok || payload == nil {
+		t.Fatalf("expected payload of type *ai.SessionPayload, got %T", val)
+	}
+	if payload.Variables["continue_mode"] != "edit" {
+		t.Fatalf("expected continue_mode=edit, got %#v", payload.Variables)
+	}
+	selectedText, _ := payload.Variables["selected_text"].(string)
+	if !strings.Contains(selectedText, "func processPayment(p Payment) error") {
+		t.Fatalf("expected selected_text to include original code, got %q", selectedText)
+	}
+}
+
+func TestOpenAICompatibleChatHandler_InjectsApplyWorkflowContextIntoAskQuery(t *testing.T) {
+	agent := &recordingQueryAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
+		"\t\"model\":\"gpt-5.4\",\n"+
+		"\t\"messages\":[\n"+
+		"\t\t{\"role\":\"user\",\"content\":\"ORIGINAL CODE:\\n```\\nfunc processPayment() error {\\n    return nil\\n}\\n```\\n\\nSUGGESTED EDIT:\\n```\\nfunc processPayment() error {\\n    if err := validatePayment(); err != nil {\\n        return err\\n    }\\n    return nil\\n}\\n```\\n\\nApply the SUGGESTED EDIT to the ORIGINAL CODE. Output the complete modified file.\\n- Output ONLY code. Do NOT explain, summarize, or describe changes.\\n- Leave existing comments in place unless changes require modifying them.\\n- Preserve all unchanged code exactly as-is.\"}\n"+
+		"\t]\n"+
+		"}"))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.queries) != 1 {
+		t.Fatalf("expected one ask query, got %d", len(agent.queries))
+	}
+	query := agent.queries[0]
+	checks := []string{
+		"Continue workflow context:",
+		"[continue_mode=apply]",
+		"[requested_phase=execution]",
+	}
+	for _, check := range checks {
+		if !strings.Contains(query, check) {
+			t.Fatalf("expected openai-compatible apply workflow context %q in query, got %q", check, query)
+		}
+	}
+}
+
+func TestOpenAICompatibleChatHandler_ExtractsFileContextIntoPayloadFromPromptHistory(t *testing.T) {
+	agent := &recordingAskAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
+		"\t\"model\":\"gpt-5.4\",\n"+
+		"\t\"messages\":[\n"+
+		"\t\t{\"role\":\"user\",\"content\":\"The following file is currently open. Don't reference it if it's not relevant to the user's message:\\n\\n```payments/service.go\\nfunc processPayment() error {\\n    return nil\\n}\\n```\"},\n"+
+		"\t\t{\"role\":\"user\",\"content\":\"```payments/service_test.go\\nfunc TestProcessPayment(t *testing.T) {}\\n```\"},\n"+
+		"\t\t{\"role\":\"user\",\"content\":\"```go\\nfunc processPayment() error {\\n    return nil\\n}\\n```\\n\\nYou are an expert programmer. You will rewrite the above code to do the following:\\n\\nRefactor the function to extract validation into a helper.\\n\\nLeave existing comments in place unless changes require modifying them. Output only a code block with the rewritten code:\"}\n"+
+		"]\n"+
+		"}"))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	val, ok := agent.calls[0].cfg.Get("payload")
+	if !ok {
+		t.Fatal("expected payload in agent config")
+	}
+	payload, ok := val.(*ai.SessionPayload)
+	if !ok || payload == nil {
+		t.Fatalf("expected payload of type *ai.SessionPayload, got %T", val)
+	}
+	if got := payload.Variables["active_file"]; got != "payments/service.go" {
+		t.Fatalf("expected active_file to be inferred, got %#v", payload.Variables)
+	}
+	openFiles, ok := payload.Variables["open_files"].([]string)
+	if !ok {
+		t.Fatalf("expected open_files as []string, got %#v", payload.Variables["open_files"])
+	}
+	if len(openFiles) != 2 || openFiles[0] != "payments/service.go" || openFiles[1] != "payments/service_test.go" {
+		t.Fatalf("unexpected open_files: %#v", openFiles)
+	}
+}
+
+func TestOpenAICompatibleChatHandler_AppendsInferredEditorContextToAskQuery(t *testing.T) {
+	agent := &recordingQueryAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
+		"\t\"model\":\"gpt-5.4\",\n"+
+		"\t\"messages\":[\n"+
+		"\t\t{\"role\":\"user\",\"content\":\"The following file is currently open. Don't reference it if it's not relevant to the user's message:\\n\\n```payments/service.go\\nfunc processPayment() error {\\n    return nil\\n}\\n```\"},\n"+
+		"\t\t{\"role\":\"user\",\"content\":\"ORIGINAL CODE:\\n```\\nfunc processPayment() error {\\n    return nil\\n}\\n```\\n\\nSUGGESTED EDIT:\\n```\\nfunc processPayment() error {\\n    if err := validatePayment(); err != nil {\\n        return err\\n    }\\n    return nil\\n}\\n```\\n\\nApply the SUGGESTED EDIT to the ORIGINAL CODE. Output the complete modified file.\"}\n"+
+		"]\n"+
+		"}"))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.queries) != 1 {
+		t.Fatalf("expected one ask query, got %d", len(agent.queries))
+	}
+	query := agent.queries[0]
+	for _, check := range []string{
+		"Continue editor context:",
+		"[active_file=payments/service.go]",
+		"[open_files=payments/service.go]",
+		"[selected_text=func processPayment() error {",
+	} {
+		if !strings.Contains(query, check) {
+			t.Fatalf("expected inferred editor context %q in query, got %q", check, query)
+		}
+	}
+}
+
+func TestOpenAICompatibleChatHandler_ParsesProviderModelAliasIntoAgentConfig(t *testing.T) {
+	agent := &recordingAskAgent{}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gemini:gemini-2.5-pro",
+		"user":"continue-session-1",
+		"messages":[{"role":"user","content":"Analyze the code base"}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	if agent.calls[0].cfg == nil {
+		t.Fatal("expected agent config to be populated")
+	}
+	val, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := val.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", val)
+	}
+	if providerDetails.Provider != "gemini" || providerDetails.Model != "gemini-2.5-pro" {
+		t.Fatalf("unexpected provider details: %+v", providerDetails)
+	}
+	payload := ai.GetSessionPayload(agent.calls[0].ctx)
+	if payload == nil || payload.SessionID != "continue-session-1" {
+		t.Fatalf("expected request user field to become session id, got %+v", payload)
+	}
+	if payload.Variables["llm_provider"] != "gemini" || payload.Variables["llm_model"] != "gemini-2.5-pro" {
+		t.Fatalf("expected provider intent in payload variables, got %#v", payload.Variables)
+	}
+	if ctxVal, ok := agent.calls[0].ctx.Value(ai.CtxKeyProvider).(string); !ok || ctxVal != "gemini:gemini-2.5-pro" {
+		t.Fatalf("expected provider context override, got %#v", agent.calls[0].ctx.Value(ai.CtxKeyProvider))
+	}
+}
+
+type streamingAskAgent struct{}
+
+func (a *streamingAskAgent) Open(ctx context.Context) error  { return nil }
+func (a *streamingAskAgent) Close(ctx context.Context) error { return nil }
+func (a *streamingAskAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
+	return nil, nil
+}
+func (a *streamingAskAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
+		streamer("progress", "Preparing workspace analysis")
+		streamer(ai.ReasoningEventAssistantMessage, map[string]any{"phase": "commentary", "text": "Inspecting the codebase.", "streaming": true, "stream_state": "delta"})
+		streamer(ai.ReasoningEventToolCall, map[string]any{"tool": "investigation_search_repo"})
+		streamer(ai.ReasoningEventToolResult, ai.BuildToolResultEvent("list_stores", map[string]any{"database": "sales"}, `{"database":"sales","stores":[{"name":"users","schema":{"first_name":"string"}}]}`, nil, 1, "", 0))
+		streamer(ai.ReasoningEventToolResult, ai.BuildToolResultEvent("execute_local_command", map[string]any{"command": "go test ./..."}, "ok\tgithub.com/sharedcode/sop/cmd/sop-daemon\t0.497s", nil, 1, "", 0))
+		streamer("terminal_command", map[string]any{"text": "$ go test ./...", "display_as_command": true})
+		streamer("content", "Found the main architecture surfaces.")
+	}
+	return "Final answer: architecture analysis complete.", nil
+}
+func (a *streamingAskAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	return "", nil
+}
+func (a *streamingAskAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
+	return nil, nil
+}
+
+func TestOpenAICompatibleChatHandler_StreamsSSEChunksWhenRequested(t *testing.T) {
+	service := &localRAGService{service: &streamingAskAgent{}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"gpt-5.4",
+		"stream":true,
+		"messages":[{"role":"user","content":"Analyze the code base"}]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	if contentType := rr.Header().Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
+		t.Fatalf("expected SSE content type, got %q", contentType)
+	}
+	if !strings.Contains(body, "chat.completion.chunk") {
+		t.Fatalf("expected chat completion chunk stream, got %q", body)
+	}
+	if !strings.Contains(body, "Progress: Preparing workspace analysis") || !strings.Contains(body, "Inspecting the codebase.") || !strings.Contains(body, "Calling tool: investigation_search_repo") || !strings.Contains(body, "list_stores confirmed users schema={first_name: string}") || !strings.Contains(body, "$ go test ./...") || !strings.Contains(body, "Found the main architecture surfaces.") || !strings.Contains(body, "Final answer: architecture analysis complete.") {
+		t.Fatalf("expected streamed Ask content in SSE body, got %q", body)
+	}
+	if strings.Contains(body, "execute_local_command returned:") {
+		t.Fatalf("expected automation tool result summary to stay suppressed, got %q", body)
+	}
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("expected SSE completion marker, got %q", body)
 	}
 }
 
@@ -287,6 +639,490 @@ func TestContinueToolHandlerPreviewsPatchForWorkspaceFile(t *testing.T) {
 	preview := fmt.Sprint(result["preview"])
 	if !strings.Contains(preview, "-before") || !strings.Contains(preview, "+after") {
 		t.Fatalf("expected preview to include old and new content, got %q", preview)
+	}
+}
+
+func TestRegisterBridgeRoutes_MountsClientEndpoints(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	mux := http.NewServeMux()
+	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
+	service.registerBridgeRoutes(mux, reg)
+
+	chatReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`))
+	chatReq.Header.Set("Content-Type", "application/json")
+	chatReq.Header.Set("X-SOP-Session-ID", "bridge-route-test-chat")
+	chatRR := httptest.NewRecorder()
+	mux.ServeHTTP(chatRR, chatReq)
+	if chatRR.Code != http.StatusOK {
+		t.Fatalf("mounted openai-compatible route status = %d, want %d", chatRR.Code, http.StatusOK)
+	}
+	if !strings.Contains(chatRR.Body.String(), `"object":"chat.completion"`) {
+		t.Fatalf("expected mounted openai-compatible response, got %q", chatRR.Body.String())
+	}
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("hello from mounted route"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	toolReq := httptest.NewRequest(http.MethodPost, "/api/continue/tools/repo.read_file", strings.NewReader(fmt.Sprintf(`{"path":"%s","start_line":1,"end_line":1}`, filePath)))
+	toolReq.Header.Set("Content-Type", "application/json")
+	toolReq.Header.Set("X-SOP-Session-ID", "bridge-route-test-tool")
+	toolRR := httptest.NewRecorder()
+	mux.ServeHTTP(toolRR, toolReq)
+	if toolRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue tool route status = %d, want %d", toolRR.Code, http.StatusOK)
+	}
+	if !strings.Contains(toolRR.Body.String(), "hello from mounted route") {
+		t.Fatalf("expected mounted continue tool response, got %q", toolRR.Body.String())
+	}
+}
+
+func TestRegisterBridgeRoutes_MountsClientMetadataEndpoints(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	mux := http.NewServeMux()
+	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
+	service.registerBridgeRoutes(mux, reg)
+
+	modelsReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	modelsReq.Header.Set("X-SOP-Session-ID", "bridge-route-models")
+	modelsRR := httptest.NewRecorder()
+	mux.ServeHTTP(modelsRR, modelsReq)
+	if modelsRR.Code != http.StatusOK {
+		t.Fatalf("mounted models route status = %d, want %d", modelsRR.Code, http.StatusOK)
+	}
+	var modelsPayload map[string]any
+	if err := json.Unmarshal(modelsRR.Body.Bytes(), &modelsPayload); err != nil {
+		t.Fatalf("decode model catalog: %v", err)
+	}
+	data, ok := modelsPayload["data"].([]any)
+	if !ok || len(data) == 0 {
+		t.Fatalf("expected model catalog data array, got %#v", modelsPayload)
+	}
+	modelIndex := map[string]map[string]any{}
+	for _, item := range data {
+		model, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := model["id"].(string)
+		if strings.TrimSpace(id) != "" {
+			modelIndex[id] = model
+		}
+	}
+	if _, ok := modelIndex["daemon-bridge"]; !ok {
+		t.Fatalf("expected daemon-bridge model entry, got %#v", modelIndex)
+	}
+	if _, ok := modelIndex["gpt-5.4"]; !ok {
+		t.Fatalf("expected gpt-5.4 compatibility alias, got %#v", modelIndex)
+	}
+	geminiModel, ok := modelIndex["gemini:gemini-2.5-pro"]
+	if !ok {
+		t.Fatalf("expected gemini provider alias entry, got %#v", modelIndex)
+	}
+	geminiMetadata, ok := geminiModel["metadata"].(map[string]any)
+	if !ok || geminiMetadata["provider"] != "gemini" || geminiMetadata["routed_via_bridge"] != true {
+		t.Fatalf("expected gemini routed metadata, got %#v", geminiModel)
+	}
+	anthropicModel, ok := modelIndex["anthropic:claude-3-5-sonnet-20241022"]
+	if !ok {
+		t.Fatalf("expected anthropic provider alias entry, got %#v", modelIndex)
+	}
+	anthropicMetadata, ok := anthropicModel["metadata"].(map[string]any)
+	if !ok || anthropicMetadata["provider"] != "anthropic" || anthropicMetadata["routed_via_bridge"] != true {
+		t.Fatalf("expected anthropic routed metadata, got %#v", anthropicModel)
+	}
+
+	continueReq := httptest.NewRequest(http.MethodGet, "/api/continue/metadata", nil)
+	continueReq.Header.Set("X-SOP-Session-ID", "bridge-route-continue-metadata")
+	continueRR := httptest.NewRecorder()
+	mux.ServeHTTP(continueRR, continueReq)
+	if continueRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue metadata route status = %d, want %d", continueRR.Code, http.StatusOK)
+	}
+	var continuePayload map[string]any
+	if err := json.Unmarshal(continueRR.Body.Bytes(), &continuePayload); err != nil {
+		t.Fatalf("decode continue metadata: %v", err)
+	}
+	if continuePayload["client"] != "continue" {
+		t.Fatalf("expected continue metadata client identifier, got %#v", continuePayload)
+	}
+	controlModel, ok := continuePayload["control_model"].(map[string]any)
+	if !ok || controlModel["controller"] != "ai_studio_daemon" || controlModel["editor_worker"] != "continue" || controlModel["provider_is_attribute"] != true {
+		t.Fatalf("expected continue control model metadata, got %#v", continuePayload)
+	}
+	workerRegister, ok := continuePayload["worker_register"].(map[string]any)
+	if !ok || workerRegister["path"] != "/api/continue/worker/register" || workerRegister["method"] != "POST" {
+		t.Fatalf("expected continue worker register metadata, got %#v", continuePayload)
+	}
+	workerState, ok := continuePayload["worker_state"].(map[string]any)
+	if !ok || workerState["path_prefix"] != "/api/continue/workers/" || workerState["method"] != "GET" {
+		t.Fatalf("expected continue worker state metadata, got %#v", continuePayload)
+	}
+	workerCapabilities, ok := continuePayload["worker_capabilities"].([]any)
+	if !ok || len(workerCapabilities) == 0 {
+		t.Fatalf("expected continue worker capability catalog, got %#v", continuePayload)
+	}
+	foundApplyPatchCapability := false
+	for _, item := range workerCapabilities {
+		if item == "apply_patch" {
+			foundApplyPatchCapability = true
+			break
+		}
+	}
+	if !foundApplyPatchCapability {
+		t.Fatalf("expected apply_patch in worker capability catalog, got %#v", workerCapabilities)
+	}
+	tools, ok := continuePayload["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected continue tools metadata, got %#v", continuePayload)
+	}
+	names, ok := tools["names"].([]any)
+	if !ok || len(names) == 0 {
+		t.Fatalf("expected continue tool names, got %#v", tools)
+	}
+	foundReadFile := false
+	for _, item := range names {
+		if item == "repo.read_file" {
+			foundReadFile = true
+			break
+		}
+	}
+	if !foundReadFile {
+		t.Fatalf("expected repo.read_file in continue metadata, got %#v", names)
+	}
+	workflows, ok := continuePayload["coding_workflows"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected coding workflow metadata, got %#v", continuePayload)
+	}
+	profiles, ok := workflows["supported_profiles"].([]any)
+	if !ok || len(profiles) == 0 {
+		t.Fatalf("expected supported workflow profiles, got %#v", workflows)
+	}
+	foundFeatureImplementation := false
+	for _, item := range profiles {
+		profile, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if profile["id"] == "feature_implementation" {
+			foundFeatureImplementation = true
+			plan, _ := profile["default_phase_plan"].([]any)
+			if len(plan) < 5 || plan[0] != "investigation" || plan[1] != "planning" || plan[2] != "execution" || plan[3] != "review" || plan[4] != "delivery" {
+				t.Fatalf("expected feature implementation phase plan, got %#v", profile)
+			}
+		}
+	}
+	if !foundFeatureImplementation {
+		t.Fatalf("expected feature_implementation workflow profile, got %#v", profiles)
+	}
+}
+
+func TestRegisterBridgeRoutes_TracksContinueAgentExecutionSessionState(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	mux := http.NewServeMux()
+	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
+	service.registerBridgeRoutes(mux, reg)
+
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-agent-1","task":"Implement a feature flag rollout for billing","mode":"plan","context":{"workspace_root":".","active_file":"billing/service.go","selected_text":"func rollout()","open_files":["billing/service.go","billing/service_test.go"]}}`))
+	executeReq.Header.Set("Content-Type", "application/json")
+	executeReq.Header.Set("X-SOP-Session-ID", "bridge-route-agent-execute")
+	executeRR := httptest.NewRecorder()
+	mux.ServeHTTP(executeRR, executeReq)
+	if executeRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue agent execute route status = %d, want %d", executeRR.Code, http.StatusOK)
+	}
+	if !strings.Contains(executeRR.Body.String(), "Executing editor-aware coding task") || !strings.Contains(executeRR.Body.String(), `"type":"done"`) {
+		t.Fatalf("expected streamed continue agent execution response, got %q", executeRR.Body.String())
+	}
+
+	sessionReq := httptest.NewRequest(http.MethodGet, "/api/continue/sessions/continue-agent-1", nil)
+	sessionReq.Header.Set("X-SOP-Session-ID", "bridge-route-agent-session")
+	sessionRR := httptest.NewRecorder()
+	mux.ServeHTTP(sessionRR, sessionReq)
+	if sessionRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue session state route status = %d, want %d", sessionRR.Code, http.StatusOK)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(sessionRR.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode continue session snapshot: %v", err)
+	}
+	if snapshot["session_id"] != "continue-agent-1" || snapshot["status"] != "completed" {
+		t.Fatalf("expected completed session snapshot, got %#v", snapshot)
+	}
+	if snapshot["phase"] != "planning" || snapshot["workflow_profile"] != "feature_implementation" || snapshot["task_type"] != "implementation" {
+		t.Fatalf("expected planning feature-implementation session snapshot, got %#v", snapshot)
+	}
+	if snapshot["active_file"] != "billing/service.go" || snapshot["workspace_root"] != "." {
+		t.Fatalf("expected workspace context in session snapshot, got %#v", snapshot)
+	}
+}
+
+func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	mux := http.NewServeMux()
+	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
+	service.registerBridgeRoutes(mux, reg)
+
+	var receivedBody map[string]any
+	observedInProgress := false
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("worker callback method = %s, want POST", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode worker callback body: %v", err)
+		}
+		if snapshot, ok := service.ensureContinueSessionStore().Get("continue-worker-1"); ok {
+			observedInProgress = snapshot.Status == "in_progress" && snapshot.Phase == "execution"
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte("{\"type\":\"progress\",\"message\":\"Continue worker preparing patch\"}\n"))
+		_, _ = w.Write([]byte("{\"type\":\"done\",\"result\":{\"status\":\"completed\"}}\n"))
+	}))
+	defer worker.Close()
+
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/continue/worker/register", strings.NewReader(fmt.Sprintf(`{"session_id":"continue-worker-1","callback_url":"%s","capabilities":["apply_patch","read_context"],"ide":"vscode"}`, worker.URL)))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-register")
+	registerRR := httptest.NewRecorder()
+	mux.ServeHTTP(registerRR, registerReq)
+	if registerRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue worker register route status = %d, want %d", registerRR.Code, http.StatusOK)
+	}
+
+	workerStateReq := httptest.NewRequest(http.MethodGet, "/api/continue/workers/continue-worker-1", nil)
+	workerStateReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-state")
+	workerStateRR := httptest.NewRecorder()
+	mux.ServeHTTP(workerStateRR, workerStateReq)
+	if workerStateRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue worker state route status = %d, want %d", workerStateRR.Code, http.StatusOK)
+	}
+
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-worker-1","task":"Apply the prepared payment patch","mode":"apply","context":{"workspace_root":".","active_file":"payments/service.go","selected_text":"func processPayment()","open_files":["payments/service.go"]}}`))
+	executeReq.Header.Set("Content-Type", "application/json")
+	executeReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-execute")
+	executeRR := httptest.NewRecorder()
+	mux.ServeHTTP(executeRR, executeReq)
+	if executeRR.Code != http.StatusOK {
+		t.Fatalf("proxied continue agent execute status = %d, want %d", executeRR.Code, http.StatusOK)
+	}
+	if !strings.Contains(executeRR.Body.String(), "Continue worker preparing patch") || !strings.Contains(executeRR.Body.String(), `"type":"done"`) {
+		t.Fatalf("expected proxied worker stream response, got %q", executeRR.Body.String())
+	}
+	if !observedInProgress {
+		t.Fatalf("expected in-progress session snapshot to be visible during worker callback")
+	}
+	if receivedBody["task"] != "Apply the prepared payment patch" || receivedBody["mode"] != "apply" {
+		t.Fatalf("unexpected proxied worker request body: %#v", receivedBody)
+	}
+
+	sessionReq := httptest.NewRequest(http.MethodGet, "/api/continue/sessions/continue-worker-1", nil)
+	sessionReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-session")
+	sessionRR := httptest.NewRecorder()
+	mux.ServeHTTP(sessionRR, sessionReq)
+	if sessionRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue worker session route status = %d, want %d", sessionRR.Code, http.StatusOK)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(sessionRR.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode proxied continue session snapshot: %v", err)
+	}
+	if snapshot["status"] != "completed" || snapshot["phase"] != "execution" {
+		t.Fatalf("expected completed execution snapshot for proxied worker path, got %#v", snapshot)
+	}
+}
+
+func TestBuildContinueBridgeEnvelope_PopulatesStructuredIDEContextVariables(t *testing.T) {
+	envelope, err := buildContinueBridgeEnvelope(continueChatRequest{
+		SessionID: "sess-ctx",
+		Message:   "Apply the prepared patch",
+		Mode:      "apply",
+		Workspace: struct {
+			Root      string `json:"root"`
+			Active    string `json:"active_file"`
+			Selection struct {
+				StartLine int `json:"start_line"`
+				EndLine   int `json:"end_line"`
+			} `json:"selection"`
+		}{Root: ".", Active: "payments/service.go"},
+		Context: struct {
+			OpenFiles    []string `json:"open_files"`
+			SelectedText string   `json:"selected_text"`
+		}{OpenFiles: []string{"payments/service.go", "payments/service_test.go"}, SelectedText: "func processPayment()"},
+	})
+	if err != nil {
+		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
+	}
+	if envelope.Ask.Variables["active_file"] != "payments/service.go" {
+		t.Fatalf("expected active_file variable, got %#v", envelope.Ask.Variables)
+	}
+	if envelope.Ask.Variables["selected_text"] != "func processPayment()" {
+		t.Fatalf("expected selected_text variable, got %#v", envelope.Ask.Variables)
+	}
+	openFiles, ok := envelope.Ask.Variables["open_files"].([]string)
+	if !ok || len(openFiles) != 2 {
+		t.Fatalf("expected open_files variable, got %#v", envelope.Ask.Variables["open_files"])
+	}
+}
+
+func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	var received continueAgentExecuteRequest
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte("{\"type\":\"progress\",\"message\":\"worker applying patch\"}\n{\"type\":\"done\",\"result\":{\"status\":\"completed\"}}\n"))
+	}))
+	defer worker.Close()
+
+	service.ensureContinueWorkerStore().Put(continueWorkerRegistration{
+		SessionID:    "continue-worker-2",
+		CallbackURL:  worker.URL,
+		Capabilities: []string{"apply_patch", "read_context"},
+		IDE:          "vscode",
+	})
+
+	backend := newContinueIDEWorkerBackend(service)
+	result, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
+		SessionID:     "continue-worker-2",
+		Task:          "Apply the prepared payment patch",
+		Mode:          "apply",
+		WorkspaceRoot: ".",
+		ActiveFile:    "payments/service.go",
+		SelectedText:  "func processPayment()",
+		OpenFiles:     []string{"payments/service.go"},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask failed: %v", err)
+	}
+	if received.Task != "Apply the prepared payment patch" || received.Context.ActiveFile != "payments/service.go" {
+		t.Fatalf("unexpected worker request: %#v", received)
+	}
+	if !strings.Contains(result, "worker applying patch") || !strings.Contains(result, `"type":"done"`) {
+		t.Fatalf("expected worker response body, got %q", result)
+	}
+}
+
+func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}, shellSessions: newPTYShellSessionManager()}
+	defer service.shellSessions.CloseAll()
+
+	var received continueAgentExecuteRequest
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("delegated by continue worker"))
+	}))
+	defer worker.Close()
+
+	service.ensureContinueWorkerStore().Put(continueWorkerRegistration{
+		SessionID:    "continue-worker-default",
+		CallbackURL:  worker.URL,
+		Capabilities: []string{"apply_patch", "read_context"},
+		IDE:          "vscode",
+	})
+
+	backend := newDefaultIDEWorkerBackend(service)
+	result, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
+		SessionID:  "continue-worker-default",
+		Task:       "Apply the prepared payment patch",
+		Mode:       "apply",
+		ActiveFile: "payments/service.go",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask failed: %v", err)
+	}
+	if received.Task != "Apply the prepared payment patch" || received.Context.ActiveFile != "payments/service.go" {
+		t.Fatalf("unexpected worker request: %#v", received)
+	}
+	if result != "delegated by continue worker" {
+		t.Fatalf("unexpected default backend result: %q", result)
+	}
+}
+
+func TestDefaultIDEWorkerBackend_InspectSessionFallsBackToDaemonShell(t *testing.T) {
+	mgr := newPTYShellSessionManager()
+	defer mgr.CloseAll()
+	if _, _, err := mgr.Run("daemon-shell-worker", "cd /tmp", 2*time.Second); err != nil {
+		t.Fatalf("seed shell session failed: %v", err)
+	}
+
+	service := &localRAGService{service: &recordingQueryAgent{}, shellSessions: mgr}
+	backend := newDefaultIDEWorkerBackend(service)
+	state, err := backend.InspectSession(context.Background(), "daemon-shell-worker")
+	if err != nil {
+		t.Fatalf("InspectSession failed: %v", err)
+	}
+	if !state.Connected {
+		t.Fatalf("expected daemon shell session to be surfaced as connected: %#v", state)
+	}
+	if state.IDE != "daemon_shell" {
+		t.Fatalf("expected daemon_shell IDE backend, got %#v", state)
+	}
+	if len(state.WorkerCapabilities) != 2 || state.WorkerCapabilities[0] != "terminal_execution" || state.WorkerCapabilities[1] != "workspace_context" {
+		t.Fatalf("unexpected daemon shell capabilities: %#v", state.WorkerCapabilities)
+	}
+	if !strings.Contains(state.WorkspaceRoot, "/tmp") {
+		t.Fatalf("expected daemon shell workspace root to reflect pwd, got %#v", state)
+	}
+}
+
+func TestRegisterBridgeRoutes_FallsBackWhenRegisteredWorkerLacksRequiredCapabilities(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	mux := http.NewServeMux()
+	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
+	service.registerBridgeRoutes(mux, reg)
+
+	workerCalled := false
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		workerCalled = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{\"type\":\"done\"}\n"))
+	}))
+	defer worker.Close()
+
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/continue/worker/register", strings.NewReader(fmt.Sprintf(`{"session_id":"continue-worker-fallback","callback_url":"%s","capabilities":["plan_changes"],"ide":"vscode"}`, worker.URL)))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-register-fallback")
+	registerRR := httptest.NewRecorder()
+	mux.ServeHTTP(registerRR, registerReq)
+	if registerRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue worker register route status = %d, want %d", registerRR.Code, http.StatusOK)
+	}
+
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-worker-fallback","task":"Apply the prepared payment patch","mode":"apply","context":{"workspace_root":".","active_file":"payments/service.go","selected_text":"func processPayment()","open_files":["payments/service.go"]}}`))
+	executeReq.Header.Set("Content-Type", "application/json")
+	executeReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-fallback-execute")
+	executeRR := httptest.NewRecorder()
+	mux.ServeHTTP(executeRR, executeReq)
+	if executeRR.Code != http.StatusOK {
+		t.Fatalf("fallback continue agent execute status = %d, want %d", executeRR.Code, http.StatusOK)
+	}
+	if workerCalled {
+		t.Fatalf("expected daemon-local fallback when worker lacks apply capability")
+	}
+	if !strings.Contains(executeRR.Body.String(), "Executing editor-aware coding task") || !strings.Contains(executeRR.Body.String(), `"type":"done"`) {
+		t.Fatalf("expected daemon-local fallback stream response, got %q", executeRR.Body.String())
+	}
+
+	sessionReq := httptest.NewRequest(http.MethodGet, "/api/continue/sessions/continue-worker-fallback", nil)
+	sessionReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-fallback-session")
+	sessionRR := httptest.NewRecorder()
+	mux.ServeHTTP(sessionRR, sessionReq)
+	if sessionRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue fallback session route status = %d, want %d", sessionRR.Code, http.StatusOK)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(sessionRR.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode fallback continue session snapshot: %v", err)
+	}
+	if snapshot["status"] != "completed" || snapshot["phase"] != "execution" {
+		t.Fatalf("expected completed execution snapshot for daemon fallback path, got %#v", snapshot)
 	}
 }
 

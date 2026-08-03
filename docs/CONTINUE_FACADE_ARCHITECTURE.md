@@ -48,6 +48,14 @@ The cleanest approach is a thin adapter layer between Continue and the existing 
 
 Continue should not need to understand the full coding workflow engine directly. Instead, it should consume a compact tool surface exposed by the shared runtime. The coding-focused tools should be backed by the existing AST, tree-sitter, repo-indexing, patching, and validation infrastructure so that Continue can act as an editor-facing client over a code-aware toolset while the daemon remains the controller.
 
+The current implementation now makes that boundary explicit through a generic Ask-side capability:
+
+- Ask exposes a generic `ide_worker` capability.
+- Continue is the first editor-backed backend adapter for that capability.
+- The daemon now also provides a second `ide_worker` backend implementation for daemon shell sessions, proving the abstraction is not Continue-specific.
+- The daemon injects the backend into the shared agent at startup.
+- The wrapper remains a passive participant: it can inspect session/editor state and delegate one bounded coding task, but it does not orchestrate phases or own the conversation loop.
+
 ```text
 VS Code + Continue
   -> local adapter / bridge
@@ -132,6 +140,25 @@ This creates a clean control boundary:
 - daemon Ask = supervisor
 - Continue = subordinate coding agent for editor-aware tasks
 
+### Current wrapper-capability shape
+
+The bridge is no longer only an HTTP transport story. There is now an Ask-visible wrapper layer with these properties:
+
+- generic capability id: `ide_worker`
+- current Ask-visible tools:
+  - `inspect_ide_worker`
+  - `delegate_ide_coding_task`
+- Continue-specific backend injection:
+  - `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
+- generic Ask-side capability:
+  - `lib/sop/ai/agent/domains/ideworker/capability.go`
+
+This is the correct architectural compromise:
+
+- Continue is visible to Ask as an IDE execution surface.
+- Continue is not promoted into a separate controller.
+- Future IDE clients can implement the same backend contract without changing Ask semantics.
+
 This is the preferred model for a future bidirectional setup. The user may start from the SOP AI window or from Continue, but the execution handoff is explicit and controlled. If VS Code is not running, the daemon can fall back to a non-editor execution path; if VS Code is running, Continue provides the richer coding experience.
 
 ## Authentication and recovery UX
@@ -149,8 +176,21 @@ Already present in the codebase:
 - daemon chat bridge endpoint: `/api/continue/chat`
 - daemon tool bridge endpoint: `/api/continue/tools/<tool>`
 - daemon session-state endpoint: `/api/continue/sessions/<sessionId>`
+- daemon worker-state endpoint: `/api/continue/workers/<sessionId>`
+- daemon worker-registration endpoint: `/api/continue/worker/register`
+- daemon delegated execution endpoint: `/api/continue/agent/execute`
 - daemon OpenAI-compatible endpoint: `/v1/chat/completions`
 - a working Continue config that currently points at the daemon through an OpenAI-compatible entry
+- a generic Ask-side `ide_worker` capability registered in the agent capability registry
+- a Continue-backed `ide_worker` backend injected by the daemon at service startup
+- structured Continue editor context copied into `SessionPayload.Variables` for Ask-side delegation:
+  - `workspace_root`
+  - `active_file`
+  - `selected_text`
+  - `open_files`
+  - `continue_mode`
+  - `coding_workflow_profile`
+  - `requested_phase`
 
 What is not yet complete:
 
@@ -158,7 +198,7 @@ What is not yet complete:
 - generated shadow-model catalog for native-feeling model choices
 - provider-compatible local facades for Anthropic and Gemini
 - robust config sync between daemon-selected port/provider state and Continue model config
-- clear resume-oriented implementation milestones in the design docs
+- deeper phase-aware use of `delegate_ide_coding_task` beyond the current planning, execution, and review guidance
 
 ## Integration pattern
 
@@ -249,7 +289,11 @@ When resuming this work, inspect these surfaces first:
 ### Runtime and bridge surfaces
 
 - daemon route wiring in `lib/sop/cmd/sop-daemon/main.go`
-- bridge handlers in `lib/sop/cmd/sop-daemon/rag.go`
+- bridge handlers in `lib/sop/cmd/sop-daemon/client_bridge.go`
+- daemon Ask bridge and service injection in `lib/sop/cmd/sop-daemon/rag.go`
+- Continue-backed IDE worker adapter in `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
+- generic Ask capability in `lib/sop/ai/agent/domains/ideworker/capability.go`
+- capability registration in `lib/sop/ai/agent/copilot.go`
 - authenticated backend equivalents in `lib/sop/tools/sopbackend/main.ai.go`
 
 ### Current Continue config surface
@@ -262,6 +306,16 @@ When resuming this work, inspect these surfaces first:
 - `docs/CONTINUE_FACADE_ARCHITECTURE.md`
 - `docs/CONTINUE_BRIDGE_IMPLEMENTATION_PLAN.md`
 - `docs/CONTINUE_BRIDGE_API_SPEC.md`
+
+### Validate these first on resume
+
+- the Ask registry still includes the generic `ide_worker` capability
+- the daemon still injects the composite default `ide_worker` backend at startup, with Continue first for editor-native execution and daemon-shell inspection as a secondary implementation
+- Continue chat requests still populate structured editor context in `SessionPayload.Variables`
+- Continue/OpenAI-compatible model selection still propagates into both daemon provider override context and explicit `SessionPayload.Variables` (`llm_provider`, `llm_model`)
+- prompt-shaped OpenAI-compatible Continue edit/apply requests still recover `selected_text`, `active_file`, and `open_files` for Ask-side use
+- `/api/continue/agent/execute` still proxies only when worker capabilities match the requested subtask
+- daemon-local fallback still works when no worker is registered or capabilities are insufficient
 
 ### First implementation questions to answer
 

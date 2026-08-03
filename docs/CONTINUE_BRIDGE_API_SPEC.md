@@ -1,10 +1,17 @@
 # Continue bridge API spec
 
-**Status**: Draft for implementation
+**Status**: Active and partially implemented
 
 ## Overview
 
-This document defines the first-pass API shape for the local bridge that connects Continue in VS Code to the daemon-backed Ask/ReAct runtime.
+This document defines the bridge contract that connects Continue in VS Code to the daemon-backed Ask/ReAct runtime.
+
+The current implementation uses two layers:
+
+- transport layer: Continue/OpenAI-compatible HTTP endpoints in the daemon
+- Ask-visible wrapper layer: a generic `ide_worker` capability that can inspect session state and delegate a bounded coding task through a backend adapter
+
+Continue is currently the first backend for that wrapper capability.
 
 ## Base URL
 
@@ -30,6 +37,14 @@ If a token is expired or invalid, the backend should return 401 Unauthorized or 
 ### POST /api/continue/chat
 
 Accepts a chat request and returns a streamed response.
+
+Current Ask-side mapping:
+
+- request metadata is transformed into the shared Ask payload
+- structured editor context is copied into `SessionPayload.Variables`
+- selected Continue model routing intent is copied into `SessionPayload.Variables` as `llm_provider` and `llm_model`
+- the OpenAI-compatible chat surface also infers editor context from Continue-style prompt history when explicit editor fields are missing
+- workflow hints such as `continue_mode`, `coding_workflow_profile`, and `requested_phase` are preserved for Ask-side tool selection
 
 ### Request body
 
@@ -74,6 +89,24 @@ The endpoint should stream NDJSON events.
 {"type":"tool_result","name":"repo.search_code","result":{"hits":[{"path":"src/parser/handler.go"}]}}
 {"type":"content","delta":"I found the relevant parser code."}
 {"type":"done"}
+```
+
+### Current structured session variables
+
+When present, the bridge now copies these fields into `SessionPayload.Variables` so Ask-side capabilities can consume them without scraping prompt text:
+
+```json
+{
+  "continue_bridge": true,
+  "workspace_root": "/path/to/repo",
+  "active_file": "src/parser/handler.go",
+  "selected_text": "func parseHandler(...)",
+  "open_files": ["src/parser/handler.go", "src/parser/handler_test.go"],
+  "continue_mode": "apply",
+  "coding_workflow_profile": "debugging",
+  "coding_task_type": "debugging",
+  "requested_phase": "execution"
+}
 ```
 
 ## 2. Tool invocation endpoint
@@ -138,6 +171,12 @@ Returns the current workflow state and metadata for a task.
 
 Invokes Continue as a remote coding worker for a specific subtask. This is the bridge used when daemon Ask needs editor-aware execution such as patching, diff review, or workspace-guided edits.
 
+Current internal caller:
+
+- generic Ask capability tool: `delegate_ide_coding_task`
+- capability implementation: `lib/sop/ai/agent/domains/ideworker/capability.go`
+- Continue backend adapter: `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
+
 ### Request body
 
 ```json
@@ -157,12 +196,87 @@ Invokes Continue as a remote coding worker for a specific subtask. This is the b
 
 The endpoint should stream NDJSON events with the same progress/tool/content structure used by the chat endpoint, followed by a terminal result event.
 
+Execution behavior:
+- if no Continue worker is registered for the session, the daemon handles the request locally through the shared workflow runtime
+- if a Continue worker is registered for the session, the daemon proxies the request to that registered worker and streams the worker response back to the caller
+- if a Continue worker is registered but lacks the capabilities required by the subtask, the daemon falls back to local Ask execution instead of proxying blindly
+- in both cases, the daemon remains the controller and records daemon-owned session snapshots
+
 ```json
 {"type":"progress","message":"Preparing the patch"}
 {"type":"tool_call","name":"code.apply_patch","args":{"path":"src/parser/handler.go"}}
 {"type":"tool_result","name":"code.apply_patch","result":{"ok":true}}
 {"type":"done","result":{"status":"completed"}}
 ```
+
+## 5. Continue worker registration endpoint
+
+### POST /api/continue/worker/register
+
+Registers a live Continue-side worker callback for a session. This is the contract that allows the daemon to delegate editor-aware subtasks back to Continue while remaining the supervisor.
+
+### Request body
+
+```json
+{
+  "session_id": "workspace-42",
+  "callback_url": "http://127.0.0.1:65432/continue/worker",
+  "capabilities": ["apply_patch", "read_context"],
+  "ide": "vscode"
+}
+```
+
+### Response
+
+```json
+{
+  "ok": true,
+  "worker": {
+    "session_id": "workspace-42",
+    "callback_url": "http://127.0.0.1:65432/continue/worker",
+    "capabilities": ["apply_patch", "read_context"],
+    "ide": "vscode",
+    "updated_at": "2026-08-02T12:34:56Z"
+  }
+}
+```
+
+## 6. Continue worker state endpoint
+
+### GET /api/continue/workers/{sessionId}
+
+Returns the registered Continue worker callback for the session when available.
+
+### Example response
+
+```json
+{
+  "session_id": "workspace-42",
+  "callback_url": "http://127.0.0.1:65432/continue/worker",
+  "capabilities": ["apply_patch", "read_context"],
+  "ide": "vscode",
+  "updated_at": "2026-08-02T12:34:56Z"
+}
+```
+
+## 7. Ask-visible IDE worker tools
+
+These are not external HTTP endpoints. They are the Ask-side capability tools that make the bridge visible inside the shared orchestration runtime.
+
+### inspect_ide_worker
+
+Purpose:
+- inspect whether a session has a connected IDE worker
+- expose advertised worker capabilities and current structured editor context
+
+### delegate_ide_coding_task
+
+Purpose:
+- delegate one bounded editor-aware subtask back to the registered IDE worker
+- preserve Ask as the controller and consume the worker result in the same workflow
+
+Key rule:
+- these tools are generic to the `ide_worker` capability; Continue is only the first backend implementation
 
 ## Tool schema
 
@@ -291,3 +405,22 @@ The endpoint should stream NDJSON events with the same progress/tool/content str
 - The bridge should reuse the existing daemon Ask endpoint rather than introducing a second orchestration engine.
 - Tool results should remain structured so Continue can make decisions from them.
 - The bridge should preserve session continuity across turns.
+- The wrapper capability must stay passive: no phase orchestration, no controller loop, and no Continue-owned workflow state.
+
+## Resume checklist
+
+When resuming this work, inspect these code surfaces first:
+
+- `lib/sop/cmd/sop-daemon/client_bridge.go`
+- `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
+- `lib/sop/cmd/sop-daemon/rag.go`
+- `lib/sop/ai/agent/domains/ideworker/capability.go`
+- `lib/sop/ai/agent/copilot.go`
+
+Validate these behaviors before extending the design:
+
+- Continue chat populates structured editor context variables
+- OpenAI-compatible prompt-shaped edit/apply requests still recover `selected_text`, `active_file`, and `open_files` into structured payload variables
+- `inspect_ide_worker` can see session/editor state for the current Ask turn
+- `delegate_ide_coding_task` only proxies when the registered worker advertises the required capability set
+- daemon-local fallback remains the behavior when no worker is registered or capability matching fails

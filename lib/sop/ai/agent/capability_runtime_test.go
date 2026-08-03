@@ -8,6 +8,7 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/agent/domains/desktop"
+	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 	"github.com/sharedcode/sop/ai/agent/domains/spaces"
 	"github.com/sharedcode/sop/ai/agent/domains/stores"
 )
@@ -37,6 +38,20 @@ func TestNewCopilotAgentRegistersDesktopCapability(t *testing.T) {
 	}
 	if cap.ID() != desktop.CapabilityID {
 		t.Fatalf("expected desktop capability id %q, got %q", desktop.CapabilityID, cap.ID())
+	}
+}
+
+func TestNewCopilotAgentRegistersIDEWorkerCapability(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	var found bool
+	for _, cap := range ag.capabilityRegistry.ListAll() {
+		if cap != nil && cap.ID() == ideworker.CapabilityID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected IDE worker capability to be registered")
 	}
 }
 
