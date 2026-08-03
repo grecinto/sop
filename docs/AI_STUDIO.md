@@ -143,6 +143,21 @@ If your daemon is running on a different machine, you can still use AI Studio wi
 4. UI makes API calls to http://127.0.0.1:9090/api/*
    - Uses daemon tokens in Authorization header
    - Falls back to bootstrap secret if no session token
+
+Continue follows the same daemon bootstrap handshake, but its HQ session is independent from the UI session:
+
+- Continue authenticates with HQ directly and owns its own HQ access/refresh lifecycle.
+- Continue separately bootstraps into daemon to obtain daemon-local access/refresh tokens.
+- Continue shares its HQ connectivity and renewal context with daemon on bridge requests so daemon-owned federation work can continue using the same Continue session.
+- UI HQ tokens and Continue HQ tokens must not be treated as interchangeable.
+
+User-side federation handoff story:
+
+- The user logs in once through AI Studio UI.
+- The daemon receives and stores the active HQ connectivity for that user session.
+- When the user switches into Continue for IDE coding, daemon can hand that HQ connectivity and token/renewal context to Continue.
+- Continue can start coding immediately without forcing the user through a second HQ login prompt.
+- Continue then continues refresh and eventual re-authentication from that handed-over session state.
 ```
 
 ### Local API Key Storage
@@ -156,6 +171,10 @@ When AI Studio runs in local daemon mode, provider API keys are no longer persis
 - There is intentionally no UI-facing decrypt endpoint.
 
 **Why this works**: Site and daemon share `sopbackend.SessionStore()` with the same JWT signing secrets, so daemon can validate site session tokens directly.
+
+For Continue, the same bootstrap pattern applies at the daemon boundary, but Continue still owns a separate HQ session because HQ security is session-based per client and requires periodic re-authentication.
+
+In practice, that separate Continue session may begin from daemon-provided HQ handoff state when the user already authenticated in AI Studio UI. This is the user-facing federation story for moving from AI Studio into Continue smoothly.
 
 ---
 

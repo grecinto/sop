@@ -52,6 +52,7 @@ Current transport surface:
 - `/api/continue/chat`
 - `/api/continue/tools/{toolName}`
 - `/api/continue/sessions/{sessionId}`
+- `/api/continue/requests/{requestId}`
 - `/api/continue/agent/execute`
 - `/api/continue/worker/register`
 - `/api/continue/workers/{sessionId}`
@@ -59,11 +60,14 @@ Current transport surface:
 
 Key transport properties:
 
+- `request_id` is the per-execution identity
+- `session_id` remains the workstream identity
 - provider is an explicit request attribute
 - model is an explicit request attribute
 - workspace and editor context are structured request fields
 - responses stream as NDJSON
 - daemon-owned metadata declares AI Studio as controller and Continue as editor worker
+- daemon-owned metadata declares the authoritative AI Studio provider/model catalog through `control_model.supported_llms`
 
 ## Ask-Side Abstraction
 
@@ -161,6 +165,7 @@ Provider/model intent now flows through both major paths.
 
 - the delegated Continue capability tool reads `llm_provider` and `llm_model` from the current Ask payload
 - the task request contract carries `Provider` and `Model`
+- the task request contract carries `RequestID` as the canonical execution identifier
 - the Continue backend writes those fields into `/api/continue/agent/execute`
 - fallback execution preserves the same provider/model values
 - delegated Ask2Ask execution should also preserve `mode` and `requested_phase` as separate fields
@@ -172,6 +177,7 @@ Implemented now:
 
 - native Continue transport and metadata
 - daemon-owned session tracking
+- daemon-owned request tracking for delegated execution
 - capability-aware worker delegation
 - Ask-side Continue capability scaffolding for single-tool delegated orchestration
 - second backend implementation proving the abstraction is not Continue-specific

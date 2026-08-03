@@ -10,11 +10,16 @@ import (
 )
 
 type fakeBackend struct {
-	inspectState SessionState
-	inspectErr   error
-	lastRequest  TaskRequest
-	result       string
-	err          error
+	inspectState     SessionState
+	inspectErr       error
+	lastRequest      TaskRequest
+	result           string
+	err              error
+	delegationID     string
+	delegationStatus DelegationStatus
+	delegationErr    error
+	lastDelegationID string
+	cancelled        bool
 }
 
 func (f *fakeBackend) InspectSession(ctx context.Context, sessionID string) (SessionState, error) {
@@ -29,6 +34,51 @@ func (f *fakeBackend) ExecuteTask(ctx context.Context, req TaskRequest) (string,
 	_ = ctx
 	f.lastRequest = req
 	return f.result, f.err
+}
+
+func (f *fakeBackend) StartTask(ctx context.Context, req TaskRequest) (DelegationHandle, error) {
+	_ = ctx
+	f.lastRequest = req
+	if f.delegationErr != nil {
+		return DelegationHandle{}, f.delegationErr
+	}
+	if f.delegationID == "" {
+		f.delegationID = "delegation-1"
+	}
+	f.lastDelegationID = f.delegationID
+	return DelegationHandle{ID: f.delegationID}, nil
+}
+
+func (f *fakeBackend) GetTaskStatus(ctx context.Context, delegationID string) (DelegationStatus, error) {
+	_ = ctx
+	f.lastDelegationID = delegationID
+	if f.delegationErr != nil {
+		return DelegationStatus{}, f.delegationErr
+	}
+	status := f.delegationStatus
+	if status.ID == "" {
+		status.ID = delegationID
+	}
+	if status.Status == "" {
+		status.Status = "running"
+	}
+	return status, nil
+}
+
+func (f *fakeBackend) CancelTask(ctx context.Context, delegationID string) (DelegationStatus, error) {
+	_ = ctx
+	f.lastDelegationID = delegationID
+	f.cancelled = true
+	if f.delegationErr != nil {
+		return DelegationStatus{}, f.delegationErr
+	}
+	status := f.delegationStatus
+	if status.ID == "" {
+		status.ID = delegationID
+	}
+	status.Status = "cancelled"
+	status.Cancelled = true
+	return status, nil
 }
 
 func TestCapabilityInspectSessionIncludesStructuredContext(t *testing.T) {
@@ -134,7 +184,7 @@ func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delegate_continue_task failed: %v", err)
 	}
-	if result != "delegated" {
+	if !strings.Contains(result, "delegation started") {
 		t.Fatalf("unexpected backend result: %q", result)
 	}
 	if backend.lastRequest.SessionID != "sess-2" {
@@ -172,15 +222,64 @@ func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 	}
 }
 
-func TestCapabilityExposeTools_UsesSingleAskVisibleDelegateTool(t *testing.T) {
+func TestCapabilityExposeTools_ProvidesDelegationLifecycleTools(t *testing.T) {
 	cap := NewCapability()
 	tools := cap.ExposeTools()
-	if len(tools) != 1 {
-		t.Fatalf("expected exactly one Ask-visible tool, got %d", len(tools))
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 Ask-visible tools, got %d", len(tools))
 	}
-	if tools[0].Name != "delegate_continue_task" {
-		t.Fatalf("expected delegate_continue_task to be the sole Ask-visible tool, got %#v", tools)
+	got := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		got = append(got, tool.Name)
 	}
+	for _, want := range []string{"delegate_continue_task", "get_continue_delegation_status", "cancel_continue_delegation"} {
+		if !containsString(got, want) {
+			t.Fatalf("expected tool %q in %#v", want, got)
+		}
+	}
+}
+
+func TestCapabilityDelegationLifecycleUsesBackend(t *testing.T) {
+	backend := &fakeBackend{delegationStatus: DelegationStatus{Status: "running", PartialResult: "half done"}}
+	cap := NewCapability()
+	cap.SetBackend(backend)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{SessionID: "sess-3"})
+
+	startResult, err := cap.ExecuteTool(ctx, "delegate_continue_task", map[string]any{"task": "Apply the patch"}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("delegate_continue_task failed: %v", err)
+	}
+	if !strings.Contains(startResult, "delegation_id") || !strings.Contains(startResult, "delegation-1") {
+		t.Fatalf("expected delegation handle in result, got %q", startResult)
+	}
+
+	statusResult, err := cap.ExecuteTool(ctx, "get_continue_delegation_status", map[string]any{"delegation_id": "delegation-1"}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("get_continue_delegation_status failed: %v", err)
+	}
+	if !strings.Contains(statusResult, "half done") {
+		t.Fatalf("expected partial result in status, got %q", statusResult)
+	}
+
+	cancelResult, err := cap.ExecuteTool(ctx, "cancel_continue_delegation", map[string]any{"delegation_id": "delegation-1"}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("cancel_continue_delegation failed: %v", err)
+	}
+	if !strings.Contains(cancelResult, "cancelled") {
+		t.Fatalf("expected cancellation state in result, got %q", cancelResult)
+	}
+	if !backend.cancelled {
+		t.Fatalf("expected backend cancel to be invoked")
+	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCapabilityLegacyAliasesStillWork(t *testing.T) {

@@ -206,6 +206,16 @@ type continueChatRequest struct {
 		OpenFiles    []string `json:"open_files"`
 		SelectedText string   `json:"selected_text"`
 	} `json:"context"`
+	Auth struct {
+		AccessToken  string `json:"access_token,omitempty"`
+		RefreshToken string `json:"refresh_token,omitempty"`
+	} `json:"auth,omitempty"`
+	HQ struct {
+		BaseURL   string `json:"base_url,omitempty"`
+		Port      string `json:"port,omitempty"`
+		UserID    string `json:"user_id,omitempty"`
+		SessionID string `json:"session_id,omitempty"`
+	} `json:"hq,omitempty"`
 	Tools      []continueChatTool     `json:"tools,omitempty"`
 	ToolChoice continueChatToolChoice `json:"tool_choice,omitempty"`
 	Mode       string                 `json:"mode"`
@@ -367,10 +377,30 @@ func (s *localRAGService) askBridgeChat(baseCtx context.Context, req bridgeAskRe
 	if req.BaseURL != "" {
 		variables["llm_url"] = req.BaseURL
 	}
-	payload := &ai.SessionPayload{CurrentUserQuery: req.UserPrompt, SessionID: req.SessionID, UserID: req.SessionID, Variables: variables}
+	sessionID := continueSessionContextKey(req.SessionID, req.HQSessionID, req.HQUserID)
+	userID := firstNonEmpty(req.HQUserID, req.SessionID)
+	payload := &ai.SessionPayload{CurrentUserQuery: req.UserPrompt, SessionID: sessionID, UserID: userID, Variables: variables}
 	ctx = context.WithValue(ctx, "session_payload", payload)
 	s.enrichContinueGuidanceVariables(ctx, req.UserPrompt, variables)
 	cfg.Set("payload", payload)
+	if req.AccessToken != "" {
+		cfg.Set("access_token", req.AccessToken)
+	}
+	if req.RefreshToken != "" {
+		cfg.Set("refresh_token", req.RefreshToken)
+	}
+	if req.HQBaseURL != "" {
+		cfg.Set("hq_base_url", normalizeHQBaseURL(req.HQBaseURL, req.HQPort))
+	}
+	if req.HQPort != "" {
+		cfg.Set("hq_port", req.HQPort)
+	}
+	if req.HQUserID != "" {
+		cfg.Set("hq_user_id", req.HQUserID)
+	}
+	if req.HQSessionID != "" {
+		cfg.Set("hq_session_id", req.HQSessionID)
+	}
 	if req.ProviderName != "" || req.APIKey != "" || req.ModelName != "" || req.BaseURL != "" {
 		providerDetails := &agent.ProviderDetails{Provider: req.ProviderName, APIKey: req.APIKey, Model: req.ModelName, BaseURL: req.BaseURL}
 		cfg.Set("provider_details", providerDetails)
@@ -391,6 +421,14 @@ func (s *localRAGService) askBridgeChat(baseCtx context.Context, req bridgeAskRe
 	if eventStreamer != nil {
 		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, eventStreamer)
 	}
+	chatReq := continueChatRequest{SessionID: req.SessionID}
+	chatReq.Auth.AccessToken = req.AccessToken
+	chatReq.Auth.RefreshToken = req.RefreshToken
+	chatReq.HQ.BaseURL = req.HQBaseURL
+	chatReq.HQ.Port = req.HQPort
+	chatReq.HQ.UserID = req.HQUserID
+	chatReq.HQ.SessionID = req.HQSessionID
+	s.storeContinueSessionContext(chatReq)
 	return s.service.Ask(ctx, req.FullPrompt, cfg)
 }
 
@@ -468,6 +506,61 @@ func cloneBridgeVariables(src map[string]any) map[string]any {
 
 func (s *localRAGService) handleContinueChat(w http.ResponseWriter, r *http.Request) {
 	s.handleBridgeChat(w, r, continueBridgeTransport{})
+}
+
+func continueSessionContextKey(sessionID, hqSessionID, hqUserID string) string {
+	if trimmed := strings.TrimSpace(sessionID); trimmed != "" {
+		return trimmed
+	}
+	if trimmed := strings.TrimSpace(hqSessionID); trimmed != "" {
+		return trimmed
+	}
+	if trimmed := strings.TrimSpace(hqUserID); trimmed != "" {
+		return trimmed
+	}
+	return "continue-bridge"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func (s *localRAGService) storeContinueSessionContext(req continueChatRequest) {
+	_ = s
+	sessionKey := continueSessionContextKey(req.SessionID, req.HQ.SessionID, req.HQ.UserID)
+	accessToken := strings.TrimSpace(req.Auth.AccessToken)
+	refreshToken := strings.TrimSpace(req.Auth.RefreshToken)
+	hqPort := strings.TrimSpace(req.HQ.Port)
+	hqBaseURL := normalizeHQBaseURL(strings.TrimSpace(req.HQ.BaseURL), hqPort)
+	if accessToken == "" && refreshToken == "" && hqBaseURL == "" && strings.TrimSpace(req.HQ.UserID) == "" && strings.TrimSpace(req.HQ.SessionID) == "" {
+		return
+	}
+
+	var storedSessionContext daemonSessionContext
+	daemonSessionStore.mu.Lock()
+	if stored, ok := daemonSessionStore.data[sessionKey]; ok {
+		storedSessionContext = stored
+	}
+	daemonSessionStore.data[sessionKey] = daemonSessionContext{
+		AccessToken:   firstNonEmpty(accessToken, storedSessionContext.AccessToken),
+		RefreshToken:  firstNonEmpty(refreshToken, storedSessionContext.RefreshToken),
+		HQBaseURL:     firstNonEmpty(hqBaseURL, storedSessionContext.HQBaseURL),
+		HQPort:        firstNonEmpty(hqPort, storedSessionContext.HQPort),
+		HQUserID:      firstNonEmpty(req.HQ.UserID, storedSessionContext.HQUserID),
+		HQSessionID:   firstNonEmpty(req.HQ.SessionID, storedSessionContext.HQSessionID),
+		LLMProvider:   storedSessionContext.LLMProvider,
+		LLMAPIKey:     storedSessionContext.LLMAPIKey,
+		LLMModel:      storedSessionContext.LLMModel,
+		LLMURL:        storedSessionContext.LLMURL,
+		ThinkingLevel: storedSessionContext.ThinkingLevel,
+		LastUpdated:   time.Now().UTC(),
+	}
+	daemonSessionStore.mu.Unlock()
 }
 
 func (s *localRAGService) handleContinueTool(w http.ResponseWriter, r *http.Request, toolName string) {

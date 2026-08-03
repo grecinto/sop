@@ -95,11 +95,13 @@ The goal is for Continue to successfully complete the IDE coding work it is alre
 - native Continue chat transport at `/api/continue/chat`
 - native Continue tool transport at `/api/continue/tools/{toolName}`
 - daemon-owned session snapshots at `/api/continue/sessions/{sessionId}`
+- daemon-owned request snapshots at `/api/continue/requests/{requestId}`
 - worker registration at `/api/continue/worker/register`
 - worker inspection at `/api/continue/workers/{sessionId}`
 - metadata at `/api/continue/metadata`
 - daemon-owned delegated execution at `/api/continue/agent/execute`
 - transport and backend foundations for daemon-owned Continue delegation
+- request-scoped execution correlation through `request_id` while keeping `session_id` as workstream identity
 - current Ask-side capability scaffolding that can be evolved into the single-tool Continue participant
 - provider/model propagation from native Continue chat into Ask payload variables
 - provider/model propagation from the delegated Continue task contract into Continue worker execution payloads
@@ -131,6 +133,7 @@ Detailed workflow-surface analysis and SDLC boundary are documented in [docs/CON
 ### 2a. Ask2Ask contract hardening
 
 - persist the final delegated worker result object in daemon-owned session/workflow state, not only transport status
+- keep the final delegated worker snapshot addressable by `request_id`, not only by `session_id`
 - keep `phase` and `mode` separate across the delegated execution contract; `phase` is workflow position, `mode` is Continue execution posture
 - treat the final delegated result as a typed daemon object even when the Ask-visible tool also renders it as JSON/text for the model
 - incrementally parse worker NDJSON streams so large delegated results do not require whole-body buffering on the proxy path
@@ -144,6 +147,7 @@ Detailed workflow-surface analysis and SDLC boundary are documented in [docs/CON
 ### 4. Session and workflow polish
 
 - expand daemon-owned session snapshots when more editor state is useful
+- add explicit request TTL and cancellation reconciliation across daemon restarts when a durable execution ledger is introduced
 - keep Continue delegation steering focused on bounded execution and review slices
 - extend tests around worker capability mismatch and local fallback behavior as needed
 - consider surfacing low-risk remaining IDE context primitives such as open files, pinned files, and signature help
@@ -190,6 +194,7 @@ Validate these behaviors before extending the design:
 
 - `/api/continue/chat` still sends provider/model through Ask context and payload variables
 - `/api/continue/agent/execute` still preserves provider/model through worker proxying and fallback execution
+- delegated Continue execution remains correlated by `request_id` even when multiple requests share one `session_id`
 - the Continue capability remains a passive participant and does not orchestrate phases
 - the daemon Ask pipeline remains unchanged for Continue-originated requests
 - the daemon LLM uses a single delegated Continue Ask tool instead of trying to mirror Continue's internal tool choreography

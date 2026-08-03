@@ -10,12 +10,14 @@ import (
 )
 
 const (
-	CapabilityID             = "ide_worker"
-	CapabilityName           = "Continue Delegation"
-	inspectContinueToolName  = "inspect_continue_worker"
-	delegateContinueToolName = "delegate_continue_task"
-	legacyInspectToolName    = "inspect_ide_worker"
-	legacyDelegateToolName   = "delegate_ide_coding_task"
+	CapabilityID                = "ide_worker"
+	CapabilityName              = "Continue Delegation"
+	inspectContinueToolName     = "inspect_continue_worker"
+	delegateContinueToolName    = "delegate_continue_task"
+	getDelegationStatusToolName = "get_continue_delegation_status"
+	cancelDelegationToolName    = "cancel_continue_delegation"
+	legacyInspectToolName       = "inspect_ide_worker"
+	legacyDelegateToolName      = "delegate_ide_coding_task"
 )
 
 type SessionState struct {
@@ -63,6 +65,7 @@ type DelegationGuidance struct {
 }
 
 type TaskRequest struct {
+	RequestID      string
 	SessionID      string
 	Task           string
 	Mode           string
@@ -80,9 +83,28 @@ type TaskRequest struct {
 	Guidance       DelegationGuidance
 }
 
+type DelegationHandle struct {
+	ID      string `json:"delegation_id"`
+	Status  string `json:"status,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type DelegationStatus struct {
+	ID            string `json:"delegation_id,omitempty"`
+	Status        string `json:"status,omitempty"`
+	Progress      string `json:"progress,omitempty"`
+	PartialResult string `json:"partial_result,omitempty"`
+	Message       string `json:"message,omitempty"`
+	Error         string `json:"error,omitempty"`
+	Cancelled     bool   `json:"cancelled,omitempty"`
+}
+
 type Backend interface {
 	InspectSession(ctx context.Context, sessionID string) (SessionState, error)
 	ExecuteTask(ctx context.Context, req TaskRequest) (string, error)
+	StartTask(ctx context.Context, req TaskRequest) (DelegationHandle, error)
+	GetTaskStatus(ctx context.Context, delegationID string) (DelegationStatus, error)
+	CancelTask(ctx context.Context, delegationID string) (DelegationStatus, error)
 }
 
 type Capability struct {
@@ -170,7 +192,7 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 	b.WriteString("Structured Context: Continue Delegation\n")
 	b.WriteString("- When a Continue-backed IDE worker is available for this session, Ask can delegate one bounded IDE coding subtask to Continue's own Ask/tool loop without giving up daemon control.\n")
 	b.WriteString("- This capability is LAO-oriented: the daemon LLM still classifies and orchestrates the broader request, and Continue only performs the bounded coding slice that is delegated to it.\n")
-	b.WriteString("- Sole Ask-visible tool: delegate_continue_task. Use other daemon capabilities normally before or after the Continue delegation when the request needs broader workflow support.\n")
+	b.WriteString("- Ask-visible tools: delegate_continue_task for start, get_continue_delegation_status for progress, and cancel_continue_delegation for interruption. Use other daemon capabilities normally before or after the Continue delegation when the request needs broader workflow support.\n")
 	b.WriteString("- Expected Continue result: a final structured execution report covering modified_files, CRUD operation per file, diff deltas or artifact references, and execution metadata.\n")
 	b.WriteString("- Rich delegation parameters are supported: team practices, success criteria, constraints, implementation notes, expected result format, and reference context can be passed as structured guidance.\n")
 	if metadata.HasBridgeContext {
@@ -205,6 +227,18 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 			Schema:      `{"type":"object","properties":{"task":{"type":"string","description":"Focused coding task to delegate to the IDE worker"},"mode":{"type":"string","description":"Worker mode hint such as plan, edit, apply, review, or test"},"requested_phase":{"type":"string","description":"Optional explicit workflow phase such as investigation, planning, execution, review, or delivery"},"allowed_tools":{"type":"array","items":{"type":"string"},"description":"Optional bounded tool subset that the remote Continue Ask turn should be allowed to use"},"tool_choice":{"type":"string","description":"Optional preferred Continue tool name for the delegated turn"},"provider":{"type":"string","description":"Optional provider override to preserve the selected LLM family during delegation"},"model":{"type":"string","description":"Optional model override to preserve the selected model during delegation"},"workspace_root":{"type":"string","description":"Workspace root for the delegated task"},"active_file":{"type":"string","description":"Primary file for the delegated task"},"selected_text":{"type":"string","description":"Selected code snippet or region for the task"},"open_files":{"type":"array","items":{"type":"string"},"description":"Open files that provide extra editor context"},"guidance":{"type":"object","description":"Structured guidance for Continue's Ask pipeline.","properties":{"team_practices":{"type":"array","items":{"type":"string"}},"success_criteria":{"type":"array","items":{"type":"string"}},"constraints":{"type":"array","items":{"type":"string"}},"implementation_notes":{"type":"array","items":{"type":"string"}},"expected_result_format":{"type":"string"},"reference_context":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string"},"source":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}}}},"metadata":{"type":"object"}}}},"required":["task"]}`,
 			Tags:        []string{"R", "U"},
 		},
+		{
+			Name:        getDelegationStatusToolName,
+			Description: "Inspect the current lifecycle state of a delegated Continue task, including progress and partial results.",
+			Schema:      `{"type":"object","properties":{"delegation_id":{"type":"string","description":"Delegation identifier returned by delegate_continue_task"}},"required":["delegation_id"]}`,
+			Tags:        []string{"R", "U"},
+		},
+		{
+			Name:        cancelDelegationToolName,
+			Description: "Cancel an in-flight Continue delegation and capture the latest lifecycle state.",
+			Schema:      `{"type":"object","properties":{"delegation_id":{"type":"string","description":"Delegation identifier returned by delegate_continue_task"}},"required":["delegation_id"]}`,
+			Tags:        []string{"R", "U"},
+		},
 	}
 }
 
@@ -212,7 +246,7 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	metadata := parseContinuePromptMetadata(query)
 	_ = state
 	instructions := `Continue Delegation Guidance:
-- This capability exposes one Ask-visible tool only: delegate_continue_task.
+- This capability exposes three Ask-visible delegation tools: delegate_continue_task to start, get_continue_delegation_status to observe progress, and cancel_continue_delegation to interrupt a long-running job.
 - Use delegate_continue_task only for one bounded coding subtask that Continue should complete through its own local Ask/tool loop.
 - Keep Ask as the controller. Classify and orchestrate the larger workflow in the daemon, delegate the IDE coding slice to Continue, consume the result, then continue with the remaining work.
 - Continue is the coding executor for the delegated slice, not the outer workflow controller.
@@ -248,6 +282,10 @@ func (c *Capability) ExecuteTool(ctx context.Context, toolName string, args map[
 		return c.inspectSession(ctx)
 	case delegateContinueToolName, legacyDelegateToolName:
 		return c.delegateTask(ctx, args)
+	case getDelegationStatusToolName:
+		return c.getDelegationStatus(ctx, args)
+	case cancelDelegationToolName:
+		return c.cancelDelegation(ctx, args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -399,7 +437,89 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 		return "", fmt.Errorf("session id is required to delegate an IDE worker task")
 	}
 
-	return c.backend.ExecuteTask(ctx, req)
+	handle, err := c.backend.StartTask(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return formatDelegationHandle(handle), nil
+}
+
+func (c *Capability) getDelegationStatus(ctx context.Context, args map[string]any) (string, error) {
+	if c.backend == nil {
+		return "", fmt.Errorf("IDE worker backend is not available")
+	}
+	delegationID := readDelegationID(args)
+	if strings.TrimSpace(delegationID) == "" {
+		return "", fmt.Errorf("delegation_id is required")
+	}
+	status, err := c.backend.GetTaskStatus(ctx, delegationID)
+	if err != nil {
+		return "", err
+	}
+	return formatDelegationStatus(status), nil
+}
+
+func (c *Capability) cancelDelegation(ctx context.Context, args map[string]any) (string, error) {
+	if c.backend == nil {
+		return "", fmt.Errorf("IDE worker backend is not available")
+	}
+	delegationID := readDelegationID(args)
+	if strings.TrimSpace(delegationID) == "" {
+		return "", fmt.Errorf("delegation_id is required")
+	}
+	status, err := c.backend.CancelTask(ctx, delegationID)
+	if err != nil {
+		return "", err
+	}
+	return formatDelegationStatus(status), nil
+}
+
+func readDelegationID(args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	if raw, ok := args["delegation_id"].(string); ok {
+		return strings.TrimSpace(raw)
+	}
+	return ""
+}
+
+func formatDelegationHandle(handle DelegationHandle) string {
+	b := strings.Builder{}
+	b.WriteString("delegation started\n")
+	b.WriteString(fmt.Sprintf("- delegation_id: %s\n", defaultString(handle.ID, "unknown")))
+	if handle.Status != "" {
+		b.WriteString(fmt.Sprintf("- status: %s\n", handle.Status))
+	}
+	if handle.Message != "" {
+		b.WriteString(fmt.Sprintf("- message: %s\n", handle.Message))
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func formatDelegationStatus(status DelegationStatus) string {
+	b := strings.Builder{}
+	b.WriteString("delegation status\n")
+	b.WriteString(fmt.Sprintf("- delegation_id: %s\n", defaultString(status.ID, "unknown")))
+	if status.Status != "" {
+		b.WriteString(fmt.Sprintf("- status: %s\n", status.Status))
+	}
+	if status.Progress != "" {
+		b.WriteString(fmt.Sprintf("- progress: %s\n", status.Progress))
+	}
+	if status.PartialResult != "" {
+		b.WriteString(fmt.Sprintf("- partial_result: %s\n", status.PartialResult))
+	}
+	if status.Message != "" {
+		b.WriteString(fmt.Sprintf("- message: %s\n", status.Message))
+	}
+	if status.Error != "" {
+		b.WriteString(fmt.Sprintf("- error: %s\n", status.Error))
+	}
+	if status.Cancelled {
+		b.WriteString("- cancelled: yes\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func mergeSessionState(base SessionState, overlay SessionState) SessionState {

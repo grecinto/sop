@@ -24,6 +24,12 @@ SESSION_ID = os.environ.get("SOP_CONTINUE_SESSION_ID", "continue-test")
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "sop")
 BOOTSTRAP_PATH = os.environ.get("SOP_CONTINUE_BOOTSTRAP_PATH", os.path.join(CONFIG_DIR, "daemon.bootstrap"))
 TOKEN_CACHE_PATH = os.environ.get("SOP_CONTINUE_TOKEN_CACHE", os.path.join(CONFIG_DIR, "continue-helper-session.json"))
+HQ_BASE_URL = os.environ.get("SOP_CONTINUE_HQ_BASE_URL", "").strip()
+HQ_PORT = os.environ.get("SOP_CONTINUE_HQ_PORT", "").strip()
+HQ_ACCESS_TOKEN = os.environ.get("SOP_CONTINUE_HQ_ACCESS_TOKEN", "").strip()
+HQ_REFRESH_TOKEN = os.environ.get("SOP_CONTINUE_HQ_REFRESH_TOKEN", "").strip()
+HQ_USER_ID = os.environ.get("SOP_CONTINUE_HQ_USER_ID", "").strip()
+HQ_SESSION_ID = os.environ.get("SOP_CONTINUE_HQ_SESSION_ID", SESSION_ID).strip() or SESSION_ID
 WORKER_IDE = os.environ.get("SOP_CONTINUE_WORKER_IDE", "vscode").strip() or "vscode"
 REQUESTED_PHASE = os.environ.get("SOP_CONTINUE_REQUESTED_PHASE", "execution").strip() or "execution"
 TOOL_CHOICE = os.environ.get("SOP_CONTINUE_TOOL_CHOICE", "apply_patch").strip()
@@ -123,6 +129,25 @@ def daemon_auth_with_bootstrap_secret():
     return payload.get("access_token"), None
 
 
+def daemon_auth_with_bootstrap_token(bootstrap_token):
+    token = str(bootstrap_token or "").strip()
+    if not token:
+        return None, "bootstrap token not found"
+    status, body = post_json_raw(
+        "/api/daemon/auth",
+        {"bootstrap_token": token},
+        include_auth=False,
+    )
+    if status != 200:
+        return None, body
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None, body
+    persist_tokens(payload)
+    return payload.get("access_token"), None
+
+
 def daemon_refresh(refresh_token):
     status, body = post_json_raw(
         "/api/daemon/refresh",
@@ -162,10 +187,31 @@ def get_access_token():
         token, err = daemon_refresh(refresh_token)
         if token and not err:
             return token
+    if HQ_ACCESS_TOKEN:
+        token, err = daemon_auth_with_bootstrap_token(HQ_ACCESS_TOKEN)
+        if token and not err:
+            return token
     token, err = daemon_auth_with_bootstrap_secret()
     if token and not err:
         return token
     return ""
+
+
+def continue_auth_payload():
+    payload = {}
+    if HQ_ACCESS_TOKEN or HQ_REFRESH_TOKEN:
+        payload["auth"] = {
+            "access_token": HQ_ACCESS_TOKEN,
+            "refresh_token": HQ_REFRESH_TOKEN,
+        }
+    if HQ_BASE_URL or HQ_PORT or HQ_USER_ID or HQ_SESSION_ID:
+        payload["hq"] = {
+            "base_url": HQ_BASE_URL,
+            "port": HQ_PORT,
+            "user_id": HQ_USER_ID,
+            "session_id": HQ_SESSION_ID,
+        }
+    return payload
 
 
 def post_json_raw(path, payload, include_auth=True):
@@ -408,6 +454,7 @@ def continue_chat_payload(message):
         "tools": [{"name": "repo.read_file"}, {"name": "test.run"}],
         "mode": "editor",
     }
+    payload.update(continue_auth_payload())
     if PROVIDER:
         payload["provider"] = PROVIDER
     if MODEL:
@@ -447,6 +494,7 @@ def continue_execute_payload(task):
             "max_inline_diff_bytes": 16384,
         },
     }
+    payload.update(continue_auth_payload())
     if TOOL_CHOICE:
         payload["tool_choice"] = TOOL_CHOICE
     if PROVIDER:

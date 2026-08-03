@@ -15,6 +15,8 @@ The AI Studio daemon remains the controller. Continue is an editor-facing partic
 - Provider and model are explicit request attributes on native Continue requests.
 - The daemon owns orchestration, workflow state, approvals, memory, and fallback behavior.
 - Continue may execute editor-aware subtasks, but only as a delegated worker.
+- The current Continue extension implements the Ask2Ask-style continuation flow: it persists HQ and daemon auth state in VS Code secret storage, rehydrates that state on startup, and refreshes or re-handshakes the session so restarts do not immediately break delegated AI Studio work.
+- Delegated Continue requests are intentionally task-scoped and single-turn. They should carry the current IDE subtask payload rather than depending on Continue conversation history, because the daemon and AI Studio remain the authoritative memory layer for prior Ask prompts and workflow state.
 
 ## Base URL
 
@@ -26,10 +28,51 @@ http://127.0.0.1:9090
 
 Use the existing daemon/HQ bearer-token flow.
 
-- Requests should include `Authorization: Bearer <access-token>` when auth is enabled.
-- `401` and `403` should be handled through the existing sign-in and token refresh flow.
-- No Continue-specific credential scheme should be introduced.
-- Local helper validation may bootstrap through `POST /api/daemon/auth` using the daemon bootstrap secret or an existing bootstrap token, then cache and refresh bearer tokens through `POST /api/daemon/refresh`.
+- Continue owns two distinct authenticated sessions:
+  - an HQ session for Northstar HQ access, renewal, and periodic re-authentication
+  - a daemon-local session for `http://127.0.0.1:9090` bridge calls
+- Requests should include `Authorization: Bearer <daemon-access-token>` when auth is enabled.
+- `401` and `403` from the daemon should be handled through the daemon-local sign-in and token refresh flow.
+- No Continue-specific daemon credential scheme should be introduced.
+- Local helper validation may bootstrap through `POST /api/daemon/auth` using the daemon bootstrap secret or an existing bootstrap token, then cache and refresh daemon bearer tokens through `POST /api/daemon/refresh`.
+- Continue must authenticate to HQ separately and manage its own HQ access token, HQ refresh token, and re-authentication cadence independently from the UI session.
+- Continue persists both the HQ token set and the daemon token set in VS Code secret storage. On activation, Continue rehydrates those values, refreshes them when stale, and can re-establish the daemon handoff after a restart.
+- When Continue calls daemon endpoints that may later trigger federation work, Continue must also provide its current HQ connectivity context so daemon can reuse the same HQ identity for outbound sync work.
+
+In the common handoff case, daemon may also provide HQ connectivity and token context back to Continue after the user has already logged in through AI Studio UI. That lets the user move from AI Studio into IDE coding without performing a second HQ login immediately.
+
+### Dual-token model
+
+Continue keeps two independent token sets:
+
+1. HQ token set
+  - `hq_access_token`
+  - `hq_refresh_token`
+  - expiry metadata and re-authentication state
+2. Daemon token set
+  - `daemon_access_token`
+  - `daemon_refresh_token`
+  - expiry metadata
+
+These token sets must never be substituted for one another. The HQ token set authenticates Continue with Northstar HQ. The daemon token set authenticates Continue with the local daemon.
+
+For user experience, the HQ token set may be initialized from daemon-provided handoff state when the user already authenticated through AI Studio UI. After handoff, Continue treats that HQ session as its active HQ context and is responsible for continuing refresh and re-authentication behavior from there.
+
+### HQ context propagation into daemon
+
+Continue must pass its active HQ connectivity context into daemon-owned flows whenever daemon may need to perform later HQ federation work on behalf of the same Continue session.
+
+The minimum propagated fields are:
+
+- `hq_base_url`
+- `hq_user_id`
+- `hq_session_id`
+- Continue-owned HQ `access_token`
+- Continue-owned HQ `refresh_token` when daemon-side renewal or long-lived federation work needs to survive beyond the current request
+
+The daemon treats this HQ context as session-scoped metadata, not as a replacement for daemon bearer auth.
+
+The same path also works in reverse: if daemon already holds fresh HQ connectivity for the current user session, daemon may include that HQ context in delegated worker callbacks so Continue can adopt it and avoid a redundant login prompt.
 
 ## Endpoints
 
@@ -210,14 +253,46 @@ Content-Type: application/json
 
 Returns daemon-owned workflow state for the Continue session.
 
+Identity rules:
+
+- `session_id` is the workstream or conversation identity
+- `request_id` is the bounded execution identity
+- the session view returns the latest daemon-owned snapshot for that session
+
 #### Example response
 
 ```json
 {
+  "request_id": "request-123",
   "session_id": "workspace-42",
   "status": "in_progress",
   "phase": "execution",
   "mode": "edit",
+  "workflow_profile": "refactoring",
+  "task_type": "refactoring",
+  "message": "Refactor the parser error handling",
+  "updated_at": "2026-08-03T12:34:56Z",
+  "open_files": ["src/parser/handler.go", "src/parser/handler_test.go"],
+  "active_file": "src/parser/handler.go",
+  "workspace_root": "/path/to/repo"
+}
+```
+
+### GET /api/continue/requests/{requestId}
+
+Returns daemon-owned workflow state for one bounded Continue execution.
+
+Use this endpoint when multiple delegated executions may happen under the same `session_id` and the caller needs a definitive handle for progress, timeout, cancellation, or result correlation.
+
+#### Example response
+
+```json
+{
+  "request_id": "request-123",
+  "session_id": "workspace-42",
+  "status": "completed",
+  "phase": "execution",
+  "mode": "apply",
   "workflow_profile": "refactoring",
   "task_type": "refactoring",
   "message": "Refactor the parser error handling",
@@ -238,6 +313,7 @@ This is the transport behind the daemon Ask capability's delegated Continue task
 
 ```json
 {
+  "request_id": "request-123",
   "session_id": "workspace-42",
   "task": "Apply the prepared patch to the parser handler",
   "provider": "gemini",
@@ -277,6 +353,9 @@ This is the transport behind the daemon Ask capability's delegated Continue task
 
 #### Execution rules
 
+- the daemon owns the authoritative `request_id` for each bounded delegated execution; Continue may send a caller-provided value, but the daemon uses its own generated identity for lifecycle tracking and correlation
+- `request_id` is the canonical identifier for correlation, timeout, cancellation, and concurrent delegated work
+- `session_id` remains the conversation or workstream identity and may span multiple delegated executions
 - if a Continue worker is registered for the session and advertises the required capability set, the daemon proxies the task to that worker
 - if no worker is registered, the daemon falls back to local Ask execution
 - if a worker is registered but lacks the required capabilities, the daemon falls back to local Ask execution
@@ -307,6 +386,10 @@ Execution result rules:
 ### POST /api/continue/worker/register
 
 Registers a Continue-side worker callback for a daemon session.
+
+Registration remains session-scoped. The worker callback handles many per-request delegated executions, each identified by `request_id`.
+
+The callback URL must be an absolute http(s) URL whose host resolves to loopback only (for example `http://127.0.0.1:65432/continue/worker` or `http://localhost:65432/continue/worker`). Remote hosts are rejected to prevent SSRF-style callback abuse.
 
 #### Request body
 
@@ -346,10 +429,15 @@ Current metadata guarantees:
 
 - chat path is `/api/continue/chat`
 - chat method is `POST`
+- request state path prefix is `/api/continue/requests/`
+- delegated execution supports an optional caller-provided `request_id`, but the daemon owns the authoritative execution identity for correlation and lifecycle tracking
+- `control_model.supported_llms` is the authoritative daemon-advertised AI Studio model catalog for the supported Big 3 providers
+- `control_model.selection_message` tells Continue to present the same daemon-advertised provider/model choices
 - chat streaming is `ndjson`
 - `provider_is_attribute` is `true`
 - `model_is_attribute` is `true`
 - control model declares `controller=ai_studio_daemon` and `editor_worker=continue`
+- control model advertises the daemon-owned `supported_llms` catalog and a `selection_message`
 - no daemon-owned config endpoint is advertised
 
 The metadata may also advertise:

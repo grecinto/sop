@@ -526,6 +526,17 @@ func TestRegisterBridgeRoutes_MountsClientMetadataEndpoints(t *testing.T) {
 	if !ok || controlModel["controller"] != "ai_studio_daemon" || controlModel["editor_worker"] != "continue" || controlModel["provider_is_attribute"] != true || controlModel["model_is_attribute"] != true {
 		t.Fatalf("expected continue control model metadata, got %#v", continuePayload)
 	}
+	if controlModel["selection_message"] == "" {
+		t.Fatalf("expected continue control model selection message, got %#v", controlModel)
+	}
+	supportedLLMs, ok := controlModel["supported_llms"].([]any)
+	if !ok || len(supportedLLMs) != 3 {
+		t.Fatalf("expected daemon-advertised supported llms, got %#v", controlModel)
+	}
+	firstGroup, ok := supportedLLMs[0].(map[string]any)
+	if !ok || firstGroup["label"] == "" {
+		t.Fatalf("expected llm catalog groups in metadata, got %#v", supportedLLMs)
+	}
 	workerRegister, ok := continuePayload["worker_register"].(map[string]any)
 	if !ok || workerRegister["path"] != "/api/continue/worker/register" || workerRegister["method"] != "POST" {
 		t.Fatalf("expected continue worker register metadata, got %#v", continuePayload)
@@ -634,7 +645,7 @@ func TestRegisterBridgeRoutes_TracksContinueAgentExecutionSessionState(t *testin
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
 	service.registerBridgeRoutes(mux, reg, nil)
 
-	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-agent-1","task":"Implement a feature flag rollout for billing","mode":"plan","context":{"workspace_root":".","active_file":"billing/service.go","selected_text":"func rollout()","open_files":["billing/service.go","billing/service_test.go"]}}`))
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"request_id":"client-request-agent-1","session_id":"continue-agent-1","task":"Implement a feature flag rollout for billing","mode":"plan","context":{"workspace_root":".","active_file":"billing/service.go","selected_text":"func rollout()","open_files":["billing/service.go","billing/service_test.go"]}}`))
 	executeReq.Header.Set("Content-Type", "application/json")
 	executeReq.Header.Set("X-SOP-Session-ID", "bridge-route-agent-execute")
 	executeRR := httptest.NewRecorder()
@@ -657,7 +668,8 @@ func TestRegisterBridgeRoutes_TracksContinueAgentExecutionSessionState(t *testin
 	if err := json.Unmarshal(sessionRR.Body.Bytes(), &snapshot); err != nil {
 		t.Fatalf("decode continue session snapshot: %v", err)
 	}
-	if snapshot["session_id"] != "continue-agent-1" || snapshot["status"] != "completed" {
+	requestID, ok := snapshot["request_id"].(string)
+	if snapshot["session_id"] != "continue-agent-1" || !ok || requestID == "" || requestID == "client-request-agent-1" || snapshot["status"] != "completed" {
 		t.Fatalf("expected completed session snapshot, got %#v", snapshot)
 	}
 	if snapshot["phase"] != "planning" || snapshot["workflow_profile"] != "feature_implementation" || snapshot["task_type"] != "implementation" {
@@ -665,6 +677,14 @@ func TestRegisterBridgeRoutes_TracksContinueAgentExecutionSessionState(t *testin
 	}
 	if snapshot["active_file"] != "billing/service.go" || snapshot["workspace_root"] != "." {
 		t.Fatalf("expected workspace context in session snapshot, got %#v", snapshot)
+	}
+
+	requestReq := httptest.NewRequest(http.MethodGet, "/api/continue/requests/"+requestID, nil)
+	requestReq.Header.Set("X-SOP-Session-ID", "bridge-route-agent-request")
+	requestRR := httptest.NewRecorder()
+	mux.ServeHTTP(requestRR, requestReq)
+	if requestRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue request state route status = %d, want %d", requestRR.Code, http.StatusOK)
 	}
 }
 
@@ -683,7 +703,7 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
 			t.Fatalf("decode worker callback body: %v", err)
 		}
-		if snapshot, ok := service.ensureContinueSessionStore().Get("continue-worker-1"); ok {
+		if snapshot, ok := service.ensureContinueSessionStore().GetRequest(receivedBody["request_id"].(string)); ok {
 			observedInProgress = snapshot.Status == "in_progress" && snapshot.Phase == "execution"
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
@@ -709,7 +729,7 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 		t.Fatalf("mounted continue worker state route status = %d, want %d", workerStateRR.Code, http.StatusOK)
 	}
 
-	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-worker-1","task":"Apply the prepared payment patch","mode":"apply","requested_phase":"execution","context":{"workspace_root":".","active_file":"payments/service.go","selected_text":"func processPayment()","open_files":["payments/service.go"]}}`))
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"request_id":"client-request-worker-1","session_id":"continue-worker-1","task":"Apply the prepared payment patch","mode":"apply","requested_phase":"execution","context":{"workspace_root":".","active_file":"payments/service.go","selected_text":"func processPayment()","open_files":["payments/service.go"]}}`))
 	executeReq.Header.Set("Content-Type", "application/json")
 	executeReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-execute")
 	executeRR := httptest.NewRecorder()
@@ -726,6 +746,10 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 	if receivedBody["task"] != "Apply the prepared payment patch" || receivedBody["mode"] != "apply" {
 		t.Fatalf("unexpected proxied worker request body: %#v", receivedBody)
 	}
+	requestID, ok := receivedBody["request_id"].(string)
+	if !ok || requestID == "" || requestID == "client-request-worker-1" {
+		t.Fatalf("expected daemon-generated request_id, got %#v", receivedBody["request_id"])
+	}
 
 	sessionReq := httptest.NewRequest(http.MethodGet, "/api/continue/sessions/continue-worker-1", nil)
 	sessionReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-session")
@@ -740,6 +764,9 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 	}
 	if snapshot["status"] != "completed" || snapshot["phase"] != "execution" {
 		t.Fatalf("expected completed execution snapshot for proxied worker path, got %#v", snapshot)
+	}
+	if snapshot["request_id"] != requestID {
+		t.Fatalf("expected request-scoped execution snapshot, got %#v", snapshot)
 	}
 	if snapshot["mode"] != "apply" {
 		t.Fatalf("expected mode to remain apply while phase is execution, got %#v", snapshot)
@@ -836,8 +863,55 @@ func TestBuildContinueBridgeEnvelope_PreservesContinueToolMetadata(t *testing.T)
 	}
 }
 
+func TestBuildContinueBridgeEnvelope_PropagatesHQSessionContext(t *testing.T) {
+	envelope, err := buildContinueBridgeEnvelope(continueChatRequest{
+		SessionID: "sess-auth",
+		Message:   "Apply the prepared patch",
+		Mode:      "apply",
+		Auth: struct {
+			AccessToken  string `json:"access_token,omitempty"`
+			RefreshToken string `json:"refresh_token,omitempty"`
+		}{AccessToken: "hq-access", RefreshToken: "hq-refresh"},
+		HQ: struct {
+			BaseURL   string `json:"base_url,omitempty"`
+			Port      string `json:"port,omitempty"`
+			UserID    string `json:"user_id,omitempty"`
+			SessionID string `json:"session_id,omitempty"`
+		}{BaseURL: "https://northstar.example.com", UserID: "user-42", SessionID: "hq-session-42"},
+	})
+	if err != nil {
+		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
+	}
+	if envelope.Ask.AccessToken != "hq-access" || envelope.Ask.RefreshToken != "hq-refresh" {
+		t.Fatalf("expected HQ tokens on bridge ask, got %#v", envelope.Ask)
+	}
+	if envelope.Ask.HQBaseURL != "https://northstar.example.com" || envelope.Ask.HQUserID != "user-42" || envelope.Ask.HQSessionID != "hq-session-42" {
+		t.Fatalf("expected HQ session context on bridge ask, got %#v", envelope.Ask)
+	}
+}
+
 func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.T) {
 	service := &localRAGService{service: &recordingQueryAgent{}}
+	daemonSessionStore.mu.Lock()
+	oldSessionStore := daemonSessionStore.data
+	daemonSessionStore.data = map[string]daemonSessionContext{}
+	daemonSessionStore.mu.Unlock()
+	t.Cleanup(func() {
+		daemonSessionStore.mu.Lock()
+		daemonSessionStore.data = oldSessionStore
+		daemonSessionStore.mu.Unlock()
+	})
+
+	daemonSessionStore.mu.Lock()
+	daemonSessionStore.data["continue-worker-2"] = daemonSessionContext{
+		AccessToken:  "hq-access-token",
+		RefreshToken: "hq-refresh-token",
+		HQBaseURL:    "https://northstar.example.com",
+		HQUserID:     "user-42",
+		HQSessionID:  "hq-session-42",
+	}
+	daemonSessionStore.mu.Unlock()
+
 	var received continueAgentExecuteRequest
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
@@ -857,6 +931,7 @@ func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.
 
 	backend := newContinueIDEWorkerBackend(service)
 	result, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
+		RequestID:      "client-request-backend-1",
 		SessionID:      "continue-worker-2",
 		Task:           "Apply the prepared payment patch",
 		Mode:           "apply",
@@ -889,8 +964,17 @@ func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.
 	if received.Task != "Apply the prepared payment patch" || received.Context.ActiveFile != "payments/service.go" {
 		t.Fatalf("unexpected worker request: %#v", received)
 	}
+	if received.RequestID == "" || received.RequestID == "client-request-backend-1" {
+		t.Fatalf("expected daemon-generated request id on worker request, got %#v", received)
+	}
 	if received.Provider != "anthropic" || received.Model != "claude-sonnet-4-5" {
 		t.Fatalf("expected provider/model on worker request, got %#v", received)
+	}
+	if received.Auth.AccessToken != "hq-access-token" || received.Auth.RefreshToken != "hq-refresh-token" {
+		t.Fatalf("expected HQ auth handoff on worker request, got %#v", received.Auth)
+	}
+	if received.HQ.BaseURL != "https://northstar.example.com" || received.HQ.UserID != "user-42" || received.HQ.SessionID != "hq-session-42" {
+		t.Fatalf("expected HQ connectivity handoff on worker request, got %#v", received.HQ)
 	}
 	if received.RequestedPhase != "execution" || received.ToolChoice != "multi_edit" {
 		t.Fatalf("expected phase/tool choice metadata on worker request, got %#v", received)
@@ -937,6 +1021,7 @@ func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *t
 
 	backend := newDefaultIDEWorkerBackend(service)
 	result, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
+		RequestID:      "client-request-default-1",
 		SessionID:      "continue-worker-default",
 		Task:           "Apply the prepared payment patch",
 		Mode:           "apply",
@@ -952,6 +1037,9 @@ func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *t
 	}
 	if received.Task != "Apply the prepared payment patch" || received.Context.ActiveFile != "payments/service.go" {
 		t.Fatalf("unexpected worker request: %#v", received)
+	}
+	if received.RequestID == "" || received.RequestID == "client-request-default-1" {
+		t.Fatalf("expected daemon-generated request id on default backend worker request, got %#v", received)
 	}
 	if received.Provider != "gemini" || received.Model != "gemini-2.5-pro" {
 		t.Fatalf("expected provider/model on default backend worker request, got %#v", received)
@@ -1048,6 +1136,25 @@ func TestRegisterBridgeRoutes_FallsBackWhenRegisteredWorkerLacksRequiredCapabili
 	}
 }
 
+func TestRegisterBridgeRoutes_RejectsWorkerRegistrationWithNonLoopbackCallbackURL(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	mux := http.NewServeMux()
+	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
+	service.registerBridgeRoutes(mux, reg, nil)
+
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/continue/worker/register", strings.NewReader(`{"session_id":"continue-worker-remote","callback_url":"http://example.com/continue/worker","capabilities":["apply_patch"],"ide":"vscode"}`))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-register-remote")
+	registerRR := httptest.NewRecorder()
+	mux.ServeHTTP(registerRR, registerReq)
+	if registerRR.Code != http.StatusBadRequest {
+		t.Fatalf("non-loopback worker registration status = %d, want %d", registerRR.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(registerRR.Body.String(), "loopback") {
+		t.Fatalf("expected loopback validation error, got %q", registerRR.Body.String())
+	}
+}
+
 func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testing.T) {
 	withIsolatedSystemDB(t)
 	xdgConfigHome := t.TempDir()
@@ -1104,7 +1211,7 @@ func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testi
 		t.Fatalf("expected continue metadata payload, got %q", authMetadataRR.Body.String())
 	}
 
-	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-auth-1","task":"Summarize the active file and report the workspace root.","mode":"apply","context":{"workspace_root":".","active_file":"README.md","selected_text":"","open_files":["README.md"]}}`))
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"request_id":"client-request-auth-1","session_id":"continue-auth-1","task":"Summarize the active file and report the workspace root.","mode":"apply","context":{"workspace_root":".","active_file":"README.md","selected_text":"","open_files":["README.md"]}}`))
 	executeReq.Header.Set("Authorization", "Bearer "+accessToken)
 	executeReq.Header.Set("Content-Type", "application/json")
 	executeRR := httptest.NewRecorder()
@@ -1129,6 +1236,10 @@ func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testi
 	}
 	if snapshot["session_id"] != "continue-auth-1" || snapshot["status"] != "completed" || snapshot["phase"] != "execution" {
 		t.Fatalf("expected completed authenticated execution snapshot, got %#v", snapshot)
+	}
+	requestID, ok := snapshot["request_id"].(string)
+	if !ok || requestID == "" || requestID == "client-request-auth-1" {
+		t.Fatalf("expected daemon-generated request_id, got %#v", snapshot["request_id"])
 	}
 }
 

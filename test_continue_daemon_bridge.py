@@ -35,6 +35,12 @@ class ContinueDaemonBridgeTests(unittest.TestCase):
         self.module.TEAM_PRACTICES = ["Preserve public interfaces", "Add targeted tests"]
         self.module.TOKEN_CACHE_PATH = os.path.join(self.tmpdir.name, "continue-helper-session.json")
         self.module.BOOTSTRAP_PATH = os.path.join(self.tmpdir.name, "daemon.bootstrap")
+        self.module.HQ_BASE_URL = ""
+        self.module.HQ_PORT = ""
+        self.module.HQ_ACCESS_TOKEN = ""
+        self.module.HQ_REFRESH_TOKEN = ""
+        self.module.HQ_USER_ID = ""
+        self.module.HQ_SESSION_ID = self.module.SESSION_ID
 
     def test_get_access_token_uses_valid_cached_token_without_network(self):
         self.module.save_token_cache({
@@ -113,6 +119,29 @@ class ContinueDaemonBridgeTests(unittest.TestCase):
         cached = self.module.load_token_cache()
         self.assertEqual(cached["refresh_token"], "bootstrap-refresh")
 
+    def test_get_access_token_prefers_hq_bootstrap_token_before_secret(self):
+        self.module.HQ_ACCESS_TOKEN = "hq-access-token"
+
+        calls = []
+
+        def fake_post_json_raw(path, payload, include_auth=True):
+            calls.append((path, payload, include_auth))
+            self.assertEqual(path, "/api/daemon/auth")
+            self.assertEqual(payload, {"bootstrap_token": "hq-access-token"})
+            self.assertFalse(include_auth)
+            return 200, json.dumps({
+                "access_token": "daemon-token",
+                "refresh_token": "daemon-refresh",
+                "expires_in": 120,
+            })
+
+        self.module.post_json_raw = fake_post_json_raw
+
+        token = self.module.get_access_token()
+
+        self.assertEqual(token, "daemon-token")
+        self.assertEqual(len(calls), 1)
+
     def test_continue_execute_payload_preserves_request_scoped_provider_details(self):
         self.module.PROVIDER = "openai"
         self.module.MODEL = "gpt-5.4"
@@ -121,6 +150,11 @@ class ContinueDaemonBridgeTests(unittest.TestCase):
         self.module.ACTIVE_FILE = "src/main.go"
         self.module.WORKSPACE_ROOT = "/workspace/repo"
         self.module.SESSION_ID = "workspace-42"
+        self.module.HQ_BASE_URL = "https://northstar.example.com"
+        self.module.HQ_ACCESS_TOKEN = "hq-token"
+        self.module.HQ_REFRESH_TOKEN = "hq-refresh"
+        self.module.HQ_USER_ID = "user-42"
+        self.module.HQ_SESSION_ID = "hq-session-42"
 
         payload = self.module.continue_execute_payload("Apply the prepared patch")
 
@@ -131,6 +165,11 @@ class ContinueDaemonBridgeTests(unittest.TestCase):
         self.assertEqual(payload["model"], "gpt-5.4")
         self.assertEqual(payload["api_key"], "continue-key")
         self.assertEqual(payload["url"], "https://api.openai.com")
+        self.assertEqual(payload["auth"]["access_token"], "hq-token")
+        self.assertEqual(payload["auth"]["refresh_token"], "hq-refresh")
+        self.assertEqual(payload["hq"]["base_url"], "https://northstar.example.com")
+        self.assertEqual(payload["hq"]["user_id"], "user-42")
+        self.assertEqual(payload["hq"]["session_id"], "hq-session-42")
         self.assertEqual(payload["requested_phase"], "execution")
         self.assertEqual(payload["allowed_tools"], ["read_file", "apply_patch", "get_problems"])
         self.assertEqual(payload["tool_choice"], "apply_patch")

@@ -34,7 +34,7 @@ func TestLoadModelCatalogUsesDefaultCatalogWithoutWritingFile(t *testing.T) {
 	if len(modelCatalog.Embedder) == 0 {
 		t.Fatal("expected default embedder catalog entries")
 	}
-	if modelCatalog.LLM[0].Options[0].Value != "gemini:gemini-3.1-pro-preview" {
+	if modelCatalog.LLM[0].Options[0].Value != "gemini:gemini-2.5-pro" {
 		t.Fatalf("unexpected first default llm option: %q", modelCatalog.LLM[0].Options[0].Value)
 	}
 	if _, err := os.Stat(modelCatalogPath); !os.IsNotExist(err) {

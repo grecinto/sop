@@ -15,6 +15,16 @@ In the rest of this guide, the short product name is AI Studio.
 
 Do not configure the daemon as an OpenAI-compatible provider.
 
+## Current integration posture
+
+The Continue integration now follows an Ask2Ask-style contract:
+
+- AI Studio remains the controller and orchestrator.
+- Continue is the editor-facing execution surface and delegated worker.
+- Continue only routes AI Studio chat and delegated coding work through the daemon for daemon-advertised provider/model pairs such as OpenAI, Anthropic, and Gemini.
+- Unsupported paths such as local Ollama workflows remain outside this native AI Studio delegation contract.
+- Continue persists HQ and daemon auth state in VS Code secret storage and rehydrates that state on extension startup so restarts do not immediately break the session.
+
 ## Supported transport
 
 Use the native Continue endpoints under `/api/continue/*`.
@@ -26,6 +36,7 @@ Primary routes:
 - `POST /api/continue/worker/register`
 - `GET /api/continue/metadata`
 - `GET /api/continue/sessions/{sessionId}`
+- `GET /api/continue/requests/{requestId}`
 - `GET /api/continue/workers/{sessionId}`
 
 Reference API details live in [docs/CONTINUE_BRIDGE_API_SPEC.md](docs/CONTINUE_BRIDGE_API_SPEC.md).
@@ -36,6 +47,7 @@ Continue should send model configuration as explicit request fields rather than 
 
 Current native request attributes:
 
+- `request_id` on delegated execution requests
 - `provider`
 - `model`
 - `api_key`
@@ -89,6 +101,7 @@ Example delegated execute request:
 
 ```json
 {
+  "request_id": "request-123",
   "session_id": "workspace-42",
   "task": "Apply the prepared patch to the parser handler",
   "provider": "openai",
@@ -105,6 +118,25 @@ Example delegated execute request:
 }
 ```
 
+Identity rules:
+
+- `session_id` identifies the ongoing Continue or AI Studio workstream
+- `request_id` identifies one bounded delegated execution under that workstream
+- worker registration stays bound to `session_id`
+- progress, timeout, cancellation, and final result correlation should key off `request_id`
+
+The daemon owns `request_id` generation for delegated execution. Continue may include a caller-provided `request_id`, but the daemon treats it as advisory and generates its own authoritative request identity when needed. This matches the daemon's orchestration model for parallel and branched work.
+
+## AI Studio model authority
+
+The daemon is the source of truth for AI Studio-supported delegated LLMs and models.
+
+- Continue should read `/api/continue/metadata`
+- Continue should use `control_model.supported_llms` to synthesize AI Studio provider/model choices
+- Continue should use `control_model.selection_message` as the human-facing contract reminder
+- Continue should delegate prompts, chat, and bounded coding execution only for the daemon-supported Big 3 provider families and their daemon-advertised models
+- Other Continue model features, such as local Ollama workflows outside AI Studio delegation, remain outside this transport contract
+
 ## Authentication
 
 When daemon auth is enabled, native Continue calls require the existing daemon bearer-token flow.
@@ -115,6 +147,19 @@ Supported paths:
 2. Refresh-token based renewal.
 3. Local bootstrap-secret authentication against `POST /api/daemon/auth`.
 
+Continue must also maintain its own HQ-authenticated session in parallel with the daemon session.
+
+- Continue signs in to HQ directly and keeps its own HQ access token and HQ refresh token.
+- Continue renews HQ tokens on expiry and participates in the required periodic HQ re-authentication flow.
+- Continue separately bootstraps against daemon and renews daemon-local bearer tokens through `POST /api/daemon/refresh`.
+- Continue passes its current HQ connectivity context to daemon requests so daemon can continue federation sync work against HQ using the same Continue-owned identity.
+
+User-facing handoff flow:
+
+- If the user already logged in to HQ through AI Studio UI, daemon may hand that HQ connectivity and token context to Continue.
+- Continue can adopt that handed-over HQ session and proceed with IDE coding without an immediate second login.
+- After handoff, Continue is responsible for continuing token refresh and eventual periodic re-authentication for its own IDE session.
+
 For local validation, the helper script now supports all three without going through the browser login screen.
 
 Relevant environment variables:
@@ -124,6 +169,18 @@ Relevant environment variables:
 - `SOP_CONTINUE_REFRESH_TOKEN`
 - `SOP_CONTINUE_BOOTSTRAP_PATH`
 - `SOP_CONTINUE_TOKEN_CACHE`
+
+The production Continue integration also needs an HQ-side credential cache containing:
+
+- HQ access token
+- HQ refresh token
+- HQ base URL
+- HQ user/session identifiers
+- HQ token expiry metadata
+
+That cache may be initialized either by direct Continue HQ login or by daemon-provided HQ session handoff when the user transitions from AI Studio UI into Continue.
+
+The current Continue extension implementation persists both the HQ session and the daemon session in VS Code secret storage. On activation, Continue rehydrates the stored session, refreshes expired daemon/HQ tokens when possible, and can re-establish the daemon handoff after a restart without requiring a fresh full login unless the refresh flow itself fails.
 
 Default bootstrap path:
 
@@ -136,6 +193,8 @@ Default helper token cache:
 ```text
 ~/.config/sop/continue-helper-session.json
 ```
+
+The helper cache models only the daemon-local auth path. A full Continue client must store HQ and daemon token sets separately.
 
 ## Local validation helper
 
@@ -210,6 +269,7 @@ Expected result:
 - the registered worker receives a callback on `/continue/worker`.
 - worker state resolves through `/api/continue/workers/{sessionId}`.
 - session state resolves through `/api/continue/sessions/{sessionId}`.
+- request state resolves through `/api/continue/requests/{requestId}`.
 
 ## Isolated source-tree validation
 
@@ -230,6 +290,7 @@ This confirms the native Continue transport works from the current daemon source
 If a dedicated Continue-side adapter is added later, it should follow these rules:
 
 - send `provider`, `model`, `api_key`, and `url` as request attributes
+- send a stable `request_id` on every delegated `/api/continue/agent/execute` request
 - forward `tools` and `tool_choice` when AI Studio needs Continue to execute IDE-native workflow steps through the normal Continue tool system
 - use the daemon bearer-token flow instead of inventing a separate auth scheme
 - treat `/api/continue/chat` as the primary prompt path

@@ -364,6 +364,39 @@ func HandleBootstrap(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+This same bootstrap and refresh pattern is also the expected local-auth path for Continue.
+
+- Continue obtains daemon-local access and refresh tokens through `POST /api/daemon/auth`.
+- Continue renews daemon-local access through `POST /api/daemon/refresh`.
+- Continue must not treat those daemon-local tokens as HQ credentials.
+
+### Continue, Daemon, and HQ session boundaries
+
+Continue operates with two independent authenticated sessions:
+
+1. HQ session
+    - authenticates Continue directly with Northstar HQ
+    - owns HQ access token, HQ refresh token, and forced re-authentication cadence
+2. Daemon session
+    - authenticates Continue to the local daemon bridge
+    - owns daemon access token and daemon refresh token
+
+The daemon session is local-runtime auth only. The HQ session is remote control-plane auth only.
+
+For user experience, the HQ session may be handed over from daemon to Continue after the user authenticated through AI Studio UI. That avoids a second immediate HQ login when the user switches from the AI Studio surface into IDE coding.
+
+When Continue calls daemon bridge endpoints, daemon bearer auth still happens via the `Authorization` header. Separately, Continue should pass its current HQ connectivity information into the daemon request body/config so daemon-side federation logic can later talk to HQ under the same Continue-owned session.
+
+That propagated HQ context should include:
+
+- HQ base URL
+- HQ user ID
+- HQ session ID
+- HQ access token
+- HQ refresh token when daemon background sync and renewal need to continue beyond the current request lifetime
+
+The reverse handoff is also supported: daemon may provide the current HQ connectivity and token context back to Continue when invoking a registered Continue worker. After that handoff, Continue continues operating and refreshing under that adopted HQ session until a normal re-authentication boundary is reached.
+
 ---
 
 ## Common Patterns

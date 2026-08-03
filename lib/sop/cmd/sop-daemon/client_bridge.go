@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -25,6 +28,12 @@ type bridgeAskRequest struct {
 	APIKey       string
 	BaseURL      string
 	ModelName    string
+	AccessToken  string
+	RefreshToken string
+	HQBaseURL    string
+	HQPort       string
+	HQUserID     string
+	HQSessionID  string
 	Variables    map[string]any
 }
 
@@ -144,6 +153,7 @@ type continueDelegationGuidance struct {
 }
 
 type continueAgentExecuteRequest struct {
+	RequestID      string                          `json:"request_id,omitempty"`
 	SessionID      string                          `json:"session_id"`
 	Task           string                          `json:"task"`
 	Provider       string                          `json:"provider,omitempty"`
@@ -157,7 +167,17 @@ type continueAgentExecuteRequest struct {
 	ToolChoice     string                          `json:"tool_choice,omitempty"`
 	Guidance       continueDelegationGuidance      `json:"guidance,omitempty"`
 	ResultContract continueExecutionResultContract `json:"result_contract,omitempty"`
-	Context        struct {
+	Auth           struct {
+		AccessToken  string `json:"access_token,omitempty"`
+		RefreshToken string `json:"refresh_token,omitempty"`
+	} `json:"auth,omitempty"`
+	HQ struct {
+		BaseURL   string `json:"base_url,omitempty"`
+		Port      string `json:"port,omitempty"`
+		UserID    string `json:"user_id,omitempty"`
+		SessionID string `json:"session_id,omitempty"`
+	} `json:"hq,omitempty"`
+	Context struct {
 		WorkspaceRoot string   `json:"workspace_root"`
 		ActiveFile    string   `json:"active_file"`
 		SelectedText  string   `json:"selected_text"`
@@ -167,6 +187,7 @@ type continueAgentExecuteRequest struct {
 }
 
 type continueSessionSnapshot struct {
+	RequestID       string                   `json:"request_id,omitempty"`
 	SessionID       string                   `json:"session_id"`
 	Status          string                   `json:"status"`
 	Phase           string                   `json:"phase,omitempty"`
@@ -207,6 +228,7 @@ type continueWorkerRegistration struct {
 type continueBridgeSessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]continueSessionSnapshot
+	requests map[string]continueSessionSnapshot
 }
 
 type continueBridgeWorkerStore struct {
@@ -223,7 +245,10 @@ type continueBridgeAdapter struct {
 }
 
 func newContinueBridgeSessionStore() *continueBridgeSessionStore {
-	return &continueBridgeSessionStore{sessions: map[string]continueSessionSnapshot{}}
+	return &continueBridgeSessionStore{
+		sessions: map[string]continueSessionSnapshot{},
+		requests: map[string]continueSessionSnapshot{},
+	}
 }
 
 func newContinueBridgeWorkerStore() *continueBridgeWorkerStore {
@@ -257,6 +282,9 @@ func (s *continueBridgeSessionStore) Put(snapshot continueSessionSnapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions[snapshot.SessionID] = snapshot
+	if requestID := strings.TrimSpace(snapshot.RequestID); requestID != "" {
+		s.requests[requestID] = snapshot
+	}
 }
 
 func (s *continueBridgeSessionStore) Get(sessionID string) (continueSessionSnapshot, bool) {
@@ -267,6 +295,20 @@ func (s *continueBridgeSessionStore) Get(sessionID string) (continueSessionSnaps
 	defer s.mu.RUnlock()
 	snapshot, ok := s.sessions[sessionID]
 	return snapshot, ok
+}
+
+func (s *continueBridgeSessionStore) GetRequest(requestID string) (continueSessionSnapshot, bool) {
+	if s == nil || strings.TrimSpace(requestID) == "" {
+		return continueSessionSnapshot{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot, ok := s.requests[requestID]
+	return snapshot, ok
+}
+
+func newContinueRequestID() string {
+	return uuid.NewString()
 }
 
 func (s *continueBridgeWorkerStore) Put(registration continueWorkerRegistration) {
@@ -324,6 +366,41 @@ func continueWorkerSupportsCapabilities(registration continueWorkerRegistration,
 		}
 	}
 	return true
+}
+
+func validateContinueWorkerCallbackURL(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Errorf("callback_url is required")
+	}
+
+	parsedURL, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("callback_url must be a valid URL: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("callback_url must use http or https")
+	}
+	if parsedURL.User != nil {
+		return fmt.Errorf("callback_url must not include user info")
+	}
+	if parsedURL.Host == "" {
+		return fmt.Errorf("callback_url must include a host")
+	}
+
+	host := strings.TrimSpace(parsedURL.Hostname())
+	if host == "" {
+		return fmt.Errorf("callback_url must include a host")
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if parsedIP := net.ParseIP(host); parsedIP != nil {
+		if parsedIP.IsLoopback() {
+			return nil
+		}
+	}
+	return fmt.Errorf("callback_url host must be loopback-only")
 }
 
 func requiredContinueWorkerCapabilities(req continueAgentExecuteRequest) []string {
@@ -470,6 +547,12 @@ func (a continueBridgeAdapter) Routes(s *localRAGService) []bridgeRoute {
 			},
 		},
 		{
+			Pattern: "/api/continue/requests/",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				a.transport.handleRequestState(s, w, r)
+			},
+		},
+		{
 			Pattern:         "/api/continue/worker/register",
 			RequiresService: true,
 			Handler: func(w http.ResponseWriter, r *http.Request) {
@@ -501,7 +584,7 @@ func (continueBridgeTransport) handleChat(s *localRAGService, w http.ResponseWri
 		return
 	}
 	req.SessionID = envelope.Ask.SessionID
-	continueBridgeTransport{}.streamContinueEnvelope(s, w, envelope, req, "")
+	continueBridgeTransport{}.streamContinueEnvelope(s, w, envelope, req, "", "")
 }
 
 func (continueBridgeTransport) handleTool(s *localRAGService, w http.ResponseWriter, r *http.Request) {
@@ -528,6 +611,7 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "task cannot be empty"})
 		return
 	}
+	req.RequestID = newContinueRequestID()
 
 	chatReq := continueChatRequest{
 		SessionID: req.SessionID,
@@ -538,6 +622,12 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 		Model:     strings.TrimSpace(req.Model),
 		URL:       strings.TrimSpace(req.URL),
 	}
+	chatReq.Auth.AccessToken = strings.TrimSpace(req.Auth.AccessToken)
+	chatReq.Auth.RefreshToken = strings.TrimSpace(req.Auth.RefreshToken)
+	chatReq.HQ.BaseURL = strings.TrimSpace(req.HQ.BaseURL)
+	chatReq.HQ.Port = strings.TrimSpace(req.HQ.Port)
+	chatReq.HQ.UserID = strings.TrimSpace(req.HQ.UserID)
+	chatReq.HQ.SessionID = strings.TrimSpace(req.HQ.SessionID)
 	chatReq.Workspace.Root = req.Context.WorkspaceRoot
 	chatReq.Workspace.Active = req.Context.ActiveFile
 	chatReq.Context.SelectedText = req.Context.SelectedText
@@ -551,12 +641,13 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 		requestedPhase = inferredPhase
 	}
 	if registration, ok := s.ensureContinueWorkerStore().Get(chatReq.SessionID); ok {
+		s.storeContinueSessionContext(chatReq)
 		requiredCapabilities := requiredContinueWorkerCapabilities(req)
 		if continueWorkerSupportsCapabilities(registration, requiredCapabilities) {
-			s.ensureContinueSessionStore().Put(buildContinueSessionSnapshot(chatReq, workflowProfile, requestedPhase, "in_progress", chatReq.Message))
+			s.ensureContinueSessionStore().Put(buildContinueSessionSnapshot(req.RequestID, chatReq, workflowProfile, requestedPhase, "in_progress", chatReq.Message))
 			outcome, err := continueBridgeTransport{}.proxyAgentExecuteToWorker(r.Context(), w, req, registration)
 			if err != nil {
-				s.ensureContinueSessionStore().Put(buildContinueSessionSnapshot(chatReq, workflowProfile, requestedPhase, "failed", err.Error()))
+				s.ensureContinueSessionStore().Put(buildContinueSessionSnapshot(req.RequestID, chatReq, workflowProfile, requestedPhase, "failed", err.Error()))
 				respondJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 				return
 			}
@@ -564,7 +655,7 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 			if outcome.StatusCode >= 400 {
 				status = "failed"
 			}
-			s.ensureContinueSessionStore().Put(buildContinueExecutionSnapshot(chatReq, workflowProfile, requestedPhase, status, chatReq.Message, outcome.FinalResult))
+			s.ensureContinueSessionStore().Put(buildContinueExecutionSnapshot(req.RequestID, chatReq, workflowProfile, requestedPhase, status, chatReq.Message, outcome.FinalResult))
 			return
 		}
 	}
@@ -575,10 +666,13 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 		return
 	}
 	chatReq.SessionID = envelope.Ask.SessionID
-	continueBridgeTransport{}.streamContinueEnvelope(s, w, envelope, chatReq, "Executing editor-aware coding task")
+	continueBridgeTransport{}.streamContinueEnvelope(s, w, envelope, chatReq, req.RequestID, "Executing editor-aware coding task")
 }
 
 func (continueBridgeTransport) proxyAgentExecuteToWorker(ctx context.Context, w http.ResponseWriter, req continueAgentExecuteRequest, registration continueWorkerRegistration) (continueWorkerCallbackOutcome, error) {
+	if err := validateContinueWorkerCallbackURL(registration.CallbackURL); err != nil {
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("invalid worker callback URL: %w", err)
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return continueWorkerCallbackOutcome{}, fmt.Errorf("marshal worker request: %w", err)
@@ -638,6 +732,25 @@ func (continueBridgeTransport) handleSessionState(s *localRAGService, w http.Res
 	respondJSON(w, http.StatusOK, snapshot)
 }
 
+func (continueBridgeTransport) handleRequestState(s *localRAGService, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	requestID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/continue/requests/"))
+	if requestID == "" {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "request id is required"})
+		return
+	}
+	store := s.ensureContinueSessionStore()
+	snapshot, ok := store.GetRequest(requestID)
+	if !ok {
+		respondJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "request not found"})
+		return
+	}
+	respondJSON(w, http.StatusOK, snapshot)
+}
+
 func (continueBridgeTransport) handleWorkerRegister(s *localRAGService, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -650,6 +763,10 @@ func (continueBridgeTransport) handleWorkerRegister(s *localRAGService, w http.R
 	}
 	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.CallbackURL) == "" {
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "session_id and callback_url are required"})
+		return
+	}
+	if err := validateContinueWorkerCallbackURL(req.CallbackURL); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	registration := continueWorkerRegistration{
@@ -705,12 +822,17 @@ func (continueBridgeTransport) writeMetadata(w http.ResponseWriter, s *localRAGS
 			"path_prefix": "/api/continue/sessions/",
 			"method":      "GET",
 		},
+		"request_state": map[string]any{
+			"path_prefix": "/api/continue/requests/",
+			"method":      "GET",
+		},
 		"agent_execute": map[string]any{
-			"path":                  "/api/continue/agent/execute",
-			"method":                "POST",
-			"streaming":             "ndjson",
-			"provider_is_attribute": true,
-			"model_is_attribute":    true,
+			"path":                    "/api/continue/agent/execute",
+			"method":                  "POST",
+			"streaming":               "ndjson",
+			"provider_is_attribute":   true,
+			"model_is_attribute":      true,
+			"request_id_is_supported": true,
 		},
 		"worker_register": map[string]any{
 			"path":   "/api/continue/worker/register",
@@ -739,6 +861,7 @@ func (continueBridgeTransport) writeMetadata(w http.ResponseWriter, s *localRAGS
 			"tool_dispatch":     true,
 			"coding_workflows":  true,
 			"session_tracking":  true,
+			"request_tracking":  true,
 			"remote_agent":      true,
 			"worker_callback":   true,
 		},
@@ -748,6 +871,8 @@ func (continueBridgeTransport) writeMetadata(w http.ResponseWriter, s *localRAGS
 			"editor_worker":         "continue",
 			"provider_is_attribute": true,
 			"model_is_attribute":    true,
+			"selection_message":     "Use the daemon-advertised supported LLM list for AI Studio routing. Continue and daemon should present the same provider/model choices.",
+			"supported_llms":        sopbackend.GetModelCatalog().LLM,
 		},
 	})
 }
@@ -996,6 +1121,12 @@ func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, e
 			APIKey:       apiKey,
 			BaseURL:      baseURL,
 			ModelName:    modelName,
+			AccessToken:  strings.TrimSpace(req.Auth.AccessToken),
+			RefreshToken: strings.TrimSpace(req.Auth.RefreshToken),
+			HQBaseURL:    strings.TrimSpace(req.HQ.BaseURL),
+			HQPort:       strings.TrimSpace(req.HQ.Port),
+			HQUserID:     strings.TrimSpace(req.HQ.UserID),
+			HQSessionID:  strings.TrimSpace(req.HQ.SessionID),
 			Variables:    variables,
 		},
 		Stream: true,
@@ -1060,12 +1191,13 @@ func containsAllWorkflowSignals(text string, signals ...string) bool {
 	return len(signals) > 0
 }
 
-func buildContinueSessionSnapshot(req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase, status, message string) continueSessionSnapshot {
+func buildContinueSessionSnapshot(requestID string, req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase, status, message string) continueSessionSnapshot {
 	phase := requestedPhase
 	if phase == "" && len(workflowProfile.DefaultPhasePlan) > 0 {
 		phase = workflowProfile.DefaultPhasePlan[0]
 	}
 	return continueSessionSnapshot{
+		RequestID:       strings.TrimSpace(requestID),
 		SessionID:       req.SessionID,
 		Status:          status,
 		Phase:           phase,
@@ -1080,8 +1212,8 @@ func buildContinueSessionSnapshot(req continueChatRequest, workflowProfile conti
 	}
 }
 
-func buildContinueExecutionSnapshot(req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase, status, message string, result *continueExecutionResult) continueSessionSnapshot {
-	snapshot := buildContinueSessionSnapshot(req, workflowProfile, requestedPhase, status, message)
+func buildContinueExecutionSnapshot(requestID string, req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase, status, message string, result *continueExecutionResult) continueSessionSnapshot {
+	snapshot := buildContinueSessionSnapshot(requestID, req, workflowProfile, requestedPhase, status, message)
 	if result != nil {
 		resultCopy := cloneContinueExecutionResult(*result)
 		snapshot.ExecutionResult = &resultCopy
@@ -1239,10 +1371,10 @@ func (continueBridgeTransport) WriteChatResponse(w http.ResponseWriter, envelope
 	respondJSON(w, http.StatusOK, AskResponse{Answer: answer})
 }
 
-func (continueBridgeTransport) streamContinueEnvelope(s *localRAGService, w http.ResponseWriter, envelope bridgeChatEnvelope, req continueChatRequest, startingMessage string) {
+func (continueBridgeTransport) streamContinueEnvelope(s *localRAGService, w http.ResponseWriter, envelope bridgeChatEnvelope, req continueChatRequest, requestID, startingMessage string) {
 	store := s.ensureContinueSessionStore()
 	workflowProfile, requestedPhase := resolveContinueWorkflowProfile(req.Mode, req.Message)
-	store.Put(buildContinueSessionSnapshot(req, workflowProfile, requestedPhase, "in_progress", req.Message))
+	store.Put(buildContinueSessionSnapshot(requestID, req, workflowProfile, requestedPhase, "in_progress", req.Message))
 
 	sendEvent, _ := sopbackend.SetupStream(w)
 	if strings.TrimSpace(startingMessage) != "" {
@@ -1257,12 +1389,12 @@ func (continueBridgeTransport) streamContinueEnvelope(s *localRAGService, w http
 
 	answer, err := s.askBridgeChat(ctx, envelope.Ask, nil)
 	if err != nil {
-		store.Put(buildContinueSessionSnapshot(req, workflowProfile, requestedPhase, "failed", err.Error()))
+		store.Put(buildContinueSessionSnapshot(requestID, req, workflowProfile, requestedPhase, "failed", err.Error()))
 		sendEvent("error", err.Error())
 		sendEvent("done", nil)
 		return
 	}
-	store.Put(buildContinueSessionSnapshot(req, workflowProfile, requestedPhase, "completed", req.Message))
+	store.Put(buildContinueSessionSnapshot(requestID, req, workflowProfile, requestedPhase, "completed", req.Message))
 	if strings.TrimSpace(answer) != "" {
 		sendEvent("content", answer)
 	}

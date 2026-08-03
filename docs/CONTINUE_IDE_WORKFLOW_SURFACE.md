@@ -14,6 +14,15 @@ Core conclusion:
 - The right strategy is to surface the highest-value Continue IDE capabilities first, then layer AI Studio workflow control and SDLC-specific orchestration above them.
 - The daemon should expose Continue capabilities as data: supported phases, phase modes, and each phase's available tools.
 
+## Current implementation posture
+
+The current implementation is now aligned with an Ask2Ask-style integration posture:
+
+- Continue is treated as a delegated editor worker, not as a controller of the full workflow.
+- The daemon owns request correlation, session snapshots, and request-scoped execution state through `request_id`.
+- Continue only participates in AI Studio delegation for daemon-advertised provider/model pairs, which means the Big 3 provider families are supported through this path while unsupported routes such as local Ollama remain outside the native AI Studio contract.
+- Continue remembers its HQ and daemon auth state across editor restarts through VS Code secret storage and rehydrates it on startup.
+
 ## Control Boundary
 
 The control boundary does not change as the tool surface grows.

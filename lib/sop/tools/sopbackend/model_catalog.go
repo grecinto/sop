@@ -104,29 +104,19 @@ func DefaultModelCatalog() ModelCatalog {
 			{
 				Label: "Google",
 				Options: []ModelCatalogOption{
-					{Value: "gemini:gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro Preview", ThinkingLevelRange: []string{"low", "medium", "high"}},
+					{Value: "gemini:gemini-2.5-pro", Label: "Gemini 2.5 Pro", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"low", "medium", "high"}},
 				},
 			},
 			{
 				Label: "Anthropic",
 				Options: []ModelCatalogOption{
-					{Value: "anthropic:claude-sonnet-4-6", Label: "Claude Sonnet 4.6", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"medium", "high"}},
 					{Value: "anthropic:claude-sonnet-4-5", Label: "Claude Sonnet 4.5", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"medium", "high"}},
-					{Value: "anthropic:claude-opus-4-8", Label: "Claude Opus 4.8", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"medium", "high"}},
 				},
 			},
 			{
 				Label: "OpenAI",
 				Options: []ModelCatalogOption{
 					{Value: "openai:gpt-5.4", Label: "GPT-5.4", DefaultThinkingLevel: "medium", ThinkingLevelRange: []string{"low", "medium", "high"}},
-					{Value: "openai:gpt-5.5-pro", Label: "GPT-5.5 Pro", DefaultThinkingLevel: "high", ThinkingLevelRange: []string{"low", "medium", "high"}},
-				},
-			},
-			{
-				Label: "Local",
-				Options: []ModelCatalogOption{
-					{Value: "ollama", Label: "Ollama (Local Default)"},
-					{Value: "ollama:gemma-4", Label: "Ollama (Gemma 4)"},
 				},
 			},
 		},
