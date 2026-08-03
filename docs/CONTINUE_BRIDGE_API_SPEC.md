@@ -16,7 +16,14 @@ http://127.0.0.1:9090
 
 ## Authentication
 
-For the first iteration, the bridge may reuse the existing local daemon authentication flow and session headers already used by the daemon endpoints.
+The bridge should reuse the existing daemon/HQ bearer-token flow rather than introducing a separate Continue-only credential scheme. Every request should include an Authorization header in the form Bearer <access-token>.
+
+Recommended behavior:
+- access tokens should be short-lived
+- renewal should go through the existing HQ login/session refresh path
+- the backend should validate tokens using the same auth middleware as the rest of the platform
+
+If a token is expired or invalid, the backend should return 401 Unauthorized or 403 Forbidden with a structured error such as auth_expired or login_required. The Continue client should respond by showing a VS Code modal prompting the user to sign in again and then retrying the pending operation after auth is restored.
 
 ## 1. Chat endpoint
 
@@ -123,6 +130,38 @@ Returns the current workflow state and metadata for a task.
   "phase": "investigation",
   "message": "Inspecting failing parser logic"
 }
+```
+
+## 4. Agent execution endpoint
+
+### POST /api/continue/agent/execute
+
+Invokes Continue as a remote coding worker for a specific subtask. This is the bridge used when daemon Ask needs editor-aware execution such as patching, diff review, or workspace-guided edits.
+
+### Request body
+
+```json
+{
+  "session_id": "workspace-42",
+  "task": "patch the failing parser handler",
+  "context": {
+    "workspace_root": "/path/to/repo",
+    "active_file": "src/parser/handler.go",
+    "selected_text": "..."
+  },
+  "mode": "coding"
+}
+```
+
+### Response
+
+The endpoint should stream NDJSON events with the same progress/tool/content structure used by the chat endpoint, followed by a terminal result event.
+
+```json
+{"type":"progress","message":"Preparing the patch"}
+{"type":"tool_call","name":"code.apply_patch","args":{"path":"src/parser/handler.go"}}
+{"type":"tool_result","name":"code.apply_patch","result":{"ok":true}}
+{"type":"done","result":{"status":"completed"}}
 ```
 
 ## Tool schema

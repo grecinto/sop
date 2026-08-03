@@ -703,7 +703,16 @@ func main() {
 		}
 		ragSvc.handleContinueChat(w, r)
 	})
-	mux.HandleFunc("/api/continue/chat", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, continueChatHandler))))
+	mux.HandleFunc("/api/continue/chat", handleOptionsAndCORS(withRateLimit(localRegistry, continueChatHandler)))
+
+	openAICompatibleChatHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ragSvc == nil {
+			respondJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "official RAG is not configured"})
+			return
+		}
+		ragSvc.handleOpenAICompatibleChat(w, r)
+	})
+	mux.HandleFunc("/v1/chat/completions", handleOptionsAndCORS(withRateLimit(localRegistry, openAICompatibleChatHandler)))
 
 	continueToolsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ragSvc == nil {
@@ -717,7 +726,7 @@ func main() {
 		}
 		ragSvc.handleContinueTool(w, r, toolName)
 	})
-	mux.HandleFunc("/api/continue/tools/", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, continueToolsHandler))))
+	mux.HandleFunc("/api/continue/tools/", handleOptionsAndCORS(withRateLimit(localRegistry, continueToolsHandler)))
 
 	// IMPORTANT: /api/ask (daemon) vs /api/ai/chat (HQ) - Separate by Design
 	//

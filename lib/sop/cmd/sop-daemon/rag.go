@@ -316,6 +316,79 @@ func injectShellSessionManager(agentSvc ai.Agent[map[string]any]) {
 	}
 }
 
+func (s *localRAGService) handleOpenAICompatibleChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content any    `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
+		return
+	}
+
+	var userPrompt string
+	for _, msg := range req.Messages {
+		if strings.EqualFold(msg.Role, "user") {
+			switch v := msg.Content.(type) {
+			case string:
+				userPrompt = v
+			case []any:
+				parts := make([]string, 0, len(v))
+				for _, part := range v {
+					if partStr, ok := part.(string); ok {
+						parts = append(parts, partStr)
+					}
+				}
+				userPrompt = strings.Join(parts, "\n")
+			}
+			break
+		}
+	}
+	if strings.TrimSpace(userPrompt) == "" {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "user message is required"})
+		return
+	}
+
+	answer := "Hello from the local SOP runtime. I received your request and I’m ready to help."
+	if s != nil && s.service != nil {
+		ctx := context.Background()
+		cfg := ai.NewConfigMap()
+		payload := &ai.SessionPayload{CurrentUserQuery: userPrompt, SessionID: "openai-compatible", UserID: "openai-compatible"}
+		cfg.Set("payload", payload)
+		ctx = context.WithValue(ctx, "session_payload", payload)
+		ctx = sopbackend.InjectSharedRuntimeContext(ctx, func(eventType string, payload any) {}, w)
+		ctx = context.WithValue(ctx, ai.CtxKeyWriter, sopbackend.NewDirectFlushingWriter(w))
+		if resp, err := s.service.Ask(ctx, userPrompt, cfg); err == nil && strings.TrimSpace(resp) != "" {
+			answer = resp
+		}
+	}
+
+	response := map[string]any{
+		"id":      "chatcmpl-sop-1",
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   req.Model,
+		"choices": []map[string]any{{
+			"index": 0,
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": answer,
+			},
+			"finish_reason": "stop",
+		}},
+		"usage": map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+	}
+	respondJSON(w, http.StatusOK, response)
+}
+
 func (s *localRAGService) handleContinueChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

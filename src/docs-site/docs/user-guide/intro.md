@@ -64,6 +64,11 @@ Connect AI Studio to daemons running on local or remote machines in your private
 
 [Learn about Remote Access →](./remote-daemon-access)
 
+### Continue as a Companion
+If you use Continue in your editor, it can act as a thin companion that sends coding requests to the SOP daemon for execution. The daemon remains the runtime that orchestrates workflows, approvals, memory, and long-running tool execution.
+
+[Learn about the Continue facade architecture →](../sdk/continue-facade-architecture)
+
 ### AI Window Experience
 The AI window is the main surface for interaction. It stays visible while the AI runs commands, streams output, and keeps you informed about what is happening in real time.
 

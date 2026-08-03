@@ -59,6 +59,28 @@ This arrangement avoids two common mistakes:
 
 The workflow runtime should stay in the backend/daemon layer because it already owns the important policy and execution concerns.
 
+## Controlled-agent integration model
+
+The integration can evolve beyond a simple chat bridge into a controlled-agent pattern.
+
+- Continue remains the editor-facing surface and can expose a chat history, progress stream, and diff UI in VS Code.
+- The daemon Ask/ReAct runtime remains the orchestrator for the broader workflow.
+- When the workflow reaches a coding-focused subtask, the daemon can delegate to Continue through a small remote tool or RPC contract.
+- Continue executes the edit-oriented action in VS Code, streams progress, and returns structured results such as file changes, patch previews, validation status, or an error.
+- The daemon then consumes that result and continues the larger workflow.
+
+This creates a clean control boundary:
+- daemon Ask = supervisor
+- Continue = subordinate coding agent for editor-aware tasks
+
+This is the preferred model for a future bidirectional setup. The user may start from the SOP AI window or from Continue, but the execution handoff is explicit and controlled. If VS Code is not running, the daemon can fall back to a non-editor execution path; if VS Code is running, Continue provides the richer coding experience.
+
+## Authentication and recovery UX
+
+Continue should reuse the existing daemon/HQ bearer-token flow rather than introducing a separate auth system. Requests should carry an Authorization header with a short-lived access token, and the backend should validate that token through the existing auth middleware. The token lifecycle should follow the same login and renewal path used by the daemon/HQ experience so users do not need to manage a second identity model.
+
+For a simple user experience, Continue should expose a small sign-in affordance in its UI, such as a compact entry or button that opens the existing HQ/daemon login flow. When a request fails with 401 or 403 because the session is expired or invalid, the Continue client should show a lightweight modal over the VS Code window prompting the user to sign in again. If renewal succeeds, the client should retry the pending request automatically; if renewal fails, it should stop the current workflow gracefully and guide the user back through the login flow.
+
 ## Integration pattern
 
 A minimal implementation can follow this contract:

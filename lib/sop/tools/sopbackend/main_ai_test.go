@@ -2,7 +2,9 @@ package sopbackend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -78,6 +80,241 @@ func TestConstructPayload_PropagatesInputPartsIntoSessionVariables(t *testing.T)
 	gotParts, ok := payload.Variables["input_parts"].([]ai.ContentPart)
 	if !ok || len(gotParts) != 1 || gotParts[0].Data != "abc123" {
 		t.Fatalf("expected image input parts to be propagated, got %#v", payload.Variables["input_parts"])
+	}
+}
+
+func TestBuildAIChatRequestFromContinueChatRequestAddsContext(t *testing.T) {
+	payload := continueChatRequest{
+		Message:   "fix the failing test",
+		SessionID: "continue-session",
+		Workspace: continueWorkspaceContext{Root: "/repo", ActiveFile: "src/app.go"},
+		Context:   continueChatContext{SelectedText: "fmt.Println(\"hi\")", OpenFiles: []string{"src/app.go", "src/app_test.go"}},
+	}
+
+	chatReq := buildAIChatRequestFromContinueChatRequest(payload)
+	if chatReq == nil {
+		t.Fatal("expected chat request payload")
+	}
+	if chatReq.SessionID != "continue-session" {
+		t.Fatalf("expected session ID to be preserved, got %q", chatReq.SessionID)
+	}
+	if !strings.Contains(chatReq.Message, "fix the failing test") {
+		t.Fatalf("expected original message to be preserved, got %q", chatReq.Message)
+	}
+	if !strings.Contains(chatReq.Message, "src/app.go") {
+		t.Fatalf("expected active file context to be included, got %q", chatReq.Message)
+	}
+	if !strings.Contains(chatReq.Message, "fmt.Println(\"hi\")") {
+		t.Fatalf("expected selected text context to be included, got %q", chatReq.Message)
+	}
+}
+
+func TestBuildAIChatRequestFromContinueChatRequestAddsToolContext(t *testing.T) {
+	payload := continueChatRequest{
+		Message: "inspect the parser error",
+		Tools:   []continueToolHint{{Name: "search_code", Args: map[string]any{"query": "ParseError"}}},
+	}
+
+	chatReq := buildAIChatRequestFromContinueChatRequest(payload)
+	if chatReq == nil {
+		t.Fatal("expected chat request payload")
+	}
+	if !strings.Contains(chatReq.Message, "search_code") {
+		t.Fatalf("expected tool intent to be included, got %q", chatReq.Message)
+	}
+	if !strings.Contains(chatReq.Message, "ParseError") {
+		t.Fatalf("expected tool arguments to be included, got %q", chatReq.Message)
+	}
+}
+
+func TestBuildAIChatRequestFromContinueChatRequestPreservesProviderMetadata(t *testing.T) {
+	payload := continueChatRequest{
+		Message:  "use the supplied credentials",
+		Provider: "openai",
+		APIKey:   "sk-test",
+		URL:      "https://example.test/v1",
+		Model:    "gpt-4.1",
+	}
+
+	chatReq := buildAIChatRequestFromContinueChatRequest(payload)
+	if chatReq == nil {
+		t.Fatal("expected chat request payload")
+	}
+	if chatReq.Provider != "openai" {
+		t.Fatalf("expected provider metadata to be preserved, got %q", chatReq.Provider)
+	}
+}
+
+func TestHandleContinueToolReadsFilesFromWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("hello from bridge\nsecond line"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/repo.read_file", strings.NewReader(fmt.Sprintf(`{"path":"%s","start_line":1,"end_line":5}`, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["ok"] != true {
+		t.Fatalf("expected ok=true response, got %#v", payload)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	if got := result["content"]; got != "hello from bridge\nsecond line" {
+		t.Fatalf("unexpected content: %#v", got)
+	}
+}
+
+func TestHandleContinueToolAppliesPatchToWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("before"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.apply_patch", strings.NewReader(fmt.Sprintf(`{"path":"%s","selection":"after"}`, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read patched file: %v", err)
+	}
+	if string(data) != "after" {
+		t.Fatalf("expected patch to overwrite file contents, got %q", string(data))
+	}
+}
+
+func TestHandleContinueToolRunsCommandsForValidation(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/test.run", strings.NewReader(`{"query":"echo bridge-test"}`))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	if got := result["output"]; !strings.Contains(got.(string), "bridge-test") {
+		t.Fatalf("expected command output to include bridge-test, got %#v", got)
+	}
+}
+
+func TestHandleContinueToolDelegatesToAgentRuntime(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/agent.ask", strings.NewReader(`{"query":"reply with hello"}`))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["ok"] != true {
+		t.Fatalf("expected ok=true response, got %#v", payload)
+	}
+}
+
+func TestContinueToolRouteIsRegisteredOnBackendMux(t *testing.T) {
+	oldConfig := config
+	config = Config{DisableAuth: true}
+	defer func() { config = oldConfig }()
+
+	mux := http.NewServeMux()
+	backend := &Backend{Config: &config, ModelCatalog: &ModelCatalog{}, LoadedAgents: loadedAgents, ActiveSessions: activeSessions}
+	backend.RegisterHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/repo.read_file", strings.NewReader(`{"path":"/tmp/does-not-matter.txt"}`))
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected router to reach tool handler, got status %d body %q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestContinueSessionStateRouteReturnsActiveSessionInfo(t *testing.T) {
+	oldConfig := config
+	config = Config{DisableAuth: true}
+	defer func() { config = oldConfig }()
+
+	oldSessions := activeSessions
+	activeSessions = NewSessionManager(10)
+	defer func() { activeSessions = oldSessions }()
+
+	activeSessions.Put("session-42", nil)
+
+	mux := http.NewServeMux()
+	backend := &Backend{Config: &config, ModelCatalog: &ModelCatalog{}, LoadedAgents: loadedAgents, ActiveSessions: activeSessions}
+	backend.RegisterHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/continue/sessions/session-42", nil)
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected session state route to succeed, got status %d body %q", rr.Code, rr.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["session_id"] != "session-42" {
+		t.Fatalf("expected session_id to be echoed, got %#v", payload["session_id"])
+	}
+	if payload["status"] != "active" {
+		t.Fatalf("expected status active, got %#v", payload["status"])
+	}
+}
+
+func TestSOPBridgeAliasRoutesAreRegisteredOnBackendMux(t *testing.T) {
+	oldConfig := config
+	config = Config{DisableAuth: true}
+	defer func() { config = oldConfig }()
+
+	mux := http.NewServeMux()
+	backend := &Backend{Config: &config, ModelCatalog: &ModelCatalog{}, LoadedAgents: loadedAgents, ActiveSessions: activeSessions}
+	backend.RegisterHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sop/tools/repo.read_file", strings.NewReader(`{"path":"/tmp/does-not-matter.txt"}`))
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected SOP bridge alias route to reach tool handler, got status %d body %q", rr.Code, rr.Body.String())
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	log "log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -122,6 +123,58 @@ func seedMetaCognitionAsync(userID, kbName string, sysOpts sop.DatabaseOptions) 
 // 6. Agent Execution Lifecycle: Uses `agentSvc.Open()` to bind physical memory contexts natively and asynchronously fires the `seedMetaCognitionAsync` task.
 // 7. RAG Execution: Delegates the complex query processing to `agentSvc.Ask()`.
 // 8. Output Interpretation (Heuristics): Scans response strings for required actions, valid JSON array/object structures, or NDJSON Script streams, rendering them gracefully as distinct UI records or standard MarkDown messages.
+func handleContinueChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload continueChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	chatReq := buildAIChatRequestFromContinueChatRequest(payload)
+	if chatReq == nil {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(chatReq.UserID) == "" {
+		if authUserID := strings.TrimSpace(sop.GetAuthFromContext(r.Context()).UserID); authUserID != "" {
+			chatReq.UserID = authUserID
+		}
+	}
+
+	if strings.TrimSpace(chatReq.SessionID) == "" {
+		chatReq.SessionID = uuid.NewString()
+	}
+
+	// Reuse the existing AI chat pipeline with NDJSON streaming.
+	// The bridge is intentionally thin: the editor supplies context and the daemon handles execution.
+	legacyReq := r.Clone(r.Context())
+	legacyReq.Method = http.MethodPost
+	legacyReq.Body = io.NopCloser(strings.NewReader(mustJSON(chatReq)))
+	legacyReq.ContentLength = int64(len(mustJSON(chatReq)))
+	legacyReq.Header.Set("Content-Type", "application/json")
+	legacyReq.RequestURI = ""
+	if payload.Provider != "" {
+		legacyReq.Header.Set("X-LLM-Provider", payload.Provider)
+	}
+	if payload.APIKey != "" {
+		legacyReq.Header.Set("X-LLM-API-Key", payload.APIKey)
+	}
+	if payload.URL != "" {
+		legacyReq.Header.Set("X-LLM-URL", payload.URL)
+	}
+	if payload.Model != "" {
+		legacyReq.Header.Set("X-LLM-Model", payload.Model)
+	}
+
+	handleAIChat(w, legacyReq)
+}
+
 func handleAIChat(w http.ResponseWriter, r *http.Request) {
 	req, err := initializeRequest(w, r)
 	if err != nil {
@@ -228,6 +281,387 @@ type aiChatRequest struct {
 	Domain        string                 `json:"domain"`
 	SelectedKBs   []ai.ArtifactReference `json:"selected_kbs"`
 	InputParts    []ai.ContentPart       `json:"input_parts"`
+}
+
+type continueChatRequest struct {
+	SessionID string                   `json:"session_id"`
+	Message   string                   `json:"message"`
+	Workspace continueWorkspaceContext `json:"workspace"`
+	Context   continueChatContext      `json:"context"`
+	Tools     []continueToolHint       `json:"tools"`
+	Mode      string                   `json:"mode"`
+	Provider  string                   `json:"provider"`
+	APIKey    string                   `json:"api_key"`
+	URL       string                   `json:"url"`
+	Model     string                   `json:"model"`
+}
+
+type continueToolHint struct {
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
+}
+
+type continueToolRequest struct {
+	Path       string `json:"path"`
+	Query      string `json:"query"`
+	StartLine  int    `json:"start_line"`
+	EndLine    int    `json:"end_line"`
+	Recursive  bool   `json:"recursive"`
+	Limit      int    `json:"limit"`
+	SessionID  string `json:"session_id"`
+	Workspace  string `json:"workspace"`
+	Selection  string `json:"selection"`
+	ActiveFile string `json:"active_file"`
+}
+
+type continueWorkspaceContext struct {
+	Root       string `json:"root"`
+	ActiveFile string `json:"active_file"`
+}
+
+type continueChatContext struct {
+	OpenFiles    []string `json:"open_files"`
+	SelectedText string   `json:"selected_text"`
+}
+
+func mustJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func buildAIChatRequestFromContinueChatRequest(req continueChatRequest) *aiChatRequest {
+	if req.Message == "" {
+		return nil
+	}
+
+	messageParts := []string{strings.TrimSpace(req.Message)}
+	if req.Workspace.ActiveFile != "" {
+		messageParts = append(messageParts, fmt.Sprintf("\nActive file: %s", req.Workspace.ActiveFile))
+	}
+	if req.Context.SelectedText != "" {
+		messageParts = append(messageParts, fmt.Sprintf("\nSelected text:\n%s", req.Context.SelectedText))
+	}
+	if len(req.Context.OpenFiles) > 0 {
+		messageParts = append(messageParts, fmt.Sprintf("\nOpen files: %s", strings.Join(req.Context.OpenFiles, ", ")))
+	}
+	if req.Workspace.Root != "" {
+		messageParts = append(messageParts, fmt.Sprintf("\nWorkspace root: %s", req.Workspace.Root))
+	}
+	if len(req.Tools) > 0 {
+		toolLines := []string{"\nRequested tools:"}
+		for _, tool := range req.Tools {
+			if tool.Name == "" {
+				continue
+			}
+			toolLines = append(toolLines, fmt.Sprintf("\n- %s", tool.Name))
+			if len(tool.Args) > 0 {
+				toolLines = append(toolLines, fmt.Sprintf(": %s", mustJSON(tool.Args)))
+			}
+		}
+		messageParts = append(messageParts, strings.Join(toolLines, ""))
+	}
+
+	return &aiChatRequest{
+		Message:   strings.Join(messageParts, ""),
+		SessionID: strings.TrimSpace(req.SessionID),
+		Agent:     "copilot",
+		Provider:  strings.TrimSpace(req.Provider),
+	}
+}
+
+func handleContinueSessionState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/api/continue/sessions/")
+	if sessionID == "" {
+		http.Error(w, "session id is required", http.StatusBadRequest)
+		return
+	}
+
+	if _, exists := activeSessions.Get(sessionID); !exists {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"session_id": sessionID,
+		"status":     "active",
+		"phase":      "investigation",
+		"message":    "SOP bridge session is active",
+	})
+}
+
+func handleContinueTool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	toolName := strings.TrimPrefix(r.URL.Path, "/api/continue/tools/")
+	if toolName == "" {
+		http.Error(w, "tool name is required", http.StatusBadRequest)
+		return
+	}
+
+	var req continueToolRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	var result any
+	var err error
+	switch toolName {
+	case "repo.read_file":
+		result, err = readContinueFile(req.Path, req.StartLine, req.EndLine)
+	case "repo.search_code":
+		result, err = searchContinueCode(req.Query, req.Path, req.Limit)
+	case "repo.list_files":
+		result, err = listContinueFiles(req.Path, req.Recursive)
+	case "code.apply_patch":
+		result, err = applyContinuePatch(req.Path, req.Selection)
+	case "code.preview_patch":
+		result, err = previewContinuePatch(req.Path, req.Selection)
+	case "test.run":
+		result, err = runContinueTest(req.Query, req.SessionID)
+	case "agent.ask":
+		result, err = delegateContinueAgent(req.Query, req.SessionID)
+	default:
+		http.Error(w, "unsupported tool", http.StatusNotImplemented)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "tool": toolName, "result": result})
+}
+
+func readContinueFile(path string, startLine, endLine int) (map[string]any, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+	}
+	data, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(data), "\n")
+	if startLine <= 0 {
+		startLine = 1
+	}
+	if endLine <= 0 || endLine > len(lines) {
+		endLine = len(lines)
+	}
+	selected := lines[startLine-1 : endLine]
+	return map[string]any{
+		"path":       cleanPath,
+		"content":    strings.Join(selected, "\n"),
+		"start_line": startLine,
+		"end_line":   endLine,
+	}, nil
+}
+
+func searchContinueCode(query, path string, limit int) (map[string]any, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	root := strings.TrimSpace(path)
+	if root == "" {
+		root = cwd()
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Clean(filepath.Join(cwd(), root))
+	}
+	var hits []map[string]any
+	err := filepath.WalkDir(root, func(currentPath string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(currentPath, ".git") || strings.HasSuffix(currentPath, ".png") || strings.HasSuffix(currentPath, ".jpg") || strings.HasSuffix(currentPath, ".jpeg") || strings.HasSuffix(currentPath, ".pdf") {
+			return nil
+		}
+		data, readErr := os.ReadFile(currentPath)
+		if readErr != nil {
+			return nil
+		}
+		text := string(data)
+		if strings.Contains(text, query) {
+			hits = append(hits, map[string]any{"path": currentPath, "text": text[:min(200, len(text))]})
+			if len(hits) >= limit {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"hits": hits}, nil
+}
+
+func listContinueFiles(path string, recursive bool) (map[string]any, error) {
+	root := strings.TrimSpace(path)
+	if root == "" {
+		root = cwd()
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Clean(filepath.Join(cwd(), root))
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	result := []string{}
+	for _, entry := range entries {
+		result = append(result, entry.Name())
+	}
+	return map[string]any{"path": root, "files": result, "recursive": recursive}, nil
+}
+
+func applyContinuePatch(path, patch string) (map[string]any, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+	}
+	if strings.TrimSpace(patch) == "" {
+		return nil, fmt.Errorf("patch is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(cleanPath, []byte(patch), 0o644); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": cleanPath, "applied": true, "content": patch}, nil
+}
+
+func previewContinuePatch(path, patch string) (map[string]any, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+	}
+	if strings.TrimSpace(patch) == "" {
+		return nil, fmt.Errorf("patch is required")
+	}
+	oldContent, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	preview := fmt.Sprintf("--- %s\n+++ %s\n-%s\n+%s\n", cleanPath, cleanPath, string(oldContent), patch)
+	return map[string]any{"path": cleanPath, "preview": preview, "applied": false}, nil
+}
+
+func runContinueTest(command, sessionID string) (map[string]any, error) {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return nil, fmt.Errorf("command is required")
+	}
+	if sessionID == "" {
+		sessionID = "continue-tests"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var stdout, stderr strings.Builder
+	cmd := exec.CommandContext(ctx, "sh", "-c", trimmed)
+	cmd.Dir = cwd()
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("command timed out")
+		}
+		return map[string]any{
+			"command":       trimmed,
+			"output":        stdout.String() + stderr.String(),
+			"still_running": false,
+			"exit_code":     0,
+			"error":         err.Error(),
+		}, nil
+	}
+
+	return map[string]any{
+		"command":       trimmed,
+		"output":        stdout.String() + stderr.String(),
+		"still_running": false,
+		"exit_code":     0,
+	}, nil
+}
+
+func delegateContinueAgent(query, sessionID string) (map[string]any, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	agentSvc, exists := loadedAgents["copilot"]
+	if !exists || agentSvc == nil {
+		return map[string]any{
+			"session_id": sessionID,
+			"answer":     "",
+			"error":      "copilot agent is not configured",
+		}, nil
+	}
+	ctx := context.Background()
+	if err := agentSvc.Open(ctx); err != nil {
+		return map[string]any{
+			"session_id": sessionID,
+			"answer":     "",
+			"error":      err.Error(),
+		}, nil
+	}
+	defer func() {
+		_ = agentSvc.Close(ctx)
+	}()
+	cfg := ai.NewConfigMap()
+	answer, err := agentSvc.Ask(ctx, trimmed, cfg)
+	if err != nil {
+		return map[string]any{
+			"session_id": sessionID,
+			"answer":     "",
+			"error":      err.Error(),
+		}, nil
+	}
+	return map[string]any{"session_id": sessionID, "answer": answer}, nil
+}
+
+func cwd() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return cwd
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func buildAppBaseURL(r *http.Request) string {

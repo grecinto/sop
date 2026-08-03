@@ -28,6 +28,29 @@ VS Code + Continue
 
 Start with a local HTTP bridge. It is the fastest path to a working integration and is sufficient for the first implementation milestone.
 
+## Controlled-agent delegation pattern
+
+The first bridge is sufficient for chat and tool calls. The next step is to let daemon Ask delegate coding subtasks to Continue as a remote agent.
+
+### Execution flow
+
+1. daemon Ask identifies a coding subtask that requires editor-aware execution.
+2. It invokes Continue over a narrow RPC/HTTP contract.
+3. Continue executes the subtask in VS Code, streams progress to its chat UI, and returns structured output.
+4. daemon Ask consumes that result and resumes the overarching workflow.
+
+### Design rule
+
+Continue should not be the controller of the workflow. It is a worker/agent that receives instructions and reports results. The daemon Ask remains the supervisor and the source of truth for workflow state, approvals, and session continuity.
+
+This design gives us a seamless experience for the user while keeping the control graph simple and explicit.
+
+### Authentication and recovery UX
+
+The bridge should reuse the existing bearer-token auth path already used by the daemon/HQ APIs. Every Continue request should include an Authorization header with a short-lived access token, and the backend should validate it through the same auth middleware used elsewhere in the system.
+
+The Continue client should offer a minimal sign-in experience, such as a compact entry/button in the Continue UI that launches the existing HQ/daemon login flow. If a request returns 401 or 403 because the token expired or was invalidated, the client should surface a lightweight modal over the VS Code window that asks the user to sign in again. After successful re-auth, the client should retry the pending request or reopen the affected session so the workflow can continue without a hard interruption.
+
 ### Suggested endpoints
 
 1. **POST /api/continue/chat**
@@ -175,6 +198,13 @@ For a concrete endpoint and payload contract, see [CONTINUE_BRIDGE_API_SPEC.md](
 4. Add patch preview and apply patch tools.
 5. Add test running and workflow state tools.
 6. Optionally evolve the bridge toward an MCP-style interface later if richer tool discovery becomes necessary.
+
+## TODO tracker
+
+- [ ] Add daemon port configurability to the UI install/setup flow so users can choose an available port.
+- [ ] Persist the user-selected daemon port as a single source of truth (settings/state).
+- [ ] On VSIX activation, read the persisted daemon port and update Continue model `apiBase` entries to route through that port.
+- [ ] When user changes daemon port later, re-sync Continue model routing automatically without manual config edits.
 
 ## Design guardrails
 

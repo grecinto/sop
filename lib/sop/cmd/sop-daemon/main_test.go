@@ -151,6 +151,27 @@ func TestContinueChatHandlerStreamsProgressAndContent(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleChatHandlerReturnsStructuredCompletion(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o-mini","messages":[{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleOpenAICompatibleChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "\"object\":\"chat.completion\"") {
+		t.Fatalf("expected chat completion body, got %q", body)
+	}
+	if !strings.Contains(body, "\"role\":\"assistant\"") {
+		t.Fatalf("expected assistant message in body, got %q", body)
+	}
+}
+
 func TestContinueToolHandlerReadsFilesFromWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "sample.txt")

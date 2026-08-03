@@ -44,4 +44,5 @@ Key advantages include:
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
 - Understand the [Workflow Architecture](./workflow-architecture) - Dynamic Planner, KB workflows, and the Ask pipeline execution model
+- Read about the [Continue Facade Architecture](./continue-facade-architecture) - how Continue acts as an editor-side companion while the daemon remains the runtime
 - Read about the [Workflow Undo System](./undo-system) - Transaction management, multi-dimensional indexing, and semantic search integration
