@@ -1,6 +1,8 @@
 # Continue Facade Architecture
 
-AI Studio and the SOP daemon remain the runtime and orchestrator. Continue is the editor-side companion that surfaces coding workflows inside the IDE while delegating execution to the daemon.
+AI Studio and the SOP daemon remain the runtime and orchestrator in the default bridge flow. Continue is the editor-side companion that surfaces coding workflows inside the IDE while delegating execution to the daemon.
+
+The SDK now also supports the reverse composition: another agent can use SOP Ask as a participant for a bounded delegated turn while keeping its own outer controller loop.
 
 ## The separation of responsibilities
 
@@ -43,6 +45,29 @@ A typical Continue request flows through:
 
 In practice, this means the daemon remains the single place that decides which capability to use, how to sequence tools, and how to manage state.
 
+## Reverse-role mode
+
+The default Continue integration keeps SOP in control, but SDK consumers are not limited to that shape.
+
+When you want another agent to be the outer orchestrator, you can mount SOP Ask as a participant instead:
+
+- the outer controller decides when to delegate to SOP
+- SOP Ask runs one bounded Ask turn
+- SOP Ask still controls its own internal capability selection, tool usage, and memory access
+- control returns to the outer controller after the delegated turn completes
+
+This is useful when Continue, another IDE agent, or a custom orchestration service wants to reuse SOP's Ask/ReAct runtime without surrendering top-level flow control.
+
+### SDK surfaces
+
+The participant-mode surfaces live in `lib/sop/ai/agent`:
+
+- `Service.AskWithRequest(ctx, AskRequest)` for in-process embedding
+- `NewParticipantHandler(...)` for exposing SOP Ask as an HTTP participant endpoint
+- `ParticipantClient` for invoking a remote SOP Ask participant endpoint
+
+The transport request intentionally uses a JSON-safe participant session shape rather than the full internal session object so external controllers can pass portable state cleanly.
+
 ## Provider and credential model
 
 Continue can supply provider metadata per request, including:
@@ -69,6 +94,12 @@ Use the daemon directly when you want:
 - full workflow orchestration
 - approvals, memory, undo, and history
 - multi-step execution that should be controlled by the platform runtime
+
+Use Ask-as-participant mode when you want:
+
+- another controller to own the outer workflow
+- SOP Ask to contribute one bounded reasoning and tool-execution turn
+- a clean transport or embedding seam without breaking the participant pattern inside SOP
 
 ## API shape
 

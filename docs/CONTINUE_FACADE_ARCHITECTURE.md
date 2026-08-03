@@ -8,6 +8,8 @@ Continue is the IDE surface. AI Studio and the daemon are the controller.
 
 That is the governing rule for this integration.
 
+For SDK reuse, the same Ask runtime can also be mounted in reverse as a participant under another controller. That does not change the internal rule above for the default Continue bridge. It adds a second supported boundary: another agent may call SOP Ask as a delegated worker while SOP Ask still controls its own inner capability pipeline.
+
 Continue can contribute editor context, diff-aware execution, and local workflow affordances, but it does not own orchestration, memory, approvals, or long-running workflow state.
 
 ## Control Boundary
@@ -83,6 +85,30 @@ Nothing about the daemon Ask pipeline changes for Continue:
 - Continue is just one capability participant among the others
 
 This means the daemon LLM can still orchestrate across other capabilities such as Spaces, Stores, Desktop, or workflow memory when the request needs that broader support.
+
+## Reverse-Role Support
+
+The bridge architecture is now deliberately versatile enough to support the opposite composition as well.
+
+### Supported reversal
+
+- Continue or another agent may act as the outer controller.
+- SOP Ask may act as a participant for one delegated turn.
+- SOP still preserves LLM-as-Orchestrator inside that delegated turn.
+
+### Boundary for reversal
+
+The reversal is supported only at the service or transport boundary, not by turning capabilities into controllers.
+
+- In-process embedding uses `Service.AskWithRequest(ctx, AskRequest)`.
+- HTTP exposure uses `NewParticipantHandler(...)`.
+- Remote invocation uses `ParticipantClient`.
+
+This keeps the architecture coherent:
+
+- outer controller decides when to call SOP Ask
+- SOP Ask decides how its own capabilities and tools are used
+- capabilities inside SOP remain passive participants
 
 ### Continue capability target shape
 
@@ -200,6 +226,7 @@ Removed:
 - Ask remains the only controller.
 - Capabilities remain passive participants.
 - Continue remains an editor surface and delegated worker.
+- In reverse-role mode, SOP Ask may be the participant of another controller, but SOP capabilities still never become controllers.
 - Provider identity is explicit and transport-neutral.
 - Do not reintroduce provider-specific facade contracts as the primary architecture.
 

@@ -25,6 +25,7 @@ The SDK provides:
 - **Parallel Ask Flow**: Split complex requests into parallel sub-asks, gather the results at the end, and keep each execution (proess) isolated so one failing task does not bring down the others or the daemon
 - **KB-driven workflows**: The agent can follow knowledge-base-defined workflows(data driven!) for tasks such as "fix failing tests", orchestrating the steps from failure capture to analysis and verification
 - **Dynamic Planner & Workflow Architecture**: AI-generated workflows with participant pattern execution through the Ask pipeline, ensuring 100% pipeline reuse with provider continuity and memory integration
+- **Ask as Participant**: Reuse SOP Ask under another controller through typed in-process or HTTP participant contracts, including reverse-role integrations with Continue-like agents
 - **Workflow Undo System**: Semantic, domain-aware undo with multi-dimensional indexing, natural language search, and time-ranked results. Each workflow runs as an atomic transaction that can be intelligently searched and restored
 
 ## Why this matters for AI platforms
@@ -44,5 +45,5 @@ Key advantages include:
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
 - Understand the [Workflow Architecture](./workflow-architecture) - Dynamic Planner, KB workflows, and the Ask pipeline execution model
-- Read about the [Continue Facade Architecture](./continue-facade-architecture) - how Continue acts as an editor-side companion while the daemon remains the runtime
+- Read about the [Continue Facade Architecture](./continue-facade-architecture) - how Continue can either act as an editor-side companion under SOP control or call SOP Ask as a participant in reverse-role integrations
 - Read about the [Workflow Undo System](./undo-system) - Transaction management, multi-dimensional indexing, and semantic search integration

@@ -1863,6 +1863,13 @@ func (s *Service) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (str
 	return resp.FinalText, nil
 }
 
+// AskWithRequest exposes the typed Ask request/response contract so other
+// controllers can use this service as a participant without depending on the
+// legacy ConfigMap-based Agent interface.
+func (s *Service) AskWithRequest(ctx context.Context, req AskRequest) (AskResponse, error) {
+	return s.ask(ctx, req)
+}
+
 func (s *Service) hydrateSessionPreferences(ctx context.Context, session *ai.SessionPayload) {
 	if s == nil || session == nil || s.systemDB == nil {
 		return

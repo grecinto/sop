@@ -104,6 +104,30 @@ This preserves the participant pattern:
 
 This pattern is domain-agnostic. It works for coding integrations like Continue, and it can be extended to other agent surfaces and domains as long as they can describe their capabilities as data.
 
+## Ask as Participant
+
+The same workflow runtime can also be reused under an external controller.
+
+This is a different boundary from the participant pattern inside Ask:
+
+- externally, SOP Ask may be one participant in a larger multi-agent system
+- internally, SOP Ask remains the orchestrator of its own capabilities and tools
+
+That distinction matters. The architecture does not permit phase or domain capabilities inside SOP to become controllers. Instead, the supported composition is:
+
+1. An outer agent decides a bounded SOP Ask turn is useful.
+2. The outer agent calls SOP through a typed request or participant HTTP endpoint.
+3. SOP Ask runs its normal routing, capability selection, ReAct loop, and memory access.
+4. SOP returns a structured result to the outer controller.
+
+The SDK surfaces for this mode are:
+
+- `AskWithRequest` for in-process embedding
+- `NewParticipantHandler` for exposing SOP Ask over HTTP
+- `ParticipantClient` for remote invocation
+
+This lets you reverse roles with Continue or another controller without weakening the LLM-as-Orchestrator design inside SOP itself.
+
 ### Conversational Feedback System
 
 The V2 Ask pipeline includes an advanced **conversational feedback system** that provides user-facing transparency during execution. This system gives users visibility into LLM reasoning and control over verbosity without breaking the participant pattern.

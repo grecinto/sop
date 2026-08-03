@@ -6,7 +6,9 @@
 
 This document defines the native transport between Continue and AI Studio from Northstar AI.
 
-The AI Studio daemon remains the controller. Continue is an editor-facing participant that sends provider/model intent, workspace context, and bounded coding tasks into the daemon-owned Ask/ReAct runtime.
+In the default IDE integration, the AI Studio daemon remains the controller. Continue is an editor-facing participant that sends provider/model intent, workspace context, and bounded coding tasks into the daemon-owned Ask/ReAct runtime.
+
+The same Ask runtime can also be exposed in reverse as a participant for another controller. In that mode, Continue or another agent may act as the outer orchestrator while SOP Ask runs as a delegated worker through the typed participant contract in `ai/agent`.
 
 ## Design Rules
 
@@ -15,8 +17,35 @@ The AI Studio daemon remains the controller. Continue is an editor-facing partic
 - Provider and model are explicit request attributes on native Continue requests.
 - The daemon owns orchestration, workflow state, approvals, memory, and fallback behavior.
 - Continue may execute editor-aware subtasks, but only as a delegated worker.
+- The reverse-role mode is also supported: another controller may delegate a bounded Ask turn into SOP through `AskWithRequest`, `NewParticipantHandler`, or `ParticipantClient` without changing SOP's internal participant-pattern rules.
 - The current Continue extension implements the Ask2Ask-style continuation flow: it persists HQ and daemon auth state in VS Code secret storage, rehydrates that state on startup, and refreshes or re-handshakes the session so restarts do not immediately break delegated AI Studio work.
 - Delegated Continue requests are intentionally task-scoped and single-turn. They should carry the current IDE subtask payload rather than depending on Continue conversation history, because the daemon and AI Studio remain the authoritative memory layer for prior Ask prompts and workflow state.
+
+## Role Modes
+
+Two integration modes are valid.
+
+### Mode 1: SOP controls, Continue participates
+
+This is the default bridge described throughout this document.
+
+- Continue calls daemon-native `/api/continue/*` routes.
+- SOP Ask remains the outer controller.
+- Continue receives delegated, bounded IDE execution work.
+
+### Mode 2: External controller, SOP Ask participates
+
+This is the reverse-role mode for SDK and agent reuse.
+
+- Another controller owns the outer workflow loop.
+- That controller delegates one bounded Ask turn into SOP.
+- SOP Ask still remains the controller of its own internal capability pipeline.
+- The integration contract is the typed participant surface in `lib/sop/ai/agent`:
+  - `Service.AskWithRequest(ctx, AskRequest)` for in-process embedding
+  - `NewParticipantHandler(...)` for exposing SOP Ask over HTTP
+  - `ParticipantClient` for calling a remote SOP Ask participant endpoint
+
+The key rule is that role reversal happens at the transport or embedding boundary, not inside the capability layer. Capabilities remain passive participants either way.
 
 ## Base URL
 
