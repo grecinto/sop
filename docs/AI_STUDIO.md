@@ -145,6 +145,16 @@ If your daemon is running on a different machine, you can still use AI Studio wi
    - Falls back to bootstrap secret if no session token
 ```
 
+### Local API Key Storage
+
+When AI Studio runs in local daemon mode, provider API keys are no longer persisted in plaintext in `localStorage.sop_ai_config`.
+
+- The UI sends the raw key once to `POST /api/daemon/secrets/encrypt` using the daemon JWT.
+- The daemon returns an opaque `enc:v1:` blob using the same encryption key already required for secure config persistence.
+- The browser stores non-secret provider settings in `localStorage.sop_ai_config` and stores only encrypted key blobs in `localStorage.sop_ai_secrets`.
+- Later local daemon handoff and local API requests send the blob back to the daemon, and the daemon decrypts it internally when building provider or embedder settings.
+- There is intentionally no UI-facing decrypt endpoint.
+
 **Why this works**: Site and daemon share `sopbackend.SessionStore()` with the same JWT signing secrets, so daemon can validate site session tokens directly.
 
 ---

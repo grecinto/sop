@@ -46,8 +46,10 @@ A lightweight cognitive layer now collects turn state, memory signals, and polic
 Relevant implementation:
 - [lib/sop/ai/agent/cognitive_layer.go](lib/sop/ai/agent/cognitive_layer.go)
 
-### IDE worker wrapper capability
-Ask now also exposes a generic `ide_worker` capability that can inspect session-bound editor context and delegate one bounded coding subtask to a daemon-injected backend. Continue is currently the first backend implementation, but the capability is intentionally generic so the Ask pipeline does not become Continue-specific.
+### Continue delegation capability
+Ask now also has the foundations for a Continue-backed capability participant. The correct target shape is LAO-preserving: Continue requests still go through the normal Ask pipeline, and Continue participates as a passive coding executor that exposes one delegated tool embodying Continue's own local Ask/tool loop.
+
+The important architectural point is that the daemon LLM is still the outer orchestrator. It classifies the request as usual, selects phases as usual, and may still use other capabilities such as Spaces or Stores. Continue is used only when a bounded IDE-native coding slice should be completed locally in the editor.
 
 Relevant implementation:
 - [lib/sop/ai/agent/domains/ideworker/capability.go](lib/sop/ai/agent/domains/ideworker/capability.go)

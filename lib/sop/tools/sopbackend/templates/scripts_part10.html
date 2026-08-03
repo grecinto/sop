@@ -3,8 +3,8 @@
     const setupWizardAIConfigDefaults = {{.SetupWizardAIConfigJSON}};
     const setupWizardModelCatalog = {{.ModelCatalogJSON}};
 
-    function getStoredAIConfig() {
-        const raw = localStorage.getItem('sop_ai_config');
+    function getStoredAISecrets() {
+        const raw = localStorage.getItem('sop_ai_secrets');
         if (!raw) return {};
         try {
             return JSON.parse(raw) || {};
@@ -13,14 +13,113 @@
         }
     }
 
+    function getStoredAIConfigRecord() {
+        const raw = localStorage.getItem('sop_ai_config');
+        if (!raw) return {};
+        try {
+            const parsed = JSON.parse(raw) || {};
+            const split = splitAIConfigAndSecrets(parsed);
+            if (Object.keys(split.secrets).length > 0) {
+                const mergedSecrets = Object.assign({}, split.secrets, getStoredAISecrets());
+                localStorage.setItem('sop_ai_config', JSON.stringify(split.config || {}));
+                localStorage.setItem('sop_ai_secrets', JSON.stringify(mergedSecrets));
+            }
+            return split.config || {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function getStoredAIConfig() {
+        return Object.assign({}, getStoredAIConfigRecord(), getStoredAISecrets());
+    }
+
+    function splitAIConfigAndSecrets(aiConfig) {
+        const nextConfig = Object.assign({}, aiConfig || {});
+        const nextSecrets = {};
+        ['brain_api_key', 'embedder_api_key', 'fallback_api_key'].forEach((key) => {
+            if (Object.prototype.hasOwnProperty.call(nextConfig, key)) {
+                if (nextConfig[key]) {
+                    nextSecrets[key] = nextConfig[key];
+                }
+                delete nextConfig[key];
+            }
+        });
+        return { config: nextConfig, secrets: nextSecrets };
+    }
+
     function setStoredAIConfig(aiConfig) {
-        localStorage.setItem('sop_ai_config', JSON.stringify(aiConfig || {}));
+        const split = splitAIConfigAndSecrets(aiConfig || {});
+        localStorage.setItem('sop_ai_config', JSON.stringify(split.config || {}));
+        localStorage.setItem('sop_ai_secrets', JSON.stringify(split.secrets || {}));
     }
 
     function mergeStoredAIConfig(partialConfig) {
         const nextConfig = Object.assign({}, getStoredAIConfig(), partialConfig || {});
         setStoredAIConfig(nextConfig);
         return nextConfig;
+    }
+
+    function isEncryptedAISecretValue(value) {
+        return typeof value === 'string' && value.indexOf('enc:v1:') === 0;
+    }
+
+    function clearEncryptedAISecretsForDisplay(aiConfig) {
+        const nextConfig = Object.assign({}, aiConfig || {});
+        ['brain_api_key', 'embedder_api_key', 'fallback_api_key'].forEach((key) => {
+            if (isEncryptedAISecretValue(nextConfig[key])) {
+                nextConfig[key] = '';
+            }
+        });
+        return nextConfig;
+    }
+
+    function encryptAISecretValueForStorage(value) {
+        const trimmed = typeof value === 'string' ? value.trim() : '';
+        if (!trimmed || isEncryptedAISecretValue(trimmed)) {
+            return trimmed;
+        }
+        const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+        if (runtimeMode !== 'local') {
+            return trimmed;
+        }
+        const response = apiCallSync('/api/daemon/secrets/encrypt', 'POST', { value: trimmed });
+        if (response && typeof response.encrypted_value === 'string' && response.encrypted_value) {
+            return response.encrypted_value;
+        }
+        throw new Error('Daemon did not return an encrypted secret');
+    }
+
+    function prepareAIConfigForSecureStorage(nextConfig, existingConfig) {
+        const prepared = Object.assign({}, nextConfig || {});
+        const current = existingConfig || {};
+        const resolveSecret = (secretKey, providerKey) => {
+            const provider = (prepared[providerKey] || '').trim();
+            const existingValue = (current[secretKey] || '').trim();
+            const nextValue = (prepared[secretKey] || '').trim();
+            if (!provider || isLocalProviderValue(provider)) {
+                prepared[secretKey] = '';
+                return;
+            }
+            if (nextValue) {
+                prepared[secretKey] = encryptAISecretValueForStorage(nextValue);
+                return;
+            }
+            prepared[secretKey] = existingValue;
+        };
+
+        resolveSecret('brain_api_key', 'brain_provider');
+        resolveSecret('embedder_api_key', 'embedder_provider');
+        resolveSecret('fallback_api_key', 'fallback_provider');
+        return prepared;
+    }
+
+    function mergeStoredAIConfigSecure(partialConfig) {
+        const existingConfig = getStoredAIConfig();
+        const nextConfig = Object.assign({}, existingConfig, partialConfig || {});
+        const prepared = prepareAIConfigForSecureStorage(nextConfig, existingConfig);
+        setStoredAIConfig(prepared);
+        return prepared;
     }
 
     function toggleEnterpriseBrain() {
@@ -405,7 +504,7 @@
     }
 
     function syncChatControlsFromAIConfig(aiConfig) {
-        const cfg = aiConfig || {};
+        const cfg = clearEncryptedAISecretsForDisplay(aiConfig || {});
         const summaryCombined = document.getElementById('chat-ai-summary-combined');
 
         if (summaryCombined) {
@@ -472,7 +571,7 @@
     }
 
     function syncSetupWizardControlsFromAIConfig(aiConfig) {
-        const cfg = aiConfig || {};
+        const cfg = clearEncryptedAISecretsForDisplay(aiConfig || {});
         if (!cfg.brain_provider && !cfg.embedder_provider) {
             return;
         }
@@ -1182,7 +1281,7 @@
             embedder_url: eUrl,
             embedder_api_key: eApiKey
         };
-        localStorage.setItem('sop_ai_config', JSON.stringify(aiConfig));
+        mergeStoredAIConfigSecure(aiConfig);
 
         // --- Construct Main Payload ---
         const finalPayload = {

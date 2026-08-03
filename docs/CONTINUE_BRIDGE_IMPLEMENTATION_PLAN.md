@@ -1,372 +1,206 @@
-# Continue bridge implementation plan
+# Continue Native Transport Implementation Plan
 
-**Status**: Active plan / partial implementation already present
+**Status**: Active
 
 ## Goal
 
-Define the minimal bridge between VS Code + Continue and the existing daemon-backed Ask/ReAct runtime so Continue can act as the editor-facing client while the app remains the controller and execution engine.
+Keep AI Studio and the daemon as the controller while exposing Continue as an IDE-native participant for coding workflows.
 
-## Controller Rule
+The integration target is the native Continue transport already implemented under `/api/continue/*`, with explicit provider/model attributes on each request.
 
-The daemon must remain the controller.
+## Non-Goals
 
-Continue cannot own the main conversation loop if AI Studio is expected to provide:
+- Do not restore daemon-as-OpenAI transport.
+- Do not add `/v1/chat/completions`, `/v1/models`, or `/api/continue/config` back as canonical surfaces.
+- Do not let Continue become the workflow controller.
+- Do not move workflow state, approvals, or memory ownership into the editor client.
 
-- undo history
-- memory and retrieval
-- approvals and policy rails
-- provider-owned ReAct behavior
-- workstream continuity
-- durable multi-step workflow state
+## Current Architecture
 
-If Continue becomes the controller, the daemon only receives partial downstream events and those features stop being native runtime behavior. That is not acceptable for the intended product shape.
-
-## Recommended integration shape
-
-Use a small local bridge service that Continue calls from VS Code. The bridge should:
-
-- accept Continue-style chat requests
-- attach workspace and editor context
-- forward requests to the local daemon Ask endpoint
-- stream progress and tool events back to Continue
-- expose a small, code-aware tool surface for editing, inspection, validation, and workflow resumption
+### Controller path
 
 ```text
-VS Code + Continue
-  -> local bridge
-  -> SOP daemon /api/ask
-  -> shared workflow engine
-  -> tools: search, inspect, patch, test, resume
+Continue chat or AI Studio handoff
+  -> /api/continue/chat
+  -> daemon Ask/ReAct runtime
+  -> normal classification, Phase Factory, passive capabilities, daemon-owned tools
+  -> streamed result back to Continue
 ```
 
-## Current status
+### Delegated editor-execution path
 
-Parts of this bridge already exist.
-
-Implemented today:
-
-- `/api/continue/chat`
-- `/api/continue/tools/<tool>`
-- `/api/continue/sessions/<sessionId>`
-- `/v1/chat/completions` OpenAI-compatible entrypoint
-- test coverage for the chat bridge, file-read tool bridge, patch preview/apply bridge, and OpenAI-compatible chat surface
-- a working Continue config that currently points at the daemon via an OpenAI-compatible model entry
-
-Still missing for the intended UX:
-
-- removal of visible bridge branding from model selection
-- shadow-model catalog generation and config sync
-- provider-compatible Anthropic facade
-- provider-compatible Gemini facade
-- unified auth/config sync between Continue and daemon UI
-
-## Initial transport choice
-
-Start with a local HTTP bridge. It is the fastest path to a working integration and is sufficient for the first implementation milestone.
-
-## Transparent provider strategy
-
-There are two sensible rollout levels.
-
-### V1: Shadow models over daemon-owned transport
-
-Continue should display familiar model labels such as:
-
-- Claude Sonnet
-- Gemini 2.5
-- GPT-4.1
-
-But those labels should still route through daemon-owned transport surfaces. The user should not see `SOP Daemon Bridge` as an LLM choice.
-
-This is sufficient for V1 because it preserves the UX goal while keeping implementation scope moderate.
-
-### V2: Provider-compatible local facades
-
-The long-term target is to expose provider-native local ingress surfaces:
-
-- OpenAI-compatible facade
-- Anthropic-compatible facade
-- Gemini-compatible facade
-
-Continue can then keep using native provider assumptions while the daemon remains the actual runtime.
-
-## Controlled-agent delegation pattern
-
-The first bridge is sufficient for chat and tool calls. The next step is to let daemon Ask delegate coding subtasks to Continue as a remote agent.
-
-### Execution flow
-
-1. daemon Ask identifies a coding subtask that requires editor-aware execution.
-2. It invokes Continue over a narrow RPC/HTTP contract.
-3. Continue executes the subtask in VS Code, streams progress to its chat UI, and returns structured output.
-4. daemon Ask consumes that result and resumes the overarching workflow.
-
-### Design rule
-
-Continue should not be the controller of the workflow. It is a worker/agent that receives instructions and reports results. The daemon Ask remains the supervisor and the source of truth for workflow state, approvals, and session continuity.
-
-This design gives us a seamless experience for the user while keeping the control graph simple and explicit.
-
-### Authentication and recovery UX
-
-The bridge should reuse the existing bearer-token auth path already used by the daemon/HQ APIs. Every Continue request should include an Authorization header with a short-lived access token, and the backend should validate it through the same auth middleware used elsewhere in the system.
-
-The Continue client should offer a minimal sign-in experience, such as a compact entry/button in the Continue UI that launches the existing HQ/daemon login flow. If a request returns 401 or 403 because the token expired or was invalidated, the client should surface a lightweight modal over the VS Code window that asks the user to sign in again. After successful re-auth, the client should retry the pending request or reopen the affected session so the workflow can continue without a hard interruption.
-
-### Suggested endpoints
-
-1. **POST /api/continue/chat**
-   - accepts a chat request and returns a stream of events
-   - used for normal user prompts and workflow-driven turns
-
-2. **POST /api/continue/tools/{toolName}**
-   - invokes a single tool by name with structured arguments
-   - used when Continue wants to inspect code, patch files, or run validation
-
-3. **GET /api/continue/sessions/{sessionId}**
-   - returns the current workflow state or metadata for a continuing task
-
-## Chat request contract
-
-A basic request should include:
-
-```json
-{
-  "session_id": "workspace-42",
-  "message": "fix the failing test in the parser module",
-  "workspace": {
-    "root": "/path/to/repo",
-    "active_file": "src/parser/handler.go",
-    "selection": {
-      "start_line": 120,
-      "end_line": 150
-    }
-  },
-  "context": {
-    "open_files": ["src/parser/handler.go", "src/parser/handler_test.go"],
-    "selected_text": "..."
-  },
-  "mode": "chat"
-}
+```text
+daemon Ask turn
+  -> Continue capability participates like any other capability
+  -> daemon LLM decides whether bounded IDE coding work belongs in Continue
+  -> delegate_continue_task
+  -> /api/continue/agent/execute
+  -> registered Continue worker callback when capability-matched
+  -> Continue completes the bounded subtask through its own Ask/tool loop
+  -> daemon resumes control with the result
 ```
 
-## Streaming response contract
+## Target Ask-Side Design
 
-The bridge should stream NDJSON or a similar event stream so Continue can show progress immediately.
+### LAO rule
 
-Example event types:
+Continue does not get a special side-channel around Ask.
 
-```json
-{"type":"progress","message":"Inspecting the failing parser logic"}
-{"type":"tool_call","name":"search_code","args":{"query":"parser"}}
-{"type":"tool_result","name":"search_code","result":{"hits":[...]}}
-{"type":"content","delta":"I found the likely failure point..."}
-{"type":"done"}
+When the prompt comes in from Continue, it should still flow through the same daemon Ask pipeline:
+
+1. normal Ask classification
+2. normal domain/phase detection
+3. normal Phase Factory participation
+4. normal capability/tool orchestration
+
+Nothing special happens to the pipeline itself. The special behavior lives only in the Continue capability.
+
+### Continue capability target
+
+The target capability should expose one tool only:
+
+- `delegate_continue_task`
+
+That tool is not a low-level proxy for Continue's internal read/search/edit/navigation primitives.
+
+Instead, it represents Continue's own local Ask pipeline as a bounded execution substrate. The daemon LLM uses it when the current slice of work is IDE-native coding that Continue should complete locally.
+
+### BuildContext and BuildInstructions requirements
+
+The Continue capability should be dynamic and metadata-aware.
+
+`BuildContext()` should tell the daemon LLM:
+
+- Continue is available as the editor-native coding orchestrator
+- the current request originated from Continue when bridge metadata says so
+- what phase/tool bounds apply to this request
+- that the daemon remains the outer orchestrator
+
+`BuildInstructions()` should tell the daemon LLM how to use the sole tool:
+
+- delegate one bounded coding objective
+- include phase intent and scope
+- include allowed tools and preferred tool choice when present
+- ask Continue to fully perform the IDE coding work and return the result
+- resume daemon orchestration after the returned result
+
+### Why this is the target
+
+The goal is not for AI Studio to re-create Continue by composing Continue's low-level tools from the daemon side.
+
+The goal is for Continue to successfully complete the IDE coding work it is already best at, then return the outcome so AI Studio can continue the broader platform, workflow, and multi-capability orchestration.
+
+## Implemented
+
+- native Continue chat transport at `/api/continue/chat`
+- native Continue tool transport at `/api/continue/tools/{toolName}`
+- daemon-owned session snapshots at `/api/continue/sessions/{sessionId}`
+- worker registration at `/api/continue/worker/register`
+- worker inspection at `/api/continue/workers/{sessionId}`
+- metadata at `/api/continue/metadata`
+- daemon-owned delegated execution at `/api/continue/agent/execute`
+- transport and backend foundations for daemon-owned Continue delegation
+- current Ask-side capability scaffolding that can be evolved into the single-tool Continue participant
+- provider/model propagation from native Continue chat into Ask payload variables
+- provider/model propagation from the delegated Continue task contract into Continue worker execution payloads
+- metadata flags declaring that provider/model are explicit transport attributes
+- Continue provider forwarding of `tools` and `tool_choice`
+- translation of daemon `tool_call` events into native Continue `assistant.toolCalls`
+- surfaced Continue IDE-native tools for problems, definitions, type definitions, references, document symbols, and terminal contents
+- removal of daemon route tests and code for `/v1/chat/completions`, `/v1/models`, and `/api/continue/config`
+- removal of the AI Studio UI control that opened daemon-generated Continue config
+
+## Remaining Work
+
+Detailed workflow-surface analysis and SDLC boundary are documented in [docs/CONTINUE_IDE_WORKFLOW_SURFACE.md](docs/CONTINUE_IDE_WORKFLOW_SURFACE.md).
+
+### 1. LAO Continue capability convergence
+
+- simplify the Ask-visible Continue capability to one delegated tool: `delegate_continue_task`
+- move session/metadata inspection into dynamic context and instructions instead of treating inspection as a primary long-term tool surface
+- ensure `Classify()` treats Continue-originated IDE coding asks as normal Ask inputs that happen to have a Continue participant available
+- ensure the daemon LLM receives enough context to compose a Continue-facing objective instead of imitating Continue's lower-level tools
+
+### 2. Continue client wiring and workflow shaping
+
+- ensure the Continue-side integration always calls the native `/api/continue/*` endpoints
+- ensure the Continue-side request builder sends provider and model explicitly on chat and delegated execution requests
+- ensure worker registration advertises only capabilities the editor callback truly supports
+- define AI Studio workflow profiles that deliberately decide which Continue tools are exposed per request
+
+### 2a. Ask2Ask contract hardening
+
+- persist the final delegated worker result object in daemon-owned session/workflow state, not only transport status
+- keep `phase` and `mode` separate across the delegated execution contract; `phase` is workflow position, `mode` is Continue execution posture
+- treat the final delegated result as a typed daemon object even when the Ask-visible tool also renders it as JSON/text for the model
+- incrementally parse worker NDJSON streams so large delegated results do not require whole-body buffering on the proxy path
+- define the streamed event schema alongside the final result schema so worker progress and file-change events remain stable across integrations
+
+### 3. Authentication hardening
+
+- validate bearer-token behavior across chat, tools, worker registration, and delegated execution
+- finalize recovery UX for expired sessions without introducing a Continue-specific auth scheme
+
+### 4. Session and workflow polish
+
+- expand daemon-owned session snapshots when more editor state is useful
+- keep Continue delegation steering focused on bounded execution and review slices
+- extend tests around worker capability mismatch and local fallback behavior as needed
+- consider surfacing low-risk remaining IDE context primitives such as open files, pinned files, and signature help
+
+### 5. Broader SDLC layers above Continue
+
+- add Git and review-specific workflow tools
+- add CI/build visibility tools
+- add deploy, rollback, logs, and environment-targeting workflows
+- add documentation validation workflows such as build, preview, and link-check support
+
+These are intentionally described as layers above Continue rather than Continue gaps. They are not primarily IDE-native or language-server-native capabilities, and they can be introduced later through AI Studio-native tools, desktop automation, and command-line execution patterns.
+
+### 6. Continue-side setup guidance
+
+- document the native participant flow for the VS Code/Continue integration
+- avoid shipping workspace examples that imply daemon-owned OpenAI model entries are still the supported path
+
+## Validation Commands
+
+Primary daemon package validation:
+
+```bash
+export GOTELEMETRY=off && go test ./lib/sop/cmd/sop-daemon
 ```
 
-## Minimal tool catalog
+Focused IDE worker validation:
 
-The first implementation should expose a compact tool set rather than a large API surface.
+```bash
+export GOTELEMETRY=off && go test ./lib/sop/ai/agent/domains/ideworker
+```
 
-### 1. Agent delegation tools
+## Resume Checklist
 
-- **agent.ask**
-  - sends the request to the daemon Ask/ReAct pipeline
-  - used when Continue wants the app to reason over the task
+Inspect these code surfaces first:
 
-- **agent.resume**
-  - resumes a previously started workflow or task
-  - used when the user continues a prior coding task
-
-### 2. Repository inspection tools
-
-- **repo.list_files**
-  - list workspace files or a directory tree
-
-- **repo.search_code**
-  - search text or symbol references across the repository
-
-- **repo.read_file**
-  - load file contents with optional line range
-
-- **repo.get_symbols**
-  - return relevant definitions, functions, classes, or methods
-
-### 3. Code intelligence tools
-
-These should be backed by AST/tree-sitter and repo indexing.
-
-- **code.find_references**
-  - find references to a symbol
-
-- **code.find_definition**
-  - locate the definition of a symbol
-
-- **code.get_context**
-  - build a compact context window around the active symbol or file
-
-- **code.related_symbols**
-  - find callers, implementations, and nearby dependent symbols
-
-### 4. Editing tools
-
-- **code.preview_patch**
-  - show a proposed edit without applying it
-
-- **code.apply_patch**
-  - apply a structured patch to a file
-
-- **code.insert_at_location**
-  - insert content at a known location when the location is already known
-
-### 5. Validation tools
-
-- **test.run**
-  - run relevant tests and return structured output
-
-- **test.status**
-  - report whether a recent test run passed or failed
-
-- **lint.run**
-  - run an optional targeted lint or static check
-
-### 6. Workflow tools
-
-- **workflow.get_state**
-  - return the current task state, phase, and progress
-
-- **workflow.update_state**
-  - persist a progress update for multi-turn tasks
-
-## Why this contract is sufficient
-
-This contract is intentionally narrow. Continue does not need the full workflow engine exposed as a giant API. It needs a small set of tools that let it:
-
-- inspect the codebase
-- delegate reasoning to the daemon runtime
-- edit files safely
-- run validation
-- continue work across turns
-
-That is enough to support the coding workflow experience without coupling the editor plugin to the full internal architecture.
-
-## V1 Scope
-
-V1 should include:
-
-- continue-to-daemon chat flow through the existing bridge
-- daemon-owned session continuity and streaming
-- friendly shadow models in Continue instead of bridge-branded entries
-- provider/model intent passed through to the daemon
-- default bridge tool catalog for repo inspection, patch preview/apply, test execution, and agent ask
-- auth and daemon-port synchronization good enough for daily use
-
-V1 should not require:
-
-- full Anthropic protocol emulation
-- full Gemini protocol emulation
-- moving orchestration into Continue
-
-## V2 Scope
-
-V2 can add:
-
-- provider-compatible local facades for Anthropic and Gemini
-- richer Continue config synchronization and auto-repair
-- stronger daemon-to-IDE delegated coding contracts beyond the current thin `ide_worker` wrapper
-
-## Implementation sequence
-
-For a concrete endpoint and payload contract, see [CONTINUE_BRIDGE_API_SPEC.md](CONTINUE_BRIDGE_API_SPEC.md).
-
-### Already complete
-
-1. Local HTTP bridge shape exists.
-2. Chat requests can be forwarded into the daemon Ask path.
-3. Initial bridge tool set exists.
-4. OpenAI-compatible chat surface exists.
-5. Worker registration, worker state, and delegated execution endpoints exist.
-6. Continue worker delegation is capability-aware rather than session-presence-only.
-7. Ask now exposes a generic `ide_worker` capability backed by a daemon-injected backend seam rather than a Continue-specific implementation.
-8. Continue editor context is copied into structured `SessionPayload.Variables` for Ask-side consumption.
-9. Planning, execution, and review phases now explicitly steer `inspect_ide_worker`, with planning limited to context gathering and execution/review allowing one bounded `delegate_ide_coding_task` subtask while keeping Ask as the controller.
-10. The OpenAI-compatible Continue chat path now infers structured editor context from prompt-shaped edit/apply requests when explicit fields are absent.
-11. The default daemon wiring now composes multiple `ide_worker` backends: Continue remains the editor-backed execution path, and a daemon-shell backend proves the abstraction is not Continue-specific while surfacing shell-session presence through the same interface.
-12. Continue/OpenAI-compatible model selection is now propagated explicitly into `SessionPayload.Variables` as `llm_provider` and `llm_model`, alongside the existing config/context override path.
-
-### Remaining for V1
-
-1. Replace bridge-branded Continue model entries with friendly shadow models.
-2. Sync daemon port and auth state into Continue config.
-3. Validate that memory, undo, approvals, and workflow continuity remain daemon-owned in the Continue flow.
-4. Tighten bridge tool defaults and error handling for daily use.
-5. Refine when additional phases beyond planning/execution/review should intentionally steer toward `inspect_ide_worker` and `delegate_ide_coding_task`.
-
-### Remaining for V2
-
-1. Add Anthropic-compatible local facade.
-2. Add Gemini-compatible local facade.
-3. Expand protocol-specific streaming and tool-call compatibility tests.
-4. Optionally evolve the bridge toward an MCP-style interface later if richer tool discovery becomes necessary.
-
-## Effort estimate
-
-For one engineer:
-
-### V1
-
-- approximately 5 to 10 working days for a usable version
-- approximately 2 to 3 weeks for a hardened V1 with config sync and auth polish
-
-### V2
-
-- approximately 3 to 6 weeks for true provider-compatible local facades beyond the current OpenAI-compatible surface
-
-## Resume checklist
-
-When resuming implementation, start here:
-
-### Code surfaces
-
-- `lib/sop/cmd/sop-daemon/main.go`
 - `lib/sop/cmd/sop-daemon/client_bridge.go`
-- `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
 - `lib/sop/cmd/sop-daemon/rag.go`
+- `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
 - `lib/sop/ai/agent/domains/ideworker/capability.go`
-- `lib/sop/ai/agent/copilot.go`
-- `lib/sop/tools/sopbackend/main.ai.go`
-- `.continuerc.json`
-- `continue-daemon-config.json`
+- `lib/sop/cmd/sop-daemon/main_test.go`
 
-### Validate these first
+Validate these behaviors before extending the design:
 
-- current bridge flow still works end-to-end
-- OpenAI-compatible local model entry still points at daemon
-- prompt-shaped OpenAI-compatible edit/apply requests still recover `selected_text`, `active_file`, and `open_files` into Ask payload variables
-- selected provider/model intent still reaches both daemon request context and explicit Ask payload variables
-- bridge sessions preserve daemon-owned state rather than Continue-owned state
-- `ide_worker` is still registered in Ask and injected with the daemon backend
-- Continue worker proxying still requires a capability match before delegation
+- `/api/continue/chat` still sends provider/model through Ask context and payload variables
+- `/api/continue/agent/execute` still preserves provider/model through worker proxying and fallback execution
+- the Continue capability remains a passive participant and does not orchestrate phases
+- the daemon Ask pipeline remains unchanged for Continue-originated requests
+- the daemon LLM uses a single delegated Continue Ask tool instead of trying to mirror Continue's internal tool choreography
+- capability matching is required before proxying to a registered Continue worker
+- `/api/continue/metadata` still advertises the native contract and no daemon-owned config endpoint
+- AI Studio does not expose a launcher for daemon-generated Continue config
 
-## TODO tracker
+## Guardrails
 
-- [ ] Replace visible `SOP Daemon Bridge` model entry with shadow-model entries for V1.
-- [ ] Add config-sync logic so Continue model entries track daemon-selected port and runtime state.
-- [ ] Validate daemon-owned undo, memory, approvals, and workflow continuity through the Continue flow.
-- [ ] Expand deliberate `inspect_ide_worker` and `delegate_ide_coding_task` steering beyond the current execution/review phases where it improves outcomes.
-- [ ] Add daemon port configurability to the UI install/setup flow so users can choose an available port.
-- [ ] Persist the user-selected daemon port as a single source of truth (settings/state).
-- [ ] On VSIX activation, read the persisted daemon port and update Continue model `apiBase` entries to route through that port.
-- [ ] When user changes daemon port later, re-sync Continue model routing automatically without manual config edits.
-- [ ] Add Anthropic-compatible local facade.
-- [ ] Add Gemini-compatible local facade.
-
-## Design guardrails
-
-- Keep the bridge thin.
-- Keep orchestration in the shared runtime.
-- Keep tool results structured so Continue can reason over them.
-- Use AST/tree-sitter and repo indexing as the foundation for code-aware tools.
-- Prefer a small, composable tool surface over a sprawling one.
-- Do not let Continue become the primary controller of workflow state.
-- Do not let daemon-only product value depend on post-hoc reconstruction from Continue history.
+- Keep the daemon as the single workflow controller.
+- Treat Continue as an editor surface and delegated worker.
+- Prefer explicit request attributes over provider-specific transport semantics.
+- Preserve provider neutrality at the daemon boundary.
+- Avoid adding compatibility layers that lock the product into one provider's request shape.

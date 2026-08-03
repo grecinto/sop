@@ -46,22 +46,40 @@ func TestCapabilityInspectSessionIncludesStructuredContext(t *testing.T) {
 			"continue_mode":           "apply",
 			"coding_workflow_profile": "refactoring",
 			"requested_phase":         "execution",
-			"workspace_root":          "/repo",
-			"active_file":             "payments/service.go",
-			"selected_text":           "func processPayment()",
-			"open_files":              []string{"payments/service.go", "payments/service_test.go"},
+			"continue_supported_phases": []any{
+				map[string]any{
+					"id":              "execution",
+					"label":           "Execution & Implementation",
+					"continue_modes":  []any{"agent"},
+					"available_tools": []any{"read_file", "multi_edit", "run_terminal_command"},
+				},
+			},
+			"continue_available_tools":       []string{"read_file", "multi_edit", "get_problems"},
+			"continue_phase_tools":           []string{"read_file", "multi_edit", "run_terminal_command"},
+			"continue_phase_available_tools": []string{"read_file", "multi_edit"},
+			"continue_tool_choice":           "multi_edit",
+			"workspace_root":                 "/repo",
+			"active_file":                    "payments/service.go",
+			"selected_text":                  "func processPayment()",
+			"open_files":                     []string{"payments/service.go", "payments/service_test.go"},
 		},
 	}
 	ctx := context.WithValue(context.Background(), "session_payload", payload)
 
-	result, err := cap.ExecuteTool(ctx, "inspect_ide_worker", nil, capabilities.RoutingState{})
+	result, err := cap.ExecuteTool(ctx, "inspect_continue_worker", nil, capabilities.RoutingState{})
 	if err != nil {
-		t.Fatalf("inspect_ide_worker failed: %v", err)
+		t.Fatalf("inspect_continue_worker failed: %v", err)
 	}
 	for _, want := range []string{
 		"connected: yes",
 		"ide: vscode",
 		"workflow_profile: refactoring",
+		"available_tools: read_file, multi_edit, get_problems",
+		"phase_tools: read_file, multi_edit, run_terminal_command",
+		"phase_available_tools: read_file, multi_edit",
+		"tool_choice: multi_edit",
+		"supported_phases:",
+		"execution (Execution & Implementation) modes=agent tools=read_file,multi_edit,run_terminal_command",
 		"active_file: payments/service.go",
 		"open_files: payments/service.go, payments/service_test.go",
 	} {
@@ -80,20 +98,41 @@ func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 		SessionID:        "sess-2",
 		CurrentUserQuery: "Apply the prepared patch",
 		Variables: map[string]any{
-			"continue_mode":  "apply",
-			"workspace_root": "/repo",
-			"active_file":    "payments/service.go",
-			"selected_text":  "func processPayment()",
-			"open_files":     []string{"payments/service.go"},
+			"continue_mode":                   "apply",
+			"llm_provider":                    "anthropic",
+			"llm_model":                       "claude-sonnet-4-5",
+			"requested_phase":                 "execution",
+			"continue_available_tools":        []string{"read_file", "multi_edit"},
+			"continue_phase_tools":            []string{"read_file", "multi_edit", "run_terminal_command"},
+			"continue_phase_available_tools":  []string{"read_file", "multi_edit"},
+			"continue_tool_choice":            "multi_edit",
+			"workspace_root":                  "/repo",
+			"active_file":                     "payments/service.go",
+			"selected_text":                   "func processPayment()",
+			"open_files":                      []string{"payments/service.go"},
+			"continue_team_practices":         []string{"Preserve public interfaces", "Add targeted tests"},
+			"continue_success_criteria":       []string{"Compilation stays green"},
+			"continue_expected_result_format": "structured_execution_result",
 		},
 	}
 	ctx := context.WithValue(context.Background(), "session_payload", payload)
 
-	result, err := cap.ExecuteTool(ctx, "delegate_ide_coding_task", map[string]any{
-		"task": "Apply the prepared patch",
+	result, err := cap.ExecuteTool(ctx, "delegate_continue_task", map[string]any{
+		"task":            "Apply the prepared patch",
+		"requested_phase": "execution",
+		"guidance": map[string]any{
+			"team_practices":         []any{"Use existing logger"},
+			"success_criteria":       []any{"Tests updated"},
+			"constraints":            []any{"Do not widen API surface"},
+			"implementation_notes":   []any{"Prefer repo conventions over generic style"},
+			"expected_result_format": "structured_execution_result",
+			"reference_context": []any{
+				map[string]any{"kind": "ltm_note", "source": "Team Patterns/Payments", "title": "Payments practices", "content": "Prefer explicit error wrapping."},
+			},
+		},
 	}, capabilities.RoutingState{})
 	if err != nil {
-		t.Fatalf("delegate_ide_coding_task failed: %v", err)
+		t.Fatalf("delegate_continue_task failed: %v", err)
 	}
 	if result != "delegated" {
 		t.Fatalf("unexpected backend result: %q", result)
@@ -104,7 +143,122 @@ func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 	if backend.lastRequest.Mode != "apply" || backend.lastRequest.ActiveFile != "payments/service.go" || backend.lastRequest.WorkspaceRoot != "/repo" {
 		t.Fatalf("unexpected delegated request: %#v", backend.lastRequest)
 	}
+	if backend.lastRequest.Provider != "anthropic" || backend.lastRequest.Model != "claude-sonnet-4-5" {
+		t.Fatalf("expected provider/model to propagate from session payload, got %#v", backend.lastRequest)
+	}
+	if len(backend.lastRequest.AvailableTools) != 2 || backend.lastRequest.AvailableTools[0] != "read_file" || backend.lastRequest.AvailableTools[1] != "multi_edit" {
+		t.Fatalf("expected available tool metadata to propagate, got %#v", backend.lastRequest.AvailableTools)
+	}
+	if backend.lastRequest.RequestedPhase != "execution" {
+		t.Fatalf("expected requested phase to propagate, got %#v", backend.lastRequest)
+	}
+	if len(backend.lastRequest.AllowedTools) != 2 || backend.lastRequest.AllowedTools[0] != "read_file" || backend.lastRequest.AllowedTools[1] != "multi_edit" {
+		t.Fatalf("expected bounded allowed tool metadata to propagate, got %#v", backend.lastRequest.AllowedTools)
+	}
+	if len(backend.lastRequest.PhaseTools) != 3 || backend.lastRequest.ToolChoice != "multi_edit" {
+		t.Fatalf("expected phase tool metadata to propagate, got %#v", backend.lastRequest)
+	}
 	if len(backend.lastRequest.OpenFiles) != 1 || backend.lastRequest.OpenFiles[0] != "payments/service.go" {
 		t.Fatalf("unexpected open files: %#v", backend.lastRequest.OpenFiles)
+	}
+	if len(backend.lastRequest.Guidance.TeamPractices) != 1 || backend.lastRequest.Guidance.TeamPractices[0] != "Use existing logger" {
+		t.Fatalf("expected explicit team practices guidance to override session defaults, got %#v", backend.lastRequest.Guidance)
+	}
+	if len(backend.lastRequest.Guidance.SuccessCriteria) != 1 || backend.lastRequest.Guidance.SuccessCriteria[0] != "Tests updated" {
+		t.Fatalf("expected success criteria guidance to propagate, got %#v", backend.lastRequest.Guidance)
+	}
+	if len(backend.lastRequest.Guidance.ReferenceContext) != 1 || backend.lastRequest.Guidance.ReferenceContext[0].Source != "Team Patterns/Payments" {
+		t.Fatalf("expected reference context guidance to propagate, got %#v", backend.lastRequest.Guidance.ReferenceContext)
+	}
+}
+
+func TestCapabilityExposeTools_UsesSingleAskVisibleDelegateTool(t *testing.T) {
+	cap := NewCapability()
+	tools := cap.ExposeTools()
+	if len(tools) != 1 {
+		t.Fatalf("expected exactly one Ask-visible tool, got %d", len(tools))
+	}
+	if tools[0].Name != "delegate_continue_task" {
+		t.Fatalf("expected delegate_continue_task to be the sole Ask-visible tool, got %#v", tools)
+	}
+}
+
+func TestCapabilityLegacyAliasesStillWork(t *testing.T) {
+	backend := &fakeBackend{result: "delegated"}
+	cap := NewCapability()
+	cap.SetBackend(backend)
+
+	payload := &ai.SessionPayload{SessionID: "sess-legacy"}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	if _, err := cap.ExecuteTool(ctx, "inspect_ide_worker", nil, capabilities.RoutingState{}); err != nil {
+		t.Fatalf("inspect_ide_worker alias failed: %v", err)
+	}
+	if _, err := cap.ExecuteTool(ctx, "delegate_ide_coding_task", map[string]any{"task": "Apply the prepared patch"}, capabilities.RoutingState{}); err != nil {
+		t.Fatalf("delegate_ide_coding_task alias failed: %v", err)
+	}
+}
+
+func TestCapabilityClassifyContinueBridgePromptAsCodingSupport(t *testing.T) {
+	cap := NewCapability()
+	query := strings.Join([]string{
+		"Implement the payment fix",
+		"[continue_bridge=true]",
+		"[continue_mode=apply]",
+		"[coding_workflow_profile=debugging]",
+		"[requested_phase=execution]",
+		"[continue_phase_available_tools=read_file,multi_edit]",
+	}, "\n")
+
+	result := cap.Classify(query, capabilities.RoutingState{Domain: "coding", CapabilityHint: "execution"})
+	if !result.Relevant {
+		t.Fatalf("expected Continue bridge prompt to be relevant")
+	}
+	if result.Score < 32 {
+		t.Fatalf("expected elevated score for Continue bridge prompt, got %d", result.Score)
+	}
+	if len(result.Hints) != 1 || result.Hints[0] != "execution" {
+		t.Fatalf("expected execution hint from requested phase, got %#v", result.Hints)
+	}
+	if len(result.Domains) != 1 || result.Domains[0] != "coding" {
+		t.Fatalf("expected coding domain for Continue bridge prompt, got %#v", result.Domains)
+	}
+}
+
+func TestCapabilityBuildInstructionsReflectsContinueBridgeMetadata(t *testing.T) {
+	cap := NewCapability()
+	query := strings.Join([]string{
+		"Review the patch outcome",
+		"[continue_bridge=true]",
+		"[requested_phase=review]",
+		"[continue_phase_tools=read_file,get_problems,run_terminal_command]",
+		"[continue_phase_available_tools=read_file,get_problems]",
+		"[continue_tool_choice=get_problems]",
+	}, "\n")
+
+	contextText := cap.BuildContext(query, capabilities.RoutingState{})
+	for _, want := range []string{
+		"requested_phase: review",
+		"continue_allowed_tools: read_file, get_problems",
+		"continue_tool_choice: get_problems",
+		"delegation_contract:",
+	} {
+		if !strings.Contains(contextText, want) {
+			t.Fatalf("expected dynamic context to contain %q, got %q", want, contextText)
+		}
+	}
+
+	instructions := cap.BuildInstructions(query, capabilities.RoutingState{})
+	for _, want := range []string{
+		"Current Continue phase: review",
+		"Bound Continue to these tools for this delegated turn when possible: read_file, get_problems.",
+		"Preferred Continue tool for the delegated turn: get_problems.",
+		"instructions for Continue's Ask pipeline",
+		"structured execution result",
+		"team practices from LTM",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("expected dynamic instructions to contain %q, got %q", want, instructions)
+		}
 	}
 }

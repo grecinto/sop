@@ -183,258 +183,17 @@ func TestContinueChatHandler_InjectsWorkflowProfileIntoAskQuery(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleChatHandlerReturnsStructuredCompletion(t *testing.T) {
-	service := &localRAGService{service: &recordingQueryAgent{}}
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o-mini","messages":[{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"hello"}]}`))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	service.handleOpenAICompatibleChat(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
-	}
-	body := rr.Body.String()
-	if !strings.Contains(body, "\"object\":\"chat.completion\"") {
-		t.Fatalf("expected chat completion body, got %q", body)
-	}
-	if !strings.Contains(body, "\"role\":\"assistant\"") {
-		t.Fatalf("expected assistant message in body, got %q", body)
-	}
-}
-
-func TestOpenAICompatibleChatHandler_PreservesSystemAndHistoryInAskQuery(t *testing.T) {
-	agent := &recordingQueryAgent{}
-	service := &localRAGService{service: agent}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
-		"model":"daemon-bridge",
-		"messages":[
-			{"role":"system","content":"You are a code analysis assistant"},
-			{"role":"user","content":"Summarize the repo"},
-			{"role":"assistant","content":"I will inspect the codebase."},
-			{"role":"user","content":[{"type":"text","text":"Analyze the code base"}]}
-		]
-	}`))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	service.handleOpenAICompatibleChat(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
-	}
-	if len(agent.queries) != 1 {
-		t.Fatalf("expected one ask query, got %d", len(agent.queries))
-	}
-	query := agent.queries[0]
-	if !strings.Contains(query, "Continue system instructions:") || !strings.Contains(query, "You are a code analysis assistant") {
-		t.Fatalf("expected system instructions to be preserved, got %q", query)
-	}
-	if !strings.Contains(query, "Continue conversation history:") || !strings.Contains(query, "User: Summarize the repo") || !strings.Contains(query, "Assistant: I will inspect the codebase.") {
-		t.Fatalf("expected prior conversation history to be preserved, got %q", query)
-	}
-	if !strings.Contains(query, "Current Continue request:") || !strings.Contains(query, "Analyze the code base") {
-		t.Fatalf("expected latest user request to lead the prompt, got %q", query)
-	}
-}
-
-func TestOpenAICompatibleChatHandler_InjectsEditWorkflowContextIntoAskQuery(t *testing.T) {
-	agent := &recordingQueryAgent{}
-	service := &localRAGService{service: agent}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
-		"\t\"model\":\"gpt-5.4\",\n"+
-		"\t\"messages\":[\n"+
-		"\t\t{\"role\":\"user\",\"content\":\"```go\\nfunc processPayment(p Payment) error {\\n    return nil\\n}\\n```\\n\\nYou are an expert programmer. You will rewrite the above code to do the following:\\n\\nRefactor the function to extract validation into a helper.\\n\\nLeave existing comments in place unless changes require modifying them. Output only a code block with the rewritten code:\"}\n"+
-		"\t]\n"+
-		"}"))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	service.handleOpenAICompatibleChat(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
-	}
-	if len(agent.queries) != 1 {
-		t.Fatalf("expected one ask query, got %d", len(agent.queries))
-	}
-	query := agent.queries[0]
-	checks := []string{
-		"Continue workflow context:",
-		"[continue_mode=edit]",
-		"[coding_workflow_profile=refactoring]",
-		"[coding_task_type=refactoring]",
-		"[requested_phase=execution]",
-	}
-	for _, check := range checks {
-		if !strings.Contains(query, check) {
-			t.Fatalf("expected openai-compatible edit workflow context %q in query, got %q", check, query)
-		}
-	}
-}
-
-func TestOpenAICompatibleChatHandler_ExtractsSelectedTextIntoPayloadFromEditPrompt(t *testing.T) {
+func TestContinueChatHandler_PropagatesProviderDetailsIntoAgentConfig(t *testing.T) {
 	agent := &recordingAskAgent{}
 	service := &localRAGService{service: agent}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
-		"\t\"model\":\"gpt-5.4\",\n"+
-		"\t\"messages\":[\n"+
-		"\t\t{\"role\":\"user\",\"content\":\"```go\\nfunc processPayment(p Payment) error {\\n    return nil\\n}\\n```\\n\\nYou are an expert programmer. You will rewrite the above code to do the following:\\n\\nRefactor the function to extract validation into a helper.\\n\\nLeave existing comments in place unless changes require modifying them. Output only a code block with the rewritten code:\"}\n"+
-		"]\n"+
-		"}"))
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"continue-session-1","message":"Analyze the code base","provider":"gemini","api_key":"secret-key","model":"gemini-2.5-pro","url":"https://example.test","workspace":{"root":"."}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	service.handleOpenAICompatibleChat(rr, req)
+	service.handleContinueChat(rr, req)
 
 	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
-	}
-	if len(agent.calls) != 1 {
-		t.Fatalf("expected one agent call, got %d", len(agent.calls))
-	}
-	val, ok := agent.calls[0].cfg.Get("payload")
-	if !ok {
-		t.Fatal("expected payload in agent config")
-	}
-	payload, ok := val.(*ai.SessionPayload)
-	if !ok || payload == nil {
-		t.Fatalf("expected payload of type *ai.SessionPayload, got %T", val)
-	}
-	if payload.Variables["continue_mode"] != "edit" {
-		t.Fatalf("expected continue_mode=edit, got %#v", payload.Variables)
-	}
-	selectedText, _ := payload.Variables["selected_text"].(string)
-	if !strings.Contains(selectedText, "func processPayment(p Payment) error") {
-		t.Fatalf("expected selected_text to include original code, got %q", selectedText)
-	}
-}
-
-func TestOpenAICompatibleChatHandler_InjectsApplyWorkflowContextIntoAskQuery(t *testing.T) {
-	agent := &recordingQueryAgent{}
-	service := &localRAGService{service: agent}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
-		"\t\"model\":\"gpt-5.4\",\n"+
-		"\t\"messages\":[\n"+
-		"\t\t{\"role\":\"user\",\"content\":\"ORIGINAL CODE:\\n```\\nfunc processPayment() error {\\n    return nil\\n}\\n```\\n\\nSUGGESTED EDIT:\\n```\\nfunc processPayment() error {\\n    if err := validatePayment(); err != nil {\\n        return err\\n    }\\n    return nil\\n}\\n```\\n\\nApply the SUGGESTED EDIT to the ORIGINAL CODE. Output the complete modified file.\\n- Output ONLY code. Do NOT explain, summarize, or describe changes.\\n- Leave existing comments in place unless changes require modifying them.\\n- Preserve all unchanged code exactly as-is.\"}\n"+
-		"\t]\n"+
-		"}"))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	service.handleOpenAICompatibleChat(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
-	}
-	if len(agent.queries) != 1 {
-		t.Fatalf("expected one ask query, got %d", len(agent.queries))
-	}
-	query := agent.queries[0]
-	checks := []string{
-		"Continue workflow context:",
-		"[continue_mode=apply]",
-		"[requested_phase=execution]",
-	}
-	for _, check := range checks {
-		if !strings.Contains(query, check) {
-			t.Fatalf("expected openai-compatible apply workflow context %q in query, got %q", check, query)
-		}
-	}
-}
-
-func TestOpenAICompatibleChatHandler_ExtractsFileContextIntoPayloadFromPromptHistory(t *testing.T) {
-	agent := &recordingAskAgent{}
-	service := &localRAGService{service: agent}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
-		"\t\"model\":\"gpt-5.4\",\n"+
-		"\t\"messages\":[\n"+
-		"\t\t{\"role\":\"user\",\"content\":\"The following file is currently open. Don't reference it if it's not relevant to the user's message:\\n\\n```payments/service.go\\nfunc processPayment() error {\\n    return nil\\n}\\n```\"},\n"+
-		"\t\t{\"role\":\"user\",\"content\":\"```payments/service_test.go\\nfunc TestProcessPayment(t *testing.T) {}\\n```\"},\n"+
-		"\t\t{\"role\":\"user\",\"content\":\"```go\\nfunc processPayment() error {\\n    return nil\\n}\\n```\\n\\nYou are an expert programmer. You will rewrite the above code to do the following:\\n\\nRefactor the function to extract validation into a helper.\\n\\nLeave existing comments in place unless changes require modifying them. Output only a code block with the rewritten code:\"}\n"+
-		"]\n"+
-		"}"))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	service.handleOpenAICompatibleChat(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
-	}
-	if len(agent.calls) != 1 {
-		t.Fatalf("expected one agent call, got %d", len(agent.calls))
-	}
-	val, ok := agent.calls[0].cfg.Get("payload")
-	if !ok {
-		t.Fatal("expected payload in agent config")
-	}
-	payload, ok := val.(*ai.SessionPayload)
-	if !ok || payload == nil {
-		t.Fatalf("expected payload of type *ai.SessionPayload, got %T", val)
-	}
-	if got := payload.Variables["active_file"]; got != "payments/service.go" {
-		t.Fatalf("expected active_file to be inferred, got %#v", payload.Variables)
-	}
-	openFiles, ok := payload.Variables["open_files"].([]string)
-	if !ok {
-		t.Fatalf("expected open_files as []string, got %#v", payload.Variables["open_files"])
-	}
-	if len(openFiles) != 2 || openFiles[0] != "payments/service.go" || openFiles[1] != "payments/service_test.go" {
-		t.Fatalf("unexpected open_files: %#v", openFiles)
-	}
-}
-
-func TestOpenAICompatibleChatHandler_AppendsInferredEditorContextToAskQuery(t *testing.T) {
-	agent := &recordingQueryAgent{}
-	service := &localRAGService{service: agent}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{\n"+
-		"\t\"model\":\"gpt-5.4\",\n"+
-		"\t\"messages\":[\n"+
-		"\t\t{\"role\":\"user\",\"content\":\"The following file is currently open. Don't reference it if it's not relevant to the user's message:\\n\\n```payments/service.go\\nfunc processPayment() error {\\n    return nil\\n}\\n```\"},\n"+
-		"\t\t{\"role\":\"user\",\"content\":\"ORIGINAL CODE:\\n```\\nfunc processPayment() error {\\n    return nil\\n}\\n```\\n\\nSUGGESTED EDIT:\\n```\\nfunc processPayment() error {\\n    if err := validatePayment(); err != nil {\\n        return err\\n    }\\n    return nil\\n}\\n```\\n\\nApply the SUGGESTED EDIT to the ORIGINAL CODE. Output the complete modified file.\"}\n"+
-		"]\n"+
-		"}"))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	service.handleOpenAICompatibleChat(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
-	}
-	if len(agent.queries) != 1 {
-		t.Fatalf("expected one ask query, got %d", len(agent.queries))
-	}
-	query := agent.queries[0]
-	for _, check := range []string{
-		"Continue editor context:",
-		"[active_file=payments/service.go]",
-		"[open_files=payments/service.go]",
-		"[selected_text=func processPayment() error {",
-	} {
-		if !strings.Contains(query, check) {
-			t.Fatalf("expected inferred editor context %q in query, got %q", check, query)
-		}
-	}
-}
-
-func TestOpenAICompatibleChatHandler_ParsesProviderModelAliasIntoAgentConfig(t *testing.T) {
-	agent := &recordingAskAgent{}
-	service := &localRAGService{service: agent}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
-		"model":"gemini:gemini-2.5-pro",
-		"user":"continue-session-1",
-		"messages":[{"role":"user","content":"Analyze the code base"}]
-	}`))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	service.handleOpenAICompatibleChat(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+		t.Fatalf("handleContinueChat() status = %d, want %d", rr.Code, http.StatusOK)
 	}
 	if len(agent.calls) != 1 {
 		t.Fatalf("expected one agent call, got %d", len(agent.calls))
@@ -450,7 +209,7 @@ func TestOpenAICompatibleChatHandler_ParsesProviderModelAliasIntoAgentConfig(t *
 	if !ok {
 		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", val)
 	}
-	if providerDetails.Provider != "gemini" || providerDetails.Model != "gemini-2.5-pro" {
+	if providerDetails.Provider != "gemini" || providerDetails.APIKey != "secret-key" || providerDetails.Model != "gemini-2.5-pro" || providerDetails.BaseURL != "https://example.test" {
 		t.Fatalf("unexpected provider details: %+v", providerDetails)
 	}
 	payload := ai.GetSessionPayload(agent.calls[0].ctx)
@@ -460,67 +219,110 @@ func TestOpenAICompatibleChatHandler_ParsesProviderModelAliasIntoAgentConfig(t *
 	if payload.Variables["llm_provider"] != "gemini" || payload.Variables["llm_model"] != "gemini-2.5-pro" {
 		t.Fatalf("expected provider intent in payload variables, got %#v", payload.Variables)
 	}
+	if payload.Variables["llm_url"] != "https://example.test" {
+		t.Fatalf("expected base URL intent in payload variables, got %#v", payload.Variables)
+	}
 	if ctxVal, ok := agent.calls[0].ctx.Value(ai.CtxKeyProvider).(string); !ok || ctxVal != "gemini:gemini-2.5-pro" {
 		t.Fatalf("expected provider context override, got %#v", agent.calls[0].ctx.Value(ai.CtxKeyProvider))
 	}
-}
-
-type streamingAskAgent struct{}
-
-func (a *streamingAskAgent) Open(ctx context.Context) error  { return nil }
-func (a *streamingAskAgent) Close(ctx context.Context) error { return nil }
-func (a *streamingAskAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
-	return nil, nil
-}
-func (a *streamingAskAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
-	if streamer, ok := ctx.Value(ai.CtxKeyEventStreamer).(func(string, any)); ok && streamer != nil {
-		streamer("progress", "Preparing workspace analysis")
-		streamer(ai.ReasoningEventAssistantMessage, map[string]any{"phase": "commentary", "text": "Inspecting the codebase.", "streaming": true, "stream_state": "delta"})
-		streamer(ai.ReasoningEventToolCall, map[string]any{"tool": "investigation_search_repo"})
-		streamer(ai.ReasoningEventToolResult, ai.BuildToolResultEvent("list_stores", map[string]any{"database": "sales"}, `{"database":"sales","stores":[{"name":"users","schema":{"first_name":"string"}}]}`, nil, 1, "", 0))
-		streamer(ai.ReasoningEventToolResult, ai.BuildToolResultEvent("execute_local_command", map[string]any{"command": "go test ./..."}, "ok\tgithub.com/sharedcode/sop/cmd/sop-daemon\t0.497s", nil, 1, "", 0))
-		streamer("terminal_command", map[string]any{"text": "$ go test ./...", "display_as_command": true})
-		streamer("content", "Found the main architecture surfaces.")
+	if ctxVal, ok := agent.calls[0].ctx.Value(ai.CtxKeyAPIKey).(string); !ok || ctxVal != "secret-key" {
+		t.Fatalf("expected API key context override, got %#v", agent.calls[0].ctx.Value(ai.CtxKeyAPIKey))
 	}
-	return "Final answer: architecture analysis complete.", nil
-}
-func (a *streamingAskAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
-	return "", nil
-}
-func (a *streamingAskAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
-	return nil, nil
+	if ctxVal, ok := agent.calls[0].ctx.Value(ai.CtxKeyBaseURL).(string); !ok || ctxVal != "https://example.test" {
+		t.Fatalf("expected base URL context override, got %#v", agent.calls[0].ctx.Value(ai.CtxKeyBaseURL))
+	}
 }
 
-func TestOpenAICompatibleChatHandler_StreamsSSEChunksWhenRequested(t *testing.T) {
-	service := &localRAGService{service: &streamingAskAgent{}}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
-		"model":"gpt-5.4",
-		"stream":true,
-		"messages":[{"role":"user","content":"Analyze the code base"}]
-	}`))
+func TestContinueChatHandler_AutoEnrichesGuidanceVariablesForImplementationPlanning(t *testing.T) {
+	agent := &recordingAskAgent{guidance: sharedagent.ContinueDelegationGuidance{
+		TeamPractices:        []string{"Preserve public interfaces", "Add targeted tests"},
+		Constraints:          []string{"Avoid direct SQL string concatenation"},
+		ImplementationNotes:  []string{"Prefer repository helpers for retry logic"},
+		ExpectedResultFormat: "structured_execution_result",
+		ReferenceContext: []sharedagent.ContinueDelegationReference{{
+			Kind:    "ltm_team_pattern",
+			Source:  "Team Patterns/Payments/Retry Pattern",
+			Title:   "Retry Pattern",
+			Content: "Use the shared retry helper with jitter.",
+		}},
+		Metadata: map[string]any{"source": "ltm_team_patterns"},
+	}}
+	service := &localRAGService{service: agent}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"continue-session-guidance","mode":"plan","message":"Implement retry handling for payment webhooks","workspace":{"root":".","active_file":"payments/webhook.go"},"context":{"open_files":["payments/webhook.go"]}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	service.handleOpenAICompatibleChat(rr, req)
+	service.handleContinueChat(rr, req)
 
 	if rr.Code != http.StatusOK {
-		t.Fatalf("handleOpenAICompatibleChat() status = %d, want %d", rr.Code, http.StatusOK)
+		t.Fatalf("handleContinueChat() status = %d, want %d", rr.Code, http.StatusOK)
 	}
-	body := rr.Body.String()
-	if contentType := rr.Header().Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
-		t.Fatalf("expected SSE content type, got %q", contentType)
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
 	}
-	if !strings.Contains(body, "chat.completion.chunk") {
-		t.Fatalf("expected chat completion chunk stream, got %q", body)
+	payload := ai.GetSessionPayload(agent.calls[0].ctx)
+	if payload == nil {
+		t.Fatal("expected session payload")
 	}
-	if !strings.Contains(body, "Progress: Preparing workspace analysis") || !strings.Contains(body, "Inspecting the codebase.") || !strings.Contains(body, "Calling tool: investigation_search_repo") || !strings.Contains(body, "list_stores confirmed users schema={first_name: string}") || !strings.Contains(body, "$ go test ./...") || !strings.Contains(body, "Found the main architecture surfaces.") || !strings.Contains(body, "Final answer: architecture analysis complete.") {
-		t.Fatalf("expected streamed Ask content in SSE body, got %q", body)
+	teamPractices, ok := payload.Variables["continue_team_practices"].([]string)
+	if !ok || len(teamPractices) != 2 || teamPractices[0] != "Preserve public interfaces" {
+		t.Fatalf("expected auto-enriched team practices, got %#v", payload.Variables["continue_team_practices"])
 	}
-	if strings.Contains(body, "execute_local_command returned:") {
-		t.Fatalf("expected automation tool result summary to stay suppressed, got %q", body)
+	constraints, ok := payload.Variables["continue_constraints"].([]string)
+	if !ok || len(constraints) != 1 {
+		t.Fatalf("expected auto-enriched constraints, got %#v", payload.Variables["continue_constraints"])
 	}
-	if !strings.Contains(body, "data: [DONE]") {
-		t.Fatalf("expected SSE completion marker, got %q", body)
+	if payload.Variables["continue_expected_result_format"] != "structured_execution_result" {
+		t.Fatalf("expected expected result format guidance, got %#v", payload.Variables["continue_expected_result_format"])
+	}
+	refs, ok := payload.Variables["continue_reference_context"].([]any)
+	if !ok || len(refs) != 1 {
+		t.Fatalf("expected auto-enriched reference context, got %#v", payload.Variables["continue_reference_context"])
+	}
+	metadata, ok := payload.Variables["continue_guidance_metadata"].(map[string]any)
+	if !ok || metadata["source"] != "ltm_team_patterns" {
+		t.Fatalf("expected guidance metadata, got %#v", payload.Variables["continue_guidance_metadata"])
+	}
+}
+
+func TestAskBridgeChat_RemovesStaleContinueGuidanceVariablesWhenRefreshIsEmpty(t *testing.T) {
+	agent := &recordingAskAgent{}
+	service := &localRAGService{service: agent}
+	_, err := service.askBridgeChat(context.Background(), bridgeAskRequest{
+		SessionID:  "continue-session-stale-guidance",
+		UserPrompt: "Implement retry handling for payment webhooks",
+		FullPrompt: "Implement retry handling for payment webhooks",
+		Variables: map[string]any{
+			"requested_phase":                 "planning",
+			"coding_task_type":                "implementation",
+			"continue_team_practices":         []string{"OLD stale practice"},
+			"continue_constraints":            []string{"OLD stale constraint"},
+			"continue_guidance_metadata":      map[string]any{"source": "ltm_team_patterns"},
+			"continue_expected_result_format": "structured_execution_result",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("askBridgeChat() error = %v", err)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	payload := ai.GetSessionPayload(agent.calls[0].ctx)
+	if payload == nil {
+		t.Fatal("expected session payload")
+	}
+	for _, key := range []string{
+		"continue_team_practices",
+		"continue_success_criteria",
+		"continue_constraints",
+		"continue_implementation_notes",
+		"continue_expected_result_format",
+		"continue_reference_context",
+		"continue_guidance_metadata",
+	} {
+		if _, ok := payload.Variables[key]; ok {
+			t.Fatalf("expected stale %s to be removed, got %#v", key, payload.Variables[key])
+		}
 	}
 }
 
@@ -646,18 +448,18 @@ func TestRegisterBridgeRoutes_MountsClientEndpoints(t *testing.T) {
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
-	service.registerBridgeRoutes(mux, reg)
+	service.registerBridgeRoutes(mux, reg, nil)
 
-	chatReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}`))
+	chatReq := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"bridge-route-test-chat","message":"hello","provider":"anthropic","model":"claude-sonnet-4-5","workspace":{"root":"."}}`))
 	chatReq.Header.Set("Content-Type", "application/json")
 	chatReq.Header.Set("X-SOP-Session-ID", "bridge-route-test-chat")
 	chatRR := httptest.NewRecorder()
 	mux.ServeHTTP(chatRR, chatReq)
 	if chatRR.Code != http.StatusOK {
-		t.Fatalf("mounted openai-compatible route status = %d, want %d", chatRR.Code, http.StatusOK)
+		t.Fatalf("mounted continue chat route status = %d, want %d", chatRR.Code, http.StatusOK)
 	}
-	if !strings.Contains(chatRR.Body.String(), `"object":"chat.completion"`) {
-		t.Fatalf("expected mounted openai-compatible response, got %q", chatRR.Body.String())
+	if !strings.Contains(chatRR.Body.String(), `"type":"content"`) || !strings.Contains(chatRR.Body.String(), `"type":"done"`) {
+		t.Fatalf("expected mounted continue stream response, got %q", chatRR.Body.String())
 	}
 
 	dir := t.TempDir()
@@ -682,55 +484,21 @@ func TestRegisterBridgeRoutes_MountsClientMetadataEndpoints(t *testing.T) {
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
-	service.registerBridgeRoutes(mux, reg)
+	service.registerBridgeRoutes(mux, reg, nil)
 
-	modelsReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	modelsReq.Header.Set("X-SOP-Session-ID", "bridge-route-models")
-	modelsRR := httptest.NewRecorder()
-	mux.ServeHTTP(modelsRR, modelsReq)
-	if modelsRR.Code != http.StatusOK {
-		t.Fatalf("mounted models route status = %d, want %d", modelsRR.Code, http.StatusOK)
+	legacyModelsReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	legacyModelsRR := httptest.NewRecorder()
+	mux.ServeHTTP(legacyModelsRR, legacyModelsReq)
+	if legacyModelsRR.Code != http.StatusNotFound {
+		t.Fatalf("expected removed legacy models route to return 404, got %d", legacyModelsRR.Code)
 	}
-	var modelsPayload map[string]any
-	if err := json.Unmarshal(modelsRR.Body.Bytes(), &modelsPayload); err != nil {
-		t.Fatalf("decode model catalog: %v", err)
-	}
-	data, ok := modelsPayload["data"].([]any)
-	if !ok || len(data) == 0 {
-		t.Fatalf("expected model catalog data array, got %#v", modelsPayload)
-	}
-	modelIndex := map[string]map[string]any{}
-	for _, item := range data {
-		model, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		id, _ := model["id"].(string)
-		if strings.TrimSpace(id) != "" {
-			modelIndex[id] = model
-		}
-	}
-	if _, ok := modelIndex["daemon-bridge"]; !ok {
-		t.Fatalf("expected daemon-bridge model entry, got %#v", modelIndex)
-	}
-	if _, ok := modelIndex["gpt-5.4"]; !ok {
-		t.Fatalf("expected gpt-5.4 compatibility alias, got %#v", modelIndex)
-	}
-	geminiModel, ok := modelIndex["gemini:gemini-2.5-pro"]
-	if !ok {
-		t.Fatalf("expected gemini provider alias entry, got %#v", modelIndex)
-	}
-	geminiMetadata, ok := geminiModel["metadata"].(map[string]any)
-	if !ok || geminiMetadata["provider"] != "gemini" || geminiMetadata["routed_via_bridge"] != true {
-		t.Fatalf("expected gemini routed metadata, got %#v", geminiModel)
-	}
-	anthropicModel, ok := modelIndex["anthropic:claude-3-5-sonnet-20241022"]
-	if !ok {
-		t.Fatalf("expected anthropic provider alias entry, got %#v", modelIndex)
-	}
-	anthropicMetadata, ok := anthropicModel["metadata"].(map[string]any)
-	if !ok || anthropicMetadata["provider"] != "anthropic" || anthropicMetadata["routed_via_bridge"] != true {
-		t.Fatalf("expected anthropic routed metadata, got %#v", anthropicModel)
+
+	legacyChatReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}]}`))
+	legacyChatReq.Header.Set("Content-Type", "application/json")
+	legacyChatRR := httptest.NewRecorder()
+	mux.ServeHTTP(legacyChatRR, legacyChatReq)
+	if legacyChatRR.Code != http.StatusNotFound {
+		t.Fatalf("expected removed legacy chat route to return 404, got %d", legacyChatRR.Code)
 	}
 
 	continueReq := httptest.NewRequest(http.MethodGet, "/api/continue/metadata", nil)
@@ -747,8 +515,15 @@ func TestRegisterBridgeRoutes_MountsClientMetadataEndpoints(t *testing.T) {
 	if continuePayload["client"] != "continue" {
 		t.Fatalf("expected continue metadata client identifier, got %#v", continuePayload)
 	}
+	chatInfo, ok := continuePayload["chat"].(map[string]any)
+	if !ok || chatInfo["path"] != "/api/continue/chat" || chatInfo["method"] != "POST" || chatInfo["provider_is_attribute"] != true || chatInfo["model_is_attribute"] != true {
+		t.Fatalf("expected native continue chat metadata, got %#v", continuePayload)
+	}
+	if _, exists := continuePayload["config"]; exists {
+		t.Fatalf("did not expect daemon-owned continue config metadata, got %#v", continuePayload)
+	}
 	controlModel, ok := continuePayload["control_model"].(map[string]any)
-	if !ok || controlModel["controller"] != "ai_studio_daemon" || controlModel["editor_worker"] != "continue" || controlModel["provider_is_attribute"] != true {
+	if !ok || controlModel["controller"] != "ai_studio_daemon" || controlModel["editor_worker"] != "continue" || controlModel["provider_is_attribute"] != true || controlModel["model_is_attribute"] != true {
 		t.Fatalf("expected continue control model metadata, got %#v", continuePayload)
 	}
 	workerRegister, ok := continuePayload["worker_register"].(map[string]any)
@@ -791,6 +566,41 @@ func TestRegisterBridgeRoutes_MountsClientMetadataEndpoints(t *testing.T) {
 	if !foundReadFile {
 		t.Fatalf("expected repo.read_file in continue metadata, got %#v", names)
 	}
+	ideTools, ok := continuePayload["ide_tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected continue IDE tool metadata, got %#v", continuePayload)
+	}
+	phaseItems, ok := ideTools["supported_phases"].([]any)
+	if !ok || len(phaseItems) == 0 {
+		t.Fatalf("expected supported phase metadata, got %#v", ideTools)
+	}
+	foundExecutionPhase := false
+	for _, item := range phaseItems {
+		phase, ok := item.(map[string]any)
+		if !ok || phase["id"] != "execution" {
+			continue
+		}
+		tools, ok := phase["available_tools"].([]any)
+		if !ok || len(tools) == 0 {
+			t.Fatalf("expected execution phase tools, got %#v", phase)
+		}
+		var hasEdit, hasTerminal bool
+		for _, tool := range tools {
+			if tool == "edit_existing_file" {
+				hasEdit = true
+			}
+			if tool == "run_terminal_command" {
+				hasTerminal = true
+			}
+		}
+		if !hasEdit || !hasTerminal {
+			t.Fatalf("expected execution phase to expose edit_existing_file and run_terminal_command, got %#v", tools)
+		}
+		foundExecutionPhase = true
+	}
+	if !foundExecutionPhase {
+		t.Fatalf("expected execution phase metadata, got %#v", phaseItems)
+	}
 	workflows, ok := continuePayload["coding_workflows"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected coding workflow metadata, got %#v", continuePayload)
@@ -822,7 +632,7 @@ func TestRegisterBridgeRoutes_TracksContinueAgentExecutionSessionState(t *testin
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
-	service.registerBridgeRoutes(mux, reg)
+	service.registerBridgeRoutes(mux, reg, nil)
 
 	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-agent-1","task":"Implement a feature flag rollout for billing","mode":"plan","context":{"workspace_root":".","active_file":"billing/service.go","selected_text":"func rollout()","open_files":["billing/service.go","billing/service_test.go"]}}`))
 	executeReq.Header.Set("Content-Type", "application/json")
@@ -862,7 +672,7 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
-	service.registerBridgeRoutes(mux, reg)
+	service.registerBridgeRoutes(mux, reg, nil)
 
 	var receivedBody map[string]any
 	observedInProgress := false
@@ -878,7 +688,7 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		_, _ = w.Write([]byte("{\"type\":\"progress\",\"message\":\"Continue worker preparing patch\"}\n"))
-		_, _ = w.Write([]byte("{\"type\":\"done\",\"result\":{\"status\":\"completed\"}}\n"))
+		_, _ = w.Write([]byte("{\"type\":\"done\",\"result\":{\"status\":\"completed\",\"summary\":\"Patched payments/service.go\",\"modified_files\":[{\"file_path\":\"payments/service.go\",\"crud_operation\":\"update\",\"diff_summary\":\"Applied payment patch\",\"diff_format\":\"unified\",\"metadata\":{\"phase\":\"execution\"}}],\"metadata\":{\"requested_phase\":\"execution\",\"mode\":\"apply\"}}}\n"))
 	}))
 	defer worker.Close()
 
@@ -899,7 +709,7 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 		t.Fatalf("mounted continue worker state route status = %d, want %d", workerStateRR.Code, http.StatusOK)
 	}
 
-	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-worker-1","task":"Apply the prepared payment patch","mode":"apply","context":{"workspace_root":".","active_file":"payments/service.go","selected_text":"func processPayment()","open_files":["payments/service.go"]}}`))
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-worker-1","task":"Apply the prepared payment patch","mode":"apply","requested_phase":"execution","context":{"workspace_root":".","active_file":"payments/service.go","selected_text":"func processPayment()","open_files":["payments/service.go"]}}`))
 	executeReq.Header.Set("Content-Type", "application/json")
 	executeReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-execute")
 	executeRR := httptest.NewRecorder()
@@ -930,6 +740,20 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 	}
 	if snapshot["status"] != "completed" || snapshot["phase"] != "execution" {
 		t.Fatalf("expected completed execution snapshot for proxied worker path, got %#v", snapshot)
+	}
+	if snapshot["mode"] != "apply" {
+		t.Fatalf("expected mode to remain apply while phase is execution, got %#v", snapshot)
+	}
+	result, ok := snapshot["execution_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected persisted execution_result in session snapshot, got %#v", snapshot["execution_result"])
+	}
+	if result["summary"] != "Patched payments/service.go" {
+		t.Fatalf("expected persisted execution result summary, got %#v", result)
+	}
+	modifiedFiles, ok := result["modified_files"].([]any)
+	if !ok || len(modifiedFiles) != 1 {
+		t.Fatalf("expected one persisted modified file, got %#v", result["modified_files"])
 	}
 }
 
@@ -966,6 +790,52 @@ func TestBuildContinueBridgeEnvelope_PopulatesStructuredIDEContextVariables(t *t
 	}
 }
 
+func TestBuildContinueBridgeEnvelope_PreservesContinueToolMetadata(t *testing.T) {
+	envelope, err := buildContinueBridgeEnvelope(continueChatRequest{
+		SessionID: "sess-tools",
+		Message:   "Apply the prepared patch",
+		Mode:      "apply",
+		Tools: []continueChatTool{
+			{Type: "function", Function: continueChatToolFunction{Name: "read_file"}},
+			{Type: "function", Function: continueChatToolFunction{Name: "multi_edit"}},
+			{Type: "function", Function: continueChatToolFunction{Name: "get_problems"}},
+		},
+		ToolChoice: continueChatToolChoice{
+			Type:     "function",
+			Function: continueChatToolFunction{Name: "multi_edit"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
+	}
+	availableTools, ok := envelope.Ask.Variables["continue_available_tools"].([]string)
+	if !ok || len(availableTools) != 3 {
+		t.Fatalf("expected continue_available_tools variable, got %#v", envelope.Ask.Variables["continue_available_tools"])
+	}
+	phaseTools, ok := envelope.Ask.Variables["continue_phase_tools"].([]string)
+	if !ok || len(phaseTools) == 0 {
+		t.Fatalf("expected continue_phase_tools variable, got %#v", envelope.Ask.Variables["continue_phase_tools"])
+	}
+	phaseAvailable, ok := envelope.Ask.Variables["continue_phase_available_tools"].([]string)
+	if !ok || len(phaseAvailable) != 2 || phaseAvailable[0] != "multi_edit" || phaseAvailable[1] != "read_file" {
+		t.Fatalf("expected execution-phase available tool intersection, got %#v", envelope.Ask.Variables["continue_phase_available_tools"])
+	}
+	if envelope.Ask.Variables["continue_tool_choice"] != "multi_edit" {
+		t.Fatalf("expected continue_tool_choice variable, got %#v", envelope.Ask.Variables["continue_tool_choice"])
+	}
+	checks := []string{
+		"[requested_phase=execution]",
+		"[continue_available_tools=get_problems,multi_edit,read_file]",
+		"[continue_phase_available_tools=multi_edit,read_file]",
+		"[continue_tool_choice=multi_edit]",
+	}
+	for _, check := range checks {
+		if !strings.Contains(envelope.Ask.FullPrompt, check) {
+			t.Fatalf("expected %q in full prompt, got %q", check, envelope.Ask.FullPrompt)
+		}
+	}
+}
+
 func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.T) {
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	var received continueAgentExecuteRequest
@@ -987,13 +857,31 @@ func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.
 
 	backend := newContinueIDEWorkerBackend(service)
 	result, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
-		SessionID:     "continue-worker-2",
-		Task:          "Apply the prepared payment patch",
-		Mode:          "apply",
-		WorkspaceRoot: ".",
-		ActiveFile:    "payments/service.go",
-		SelectedText:  "func processPayment()",
-		OpenFiles:     []string{"payments/service.go"},
+		SessionID:      "continue-worker-2",
+		Task:           "Apply the prepared payment patch",
+		Mode:           "apply",
+		Provider:       "anthropic",
+		Model:          "claude-sonnet-4-5",
+		RequestedPhase: "execution",
+		AvailableTools: []string{"read_file", "multi_edit", "get_problems"},
+		PhaseTools:     []string{"read_file", "multi_edit", "run_terminal_command"},
+		AllowedTools:   []string{"read_file", "multi_edit"},
+		ToolChoice:     "multi_edit",
+		WorkspaceRoot:  ".",
+		ActiveFile:     "payments/service.go",
+		SelectedText:   "func processPayment()",
+		OpenFiles:      []string{"payments/service.go"},
+		Guidance: ideworker.DelegationGuidance{
+			TeamPractices:        []string{"Preserve payment invariants", "Add targeted tests"},
+			SuccessCriteria:      []string{"Return structured execution result"},
+			ExpectedResultFormat: "structured_execution_result",
+			ReferenceContext: []ideworker.DelegationReference{{
+				Kind:    "ltm_note",
+				Source:  "Team Patterns/Payments",
+				Title:   "Payments practices",
+				Content: "Prefer explicit error wrapping.",
+			}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("ExecuteTask failed: %v", err)
@@ -1001,8 +889,28 @@ func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.
 	if received.Task != "Apply the prepared payment patch" || received.Context.ActiveFile != "payments/service.go" {
 		t.Fatalf("unexpected worker request: %#v", received)
 	}
-	if !strings.Contains(result, "worker applying patch") || !strings.Contains(result, `"type":"done"`) {
-		t.Fatalf("expected worker response body, got %q", result)
+	if received.Provider != "anthropic" || received.Model != "claude-sonnet-4-5" {
+		t.Fatalf("expected provider/model on worker request, got %#v", received)
+	}
+	if received.RequestedPhase != "execution" || received.ToolChoice != "multi_edit" {
+		t.Fatalf("expected phase/tool choice metadata on worker request, got %#v", received)
+	}
+	if len(received.AllowedTools) != 2 || received.AllowedTools[0] != "read_file" || received.AllowedTools[1] != "multi_edit" {
+		t.Fatalf("expected allowed tools on worker request, got %#v", received)
+	}
+	if !received.ResultContract.StreamProgress || !received.ResultContract.IncludeModifiedFiles || !received.ResultContract.IncludeDiffDeltas || !received.ResultContract.PreferArtifactRefs {
+		t.Fatalf("expected hybrid result contract on worker request, got %#v", received.ResultContract)
+	}
+	if received.ResultContract.MaxInlineDiffBytes != 16384 {
+		t.Fatalf("expected bounded inline diff size, got %#v", received.ResultContract)
+	}
+	if len(received.Guidance.TeamPractices) != 2 || received.Guidance.ExpectedResultFormat != "structured_execution_result" {
+		t.Fatalf("expected structured guidance on worker request, got %#v", received.Guidance)
+	}
+	for _, want := range []string{"\"status\": \"completed\""} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected canonical JSON execution result to contain %q, got %q", want, result)
+		}
 	}
 }
 
@@ -1029,16 +937,30 @@ func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *t
 
 	backend := newDefaultIDEWorkerBackend(service)
 	result, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
-		SessionID:  "continue-worker-default",
-		Task:       "Apply the prepared payment patch",
-		Mode:       "apply",
-		ActiveFile: "payments/service.go",
+		SessionID:      "continue-worker-default",
+		Task:           "Apply the prepared payment patch",
+		Mode:           "apply",
+		Provider:       "gemini",
+		Model:          "gemini-2.5-pro",
+		RequestedPhase: "execution",
+		AllowedTools:   []string{"read_file", "multi_edit"},
+		ToolChoice:     "multi_edit",
+		ActiveFile:     "payments/service.go",
 	})
 	if err != nil {
 		t.Fatalf("ExecuteTask failed: %v", err)
 	}
 	if received.Task != "Apply the prepared payment patch" || received.Context.ActiveFile != "payments/service.go" {
 		t.Fatalf("unexpected worker request: %#v", received)
+	}
+	if received.Provider != "gemini" || received.Model != "gemini-2.5-pro" {
+		t.Fatalf("expected provider/model on default backend worker request, got %#v", received)
+	}
+	if received.RequestedPhase != "execution" || received.ToolChoice != "multi_edit" {
+		t.Fatalf("expected requested phase and tool choice on default backend worker request, got %#v", received)
+	}
+	if !received.ResultContract.StreamProgress || !received.ResultContract.PreferArtifactRefs {
+		t.Fatalf("expected result contract to propagate on default backend worker request, got %#v", received.ResultContract)
 	}
 	if result != "delegated by continue worker" {
 		t.Fatalf("unexpected default backend result: %q", result)
@@ -1076,7 +998,7 @@ func TestRegisterBridgeRoutes_FallsBackWhenRegisteredWorkerLacksRequiredCapabili
 	service := &localRAGService{service: &recordingQueryAgent{}}
 	mux := http.NewServeMux()
 	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
-	service.registerBridgeRoutes(mux, reg)
+	service.registerBridgeRoutes(mux, reg, nil)
 
 	workerCalled := false
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1123,6 +1045,90 @@ func TestRegisterBridgeRoutes_FallsBackWhenRegisteredWorkerLacksRequiredCapabili
 	}
 	if snapshot["status"] != "completed" || snapshot["phase"] != "execution" {
 		t.Fatalf("expected completed execution snapshot for daemon fallback path, got %#v", snapshot)
+	}
+}
+
+func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testing.T) {
+	withIsolatedSystemDB(t)
+	xdgConfigHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
+
+	authHandler := &DaemonAuthHandler{
+		bootstrapSecret: "stale-secret",
+		bootstrapPath:   filepath.Join(xdgConfigHome, "sop", "daemon.bootstrap"),
+		sessionStore:    sopbackend.NewSessionStore(time.Minute),
+		config:          defaultDaemonAuthConfig,
+	}
+	if err := os.MkdirAll(filepath.Dir(authHandler.bootstrapPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(authHandler.bootstrapPath, []byte("fresh-secret"), 0o600); err != nil {
+		t.Fatalf("write bootstrap secret: %v", err)
+	}
+
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	mux := http.NewServeMux()
+	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
+	service.registerBridgeRoutes(mux, reg, authHandler)
+
+	unauthMetadataReq := httptest.NewRequest(http.MethodGet, "/api/continue/metadata", nil)
+	unauthMetadataRR := httptest.NewRecorder()
+	mux.ServeHTTP(unauthMetadataRR, unauthMetadataReq)
+	if unauthMetadataRR.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated metadata status = %d, want %d", unauthMetadataRR.Code, http.StatusUnauthorized)
+	}
+
+	bootstrapReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"fresh-secret"}`))
+	bootstrapRR := httptest.NewRecorder()
+	authHandler.HandleBootstrap(bootstrapRR, bootstrapReq)
+	if bootstrapRR.Code != http.StatusOK {
+		t.Fatalf("bootstrap auth status = %d, want %d with body %s", bootstrapRR.Code, http.StatusOK, bootstrapRR.Body.String())
+	}
+	var authPayload map[string]any
+	if err := json.Unmarshal(bootstrapRR.Body.Bytes(), &authPayload); err != nil {
+		t.Fatalf("decode bootstrap auth response: %v", err)
+	}
+	accessToken, _ := authPayload["access_token"].(string)
+	if strings.TrimSpace(accessToken) == "" {
+		t.Fatalf("expected bootstrap auth access token, got %#v", authPayload)
+	}
+
+	authMetadataReq := httptest.NewRequest(http.MethodGet, "/api/continue/metadata", nil)
+	authMetadataReq.Header.Set("Authorization", "Bearer "+accessToken)
+	authMetadataRR := httptest.NewRecorder()
+	mux.ServeHTTP(authMetadataRR, authMetadataReq)
+	if authMetadataRR.Code != http.StatusOK {
+		t.Fatalf("authenticated metadata status = %d, want %d", authMetadataRR.Code, http.StatusOK)
+	}
+	if !strings.Contains(authMetadataRR.Body.String(), `"client":"continue"`) {
+		t.Fatalf("expected continue metadata payload, got %q", authMetadataRR.Body.String())
+	}
+
+	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"session_id":"continue-auth-1","task":"Summarize the active file and report the workspace root.","mode":"apply","context":{"workspace_root":".","active_file":"README.md","selected_text":"","open_files":["README.md"]}}`))
+	executeReq.Header.Set("Authorization", "Bearer "+accessToken)
+	executeReq.Header.Set("Content-Type", "application/json")
+	executeRR := httptest.NewRecorder()
+	mux.ServeHTTP(executeRR, executeReq)
+	if executeRR.Code != http.StatusOK {
+		t.Fatalf("authenticated continue agent execute status = %d, want %d", executeRR.Code, http.StatusOK)
+	}
+	if !strings.Contains(executeRR.Body.String(), "Executing editor-aware coding task") || !strings.Contains(executeRR.Body.String(), `"type":"done"`) {
+		t.Fatalf("expected streamed execute response, got %q", executeRR.Body.String())
+	}
+
+	sessionReq := httptest.NewRequest(http.MethodGet, "/api/continue/sessions/continue-auth-1", nil)
+	sessionReq.Header.Set("Authorization", "Bearer "+accessToken)
+	sessionRR := httptest.NewRecorder()
+	mux.ServeHTTP(sessionRR, sessionReq)
+	if sessionRR.Code != http.StatusOK {
+		t.Fatalf("authenticated continue session status = %d, want %d", sessionRR.Code, http.StatusOK)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(sessionRR.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode continue session snapshot: %v", err)
+	}
+	if snapshot["session_id"] != "continue-auth-1" || snapshot["status"] != "completed" || snapshot["phase"] != "execution" {
+		t.Fatalf("expected completed authenticated execution snapshot, got %#v", snapshot)
 	}
 }
 
@@ -2031,6 +2037,64 @@ func TestHandleAskPassesProviderDetailsToAgentConfig(t *testing.T) {
 	}
 }
 
+func TestHandleEncryptDaemonSecretReturnsEncryptedBlob(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/secrets/encrypt", strings.NewReader(`{"value":"secret-key"}`))
+	rr := httptest.NewRecorder()
+
+	handleEncryptDaemonSecret(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleEncryptDaemonSecret() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	var resp daemonSecretEncryptResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !strings.HasPrefix(resp.EncryptedValue, "enc:v1:") {
+		t.Fatalf("expected encrypted blob, got %q", resp.EncryptedValue)
+	}
+	decrypted, err := sopbackend.DecryptSecretValue(resp.EncryptedValue)
+	if err != nil {
+		t.Fatalf("DecryptSecretValue() error = %v", err)
+	}
+	if decrypted != "secret-key" {
+		t.Fatalf("decrypted value = %q, want %q", decrypted, "secret-key")
+	}
+}
+
+func TestHandleAskDecryptsEncryptedProviderAPIKey(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	encrypted, err := sopbackend.EncryptSecretValue("secret-key")
+	if err != nil {
+		t.Fatalf("EncryptSecretValue() error = %v", err)
+	}
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(fmt.Sprintf(`{"query":"hello","llm_provider":"gemini","llm_api_key":%q,"llm_model":"gemini-2.5-pro","llm_url":"https://example.test"}`, encrypted)))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	value, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := value.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", value)
+	}
+	if providerDetails.APIKey != "secret-key" {
+		t.Fatalf("api key = %q, want %q", providerDetails.APIKey, "secret-key")
+	}
+}
+
 func TestAutoProvisionSharedCopilotServiceUsesBackendLoadedAgents(t *testing.T) {
 	oldAgents := sopbackend.GetLoadedAgents()
 	defer sopbackend.SetLoadedAgents(oldAgents)
@@ -2817,6 +2881,7 @@ func TestHandleUIHandoffAllowsMissingAuthTokensForLocalRuntime(t *testing.T) {
 
 type recordingAskAgent struct {
 	response string
+	guidance sharedagent.ContinueDelegationGuidance
 	calls    []struct {
 		ctx context.Context
 		cfg *ai.ConfigMap
@@ -2837,6 +2902,14 @@ func (a *recordingAskAgent) Ask(ctx context.Context, query string, cfg *ai.Confi
 		return a.response, nil
 	}
 	return "ok", nil
+}
+
+func (a *recordingAskAgent) BuildContinueDelegationGuidance(ctx context.Context, query, requestedPhase string, variables map[string]any) (sharedagent.ContinueDelegationGuidance, error) {
+	_ = ctx
+	_ = query
+	_ = requestedPhase
+	_ = variables
+	return a.guidance, nil
 }
 
 func TestLocalRAGAskUsesShellFallbackForSimpleCommands(t *testing.T) {

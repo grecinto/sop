@@ -27,7 +27,11 @@ func resolveLLMSettings(r *http.Request) llmSettings {
 			settings.Provider = h
 		}
 		if h := r.Header.Get("X-LLM-API-Key"); h != "" {
-			settings.APIKey = h
+			if decrypted, err := DecryptSecretValue(h); err == nil {
+				settings.APIKey = decrypted
+			} else {
+				settings.APIKey = h
+			}
 		}
 		if h := r.Header.Get("X-LLM-URL"); h != "" {
 			settings.URL = h
@@ -55,7 +59,11 @@ func resolveFallbackSettings(r *http.Request) *llmSettings {
 	}
 
 	if h := r.Header.Get("X-LLM-Fallback-API-Key"); h != "" {
-		settings.APIKey = h
+		if decrypted, err := DecryptSecretValue(h); err == nil {
+			settings.APIKey = decrypted
+		} else {
+			settings.APIKey = h
+		}
 	}
 	if h := r.Header.Get("X-LLM-Fallback-URL"); h != "" {
 		settings.URL = h

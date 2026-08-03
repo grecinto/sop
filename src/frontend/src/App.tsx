@@ -118,6 +118,21 @@ function loadProvisioningDoneFlag(): boolean {
   }
 }
 
+function getConfiguredDaemonURL(): string {
+  if (typeof window === 'undefined') {
+    return DEFAULT_DAEMON_URL;
+  }
+  try {
+    const storedDaemonURL = window.localStorage.getItem('sop_daemon_url');
+    if (storedDaemonURL && storedDaemonURL.trim() !== '') {
+      return storedDaemonURL.trim().replace(/\/$/, '');
+    }
+  } catch {
+    // Fall back to default daemon URL.
+  }
+  return DEFAULT_DAEMON_URL;
+}
+
 function clearBrowserSessionCookies() {
   if (typeof document === 'undefined') {
     return;
@@ -781,11 +796,11 @@ async function openLocalWorkflow(event: MouseEvent<HTMLAnchorElement>): Promise<
   clearAIStudioHQTokens();
   
   // Check if user has configured a custom daemon URL (stored in localStorage)
-  const customDaemonURL = window.localStorage.getItem('sop_daemon_url');
+  const customDaemonURL = getConfiguredDaemonURL();
   
   // Build relative URL to go through site backend first
   let url = '/app?mode=daemon';
-  if (customDaemonURL && customDaemonURL.trim() !== '' && customDaemonURL !== DEFAULT_DAEMON_URL) {
+  if (customDaemonURL && customDaemonURL !== DEFAULT_DAEMON_URL) {
     // Pass custom daemon URL as query parameter
     url += `&daemon_url=${encodeURIComponent(customDaemonURL)}`;
   }

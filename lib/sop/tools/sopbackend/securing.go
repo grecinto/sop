@@ -10,15 +10,67 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
 
 const secureStringPrefix = "enc:v1:"
+
+type SecretResolver interface {
+	Resolve(value string) (string, error)
+}
+
+type SecretResolverFunc func(value string) (string, error)
+
+func (f SecretResolverFunc) Resolve(value string) (string, error) {
+	return f(value)
+}
+
+var (
+	secretResolverMu sync.RWMutex
+	secretResolver   SecretResolver = SecretResolverFunc(decryptSecuredString)
+)
 
 // SecuredString encrypts its value when persisted to JSON and decrypts it when loaded.
 type SecuredString string
 
 func NewSecuredString(value string) SecuredString {
 	return SecuredString(value)
+}
+
+func IsEncryptedSecretValue(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), secureStringPrefix)
+}
+
+func EncryptSecretValue(value string) (string, error) {
+	return NewSecuredString(value).encryptedValue()
+}
+
+func ResolveSecretValue(value string) (string, error) {
+	secretResolverMu.RLock()
+	resolver := secretResolver
+	secretResolverMu.RUnlock()
+	return resolver.Resolve(value)
+}
+
+func DecryptSecretValue(value string) (string, error) {
+	return ResolveSecretValue(value)
+}
+
+func SetSecretResolver(resolver SecretResolver) func() {
+	secretResolverMu.Lock()
+	previous := secretResolver
+	if resolver == nil {
+		secretResolver = SecretResolverFunc(decryptSecuredString)
+	} else {
+		secretResolver = resolver
+	}
+	secretResolverMu.Unlock()
+
+	return func() {
+		secretResolverMu.Lock()
+		secretResolver = previous
+		secretResolverMu.Unlock()
+	}
 }
 
 func (s SecuredString) Plaintext() string {
@@ -46,7 +98,7 @@ func (s *SecuredString) UnmarshalJSON(data []byte) error {
 		*s = ""
 		return nil
 	}
-	plaintext, err := decryptSecuredString(raw)
+	plaintext, err := ResolveSecretValue(raw)
 	if err != nil {
 		return err
 	}

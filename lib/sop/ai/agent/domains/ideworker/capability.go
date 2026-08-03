@@ -10,32 +10,74 @@ import (
 )
 
 const (
-	CapabilityID   = "ide_worker"
-	CapabilityName = "IDE Worker Integration"
+	CapabilityID             = "ide_worker"
+	CapabilityName           = "Continue Delegation"
+	inspectContinueToolName  = "inspect_continue_worker"
+	delegateContinueToolName = "delegate_continue_task"
+	legacyInspectToolName    = "inspect_ide_worker"
+	legacyDelegateToolName   = "delegate_ide_coding_task"
 )
 
 type SessionState struct {
-	SessionID          string
-	Connected          bool
-	IDE                string
-	WorkerCapabilities []string
-	Mode               string
-	WorkflowProfile    string
-	RequestedPhase     string
-	WorkspaceRoot      string
-	ActiveFile         string
-	SelectedText       string
-	OpenFiles          []string
+	SessionID           string
+	Connected           bool
+	IDE                 string
+	WorkerCapabilities  []string
+	Mode                string
+	WorkflowProfile     string
+	RequestedPhase      string
+	SupportedPhases     []PhaseDefinition
+	AvailableTools      []string
+	PhaseTools          []string
+	PhaseAvailableTools []string
+	ToolChoice          string
+	WorkspaceRoot       string
+	ActiveFile          string
+	SelectedText        string
+	OpenFiles           []string
+}
+
+type PhaseDefinition struct {
+	ID             string
+	Label          string
+	ContinueModes  []string
+	AvailableTools []string
+}
+
+type DelegationReference struct {
+	Kind     string
+	Source   string
+	Title    string
+	Content  string
+	Metadata map[string]any
+}
+
+type DelegationGuidance struct {
+	TeamPractices        []string
+	SuccessCriteria      []string
+	Constraints          []string
+	ImplementationNotes  []string
+	ExpectedResultFormat string
+	ReferenceContext     []DelegationReference
+	Metadata             map[string]any
 }
 
 type TaskRequest struct {
-	SessionID     string
-	Task          string
-	Mode          string
-	WorkspaceRoot string
-	ActiveFile    string
-	SelectedText  string
-	OpenFiles     []string
+	SessionID      string
+	Task           string
+	Mode           string
+	Provider       string
+	Model          string
+	RequestedPhase string
+	AvailableTools []string
+	PhaseTools     []string
+	AllowedTools   []string
+	ToolChoice     string
+	WorkspaceRoot  string
+	ActiveFile     string
+	SelectedText   string
+	OpenFiles      []string
+	Guidance       DelegationGuidance
 }
 
 type Backend interface {
@@ -70,13 +112,31 @@ func (c *Capability) Entitlement() capabilities.Entitlement {
 }
 
 func (c *Capability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
+	metadata := parseContinuePromptMetadata(query)
 	combined := strings.ToLower(strings.TrimSpace(strings.Join([]string{state.Domain, state.CapabilityHint, query}, " ")))
 	if combined == "" {
 		return capabilities.ClassificationResult{}
 	}
 
+	if metadata.HasBridgeContext {
+		result := capabilities.ClassificationResult{
+			Relevant: true,
+			Score:    32,
+			Mode:     capabilities.CapabilityModeSupporting,
+			Domains:  []string{"coding"},
+		}
+		if metadata.RequestedPhase != "" {
+			result.Hints = []string{metadata.RequestedPhase}
+		}
+		if containsAny(combined, "implement", "patch", "edit", "refactor", "review", "test", "debug") {
+			result.Score = 40
+		}
+		return result
+	}
+
 	if containsAny(combined,
 		"[continue_mode=",
+		"[continue_bridge=",
 		"coding_workflow_profile",
 		"workspace_root",
 		"active_file",
@@ -104,44 +164,89 @@ func (c *Capability) Classify(query string, state capabilities.RoutingState) cap
 }
 
 func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
-	_ = query
+	metadata := parseContinuePromptMetadata(query)
 	_ = state
-	return "Structured Context: IDE Worker Integration\n- When an IDE-native worker is connected for this session, Ask can inspect editor context and delegate a focused coding subtask without giving up daemon control."
+	b := strings.Builder{}
+	b.WriteString("Structured Context: Continue Delegation\n")
+	b.WriteString("- When a Continue-backed IDE worker is available for this session, Ask can delegate one bounded IDE coding subtask to Continue's own Ask/tool loop without giving up daemon control.\n")
+	b.WriteString("- This capability is LAO-oriented: the daemon LLM still classifies and orchestrates the broader request, and Continue only performs the bounded coding slice that is delegated to it.\n")
+	b.WriteString("- Sole Ask-visible tool: delegate_continue_task. Use other daemon capabilities normally before or after the Continue delegation when the request needs broader workflow support.\n")
+	b.WriteString("- Expected Continue result: a final structured execution report covering modified_files, CRUD operation per file, diff deltas or artifact references, and execution metadata.\n")
+	b.WriteString("- Rich delegation parameters are supported: team practices, success criteria, constraints, implementation notes, expected result format, and reference context can be passed as structured guidance.\n")
+	if metadata.HasBridgeContext {
+		if metadata.Mode != "" {
+			b.WriteString(fmt.Sprintf("- continue_mode: %s\n", metadata.Mode))
+		}
+		if metadata.WorkflowProfile != "" {
+			b.WriteString(fmt.Sprintf("- workflow_profile: %s\n", metadata.WorkflowProfile))
+		}
+		if metadata.RequestedPhase != "" {
+			b.WriteString(fmt.Sprintf("- requested_phase: %s\n", metadata.RequestedPhase))
+		}
+		if len(metadata.AvailableTools) > 0 {
+			b.WriteString(fmt.Sprintf("- continue_available_tools: %s\n", strings.Join(metadata.AvailableTools, ", ")))
+		}
+		if len(metadata.AllowedTools) > 0 {
+			b.WriteString(fmt.Sprintf("- continue_allowed_tools: %s\n", strings.Join(metadata.AllowedTools, ", ")))
+		}
+		if metadata.ToolChoice != "" {
+			b.WriteString(fmt.Sprintf("- continue_tool_choice: %s\n", metadata.ToolChoice))
+		}
+		b.WriteString("- delegation_contract: compose a bounded Continue task, pass phase/tool constraints through delegate_continue_task, accept streamed progress during execution, then continue daemon orchestration with the final structured result.\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 	return []capabilities.ToolDefinition{
 		{
-			Name:        "inspect_ide_worker",
-			Description: "Inspect whether the current Ask session has an IDE-native worker attached, including editor type, advertised worker capabilities, and structured workspace context.",
-			Schema:      `{"type":"object","properties":{}}`,
-			Tags:        []string{"R"},
-		},
-		{
-			Name:        "delegate_ide_coding_task",
-			Description: "Delegate a focused coding subtask to the connected IDE worker for editor-native execution such as patch application, context-aware editing, or diff-oriented review.",
-			Schema:      `{"type":"object","properties":{"task":{"type":"string","description":"Focused coding task to delegate to the IDE worker"},"mode":{"type":"string","description":"Worker mode hint such as plan, edit, apply, review, or test"},"workspace_root":{"type":"string","description":"Workspace root for the delegated task"},"active_file":{"type":"string","description":"Primary file for the delegated task"},"selected_text":{"type":"string","description":"Selected code snippet or region for the task"},"open_files":{"type":"array","items":{"type":"string"},"description":"Open files that provide extra editor context"}},"required":["task"]}`,
+			Name:        delegateContinueToolName,
+			Description: "Delegate one bounded coding subtask to the connected Continue worker so Continue can run its own Ask/tool loop locally and return the finished result to AI Studio.",
+			Schema:      `{"type":"object","properties":{"task":{"type":"string","description":"Focused coding task to delegate to the IDE worker"},"mode":{"type":"string","description":"Worker mode hint such as plan, edit, apply, review, or test"},"requested_phase":{"type":"string","description":"Optional explicit workflow phase such as investigation, planning, execution, review, or delivery"},"allowed_tools":{"type":"array","items":{"type":"string"},"description":"Optional bounded tool subset that the remote Continue Ask turn should be allowed to use"},"tool_choice":{"type":"string","description":"Optional preferred Continue tool name for the delegated turn"},"provider":{"type":"string","description":"Optional provider override to preserve the selected LLM family during delegation"},"model":{"type":"string","description":"Optional model override to preserve the selected model during delegation"},"workspace_root":{"type":"string","description":"Workspace root for the delegated task"},"active_file":{"type":"string","description":"Primary file for the delegated task"},"selected_text":{"type":"string","description":"Selected code snippet or region for the task"},"open_files":{"type":"array","items":{"type":"string"},"description":"Open files that provide extra editor context"},"guidance":{"type":"object","description":"Structured guidance for Continue's Ask pipeline.","properties":{"team_practices":{"type":"array","items":{"type":"string"}},"success_criteria":{"type":"array","items":{"type":"string"}},"constraints":{"type":"array","items":{"type":"string"}},"implementation_notes":{"type":"array","items":{"type":"string"}},"expected_result_format":{"type":"string"},"reference_context":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string"},"source":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}}}},"metadata":{"type":"object"}}}},"required":["task"]}`,
 			Tags:        []string{"R", "U"},
 		},
 	}
 }
 
 func (c *Capability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	_ = query
+	metadata := parseContinuePromptMetadata(query)
 	_ = state
-	return `IDE Worker Guidance:
-- Use inspect_ide_worker to see whether this session has a connected editor worker and what capabilities it supports.
-- Use delegate_ide_coding_task only for focused editor-native subtasks such as applying a prepared patch, performing a local diff-aware edit, or running an IDE-scoped coding step.
-- Keep Ask as the controller. Delegate one bounded subtask, consume the result, and then continue the larger workflow in the daemon.
-- If no worker is connected or required capabilities are missing, continue with daemon-native tools instead.`
+	instructions := `Continue Delegation Guidance:
+- This capability exposes one Ask-visible tool only: delegate_continue_task.
+- Use delegate_continue_task only for one bounded coding subtask that Continue should complete through its own local Ask/tool loop.
+- Keep Ask as the controller. Classify and orchestrate the larger workflow in the daemon, delegate the IDE coding slice to Continue, consume the result, then continue with the remaining work.
+- Continue is the coding executor for the delegated slice, not the outer workflow controller.
+- Expect Continue to finish with a structured execution result that lists modified_files, CRUD operations, diff deltas or diff artifact references, and relevant metadata.
+- When available, pass structured guidance such as team practices from LTM, success criteria, constraints, implementation notes, expected result format, and reference context as parameters to Continue's Ask.
+- If Continue is not available or the request does not benefit from editor-native coding execution, continue with daemon-native tools or other capabilities instead.`
+	if !metadata.HasBridgeContext {
+		return instructions
+	}
+	boundedTools := metadata.AllowedTools
+	if len(boundedTools) == 0 {
+		boundedTools = metadata.PhaseTools
+	}
+	parts := []string{instructions}
+	if metadata.RequestedPhase != "" {
+		parts = append(parts, fmt.Sprintf("Current Continue phase: %s. Keep delegation scoped to that phase unless the user changes the ask.", metadata.RequestedPhase))
+	}
+	if len(boundedTools) > 0 {
+		parts = append(parts, fmt.Sprintf("Bound Continue to these tools for this delegated turn when possible: %s.", strings.Join(boundedTools, ", ")))
+	}
+	if metadata.ToolChoice != "" {
+		parts = append(parts, fmt.Sprintf("Preferred Continue tool for the delegated turn: %s.", metadata.ToolChoice))
+	}
+	parts = append(parts, "When delegating, write the task as instructions for Continue's Ask pipeline, not as a sequence of low-level tool calls for AI Studio to imitate.")
+	parts = append(parts, "Delegate the coding objective, expected scope, and success criteria. Let Continue decide how to use its internal IDE tools.")
+	return strings.Join(parts, "\n")
 }
 
 func (c *Capability) ExecuteTool(ctx context.Context, toolName string, args map[string]any, state capabilities.RoutingState) (string, error) {
 	_ = state
 	switch toolName {
-	case "inspect_ide_worker":
+	case inspectContinueToolName, legacyInspectToolName:
 		return c.inspectSession(ctx)
-	case "delegate_ide_coding_task":
+	case delegateContinueToolName, legacyDelegateToolName:
 		return c.delegateTask(ctx, args)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
@@ -181,6 +286,11 @@ func (c *Capability) inspectSession(ctx context.Context) (string, error) {
 		state.Mode = readString(payload.Variables, "continue_mode")
 		state.WorkflowProfile = readString(payload.Variables, "coding_workflow_profile")
 		state.RequestedPhase = readString(payload.Variables, "requested_phase")
+		state.SupportedPhases = readPhaseDefinitions(payload.Variables["continue_supported_phases"])
+		state.AvailableTools = readStringSlice(payload.Variables["continue_available_tools"])
+		state.PhaseTools = readStringSlice(payload.Variables["continue_phase_tools"])
+		state.PhaseAvailableTools = readStringSlice(payload.Variables["continue_phase_available_tools"])
+		state.ToolChoice = readString(payload.Variables, "continue_tool_choice")
 		state.WorkspaceRoot = readString(payload.Variables, "workspace_root")
 		state.ActiveFile = readString(payload.Variables, "active_file")
 		state.SelectedText = readString(payload.Variables, "selected_text")
@@ -210,10 +320,18 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 		req.SessionID = strings.TrimSpace(payload.SessionID)
 		if payload.Variables != nil {
 			req.Mode = readString(payload.Variables, "continue_mode")
+			req.Provider = readString(payload.Variables, "llm_provider")
+			req.Model = readString(payload.Variables, "llm_model")
+			req.RequestedPhase = readString(payload.Variables, "requested_phase")
+			req.AvailableTools = readStringSlice(payload.Variables["continue_available_tools"])
+			req.PhaseTools = readStringSlice(payload.Variables["continue_phase_tools"])
+			req.AllowedTools = readStringSlice(payload.Variables["continue_phase_available_tools"])
+			req.ToolChoice = readString(payload.Variables, "continue_tool_choice")
 			req.WorkspaceRoot = readString(payload.Variables, "workspace_root")
 			req.ActiveFile = readString(payload.Variables, "active_file")
 			req.SelectedText = readString(payload.Variables, "selected_text")
 			req.OpenFiles = readStringSlice(payload.Variables["open_files"])
+			req.Guidance = readDelegationGuidanceFromVariables(payload.Variables)
 		}
 	}
 
@@ -222,6 +340,21 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 	}
 	if mode, ok := args["mode"].(string); ok && strings.TrimSpace(mode) != "" {
 		req.Mode = strings.TrimSpace(mode)
+	}
+	if requestedPhase, ok := args["requested_phase"].(string); ok && strings.TrimSpace(requestedPhase) != "" {
+		req.RequestedPhase = strings.TrimSpace(requestedPhase)
+	}
+	if allowedTools, ok := args["allowed_tools"]; ok {
+		req.AllowedTools = readStringSlice(allowedTools)
+	}
+	if toolChoice, ok := args["tool_choice"].(string); ok && strings.TrimSpace(toolChoice) != "" {
+		req.ToolChoice = strings.TrimSpace(toolChoice)
+	}
+	if provider, ok := args["provider"].(string); ok && strings.TrimSpace(provider) != "" {
+		req.Provider = strings.TrimSpace(provider)
+	}
+	if model, ok := args["model"].(string); ok && strings.TrimSpace(model) != "" {
+		req.Model = strings.TrimSpace(model)
 	}
 	if workspaceRoot, ok := args["workspace_root"].(string); ok && strings.TrimSpace(workspaceRoot) != "" {
 		req.WorkspaceRoot = strings.TrimSpace(workspaceRoot)
@@ -234,6 +367,27 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 	}
 	if openFiles, ok := args["open_files"]; ok {
 		req.OpenFiles = readStringSlice(openFiles)
+	}
+	if guidance, ok := args["guidance"]; ok {
+		req.Guidance = mergeDelegationGuidance(req.Guidance, readDelegationGuidance(guidance))
+	}
+	if teamPractices, ok := args["team_practices"]; ok {
+		req.Guidance.TeamPractices = readStringSlice(teamPractices)
+	}
+	if successCriteria, ok := args["success_criteria"]; ok {
+		req.Guidance.SuccessCriteria = readStringSlice(successCriteria)
+	}
+	if constraints, ok := args["constraints"]; ok {
+		req.Guidance.Constraints = readStringSlice(constraints)
+	}
+	if implementationNotes, ok := args["implementation_notes"]; ok {
+		req.Guidance.ImplementationNotes = readStringSlice(implementationNotes)
+	}
+	if expectedResultFormat, ok := args["expected_result_format"].(string); ok && strings.TrimSpace(expectedResultFormat) != "" {
+		req.Guidance.ExpectedResultFormat = strings.TrimSpace(expectedResultFormat)
+	}
+	if referenceContext, ok := args["reference_context"]; ok {
+		req.Guidance.ReferenceContext = readDelegationReferences(referenceContext)
 	}
 	if req.Mode == "" {
 		req.Mode = "coding"
@@ -269,6 +423,21 @@ func mergeSessionState(base SessionState, overlay SessionState) SessionState {
 	}
 	if overlay.RequestedPhase != "" {
 		base.RequestedPhase = overlay.RequestedPhase
+	}
+	if len(overlay.SupportedPhases) > 0 {
+		base.SupportedPhases = append([]PhaseDefinition(nil), overlay.SupportedPhases...)
+	}
+	if len(overlay.AvailableTools) > 0 {
+		base.AvailableTools = append([]string(nil), overlay.AvailableTools...)
+	}
+	if len(overlay.PhaseTools) > 0 {
+		base.PhaseTools = append([]string(nil), overlay.PhaseTools...)
+	}
+	if len(overlay.PhaseAvailableTools) > 0 {
+		base.PhaseAvailableTools = append([]string(nil), overlay.PhaseAvailableTools...)
+	}
+	if overlay.ToolChoice != "" {
+		base.ToolChoice = overlay.ToolChoice
 	}
 	if overlay.WorkspaceRoot != "" {
 		base.WorkspaceRoot = overlay.WorkspaceRoot
@@ -308,6 +477,35 @@ func formatSessionState(state SessionState) string {
 	}
 	if state.RequestedPhase != "" {
 		b.WriteString(fmt.Sprintf("- requested_phase: %s\n", state.RequestedPhase))
+	}
+	if len(state.AvailableTools) > 0 {
+		b.WriteString(fmt.Sprintf("- available_tools: %s\n", strings.Join(state.AvailableTools, ", ")))
+	}
+	if len(state.PhaseTools) > 0 {
+		b.WriteString(fmt.Sprintf("- phase_tools: %s\n", strings.Join(state.PhaseTools, ", ")))
+	}
+	if len(state.PhaseAvailableTools) > 0 {
+		b.WriteString(fmt.Sprintf("- phase_available_tools: %s\n", strings.Join(state.PhaseAvailableTools, ", ")))
+	}
+	if state.ToolChoice != "" {
+		b.WriteString(fmt.Sprintf("- tool_choice: %s\n", state.ToolChoice))
+	}
+	if len(state.SupportedPhases) > 0 {
+		b.WriteString("- supported_phases:\n")
+		for _, phase := range state.SupportedPhases {
+			line := fmt.Sprintf("  - %s", phase.ID)
+			if phase.Label != "" {
+				line += fmt.Sprintf(" (%s)", phase.Label)
+			}
+			if len(phase.ContinueModes) > 0 {
+				line += fmt.Sprintf(" modes=%s", strings.Join(phase.ContinueModes, ","))
+			}
+			if len(phase.AvailableTools) > 0 {
+				line += fmt.Sprintf(" tools=%s", strings.Join(phase.AvailableTools, ","))
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
 	}
 	if state.WorkspaceRoot != "" {
 		b.WriteString(fmt.Sprintf("- workspace_root: %s\n", state.WorkspaceRoot))
@@ -356,6 +554,135 @@ func readStringSlice(value any) []string {
 	}
 }
 
+func readPhaseDefinitions(value any) []PhaseDefinition {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	phases := make([]PhaseDefinition, 0, len(items))
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		phase := PhaseDefinition{
+			ID:             readString(entry, "id"),
+			Label:          readString(entry, "label"),
+			ContinueModes:  readStringSlice(entry["continue_modes"]),
+			AvailableTools: readStringSlice(entry["available_tools"]),
+		}
+		if phase.ID == "" {
+			continue
+		}
+		phases = append(phases, phase)
+	}
+	if len(phases) == 0 {
+		return nil
+	}
+	return phases
+}
+
+func readDelegationGuidanceFromVariables(values map[string]any) DelegationGuidance {
+	if values == nil {
+		return DelegationGuidance{}
+	}
+	guidance := DelegationGuidance{
+		TeamPractices:        readStringSlice(values["continue_team_practices"]),
+		SuccessCriteria:      readStringSlice(values["continue_success_criteria"]),
+		Constraints:          readStringSlice(values["continue_constraints"]),
+		ImplementationNotes:  readStringSlice(values["continue_implementation_notes"]),
+		ExpectedResultFormat: readString(values, "continue_expected_result_format"),
+		ReferenceContext:     readDelegationReferences(values["continue_reference_context"]),
+	}
+	if metadata, ok := values["continue_guidance_metadata"].(map[string]any); ok {
+		guidance.Metadata = cloneAnyMap(metadata)
+	}
+	return guidance
+}
+
+func readDelegationGuidance(value any) DelegationGuidance {
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return DelegationGuidance{}
+	}
+	guidance := DelegationGuidance{
+		TeamPractices:        readStringSlice(entry["team_practices"]),
+		SuccessCriteria:      readStringSlice(entry["success_criteria"]),
+		Constraints:          readStringSlice(entry["constraints"]),
+		ImplementationNotes:  readStringSlice(entry["implementation_notes"]),
+		ExpectedResultFormat: readString(entry, "expected_result_format"),
+		ReferenceContext:     readDelegationReferences(entry["reference_context"]),
+	}
+	if metadata, ok := entry["metadata"].(map[string]any); ok {
+		guidance.Metadata = cloneAnyMap(metadata)
+	}
+	return guidance
+}
+
+func mergeDelegationGuidance(base DelegationGuidance, overlay DelegationGuidance) DelegationGuidance {
+	if len(overlay.TeamPractices) > 0 {
+		base.TeamPractices = append([]string(nil), overlay.TeamPractices...)
+	}
+	if len(overlay.SuccessCriteria) > 0 {
+		base.SuccessCriteria = append([]string(nil), overlay.SuccessCriteria...)
+	}
+	if len(overlay.Constraints) > 0 {
+		base.Constraints = append([]string(nil), overlay.Constraints...)
+	}
+	if len(overlay.ImplementationNotes) > 0 {
+		base.ImplementationNotes = append([]string(nil), overlay.ImplementationNotes...)
+	}
+	if strings.TrimSpace(overlay.ExpectedResultFormat) != "" {
+		base.ExpectedResultFormat = strings.TrimSpace(overlay.ExpectedResultFormat)
+	}
+	if len(overlay.ReferenceContext) > 0 {
+		base.ReferenceContext = append([]DelegationReference(nil), overlay.ReferenceContext...)
+	}
+	if len(overlay.Metadata) > 0 {
+		base.Metadata = cloneAnyMap(overlay.Metadata)
+	}
+	return base
+}
+
+func readDelegationReferences(value any) []DelegationReference {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	refs := make([]DelegationReference, 0, len(items))
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref := DelegationReference{
+			Kind:    readString(entry, "kind"),
+			Source:  readString(entry, "source"),
+			Title:   readString(entry, "title"),
+			Content: readString(entry, "content"),
+		}
+		if metadata, ok := entry["metadata"].(map[string]any); ok {
+			ref.Metadata = cloneAnyMap(metadata)
+		}
+		if ref.Kind == "" && ref.Source == "" && ref.Title == "" && ref.Content == "" && len(ref.Metadata) == 0 {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(src))
+	for key, value := range src {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func defaultString(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -370,4 +697,76 @@ func containsAny(text string, signals ...string) bool {
 		}
 	}
 	return false
+}
+
+type continuePromptMetadata struct {
+	HasBridgeContext bool
+	Mode             string
+	WorkflowProfile  string
+	RequestedPhase   string
+	AvailableTools   []string
+	PhaseTools       []string
+	AllowedTools     []string
+	ToolChoice       string
+}
+
+func parseContinuePromptMetadata(query string) continuePromptMetadata {
+	metadata := continuePromptMetadata{}
+	for _, line := range strings.Split(query, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]") {
+			continue
+		}
+		body := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
+		key, value, found := strings.Cut(body, "=")
+		if !found {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		switch key {
+		case "continue_bridge":
+			metadata.HasBridgeContext = strings.EqualFold(value, "true")
+		case "continue_mode":
+			metadata.Mode = value
+			metadata.HasBridgeContext = true
+		case "coding_workflow_profile":
+			metadata.WorkflowProfile = value
+			metadata.HasBridgeContext = true
+		case "requested_phase":
+			metadata.RequestedPhase = value
+			metadata.HasBridgeContext = true
+		case "continue_available_tools":
+			metadata.AvailableTools = splitCSV(value)
+			metadata.HasBridgeContext = true
+		case "continue_phase_tools":
+			metadata.PhaseTools = splitCSV(value)
+			metadata.HasBridgeContext = true
+		case "continue_phase_available_tools":
+			metadata.AllowedTools = splitCSV(value)
+			metadata.HasBridgeContext = true
+		case "continue_tool_choice":
+			metadata.ToolChoice = value
+			metadata.HasBridgeContext = true
+		}
+	}
+	return metadata
+}
+
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			items = append(items, part)
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
 }

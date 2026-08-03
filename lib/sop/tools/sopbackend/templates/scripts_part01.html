@@ -275,10 +275,11 @@
             const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
             const token = getStoredSessionToken();
             const h = { 'Content-Type': 'application/json' };
+            const allowEncryptedSecrets = runtimeMode === 'local' && typeof endpoint === 'string' && endpoint.startsWith('/api/');
             if (runtimeMode !== 'local' && token) {
                 h.Authorization = `Bearer ${token}`;
             }
-            applyAIConfigHeaders(h, getStoredAIConfig());
+            applyAIConfigHeaders(h, getStoredAIConfig(), { allowEncryptedSecrets });
 
             if (overrideHeaders) {
                 for (const [k, v] of Object.entries(overrideHeaders)) {
@@ -329,7 +330,8 @@
         try {
             const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
             const h = { 'Content-Type': 'application/json' };
-            applyAIConfigHeaders(h, getStoredAIConfig());
+            const allowEncryptedSecrets = runtimeMode === 'local' && typeof endpoint === 'string' && endpoint.startsWith('/api/');
+            applyAIConfigHeaders(h, getStoredAIConfig(), { allowEncryptedSecrets });
 
             if (overrideHeaders) {
                 for (const [k, v] of Object.entries(overrideHeaders)) {
@@ -392,7 +394,8 @@
         if (runtimeMode === 'local') {
             try {
                 const h = { 'Content-Type': 'application/json' };
-                applyAIConfigHeaders(h, getStoredAIConfig());
+                const allowEncryptedSecrets = typeof endpoint === 'string' && endpoint.startsWith('/api/');
+                applyAIConfigHeaders(h, getStoredAIConfig(), { allowEncryptedSecrets });
                 if (overrideHeaders) {
                     for (const [k, v] of Object.entries(overrideHeaders)) {
                         h[k] = v;
@@ -457,8 +460,8 @@
         }
     }
 
-    function getStoredAIConfig() {
-        const raw = localStorage.getItem('sop_ai_config');
+    function getStoredAISecrets() {
+        const raw = localStorage.getItem('sop_ai_secrets');
         if (!raw) return {};
         try {
             return JSON.parse(raw) || {};
@@ -467,14 +470,113 @@
         }
     }
 
+    function getStoredAIConfigRecord() {
+        const raw = localStorage.getItem('sop_ai_config');
+        if (!raw) return {};
+        try {
+            const parsed = JSON.parse(raw) || {};
+            const split = splitAIConfigAndSecrets(parsed);
+            if (Object.keys(split.secrets).length > 0) {
+                const mergedSecrets = Object.assign({}, split.secrets, getStoredAISecrets());
+                localStorage.setItem('sop_ai_config', JSON.stringify(split.config || {}));
+                localStorage.setItem('sop_ai_secrets', JSON.stringify(mergedSecrets));
+            }
+            return split.config || {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function getStoredAIConfig() {
+        return Object.assign({}, getStoredAIConfigRecord(), getStoredAISecrets());
+    }
+
+    function splitAIConfigAndSecrets(aiConfig) {
+        const nextConfig = Object.assign({}, aiConfig || {});
+        const nextSecrets = {};
+        ['brain_api_key', 'embedder_api_key', 'fallback_api_key'].forEach((key) => {
+            if (Object.prototype.hasOwnProperty.call(nextConfig, key)) {
+                if (nextConfig[key]) {
+                    nextSecrets[key] = nextConfig[key];
+                }
+                delete nextConfig[key];
+            }
+        });
+        return { config: nextConfig, secrets: nextSecrets };
+    }
+
     function setStoredAIConfig(aiConfig) {
-        localStorage.setItem('sop_ai_config', JSON.stringify(aiConfig || {}));
+        const split = splitAIConfigAndSecrets(aiConfig || {});
+        localStorage.setItem('sop_ai_config', JSON.stringify(split.config || {}));
+        localStorage.setItem('sop_ai_secrets', JSON.stringify(split.secrets || {}));
     }
 
     function mergeStoredAIConfig(partialConfig) {
         const nextConfig = Object.assign({}, getStoredAIConfig(), partialConfig || {});
         setStoredAIConfig(nextConfig);
         return nextConfig;
+    }
+
+    function isEncryptedAISecretValue(value) {
+        return typeof value === 'string' && value.indexOf('enc:v1:') === 0;
+    }
+
+    function clearEncryptedAISecretsForDisplay(aiConfig) {
+        const nextConfig = Object.assign({}, aiConfig || {});
+        ['brain_api_key', 'embedder_api_key', 'fallback_api_key'].forEach((key) => {
+            if (isEncryptedAISecretValue(nextConfig[key])) {
+                nextConfig[key] = '';
+            }
+        });
+        return nextConfig;
+    }
+
+    function encryptAISecretValueForStorage(value) {
+        const trimmed = typeof value === 'string' ? value.trim() : '';
+        if (!trimmed || isEncryptedAISecretValue(trimmed)) {
+            return trimmed;
+        }
+        const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+        if (runtimeMode !== 'local') {
+            return trimmed;
+        }
+        const response = apiCallSync('/api/daemon/secrets/encrypt', 'POST', { value: trimmed });
+        if (response && typeof response.encrypted_value === 'string' && response.encrypted_value) {
+            return response.encrypted_value;
+        }
+        throw new Error('Daemon did not return an encrypted secret');
+    }
+
+    function prepareAIConfigForSecureStorage(nextConfig, existingConfig) {
+        const prepared = Object.assign({}, nextConfig || {});
+        const current = existingConfig || {};
+        const resolveSecret = (secretKey, providerKey) => {
+            const provider = (prepared[providerKey] || '').trim();
+            const existingValue = (current[secretKey] || '').trim();
+            const nextValue = (prepared[secretKey] || '').trim();
+            if (!provider || isLocalProviderValue(provider)) {
+                prepared[secretKey] = '';
+                return;
+            }
+            if (nextValue) {
+                prepared[secretKey] = encryptAISecretValueForStorage(nextValue);
+                return;
+            }
+            prepared[secretKey] = existingValue;
+        };
+
+        resolveSecret('brain_api_key', 'brain_provider');
+        resolveSecret('embedder_api_key', 'embedder_provider');
+        resolveSecret('fallback_api_key', 'fallback_provider');
+        return prepared;
+    }
+
+    function mergeStoredAIConfigSecure(partialConfig) {
+        const existingConfig = getStoredAIConfig();
+        const nextConfig = Object.assign({}, existingConfig, partialConfig || {});
+        const prepared = prepareAIConfigForSecureStorage(nextConfig, existingConfig);
+        setStoredAIConfig(prepared);
+        return prepared;
     }
 
     function splitProviderValue(value) {
@@ -506,18 +608,19 @@
         return normalized.model ? `${normalized.provider}:${normalized.model}` : (normalized.provider || '');
     }
 
-    function applyAIConfigHeaders(headers, aiConfig) {
+    function applyAIConfigHeaders(headers, aiConfig, options) {
         const cfg = aiConfig || {};
+        const allowEncryptedSecrets = !!(options && options.allowEncryptedSecrets);
         if (cfg.brain_provider) headers['X-LLM-Provider'] = cfg.brain_provider;
-        if (cfg.brain_api_key) headers['X-LLM-API-Key'] = cfg.brain_api_key;
+        if (cfg.brain_api_key && (allowEncryptedSecrets || !isEncryptedAISecretValue(cfg.brain_api_key))) headers['X-LLM-API-Key'] = cfg.brain_api_key;
         if (cfg.brain_url) headers['X-LLM-URL'] = cfg.brain_url;
         if (cfg.brain_model) headers['X-LLM-Model'] = cfg.brain_model;
         if (cfg.embedder_provider) headers['X-Embedder-Provider'] = cfg.embedder_provider;
-        if (cfg.embedder_api_key) headers['X-Embedder-API-Key'] = cfg.embedder_api_key;
+        if (cfg.embedder_api_key && (allowEncryptedSecrets || !isEncryptedAISecretValue(cfg.embedder_api_key))) headers['X-Embedder-API-Key'] = cfg.embedder_api_key;
         if (cfg.embedder_url) headers['X-Embedder-URL'] = cfg.embedder_url;
         if (cfg.embedder_model) headers['X-Embedder-Model'] = cfg.embedder_model;
         if (cfg.fallback_provider) headers['X-LLM-Fallback-Provider'] = cfg.fallback_provider;
-        if (cfg.fallback_api_key) headers['X-LLM-Fallback-API-Key'] = cfg.fallback_api_key;
+        if (cfg.fallback_api_key && (allowEncryptedSecrets || !isEncryptedAISecretValue(cfg.fallback_api_key))) headers['X-LLM-Fallback-API-Key'] = cfg.fallback_api_key;
         if (cfg.fallback_url) headers['X-LLM-Fallback-URL'] = cfg.fallback_url;
         if (cfg.fallback_model) headers['X-LLM-Fallback-Model'] = cfg.fallback_model;
         return headers;
@@ -2040,6 +2143,7 @@
             
             // Add Save button icon
             const saveBtn = document.createElement('span');
+            saveBtn.id = 'workflow-studio-save-btn';
             saveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M11 2H9v3h2V2z"/><path d="M1.5 0h11.586a1.5 1.5 0 0 1 1.06.44l1.415 1.414A1.5 1.5 0 0 1 16 2.914V14.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 0 14.5v-13A1.5 1.5 0 0 1 1.5 0zM1 1.5v13a.5.5 0 0 0 .5.5H2v-4.5A1.5 1.5 0 0 1 3.5 9h9a1.5 1.5 0 0 1 1.5 1.5V15h.5a.5.5 0 0 0 .5-.5V2.914a.5.5 0 0 0-.146-.353l-1.415-1.415A.5.5 0 0 0 13.086 1H13v4.5A1.5 1.5 0 0 1 11.5 7h-7A1.5 1.5 0 0 1 3 5.5V1H1.5a.5.5 0 0 0-.5.5zm3 4a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 .5-.5V1H4v4.5zM3 15h10v-4.5a.5.5 0 0 0-.5-.5h-9a.5.5 0 0 0-.5.5V15z"/></svg>';
             saveBtn.title = 'Save Workflow';
             saveBtn.style.fontSize = '1em';
@@ -2061,9 +2165,14 @@
         const stepListHtml = (state.workflow.steps || []).map((step, index) => {
             const isActive = index === selectedIndex;
             return `
-                <button type="button" data-step-index="${index}" onclick="window.selectWorkflowStudioStep(${index})" style="text-align:left; border:1px solid ${isActive ? 'var(--active-bg)' : 'var(--border-color)'}; border-radius:8px; padding:10px; background:${isActive ? 'rgba(91,110,209,0.12)' : 'var(--bg-color)'}; color:var(--text-color); cursor:pointer; display:flex; flex-direction:column; gap:3px;">
-                    <div style="font-size:0.72em; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:var(--key-color);">Step ${window.escapeHTML(step.stepNumber || index + 1)}</div>
+                <button type="button" data-step-index="${index}" onclick="window.selectWorkflowStudioStep(${index})" style="text-align:left; border:1px solid ${isActive ? 'var(--active-bg)' : 'var(--border-color)'}; border-radius:8px; padding:10px; background:${isActive ? 'rgba(91,110,209,0.12)' : 'var(--bg-color)'}; color:var(--text-color); cursor:pointer; display:flex; flex-direction:column; gap:8px;">
+                    <div class="workflow-studio-step-number" style="font-size:0.72em; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:var(--key-color);">Step ${window.escapeHTML(step.stepNumber || index + 1)}</div>
                     <div style="font-size:0.9em; font-weight:600;">${window.escapeHTML(step.title || `Step ${index + 1}`)}</div>
+                    <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end;">
+                        <button type="button" class="workflow-studio-move-step-up-btn" onclick="event.stopPropagation(); window.moveWorkflowStudioStepUp(${index});" style="padding:4px 6px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer;">Up</button>
+                        <button type="button" class="workflow-studio-move-step-down-btn" onclick="event.stopPropagation(); window.moveWorkflowStudioStepDown(${index});" style="padding:4px 6px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer;">Down</button>
+                        <button type="button" class="workflow-studio-delete-step-btn" onclick="event.stopPropagation(); window.deleteWorkflowStudioStep(${index});" style="padding:4px 6px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer;">Delete</button>
+                    </div>
                 </button>
             `;
         }).join('');
@@ -2087,7 +2196,7 @@
                             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
                                 <div style="font-size:0.9em; font-weight:700; color:var(--text-color);">Workflow Steps</div>
                                 <div style="display: flex; gap: 8px; align-items: center;">
-                                    <span onclick="window.addWorkflowStudioStep()" title="Add Step" style="cursor: pointer; display: inline-flex; align-items: center; color: #7c3aed;">
+                                    <span id="workflow-studio-add-step-btn" onclick="window.addWorkflowStudioStep()" title="Add Step" style="cursor: pointer; display: inline-flex; align-items: center; color: #7c3aed;">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16">
                                             <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
                                         </svg>
@@ -2100,7 +2209,7 @@
                                     </span>
                                 </div>
                             </div>
-                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; overflow-y:auto; padding-right:2px; max-height: 400px;">${stepListHtml || '<div style="font-size:0.85em; color:var(--text-muted); padding: 10px 0; grid-column: 1 / -1;">No steps yet. Add one to start editing the workflow.</div>'}</div>
+                            <div id="workflow-studio-step-list" style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; overflow-y:auto; padding-right:2px; max-height: 400px;">${stepListHtml || '<div style="font-size:0.85em; color:var(--text-muted); padding: 10px 0; grid-column: 1 / -1;">No steps yet. Add one to start editing the workflow.</div>'}</div>
                         </div>
                     </div>
                     
@@ -2178,12 +2287,12 @@
         window.renderWorkflowStudioModal(state.item, state.fallbackTitle);
     };
 
-    window.deleteWorkflowStudioStep = function() {
+    window.deleteWorkflowStudioStep = function(index) {
         const state = window._workflowStudioState;
         if (!state || !state.workflow || !state.workflow.steps || state.workflow.steps.length === 0) {
             return;
         }
-        const selectedIndex = state.selectedIndex >= 0 ? state.selectedIndex : 0;
+        const selectedIndex = typeof index === 'number' ? index : (state.selectedIndex >= 0 ? state.selectedIndex : 0);
         if (selectedIndex >= state.workflow.steps.length) {
             return;
         }
@@ -2195,6 +2304,30 @@
         } else if (selectedIndex >= state.workflow.steps.length) {
             state.selectedIndex = state.workflow.steps.length - 1;
         }
+        window.renderWorkflowStudioModal(state.item, state.fallbackTitle);
+    };
+
+    window.moveWorkflowStudioStepUp = function(index) {
+        const state = window._workflowStudioState;
+        if (!state || !state.workflow || !Array.isArray(state.workflow.steps) || index <= 0 || index >= state.workflow.steps.length) {
+            return;
+        }
+        const tmp = state.workflow.steps[index - 1];
+        state.workflow.steps[index - 1] = state.workflow.steps[index];
+        state.workflow.steps[index] = tmp;
+        state.selectedIndex = index - 1;
+        window.renderWorkflowStudioModal(state.item, state.fallbackTitle);
+    };
+
+    window.moveWorkflowStudioStepDown = function(index) {
+        const state = window._workflowStudioState;
+        if (!state || !state.workflow || !Array.isArray(state.workflow.steps) || index < 0 || index >= state.workflow.steps.length - 1) {
+            return;
+        }
+        const tmp = state.workflow.steps[index + 1];
+        state.workflow.steps[index + 1] = state.workflow.steps[index];
+        state.workflow.steps[index] = tmp;
+        state.selectedIndex = index + 1;
         window.renderWorkflowStudioModal(state.item, state.fallbackTitle);
     };
 
@@ -3445,6 +3578,9 @@
         }
 
         function renderTreeNodes(catList, container, depth=0) {
+            if (depth === 0) {
+                window.showSpaceDocumentsRootIfNeeded(container, name);
+            }
             catList.forEach(cat => {
                 const li = document.createElement('li');
                 li.style.marginBottom = '6px';
@@ -3518,7 +3654,7 @@
                             try {
                                 // If workflow category, try loading workflow items as tree leaves first
                                 if (isWorkflowCategory) {
-                                    await window.renderWorkflowItemsAsLeaves(cat, childrenContainer, depth + 1, name);
+                                    await window.loadWorkflowItemsForCategoryTree(cat, childrenContainer, depth + 1, name);
                                 }
                                 
                                 // If no workflow items added (or not workflow category), load child categories
@@ -3601,7 +3737,72 @@
         }
         
         // Workflow tree-leaf rendering functions
-        window.renderWorkflowItemsAsLeaves = async function(category, container, depth, spaceName) {
+        window.getSelectedCategoryWorkflowEnabled = function(category) {
+            const candidate = category || window._lastSelectedCategory || window._lastFetchItemsArgs?.catObj || null;
+            return Boolean(candidate && candidate.metadata && candidate.metadata.workflow_enabled === true);
+        };
+
+        window.renderWorkflowItemTreeNode = function(item, depth, onSelect) {
+            const workflowName = window.getWorkflowName(item);
+            const stepCount = window.getWorkflowStepCount(item);
+            const leafLi = document.createElement('li');
+            leafLi.style.marginBottom = '6px';
+            leafLi.style.marginLeft = (depth * 10) + 'px';
+            leafLi.style.cursor = 'pointer';
+            leafLi.style.padding = '6px 8px';
+            leafLi.style.borderRadius = '4px';
+            leafLi.style.display = 'flex';
+            leafLi.style.alignItems = 'center';
+            leafLi.style.gap = '8px';
+            leafLi.dataset.workflowItemId = item.id;
+
+            const icon = document.createElement('span');
+            icon.innerHTML = '⚡';
+            icon.style.color = '#7c3aed';
+            icon.style.fontSize = '14px';
+            icon.style.flexShrink = '0';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = workflowName;
+            nameSpan.style.flex = '1';
+            nameSpan.style.overflow = 'hidden';
+            nameSpan.style.textOverflow = 'ellipsis';
+            nameSpan.style.whiteSpace = 'nowrap';
+            nameSpan.style.fontSize = '0.9em';
+            nameSpan.style.color = 'var(--text-color)';
+
+            const badge = document.createElement('span');
+            badge.textContent = stepCount;
+            badge.style.fontSize = '0.7em';
+            badge.style.background = '#7c3aed';
+            badge.style.color = '#fff';
+            badge.style.padding = '2px 6px';
+            badge.style.borderRadius = '10px';
+            badge.style.fontWeight = '600';
+            badge.style.flexShrink = '0';
+
+            leafLi.appendChild(icon);
+            leafLi.appendChild(nameSpan);
+            leafLi.appendChild(badge);
+
+            leafLi.onmouseover = () => {
+                leafLi.style.background = 'rgba(124, 58, 237, 0.15)';
+            };
+            leafLi.onmouseout = () => {
+                if (!leafLi.classList.contains('selected')) {
+                    leafLi.style.background = 'transparent';
+                }
+            };
+            leafLi.onclick = (e) => {
+                e.stopPropagation();
+                if (typeof onSelect === 'function') {
+                    onSelect(leafLi, item);
+                }
+            };
+            return leafLi;
+        };
+
+        window.loadWorkflowItemsForCategoryTree = async function(category, container, depth, spaceName) {
             try {
                 const res = await authFetch(
                     `/api/spaces/items?database=${encodeURIComponent(currentDatabase)}&name=${encodeURIComponent(spaceName)}&category_id=${category.id}&offset=0&limit=500`
@@ -3617,83 +3818,18 @@
                 }
                 
                 items.forEach(item => {
-                    console.log('=== Workflow Item Debug ===');
-                    console.log('Full item:', JSON.stringify(item, null, 2));
-                    console.log('item.data exists?', !!item.data);
-                    console.log('item.workflow_template exists?', !!item.workflow_template);
-                    if (item.data) {
-                        console.log('item.data.workflow_template exists?', !!item.data.workflow_template);
-                        if (item.data.workflow_template) {
-                            console.log('item.data.workflow_template.steps:', item.data.workflow_template.steps);
-                        }
-                    }
-                    
-                    const workflowName = window.getWorkflowName(item);
-                    const stepCount = window.getWorkflowStepCount(item);
-                    console.log(`Detected: "${workflowName}" with ${stepCount} steps`);
-                    
-                    const leafLi = document.createElement('li');
-                    leafLi.style.marginBottom = '6px';
-                    leafLi.style.marginLeft = (depth * 10) + 'px';
-                    leafLi.style.cursor = 'pointer';
-                    leafLi.style.padding = '6px 8px';
-                    leafLi.style.borderRadius = '4px';
-                    leafLi.style.display = 'flex';
-                    leafLi.style.alignItems = 'center';
-                    leafLi.style.gap = '8px';
-                    leafLi.dataset.workflowItemId = item.id;
-                    
-                    const icon = document.createElement('span');
-                    icon.innerHTML = '⚡';
-                    icon.style.color = '#7c3aed';
-                    icon.style.fontSize = '14px';
-                    icon.style.flexShrink = '0';
-                    
-                    const nameSpan = document.createElement('span');
-                    nameSpan.textContent = workflowName;
-                    nameSpan.style.flex = '1';
-                    nameSpan.style.overflow = 'hidden';
-                    nameSpan.style.textOverflow = 'ellipsis';
-                    nameSpan.style.whiteSpace = 'nowrap';
-                    nameSpan.style.fontSize = '0.9em';
-                    nameSpan.style.color = 'var(--text-color)';
-                    
-                    const badge = document.createElement('span');
-                    badge.textContent = stepCount;
-                    badge.style.fontSize = '0.7em';
-                    badge.style.background = '#7c3aed';
-                    badge.style.color = '#fff';
-                    badge.style.padding = '2px 6px';
-                    badge.style.borderRadius = '10px';
-                    badge.style.fontWeight = '600';
-                    badge.style.flexShrink = '0';
-                    
-                    leafLi.appendChild(icon);
-                    leafLi.appendChild(nameSpan);
-                    leafLi.appendChild(badge);
-                    
-                    leafLi.onmouseover = () => {
-                        leafLi.style.background = 'rgba(124, 58, 237, 0.15)';
-                    };
-                    leafLi.onmouseout = () => {
-                        if (!leafLi.classList.contains('selected')) {
-                            leafLi.style.background = 'transparent';
-                        }
-                    };
-                    
-                    leafLi.onclick = (e) => {
-                        e.stopPropagation();
+                    const leafLi = window.renderWorkflowItemTreeNode(item, depth, (selectedLeaf, selectedItem) => {
                         document.querySelectorAll('#kb-category-tree li[data-workflow-item-id]').forEach(li => {
                             li.classList.remove('selected');
                             li.style.fontWeight = 'normal';
                             li.style.background = 'transparent';
                         });
-                        leafLi.classList.add('selected');
-                        leafLi.style.fontWeight = '600';
-                        leafLi.style.background = 'rgba(124, 58, 237, 0.15)';
-                        window.showWorkflowFlowDiagram(item, category, spaceName);
-                    };
-                    
+                        selectedLeaf.classList.add('selected');
+                        selectedLeaf.style.fontWeight = '600';
+                        selectedLeaf.style.background = 'rgba(124, 58, 237, 0.15)';
+                        window.showWorkflowFlowDiagram(selectedItem, category, spaceName);
+                    });
+
                     container.appendChild(leafLi);
                     
                     if (item.id && !window._workflowStudioItemById) {
@@ -3707,6 +3843,119 @@
                 console.error('Failed to load workflow items', err);
                 container.innerHTML = '<li style="padding: 8px; color: var(--text-muted); font-size: 0.85em;">Failed to load workflows</li>';
             }
+        };
+
+        window.renderWorkflowItemsAsLeaves = window.loadWorkflowItemsForCategoryTree;
+
+        window.renderSpaceDocumentsRootNode = function(spaceName) {
+            const rootDocumentsContainer = document.createElement('li');
+            rootDocumentsContainer.dataset.documentsRoot = 'true';
+            rootDocumentsContainer.style.display = 'block';
+            rootDocumentsContainer.style.listStyle = 'none';
+            rootDocumentsContainer.style.marginBottom = '6px';
+            rootDocumentsContainer.style.padding = '6px 8px';
+            rootDocumentsContainer.style.borderRadius = '4px';
+            rootDocumentsContainer.style.cursor = 'pointer';
+            rootDocumentsContainer.innerHTML = '<span style="display:inline-flex; align-items:center; gap:8px;"><span>📄</span><span>Documents</span></span>';
+            rootDocumentsContainer.onclick = (event) => {
+                event.stopPropagation();
+                window.fetchDocumentsForCategory(spaceName, '', 'Documents');
+            };
+            return rootDocumentsContainer;
+        };
+
+        window.showSpaceDocumentsRootIfNeeded = function(container, spaceName) {
+            if (!container || container.querySelector('li[data-documents-root="true"]')) {
+                return;
+            }
+            const rootDocumentsContainer = window.renderSpaceDocumentsRootNode(spaceName);
+            rootDocumentsContainer.style.display = 'block';
+            container.appendChild(rootDocumentsContainer);
+        };
+
+        window.renderDocumentTreeNode = function(documentItem, depth, onSelect) {
+            const li = document.createElement('li');
+            li.style.marginBottom = '6px';
+            li.style.marginLeft = (depth * 10) + 'px';
+            li.style.cursor = 'pointer';
+            li.style.padding = '6px 8px';
+            li.style.borderRadius = '4px';
+            li.style.display = 'flex';
+            li.style.alignItems = 'center';
+            li.style.gap = '8px';
+            li.dataset.documentItemId = documentItem && documentItem.id ? documentItem.id : '';
+            li.innerHTML = `<span style="flex-shrink:0;">📄</span><span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${window.escapeHTML((documentItem && ((documentItem.summaries && documentItem.summaries[0]) || documentItem.name || documentItem.id || 'Document')) || 'Document')}</span>`;
+            li.onclick = (event) => {
+                event.stopPropagation();
+                if (typeof onSelect === 'function') {
+                    onSelect(documentItem, li);
+                }
+            };
+            return li;
+        };
+
+        window.loadDocumentsForCategoryTree = async function(category, container, depth, spaceName) {
+            const documents = await window.fetchDocumentsForCategory(spaceName, category && category.id ? category.id : '', category && category.name ? category.name : 'Documents');
+            if (!container) {
+                return documents;
+            }
+            container.innerHTML = '';
+            documents.forEach((documentItem) => {
+                const node = window.renderDocumentTreeNode(documentItem, depth, (selectedItem) => {
+                    window.openDocumentDetailView(selectedItem);
+                });
+                container.appendChild(node);
+            });
+            return documents;
+        };
+
+        window.renderDocumentCardHtml = function(documentItem) {
+            const documentTitle = (documentItem && ((documentItem.summaries && documentItem.summaries[0]) || documentItem.name || documentItem.id)) || 'Document';
+            const description = (documentItem && (documentItem.description || documentItem.text || '')) || '';
+            return `<div class="space-document-card" style="display:flex; flex-direction:column; gap:8px; padding:12px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-color);"><div style="font-weight:600; color:var(--text-color);">${window.escapeHTML(documentTitle)}</div><div style="font-size:0.9em; color:var(--text-muted);">${window.escapeHTML(description)}</div><div style="display:flex; justify-content:flex-end;"><button type="button" onclick="window.deleteSpaceDocument('${window.escapeHTML(documentItem && documentItem.id ? documentItem.id : '')}','${window.escapeHTML(documentItem && (documentItem.category_id || documentItem.category) ? (documentItem.category_id || documentItem.category) : '')}','${window.escapeHTML(documentTitle)}')" style="padding:6px 10px; border:1px solid var(--border-color); border-radius:6px; background:var(--button-bg); color:var(--text-color); cursor:pointer;">Delete Document</button></div></div>`;
+        };
+
+        window.fetchDocumentsForCategory = async function(spaceName, categoryId, categoryName) {
+            const res = await authFetch(`/api/spaces/items?database=${encodeURIComponent(currentDatabase)}&name=${encodeURIComponent(spaceName)}&category_id=${encodeURIComponent(categoryId || '')}&offset=0&limit=500`);
+            const data = await res.json();
+            const items = data.data || data.items || [];
+            const documents = items.filter((item) => window.normalizeDocIDs(item.doc_id || (item.data && item.data.doc_id)).length > 0);
+
+            const itemsGrid = document.getElementById('kb-items-grid');
+            if (itemsGrid) {
+                const cards = documents.map((item) => window.renderDocumentCardHtml(item)).join('');
+                itemsGrid.innerHTML = cards || '<div style="padding: 15px;">No documents found.</div>';
+            }
+
+            const headerTitle = document.getElementById('kb-items-header-title');
+            if (headerTitle) {
+                headerTitle.textContent = categoryName || 'Documents';
+            }
+            return documents;
+        };
+
+        window.openDocumentDetailView = function(documentItem) {
+            if (!documentItem) {
+                return;
+            }
+            const link = document.createElement('a');
+            link.setAttribute('data-id', documentItem.id || '');
+            link.setAttribute('data-category-id', documentItem.category_id || documentItem.category || '');
+            link.setAttribute('data-category-name', documentItem.category_name || 'Documents');
+            link.setAttribute('data-summaries', documentItem.summaries ? documentItem.summaries.join('\n') : '');
+            link.setAttribute('data-full-desc', documentItem.description || documentItem.text || '');
+            link.setAttribute('data-payload-ref', window.getItemPreviewReference ? window.getItemPreviewReference(documentItem) : '');
+            if (typeof window.editDomainItemInline === 'function') {
+                window.editDomainItemInline(link);
+            }
+        };
+
+        window.deleteSpaceDocument = function(itemId, categoryId, itemName) {
+            const shim = document.createElement('button');
+            shim.setAttribute('data-item-id', itemId || '');
+            shim.setAttribute('data-category-id', categoryId || '');
+            shim.setAttribute('data-item-name', itemName || 'Document');
+            window.deleteSpaceItem(shim);
         };
 
         window.showWorkflowFlowDiagram = function(item, category, spaceName) {
@@ -5201,6 +5450,10 @@ function toggleSpaceItemMode() {
     const workflowSection = document.getElementById('new-space-item-workflow-section');
     const workflowName = document.getElementById('new-space-item-workflow-name');
     const workflowSteps = document.getElementById('new-space-item-workflow-steps');
+    const workflowOption = modeSelect ? modeSelect.querySelector('option[value="workflow"]') : null;
+    if (workflowOption && typeof window.getSelectedCategoryWorkflowEnabled === 'function') {
+        workflowOption.disabled = !window.getSelectedCategoryWorkflowEnabled();
+    }
     const isWorkflowMode = (modeSelect?.value || 'content') === 'workflow';
     if (workflowSection) {
         workflowSection.style.display = isWorkflowMode ? 'flex' : 'none';

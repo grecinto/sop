@@ -64,6 +64,44 @@ func TestResolveFallbackSettings_WithProvider(t *testing.T) {
 	}
 }
 
+func TestResolveLLMSettings_DecryptsEncryptedAPIKey(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	encrypted, err := EncryptSecretValue("sk-encrypted")
+	if err != nil {
+		t.Fatalf("EncryptSecretValue() error = %v", err)
+	}
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Header.Set("X-LLM-API-Key", encrypted)
+
+	settings := resolveLLMSettings(req)
+	if settings.APIKey != "sk-encrypted" {
+		t.Fatalf("API key = %q, want %q", settings.APIKey, "sk-encrypted")
+	}
+}
+
+func TestDecryptSecretValueUsesConfiguredResolver(t *testing.T) {
+	restore := SetSecretResolver(SecretResolverFunc(func(value string) (string, error) {
+		return "resolved:" + value, nil
+	}))
+	defer restore()
+
+	decrypted, err := DecryptSecretValue("blob")
+	if err != nil {
+		t.Fatalf("DecryptSecretValue() error = %v", err)
+	}
+	if decrypted != "resolved:blob" {
+		t.Fatalf("decrypted value = %q, want %q", decrypted, "resolved:blob")
+	}
+
+	resolved, err := ResolveSecretValue("second")
+	if err != nil {
+		t.Fatalf("ResolveSecretValue() error = %v", err)
+	}
+	if resolved != "resolved:second" {
+		t.Fatalf("resolved value = %q, want %q", resolved, "resolved:second")
+	}
+}
+
 func TestGetConfiguredLLM_ReturnsFallbackGenerator(t *testing.T) {
 	if !config.ProductionMode {
 		t.Skip("Skipping test in non-production mode")

@@ -68,6 +68,42 @@ The Ask pipeline is "our moat" because it provides:
 
 By executing workflows *through* the Ask pipeline rather than *bypassing* it, every workflow step inherits these capabilities.
 
+## External Agent Integration Pattern
+
+The same workflow architecture can wrap external agents and external tool systems without giving up AI Studio control.
+
+### Metadata-Driven Participants
+
+An external integration should ideally describe itself in metadata:
+
+- supported phases
+- phase-specific available tools
+- mode constraints
+- request-scoped callable tool subsets
+- request-scoped tool-choice hints
+
+AI Studio can then load that metadata into a capability and treat the external system as a passive participant.
+
+### Thin Wrapper Capability
+
+The recommended pattern is a thin wrapper capability that:
+
+- ingests remote capability metadata
+- maps remote phases onto AI Studio phases
+- exposes one bounded delegation tool when the remote system is itself an agent/orchestrator
+- forwards execution to the remote backend
+- returns control to the Ask pipeline after each bounded step
+
+For Continue specifically, the recommended target is a single delegated tool that represents Continue's own local Ask/tool loop rather than a mirrored catalog of Continue's internal read/edit/search tools. AI Studio keeps the outer LLM-as-Orchestrator role; Continue completes the bounded IDE coding slice and returns the result.
+
+This preserves the participant pattern:
+
+- AI Studio remains the orchestrator
+- the external system remains a tool substrate or delegated worker
+- no external agent becomes the workflow controller
+
+This pattern is domain-agnostic. It works for coding integrations like Continue, and it can be extended to other agent surfaces and domains as long as they can describe their capabilities as data.
+
 ### Conversational Feedback System
 
 The V2 Ask pipeline includes an advanced **conversational feedback system** that provides user-facing transparency during execution. This system gives users visibility into LLM reasoning and control over verbosity without breaking the participant pattern.

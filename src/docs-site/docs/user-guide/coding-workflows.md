@@ -25,6 +25,22 @@ AI Studio's approach is fundamentally different from traditional automation:
 
 You describe what you want, and the AI orchestrates everything—from task classification to tool selection to execution flow.
 
+## Works Across Native and Remote Tool Surfaces
+
+AI Studio's workflow system is not limited to one built-in tool stack.
+
+Because the phase system is richer than any single editor integration, AI Studio can consume external agent metadata and use external tool surfaces as participants in the workflow.
+
+In practice, that means AI Studio can:
+
+- read a remote agent's supported phases
+- understand which tools are available in each phase
+- align those remote phases to AI Studio's own workflow model
+- delegate a bounded step remotely
+- keep orchestration, memory, and handoff inside AI Studio
+
+This is why the product can integrate with systems like Continue without giving up the AI Studio workflow model.
+
 :::tip For Developers
 Want to understand the technical architecture? See the SDK documentation:
 - **[Workflow Architecture](../sdk/workflow-architecture)** - Dynamic Planner, Ask pipeline, participant pattern, conversational feedback
@@ -99,6 +115,7 @@ AI Studio executes through **structured phases** that organize the work into cle
 - **Resumable**: Can pause and resume between phases
 - **Revisitable**: Can return to earlier phase if new information emerges
 - **Tool-aware**: Each phase has access to relevant coding tools
+- **Integration-aware**: A phase can use local tools, remote tools, or a mix when external systems describe their capabilities in metadata
 
 ### Knowledge Base Templates (Optional)
 
@@ -209,6 +226,33 @@ AI Studio applies **language-appropriate patterns** automatically:
 - **Testing**: Property-based testing hints in Rust, unittest/pytest in Python, JUnit in Java
 - **Code organization**: Modules in Rust/Python, packages in Java/Go
 - **Naming conventions**: snake_case for Python/Rust, camelCase for JavaScript/TypeScript, PascalCase for C#
+
+## Team Best Practices That Stay On
+
+AI Studio can go beyond generic language advice. You can store your own team practices in memory and have them automatically enrich coding asks.
+
+For example, your team might define guidance such as:
+
+- preserve public interfaces unless a breaking change is explicitly requested
+- always add targeted tests for changed behavior
+- use the repository’s existing error-wrapping and logging patterns
+- return a clear modification summary for review
+
+When you ask AI Studio to implement or refactor something, those practices can be injected automatically into the overall Ask pipeline. You do not have to paste the same checklist into every prompt.
+
+This is especially useful in real projects because the enrichment survives different execution paths:
+
+- direct daemon-owned coding tools can use it
+- multi-phase workflow planning can use it
+- delegated IDE companions such as Continue can use it
+
+So a short request like:
+
+```text
+Add retry handling to the payment webhook client.
+```
+
+can still carry the team’s expectations automatically. That gives you more consistent output with less repetitive prompting.
 
 ## Making Quick Adjustments During Execution
 

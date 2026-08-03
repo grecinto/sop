@@ -1,21 +1,22 @@
-# Continue bridge API spec
+# Continue Native Transport API Spec
 
-**Status**: Active and partially implemented
+**Status**: Active
 
-## Overview
+## Purpose
 
-This document defines the bridge contract that connects Continue in VS Code to the daemon-backed Ask/ReAct runtime.
+This document defines the native transport between Continue and AI Studio from Northstar AI.
 
-The current implementation uses two layers:
+The AI Studio daemon remains the controller. Continue is an editor-facing participant that sends provider/model intent, workspace context, and bounded coding tasks into the daemon-owned Ask/ReAct runtime.
 
-- transport layer: Continue/OpenAI-compatible HTTP endpoints in the daemon
-- Ask-visible wrapper layer: a generic `ide_worker` capability that can inspect session state and delegate a bounded coding task through a backend adapter
+## Design Rules
 
-Continue is currently the first backend for that wrapper capability.
+- Do not surface the daemon as an OpenAI-compatible provider.
+- Do not use `/v1/chat/completions`, `/v1/models`, or `/api/continue/config` as canonical integration points.
+- Provider and model are explicit request attributes on native Continue requests.
+- The daemon owns orchestration, workflow state, approvals, memory, and fallback behavior.
+- Continue may execute editor-aware subtasks, but only as a delegated worker.
 
 ## Base URL
-
-All endpoints are local to the host running the app:
 
 ```text
 http://127.0.0.1:9090
@@ -23,99 +24,156 @@ http://127.0.0.1:9090
 
 ## Authentication
 
-The bridge should reuse the existing daemon/HQ bearer-token flow rather than introducing a separate Continue-only credential scheme. Every request should include an Authorization header in the form Bearer <access-token>.
+Use the existing daemon/HQ bearer-token flow.
 
-Recommended behavior:
-- access tokens should be short-lived
-- renewal should go through the existing HQ login/session refresh path
-- the backend should validate tokens using the same auth middleware as the rest of the platform
+- Requests should include `Authorization: Bearer <access-token>` when auth is enabled.
+- `401` and `403` should be handled through the existing sign-in and token refresh flow.
+- No Continue-specific credential scheme should be introduced.
+- Local helper validation may bootstrap through `POST /api/daemon/auth` using the daemon bootstrap secret or an existing bootstrap token, then cache and refresh bearer tokens through `POST /api/daemon/refresh`.
 
-If a token is expired or invalid, the backend should return 401 Unauthorized or 403 Forbidden with a structured error such as auth_expired or login_required. The Continue client should respond by showing a VS Code modal prompting the user to sign in again and then retrying the pending operation after auth is restored.
-
-## 1. Chat endpoint
+## Endpoints
 
 ### POST /api/continue/chat
 
-Accepts a chat request and returns a streamed response.
+Primary Continue-to-daemon request path.
 
-Current Ask-side mapping:
+Responsibilities:
 
-- request metadata is transformed into the shared Ask payload
-- structured editor context is copied into `SessionPayload.Variables`
-- selected Continue model routing intent is copied into `SessionPayload.Variables` as `llm_provider` and `llm_model`
-- the OpenAI-compatible chat surface also infers editor context from Continue-style prompt history when explicit editor fields are missing
-- workflow hints such as `continue_mode`, `coding_workflow_profile`, and `requested_phase` are preserved for Ask-side tool selection
+- accepts the current user prompt
+- preserves provider/model intent explicitly
+- carries structured workspace/editor context
+- may carry Continue-native tool definitions and tool-choice hints for IDE-side workflow execution
+- streams daemon-owned progress and final content back to Continue
+- records daemon-owned session snapshots
 
-### Request body
+Continue is expected to use its normal tool system as the IDE execution surface. AI Studio remains the controller and may use `tools` and `tool_choice` to constrain or steer which Continue tools are callable for a given request.
+
+The daemon should treat this as metadata, not just transport. The integration contract includes the ability to describe:
+
+- supported Continue phases
+- phase-to-tool availability
+- mode constraints per phase
+- request-scoped forwarded tool availability
+
+#### Request body
 
 ```json
 {
-  "session_id": "string",
-  "message": "string",
+  "session_id": "workspace-42",
+  "message": "Refactor the parser error handling",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-5",
+  "api_key": "provider-key-from-continue",
+  "url": "https://api.anthropic.com",
   "workspace": {
-    "root": "string",
-    "active_file": "string",
+    "root": "/path/to/repo",
+    "active_file": "src/parser/handler.go",
     "selection": {
-      "start_line": 1,
-      "end_line": 50
+      "start_line": 40,
+      "end_line": 90
     }
   },
   "context": {
-    "open_files": ["string"],
-    "selected_text": "string"
+    "open_files": ["src/parser/handler.go", "src/parser/handler_test.go"],
+    "selected_text": "func parseHandler(...)"
   },
-  "mode": "chat"
+  "tools": [
+    {
+      "type": "function",
+      "displayTitle": "Edit File",
+      "group": "AI Studio Workflows",
+      "readonly": false,
+      "function": {
+        "name": "edit_file",
+        "description": "Edit an existing file",
+        "parameters": {
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "tool_choice": {
+    "type": "function",
+    "function": {
+      "name": "edit_file"
+    }
+  },
+  "mode": "edit"
 }
 ```
 
-### Response
+#### Ask payload mapping
 
-The endpoint should stream NDJSON events.
+The daemon maps the request into shared Ask state.
 
-#### Event types
+Structured variables currently propagated into `SessionPayload.Variables` include:
+
+```json
+{
+  "continue_bridge": true,
+  "continue_mode": "edit",
+  "coding_workflow_profile": "refactoring",
+  "coding_task_type": "refactoring",
+  "requested_phase": "execution",
+  "workspace_root": "/path/to/repo",
+  "active_file": "src/parser/handler.go",
+  "selected_text": "func parseHandler(...)",
+  "open_files": ["src/parser/handler.go", "src/parser/handler_test.go"],
+  "continue_available_tools": ["read_file", "multi_edit", "get_problems"],
+  "continue_phase_tools": ["read_file", "view_diff", "edit_existing_file", "single_find_and_replace", "multi_edit", "run_terminal_command"],
+  "continue_phase_available_tools": ["read_file", "multi_edit"],
+  "continue_tool_choice": "multi_edit",
+  "llm_provider": "anthropic",
+  "llm_model": "claude-sonnet-4-5",
+  "llm_url": "https://api.anthropic.com"
+}
+```
+
+This allows AI Studio capabilities to consume Continue availability as structured data rather than relying on special-case integration logic.
+
+#### Response format
+
+The endpoint streams NDJSON events.
+
+Supported event types:
 
 - `progress`
 - `tool_call`
 - `tool_result`
 - `content`
-- `done`
 - `error`
+- `done`
 
-#### Example
+When `tool_call` events are emitted, the Continue AI Studio provider translates them into native Continue `assistant.toolCalls` messages so IDE-side tools such as file edit, multi-edit, diff review, and terminal execution can be executed through Continue's normal tool pipeline.
+
+This pipeline now also supports surfaced IDE-native diagnostics and navigation tools including problems, definitions, type definitions, references, document symbols, and terminal contents.
+
+See [docs/CONTINUE_IDE_WORKFLOW_SURFACE.md](docs/CONTINUE_IDE_WORKFLOW_SURFACE.md) for the current workflow inventory and SDLC coverage boundary.
+
+#### Example response
 
 ```json
-{"type":"progress","message":"Inspecting the target module"}
-{"type":"tool_call","name":"repo.search_code","args":{"query":"parser"}}
-{"type":"tool_result","name":"repo.search_code","result":{"hits":[{"path":"src/parser/handler.go"}]}}
-{"type":"content","delta":"I found the relevant parser code."}
+{"type":"progress","message":"Preparing local workspace context"}
+{"type":"content","delta":"I'm connecting your request to the local AI Studio runtime."}
+{"type":"content","delta":"I found the parser branch that needs refactoring."}
 {"type":"done"}
 ```
 
-### Current structured session variables
-
-When present, the bridge now copies these fields into `SessionPayload.Variables` so Ask-side capabilities can consume them without scraping prompt text:
-
-```json
-{
-  "continue_bridge": true,
-  "workspace_root": "/path/to/repo",
-  "active_file": "src/parser/handler.go",
-  "selected_text": "func parseHandler(...)",
-  "open_files": ["src/parser/handler.go", "src/parser/handler_test.go"],
-  "continue_mode": "apply",
-  "coding_workflow_profile": "debugging",
-  "coding_task_type": "debugging",
-  "requested_phase": "execution"
-}
-```
-
-## 2. Tool invocation endpoint
-
 ### POST /api/continue/tools/{toolName}
 
-Invokes one tool with structured input.
+Invokes one daemon-owned tool with structured input.
 
-### Example: repo.search_code
+Current tool surface:
+
+- `repo.read_file`
+- `repo.search_code`
+- `repo.list_files`
+- `code.apply_patch`
+- `code.preview_patch`
+- `test.run`
+- `agent.ask`
+
+#### Example request
 
 ```http
 POST /api/continue/tools/repo.search_code
@@ -130,7 +188,7 @@ Content-Type: application/json
 }
 ```
 
-### Example response
+#### Example response
 
 ```json
 {
@@ -148,74 +206,109 @@ Content-Type: application/json
 }
 ```
 
-## 3. Session state endpoint
-
 ### GET /api/continue/sessions/{sessionId}
 
-Returns the current workflow state and metadata for a task.
+Returns daemon-owned workflow state for the Continue session.
 
-### Example response
+#### Example response
 
 ```json
 {
   "session_id": "workspace-42",
   "status": "in_progress",
-  "phase": "investigation",
-  "message": "Inspecting failing parser logic"
+  "phase": "execution",
+  "mode": "edit",
+  "workflow_profile": "refactoring",
+  "task_type": "refactoring",
+  "message": "Refactor the parser error handling",
+  "updated_at": "2026-08-03T12:34:56Z",
+  "open_files": ["src/parser/handler.go", "src/parser/handler_test.go"],
+  "active_file": "src/parser/handler.go",
+  "workspace_root": "/path/to/repo"
 }
 ```
 
-## 4. Agent execution endpoint
-
 ### POST /api/continue/agent/execute
 
-Invokes Continue as a remote coding worker for a specific subtask. This is the bridge used when daemon Ask needs editor-aware execution such as patching, diff review, or workspace-guided edits.
+Allows the daemon to delegate one bounded editor-aware coding task to Continue.
 
-Current internal caller:
+This is the transport behind the daemon Ask capability's delegated Continue task tool.
 
-- generic Ask capability tool: `delegate_ide_coding_task`
-- capability implementation: `lib/sop/ai/agent/domains/ideworker/capability.go`
-- Continue backend adapter: `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
-
-### Request body
+#### Request body
 
 ```json
 {
   "session_id": "workspace-42",
-  "task": "patch the failing parser handler",
+  "task": "Apply the prepared patch to the parser handler",
+  "provider": "gemini",
+  "model": "gemini-2.5-pro",
+  "api_key": "provider-key-from-continue",
+  "url": "https://generativelanguage.googleapis.com",
+  "requested_phase": "execution",
+  "allowed_tools": ["read_file", "apply_patch", "get_problems"],
+  "tool_choice": "apply_patch",
+  "guidance": {
+    "team_practices": ["Preserve public interfaces", "Add targeted tests"],
+    "success_criteria": ["Return a structured execution result", "Keep changes bounded to the selected file"],
+    "constraints": ["Do not widen the public API"],
+    "implementation_notes": ["Prefer existing repository logging/error patterns"],
+    "expected_result_format": "structured_execution_result",
+    "reference_context": [
+      {"kind": "ltm_note", "source": "Team Patterns/Payments", "title": "Payments practices", "content": "Prefer explicit error wrapping for service-layer failures."}
+    ]
+  },
+  "result_contract": {
+    "stream_progress": true,
+    "include_modified_files": true,
+    "include_diff_deltas": true,
+    "include_metadata": true,
+    "prefer_artifact_refs": true,
+    "max_inline_diff_bytes": 16384
+  },
   "context": {
     "workspace_root": "/path/to/repo",
     "active_file": "src/parser/handler.go",
-    "selected_text": "..."
+    "selected_text": "func parseHandler(...)",
+    "open_files": ["src/parser/handler.go"]
   },
-  "mode": "coding"
+  "mode": "apply"
 }
 ```
 
-### Response
+#### Execution rules
 
-The endpoint should stream NDJSON events with the same progress/tool/content structure used by the chat endpoint, followed by a terminal result event.
+- if a Continue worker is registered for the session and advertises the required capability set, the daemon proxies the task to that worker
+- if no worker is registered, the daemon falls back to local Ask execution
+- if a worker is registered but lacks the required capabilities, the daemon falls back to local Ask execution
+- provider/model intent must be preserved in both the proxy path and the fallback path
+- rich guidance such as LTM-derived team practices, success criteria, and constraints should be passed as structured parameters rather than hidden only in the freeform task string
+- the daemon remains the system of record for session state in all cases
 
-Execution behavior:
-- if no Continue worker is registered for the session, the daemon handles the request locally through the shared workflow runtime
-- if a Continue worker is registered for the session, the daemon proxies the request to that registered worker and streams the worker response back to the caller
-- if a Continue worker is registered but lacks the capabilities required by the subtask, the daemon falls back to local Ask execution instead of proxying blindly
-- in both cases, the daemon remains the controller and records daemon-owned session snapshots
+#### Response format
+
+The endpoint returns NDJSON in the same event shape used by chat. During long-running delegated work, progress and file-level change events should stream incrementally. The final `done.result` is the canonical structured execution result.
 
 ```json
-{"type":"progress","message":"Preparing the patch"}
+{"type":"progress","message":"Executing editor-aware coding task"}
+{"type":"continue_progress","message":"Continue Ask2Ask handling phase=execution file=src/parser/handler.go"}
 {"type":"tool_call","name":"code.apply_patch","args":{"path":"src/parser/handler.go"}}
-{"type":"tool_result","name":"code.apply_patch","result":{"ok":true}}
-{"type":"done","result":{"status":"completed"}}
+{"type":"continue_modified_file","file":{"file_path":"src/parser/handler.go","crud_operation":"update","diff_summary":"Applied delegated execution change to src/parser/handler.go","diff_format":"unified","diff_delta":"@@ ...","metadata":{"phase":"execution"}}}
+{"type":"done","result":{"status":"completed","summary":"Continue completed delegated execution work for src/parser/handler.go","modified_files":[{"file_path":"src/parser/handler.go","crud_operation":"update","diff_summary":"Applied delegated execution change to src/parser/handler.go","diff_format":"unified","diff_delta":"@@ ...","metadata":{"phase":"execution"}}],"artifacts":[{"id":"diff::handler.go","kind":"diff","path":"artifacts/diffs/handler.go.patch","description":"Full diff for src/parser/handler.go","metadata":{"diff_format":"unified"}}],"metadata":{"requested_phase":"execution","tool_choice":"apply_patch","allowed_tools":["read_file","apply_patch","get_problems"]}}}
 ```
 
-## 5. Continue worker registration endpoint
+Execution result rules:
+
+- stream progress while Continue is still working
+- emit file-level change events as modifications become known
+- always finish with one canonical structured result object
+- inline compact diffs when practical
+- prefer artifact references for large diffs when requested by `result_contract`
 
 ### POST /api/continue/worker/register
 
-Registers a live Continue-side worker callback for a session. This is the contract that allows the daemon to delegate editor-aware subtasks back to Continue while remaining the supervisor.
+Registers a Continue-side worker callback for a daemon session.
 
-### Request body
+#### Request body
 
 ```json
 {
@@ -226,7 +319,7 @@ Registers a live Continue-side worker callback for a session. This is the contra
 }
 ```
 
-### Response
+#### Response
 
 ```json
 {
@@ -236,191 +329,99 @@ Registers a live Continue-side worker callback for a session. This is the contra
     "callback_url": "http://127.0.0.1:65432/continue/worker",
     "capabilities": ["apply_patch", "read_context"],
     "ide": "vscode",
-    "updated_at": "2026-08-02T12:34:56Z"
+    "updated_at": "2026-08-03T12:34:56Z"
   }
 }
 ```
 
-## 6. Continue worker state endpoint
-
 ### GET /api/continue/workers/{sessionId}
 
-Returns the registered Continue worker callback for the session when available.
+Returns the registered worker callback for the session when available.
 
-### Example response
+### GET /api/continue/metadata
 
-```json
-{
-  "session_id": "workspace-42",
-  "callback_url": "http://127.0.0.1:65432/continue/worker",
-  "capabilities": ["apply_patch", "read_context"],
-  "ide": "vscode",
-  "updated_at": "2026-08-02T12:34:56Z"
-}
-```
+Returns native Continue transport metadata.
 
-## 7. Ask-visible IDE worker tools
+Current metadata guarantees:
 
-These are not external HTTP endpoints. They are the Ask-side capability tools that make the bridge visible inside the shared orchestration runtime.
+- chat path is `/api/continue/chat`
+- chat method is `POST`
+- chat streaming is `ndjson`
+- `provider_is_attribute` is `true`
+- `model_is_attribute` is `true`
+- control model declares `controller=ai_studio_daemon` and `editor_worker=continue`
+- no daemon-owned config endpoint is advertised
 
-### inspect_ide_worker
+The metadata may also advertise:
 
-Purpose:
-- inspect whether a session has a connected IDE worker
-- expose advertised worker capabilities and current structured editor context
+- `ide_tools.catalog`
+- `ide_tools.supported_phases`
+- request support for `tools` forwarding
+- request support for `tool_choice`
 
-### delegate_ide_coding_task
+This makes the Continue integration consumable as a daemon-side capability participant from AI Studio.
 
-Purpose:
-- delegate one bounded editor-aware subtask back to the registered IDE worker
-- preserve Ask as the controller and consume the worker result in the same workflow
+## Ask-visible Continue Capability
 
-Key rule:
-- these tools are generic to the `ide_worker` capability; Continue is only the first backend implementation
+The HTTP transport is only one layer of the integration. Inside Ask, the daemon should expose Continue through the same LAO pipeline used for all other requests.
 
-## Tool schema
+Core rule:
 
-### repo.list_files
+- Continue-originated prompts still go through normal Ask classification
+- the daemon LLM still determines phase and domain
+- Phase Factory and other capabilities still participate normally
+- Continue is represented as one passive capability participant, not as an alternate controller
 
-```json
-{
-  "path": "string",
-  "recursive": false
-}
-```
+Target tool surface:
 
-### repo.search_code
+- `delegate_continue_task`
 
-```json
-{
-  "query": "string",
-  "path": "string",
-  "limit": 20
-}
-```
+That tool represents Continue's own local Ask/tool loop. The daemon LLM uses it to delegate one bounded IDE coding objective to Continue and waits for the finished result.
 
-### repo.read_file
+Dynamic context and instruction requirements:
 
-```json
-{
-  "path": "string",
-  "start_line": 1,
-  "end_line": 200
-}
-```
+- `Classify()` recognizes that Continue-originated coding requests have an editor-native participant available
+- `BuildContext()` tells the daemon LLM when Continue is the right bounded coding executor for the slice
+- `BuildInstructions()` tells the daemon LLM how to compose the delegated objective, including phase bounds, allowed tools, success criteria, and expected result shape
 
-### repo.get_symbols
+Transitional note:
 
-```json
-{
-  "path": "string"
-}
-```
+- current compatibility aliases such as `inspect_ide_worker` and `delegate_ide_coding_task` may still exist during migration
+- they should not be treated as the target architecture
 
-### code.find_references
+## Continue Workflow Surface Notes
 
-```json
-{
-  "symbol": "string",
-  "path": "string"
-}
-```
+The Continue integration should be understood as a layered workflow surface:
 
-### code.find_definition
+- Continue provides IDE-native execution tools and context capture.
+- AI Studio decides when those tools are available and how they fit into the larger workflow.
+- The current surface is strong for coding, testing, debugging, and repository-local documentation work.
+- It is not yet a full SDLC abstraction for CI, deployment, release, rollback, and operational workflows.
 
-```json
-{
-  "symbol": "string",
-  "path": "string"
-}
-```
+Mode-aware tool expectations:
 
-### code.get_context
+- `chat` mode: no active tools
+- `plan` mode: readonly tools only
+- `agent` mode: mutation-capable tools when enabled
 
-```json
-{
-  "path": "string",
-  "line": 1,
-  "window": 30
-}
-```
+This mode gating should be treated as part of the API contract even though it is implemented inside Continue rather than the daemon.
 
-### code.related_symbols
+## Removed Surfaces
 
-```json
-{
-  "symbol": "string",
-  "path": "string"
-}
-```
+The following surfaces are intentionally not part of the current contract:
 
-### code.preview_patch
+- `/v1/chat/completions`
+- `/v1/models`
+- `/api/continue/config`
+- daemon-owned shadow-model discovery
+- daemon-owned OpenAI-compatible request semantics
 
-```json
-{
-  "path": "string",
-  "patch": "string"
-}
-```
+## Validation Checklist
 
-### code.apply_patch
+When changing this integration, validate these behaviors first:
 
-```json
-{
-  "path": "string",
-  "patch": "string"
-}
-```
-
-### test.run
-
-```json
-{
-  "target": "string",
-  "cwd": "string"
-}
-```
-
-### workflow.get_state
-
-```json
-{
-  "session_id": "string"
-}
-```
-
-### workflow.update_state
-
-```json
-{
-  "session_id": "string",
-  "phase": "string",
-  "message": "string"
-}
-```
-
-## Implementation notes
-
-- The first milestone should implement only the core inspection, delegation, patch preview, patch apply, and test-run tools.
-- The bridge should reuse the existing daemon Ask endpoint rather than introducing a second orchestration engine.
-- Tool results should remain structured so Continue can make decisions from them.
-- The bridge should preserve session continuity across turns.
-- The wrapper capability must stay passive: no phase orchestration, no controller loop, and no Continue-owned workflow state.
-
-## Resume checklist
-
-When resuming this work, inspect these code surfaces first:
-
-- `lib/sop/cmd/sop-daemon/client_bridge.go`
-- `lib/sop/cmd/sop-daemon/ide_worker_bridge.go`
-- `lib/sop/cmd/sop-daemon/rag.go`
-- `lib/sop/ai/agent/domains/ideworker/capability.go`
-- `lib/sop/ai/agent/copilot.go`
-
-Validate these behaviors before extending the design:
-
-- Continue chat populates structured editor context variables
-- OpenAI-compatible prompt-shaped edit/apply requests still recover `selected_text`, `active_file`, and `open_files` into structured payload variables
-- `inspect_ide_worker` can see session/editor state for the current Ask turn
-- `delegate_ide_coding_task` only proxies when the registered worker advertises the required capability set
-- daemon-local fallback remains the behavior when no worker is registered or capability matching fails
+- `/api/continue/chat` preserves `provider` and `model`
+- chat requests populate structured editor context in `SessionPayload.Variables`
+- `/api/continue/agent/execute` preserves provider/model through both worker-proxy and fallback paths
+- worker proxying only occurs when advertised capabilities match the requested subtask
+- `/api/continue/metadata` advertises the native contract and does not reintroduce daemon-owned config surfaces

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -136,6 +135,7 @@ func (b continueIDEWorkerBackend) InspectSession(ctx context.Context, sessionID 
 	if b.service == nil || state.SessionID == "" {
 		return state, nil
 	}
+	state.SupportedPhases = convertContinueSupportedPhases()
 	if registration, ok := b.service.ensureContinueWorkerStore().Get(state.SessionID); ok {
 		state.Connected = true
 		state.IDE = strings.TrimSpace(registration.IDE)
@@ -148,6 +148,7 @@ func (b continueIDEWorkerBackend) InspectSession(ctx context.Context, sessionID 
 		state.Mode = strings.TrimSpace(snapshot.Mode)
 		state.WorkflowProfile = strings.TrimSpace(snapshot.WorkflowProfile)
 		state.RequestedPhase = strings.TrimSpace(snapshot.Phase)
+		state.PhaseTools = continueToolsForPhase(state.RequestedPhase)
 		state.WorkspaceRoot = strings.TrimSpace(snapshot.WorkspaceRoot)
 		state.ActiveFile = strings.TrimSpace(snapshot.ActiveFile)
 		state.OpenFiles = append([]string(nil), snapshot.OpenFiles...)
@@ -155,14 +156,44 @@ func (b continueIDEWorkerBackend) InspectSession(ctx context.Context, sessionID 
 	return state, nil
 }
 
+func convertContinueSupportedPhases() []ideworker.PhaseDefinition {
+	phases := continueSupportedPhases()
+	converted := make([]ideworker.PhaseDefinition, 0, len(phases))
+	for _, phase := range phases {
+		converted = append(converted, ideworker.PhaseDefinition{
+			ID:             phase.ID,
+			Label:          phase.Label,
+			ContinueModes:  append([]string(nil), phase.ContinueModes...),
+			AvailableTools: append([]string(nil), phase.AvailableTools...),
+		})
+	}
+	return converted
+}
+
 func (b continueIDEWorkerBackend) ExecuteTask(ctx context.Context, req ideworker.TaskRequest) (string, error) {
 	if b.service == nil {
 		return "", fmt.Errorf("IDE worker backend unavailable")
 	}
 	continueReq := continueAgentExecuteRequest{
-		SessionID: strings.TrimSpace(req.SessionID),
-		Task:      strings.TrimSpace(req.Task),
-		Mode:      strings.TrimSpace(req.Mode),
+		SessionID:      strings.TrimSpace(req.SessionID),
+		Task:           strings.TrimSpace(req.Task),
+		Mode:           strings.TrimSpace(req.Mode),
+		Provider:       strings.TrimSpace(req.Provider),
+		Model:          strings.TrimSpace(req.Model),
+		RequestedPhase: strings.TrimSpace(req.RequestedPhase),
+		AvailableTools: append([]string(nil), req.AvailableTools...),
+		PhaseTools:     append([]string(nil), req.PhaseTools...),
+		AllowedTools:   append([]string(nil), req.AllowedTools...),
+		ToolChoice:     strings.TrimSpace(req.ToolChoice),
+		Guidance:       convertDelegationGuidance(req.Guidance),
+	}
+	continueReq.ResultContract = continueExecutionResultContract{
+		StreamProgress:       true,
+		IncludeModifiedFiles: true,
+		IncludeDiffDeltas:    true,
+		IncludeMetadata:      true,
+		PreferArtifactRefs:   true,
+		MaxInlineDiffBytes:   16384,
 	}
 	continueReq.Context.WorkspaceRoot = strings.TrimSpace(req.WorkspaceRoot)
 	continueReq.Context.ActiveFile = strings.TrimSpace(req.ActiveFile)
@@ -185,46 +216,137 @@ func (b continueIDEWorkerBackend) ExecuteTask(ctx context.Context, req ideworker
 		return "", fmt.Errorf("registered IDE worker lacks required capabilities: need %s, have %s", strings.Join(requiredCapabilities, ", "), strings.Join(registration.Capabilities, ", "))
 	}
 
-	body, statusCode, err := executeContinueWorkerCallback(ctx, continueReq, registration)
+	outcome, err := executeContinueWorkerCallback(ctx, continueReq, registration)
 	if err != nil {
 		return "", err
 	}
-	if statusCode >= http.StatusBadRequest {
-		trimmedBody := strings.TrimSpace(string(body))
+	if outcome.StatusCode >= http.StatusBadRequest {
+		trimmedBody := strings.TrimSpace(outcome.RawBody)
 		if trimmedBody == "" {
-			trimmedBody = http.StatusText(statusCode)
+			trimmedBody = http.StatusText(outcome.StatusCode)
 		}
-		return "", fmt.Errorf("IDE worker returned status %d: %s", statusCode, trimmedBody)
+		return "", fmt.Errorf("IDE worker returned status %d: %s", outcome.StatusCode, trimmedBody)
 	}
-	if strings.TrimSpace(string(body)) == "" {
+	if strings.TrimSpace(outcome.RawBody) == "" && outcome.FinalResult == nil {
 		return "IDE worker task delegated successfully.", nil
 	}
-	return string(body), nil
+	if outcome.FinalResult != nil {
+		if body, ok := marshalContinueExecutionResult(*outcome.FinalResult); ok {
+			return body, nil
+		}
+		return "", fmt.Errorf("marshal delegated execution result")
+	}
+	if normalized, ok := normalizeContinueWorkerResult([]byte(outcome.RawBody)); ok {
+		return normalized, nil
+	}
+	return outcome.RawBody, nil
 }
 
-func executeContinueWorkerCallback(ctx context.Context, req continueAgentExecuteRequest, registration continueWorkerRegistration) ([]byte, int, error) {
+func executeContinueWorkerCallback(ctx context.Context, req continueAgentExecuteRequest, registration continueWorkerRegistration) (continueWorkerCallbackOutcome, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("marshal worker request: %w", err)
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("marshal worker request: %w", err)
 	}
 	callbackReq, err := http.NewRequestWithContext(ctx, http.MethodPost, registration.CallbackURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, fmt.Errorf("build worker callback request: %w", err)
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("build worker callback request: %w", err)
 	}
 	callbackReq.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(callbackReq)
 	if err != nil {
-		return nil, 0, fmt.Errorf("call IDE worker: %w", err)
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("call IDE worker: %w", err)
 	}
 	defer resp.Body.Close()
-	responseBody, err := io.ReadAll(resp.Body)
+	outcome, err := readContinueWorkerResponse(resp.Body, nil, true)
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("read worker response: %w", err)
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("read worker response: %w", err)
 	}
-	if resp.StatusCode == 0 {
-		resp.StatusCode = http.StatusOK
+	outcome.StatusCode = resp.StatusCode
+	if outcome.StatusCode == 0 {
+		outcome.StatusCode = http.StatusOK
 	}
-	return responseBody, resp.StatusCode, nil
+	outcome.ContentType = strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if outcome.ContentType == "" {
+		outcome.ContentType = "application/x-ndjson"
+	}
+	return outcome, nil
+}
+
+func convertDelegationGuidance(src ideworker.DelegationGuidance) continueDelegationGuidance {
+	guidance := continueDelegationGuidance{
+		TeamPractices:        append([]string(nil), src.TeamPractices...),
+		SuccessCriteria:      append([]string(nil), src.SuccessCriteria...),
+		Constraints:          append([]string(nil), src.Constraints...),
+		ImplementationNotes:  append([]string(nil), src.ImplementationNotes...),
+		ExpectedResultFormat: strings.TrimSpace(src.ExpectedResultFormat),
+		Metadata:             cloneAnyMap(src.Metadata),
+	}
+	if len(src.ReferenceContext) > 0 {
+		guidance.ReferenceContext = make([]continueDelegationReference, 0, len(src.ReferenceContext))
+		for _, ref := range src.ReferenceContext {
+			guidance.ReferenceContext = append(guidance.ReferenceContext, continueDelegationReference{
+				Kind:     strings.TrimSpace(ref.Kind),
+				Source:   strings.TrimSpace(ref.Source),
+				Title:    strings.TrimSpace(ref.Title),
+				Content:  strings.TrimSpace(ref.Content),
+				Metadata: cloneAnyMap(ref.Metadata),
+			})
+		}
+	}
+	return guidance
+}
+
+func normalizeContinueWorkerResult(body []byte) (string, bool) {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return "", false
+	}
+
+	if result, ok := parseContinueExecutionResult([]byte(trimmed)); ok {
+		return marshalContinueExecutionResult(result)
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var envelope struct {
+			Type   string                  `json:"type"`
+			Result continueExecutionResult `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(line), &envelope); err != nil {
+			continue
+		}
+		if envelope.Type == "done" {
+			return marshalContinueExecutionResult(envelope.Result)
+		}
+	}
+
+	return "", false
+}
+
+func marshalContinueExecutionResult(result continueExecutionResult) (string, bool) {
+	if strings.TrimSpace(result.Status) == "" {
+		result.Status = "completed"
+	}
+	body, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", false
+	}
+	return string(body), true
+}
+
+func parseContinueExecutionResult(body []byte) (continueExecutionResult, bool) {
+	var result continueExecutionResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return continueExecutionResult{}, false
+	}
+	if strings.TrimSpace(result.Status) == "" && strings.TrimSpace(result.Summary) == "" && len(result.ModifiedFiles) == 0 && len(result.Artifacts) == 0 && len(result.Metadata) == 0 {
+		return continueExecutionResult{}, false
+	}
+	return result, true
 }
 
 func injectIDEWorkerBackend(agentSvc ai.Agent[map[string]any], backend ideworker.Backend) {

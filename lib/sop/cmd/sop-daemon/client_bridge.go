@@ -1,19 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"regexp"
-
 	"github.com/sharedcode/sop/ai"
-	"github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -22,15 +22,10 @@ type bridgeAskRequest struct {
 	UserPrompt   string
 	FullPrompt   string
 	ProviderName string
+	APIKey       string
+	BaseURL      string
 	ModelName    string
 	Variables    map[string]any
-}
-
-type inferredOpenAICompatibleEditorContext struct {
-	WorkspaceRoot string
-	ActiveFile    string
-	SelectedText  string
-	OpenFiles     []string
 }
 
 type bridgeStreamEvent struct {
@@ -66,12 +61,6 @@ type bridgeClientAdapter interface {
 	Routes(*localRAGService) []bridgeRoute
 }
 
-type bridgeModelDescriptor struct {
-	ID       string
-	OwnedBy  string
-	Metadata map[string]any
-}
-
 type continueWorkflowProfile struct {
 	ID               string
 	Label            string
@@ -82,10 +71,93 @@ type continueWorkflowProfile struct {
 	Guidance         string
 }
 
+type continueIDEToolDefinition struct {
+	Name         string   `json:"name"`
+	DisplayName  string   `json:"display_name"`
+	Description  string   `json:"description"`
+	Category     string   `json:"category"`
+	Readonly     bool     `json:"readonly"`
+	Experimental bool     `json:"experimental,omitempty"`
+	Modes        []string `json:"modes,omitempty"`
+	Phases       []string `json:"phases,omitempty"`
+	Workflows    []string `json:"workflows,omitempty"`
+}
+
+type continueIDEPhaseDefinition struct {
+	ID             string   `json:"id"`
+	Label          string   `json:"label"`
+	ContinueModes  []string `json:"continue_modes,omitempty"`
+	AvailableTools []string `json:"available_tools,omitempty"`
+}
+
+type continueExecutionResultContract struct {
+	StreamProgress       bool `json:"stream_progress,omitempty"`
+	IncludeModifiedFiles bool `json:"include_modified_files,omitempty"`
+	IncludeDiffDeltas    bool `json:"include_diff_deltas,omitempty"`
+	IncludeMetadata      bool `json:"include_metadata,omitempty"`
+	PreferArtifactRefs   bool `json:"prefer_artifact_refs,omitempty"`
+	MaxInlineDiffBytes   int  `json:"max_inline_diff_bytes,omitempty"`
+}
+
+type continueExecutionArtifact struct {
+	ID          string         `json:"id,omitempty"`
+	Kind        string         `json:"kind,omitempty"`
+	Path        string         `json:"path,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+type continueExecutionModifiedFile struct {
+	FilePath        string         `json:"file_path,omitempty"`
+	CRUDOperation   string         `json:"crud_operation,omitempty"`
+	DiffSummary     string         `json:"diff_summary,omitempty"`
+	DiffDelta       string         `json:"diff_delta,omitempty"`
+	DiffFormat      string         `json:"diff_format,omitempty"`
+	DiffArtifactRef string         `json:"diff_artifact_ref,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
+}
+
+type continueExecutionResult struct {
+	Status        string                          `json:"status,omitempty"`
+	Summary       string                          `json:"summary,omitempty"`
+	ModifiedFiles []continueExecutionModifiedFile `json:"modified_files,omitempty"`
+	Artifacts     []continueExecutionArtifact     `json:"artifacts,omitempty"`
+	Metadata      map[string]any                  `json:"metadata,omitempty"`
+}
+
+type continueDelegationReference struct {
+	Kind     string         `json:"kind,omitempty"`
+	Source   string         `json:"source,omitempty"`
+	Title    string         `json:"title,omitempty"`
+	Content  string         `json:"content,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type continueDelegationGuidance struct {
+	TeamPractices        []string                      `json:"team_practices,omitempty"`
+	SuccessCriteria      []string                      `json:"success_criteria,omitempty"`
+	Constraints          []string                      `json:"constraints,omitempty"`
+	ImplementationNotes  []string                      `json:"implementation_notes,omitempty"`
+	ExpectedResultFormat string                        `json:"expected_result_format,omitempty"`
+	ReferenceContext     []continueDelegationReference `json:"reference_context,omitempty"`
+	Metadata             map[string]any                `json:"metadata,omitempty"`
+}
+
 type continueAgentExecuteRequest struct {
-	SessionID string `json:"session_id"`
-	Task      string `json:"task"`
-	Context   struct {
+	SessionID      string                          `json:"session_id"`
+	Task           string                          `json:"task"`
+	Provider       string                          `json:"provider,omitempty"`
+	APIKey         string                          `json:"api_key,omitempty"`
+	Model          string                          `json:"model,omitempty"`
+	URL            string                          `json:"url,omitempty"`
+	RequestedPhase string                          `json:"requested_phase,omitempty"`
+	AvailableTools []string                        `json:"available_tools,omitempty"`
+	PhaseTools     []string                        `json:"phase_tools,omitempty"`
+	AllowedTools   []string                        `json:"allowed_tools,omitempty"`
+	ToolChoice     string                          `json:"tool_choice,omitempty"`
+	Guidance       continueDelegationGuidance      `json:"guidance,omitempty"`
+	ResultContract continueExecutionResultContract `json:"result_contract,omitempty"`
+	Context        struct {
 		WorkspaceRoot string   `json:"workspace_root"`
 		ActiveFile    string   `json:"active_file"`
 		SelectedText  string   `json:"selected_text"`
@@ -95,17 +167,26 @@ type continueAgentExecuteRequest struct {
 }
 
 type continueSessionSnapshot struct {
-	SessionID       string   `json:"session_id"`
-	Status          string   `json:"status"`
-	Phase           string   `json:"phase,omitempty"`
-	Mode            string   `json:"mode,omitempty"`
-	WorkflowProfile string   `json:"workflow_profile,omitempty"`
-	TaskType        string   `json:"task_type,omitempty"`
-	Message         string   `json:"message,omitempty"`
-	UpdatedAt       string   `json:"updated_at,omitempty"`
-	OpenFiles       []string `json:"open_files,omitempty"`
-	ActiveFile      string   `json:"active_file,omitempty"`
-	WorkspaceRoot   string   `json:"workspace_root,omitempty"`
+	SessionID       string                   `json:"session_id"`
+	Status          string                   `json:"status"`
+	Phase           string                   `json:"phase,omitempty"`
+	Mode            string                   `json:"mode,omitempty"`
+	WorkflowProfile string                   `json:"workflow_profile,omitempty"`
+	TaskType        string                   `json:"task_type,omitempty"`
+	Message         string                   `json:"message,omitempty"`
+	UpdatedAt       string                   `json:"updated_at,omitempty"`
+	OpenFiles       []string                 `json:"open_files,omitempty"`
+	ActiveFile      string                   `json:"active_file,omitempty"`
+	WorkspaceRoot   string                   `json:"workspace_root,omitempty"`
+	ExecutionResult *continueExecutionResult `json:"execution_result,omitempty"`
+}
+
+type continueWorkerCallbackOutcome struct {
+	StatusCode    int
+	ContentType   string
+	RawBody       string
+	FinalResult   *continueExecutionResult
+	StreamedEvent bool
 }
 
 type continueWorkerRegistrationRequest struct {
@@ -137,14 +218,8 @@ var continueWorkerCapabilityCatalog = []string{"read_context", "apply_patch", "e
 
 type continueBridgeTransport struct{}
 
-type openAICompatibleBridgeTransport struct{}
-
 type continueBridgeAdapter struct {
 	transport continueBridgeTransport
-}
-
-type openAICompatibleBridgeAdapter struct {
-	transport openAICompatibleBridgeTransport
 }
 
 func newContinueBridgeSessionStore() *continueBridgeSessionStore {
@@ -332,11 +407,10 @@ func (s *localRAGService) continueToolHandlers() map[string]continueToolHandler 
 func (s *localRAGService) bridgeClients() []bridgeClientAdapter {
 	return []bridgeClientAdapter{
 		continueBridgeAdapter{transport: continueBridgeTransport{}},
-		openAICompatibleBridgeAdapter{transport: openAICompatibleBridgeTransport{}},
 	}
 }
 
-func (s *localRAGService) registerBridgeRoutes(mux *http.ServeMux, reg *SessionRegistry) {
+func (s *localRAGService) registerBridgeRoutes(mux *http.ServeMux, reg *SessionRegistry, authHandler *DaemonAuthHandler) {
 	if mux == nil || reg == nil {
 		return
 	}
@@ -351,7 +425,11 @@ func (s *localRAGService) registerBridgeRoutes(mux *http.ServeMux, reg *SessionR
 				}
 				handler(w, r)
 			})
-			mux.HandleFunc(route.Pattern, handleOptionsAndCORS(withRateLimit(reg, wrapped)))
+			protected := withRateLimit(reg, wrapped)
+			if authHandler != nil {
+				protected = authHandler.RequireAuth(protected)
+			}
+			mux.HandleFunc(route.Pattern, handleOptionsAndCORS(protected))
 		}
 	}
 }
@@ -407,24 +485,6 @@ func (a continueBridgeAdapter) Routes(s *localRAGService) []bridgeRoute {
 	}
 }
 
-func (a openAICompatibleBridgeAdapter) Routes(s *localRAGService) []bridgeRoute {
-	return []bridgeRoute{
-		{
-			Pattern:         "/v1/chat/completions",
-			RequiresService: true,
-			Handler: func(w http.ResponseWriter, r *http.Request) {
-				a.transport.handleChat(s, w, r)
-			},
-		},
-		{
-			Pattern: "/v1/models",
-			Handler: func(w http.ResponseWriter, r *http.Request) {
-				a.transport.writeModels(w)
-			},
-		},
-	}
-}
-
 func (continueBridgeTransport) handleChat(s *localRAGService, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -469,7 +529,15 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 		return
 	}
 
-	chatReq := continueChatRequest{SessionID: req.SessionID, Message: req.Task, Mode: req.Mode}
+	chatReq := continueChatRequest{
+		SessionID: req.SessionID,
+		Message:   req.Task,
+		Mode:      req.Mode,
+		Provider:  strings.TrimSpace(req.Provider),
+		APIKey:    strings.TrimSpace(req.APIKey),
+		Model:     strings.TrimSpace(req.Model),
+		URL:       strings.TrimSpace(req.URL),
+	}
 	chatReq.Workspace.Root = req.Context.WorkspaceRoot
 	chatReq.Workspace.Active = req.Context.ActiveFile
 	chatReq.Context.SelectedText = req.Context.SelectedText
@@ -477,22 +545,26 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 	if strings.TrimSpace(chatReq.Mode) == "" {
 		chatReq.Mode = "coding"
 	}
-	workflowProfile, requestedPhase := resolveContinueWorkflowProfile(chatReq.Mode, chatReq.Message)
+	workflowProfile, inferredPhase := resolveContinueWorkflowProfile(chatReq.Mode, chatReq.Message)
+	requestedPhase := strings.TrimSpace(req.RequestedPhase)
+	if requestedPhase == "" {
+		requestedPhase = inferredPhase
+	}
 	if registration, ok := s.ensureContinueWorkerStore().Get(chatReq.SessionID); ok {
 		requiredCapabilities := requiredContinueWorkerCapabilities(req)
 		if continueWorkerSupportsCapabilities(registration, requiredCapabilities) {
 			s.ensureContinueSessionStore().Put(buildContinueSessionSnapshot(chatReq, workflowProfile, requestedPhase, "in_progress", chatReq.Message))
-			statusCode, err := continueBridgeTransport{}.proxyAgentExecuteToWorker(r.Context(), w, req, registration)
+			outcome, err := continueBridgeTransport{}.proxyAgentExecuteToWorker(r.Context(), w, req, registration)
 			if err != nil {
 				s.ensureContinueSessionStore().Put(buildContinueSessionSnapshot(chatReq, workflowProfile, requestedPhase, "failed", err.Error()))
 				respondJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 				return
 			}
 			status := "completed"
-			if statusCode >= 400 {
+			if outcome.StatusCode >= 400 {
 				status = "failed"
 			}
-			s.ensureContinueSessionStore().Put(buildContinueSessionSnapshot(chatReq, workflowProfile, requestedPhase, status, chatReq.Message))
+			s.ensureContinueSessionStore().Put(buildContinueExecutionSnapshot(chatReq, workflowProfile, requestedPhase, status, chatReq.Message, outcome.FinalResult))
 			return
 		}
 	}
@@ -506,23 +578,45 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 	continueBridgeTransport{}.streamContinueEnvelope(s, w, envelope, chatReq, "Executing editor-aware coding task")
 }
 
-func (continueBridgeTransport) proxyAgentExecuteToWorker(ctx context.Context, w http.ResponseWriter, req continueAgentExecuteRequest, registration continueWorkerRegistration) (int, error) {
-	body, statusCode, err := executeContinueWorkerCallback(ctx, req, registration)
+func (continueBridgeTransport) proxyAgentExecuteToWorker(ctx context.Context, w http.ResponseWriter, req continueAgentExecuteRequest, registration continueWorkerRegistration) (continueWorkerCallbackOutcome, error) {
+	body, err := json.Marshal(req)
 	if err != nil {
-		return 0, err
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("marshal worker request: %w", err)
 	}
-	if statusCode == 0 {
-		statusCode = http.StatusOK
+	callbackReq, err := http.NewRequestWithContext(ctx, http.MethodPost, registration.CallbackURL, bytes.NewReader(body))
+	if err != nil {
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("build worker callback request: %w", err)
 	}
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.WriteHeader(statusCode)
-	if _, err := w.Write(body); err != nil {
-		return statusCode, fmt.Errorf("copy worker response: %w", err)
+	callbackReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(callbackReq)
+	if err != nil {
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("call IDE worker: %w", err)
 	}
+	defer resp.Body.Close()
+
+	outcome := continueWorkerCallbackOutcome{StatusCode: resp.StatusCode}
+	if outcome.StatusCode == 0 {
+		outcome.StatusCode = http.StatusOK
+	}
+	outcome.ContentType = strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if outcome.ContentType == "" {
+		outcome.ContentType = "application/x-ndjson"
+	}
+	w.Header().Set("Content-Type", outcome.ContentType)
+	w.WriteHeader(outcome.StatusCode)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-	return statusCode, nil
+	streamOutcome, err := readContinueWorkerResponse(resp.Body, w, false)
+	if err != nil {
+		return outcome, fmt.Errorf("copy worker response: %w", err)
+	}
+	outcome.FinalResult = streamOutcome.FinalResult
+	outcome.StreamedEvent = streamOutcome.StreamedEvent
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return outcome, nil
 }
 
 func (continueBridgeTransport) handleSessionState(s *localRAGService, w http.ResponseWriter, r *http.Request) {
@@ -599,17 +693,24 @@ func (continueBridgeTransport) writeMetadata(w http.ResponseWriter, s *localRAGS
 		"object": "client.capabilities",
 		"client": "continue",
 		"chat": map[string]any{
-			"path":      "/api/continue/chat",
-			"streaming": "ndjson",
+			"path":                  "/api/continue/chat",
+			"method":                "POST",
+			"streaming":             "ndjson",
+			"api_key_is_attribute":  true,
+			"provider_is_attribute": true,
+			"model_is_attribute":    true,
+			"url_is_attribute":      true,
 		},
 		"session_state": map[string]any{
 			"path_prefix": "/api/continue/sessions/",
 			"method":      "GET",
 		},
 		"agent_execute": map[string]any{
-			"path":      "/api/continue/agent/execute",
-			"method":    "POST",
-			"streaming": "ndjson",
+			"path":                  "/api/continue/agent/execute",
+			"method":                "POST",
+			"streaming":             "ndjson",
+			"provider_is_attribute": true,
+			"model_is_attribute":    true,
 		},
 		"worker_register": map[string]any{
 			"path":   "/api/continue/worker/register",
@@ -623,6 +724,14 @@ func (continueBridgeTransport) writeMetadata(w http.ResponseWriter, s *localRAGS
 		"tools": map[string]any{
 			"path_prefix": "/api/continue/tools/",
 			"names":       toolNames,
+		},
+		"ide_tools": map[string]any{
+			"source":                       "continue",
+			"request_forwards_tools":       true,
+			"request_supports_tool_choice": true,
+			"names":                        continueIDEToolNames(),
+			"catalog":                      continueIDEToolCatalog(),
+			"supported_phases":             continueSupportedPhases(),
 		},
 		"features": map[string]any{
 			"workspace_context": true,
@@ -638,6 +747,7 @@ func (continueBridgeTransport) writeMetadata(w http.ResponseWriter, s *localRAGS
 			"controller":            "ai_studio_daemon",
 			"editor_worker":         "continue",
 			"provider_is_attribute": true,
+			"model_is_attribute":    true,
 		},
 	})
 }
@@ -708,7 +818,117 @@ func continueWorkflowMetadata() map[string]any {
 	return map[string]any{
 		"phase_vocabulary":   []string{"intake", "investigation", "planning", "execution", "review", "delivery"},
 		"supported_profiles": items,
+		"supported_phases":   continueSupportedPhases(),
 	}
+}
+
+func continueSupportedPhases() []continueIDEPhaseDefinition {
+	return []continueIDEPhaseDefinition{
+		{ID: "intake", Label: "Intake & Context", ContinueModes: []string{"chat", "plan"}, AvailableTools: []string{"read_file", "read_currently_open_file", "file_glob_search", "ls", "view_repo_map", "request_rule", "read_skill"}},
+		{ID: "investigation", Label: "Investigation & Analysis", ContinueModes: []string{"plan", "agent"}, AvailableTools: []string{"read_file", "read_currently_open_file", "read_file_range", "file_glob_search", "grep_search", "ls", "codebase", "view_repo_map", "view_subdirectory", "get_problems", "goto_definition", "goto_type_definition", "get_references", "get_document_symbols", "get_terminal_contents", "fetch_url_content", "search_web"}},
+		{ID: "planning", Label: "Planning & Design", ContinueModes: []string{"plan"}, AvailableTools: []string{"read_file", "read_currently_open_file", "read_file_range", "file_glob_search", "grep_search", "ls", "codebase", "view_repo_map", "view_subdirectory", "goto_definition", "goto_type_definition", "get_references", "get_document_symbols", "view_diff", "request_rule", "read_skill", "fetch_url_content", "search_web"}},
+		{ID: "execution", Label: "Execution & Implementation", ContinueModes: []string{"agent"}, AvailableTools: []string{"read_file", "read_currently_open_file", "view_diff", "create_new_file", "edit_existing_file", "single_find_and_replace", "multi_edit", "run_terminal_command", "create_rule_block"}},
+		{ID: "review", Label: "Review & Validation", ContinueModes: []string{"plan", "agent"}, AvailableTools: []string{"read_file", "read_currently_open_file", "read_file_range", "grep_search", "get_problems", "goto_definition", "goto_type_definition", "get_references", "get_document_symbols", "view_diff", "run_terminal_command", "get_terminal_contents", "request_rule", "read_skill"}},
+		{ID: "delivery", Label: "Delivery & Handoff", ContinueModes: []string{"plan", "agent"}, AvailableTools: []string{"read_file", "view_diff", "run_terminal_command", "get_terminal_contents", "create_rule_block"}},
+	}
+}
+
+func continueIDEToolCatalog() []continueIDEToolDefinition {
+	return []continueIDEToolDefinition{
+		{Name: "read_file", DisplayName: "Read File", Description: "Read an existing file from the workspace", Category: "read", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"intake", "investigation", "planning", "execution", "review", "delivery"}, Workflows: []string{"feature_implementation", "debugging", "testing_validation", "refactoring", "code_review"}},
+		{Name: "read_currently_open_file", DisplayName: "Read Currently Open File", Description: "Read the active file in the IDE", Category: "read", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"intake", "investigation", "planning", "execution", "review"}, Workflows: []string{"feature_implementation", "debugging", "testing_validation", "refactoring", "code_review"}},
+		{Name: "read_file_range", DisplayName: "Read File Range", Description: "Read a targeted line range from a file", Category: "read", Readonly: true, Experimental: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning", "review"}, Workflows: []string{"feature_implementation", "debugging", "testing_validation", "refactoring", "code_review"}},
+		{Name: "file_glob_search", DisplayName: "Glob File Search", Description: "Find files by glob pattern", Category: "search", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"intake", "investigation", "planning"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "grep_search", DisplayName: "Grep Search", Description: "Search repository contents with ripgrep", Category: "search", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning", "review"}, Workflows: []string{"feature_implementation", "debugging", "testing_validation", "refactoring", "code_review"}},
+		{Name: "ls", DisplayName: "List Directory", Description: "List files and folders in the workspace", Category: "search", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"intake", "investigation", "planning"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "codebase", DisplayName: "Codebase Search", Description: "Semantically search the codebase", Category: "search", Readonly: true, Experimental: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "view_repo_map", DisplayName: "View Repo Map", Description: "Inspect repository structure summaries", Category: "search", Readonly: true, Experimental: true, Modes: []string{"plan", "agent"}, Phases: []string{"intake", "investigation", "planning"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "view_subdirectory", DisplayName: "View Subdirectory", Description: "Inspect a subdirectory summary", Category: "search", Readonly: true, Experimental: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "get_problems", DisplayName: "Get Problems", Description: "Read IDE diagnostics for a file", Category: "diagnostics", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "review"}, Workflows: []string{"debugging", "testing_validation", "refactoring", "code_review"}},
+		{Name: "goto_definition", DisplayName: "Go To Definition", Description: "Resolve symbol definitions", Category: "navigation", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning", "review"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "goto_type_definition", DisplayName: "Go To Type Definition", Description: "Resolve symbol type definitions", Category: "navigation", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning", "review"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "get_references", DisplayName: "Get References", Description: "Find symbol references", Category: "navigation", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning", "review"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "get_document_symbols", DisplayName: "Get Document Symbols", Description: "List document symbols for a file", Category: "navigation", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning", "review"}, Workflows: []string{"feature_implementation", "debugging", "refactoring", "code_review"}},
+		{Name: "view_diff", DisplayName: "View Diff", Description: "Inspect the current working diff", Category: "review", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"planning", "execution", "review", "delivery"}, Workflows: []string{"feature_implementation", "debugging", "testing_validation", "refactoring", "code_review"}},
+		{Name: "create_new_file", DisplayName: "Create New File", Description: "Create a new file in the workspace", Category: "edit", Readonly: false, Modes: []string{"agent"}, Phases: []string{"execution"}, Workflows: []string{"feature_implementation", "refactoring"}},
+		{Name: "edit_existing_file", DisplayName: "Edit Existing File", Description: "Edit an existing file", Category: "edit", Readonly: false, Modes: []string{"agent"}, Phases: []string{"execution"}, Workflows: []string{"feature_implementation", "debugging", "refactoring"}},
+		{Name: "single_find_and_replace", DisplayName: "Single Find and Replace", Description: "Apply one targeted replacement", Category: "edit", Readonly: false, Modes: []string{"agent"}, Phases: []string{"execution"}, Workflows: []string{"feature_implementation", "debugging", "refactoring"}},
+		{Name: "multi_edit", DisplayName: "Multi Edit", Description: "Apply multi-location edits in one action", Category: "edit", Readonly: false, Modes: []string{"agent"}, Phases: []string{"execution"}, Workflows: []string{"feature_implementation", "debugging", "refactoring"}},
+		{Name: "run_terminal_command", DisplayName: "Run Terminal Command", Description: "Run a terminal command in the workspace", Category: "execution", Readonly: false, Modes: []string{"agent"}, Phases: []string{"execution", "review", "delivery"}, Workflows: []string{"feature_implementation", "debugging", "testing_validation", "refactoring"}},
+		{Name: "get_terminal_contents", DisplayName: "Get Terminal Contents", Description: "Inspect current terminal contents", Category: "execution", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "review", "delivery"}, Workflows: []string{"debugging", "testing_validation", "code_review"}},
+		{Name: "request_rule", DisplayName: "Request Rule", Description: "Load rule or policy guidance", Category: "guidance", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"intake", "planning", "review"}, Workflows: []string{"feature_implementation", "refactoring", "code_review"}},
+		{Name: "read_skill", DisplayName: "Read Skill", Description: "Read skill instructions", Category: "guidance", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"intake", "planning", "review"}, Workflows: []string{"feature_implementation", "refactoring", "code_review"}},
+		{Name: "create_rule_block", DisplayName: "Create Rule Block", Description: "Create a new rule block", Category: "guidance", Readonly: false, Modes: []string{"agent"}, Phases: []string{"execution", "delivery"}, Workflows: []string{"feature_implementation", "documentation"}},
+		{Name: "fetch_url_content", DisplayName: "Fetch URL Content", Description: "Read content from a URL", Category: "research", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning"}, Workflows: []string{"feature_implementation", "debugging", "code_review"}},
+		{Name: "search_web", DisplayName: "Search Web", Description: "Search the web for supporting context", Category: "research", Readonly: true, Modes: []string{"plan", "agent"}, Phases: []string{"investigation", "planning"}, Workflows: []string{"feature_implementation", "debugging", "code_review"}},
+	}
+}
+
+func continueIDEToolNames() []string {
+	tools := continueIDEToolCatalog()
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func continuePhaseToolBundles() map[string][]string {
+	bundles := map[string][]string{}
+	for _, phase := range continueSupportedPhases() {
+		bundles[phase.ID] = append([]string(nil), phase.AvailableTools...)
+	}
+	return bundles
+}
+
+func continueToolsForPhase(phase string) []string {
+	phase = strings.ToLower(strings.TrimSpace(phase))
+	if phase == "" {
+		return nil
+	}
+	for _, item := range continueSupportedPhases() {
+		if item.ID == phase {
+			return append([]string(nil), item.AvailableTools...)
+		}
+	}
+	return nil
+}
+
+func continueRequestToolNames(tools []continueChatTool) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		name := strings.TrimSpace(tool.Function.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func intersectContinueToolNames(left, right []string) []string {
+	if len(left) == 0 || len(right) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(right))
+	for _, name := range right {
+		allowed[name] = true
+	}
+	matched := []string{}
+	for _, name := range left {
+		if allowed[name] {
+			matched = append(matched, name)
+		}
+	}
+	sort.Strings(matched)
+	return matched
 }
 
 func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, error) {
@@ -720,6 +940,7 @@ func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, e
 	}
 
 	variables := map[string]any{"continue_bridge": true, "workspace_root": req.Workspace.Root}
+	availableToolNames := continueRequestToolNames(req.Tools)
 	workflowProfile, requestedPhase := resolveContinueWorkflowProfile(req.Mode, req.Message)
 	if mode := strings.TrimSpace(req.Mode); mode != "" {
 		variables["continue_mode"] = mode
@@ -733,19 +954,49 @@ func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, e
 	if len(req.Context.OpenFiles) > 0 {
 		variables["open_files"] = append([]string(nil), req.Context.OpenFiles...)
 	}
+	if len(availableToolNames) > 0 {
+		variables["continue_available_tools"] = availableToolNames
+	}
 	if workflowProfile.ID != "" {
 		variables["coding_workflow_profile"] = workflowProfile.ID
 		variables["coding_task_type"] = workflowProfile.TaskType
 	}
 	if requestedPhase != "" {
 		variables["requested_phase"] = requestedPhase
+		phaseTools := continueToolsForPhase(requestedPhase)
+		if len(phaseTools) > 0 {
+			variables["continue_phase_tools"] = phaseTools
+			if len(availableToolNames) > 0 {
+				variables["continue_phase_available_tools"] = intersectContinueToolNames(phaseTools, availableToolNames)
+			}
+		}
+	}
+	if toolChoice := strings.TrimSpace(req.ToolChoice.Function.Name); toolChoice != "" {
+		variables["continue_tool_choice"] = toolChoice
+	}
+	providerName := strings.TrimSpace(req.Provider)
+	apiKey := strings.TrimSpace(req.APIKey)
+	modelName := strings.TrimSpace(req.Model)
+	baseURL := strings.TrimSpace(req.URL)
+	if providerName != "" {
+		variables["llm_provider"] = providerName
+	}
+	if modelName != "" {
+		variables["llm_model"] = modelName
+	}
+	if baseURL != "" {
+		variables["llm_url"] = baseURL
 	}
 	return bridgeChatEnvelope{
 		Ask: bridgeAskRequest{
-			SessionID:  req.SessionID,
-			UserPrompt: req.Message,
-			FullPrompt: buildContinueBridgePrompt(req, workflowProfile, requestedPhase),
-			Variables:  variables,
+			SessionID:    req.SessionID,
+			UserPrompt:   req.Message,
+			FullPrompt:   buildContinueBridgePrompt(req, workflowProfile, requestedPhase),
+			ProviderName: providerName,
+			APIKey:       apiKey,
+			BaseURL:      baseURL,
+			ModelName:    modelName,
+			Variables:    variables,
 		},
 		Stream: true,
 		InitialEvents: []bridgeStreamEvent{
@@ -829,217 +1080,120 @@ func buildContinueSessionSnapshot(req continueChatRequest, workflowProfile conti
 	}
 }
 
-func inferContinueOpenAIWorkflowContext(messages []openAICompatibleMessage) (string, continueWorkflowProfile, string) {
-	textParts := make([]string, 0, len(messages))
-	for _, message := range messages {
-		text := strings.TrimSpace(extractOpenAICompatibleMessageText(message.Content))
-		if text != "" {
-			textParts = append(textParts, text)
-		}
+func buildContinueExecutionSnapshot(req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase, status, message string, result *continueExecutionResult) continueSessionSnapshot {
+	snapshot := buildContinueSessionSnapshot(req, workflowProfile, requestedPhase, status, message)
+	if result != nil {
+		resultCopy := cloneContinueExecutionResult(*result)
+		snapshot.ExecutionResult = &resultCopy
 	}
-	combined := strings.ToLower(strings.Join(textParts, "\n\n"))
-	inferredMode := ""
-	switch {
-	case containsAllWorkflowSignals(combined, "original code:", "suggested edit:") || containsAllWorkflowSignals(combined, "original code:", "new code:"):
-		inferredMode = "apply"
-	case containsAnyWorkflowSignal(combined,
-		"rewrite the above code",
-		"edit the code to perfectly satisfy",
-		"you will rewrite the above code",
-		"rewrite the code to satisfy this request",
-		"<start editing here>"):
-		inferredMode = "edit"
-	}
-	profile, requestedPhase := resolveContinueWorkflowProfile(inferredMode, combined)
-	return inferredMode, profile, requestedPhase
+	return snapshot
 }
 
-func inferOpenAICompatibleEditorContext(messages []openAICompatibleMessage) inferredOpenAICompatibleEditorContext {
-	ctx := inferredOpenAICompatibleEditorContext{}
-	texts := make([]string, 0, len(messages))
-	pathHints := make([]string, 0, len(messages))
-	for _, message := range messages {
-		text := strings.TrimSpace(extractOpenAICompatibleMessageText(message.Content))
-		if text == "" {
-			continue
+func cloneContinueExecutionResult(src continueExecutionResult) continueExecutionResult {
+	cloned := continueExecutionResult{
+		Status:   src.Status,
+		Summary:  src.Summary,
+		Metadata: cloneAnyMap(src.Metadata),
+	}
+	if len(src.ModifiedFiles) > 0 {
+		cloned.ModifiedFiles = make([]continueExecutionModifiedFile, 0, len(src.ModifiedFiles))
+		for _, file := range src.ModifiedFiles {
+			cloned.ModifiedFiles = append(cloned.ModifiedFiles, continueExecutionModifiedFile{
+				FilePath:        file.FilePath,
+				CRUDOperation:   file.CRUDOperation,
+				DiffSummary:     file.DiffSummary,
+				DiffDelta:       file.DiffDelta,
+				DiffFormat:      file.DiffFormat,
+				DiffArtifactRef: file.DiffArtifactRef,
+				Metadata:        cloneAnyMap(file.Metadata),
+			})
 		}
-		texts = append(texts, text)
-		if ctx.SelectedText == "" {
-			ctx.SelectedText = inferSelectedTextFromPrompt(text)
+	}
+	if len(src.Artifacts) > 0 {
+		cloned.Artifacts = make([]continueExecutionArtifact, 0, len(src.Artifacts))
+		for _, artifact := range src.Artifacts {
+			cloned.Artifacts = append(cloned.Artifacts, continueExecutionArtifact{
+				ID:          artifact.ID,
+				Kind:        artifact.Kind,
+				Path:        artifact.Path,
+				Description: artifact.Description,
+				Metadata:    cloneAnyMap(artifact.Metadata),
+			})
 		}
-		pathHints = append(pathHints, inferOpenAICompatiblePathHints(text)...)
 	}
-
-	combined := strings.Join(texts, "\n\n")
-	if workspaceRoot := inferLabeledValue(combined, "workspace_root", "workspace root"); workspaceRoot != "" {
-		ctx.WorkspaceRoot = workspaceRoot
-	}
-	if activeFile := inferLabeledValue(combined, "active_file", "active file", "current file"); activeFile != "" {
-		ctx.ActiveFile = activeFile
-	}
-	if ctx.SelectedText == "" {
-		ctx.SelectedText = inferLabeledCodeBlock(combined, "selected text", "selection")
-	}
-	ctx.OpenFiles = dedupeStrings(pathHints)
-	if ctx.ActiveFile == "" && len(ctx.OpenFiles) > 0 {
-		ctx.ActiveFile = ctx.OpenFiles[0]
-	}
-	if ctx.ActiveFile != "" && !containsString(ctx.OpenFiles, ctx.ActiveFile) {
-		ctx.OpenFiles = append([]string{ctx.ActiveFile}, ctx.OpenFiles...)
-	}
-	return ctx
+	return cloned
 }
 
-func buildOpenAICompatibleEditorContextText(ctx inferredOpenAICompatibleEditorContext) string {
-	lines := make([]string, 0, 4)
-	if ctx.WorkspaceRoot != "" {
-		lines = append(lines, fmt.Sprintf("[workspace_root=%s]", ctx.WorkspaceRoot))
+func cloneAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
 	}
-	if ctx.ActiveFile != "" {
-		lines = append(lines, fmt.Sprintf("[active_file=%s]", ctx.ActiveFile))
+	cloned := make(map[string]any, len(src))
+	for key, value := range src {
+		cloned[key] = value
 	}
-	if ctx.SelectedText != "" {
-		lines = append(lines, fmt.Sprintf("[selected_text=%s]", ctx.SelectedText))
-	}
-	if len(ctx.OpenFiles) > 0 {
-		lines = append(lines, fmt.Sprintf("[open_files=%s]", strings.Join(ctx.OpenFiles, ",")))
-	}
-	return strings.Join(lines, "\n")
+	return cloned
 }
 
-func inferSelectedTextFromPrompt(text string) string {
-	if text == "" {
-		return ""
-	}
-	if selectedText := inferLabeledCodeBlock(text, "original code", "code to edit"); selectedText != "" {
-		return selectedText
-	}
-	trimmed := strings.TrimSpace(text)
-	if containsAnyWorkflowSignal(strings.ToLower(trimmed), "rewrite the above code", "rewrite the code to satisfy", "you will rewrite the above code") {
-		blocks := extractFencedCodeBlocks(trimmed)
-		if len(blocks) > 0 {
-			return blocks[0].Body
+func readContinueWorkerResponse(body io.Reader, sink io.Writer, collectRaw bool) (continueWorkerCallbackOutcome, error) {
+	reader := bufio.NewReader(body)
+	var raw strings.Builder
+	outcome := continueWorkerCallbackOutcome{}
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			outcome.StreamedEvent = true
+			if sink != nil {
+				if _, writeErr := sink.Write(line); writeErr != nil {
+					return outcome, writeErr
+				}
+			}
+			if collectRaw {
+				raw.Write(line)
+			}
+			captureContinueWorkerResult(&outcome, line)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return outcome, err
 		}
 	}
-	return ""
-}
-
-type fencedCodeBlock struct {
-	Info string
-	Body string
-}
-
-func extractFencedCodeBlocks(text string) []fencedCodeBlock {
-	all := regexp.MustCompile("(?s)```([^\n`]*)\\n(.*?)```").FindAllStringSubmatch(text, -1)
-	blocks := make([]fencedCodeBlock, 0, len(all))
-	for _, match := range all {
-		if len(match) < 3 {
-			continue
-		}
-		body := strings.TrimSpace(match[2])
-		if body == "" {
-			continue
-		}
-		blocks = append(blocks, fencedCodeBlock{Info: strings.TrimSpace(match[1]), Body: body})
-	}
-	return blocks
-}
-
-func inferLabeledCodeBlock(text string, labels ...string) string {
-	lower := strings.ToLower(text)
-	for _, label := range labels {
-		needle := strings.ToLower(strings.TrimSpace(label))
-		if needle == "" {
-			continue
-		}
-		idx := strings.Index(lower, needle)
-		if idx == -1 {
-			continue
-		}
-		if blocks := extractFencedCodeBlocks(text[idx:]); len(blocks) > 0 {
-			return blocks[0].Body
-		}
-	}
-	return ""
-}
-
-func inferLabeledValue(text string, labels ...string) string {
-	for _, label := range labels {
-		if label == "" {
-			continue
-		}
-		pattern := regexp.MustCompile(`(?im)(?:\[)?` + regexp.QuoteMeta(label) + `(?:\])?\s*[:=]\s*([^\n\]]+)`)
-		if match := pattern.FindStringSubmatch(text); len(match) > 1 {
-			value := strings.TrimSpace(strings.Trim(match[1], "`\""))
-			if value != "" {
-				return value
+	if collectRaw {
+		outcome.RawBody = raw.String()
+		if outcome.FinalResult == nil {
+			trimmed := strings.TrimSpace(outcome.RawBody)
+			if result, ok := parseContinueExecutionResult([]byte(trimmed)); ok {
+				resultCopy := cloneContinueExecutionResult(result)
+				outcome.FinalResult = &resultCopy
 			}
 		}
 	}
-	return ""
+	return outcome, nil
 }
 
-func inferOpenAICompatiblePathHints(text string) []string {
-	paths := []string{}
-	for _, block := range extractFencedCodeBlocks(text) {
-		if path := normalizeFileHint(block.Info); path != "" {
-			paths = append(paths, path)
-		}
+func captureContinueWorkerResult(outcome *continueWorkerCallbackOutcome, rawLine []byte) {
+	trimmed := strings.TrimSpace(string(rawLine))
+	if trimmed == "" {
+		return
 	}
-	if activeFile := inferLabeledValue(text, "active file", "current file"); activeFile != "" {
-		paths = append(paths, activeFile)
+	if result, ok := parseContinueExecutionResult([]byte(trimmed)); ok {
+		resultCopy := cloneContinueExecutionResult(result)
+		outcome.FinalResult = &resultCopy
+		return
 	}
-	return dedupeStrings(paths)
-}
-
-func normalizeFileHint(value string) string {
-	value = strings.TrimSpace(strings.Trim(value, "`"))
-	if value == "" || !looksLikePathHint(value) {
-		return ""
+	var envelope struct {
+		Type   string                  `json:"type"`
+		Result continueExecutionResult `json:"result"`
 	}
-	return value
-}
-
-func looksLikePathHint(value string) bool {
-	lower := strings.ToLower(strings.TrimSpace(value))
-	knownLanguageTags := map[string]bool{
-		"go": true, "js": true, "ts": true, "tsx": true, "jsx": true,
-		"json": true, "yaml": true, "yml": true, "py": true, "python": true,
-		"java": true, "rb": true, "ruby": true, "rs": true, "rust": true,
-		"sh": true, "bash": true, "zsh": true, "md": true, "markdown": true,
-		"sql": true, "xml": true, "html": true, "css": true,
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+		return
 	}
-	if knownLanguageTags[lower] {
-		return false
+	if envelope.Type == "done" {
+		resultCopy := cloneContinueExecutionResult(envelope.Result)
+		outcome.FinalResult = &resultCopy
 	}
-	return strings.Contains(value, "/") || strings.Contains(value, "\\") || regexp.MustCompile(`^[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+$`).MatchString(value)
-}
-
-func dedupeStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	seen := map[string]bool{}
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" || seen[trimmed] {
-			continue
-		}
-		seen[trimmed] = true
-		result = append(result, trimmed)
-	}
-	return result
-}
-
-func containsString(values []string, target string) bool {
-	target = strings.TrimSpace(target)
-	for _, value := range values {
-		if strings.TrimSpace(value) == target {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *localRAGService) continueToolNames() []string {
@@ -1050,89 +1204,6 @@ func (s *localRAGService) continueToolNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func (openAICompatibleBridgeTransport) handleChat(s *localRAGService, w http.ResponseWriter, r *http.Request) {
-	s.handleBridgeChat(w, r, openAICompatibleBridgeTransport{})
-}
-
-func (openAICompatibleBridgeTransport) modelCatalog() []bridgeModelDescriptor {
-	return []bridgeModelDescriptor{
-		{
-			ID:      "daemon-bridge",
-			OwnedBy: "sop-daemon",
-			Metadata: map[string]any{
-				"bridge":                    "openai-compatible",
-				"supports_stream":           true,
-				"supports_chat":             true,
-				"provider_alias_format":     "provider:model",
-				"supported_alias_providers": []string{"chatgpt", "gemini", "anthropic"},
-				"provider_alias_examples":   []string{"gpt-5.4", "gpt-4o-mini", "gemini:gemini-2.5-pro", "anthropic:claude-3-5-sonnet-20241022"},
-			},
-		},
-		{
-			ID:      "gpt-5.4",
-			OwnedBy: "sop-daemon",
-			Metadata: map[string]any{
-				"alias_of":            "daemon-bridge",
-				"compatibility_alias": true,
-				"supports_stream":     true,
-			},
-		},
-		{
-			ID:      "gpt-4o-mini",
-			OwnedBy: "sop-daemon",
-			Metadata: map[string]any{
-				"alias_of":            "daemon-bridge",
-				"compatibility_alias": true,
-				"supports_stream":     true,
-			},
-		},
-		{
-			ID:      "gemini:gemini-2.5-pro",
-			OwnedBy: "sop-daemon",
-			Metadata: map[string]any{
-				"alias_of":          "daemon-bridge",
-				"provider_alias":    true,
-				"provider":          "gemini",
-				"routed_via_bridge": true,
-				"supports_stream":   true,
-			},
-		},
-		{
-			ID:      "anthropic:claude-3-5-sonnet-20241022",
-			OwnedBy: "sop-daemon",
-			Metadata: map[string]any{
-				"alias_of":          "daemon-bridge",
-				"provider_alias":    true,
-				"provider":          "anthropic",
-				"routed_via_bridge": true,
-				"supports_stream":   true,
-			},
-		},
-	}
-}
-
-func (t openAICompatibleBridgeTransport) writeModels(w http.ResponseWriter) {
-	if w == nil {
-		return
-	}
-	models := t.modelCatalog()
-	data := make([]map[string]any, 0, len(models))
-	created := time.Now().Unix()
-	for _, model := range models {
-		data = append(data, map[string]any{
-			"id":       model.ID,
-			"object":   "model",
-			"created":  created,
-			"owned_by": model.OwnedBy,
-			"metadata": model.Metadata,
-		})
-	}
-	respondJSON(w, http.StatusOK, map[string]any{
-		"object": "list",
-		"data":   data,
-	})
 }
 
 func (continueBridgeTransport) DecodeChatRequest(r *http.Request) (bridgeChatEnvelope, error) {
@@ -1211,6 +1282,29 @@ func buildContinueBridgePrompt(req continueChatRequest, workflowProfile continue
 	}
 	if requestedPhase != "" {
 		query += fmt.Sprintf("\n[requested_phase=%s]", requestedPhase)
+		phaseTools := continueToolsForPhase(requestedPhase)
+		if len(phaseTools) > 0 {
+			query += fmt.Sprintf("\n[continue_phase_tools=%s]", strings.Join(phaseTools, ","))
+		}
+	}
+	availableToolNames := continueRequestToolNames(req.Tools)
+	if len(availableToolNames) > 0 {
+		query += fmt.Sprintf("\n[continue_available_tools=%s]", strings.Join(availableToolNames, ","))
+		if requestedPhase != "" {
+			phaseAvailable := intersectContinueToolNames(continueToolsForPhase(requestedPhase), availableToolNames)
+			if len(phaseAvailable) > 0 {
+				query += fmt.Sprintf("\n[continue_phase_available_tools=%s]", strings.Join(phaseAvailable, ","))
+			}
+		}
+	}
+	if toolChoice := strings.TrimSpace(req.ToolChoice.Function.Name); toolChoice != "" {
+		query += fmt.Sprintf("\n[continue_tool_choice=%s]", toolChoice)
+	}
+	if provider := strings.TrimSpace(req.Provider); provider != "" {
+		query += fmt.Sprintf("\n[llm_provider=%s]", provider)
+	}
+	if model := strings.TrimSpace(req.Model); model != "" {
+		query += fmt.Sprintf("\n[llm_model=%s]", model)
 	}
 	if strings.TrimSpace(req.Workspace.Root) != "" {
 		query += fmt.Sprintf("\n[workspace_root=%s]", req.Workspace.Root)
@@ -1225,265 +1319,4 @@ func buildContinueBridgePrompt(req continueChatRequest, workflowProfile continue
 		query += fmt.Sprintf("\n[open_files=%s]", strings.Join(req.Context.OpenFiles, ","))
 	}
 	return query
-}
-
-type openAICompatibleChatRequest struct {
-	Model    string                    `json:"model"`
-	User     string                    `json:"user,omitempty"`
-	Stream   bool                      `json:"stream,omitempty"`
-	Messages []openAICompatibleMessage `json:"messages"`
-}
-
-type openAICompatibleMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
-}
-
-func (openAICompatibleBridgeTransport) DecodeChatRequest(r *http.Request) (bridgeChatEnvelope, error) {
-	var req openAICompatibleChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return bridgeChatEnvelope{}, fmt.Errorf("Invalid JSON body: %w", err)
-	}
-
-	userPrompt, fullPrompt := buildOpenAICompatibleQuery(req.Messages)
-	if strings.TrimSpace(userPrompt) == "" {
-		return bridgeChatEnvelope{}, fmt.Errorf("user message is required")
-	}
-	inferredMode, workflowProfile, requestedPhase := inferContinueOpenAIWorkflowContext(req.Messages)
-	editorContext := inferOpenAICompatibleEditorContext(req.Messages)
-	if inferredMode != "" || workflowProfile.ID != "" || requestedPhase != "" {
-		workflowContextLines := make([]string, 0, 4)
-		if inferredMode != "" {
-			workflowContextLines = append(workflowContextLines, fmt.Sprintf("[continue_mode=%s]", inferredMode))
-		}
-		if workflowProfile.ID != "" {
-			workflowContextLines = append(workflowContextLines,
-				fmt.Sprintf("[coding_workflow_profile=%s]", workflowProfile.ID),
-				fmt.Sprintf("[coding_task_type=%s]", workflowProfile.TaskType),
-				fmt.Sprintf("[recommended_phase_plan=%s]", strings.Join(workflowProfile.DefaultPhasePlan, " -> ")),
-			)
-		}
-		if requestedPhase != "" {
-			workflowContextLines = append(workflowContextLines, fmt.Sprintf("[requested_phase=%s]", requestedPhase))
-		}
-		if len(workflowContextLines) > 0 {
-			fullPrompt += "\n\nContinue workflow context:\n" + strings.Join(workflowContextLines, "\n")
-		}
-	}
-	if editorContextText := buildOpenAICompatibleEditorContextText(editorContext); editorContextText != "" {
-		fullPrompt += "\n\nContinue editor context:\n" + editorContextText
-	}
-
-	sessionID := strings.TrimSpace(req.User)
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(r.Header.Get("X-Continue-Session-Id"))
-	}
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(r.Header.Get("X-Session-Id"))
-	}
-	if sessionID == "" {
-		sessionID = "openai-compatible"
-	}
-
-	providerName, modelName := parseOpenAICompatibleModelAlias(req.Model)
-	variables := map[string]any{"continue_bridge": true}
-	if inferredMode != "" {
-		variables["continue_mode"] = inferredMode
-	}
-	if workflowProfile.ID != "" {
-		variables["coding_workflow_profile"] = workflowProfile.ID
-		variables["coding_task_type"] = workflowProfile.TaskType
-	}
-	if requestedPhase != "" {
-		variables["requested_phase"] = requestedPhase
-	}
-	if editorContext.WorkspaceRoot != "" {
-		variables["workspace_root"] = editorContext.WorkspaceRoot
-	}
-	if editorContext.ActiveFile != "" {
-		variables["active_file"] = editorContext.ActiveFile
-	}
-	if editorContext.SelectedText != "" {
-		variables["selected_text"] = editorContext.SelectedText
-	}
-	if len(editorContext.OpenFiles) > 0 {
-		variables["open_files"] = append([]string(nil), editorContext.OpenFiles...)
-	}
-	return bridgeChatEnvelope{
-		Ask: bridgeAskRequest{
-			SessionID:    sessionID,
-			UserPrompt:   userPrompt,
-			FullPrompt:   fullPrompt,
-			ProviderName: providerName,
-			ModelName:    modelName,
-			Variables:    variables,
-		},
-		Stream:        req.Stream,
-		ResponseModel: req.Model,
-		DefaultAnswer: "Hello from the local SOP runtime. I received your request and I’m ready to help.",
-	}, nil
-}
-
-func (openAICompatibleBridgeTransport) StreamChat(w http.ResponseWriter, envelope bridgeChatEnvelope, ask bridgeAskInvoker) {
-	sse := newOpenAICompatibleSSEWriter(w, envelope.ResponseModel)
-	eventStreamer := func(eventType string, payload any) {
-		switch eventType {
-		case ai.ReasoningEventAssistantMessage:
-			if message, ok := payload.(map[string]any); ok {
-				if source, _ := message["source"].(string); strings.EqualFold(strings.TrimSpace(source), "reasoning_summary") {
-					return
-				}
-				if text, ok := message["text"].(string); ok {
-					sse.writeContent(text)
-				}
-			}
-		case "content":
-			sse.writeContent(fmt.Sprintf("%v", payload))
-		case "progress":
-			sse.writeContent(fmt.Sprintf("Progress: %v", payload))
-		case ai.ReasoningEventToolCall:
-			if event, ok := payload.(map[string]any); ok {
-				tool, _ := event["tool"].(string)
-				if strings.TrimSpace(tool) != "" {
-					sse.writeContent(fmt.Sprintf("Calling tool: %s", strings.TrimSpace(tool)))
-				}
-			}
-		case ai.ReasoningEventToolResult:
-			if event, ok := payload.(map[string]any); ok {
-				if summary := summarizeOpenAICompatibleToolResult(event); summary != "" {
-					sse.writeContent(summary)
-				}
-			}
-		case ai.ReasoningEventToolError:
-			if event, ok := payload.(map[string]any); ok {
-				tool, _ := event["tool"].(string)
-				errText, _ := event["error"].(string)
-				if strings.TrimSpace(tool) != "" || strings.TrimSpace(errText) != "" {
-					sse.writeContent(strings.TrimSpace(fmt.Sprintf("Tool error (%s): %s", strings.TrimSpace(tool), strings.TrimSpace(errText))))
-				}
-			}
-		case "terminal_command":
-			switch typed := payload.(type) {
-			case map[string]any:
-				if text, ok := typed["text"].(string); ok && strings.TrimSpace(text) != "" {
-					sse.writeContent(text)
-				}
-			case string:
-				if strings.TrimSpace(typed) != "" {
-					sse.writeContent(typed)
-				}
-			}
-		case "error":
-			sse.writeContent(fmt.Sprintf("Error: %v", payload))
-		}
-	}
-
-	answer, err := ask(context.Background(), envelope.Ask, eventStreamer)
-	if err != nil {
-		sse.finish("Error: " + err.Error())
-		return
-	}
-	sse.finish(answer)
-}
-
-func (openAICompatibleBridgeTransport) WriteChatResponse(w http.ResponseWriter, envelope bridgeChatEnvelope, answer string) {
-	response := map[string]any{
-		"id":      "chatcmpl-sop-1",
-		"object":  "chat.completion",
-		"created": time.Now().Unix(),
-		"model":   envelope.ResponseModel,
-		"choices": []map[string]any{{
-			"index": 0,
-			"message": map[string]any{
-				"role":    "assistant",
-				"content": answer,
-			},
-			"finish_reason": "stop",
-		}},
-		"usage": map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-	}
-	respondJSON(w, http.StatusOK, response)
-}
-
-func buildOpenAICompatibleQuery(messages []openAICompatibleMessage) (latestUser string, fullPrompt string) {
-	if len(messages) == 0 {
-		return "", ""
-	}
-	lastUserIndex := -1
-	for i := len(messages) - 1; i >= 0; i-- {
-		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "user") {
-			lastUserIndex = i
-			break
-		}
-	}
-	if lastUserIndex == -1 {
-		return "", ""
-	}
-	latestUser = strings.TrimSpace(extractOpenAICompatibleMessageText(messages[lastUserIndex].Content))
-	if latestUser == "" {
-		return "", ""
-	}
-	sections := make([]string, 0, 3)
-	systemParts := make([]string, 0, 2)
-	historyParts := make([]string, 0, len(messages))
-	for idx, msg := range messages {
-		text := strings.TrimSpace(extractOpenAICompatibleMessageText(msg.Content))
-		if text == "" {
-			continue
-		}
-		role := strings.ToLower(strings.TrimSpace(msg.Role))
-		switch role {
-		case "system", "developer":
-			systemParts = append(systemParts, text)
-		case "user", "assistant", "tool":
-			if idx == lastUserIndex {
-				continue
-			}
-			historyParts = append(historyParts, fmt.Sprintf("%s: %s", strings.Title(role), text))
-		}
-	}
-	if len(systemParts) > 0 {
-		sections = append(sections, "Continue system instructions:\n"+strings.Join(systemParts, "\n\n"))
-	}
-	if len(historyParts) > 0 {
-		sections = append(sections, "Continue conversation history:\n"+strings.Join(historyParts, "\n"))
-	}
-	sections = append(sections, "Current Continue request:\n"+latestUser)
-	return latestUser, strings.Join(sections, "\n\n")
-}
-
-func extractOpenAICompatibleMessageText(content any) string {
-	switch v := content.(type) {
-	case string:
-		return v
-	case []any:
-		parts := make([]string, 0, len(v))
-		for _, part := range v {
-			switch typed := part.(type) {
-			case string:
-				if strings.TrimSpace(typed) != "" {
-					parts = append(parts, typed)
-				}
-			case map[string]any:
-				if text, ok := typed["text"].(string); ok && strings.TrimSpace(text) != "" {
-					parts = append(parts, text)
-				}
-			}
-		}
-		return strings.Join(parts, "\n")
-	default:
-		return ""
-	}
-}
-
-func parseOpenAICompatibleModelAlias(model string) (provider string, resolvedModel string) {
-	trimmed := strings.TrimSpace(model)
-	if trimmed == "" || strings.EqualFold(trimmed, "daemon-bridge") {
-		return "", ""
-	}
-	providerPart, modelPart := agent.NormalizeProviderAndModel(trimmed, "")
-	if strings.TrimSpace(modelPart) != "" {
-		return providerPart, modelPart
-	}
-	return agent.ProviderChatGPT, trimmed
 }

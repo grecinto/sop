@@ -130,6 +130,43 @@ With AI Studio, memory can be delivered as a runtime capability that follows the
 - the assistant can continue to reason over prior context without relying on a brittle app-level abstraction
 - the experience can remain stable even when model providers or infrastructure layers evolve
 
+## Real-world example: always-on coding best practices
+
+Here is a concrete example of why this matters in day-to-day work.
+
+Imagine a team that wants every coding task to follow a small set of practices:
+
+- preserve public interfaces unless the user explicitly asks for a breaking change
+- add or update targeted tests when behavior changes
+- use the team’s preferred error-handling and logging patterns
+- return a clear summary of modified files and validation results
+
+In a typical copilot product, those preferences often live in scattered prompt snippets, local notes, or tribal memory. They may be applied sometimes, ignored other times, or lost entirely when the execution path changes.
+
+With AI Studio, those practices can live in memory as first-class guidance. When the user asks for an implementation change, the daemon can retrieve those practices from memory and enrich the Ask pipeline automatically. The coding agent does not need a custom one-off integration for each rule. The memory layer supplies the enrichment as structured context.
+
+That means the user can say something simple like:
+
+```text
+Implement retry handling for the payment webhook timeout.
+```
+
+And AI Studio can still carry forward the team’s real requirements:
+
+- use the team’s preferred retry/backoff pattern
+- keep the public API stable
+- update the tests that cover timeout handling
+- produce a structured result describing the modified files and checks that ran
+
+This remains valuable even when AI Studio delegates the actual coding step to another agent surface such as Continue. The daemon still owns the outer Ask pipeline, memory, and policy. It can inject the best practices from memory into the delegated request without much extra integration work, because the delegated coding contract accepts structured guidance instead of relying only on a raw prompt string.
+
+The result is practical, not theoretical:
+
+- users define best practices once
+- AI Studio keeps applying them whenever coding work is requested
+- the same guidance can improve local daemon tools and delegated IDE companions
+- teams get more consistency without manually repeating the same instructions in every chat
+
 ## Customer-facing benefits
 
 This design creates a few concrete benefits for the customer:
@@ -138,6 +175,7 @@ This design creates a few concrete benefits for the customer:
 - Stability and quality: the AI’s behavior is anchored by the customer’s own memory and runtime, so the quality of assistance is not dependent on a single provider wrapper changing underneath the user.
 - No competition with other users: because the memory layer runs in the customer’s host environment, the experience does not have to compete with other users for shared provider resources or pooled memory infrastructure.
 - Portable intelligence: the same memory system can travel with the user across devices, workspaces, and environments without requiring a giant centralized semantic index to be kept in sync.
+- Low integration overhead for richer behavior: memory can enrich the full Ask pipeline, including delegated coding surfaces, without requiring every external agent integration to reinvent the same best-practice plumbing.
 
 ## Bottom line
 

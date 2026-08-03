@@ -318,6 +318,14 @@ type UIHandoffRequest struct {
 	ThinkingLevel string `json:"thinking_level,omitempty"`
 }
 
+type daemonSecretEncryptRequest struct {
+	Value string `json:"value"`
+}
+
+type daemonSecretEncryptResponse struct {
+	EncryptedValue string `json:"encrypted_value"`
+}
+
 type UIHandoffResponse struct {
 	Accepted            bool                              `json:"accepted"`
 	Message             string                            `json:"message"`
@@ -342,6 +350,18 @@ type daemonSessionContext struct {
 	LLMURL        string
 	ThinkingLevel string
 	LastUpdated   time.Time
+}
+
+func resolveDaemonSecretValue(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	decrypted, err := sopbackend.DecryptSecretValue(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("decrypt daemon secret: %w", err)
+	}
+	return strings.TrimSpace(decrypted), nil
 }
 
 func normalizeHQBaseURL(baseURL, port string) string {
@@ -675,6 +695,7 @@ func main() {
 	mux.HandleFunc("/api/daemon/hq-auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleHQAuth)))
 	mux.HandleFunc("/api/daemon/receive-space", handleOptionsAndCORS(http.HandlerFunc(handleReceiveSpaceFromHQ)))
 	mux.HandleFunc("/api/daemon/vectorization/recovery", handleOptionsAndCORS(http.HandlerFunc(handleGetVectorizationRecoveryStatus)))
+	mux.HandleFunc("/api/daemon/secrets/encrypt", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleEncryptDaemonSecret))))
 
 	// Privacy governance endpoints WITH authentication
 	mux.HandleFunc("/api/daemon/privacy/settings", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleGetPrivacySettings))))
@@ -696,7 +717,7 @@ func main() {
 	mux.HandleFunc("/api/execute", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(executeHandler)))))
 	mux.HandleFunc("/api/handoff", handleOptionsAndCORS(authHandler.RequireAuth(withRateLimit(localRegistry, http.HandlerFunc(handleUIHandoff)))))
 
-	ragSvc.registerBridgeRoutes(mux, localRegistry)
+	ragSvc.registerBridgeRoutes(mux, localRegistry, authHandler)
 
 	// IMPORTANT: /api/ask (daemon) vs /api/ai/chat (HQ) - Separate by Design
 	//
@@ -1698,6 +1719,10 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	normalizedHQBaseURL := normalizeHQBaseURL(hqBaseURL, hqPort)
+	if _, err := resolveDaemonSecretValue(req.LLMAPIKey); err != nil {
+		respondJSON(w, http.StatusBadRequest, UIHandoffResponse{Error: "Invalid llm_api_key: " + err.Error()})
+		return
+	}
 
 	ctxKey := strings.TrimSpace(req.HQ.SessionID)
 	if ctxKey == "" {
@@ -1768,6 +1793,33 @@ func buildLocalRAGWelcomeContext() string {
 		}
 	}
 	return welcomeContext
+}
+
+func handleEncryptDaemonSecret(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req daemonSecretEncryptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON body: " + err.Error()})
+		return
+	}
+
+	trimmed := strings.TrimSpace(req.Value)
+	if trimmed == "" {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "value is required"})
+		return
+	}
+
+	encrypted, err := sopbackend.EncryptSecretValue(trimmed)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to encrypt secret"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, daemonSecretEncryptResponse{EncryptedValue: encrypted})
 }
 
 func htmlEscape(s string) string {

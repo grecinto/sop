@@ -169,9 +169,31 @@ type AskResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type continueChatToolFunction struct {
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+type continueChatTool struct {
+	Type         string                   `json:"type,omitempty"`
+	DisplayTitle string                   `json:"displayTitle,omitempty"`
+	Group        string                   `json:"group,omitempty"`
+	Readonly     bool                     `json:"readonly,omitempty"`
+	Function     continueChatToolFunction `json:"function,omitempty"`
+}
+
+type continueChatToolChoice struct {
+	Type     string                   `json:"type,omitempty"`
+	Function continueChatToolFunction `json:"function,omitempty"`
+}
+
 type continueChatRequest struct {
 	SessionID string `json:"session_id"`
 	Message   string `json:"message"`
+	Provider  string `json:"provider,omitempty"`
+	APIKey    string `json:"api_key,omitempty"`
+	Model     string `json:"model,omitempty"`
+	URL       string `json:"url,omitempty"`
 	Workspace struct {
 		Root      string `json:"root"`
 		Active    string `json:"active_file"`
@@ -184,7 +206,9 @@ type continueChatRequest struct {
 		OpenFiles    []string `json:"open_files"`
 		SelectedText string   `json:"selected_text"`
 	} `json:"context"`
-	Mode string `json:"mode"`
+	Tools      []continueChatTool     `json:"tools,omitempty"`
+	ToolChoice continueChatToolChoice `json:"tool_choice,omitempty"`
+	Mode       string                 `json:"mode"`
 }
 
 type continueToolRequest struct {
@@ -320,8 +344,8 @@ func injectShellSessionManager(agentSvc ai.Agent[map[string]any]) {
 	}
 }
 
-func (s *localRAGService) handleOpenAICompatibleChat(w http.ResponseWriter, r *http.Request) {
-	s.handleBridgeChat(w, r, openAICompatibleBridgeTransport{})
+type continueGuidanceProvider interface {
+	BuildContinueDelegationGuidance(ctx context.Context, query, requestedPhase string, variables map[string]any) (agent.ContinueDelegationGuidance, error)
 }
 
 func (s *localRAGService) askBridgeChat(baseCtx context.Context, req bridgeAskRequest, eventStreamer func(string, any)) (string, error) {
@@ -340,18 +364,95 @@ func (s *localRAGService) askBridgeChat(baseCtx context.Context, req bridgeAskRe
 	if req.ModelName != "" {
 		variables["llm_model"] = req.ModelName
 	}
-	payload := &ai.SessionPayload{CurrentUserQuery: req.UserPrompt, SessionID: req.SessionID, UserID: req.SessionID, Variables: variables}
-	cfg.Set("payload", payload)
-	if req.ProviderName != "" {
-		providerDetails := &agent.ProviderDetails{Provider: req.ProviderName, Model: req.ModelName}
-		cfg.Set("provider_details", providerDetails)
-		ctx = context.WithValue(ctx, ai.CtxKeyProvider, req.ProviderName+":"+req.ModelName)
+	if req.BaseURL != "" {
+		variables["llm_url"] = req.BaseURL
 	}
+	payload := &ai.SessionPayload{CurrentUserQuery: req.UserPrompt, SessionID: req.SessionID, UserID: req.SessionID, Variables: variables}
 	ctx = context.WithValue(ctx, "session_payload", payload)
+	s.enrichContinueGuidanceVariables(ctx, req.UserPrompt, variables)
+	cfg.Set("payload", payload)
+	if req.ProviderName != "" || req.APIKey != "" || req.ModelName != "" || req.BaseURL != "" {
+		providerDetails := &agent.ProviderDetails{Provider: req.ProviderName, APIKey: req.APIKey, Model: req.ModelName, BaseURL: req.BaseURL}
+		cfg.Set("provider_details", providerDetails)
+		if req.ProviderName != "" {
+			providerCtxValue := req.ProviderName
+			if req.ModelName != "" {
+				providerCtxValue = req.ProviderName + ":" + req.ModelName
+			}
+			ctx = context.WithValue(ctx, ai.CtxKeyProvider, providerCtxValue)
+		}
+		if req.APIKey != "" {
+			ctx = context.WithValue(ctx, ai.CtxKeyAPIKey, req.APIKey)
+		}
+		if req.BaseURL != "" {
+			ctx = context.WithValue(ctx, ai.CtxKeyBaseURL, req.BaseURL)
+		}
+	}
 	if eventStreamer != nil {
 		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, eventStreamer)
 	}
 	return s.service.Ask(ctx, req.FullPrompt, cfg)
+}
+
+func (s *localRAGService) enrichContinueGuidanceVariables(ctx context.Context, query string, variables map[string]any) {
+	if s == nil || s.service == nil || len(variables) == 0 {
+		return
+	}
+	provider, ok := s.service.(continueGuidanceProvider)
+	if !ok {
+		return
+	}
+	requestedPhase, _ := variables["requested_phase"].(string)
+	guidance, err := provider.BuildContinueDelegationGuidance(ctx, query, requestedPhase, variables)
+	if err != nil {
+		return
+	}
+	applyContinueGuidanceVariables(variables, guidance)
+}
+
+func applyContinueGuidanceVariables(variables map[string]any, guidance agent.ContinueDelegationGuidance) {
+	clearContinueGuidanceVariables(variables)
+	if len(guidance.TeamPractices) > 0 {
+		variables["continue_team_practices"] = append([]string(nil), guidance.TeamPractices...)
+	}
+	if len(guidance.SuccessCriteria) > 0 {
+		variables["continue_success_criteria"] = append([]string(nil), guidance.SuccessCriteria...)
+	}
+	if len(guidance.Constraints) > 0 {
+		variables["continue_constraints"] = append([]string(nil), guidance.Constraints...)
+	}
+	if len(guidance.ImplementationNotes) > 0 {
+		variables["continue_implementation_notes"] = append([]string(nil), guidance.ImplementationNotes...)
+	}
+	if strings.TrimSpace(guidance.ExpectedResultFormat) != "" {
+		variables["continue_expected_result_format"] = strings.TrimSpace(guidance.ExpectedResultFormat)
+	}
+	if len(guidance.ReferenceContext) > 0 {
+		refs := make([]any, 0, len(guidance.ReferenceContext))
+		for _, ref := range guidance.ReferenceContext {
+			refs = append(refs, map[string]any{
+				"kind":     ref.Kind,
+				"source":   ref.Source,
+				"title":    ref.Title,
+				"content":  ref.Content,
+				"metadata": cloneBridgeVariables(ref.Metadata),
+			})
+		}
+		variables["continue_reference_context"] = refs
+	}
+	if len(guidance.Metadata) > 0 {
+		variables["continue_guidance_metadata"] = cloneBridgeVariables(guidance.Metadata)
+	}
+}
+
+func clearContinueGuidanceVariables(variables map[string]any) {
+	delete(variables, "continue_team_practices")
+	delete(variables, "continue_success_criteria")
+	delete(variables, "continue_constraints")
+	delete(variables, "continue_implementation_notes")
+	delete(variables, "continue_expected_result_format")
+	delete(variables, "continue_reference_context")
+	delete(variables, "continue_guidance_metadata")
 }
 
 func cloneBridgeVariables(src map[string]any) map[string]any {
@@ -363,198 +464,6 @@ func cloneBridgeVariables(src map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
-}
-
-type openAICompatibleSSEWriter struct {
-	w              http.ResponseWriter
-	model          string
-	responseID     string
-	created        int64
-	started        bool
-	streamedText   strings.Builder
-	streamedAny    bool
-	streamFinished bool
-}
-
-func newOpenAICompatibleSSEWriter(w http.ResponseWriter, model string) *openAICompatibleSSEWriter {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-	return &openAICompatibleSSEWriter{
-		w:          w,
-		model:      model,
-		responseID: "chatcmpl-sop-stream-1",
-		created:    time.Now().Unix(),
-	}
-}
-
-func (sse *openAICompatibleSSEWriter) writeChunk(delta map[string]any, finishReason any) {
-	if sse == nil || sse.w == nil || sse.streamFinished {
-		return
-	}
-	chunk := map[string]any{
-		"id":      sse.responseID,
-		"object":  "chat.completion.chunk",
-		"created": sse.created,
-		"model":   sse.model,
-		"choices": []map[string]any{{
-			"index":         0,
-			"delta":         delta,
-			"finish_reason": finishReason,
-		}},
-	}
-	bytes, err := json.Marshal(chunk)
-	if err != nil {
-		return
-	}
-	_, _ = fmt.Fprintf(sse.w, "data: %s\n\n", bytes)
-	if f, ok := sse.w.(http.Flusher); ok {
-		f.Flush()
-	}
-	sse.streamedAny = true
-}
-
-func (sse *openAICompatibleSSEWriter) ensureStarted() {
-	if sse == nil || sse.started {
-		return
-	}
-	sse.writeChunk(map[string]any{"role": "assistant"}, nil)
-	sse.started = true
-}
-
-func (sse *openAICompatibleSSEWriter) writeContent(text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-	sse.ensureStarted()
-	sse.writeChunk(map[string]any{"content": text}, nil)
-	if sse.streamedText.Len() < 8192 {
-		sse.streamedText.WriteString(text)
-	}
-}
-
-func (sse *openAICompatibleSSEWriter) finish(finalAnswer string) {
-	if sse == nil || sse.streamFinished {
-		return
-	}
-	trimmedFinal := strings.TrimSpace(finalAnswer)
-	if trimmedFinal != "" {
-		streamed := strings.TrimSpace(sse.streamedText.String())
-		if streamed == "" || !strings.Contains(streamed, trimmedFinal) {
-			sse.writeContent(trimmedFinal)
-		}
-	}
-	sse.ensureStarted()
-	sse.writeChunk(map[string]any{}, "stop")
-	_, _ = fmt.Fprintf(sse.w, "data: [DONE]\n\n")
-	if f, ok := sse.w.(http.Flusher); ok {
-		f.Flush()
-	}
-	sse.streamFinished = true
-}
-
-func (s *localRAGService) handleOpenAICompatibleChatStream(w http.ResponseWriter, model, sessionID, userPrompt, fullPrompt, providerName, modelName string) {
-	sse := newOpenAICompatibleSSEWriter(w, model)
-	eventStreamer := func(eventType string, payload any) {
-		switch eventType {
-		case ai.ReasoningEventAssistantMessage:
-			if message, ok := payload.(map[string]any); ok {
-				if source, _ := message["source"].(string); strings.EqualFold(strings.TrimSpace(source), "reasoning_summary") {
-					return
-				}
-				if text, ok := message["text"].(string); ok {
-					sse.writeContent(text)
-				}
-			}
-		case "content":
-			sse.writeContent(fmt.Sprintf("%v", payload))
-		case "progress":
-			sse.writeContent(fmt.Sprintf("Progress: %v", payload))
-		case ai.ReasoningEventToolCall:
-			if event, ok := payload.(map[string]any); ok {
-				tool, _ := event["tool"].(string)
-				if strings.TrimSpace(tool) != "" {
-					sse.writeContent(fmt.Sprintf("Calling tool: %s", strings.TrimSpace(tool)))
-				}
-			}
-		case ai.ReasoningEventToolResult:
-			if event, ok := payload.(map[string]any); ok {
-				if summary := summarizeOpenAICompatibleToolResult(event); summary != "" {
-					sse.writeContent(summary)
-				}
-			}
-		case ai.ReasoningEventToolError:
-			if event, ok := payload.(map[string]any); ok {
-				tool, _ := event["tool"].(string)
-				errText, _ := event["error"].(string)
-				if strings.TrimSpace(tool) != "" || strings.TrimSpace(errText) != "" {
-					sse.writeContent(strings.TrimSpace(fmt.Sprintf("Tool error (%s): %s", strings.TrimSpace(tool), strings.TrimSpace(errText))))
-				}
-			}
-		case "terminal_command":
-			switch typed := payload.(type) {
-			case map[string]any:
-				if text, ok := typed["text"].(string); ok && strings.TrimSpace(text) != "" {
-					sse.writeContent(text)
-				}
-			case string:
-				if strings.TrimSpace(typed) != "" {
-					sse.writeContent(typed)
-				}
-			}
-		case "error":
-			sse.writeContent(fmt.Sprintf("Error: %v", payload))
-		}
-	}
-	answer, err := s.askBridgeChat(context.Background(), bridgeAskRequest{
-		SessionID:    sessionID,
-		UserPrompt:   userPrompt,
-		FullPrompt:   fullPrompt,
-		ProviderName: providerName,
-		ModelName:    modelName,
-	}, eventStreamer)
-	if err != nil {
-		sse.finish("Error: " + err.Error())
-		return
-	}
-	sse.finish(answer)
-}
-
-func summarizeOpenAICompatibleToolResult(event map[string]any) string {
-	tool := strings.TrimSpace(fmt.Sprintf("%v", event["tool"]))
-	if tool == "" {
-		return ""
-	}
-
-	result := strings.TrimSpace(fmt.Sprintf("%v", event["result"]))
-	if result == "" {
-		return ""
-	}
-
-	args, _ := event["args"].(map[string]any)
-	facts := ai.SummarizeSuccessfulToolResult(ai.ReActToolResult{
-		Name:   tool,
-		Args:   args,
-		Result: result,
-	})
-	if len(facts) == 0 {
-		return ""
-	}
-
-	trimmed := make([]string, 0, len(facts))
-	for _, fact := range facts {
-		fact = strings.TrimSpace(fact)
-		if fact != "" {
-			trimmed = append(trimmed, fact)
-		}
-	}
-	return strings.Join(trimmed, "\n")
 }
 
 func (s *localRAGService) handleContinueChat(w http.ResponseWriter, r *http.Request) {
@@ -875,10 +784,15 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		model = strings.TrimSpace(storedSessionContext.LLMModel)
 		url = strings.TrimSpace(storedSessionContext.LLMURL)
 	}
+	decryptedAPIKey, decryptErr := resolveDaemonSecretValue(apiKey)
+	if decryptErr != nil {
+		respondJSON(w, http.StatusBadRequest, AskResponse{Error: "Invalid llm_api_key: " + decryptErr.Error()})
+		return
+	}
 	if provider != "" || apiKey != "" || model != "" || url != "" {
 		providerDetails := &agent.ProviderDetails{
 			Provider: provider,
-			APIKey:   apiKey,
+			APIKey:   decryptedAPIKey,
 			Model:    model,
 			BaseURL:  url,
 		}

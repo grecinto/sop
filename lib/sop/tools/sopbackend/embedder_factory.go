@@ -33,7 +33,11 @@ func resolveEmbedderSettings(r *http.Request) embedderSettings {
 			settings.Provider = h
 		}
 		if h := r.Header.Get("X-Embedder-API-Key"); h != "" {
-			settings.APIKey = h
+			if decrypted, err := DecryptSecretValue(h); err == nil {
+				settings.APIKey = decrypted
+			} else {
+				settings.APIKey = h
+			}
 		}
 		if h := r.Header.Get("X-Embedder-URL"); h != "" {
 			settings.URL = h

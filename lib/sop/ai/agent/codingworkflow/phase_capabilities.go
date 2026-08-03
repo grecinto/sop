@@ -420,7 +420,7 @@ This phase supports TWO interaction modes - choose based on change complexity an
 
 WORKFLOW:
 1. Review requirements from intake and evidence from investigation
-2. If current editor state would sharpen the plan, call inspect_ide_worker to confirm active file, selection, workspace context, and available IDE-native capabilities
+2. If Continue bridge metadata is present, use that context to understand the editor-backed coding environment, but do not delegate implementation work during planning
 3. Call planning_build_context to refresh repository understanding
 4. Call planning_search_repo to find implementation patterns
 5. Call planning_inspect_repo to understand current code structure
@@ -475,16 +475,15 @@ ARTIFACT FIELDS:
 - transition_direction: "forward"
 
 TOOL SEQUENCE:
-1. inspect_ide_worker (optional: gather editor context only when it will improve the plan)
-2. planning_build_context (REQUIRED FIRST repository/planning step)
-3. planning_search_repo (research patterns BEFORE designing)
-4. planning_inspect_repo (understand current state)
-5. planning_list_changed_files (avoid conflicts)
-6. planning_plan_changes (generate concrete plan)
-7. planning_capture (save artifact)
+1. planning_build_context (REQUIRED FIRST repository/planning step)
+2. planning_search_repo (research patterns BEFORE designing)
+3. planning_inspect_repo (understand current state)
+4. planning_list_changed_files (avoid conflicts)
+5. planning_plan_changes (generate concrete plan)
+6. planning_capture (save artifact)
 
 CONTROL RULE:
-- Planning may inspect IDE state for context, but it should not call delegate_ide_coding_task or otherwise delegate implementation work yet.
+- Planning may use Continue bridge context if present, but it should not call delegate_continue_task or otherwise delegate implementation work yet.
 - Keep Ask as the controller. Use planning to decide what should be executed later, not to start execution inside the planning phase.
 
 QUALITY STANDARDS:
@@ -544,11 +543,11 @@ CONTROL RULE:
 
 WORKFLOW:
 1. Review plan from planning phase artifact
-2. If editor-native execution would help, call inspect_ide_worker first to confirm whether an IDE worker is connected and what capabilities it supports
+2. If editor-native execution would help and Continue context is available, consider whether this step should be delegated as one bounded Continue coding objective
 3. For each step in plan:
 	a. Call execution_preview_patch to preview changes
 	b. Get user approval for preview (MANDATORY for safety)
-	c. If an IDE worker is connected and the task is a bounded editor-native subtask, call delegate_ide_coding_task to execute that single patch/edit step in the IDE
+	c. If a Continue worker is connected and the task is a bounded editor-native subtask, call delegate_continue_task to execute that single coding step through Continue
 	d. Otherwise call execution_apply_patch to apply changes directly
 	e. Call execution_run_tests to validate
 4. Capture artifact with results
@@ -599,10 +598,9 @@ SAFETY RULES (CRITICAL):
 TOOL SEQUENCE:
 1. execution_preview_patch (show user what will change)
 2. [WAIT for approval]
-3. inspect_ide_worker (optional: confirm IDE worker/session capability)
-4. delegate_ide_coding_task OR execution_apply_patch (choose the safer bounded path for this step)
-5. execution_run_tests (validate changes)
-6. execution_capture (save results)
+3. delegate_continue_task OR execution_apply_patch (choose the safer bounded path for this step)
+4. execution_run_tests (validate changes)
+5. execution_capture (save results)
 
 QUALITY STANDARDS:
 ✅ SAFE: Preview → Approval → Apply → Validate
@@ -649,9 +647,9 @@ CONTROL RULE:
 WORKFLOW:
 1. Call review_build_context to understand current state
 2. Call review_inspect_repo to see applied changes
-3. If IDE-native review or validation would help, call inspect_ide_worker first to confirm whether an IDE worker is connected and what capabilities it supports
+3. If IDE-native review or validation would help and Continue context is available, consider whether this slice should be delegated as one bounded Continue coding objective
 4. Call review_run_tests to validate functionality
-5. If a bounded editor-native review step is useful, call delegate_ide_coding_task for a focused diff review, IDE-scoped validation, or localized follow-up check
+5. If a bounded editor-native review step is useful, call delegate_continue_task for a focused diff review, IDE-scoped validation, or localized follow-up check
 6. Compare results against requirements from intake
 7. Check quality: code style, test coverage, documentation
 8. Capture artifact with validation results
@@ -851,11 +849,11 @@ func (c *PhaseCapability) BuildInstructions(query string, state capabilities.Rou
 	case "investigation":
 		return "Use Investigation capability to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) Document evidence, 6) Transition to planning when analysis complete."
 	case "planning":
-		return "Use Planning capability to: 1) Optionally call inspect_ide_worker when current editor context would sharpen the plan, 2) Build context, 3) Research patterns, 4) Generate concrete plan with file/function references, 5) Present plan to user, 6) Capture artifact with status='ready_for_execution', 7) Transition to execution when approved. SAFETY: Planning may inspect IDE context, but do not call delegate_ide_coding_task during planning; keep Ask as the controller."
+		return "Use Planning capability to: 1) Use Continue bridge context when available to understand the editor-backed coding environment, 2) Build context, 3) Research patterns, 4) Generate concrete plan with file/function references, 5) Present plan to user, 6) Capture artifact with status='ready_for_execution', 7) Transition to execution when approved. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
 	case "execution":
-		return "Use Execution capability to: 1) Preview patches, 2) Get user approval, 3) Call inspect_ide_worker when editor-native execution may help, 4) Use delegate_ide_coding_task only for one bounded IDE-native subtask when the worker supports it, otherwise apply patches directly, 5) Run relevant validation after each change, 6) Capture results, 7) Transition to review when complete. SAFETY: Always preview before applying and keep Ask as the controller."
+		return "Use Execution capability to: 1) Preview patches, 2) Get user approval, 3) Decide whether the current step should be delegated to Continue as one bounded coding objective, 4) Use delegate_continue_task only for that bounded Continue subtask when appropriate, otherwise apply patches directly, 5) Run relevant validation after each change, 6) Capture results, 7) Transition to review when complete. SAFETY: Always preview before applying and keep Ask as the controller."
 	case "review":
-		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) Call inspect_ide_worker when IDE-native review or validation may help, 4) Use delegate_ide_coding_task only for one bounded review or validation subtask when the worker supports it, 5) Run relevant validation, 6) Validate against requirements, 7) Capture validation results, 8) Transition to delivery if approved or back to execution if issues found."
+		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) Decide whether a bounded IDE-native review or validation slice should be delegated to Continue, 4) Use delegate_continue_task only for that bounded subtask when appropriate, 5) Run relevant validation, 6) Validate against requirements, 7) Capture validation results, 8) Transition to delivery if approved or back to execution if issues found."
 	case "delivery":
 		return "Use Delivery capability to: 1) Review all phase artifacts, 2) Summarize changes made, 3) Document decisions, 4) Capture delivery summary, 5) Signal exit to complete workflow."
 	default:
