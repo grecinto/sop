@@ -5949,8 +5949,14 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, result string) (st
 		return result, nil
 	}
 
+	unwrappedResult, existingHint, _, _ := unwrapToolResultEnvelopeFull(result)
+	storageInput := unwrappedResult
+	if strings.TrimSpace(storageInput) == "" {
+		storageInput = result
+	}
+
 	// Check if result needs file backing
-	summary, filePath, fileSize, err := storage.StoreResult(toolName, result)
+	summary, filePath, fileSize, err := storage.StoreResult(toolName, storageInput)
 	if err != nil {
 		log.Warn("Failed to store tool result", "error", err, "tool", toolName)
 		return result, nil // Fallback to inline
@@ -5965,7 +5971,8 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, result string) (st
 	log.Info("Tool result stored to file", "tool", toolName, "file", filePath, "size", fileSize)
 
 	envelope := ai.ToolResultEnvelope{
-		ToolResult: json.RawMessage(fmt.Sprintf("%q", summary)),
+		ToolResult:   json.RawMessage(fmt.Sprintf("%q", summary)),
+		ProgressHint: existingHint,
 		FileMetadata: &ai.ToolFileMetadata{
 			FilePath: filePath,
 			FileSize: int64(fileSize),

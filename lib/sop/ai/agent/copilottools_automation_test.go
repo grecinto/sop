@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,5 +150,68 @@ func TestRunLocalAutomationCommandEmitsProgressCommentaryForGoTests(t *testing.T
 	}
 	if !strings.Contains(strings.Join(commentary, "\n"), "predominantly Go-based") {
 		t.Fatalf("expected Go-based progress commentary, got %q", strings.Join(commentary, "\n"))
+	}
+}
+
+func TestRunLocalAutomationCommand_WrapsPassingTestsWithTerminalSuccessHintInNativeLoop(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		return `{"stdout":"ok   github.com/sharedcode/sop/agent  0.123s\n","stderr":"","exit_code":0}`, nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{}
+	ctx := context.WithValue(context.Background(), ai.CtxKeyNativeToolHints, true)
+	out, err := ag.runLocalAutomationCommand(ctx, map[string]any{"command": "go test ./..."}, "go test ./...", "", "", 60)
+	if err != nil {
+		t.Fatalf("runLocalAutomationCommand() error = %v", err)
+	}
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("expected tool result envelope, got %q: %v", out, err)
+	}
+	if envelope.ProgressHint == nil || envelope.ProgressHint.Status != "terminal_success" {
+		t.Fatalf("expected terminal_success hint, got %+v", envelope.ProgressHint)
+	}
+	if !strings.Contains(string(envelope.ToolResult), "TEST STATUS: PASS") {
+		t.Fatalf("expected pass summary in tool result, got %s", string(envelope.ToolResult))
+	}
+}
+
+func TestWrapToolResultWithStorage_PreservesTerminalSuccessHintForLargePassingTestOutput(t *testing.T) {
+	sessionID := "test-session-pass-large"
+	storage, err := NewToolResultStorage(sessionID)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
+	ctx = context.WithValue(ctx, SessionPayloadKey, &ai.SessionPayload{SessionID: sessionID})
+
+	var sb strings.Builder
+	sb.WriteString("TEST STATUS: PASS\nAll tests passed successfully. Stop and report the outcome to the user.\n\n")
+	for i := 0; i < 300; i++ {
+		sb.WriteString("ok   github.com/sharedcode/sop/agent  0.123s\n")
+	}
+	raw := wrapNativeToolResultEnvelope(sb.String(), &ai.ToolProgressHint{Status: "terminal_success", CompletionDelta: 1.0, Tips: []string{"Tests passed successfully."}})
+	wrapped, err := wrapToolResultWithStorage(ctx, "run_repo_tests", raw)
+	if err != nil {
+		t.Fatalf("wrapToolResultWithStorage() error = %v", err)
+	}
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(wrapped), &envelope); err != nil {
+		t.Fatalf("expected stored envelope, got %q: %v", wrapped, err)
+	}
+	if envelope.ProgressHint == nil || envelope.ProgressHint.Status != "terminal_success" {
+		t.Fatalf("expected terminal_success hint to survive file-backing, got %+v", envelope.ProgressHint)
+	}
+	if envelope.FileMetadata == nil || envelope.FileMetadata.FilePath == "" {
+		t.Fatalf("expected file metadata for large output, got %+v", envelope.FileMetadata)
+	}
+	if !strings.Contains(string(envelope.ToolResult), "Full output:") {
+		t.Fatalf("expected summary tool result after file-backing, got %s", string(envelope.ToolResult))
 	}
 }

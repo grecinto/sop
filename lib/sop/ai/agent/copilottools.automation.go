@@ -1886,6 +1886,11 @@ func emitAutomationToolResult(ctx context.Context, toolName, result string) {
 // Returns a status summary string to prepend to LLM output (empty if not a test or no status found)
 // This ensures critical test outcomes are delivered to both UI and LLM
 func parseAndEmitTestStatus(ctx context.Context, command, output string) string {
+	_, summary := analyzeTestStatus(command, output)
+	return summary
+}
+
+func analyzeTestStatus(command, output string) (string, string) {
 	// Only parse test commands
 	isTestCommand := strings.Contains(command, "go test") ||
 		strings.Contains(command, "npm test") ||
@@ -1894,7 +1899,7 @@ func parseAndEmitTestStatus(ctx context.Context, command, output string) string 
 		strings.Contains(command, "run_all_tests")
 
 	if !isTestCommand {
-		return ""
+		return "", ""
 	}
 
 	lines := strings.Split(output, "\n")
@@ -1996,10 +2001,10 @@ func parseAndEmitTestStatus(ctx context.Context, command, output string) string 
 				}
 			}
 		}
-		return llmSummary + "\n"
+		return status, llmSummary + "\n"
 	}
 
-	return ""
+	return "", ""
 }
 
 func boolFlagFromArgs(args map[string]any, key string) bool {
@@ -2273,12 +2278,19 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 			// but we want just the stdout for display/storage
 			displayResult := unwrapCommandExecutorResult(result)
 
-			statusSummary := parseAndEmitTestStatus(ctx, command, displayResult)
+			status, statusSummary := analyzeTestStatus(command, displayResult)
 
 			// Prepend status summary if present
 			// wrapToolResultWithStorage will handle file storage automatically
 			if statusSummary != "" {
 				displayResult = statusSummary + "\n\n" + displayResult
+			}
+			if status == "PASS" && nativeToolHintsEnabled(ctx) {
+				displayResult = wrapNativeToolResultEnvelope(displayResult, &ai.ToolProgressHint{
+					Status:          "terminal_success",
+					CompletionDelta: 1.0,
+					Tips:            []string{"Tests passed successfully. Stop and report the outcome to the user instead of rerunning the same validation command."},
+				})
 			}
 
 			// Note: Command output is NOT streamed to chat history

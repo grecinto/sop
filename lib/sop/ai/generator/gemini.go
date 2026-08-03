@@ -673,7 +673,7 @@ func shouldShortCircuitGeminiOwnedLoopOnToolHint(hint *ai.ToolProgressHint) bool
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(hint.Status)) {
-	case "anti_success", "blocked", "error", "failed", "fatal", "hard_error", "terminal_error":
+	case "anti_success", "blocked", "error", "failed", "fatal", "hard_error", "terminal_error", "terminal_success":
 		return true
 	default:
 		return false

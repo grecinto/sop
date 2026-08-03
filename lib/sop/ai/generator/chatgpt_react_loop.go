@@ -133,6 +133,18 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 		}
 		executedToolCalls = append(executedToolCalls, newExecuted...)
 		toolResults = append(toolResults, newResults...)
+		if len(newResults) > 0 {
+			lastResult := newResults[len(newResults)-1]
+			if shouldShortCircuitChatGPTOwnedLoopOnToolHint(lastResult.Hint) {
+				resp := buildFinalResponse(l.modelName(), lastResult.Result, executedToolCalls, toolResults, response.ID, conversationIDFromResponse(response))
+				resp.EscalationState = retryState.escalationState
+				if resp.CarryoverState != nil {
+					resp.CarryoverState.RetryLearnings = retryState.exportedLearnings()
+				}
+				emitChatGPTOwnedLoopHydration(req, resp)
+				return resp, nil
+			}
+		}
 
 		partial := buildFinalResponse(l.modelName(), "", executedToolCalls, toolResults, response.ID, conversationIDFromResponse(response))
 		partial.EscalationState = retryState.escalationState
@@ -398,6 +410,18 @@ func chatGPTUserPrompt(req ai.ReasoningRequest) string {
 		parts = append(parts, "User Query: "+query)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func shouldShortCircuitChatGPTOwnedLoopOnToolHint(hint *ai.ToolProgressHint) bool {
+	if hint == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(hint.Status)) {
+	case "anti_success", "blocked", "error", "failed", "fatal", "hard_error", "terminal_error", "terminal_success":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildChatGPTResponsesTools(tools []ai.ToolDefinition) ([]openAIResponsesTool, error) {

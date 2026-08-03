@@ -3309,6 +3309,9 @@ func TestCompatibleReActEngine_HelperClassifiers_RecognizeTerminalHintStatuses(t
 	if !shouldShortCircuitAskLoopOnToolHint(&ai.ToolProgressHint{Status: "terminal_error"}) {
 		t.Fatal("expected terminal_error to short-circuit the Ask loop")
 	}
+	if !shouldShortCircuitAskLoopOnToolHint(&ai.ToolProgressHint{Status: "terminal_success"}) {
+		t.Fatal("expected terminal_success to short-circuit the Ask loop")
+	}
 	if shouldShortCircuitAskLoopOnToolHint(&ai.ToolProgressHint{Status: "progressing"}) {
 		t.Fatal("did not expect progressing to short-circuit the Ask loop")
 	}
