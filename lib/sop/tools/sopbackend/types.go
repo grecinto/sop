@@ -4,6 +4,39 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
+type HostKind string
+
+const (
+	HostKindUnknown   HostKind = "unknown"
+	HostKindHQ        HostKind = "hq"
+	HostKindDaemon    HostKind = "daemon"
+	HostKindCorporate HostKind = "corporate"
+)
+
+type AuthMode string
+
+const (
+	AuthModeUnknown       AuthMode = "unknown"
+	AuthModeSession       AuthMode = "session"
+	AuthModeJWTBootstrap  AuthMode = "jwt_bootstrap"
+	AuthModeEnterpriseSSO AuthMode = "enterprise_sso"
+)
+
+type ProvisioningMode string
+
+const (
+	ProvisioningModeUnknown  ProvisioningMode = "unknown"
+	ProvisioningModeSimple   ProvisioningMode = "simple"
+	ProvisioningModeAdvanced ProvisioningMode = "advanced"
+)
+
+type HostProfile struct {
+	Kind                    HostKind           `json:"kind"`
+	AuthMode                AuthMode           `json:"auth_mode"`
+	ProvisioningModes       []ProvisioningMode `json:"provisioning_modes,omitempty"`
+	DefaultProvisioningMode ProvisioningMode   `json:"default_provisioning_mode,omitempty"`
+}
+
 // ErasureConfigEntry defines a single EC zone configuration
 type ErasureConfigEntry struct {
 	Key          string   `json:"key"`
@@ -49,13 +82,15 @@ type Config struct {
 	ObfuscationMode string `json:"obfuscation_mode,omitempty"`
 
 	// Legacy/CLI fields - Ignored in JSON to keep config clean
-	DatabasePath                     string `json:"-"`
-	Mode                             string `json:"-"`
-	ConfigFile                       string `json:"-"`
-	RedisURL                         string `json:"-"`
-	DisableAuth                      bool   `json:"-"` // Disable authentication (for local daemon)
-	DisableSOPKBPreload              bool   `json:"disable_sop_kb_preload,omitempty"`
-	VectorizationRecoveryStoragePath string `json:"vectorization_recovery_storage_path,omitempty"`
+	HostProfile                      HostProfile `json:"-"`
+	HostKind                         HostKind    `json:"-"`
+	DatabasePath                     string      `json:"-"`
+	Mode                             string      `json:"-"`
+	ConfigFile                       string      `json:"-"`
+	RedisURL                         string      `json:"-"`
+	DisableAuth                      bool        `json:"-"` // Disable authentication (for local runtime)
+	DisableSOPKBPreload              bool        `json:"disable_sop_kb_preload,omitempty"`
+	VectorizationRecoveryStoragePath string      `json:"vectorization_recovery_storage_path,omitempty"`
 }
 
 // Package-level global variables used by handler functions

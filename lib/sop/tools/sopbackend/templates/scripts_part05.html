@@ -34,21 +34,21 @@
         return features.some(f => String(f).toLowerCase().trim() === featureName.toLowerCase().trim());
     }
 
-    function shouldLocalDaemonOnly() {
+    function shouldUseOnlyLocalRuntime() {
         return !RUNTIME_SWITCH_ENABLED;
     }
 
     function syncRuntimeControlsVisibility() {
         const controls = document.getElementById('chat-runtime-controls');
         if (!controls) return;
-        const shouldShow = !shouldLocalDaemonOnly();
+        const shouldShow = !shouldUseOnlyLocalRuntime();
         controls.style.display = shouldShow ? 'flex' : 'none';
     }
 
     function getChatRuntimeMode() {
         const saved = localStorage.getItem('sop_chat_runtime');
         const trimmed = saved ? saved.trim() : '';
-        if (shouldLocalDaemonOnly()) {
+        if (shouldUseOnlyLocalRuntime()) {
             return 'local';
         }
         if (trimmed === 'local' || trimmed === 'hq') {
@@ -59,7 +59,7 @@
 
     // DEFAULT_DAEMON_URL constant is defined in scripts_part01.html
 
-    function normalizeDaemonBaseURL(url) {
+    function normalizeLocalRuntimeBaseURL(url) {
         const value = (url || '').trim();
         if (!value) {
             return DEFAULT_DAEMON_URL;
@@ -67,15 +67,15 @@
         return value.replace(/\/$/, '');
     }
 
-    function getDaemonBaseURL() {
+    function getLocalRuntimeBaseURL() {
         const configured = window.SOP_DAEMON_BASE_URL || localStorage.getItem('sop_daemon_url') || DEFAULT_DAEMON_URL;
-        const value = normalizeDaemonBaseURL(configured);
+        const value = normalizeLocalRuntimeBaseURL(configured);
         window.SOP_DAEMON_BASE_URL = value;
         return value;
     }
 
-    function setDaemonBaseURL(url) {
-        const value = normalizeDaemonBaseURL(url);
+    function setLocalRuntimeBaseURL(url) {
+        const value = normalizeLocalRuntimeBaseURL(url);
         window.SOP_DAEMON_BASE_URL = value;
         localStorage.setItem('sop_daemon_url', value);
         return value;
@@ -84,16 +84,16 @@
     function persistChatRuntimeLocalURL() {
         const input = document.getElementById('chat-runtime-local-url');
         if (!input) return;
-        setDaemonBaseURL(input.value);
+        setLocalRuntimeBaseURL(input.value);
     }
 
     function handleRuntimeSwitchReloadError(err, runtime) {
         console.error('[RuntimeToggle] reloadDatabases failed:', err);
         const message = err && err.message ? err.message : 'Unknown error';
-        if (runtime === 'local' && message.includes('Cannot connect to local daemon')) {
+        if (runtime === 'local' && message.includes('Cannot connect to local runtime')) {
             const select = document.getElementById('database-select');
             if (select) {
-                select.innerHTML = '<option>Local daemon offline</option>';
+                select.innerHTML = '<option>Local runtime offline</option>';
             }
             return;
         }
@@ -105,7 +105,7 @@
     }
 
     function setChatRuntimeMode(mode) {
-        const runtime = shouldLocalDaemonOnly() ? 'local' : (mode === 'local' ? 'local' : 'hq');
+        const runtime = shouldUseOnlyLocalRuntime() ? 'local' : (mode === 'local' ? 'local' : 'hq');
         localStorage.setItem('sop_chat_runtime', runtime);
         const checkbox = document.getElementById('chat-runtime-hq');
         const input = document.getElementById('chat-runtime-local-url');
@@ -113,9 +113,9 @@
         const formatSelect = document.getElementById('format-select');
         if (checkbox) checkbox.checked = runtime === 'hq';
         if (input) {
-            input.style.display = (!shouldLocalDaemonOnly() || runtime === 'hq') ? 'none' : 'inline-block';
+            input.style.display = (!shouldUseOnlyLocalRuntime() || runtime === 'hq') ? 'none' : 'inline-block';
             if (runtime === 'local' && !input.value) {
-                input.value = getDaemonBaseURL();
+                input.value = getLocalRuntimeBaseURL();
             }
         }
         if (domainSelect) {
@@ -162,8 +162,8 @@
         const runtime = getChatRuntimeMode();
         if (checkbox) checkbox.checked = runtime === 'hq';
         if (input) {
-            input.value = getDaemonBaseURL();
-            input.style.display = (!shouldLocalDaemonOnly() || runtime === 'hq') ? 'none' : 'inline-block';
+            input.value = getLocalRuntimeBaseURL();
+            input.style.display = (!shouldUseOnlyLocalRuntime() || runtime === 'hq') ? 'none' : 'inline-block';
         }
         if (domainSelect) {
             const hasOptions = Array.from(domainSelect.options).some(option => option.value && option.value !== '' && option.getAttribute('data-dynamic') === 'true');
@@ -205,15 +205,15 @@
         }
     }
 
-    function getDaemonAskURL() {
-        return getDaemonBaseURL().replace(/\/$/, '') + '/api/ask';
+    function getLocalRuntimeAskURL() {
+        return getLocalRuntimeBaseURL().replace(/\/$/, '') + '/api/ask';
     }
 
-    function getDaemonHandoffURL() {
-        return getDaemonBaseURL().replace(/\/$/, '') + '/api/handoff';
+    function getLocalRuntimeHandoffURL() {
+        return getLocalRuntimeBaseURL().replace(/\/$/, '') + '/api/handoff';
     }
 
-    async function daemonFetch(endpoint, options = {}) {
+    async function localRuntimeFetch(endpoint, options = {}) {
         if (window.daemonAuth && typeof window.daemonAuth.request === 'function') {
             return window.daemonAuth.request(endpoint, options);
         }
@@ -224,14 +224,14 @@
     async function requestRuntimeWelcomeContext(runtimeMode) {
         try {
             if (runtimeMode === 'local') {
-                const response = await daemonFetch('/api/handoff', {
+                const response = await localRuntimeFetch('/api/handoff', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(buildLocalDaemonHandoffPayload('connect'))
+                    body: JSON.stringify(buildLocalRuntimeHandoffPayload('connect'))
                 });
                 if (!response.ok) {
                     const text = await response.text().catch(() => '');
-                    throw new Error(text || 'Unable to connect to local daemon');
+                    throw new Error(text || 'Unable to connect to local runtime');
                 }
                 const data = await response.json().catch(() => null);
                 if (data && data.welcome_context) {
@@ -255,10 +255,10 @@
             }
             return data;
         } catch (err) {
-            console.warn(`[requestRuntimeWelcomeContext] Failed to get welcome context for ${runtimeMode === 'local' ? 'local daemon' : 'HQ'} runtime:`, err.message || err);
-            // Don't show error in chat for local daemon - auth failures are handled gracefully
+            console.warn(`[requestRuntimeWelcomeContext] Failed to get welcome context for ${runtimeMode === 'local' ? 'local runtime' : 'HQ'} runtime:`, err.message || err);
+            // Don't show error in chat for local runtime - auth failures are handled gracefully
             if (runtimeMode !== 'local') {
-                appendChatMessage('ai', `Welcome context unavailable for ${runtimeMode === 'local' ? 'local daemon' : 'HQ'} runtime: ${err.message || 'unknown error'}`);
+                appendChatMessage('ai', `Welcome context unavailable for ${runtimeMode === 'local' ? 'local runtime' : 'HQ'} runtime: ${err.message || 'unknown error'}`);
             }
             return null;
         }
@@ -314,7 +314,7 @@
                 if (!action || !targetType || !targetID) return;
 
                 try {
-                    const response = await daemonFetch('/api/daemon/vectorization/recovery', {
+                    const response = await localRuntimeFetch('/api/daemon/vectorization/recovery', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ action, kb_name: kbName, target_type: targetType, target_id: targetID })
@@ -489,7 +489,7 @@
             // Default to 'local-daemon' to match backend default (not 'default')
             const sessionID = (typeof currentSessionID !== 'undefined' && currentSessionID) ? currentSessionID : 'local-daemon';
             
-            const response = await daemonFetch('/api/terminal/status?session_id=' + encodeURIComponent(sessionID), {
+            const response = await localRuntimeFetch('/api/terminal/status?session_id=' + encodeURIComponent(sessionID), {
                 method: 'GET',
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -583,7 +583,7 @@
     async function stopAITerminalCommand() {
         try {
             const sessionID = (typeof currentSessionID !== 'undefined' && currentSessionID) ? currentSessionID : 'local-daemon';
-            const response = await daemonFetch('/api/terminal/stop?session_id=' + encodeURIComponent(sessionID), {
+            const response = await localRuntimeFetch('/api/terminal/stop?session_id=' + encodeURIComponent(sessionID), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -983,7 +983,7 @@
         updateChatAttachmentOverflowVisibility();
     });
 
-    function buildLocalDaemonHandoffPayload(query) {
+    function buildLocalRuntimeHandoffPayload(query) {
         const token = typeof getStoredSessionToken === 'function' ? getStoredSessionToken() : '';
         const refreshToken = typeof getStoredRefreshToken === 'function' ? getStoredRefreshToken() : '';
         const chatAIConfig = typeof getStoredAIConfig === 'function' ? getStoredAIConfig() : {};
@@ -997,7 +997,7 @@
         const hqPort = (window.location.port || '').trim();
         
         const effectiveSessionID = currentSessionID || 'local-daemon';
-        console.log('[buildLocalDaemonHandoffPayload] Using session_id:', effectiveSessionID, '(currentSessionID:', currentSessionID, ')');
+        console.log('[buildLocalRuntimeHandoffPayload] Using session_id:', effectiveSessionID, '(currentSessionID:', currentSessionID, ')');
         
         return {
             query: query || 'connect',
@@ -1052,10 +1052,10 @@
     }
 
     async function ensureLocalAgentReachable() {
-        const response = await daemonFetch('/api/handoff', {
+        const response = await localRuntimeFetch('/api/handoff', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(buildLocalDaemonHandoffPayload('connect'))
+            body: JSON.stringify(buildLocalRuntimeHandoffPayload('connect'))
         });
         if (!response.ok) {
             const text = await response.text().catch(() => '');
@@ -2654,9 +2654,9 @@
      * This function routes to different endpoints based on runtime mode:
      * 
      * LOCAL MODE → /api/ask:
-     *   - Auth: JWT bearer tokens (daemonFetch)
+    *   - Auth: JWT bearer tokens (localRuntimeFetch)
      *   - Payload: {query, auth{access_token, refresh_token}, hq{base_url, user_id}, llm_provider, ...}
-     *   - Target: Local daemon (127.0.0.1:9090)
+    *   - Target: Local runtime (127.0.0.1:9090)
      *   - Security: Bootstrap file → JWT
      *   - Features: Full agent capabilities
      *   - Streaming: ✅ NDJSON streaming enabled (real-time progress updates)
@@ -2672,7 +2672,7 @@
      * WHY SEPARATE ENDPOINTS?
      * 1. Different auth models (JWT vs session)
      * 2. Different payload structures (daemon handoff vs HQ rich context)
-     * 3. Daemon-specific integration (session store, PTY shells, federation)
+    * 3. Local runtime integration (session store, PTY shells, federation)
      * 4. Independence (cleaner boundaries, less coupling risk)
      * 
      * Both share underlying logic (sopbackend.AskSharedAgent) and now both
@@ -2690,7 +2690,7 @@
             payloadDomain = window.customKBs.join(',');
         }
 
-        // Route to local daemon with JWT auth and daemon-specific payload
+        // Route to local runtime with JWT auth and runtime handoff payload
         if (runtimeMode === 'local') {
             return {
                 endpoint: '/api/ask',
@@ -2698,9 +2698,9 @@
                 headers: { 'Content-Type': 'application/json', 'Accept': 'application/x-ndjson' },
                 body: JSON.stringify({
                     query: message,
-                    ...buildLocalDaemonHandoffPayload(message)
+                    ...buildLocalRuntimeHandoffPayload(message)
                 }),
-                fetcher: daemonFetch,
+                fetcher: localRuntimeFetch,
                 runtimeMode: 'local'
             };
         }
@@ -2990,7 +2990,7 @@
             });
 
             if (resolvedRuntimeMode === 'local') {
-                console.debug('[UI local daemon] received response', {
+                console.debug('[UI local runtime] received response', {
                     ok: response.ok,
                     status: response.status,
                     contentType: response.headers.get('content-type')
@@ -3306,7 +3306,7 @@
                     execution_mode: executionMode
                 };
 
-                const res = await fetch(getDaemonBaseURL().replace(/\/$/, '') + '/api/execute', {
+                const res = await fetch(getLocalRuntimeBaseURL().replace(/\/$/, '') + '/api/execute', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(req)
@@ -3413,7 +3413,7 @@
         container.innerHTML = '<span style="color: #eab308;">⏳ Executing locally via SOP Daemon...</span>';
         
         try {
-            const res = await fetch(getDaemonBaseURL().replace(/\/$/, '') + '/api/execute', {
+            const res = await fetch(getLocalRuntimeBaseURL().replace(/\/$/, '') + '/api/execute', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ command: command })
@@ -3428,7 +3428,7 @@
             container.innerHTML = `<span style="color: #10b981;">✅ Executed locally.</span>`;
             
             // Format daemon output back into the chat context as the user's response
-            let outputMsg = `[Local Daemon Execution Result for \`${command}\`]\n`;
+            let outputMsg = `[Local Runtime Execution Result for \`${command}\`]\n`;
             
             // Format ls output: one file per line
             if (data.stdout) {

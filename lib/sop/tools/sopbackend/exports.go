@@ -45,6 +45,35 @@ func runBackgroundServiceHooks(ctx context.Context) {
 	}
 }
 
+// CleanupStaleSessions removes stale tracked sessions from the shared backend runtime.
+// It targets the in-memory runtime session manager used by the backend, while persistent
+// stores such as the B-tree-backed session store are handled separately by their own cleanup logic.
+func CleanupStaleSessions(ttl time.Duration) int {
+	if ttl <= 0 {
+		return 0
+	}
+	if activeSessions != nil {
+		return activeSessions.RemoveStale(ttl)
+	}
+	return 0
+}
+
+// CleanupStalePersistentSessions removes stale sessions from the shared persistent session store.
+// This is the HQ-style behavior for a B-tree-backed session store and mirrors the daemon's TTL-based cleanup semantics.
+func CleanupStalePersistentSessions(ctx context.Context, ttl time.Duration) (int, error) {
+	if ttl <= 0 {
+		return 0, nil
+	}
+	if currentTokenFacade() == nil {
+		return 0, nil
+	}
+	store, ok := currentTokenFacade().(*SessionStore)
+	if !ok || store == nil {
+		return 0, nil
+	}
+	return store.collectStaleSessions(ctx, 10*time.Minute, DefaultSessionGCBatchSize())
+}
+
 // GetConfig returns a copy of the current configuration
 func GetConfig() Config {
 	return config
@@ -79,7 +108,7 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 	if cfg == nil {
 		cfg = ai.NewConfigMap()
 	}
-	// Preserve existing streaming context if already injected (daemon mode)
+	// Preserve existing streaming context if already injected (local runtime mode)
 	// Only inject defaults if context doesn't already have streaming support
 	existingStreamer := ctx.Value(ai.CtxKeyEventStreamer)
 	if existingStreamer == nil {
@@ -87,7 +116,7 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 	}
 
 	if config.DisableAuth {
-		// Auth disabled for daemon mode - skip user-store lookup
+		// Auth disabled for local runtime mode - skip user-store lookup
 	} else if auth := sop.GetAuthFromContext(ctx); auth.UserID != "" {
 		username := normalizeUsername(auth.UserID)
 		if username != "" && username != "root" && username != "ui-client" {
@@ -133,7 +162,7 @@ func SetProductionMode(production bool) {
 	config.ProductionMode = production
 }
 
-// SetDisableAuth disables authentication (for local daemon mode)
+// SetDisableAuth disables authentication (for local runtime mode)
 func SetDisableAuth(disable bool) {
 	config.DisableAuth = disable
 }
@@ -148,10 +177,124 @@ type RuntimeOptions struct {
 	EnableLocalAutomation bool
 	AutomationPolicy      *sharedagent.AutomationPolicy
 	EnableStoresFeature   bool // Enable Stores capability, tools, and API endpoints (enabled by default - provides DB management UI)
+	HostKind              HostKind
+	HostProfile           HostProfile
+}
+
+func normalizeHostKind(kind HostKind) HostKind {
+	switch kind {
+	case HostKindHQ, HostKindDaemon, HostKindCorporate:
+		return kind
+	default:
+		return HostKindUnknown
+	}
+}
+
+func normalizeAuthMode(mode AuthMode) AuthMode {
+	switch mode {
+	case AuthModeSession, AuthModeJWTBootstrap, AuthModeEnterpriseSSO:
+		return mode
+	default:
+		return AuthModeUnknown
+	}
+}
+
+func normalizeProvisioningMode(mode ProvisioningMode) ProvisioningMode {
+	switch mode {
+	case ProvisioningModeSimple, ProvisioningModeAdvanced:
+		return mode
+	default:
+		return ProvisioningModeUnknown
+	}
+}
+
+func normalizeProvisioningModes(modes []ProvisioningMode) []ProvisioningMode {
+	if len(modes) == 0 {
+		return nil
+	}
+	normalized := make([]ProvisioningMode, 0, len(modes))
+	for _, mode := range modes {
+		mode = normalizeProvisioningMode(mode)
+		if mode == ProvisioningModeUnknown {
+			continue
+		}
+		seen := false
+		for _, existing := range normalized {
+			if existing == mode {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			normalized = append(normalized, mode)
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func DefaultHostProfile(kind HostKind) HostProfile {
+	kind = normalizeHostKind(kind)
+	switch kind {
+	case HostKindHQ:
+		return HostProfile{
+			Kind:                    HostKindHQ,
+			AuthMode:                AuthModeSession,
+			ProvisioningModes:       []ProvisioningMode{ProvisioningModeSimple, ProvisioningModeAdvanced},
+			DefaultProvisioningMode: ProvisioningModeSimple,
+		}
+	case HostKindDaemon:
+		return HostProfile{
+			Kind:                    HostKindDaemon,
+			AuthMode:                AuthModeJWTBootstrap,
+			ProvisioningModes:       []ProvisioningMode{ProvisioningModeSimple, ProvisioningModeAdvanced},
+			DefaultProvisioningMode: ProvisioningModeSimple,
+		}
+	case HostKindCorporate:
+		return HostProfile{
+			Kind:                    HostKindCorporate,
+			AuthMode:                AuthModeEnterpriseSSO,
+			ProvisioningModes:       []ProvisioningMode{ProvisioningModeSimple, ProvisioningModeAdvanced},
+			DefaultProvisioningMode: ProvisioningModeSimple,
+		}
+	default:
+		return HostProfile{
+			Kind:                    HostKindUnknown,
+			AuthMode:                AuthModeUnknown,
+			DefaultProvisioningMode: ProvisioningModeUnknown,
+		}
+	}
+}
+
+func resolveHostProfile(opts RuntimeOptions) HostProfile {
+	profile := opts.HostProfile
+	if profile.Kind == "" {
+		profile = DefaultHostProfile(opts.HostKind)
+	} else {
+		profile.Kind = normalizeHostKind(profile.Kind)
+		profile.AuthMode = normalizeAuthMode(profile.AuthMode)
+		profile.ProvisioningModes = normalizeProvisioningModes(profile.ProvisioningModes)
+		profile.DefaultProvisioningMode = normalizeProvisioningMode(profile.DefaultProvisioningMode)
+		if profile.Kind == HostKindUnknown && opts.HostKind != "" {
+			profile = DefaultHostProfile(opts.HostKind)
+		}
+		if profile.DefaultProvisioningMode == ProvisioningModeUnknown && len(profile.ProvisioningModes) > 0 {
+			profile.DefaultProvisioningMode = profile.ProvisioningModes[0]
+		}
+	}
+	if profile.Kind == HostKindUnknown && opts.HostKind != "" {
+		profile = DefaultHostProfile(opts.HostKind)
+	}
+	return profile
 }
 
 // Initialize performs shared backend initialization for a specific runtime.
 func Initialize(ctx context.Context, opts RuntimeOptions) error {
+	config.HostProfile = resolveHostProfile(opts)
+	config.HostKind = config.HostProfile.Kind
+
 	if opts.EnableLocalAutomation {
 		sharedagent.SetLocalDesktopAutomationEnabled(true)
 		if opts.AutomationPolicy != nil {
@@ -202,6 +345,12 @@ func InitializeRuntime(ctx context.Context, configPath string, opts RuntimeOptio
 		SetConfigFile(targetConfigPath)
 		if _, err := LoadModelCatalog(targetConfigPath); err != nil {
 			return "", err
+		}
+
+		if config.SystemDB != nil {
+			if _, err := GetSystemDBOptions(ctx); err != nil {
+				log.Warn("failed to repair configured system database on startup", "error", err)
+			}
 		}
 
 		// Auto-provision users store if config exists but store is missing
@@ -401,9 +550,20 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 		RegisterUIRoutesWithoutRoot(mux)
 	}
 	RegisterSwaggerHandlers(mux, "")
+	registerSharedAPIHandlers(mux)
+	registerSharedAdminHandlers(mux)
+	initKBQuality()
+	if kbQualityAPI != nil {
+		kbQualityAPI.RegisterRoutes(mux)
+	}
+}
 
+func registerSharedAdminHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/users", WithAuth(handleAdminUsersPage))
 	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
+}
+
+func registerSharedAPIHandlers(mux *http.ServeMux) {
 	// Runtime & Database Endpoints
 	mux.HandleFunc("/api/runtime/refresh", WithAuth(handleRuntimeRefresh))
 	mux.HandleFunc("/api/databases", WithAuth(handleDatabases))
@@ -424,6 +584,12 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 
 	// AI Endpoints
 	mux.HandleFunc("/api/ai/chat", WithAuth(handleAIChat))
+	mux.HandleFunc("/api/continue/chat", WithAuth(handleContinueChat))
+	mux.HandleFunc("/api/sop/chat", WithAuth(handleContinueChat))
+	mux.HandleFunc("/api/continue/tools/", WithAuth(handleContinueTool))
+	mux.HandleFunc("/api/sop/tools/", WithAuth(handleContinueTool))
+	mux.HandleFunc("/api/continue/sessions/", WithAuth(handleContinueSessionState))
+	mux.HandleFunc("/api/sop/sessions/", WithAuth(handleContinueSessionState))
 	mux.HandleFunc("/api/ai/test-connection", WithAuth(handleTestLLMConnection))
 	mux.HandleFunc("/api/ai/test-embedder-connection", WithAuth(handleTestEmbedderConnection))
 	mux.HandleFunc("/api/ai/summarize", WithAuth(handleAISummarize))
@@ -431,6 +597,8 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 	mux.HandleFunc("/api/ai/session/close", WithAuth(handleCloseSession))
 	mux.HandleFunc("/api/ai/feedback", WithAuth(handleAIFeedback))
 	mux.HandleFunc("/api/scripts/execute", WithAuth(handleExecuteScript))
+	mux.HandleFunc("/api/ai/chat/revalidate", WithAuth(HandleKBRevalidate))
+	mux.HandleFunc("/api/ai/kb/alternatives", WithAuth(HandleKBAlternatives))
 
 	// Knowledge Base Endpoints
 	mux.HandleFunc("/api/source-store/digest", WithAuth(handleDigestSourceStore))
@@ -453,8 +621,29 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 	mux.HandleFunc("/api/spaces/config", WithAuth(handleSaveSpaceConfig))
 	mux.HandleFunc("/api/tasks/status", WithAuth(handleGetTaskStatus))
 
+	// Space Federation Endpoints
+	mux.HandleFunc("/api/space/auto-share", WithAuth(HandleSetSpaceAutoShare))
+	mux.HandleFunc("/api/space/auto-shared", WithAuth(HandleListAutoSharedSpaces))
+	mux.HandleFunc("/api/space/pull", WithAuth(HandleDaemonPullSpace))
+
+	// LTM Category Auto-Share Endpoints
+	mux.HandleFunc("/api/ltm/category/auto-share", WithAuth(HandleSetCategoryAutoShare))
+	mux.HandleFunc("/api/ltm/category/auto-share/list", WithAuth(HandleListCategoryAutoShare))
+	mux.HandleFunc("/api/ltm/category/auto-share/bulk", WithAuth(HandleBulkSetCategoryAutoShare))
+
+	// Workflow Management Endpoints
+	mux.HandleFunc("/api/workflow/save", WithAuth(handleSaveWorkflow))
+	mux.HandleFunc("/api/workflow/publish", WithAuth(handlePublishWorkflow))
+	mux.HandleFunc("/api/workflow/list", WithAuth(handleListWorkflows))
+	mux.HandleFunc("/api/workflow/get", WithAuth(handleGetWorkflow))
+	mux.HandleFunc("/api/workflow/undo/recent", WithAuth(handleUndoRecent))
+	mux.HandleFunc("/api/workflow/undo/restore/", WithAuth(handleUndoRestore))
+	mux.HandleFunc("/api/workflow/undo/search", WithAuth(handleUndoSearch))
+	mux.HandleFunc("/api/workflow/undo/stats", WithAuth(handleUndoStats))
+
 	// Configuration Endpoints
 	mux.HandleFunc("/api/config/save", WithAuth(handleSaveConfig))
+	mux.HandleFunc("/api/config/provision/simple", WithAuth(handleSimpleProvision))
 	mux.HandleFunc("/api/db/init", WithAuth(handleInitDatabase))
 	mux.HandleFunc("/api/config/validate-path", WithAuth(handleValidatePath))
 	mux.HandleFunc("/api/system/uninstall", WithAuth(handleUninstallSystem))
@@ -468,17 +657,11 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 
-	// HQ Federation / Central Memory Endpoints
+	// Federation Endpoints
 	mux.HandleFunc("/api/daemon/hq-sync", WithAuth(HandleHQSync))
 	mux.HandleFunc("/api/daemon/hq-retrieve", WithAuth(HandleHQRetrieve))
-	mux.HandleFunc("/api/daemon/pull-space", WithAuth(HandleDaemonPullSpace)) // Daemon pulls Space from HQ
+	mux.HandleFunc("/api/daemon/pull-space", WithAuth(HandleDaemonPullSpace))
 	mux.HandleFunc("/api/daemon/acknowledge-space", WithAuth(handleAcknowledgeSpace))
-
-	// KB Quality Management Endpoints
-	initKBQuality()
-	if kbQualityAPI != nil {
-		kbQualityAPI.RegisterRoutes(mux)
-	}
 }
 
 var (
@@ -520,13 +703,15 @@ func StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.D
 			if activeSessions != nil {
 				evicted := activeSessions.RemoveStale(ttl)
 				if evicted > 0 {
-					// Log cleanup if needed
+					log.Debug("background service: evicted stale active sessions", "count", evicted)
 				}
 			}
 			if currentTokenFacade() != nil {
 				if store, ok := currentTokenFacade().(*SessionStore); ok && store != nil {
-					if _, err := store.collectStaleSessions(ctx, 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
+					if removed, err := store.collectStaleSessions(ctx, 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
 						log.Warn("background service: failed to collect stale sessions", "error", err)
+					} else if removed > 0 {
+						log.Debug("background service: removed stale persistent sessions", "count", removed)
 					}
 				}
 			}

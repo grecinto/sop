@@ -102,6 +102,23 @@ After this override is installed:
 - `sopbackend.CreateSession()` issues tokens for site users
 - All RequireAuth middleware uses site users
 
+## Provisioning Direction
+
+First-boot provisioning is moving toward a shared host-framework model in `sopbackend`.
+
+The intended direction is:
+
+- HQ continues to support the guided Setup Wizard flow
+- daemon also reuses the same Setup Wizard-oriented provisioning framework
+- provisioning supports both `Simple` setup and `Advanced` setup
+- the current daemon quick provisioner becomes the implementation of `Simple` setup
+- missing environment state such as a missing `config.json` should trigger the shared provisioning decision path
+- configured system DB repair during runtime startup should be handled by shared `sopbackend` bootstrap logic, not by daemon-only wiring
+
+This keeps host bootstrapping aligned across HQ, daemon, and the future Corporate server instead of maintaining separate first-run provisioning systems.
+
+See [SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md](SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md) for the refactor plan.
+
 ### Where Auth Logic Lives
 
 | Component | Responsibility | Location |
@@ -137,6 +154,7 @@ See [AUTH_QUICK_REFERENCE.md](AUTH_QUICK_REFERENCE.md) for detailed architecture
 - Keep handlers focused on parsing input, validating it, and coordinating calls.
 - Put orchestration for the product experience in the site/backend layer, not in the shared runtime.
 - Document new product features in the docs tree so future maintainers can find them quickly.
+- Shape shared runtime features in `sopbackend` so new host types can reuse them with explicit host profiles rather than app-specific branching.
 
 ## Where to look first
 

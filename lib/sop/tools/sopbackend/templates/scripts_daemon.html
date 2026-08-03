@@ -17,7 +17,7 @@
     const SUBSCRIPTION_CHECK_INTERVAL = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
     const DEFAULT_DAEMON_URL = 'http://127.0.0.1:9090';
 
-    function getDaemonBaseURL() {
+    function getLocalRuntimeBaseURL() {
         const configured = window.SOP_DAEMON_BASE_URL || localStorage.getItem('sop_daemon_url') || DEFAULT_DAEMON_URL;
         return (configured || DEFAULT_DAEMON_URL).replace(/\/$/, '');
     }
@@ -76,7 +76,7 @@
                 if (bootstrapToken) {
                     // Use site session token directly
                     authPayload = { bootstrap_token: bootstrapToken.trim() };
-                    authEndpoint = `${getDaemonBaseURL()}/api/daemon/auth`;
+                    authEndpoint = `${getLocalRuntimeBaseURL()}/api/daemon/auth`;
                 } else {
                     // Fall back to bootstrap secret from file
                     const secretResponse = await fetch('/api/daemon/bootstrap-secret');
@@ -97,7 +97,7 @@
                     }
 
                     authPayload = { bootstrap_secret: bootstrapSecret };
-                    authEndpoint = `${getDaemonBaseURL()}/api/daemon/auth`;
+                    authEndpoint = `${getLocalRuntimeBaseURL()}/api/daemon/auth`;
                 }
 
                 // Authenticate with daemon
@@ -221,7 +221,7 @@
             }
 
             try {
-                const response = await fetch(`${getDaemonBaseURL()}/api/daemon/refresh`, {
+                const response = await fetch(`${getLocalRuntimeBaseURL()}/api/daemon/refresh`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -284,7 +284,7 @@
                 'Authorization': `Bearer ${this.accessToken}`,
             };
 
-            const response = await fetch(`${getDaemonBaseURL()}${endpoint}`, {
+            const response = await fetch(`${getLocalRuntimeBaseURL()}${endpoint}`, {
                 ...options,
                 headers
             });
@@ -295,7 +295,7 @@
                 if (refreshed) {
                     // Retry with new token
                     headers.Authorization = `Bearer ${this.accessToken}`;
-                    return fetch(`${getDaemonBaseURL()}${endpoint}`, {
+                    return fetch(`${getLocalRuntimeBaseURL()}${endpoint}`, {
                         ...options,
                         headers
                     });
@@ -304,7 +304,7 @@
                     const bootstrapped = await this.bootstrap();
                     if (bootstrapped) {
                         headers.Authorization = `Bearer ${this.accessToken}`;
-                        return fetch(`${getDaemonBaseURL()}${endpoint}`, {
+                        return fetch(`${getLocalRuntimeBaseURL()}${endpoint}`, {
                             ...options,
                             headers
                         });

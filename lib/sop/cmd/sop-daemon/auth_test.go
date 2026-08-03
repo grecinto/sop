@@ -103,6 +103,63 @@ func TestHandleBootstrapAcceptsSignedBootstrapToken(t *testing.T) {
 	}
 }
 
+func TestHandleBootstrapSupportsMultipleAuthenticatedClients(t *testing.T) {
+	withIsolatedSystemDB(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	h := &DaemonAuthHandler{
+		bootstrapSecret: "shared-secret",
+		bootstrapPath:   filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sop", "daemon.bootstrap"),
+		sessionStore:    sopbackend.NewSessionStore(time.Minute),
+	}
+
+	if err := os.MkdirAll(filepath.Dir(h.bootstrapPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(h.bootstrapPath, []byte(h.bootstrapSecret), 0o600); err != nil {
+		t.Fatalf("write bootstrap file: %v", err)
+	}
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"shared-secret","client_id":"ai-studio-ui"}`))
+	firstRR := httptest.NewRecorder()
+	h.HandleBootstrap(firstRR, firstReq)
+	if firstRR.Code != http.StatusOK {
+		t.Fatalf("expected first bootstrap to succeed, got %d with body %s", firstRR.Code, firstRR.Body.String())
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"shared-secret","client_id":"continue-vscode"}`))
+	secondRR := httptest.NewRecorder()
+	h.HandleBootstrap(secondRR, secondReq)
+	if secondRR.Code != http.StatusOK {
+		t.Fatalf("expected second bootstrap to succeed, got %d with body %s", secondRR.Code, secondRR.Body.String())
+	}
+
+	if got := h.clientSessionRegistry().Count(); got != 2 {
+		t.Fatalf("expected 2 authenticated clients in registry, got %d", got)
+	}
+}
+
+func TestCleanupStaleClientSessionsRemovesExpiredEntries(t *testing.T) {
+	h := &DaemonAuthHandler{clientRegistry: newDaemonClientRegistry()}
+	registry := h.clientSessionRegistry()
+	registry.Register("stale-client", "ui-client", "daemon-user", "token-1")
+
+	entry, ok := registry.Get("stale-client")
+	if !ok {
+		t.Fatalf("expected stale client to be registered")
+	}
+	entry.LastSeen = time.Now().Add(-2 * time.Hour)
+	registry.clients[entry.ClientID] = entry
+
+	removed := h.cleanupStaleClientSessions(time.Hour)
+	if removed != 1 {
+		t.Fatalf("expected one stale client to be removed, got %d", removed)
+	}
+	if got := registry.Count(); got != 0 {
+		t.Fatalf("expected stale client registry to be empty after cleanup, got %d", got)
+	}
+}
+
 func TestRequireAuthAcceptsHQSignedTokens(t *testing.T) {
 	withIsolatedSystemDB(t)
 

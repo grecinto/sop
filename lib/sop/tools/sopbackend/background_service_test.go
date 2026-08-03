@@ -27,3 +27,33 @@ func TestStartBackgroundServiceWithContextRunsRegisteredHooks(t *testing.T) {
 		t.Fatalf("expected registered background service hook to run")
 	}
 }
+
+func TestCleanupStaleSessionsRemovesExpiredRuntimeSessions(t *testing.T) {
+	oldSessions := activeSessions
+	activeSessions = NewSessionManager(10)
+	defer func() { activeSessions = oldSessions }()
+
+	activeSessions.Put("stale-session", nil)
+	activeSessions.Put("fresh-session", nil)
+
+	sm := activeSessions
+	sm.mu.Lock()
+	if node, ok := sm.lookup["stale-session"]; ok {
+		node.lastUse = time.Now().Add(-2 * time.Hour)
+	}
+	if node, ok := sm.lookup["fresh-session"]; ok {
+		node.lastUse = time.Now()
+	}
+	sm.mu.Unlock()
+
+	removed := CleanupStaleSessions(time.Hour)
+	if removed != 1 {
+		t.Fatalf("expected one stale session to be removed, got %d", removed)
+	}
+	if _, ok := activeSessions.Get("stale-session"); ok {
+		t.Fatalf("expected stale session to be removed")
+	}
+	if _, ok := activeSessions.Get("fresh-session"); !ok {
+		t.Fatalf("expected fresh session to remain")
+	}
+}

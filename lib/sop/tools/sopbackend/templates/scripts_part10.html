@@ -731,9 +731,11 @@
         openUIModal('setup-wizard');
     }
 
-    function showSetupWizard() {
+    function showSetupWizard(decision = null) {
         openUIModal('setup-wizard');
         skipUserDbProvisioning = false;
+        const preferredMode = decision && decision.mode ? String(decision.mode).trim().toLowerCase() : 'simple';
+        applyProvisioningMode(preferredMode === 'advanced' ? 'advanced' : 'simple');
         
         // Initialize User DB EC Container if empty
         const container = document.getElementById('setup-db-ec-container');
@@ -795,6 +797,19 @@
 
         // Populate Summary on Step 3
         if (currentWizardStep === 3) {
+            if (currentProvisioningMode === 'simple') {
+                const regPath = document.getElementById('setup-reg-path').value;
+                const port = document.getElementById('setup-port').value;
+                document.getElementById('setup-summary').innerHTML = `
+                    <strong>Provisioning Mode:</strong> Simple setup<br>
+                    <strong>System Database:</strong> ${regPath || 'Default local path'}<br>
+                    <strong>Port:</strong> ${port}<br>
+                    <strong>User Database:</strong> Not created during simple setup<br>
+                    <strong>Configuration:</strong> Local defaults with shared first-boot provisioning<br>
+                `;
+                return;
+            }
+
             // User DB Config (Step 1)
             const dbName = document.getElementById('setup-db-name').value;
             const dbPath = document.getElementById('setup-db-path').value;
@@ -915,6 +930,14 @@
         if (currentWizardStep < 3) {
             // Validation
             if (currentWizardStep === 1) { // Was 2: User DB
+                if (currentProvisioningMode === 'simple') {
+                    skipUserDbProvisioning = true;
+                    populateStep1Defaults();
+                    currentWizardStep++;
+                    updateWizardStep();
+                    return;
+                }
+
                 skipUserDbProvisioning = false;
 
                 // Unified Validation
@@ -924,6 +947,12 @@
                 populateStep1Defaults();
 
             } else if (currentWizardStep === 2) { // Was 1: System Config
+                 if (currentProvisioningMode === 'simple') {
+                     currentWizardStep++;
+                     updateWizardStep();
+                     return;
+                 }
+
                  const manualEntToggle = document.getElementById('setup-sys-use-manual-enterprise');
                  const isShared = manualEntToggle && manualEntToggle.checked;
                  const path = document.getElementById('setup-reg-path').value;
@@ -1064,7 +1093,243 @@
         updateWizardStep();
     }
 
+    function submitProvisioningRequest(endpoint, finalPayload, options) {
+        const rootPassword = options.rootPassword;
+        const port = options.port;
+        const regPath = options.regPath;
+        const validationRegPath = options.validationRegPath;
+        const populateDemo = Boolean(options.populateDemo);
+        const dbName = options.dbName || '';
+        const selectedTemplateCount = options.selectedTemplateCount || 0;
+
+        const loadingModal = document.getElementById('setup-loading-modal');
+        const pb = document.getElementById('setup-progress-bar');
+        const pbDetails = document.getElementById('setup-loading-details');
+
+        if (loadingModal) {
+            loadingModal.style.display = 'flex';
+            closeUIModal('setup-wizard');
+            pb.style.width = '10%';
+            pbDetails.innerHTML = '- Initializing config save...<br>';
+
+            let pTicks = 0;
+            const progressItl = setInterval(() => {
+                pTicks++;
+                if (pTicks === 2) {
+                    pb.style.width = '30%';
+                    pbDetails.innerHTML += '- Creating System & User Data Stores...<br>';
+                } else if (pTicks === 4 && (populateDemo || selectedTemplateCount > 0)) {
+                    pb.style.width = '50%';
+                    pbDetails.innerHTML += '- Pre-loading specified template datasets...<br>';
+                    document.getElementById('setup-loading-message').innerText = 'Loading templates - this may take a bit...';
+                } else if (pTicks === 7 && selectedTemplateCount > 0) {
+                    pb.style.width = '70%';
+                    pbDetails.innerHTML += '- Compiling semantic models...<br>';
+                } else if (pTicks === 8 && populateDemo) {
+                    pb.style.width = '85%';
+                    pbDetails.innerHTML += '- Inserting demo & medical domains concurrently...<br>';
+                } else if (pTicks >= 10) {
+                    pb.style.width = '95%';
+                    pbDetails.innerHTML += '- Waiting for final DB persistence sync...<br>';
+                    clearInterval(progressItl);
+                }
+            }, 1500);
+
+            window._setupProgressItl = progressItl;
+        }
+
+        apiCall(endpoint, 'POST', finalPayload)
+        .then(async (result) => {
+            if (window._setupProgressItl) clearInterval(window._setupProgressItl);
+
+            if (!rootPassword) {
+                throw new Error('Root password is required to complete setup.');
+            }
+            try {
+                const loginRes = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: 'root', password: rootPassword })
+                });
+                const loginBody = await loginRes.json().catch(() => null);
+                if (!loginRes.ok) {
+                    const text = loginBody && (loginBody.error || loginBody.message)
+                        ? (loginBody.error || loginBody.message)
+                        : await loginRes.text();
+                    throw new Error(text || 'auto-login failed');
+                }
+                if (!storeSessionTokens(loginBody)) {
+                    throw new Error('Auto-login succeeded but did not return an access token.');
+                }
+            } catch (e) {
+                throw new Error(`Auto-login after setup failed: ${e.message || e}`);
+            }
+
+            let sopTaskId = null;
+            let medTaskId = null;
+            const effectiveRegPath = (result && result.registry_path) ? result.registry_path : (regPath || validationRegPath);
+            const systemDbNameForPreload = (() => {
+                const pathToUse = effectiveRegPath;
+                if (!pathToUse) return 'system';
+                const parts = pathToUse.split(/[\\/]/).filter(Boolean);
+                return parts[parts.length - 1] || 'system';
+            })();
+
+            try {
+                const sopRes = await authFetch('/api/spaces/preload', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        template_id: 'core_playbook',
+                        database_name: systemDbNameForPreload
+                    })
+                });
+                if (sopRes.ok) {
+                    const data = await sopRes.json();
+                    sopTaskId = data.task_id;
+                } else {
+                    const text = await sopRes.text();
+                    alert('Critical Error: Missing Core Playbook KB JSON! Core Playbook Space failed to initialize: ' + text);
+                    console.error('Critical Core Playbook KB missing:', text);
+                }
+            } catch (e) {
+                console.error('Failed to trigger Core Playbook preload:', e);
+                alert('Critical Error: Failed to trigger Core Playbook preload. ' + e.message);
+            }
+
+            if (populateDemo && dbName) {
+                try {
+                    const medRes = await authFetch('/api/spaces/preload', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            template_id: 'medical',
+                            database_name: dbName
+                        })
+                    });
+                    if (medRes.ok) {
+                        const data = await medRes.json();
+                        medTaskId = data.task_id;
+                    }
+                } catch (e) {
+                    console.error('Failed to trigger Medical preload:', e);
+                }
+            }
+
+            try {
+                const msg = document.getElementById('setup-loading-message');
+                if (msg) msg.innerText = 'Preloading spaces...';
+
+                const pollPromises = [];
+                if (sopTaskId) pollPromises.push(pollLongRunningTask(sopTaskId, null, null, 'Core Playbook', false));
+                if (medTaskId) pollPromises.push(pollLongRunningTask(medTaskId, null, null, 'Medical', false));
+
+                const results = await Promise.allSettled(pollPromises);
+                const errors = results.filter(r => r.status === 'rejected').map(r => r.reason.message || r.reason);
+                if (errors.length > 0) {
+                    throw new Error(errors.join(' | '));
+                }
+            } catch (e) {
+                console.error('Error during space preloading:', e);
+                alert('Critical Error: Failed to preload Knowledge Base JSON: ' + e);
+                const details = document.getElementById('setup-loading-details');
+                if (details) details.innerHTML += `<span style="color: var(--text-red);">- Preload Error: ${e.message}</span><br>`;
+                await new Promise(r => setTimeout(r, 2000));
+            }
+
+            if (loadingModal) {
+                loadingModal.style.display = 'none';
+            }
+
+            try {
+                localStorage.setItem('sop_provisioning_done', '1');
+                sessionStorage.setItem('sop_provisioning_done', '1');
+            } catch (e) {
+                console.warn('Unable to cache provisioning completion flag', e);
+            }
+
+            resetSetupForm();
+
+            const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+            if (port && port != parseInt(currentPort)) {
+                const hostname = window.location.hostname;
+                const newUrl = `${window.location.protocol}//${hostname}:${port}/app`;
+                showAlert(`Setup Complete! IMPORTANT: You changed the port to ${port}. Please RESTART the server manually, then open: ${newUrl}`, null);
+                window.location.assign(newUrl);
+            } else {
+                window.location.reload();
+            }
+        })
+        .catch(err => {
+            if (window._setupProgressItl) clearInterval(window._setupProgressItl);
+            const loadingModal = document.getElementById('setup-loading-modal');
+            if (loadingModal) loadingModal.style.display = 'none';
+            openUIModal('setup-wizard');
+            console.error(err);
+            const nextBtn = document.getElementById('wizard-next');
+            nextBtn.disabled = false;
+            nextBtn.textContent = 'Finish';
+            nextBtn.title = 'Click "Finish" to create the configuration and initialize the databases.';
+        });
+    }
+
+    function finishSimpleSetup() {
+        const rootPassword = document.getElementById('setup-root-password')?.value || '';
+        const port = parseInt(document.getElementById('setup-port').value);
+        const regPath = (document.getElementById('setup-reg-path')?.value || '').trim();
+        const bProviderValue = document.getElementById('setup-brain-provider') ? document.getElementById('setup-brain-provider').value : '';
+        const bParts = splitProviderValue(bProviderValue);
+        const bProvider = bParts.provider;
+        const bModel = bParts.model || (document.getElementById('setup-brain-model') ? document.getElementById('setup-brain-model').value.trim() : '');
+        const bUrl = document.getElementById('setup-brain-url') ? document.getElementById('setup-brain-url').value.trim() : '';
+        const bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : '';
+        const eProviderValue = document.getElementById('setup-embedder-provider') ? document.getElementById('setup-embedder-provider').value : '';
+        const eParts = splitProviderValue(eProviderValue);
+        const eProvider = eParts.provider;
+        const eModel = eParts.model || (document.getElementById('setup-embedder-model') ? document.getElementById('setup-embedder-model').value.trim() : '');
+        const eUrl = document.getElementById('setup-embedder-url') ? document.getElementById('setup-embedder-url').value.trim() : '';
+        const eApiKey = document.getElementById('setup-embedder-api-key') ? document.getElementById('setup-embedder-api-key').value.trim() : '';
+
+        mergeStoredAIConfigSecure({
+            brain_provider: bProvider,
+            brain_model: bModel,
+            brain_url: bUrl,
+            brain_api_key: bApiKey,
+            embedder_provider: eProvider,
+            embedder_model: eModel,
+            embedder_url: eUrl,
+            embedder_api_key: eApiKey
+        });
+
+        const nextBtn = document.getElementById('wizard-next');
+        nextBtn.disabled = true;
+        nextBtn.textContent = 'Setting up...';
+        nextBtn.title = 'Creating databases and configuring environments...';
+
+        submitProvisioningRequest('/api/config/provision/simple', {
+            registry_path: regPath,
+            port: port,
+            root_password: rootPassword,
+            system_admin_bootstrap_secret: document.getElementById('setup-system-admin-bootstrap-secret')?.value || '',
+            vectorization_recovery_storage_path: document.getElementById('setup-vectorization-recovery-storage-path')?.value || ''
+        }, {
+            rootPassword: rootPassword,
+            port: port,
+            regPath: regPath,
+            validationRegPath: regPath,
+            populateDemo: false,
+            dbName: '',
+            selectedTemplateCount: 0
+        });
+    }
+
     function finishSetup() {
+        if (currentProvisioningMode === 'simple') {
+            finishSimpleSetup();
+            return;
+        }
+
         // Collect DB Settings
         let dbName = document.getElementById('setup-db-name').value;
         let dbPath = document.getElementById('setup-db-path').value;
@@ -1303,189 +1568,14 @@
             databases: databases
         };
 
-        // UI Loading State (Synchronous wait for the heavy DBs)
-        const loadingModal = document.getElementById('setup-loading-modal');
-        const pb = document.getElementById('setup-progress-bar');
-        const pbDetails = document.getElementById('setup-loading-details');
-        
-        if (loadingModal) {
-            loadingModal.style.display = 'flex';
-            closeUIModal('setup-wizard');
-            pb.style.width = '10%';
-            pbDetails.innerHTML = '- Initializing config save...<br>';
-            
-            // Faux progress steps since response is monolithic
-            let pTicks = 0;
-            const maxTicks = 10;
-            const progressItl = setInterval(() => {
-                pTicks++;
-                if (pTicks === 2) {
-                    pb.style.width = '30%';
-                    pbDetails.innerHTML += '- Creating System & User Data Stores...<br>';
-                  } else if (pTicks === 4 && (populateDemo || document.querySelectorAll('input[id^="setup-populate-template-"]:checked').length > 0)) {
-                      pb.style.width = '50%';
-                      pbDetails.innerHTML += '- Pre-loading specified template datasets...<br>';
-                      document.getElementById('setup-loading-message').innerText = 'Loading templates - this may take a bit...';
-                  } else if (pTicks === 7 && document.querySelectorAll('input[id^="setup-populate-template-"]:checked').length > 0) {
-                      pb.style.width = '70%';
-                      pbDetails.innerHTML += '- Compiling semantic models...<br>';
-                } else if (pTicks === 8 && populateDemo) {
-                    pb.style.width = '85%';
-                    pbDetails.innerHTML += '- Inserting demo & medical domains concurrently...<br>';
-                } else if (pTicks >= 10) {
-                    pb.style.width = '95%';
-                    pbDetails.innerHTML += '- Waiting for final DB persistence sync...<br>';
-                    clearInterval(progressItl);
-                }
-            }, 1500);
-            
-            window._setupProgressItl = progressItl;
-        }
-
-        // 1. Single Atomic Save & Setup Call
-        apiCall('/api/config/save', 'POST', finalPayload)
-        .then(async () => {
-            if (window._setupProgressItl) clearInterval(window._setupProgressItl);
-
-            // 2. Auto-login immediately after setup so subsequent protected calls run
-            // within the newly created first-run session instead of redirecting to /login.
-            const rootPassword = (document.getElementById('setup-root-password')?.value || '').trim();
-            if (!rootPassword) {
-                throw new Error('Root password is required to complete setup.');
-            }
-            try {
-                const loginRes = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: 'root', password: rootPassword })
-                });
-                const loginBody = await loginRes.json().catch(() => null);
-                if (!loginRes.ok) {
-                    const text = loginBody && (loginBody.error || loginBody.message)
-                        ? (loginBody.error || loginBody.message)
-                        : await loginRes.text();
-                    throw new Error(text || 'auto-login failed');
-                }
-                if (!storeSessionTokens(loginBody)) {
-                    throw new Error('Auto-login succeeded but did not return an access token.');
-                }
-            } catch (e) {
-                throw new Error(`Auto-login after setup failed: ${e.message || e}`);
-            }
-
-            let sopTaskId = null;
-            let medTaskId = null;
-
-            // Derive system database name from the configured path
-            const systemDbNameForPreload = (() => {
-                const pathToUse = regPath || validationRegPath;
-                if (!pathToUse) return 'system';
-                const parts = pathToUse.split(/[\\/]/).filter(Boolean);
-                return parts[parts.length - 1] || 'system';
-            })();
-
-            // 3. Trigger Core Playbook Space preload
-            try {
-                const sopRes = await authFetch('/api/spaces/preload', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        template_id: 'core_playbook',
-                        database_name: systemDbNameForPreload
-                    })
-                });
-                if (sopRes.ok) {
-                    const data = await sopRes.json();
-                    sopTaskId = data.task_id;
-                } else {
-                    const text = await sopRes.text();
-                    alert("Critical Error: Missing Core Playbook KB JSON! Core Playbook Space failed to initialize: " + text);
-                    console.error("Critical Core Playbook KB missing:", text);
-                }
-            } catch (e) {
-                console.error("Failed to trigger Core Playbook preload:", e);
-                alert("Critical Error: Failed to trigger Core Playbook preload. " + e.message);
-            }
-
-            // 4. Trigger Medical Space preload if requested (Preload Examples checkbox)
-            if (populateDemo) {
-                try {
-                    const medRes = await authFetch('/api/spaces/preload', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            template_id: 'medical',
-                            database_name: dbName
-                        })
-                    });
-                    if (medRes.ok) {
-                        const data = await medRes.json();
-                        medTaskId = data.task_id;
-                    }
-                } catch (e) {
-                    console.error("Failed to trigger Medical preload:", e);
-                }
-            }
-
-            // 5. Poll Tasks via global system
-            try {
-                const msg = document.getElementById('setup-loading-message');
-                if (msg) msg.innerText = 'Preloading spaces...';
-
-                const pollPromises = [];
-                if (sopTaskId) pollPromises.push(pollLongRunningTask(sopTaskId, null, null, "Core Playbook", false));
-                if (medTaskId) pollPromises.push(pollLongRunningTask(medTaskId, null, null, "Medical", false));
-                
-                const results = await Promise.allSettled(pollPromises);
-                const errors = results.filter(r => r.status === 'rejected').map(r => r.reason.message || r.reason);
-                if (errors.length > 0) {
-                    throw new Error(errors.join(" | "));
-                }
-            } catch (e) {
-                console.error("Error during space preloading:", e);
-                alert("Critical Error: Failed to preload Knowledge Base JSON: " + e);
-                // We'll still proceed to finish setup, but log the error
-                const details = document.getElementById('setup-loading-details');
-                if (details) details.innerHTML += `<span style="color: var(--text-red);">- Preload Error: ${e.message}</span><br>`;
-                await new Promise(r => setTimeout(r, 2000));
-            }
-
-            if (loadingModal) {
-                loadingModal.style.display = 'none';
-            }
-
-            try {
-                localStorage.setItem('sop_provisioning_done', '1');
-                sessionStorage.setItem('sop_provisioning_done', '1');
-            } catch (e) {
-                console.warn('Unable to cache provisioning completion flag', e);
-            }
-
-              // 6. Enter the app with the session established above unless a port
-              // change requires the user to restart the server first.
-            resetSetupForm();
-
-            const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
-            if (port && port != parseInt(currentPort)) {
-                 const hostname = window.location.hostname;
-                 const newUrl = `${window.location.protocol}//${hostname}:${port}/app`;
-                 showAlert(`Setup Complete! IMPORTANT: You changed the port to ${port}. Please RESTART the server manually, then open: ${newUrl}`, null);
-                 window.location.assign(newUrl);
-            } else {
-                  // Setup complete - stay in Data Manager (user is already logged in)
-                  window.location.reload();
-            }
-        })
-        .catch(err => {
-            if (window._setupProgressItl) clearInterval(window._setupProgressItl);
-            const loadingModal = document.getElementById('setup-loading-modal');
-            if (loadingModal) loadingModal.style.display = 'none';
-            openUIModal('setup-wizard'); // Restore UI
-            console.error(err);
-            nextBtn.disabled = false;
-            nextBtn.textContent = "Finish";
-            nextBtn.title = 'Click "Finish" to create the configuration and initialize the databases.';
+        submitProvisioningRequest('/api/config/save', finalPayload, {
+            rootPassword: (document.getElementById('setup-root-password')?.value || '').trim(),
+            port: port,
+            regPath: regPath,
+            validationRegPath: validationRegPath,
+            populateDemo: populateDemo,
+            dbName: dbName,
+            selectedTemplateCount: document.querySelectorAll('input[id^="setup-populate-template-"]:checked').length
         });
     }
 

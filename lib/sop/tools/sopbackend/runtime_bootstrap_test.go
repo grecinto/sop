@@ -61,7 +61,7 @@ func TestInitializeRuntimeBootstrapsConfigAndReturnsResolvedPath(t *testing.T) {
 		t.Fatalf("write temp config: %v", err)
 	}
 
-	resolvedPath, err := InitializeRuntime(context.Background(), configPath, RuntimeOptions{}, 0, nil)
+	resolvedPath, err := InitializeRuntime(context.Background(), configPath, RuntimeOptions{HostKind: HostKindDaemon}, 0, nil)
 	if err != nil {
 		t.Fatalf("InitializeRuntime() error = %v", err)
 	}
@@ -75,5 +75,53 @@ func TestInitializeRuntimeBootstrapsConfigAndReturnsResolvedPath(t *testing.T) {
 	}
 	if cfg.Port != 9090 {
 		t.Fatalf("GetConfig().Port = %d, want 9090", cfg.Port)
+	}
+	if cfg.HostKind != HostKindDaemon {
+		t.Fatalf("GetConfig().HostKind = %q, want %q", cfg.HostKind, HostKindDaemon)
+	}
+	if cfg.HostProfile.Kind != HostKindDaemon {
+		t.Fatalf("GetConfig().HostProfile.Kind = %q, want %q", cfg.HostProfile.Kind, HostKindDaemon)
+	}
+	if cfg.HostProfile.DefaultProvisioningMode != ProvisioningModeSimple {
+		t.Fatalf("GetConfig().HostProfile.DefaultProvisioningMode = %q, want %q", cfg.HostProfile.DefaultProvisioningMode, ProvisioningModeSimple)
+	}
+}
+
+func TestInitializeRuntimeRepairsConfiguredSystemDBOnStartup(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_SESSION_SECRET", "session-secret")
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	systemPath := filepath.Join(tmpDir, ".sop-data", SystemDBName)
+	configContents := []byte("{\n  \"port\": 9090,\n  \"production_mode\": true,\n  \"system_db\": {\n    \"name\": \"system\",\n    \"path\": \"" + systemPath + "\",\n    \"mode\": \"standalone\"\n  },\n  \"databases\": []\n}\n")
+	if err := os.WriteFile(configPath, configContents, 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	if _, err := InitializeRuntime(context.Background(), configPath, RuntimeOptions{HostKind: HostKindDaemon}, 0, nil); err != nil {
+		t.Fatalf("InitializeRuntime() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(systemPath, "dboptions.json")); err != nil {
+		t.Fatalf("expected InitializeRuntime() to materialize configured system DB, stat error = %v", err)
+	}
+}
+
+func TestInitializeRuntimeDefaultsUnknownHostKindWhenNotSpecified(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("SOP_SESSION_SECRET", "session-secret")
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	if _, err := InitializeRuntime(context.Background(), configPath, RuntimeOptions{}, 0, ptrBool(false)); err != nil {
+		t.Fatalf("InitializeRuntime() error = %v", err)
+	}
+	if cfg := GetConfig(); cfg.HostKind != HostKindUnknown {
+		t.Fatalf("GetConfig().HostKind = %q, want %q", cfg.HostKind, HostKindUnknown)
 	}
 }

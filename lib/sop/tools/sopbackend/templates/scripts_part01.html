@@ -150,7 +150,7 @@
         if (runtimeMode !== 'local') {
             return endpoint;
         }
-        const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
+        const daemonBase = (typeof getLocalRuntimeBaseURL === 'function' ? getLocalRuntimeBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
         return `${daemonBase}${endpoint}`;
     }
 
@@ -215,7 +215,7 @@
             headers['Cache-Control'] = 'no-store';
             headers.Pragma = 'no-cache';
             applyRuntimeAuthHeaders(headers, endpoint);
-            const response = await daemonRuntimeRequest(endpoint, Object.assign({}, options, {
+            const response = await localRuntimeRequest(endpoint, Object.assign({}, options, {
                 cache: 'no-store',
                 credentials: 'omit',
                 headers
@@ -351,7 +351,7 @@
 
             if (runtimeMode === 'local' && typeof endpoint === 'string' && endpoint.startsWith('/api/')) {
                 applyRuntimeAuthHeaders(h, endpoint);
-                const response = await daemonRuntimeRequest(endpoint, options);
+                const response = await localRuntimeRequest(endpoint, options);
                 if (!response.ok) {
                     const text = await response.text();
                     throw new Error(`API Error (${response.status}): ${text || response.statusText}`);
@@ -414,7 +414,7 @@
 
                 const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
 
-                const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
+                const daemonBase = (typeof getLocalRuntimeBaseURL === 'function' ? getLocalRuntimeBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
                 const targetUrl = `${daemonBase}${endpoint}`;
                 if (useDaemonAuth && window.daemonAuth) {
                     const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
@@ -933,6 +933,9 @@
     const CURRENT_CONFIG_FILE = "{{ .ConfigFile }}";
 
     function shouldDisplaySetupWizard(runtimeMode) {
+        if (runtimeRefreshPayload && runtimeRefreshPayload.provisioning) {
+            return Boolean(runtimeRefreshPayload.provisioning.required);
+        }
         const hasExistingConfig = Boolean(
             typeof CURRENT_CONFIG_FILE !== 'undefined' &&
             CURRENT_CONFIG_FILE &&
@@ -985,6 +988,7 @@
     let columnWidths = [];
     let availableDatabases = [];
     let runtimeRefreshPayload = null;
+    let currentProvisioningMode = 'simple';
     let lastRuntimeMode = null;
     const CHIP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M6.5 0a.5.5 0 0 1 .5.5V3h3V.5a.5.5 0 0 1 1 0V3h1a2 2 0 0 1 2 2v1h1.5a.5.5 0 0 1 0 1H14v3h1.5a.5.5 0 0 1 0 1H14v1a2 2 0 0 1-2 2h-1v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14h-3v1.5a.5.5 0 0 1-1 0V14H5a2 2 0 0 1-2-2v-1H1.5a.5.5 0 0 1 0-1H3V8H1.5a.5.5 0 0 1 0-1H3V5a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM5 4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1H5z"/></svg>`;
 
@@ -1006,14 +1010,14 @@
         return Boolean(window.daemonAuth && typeof window.daemonAuth.bootstrap === 'function');
     }
 
-    async function daemonRuntimeRequest(endpoint, options = {}) {
-        const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
+    async function localRuntimeRequest(endpoint, options = {}) {
+        const daemonBase = (typeof getLocalRuntimeBaseURL === 'function' ? getLocalRuntimeBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
         const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
 
         if (useDaemonAuth) {
             const authReady = await waitForDaemonAuthClient(4000);
             if (!authReady) {
-                console.warn('[daemonRuntimeRequest] daemon auth client not available yet; continuing without auth');
+                console.warn('[localRuntimeRequest] daemon auth client not available yet; continuing without auth');
             } else if (window.daemonAuth) {
                 const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
                 if (existingToken) {
@@ -1037,9 +1041,9 @@
     async function loadRuntimeRefreshPayload() {
         const runtimeMode = getCurrentRuntimeMode();
         if (runtimeMode === 'local') {
-            const daemonBase = (typeof getDaemonBaseURL === 'function' ? getDaemonBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
+            const daemonBase = (typeof getLocalRuntimeBaseURL === 'function' ? getLocalRuntimeBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
             try {
-                const response = await daemonRuntimeRequest('/api/runtime/refresh', {
+                const response = await localRuntimeRequest('/api/runtime/refresh', {
                     method: 'GET',
                     headers: { 'Content-Type': 'application/json' },
                     cache: 'no-store',
@@ -1056,8 +1060,8 @@
                 }
             } catch (err) {
                 // When in local mode, don't fall back to HQ - surface the connection error
-                console.error('Local daemon connection failed:', err);
-                throw new Error(`Cannot connect to local daemon at ${daemonBase}. Ensure the daemon is running.`);
+                console.error('Local runtime connection failed:', err);
+                throw new Error(`Cannot connect to local runtime at ${daemonBase}. Ensure the runtime is running.`);
             }
         }
         return await apiCall('/api/runtime/refresh');
@@ -1168,7 +1172,7 @@
                     }
 
                     if (shouldDisplaySetupWizard(runtimeMode)) {
-                        showSetupWizard();
+                        showSetupWizard(payload && payload.provisioning ? payload.provisioning : null);
                     }
                     return;
                 }
@@ -1360,14 +1364,14 @@
                 console.error(err);
                 const runtimeMode = getCurrentRuntimeMode();
                 
-                // Handle local daemon connection failure with clear user messaging
-                if (runtimeMode === 'local' && err.message && err.message.includes('Cannot connect to local daemon')) {
+                // Handle local runtime connection failure with clear user messaging
+                if (runtimeMode === 'local' && err.message && err.message.includes('Cannot connect to local runtime')) {
                     // Don't use showAlert during page initialization - it can cause infinite recursion
                     // if the modal DOM isn't ready yet
-                    console.warn('[reloadDatabases] Local daemon unavailable:', err.message);
+                    console.warn('[reloadDatabases] Local runtime unavailable:', err.message);
                     const select = document.getElementById('database-select');
                     if (select) {
-                        select.innerHTML = '<option>Local daemon offline</option>';
+                        select.innerHTML = '<option>Local runtime offline</option>';
                     }
                 } else {
                     document.getElementById('database-select').innerHTML = '<option>Error loading databases</option>';
@@ -1382,7 +1386,7 @@
         const checkbox = document.getElementById('chat-runtime-hq');
         const shouldShow = Boolean(checkbox && checkbox.checked) || (!checkbox && getCurrentRuntimeMode() === 'hq');
         button.style.display = shouldShow ? 'inline-flex' : 'none';
-        button.title = shouldShow ? 'Manage Environments' : 'Environment Manager is unavailable in local daemon mode';
+        button.title = shouldShow ? 'Manage Environments' : 'Environment Manager is unavailable in local runtime mode';
     }
 
     async function initializeDashboardBootstrap() {

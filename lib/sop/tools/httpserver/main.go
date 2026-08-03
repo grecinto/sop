@@ -198,6 +198,7 @@ func main() {
 	}
 	targetConfigPath, err := sopbackend.InitializeRuntime(context.Background(), configFile, sopbackend.RuntimeOptions{
 		EnableStoresFeature: enableStores,
+		HostKind:            sopbackend.HostKindHQ,
 	}, port, &effectiveProductionMode)
 	if err != nil {
 		log.Error(fmt.Sprintf("Failed to initialize shared backend: %v", err))

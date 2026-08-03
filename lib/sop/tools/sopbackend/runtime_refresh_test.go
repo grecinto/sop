@@ -26,11 +26,12 @@ func TestHandleRuntimeRefreshReturnsDatabaseCatalog(t *testing.T) {
 	}
 
 	var resp struct {
-		Runtime          string              `json:"runtime"`
-		Databases        []DatabaseConfig    `json:"databases"`
-		SelectedDatabase string              `json:"selected_database,omitempty"`
-		Stores           map[string][]string `json:"stores,omitempty"`
-		Spaces           map[string][]string `json:"spaces,omitempty"`
+		Runtime          string               `json:"runtime"`
+		Databases        []DatabaseConfig     `json:"databases"`
+		SelectedDatabase string               `json:"selected_database,omitempty"`
+		Stores           map[string][]string  `json:"stores,omitempty"`
+		Spaces           map[string][]string  `json:"spaces,omitempty"`
+		Provisioning     ProvisioningDecision `json:"provisioning"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -53,5 +54,8 @@ func TestHandleRuntimeRefreshReturnsDatabaseCatalog(t *testing.T) {
 	}
 	if resp.SelectedDatabase != "local" {
 		t.Fatalf("selected_database = %q, want %q", resp.SelectedDatabase, "local")
+	}
+	if resp.Provisioning.Required {
+		t.Fatalf("expected provisioning to be optional for configured runtime, got %#v", resp.Provisioning)
 	}
 }

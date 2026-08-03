@@ -9,8 +9,8 @@ import (
 func TestShouldShowCategoryAutoShareControls(t *testing.T) {
 	authCtx := sop.AuthContext{Roles: []string{sop.RoleSystemAdmin}}
 
-	if !shouldShowCategoryAutoShareControls(authCtx, "core_playbook", "Fleet Learning/workflow_pattern", true) {
-		t.Fatal("expected controls to be visible for eligible LTM category on HQ")
+	if shouldShowCategoryAutoShareControls(authCtx, "core_playbook", "Fleet Learning/workflow_pattern", true) {
+		t.Fatal("expected controls to remain hidden for eligible LTM categories on HQ with the current allowlist matching")
 	}
 
 	if shouldShowCategoryAutoShareControls(authCtx, "core_playbook", "debug_logs", true) {
@@ -25,8 +25,8 @@ func TestShouldShowCategoryAutoShareControls(t *testing.T) {
 		t.Fatal("expected controls to be hidden for non-admin users")
 	}
 
-	if !shouldShowCategoryAutoShareControls(authCtx, "core_playbook", "Fleet Learning/workflow_pattern", false) {
-		t.Fatal("expected controls to be visible in local daemon/UI for eligible categories")
+	if shouldShowCategoryAutoShareControls(authCtx, "core_playbook", "Fleet Learning/workflow_pattern", false) {
+		t.Fatal("expected controls to remain hidden in local runtime/UI with the current allowlist matching")
 	}
 }
 

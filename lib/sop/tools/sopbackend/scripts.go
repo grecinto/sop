@@ -132,7 +132,7 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		log.Debug("withAuth: handler invocation", "handler", handlerName(next), "method", r.Method, "path", r.URL.Path)
 
-		// Bypass authentication if disabled (for local daemon)
+		// Bypass authentication if disabled (for local runtime)
 		if config.DisableAuth {
 			log.Debug("withAuth: skipping authentication (disabled)", "path", r.URL.Path, "method", r.Method)
 			next(w, r)

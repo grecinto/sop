@@ -582,7 +582,7 @@ func TestRefreshSpacesListHidesDomainSelectWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestChatRuntimeSwitchHandlesLocalDaemonFallbackInTemplate(t *testing.T) {
+func TestChatRuntimeSwitchHandlesLocalRuntimeFallbackInTemplate(t *testing.T) {
 	scriptsPath := templatePath("scripts_part05.html")
 	scriptsData, err := os.ReadFile(scriptsPath)
 	if err != nil {
@@ -592,8 +592,8 @@ func TestChatRuntimeSwitchHandlesLocalDaemonFallbackInTemplate(t *testing.T) {
 	if !strings.Contains(scriptsContent, "handleRuntimeSwitchReloadError") {
 		t.Fatalf("expected runtime switch to use a resilient reload-error handler in %s", scriptsPath)
 	}
-	if !strings.Contains(scriptsContent, "Cannot connect to local daemon") {
-		t.Fatalf("expected runtime switch to handle local daemon connection failures gracefully in %s", scriptsPath)
+	if !strings.Contains(scriptsContent, "Cannot connect to local runtime") {
+		t.Fatalf("expected runtime switch to handle local runtime connection failures gracefully in %s", scriptsPath)
 	}
 }
 
@@ -609,5 +609,31 @@ func TestChatRuntimeWelcomeContextRequestsHQContextForHQRuntime(t *testing.T) {
 	}
 	if !strings.Contains(scriptsContent, "const response = await authFetch('/api/ai/test-connection'") {
 		t.Fatalf("expected HQ runtime welcome-context flow to call the HQ test-connection endpoint in %s", scriptsPath)
+	}
+}
+
+func TestSetupProvisioningModeChooserRoutesSimpleAndAdvancedEndpoints(t *testing.T) {
+	scriptsPath := templatePath("scripts_part10.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read setup script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+
+	for _, token := range []string{
+		"function finishSimpleSetup()",
+		"submitProvisioningRequest('/api/config/provision/simple'",
+		"function finishSetup()",
+		"if (currentProvisioningMode === 'simple') {",
+		"finishSimpleSetup();",
+		"submitProvisioningRequest('/api/config/save', finalPayload",
+	} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected setup chooser routing token %q in %s", token, scriptsPath)
+		}
+	}
+
+	if strings.Index(scriptsContent, "submitProvisioningRequest('/api/config/provision/simple'") > strings.Index(scriptsContent, "submitProvisioningRequest('/api/config/save', finalPayload") {
+		t.Fatalf("expected simple setup endpoint declaration to appear before advanced save routing in %s", scriptsPath)
 	}
 }

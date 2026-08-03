@@ -50,6 +50,21 @@ type SaveConfigRequest struct {
 	Databases      []UserDBRequest     `json:"databases"`
 }
 
+type SimpleProvisionRequest struct {
+	RegistryPath string `json:"registry_path,omitempty"`
+	Port         int    `json:"port,omitempty"`
+	RootPassword string `json:"root_password,omitempty"`
+
+	SystemAdminBootstrapSecret       string `json:"system_admin_bootstrap_secret,omitempty"`
+	VectorizationRecoveryStoragePath string `json:"vectorization_recovery_storage_path,omitempty"`
+}
+
+type saveConfigResponse struct {
+	Status       string `json:"status"`
+	Message      string `json:"message"`
+	RegistryPath string `json:"registry_path,omitempty"`
+}
+
 func validateSetupWizardRootPassword(password string) error {
 	if strings.TrimSpace(password) == "" {
 		return fmt.Errorf("root password is required")
@@ -192,38 +207,66 @@ func loadDatabaseOptionsForReuse(path string) (sop.DatabaseOptions, error) {
 	return database.GetOptions(context.Background(), path)
 }
 
-// handleSaveConfig writes the provided configuration to the specified file path.
-// Broken down into modular steps for readability/maintainability.
-func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
-	log.Debug("TRACE: handleSaveConfig called")
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+func defaultSimpleProvisioningRegistryPath() string {
+	baseDir := ""
+	if strings.TrimSpace(config.ConfigFile) != "" {
+		baseDir = filepath.Dir(config.ConfigFile)
+	}
+	if strings.TrimSpace(baseDir) == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			baseDir = cwd
+		} else {
+			baseDir = "."
+		}
+	}
+	return filepath.Join(baseDir, ".sop-data", SystemDBName)
+}
+
+func buildSimpleProvisionSaveRequest(req *SimpleProvisionRequest) *SaveConfigRequest {
+	registryPath := ""
+	if strings.TrimSpace(req.RegistryPath) != "" {
+		registryPath = sanitizePath(req.RegistryPath)
+	}
+	if strings.TrimSpace(registryPath) == "" {
+		registryPath = defaultSimpleProvisioningRegistryPath()
 	}
 
-	// 1. Parse Request
-	req, err := parseSaveConfigRequest(r)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
+	port := req.Port
+	if port <= 0 {
+		port = config.Port
 	}
+	if port <= 0 {
+		port = 8080
+	}
+
+	return &SaveConfigRequest{
+		RegistryPath: registryPath,
+		Port:         port,
+		RootPassword: req.RootPassword,
+
+		SystemAdminBootstrapSecret:       req.SystemAdminBootstrapSecret,
+		VectorizationRecoveryStoragePath: req.VectorizationRecoveryStoragePath,
+
+		UseSharedBrain: false,
+		SystemOptions: sop.DatabaseOptions{
+			Type: sop.Standalone,
+		},
+		Databases: nil,
+	}
+}
+
+func executeSaveConfigRequest(ctx context.Context, req *SaveConfigRequest) error {
 	if err := validateSetupWizardRootPassword(req.RootPassword); err != nil {
-		http.Error(w, fmt.Sprintf("Validation Failed: %v", err), http.StatusBadRequest)
-		return
+		return fmt.Errorf("Validation Failed: %v", err)
 	}
 	if err := validateSetupWizardSystemAdminSecret(req.SystemAdminBootstrapSecret); err != nil {
-		http.Error(w, fmt.Sprintf("Validation Failed: %v", err), http.StatusBadRequest)
-		return
+		return fmt.Errorf("Validation Failed: %v", err)
 	}
-
-	// 2. Validate Safety (Paths, Conflicts, Permissions)
 	if err := validatePathConflictsAndPermissions(req); err != nil {
 		log.Error(fmt.Sprintf("TRACE: Validation Failed (SaveConfig): %v", err))
-		http.Error(w, fmt.Sprintf("Safety Check Failed: %v", err), http.StatusBadRequest)
-		return
+		return fmt.Errorf("Safety Check Failed: %v", err)
 	}
 
-	// 3. Update global config settings (Memory)
 	if req.Port > 0 {
 		config.Port = req.Port
 	}
@@ -233,35 +276,26 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		config.VectorizationRecoveryStoragePath = ""
 	}
 
-	// 4. Setup System DB (I/O)
-	ctx := r.Context()
 	sysDBConfig, sysCreated, err := setupSystemDB(ctx, req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("System DB Setup Failed: %v", err), http.StatusInternalServerError)
-		return
+		return fmt.Errorf("System DB Setup Failed: %v", err)
 	}
 	if sysDBConfig != nil {
 		config.SystemDB = sysDBConfig
 	}
 
-	// 5. Setup User DBs (I/O)
 	newDBs, err := setupUserDBs(ctx, req)
 	if err != nil {
-		// Orchestrate Global Rollback
 		log.Warn(fmt.Sprintf("Transaction Failed. Rolling back SystemDB created? %v", sysCreated))
 		if sysCreated {
 			cleanupSystemDB(req)
 		}
-		http.Error(w, fmt.Sprintf("User DB Setup Failed: %v", err), http.StatusInternalServerError)
-		return
+		return fmt.Errorf("User DB Setup Failed: %v", err)
 	}
-	// Append valid DBs
 	config.Databases = append(config.Databases, newDBs...)
 
-	// 6. Provision the users store first, then seed the root user into that backing store.
 	if err := config.ensureProvisionedUsersStore(ctx); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to initialize users store: %v", err), http.StatusInternalServerError)
-		return
+		return fmt.Errorf("Failed to initialize users store: %v", err)
 	}
 	if req.RootPassword != "" {
 		rootRole := sop.RoleAdmin
@@ -273,26 +307,74 @@ func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := ensureRootUserFromPassword(req.RootPassword, rootRole, rootFeatures); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to seed root user: %v", err), http.StatusInternalServerError)
-			return
+			return fmt.Errorf("Failed to seed root user: %v", err)
 		}
 	}
-	// 7. Save Config File (Disk)
 	if err := saveConfig(); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to write config file: %v", err), http.StatusInternalServerError)
-		return
+		return fmt.Errorf("Failed to write config file: %v", err)
 	}
 
 	markProvisioningComplete()
 
-	// 8. Reload Agents
 	if err := initAgents(context.Background()); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to initialize agents: %v", err), http.StatusInternalServerError)
+		return fmt.Errorf("Failed to initialize agents: %v", err)
+	}
+
+	return nil
+}
+
+// handleSaveConfig writes the provided configuration to the specified file path.
+// Broken down into modular steps for readability/maintainability.
+func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
+	log.Debug("TRACE: handleSaveConfig called")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	req, err := parseSaveConfigRequest(r)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := executeSaveConfigRequest(r.Context(), req); err != nil {
+		status := http.StatusInternalServerError
+		if strings.HasPrefix(err.Error(), "Validation Failed:") || strings.HasPrefix(err.Error(), "Safety Check Failed:") {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Configuration saved successfully"})
+	json.NewEncoder(w).Encode(saveConfigResponse{Status: "ok", Message: "Configuration saved successfully", RegistryPath: req.RegistryPath})
+}
+
+func handleSimpleProvision(w http.ResponseWriter, r *http.Request) {
+	log.Debug("TRACE: handleSimpleProvision called")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var simpleReq SimpleProvisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&simpleReq); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: decode error: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	saveReq := buildSimpleProvisionSaveRequest(&simpleReq)
+	if err := executeSaveConfigRequest(r.Context(), saveReq); err != nil {
+		status := http.StatusInternalServerError
+		if strings.HasPrefix(err.Error(), "Validation Failed:") || strings.HasPrefix(err.Error(), "Safety Check Failed:") {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(saveConfigResponse{Status: "ok", Message: "Simple provisioning completed successfully", RegistryPath: saveReq.RegistryPath})
 }
 
 func parseSaveConfigRequest(r *http.Request) (*SaveConfigRequest, error) {

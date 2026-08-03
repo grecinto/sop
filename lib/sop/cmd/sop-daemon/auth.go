@@ -114,6 +114,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sharedcode/sop"
@@ -141,6 +142,175 @@ type DaemonAuthHandler struct {
 	hqSigningSecret string
 	syncQueue       *SyncQueue
 	pollClient      *FederationPollClient
+	clientRegistry  *daemonClientRegistry
+}
+
+type daemonClientSession struct {
+	ClientID string
+	UserID   string
+	Role     string
+	Token    string
+	Created  time.Time
+	LastSeen time.Time
+}
+
+type daemonClientRegistry struct {
+	mu      sync.RWMutex
+	clients map[string]daemonClientSession
+	order   []string
+}
+
+func newDaemonClientRegistry() *daemonClientRegistry {
+	return &daemonClientRegistry{clients: make(map[string]daemonClientSession)}
+}
+
+func (r *daemonClientRegistry) Register(clientID, userID, role, token string) daemonClientSession {
+	if r == nil {
+		return daemonClientSession{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if clientID == "" {
+		clientID = fmt.Sprintf("client-%d", len(r.clients)+1)
+	}
+	now := time.Now().UTC()
+	entry := daemonClientSession{ClientID: clientID, UserID: userID, Role: role, Token: token, Created: now, LastSeen: now}
+	r.clients[clientID] = entry
+	if !containsString(r.order, clientID) {
+		r.order = append(r.order, clientID)
+	}
+	return entry
+}
+
+func (r *daemonClientRegistry) Get(clientID string) (daemonClientSession, bool) {
+	if r == nil {
+		return daemonClientSession{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.clients[clientID]
+	return entry, ok
+}
+
+func (r *daemonClientRegistry) Count() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.clients)
+}
+
+func (r *daemonClientRegistry) List() []daemonClientSession {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	clients := make([]daemonClientSession, 0, len(r.clients))
+	for _, id := range r.order {
+		if entry, ok := r.clients[id]; ok {
+			clients = append(clients, entry)
+		}
+	}
+	return clients
+}
+
+func (r *daemonClientRegistry) Touch(clientID, token string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().UTC()
+	if clientID != "" {
+		if entry, ok := r.clients[clientID]; ok {
+			entry.LastSeen = now
+			r.clients[clientID] = entry
+		}
+		return
+	}
+	if token != "" {
+		for id, entry := range r.clients {
+			if entry.Token == token {
+				entry.LastSeen = now
+				r.clients[id] = entry
+				return
+			}
+		}
+	}
+}
+
+func (r *daemonClientRegistry) RemoveStale(ttl time.Duration) int {
+	if r == nil || ttl <= 0 {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().UTC()
+	removed := 0
+	filteredOrder := make([]string, 0, len(r.order))
+	for _, id := range r.order {
+		entry, ok := r.clients[id]
+		if !ok {
+			continue
+		}
+		lastSeen := entry.LastSeen
+		if lastSeen.IsZero() {
+			lastSeen = entry.Created
+		}
+		if now.Sub(lastSeen) >= ttl {
+			delete(r.clients, id)
+			removed++
+			continue
+		}
+		filteredOrder = append(filteredOrder, id)
+	}
+	r.order = filteredOrder
+	return removed
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *DaemonAuthHandler) clientSessionRegistry() *daemonClientRegistry {
+	if h == nil {
+		return nil
+	}
+	if h.clientRegistry == nil {
+		h.clientRegistry = newDaemonClientRegistry()
+	}
+	return h.clientRegistry
+}
+
+func (h *DaemonAuthHandler) cleanupStaleClientSessions(ttl time.Duration) int {
+	if h == nil {
+		return 0
+	}
+	registry := h.clientSessionRegistry()
+	if registry == nil {
+		return 0
+	}
+	return registry.RemoveStale(ttl)
+}
+
+func (h *DaemonAuthHandler) touchClientSession(clientID, token string) {
+	if h == nil {
+		return
+	}
+	registry := h.clientSessionRegistry()
+	if registry != nil {
+		registry.Touch(clientID, token)
+	}
 }
 
 type hqSignedClaims struct {
@@ -897,6 +1067,7 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 	var req struct {
 		BootstrapSecret string `json:"bootstrap_secret"`
 		BootstrapToken  string `json:"bootstrap_token"`
+		ClientID        string `json:"client_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
@@ -920,12 +1091,18 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 			role = "daemon-user"
 		}
 	} else {
-		// Validate using the current bootstrap secret stored on disk.
+		// Validate using the bootstrap secret stored on disk when available, but fall back
+		// to the in-memory secret so additional authenticated clients can reuse the same
+		// daemon bootstrap flow without needing a fresh file.
 		currentBootstrapSecret, err := h.loadBootstrapSecretFromDisk()
 		if err != nil {
-			log.Printf("Failed to load bootstrap secret from disk: %v", err)
-			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
-			return
+			if strings.TrimSpace(h.bootstrapSecret) == "" {
+				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
+				return
+			}
+			currentBootstrapSecret = h.bootstrapSecret
+		} else if strings.TrimSpace(currentBootstrapSecret) != "" && strings.TrimSpace(h.bootstrapSecret) == "" {
+			h.bootstrapSecret = currentBootstrapSecret
 		}
 		if h.bootstrapSecret != currentBootstrapSecret {
 			h.bootstrapSecret = currentBootstrapSecret
@@ -940,7 +1117,7 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		role = "daemon-user"
 	}
 
-	// Create session for the UI client
+	// Create session for the authenticated client.
 	accessToken, refreshToken, err := h.sessionStore.CreateSession(r.Context(), subject, role)
 	if err != nil {
 		log.Printf("Failed to create session: %v", err)
@@ -948,15 +1125,16 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Delete bootstrap file after successful authentication (one-time use)
-	if err := os.Remove(h.bootstrapPath); err != nil {
-		log.Printf("Warning: failed to delete bootstrap file: %v", err)
-		// Continue anyway - authentication succeeded
-	} else {
-		log.Printf("Bootstrap file deleted (one-time use completed)")
+	clientID := strings.TrimSpace(req.ClientID)
+	if clientID == "" {
+		clientID = strings.TrimSpace(readClientID(r))
 	}
+	if clientID == "" {
+		clientID = "default-client"
+	}
+	h.clientSessionRegistry().Register(clientID, subject, role, accessToken)
 
-	log.Printf("UI authenticated successfully via bootstrap")
+	log.Printf("Authenticated client %q successfully via bootstrap", clientID)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
@@ -1090,6 +1268,7 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 			}
 			ctx := sop.ContextWithAuth(r.Context(), authCtx)
 			r = r.WithContext(ctx)
+			h.touchClientSession("", token)
 			next(w, r)
 			return
 		}
@@ -1103,6 +1282,7 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 		}
 		ctx = sop.ContextWithAuth(ctx, authCtx)
 		r = r.WithContext(ctx)
+		h.touchClientSession("", token)
 		next(w, r)
 	}
 }
@@ -1113,4 +1293,17 @@ func extractBearerToken(authHeader string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[1])
+}
+
+func readClientID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(r.Header.Get("X-Client-ID")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(r.Header.Get("X-Client-Id")); value != "" {
+		return value
+	}
+	return ""
 }

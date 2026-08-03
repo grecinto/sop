@@ -313,8 +313,28 @@ func TestSOPBridgeAliasRoutesAreRegisteredOnBackendMux(t *testing.T) {
 
 	mux.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusInternalServerError {
+	if rr.Code == http.StatusNotFound {
 		t.Fatalf("expected SOP bridge alias route to reach tool handler, got status %d body %q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestBackendRegisterHandlers_ProtectsHQSyncRoute(t *testing.T) {
+	oldConfig := config
+	config = Config{}
+	defer func() { config = oldConfig }()
+
+	mux := http.NewServeMux()
+	backend := &Backend{Config: &config, ModelCatalog: &ModelCatalog{}, LoadedAgents: loadedAgents, ActiveSessions: activeSessions}
+	backend.RegisterHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/hq-sync", strings.NewReader(`{"daemon_id":"daemon-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected /api/daemon/hq-sync to require auth on backend mux, got status %d body %q", rr.Code, rr.Body.String())
 	}
 }
 

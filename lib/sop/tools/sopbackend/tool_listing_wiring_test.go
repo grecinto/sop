@@ -29,7 +29,7 @@ func listToolsTextForLoadedAgents(t *testing.T, agents map[string]ai.Agent[map[s
 	return out
 }
 
-func TestInitializeDaemonRuntimeExposesAutomationAndNativeToolsInListTools(t *testing.T) {
+func TestInitializeLocalRuntimeExposesAutomationAndNativeToolsInListTools(t *testing.T) {
 	sharedagent.SetLocalDesktopAutomationEnabled(false)
 	sharedagent.SetAutomationPolicy(sharedagent.DefaultAutomationPolicy())
 	defer sharedagent.SetLocalDesktopAutomationEnabled(false)
@@ -48,9 +48,9 @@ func TestInitializeDaemonRuntimeExposesAutomationAndNativeToolsInListTools(t *te
 	}
 
 	out := listToolsTextForLoadedAgents(t, GetLoadedAgents())
-	for _, expected := range []string{"/execute_script", "/list_stores", "/mint_to_space", "/read_space_config", "/execute_local_command", "/git_status", "/postgres_query", "/splunk_search"} {
+	for _, expected := range []string{"/mint_to_space", "/read_space_config", "/execute_local_command", "/search_repo_files", "/grep_repo_text", "/run_repo_tests", "/read_file"} {
 		if !strings.Contains(out, expected) {
-			t.Fatalf("expected daemon tool list to include %s, got:\n%s", expected, out)
+			t.Fatalf("expected local runtime tool list to include %s, got:\n%s", expected, out)
 		}
 	}
 }

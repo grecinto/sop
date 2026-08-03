@@ -1224,6 +1224,13 @@ This gives us a path to scale the federation layer without requiring a full stre
 **HQ initialization** (tools/httpserver + Setup Wizard):
 HTTPServer serves the Setup Wizard UI on first run. The Setup Wizard is responsible for creating the system database and preloading the Core Playbook KB as part of the initial provisioning flow.
 
+This is now the reference provisioning direction for the shared host framework as well. The Setup Wizard should no longer be treated as HQ-only infrastructure. It should become a reusable host-provisioning framework that supports:
+
+- `Simple` setup: current daemon quick-provisioner behavior with local defaults
+- `Advanced` setup: full Setup Wizard flow for explicit environment control
+
+The standard trigger should be missing first-boot environment state such as a missing `config.json` or missing required runtime configuration.
+
 Setup Wizard preload (scripts_part10.html line ~1253):
 ```javascript
 // Step 3 of Setup Wizard: Trigger Core Playbook Space preload
@@ -1247,6 +1254,8 @@ if config.SystemDB != nil && !config.DisableSOPKBPreload {
 **Daemon bootstrap** (cmd/sop-daemon/main.go):
 For first-run daemon bootstrap, the daemon ships with a packaged copy of the Core Playbook knowledge payload and auto-preloads it on startup into its local system database. This provides deterministic cold-start behavior even when HQ is unavailable or the daemon is starting offline.
 
+The current quick-provisioner behavior should be preserved, but it should be absorbed into the shared provisioning framework as the `Simple` setup mode instead of remaining a daemon-only special case.
+
 Daemon auto-preload on startup:
 ```go
 if cfg.SystemDB != nil {
@@ -1263,8 +1272,10 @@ if cfg.SystemDB != nil {
 
 This gives us:
 - **HQ**: Setup Wizard creates core_playbook during provisioning (manual/guided flow) + auto-bootstrap on restart (safety net)
-- **Daemon**: Auto-bootstrap creates local core_playbook on startup (unattended flow)
+- **Daemon**: Auto-bootstrap creates local core_playbook on startup (unattended flow), while future first-boot provisioning should use the same reusable Setup Wizard framework with `Simple` and `Advanced` modes
 - **Both**: Ready for Fleet Learning federation after initialization
+
+See [SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md](SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md) for the current shared host/provisioning refactor direction.
 
 ## Bidirectional Sync Implementation
 

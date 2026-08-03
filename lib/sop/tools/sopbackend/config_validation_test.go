@@ -101,6 +101,85 @@ func TestHandleSaveConfig_PersistsRootUserIntoSystemUsersStore(t *testing.T) {
 	}
 }
 
+func TestHandleSimpleProvision_UsesSharedDefaultsAndSeedsRootUser(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.json")
+	config = Config{}
+	config.ConfigFile = configFile
+
+	payload := map[string]interface{}{
+		"port":          9090,
+		"root_password": "secret123",
+	}
+
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/provision/simple", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+
+	handleSimpleProvision(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleSimpleProvision() status = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Status       string `json:"status"`
+		RegistryPath string `json:"registry_path"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("status = %q, want ok", resp.Status)
+	}
+	if resp.RegistryPath == "" {
+		t.Fatal("expected simple provision response to include registry_path")
+	}
+
+	if config.SystemDB == nil {
+		t.Fatal("expected simple provision to populate config.SystemDB")
+	}
+	if config.SystemDB.Path == "" {
+		t.Fatal("expected simple provision to populate config.SystemDB.Path")
+	}
+	if len(config.Databases) != 0 {
+		t.Fatalf("expected simple provision to avoid creating user databases, got %+v", config.Databases)
+	}
+
+	ok, user, err := config.Authenticate("root", "secret123")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if !ok || user == nil || user.Username != "root" {
+		t.Fatalf("Authenticate() = ok=%v user=%v", ok, user)
+	}
+}
+
+func TestBuildSimpleProvisionSaveRequest_UsesConfigRelativeDefaultPath(t *testing.T) {
+	oldConfig := config
+	defer func() { config = oldConfig }()
+
+	tmpDir := t.TempDir()
+	config = Config{ConfigFile: filepath.Join(tmpDir, "config.json")}
+
+	req := buildSimpleProvisionSaveRequest(&SimpleProvisionRequest{RootPassword: "secret123"})
+	if req == nil {
+		t.Fatal("expected buildSimpleProvisionSaveRequest() to return a request")
+	}
+	wantPath := filepath.Join(tmpDir, ".sop-data", SystemDBName)
+	if req.RegistryPath != wantPath {
+		t.Fatalf("RegistryPath = %q, want %q", req.RegistryPath, wantPath)
+	}
+	if req.Port != 8080 {
+		t.Fatalf("Port = %d, want 8080", req.Port)
+	}
+	if req.SystemOptions.Type != sop.Standalone {
+		t.Fatalf("SystemOptions.Type = %v, want %v", req.SystemOptions.Type, sop.Standalone)
+	}
+}
+
 func TestWithAuth_AllowsInitialConfigSaveWithoutBearerToken(t *testing.T) {
 	oldConfig := config
 	defer func() { config = oldConfig }()
