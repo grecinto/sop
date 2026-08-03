@@ -72,6 +72,8 @@ This means:
 
 For the full consolidated rationale and decision history, see [WORKFLOWS.md](WORKFLOWS.md). This implementation doc remains the product-facing companion that focuses on the coding workflow experience, while the workflow doc captures the broader architectural intent.
 
+For the editor-facing facade model in VS Code, see [CONTINUE_FACADE_ARCHITECTURE.md](CONTINUE_FACADE_ARCHITECTURE.md). That document describes the recommended pattern of using Continue as a thin front-end over the shared workflow runtime instead of replacing it, and it also outlines the coding-native tool surface Continue should call, including AST/tree-sitter-backed inspection, patching, validation, and workflow continuation.
+
 ---
 
 ### Phase 4: Parallel Execution

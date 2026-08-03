@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/sharedcode/sop/ai/memory"
 )
 
 // MockSpaceClient implements SpaceClient for testing.
@@ -180,19 +182,147 @@ func TestTransactionLifecycle(t *testing.T) {
 	}
 
 	// Verify transaction metadata
-	item := items[0]
-	if item.ID != txn.ID {
-		t.Errorf("Expected item ID %s, got %s", txn.ID, item.ID)
+	var foundWorkstream bool
+	for _, item := range items {
+		if item.ID == txn.ID {
+			foundWorkstream = true
+			if item.Metadata["kind"] != "workstream" {
+				t.Errorf("Expected workstream metadata for item %s, got %v", item.ID, item.Metadata["kind"])
+			}
+			break
+		}
+	}
+	if !foundWorkstream {
+		t.Errorf("Expected to find workstream item with ID %s in Space storage", txn.ID)
 	}
 
-	// Verify backup file exists
+	// Verify the transaction stores a compact delta payload
 	if len(txn.ModifiedFiles) == 0 {
 		t.Fatal("No modified files recorded")
 	}
 
 	record := txn.ModifiedFiles[0]
-	if _, err := os.Stat(record.BackupPath); os.IsNotExist(err) {
-		t.Errorf("Backup file not found: %s", record.BackupPath)
+	if record.Delta == "" {
+		t.Fatal("Expected delta payload to be stored for the modified file")
+	}
+	if record.DeltaFormat == "" {
+		t.Fatal("Expected delta format metadata to be set")
+	}
+}
+
+func TestEndTransactionStoresSemanticHierarchyInSpace(t *testing.T) {
+	tmpDir := t.TempDir()
+	spaceClient := NewMockSpaceClient()
+	artifactExtractor := NewCodeArtifactExtractor(nil)
+
+	um, err := NewUndoManager(tmpDir, "testuser", spaceClient, artifactExtractor)
+	if err != nil {
+		t.Fatalf("NewUndoManager failed: %v", err)
+	}
+
+	ctx := context.Background()
+	txn, err := um.BeginTransaction(ctx, "Semantic workflow", "test_fix")
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+	txn.SessionID = "session-123"
+	txn.WorkstreamID = "workstream-456"
+	txn.CodeArtifacts = []CodeArtifact{{Namespace: "my.namespace", Package: "my_package", File: "semantic.txt", Functions: []string{"DoThing"}}}
+
+	testFile := "semantic.txt"
+	fullPath := filepath.Join(tmpDir, testFile)
+	if err := os.WriteFile(fullPath, []byte("original"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	if err := um.BackupFile(ctx, testFile); err != nil {
+		t.Fatalf("BackupFile failed: %v", err)
+	}
+	if err := os.WriteFile(fullPath, []byte("modified"), 0644); err != nil {
+		t.Fatalf("Failed to modify test file: %v", err)
+	}
+	if err := um.EndTransaction(ctx, true, 2*time.Second, 2, 0); err != nil {
+		t.Fatalf("EndTransaction failed: %v", err)
+	}
+
+	items := spaceClient.items["testuser_workflow_undo"]
+	if len(items) == 0 {
+		t.Fatal("Expected items to be stored in Space")
+	}
+
+	repoName := sanitizeSpaceSegment(filepath.Base(tmpDir))
+	expectedNamespace := sanitizeSpaceSegment("my.namespace")
+	var sawCanonicalItem bool
+	for _, item := range items {
+		if item.Metadata["kind"] != "file_delta" {
+			continue
+		}
+		sawCanonicalItem = true
+		presentationPath, okPresentation := item.Metadata["presentation_path"].([]string)
+		semanticPath, okSemantic := item.Metadata["semantic_path"].([]string)
+		if !okPresentation || !okSemantic {
+			t.Fatal("Expected file-delta item to carry both presentation and semantic paths in metadata")
+		}
+		if len(presentationPath) < 3 || presentationPath[0] != "Coding Workflows" || presentationPath[1] != repoName || presentationPath[2] != expectedNamespace {
+			t.Fatalf("Unexpected presentation path: %v", presentationPath)
+		}
+		if len(semanticPath) < 4 || semanticPath[0] != "Semantic Index" || semanticPath[1] != "Coding Workflows" || semanticPath[2] != repoName || semanticPath[3] != expectedNamespace {
+			t.Fatalf("Unexpected semantic path: %v", semanticPath)
+		}
+		if item.IndexPopulationMode != memory.IndexPopulationModeFull {
+			t.Fatalf("Expected canonical file-delta item to use full indexing mode, got %v", item.IndexPopulationMode)
+		}
+	}
+
+	if !sawCanonicalItem {
+		t.Fatal("Expected a canonical file-delta item to be stored once")
+	}
+}
+
+func TestStoreInSpaceUsesIndexPopulationMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	spaceClient := NewMockSpaceClient()
+	artifactExtractor := NewCodeArtifactExtractor(nil)
+
+	um, err := NewUndoManager(tmpDir, "testuser", spaceClient, artifactExtractor)
+	if err != nil {
+		t.Fatalf("NewUndoManager failed: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = um.BeginTransaction(ctx, "Index mode workflow", "test_fix")
+	if err != nil {
+		t.Fatalf("BeginTransaction failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "mode.txt"), []byte("content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	if err := um.BackupFile(ctx, "mode.txt"); err != nil {
+		t.Fatalf("BackupFile failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "mode.txt"), []byte("modified"), 0644); err != nil {
+		t.Fatalf("Failed to modify test file: %v", err)
+	}
+	if err := um.EndTransaction(ctx, true, time.Second, 1, 0); err != nil {
+		t.Fatalf("EndTransaction failed: %v", err)
+	}
+
+	items := spaceClient.items["testuser_workflow_undo"]
+	var sawPresentationPath bool
+	var sawSemanticPath bool
+	for _, item := range items {
+		if item.Metadata["kind"] == "presentation_path" && item.IndexPopulationMode == memory.IndexPopulationModeReference {
+			sawPresentationPath = true
+		}
+		if item.Metadata["kind"] == "semantic_path" && item.IndexPopulationMode == memory.IndexPopulationModeFull {
+			sawSemanticPath = true
+		}
+	}
+
+	if !sawPresentationPath {
+		t.Fatal("expected presentation path item to use reference indexing mode")
+	}
+	if !sawSemanticPath {
+		t.Fatal("expected semantic path item to use full indexing mode")
 	}
 }
 

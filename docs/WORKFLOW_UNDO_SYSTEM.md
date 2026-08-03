@@ -33,7 +33,7 @@ The Workflow Undo System treats each coding workflow run as an **atomic transact
 ---
 
 ## Multi-Language Support
-
+> TODO: Revisit the undo history UX so transaction cards can render Git-style diff previews and per-file change metadata directly from the new delta payloads.
 ### Test Runner
 The system automatically detects project type and runs appropriate test commands:
 

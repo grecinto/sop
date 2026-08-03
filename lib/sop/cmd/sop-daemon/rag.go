@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -168,6 +169,37 @@ type AskResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type continueChatRequest struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+	Workspace struct {
+		Root      string `json:"root"`
+		Active    string `json:"active_file"`
+		Selection struct {
+			StartLine int `json:"start_line"`
+			EndLine   int `json:"end_line"`
+		} `json:"selection"`
+	} `json:"workspace"`
+	Context struct {
+		OpenFiles    []string `json:"open_files"`
+		SelectedText string   `json:"selected_text"`
+	} `json:"context"`
+	Mode string `json:"mode"`
+}
+
+type continueToolRequest struct {
+	Path       string `json:"path"`
+	Query      string `json:"query"`
+	StartLine  int    `json:"start_line"`
+	EndLine    int    `json:"end_line"`
+	Recursive  bool   `json:"recursive"`
+	Limit      int    `json:"limit"`
+	SessionID  string `json:"session_id"`
+	Workspace  string `json:"workspace"`
+	Selection  string `json:"selection"`
+	ActiveFile string `json:"active_file"`
+}
+
 type localRAGService struct {
 	service       ai.Agent[map[string]any]
 	shellSessions *ptyShellSessionManager
@@ -282,6 +314,284 @@ func injectShellSessionManager(agentSvc ai.Agent[map[string]any]) {
 		copilotAgent.InjectShellSessionManager(globalShellSessionManager)
 		log.Printf("daemon: injected shell session manager into CopilotAgent")
 	}
+}
+
+func (s *localRAGService) handleContinueChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req continueChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
+		return
+	}
+
+	if strings.TrimSpace(req.Message) == "" {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "message cannot be empty"})
+		return
+	}
+
+	sendEvent, _ := sopbackend.SetupStream(w)
+	if strings.TrimSpace(req.SessionID) == "" {
+		req.SessionID = "continue-bridge"
+	}
+
+	sendEvent("progress", "Preparing local workspace context")
+	sendEvent("content", "I’m connecting your request to the local SOP runtime.")
+
+	askReq := AskRequest{
+		Query: req.Message,
+		HQ: struct {
+			BaseURL   string `json:"base_url"`
+			Port      string `json:"port,omitempty"`
+			UserID    string `json:"user_id"`
+			SessionID string `json:"session_id"`
+		}{
+			SessionID: req.SessionID,
+			UserID:    req.SessionID,
+		},
+	}
+	if strings.TrimSpace(req.Workspace.Root) != "" {
+		askReq.Query += fmt.Sprintf("\n[workspace_root=%s]", req.Workspace.Root)
+	}
+	if strings.TrimSpace(req.Workspace.Active) != "" {
+		askReq.Query += fmt.Sprintf("\n[active_file=%s]", req.Workspace.Active)
+	}
+	if strings.TrimSpace(req.Context.SelectedText) != "" {
+		askReq.Query += fmt.Sprintf("\n[selected_text=%s]", req.Context.SelectedText)
+	}
+	if len(req.Context.OpenFiles) > 0 {
+		askReq.Query += fmt.Sprintf("\n[open_files=%s]", strings.Join(req.Context.OpenFiles, ","))
+	}
+
+	ctx := context.Background()
+	payload := &ai.SessionPayload{
+		CurrentUserQuery: req.Message,
+		SessionID:        req.SessionID,
+		UserID:           req.SessionID,
+		Variables:        map[string]any{"continue_bridge": true, "workspace_root": req.Workspace.Root},
+	}
+	cfg := ai.NewConfigMap()
+	cfg.Set("payload", payload)
+	ctx = context.WithValue(ctx, "session_payload", payload)
+	ctx = sopbackend.InjectSharedRuntimeContext(ctx, sendEvent, w)
+	ctx = context.WithValue(ctx, ai.CtxKeyWriter, sopbackend.NewDirectFlushingWriter(w))
+
+	if s == nil || s.service == nil {
+		sendEvent("error", "local RAG service is not initialized")
+		sendEvent("done", nil)
+		return
+	}
+
+	answer, err := s.service.Ask(ctx, askReq.Query, cfg)
+	if err != nil {
+		sendEvent("error", err.Error())
+		sendEvent("done", nil)
+		return
+	}
+
+	if strings.TrimSpace(answer) != "" {
+		sendEvent("content", answer)
+	}
+	sendEvent("done", nil)
+}
+
+func (s *localRAGService) handleContinueTool(w http.ResponseWriter, r *http.Request, toolName string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req continueToolRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
+		return
+	}
+
+	var result any
+	var err error
+	switch toolName {
+	case "repo.read_file":
+		result, err = readContinueFile(req.Path, req.StartLine, req.EndLine)
+	case "repo.search_code":
+		result, err = searchContinueCode(req.Query, req.Path, req.Limit)
+	case "repo.list_files":
+		result, err = listContinueFiles(req.Path, req.Recursive)
+	case "code.apply_patch":
+		result, err = applyContinuePatch(req.Path, req.Selection)
+	case "code.preview_patch":
+		result, err = previewContinuePatch(req.Path, req.Selection)
+	case "test.run":
+		result, err = runContinueTest(req.Query, req.SessionID)
+	case "agent.ask":
+		result, err = s.delegateContinueAgent(req.Query, req.SessionID)
+	default:
+		respondJSON(w, http.StatusNotImplemented, map[string]any{"ok": false, "error": "unsupported tool"})
+		return
+	}
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true, "tool": toolName, "result": result})
+}
+
+func readContinueFile(path string, startLine, endLine int) (map[string]any, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+	}
+	data, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(data), "\n")
+	if startLine <= 0 {
+		startLine = 1
+	}
+	if endLine <= 0 || endLine > len(lines) {
+		endLine = len(lines)
+	}
+	selected := lines[startLine-1 : endLine]
+	return map[string]any{
+		"path":       cleanPath,
+		"content":    strings.Join(selected, "\n"),
+		"start_line": startLine,
+		"end_line":   endLine,
+	}, nil
+}
+
+func searchContinueCode(query, path string, limit int) (map[string]any, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	root := strings.TrimSpace(path)
+	if root == "" {
+		root = cwd()
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Clean(filepath.Join(cwd(), root))
+	}
+	var hits []map[string]any
+	filepath.WalkDir(root, func(currentPath string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(currentPath, ".git") || strings.HasSuffix(currentPath, ".png") || strings.HasSuffix(currentPath, ".jpg") || strings.HasSuffix(currentPath, ".jpeg") || strings.HasSuffix(currentPath, ".pdf") {
+			return nil
+		}
+		data, readErr := os.ReadFile(currentPath)
+		if readErr != nil {
+			return nil
+		}
+		text := string(data)
+		if strings.Contains(text, query) {
+			hits = append(hits, map[string]any{"path": currentPath, "text": text[:min(200, len(text))]})
+			if len(hits) >= limit {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	return map[string]any{"hits": hits}, nil
+}
+
+func listContinueFiles(path string, recursive bool) (map[string]any, error) {
+	root := strings.TrimSpace(path)
+	if root == "" {
+		root = cwd()
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Clean(filepath.Join(cwd(), root))
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	result := []string{}
+	for _, entry := range entries {
+		result = append(result, entry.Name())
+	}
+	return map[string]any{"path": root, "files": result, "recursive": recursive}, nil
+}
+
+func applyContinuePatch(path, patch string) (map[string]any, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+	}
+	if strings.TrimSpace(patch) == "" {
+		return nil, fmt.Errorf("patch is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(cleanPath, []byte(patch), 0o644); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": cleanPath, "applied": true, "content": patch}, nil
+}
+
+func previewContinuePatch(path, patch string) (map[string]any, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+	}
+	if strings.TrimSpace(patch) == "" {
+		return nil, fmt.Errorf("patch is required")
+	}
+	oldContent, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	preview := fmt.Sprintf("--- %s\n+++ %s\n-%s\n+%s\n", cleanPath, cleanPath, string(oldContent), patch)
+	return map[string]any{"path": cleanPath, "preview": preview, "applied": false}, nil
+}
+
+func runContinueTest(command, sessionID string) (map[string]any, error) {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return nil, fmt.Errorf("command is required")
+	}
+	if sessionID == "" {
+		sessionID = "continue-tests"
+	}
+	manager := newPTYShellSessionManager()
+	output, stillRunning, err := manager.Run(sessionID, trimmed, 20*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"command":       trimmed,
+		"output":        output,
+		"still_running": stillRunning,
+		"exit_code":     0,
+	}, nil
+}
+
+func (s *localRAGService) delegateContinueAgent(query, sessionID string) (map[string]any, error) {
+	if s == nil || s.service == nil {
+		return nil, fmt.Errorf("local RAG service is not initialized")
+	}
+	answer, err := s.service.Ask(context.Background(), query, ai.NewConfigMap())
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"session_id": sessionID, "answer": answer}, nil
 }
 
 func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {

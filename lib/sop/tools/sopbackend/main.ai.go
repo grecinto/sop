@@ -460,6 +460,9 @@ func SetupStream(w http.ResponseWriter) (func(string, any), func() bool) {
 			log.Info("UI: streaming content", "length", len(fmt.Sprintf("%v", payload)))
 			writeEvent(eventType, payload)
 			return
+		case "progress", "done":
+			writeEvent(eventType, payload)
+			return
 		case "terminal_command":
 			if payloadMap, ok := payload.(map[string]any); ok {
 				if text, ok := payloadMap["text"].(string); ok && strings.TrimSpace(text) != "" {

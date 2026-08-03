@@ -8,6 +8,18 @@ This feature allows System Administrators to control which HQ LTM (Long-Term Mem
 
 **Privacy Model**: This is the HQ-side allowlist control. Daemon-level privacy filtering (user opt-out, PII detection, approval queues) happens before content reaches HQ. HQ then applies category-level distribution controls before resharing to other daemons.
 
+## Recommended semantic layout for workflow memory
+
+For coding workflow review artifacts, LTM should be organized around semantic code structure rather than the low-level transaction used to persist the data. A minimal layout is:
+
+- Coding Workflows
+  - Repo name
+    - Namespace / Class
+      - Function
+        - Items representing file-level deltas and related change metadata
+
+This structure is intended for review, recall, and future synthesis. It makes the repository, code hierarchy, and concrete file changes easy to navigate without treating the storage transaction as the primary organizational unit. In this layout, the code-path nodes are the navigation structure, while the file-level change record is the leaf item that carries the change payload and delta.
+
 ## Problem Statement
 
 HQ accumulates knowledge from all daemons in its LTM. However, not all categories are valuable for daemons:

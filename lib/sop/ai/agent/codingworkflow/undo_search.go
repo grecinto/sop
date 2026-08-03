@@ -279,7 +279,20 @@ func (um *UndoManager) restoreTransaction(ctx context.Context, txn *WorkflowTran
 			}
 
 		case "delete":
-			// File was deleted, restore from backup
+			// File was deleted, restore from the stored delta payload when available.
+			if record.Delta != "" {
+				backup := []byte(record.Delta)
+				// Ensure directory exists
+				dir := filepath.Dir(fullPath)
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return fmt.Errorf("create directory %s: %w", dir, err)
+				}
+
+				if err := os.WriteFile(fullPath, backup, 0644); err != nil {
+					return fmt.Errorf("restore deleted file %s: %w", record.FilePath, err)
+				}
+				break
+			}
 			if record.BackupPath == "" {
 				return fmt.Errorf("no backup for deleted file %s", record.FilePath)
 			}
@@ -299,7 +312,20 @@ func (um *UndoManager) restoreTransaction(ctx context.Context, txn *WorkflowTran
 			}
 
 		case "modify":
-			// File was modified, restore from backup
+			// File was modified, restore from the stored delta payload when present.
+			if record.Delta != "" {
+				backup := []byte(record.Delta)
+				if record.OriginalHash != "" {
+					hash := sha256Hash(backup)
+					if hash != record.OriginalHash {
+						return fmt.Errorf("backup integrity check failed for %s", record.FilePath)
+					}
+				}
+				if err := os.WriteFile(fullPath, backup, 0644); err != nil {
+					return fmt.Errorf("restore file %s: %w", record.FilePath, err)
+				}
+				break
+			}
 			if record.BackupPath == "" {
 				return fmt.Errorf("no backup for modified file %s", record.FilePath)
 			}
@@ -354,7 +380,17 @@ func (um *UndoManager) previewRestore(txn *WorkflowTransaction, options RestoreO
 // verifyBackupIntegrity verifies backup file hashes.
 func (um *UndoManager) verifyBackupIntegrity(txn *WorkflowTransaction) bool {
 	for _, record := range txn.ModifiedFiles {
-		if record.BackupPath == "" || record.OriginalHash == "" {
+		if record.OriginalHash == "" {
+			continue
+		}
+		if record.Delta != "" {
+			hash := sha256Hash([]byte(record.Delta))
+			if hash != record.OriginalHash {
+				return false
+			}
+			continue
+		}
+		if record.BackupPath == "" {
 			continue
 		}
 

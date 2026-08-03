@@ -59,11 +59,19 @@ func (wmu *WorkflowManagerWithUndo) Execute(ctx context.Context, steps []Step, t
 		return WorkflowResult{}, fmt.Errorf("begin undo transaction: %w", err)
 	}
 
-	// Add transaction ID to state metadata
+	// Add transaction ID and session/workstream metadata to state metadata
 	if state.Metadata == nil {
 		state.Metadata = make(map[string]string)
 	}
 	state.Metadata["undo_transaction_id"] = txn.ID
+	if task.State.Metadata != nil {
+		if sessionID, ok := task.State.Metadata["session_id"]; ok && sessionID != "" {
+			txn.SessionID = sessionID
+		}
+		if workstreamID, ok := task.State.Metadata["workstream_id"]; ok && workstreamID != "" {
+			txn.WorkstreamID = workstreamID
+		}
+	}
 
 	// Execute workflow through the shared step runner.
 	result, err := wmu.base.runWorkflow(ctx, steps, task, state)

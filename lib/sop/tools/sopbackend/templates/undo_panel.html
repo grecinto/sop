@@ -184,6 +184,7 @@
         font-size: 11px;
         color: var(--text-muted, #858585);
         margin-top: 6px;
+        flex-wrap: wrap;
     }
 
     .undo-files-badge {
@@ -203,10 +204,156 @@
         color: #569cd6;
     }
 
+    .undo-summary-text {
+        font-size: 11px;
+        color: var(--text-muted, #858585);
+        margin-top: 6px;
+        line-height: 1.4;
+    }
+
+    .undo-file-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 6px;
+        background: rgba(78, 201, 176, 0.12);
+        border-radius: 3px;
+        color: #4ec9b0;
+        font-size: 10px;
+        margin-top: 4px;
+    }
+
     .undo-transaction-actions {
         display: flex;
         gap: 6px;
         margin-top: 8px;
+    }
+
+    .undo-details-modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1100;
+        padding: 20px;
+    }
+
+    .undo-details-modal.open {
+        display: flex;
+    }
+
+    .undo-details-card {
+        width: min(720px, 100%);
+        max-height: 80vh;
+        overflow: auto;
+        background: var(--surface-bg, #2d2d30);
+        border: 1px solid var(--border-color, #3e3e42);
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+        padding: 16px;
+    }
+
+    .undo-details-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+
+    .undo-details-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-color, #cccccc);
+    }
+
+    .undo-details-close {
+        background: none;
+        border: none;
+        color: var(--text-muted, #858585);
+        font-size: 18px;
+        cursor: pointer;
+    }
+
+    .undo-details-body {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .undo-details-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--text-muted, #858585);
+    }
+
+    .undo-details-file {
+        border: 1px solid var(--border-color, #3e3e42);
+        border-radius: 6px;
+        padding: 10px;
+        background: rgba(255,255,255,0.03);
+    }
+
+    .undo-diff-preview {
+        margin-top: 8px;
+        padding: 8px;
+        border-radius: 6px;
+        background: rgba(0,0,0,0.24);
+        color: var(--text-color, #cccccc);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        overflow-x: auto;
+    }
+
+    .undo-diff-preview .diff-added {
+        color: #4ec9b0;
+    }
+
+    .undo-diff-preview .diff-removed {
+        color: #f48771;
+    }
+
+    .undo-diff-preview .diff-header {
+        color: #569cd6;
+        font-weight: 600;
+    }
+
+    .undo-diff-toggle,
+    .undo-diff-toggle-all {
+        margin-top: 8px;
+        background: none;
+        border: 1px solid var(--border-color, #3e3e42);
+        color: var(--text-muted, #858585);
+        border-radius: 4px;
+        padding: 4px 8px;
+        cursor: pointer;
+        font-size: 11px;
+    }
+
+    .undo-diff-toggle-all {
+        margin-top: 0;
+        margin-bottom: 8px;
+    }
+
+    .undo-diff-collapsed {
+        max-height: 96px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .undo-diff-collapsed::after {
+        content: '';
+        position: absolute;
+        inset: auto 0 0 0;
+        height: 38px;
+        background: linear-gradient(180deg, transparent, rgba(0,0,0,0.65));
+        pointer-events: none;
     }
 
     .undo-action-btn {
@@ -370,6 +517,16 @@
     </div>
 </div>
 
+<div id="undo-details-modal" class="undo-details-modal" onclick="closeUndoDetails()">
+    <div class="undo-details-card" onclick="event.stopPropagation()">
+        <div class="undo-details-header">
+            <div class="undo-details-title" id="undo-details-title">Transaction details</div>
+            <button class="undo-details-close" onclick="closeUndoDetails()">×</button>
+        </div>
+        <div id="undo-details-body" class="undo-details-body"></div>
+    </div>
+</div>
+
 <script>
 // Workflow Undo Panel JavaScript
 (function() {
@@ -400,7 +557,18 @@
             const response = await fetch('/api/workflow/undo/recent?limit=20');
             if (!response.ok) throw new Error('Failed to load undo history');
             
-            undoHistory = await response.json();
+            const payload = await response.json();
+            const transactions = Array.isArray(payload) ? payload : (payload.transactions || []);
+            const summaryItems = Array.isArray(payload.summary) ? payload.summary : [];
+            undoHistory = transactions.map((txn, index) => {
+                const summaryItem = summaryItems.find(item => item.transaction_id === txn.id) || summaryItems[index] || null;
+                return {
+                    ...txn,
+                    summary: summaryItem?.summary || txn.description,
+                    files: summaryItem?.files || txn.modified_files || [],
+                    diffSummary: summaryItem?.summary || ''
+                };
+            });
             renderUndoHistory(undoHistory);
         } catch (error) {
             console.error('Failed to load undo history:', error);
@@ -440,8 +608,15 @@
         const icon = getWorkflowIcon(txn.workflow_type);
         const statusClass = getStatusClass(txn.status);
         const relativeTime = getRelativeTime(txn.timestamp);
-        const filesCount = txn.modified_files?.length || 0;
+        const fileItems = Array.isArray(txn.files) ? txn.files : (txn.modified_files || []);
+        const filesCount = fileItems.length;
         const isUndone = txn.status === 'undone';
+        const summaryText = txn.summary || txn.diffSummary || '';
+        const fileChips = fileItems.slice(0, 3).map(file => {
+            const label = file.file_path || file.path || '';
+            const stats = file.diff_stats ? ` ${file.diff_stats}` : '';
+            return `<span class="undo-file-chip">${escapeHtml(label)}${escapeHtml(stats)}</span>`;
+        }).join('');
         
         return `
             <div class="undo-transaction-card" onclick="showTransactionDetails('${txn.id}')">
@@ -459,6 +634,8 @@
                             </span>
                             ${txn.application_domain ? `<span class="undo-component-tag">${txn.application_domain}</span>` : ''}
                         </div>
+                        ${summaryText ? `<div class="undo-summary-text">${escapeHtml(summaryText)}</div>` : ''}
+                        ${fileChips ? `<div class="undo-transaction-meta">${fileChips}</div>` : ''}
                     </div>
                 </div>
                 <div class="undo-transaction-actions">
@@ -618,8 +795,55 @@
 
     // Show transaction details
     window.showTransactionDetails = function(txnId) {
-        // TODO: Show modal with full transaction details
-        console.log('Show details for transaction:', txnId);
+        const txn = undoHistory.find(item => item.id === txnId);
+        if (!txn) return;
+
+        const title = document.getElementById('undo-details-title');
+        const body = document.getElementById('undo-details-body');
+        const modal = document.getElementById('undo-details-modal');
+
+        title.textContent = txn.description || 'Transaction details';
+
+        const fileItems = Array.isArray(txn.files) ? txn.files : (txn.modified_files || []);
+        const fileMarkup = fileItems.length === 0
+            ? '<div class="undo-details-file">No file-level diff metadata recorded.</div>'
+            : fileItems.map(file => {
+                const label = file.file_path || file.path || 'unknown';
+                const stats = file.diff_stats ? `<span class="undo-file-chip">${escapeHtml(file.diff_stats)}</span>` : '';
+                const summary = file.diff_summary || '';
+                const preview = file.preview || '';
+                return `<div class="undo-details-file">
+                    <div class="undo-transaction-desc">${escapeHtml(label)}</div>
+                    <div class="undo-details-meta">
+                        <span>${escapeHtml(file.change_type || 'modify')}</span>
+                        ${file.delta_format ? `<span>${escapeHtml(file.delta_format)}</span>` : ''}
+                        ${stats}
+                    </div>
+                    ${summary ? `<div class="undo-summary-text">${escapeHtml(summary)}</div>` : ''}
+                    ${preview ? `<div class="undo-summary-text" style="font-family: monospace; opacity: 0.9;">${escapeHtml(preview)}</div>` : ''}
+                    ${file.diff_preview ? `<div>
+                        <button class="undo-diff-toggle" onclick="event.stopPropagation(); toggleUndoDiff(this)">Collapse diff</button>
+                        <pre class="undo-diff-preview undo-diff-collapsed">${formatDiffPreview(file.diff_preview)}</pre>
+                    </div>` : ''}
+                </div>`;
+            }).join('');
+
+        body.innerHTML = `
+            <div class="undo-details-meta">
+                <span>Workflow: ${escapeHtml(txn.workflow_type || 'general')}</span>
+                <span>Status: ${escapeHtml(txn.status || 'unknown')}</span>
+                <span>Updated: ${escapeHtml(new Date(txn.timestamp).toLocaleString())}</span>
+            </div>
+            <div class="undo-summary-text">${escapeHtml(txn.summary || txn.description || '')}</div>
+            <button class="undo-diff-toggle-all" onclick="toggleAllUndoDiffs(this)">Collapse all diffs</button>
+            ${fileMarkup}
+        `;
+
+        modal.classList.add('open');
+    };
+
+    window.closeUndoDetails = function() {
+        document.getElementById('undo-details-modal').classList.remove('open');
     };
 
     // Search undo history
@@ -633,7 +857,8 @@
             const response = await fetch(`/api/workflow/undo/search?q=${encodeURIComponent(query)}`);
             if (!response.ok) throw new Error('Search failed');
             
-            const results = await response.json();
+            const payload = await response.json();
+            const results = Array.isArray(payload) ? payload : (payload.transactions || []);
             renderUndoHistory(results);
         } catch (error) {
             console.error('Search failed:', error);
@@ -660,6 +885,52 @@
             </div>
         `;
     }
+
+    // Format diff preview with visual markers for additions and removals
+    function formatDiffPreview(text) {
+        if (!text) return '';
+
+        return String(text)
+            .split('\n')
+            .map(line => {
+                const escaped = escapeHtml(line);
+                if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
+                    return `<span class="diff-header">${escaped}</span>`;
+                }
+                if (line.startsWith('+') && !line.startsWith('+++')) {
+                    return `<span class="diff-added">${escaped}</span>`;
+                }
+                if (line.startsWith('-') && !line.startsWith('---')) {
+                    return `<span class="diff-removed">${escaped}</span>`;
+                }
+                return escaped;
+            })
+            .join('\n');
+    }
+
+    window.toggleUndoDiff = function(button) {
+        const preview = button.nextElementSibling;
+        if (!preview) return;
+
+        const isCollapsed = preview.classList.toggle('undo-diff-collapsed');
+        button.textContent = isCollapsed ? 'Expand diff' : 'Collapse diff';
+    };
+
+    window.toggleAllUndoDiffs = function(button) {
+        const previews = Array.from(document.querySelectorAll('.undo-diff-preview'));
+        const shouldCollapse = button.textContent === 'Collapse all diffs';
+
+        previews.forEach(preview => {
+            preview.classList.toggle('undo-diff-collapsed', shouldCollapse);
+        });
+
+        const toggles = Array.from(document.querySelectorAll('.undo-diff-toggle'));
+        toggles.forEach(toggle => {
+            toggle.textContent = shouldCollapse ? 'Expand diff' : 'Collapse diff';
+        });
+
+        button.textContent = shouldCollapse ? 'Expand all diffs' : 'Collapse all diffs';
+    };
 
     // Utility: Escape HTML
     function escapeHtml(text) {

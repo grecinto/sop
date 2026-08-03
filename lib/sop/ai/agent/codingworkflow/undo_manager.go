@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sharedcode/sop/ai/memory"
 )
 
 // UndoManager manages workflow transaction lifecycle and undo operations.
@@ -57,12 +58,13 @@ type SpaceCreateRequest struct {
 
 // SpaceItem represents an item stored in a Space.
 type SpaceItem struct {
-	ID           string                 `json:"id"`
-	CategoryPath []string               `json:"category_path"`
-	Title        string                 `json:"title"`
-	Content      string                 `json:"content"`
-	Metadata     map[string]interface{} `json:"metadata"`
-	VectorScore  float64                `json:"vector_score,omitempty"` // From semantic search
+	ID                  string                     `json:"id"`
+	CategoryPath        []string                   `json:"category_path"`
+	Title               string                     `json:"title"`
+	Content             string                     `json:"content"`
+	Metadata            map[string]interface{}     `json:"metadata"`
+	VectorScore         float64                    `json:"vector_score,omitempty"` // From semantic search
+	IndexPopulationMode memory.IndexPopulationMode `json:"index_population_mode,omitempty"`
 }
 
 // SpaceSearchRequest represents a semantic search query.
@@ -228,12 +230,11 @@ func (um *UndoManager) BackupFile(ctx context.Context, filePath string) error {
 	hash := sha256.Sum256(content)
 	originalHash := hex.EncodeToString(hash[:])
 
-	// Create backup
-	backupFileName := strings.ReplaceAll(filePath, "/", "_")
-	backupPath := filepath.Join(um.currentTxn.BackupPath, backupFileName)
-
-	if err := os.WriteFile(backupPath, content, 0644); err != nil {
-		return fmt.Errorf("write backup: %w", err)
+	// Capture a compact delta payload instead of a full-file backup.
+	delta := string(content)
+	deltaFormat := "text-full"
+	if len(content) > 0 {
+		deltaFormat = "text-raw"
 	}
 
 	// Get file info
@@ -246,11 +247,21 @@ func (um *UndoManager) BackupFile(ctx context.Context, filePath string) error {
 	// Record modification
 	record := ModifiedFileRecord{
 		FilePath:     filePath,
-		BackupPath:   backupPath,
+		BackupPath:   "",
 		OriginalHash: originalHash,
 		Timestamp:    time.Now(),
 		ChangeType:   "modify",
 		SizeBytes:    sizeBytes,
+		Delta:        delta,
+		DeltaFormat:  deltaFormat,
+		DiffSummary:  fmt.Sprintf("tracked %s for diff replay", filePath),
+		DiffStats:    "+0 -0",
+		Metadata: map[string]string{
+			"kind":      "text",
+			"source":    "undo-manager",
+			"format":    deltaFormat,
+			"file_path": filePath,
+		},
 	}
 
 	um.currentTxn.ModifiedFiles = append(um.currentTxn.ModifiedFiles, record)
@@ -292,21 +303,29 @@ func (um *UndoManager) EndTransaction(ctx context.Context, success bool, executi
 		return fmt.Errorf("calculate modification metrics: %w", err)
 	}
 
-	// Extract code artifacts via AST
-	if um.artifactExtract != nil {
+	// Extract code artifacts via AST when the transaction does not already carry them.
+	if len(txn.CodeArtifacts) == 0 && um.artifactExtract != nil {
 		artifacts, err := um.artifactExtract.ExtractFromModifiedFiles(txn.ModifiedFiles, um.workingDir)
 		if err != nil {
-			// Log but don't fail - artifact extraction is best-effort
-			// Fall back to file path inference
+			// Log but don't fail - artifact extraction is best-effort.
+			// Fall back to file path inference when extraction fails.
 			artifacts = um.inferArtifactsFromPaths(txn.ModifiedFiles)
 		}
 		txn.CodeArtifacts = artifacts
-		txn.CategoryPath = um.artifactExtract.GenerateCategoryPath(artifacts)
-		if len(txn.CategoryPath) > 0 {
-			txn.ApplicationDomain = txn.CategoryPath[0]
-			if len(txn.CategoryPath) > 1 {
-				txn.SubComponent = txn.CategoryPath[1]
-			}
+	}
+
+	if len(txn.CategoryPath) == 0 {
+		if um.artifactExtract != nil && len(txn.CodeArtifacts) > 0 {
+			txn.CategoryPath = um.artifactExtract.GenerateCategoryPath(txn.CodeArtifacts)
+		}
+		if len(txn.CategoryPath) == 0 {
+			txn.CategoryPath = um.inferCategoryPath(txn.CodeArtifacts)
+		}
+	}
+	if len(txn.CategoryPath) > 0 {
+		txn.ApplicationDomain = txn.CategoryPath[0]
+		if len(txn.CategoryPath) > 1 {
+			txn.SubComponent = txn.CategoryPath[1]
 		}
 	}
 
@@ -349,10 +368,21 @@ func (um *UndoManager) calculateModificationMetrics(txn *WorkflowTransaction) er
 		hash := sha256.Sum256(content)
 		record.ModifiedHash = hex.EncodeToString(hash[:])
 
-		// Estimate line changes (simple approach)
-		if record.OriginalHash != "" && record.BackupPath != "" {
-			originalContent, _ := os.ReadFile(record.BackupPath)
+		// Estimate line changes from the captured delta when available.
+		if record.OriginalHash != "" && record.Delta != "" {
+			originalContent := []byte(record.Delta)
 			record.LinesAdded, record.LinesRemoved = estimateLineChanges(originalContent, content)
+			if record.LinesAdded > 0 || record.LinesRemoved > 0 {
+				record.DiffStats = fmt.Sprintf("+%d -%d", record.LinesAdded, record.LinesRemoved)
+				record.DiffSummary = fmt.Sprintf("%s changed (%s)", record.FilePath, record.DiffStats)
+			} else {
+				record.DiffSummary = fmt.Sprintf("%s updated", record.FilePath)
+			}
+			if record.Metadata == nil {
+				record.Metadata = make(map[string]string)
+			}
+			record.Metadata["lines_added"] = fmt.Sprintf("%d", record.LinesAdded)
+			record.Metadata["lines_removed"] = fmt.Sprintf("%d", record.LinesRemoved)
 		}
 	}
 
@@ -374,47 +404,191 @@ func estimateLineChanges(original, modified []byte) (added int, removed int) {
 	return added, removed
 }
 
-// storeInSpace stores the transaction in Space with multiple category paths.
+// storeInSpace stores the transaction in Space using a presentation hierarchy and a
+// separate semantic-index hierarchy for later retrieval/search. The UI explorer is not
+// yet implemented, so this remains a backend-only structure for future UI work.
 func (um *UndoManager) storeInSpace(ctx context.Context, txn *WorkflowTransaction) error {
 	// Generate searchable content for vectorization
 	txn.SearchableContent = um.generateSearchableContent(txn)
 
-	// Create Space item
-	item := SpaceItem{
+	repoName := um.deriveRepoName()
+	presentationPath := um.derivePresentationPath(txn)
+	semanticPath := um.deriveSemanticIndexPath(txn)
+
+	itemsToStore := []SpaceItem{}
+
+	// Transaction-level workstream record for undo history review.
+	itemsToStore = append(itemsToStore, SpaceItem{
 		ID:      txn.ID,
-		Title:   fmt.Sprintf("[%s] %s", txn.Timestamp.Format("2006-01-02 15:04"), txn.Description),
+		Title:   txn.Description,
 		Content: txn.SearchableContent,
 		Metadata: map[string]interface{}{
-			"txn_id":             txn.ID,
-			"timestamp":          txn.Timestamp.Unix(),
-			"timestamp_iso":      txn.Timestamp.Format(time.RFC3339),
-			"date_filter":        txn.Timestamp.Format("2006-01-02"),
-			"workflow_type":      txn.WorkflowType,
-			"status":             txn.Status,
-			"tags":               txn.Tags,
-			"user_name":          txn.UserName,
-			"application_domain": txn.ApplicationDomain,
-			"sub_component":      txn.SubComponent,
-			"code_artifacts":     txn.CodeArtifacts,
-			"modified_files":     txn.ModifiedFiles,
-			"backup_path":        txn.BackupPath,
-			"execution_time":     txn.ExecutionTime,
-			"step_count":         txn.StepCount,
-			"retry_count":        txn.RetryCount,
+			"kind":          "workstream",
+			"repo_name":     repoName,
+			"txn_id":        txn.ID,
+			"workflow_type": txn.WorkflowType,
+			"status":        txn.Status,
 		},
+		CategoryPath: []string{"Coding Workflows", repoName, "Transactions"},
+	})
+
+	// Presentation repo container.
+	itemsToStore = append(itemsToStore, SpaceItem{
+		ID:      fmt.Sprintf("%s_repo", txn.ID),
+		Title:   fmt.Sprintf("Repository: %s", repoName),
+		Content: fmt.Sprintf("Presentation container for workflow review data for %s.", repoName),
+		Metadata: map[string]interface{}{
+			"kind":      "repo",
+			"repo_name": repoName,
+			"txn_id":    txn.ID,
+		},
+		CategoryPath: []string{"Coding Workflows", repoName},
+	})
+
+	// Semantic index repo container.
+	itemsToStore = append(itemsToStore, SpaceItem{
+		ID:      fmt.Sprintf("%s_repo_semantic", txn.ID),
+		Title:   fmt.Sprintf("Repository: %s", repoName),
+		Content: fmt.Sprintf("Semantic index entry for repository %s.", repoName),
+		Metadata: map[string]interface{}{
+			"kind":           "repo",
+			"repo_name":      repoName,
+			"txn_id":         txn.ID,
+			"semantic_index": true,
+		},
+		CategoryPath: []string{"Semantic Index", "Coding Workflows", repoName},
+	})
+
+	// Presentation code-path container.
+	presentationContainerPath := append([]string{"Coding Workflows", repoName}, presentationPath[2:]...)
+	itemsToStore = append(itemsToStore, SpaceItem{
+		ID:      fmt.Sprintf("%s_presentation_path", txn.ID),
+		Title:   fmt.Sprintf("Code Path: %s", strings.Join(presentationContainerPath[2:], " / ")),
+		Content: txn.SearchableContent,
+		Metadata: map[string]interface{}{
+			"kind":              "presentation_path",
+			"repo_name":         repoName,
+			"txn_id":            txn.ID,
+			"presentation_path": presentationContainerPath,
+		},
+		CategoryPath:        presentationContainerPath,
+		IndexPopulationMode: memory.IndexPopulationModeReference,
+	})
+
+	// Semantic index code-path container.
+	semanticContainerPath := append([]string{"Semantic Index", "Coding Workflows", repoName}, semanticPath[3:]...)
+	itemsToStore = append(itemsToStore, SpaceItem{
+		ID:      fmt.Sprintf("%s_semantic_path", txn.ID),
+		Title:   fmt.Sprintf("Semantic Path: %s", strings.Join(semanticContainerPath[3:], " / ")),
+		Content: txn.SearchableContent,
+		Metadata: map[string]interface{}{
+			"kind":           "semantic_path",
+			"repo_name":      repoName,
+			"txn_id":         txn.ID,
+			"semantic_path":  semanticContainerPath,
+			"semantic_index": true,
+		},
+		CategoryPath:        semanticContainerPath,
+		IndexPopulationMode: memory.IndexPopulationModeFull,
+	})
+
+	// File-delta items. These are the leaf review artifacts.
+	for _, file := range txn.ModifiedFiles {
+		presentationFilePath := append(presentationContainerPath, file.FilePath)
+		semanticFilePath := append(semanticContainerPath, file.FilePath)
+		fileItem := SpaceItem{
+			ID:      fmt.Sprintf("%s_file_%s", txn.ID, sanitizeSpaceSegment(file.FilePath)),
+			Title:   file.FilePath,
+			Content: fmt.Sprintf("File change for %s\n\n%s\n%s", file.FilePath, file.DiffSummary, file.DiffStats),
+			Metadata: map[string]interface{}{
+				"kind":              "file_delta",
+				"repo_name":         repoName,
+				"txn_id":            txn.ID,
+				"file_path":         file.FilePath,
+				"change_type":       file.ChangeType,
+				"delta":             file.Delta,
+				"delta_format":      file.DeltaFormat,
+				"diff_summary":      file.DiffSummary,
+				"diff_stats":        file.DiffStats,
+				"metadata":          file.Metadata,
+				"presentation_path": presentationFilePath,
+				"semantic_path":     semanticFilePath,
+				"semantic_index":    true,
+			},
+			CategoryPath:        semanticFilePath,
+			IndexPopulationMode: memory.IndexPopulationModeFull,
+		}
+		itemsToStore = append(itemsToStore, fileItem)
 	}
 
-	// Store with multiple category paths
-	categoryPaths := um.generateCategoryPaths(txn)
-
-	for _, catPath := range categoryPaths {
-		item.CategoryPath = catPath
-		if err := um.spaceClient.AddItemToCategory(ctx, um.spaceID, catPath, item); err != nil {
-			return fmt.Errorf("add to category %v: %w", catPath, err)
+	// Store each semantic item in the Space. Additional UI exploration can be layered on
+	// top of this backend structure later. Tracker: UI explorer/navigation is not yet
+	// implemented and should be revisited separately.
+	for _, item := range itemsToStore {
+		if err := um.spaceClient.AddItemToCategory(ctx, um.spaceID, item.CategoryPath, item); err != nil {
+			return fmt.Errorf("add semantic item %s to category %v: %w", item.ID, item.CategoryPath, err)
 		}
 	}
 
 	return nil
+}
+
+func (um *UndoManager) deriveRepoName() string {
+	if um.workingDir == "" {
+		return "unknown_repo"
+	}
+	return sanitizeSpaceSegment(filepath.Base(um.workingDir))
+}
+
+func (um *UndoManager) derivePresentationPath(txn *WorkflowTransaction) []string {
+	segments := []string{"Coding Workflows"}
+	segments = append(segments, um.deriveRepoName())
+
+	for _, artifact := range txn.CodeArtifacts {
+		if artifact.Namespace != "" {
+			segments = append(segments, sanitizeSpaceSegment(artifact.Namespace))
+			return segments
+		}
+		if artifact.Package != "" {
+			segments = append(segments, sanitizeSpaceSegment(artifact.Package))
+			return segments
+		}
+	}
+
+	segments = append(segments, "general")
+	return segments
+}
+
+func (um *UndoManager) deriveSemanticIndexPath(txn *WorkflowTransaction) []string {
+	segments := []string{"Semantic Index", "Coding Workflows"}
+	segments = append(segments, um.deriveRepoName())
+
+	for _, artifact := range txn.CodeArtifacts {
+		if artifact.Namespace != "" {
+			segments = append(segments, sanitizeSpaceSegment(artifact.Namespace))
+			return segments
+		}
+		if artifact.Package != "" {
+			segments = append(segments, sanitizeSpaceSegment(artifact.Package))
+			return segments
+		}
+	}
+
+	segments = append(segments, "general")
+	return segments
+}
+
+func sanitizeSpaceSegment(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, string(os.PathSeparator), "_")
+	value = strings.ReplaceAll(value, "/", "_")
+	value = strings.ReplaceAll(value, "\\", "_")
+	value = strings.ReplaceAll(value, " ", "_")
+	value = strings.Trim(value, "_-.")
+	if value == "" {
+		return "root"
+	}
+	return value
 }
 
 // generateCategoryPaths creates multiple category paths for a transaction.
@@ -528,6 +702,23 @@ func (um *UndoManager) inferArtifactsFromPaths(files []ModifiedFileRecord) []Cod
 	}
 
 	return artifacts
+}
+
+func (um *UndoManager) inferCategoryPath(artifacts []CodeArtifact) []string {
+	if len(artifacts) == 0 {
+		return []string{"general"}
+	}
+
+	for _, artifact := range artifacts {
+		if artifact.Namespace != "" {
+			return []string{sanitizeSpaceSegment(artifact.Namespace)}
+		}
+		if artifact.Package != "" {
+			return []string{sanitizeSpaceSegment(artifact.Package)}
+		}
+	}
+
+	return []string{"general"}
 }
 
 // Helper function to title case a string.

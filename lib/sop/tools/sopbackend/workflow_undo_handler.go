@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai/agent/codingworkflow"
 	aidb "github.com/sharedcode/sop/ai/database"
@@ -23,6 +27,34 @@ type UndoRecentResponse struct {
 	Message      string                               `json:"message,omitempty"`
 	Transactions []codingworkflow.WorkflowTransaction `json:"transactions,omitempty"`
 	Total        int                                  `json:"total"`
+	Summary      []UndoHistoryItem                    `json:"summary,omitempty"`
+}
+
+// UndoHistoryItem is a UI-friendly summary for the undo history timeline.
+type UndoHistoryItem struct {
+	TransactionID string                 `json:"transaction_id"`
+	SessionID     string                 `json:"session_id,omitempty"`
+	WorkstreamID  string                 `json:"workstream_id,omitempty"`
+	GroupKey      string                 `json:"group_key,omitempty"`
+	Timestamp     string                 `json:"timestamp"`
+	Description   string                 `json:"description"`
+	WorkflowType  string                 `json:"workflow_type"`
+	Status        string                 `json:"status"`
+	Summary       string                 `json:"summary"`
+	Files         []UndoFileSummary      `json:"files,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// UndoFileSummary is a compact per-file diff summary for UI cards.
+type UndoFileSummary struct {
+	FilePath    string            `json:"file_path"`
+	ChangeType  string            `json:"change_type"`
+	DiffSummary string            `json:"diff_summary,omitempty"`
+	DiffStats   string            `json:"diff_stats,omitempty"`
+	DeltaFormat string            `json:"delta_format,omitempty"`
+	Preview     string            `json:"preview,omitempty"`
+	DiffPreview string            `json:"diff_preview,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // UndoRestoreRequest represents an undo restore request
@@ -101,11 +133,14 @@ func handleUndoRecent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	summary := buildUndoHistorySummary(transactions, getUndoWorkingDir(r))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(UndoRecentResponse{
 		Success:      true,
 		Transactions: transactions,
 		Total:        len(transactions),
+		Summary:      summary,
 	})
 }
 
@@ -256,6 +291,140 @@ func handleUndoSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUndoStats returns undo system statistics
+func buildUndoHistorySummary(transactions []codingworkflow.WorkflowTransaction, workingDir string) []UndoHistoryItem {
+	items := make([]UndoHistoryItem, 0, len(transactions))
+	for _, txn := range transactions {
+		files := make([]UndoFileSummary, 0, len(txn.ModifiedFiles))
+		for _, record := range txn.ModifiedFiles {
+			files = append(files, UndoFileSummary{
+				FilePath:    record.FilePath,
+				ChangeType:  record.ChangeType,
+				DiffSummary: record.DiffSummary,
+				DiffStats:   record.DiffStats,
+				DeltaFormat: record.DeltaFormat,
+				Preview:     buildDeltaPreview(record.Delta),
+				DiffPreview: buildFileDiffPreview(record, workingDir),
+				Metadata:    record.Metadata,
+			})
+		}
+
+		summaryText := txn.Description
+		if txn.WorkflowType != "" {
+			summaryText = fmt.Sprintf("%s · %s", txn.Description, txn.WorkflowType)
+		}
+
+		groupKey := txn.WorkstreamID
+		if groupKey == "" {
+			groupKey = txn.SessionID
+		}
+
+		items = append(items, UndoHistoryItem{
+			TransactionID: txn.ID,
+			SessionID:     txn.SessionID,
+			WorkstreamID:  txn.WorkstreamID,
+			GroupKey:      groupKey,
+			Timestamp:     txn.Timestamp.Format(time.RFC3339),
+			Description:   txn.Description,
+			WorkflowType:  txn.WorkflowType,
+			Status:        txn.Status,
+			Summary:       summaryText,
+			Files:         files,
+			Metadata: map[string]interface{}{
+				"modified_file_count": len(txn.ModifiedFiles),
+				"execution_time":      txn.ExecutionTime,
+				"tags":                txn.Tags,
+				"session_id":          txn.SessionID,
+				"workstream_id":       txn.WorkstreamID,
+			},
+		})
+	}
+	return items
+}
+
+func buildDeltaPreview(delta string) string {
+	if strings.TrimSpace(delta) == "" {
+		return ""
+	}
+
+	lines := strings.Split(strings.ReplaceAll(delta, "\r\n", "\n"), "\n")
+	previewLines := make([]string, 0, 3)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		previewLines = append(previewLines, trimmed)
+		if len(previewLines) == 3 {
+			break
+		}
+	}
+
+	if len(previewLines) == 0 {
+		return ""
+	}
+
+	preview := strings.Join(previewLines, " | ")
+	if len(preview) > 140 {
+		preview = preview[:137] + "..."
+	}
+	return preview
+}
+
+func buildFileDiffPreview(record codingworkflow.ModifiedFileRecord, workingDir string) string {
+	if workingDir == "" {
+		workingDir = "."
+	}
+
+	basePath := filepath.Clean(workingDir)
+	fullPath := filepath.Join(basePath, record.FilePath)
+
+	oldText := record.Delta
+	newText := ""
+	if record.ChangeType == "delete" {
+		newText = ""
+	} else {
+		content, err := os.ReadFile(fullPath)
+		if err == nil {
+			newText = string(content)
+		} else if !os.IsNotExist(err) {
+			return ""
+		}
+	}
+
+	if strings.TrimSpace(oldText) == "" && strings.TrimSpace(newText) == "" {
+		return ""
+	}
+
+	if strings.TrimSpace(oldText) == "" {
+		oldText = ""
+	}
+
+	dmp := diffmatchpatch.New()
+	patches := dmp.PatchMake(oldText, newText)
+	preview := dmp.PatchToText(patches)
+	if preview == "" {
+		preview = fmt.Sprintf("--- %s\n+++ %s\n", record.FilePath, record.FilePath)
+		if oldText != "" {
+			preview += "-" + oldText + "\n"
+		}
+		if newText != "" {
+			preview += "+" + newText + "\n"
+		}
+	}
+	return preview
+}
+
+func getUndoWorkingDir(r *http.Request) string {
+	cfg := GetConfig()
+	workingDir := "."
+	if cfg.SystemDB != nil && cfg.SystemDB.Path != "" {
+		workingDir = cfg.SystemDB.Path
+	} else if len(cfg.Databases) > 0 && cfg.Databases[0].Path != "" {
+		workingDir = cfg.Databases[0].Path
+	}
+	return workingDir
+}
+
 func handleUndoStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -318,13 +487,7 @@ func getUndoManager(r *http.Request) (*codingworkflow.UndoManager, error) {
 		return mgr, nil
 	}
 
-	cfg := GetConfig()
-	workingDir := "."
-	if cfg.SystemDB != nil && cfg.SystemDB.Path != "" {
-		workingDir = cfg.SystemDB.Path
-	} else if len(cfg.Databases) > 0 && cfg.Databases[0].Path != "" {
-		workingDir = cfg.Databases[0].Path
-	}
+	workingDir := getUndoWorkingDir(r)
 
 	spaceClient := newRealSpaceClient(r)
 	artifactExtractor := codingworkflow.NewCodeArtifactExtractor(codingworkflow.NewGrammarRegistry())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +127,145 @@ func TestBuildListenAddr(t *testing.T) {
 
 	if got, want := buildListenAddr("0.0.0.0", 8080), "0.0.0.0:8080"; got != want {
 		t.Fatalf("buildListenAddr() = %q, want %q", got, want)
+	}
+}
+
+func TestContinueChatHandlerStreamsProgressAndContent(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"sess-1","message":"inspect this repo","workspace":{"root":"."},"context":{"open_files":["README.md"]}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueChat(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueChat() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "\"type\":\"content\"") {
+		t.Fatalf("expected streamed content event, got %q", body)
+	}
+	if !strings.Contains(body, "\"type\":\"done\"") {
+		t.Fatalf("expected done event, got %q", body)
+	}
+}
+
+func TestContinueToolHandlerReadsFilesFromWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("hello from bridge\nsecond line"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	service := &localRAGService{}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/repo.read_file", strings.NewReader(fmt.Sprintf(`{"path":"%s","start_line":1,"end_line":5}`, filePath)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueTool(rr, req, "repo.read_file")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["ok"] != true {
+		t.Fatalf("expected ok=true response, got %#v", payload)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	if got := result["content"]; got != "hello from bridge\nsecond line" {
+		t.Fatalf("unexpected content: %#v", got)
+	}
+}
+
+func TestContinueToolHandlerAppliesPatchToWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("before"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	service := &localRAGService{}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.apply_patch", strings.NewReader(fmt.Sprintf(`{"path":"%s","selection":"after"}`, filePath)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueTool(rr, req, "code.apply_patch")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read patched file: %v", err)
+	}
+	if string(data) != "after" {
+		t.Fatalf("expected patch to overwrite file contents, got %q", string(data))
+	}
+}
+
+func TestContinueToolHandlerRunsCommandsForValidation(t *testing.T) {
+	service := &localRAGService{}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/test.run", strings.NewReader(`{"query":"echo bridge-test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueTool(rr, req, "test.run")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	if got := result["output"]; !strings.Contains(fmt.Sprint(got), "bridge-test") {
+		t.Fatalf("expected command output to include bridge-test, got %#v", got)
+	}
+}
+
+func TestContinueToolHandlerPreviewsPatchForWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("before"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	service := &localRAGService{}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.preview_patch", strings.NewReader(fmt.Sprintf(`{"path":"%s","selection":"after"}`, filePath)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueTool(rr, req, "code.preview_patch")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	preview := fmt.Sprint(result["preview"])
+	if !strings.Contains(preview, "-before") || !strings.Contains(preview, "+after") {
+		t.Fatalf("expected preview to include old and new content, got %q", preview)
 	}
 }
 

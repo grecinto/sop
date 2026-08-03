@@ -31,6 +31,8 @@ type WorkflowTransaction struct {
 
 	// Execution context
 	Context       map[string]interface{} `json:"context,omitempty"`
+	SessionID     string                 `json:"session_id,omitempty"`
+	WorkstreamID  string                 `json:"workstream_id,omitempty"`
 	ExecutionTime string                 `json:"execution_time"`
 	StepCount     int                    `json:"step_count"`
 	RetryCount    int                    `json:"retry_count"`
@@ -51,15 +53,20 @@ type CodeArtifact struct {
 
 // ModifiedFileRecord tracks a single file modification within a transaction.
 type ModifiedFileRecord struct {
-	FilePath     string    `json:"file_path"`     // Relative path from working dir
-	BackupPath   string    `json:"backup_path"`   // Path to backup copy
-	OriginalHash string    `json:"original_hash"` // SHA256 of original content
-	ModifiedHash string    `json:"modified_hash"` // SHA256 of modified content
-	Timestamp    time.Time `json:"timestamp"`     // When file was modified
-	LinesAdded   int       `json:"lines_added"`   // Number of lines added
-	LinesRemoved int       `json:"lines_removed"` // Number of lines removed
-	ChangeType   string    `json:"change_type"`   // "create", "modify", "delete"
-	SizeBytes    int64     `json:"size_bytes"`    // Original file size
+	FilePath     string            `json:"file_path"`              // Relative path from working dir
+	BackupPath   string            `json:"backup_path"`            // Deprecated: retained for compatibility with older records
+	OriginalHash string            `json:"original_hash"`          // SHA256 of original content
+	ModifiedHash string            `json:"modified_hash"`          // SHA256 of modified content
+	Timestamp    time.Time         `json:"timestamp"`              // When file was modified
+	LinesAdded   int               `json:"lines_added"`            // Number of lines added
+	LinesRemoved int               `json:"lines_removed"`          // Number of lines removed
+	ChangeType   string            `json:"change_type"`            // "create", "modify", "delete"
+	SizeBytes    int64             `json:"size_bytes"`             // Original file size
+	Delta        string            `json:"delta,omitempty"`        // Compact text delta payload for replaying the change
+	DeltaFormat  string            `json:"delta_format,omitempty"` // e.g. "text-replace"
+	DiffSummary  string            `json:"diff_summary,omitempty"` // Short human-readable summary for UI cards
+	DiffStats    string            `json:"diff_stats,omitempty"`   // Compact counts like "+3 -1"
+	Metadata     map[string]string `json:"metadata,omitempty"`     // UI-friendly metadata for timeline rendering
 }
 
 // UndoQuery specifies search criteria for finding transactions.

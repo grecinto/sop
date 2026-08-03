@@ -198,6 +198,28 @@ The UI should make it clear that documents are stored once in the Space document
 
 ---
 
+## Semantic structure for workflow review memory
+
+The Space model should organize coding workflow review artifacts by a semantic code-structure hierarchy rather than by low-level persistence transaction. The minimal durable structure should be:
+
+- Coding Workflows
+  - Repo name
+    - Namespace / Class
+      - Function
+        - Items representing file-level deltas and related change metadata
+
+This keeps the hierarchy aligned with how a developer searches and navigates code:
+1. identify the repository,
+2. locate the relevant namespace or class,
+3. drill into the function or code surface,
+4. inspect the concrete change entry and delta payload.
+
+In this model:
+- the semantic index is driven by code hierarchy, not by timeline or workstream ordering,
+- the code-path nodes (repo, namespace/class, function) are the navigation structure,
+- the file-level change record is the leaf item that carries the diff summary, diff stats, delta payload, and metadata.
+- Transaction IDs are implementation details for storage and replay and should not define the Space hierarchy.
+
 ## Functional requirements
 
 ### A. Blob storage
