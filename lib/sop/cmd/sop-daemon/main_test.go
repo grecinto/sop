@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,6 +42,42 @@ var workerModeEnabled bool
 
 func init() {
 	flag.BoolVar(&workerModeEnabled, "worker-mode", false, "run the PTY worker and exit")
+}
+
+func newLoopbackTestServer(handler http.Handler) *httptest.Server {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			panic(err)
+		}
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	return server
+}
+
+func TestRegisterBridgeRoutesSkipsDuplicateContinueRoutes(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/continue/chat", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	reg := NewSessionRegistry(SubscriptionPolicy{MaxRequests: 20, Window: time.Minute})
+
+	var panicked any
+	func() {
+		defer func() {
+			panicked = recover()
+		}()
+		service.registerBridgeRoutes(mux, reg, nil)
+	}()
+
+	if panicked != nil {
+		t.Fatalf("registerBridgeRoutes panicked on duplicate route registration: %v", panicked)
+	}
 }
 
 func TestMain(m *testing.M) {
@@ -696,7 +733,7 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 
 	var receivedBody map[string]any
 	observedInProgress := false
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	worker := newLoopbackTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("worker callback method = %s, want POST", r.Method)
 		}
@@ -913,7 +950,7 @@ func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.
 	daemonSessionStore.mu.Unlock()
 
 	var received continueAgentExecuteRequest
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	worker := newLoopbackTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Fatalf("decode worker request: %v", err)
 		}
@@ -1003,7 +1040,7 @@ func TestDefaultIDEWorkerBackend_ExecuteTaskProxiesRegisteredContinueWorker(t *t
 	defer service.shellSessions.CloseAll()
 
 	var received continueAgentExecuteRequest
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	worker := newLoopbackTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Fatalf("decode worker request: %v", err)
 		}
@@ -1089,7 +1126,7 @@ func TestRegisterBridgeRoutes_FallsBackWhenRegisteredWorkerLacksRequiredCapabili
 	service.registerBridgeRoutes(mux, reg, nil)
 
 	workerCalled := false
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	worker := newLoopbackTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		workerCalled = true
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{\"type\":\"done\"}\n"))

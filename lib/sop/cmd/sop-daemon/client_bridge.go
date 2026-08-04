@@ -489,6 +489,21 @@ func (s *localRAGService) bridgeClients() []bridgeClientAdapter {
 	}
 }
 
+func registerBridgeRoute(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
+	if mux == nil || pattern == "" {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if errText := fmt.Sprint(recovered); strings.Contains(errText, "conflicts with pattern") {
+				return
+			}
+			panic(recovered)
+		}
+	}()
+	mux.HandleFunc(pattern, handler)
+}
+
 func (s *localRAGService) registerBridgeRoutes(mux *http.ServeMux, reg *SessionRegistry, authHandler *DaemonAuthHandler) {
 	if mux == nil || reg == nil {
 		return
@@ -508,7 +523,7 @@ func (s *localRAGService) registerBridgeRoutes(mux *http.ServeMux, reg *SessionR
 			if authHandler != nil {
 				protected = authHandler.RequireAuth(protected)
 			}
-			mux.HandleFunc(route.Pattern, handleOptionsAndCORS(protected))
+			registerBridgeRoute(mux, route.Pattern, handleOptionsAndCORS(protected))
 		}
 	}
 }
