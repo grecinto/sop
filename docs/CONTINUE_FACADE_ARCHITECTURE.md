@@ -103,6 +103,7 @@ The reversal is supported only at the service or transport boundary, not by turn
 - In-process embedding uses `Service.AskWithRequest(ctx, AskRequest)`.
 - HTTP exposure uses `NewParticipantHandler(...)`.
 - Remote invocation uses `ParticipantClient`.
+- Live streaming remote invocation uses `ParticipantClient.AskStream(...)` with `Accept: application/x-ndjson`.
 
 This keeps the architecture coherent:
 

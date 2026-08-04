@@ -40,10 +40,12 @@ This is the reverse-role mode for SDK and agent reuse.
 - Another controller owns the outer workflow loop.
 - That controller delegates one bounded Ask turn into SOP.
 - SOP Ask still remains the controller of its own internal capability pipeline.
+- SOP may return either a final JSON response or an NDJSON event stream with progress, tool activity, content, final response, and done events.
 - The integration contract is the typed participant surface in `lib/sop/ai/agent`:
   - `Service.AskWithRequest(ctx, AskRequest)` for in-process embedding
   - `NewParticipantHandler(...)` for exposing SOP Ask over HTTP
   - `ParticipantClient` for calling a remote SOP Ask participant endpoint
+  - `ParticipantClient.AskStream(...)` for consuming live NDJSON progress from that participant endpoint
 
 The key rule is that role reversal happens at the transport or embedding boundary, not inside the capability layer. Capabilities remain passive participants either way.
 

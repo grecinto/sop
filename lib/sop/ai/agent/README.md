@@ -47,7 +47,7 @@ Ask now supports a modular capability layer that keeps domain behavior out of th
 *   **Runtime Extension**: New domains can be introduced by registering a capability implementation, enabling support for web research, custom verticals, or other services without branching the core Ask pipeline.
 *   **Shared Runtime**: The same capability-aware runtime is used by the daemon and httpserver entry points, keeping behavior consistent across both surfaces.
 *   **Deployment Scope**: Coding-workflow capabilities should remain local-runtime scoped. HQ/site-server deployments should not expose them as a general capability path, while end-user host runtimes or local daemons may register them for local editing and repo-aware workflows.
-*   **Ask as Participant**: The same Ask runtime can also be reused under an external controller through `Service.AskWithRequest`, `NewParticipantHandler`, and `ParticipantClient`. This reverses roles at the transport boundary only. Inside SOP, Ask still orchestrates its own capabilities and tools.
+*   **Ask as Participant**: The same Ask runtime can also be reused under an external controller through `Service.AskWithRequest`, `NewParticipantHandler`, and `ParticipantClient`. Participant mode now supports both final JSON responses and NDJSON streaming via `ParticipantClient.AskStream`, while still routing through the queue-aware Ask pipeline when the copilot agent is registered. This reverses roles at the transport boundary only. Inside SOP, Ask still orchestrates its own capabilities and tools.
 
 ```mermaid
 flowchart LR

@@ -1,0 +1,271 @@
+# Ask Participant Mode
+
+This guide shows how to use SOP Ask as a participant under another controller.
+
+In this mode, your application, agent, or IDE worker owns the outer workflow loop and delegates one bounded Ask turn into SOP when it wants SOP's internal orchestration, capabilities, memory, and tool execution.
+
+## What This Mode Guarantees
+
+When the participant request is backed by the registered `copilot` agent, SOP runs the delegated request through the queue-aware Ask pipeline rather than a shallow single-turn helper.
+
+That means the delegated Ask turn can:
+
+- route across capabilities normally
+- use the internal work queue for multi-turn continuation
+- emit progress and structured events while it runs
+- return the final result only after the queued internal workflow completes for that delegated turn
+
+The role reversal happens only at the boundary:
+
+- your controller decides when to call SOP Ask
+- SOP Ask decides how to complete that delegated request internally
+- SOP capabilities still remain passive participants
+
+## Available SDK Surfaces
+
+The participant surfaces live in `lib/sop/ai/agent`:
+
+- `Service.AskWithRequest(ctx, AskRequest)`
+- `NewParticipantHandler(...)`
+- `ParticipantClient.Ask(...)`
+- `ParticipantClient.AskStream(...)`
+
+Use them in three common ways.
+
+## 1. In-Process Embedding
+
+Use this when your controller and SOP runtime live in the same process.
+
+```go
+package main
+
+import (
+  "context"
+  "fmt"
+
+  "github.com/sharedcode/sop/ai"
+  "github.com/sharedcode/sop/ai/agent"
+)
+
+func delegateAskInProcess(ctx context.Context, svc *agent.Service) error {
+  resp, err := svc.AskWithRequest(ctx, agent.AskRequest{
+    Query: "Inspect the repository and prepare the next bounded implementation step.",
+    Session: &ai.SessionPayload{
+      SessionID:    "outer-controller-session",
+      CurrentDB:    "system",
+      ActiveRepo:   "/workspace/repo",
+      ActiveDomain: "coding",
+    },
+    ThinkingLevel: "high",
+    DefaultFormat: "json",
+    ProviderOverride: &agent.ProviderDetails{
+      Provider: "anthropic",
+      Model:    "claude-sonnet-4-5",
+    },
+    EventStreamer: func(eventType string, data any) {
+      fmt.Printf("event=%s data=%v\n", eventType, data)
+    },
+    ProgressSink: func(message string) {
+      fmt.Printf("progress=%s\n", message)
+    },
+  })
+  if err != nil {
+    return err
+  }
+
+  fmt.Println(resp.FinalText)
+  return nil
+}
+```
+
+Why this is useful:
+
+- no HTTP transport is needed
+- your controller can pass request-scoped session state directly
+- SOP still uses its internal queue-aware Ask pipeline when `copilot` is registered
+
+## 2. HTTP Participant Endpoint
+
+Use this when SOP Ask should run as a separate process or service.
+
+```go
+package main
+
+import (
+  "net/http"
+
+  "github.com/sharedcode/sop/ai/agent"
+)
+
+func mountParticipantEndpoint(mux *http.ServeMux, svc *agent.Service) {
+  mux.Handle("/api/agent/participant/ask", agent.NewParticipantHandler(svc))
+}
+```
+
+### JSON request/response mode
+
+Send a normal JSON request when you only need the final result.
+
+```json
+{
+  "query": "Investigate the failing parser tests and finish the internal workflow.",
+  "session": {
+    "session_id": "controller-42",
+    "active_repo": "/workspace/repo",
+    "active_domain": "coding"
+  },
+  "thinking_level": "high",
+  "default_format": "json"
+}
+```
+
+Typical JSON response:
+
+```json
+{
+  "final_text": "I traced the parser regression to the token recovery branch and completed the queued execution and review steps.",
+  "updated_session": {
+    "session_id": "controller-42",
+    "active_repo": "/workspace/repo",
+    "active_domain": "coding"
+  }
+}
+```
+
+## 3. NDJSON Streaming Participant Mode
+
+Use this when your outer controller wants live progress, tool activity, or partial content while SOP Ask is working.
+
+Set:
+
+- `Content-Type: application/json`
+- `Accept: application/x-ndjson`
+
+The participant endpoint emits NDJSON events such as:
+
+- `progress`
+- tool and assistant event types forwarded from SOP Ask
+- `content`
+- `final`
+- `done`
+
+Example stream:
+
+```json
+{"type":"progress","message":"Preparing delegated Ask turn"}
+{"type":"tool_call","data":{"name":"search_codebase"}}
+{"type":"content","message":"I found the parser recovery path that controls this failure."}
+{"type":"final","response":{"final_text":"Queued workflow complete."}}
+{"type":"done"}
+```
+
+## 4. Remote Client Example
+
+### Final-result client
+
+```go
+package main
+
+import (
+  "context"
+  "fmt"
+  "net/http"
+
+  "github.com/sharedcode/sop/ai/agent"
+)
+
+func callParticipant(ctx context.Context) error {
+  client := &agent.ParticipantClient{
+    URL:        "http://127.0.0.1:9090/api/agent/participant/ask",
+    HTTPClient: http.DefaultClient,
+  }
+
+  resp, err := client.Ask(ctx, agent.ParticipantRequest{
+    Query: "Complete the internal coding workflow for this bounded task.",
+    Session: &agent.ParticipantSession{
+      SessionID:    "controller-42",
+      ActiveRepo:   "/workspace/repo",
+      ActiveDomain: "coding",
+    },
+  })
+  if err != nil {
+    return err
+  }
+
+  fmt.Println(resp.FinalText)
+  return nil
+}
+```
+
+### Streaming client
+
+```go
+package main
+
+import (
+  "context"
+  "fmt"
+  "net/http"
+
+  "github.com/sharedcode/sop/ai/agent"
+)
+
+func streamParticipant(ctx context.Context) error {
+  client := &agent.ParticipantClient{
+    URL:        "http://127.0.0.1:9090/api/agent/participant/ask",
+    HTTPClient: http.DefaultClient,
+  }
+
+  resp, err := client.AskStream(ctx, agent.ParticipantRequest{
+    Query: "Run the delegated Ask workflow and stream progress.",
+    Session: &agent.ParticipantSession{
+      SessionID:    "controller-42",
+      ActiveRepo:   "/workspace/repo",
+      ActiveDomain: "coding",
+    },
+  }, func(event agent.ParticipantStreamEvent) error {
+    fmt.Printf("event=%s message=%s data=%v\n", event.Type, event.Message, event.Data)
+    return nil
+  })
+  if err != nil {
+    return err
+  }
+
+  fmt.Println("final:", resp.FinalText)
+  return nil
+}
+```
+
+## Portable Session Contract
+
+The HTTP participant transport uses `ParticipantSession`, not the full internal `SessionPayload`.
+
+That is intentional. The portable session contract only carries transport-safe state such as:
+
+- session identity
+- current database name
+- active repository and domain hints
+- selected KB references
+- variables that are safe to serialize
+
+It does not attempt to serialize process-local transaction handles or other in-memory runtime objects.
+
+## Design Guidance
+
+Use Ask-as-participant mode when:
+
+- another agent must remain the top-level controller
+- you want SOP's internal orchestration for one bounded delegated turn
+- you need capability routing, queue-backed continuation, and memory inside that turn
+
+Do not use it to turn SOP capabilities into controllers. The supported model is still:
+
+- outer controller at the boundary
+- SOP Ask as internal orchestrator for the delegated turn
+- SOP capabilities as passive participants
+
+## Related Pages
+
+- [Continue Facade Architecture](./continue-facade-architecture)
+- [Workflow Architecture](./workflow-architecture)
+- [SDK Overview](./intro)

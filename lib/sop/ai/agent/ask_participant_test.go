@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -20,6 +21,15 @@ type stubAskParticipant struct {
 
 func (s *stubAskParticipant) AskWithRequest(ctx context.Context, req AskRequest) (AskResponse, error) {
 	s.lastRequest = req
+	if req.ProgressSink != nil {
+		req.ProgressSink("queued step")
+	}
+	if req.EventStreamer != nil {
+		req.EventStreamer("tool_call", map[string]any{"name": "select"})
+	}
+	if req.Writer != nil {
+		_, _ = req.Writer.Write([]byte("partial content"))
+	}
 	return s.response, s.err
 }
 
@@ -127,6 +137,102 @@ func TestParticipantClientPostsRequest(t *testing.T) {
 	if resp.UpdatedSession == nil || resp.UpdatedSession.SessionID != "remote-session" {
 		t.Fatalf("updated_session = %#v, want session remote-session", resp.UpdatedSession)
 	}
+}
+
+func TestParticipantHandlerStreamsNDJSONEvents(t *testing.T) {
+	participant := &stubAskParticipant{
+		response: AskResponse{
+			FinalText:      "delegated-result",
+			UpdatedSession: &ai.SessionPayload{SessionID: "s-123"},
+		},
+	}
+	handler := NewParticipantHandler(participant)
+
+	req := httptest.NewRequest(http.MethodPost, "/participant/ask", strings.NewReader(`{"query":"stream this","session":{"session_id":"s-123"}}`))
+	req.Header.Set("Accept", participantNDJSONContentType)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, participantNDJSONContentType) {
+		t.Fatalf("content-type = %q, want NDJSON", got)
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(rec.Body.String()))
+	var eventTypes []string
+	var sawFinal bool
+	for decoder.More() {
+		var event ParticipantStreamEvent
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatalf("decode stream event: %v", err)
+		}
+		eventTypes = append(eventTypes, event.Type)
+		if event.Type == "final" {
+			sawFinal = true
+			if event.Response == nil || event.Response.FinalText != "delegated-result" {
+				t.Fatalf("final response = %#v, want delegated-result", event.Response)
+			}
+		}
+	}
+	if !sawFinal {
+		t.Fatal("expected final stream event")
+	}
+	sort.Strings(eventTypes)
+	for _, want := range []string{"content", "done", "final", "progress", "tool_call"} {
+		if !containsParticipantEventType(eventTypes, want) {
+			t.Fatalf("event types = %#v, missing %q", eventTypes, want)
+		}
+	}
+}
+
+func TestParticipantClientAskStreamReadsNDJSON(t *testing.T) {
+	client := &ParticipantClient{
+		URL: "https://participant.example.test/ask",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if got := r.Header.Get("Accept"); got != participantNDJSONContentType {
+				t.Fatalf("Accept = %q, want %q", got, participantNDJSONContentType)
+			}
+			stream := strings.Join([]string{
+				`{"type":"progress","message":"queued step"}`,
+				`{"type":"final","response":{"final_text":"participant-complete","updated_session":{"session_id":"remote-session"}}}`,
+				`{"type":"done"}`,
+			}, "\n") + "\n"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{participantNDJSONContentType}},
+				Body:       io.NopCloser(strings.NewReader(stream)),
+			}, nil
+		})},
+	}
+
+	var seen []string
+	resp, err := client.AskStream(context.Background(), ParticipantRequest{Query: "inspect repo state"}, func(event ParticipantStreamEvent) error {
+		seen = append(seen, event.Type)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("AskStream() error = %v", err)
+	}
+	if resp.FinalText != "participant-complete" {
+		t.Fatalf("final_text = %q, want %q", resp.FinalText, "participant-complete")
+	}
+	if resp.UpdatedSession == nil || resp.UpdatedSession.SessionID != "remote-session" {
+		t.Fatalf("updated_session = %#v, want session remote-session", resp.UpdatedSession)
+	}
+	for _, want := range []string{"progress", "final", "done"} {
+		if !containsParticipantEventType(seen, want) {
+			t.Fatalf("seen events = %#v, missing %q", seen, want)
+		}
+	}
+}
+
+func containsParticipantEventType(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

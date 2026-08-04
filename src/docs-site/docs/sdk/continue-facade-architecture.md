@@ -65,8 +65,13 @@ The participant-mode surfaces live in `lib/sop/ai/agent`:
 - `Service.AskWithRequest(ctx, AskRequest)` for in-process embedding
 - `NewParticipantHandler(...)` for exposing SOP Ask as an HTTP participant endpoint
 - `ParticipantClient` for invoking a remote SOP Ask participant endpoint
+- `ParticipantClient.AskStream(...)` for NDJSON streaming progress, content, and final response events
 
 The transport request intentionally uses a JSON-safe participant session shape rather than the full internal session object so external controllers can pass portable state cleanly.
+
+When the participant endpoint is backed by the registered copilot agent, the delegated request runs through SOP's queue-aware Ask pipeline before the final response is emitted.
+
+For end-to-end examples, see [Ask Participant Mode](./ask-participant-mode).
 
 ## Provider and credential model
 

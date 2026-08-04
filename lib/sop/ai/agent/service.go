@@ -1867,7 +1867,99 @@ func (s *Service) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (str
 // controllers can use this service as a participant without depending on the
 // legacy ConfigMap-based Agent interface.
 func (s *Service) AskWithRequest(ctx context.Context, req AskRequest) (AskResponse, error) {
-	return s.ask(ctx, req)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		return AskResponse{}, fmt.Errorf("query is required")
+	}
+	if req.Session == nil {
+		req.Session = &ai.SessionPayload{CurrentUserQuery: req.Query}
+	} else if strings.TrimSpace(req.Session.CurrentUserQuery) == "" {
+		req.Session.CurrentUserQuery = req.Query
+	}
+
+	runCtx, cfg := participantAskContextAndConfig(ctx, req)
+	if err := s.Open(runCtx); err != nil {
+		return AskResponse{}, err
+	}
+	defer func() {
+		if closeErr := s.Close(runCtx); closeErr != nil {
+			log.Warn("AskWithRequest close failed", "error", closeErr)
+		}
+	}()
+
+	if s != nil && s.registry != nil {
+		if copilotAgent, ok := s.registry["copilot"]; ok && copilotAgent != nil {
+			finalText, err := copilotAgent.Ask(runCtx, req.Query, cfg)
+			resp := AskResponse{
+				FinalText:      finalText,
+				UpdatedSession: req.Session,
+			}
+			s.syncSessionFromPayload(resp.UpdatedSession)
+			return resp, err
+		}
+	}
+
+	resp, err := s.ask(runCtx, req)
+	if err != nil {
+		return resp, err
+	}
+	s.syncSessionFromPayload(resp.UpdatedSession)
+	return resp, nil
+}
+
+func participantAskContextAndConfig(ctx context.Context, req AskRequest) (context.Context, *ai.ConfigMap) {
+	ctx = context.WithValue(ctx, SessionPayloadKey, req.Session)
+	if req.Writer != nil {
+		ctx = context.WithValue(ctx, ai.CtxKeyWriter, req.Writer)
+	}
+	if req.EventStreamer != nil {
+		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, req.EventStreamer)
+	}
+	if req.ProgressSink != nil {
+		ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, req.ProgressSink)
+	}
+	if req.Executor != nil {
+		ctx = context.WithValue(ctx, ai.CtxKeyExecutor, req.Executor)
+	}
+	if req.ScriptRecorder != nil {
+		ctx = context.WithValue(ctx, ai.CtxKeyScriptRecorder, req.ScriptRecorder)
+	}
+	if req.Database != nil {
+		ctx = context.WithValue(ctx, ai.CtxKeyDatabase, req.Database)
+	}
+	if req.ProviderOverride != nil {
+		if provider := strings.TrimSpace(req.ProviderOverride.Provider); provider != "" {
+			ctx = context.WithValue(ctx, ai.CtxKeyProvider, provider)
+		}
+		if apiKey := strings.TrimSpace(req.ProviderOverride.APIKey); apiKey != "" {
+			ctx = context.WithValue(ctx, ai.CtxKeyAPIKey, apiKey)
+		}
+		if baseURL := strings.TrimSpace(req.ProviderOverride.BaseURL); baseURL != "" {
+			ctx = context.WithValue(ctx, ai.CtxKeyBaseURL, baseURL)
+		}
+	}
+
+	cfg := req.Options
+	if cfg == nil {
+		cfg = ai.NewConfigMap()
+	}
+	if strings.TrimSpace(req.DefaultFormat) != "" {
+		cfg.Set("default_format", strings.TrimSpace(req.DefaultFormat))
+	}
+	if strings.TrimSpace(req.ThinkingLevel) != "" {
+		cfg.Set("thinking_level", strings.TrimSpace(req.ThinkingLevel))
+	}
+	if req.ProviderOverride != nil {
+		cfg.Set("provider_details", req.ProviderOverride)
+	}
+	if isNewTopic, ok := cfg.Get("is_new_topic"); !ok || isNewTopic == nil {
+		if isNewTopic := ai.IsNewTopicFromContext(ctx); isNewTopic {
+			cfg.Set("is_new_topic", true)
+		}
+	}
+	return ctx, cfg
 }
 
 func (s *Service) hydrateSessionPreferences(ctx context.Context, session *ai.SessionPayload) {

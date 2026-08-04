@@ -46,4 +46,5 @@ Key advantages include:
 - Explore the [AI Database Platform](./ai-database)
 - Understand the [Workflow Architecture](./workflow-architecture) - Dynamic Planner, KB workflows, and the Ask pipeline execution model
 - Read about the [Continue Facade Architecture](./continue-facade-architecture) - how Continue can either act as an editor-side companion under SOP control or call SOP Ask as a participant in reverse-role integrations
+- Follow the [Ask Participant Mode](./ask-participant-mode) guide for concrete embedding, HTTP, and NDJSON streaming examples
 - Read about the [Workflow Undo System](./undo-system) - Transaction management, multi-dimensional indexing, and semantic search integration

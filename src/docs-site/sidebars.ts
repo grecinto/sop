@@ -33,7 +33,16 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'SDK Documentation',
-      items: ['sdk/intro', 'sdk/vector-database', 'sdk/ai-database', 'sdk/stores-management'],
+      items: [
+        'sdk/intro',
+        'sdk/continue-facade-architecture',
+        'sdk/ask-participant-mode',
+        'sdk/workflow-architecture',
+        'sdk/vector-database',
+        'sdk/ai-database',
+        'sdk/stores-management',
+        'sdk/undo-system',
+      ],
     },
   ],
 };

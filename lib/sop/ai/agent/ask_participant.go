@@ -1,15 +1,20 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/sharedcode/sop/ai"
 )
+
+const participantNDJSONContentType = "application/x-ndjson"
 
 // AskParticipant exposes the typed Ask contract for controller-to-participant
 // delegation without forcing callers through the generic Agent interface.
@@ -55,6 +60,16 @@ type ParticipantResponse struct {
 	OutcomeFacts   []string            `json:"outcome_facts,omitempty"`
 	OutcomeRecipes []ai.LearnedRecipe  `json:"outcome_recipes,omitempty"`
 	Error          string              `json:"error,omitempty"`
+}
+
+// ParticipantStreamEvent is the NDJSON event envelope emitted when another
+// controller requests streaming participant output from SOP Ask.
+type ParticipantStreamEvent struct {
+	Type     string               `json:"type"`
+	Message  string               `json:"message,omitempty"`
+	Data     any                  `json:"data,omitempty"`
+	Response *ParticipantResponse `json:"response,omitempty"`
+	Error    string               `json:"error,omitempty"`
 }
 
 type participantErrorResponse struct {
@@ -135,12 +150,13 @@ func participantSessionFromAI(session *ai.SessionPayload) *ParticipantSession {
 // typed participant endpoint for another controller.
 func NewParticipantHandler(participant AskParticipant) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		if participant == nil {
+			w.Header().Set("Content-Type", "application/json")
 			writeParticipantError(w, http.StatusServiceUnavailable, "ask participant is not configured")
 			return
 		}
 		if r.Method != http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
 			writeParticipantError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
@@ -148,13 +164,22 @@ func NewParticipantHandler(participant AskParticipant) http.Handler {
 		defer r.Body.Close()
 		var req ParticipantRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.Header().Set("Content-Type", "application/json")
 			writeParticipantError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON body: %v", err))
 			return
 		}
 		if strings.TrimSpace(req.Query) == "" {
+			w.Header().Set("Content-Type", "application/json")
 			writeParticipantError(w, http.StatusBadRequest, "query is required")
 			return
 		}
+
+		if participantAcceptsNDJSON(r) {
+			handleParticipantStream(w, r, participant, req)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
 
 		resp, err := participant.AskWithRequest(r.Context(), req.toAskRequest())
 		if err != nil {
@@ -168,9 +193,75 @@ func NewParticipantHandler(participant AskParticipant) http.Handler {
 	})
 }
 
+func participantAcceptsNDJSON(r *http.Request) bool {
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), participantNDJSONContentType)
+}
+
+func handleParticipantStream(w http.ResponseWriter, r *http.Request, participant AskParticipant, req ParticipantRequest) {
+	w.Header().Set("Content-Type", participantNDJSONContentType)
+	streamer := newParticipantStreamWriter(w)
+	askReq := req.toAskRequest()
+	askReq.Writer = streamer.contentWriter()
+	askReq.EventStreamer = func(eventType string, data any) {
+		streamer.send(ParticipantStreamEvent{Type: eventType, Data: data})
+	}
+	askReq.ProgressSink = func(message string) {
+		streamer.send(ParticipantStreamEvent{Type: "progress", Message: message})
+	}
+
+	resp, err := participant.AskWithRequest(r.Context(), askReq)
+	if err != nil {
+		streamer.send(ParticipantStreamEvent{Type: "participant_error", Error: err.Error()})
+		streamer.send(ParticipantStreamEvent{Type: "done"})
+		return
+	}
+	finalResp := participantResponseFromAsk(resp)
+	streamer.send(ParticipantStreamEvent{Type: "final", Response: &finalResp})
+	streamer.send(ParticipantStreamEvent{Type: "done"})
+}
+
 func writeParticipantError(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(participantErrorResponse{Error: message})
+}
+
+type participantStreamWriter struct {
+	mu      sync.Mutex
+	encoder *json.Encoder
+	flush   func()
+}
+
+func newParticipantStreamWriter(w http.ResponseWriter) *participantStreamWriter {
+	writer := &participantStreamWriter{encoder: json.NewEncoder(w)}
+	if flusher, ok := w.(http.Flusher); ok {
+		writer.flush = flusher.Flush
+	}
+	return writer
+}
+
+func (w *participantStreamWriter) send(event ParticipantStreamEvent) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_ = w.encoder.Encode(event)
+	if w.flush != nil {
+		w.flush()
+	}
+}
+
+func (w *participantStreamWriter) contentWriter() io.Writer {
+	return participantContentWriter{stream: w}
+}
+
+type participantContentWriter struct {
+	stream *participantStreamWriter
+}
+
+func (w participantContentWriter) Write(p []byte) (int, error) {
+	message := strings.TrimSpace(string(p))
+	if message != "" {
+		w.stream.send(ParticipantStreamEvent{Type: "content", Message: message})
+	}
+	return len(p), nil
 }
 
 // ParticipantClient lets a higher-level controller invoke SOP Ask over HTTP
@@ -231,4 +322,78 @@ func (c *ParticipantClient) Ask(ctx context.Context, req ParticipantRequest) (Pa
 		return ParticipantResponse{}, fmt.Errorf("participant ask failed: %s", resp.Error)
 	}
 	return resp, nil
+}
+
+// AskStream invokes a remote SOP Ask participant endpoint in NDJSON mode,
+// forwarding each streamed event to onEvent and returning the final response.
+func (c *ParticipantClient) AskStream(ctx context.Context, req ParticipantRequest, onEvent func(ParticipantStreamEvent) error) (ParticipantResponse, error) {
+	if strings.TrimSpace(c.URL) == "" {
+		return ParticipantResponse{}, fmt.Errorf("participant URL is required")
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return ParticipantResponse{}, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL, bytes.NewReader(body))
+	if err != nil {
+		return ParticipantResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", participantNDJSONContentType)
+	for key, values := range c.Headers {
+		for _, value := range values {
+			httpReq.Header.Add(key, value)
+		}
+	}
+
+	client := c.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	httpResp, err := client.Do(httpReq)
+	if err != nil {
+		return ParticipantResponse{}, err
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+		var errResp participantErrorResponse
+		if decodeErr := json.NewDecoder(httpResp.Body).Decode(&errResp); decodeErr == nil && strings.TrimSpace(errResp.Error) != "" {
+			return ParticipantResponse{}, fmt.Errorf("participant ask failed: %s", errResp.Error)
+		}
+		return ParticipantResponse{}, fmt.Errorf("participant ask failed with status %d", httpResp.StatusCode)
+	}
+
+	var finalResp ParticipantResponse
+	var streamErr string
+	decoder := json.NewDecoder(bufio.NewReader(httpResp.Body))
+	for {
+		var event ParticipantStreamEvent
+		if err := decoder.Decode(&event); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return finalResp, err
+		}
+		if onEvent != nil {
+			if err := onEvent(event); err != nil {
+				return finalResp, err
+			}
+		}
+		switch event.Type {
+		case "final":
+			if event.Response != nil {
+				finalResp = *event.Response
+			}
+		case "participant_error":
+			streamErr = strings.TrimSpace(event.Error)
+		}
+	}
+	if streamErr != "" {
+		return finalResp, fmt.Errorf("participant ask failed: %s", streamErr)
+	}
+	return finalResp, nil
 }

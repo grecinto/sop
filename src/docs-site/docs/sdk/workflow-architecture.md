@@ -125,8 +125,11 @@ The SDK surfaces for this mode are:
 - `AskWithRequest` for in-process embedding
 - `NewParticipantHandler` for exposing SOP Ask over HTTP
 - `ParticipantClient` for remote invocation
+- `ParticipantClient.AskStream` for remote invocation with NDJSON progress streaming
 
 This lets you reverse roles with Continue or another controller without weakening the LLM-as-Orchestrator design inside SOP itself.
+
+For concrete embedding and streaming examples, see [Ask Participant Mode](./ask-participant-mode).
 
 ### Conversational Feedback System
 

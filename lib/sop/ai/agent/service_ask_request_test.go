@@ -7,6 +7,34 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
+type askWithRequestQueueStubAgent struct {
+	openCalls  int
+	closeCalls int
+	lastQuery  string
+	lastCfg    *ai.ConfigMap
+	response   string
+}
+
+func (a *askWithRequestQueueStubAgent) Open(ctx context.Context) error {
+	a.openCalls++
+	return nil
+}
+
+func (a *askWithRequestQueueStubAgent) Close(ctx context.Context) error {
+	a.closeCalls++
+	return nil
+}
+
+func (a *askWithRequestQueueStubAgent) Search(ctx context.Context, query string, limit int) ([]ai.Hit[map[string]any], error) {
+	return nil, nil
+}
+
+func (a *askWithRequestQueueStubAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
+	a.lastQuery = query
+	a.lastCfg = cfg
+	return a.response, nil
+}
+
 // TestAskWithRequest_BasicFlow tests the new explicit parameter API
 func TestAskWithRequest_BasicFlow(t *testing.T) {
 	// This is a minimal smoke test to verify the new API compiles and runs
@@ -97,5 +125,50 @@ func TestAskResponse_Structure(t *testing.T) {
 
 	if len(resp.OutcomeFacts) != 1 {
 		t.Errorf("Expected 1 outcome fact, got %d", len(resp.OutcomeFacts))
+	}
+}
+
+func TestServiceAskWithRequest_UsesCopilotRegistryAgent(t *testing.T) {
+	stub := &askWithRequestQueueStubAgent{response: "queued-result"}
+	svc := &Service{
+		registry: map[string]ai.Agent[map[string]any]{"copilot": stub},
+		session:  NewRunnerSession(),
+	}
+
+	resp, err := svc.AskWithRequest(context.Background(), AskRequest{
+		Query:         "complete the queued workflow",
+		Session:       &ai.SessionPayload{SessionID: "sess-1"},
+		ThinkingLevel: "high",
+		DefaultFormat: "json",
+		ProviderOverride: &ProviderDetails{
+			Provider: "anthropic",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AskWithRequest() error = %v", err)
+	}
+	if resp.FinalText != "queued-result" {
+		t.Fatalf("AskWithRequest() = %q, want %q", resp.FinalText, "queued-result")
+	}
+	if stub.openCalls != 1 || stub.closeCalls != 1 {
+		t.Fatalf("lifecycle calls = open:%d close:%d, want 1/1", stub.openCalls, stub.closeCalls)
+	}
+	if stub.lastQuery != "complete the queued workflow" {
+		t.Fatalf("lastQuery = %q, want %q", stub.lastQuery, "complete the queued workflow")
+	}
+	if stub.lastCfg == nil {
+		t.Fatal("expected config map to be forwarded")
+	}
+	if v, ok := stub.lastCfg.Get("thinking_level"); !ok || v != "high" {
+		t.Fatalf("thinking_level = %#v, want %q", v, "high")
+	}
+	if v, ok := stub.lastCfg.Get("default_format"); !ok || v != "json" {
+		t.Fatalf("default_format = %#v, want %q", v, "json")
+	}
+	if v, ok := stub.lastCfg.Get("provider_details"); !ok || v == nil {
+		t.Fatalf("provider_details missing: %#v", v)
+	}
+	if resp.UpdatedSession == nil || resp.UpdatedSession.SessionID != "sess-1" {
+		t.Fatalf("updated session = %#v, want session_id sess-1", resp.UpdatedSession)
 	}
 }
