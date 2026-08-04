@@ -12,6 +12,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	sharedagent "github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/ai/memory"
 )
 
@@ -229,10 +230,166 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	loadedAgents = b.LoadedAgents
 	activeSessions = b.ActiveSessions
 
-	registerSharedAPIHandlers(mux)
+	// Runtime & Database Endpoints
+	mux.HandleFunc("/api/runtime/refresh", WithAuth(handleRuntimeRefresh))
+	mux.HandleFunc("/api/databases", WithAuth(handleDatabases))
+	mux.HandleFunc("/api/databases/update", WithAuth(handleUpdateDatabase))
+
+	// Stores API endpoints (disabled by default for v1, hidden via feature flag)
+	if sharedagent.StoresFeatureEnabled() {
+		mux.HandleFunc("/api/stores", WithAuth(handleListStores))
+		mux.HandleFunc("/api/store/info", WithAuth(handleGetStoreInfo))
+		mux.HandleFunc("/api/store/update", WithAuth(handleUpdateStoreInfo))
+		mux.HandleFunc("/api/store/items", WithAuth(handleListItems))
+		mux.HandleFunc("/api/store/item/update", WithAuth(handleUpdateItem))
+		mux.HandleFunc("/api/store/item/add", WithAuth(handleAddItem))
+		mux.HandleFunc("/api/store/item/delete", WithAuth(handleDeleteItem))
+		mux.HandleFunc("/api/store/items/delete", WithAuth(handleDeleteItems))
+		mux.HandleFunc("/api/store/add", WithAuth(handleAddStore))
+		mux.HandleFunc("/api/store/delete", WithAuth(handleDeleteStore))
+	}
+
+	mux.HandleFunc("/api/spaces", WithAuth(handleListSpaces))
+	mux.HandleFunc("/api/db/options", WithAuth(handleGetDBOptions))
+	mux.HandleFunc("/api/admin/validate", WithAuth(handleValidateAdminToken))
+
+	// AI Endpoints
+	//
+	// NOTE: /api/ai/chat vs /api/ask (daemon)
+	// This endpoint (/api/ai/chat) is for HQ mode with SESSION auth.
+	// The daemon provides /api/ask with JWT auth for localhost (see daemon/main.go).
+	// Both share underlying agent logic but maintain separate endpoints for:
+	// - Different auth models (session vs JWT)
+	// - Different payload structures (rich HQ vs simpler daemon)
+	// - Independent evolution (HQ features vs local-first features)
+	mux.HandleFunc("/api/ai/chat", WithAuth(handleAIChat))
+	mux.HandleFunc("/api/continue/chat", WithAuth(handleContinueChat))
+	mux.HandleFunc("/api/sop/chat", WithAuth(handleContinueChat))
+	mux.HandleFunc("/api/continue/tools/", WithAuth(handleContinueTool))
+	mux.HandleFunc("/api/sop/tools/", WithAuth(handleContinueTool))
+	mux.HandleFunc("/api/continue/sessions/", WithAuth(handleContinueSessionState))
+	mux.HandleFunc("/api/sop/sessions/", WithAuth(handleContinueSessionState))
+	mux.HandleFunc("/api/ai/test-connection", WithAuth(handleTestLLMConnection))
+	mux.HandleFunc("/api/ai/test-embedder-connection", WithAuth(handleTestEmbedderConnection))
+	mux.HandleFunc("/api/ai/summarize", WithAuth(handleAISummarize))
+	mux.HandleFunc("/api/tool/execute", WithAuth(handleToolExecute))
+	mux.HandleFunc("/api/ai/session/close", WithAuth(handleCloseSession))
+	mux.HandleFunc("/api/ai/feedback", WithAuth(handleAIFeedback))
+	mux.HandleFunc("/api/scripts/execute", WithAuth(handleExecuteScript))
+
+	// KB Refinement Endpoints
+	mux.HandleFunc("/api/ai/chat/revalidate", WithAuth(HandleKBRevalidate))
+	mux.HandleFunc("/api/ai/kb/alternatives", WithAuth(HandleKBAlternatives))
+
+	// Knowledge Base Endpoints
+	mux.HandleFunc("/api/source-store/digest", WithAuth(handleDigestSourceStore))
+	mux.HandleFunc("/api/spaces/categories", WithAuth(handleListSpaceCategories))
+	mux.HandleFunc("/api/spaces/category/add", WithAuth(handleAddSpaceCategory))
+	mux.HandleFunc("/api/spaces/category/delete", WithAuth(handleDeleteSpaceCategory))
+	mux.HandleFunc("/api/spaces/items", WithAuth(handleListSpaceItems))
+	mux.HandleFunc("/api/spaces/item/add", WithAuth(handleAddSpaceItem))
+	mux.HandleFunc("/api/spaces/item/update", WithAuth(handleUpdateSpaceItem))
+	mux.HandleFunc("/api/spaces/item/delete", WithAuth(handleDeleteSpaceItem))
+	mux.HandleFunc("/api/spaces/create", WithAuth(handleCreateSpace))
+	mux.HandleFunc("/api/spaces/preload", WithAuth(handlePreloadSpace))
+	mux.HandleFunc("/api/spaces/ingest", WithAuth(handleIngestSpace))
+	mux.HandleFunc("/api/spaces/ingest/import", WithAuth(handleIngestImportSpace))
+	mux.HandleFunc("/api/spaces/vectorize", WithAuth(handleVectorizeSpace))
+	mux.HandleFunc("/api/spaces/delete", WithAuth(handleDeleteSpace))
+	mux.HandleFunc("/api/spaces/export", WithAuth(handleExportSpace))
+	mux.HandleFunc("/api/spaces/import", WithAuth(handleImportSpace))
+	mux.HandleFunc("/api/spaces/config/get", WithAuth(handleGetSpaceConfig))
+	mux.HandleFunc("/api/spaces/config", WithAuth(handleSaveSpaceConfig))
+	mux.HandleFunc("/api/tasks/status", WithAuth(handleGetTaskStatus))
+
+	// Space Federation Endpoints
+	mux.HandleFunc("/api/space/auto-share", WithAuth(HandleSetSpaceAutoShare))
+	mux.HandleFunc("/api/space/auto-shared", WithAuth(HandleListAutoSharedSpaces))
+	mux.HandleFunc("/api/space/pull", WithAuth(HandleDaemonPullSpace)) // Daemon pulls Space from HQ
+
+	// LTM Category Auto-Share Endpoints (SA only)
+	mux.HandleFunc("/api/ltm/category/auto-share", WithAuth(HandleSetCategoryAutoShare))
+	mux.HandleFunc("/api/ltm/category/auto-share/list", WithAuth(HandleListCategoryAutoShare))
+	mux.HandleFunc("/api/ltm/category/auto-share/bulk", WithAuth(HandleBulkSetCategoryAutoShare))
+
+	// Workflow Management Endpoints (SA only)
+	mux.HandleFunc("/api/workflow/save", WithAuth(handleSaveWorkflow))
+	mux.HandleFunc("/api/workflow/publish", WithAuth(handlePublishWorkflow))
+	mux.HandleFunc("/api/workflow/list", WithAuth(handleListWorkflows))
+	mux.HandleFunc("/api/workflow/get", WithAuth(handleGetWorkflow))
+
+	// Workflow Undo Endpoints
+	mux.HandleFunc("/api/workflow/undo/recent", WithAuth(handleUndoRecent))
+	mux.HandleFunc("/api/workflow/undo/restore/", WithAuth(handleUndoRestore)) // Trailing slash for path param
+	mux.HandleFunc("/api/workflow/undo/search", WithAuth(handleUndoSearch))
+	mux.HandleFunc("/api/workflow/undo/stats", WithAuth(handleUndoStats))
+
+	// Daemon Sync Endpoints
+	mux.HandleFunc("/api/daemon/hq-sync", HandleHQSync)
+
+	// Configuration Endpoints
+	mux.HandleFunc("/api/config/save", WithAuth(handleSaveConfig))
+	mux.HandleFunc("/api/db/init", WithAuth(handleInitDatabase))
+	mux.HandleFunc("/api/config/validate-path", WithAuth(handleValidatePath))
+	mux.HandleFunc("/api/system/uninstall", WithAuth(handleUninstallSystem))
+	mux.HandleFunc("/api/config/environments", WithAuth(handleListEnvironments))
+	mux.HandleFunc("/api/config/environments/create", WithAuth(handleCreateEnvironment))
+	mux.HandleFunc("/api/config/environments/switch", WithAuth(handleSwitchEnvironment))
+	mux.HandleFunc("/api/config/environments/delete", WithAuth(handleDeleteEnvironment))
+
+	// Admin UI / Auth Endpoints
+	mux.HandleFunc("/admin/users", WithAuth(handleAdminUsersPage))
+	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
+	mux.HandleFunc("/api/auth/login", handleLogin)
+	mux.HandleFunc("/api/auth/refresh", handleRefresh)
+	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
+
+	// KB Quality Management Endpoints
 	if b.KBQualityAPI != nil {
 		b.KBQualityAPI.RegisterRoutes(mux)
 	}
+}
+
+// StartBackgroundService starts the shared background service loop for the backend.
+// The main loop acts as a lightweight dispatcher and hands off heavier work to dedicated worker goroutines.
+func (b *Backend) StartBackgroundService(interval, ttl time.Duration) {
+	b.StartBackgroundServiceWithContext(context.Background(), interval, ttl)
+}
+
+// StartBackgroundServiceWithContext starts the shared background service loop and stops it when the provided context is canceled.
+func (b *Backend) StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.Duration) {
+	if b == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				b.StopBackgroundService()
+				return
+			case <-ticker.C:
+			}
+			if b.ActiveSessions != nil {
+				evicted := b.ActiveSessions.RemoveStale(ttl)
+				if evicted > 0 {
+					// Log cleanup if needed
+				}
+			}
+			if currentTokenFacade() != nil {
+				if store, ok := currentTokenFacade().(*SessionStore); ok && store != nil {
+					if _, err := store.collectStaleSessions(ctx, 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
+						log.Warn("background service: failed to collect stale sessions", "error", err)
+					}
+				}
+			}
+		}
+	}()
 }
 
 func (b *Backend) StopBackgroundService() {

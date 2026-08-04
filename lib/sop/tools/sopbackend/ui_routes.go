@@ -18,7 +18,7 @@ import (
 	aidb "github.com/sharedcode/sop/ai/database"
 )
 
-// DefaultDaemonURL is the default local runtime endpoint.
+// DefaultDaemonURL is the default local daemon endpoint.
 // CRITICAL: This must match constants in JavaScript/TypeScript:
 //   - templates/scripts_daemon.html
 //   - templates/scripts_part01.html
@@ -133,7 +133,7 @@ func (r *UIRouter) RegisterWithOptions(mux *http.ServeMux, includeRoot bool) {
 }
 
 func (r *UIRouter) handleRoot(w http.ResponseWriter, req *http.Request) {
-	if !CurrentProvisioningDecision().Required {
+	if HasConfigFileOnDisk() {
 		r.handleLoginPage(w, req)
 		return
 	}
@@ -471,21 +471,21 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 	// DAEMON MODE CONFIGURATION
 	// ========================================================================
 	// When ?mode=daemon query parameter is present, the Data Manager UI should
-	// connect to the local runtime (http://127.0.0.1:9090) instead of HQ.
+	// connect to the local daemon (http://127.0.0.1:9090) instead of HQ.
 	//
 	// This is used by the "AI Studio" button to launch Data Manager in daemon mode.
 	//
 	// Implementation:
 	//   1. Check for mode=daemon query parameter
-	//   2. Set LocalRuntimeBootstrapEnabled = true (enables local runtime auth bootstrap)
-	//   3. Set DefaultRuntimeMode = "local" (JavaScript defaults to the local runtime)
-	//   4. Set LocalRuntimeURL to custom URL if provided, else DefaultDaemonURL
+	//   2. Set DaemonRuntimeEnabled = true (enables daemon auth bootstrap)
+	//   3. Set DefaultRuntimeMode = "local" (JavaScript defaults to daemon)
+	//   4. Set DaemonURL to custom URL if provided, else DefaultDaemonURL
 	//
 	// Template Effects (index.html):
-	//   {{if .LocalRuntimeBootstrapEnabled}}
+	//   {{if .DaemonRuntimeEnabled}}
 	//     localStorage.setItem('sop_chat_runtime', 'local');
-	//     localStorage.setItem('sop_daemon_url', '{{.LocalRuntimeURL}}');
-	//     window.SOP_DAEMON_BASE_URL = '{{.LocalRuntimeURL}}';
+	//     localStorage.setItem('sop_daemon_url', '{{.DaemonURL}}');
+	//     window.SOP_DAEMON_BASE_URL = '{{.DaemonURL}}';
 	//   {{end}}
 	//
 	// JavaScript Effects (scripts_daemon.html):
@@ -501,15 +501,15 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 	//
 	// See: docs/AI_STUDIO_DAEMON_MODE.md for complete specification
 	// ========================================================================
-	localRuntimeBootstrapEnabled := false
-	localRuntimeURL := DefaultDaemonURL
+	daemonRuntimeEnabled := false
+	daemonURL := DefaultDaemonURL
 	defaultRuntimeMode := "hq"
 	if mode := strings.TrimSpace(req.URL.Query().Get("mode")); mode == "daemon" {
-		localRuntimeBootstrapEnabled = true
+		daemonRuntimeEnabled = true
 		defaultRuntimeMode = "local"
 		// Allow custom daemon URL via query parameter
 		if customURL := strings.TrimSpace(req.URL.Query().Get("daemon_url")); customURL != "" {
-			localRuntimeURL = customURL
+			daemonURL = customURL
 		}
 	}
 
@@ -552,30 +552,30 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 	}
 
 	return map[string]any{
-		"Version":                      sop.Version,
-		"Username":                     username,
-		"CurrentPlan":                  currentPlan,
-		"CurrentPlanLabel":             planLabel,
-		"CurrentPlanDescription":       planDescription,
-		"AvailablePlans":               availablePlans,
-		"CurrentRole":                  currentRole,
-		"IsAdmin":                      isAdmin,
-		"AdminCapabilities":            adminCapabilities,
-		"ShowSubscribeForm":            false,
-		"ShowDownloadStep":             false,
-		"LocalRuntimeURL":              localRuntimeURL,
-		"SubscriptionSuccess":          false,
-		"SubscriptionMessage":          "",
-		"IsUnsubscribed":               false,
-		"RuntimeSwitchEnabled":         runtimeSwitchEnabled,
-		"LocalRuntimeBootstrapEnabled": localRuntimeBootstrapEnabled,
-		"ConfigFile":                   configFile,
-		"DefaultRuntimeMode":           defaultRuntimeMode,
-		"SetupWizardAIConfigJSON":      r.setupWizardAIConfigJSON(),
-		"ModelCatalog":                 GetModelCatalog(),
-		"ModelCatalogJSON":             r.modelCatalogJSON(),
-		"ParentSiteURL":                parentSiteURL,
-		"ParentSiteLabel":              parentSiteLabel,
+		"Version":                 sop.Version,
+		"Username":                username,
+		"CurrentPlan":             currentPlan,
+		"CurrentPlanLabel":        planLabel,
+		"CurrentPlanDescription":  planDescription,
+		"AvailablePlans":          availablePlans,
+		"CurrentRole":             currentRole,
+		"IsAdmin":                 isAdmin,
+		"AdminCapabilities":       adminCapabilities,
+		"ShowSubscribeForm":       false,
+		"ShowDownloadStep":        false,
+		"DaemonURL":               daemonURL,
+		"SubscriptionSuccess":     false,
+		"SubscriptionMessage":     "",
+		"IsUnsubscribed":          false,
+		"RuntimeSwitchEnabled":    runtimeSwitchEnabled,
+		"DaemonRuntimeEnabled":    daemonRuntimeEnabled,
+		"ConfigFile":              configFile,
+		"DefaultRuntimeMode":      defaultRuntimeMode,
+		"SetupWizardAIConfigJSON": r.setupWizardAIConfigJSON(),
+		"ModelCatalog":            GetModelCatalog(),
+		"ModelCatalogJSON":        r.modelCatalogJSON(),
+		"ParentSiteURL":           parentSiteURL,
+		"ParentSiteLabel":         parentSiteLabel,
 	}
 }
 

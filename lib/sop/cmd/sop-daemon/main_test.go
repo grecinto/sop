@@ -31,7 +31,8 @@ type stubSharedAgent struct {
 }
 
 type recordingQueryAgent struct {
-	queries []string
+	queries    []string
+	queriesOut *[]string
 }
 
 type executorAwareAgent struct {
@@ -127,6 +128,9 @@ func (a *recordingQueryAgent) Search(ctx context.Context, query string, limit in
 }
 func (a *recordingQueryAgent) Ask(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	a.queries = append(a.queries, query)
+	if a.queriesOut != nil {
+		*a.queriesOut = append(*a.queriesOut, query)
+	}
 	return "ok", nil
 }
 func (a *recordingQueryAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
@@ -134,6 +138,13 @@ func (a *recordingQueryAgent) Execute(ctx context.Context, toolName string, args
 }
 func (a *recordingQueryAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
 	return nil, nil
+}
+func (a *recordingQueryAgent) Clone() ai.Agent[map[string]any] {
+	queriesOut := a.queriesOut
+	if queriesOut == nil {
+		queriesOut = &a.queries
+	}
+	return &recordingQueryAgent{queriesOut: queriesOut}
 }
 
 func (a *executorAwareAgent) Open(ctx context.Context) error  { return nil }
@@ -2068,11 +2079,12 @@ func TestHandleAskUsesSharedBackendHandlerForSlashCommands(t *testing.T) {
 	localAgent := &recordingQueryAgent{}
 	sharedAgent := &recordingQueryAgent{}
 	svc := &localRAGService{service: localAgent, shellSessions: newPTYShellSessionManager()}
-	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"list_tools"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"list_tools","hq":{"session_id":"shared-slash-test"}}`))
 	rr := httptest.NewRecorder()
 
+	prevSessions := sopbackend.GetLoadedAgents()
 	sopbackend.SetLoadedAgents(map[string]ai.Agent[map[string]any]{"copilot": sharedAgent})
-	defer sopbackend.SetLoadedAgents(nil)
+	defer sopbackend.SetLoadedAgents(prevSessions)
 
 	svc.handleAsk(rr, req)
 
@@ -2091,11 +2103,12 @@ func TestHandleAskUsesSharedBackendHandlerForNaturalLanguageQueries(t *testing.T
 	localAgent := &recordingQueryAgent{}
 	sharedAgent := &recordingQueryAgent{}
 	svc := &localRAGService{service: localAgent, shellSessions: newPTYShellSessionManager()}
-	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"show me list of changed files in this repo in git"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"show me list of changed files in this repo in git","hq":{"session_id":"shared-natural-language-test"}}`))
 	rr := httptest.NewRecorder()
 
+	prevSessions := sopbackend.GetLoadedAgents()
 	sopbackend.SetLoadedAgents(map[string]ai.Agent[map[string]any]{"copilot": sharedAgent})
-	defer sopbackend.SetLoadedAgents(nil)
+	defer sopbackend.SetLoadedAgents(prevSessions)
 
 	svc.handleAsk(rr, req)
 

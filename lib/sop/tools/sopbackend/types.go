@@ -88,7 +88,7 @@ type Config struct {
 	Mode                             string      `json:"-"`
 	ConfigFile                       string      `json:"-"`
 	RedisURL                         string      `json:"-"`
-	DisableAuth                      bool        `json:"-"` // Disable authentication (for local runtime)
+	DisableAuth                      bool        `json:"-"` // Disable authentication (for local daemon)
 	DisableSOPKBPreload              bool        `json:"disable_sop_kb_preload,omitempty"`
 	VectorizationRecoveryStoragePath string      `json:"vectorization_recovery_storage_path,omitempty"`
 }

@@ -1682,7 +1682,7 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
-	if !CurrentProvisioningDecision().Required {
+	if HasConfigFileOnDisk() {
 		handleLoginPage(w, r)
 		return
 	}

@@ -101,6 +101,73 @@ type parallelAskAgent interface {
 	AskParallel(context.Context, string, *ai.ConfigMap) (string, error)
 }
 
+func sharedAskPayload(ctx context.Context, cfg *ai.ConfigMap) *ai.SessionPayload {
+	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		return payload
+	}
+	if cfg == nil {
+		return nil
+	}
+	value, ok := cfg.Get("payload")
+	if !ok || value == nil {
+		return nil
+	}
+	payload, _ := value.(*ai.SessionPayload)
+	return payload
+}
+
+func deriveSharedAskSessionID(ctx context.Context, cfg *ai.ConfigMap) string {
+	if payload := sharedAskPayload(ctx, cfg); payload != nil {
+		if sessionID := strings.TrimSpace(payload.SessionID); sessionID != "" {
+			return sessionID
+		}
+		if userID := strings.TrimSpace(payload.UserID); userID != "" {
+			if clientID := strings.TrimSpace(payload.ClientID); clientID != "" {
+				return fmt.Sprintf("user:%s:client:%s", userID, clientID)
+			}
+			return fmt.Sprintf("user:%s", userID)
+		}
+	}
+	if auth := sop.GetAuthFromContext(ctx); strings.TrimSpace(auth.UserID) != "" {
+		return fmt.Sprintf("user:%s", strings.TrimSpace(auth.UserID))
+	}
+	return "shared-anonymous"
+}
+
+func resolveSharedAskBlueprint() ai.Agent[map[string]any] {
+	for _, agentID := range []string{"copilot", "sql_core"} {
+		if agentSvc, ok := loadedAgents[agentID]; ok && agentSvc != nil {
+			return agentSvc
+		}
+	}
+	for _, agentSvc := range loadedAgents {
+		if agentSvc != nil {
+			return agentSvc
+		}
+	}
+	return nil
+}
+
+func lockSharedAskSession(ctx context.Context, cfg *ai.ConfigMap, blueprint ai.Agent[map[string]any]) (context.Context, ai.Agent[map[string]any], *sync.Mutex, error) {
+	if blueprint == nil {
+		return ctx, nil, nil, ErrAgentNotInitialized
+	}
+	payload := sharedAskPayload(ctx, cfg)
+	if payload != nil && ai.GetSessionPayload(ctx) == nil {
+		ctx = context.WithValue(ctx, "session_payload", payload)
+	}
+	sessionID := deriveSharedAskSessionID(ctx, cfg)
+	agentSvc, sessionMu := activeSessions.GetOrCreate(sessionID, func() ai.Agent[map[string]any] {
+		if cloneable, ok := blueprint.(interface {
+			Clone() ai.Agent[map[string]any]
+		}); ok {
+			return cloneable.Clone()
+		}
+		return blueprint
+	})
+	return ctx, agentSvc, sessionMu, nil
+}
+
 func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -108,7 +175,7 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 	if cfg == nil {
 		cfg = ai.NewConfigMap()
 	}
-	// Preserve existing streaming context if already injected (local runtime mode)
+	// Preserve existing streaming context if already injected (daemon mode)
 	// Only inject defaults if context doesn't already have streaming support
 	existingStreamer := ctx.Value(ai.CtxKeyEventStreamer)
 	if existingStreamer == nil {
@@ -116,7 +183,7 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 	}
 
 	if config.DisableAuth {
-		// Auth disabled for local runtime mode - skip user-store lookup
+		// Auth disabled for daemon mode - skip user-store lookup
 	} else if auth := sop.GetAuthFromContext(ctx); auth.UserID != "" {
 		username := normalizeUsername(auth.UserID)
 		if username != "" && username != "root" && username != "ui-client" {
@@ -128,23 +195,17 @@ func AskSharedAgent(ctx context.Context, query string, cfg *ai.ConfigMap) (strin
 		}
 	}
 
-	for _, agentID := range []string{"copilot", "sql_core"} {
-		if agentSvc, ok := loadedAgents[agentID]; ok && agentSvc != nil {
-			if parallelAgent, ok := agentSvc.(parallelAskAgent); ok && len(sharedagent.DetectParallelSubqueries(query)) > 1 {
-				return parallelAgent.AskParallel(ctx, query, cfg)
-			}
-			return agentSvc.Ask(ctx, query, cfg)
-		}
+	ctx, agentSvc, sessionMu, err := lockSharedAskSession(ctx, cfg, resolveSharedAskBlueprint())
+	if err != nil {
+		return "", err
 	}
-	for _, agentSvc := range loadedAgents {
-		if agentSvc != nil {
-			if parallelAgent, ok := agentSvc.(parallelAskAgent); ok && len(sharedagent.DetectParallelSubqueries(query)) > 1 {
-				return parallelAgent.AskParallel(ctx, query, cfg)
-			}
-			return agentSvc.Ask(ctx, query, cfg)
-		}
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+
+	if parallelAgent, ok := agentSvc.(parallelAskAgent); ok && len(sharedagent.DetectParallelSubqueries(query)) > 1 {
+		return parallelAgent.AskParallel(ctx, query, cfg)
 	}
-	return "", ErrAgentNotInitialized
+	return agentSvc.Ask(ctx, query, cfg)
 }
 
 // SetConfigFile sets the config file path
@@ -162,7 +223,7 @@ func SetProductionMode(production bool) {
 	config.ProductionMode = production
 }
 
-// SetDisableAuth disables authentication (for local runtime mode)
+// SetDisableAuth disables authentication (for local daemon mode)
 func SetDisableAuth(disable bool) {
 	config.DisableAuth = disable
 }
@@ -550,20 +611,9 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 		RegisterUIRoutesWithoutRoot(mux)
 	}
 	RegisterSwaggerHandlers(mux, "")
-	registerSharedAPIHandlers(mux)
-	registerSharedAdminHandlers(mux)
-	initKBQuality()
-	if kbQualityAPI != nil {
-		kbQualityAPI.RegisterRoutes(mux)
-	}
-}
 
-func registerSharedAdminHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/users", WithAuth(handleAdminUsersPage))
 	mux.HandleFunc("/api/admin/users", WithAuth(handleAdminUsersList))
-}
-
-func registerSharedAPIHandlers(mux *http.ServeMux) {
 	// Runtime & Database Endpoints
 	mux.HandleFunc("/api/runtime/refresh", WithAuth(handleRuntimeRefresh))
 	mux.HandleFunc("/api/databases", WithAuth(handleDatabases))
@@ -584,12 +634,6 @@ func registerSharedAPIHandlers(mux *http.ServeMux) {
 
 	// AI Endpoints
 	mux.HandleFunc("/api/ai/chat", WithAuth(handleAIChat))
-	mux.HandleFunc("/api/continue/chat", WithAuth(handleContinueChat))
-	mux.HandleFunc("/api/sop/chat", WithAuth(handleContinueChat))
-	mux.HandleFunc("/api/continue/tools/", WithAuth(handleContinueTool))
-	mux.HandleFunc("/api/sop/tools/", WithAuth(handleContinueTool))
-	mux.HandleFunc("/api/continue/sessions/", WithAuth(handleContinueSessionState))
-	mux.HandleFunc("/api/sop/sessions/", WithAuth(handleContinueSessionState))
 	mux.HandleFunc("/api/ai/test-connection", WithAuth(handleTestLLMConnection))
 	mux.HandleFunc("/api/ai/test-embedder-connection", WithAuth(handleTestEmbedderConnection))
 	mux.HandleFunc("/api/ai/summarize", WithAuth(handleAISummarize))
@@ -597,8 +641,6 @@ func registerSharedAPIHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/session/close", WithAuth(handleCloseSession))
 	mux.HandleFunc("/api/ai/feedback", WithAuth(handleAIFeedback))
 	mux.HandleFunc("/api/scripts/execute", WithAuth(handleExecuteScript))
-	mux.HandleFunc("/api/ai/chat/revalidate", WithAuth(HandleKBRevalidate))
-	mux.HandleFunc("/api/ai/kb/alternatives", WithAuth(HandleKBAlternatives))
 
 	// Knowledge Base Endpoints
 	mux.HandleFunc("/api/source-store/digest", WithAuth(handleDigestSourceStore))
@@ -621,29 +663,8 @@ func registerSharedAPIHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/spaces/config", WithAuth(handleSaveSpaceConfig))
 	mux.HandleFunc("/api/tasks/status", WithAuth(handleGetTaskStatus))
 
-	// Space Federation Endpoints
-	mux.HandleFunc("/api/space/auto-share", WithAuth(HandleSetSpaceAutoShare))
-	mux.HandleFunc("/api/space/auto-shared", WithAuth(HandleListAutoSharedSpaces))
-	mux.HandleFunc("/api/space/pull", WithAuth(HandleDaemonPullSpace))
-
-	// LTM Category Auto-Share Endpoints
-	mux.HandleFunc("/api/ltm/category/auto-share", WithAuth(HandleSetCategoryAutoShare))
-	mux.HandleFunc("/api/ltm/category/auto-share/list", WithAuth(HandleListCategoryAutoShare))
-	mux.HandleFunc("/api/ltm/category/auto-share/bulk", WithAuth(HandleBulkSetCategoryAutoShare))
-
-	// Workflow Management Endpoints
-	mux.HandleFunc("/api/workflow/save", WithAuth(handleSaveWorkflow))
-	mux.HandleFunc("/api/workflow/publish", WithAuth(handlePublishWorkflow))
-	mux.HandleFunc("/api/workflow/list", WithAuth(handleListWorkflows))
-	mux.HandleFunc("/api/workflow/get", WithAuth(handleGetWorkflow))
-	mux.HandleFunc("/api/workflow/undo/recent", WithAuth(handleUndoRecent))
-	mux.HandleFunc("/api/workflow/undo/restore/", WithAuth(handleUndoRestore))
-	mux.HandleFunc("/api/workflow/undo/search", WithAuth(handleUndoSearch))
-	mux.HandleFunc("/api/workflow/undo/stats", WithAuth(handleUndoStats))
-
 	// Configuration Endpoints
 	mux.HandleFunc("/api/config/save", WithAuth(handleSaveConfig))
-	mux.HandleFunc("/api/config/provision/simple", WithAuth(handleSimpleProvision))
 	mux.HandleFunc("/api/db/init", WithAuth(handleInitDatabase))
 	mux.HandleFunc("/api/config/validate-path", WithAuth(handleValidatePath))
 	mux.HandleFunc("/api/system/uninstall", WithAuth(handleUninstallSystem))
@@ -657,11 +678,17 @@ func registerSharedAPIHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/refresh", handleRefresh)
 	mux.HandleFunc("/api/auth/users/role", WithAuth(handleUpdateUserRole))
 
-	// Federation Endpoints
+	// HQ Federation / Central Memory Endpoints
 	mux.HandleFunc("/api/daemon/hq-sync", WithAuth(HandleHQSync))
 	mux.HandleFunc("/api/daemon/hq-retrieve", WithAuth(HandleHQRetrieve))
-	mux.HandleFunc("/api/daemon/pull-space", WithAuth(HandleDaemonPullSpace))
+	mux.HandleFunc("/api/daemon/pull-space", WithAuth(HandleDaemonPullSpace)) // Daemon pulls Space from HQ
 	mux.HandleFunc("/api/daemon/acknowledge-space", WithAuth(handleAcknowledgeSpace))
+
+	// KB Quality Management Endpoints
+	initKBQuality()
+	if kbQualityAPI != nil {
+		kbQualityAPI.RegisterRoutes(mux)
+	}
 }
 
 var (
@@ -703,15 +730,13 @@ func StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.D
 			if activeSessions != nil {
 				evicted := activeSessions.RemoveStale(ttl)
 				if evicted > 0 {
-					log.Debug("background service: evicted stale active sessions", "count", evicted)
+					// Log cleanup if needed
 				}
 			}
 			if currentTokenFacade() != nil {
 				if store, ok := currentTokenFacade().(*SessionStore); ok && store != nil {
-					if removed, err := store.collectStaleSessions(ctx, 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
+					if _, err := store.collectStaleSessions(ctx, 10*time.Minute, DefaultSessionGCBatchSize()); err != nil {
 						log.Warn("background service: failed to collect stale sessions", "error", err)
-					} else if removed > 0 {
-						log.Debug("background service: removed stale persistent sessions", "count", removed)
 					}
 				}
 			}

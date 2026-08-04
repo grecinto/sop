@@ -202,21 +202,6 @@ func (r *daemonClientRegistry) Count() int {
 	return len(r.clients)
 }
 
-func (r *daemonClientRegistry) List() []daemonClientSession {
-	if r == nil {
-		return nil
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	clients := make([]daemonClientSession, 0, len(r.clients))
-	for _, id := range r.order {
-		if entry, ok := r.clients[id]; ok {
-			clients = append(clients, entry)
-		}
-	}
-	return clients
-}
-
 func (r *daemonClientRegistry) Touch(clientID, token string) {
 	if r == nil {
 		return
@@ -1091,9 +1076,8 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 			role = "daemon-user"
 		}
 	} else {
-		// Validate using the bootstrap secret stored on disk when available, but fall back
-		// to the in-memory secret so additional authenticated clients can reuse the same
-		// daemon bootstrap flow without needing a fresh file.
+		// Allow already-authenticated clients to reuse the in-memory bootstrap secret
+		// when the one-time bootstrap file has already been consumed.
 		currentBootstrapSecret, err := h.loadBootstrapSecretFromDisk()
 		if err != nil {
 			if strings.TrimSpace(h.bootstrapSecret) == "" {
@@ -1117,7 +1101,7 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		role = "daemon-user"
 	}
 
-	// Create session for the authenticated client.
+	// Create session for the UI client
 	accessToken, refreshToken, err := h.sessionStore.CreateSession(r.Context(), subject, role)
 	if err != nil {
 		log.Printf("Failed to create session: %v", err)
@@ -1287,14 +1271,6 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
-func extractBearerToken(authHeader string) string {
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-		return ""
-	}
-	return strings.TrimSpace(parts[1])
-}
-
 func readClientID(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -1306,4 +1282,12 @@ func readClientID(r *http.Request) string {
 		return value
 	}
 	return ""
+}
+
+func extractBearerToken(authHeader string) string {
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
 }

@@ -86,6 +86,37 @@ func TestCopilotAgent_Ask_SlashPrefixedCommandExecutesLocalAutomationDirectly(t 
 	}
 }
 
+func TestCopilotAgent_Clone_Ask_CommandPrefixExecutesLocalAutomationDirectly(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalCommandExecutor(nil)
+
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		if req.Command != "cd .." {
+			t.Fatalf("command = %q, want %q", req.Command, "cd ..")
+		}
+		return `{"stdout":"","stderr":"","exit_code":0}`, nil
+	})
+
+	blueprint := NewCopilotAgent(Config{}, nil, nil)
+	cloned, ok := blueprint.Clone().(*CopilotAgent)
+	if !ok {
+		t.Fatal("expected CopilotAgent clone")
+	}
+
+	ctx := context.Background()
+	payload := &ai.SessionPayload{CurrentDB: "system", SessionID: "clone-slash", UserID: "alice"}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
+	resp, err := cloned.Ask(ctx, "/c cd ..", nil)
+	if err != nil {
+		t.Fatalf("Ask on cloned agent with direct command prefix failed: %v", err)
+	}
+	if strings.Contains(strings.ToLower(resp), "tool fallback failed") {
+		t.Fatalf("cloned direct command response = %q, did not expect tool fallback failure", resp)
+	}
+}
+
 func TestCapabilityPrefixRouting_RequiresSlashPrefixes(t *testing.T) {
 	SetLocalDesktopAutomationEnabled(true)
 	defer SetLocalDesktopAutomationEnabled(false)

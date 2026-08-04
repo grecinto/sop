@@ -344,12 +344,17 @@ func HasConfigFileOnDisk() bool {
 	if provisioningCompleteCache.Load() {
 		return true
 	}
-	decision := CurrentProvisioningDecision()
-	if !decision.HasConfigOnDisk {
+	path := FindExistingConfigFile()
+	if path == "" {
 		resetProvisioningCompletionCache()
 		return false
 	}
-	provisioned := !decision.Required
+	cfg, err := loadConfigFromDisk(path)
+	if err != nil {
+		resetProvisioningCompletionCache()
+		return false
+	}
+	provisioned := len(cfg.Databases) > 0 || cfg.SystemDB != nil
 	if provisioned {
 		markProvisioningComplete()
 	} else {
@@ -359,14 +364,13 @@ func HasConfigFileOnDisk() bool {
 }
 
 type RuntimeRefreshResponse struct {
-	Runtime             string               `json:"runtime"`
-	Databases           []DatabaseConfig     `json:"databases"`
-	SelectedDatabase    string               `json:"selected_database,omitempty"`
-	Stores              map[string][]string  `json:"stores,omitempty"`
-	Spaces              map[string][]string  `json:"spaces,omitempty"`
-	DisableSOPKBPreload bool                 `json:"disable_sop_kb_preload,omitempty"`
-	StoresEnabled       bool                 `json:"stores_enabled"`
-	Provisioning        ProvisioningDecision `json:"provisioning"`
+	Runtime             string              `json:"runtime"`
+	Databases           []DatabaseConfig    `json:"databases"`
+	SelectedDatabase    string              `json:"selected_database,omitempty"`
+	Stores              map[string][]string `json:"stores,omitempty"`
+	Spaces              map[string][]string `json:"spaces,omitempty"`
+	DisableSOPKBPreload bool                `json:"disable_sop_kb_preload,omitempty"`
+	StoresEnabled       bool                `json:"stores_enabled"`
 }
 
 func handleRuntimeRefresh(w http.ResponseWriter, r *http.Request) {
@@ -389,7 +393,6 @@ func buildRuntimeRefreshResponse(ctx context.Context, req *http.Request, runtime
 		Spaces:              map[string][]string{},
 		DisableSOPKBPreload: config.DisableSOPKBPreload,
 		StoresEnabled:       sharedagent.StoresFeatureEnabled(),
-		Provisioning:        CurrentProvisioningDecision(),
 	}
 
 	dbs := make([]DatabaseConfig, len(config.Databases))

@@ -28,6 +28,7 @@ import (
 	"github.com/sharedcode/sop"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
+	sopdatabase "github.com/sharedcode/sop/database"
 	sopfs "github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -565,7 +566,6 @@ func main() {
 		EnableLocalAutomation: true,
 		AutomationPolicy:      &policy,
 		EnableStoresFeature:   true,
-		HostKind:              sopbackend.HostKindDaemon,
 	}, *port, nil); err != nil {
 		log.Printf("Warning: backend bootstrap failed: %v", err)
 	} else {
@@ -573,6 +573,31 @@ func main() {
 	}
 	cfg := sopbackend.GetConfig()
 	configureRecoveryStatePersistence(cfg)
+
+	// Auto-provision system DB if it doesn't exist
+	if cfg.SystemDB != nil {
+		cfg.SystemDB.IsSystem = true
+		if cfg.SystemDB.Path != "" {
+			dbOptionsPath := filepath.Join(cfg.SystemDB.Path, "dboptions.json")
+			if _, err := os.Stat(dbOptionsPath); os.IsNotExist(err) {
+				log.Printf("System DB not found at %s, auto-provisioning...", cfg.SystemDB.Path)
+
+				// Setup the system database with standalone mode
+				options := sop.DatabaseOptions{
+					Type:                 sop.Standalone,
+					StoresFolders:        []string{cfg.SystemDB.Path},
+					RegistryHashModValue: 0, // Default for system DB
+				}
+
+				ctx := context.Background()
+				if _, err := sopdatabase.Setup(ctx, options); err != nil {
+					log.Printf("Warning: failed to auto-provision system DB: %v", err)
+				} else {
+					log.Printf("System DB auto-provisioned at %s", cfg.SystemDB.Path)
+				}
+			}
+		}
+	}
 
 	// Initialize daemon authentication with JWT
 	authConfig := DaemonAuthConfig{
@@ -651,21 +676,6 @@ func main() {
 	// Register all sopbackend handlers (provides full backend API)
 	hostCtx, stopHost := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopHost()
-	sopbackend.RegisterBackgroundServiceHook(func(ctx context.Context) {
-		if authHandler == nil {
-			return
-		}
-		ttl := authHandler.config.AccessTokenTTL
-		if ttl <= 0 {
-			ttl = 30 * time.Minute
-		}
-		if ttl < 15*time.Minute {
-			ttl = 15 * time.Minute
-		}
-		if removed := authHandler.cleanupStaleClientSessions(ttl); removed > 0 {
-			log.Printf("Daemon auth cleanup: removed %d stale client sessions", removed)
-		}
-	})
 	sopbackend.StartBackgroundServiceWithContext(hostCtx, sopbackend.DefaultSessionCleanupInterval(), 2*time.Hour)
 
 	// Start PTY shell session cleanup (30 minute idle timeout, check every 5 minutes)

@@ -4061,6 +4061,8 @@ func (a *CopilotAgent) handleDirectToolInvocation(ctx context.Context, query str
 		return false, "", nil
 	}
 
+	a.ensureCapabilityRegistry()
+
 	// Try capability-based prefix routing first
 	if a.capabilityRegistry != nil {
 		if handled, result, err := a.capabilityRegistry.TryPrefixRouting(ctx, trimmed); handled {
