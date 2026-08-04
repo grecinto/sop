@@ -3,6 +3,8 @@ package codingworkflow
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -250,6 +252,40 @@ func TestPlanningPhaseCapabilityExecutesWorkflowTool(t *testing.T) {
 	}
 	if !strings.Contains(result, "/tmp/demo") {
 		t.Fatalf("expected working directory in result, got %q", result)
+	}
+}
+
+func TestInvestigationInspectRepoReportsGuidanceWhenRepositoryUnavailable(t *testing.T) {
+	tempRoot := t.TempDir()
+	workingDir := filepath.Join(tempRoot, "scratch")
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		t.Fatalf("create temp working dir: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prevWD)
+	}()
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir temp working dir: %v", err)
+	}
+
+	cap := NewInvestigationPhaseCapability(&SharedInfrastructure{Memory: NewInMemorySessionMemory()})
+	result, execErr := cap.ExecuteTool(context.Background(), "investigation_inspect_repo", map[string]any{
+		"query":       "fix failing tests",
+		"working_dir": ".",
+	}, capabilities.RoutingState{})
+	if execErr != nil {
+		t.Fatalf("expected graceful repo guidance, got error: %v", execErr)
+	}
+	if !strings.Contains(result, "Repository Inspection Unavailable") {
+		t.Fatalf("expected unavailable guidance, got %q", result)
+	}
+	if !strings.Contains(result, "provide working_dir") {
+		t.Fatalf("expected guidance to provide working_dir, got %q", result)
 	}
 }
 

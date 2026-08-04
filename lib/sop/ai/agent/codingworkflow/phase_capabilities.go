@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	log "log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -1671,6 +1673,59 @@ func (c *PhaseCapability) sharedInfrastructure() *SharedInfrastructure {
 	return c.ensureSharedInfrastructure()
 }
 
+func isGitRepositoryDir(dir string) bool {
+	trimmed := strings.TrimSpace(dir)
+	if trimmed == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(filepath.Clean(trimmed), ".git"))
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
+}
+
+func resolveRepoWorkingDir(task Task) (Task, []string) {
+	resolved := task
+	baseDir := strings.TrimSpace(task.WorkingDir)
+	if baseDir == "" {
+		baseDir = "."
+	}
+	baseDir = filepath.Clean(baseDir)
+	if isGitRepositoryDir(baseDir) {
+		resolved.WorkingDir = baseDir
+		return resolved, []string{baseDir}
+	}
+	candidates := discoverWorkingDirCandidates(baseDir)
+	if len(candidates) > 0 {
+		resolved.WorkingDir = candidates[0]
+		return resolved, candidates
+	}
+	resolved.WorkingDir = baseDir
+	return resolved, nil
+}
+
+func formatRepoResolutionFallback(toolLabel string, task Task, candidates []string, err error) string {
+	parts := []string{fmt.Sprintf("%s Unavailable", toolLabel)}
+	if err != nil {
+		parts = append(parts, fmt.Sprintf("Reason: %s", err.Error()))
+	}
+	requested := strings.TrimSpace(task.WorkingDir)
+	if requested == "" {
+		requested = "(empty)"
+	}
+	parts = append(parts, fmt.Sprintf("Requested WorkingDir: %s", requested))
+	if len(candidates) > 0 {
+		parts = append(parts, fmt.Sprintf("Resolved WorkingDir: %s", candidates[0]))
+		parts = append(parts, fmt.Sprintf("Detected Repositories: %s", strings.Join(candidates, ", ")))
+		parts = append(parts, "Next Step: retry with working_dir set to the resolved repository path.")
+	} else {
+		parts = append(parts, "Detected Repositories: none")
+		parts = append(parts, "Next Step: provide working_dir for a git repository, then retry.")
+	}
+	return strings.Join(parts, "\n")
+}
+
 func (c *PhaseCapability) runBuildContext(args map[string]any) (string, error) {
 	task := c.buildTask(args)
 	infra := c.sharedInfrastructure()
@@ -1695,7 +1750,7 @@ func (c *PhaseCapability) runBuildContext(args map[string]any) (string, error) {
 }
 
 func (c *PhaseCapability) runInspectRepo(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+	task, candidates := resolveRepoWorkingDir(c.buildTask(args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -1703,7 +1758,7 @@ func (c *PhaseCapability) runInspectRepo(args map[string]any) (string, error) {
 	repoOps := infra.NewRepoOperations()
 	summary, err := repoOps.InspectRepo(task, task.State)
 	if err != nil {
-		return "", fmt.Errorf("inspect repo: %w", err)
+		return formatRepoResolutionFallback("Repository Inspection", task, candidates, err), nil
 	}
 	parts := []string{"Repository Inspection"}
 	if len(summary.ChangedFiles) > 0 {
@@ -1739,7 +1794,7 @@ func (c *PhaseCapability) runSearchRepo(args map[string]any) (string, error) {
 }
 
 func (c *PhaseCapability) runListChangedFiles(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+	task, candidates := resolveRepoWorkingDir(c.buildTask(args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -1747,7 +1802,7 @@ func (c *PhaseCapability) runListChangedFiles(args map[string]any) (string, erro
 	repoOps := infra.NewRepoOperations()
 	files, err := repoOps.ListChangedFiles(task, task.State)
 	if err != nil {
-		return "", fmt.Errorf("list changed files: %w", err)
+		return formatRepoResolutionFallback("Changed Files Inspection", task, candidates, err), nil
 	}
 	if len(files) == 0 {
 		return "Changed Files: none", nil
