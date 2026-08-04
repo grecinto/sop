@@ -48,6 +48,7 @@ Ask now supports a modular capability layer that keeps domain behavior out of th
 *   **Shared Runtime**: The same capability-aware runtime is used by the daemon and httpserver entry points, keeping behavior consistent across both surfaces.
 *   **Deployment Scope**: Coding-workflow capabilities should remain local-runtime scoped. HQ/site-server deployments should not expose them as a general capability path, while end-user host runtimes or local daemons may register them for local editing and repo-aware workflows.
 *   **Ask as Participant**: The same Ask runtime can also be reused under an external controller through `Service.AskWithRequest`, `NewParticipantHandler`, and `ParticipantClient`. Participant mode now supports both final JSON responses and NDJSON streaming via `ParticipantClient.AskStream`, while still routing through the queue-aware Ask pipeline when the copilot agent is registered. This reverses roles at the transport boundary only. Inside SOP, Ask still orchestrates its own capabilities and tools.
+*   **Definitive recursion guard**: Participant-mode requests also support `request_id` and `root_request_id`. SOP generates a SOP-owned `root_request_id` for outbound Ask-to-Ask delegation when needed and rejects any participant request that later re-enters SOP carrying that SOP-owned root, preventing infinite controller-to-controller recursion by durable request identity rather than soft context markers.
 
 ```mermaid
 flowchart LR

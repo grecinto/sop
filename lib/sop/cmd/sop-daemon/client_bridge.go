@@ -154,6 +154,8 @@ type continueDelegationGuidance struct {
 
 type continueAgentExecuteRequest struct {
 	RequestID      string                          `json:"request_id,omitempty"`
+	TraceID        string                          `json:"trace_id,omitempty"`
+	RootRequestID  string                          `json:"root_request_id,omitempty"`
 	SessionID      string                          `json:"session_id"`
 	Task           string                          `json:"task"`
 	Provider       string                          `json:"provider,omitempty"`

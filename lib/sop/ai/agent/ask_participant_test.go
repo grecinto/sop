@@ -139,6 +139,26 @@ func TestParticipantClientPostsRequest(t *testing.T) {
 	}
 }
 
+func TestParticipantHandlerRejectsSOPGeneratedTraceID(t *testing.T) {
+	participant := &stubAskParticipant{}
+	handler := NewParticipantHandler(participant)
+	traceID := ai.NewParticipantTraceID()
+
+	req := httptest.NewRequest(http.MethodPost, "/participant/ask", strings.NewReader(`{"query":"loop back","trace_id":"`+traceID+`"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	if participant.lastRequest.Query != "" {
+		t.Fatalf("participant should not have been invoked, got %#v", participant.lastRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "trace_id") {
+		t.Fatalf("expected recursion guard error, got %q", rec.Body.String())
+	}
+}
+
 func TestParticipantHandlerStreamsNDJSONEvents(t *testing.T) {
 	participant := &stubAskParticipant{
 		response: AskResponse{

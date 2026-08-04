@@ -102,6 +102,7 @@ Example delegated execute request:
 ```json
 {
   "request_id": "request-123",
+  "root_request_id": "external-root-42",
   "session_id": "workspace-42",
   "task": "Apply the prepared patch to the parser handler",
   "provider": "openai",
@@ -122,10 +123,13 @@ Identity rules:
 
 - `session_id` identifies the ongoing Continue or AI Studio workstream
 - `request_id` identifies one bounded delegated execution under that workstream
+- `root_request_id` identifies the top-level controller-to-controller execution tree when delegation crosses Ask runtimes
 - worker registration stays bound to `session_id`
 - progress, timeout, cancellation, and final result correlation should key off `request_id`
 
 The daemon owns `request_id` generation for delegated execution. Continue may include a caller-provided `request_id`, but the daemon treats it as advisory and generates its own authoritative request identity when needed. This matches the daemon's orchestration model for parallel and branched work.
+
+If Continue or another controller participates in an Ask-to-Ask chain, `root_request_id` should be propagated unchanged across the chain. When SOP originates outbound participant delegation and no root exists yet, SOP generates a SOP-owned `root_request_id`. If that SOP-owned root later re-enters SOP participant mode, SOP rejects the request instead of recursing.
 
 ## AI Studio model authority
 

@@ -127,6 +127,8 @@ The SDK surfaces for this mode are:
 - `ParticipantClient` for remote invocation
 - `ParticipantClient.AskStream` for remote invocation with NDJSON progress streaming
 
+These participant requests also support `request_id` for the current delegated call and `root_request_id` for the overall Ask-to-Ask tree. SOP generates a SOP-owned `root_request_id` for outbound delegation when needed and rejects any participant request that later re-enters SOP carrying that SOP-owned root.
+
 This lets you reverse roles with Continue or another controller without weakening the LLM-as-Orchestrator design inside SOP itself.
 
 For concrete embedding and streaming examples, see [Ask Participant Mode](./ask-participant-mode).

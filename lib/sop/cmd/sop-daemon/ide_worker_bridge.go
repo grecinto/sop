@@ -502,6 +502,8 @@ func (b *continueIDEWorkerBackend) executeDelegatedTask(ctx context.Context, req
 	}
 	continueReq := continueAgentExecuteRequest{
 		RequestID:      newContinueRequestID(),
+		TraceID:        strings.TrimSpace(req.TraceID),
+		RootRequestID:  strings.TrimSpace(req.RootRequestID),
 		SessionID:      strings.TrimSpace(req.SessionID),
 		Task:           strings.TrimSpace(req.Task),
 		Mode:           strings.TrimSpace(req.Mode),

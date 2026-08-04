@@ -15,6 +15,8 @@ Traditional vector databases use overnight K-Means clustering in data centers to
 
 ## Overview
 
+The SDK originates from [Scalable Objects Persistence (SOP)](https://github.com/sharedcode/sop), the MIT-licensed open source foundation for the platform.
+
 The SDK provides:
 
 - **Vector Database**: A new architecture that eliminates K-Means clustering
@@ -42,6 +44,7 @@ Key advantages include:
 
 ## Next Steps
 
+- Read the [SDK History](./history) page for the SOP origin, licensing, and source-availability model
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
 - Understand the [Workflow Architecture](./workflow-architecture) - Dynamic Planner, KB workflows, and the Ask pipeline execution model

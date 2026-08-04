@@ -35,6 +35,7 @@ const sidebars: SidebarsConfig = {
       label: 'SDK Documentation',
       items: [
         'sdk/intro',
+        'sdk/history',
         'sdk/continue-facade-architecture',
         'sdk/ask-participant-mode',
         'sdk/workflow-architecture',

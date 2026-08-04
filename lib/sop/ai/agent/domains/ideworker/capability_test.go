@@ -273,6 +273,38 @@ func TestCapabilityDelegationLifecycleUsesBackend(t *testing.T) {
 	}
 }
 
+func TestCapabilityDelegateTaskGeneratesSOPTraceID(t *testing.T) {
+	backend := &fakeBackend{}
+	cap := NewCapability()
+	cap.SetBackend(backend)
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{SessionID: "sess-root"})
+
+	if _, err := cap.ExecuteTool(ctx, "delegate_continue_task", map[string]any{"task": "Apply the patch"}, capabilities.RoutingState{}); err != nil {
+		t.Fatalf("delegate_continue_task failed: %v", err)
+	}
+	if !ai.IsSOPParticipantTraceID(backend.lastRequest.TraceID) {
+		t.Fatalf("expected SOP-generated trace_id, got %q", backend.lastRequest.TraceID)
+	}
+}
+
+func TestCapabilityDelegateTaskPreservesExistingTraceID(t *testing.T) {
+	backend := &fakeBackend{}
+	cap := NewCapability()
+	cap.SetBackend(backend)
+	payload := &ai.SessionPayload{
+		SessionID: "sess-root-2",
+		Variables: map[string]any{ai.ParticipantTraceIDVariableKey: "external-trace-123"},
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	if _, err := cap.ExecuteTool(ctx, "delegate_continue_task", map[string]any{"task": "Apply the patch"}, capabilities.RoutingState{}); err != nil {
+		t.Fatalf("delegate_continue_task failed: %v", err)
+	}
+	if backend.lastRequest.TraceID != "external-trace-123" {
+		t.Fatalf("expected existing trace_id to propagate, got %q", backend.lastRequest.TraceID)
+	}
+}
+
 func containsString(items []string, target string) bool {
 	for _, item := range items {
 		if item == target {

@@ -105,6 +105,8 @@ The reversal is supported only at the service or transport boundary, not by turn
 - Remote invocation uses `ParticipantClient`.
 - Live streaming remote invocation uses `ParticipantClient.AskStream(...)` with `Accept: application/x-ndjson`.
 
+Participant-mode requests can also carry `request_id` and `root_request_id`. `request_id` identifies the current delegated participant call. `root_request_id` identifies the full Ask-to-Ask delegation tree. SOP generates a SOP-owned root when it delegates outward and rejects any later participant request that re-enters SOP carrying that SOP-owned root, which prevents controller-to-controller recursion by durable identity.
+
 This keeps the architecture coherent:
 
 - outer controller decides when to call SOP Ask

@@ -49,6 +49,21 @@ This is the reverse-role mode for SDK and agent reuse.
 
 The key rule is that role reversal happens at the transport or embedding boundary, not inside the capability layer. Capabilities remain passive participants either way.
 
+### Participant request identity and recursion guard
+
+The typed participant contract also carries two request identity fields:
+
+- `request_id`: the current delegated participant call id
+- `root_request_id`: the top-level id for the full delegated Ask-to-Ask tree
+
+Rules:
+
+- External controllers may provide both fields.
+- If `root_request_id` is absent when SOP delegates outward into another controller-aware worker, SOP generates a SOP-owned root id and propagates it.
+- If a participant request later enters SOP carrying a SOP-owned `root_request_id`, SOP must reject the request rather than re-entering the same controller loop.
+
+This guard is definitive by identity, not heuristic by prompt or context state.
+
 ## Base URL
 
 ```text

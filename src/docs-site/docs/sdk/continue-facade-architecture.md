@@ -69,6 +69,8 @@ The participant-mode surfaces live in `lib/sop/ai/agent`:
 
 The transport request intentionally uses a JSON-safe participant session shape rather than the full internal session object so external controllers can pass portable state cleanly.
 
+Participant requests may also carry `request_id` and `root_request_id`. `request_id` identifies the current delegated call. `root_request_id` identifies the whole controller-to-controller Ask tree. If SOP sees a `root_request_id` that SOP itself minted for outbound delegation, it rejects the request instead of allowing recursive Ask-to-Ask re-entry.
+
 When the participant endpoint is backed by the registered copilot agent, the delegated request runs through SOP's queue-aware Ask pipeline before the final response is emitted.
 
 For end-to-end examples, see [Ask Participant Mode](./ask-participant-mode).

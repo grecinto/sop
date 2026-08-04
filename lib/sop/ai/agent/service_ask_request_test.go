@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/sharedcode/sop/ai"
@@ -170,5 +171,19 @@ func TestServiceAskWithRequest_UsesCopilotRegistryAgent(t *testing.T) {
 	}
 	if resp.UpdatedSession == nil || resp.UpdatedSession.SessionID != "sess-1" {
 		t.Fatalf("updated session = %#v, want session_id sess-1", resp.UpdatedSession)
+	}
+}
+
+func TestServiceAskWithRequest_RejectsSOPGeneratedTraceID(t *testing.T) {
+	svc := &Service{session: NewRunnerSession()}
+	_, err := svc.AskWithRequest(context.Background(), AskRequest{
+		Query:   "loop back",
+		TraceID: ai.NewParticipantTraceID(),
+	})
+	if err == nil {
+		t.Fatal("expected recursion guard error")
+	}
+	if !strings.Contains(err.Error(), "trace_id") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

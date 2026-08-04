@@ -66,6 +66,8 @@ type DelegationGuidance struct {
 
 type TaskRequest struct {
 	RequestID      string
+	TraceID        string
+	RootRequestID  string
 	SessionID      string
 	Task           string
 	Mode           string
@@ -357,6 +359,12 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 	if payload != nil {
 		req.SessionID = strings.TrimSpace(payload.SessionID)
 		if payload.Variables != nil {
+			req.RequestID = readString(payload.Variables, ai.ParticipantRequestIDVariableKey)
+			req.TraceID = readString(payload.Variables, ai.ParticipantTraceIDVariableKey)
+			if req.TraceID == "" {
+				req.TraceID = readString(payload.Variables, "root_request_id")
+			}
+			req.RootRequestID = req.TraceID
 			req.Mode = readString(payload.Variables, "continue_mode")
 			req.Provider = readString(payload.Variables, "llm_provider")
 			req.Model = readString(payload.Variables, "llm_model")
@@ -429,6 +437,17 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 	}
 	if req.Mode == "" {
 		req.Mode = "coding"
+	}
+	if req.TraceID == "" {
+		req.TraceID = ai.NewParticipantTraceID()
+		req.RootRequestID = req.TraceID
+		if payload != nil {
+			if payload.Variables == nil {
+				payload.Variables = make(map[string]any)
+			}
+			payload.Variables[ai.ParticipantTraceIDVariableKey] = req.TraceID
+			payload.Variables["root_request_id"] = req.TraceID
+		}
 	}
 	if req.Task == "" {
 		return "", fmt.Errorf("task is required")
