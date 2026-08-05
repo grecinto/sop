@@ -135,10 +135,10 @@ If your daemon is running on a different machine, you can still use AI Studio wi
    - Sets localStorage.sop_chat_runtime = 'local'
    ↓
 3. AI Studio UI auto-bootstraps
-   - Reads localStorage.sop_access_token (site session)
-   - Sends POST /api/daemon/auth { bootstrap_token: token }
-   - Daemon validates via sessionStore.ValidateTokenWithoutAccountCheck()
-   - Returns daemon-specific access/refresh tokens
+   - Reads the local bootstrap secret from disk or the bootstrap file path provided by the daemon runtime.
+   - Sends POST /api/daemon/challenge { bootstrap_secret } to obtain a one-time daemon challenge.
+   - Signs the challenge using the bootstrap secret and sends POST /api/daemon/auth with the signed proof.
+   - Daemon validates the challenge once and returns daemon-specific access/refresh tokens.
    ↓
 4. UI makes API calls to http://127.0.0.1:9090/api/*
    - Uses daemon tokens in Authorization header

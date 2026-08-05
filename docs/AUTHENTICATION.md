@@ -334,35 +334,14 @@ func withAuth(next http.HandlerFunc) http.HandlerFunc {
 
 ### Daemon Bootstrap Authentication
 
-Daemons can authenticate using site session tokens:
+The daemon bootstrap flow is now challenge-based. The UI first asks the daemon for a fresh one-time challenge, then signs that challenge with the bootstrap secret before calling the bootstrap endpoint.
 
 **File**: `lib/sop/cmd/sop-daemon/auth.go`
 
-```go
-func HandleBootstrap(w http.ResponseWriter, r *http.Request) {
-    var req BootstrapRequest
-    json.NewDecoder(r.Body).Decode(&req)
-    
-    // Validate site session token
-    if req.BootstrapToken != "" {
-        username, role, err := sessionStore.ValidateTokenWithoutAccountCheck(req.BootstrapToken)
-        if err == nil {
-            // Create daemon-specific session
-            accessToken, refreshToken, _ := CreateSession(username, role)
-            json.NewEncoder(w).Encode(map[string]string{
-                "access_token": accessToken,
-                "refresh_token": refreshToken,
-            })
-            return
-        }
-    }
-    
-    // Fallback to bootstrap secret
-    if req.BootstrapSecret != "" {
-        // Validate secret...
-    }
-}
-```
+1. The daemon issues a random challenge ID and stores it in memory with expiry and one-time-use state.
+2. The UI sends that challenge ID back with a signature derived from `bootstrap_secret + ":" + challenge_id`.
+3. The daemon verifies the signature once and, if valid, issues daemon access and refresh tokens.
+4. All later daemon API calls require those daemon-issued bearer tokens in the `Authorization` header.
 
 This same bootstrap and refresh pattern is also the expected local-auth path for Continue.
 

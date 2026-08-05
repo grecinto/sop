@@ -688,6 +688,7 @@ func main() {
 
 	// Register daemon authentication endpoints (NO auth required)
 	mux.HandleFunc("/api/daemon/auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleBootstrap)))
+	mux.HandleFunc("/api/daemon/challenge", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleBootstrapChallenge)))
 	mux.HandleFunc("/api/daemon/refresh", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleRefresh)))
 	mux.HandleFunc("/api/daemon/hq-auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleHQAuth)))
 	mux.HandleFunc("/api/daemon/provision/status", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleDaemonProvisionStatus))))

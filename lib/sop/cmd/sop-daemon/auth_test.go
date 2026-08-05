@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +18,17 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
+func TestResolveBootstrapPathForClientUsesDistinctFiles(t *testing.T) {
+	basePath := filepath.Join(t.TempDir(), "daemon.bootstrap")
+
+	if got := resolveBootstrapPathForClient(basePath, ""); got != "" {
+		t.Fatalf("expected empty client to resolve to no path, got %s", got)
+	}
+	if got := resolveBootstrapPathForClient(basePath, "ui-a"); got != filepath.Join(filepath.Dir(basePath), "daemon.bootstrap.ui-a") {
+		t.Fatalf("expected client-specific path, got %s", got)
+	}
+}
+
 func TestHandleBootstrapUsesInMemorySessionsWithoutSystemDB(t *testing.T) {
 	oldCfg := sopbackend.GetConfig()
 	sopbackend.SetConfig(sopbackend.Config{})
@@ -28,7 +41,12 @@ func TestHandleBootstrapUsesInMemorySessionsWithoutSystemDB(t *testing.T) {
 		sessionStore:    newInMemoryDaemonSessionStore(time.Minute, time.Hour),
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"shared-secret"}`))
+	challenge := h.issueBootstrapChallenge()
+	if challenge == nil {
+		t.Fatal("expected bootstrap challenge")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(signedBootstrapBodyWithClientID("shared-secret", challenge, "bootstrap-client")))
 	rr := httptest.NewRecorder()
 
 	h.HandleBootstrap(rr, req)
@@ -77,7 +95,7 @@ func TestHandleBootstrapUsesCurrentBootstrapSecretFromDisk(t *testing.T) {
 
 	h := &DaemonAuthHandler{
 		bootstrapSecret: "stale-secret",
-		bootstrapPath:   filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sop", "daemon.bootstrap"),
+		bootstrapPath:   filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sop", "daemon.bootstrap.ui-client"),
 		sessionStore:    sopbackend.NewSessionStore(time.Minute),
 	}
 
@@ -88,7 +106,12 @@ func TestHandleBootstrapUsesCurrentBootstrapSecretFromDisk(t *testing.T) {
 		t.Fatalf("write bootstrap file: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"fresh-secret"}`))
+	challenge := h.issueBootstrapChallenge()
+	if challenge == nil {
+		t.Fatal("expected bootstrap challenge")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(signedBootstrapBodyWithClientID("fresh-secret", challenge, "ui-client")))
 	rr := httptest.NewRecorder()
 
 	h.HandleBootstrap(rr, req)
@@ -98,7 +121,7 @@ func TestHandleBootstrapUsesCurrentBootstrapSecretFromDisk(t *testing.T) {
 	}
 }
 
-func TestHandleBootstrapAcceptsSignedBootstrapToken(t *testing.T) {
+func TestHandleBootstrapRejectsBootstrapTokenWithoutChallenge(t *testing.T) {
 	withIsolatedSystemDB(t)
 
 	h := &DaemonAuthHandler{sessionStore: sopbackend.NewSessionStore(time.Minute)}
@@ -112,17 +135,74 @@ func TestHandleBootstrapAcceptsSignedBootstrapToken(t *testing.T) {
 
 	h.HandleBootstrap(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rr.Code, rr.Body.String())
+	if rr.Code == http.StatusOK {
+		t.Fatalf("expected bootstrap token without challenge to be rejected, got %d with body %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleBootstrapRequiresSignedChallengeOnce(t *testing.T) {
+	h := &DaemonAuthHandler{
+		bootstrapSecret: "shared-secret",
+		sessionStore:    newInMemoryDaemonSessionStore(time.Minute, time.Hour),
+	}
+	challenge := h.issueBootstrapChallenge()
+	if challenge == nil {
+		t.Fatal("expected bootstrap challenge")
 	}
 
-	var body map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
+	signed := signBootstrapChallenge("shared-secret", challenge)
+	body := fmt.Sprintf(`{"bootstrap_secret":"shared-secret","bootstrap_challenge_id":"%s","bootstrap_challenge_signature":"%s","client_id":"challenge-client"}`, challenge.ChallengeID, signed)
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(body))
+	firstRR := httptest.NewRecorder()
+	h.HandleBootstrap(firstRR, firstReq)
+	if firstRR.Code != http.StatusOK {
+		t.Fatalf("expected first bootstrap to succeed, got %d with body %s", firstRR.Code, firstRR.Body.String())
 	}
-	if body["access_token"] == "" {
-		t.Fatalf("expected daemon access token in response, got %#v", body)
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(body))
+	secondRR := httptest.NewRecorder()
+	h.HandleBootstrap(secondRR, secondReq)
+	if secondRR.Code == http.StatusOK {
+		t.Fatalf("expected replayed bootstrap challenge to be rejected, got %d with body %s", secondRR.Code, secondRR.Body.String())
 	}
+}
+
+func TestHandleBootstrapRejectsSopbackendSessionTokenWithoutChallenge(t *testing.T) {
+	withIsolatedSystemDB(t)
+
+	h := &DaemonAuthHandler{sessionStore: newInMemoryDaemonSessionStore(time.Minute, time.Hour)}
+	siteSessionStore := sopbackend.NewSessionStore(time.Minute)
+	accessToken, _, err := siteSessionStore.CreateSession(context.Background(), "alice", "daemon-user")
+	if err != nil {
+		t.Fatalf("create site session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(fmt.Sprintf(`{"bootstrap_token":"%s"}`, accessToken)))
+	rr := httptest.NewRecorder()
+
+	h.HandleBootstrap(rr, req)
+
+	if rr.Code == http.StatusOK {
+		t.Fatalf("expected site session token without challenge to be rejected, got %d with body %s", rr.Code, rr.Body.String())
+	}
+}
+
+func signBootstrapChallenge(secret string, challenge *bootstrapChallenge) string {
+	digest := sha256.Sum256([]byte(secret + ":" + challenge.ChallengeID))
+	return hex.EncodeToString(digest[:])
+}
+
+func signedBootstrapBody(secret string, challenge *bootstrapChallenge) string {
+	return signedBootstrapBodyWithClientID(secret, challenge, "")
+}
+
+func signedBootstrapBodyWithClientID(secret string, challenge *bootstrapChallenge, clientID string) string {
+	signed := signBootstrapChallenge(secret, challenge)
+	if strings.TrimSpace(clientID) == "" {
+		return fmt.Sprintf(`{"bootstrap_secret":"%s","bootstrap_challenge_id":"%s","bootstrap_challenge_signature":"%s"}`, secret, challenge.ChallengeID, signed)
+	}
+	return fmt.Sprintf(`{"bootstrap_secret":"%s","bootstrap_challenge_id":"%s","bootstrap_challenge_signature":"%s","client_id":"%s"}`, secret, challenge.ChallengeID, signed, clientID)
 }
 
 func TestHandleBootstrapSupportsMultipleAuthenticatedClients(t *testing.T) {
@@ -131,7 +211,7 @@ func TestHandleBootstrapSupportsMultipleAuthenticatedClients(t *testing.T) {
 
 	h := &DaemonAuthHandler{
 		bootstrapSecret: "shared-secret",
-		bootstrapPath:   filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sop", "daemon.bootstrap"),
+		bootstrapPath:   filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sop", "daemon.bootstrap.ai-studio-ui"),
 		sessionStore:    sopbackend.NewSessionStore(time.Minute),
 	}
 
@@ -141,15 +221,26 @@ func TestHandleBootstrapSupportsMultipleAuthenticatedClients(t *testing.T) {
 	if err := os.WriteFile(h.bootstrapPath, []byte(h.bootstrapSecret), 0o600); err != nil {
 		t.Fatalf("write bootstrap file: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(h.bootstrapPath), "daemon.bootstrap.continue-vscode"), []byte(h.bootstrapSecret), 0o600); err != nil {
+		t.Fatalf("write second bootstrap file: %v", err)
+	}
 
-	firstReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"shared-secret","client_id":"ai-studio-ui"}`))
+	firstChallenge := h.issueBootstrapChallenge()
+	if firstChallenge == nil {
+		t.Fatal("expected first bootstrap challenge")
+	}
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(fmt.Sprintf(`{"bootstrap_secret":"shared-secret","bootstrap_challenge_id":"%s","bootstrap_challenge_signature":"%s","client_id":"ai-studio-ui"}`, firstChallenge.ChallengeID, signBootstrapChallenge("shared-secret", firstChallenge))))
 	firstRR := httptest.NewRecorder()
 	h.HandleBootstrap(firstRR, firstReq)
 	if firstRR.Code != http.StatusOK {
 		t.Fatalf("expected first bootstrap to succeed, got %d with body %s", firstRR.Code, firstRR.Body.String())
 	}
 
-	secondReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"shared-secret","client_id":"continue-vscode"}`))
+	secondChallenge := h.issueBootstrapChallenge()
+	if secondChallenge == nil {
+		t.Fatal("expected second bootstrap challenge")
+	}
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(fmt.Sprintf(`{"bootstrap_secret":"shared-secret","bootstrap_challenge_id":"%s","bootstrap_challenge_signature":"%s","client_id":"continue-vscode"}`, secondChallenge.ChallengeID, signBootstrapChallenge("shared-secret", secondChallenge))))
 	secondRR := httptest.NewRecorder()
 	h.HandleBootstrap(secondRR, secondReq)
 	if secondRR.Code != http.StatusOK {

@@ -1210,7 +1210,7 @@ func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testi
 
 	authHandler := &DaemonAuthHandler{
 		bootstrapSecret: "stale-secret",
-		bootstrapPath:   filepath.Join(xdgConfigHome, "sop", "daemon.bootstrap"),
+		bootstrapPath:   filepath.Join(xdgConfigHome, "sop", "daemon.bootstrap.bridge-client"),
 		sessionStore:    sopbackend.NewSessionStore(time.Minute),
 		config:          defaultDaemonAuthConfig,
 	}
@@ -1233,7 +1233,12 @@ func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testi
 		t.Fatalf("unauthenticated metadata status = %d, want %d", unauthMetadataRR.Code, http.StatusUnauthorized)
 	}
 
-	bootstrapReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"fresh-secret"}`))
+	bootstrapChallenge := authHandler.issueBootstrapChallenge()
+	if bootstrapChallenge == nil {
+		t.Fatal("expected bootstrap challenge")
+	}
+	bootstrapBody := fmt.Sprintf(`{"bootstrap_secret":"fresh-secret","bootstrap_challenge_id":"%s","bootstrap_challenge_signature":"%s","client_id":"bridge-client"}`, bootstrapChallenge.ChallengeID, signBootstrapChallenge("fresh-secret", bootstrapChallenge))
+	bootstrapReq := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(bootstrapBody))
 	bootstrapRR := httptest.NewRecorder()
 	authHandler.HandleBootstrap(bootstrapRR, bootstrapReq)
 	if bootstrapRR.Code != http.StatusOK {

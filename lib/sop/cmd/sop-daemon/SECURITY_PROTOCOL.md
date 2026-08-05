@@ -384,17 +384,21 @@ To protect against same-host malware and multi-user access, the daemon implement
 ┌─────────────────────────────────────────────────────────────┐
 │ 2. UI First Connection (ONE TIME)                           │
 │    - Read bootstrap secret from file                        │
-│    - POST /api/daemon/auth { bootstrap_secret }             │
-│    - Daemon validates → issues JWT tokens                   │
+│    - POST /api/daemon/challenge { bootstrap_secret }       │
+│    - Daemon issues a fresh random challenge ID and a        │
+│      challenge signature derived from secret + challenge ID │
+│    - UI signs the challenge and POSTs /api/daemon/auth      │
+│      with bootstrap_secret, challenge_id, and challenge_signature │
+│    - Daemon validates the proof once, then issues JWT tokens │
 │    - Store tokens in memory (NOT localStorage)              │
-│    - (Optional) Delete bootstrap file after use             │
 └─────────────────────────────────────────────────────────────┘
                            ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ 3. All Subsequent Requests                                  │
 │    - Authorization: Bearer {access_token}                   │
 │    - Same JWT validation as HQ                              │
-│    - No file reads needed                                   │
+│    - Bootstrap secret is not used for later API auth        │
+│    - The challenge is single-use and expires quickly        │
 └─────────────────────────────────────────────────────────────┘
                            ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -405,6 +409,8 @@ To protect against same-host malware and multi-user access, the daemon implement
 │    - Continue operation                                     │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+Important security detail: the bootstrap challenge is not itself an authorization token. It is a one-time proof that the caller knows the bootstrap secret and is speaking to the daemon that issued the challenge. Only the later bearer-token exchange grants access to protected daemon endpoints.
 
 ### Why This Is Brilliant
 
@@ -537,11 +543,28 @@ Token expiry is configurable for tuning security vs UX:
 
 ### Bootstrap Authentication Endpoints
 
-#### POST /api/daemon/auth (Bootstrap)
+#### POST /api/daemon/challenge (Bootstrap Challenge)
 ```json
 Request:
 {
   "bootstrap_secret": "abc123..."
+}
+
+Response (200 OK):
+{
+  "challenge_id": "challenge-0123...",
+  "challenge_signature": "sha256(secret:challenge_id)",
+  "daemon_id": "local-daemon"
+}
+```
+
+#### POST /api/daemon/auth (Bootstrap)
+```json
+Request:
+{
+  "bootstrap_secret": "abc123...",
+  "bootstrap_challenge_id": "challenge-0123...",
+  "bootstrap_challenge_signature": "sha256(secret:challenge_id)"
 }
 
 Response (200 OK):
@@ -554,7 +577,7 @@ Response (200 OK):
 
 Response (401 Unauthorized):
 {
-  "error": "Invalid bootstrap secret"
+  "error": "Invalid bootstrap challenge signature"
 }
 ```
 
@@ -612,22 +635,41 @@ class DaemonAuth {
         // Read bootstrap secret via httpserver proxy
         const response = await fetch('/api/daemon/bootstrap-secret');
         const { secret } = await response.json();
-        
-        // Authenticate with daemon
-        const authResponse = await fetch('http://localhost:9090/api/daemon/auth', {
+
+        // Request a fresh one-time daemon challenge
+        const challengeResponse = await fetch('http://localhost:9090/api/daemon/challenge', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ bootstrap_secret: secret })
         });
-        
+
+        if (!challengeResponse.ok) {
+            throw new Error('Daemon challenge failed');
+        }
+
+        const challenge = await challengeResponse.json();
+        const signature = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${secret}:${challenge.challenge_id}`));
+        const signedChallenge = Array.from(new Uint8Array(signature), b => b.toString(16).padStart(2, '0')).join('');
+
+        // Authenticate with daemon using the signed challenge
+        const authResponse = await fetch('http://localhost:9090/api/daemon/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                bootstrap_secret: secret,
+                bootstrap_challenge_id: challenge.challenge_id,
+                bootstrap_challenge_signature: signedChallenge
+            })
+        });
+
         if (!authResponse.ok) {
             throw new Error('Daemon authentication failed');
         }
-        
+
         const tokens = await authResponse.json();
         this.accessToken = tokens.access_token;
         this.refreshToken = tokens.refresh_token;
-        
+
         console.log('Daemon authenticated successfully');
     }
     

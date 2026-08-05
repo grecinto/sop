@@ -142,18 +142,18 @@ type daemonSessionStoreBackend interface {
 }
 
 type inMemoryDaemonSessionStore struct {
-	mu           sync.RWMutex
-	ttl          time.Duration
-	refreshTTL   time.Duration
-	sessions     map[string]daemonSessionRecord
+	mu         sync.RWMutex
+	ttl        time.Duration
+	refreshTTL time.Duration
+	sessions   map[string]daemonSessionRecord
 }
 
 type daemonSessionRecord struct {
-	AccessToken     string
-	RefreshToken    string
-	Username        string
-	Role            string
-	ExpiresAt       time.Time
+	AccessToken      string
+	RefreshToken     string
+	Username         string
+	Role             string
+	ExpiresAt        time.Time
 	RefreshExpiresAt time.Time
 }
 
@@ -270,11 +270,11 @@ func (s *inMemoryDaemonSessionStore) CreateSession(ctx context.Context, username
 		return "", "", err
 	}
 	record := daemonSessionRecord{
-		AccessToken:     accessToken,
-		RefreshToken:    refreshToken,
-		Username:        username,
-		Role:            role,
-		ExpiresAt:       now.Add(s.ttl),
+		AccessToken:      accessToken,
+		RefreshToken:     refreshToken,
+		Username:         username,
+		Role:             role,
+		ExpiresAt:        now.Add(s.ttl),
 		RefreshExpiresAt: now.Add(s.refreshTTL),
 	}
 	s.mu.Lock()
@@ -309,11 +309,11 @@ func (s *inMemoryDaemonSessionStore) Refresh(ctx context.Context, refreshToken s
 		return "", "", err
 	}
 	newRecord := daemonSessionRecord{
-		AccessToken:     accessToken,
-		RefreshToken:    newRefreshToken,
-		Username:        record.Username,
-		Role:            record.Role,
-		ExpiresAt:       now.Add(s.ttl),
+		AccessToken:      accessToken,
+		RefreshToken:     newRefreshToken,
+		Username:         record.Username,
+		Role:             record.Role,
+		ExpiresAt:        now.Add(s.ttl),
 		RefreshExpiresAt: record.RefreshExpiresAt,
 	}
 	s.mu.Lock()
@@ -365,6 +365,8 @@ type DaemonAuthHandler struct {
 	syncQueue       *SyncQueue
 	pollClient      *FederationPollClient
 	clientRegistry  *daemonClientRegistry
+	challengeMu     sync.RWMutex
+	challenges      map[string]bootstrapChallengeState
 }
 
 type daemonClientSession struct {
@@ -529,8 +531,27 @@ type hqSignedClaims struct {
 	TokenID   string   `json:"jti"`
 }
 
+type bootstrapChallengeState struct {
+	Challenge *bootstrapChallenge
+	Used      bool
+	UsedAt    time.Time
+}
+
 type hqAuthRequest struct {
 	AccessToken string `json:"access_token"`
+}
+
+type bootstrapChallenge struct {
+	ChallengeID string `json:"challenge_id"`
+	ExpiresAt   int64  `json:"expires_at"`
+	Signature   string `json:"signature"`
+	SecretHash  string `json:"secret_hash"`
+	DaemonID    string `json:"daemon_id,omitempty"`
+}
+
+type bootstrapChallengeResponse struct {
+	Challenge *bootstrapChallenge `json:"challenge,omitempty"`
+	Error     string              `json:"error,omitempty"`
 }
 
 type hqAuthResponse struct {
@@ -570,12 +591,21 @@ type hqSyncBatch struct {
 
 // ensureBootstrapSecret generates a new bootstrap secret on every daemon startup
 func ensureBootstrapSecret() (string, error) {
+	return ensureBootstrapSecretForClient("daemon")
+}
+
+func ensureBootstrapSecretForClient(clientID string) (string, error) {
 	configDir, err := getConfigDir()
 	if err != nil {
 		return "", err
 	}
 
-	bootstrapPath := filepath.Join(configDir, "daemon.bootstrap")
+	clientKey := strings.TrimSpace(clientID)
+	if clientKey == "" {
+		return "", fmt.Errorf("client_id required")
+	}
+	cleanClientID := sanitizeBootstrapClientID(clientKey)
+	bootstrapPath := filepath.Join(configDir, fmt.Sprintf("daemon.bootstrap.%s", cleanClientID))
 
 	// Always generate new bootstrap secret (rotation on every restart)
 	buf := make([]byte, 32)
@@ -597,11 +627,19 @@ func ensureBootstrapSecret() (string, error) {
 }
 
 func (h *DaemonAuthHandler) loadBootstrapSecretFromDisk() (string, error) {
-	if h.bootstrapPath == "" {
+	return h.loadBootstrapSecretFromDiskForClient("")
+}
+
+func (h *DaemonAuthHandler) loadBootstrapSecretFromDiskForClient(clientID string) (string, error) {
+	if strings.TrimSpace(clientID) == "" {
+		return "", fmt.Errorf("client_id required")
+	}
+	bootstrapPath := resolveBootstrapPathForClient(h.bootstrapPath, clientID)
+	if bootstrapPath == "" {
 		return "", fmt.Errorf("bootstrap path not configured")
 	}
 
-	data, err := os.ReadFile(h.bootstrapPath)
+	data, err := os.ReadFile(bootstrapPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", err
@@ -614,6 +652,42 @@ func (h *DaemonAuthHandler) loadBootstrapSecretFromDisk() (string, error) {
 		return "", fmt.Errorf("bootstrap secret file is empty")
 	}
 	return secret, nil
+}
+
+func sanitizeBootstrapClientID(clientID string) string {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return ""
+	}
+	clean := strings.ToLower(clientID)
+	clean = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		default:
+			return '-'
+		}
+	}, clean)
+	clean = strings.Trim(clean, "-")
+	return clean
+}
+
+func resolveBootstrapPathForClient(basePath, clientID string) string {
+	if strings.TrimSpace(basePath) == "" {
+		return ""
+	}
+	clientKey := sanitizeBootstrapClientID(clientID)
+	if clientKey == "" {
+		return ""
+	}
+	dir := filepath.Dir(basePath)
+	baseName := filepath.Base(basePath)
+	if strings.HasSuffix(baseName, "."+clientKey) {
+		return basePath
+	}
+	return filepath.Join(dir, fmt.Sprintf("daemon.bootstrap.%s", clientKey))
 }
 
 // getConfigDir returns the daemon configuration directory
@@ -639,7 +713,7 @@ func NewDaemonAuthHandler(config DaemonAuthConfig) (*DaemonAuthHandler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get config dir: %w", err)
 	}
-	bootstrapPath := filepath.Join(configDir, "daemon.bootstrap")
+	bootstrapPath := filepath.Join(configDir, "daemon.bootstrap.daemon")
 
 	// Daemon bootstrap/authentication uses an in-memory session store so the UI handshake
 	// does not require a system database or persistent store creation.
@@ -766,6 +840,103 @@ func (h *DaemonAuthHandler) validateHQSignedToken(token string) (*hqSignedClaims
 		return nil, fmt.Errorf("expired HQ token")
 	}
 	return &claims, nil
+}
+
+func (h *DaemonAuthHandler) issueBootstrapChallenge() *bootstrapChallenge {
+	if h == nil {
+		return nil
+	}
+	challengeID := fmt.Sprintf("challenge-%d", time.Now().UTC().UnixNano())
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err == nil {
+		challengeID = hex.EncodeToString(buf)
+	}
+	secret := strings.TrimSpace(h.bootstrapSecret)
+	if secret == "" {
+		secret = strings.TrimSpace(loadBootstrapSecretFromDiskForHandler(h))
+	}
+	digest := sha256.Sum256([]byte(secret + ":" + challengeID))
+	challenge := &bootstrapChallenge{
+		ChallengeID: challengeID,
+		ExpiresAt:   time.Now().UTC().Add(2 * time.Minute).Unix(),
+		Signature:   hex.EncodeToString(digest[:]),
+		SecretHash:  hex.EncodeToString(digest[:]),
+		DaemonID:    strings.TrimSpace(os.Getenv("SOP_DAEMON_ID")),
+	}
+	h.challengeMu.Lock()
+	if h.challenges == nil {
+		h.challenges = make(map[string]bootstrapChallengeState)
+	}
+	h.challenges[challenge.ChallengeID] = bootstrapChallengeState{Challenge: challenge}
+	h.challengeMu.Unlock()
+	if challenge.DaemonID == "" {
+		challenge.DaemonID = "local-daemon"
+	}
+	return challenge
+}
+
+func loadBootstrapSecretFromDiskForHandler(h *DaemonAuthHandler) string {
+	if h == nil || h.bootstrapPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(h.bootstrapPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func (h *DaemonAuthHandler) verifyBootstrapChallenge(challengeID, signedToken string) bool {
+	if h == nil || strings.TrimSpace(challengeID) == "" || strings.TrimSpace(signedToken) == "" {
+		return false
+	}
+	h.challengeMu.Lock()
+	defer h.challengeMu.Unlock()
+	if h.challenges == nil {
+		return false
+	}
+	state, ok := h.challenges[challengeID]
+	if !ok || state.Challenge == nil || state.Used {
+		return false
+	}
+	if time.Now().UTC().Unix() > state.Challenge.ExpiresAt {
+		delete(h.challenges, challengeID)
+		return false
+	}
+	secret := strings.TrimSpace(h.bootstrapSecret)
+	if secret == "" {
+		secret = strings.TrimSpace(loadBootstrapSecretFromDiskForHandler(h))
+	}
+	if secret == "" {
+		return false
+	}
+	digest := sha256.Sum256([]byte(secret + ":" + state.Challenge.ChallengeID))
+	expected := hex.EncodeToString(digest[:])
+	if !hmac.Equal([]byte(signedToken), []byte(expected)) {
+		return false
+	}
+	state.Used = true
+	state.UsedAt = time.Now().UTC()
+	h.challenges[challengeID] = state
+	return true
+}
+
+func (h *DaemonAuthHandler) pruneExpiredChallenges() {
+	if h == nil || len(h.challenges) == 0 {
+		return
+	}
+	now := time.Now().UTC().Unix()
+	h.challengeMu.Lock()
+	defer h.challengeMu.Unlock()
+	for id, state := range h.challenges {
+		if state.Challenge == nil {
+			delete(h.challenges, id)
+			continue
+		}
+		if state.Used || now > state.Challenge.ExpiresAt {
+			delete(h.challenges, id)
+		}
+	}
 }
 
 func (h *DaemonAuthHandler) HandleHQAuth(w http.ResponseWriter, r *http.Request) {
@@ -1263,6 +1434,20 @@ func (h *DaemonAuthHandler) storeRetrievedArtifacts(ctx context.Context, artifac
 	return nil
 }
 
+func (h *DaemonAuthHandler) validateBootstrapToken(ctx context.Context, token string) (*sopbackend.UserRecord, error) {
+	if h.sessionStore != nil {
+		if userRecord, err := h.sessionStore.ValidateTokenWithoutAccountCheck(ctx, token); err == nil {
+			return userRecord, nil
+		}
+	}
+
+	// The UI may be bootstrapping the daemon with the current site session token
+	// (for example, sop_access_token stored in the browser). Accept that as a
+	// valid bootstrap credential when it passes the backend session validation.
+	siteSessionStore := sopbackend.NewSessionStore(time.Hour)
+	return siteSessionStore.ValidateTokenWithoutAccountCheck(ctx, token)
+}
+
 // HandleBootstrap handles initial authentication with bootstrap secret
 func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1270,10 +1455,15 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	h.pruneExpiredChallenges()
+
 	var req struct {
-		BootstrapSecret string `json:"bootstrap_secret"`
-		BootstrapToken  string `json:"bootstrap_token"`
-		ClientID        string `json:"client_id"`
+		BootstrapSecret         string `json:"bootstrap_secret"`
+		BootstrapToken          string `json:"bootstrap_token"`
+		ClientID                string `json:"client_id"`
+		BootstrapChallengeID    string `json:"bootstrap_challenge_id"`
+		BootstrapChallengeSig   string `json:"bootstrap_challenge_signature"`
+		BootstrapChallengeNonce string `json:"bootstrap_challenge_nonce"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
@@ -1281,46 +1471,49 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 	}
 
 	var subject, role string
-	if strings.TrimSpace(req.BootstrapToken) != "" {
-		userRecord, err := h.sessionStore.ValidateTokenWithoutAccountCheck(r.Context(), strings.TrimSpace(req.BootstrapToken))
-		if err != nil {
-			log.Printf("Invalid bootstrap token attempt: %v", err)
-			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap token"})
-			return
-		}
-		subject = strings.TrimSpace(userRecord.Username)
-		role = strings.TrimSpace(userRecord.Role)
-		if subject == "" {
-			subject = "ui-client"
-		}
-		if role == "" {
-			role = "daemon-user"
-		}
-	} else {
-		// Allow already-authenticated clients to reuse the in-memory bootstrap secret
-		// when the one-time bootstrap file has already been consumed.
-		currentBootstrapSecret, err := h.loadBootstrapSecretFromDisk()
-		if err != nil {
-			if strings.TrimSpace(h.bootstrapSecret) == "" {
-				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
-				return
-			}
-			currentBootstrapSecret = h.bootstrapSecret
-		} else if strings.TrimSpace(currentBootstrapSecret) != "" && strings.TrimSpace(h.bootstrapSecret) == "" {
-			h.bootstrapSecret = currentBootstrapSecret
-		}
-		if h.bootstrapSecret != currentBootstrapSecret {
-			h.bootstrapSecret = currentBootstrapSecret
-		}
+	clientID := strings.TrimSpace(req.ClientID)
+	if clientID == "" {
+		clientID = strings.TrimSpace(readClientID(r))
+	}
+	if clientID == "" {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "client_id required"})
+		return
+	}
 
-		if req.BootstrapSecret != h.bootstrapSecret {
-			log.Printf("Invalid bootstrap secret attempt")
+	currentBootstrapSecret, err := h.loadBootstrapSecretFromDiskForClient(clientID)
+	if err != nil {
+		if strings.TrimSpace(h.bootstrapSecret) == "" {
 			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
 			return
 		}
-		subject = "ui-client"
-		role = "daemon-user"
+		currentBootstrapSecret = h.bootstrapSecret
+	} else if strings.TrimSpace(currentBootstrapSecret) != "" && strings.TrimSpace(h.bootstrapSecret) == "" {
+		h.bootstrapSecret = currentBootstrapSecret
 	}
+	if h.bootstrapSecret != currentBootstrapSecret {
+		h.bootstrapSecret = currentBootstrapSecret
+	}
+
+	if req.BootstrapSecret != h.bootstrapSecret {
+		log.Printf("Invalid bootstrap secret attempt")
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
+		return
+	}
+	challengeID := strings.TrimSpace(req.BootstrapChallengeID)
+	if challengeID == "" || strings.TrimSpace(req.BootstrapChallengeSig) == "" {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap challenge"})
+		return
+	}
+	if !h.verifyBootstrapChallenge(challengeID, strings.TrimSpace(req.BootstrapChallengeSig)) {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap challenge signature"})
+		return
+	}
+	if strings.TrimSpace(req.BootstrapChallengeNonce) != "" && strings.TrimSpace(req.BootstrapChallengeNonce) != challengeID {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap challenge nonce"})
+		return
+	}
+	subject = "ui-client"
+	role = "daemon-user"
 
 	// Create session for the UI client
 	accessToken, refreshToken, err := h.sessionStore.CreateSession(r.Context(), subject, role)
@@ -1330,13 +1523,6 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	clientID := strings.TrimSpace(req.ClientID)
-	if clientID == "" {
-		clientID = strings.TrimSpace(readClientID(r))
-	}
-	if clientID == "" {
-		clientID = "default-client"
-	}
 	h.clientSessionRegistry().Register(clientID, subject, role, accessToken)
 
 	log.Printf("Authenticated client %q successfully via bootstrap", clientID)
@@ -1345,6 +1531,59 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 		"refresh_token": refreshToken,
 		"token_type":    "Bearer",
 		"expires_in":    int(h.config.AccessTokenTTL.Seconds()),
+	})
+}
+
+// HandleBootstrapChallenge issues a one-time challenge for the UI to sign before bootstrap.
+func (h *DaemonAuthHandler) HandleBootstrapChallenge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		BootstrapSecret string `json:"bootstrap_secret"`
+		ClientID        string `json:"client_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+		return
+	}
+
+	clientID := strings.TrimSpace(req.ClientID)
+	if clientID == "" {
+		respondJSON(w, http.StatusBadRequest, map[string]string{"error": "client_id required"})
+		return
+	}
+
+	currentBootstrapSecret, err := h.loadBootstrapSecretFromDiskForClient(clientID)
+	if err != nil {
+		if strings.TrimSpace(h.bootstrapSecret) == "" {
+			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
+			return
+		}
+		currentBootstrapSecret = h.bootstrapSecret
+	} else if strings.TrimSpace(currentBootstrapSecret) != "" && strings.TrimSpace(h.bootstrapSecret) == "" {
+		h.bootstrapSecret = currentBootstrapSecret
+	}
+	if h.bootstrapSecret != currentBootstrapSecret {
+		h.bootstrapSecret = currentBootstrapSecret
+	}
+	if strings.TrimSpace(req.BootstrapSecret) != strings.TrimSpace(h.bootstrapSecret) {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid bootstrap secret"})
+		return
+	}
+
+	challenge := h.issueBootstrapChallenge()
+	if challenge == nil {
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to issue bootstrap challenge"})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"challenge_id":        challenge.ChallengeID,
+		"challenge_signature": challenge.Signature,
+		"daemon_id":           challenge.DaemonID,
 	})
 }
 
@@ -1431,13 +1670,17 @@ func (h *DaemonAuthHandler) regenerateBootstrapFile() error {
 		return fmt.Errorf("get config directory: %w", err)
 	}
 
-	bootstrapPath := filepath.Join(configDir, "daemon.bootstrap")
+	bootstrapPath := h.bootstrapPath
+	if strings.TrimSpace(bootstrapPath) == "" {
+		bootstrapPath = filepath.Join(configDir, "daemon.bootstrap.daemon")
+	}
 	if err := os.WriteFile(bootstrapPath, []byte(newSecret), 0600); err != nil {
 		return fmt.Errorf("write bootstrap file: %w", err)
 	}
 
 	// Update handler's bootstrap secret
 	h.bootstrapSecret = newSecret
+	h.bootstrapPath = bootstrapPath
 
 	return nil
 }

@@ -80,7 +80,7 @@ Use the existing daemon/HQ bearer-token flow.
 - Requests should include `Authorization: Bearer <daemon-access-token>` when auth is enabled.
 - `401` and `403` from the daemon should be handled through the daemon-local sign-in and token refresh flow.
 - No Continue-specific daemon credential scheme should be introduced.
-- Local helper validation may bootstrap through `POST /api/daemon/auth` using the daemon bootstrap secret or an existing bootstrap token, then cache and refresh daemon bearer tokens through `POST /api/daemon/refresh`.
+- Local helper validation should bootstrap through `POST /api/daemon/challenge` and `POST /api/daemon/auth` using the daemon bootstrap secret plus a signed one-time challenge, then cache and refresh daemon bearer tokens through `POST /api/daemon/refresh`.
 - Continue must authenticate to HQ separately and manage its own HQ access token, HQ refresh token, and re-authentication cadence independently from the UI session.
 - Continue persists both the HQ token set and the daemon token set in VS Code secret storage. On activation, Continue rehydrates those values, refreshes them when stale, and can re-establish the daemon handoff after a restart.
 - When Continue calls daemon endpoints that may later trigger federation work, Continue must also provide its current HQ connectivity context so daemon can reuse the same HQ identity for outbound sync work.

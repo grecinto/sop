@@ -155,9 +155,6 @@ func main() {
 			SessionTokenTTLMinutes: sopbackend.GetConfig().SessionTokenTTLMinutes,
 			SessionSecret:          sopbackend.GetConfig().SessionSecret,
 			AuthProviderName:       sopbackend.GetConfig().AuthProviderName,
-			Users:                  sopbackend.GetConfig().Users,
-			Subscriptions:          sopbackend.GetConfig().Subscriptions,
-			Payments:               sopbackend.GetConfig().Payments,
 			ObfuscationMode:        sopbackend.GetConfig().ObfuscationMode,
 			DatabasePath:           sopbackend.GetConfig().DatabasePath,
 			Mode:                   sopbackend.GetConfig().Mode,
@@ -478,7 +475,34 @@ func handleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {
 		configDir = filepath.Join(home, ".config", "sop")
 	}
 
-	bootstrapPath := filepath.Join(configDir, "daemon.bootstrap")
+	clientID := strings.TrimSpace(r.URL.Query().Get("client_id"))
+	if clientID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "client_id required"})
+		return
+	}
+
+	bootstrapFileName := "daemon.bootstrap"
+	if strings.TrimSpace(clientID) != "" {
+		clientKey := strings.ToLower(clientID)
+		clientKey = strings.Map(func(r rune) rune {
+			switch {
+			case r >= 'a' && r <= 'z':
+				return r
+			case r >= '0' && r <= '9':
+				return r
+			default:
+				return '-'
+			}
+		}, clientKey)
+		clientKey = strings.Trim(clientKey, "-")
+		if clientKey == "" {
+			clientKey = "default"
+		}
+		bootstrapFileName = fmt.Sprintf("%s.%s", bootstrapFileName, clientKey)
+	}
+	bootstrapPath := filepath.Join(configDir, bootstrapFileName)
 
 	// Read bootstrap secret
 	secretBytes, err := os.ReadFile(bootstrapPath)

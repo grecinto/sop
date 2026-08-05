@@ -149,7 +149,7 @@ Supported paths:
 
 1. Direct bearer token injection.
 2. Refresh-token based renewal.
-3. Local bootstrap-secret authentication against `POST /api/daemon/auth`.
+3. Local challenge-based bootstrap authentication against `POST /api/daemon/challenge` and `POST /api/daemon/auth`.
 
 Continue must also maintain its own HQ-authenticated session in parallel with the daemon session.
 

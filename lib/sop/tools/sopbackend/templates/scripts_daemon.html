@@ -17,6 +17,16 @@
     const SUBSCRIPTION_CHECK_INTERVAL = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
     const DEFAULT_DAEMON_URL = 'http://127.0.0.1:9090';
 
+    function sha256Hex(value) {
+        if (typeof crypto === 'undefined' || !crypto.subtle) {
+            return '';
+        }
+        const bytes = new TextEncoder().encode(value);
+        return crypto.subtle.digest('SHA-256', bytes).then(buffer => {
+            return Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, '0')).join('');
+        });
+    }
+
     function getLocalRuntimeBaseURL() {
         const configured = window.SOP_DAEMON_BASE_URL || localStorage.getItem('sop_daemon_url') || DEFAULT_DAEMON_URL;
         return (configured || DEFAULT_DAEMON_URL).replace(/\/$/, '');
@@ -62,7 +72,6 @@
                     return true;
                 }
 
-                // Get site session token from storage
                 const bootstrapToken = [
                     localStorage.getItem('sop_access_token'),
                     sessionStorage.getItem('sop_access_token'),
@@ -72,14 +81,14 @@
 
                 let authPayload;
                 let authEndpoint;
+                let bootstrapSecret = '';
 
                 if (bootstrapToken) {
-                    // Use site session token directly
                     authPayload = { bootstrap_token: bootstrapToken.trim() };
                     authEndpoint = `${getLocalRuntimeBaseURL()}/api/daemon/auth`;
                 } else {
-                    // Fall back to bootstrap secret from file
-                    const secretResponse = await fetch('/api/daemon/bootstrap-secret');
+                    const clientID = (typeof getCurrentClientID === 'function' ? getCurrentClientID() : '') || '';
+                    const secretResponse = await fetch(`/api/daemon/bootstrap-secret${clientID ? `?client_id=${encodeURIComponent(clientID)}` : ''}`);
                     if (!secretResponse.ok) {
                         if (secretResponse.status === 404) {
                             console.debug('[DaemonAuth] Daemon not running or bootstrap file not found');
@@ -90,7 +99,7 @@
                     }
 
                     const secretData = await secretResponse.json();
-                    const bootstrapSecret = secretData && secretData.bootstrap_secret;
+                    bootstrapSecret = secretData && secretData.bootstrap_secret;
 
                     if (!bootstrapSecret) {
                         throw new Error('Bootstrap secret is empty');
@@ -99,6 +108,36 @@
                     authPayload = { bootstrap_secret: bootstrapSecret };
                     authEndpoint = `${getLocalRuntimeBaseURL()}/api/daemon/auth`;
                 }
+
+                const challengeResponse = await fetch(authEndpoint.replace('/api/daemon/auth', '/api/daemon/challenge'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bootstrap_secret: bootstrapSecret || '', bootstrap_token: bootstrapToken || '' })
+                });
+
+                if (!challengeResponse.ok) {
+                    const challengeError = await challengeResponse.json().catch(() => ({}));
+                    throw new Error(`Daemon challenge failed: ${challengeError.error || challengeResponse.status}`);
+                }
+
+                const challengeData = await challengeResponse.json();
+                const challengeID = challengeData && challengeData.challenge_id;
+                const challengeSignature = challengeData && challengeData.challenge_signature;
+                if (!challengeID || !challengeSignature) {
+                    throw new Error('Daemon challenge response was incomplete');
+                }
+
+                const signedChallenge = await sha256Hex(`${bootstrapSecret || bootstrapToken || ''}:${challengeID}`);
+                if (!signedChallenge) {
+                    throw new Error('Failed to sign bootstrap challenge');
+                }
+
+                authPayload = {
+                    ...authPayload,
+                    bootstrap_challenge_id: challengeID,
+                    bootstrap_challenge_signature: signedChallenge,
+                    bootstrap_challenge_nonce: challengeID
+                };
 
                 // Authenticate with daemon
                 const authResponse = await fetch(authEndpoint, {
