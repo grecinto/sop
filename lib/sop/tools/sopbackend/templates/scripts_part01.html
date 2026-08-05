@@ -1009,11 +1009,18 @@
         return Boolean(window.daemonAuth && typeof window.daemonAuth.bootstrap === 'function');
     }
 
+    function createDaemonAuthHandshakeError(detailMessage = '') {
+        const baseMessage = 'Local daemon authentication could not be established during the handshake. Confirm the local daemon is running and that you are signed in to HQ with the current HQ URL available before provisioning.';
+        return new Error(detailMessage ? `${baseMessage} ${detailMessage}` : baseMessage);
+    }
+
     async function localRuntimeRequest(endpoint, options = {}) {
         const daemonBase = (typeof getLocalRuntimeBaseURL === 'function' ? getLocalRuntimeBaseURL() : DEFAULT_DAEMON_URL).replace(/\/$/, '');
         const useDaemonAuth = typeof endpoint === 'string' && endpoint.startsWith('/api/') && !endpoint.startsWith('/api/daemon/bootstrap-secret');
 
         if (useDaemonAuth) {
+            let authAttempted = false;
+            let authSucceeded = false;
             const authReady = await waitForDaemonAuthClient(4000);
             if (!authReady) {
                 console.warn('[localRuntimeRequest] daemon auth client not available yet; continuing without auth');
@@ -1022,14 +1029,26 @@
                 if (existingToken) {
                     options.headers = options.headers || {};
                     options.headers.Authorization = `Bearer ${existingToken}`;
+                    authSucceeded = true;
                 } else if (typeof window.daemonAuth.bootstrap === 'function') {
-                    await window.daemonAuth.bootstrap();
-                    const bootToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
-                    if (bootToken) {
-                        options.headers = options.headers || {};
-                        options.headers.Authorization = `Bearer ${bootToken}`;
+                    try {
+                        authAttempted = true;
+                        await window.daemonAuth.bootstrap();
+                        const bootToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
+                        if (bootToken) {
+                            options.headers = options.headers || {};
+                            options.headers.Authorization = `Bearer ${bootToken}`;
+                            authSucceeded = true;
+                        }
+                    } catch (err) {
+                        console.warn('[localRuntimeRequest] daemon auth handshake failed', err);
+                        throw createDaemonAuthHandshakeError(err && err.message ? err.message : 'The handshake failed.');
                     }
                 }
+            }
+
+            if (authAttempted && !authSucceeded) {
+                throw createDaemonAuthHandshakeError('The daemon did not return an access token.');
             }
         }
 
@@ -3542,6 +3561,33 @@
 
         // Recursively render tree
         const treeRoot = document.querySelector('#kb-category-tree');
+
+        window.renderSpaceDocumentsRootNode = function(spaceName) {
+            const rootDocumentsContainer = document.createElement('li');
+            rootDocumentsContainer.dataset.documentsRoot = 'true';
+            rootDocumentsContainer.style.display = 'block';
+            rootDocumentsContainer.style.listStyle = 'none';
+            rootDocumentsContainer.style.marginBottom = '6px';
+            rootDocumentsContainer.style.padding = '6px 8px';
+            rootDocumentsContainer.style.borderRadius = '4px';
+            rootDocumentsContainer.style.cursor = 'pointer';
+            rootDocumentsContainer.innerHTML = '<span style="display:inline-flex; align-items:center; gap:8px;"><span>📄</span><span>Documents</span></span>';
+            rootDocumentsContainer.onclick = (event) => {
+                event.stopPropagation();
+                window.fetchDocumentsForCategory(spaceName, '', 'Documents');
+            };
+            return rootDocumentsContainer;
+        };
+
+        window.showSpaceDocumentsRootIfNeeded = function(container, spaceName) {
+            if (!container || container.querySelector('li[data-documents-root="true"]')) {
+                return;
+            }
+            const rootDocumentsContainer = window.renderSpaceDocumentsRootNode(spaceName);
+            rootDocumentsContainer.style.display = 'block';
+            container.appendChild(rootDocumentsContainer);
+        };
+
         function renderCategoryLifecycleIndicator(cat) {
             if (!cat) return null;
             const metadata = (cat.metadata && typeof cat.metadata === 'object') ? cat.metadata : {};
@@ -3849,32 +3895,6 @@
         };
 
         window.renderWorkflowItemsAsLeaves = window.loadWorkflowItemsForCategoryTree;
-
-        window.renderSpaceDocumentsRootNode = function(spaceName) {
-            const rootDocumentsContainer = document.createElement('li');
-            rootDocumentsContainer.dataset.documentsRoot = 'true';
-            rootDocumentsContainer.style.display = 'block';
-            rootDocumentsContainer.style.listStyle = 'none';
-            rootDocumentsContainer.style.marginBottom = '6px';
-            rootDocumentsContainer.style.padding = '6px 8px';
-            rootDocumentsContainer.style.borderRadius = '4px';
-            rootDocumentsContainer.style.cursor = 'pointer';
-            rootDocumentsContainer.innerHTML = '<span style="display:inline-flex; align-items:center; gap:8px;"><span>📄</span><span>Documents</span></span>';
-            rootDocumentsContainer.onclick = (event) => {
-                event.stopPropagation();
-                window.fetchDocumentsForCategory(spaceName, '', 'Documents');
-            };
-            return rootDocumentsContainer;
-        };
-
-        window.showSpaceDocumentsRootIfNeeded = function(container, spaceName) {
-            if (!container || container.querySelector('li[data-documents-root="true"]')) {
-                return;
-            }
-            const rootDocumentsContainer = window.renderSpaceDocumentsRootNode(spaceName);
-            rootDocumentsContainer.style.display = 'block';
-            container.appendChild(rootDocumentsContainer);
-        };
 
         window.renderDocumentTreeNode = function(documentItem, depth, onSelect) {
             const li = document.createElement('li');

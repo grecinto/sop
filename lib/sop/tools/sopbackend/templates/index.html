@@ -900,7 +900,7 @@
                     <label style="margin: 0; white-space: nowrap;" title="App Operation Mode: Standalone (Single Instance) or Clustered (Multiple Instances sharing Data).">Mode</label>
                     <select id="setup-db-type" onchange="toggleSetupConnectionField('db')" style="width: 120px;">
                         <option value="clustered">Clustered</option>
-                        <option value="standalone">Standalone</option>
+                        <option value="standalone" selected>Standalone</option>
                     </select>
                 </div>
                  <div id="setup-conn-group-db" style="display: none; align-items: center; gap: 8px; flex: 1;">
@@ -974,7 +974,7 @@
                     <label style="margin: 0; white-space: nowrap;" title="App Operation Mode: Standalone (Single Instance) or Clustered (Multiple Instances sharing Data).">Mode</label>
                     <select id="setup-sys-type" onchange="toggleSetupConnectionField('sys')" style="width: 120px;">
                         <option value="clustered">Clustered</option>
-                        <option value="standalone">Standalone</option>
+                        <option value="standalone" selected>Standalone</option>
                     </select>
                 </div>
                  <div id="setup-conn-group-sys" style="display: none; align-items: center; gap: 8px; flex: 1;">
@@ -1032,7 +1032,7 @@
                             </div>
                             <div style="display: flex; align-items: center; gap: 5px; flex: 1;">
                                 <label style="white-space: nowrap; margin-bottom: 0;">Stores Folder(s):</label>
-                                <input type="text" id="setup-sys-stores-folders" placeholder="/path/one, /path/two" style="flex: 1;">
+                                <input type="text" id="setup-sys-stores-folders" placeholder="/path/one, /path/two" value="./.sop-data/{{.SystemDBName}}" style="flex: 1;">
                             </div>
                         </div>
                     </div>

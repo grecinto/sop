@@ -22,7 +22,7 @@ The Workflow Undo System treats each coding workflow run as an **atomic transact
 
 **vs. Enterprise Workflow Systems (Temporal, Step Functions):**
 - No complex compensation logic required
-- Simple snapshot-based approach (reliable, fast)
+- Simple delta-based approach (reliable, fast)
 - Developer-friendly UX (no YAML/JSON configuration)
 - Built-in semantic intelligence
 
@@ -41,12 +41,12 @@ Layer 1: Knowledge Base Space (Semantic Index)
 ├── Rich searchable content (descriptions + code context)
 └── Time-ranked results (recency + relevance scoring)
 
-Layer 2: Filesystem (Backup Storage)
+Layer 2: Undo Space (Delta Storage)
 ├── .sop/undo/transactions/<txnID>/
-│   ├── backups/ (full file copies)
 │   ├── metadata.json (transaction details)
-│   └── checksums.json (SHA256 hashes)
-└── Fast, reliable restore operations
+│   ├── deltas/ (compact file diff payloads)
+│   └── checksums.json (pre/post content hashes)
+└── Efficient rollback via inverse patches
 
 Layer 3: Index (Fast Lookups)
 └── .sop/undo/index.json
@@ -54,6 +54,8 @@ Layer 3: Index (Fast Lookups)
     ├── Transaction ID to path mapping
     └── Quick access without full KB scan
 ```
+
+The current implementation stores the change delta in the undo space instead of keeping a backup folder with full file copies over time. This greatly reduces disk usage while preserving enough information to replay or reverse each workflow change.
 
 ### Multi-Dimensional Indexing
 
@@ -125,9 +127,9 @@ Path 3 (Type):     "workflow_type/security_enhancement" → txn_item
 // 1. Begin Transaction
 func BeginTransaction(workingDir, description string) (TransactionID, error) {
     txnID := generateTransactionID()
-    backupDir := fmt.Sprintf(".sop/undo/transactions/%s/backups", txnID)
-    os.MkdirAll(backupDir, 0755)
-    
+    deltaDir := fmt.Sprintf(".sop/undo/transactions/%s/deltas", txnID)
+    os.MkdirAll(deltaDir, 0755)
+
     metadata := TransactionMetadata{
         ID:          txnID,
         Timestamp:   time.Now(),
@@ -136,68 +138,66 @@ func BeginTransaction(workingDir, description string) (TransactionID, error) {
         Status:      "in_progress",
         Files:       []FileModification{},
     }
-    
+
     saveMetadata(txnID, metadata)
     return txnID, nil
 }
 
-// 2. Record File Modifications
-func BackupAndModify(txnID, filePath string, patch Patch) error {
-    // Backup original file
-    originalContent, err := os.ReadFile(filePath)
-    if err != nil && !os.IsNotExist(err) {
+// 2. Record File Modifications as Deltas
+func RecordDelta(txnID, filePath string, before, after []byte, patch Patch) error {
+    beforeHash := sha256.Sum256(before)
+    afterHash := sha256.Sum256(after)
+
+    deltaPath := fmt.Sprintf(".sop/undo/transactions/%s/deltas/%s.json",
+        txnID, sanitizeFilePath(filePath))
+    os.MkdirAll(filepath.Dir(deltaPath), 0755)
+
+    payload := DeltaPayload{
+        Path:         filePath,
+        BeforeHash:   hex.EncodeToString(beforeHash[:]),
+        AfterHash:    hex.EncodeToString(afterHash[:]),
+        Patch:        patch,
+        ReversePatch: patch.Reverse(),
+    }
+
+    if err := os.WriteFile(deltaPath, mustMarshalJSON(payload), 0644); err != nil {
         return err
     }
-    
-    backupPath := fmt.Sprintf(".sop/undo/transactions/%s/backups/%s", 
-        txnID, sanitizeFilePath(filePath))
-    os.MkdirAll(filepath.Dir(backupPath), 0755)
-    os.WriteFile(backupPath, originalContent, 0644)
-    
-    // Calculate checksum
-    checksum := sha256.Sum256(originalContent)
-    saveChecksum(txnID, filePath, checksum)
-    
-    // Apply patch
+
+    // Apply patch to working tree
     if err := patch.Apply(filePath); err != nil {
         return err
     }
-    
-    // Record modification
-    recordFileModification(txnID, filePath, patch.Stats())
+
+    recordFileModification(txnID, filePath, payload)
     return nil
 }
 
 // 3. Commit Transaction
 func CommitTransaction(txnID string, success bool) error {
     metadata := loadMetadata(txnID)
-    
+
     if success {
         metadata.Status = "completed"
-        
-        // Extract code artifacts via AST
+
         artifacts, err := extractCodeArtifacts(metadata.Files)
         if err != nil {
             log.Warn("Failed to extract code artifacts", "error", err)
         }
         metadata.CodeArtifacts = artifacts
-        
-        // Store in KB with multiple category paths
+
         if err := storeInKnowledgeBase(metadata); err != nil {
             return err
         }
-        
-        // Update index
+
         updateIndex(txnID, metadata)
     } else {
         metadata.Status = "rolled_back"
-        
-        // Auto-rollback: restore all files
         if err := rollbackTransaction(txnID); err != nil {
             return err
         }
     }
-    
+
     saveMetadata(txnID, metadata)
     return nil
 }
@@ -212,37 +212,41 @@ type TransactionMetadata struct {
     WorkflowType    string    `json:"workflow_type"`    // debugging, testing, refactoring, etc.
     Description     string    `json:"description"`
     Status          string    `json:"status"`           // in_progress, completed, rolled_back
-    
-    // Triggering information
+
     TriggeredBy     string    `json:"triggered_by"`     // user, automated
     UserName        string    `json:"user_name"`
-    
-    // Code artifacts extracted via AST
+
     CodeArtifacts   []CodeArtifact `json:"code_artifacts"`
-    
-    // File changes
     Files           []FileModification `json:"files"`
-    
-    // Categorization
+
     Tags            []string          `json:"tags"`
     Component       string            `json:"component"`        // e.g., "Authentication System"
     SubComponent    string            `json:"sub_component"`    // e.g., "Middleware"
 }
 
 type CodeArtifact struct {
-    Namespace  string   `json:"namespace"`   // e.g., "github.com/myapp/parser"
-    Package    string   `json:"package"`     // e.g., "tokenizer"
-    File       string   `json:"file"`        // relative path
-    Functions  []string `json:"functions"`   // function names
-    Types      []string `json:"types"`       // struct/class/interface names
+    Namespace  string   `json:"namespace"`
+    Package    string   `json:"package"`
+    File       string   `json:"file"`
+    Functions  []string `json:"functions"`
+    Types      []string `json:"types"`
 }
 
 type FileModification struct {
-    Path          string `json:"path"`
-    BackupPath    string `json:"backup_path"`
-    Checksum      string `json:"checksum"`      // SHA256 of original
-    LinesAdded    int    `json:"lines_added"`
-    LinesRemoved  int    `json:"lines_removed"`
+    Path           string `json:"path"`
+    DeltaPath      string `json:"delta_path"`
+    BeforeHash     string `json:"before_hash"`
+    AfterHash      string `json:"after_hash"`
+    LinesAdded     int    `json:"lines_added"`
+    LinesRemoved   int    `json:"lines_removed"`
+}
+
+type DeltaPayload struct {
+    Path         string `json:"path"`
+    BeforeHash   string `json:"before_hash"`
+    AfterHash    string `json:"after_hash"`
+    Patch        Patch  `json:"patch"`
+    ReversePatch Patch  `json:"reverse_patch"`
 }
 ```
 
@@ -436,37 +440,26 @@ func SearchTransactions(kb *KnowledgeBase, opts SearchOptions) ([]TransactionRes
 ```go
 func RollbackTransaction(txnID string) error {
     metadata := loadMetadata(txnID)
-    
+
     if metadata.Status == "rolled_back" {
         return fmt.Errorf("transaction already rolled back")
     }
-    
-    // Restore each modified file
+
     for _, file := range metadata.Files {
-        backupPath := file.BackupPath
-        
-        // Verify backup integrity
-        backupContent, err := os.ReadFile(backupPath)
+        payload, err := readDeltaPayload(file.DeltaPath)
         if err != nil {
-            return fmt.Errorf("backup missing for %s: %w", file.Path, err)
+            return fmt.Errorf("delta missing for %s: %w", file.Path, err)
         }
-        
-        checksum := sha256.Sum256(backupContent)
-        if hex.EncodeToString(checksum[:]) != file.Checksum {
-            return fmt.Errorf("backup corrupted for %s", file.Path)
-        }
-        
-        // Restore file
-        if err := os.WriteFile(file.Path, backupContent, 0644); err != nil {
-            return fmt.Errorf("failed to restore %s: %w", file.Path, err)
+
+        if err := payload.ReversePatch.Apply(file.Path); err != nil {
+            return fmt.Errorf("failed to reverse %s: %w", file.Path, err)
         }
     }
-    
-    // Update status
+
     metadata.Status = "rolled_back"
     metadata.RolledBackAt = time.Now()
     saveMetadata(txnID, metadata)
-    
+
     return nil
 }
 ```
@@ -476,9 +469,8 @@ func RollbackTransaction(txnID string) error {
 ```go
 func RestoreFiles(txnID string, filePaths []string) error {
     metadata := loadMetadata(txnID)
-    
+
     for _, targetPath := range filePaths {
-        // Find file in transaction
         var filemod *FileModification
         for _, f := range metadata.Files {
             if f.Path == targetPath {
@@ -486,22 +478,21 @@ func RestoreFiles(txnID string, filePaths []string) error {
                 break
             }
         }
-        
+
         if filemod == nil {
             return fmt.Errorf("file %s not part of transaction", targetPath)
         }
-        
-        // Restore from backup
-        backupContent, err := os.ReadFile(filemod.BackupPath)
+
+        payload, err := readDeltaPayload(filemod.DeltaPath)
         if err != nil {
             return err
         }
-        
-        if err := os.WriteFile(targetPath, backupContent, 0644); err != nil {
+
+        if err := payload.ReversePatch.Apply(targetPath); err != nil {
             return err
         }
     }
-    
+
     return nil
 }
 ```
@@ -511,21 +502,21 @@ func RestoreFiles(txnID string, filePaths []string) error {
 ```go
 func PreviewRestore(txnID string) (RestorePreview, error) {
     metadata := loadMetadata(txnID)
-    
+
     preview := RestorePreview{
         TransactionID: txnID,
         Description:   metadata.Description,
         Files:         []FilePreview{},
     }
-    
+
     for _, file := range metadata.Files {
         preview.Files = append(preview.Files, FilePreview{
             Path:         file.Path,
-            LinesAdded:   file.LinesRemoved,  // Reversed
-            LinesRemoved: file.LinesAdded,    // Reversed
+            LinesAdded:   file.LinesRemoved,
+            LinesRemoved: file.LinesAdded,
         })
     }
-    
+
     return preview, nil
 }
 
@@ -538,15 +529,8 @@ type RestorePreview struct {
 
 type FilePreview struct {
     Path         string
-    LinesAdded   int  // Will be added when restoring
-    LinesRemoved int  // Will be removed when restoring
-}
-```
-
-## Integration with Workflows
-
-### Automatic Transaction Wrapping
-
+    LinesAdded   int
+    LinesRemoved int
 Workflows automatically wrap their execution in undo transactions:
 
 ```go
@@ -602,14 +586,16 @@ func ApplyPatch(ctx context.Context, filePath string, patch Patch) error {
 
 Per transaction:
 - Metadata: ~2-5 KB (JSON)
-- File backups: Actual file sizes
-- Checksums: 32 bytes per file
+- Delta payloads: Size of the actual patch, usually much smaller than the full file
+- Checksums: 64 bytes per file (before/after hash)
 - KB index entries: ~1 KB per transaction
 
-**Example**: A workflow modifying 3 files (average 10 KB each):
-- Total: ~35-40 KB per transaction
-- 100 transactions: ~3.5-4 MB
-- 1000 transactions: ~35-40 MB
+**Example**: A workflow modifying 3 files with small targeted edits:
+- Total: ~10-30 KB of delta payloads per transaction
+- 100 transactions: ~1-3 MB
+- 1000 transactions: ~10-30 MB
+
+This is substantially smaller than storing full file copies for every workflow run, especially for large files or long-lived histories.
 
 ### Retention and Cleanup
 
@@ -655,8 +641,8 @@ func isMilestone(txn TransactionMetadata) bool {
 
 1. **Index Caching**: Keep frequently accessed transactions in memory
 2. **Lazy Loading**: Load metadata only when needed
-3. **Batch Operations**: Group multiple file operations in single transaction
-4. **Compressed Backups**: Compress older transaction backups
+3. **Batch Operations**: Group multiple file operations in a single transaction
+4. **Delta Compression**: Compress older delta payloads when storage pressure grows
 5. **Date Index**: Fast date-based lookups without KB scan
 
 ```go
@@ -919,8 +905,9 @@ The Workflow Undo System provides:
 2. **Multi-dimensional indexing** - Date, code artifacts, workflow types
 3. **Semantic search** - Natural language queries with time ranking
 4. **AST-based categorization** - Automatic component extraction
-5. **Fast rollback** - File-based snapshots with integrity checks
-6. **Rich context** - Know why changes were made, not just what
-7. **Multi-language support** - Works across Go, Python, Java, Rust, JS/TS, C#
+5. **Delta-based rollback** - Replays inverse patches from undo space without storing full file copies
+6. **Low disk overhead** - Compact diffs instead of backup folders that grow with every workflow run
+7. **Rich context** - Know why changes were made, not just what
+8. **Multi-language support** - Works across Go, Python, Java, Rust, JS/TS, C#
 
 The system integrates seamlessly with workflows, providing confidence to experiment while maintaining a complete, searchable history of code evolution.

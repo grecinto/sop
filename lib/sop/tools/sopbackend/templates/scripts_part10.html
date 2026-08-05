@@ -798,6 +798,11 @@
                     const text = await response.text().catch(() => '');
                     if (text) message = text;
                 }
+                const normalized = (message || '').toLowerCase();
+                const authRelated = normalized.includes('authorization') || normalized.includes('unauthorized') || normalized.includes('forbidden') || normalized.includes('auth');
+                if (authRelated) {
+                    message = 'Local daemon authentication could not be established. Confirm the local daemon is running and that the current HQ URL is available and you sign in to HQ before provisioning.';
+                }
                 throw new Error(message);
             }
             const result = await response.json().catch(() => ({}));
@@ -883,7 +888,15 @@
              }
         }
         
-        // Ensure UI state matches Defaults (Clustered)
+        // Ensure UI state matches Defaults (Standalone)
+        const defaultDbType = document.getElementById('setup-db-type');
+        if (defaultDbType && !defaultDbType.value) {
+            defaultDbType.value = 'standalone';
+        }
+        const defaultSysType = document.getElementById('setup-sys-type');
+        if (defaultSysType && !defaultSysType.value) {
+            defaultSysType.value = 'standalone';
+        }
         toggleSetupConnectionField('db');
         toggleSetupConnectionField('sys');
         
@@ -1220,7 +1233,7 @@
              </p>`;
         }
 
-        document.getElementById('setup-sys-stores-folders').value = '';
+        document.getElementById('setup-sys-stores-folders').value = './.sop-data/' + (typeof SYSTEM_DB_NAME === 'string' && SYSTEM_DB_NAME.trim() ? SYSTEM_DB_NAME : 'system');
         document.getElementById('setup-sys-registry-hash-mod').value = '';
         document.getElementById('setup-db-registry-hash-mod').value = '';
         

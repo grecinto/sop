@@ -134,10 +134,232 @@ var defaultDaemonAuthConfig = DaemonAuthConfig{
 }
 
 // DaemonAuthHandler handles daemon authentication
+type daemonSessionStoreBackend interface {
+	CreateSession(ctx context.Context, username, role string) (string, string, error)
+	Refresh(ctx context.Context, refreshToken string) (string, string, error)
+	ValidateToken(ctx context.Context, token string) (*sopbackend.UserRecord, error)
+	ValidateTokenWithoutAccountCheck(ctx context.Context, token string) (*sopbackend.UserRecord, error)
+}
+
+type inMemoryDaemonSessionStore struct {
+	mu           sync.RWMutex
+	ttl          time.Duration
+	refreshTTL   time.Duration
+	sessions     map[string]daemonSessionRecord
+}
+
+type daemonSessionRecord struct {
+	AccessToken     string
+	RefreshToken    string
+	Username        string
+	Role            string
+	ExpiresAt       time.Time
+	RefreshExpiresAt time.Time
+}
+
+func newInMemoryDaemonSessionStore(ttl, refreshTTL time.Duration) *inMemoryDaemonSessionStore {
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	if refreshTTL <= 0 {
+		refreshTTL = 7 * 24 * time.Hour
+	}
+	return &inMemoryDaemonSessionStore{
+		ttl:        ttl,
+		refreshTTL: refreshTTL,
+		sessions:   make(map[string]daemonSessionRecord),
+	}
+}
+
+func (s *inMemoryDaemonSessionStore) newToken() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func (s *inMemoryDaemonSessionStore) tokenSigningSecret() []byte {
+	if secret := strings.TrimSpace(os.Getenv("SOP_SESSION_SECRET")); secret != "" {
+		return []byte(secret)
+	}
+	return []byte("sop-session-default-secret")
+}
+
+func (s *inMemoryDaemonSessionStore) base64urlEncode(data []byte) string {
+	return strings.TrimRight(base64.RawURLEncoding.EncodeToString(data), "=")
+}
+
+func (s *inMemoryDaemonSessionStore) base64urlDecode(data string) ([]byte, error) {
+	if missing := len(data) % 4; missing != 0 {
+		data += strings.Repeat("=", 4-missing)
+	}
+	return base64.URLEncoding.DecodeString(data)
+}
+
+type daemonSignedAccessClaims struct {
+	Subject   string `json:"sub"`
+	Role      string `json:"role"`
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
+	TokenID   string `json:"jti"`
+}
+
+func (s *inMemoryDaemonSessionStore) signAccessToken(username, role string, issuedAt, expiresAt time.Time, tokenID string) (string, error) {
+	header := s.base64urlEncode([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	claims := daemonSignedAccessClaims{
+		Subject:   username,
+		Role:      role,
+		IssuedAt:  issuedAt.Unix(),
+		ExpiresAt: expiresAt.Unix(),
+		TokenID:   tokenID,
+	}
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	payload := s.base64urlEncode(claimsJSON)
+	input := header + "." + payload
+	mac := hmac.New(sha256.New, s.tokenSigningSecret())
+	_, _ = mac.Write([]byte(input))
+	signature := s.base64urlEncode(mac.Sum(nil))
+	return input + "." + signature, nil
+}
+
+func (s *inMemoryDaemonSessionStore) parseAndVerifySignedAccessToken(token string) (*daemonSignedAccessClaims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid signed token")
+	}
+	header, payload, signature := parts[0], parts[1], parts[2]
+	mac := hmac.New(sha256.New, s.tokenSigningSecret())
+	_, _ = mac.Write([]byte(header + "." + payload))
+	expected := s.base64urlEncode(mac.Sum(nil))
+	if !hmac.Equal([]byte(signature), []byte(expected)) {
+		return nil, fmt.Errorf("invalid signature")
+	}
+	claimsJSON, err := s.base64urlDecode(payload)
+	if err != nil {
+		return nil, fmt.Errorf("invalid payload")
+	}
+	var claims daemonSignedAccessClaims
+	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
+		return nil, fmt.Errorf("invalid claims")
+	}
+	if claims.Subject == "" || claims.Role == "" || claims.TokenID == "" {
+		return nil, fmt.Errorf("invalid claims")
+	}
+	if time.Now().UTC().Unix() >= claims.ExpiresAt {
+		return nil, fmt.Errorf("expired session")
+	}
+	return &claims, nil
+}
+
+func (s *inMemoryDaemonSessionStore) CreateSession(ctx context.Context, username, role string) (string, string, error) {
+	now := time.Now().UTC()
+	tokenID, err := s.newToken()
+	if err != nil {
+		return "", "", err
+	}
+	accessToken, err := s.signAccessToken(username, role, now, now.Add(s.ttl), tokenID)
+	if err != nil {
+		return "", "", err
+	}
+	refreshToken, err := s.newToken()
+	if err != nil {
+		return "", "", err
+	}
+	record := daemonSessionRecord{
+		AccessToken:     accessToken,
+		RefreshToken:    refreshToken,
+		Username:        username,
+		Role:            role,
+		ExpiresAt:       now.Add(s.ttl),
+		RefreshExpiresAt: now.Add(s.refreshTTL),
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[accessToken] = record
+	s.sessions[refreshToken] = record
+	return accessToken, refreshToken, nil
+}
+
+func (s *inMemoryDaemonSessionStore) Refresh(ctx context.Context, refreshToken string) (string, string, error) {
+	s.mu.RLock()
+	record, ok := s.sessions[refreshToken]
+	s.mu.RUnlock()
+	if !ok {
+		return "", "", fmt.Errorf("invalid refresh token")
+	}
+	if time.Now().UTC().After(record.RefreshExpiresAt) {
+		s.mu.Lock()
+		delete(s.sessions, record.AccessToken)
+		delete(s.sessions, record.RefreshToken)
+		s.mu.Unlock()
+		return "", "", fmt.Errorf("expired refresh token")
+	}
+
+	now := time.Now().UTC()
+	accessToken, err := s.signAccessToken(record.Username, record.Role, now, record.ExpiresAt, "")
+	if err != nil {
+		return "", "", err
+	}
+	newRefreshToken, err := s.newToken()
+	if err != nil {
+		return "", "", err
+	}
+	newRecord := daemonSessionRecord{
+		AccessToken:     accessToken,
+		RefreshToken:    newRefreshToken,
+		Username:        record.Username,
+		Role:            record.Role,
+		ExpiresAt:       now.Add(s.ttl),
+		RefreshExpiresAt: record.RefreshExpiresAt,
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, record.AccessToken)
+	delete(s.sessions, record.RefreshToken)
+	s.sessions[accessToken] = newRecord
+	s.sessions[newRefreshToken] = newRecord
+	return accessToken, newRefreshToken, nil
+}
+
+func (s *inMemoryDaemonSessionStore) validateToken(ctx context.Context, token string, requireActiveAccount bool) (*sopbackend.UserRecord, error) {
+	if _, err := s.parseAndVerifySignedAccessToken(token); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	record, ok := s.sessions[token]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("invalid session")
+	}
+	if time.Now().UTC().After(record.ExpiresAt) {
+		s.mu.Lock()
+		delete(s.sessions, record.AccessToken)
+		delete(s.sessions, record.RefreshToken)
+		s.mu.Unlock()
+		return nil, fmt.Errorf("invalid session")
+	}
+	if requireActiveAccount {
+		return &sopbackend.UserRecord{Username: record.Username, Role: record.Role}, nil
+	}
+	return &sopbackend.UserRecord{Username: record.Username, Role: record.Role}, nil
+}
+
+func (s *inMemoryDaemonSessionStore) ValidateToken(ctx context.Context, token string) (*sopbackend.UserRecord, error) {
+	return s.validateToken(ctx, token, true)
+}
+
+func (s *inMemoryDaemonSessionStore) ValidateTokenWithoutAccountCheck(ctx context.Context, token string) (*sopbackend.UserRecord, error) {
+	return s.validateToken(ctx, token, false)
+}
+
 type DaemonAuthHandler struct {
 	bootstrapSecret string
 	bootstrapPath   string
-	sessionStore    *sopbackend.SessionStore
+	sessionStore    daemonSessionStoreBackend
 	config          DaemonAuthConfig
 	hqSigningSecret string
 	syncQueue       *SyncQueue
@@ -419,10 +641,9 @@ func NewDaemonAuthHandler(config DaemonAuthConfig) (*DaemonAuthHandler, error) {
 	}
 	bootstrapPath := filepath.Join(configDir, "daemon.bootstrap")
 
-	// Create session store with configured TTLs
-	// Note: sopbackend.NewSessionStore only takes access TTL, need to customize
-	sessionStore := sopbackend.NewSessionStore(config.AccessTokenTTL)
-	// TODO: Set refreshTTL once sopbackend exports it or provides setter
+	// Daemon bootstrap/authentication uses an in-memory session store so the UI handshake
+	// does not require a system database or persistent store creation.
+	sessionStore := newInMemoryDaemonSessionStore(config.AccessTokenTTL, config.RefreshTokenTTL)
 
 	// Initialize poll client if HQ is configured via environment variable
 	// Note: If HQ URL comes from UI session instead, poll client will be nil
@@ -1104,8 +1325,8 @@ func (h *DaemonAuthHandler) HandleBootstrap(w http.ResponseWriter, r *http.Reque
 	// Create session for the UI client
 	accessToken, refreshToken, err := h.sessionStore.CreateSession(r.Context(), subject, role)
 	if err != nil {
-		log.Printf("Failed to create session: %v", err)
-		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create session"})
+		log.Printf("Failed to create daemon session for subject=%q role=%q: %v", subject, role, err)
+		respondJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to create session: %v", err)})
 		return
 	}
 

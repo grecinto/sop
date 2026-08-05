@@ -16,6 +16,28 @@ import (
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
+func TestHandleBootstrapUsesInMemorySessionsWithoutSystemDB(t *testing.T) {
+	oldCfg := sopbackend.GetConfig()
+	sopbackend.SetConfig(sopbackend.Config{})
+	t.Cleanup(func() {
+		sopbackend.SetConfig(oldCfg)
+	})
+
+	h := &DaemonAuthHandler{
+		bootstrapSecret: "shared-secret",
+		sessionStore:    newInMemoryDaemonSessionStore(time.Minute, time.Hour),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/auth", strings.NewReader(`{"bootstrap_secret":"shared-secret"}`))
+	rr := httptest.NewRecorder()
+
+	h.HandleBootstrap(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rr.Code, rr.Body.String())
+	}
+}
+
 func TestDaemonRequireAuthPropagatesUserRoleToContext(t *testing.T) {
 	withIsolatedSystemDB(t)
 

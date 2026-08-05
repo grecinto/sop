@@ -258,6 +258,28 @@ func TestSpaceDocumentRootNodeStaysVisibleAsBuiltInDocumentView(t *testing.T) {
 	}
 }
 
+func TestSpaceDocumentsRootHelperIsDefinedBeforeTreeRender(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+
+	helperDef := strings.Index(scriptsContent, "window.showSpaceDocumentsRootIfNeeded = function(container, spaceName) {")
+	renderTreeDef := strings.Index(scriptsContent, "function renderTreeNodes(catList, container, depth=0) {")
+	rootRenderCall := strings.Index(scriptsContent, "if (depth === 0) {")
+	if helperDef == -1 || renderTreeDef == -1 || rootRenderCall == -1 {
+		t.Fatalf("expected document root helper and tree render call in %s", scriptsPath)
+	}
+	if helperDef > renderTreeDef {
+		t.Fatalf("expected document root helper to be defined before renderTreeNodes in %s", scriptsPath)
+	}
+	if helperDef > rootRenderCall {
+		t.Fatalf("expected document root helper to be defined before the tree render guard in %s", scriptsPath)
+	}
+}
+
 func TestRenderTreeNodesOnlyAddsDocumentsRootAtTopLevel(t *testing.T) {
 	scriptsPath := templatePath("scripts_part01.html")
 	scriptsData, err := os.ReadFile(scriptsPath)
@@ -281,6 +303,47 @@ func TestSpaceItemScriptsExposeDocumentTreeHelpers(t *testing.T) {
 	for _, token := range []string{"renderDocumentTreeNode", "loadDocumentsForCategoryTree", "renderSpaceDocumentsRootNode"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected document tree helper %s in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestLocalRuntimeRequestsUseDaemonAuthClient(t *testing.T) {
+	scriptsPath := templatePath("scripts_part01.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"async function localRuntimeRequest", "window.daemonAuth.bootstrap", "Authorization = `Bearer ${bootToken}`"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected local runtime request helper to perform daemon auth bootstrap and attach the token in %s", scriptsPath)
+		}
+	}
+}
+
+func TestDaemonProvisioningSystemStoresFoldersDefaultsToSystemDataPath(t *testing.T) {
+	indexPath := templatePath("index.html")
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	indexContent := string(indexData)
+	want := `id="setup-sys-stores-folders" placeholder="/path/one, /path/two" value="./.sop-data/{{.SystemDBName}}" style="flex: 1;"`
+	if !strings.Contains(indexContent, want) {
+		t.Fatalf("expected daemon provisioning system stores field to default to the system data path in %s", indexPath)
+	}
+}
+
+func TestDaemonProvisioningErrorsExplainAuthBootstrapIssue(t *testing.T) {
+	scriptsPath := templatePath("scripts_part10.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"Local daemon authentication could not be established", "HQ URL", "sign in to HQ"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected daemon provisioning flow to explain auth bootstrap issues in %s", scriptsPath)
 		}
 	}
 }
