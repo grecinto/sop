@@ -612,7 +612,7 @@ func TestChatRuntimeWelcomeContextRequestsHQContextForHQRuntime(t *testing.T) {
 	}
 }
 
-func TestSetupProvisioningModeChooserRoutesSimpleAndAdvancedEndpoints(t *testing.T) {
+func TestSetupWizardUsesSharedSaveRouteWithoutProvisioningModeState(t *testing.T) {
 	scriptsPath := templatePath("scripts_part10.html")
 	scriptsData, err := os.ReadFile(scriptsPath)
 	if err != nil {
@@ -623,13 +623,17 @@ func TestSetupProvisioningModeChooserRoutesSimpleAndAdvancedEndpoints(t *testing
 	for _, token := range []string{
 		"function finishSetup()",
 		"submitProvisioningRequest('/api/config/save', finalPayload",
+		"function finishDaemonSystemSetup()",
 	} {
 		if !strings.Contains(scriptsContent, token) {
-			t.Fatalf("expected setup chooser routing token %q in %s", token, scriptsPath)
+			t.Fatalf("expected setup wizard routing token %q in %s", token, scriptsPath)
 		}
 	}
 
-	if strings.Index(scriptsContent, "submitProvisioningRequest('/api/config/provision/simple'") > strings.Index(scriptsContent, "submitProvisioningRequest('/api/config/save', finalPayload") {
-		t.Fatalf("expected simple setup endpoint declaration to appear before advanced save routing in %s", scriptsPath)
+	if strings.Contains(scriptsContent, "submitProvisioningRequest('/api/config/provision/simple'") {
+		t.Fatalf("expected setup wizard to stop calling the removed simple-provision endpoint in %s", scriptsPath)
+	}
+	if strings.Contains(scriptsContent, "currentProvisioningMode") {
+		t.Fatalf("expected setup wizard to stop carrying simple-vs-advanced provisioning mode state in %s", scriptsPath)
 	}
 }

@@ -763,7 +763,7 @@
             if (intro) {
                 if (!intro.dataset.defaultText) intro.dataset.defaultText = intro.textContent;
                 intro.textContent = daemonProvisioningWizardActive
-                    ? 'Configure the daemon System DB. Advanced mode exposes storage topology controls such as clustered mode, Redis, stores folders, and erasure coding.'
+                    ? 'Configure the daemon System DB, including clustered mode, Redis, stores folders, and erasure coding when needed.'
                     : intro.dataset.defaultText;
             }
         }
@@ -816,13 +816,6 @@
             console.error(err);
             showAlert(err && err.message ? err.message : String(err));
         }
-    }
-
-    function finishDaemonSimpleSetup() {
-        const port = parseInt(document.getElementById('setup-port').value) || 9090;
-        submitDaemonProvisionRequest('/api/daemon/provision/simple', {
-            port: port
-        });
     }
 
     function finishDaemonSystemSetup() {
@@ -878,8 +871,6 @@
         configureDaemonProvisioningWizard(isLocalRuntime);
         openUIModal('setup-wizard');
         skipUserDbProvisioning = false;
-        const preferredMode = decision && decision.mode ? String(decision.mode).trim().toLowerCase() : 'simple';
-        applyProvisioningMode(preferredMode === 'advanced' ? 'advanced' : 'simple');
         currentWizardStep = isLocalRuntime ? 2 : 1;
         
         // Initialize User DB EC Container if empty
@@ -913,10 +904,8 @@
 
             const nextBtn = document.getElementById('wizard-next');
             if (nextBtn) {
-                nextBtn.textContent = currentProvisioningMode === 'simple' ? 'Proceed' : 'Provision System DB';
-                nextBtn.title = currentProvisioningMode === 'simple'
-                    ? 'Click "Proceed" to run the daemon quick provision flow.'
-                    : 'Click "Provision System DB" to create the configured daemon System DB.';
+                nextBtn.textContent = 'Provision System DB';
+                nextBtn.title = 'Click "Provision System DB" to create the configured daemon System DB.';
                 nextBtn.onclick = wizardNext;
             }
 
@@ -973,19 +962,6 @@
 
         // Populate Summary on Step 3
         if (currentWizardStep === 3) {
-            if (currentProvisioningMode === 'simple') {
-                const regPath = document.getElementById('setup-reg-path').value;
-                const port = document.getElementById('setup-port').value;
-                document.getElementById('setup-summary').innerHTML = `
-                    <strong>Provisioning Mode:</strong> Simple setup<br>
-                    <strong>System Database:</strong> ${regPath || 'Default local path'}<br>
-                    <strong>Port:</strong> ${port}<br>
-                    <strong>User Database:</strong> Not created during simple setup<br>
-                    <strong>Configuration:</strong> Local defaults with shared first-boot provisioning<br>
-                `;
-                return;
-            }
-
             // User DB Config (Step 1)
             const dbName = document.getElementById('setup-db-name').value;
             const dbPath = document.getElementById('setup-db-path').value;
@@ -1104,10 +1080,6 @@
 
     function wizardNext() {
         if (daemonProvisioningWizardActive) {
-            if (currentProvisioningMode === 'simple') {
-                finishDaemonSimpleSetup();
-                return;
-            }
             finishDaemonSystemSetup();
             return;
         }
@@ -1115,14 +1087,6 @@
         if (currentWizardStep < 3) {
             // Validation
             if (currentWizardStep === 1) { // Was 2: User DB
-                if (currentProvisioningMode === 'simple') {
-                    skipUserDbProvisioning = true;
-                    populateStep1Defaults();
-                    currentWizardStep++;
-                    updateWizardStep();
-                    return;
-                }
-
                 skipUserDbProvisioning = false;
 
                 // Unified Validation
@@ -1132,12 +1096,6 @@
                 populateStep1Defaults();
 
             } else if (currentWizardStep === 2) { // Was 1: System Config
-                 if (currentProvisioningMode === 'simple') {
-                     currentWizardStep++;
-                     updateWizardStep();
-                     return;
-                 }
-
                  const manualEntToggle = document.getElementById('setup-sys-use-manual-enterprise');
                  const isShared = manualEntToggle && manualEntToggle.checked;
                  const path = document.getElementById('setup-reg-path').value;
@@ -1505,7 +1463,7 @@
              }
         }
 
-        // 1. Determine User DB Settings (Simple vs Advanced)
+        // 1. Determine User DB settings from the visible storage controls.
         const dbAdvToggle = document.getElementById('setup-db-advanced-toggle');
         const isDbAdvanced = dbAdvToggle && dbAdvToggle.checked;
         
@@ -1515,15 +1473,15 @@
         
         if (isDbAdvanced) {
              finalDbStoresFoldersRaw = document.getElementById('setup-db-stores-folders').value.trim();
-             // In advanced mode, the single "dbPath" is ignored or derived from first store? 
-             // To pass validation, we ensure dbPath reflects the first store
+             // When expanded storage controls are enabled, reflect the first
+             // store folder back into dbPath so downstream validation sees a path.
              if (!finalDbStoresFoldersRaw) return showAlert("In Advanced Mode, at least one Store Folder is required for User DB.");
              dbPath = finalDbStoresFoldersRaw.split(/[\n,]+/).map(s=>s.trim())[0];
              
              finalDbHashMod = document.getElementById('setup-db-registry-hash-mod').value;
              finalDbErasureConfigs = collectEcConfigs('setup-db-ec-container') || [];
         } else {
-             // Simple Mode: Use the explicit simple input
+             // Otherwise, use the direct database path field.
              dbPath = document.getElementById('setup-db-path').value.trim();
              if (!dbPath) return showAlert("Database Path is required");
              // Reset advanced fields
@@ -1538,7 +1496,7 @@
         const populateMedical = document.getElementById('setup-populate-medical') ? document.getElementById('setup-populate-medical').checked : false;
 
 
-        // 2. Determine System DB Settings (Simple vs Advanced)
+        // 2. Determine System DB settings from the visible storage controls.
         const port = parseInt(document.getElementById('setup-port').value);
         const bProviderValue = document.getElementById('setup-brain-provider') ? document.getElementById('setup-brain-provider').value : "";
         const bParts = splitProviderValue(bProviderValue);
@@ -1570,8 +1528,8 @@
             sysStoresFoldersRaw = document.getElementById('setup-sys-stores-folders').value.trim();
             if (!sysStoresFoldersRaw) return showAlert("In Advanced Mode, at least one Store Folder is required for System DB.");
             
-            // In Advanced Mode, we send specific stores folders. Sending registry_path as well causes a conflict in the backend validation.
-            // So we set regPath to empty string for the payload.
+            // When specific store folders are supplied, omit registry_path in
+            // the payload to avoid conflicting backend path validation.
             regPath = "";
             // Use the first folder for client-side collision validation
             validationRegPath = sysStoresFoldersRaw.split(/[\n,]+/).map(s=>s.trim())[0];
@@ -1580,7 +1538,7 @@
             const manualConfigs = collectEcConfigs('setup-sys-ec-container');
             if (manualConfigs) sysErasureConfigs = manualConfigs;
         } else {
-            // Simple Mode: Use explicit simple input
+            // Otherwise, use the direct system database path field.
             regPath = document.getElementById('setup-reg-path').value.trim();
             if (!regPath) return showAlert("System Database Path is required");
             validationRegPath = regPath;

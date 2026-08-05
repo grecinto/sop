@@ -689,27 +689,6 @@
     // Setup Wizard Logic
     let currentWizardStep = 1;
 
-    function applyProvisioningMode(mode) {
-        currentProvisioningMode = mode === 'advanced' ? 'advanced' : 'simple';
-
-        const dbAdvancedToggle = document.getElementById('setup-db-advanced-toggle');
-        const sysAdvancedToggle = document.getElementById('setup-sys-advanced-toggle');
-
-        const shouldEnableAdvanced = currentProvisioningMode === 'advanced';
-        if (dbAdvancedToggle) {
-            dbAdvancedToggle.checked = shouldEnableAdvanced;
-            toggleSetupAdvancedOptions('db');
-        }
-        if (sysAdvancedToggle) {
-            sysAdvancedToggle.checked = shouldEnableAdvanced;
-            toggleSetupAdvancedOptions('sys');
-        }
-    }
-
-    function selectProvisioningMode(mode) {
-        applyProvisioningMode(mode);
-    }
-
     function toggleSetupConnectionField(mode) {
         // mode: 'db' or 'sys'
         const typeId = mode === 'sys' ? 'setup-sys-type' : 'setup-db-type';

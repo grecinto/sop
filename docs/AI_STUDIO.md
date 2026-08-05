@@ -559,10 +559,9 @@ The daemon side will gain its own first-run provisioner. This is not the same pr
 
 Design direction:
 - match the Setup Wizard visual style so daemon mode feels consistent with AI Studio
-- default to `Simple` with an `Advanced` button
-- `Simple` should trigger the current daemon quick-provision behavior explicitly
-- `Advanced` should open a daemon Setup Wizard that exposes only System DB configuration controls
-- daemon advanced provisioning should only cover System DB topology concerns such as path, standalone/clustered mode, Redis URL, stores folders, registry hash mod, and erasure coding
+- do not introduce a shared Setup Wizard "setup style" chooser for daemon mode
+- daemon setup should expose only System DB configuration controls when launched from the Setup Wizard surface
+- daemon provisioning should only cover System DB topology concerns such as path, standalone/clustered mode, Redis URL, stores folders, registry hash mod, and erasure coding
 - daemon provisioning must not reuse HQ/httpserver handlers that create persistent root users, users stores, or page-3 HQ-specific settings
 
 Planned behavioral change:
@@ -591,42 +590,14 @@ Expected response shape:
     "has_config_on_disk": false,
     "has_system_db": false,
     "default_system_db_path": "/Users/me/.config/sop/system",
-    "default_port": 9090,
-    "advanced_supported": true
-}
-```
-
-`POST /api/daemon/provision/simple`
-
-Purpose:
-- perform the current daemon quick-provision behavior explicitly
-- create the daemon config if missing
-- create the default standalone System DB
-
-Expected request shape:
-
-```json
-{
-    "port": 9090
-}
-```
-
-Expected response shape:
-
-```json
-{
-    "status": "ok",
-    "config_path": "/Users/me/.config/sop/config.json",
-    "system_db_path": "/Users/me/.config/sop/system",
-    "mode": "standalone",
-    "restart_required": false
+    "default_port": 9090
 }
 ```
 
 `POST /api/daemon/provision/system`
 
 Purpose:
-- provision an advanced daemon System DB only
+- provision the daemon System DB only
 - allow the operator to configure topology details without entering HQ-only setup steps
 
 Expected request shape:
@@ -672,7 +643,7 @@ Expected response shape:
 Daemon-specific rules:
 - daemon provisioning must not create a persistent root user
 - daemon provisioning must not bootstrap the HQ/httpserver users store unless daemon later proves it requires one for local-only reasons
-- daemon advanced flow must expose only the System DB controls equivalent to Setup Wizard Page 2
+- daemon setup flow must expose only the System DB controls equivalent to Setup Wizard Page 2
 - daemon should continue to reuse the same visual style as AI Studio Setup Wizard, but not the same provisioning submit logic
 
 ---
