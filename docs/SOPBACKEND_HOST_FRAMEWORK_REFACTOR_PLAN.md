@@ -86,13 +86,13 @@ HQ already has a Setup Wizard-oriented first-boot model.
 
 The daemon currently has a simpler quick provisioner path and auto-provisions pieces when local configuration or system DB state is missing.
 
-That split is no longer ideal. First-boot provisioning should be standardized across hosts.
+That split is still undesirable from a UX perspective, but the provisioning implementation should not be standardized all the way down to shared backend semantics.
 
 ## Decision
 
-The Setup Wizard must become reusable across hosts, including daemon.
+The Setup Wizard visual language must become reusable across hosts, including daemon.
 
-That means `SetupWizard` is no longer only an HQ concern. It becomes the standard provisioning framework for any host that starts without a valid environment.
+That does not mean daemon should reuse HQ/httpserver provisioning handlers. Daemon will have its own provisioning implementation and request contracts, while matching the same general style and mode chooser UX.
 
 ## Required model
 
@@ -108,10 +108,11 @@ For all host kinds, the first-boot provisioner style should be the same:
 - allow the user to switch to `Advanced`
 
 This means HQ, daemon, and future Corporate server should not diverge on first-boot provisioning style. They may differ internally in runtime defaults and host capabilities, but the user-facing entry experience should be consistent.
+They may also differ in provisioning payloads, backend side effects, and post-provision initialization.
 
 ### Simple setup
 
-Simple setup should reuse the current daemon quick provisioner behavior:
+Daemon simple setup should reuse the current daemon quick provisioner behavior:
 
 - fast first boot
 - minimal required inputs
@@ -125,20 +126,28 @@ This is the path for:
 - low-friction developer setup
 - unattended or near-unattended local setup
 
+For HQ/httpserver, simple setup remains the existing shared Setup Wizard path backed by `sopbackend` config-save semantics.
+
 ### Advanced setup
 
-Advanced setup should reuse the Setup Wizard flow:
+Advanced setup should be host-specific behind a shared visual shell:
 
-- explicit path/database selection
-- erasure coding and storage layout choices where relevant
-- environment-specific auth/bootstrap configuration
-- more guided provisioning and validation
+- HQ/httpserver advanced setup keeps the full Setup Wizard flow
+- daemon advanced setup exposes only System DB provisioning controls
+- daemon advanced setup should only provision a more advanced System DB shape:
+	- explicit system DB path
+	- standalone vs clustered mode
+	- Redis URL when clustered
+	- stores folders
+	- registry hash mod
+	- erasure coding / partitioning
+- daemon advanced setup must not include HQ-only steps such as root-password seeding, users-store bootstrap, or page-3 LLM/embedder setup
 
 This is the path for:
 
 - HQ deployment
 - future Corporate server deployment
-- advanced daemon setup when the operator needs full control
+- advanced daemon setup when the operator needs explicit control over local System DB topology
 
 ## Standard trigger
 
@@ -155,20 +164,72 @@ When this happens, the host should enter a common provisioning decision path:
 - complete provisioning
 - continue normal runtime bootstrap
 
-The shared runtime should default that choice to `Simple` for all host kinds, while always keeping `Advanced` available from the same entry surface.
+Each host should default that choice to `Simple`, while always keeping `Advanced` available from the same entry surface.
+
+## Daemon-specific implementation contract
+
+The daemon must implement its own provisioning contract under `cmd/sop-daemon`.
+
+Required daemon endpoints:
+
+1. `GET /api/daemon/provision/status`
+2. `POST /api/daemon/provision/simple`
+3. `POST /api/daemon/provision/system`
+
+Expected daemon provisioning states:
+
+- `unprovisioned`: no valid daemon config exists yet
+- `partial`: config exists but required System DB/runtime state is incomplete
+- `ready`: daemon config and System DB are present and runtime can continue normal bootstrap
+
+`Simple` provisioning contract:
+
+- explicit user-triggered replacement for today's daemon quick-provision startup behavior
+- create daemon config if missing
+- create default standalone System DB
+- use local defaults
+- avoid HQ/httpserver concepts such as root-user creation, users-store bootstrap, or page-3 configuration
+
+`Advanced` provisioning contract:
+
+- provision only the daemon System DB
+- allow:
+	- path
+	- standalone vs clustered mode
+	- Redis URL
+	- stores folders
+	- registry hash mod
+	- erasure coding / partitioning
+- do not expose user DB creation
+- do not expose HQ/httpserver-specific account bootstrap
+
+Daemon UI contract:
+
+- reuse the Setup Wizard design language only
+- default to `Simple`
+- expose an `Advanced` button
+- in advanced mode, show only the System DB page equivalent
+- do not reuse HQ provisioning handlers or payload contracts from `sopbackend`
+
+Lifecycle constraint:
+
+- daemon startup should no longer auto-create missing `config.json`
+- daemon startup should no longer silently auto-provision a missing System DB
+- daemon should stay alive in an unprovisioned state and wait for the UI client to trigger one of the daemon provisioning endpoints
 
 ## Refactor implication
 
-The daemon quick provisioner should not remain a standalone ad hoc path.
+The daemon quick provisioner should not remain a standalone startup side effect.
 
 Instead:
 
 - keep its behavior
-- repackage it as the `Simple` provisioning mode under the shared provisioning framework
-- let Setup Wizard infrastructure host both `Simple` and `Advanced` flows
-- keep configured system DB repair in shared runtime bootstrap rather than a daemon-only startup branch
+- move it behind explicit daemon provisioning endpoints
+- let daemon UI host both `Simple` and `Advanced` flows using daemon-only request/response contracts
+- keep HQ/httpserver provisioning in `sopbackend`
+- stop treating missing daemon config or missing daemon system DB state as something startup should auto-repair silently
 
-This provides one provisioning architecture with two operator experiences.
+This provides one design language with separate provisioning architectures for separate host responsibilities.
 
 ## Federation Direction
 

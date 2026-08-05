@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
 func TestEnsureConfigPath_CreatesDefaultConfigInUserConfigDir(t *testing.T) {
@@ -90,5 +93,61 @@ func TestShouldPrintHelpRecognizesDoubleDashH(t *testing.T) {
 	}
 	if shouldPrintHelp([]string{"--port", "9090"}) {
 		t.Fatal("expected ordinary flags to keep help disabled")
+	}
+}
+
+func TestCurrentDaemonProvisionStatusReportsUnprovisionedWhenConfigMissing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	oldConfig := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldConfig)
+	oldPath := localRuntimeConfigPath
+	defer func() { localRuntimeConfigPath = oldPath }()
+	localRuntimeConfigPath = ""
+
+	status := currentDaemonProvisionStatus()
+	if !status.Required {
+		t.Fatal("expected daemon provisioning to be required")
+	}
+	if status.State != daemonProvisionStateUnprovisioned {
+		t.Fatalf("expected unprovisioned state, got %q", status.State)
+	}
+	if status.HasConfigOnDisk {
+		t.Fatal("expected no config file on disk")
+	}
+	if !strings.HasSuffix(status.ConfigPath, filepath.Join("sop", "config.json")) {
+		t.Fatalf("expected resolved config path to end with sop/config.json, got %q", status.ConfigPath)
+	}
+	if !strings.HasSuffix(status.DefaultSystemDBPath, filepath.Join("sop", "system")) {
+		t.Fatalf("expected default system db path to end with sop/system, got %q", status.DefaultSystemDBPath)
+	}
+}
+
+func TestProvisionDaemonSimpleWritesConfigAndTransitionsToReady(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	oldConfig := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldConfig)
+	oldPath := localRuntimeConfigPath
+	defer func() { localRuntimeConfigPath = oldPath }()
+	localRuntimeConfigPath = ""
+
+	configPath, err := provisionDaemonSimple(context.Background(), daemonProvisionSimpleRequest{Port: 9090})
+	if err != nil {
+		t.Fatalf("provisionDaemonSimple() error = %v", err)
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("expected config file to exist at %s: %v", configPath, err)
+	}
+
+	status := currentDaemonProvisionStatus()
+	if status.Required {
+		t.Fatalf("expected provisioning to be complete, got %#v", status)
+	}
+	if status.State != daemonProvisionStateReady {
+		t.Fatalf("expected ready state, got %q", status.State)
+	}
+	if !status.HasSystemDB {
+		t.Fatal("expected simple provisioning to create the system db")
 	}
 }

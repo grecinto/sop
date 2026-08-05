@@ -104,18 +104,20 @@ After this override is installed:
 
 ## Provisioning Direction
 
-First-boot provisioning is moving toward a shared host-framework model in `sopbackend`.
+First-boot provisioning is now split by host semantics.
 
 The intended direction is:
 
 - HQ continues to support the guided Setup Wizard flow
-- daemon also reuses the same Setup Wizard-oriented provisioning framework
-- provisioning supports both `Simple` setup and `Advanced` setup
-- the current daemon quick provisioner becomes the implementation of `Simple` setup
-- missing environment state such as a missing `config.json` should trigger the shared provisioning decision path
-- configured system DB repair during runtime startup should be handled by shared `sopbackend` bootstrap logic, not by daemon-only wiring
+- daemon gets its own provisioning implementation under `cmd/sop-daemon`
+- daemon provisioning should remain visually consistent with the Setup Wizard, but must not reuse HQ/httpserver provisioning handlers
+- daemon provisioning supports both `Simple` setup and `Advanced` setup
+- daemon `Simple` setup should perform the current quick-provision behavior explicitly, triggered by user action rather than startup-side auto-mutation
+- daemon `Advanced` setup should provision only the System DB and expose only the equivalent of Setup Wizard Page 2: storage mode, path, Redis, stores folders, erasure coding, and hash mod
+- missing environment state such as a missing `config.json` should trigger a daemon-specific provisioning status path, not the HQ/shared config-save flow
+- configured system DB repair during daemon startup should not silently provision missing state; provisioning should be explicit from the daemon UI
 
-This keeps host bootstrapping aligned across HQ, daemon, and the future Corporate server instead of maintaining separate first-run provisioning systems.
+This keeps the user-facing first-run experience stylistically aligned across hosts while preserving a clean architectural boundary between HQ/httpserver provisioning and daemon provisioning.
 
 See [SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md](SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md) for the refactor plan.
 

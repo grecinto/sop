@@ -28,7 +28,6 @@ import (
 	"github.com/sharedcode/sop"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
-	sopdatabase "github.com/sharedcode/sop/database"
 	sopfs "github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -523,15 +522,13 @@ func main() {
 		return
 	}
 
-	// Load configuration using sopbackend
-	resolvedConfig, created, err := ensureConfigPath(*configPath)
+	// Resolve the daemon config path, but do not auto-create it here.
+	resolvedConfig, err := resolveDaemonConfigLocation(*configPath, nil)
 	if err != nil {
 		log.Fatalf("Failed to resolve daemon config: %v", err)
 	}
-	if created {
-		log.Printf("Created initial local daemon config at %s", resolvedConfig)
-	}
 	localRuntimeConfigPath = resolvedConfig
+	sopbackend.SetConfigFile(resolvedConfig)
 
 	stateDir := resolveVectorizationRecoveryStateDir(resolvedConfig, sopbackend.GetConfig())
 	policyImpl := newRuntimeVectorizationFailurePolicy(stateDir)
@@ -553,7 +550,28 @@ func main() {
 		}
 	})
 
-	// Load sopbackend configuration exactly like the httpserver does and initialize it once.
+	// WARNING FOR FUTURE COPILOTS / MAINTAINERS:
+	//
+	// Treat the daemon as a separate lightweight app, not as a thin variant of
+	// httpserver. It may reuse shared libraries from sopbackend, but its product
+	// requirements are different:
+	//   - local-first runtime
+	//   - lightweight app behavior
+	//   - daemon-specific provisioning flow
+	//   - daemon-specific auth/bootstrap lifecycle
+	//
+	// Do NOT use httpserver as the default architectural template for daemon
+	// changes. Shared code reuse is allowed, but daemon behavior must be decided
+	// from daemon requirements first.
+	//
+	// In particular, avoid reintroducing assumptions that daemon should:
+	//   - share HQ/httpserver provisioning handlers
+	//   - auto-mutate missing config/state just because httpserver does
+	//   - grow toward the heavier HQ control-plane model when a lightweight local
+	//     behavior is sufficient
+	//
+	// Initialize shared runtime dependencies here only as reusable building
+	// blocks for the daemon app.
 	policy := sharedagent.AutomationPolicy{
 		Enabled:               true,
 		AllowShellCommands:    true,
@@ -566,6 +584,7 @@ func main() {
 		EnableLocalAutomation: true,
 		AutomationPolicy:      &policy,
 		EnableStoresFeature:   true,
+		HostKind:              sopbackend.HostKindDaemon,
 	}, *port, nil); err != nil {
 		log.Printf("Warning: backend bootstrap failed: %v", err)
 	} else {
@@ -573,30 +592,8 @@ func main() {
 	}
 	cfg := sopbackend.GetConfig()
 	configureRecoveryStatePersistence(cfg)
-
-	// Auto-provision system DB if it doesn't exist
 	if cfg.SystemDB != nil {
 		cfg.SystemDB.IsSystem = true
-		if cfg.SystemDB.Path != "" {
-			dbOptionsPath := filepath.Join(cfg.SystemDB.Path, "dboptions.json")
-			if _, err := os.Stat(dbOptionsPath); os.IsNotExist(err) {
-				log.Printf("System DB not found at %s, auto-provisioning...", cfg.SystemDB.Path)
-
-				// Setup the system database with standalone mode
-				options := sop.DatabaseOptions{
-					Type:                 sop.Standalone,
-					StoresFolders:        []string{cfg.SystemDB.Path},
-					RegistryHashModValue: 0, // Default for system DB
-				}
-
-				ctx := context.Background()
-				if _, err := sopdatabase.Setup(ctx, options); err != nil {
-					log.Printf("Warning: failed to auto-provision system DB: %v", err)
-				} else {
-					log.Printf("System DB auto-provisioned at %s", cfg.SystemDB.Path)
-				}
-			}
-		}
 	}
 
 	// Initialize daemon authentication with JWT
@@ -693,6 +690,9 @@ func main() {
 	mux.HandleFunc("/api/daemon/auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleBootstrap)))
 	mux.HandleFunc("/api/daemon/refresh", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleRefresh)))
 	mux.HandleFunc("/api/daemon/hq-auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleHQAuth)))
+	mux.HandleFunc("/api/daemon/provision/status", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleDaemonProvisionStatus))))
+	mux.HandleFunc("/api/daemon/provision/simple", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleDaemonProvisionSimple))))
+	mux.HandleFunc("/api/daemon/provision/system", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleDaemonProvisionSystem))))
 	mux.HandleFunc("/api/daemon/receive-space", handleOptionsAndCORS(http.HandlerFunc(handleReceiveSpaceFromHQ)))
 	mux.HandleFunc("/api/daemon/vectorization/recovery", handleOptionsAndCORS(http.HandlerFunc(handleGetVectorizationRecoveryStatus)))
 	mux.HandleFunc("/api/daemon/secrets/encrypt", handleOptionsAndCORS(authHandler.RequireAuth(http.HandlerFunc(handleEncryptDaemonSecret))))
@@ -722,7 +722,16 @@ func main() {
 	// IMPORTANT: /api/ask (daemon) vs /api/ai/chat (HQ) - Separate by Design
 	//
 	// The daemon provides /api/ask with JWT auth for LOCAL runtime mode.
-	// This is SEPARATE from HQ's /api/ai/chat for good reasons:
+	// This is SEPARATE from HQ's /api/ai/chat because daemon is now treated as a
+	// fully separate lightweight app, not as a reduced copy of httpserver.
+	// Shared agent/runtime pieces may still be reused internally, but endpoint
+	// behavior, provisioning, auth, and lifecycle rules are allowed to diverge.
+	//
+	// Keep this boundary explicit when modifying daemon. If a future change makes
+	// sense for HQ/httpserver but adds weight or coupling to daemon, prefer a
+	// daemon-specific implementation.
+	//
+	// This is SEPARATE from HQ's /api/ai/chat for concrete reasons:
 	//
 	// 1. DIFFERENT AUTH MODELS:
 	//    - /api/ask: JWT bearer tokens (bootstrap file → JWT)
@@ -743,8 +752,9 @@ func main() {
 	//    - HQ evolves for multi-tenant features
 	//    - Separate endpoints = clearer boundaries, less coupling risk
 	//
-	// Both call sopbackend.AskSharedAgent() so LOGIC is shared.
-	// Separation is at AUTH and PAYLOAD layers, which is correct.
+	// Some Ask internals are shared through sopbackend.AskSharedAgent(), but that
+	// shared implementation detail must not be used as justification to collapse
+	// daemon and HQ into one app model.
 	//
 	// STREAMING: /api/ask now supports NDJSON streaming (same as /api/ai/chat)!
 	//            UI sends Accept: application/x-ndjson and gets real-time progress.

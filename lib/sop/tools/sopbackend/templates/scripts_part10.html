@@ -731,11 +731,156 @@
         openUIModal('setup-wizard');
     }
 
+    let daemonProvisioningWizardActive = false;
+
+    function configureDaemonProvisioningWizard(enabled) {
+        daemonProvisioningWizardActive = Boolean(enabled);
+
+        const progress = document.querySelector('#setup-wizard .wizard-progress');
+        if (progress) {
+            progress.style.display = daemonProvisioningWizardActive ? 'none' : 'flex';
+        }
+
+        const step1 = document.getElementById('step-1');
+        const step2 = document.getElementById('step-2');
+        const step3 = document.getElementById('step-3');
+        if (step1) step1.style.display = daemonProvisioningWizardActive ? 'none' : '';
+        if (step2) step2.style.display = '';
+        if (step3) step3.style.display = daemonProvisioningWizardActive ? 'none' : '';
+
+        const manualSharedBrain = document.getElementById('setup-sys-manual-enterprise-group');
+        if (manualSharedBrain) {
+            manualSharedBrain.style.display = daemonProvisioningWizardActive ? 'none' : 'flex';
+        }
+
+        if (step2) {
+            const heading = step2.querySelector('h3');
+            const intro = step2.querySelector('p');
+            if (heading) {
+                if (!heading.dataset.defaultText) heading.dataset.defaultText = heading.textContent;
+                heading.textContent = daemonProvisioningWizardActive ? 'Provision Local System Database' : heading.dataset.defaultText;
+            }
+            if (intro) {
+                if (!intro.dataset.defaultText) intro.dataset.defaultText = intro.textContent;
+                intro.textContent = daemonProvisioningWizardActive
+                    ? 'Configure the daemon System DB. Advanced mode exposes storage topology controls such as clustered mode, Redis, stores folders, and erasure coding.'
+                    : intro.dataset.defaultText;
+            }
+        }
+    }
+
+    async function submitDaemonProvisionRequest(endpoint, payload) {
+        const loadingModal = document.getElementById('setup-loading-modal');
+        const pb = document.getElementById('setup-progress-bar');
+        const pbDetails = document.getElementById('setup-loading-details');
+
+        if (loadingModal) {
+            loadingModal.style.display = 'flex';
+            closeUIModal('setup-wizard');
+            pb.style.width = '20%';
+            pbDetails.innerHTML = '- Preparing daemon provisioning...<br>';
+        }
+
+        try {
+            const response = await localRuntimeRequest(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                cache: 'no-store',
+                credentials: 'omit'
+            });
+            if (!response.ok) {
+                let message = `Provisioning failed (${response.status})`;
+                try {
+                    const body = await response.json();
+                    message = body.error || body.message || message;
+                } catch (_) {
+                    const text = await response.text().catch(() => '');
+                    if (text) message = text;
+                }
+                throw new Error(message);
+            }
+            const result = await response.json().catch(() => ({}));
+            if (loadingModal) loadingModal.style.display = 'none';
+            resetSetupForm();
+            configureDaemonProvisioningWizard(false);
+            runtimeRefreshPayload = null;
+            if (result && result.restart_required) {
+                showAlert('Daemon provisioning completed. Restart the local daemon to finish setup.');
+                return;
+            }
+            await window.reloadDatabases(true);
+        } catch (err) {
+            if (loadingModal) loadingModal.style.display = 'none';
+            openUIModal('setup-wizard');
+            console.error(err);
+            showAlert(err && err.message ? err.message : String(err));
+        }
+    }
+
+    function finishDaemonSimpleSetup() {
+        const port = parseInt(document.getElementById('setup-port').value) || 9090;
+        submitDaemonProvisionRequest('/api/daemon/provision/simple', {
+            port: port
+        });
+    }
+
+    function finishDaemonSystemSetup() {
+        const port = parseInt(document.getElementById('setup-port').value) || 9090;
+        const sysType = document.getElementById('setup-sys-type').value;
+        const sysConn = document.getElementById('setup-sys-conn').value.trim();
+        const regPath = document.getElementById('setup-reg-path').value.trim();
+        const sysHashMod = parseInt(document.getElementById('setup-sys-registry-hash-mod').value || '0', 10) || 0;
+        const sysStoresFoldersRaw = document.getElementById('setup-sys-stores-folders').value.trim();
+        const sysStoresFolders = sysStoresFoldersRaw ? sysStoresFoldersRaw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean) : [];
+
+        if (!regPath) {
+            showAlert('Please enter a system database path');
+            return;
+        }
+        if (sysType === 'clustered' && !sysConn) {
+            showAlert('Redis URL is required when clustered mode is selected');
+            return;
+        }
+
+        const convertToDaemonEcMap = (arr) => {
+            const m = {};
+            if (!arr || arr.length === 0) return null;
+            arr.forEach(item => {
+                let key = item.key || 'default';
+                if (key === '""') key = '';
+                m[key] = {
+                    data_shards_count: item.data_chunks,
+                    parity_shards_count: item.parity_chunks,
+                    base_folder_paths_across_drives: item.base_paths
+                };
+            });
+            return m;
+        };
+
+        submitDaemonProvisionRequest('/api/daemon/provision/system', {
+            port: port,
+            system_db: {
+                path: regPath,
+                mode: sysType,
+                redis_url: sysConn,
+                registry_hash_mod: sysHashMod,
+                stores_folders: sysStoresFolders,
+                erasure_config: convertToDaemonEcMap(collectEcConfigs('setup-sys-ec-container'))
+            }
+        });
+    }
+
     function showSetupWizard(decision = null) {
+        const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
+        const isLocalRuntime = runtimeMode === 'local';
+
+        configureDaemonProvisioningWizard(isLocalRuntime);
         openUIModal('setup-wizard');
         skipUserDbProvisioning = false;
         const preferredMode = decision && decision.mode ? String(decision.mode).trim().toLowerCase() : 'simple';
         applyProvisioningMode(preferredMode === 'advanced' ? 'advanced' : 'simple');
+        currentWizardStep = isLocalRuntime ? 2 : 1;
         
         // Initialize User DB EC Container if empty
         const container = document.getElementById('setup-db-ec-container');
@@ -755,6 +900,37 @@
     }
 
     function updateWizardStep() {
+        if (daemonProvisioningWizardActive) {
+            document.querySelectorAll('.wizard-step').forEach(el => el.classList.remove('active'));
+            const daemonStep = document.getElementById('step-2');
+            if (daemonStep) daemonStep.classList.add('active');
+
+            const prevBtn = document.getElementById('wizard-prev');
+            if (prevBtn) prevBtn.style.visibility = 'hidden';
+
+            const skipBtn = document.getElementById('wizard-skip');
+            if (skipBtn) skipBtn.style.display = 'none';
+
+            const nextBtn = document.getElementById('wizard-next');
+            if (nextBtn) {
+                nextBtn.textContent = currentProvisioningMode === 'simple' ? 'Proceed' : 'Provision System DB';
+                nextBtn.title = currentProvisioningMode === 'simple'
+                    ? 'Click "Proceed" to run the daemon quick provision flow.'
+                    : 'Click "Provision System DB" to create the configured daemon System DB.';
+                nextBtn.onclick = wizardNext;
+            }
+
+            const helpLink = document.getElementById('wizard-help-link');
+            if (helpLink) {
+                helpLink.title = 'Open help for daemon provisioning';
+                helpLink.onclick = (event) => {
+                    event.preventDefault();
+                    showSetupWizardHelp(2);
+                };
+            }
+            return;
+        }
+
         // Update Steps
         document.querySelectorAll('.wizard-step').forEach(el => el.classList.remove('active'));
         document.getElementById(`step-${currentWizardStep}`).classList.add('active');
@@ -927,6 +1103,15 @@
     }
 
     function wizardNext() {
+        if (daemonProvisioningWizardActive) {
+            if (currentProvisioningMode === 'simple') {
+                finishDaemonSimpleSetup();
+                return;
+            }
+            finishDaemonSystemSetup();
+            return;
+        }
+
         if (currentWizardStep < 3) {
             // Validation
             if (currentWizardStep === 1) { // Was 2: User DB
@@ -1013,6 +1198,9 @@
     }
 
     function wizardPrev() {
+        if (daemonProvisioningWizardActive) {
+            return;
+        }
         if (currentWizardStep > 1) {
             currentWizardStep--;
             updateWizardStep();
@@ -1023,6 +1211,12 @@
     function wizardCancel() {
         if (wizardCancelLocked) return;
         wizardCancelLocked = true;
+
+        if (daemonProvisioningWizardActive) {
+            closeUIModal('setup-wizard');
+            wizardCancelLocked = false;
+            return;
+        }
         
         console.log("Wizard Cancel triggered");
 
@@ -1090,6 +1284,7 @@
         // Reset Step
         skipUserDbProvisioning = false;
         currentWizardStep = 1;
+        daemonProvisioningWizardActive = false;
         updateWizardStep();
     }
 

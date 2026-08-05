@@ -21,7 +21,19 @@ import (
 
 const defaultDaemonConfigFileName = "config.json"
 
-// Daemon uses the shared SetupStream from sopbackend
+// WARNING FOR FUTURE COPILOTS / MAINTAINERS:
+//
+// The daemon is now a separate lightweight app with its own provisioning and
+// lifecycle rules. Reusing helpers from sopbackend is fine, but do not infer
+// that daemon should mirror httpserver/HQ behavior.
+//
+// In particular:
+//   - daemon config/bootstrap behavior is daemon-owned
+//   - daemon provisioning should remain daemon-specific
+//   - shared helpers are implementation reuse, not an architectural mandate
+//
+// Daemon uses the shared SetupStream from sopbackend as a reusable transport
+// helper only.
 
 // isValidDaemonConfig checks if the config file has the required daemon structure
 func isValidDaemonConfig(configPath string) bool {
@@ -102,6 +114,10 @@ func resolveDaemonConfigLocation(explicitPath string, out io.Writer) (string, er
 }
 
 func ensureConfigPath(explicitPath string) (string, bool, error) {
+	// NOTE: This helper reflects the current quick-provision behavior. Future
+	// daemon provisioning work is expected to move this startup-side mutation
+	// behind explicit daemon provisioning endpoints. Do not expand this into a
+	// broader HQ/httpserver-style setup path.
 	resolvedPath, err := resolveDaemonConfigLocation(explicitPath, nil)
 	if err != nil {
 		return "", false, err
