@@ -689,51 +689,11 @@
     // Setup Wizard Logic
     let currentWizardStep = 1;
 
-    function provisioningModeDescription(mode) {
-        if (mode === 'advanced') {
-            return 'Advanced setup is active. Storage, partitioning, and environment controls are expanded.';
-        }
-        return 'Simple setup is selected by default. You can switch to Advanced setup at any time.';
-    }
-
     function applyProvisioningMode(mode) {
         currentProvisioningMode = mode === 'advanced' ? 'advanced' : 'simple';
 
-        const simpleBtn = document.getElementById('setup-mode-simple-btn');
-        const advancedBtn = document.getElementById('setup-mode-advanced-btn');
-        const description = document.getElementById('setup-provisioning-mode-description');
         const dbAdvancedToggle = document.getElementById('setup-db-advanced-toggle');
         const sysAdvancedToggle = document.getElementById('setup-sys-advanced-toggle');
-
-        if (simpleBtn) {
-            if (currentProvisioningMode === 'simple') {
-                simpleBtn.className = 'primary-btn';
-                simpleBtn.style.background = '';
-                simpleBtn.style.color = '';
-                simpleBtn.style.border = '';
-            } else {
-                simpleBtn.className = '';
-                simpleBtn.style.background = 'var(--sidebar-bg)';
-                simpleBtn.style.color = 'var(--text-color)';
-                simpleBtn.style.border = '1px solid var(--border-color)';
-            }
-        }
-        if (advancedBtn) {
-            if (currentProvisioningMode === 'advanced') {
-                advancedBtn.className = 'primary-btn';
-                advancedBtn.style.background = '';
-                advancedBtn.style.color = '';
-                advancedBtn.style.border = '';
-            } else {
-                advancedBtn.className = '';
-                advancedBtn.style.background = 'var(--sidebar-bg)';
-                advancedBtn.style.color = 'var(--text-color)';
-                advancedBtn.style.border = '1px solid var(--border-color)';
-            }
-        }
-        if (description) {
-            description.textContent = provisioningModeDescription(currentProvisioningMode);
-        }
 
         const shouldEnableAdvanced = currentProvisioningMode === 'advanced';
         if (dbAdvancedToggle) {

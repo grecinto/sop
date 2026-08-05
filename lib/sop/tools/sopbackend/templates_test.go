@@ -621,11 +621,7 @@ func TestSetupProvisioningModeChooserRoutesSimpleAndAdvancedEndpoints(t *testing
 	scriptsContent := string(scriptsData)
 
 	for _, token := range []string{
-		"function finishSimpleSetup()",
-		"submitProvisioningRequest('/api/config/provision/simple'",
 		"function finishSetup()",
-		"if (currentProvisioningMode === 'simple') {",
-		"finishSimpleSetup();",
 		"submitProvisioningRequest('/api/config/save', finalPayload",
 	} {
 		if !strings.Contains(scriptsContent, token) {

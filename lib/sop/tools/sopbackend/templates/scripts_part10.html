@@ -1469,62 +1469,7 @@
         });
     }
 
-    function finishSimpleSetup() {
-        const rootPassword = document.getElementById('setup-root-password')?.value || '';
-        const port = parseInt(document.getElementById('setup-port').value);
-        const regPath = (document.getElementById('setup-reg-path')?.value || '').trim();
-        const bProviderValue = document.getElementById('setup-brain-provider') ? document.getElementById('setup-brain-provider').value : '';
-        const bParts = splitProviderValue(bProviderValue);
-        const bProvider = bParts.provider;
-        const bModel = bParts.model || (document.getElementById('setup-brain-model') ? document.getElementById('setup-brain-model').value.trim() : '');
-        const bUrl = document.getElementById('setup-brain-url') ? document.getElementById('setup-brain-url').value.trim() : '';
-        const bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : '';
-        const eProviderValue = document.getElementById('setup-embedder-provider') ? document.getElementById('setup-embedder-provider').value : '';
-        const eParts = splitProviderValue(eProviderValue);
-        const eProvider = eParts.provider;
-        const eModel = eParts.model || (document.getElementById('setup-embedder-model') ? document.getElementById('setup-embedder-model').value.trim() : '');
-        const eUrl = document.getElementById('setup-embedder-url') ? document.getElementById('setup-embedder-url').value.trim() : '';
-        const eApiKey = document.getElementById('setup-embedder-api-key') ? document.getElementById('setup-embedder-api-key').value.trim() : '';
-
-        mergeStoredAIConfigSecure({
-            brain_provider: bProvider,
-            brain_model: bModel,
-            brain_url: bUrl,
-            brain_api_key: bApiKey,
-            embedder_provider: eProvider,
-            embedder_model: eModel,
-            embedder_url: eUrl,
-            embedder_api_key: eApiKey
-        });
-
-        const nextBtn = document.getElementById('wizard-next');
-        nextBtn.disabled = true;
-        nextBtn.textContent = 'Setting up...';
-        nextBtn.title = 'Creating databases and configuring environments...';
-
-        submitProvisioningRequest('/api/config/provision/simple', {
-            registry_path: regPath,
-            port: port,
-            root_password: rootPassword,
-            system_admin_bootstrap_secret: document.getElementById('setup-system-admin-bootstrap-secret')?.value || '',
-            vectorization_recovery_storage_path: document.getElementById('setup-vectorization-recovery-storage-path')?.value || ''
-        }, {
-            rootPassword: rootPassword,
-            port: port,
-            regPath: regPath,
-            validationRegPath: regPath,
-            populateDemo: false,
-            dbName: '',
-            selectedTemplateCount: 0
-        });
-    }
-
     function finishSetup() {
-        if (currentProvisioningMode === 'simple') {
-            finishSimpleSetup();
-            return;
-        }
-
         // Collect DB Settings
         let dbName = document.getElementById('setup-db-name').value;
         let dbPath = document.getElementById('setup-db-path').value;
