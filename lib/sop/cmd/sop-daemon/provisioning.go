@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	aidb "github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/database"
+	"github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -230,6 +233,7 @@ func provisionDaemonSystem(ctx context.Context, req daemonProvisionSystemRequest
 	if err != nil {
 		return "", "", "", err
 	}
+	erasureEntries = normalizeDaemonErasureEntries(erasureEntries, append([]string{systemPath}, storesFolders...))
 	paths := append([]string{}, storesFolders...)
 	for _, ec := range erasureEntries {
 		paths = append(paths, ec.BasePaths...)
@@ -266,11 +270,15 @@ func writeAndActivateDaemonConfig(ctx context.Context, configPath string, system
 	if port <= 0 {
 		port = daemonDefaultPort()
 	}
+	provisionedSystemDB, err := provisionDaemonSystemDB(ctx, systemDB)
+	if err != nil {
+		return fmt.Errorf("provision system db: %w", err)
+	}
 	cfg := sopbackend.Config{
 		Port:           port,
 		Databases:      []sopbackend.DatabaseConfig{},
 		PageSize:       40,
-		SystemDB:       &systemDB,
+		SystemDB:       &provisionedSystemDB,
 		ProductionMode: true,
 	}
 	if err := sopbackend.SaveConfig(configPath, cfg); err != nil {
@@ -282,9 +290,6 @@ func writeAndActivateDaemonConfig(ctx context.Context, configPath string, system
 	sopbackend.SetConfigFile(configPath)
 	if _, err := sopbackend.LoadModelCatalog(configPath); err != nil {
 		return fmt.Errorf("load model catalog: %w", err)
-	}
-	if _, err := sopbackend.GetSystemDBOptions(ctx); err != nil {
-		return fmt.Errorf("provision system db: %w", err)
 	}
 	if cfg := sopbackend.GetConfig(); cfg.SystemDB != nil {
 		if err := bootstrapSOPKnowledgeBaseIfNeeded(
@@ -306,7 +311,95 @@ func writeAndActivateDaemonConfig(ctx context.Context, configPath string, system
 		}
 	}
 	return nil
+}
 
+func provisionDaemonSystemDB(ctx context.Context, systemDB sopbackend.DatabaseConfig) (sopbackend.DatabaseConfig, error) {
+	if strings.TrimSpace(systemDB.Name) == "" {
+		systemDB.Name = sopbackend.SystemDBName
+	}
+
+	targetFolders := append([]string{}, systemDB.StoresFolders...)
+	if len(targetFolders) == 0 {
+		if strings.TrimSpace(systemDB.Path) != "" {
+			targetFolders = []string{systemDB.Path}
+		}
+	}
+	if len(targetFolders) == 0 {
+		return systemDB, nil
+	}
+
+	registryPath := sanitizeDaemonPath(targetFolders[0])
+	if registryPath == "" {
+		registryPath = sanitizeDaemonPath(systemDB.Path)
+	}
+	if registryPath == "" {
+		return systemDB, nil
+	}
+
+	systemDB.Path = registryPath
+	systemDB.StoresFolders = []string{registryPath}
+	if len(targetFolders) > 1 {
+		systemDB.StoresFolders = append(systemDB.StoresFolders, targetFolders[1:]...)
+	}
+
+	systemDB.ErasureConfigs = normalizeDaemonErasureEntries(systemDB.ErasureConfigs, append([]string{registryPath}, systemDB.StoresFolders...))
+
+	sysOpts := sop.DatabaseOptions{
+		Type:                 sop.Standalone,
+		StoresFolders:        []string{registryPath},
+		RegistryHashModValue: fs.MinimumModValue,
+	}
+	if len(systemDB.StoresFolders) > 0 {
+		sysOpts.StoresFolders = append([]string(nil), systemDB.StoresFolders...)
+	}
+	if systemDB.Mode == "clustered" {
+		sysOpts.Type = sop.Clustered
+		sysOpts.CacheType = sop.Redis
+		sysOpts.RedisConfig = &sop.RedisCacheConfig{Address: systemDB.RedisURL}
+	}
+	if len(systemDB.ErasureConfigs) > 0 {
+		sysOpts.ErasureConfig = make(map[string]sop.ErasureCodingConfig)
+		for _, entry := range systemDB.ErasureConfigs {
+			key := entry.Key
+			if key == "default" {
+				key = ""
+			}
+			sysOpts.ErasureConfig[key] = sop.ErasureCodingConfig{
+				DataShardsCount:             entry.DataChunks,
+				ParityShardsCount:           entry.ParityChunks,
+				BaseFolderPathsAcrossDrives: append([]string(nil), entry.BasePaths...),
+			}
+		}
+	}
+
+	hasDBOptions, hasRegHashMod := database.IsDatabasePath(systemDB.Path)
+	if !hasDBOptions {
+		subPath := filepath.Join(systemDB.Path, "system_db")
+		if exists, mod := database.IsDatabasePath(subPath); exists {
+			systemDB.Path = subPath
+			hasDBOptions = true
+			hasRegHashMod = mod
+		}
+	}
+
+	if hasDBOptions || hasRegHashMod {
+		loadedOpts, err := database.GetOptions(ctx, systemDB.Path)
+		if err != nil {
+			return systemDB, fmt.Errorf("system database exists but failed to read options in %q: %w", systemDB.Path, err)
+		}
+		sysOpts = loadedOpts
+	} else {
+		if _, err := database.Setup(ctx, sysOpts); err != nil {
+			return systemDB, err
+		}
+	}
+
+	if systemDB.Mode == "clustered" {
+		systemDB.Mode = "clustered"
+	} else {
+		systemDB.Mode = "standalone"
+	}
+	return systemDB, nil
 }
 
 func currentDaemonConfigPath() (string, error) {
@@ -361,12 +454,47 @@ func sanitizeDaemonPathList(paths []string) []string {
 	return result
 }
 
+func normalizeDaemonErasureEntries(entries []sopbackend.ErasureConfigEntry, fallbackPaths []string) []sopbackend.ErasureConfigEntry {
+	if len(entries) > 0 {
+		for _, entry := range entries {
+			if strings.TrimSpace(entry.Key) == "" || strings.EqualFold(strings.TrimSpace(entry.Key), "default") {
+				return entries
+			}
+		}
+	}
+
+	candidatePaths := sanitizeDaemonPathList(fallbackPaths)
+	if len(candidatePaths) == 0 {
+		return nil
+	}
+
+	if len(entries) == 0 {
+		return []sopbackend.ErasureConfigEntry{{
+			Key:          "",
+			DataChunks:   1,
+			ParityChunks: 0,
+			BasePaths:    []string{candidatePaths[0]},
+		}}
+	}
+
+	return append(entries, sopbackend.ErasureConfigEntry{
+		Key:          "",
+		DataChunks:   1,
+		ParityChunks: 0,
+		BasePaths:    []string{candidatePaths[0]},
+	})
+}
+
 func convertDaemonErasureConfig(input map[string]daemonErasureRequest) ([]sopbackend.ErasureConfigEntry, error) {
 	if len(input) == 0 {
 		return nil, nil
 	}
 	entries := make([]sopbackend.ErasureConfigEntry, 0, len(input))
 	for key, value := range input {
+		normalizedKey := strings.TrimSpace(key)
+		if strings.EqualFold(normalizedKey, "default") || normalizedKey == "" {
+			normalizedKey = ""
+		}
 		paths := sanitizeDaemonPathList(value.BaseFolderPathsAcrossDrives)
 		if value.DataShardsCount <= 0 {
 			return nil, fmt.Errorf("erasure config %q requires data_shards_count > 0", key)
@@ -378,7 +506,7 @@ func convertDaemonErasureConfig(input map[string]daemonErasureRequest) ([]sopbac
 			return nil, fmt.Errorf("erasure config %q requires %d base paths", key, value.DataShardsCount+value.ParityShardsCount)
 		}
 		entries = append(entries, sopbackend.ErasureConfigEntry{
-			Key:          key,
+			Key:          normalizedKey,
 			DataChunks:   value.DataShardsCount,
 			ParityChunks: value.ParityShardsCount,
 			BasePaths:    paths,

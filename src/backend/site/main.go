@@ -388,7 +388,6 @@ func registerSiteHandlers(mux *http.ServeMux, frontendDir, docsDir string) {
 	siteaccount.RegisterHandlers(mux)
 
 	// Register additional site-specific handlers
-	mux.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
 	registerFrontendHandler(mux, frontendDir)
 	registerDocsHandler(mux, docsDir)
 }

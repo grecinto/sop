@@ -490,8 +490,8 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 	//
 	// JavaScript Effects (scripts_daemon.html):
 	//   - Auto-bootstrap on DOMContentLoaded
-	//   - Uses site session token as bootstrap_token
-	//   - Falls back to bootstrap secret if no session token
+	//   - Fetches the client-specific bootstrap secret from the local proxy
+	//   - Completes the daemon challenge-response handshake before protected requests
 	//
 	// CRITICAL: Do not change DefaultDaemonURL constant without updating:
 	//   - scripts_daemon.html (DEFAULT_DAEMON_URL)
@@ -554,6 +554,7 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 	return map[string]any{
 		"Version":                 sop.Version,
 		"Username":                username,
+		"SystemDBName":            SystemDBName,
 		"CurrentPlan":             currentPlan,
 		"CurrentPlanLabel":        planLabel,
 		"CurrentPlanDescription":  planDescription,

@@ -21,6 +21,77 @@ import (
 
 var ErrAgentNotInitialized = errors.New("agent not initialized")
 
+func daemonBootstrapConfigDir() (string, error) {
+	if v := os.Getenv("XDG_CONFIG_HOME"); strings.TrimSpace(v) != "" {
+		return filepath.Join(v, "sop"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "sop"), nil
+}
+
+func sanitizeDaemonBootstrapClientID(clientID string) string {
+	clientKey := strings.ToLower(strings.TrimSpace(clientID))
+	clientKey = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		default:
+			return '-'
+		}
+	}, clientKey)
+	clientKey = strings.Trim(clientKey, "-")
+	return clientKey
+}
+
+func HandleDaemonBootstrapSecret(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	configDir, err := daemonBootstrapConfigDir()
+	if err != nil {
+		log.Error("failed to resolve daemon bootstrap config directory", "error", err)
+		http.Error(w, "Failed to get config directory", http.StatusInternalServerError)
+		return
+	}
+
+	clientID := sanitizeDaemonBootstrapClientID(r.URL.Query().Get("client_id"))
+	bootstrapFileName := "daemon.bootstrap"
+	if clientID != "" {
+		bootstrapFileName = fmt.Sprintf("daemon.bootstrap.%s", clientID)
+	}
+	bootstrapPath := filepath.Join(configDir, bootstrapFileName)
+
+	secretBytes, err := os.ReadFile(bootstrapPath)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		if os.IsNotExist(err) {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Bootstrap file not found. Daemon may not be running."})
+			return
+		}
+		log.Error("failed to read daemon bootstrap file", "path", bootstrapPath, "error", err)
+		http.Error(w, "Failed to read bootstrap file", http.StatusInternalServerError)
+		return
+	}
+
+	secret := strings.TrimSpace(string(secretBytes))
+	if secret == "" {
+		log.Error("daemon bootstrap file is empty", "path", bootstrapPath)
+		http.Error(w, "Bootstrap file is empty", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"bootstrap_secret": secret})
+}
+
 var (
 	backgroundServiceHookMu sync.RWMutex
 	backgroundServiceHooks  []func(context.Context)

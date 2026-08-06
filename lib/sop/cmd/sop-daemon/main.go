@@ -54,6 +54,16 @@ func bootstrapSOPKnowledgeBaseIfNeeded(ctx context.Context, databaseName string,
 	return preload(ctx, databaseName)
 }
 
+func shouldSeedFederatedContent(cfg sopbackend.Config, decision sopbackend.ProvisioningDecision) (bool, string) {
+	if decision.Required {
+		return false, fmt.Sprintf("provisioning is still required (%s)", decision.Reason)
+	}
+	if cfg.SystemDB == nil {
+		return false, "system database is not configured"
+	}
+	return true, ""
+}
+
 type runtimeVectorizationFailurePolicyHandle interface {
 	aidb.VectorizationFailurePolicy
 	RecoveryState() runtimeVectorizationRecoveryState
@@ -662,12 +672,17 @@ func main() {
 			settings.GlobalShareEnabled, settings.PolicyType)
 	}
 
-	// Seed initial federated content for fleet-wide intelligence
-	log.Printf("Seeding initial federated content...")
-	if err := SeedInitialFederatedContent(context.Background()); err != nil {
-		log.Printf("Warning: failed to seed federated content: %v", err)
+	// Seed initial federated content only after daemon provisioning creates a usable system DB.
+	provisioningDecision := sopbackend.CurrentProvisioningDecision()
+	if shouldSeed, skipReason := shouldSeedFederatedContent(cfg, provisioningDecision); shouldSeed {
+		log.Printf("Seeding initial federated content...")
+		if err := SeedInitialFederatedContent(context.Background()); err != nil {
+			log.Printf("Warning: failed to seed federated content: %v", err)
+		} else {
+			log.Printf("Federated content seeded successfully")
+		}
 	} else {
-		log.Printf("Federated content seeded successfully")
+		log.Printf("Skipping federated content seeding: %s", skipReason)
 	}
 
 	// Register all sopbackend handlers (provides full backend API)
@@ -687,6 +702,7 @@ func main() {
 	sopbackend.RegisterMonitorabilityHandlers(mux)
 
 	// Register daemon authentication endpoints (NO auth required)
+	mux.HandleFunc("/api/daemon/bootstrap-secret", handleOptionsAndCORS(http.HandlerFunc(sopbackend.HandleDaemonBootstrapSecret)))
 	mux.HandleFunc("/api/daemon/auth", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleBootstrap)))
 	mux.HandleFunc("/api/daemon/challenge", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleBootstrapChallenge)))
 	mux.HandleFunc("/api/daemon/refresh", handleOptionsAndCORS(http.HandlerFunc(authHandler.HandleRefresh)))

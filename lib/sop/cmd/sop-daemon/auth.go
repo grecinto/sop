@@ -589,6 +589,8 @@ type hqSyncBatch struct {
 	} `json:"shared_memory,omitempty"`
 }
 
+const uiBootstrapClientID = "sop-ui"
+
 // ensureBootstrapSecret generates a new bootstrap secret on every daemon startup
 func ensureBootstrapSecret() (string, error) {
 	return ensureBootstrapSecretForClient("daemon")
@@ -707,6 +709,9 @@ func NewDaemonAuthHandler(config DaemonAuthConfig) (*DaemonAuthHandler, error) {
 	bootstrapSecret, err := ensureBootstrapSecret()
 	if err != nil {
 		return nil, fmt.Errorf("ensure bootstrap secret: %w", err)
+	}
+	if _, err := ensureBootstrapSecretForClient(uiBootstrapClientID); err != nil {
+		return nil, fmt.Errorf("ensure ui bootstrap secret: %w", err)
 	}
 
 	configDir, err := getConfigDir()

@@ -856,6 +856,11 @@
             return m;
         };
 
+        const sysEcConfigs = collectEcConfigs('setup-sys-ec-container');
+        const effectiveSysEcConfigs = (sysEcConfigs && sysEcConfigs.length > 0)
+            ? sysEcConfigs
+            : (regPath ? [{ key: '', data_chunks: 1, parity_chunks: 0, base_paths: [regPath] }] : []);
+
         submitDaemonProvisionRequest('/api/daemon/provision/system', {
             port: port,
             system_db: {
@@ -864,7 +869,7 @@
                 redis_url: sysConn,
                 registry_hash_mod: sysHashMod,
                 stores_folders: sysStoresFolders,
-                erasure_config: convertToDaemonEcMap(collectEcConfigs('setup-sys-ec-container'))
+                erasure_config: convertToDaemonEcMap(effectiveSysEcConfigs)
             }
         });
     }
@@ -878,13 +883,18 @@
         skipUserDbProvisioning = false;
         currentWizardStep = isLocalRuntime ? 2 : 1;
         
-        // Initialize User DB EC Container if empty
-        const container = document.getElementById('setup-db-ec-container');
-        if (container && container.children.length <= 1) { // 1 is helper text
-             // Clear existing entries (keep p tag if possible, or just rebuild)
-             // The p tag is inside. Let's just append if no .ec-entry exist
-             if (container.querySelectorAll('.ec-entry').length === 0) {
+        // Initialize EC containers with a default entry for the daemon flow.
+        const dbContainer = document.getElementById('setup-db-ec-container');
+        if (dbContainer && dbContainer.children.length <= 1) { // 1 is helper text
+             if (dbContainer.querySelectorAll('.ec-entry').length === 0) {
                  addSetupDbECItem();
+             }
+        }
+
+        const sysContainer = document.getElementById('setup-sys-ec-container');
+        if (sysContainer && sysContainer.children.length <= 1) {
+             if (sysContainer.querySelectorAll('.ec-entry').length === 0) {
+                 addSetupSysECItem();
              }
         }
         

@@ -29,6 +29,24 @@ func TestResolveBootstrapPathForClientUsesDistinctFiles(t *testing.T) {
 	}
 }
 
+func TestNewDaemonAuthHandlerCreatesUIBootstrapSecretFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	_, err := NewDaemonAuthHandler(DaemonAuthConfig{AccessTokenTTL: time.Hour, RefreshTokenTTL: time.Hour})
+	if err != nil {
+		t.Fatalf("new daemon auth handler: %v", err)
+	}
+
+	uiBootstrapPath := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sop", fmt.Sprintf("daemon.bootstrap.%s", uiBootstrapClientID))
+	data, err := os.ReadFile(uiBootstrapPath)
+	if err != nil {
+		t.Fatalf("read ui bootstrap file: %v", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		t.Fatalf("expected ui bootstrap file to contain a secret")
+	}
+}
+
 func TestHandleBootstrapUsesInMemorySessionsWithoutSystemDB(t *testing.T) {
 	oldCfg := sopbackend.GetConfig()
 	sopbackend.SetConfig(sopbackend.Config{})

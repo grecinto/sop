@@ -314,9 +314,54 @@ func TestLocalRuntimeRequestsUseDaemonAuthClient(t *testing.T) {
 		t.Fatalf("read template: %v", err)
 	}
 	scriptsContent := string(scriptsData)
-	for _, token := range []string{"async function localRuntimeRequest", "window.daemonAuth.bootstrap", "Authorization = `Bearer ${bootToken}`"} {
+	for _, token := range []string{"async function localRuntimeRequest", "window.daemonAuth.bootstrap", "Authorization = `Bearer ${bootToken}`", "The daemon auth client did not initialize in the UI", "Local daemon authentication could not be established", "getLastBootstrapError"} {
 		if !strings.Contains(scriptsContent, token) {
 			t.Fatalf("expected local runtime request helper to perform daemon auth bootstrap and attach the token in %s", scriptsPath)
+		}
+	}
+}
+
+func TestDaemonBootstrapClientValidatesAuthResponsePayload(t *testing.T) {
+	scriptsPath := templatePath("scripts_daemon.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"lastBootstrapError", "Daemon authentication response did not include an access token.", "Daemon authentication response did not include a refresh token.", "Daemon authentication response did not include a valid token expiry."} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected daemon bootstrap client to validate auth response payload token %q in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestDaemonBootstrapScriptsPassClientIDIntoHandshake(t *testing.T) {
+	scriptsPath := templatePath("scripts_daemon.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+	for _, token := range []string{"getLocalRuntimeBaseURL()", "daemonBootstrapURL", "?client_id=${encodeURIComponent(clientID)}", "client_id: clientID"} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected daemon bootstrap client to pass the client ID into the handshake payload in %s", scriptsPath)
+		}
+	}
+	if strings.Contains(scriptsContent, "bootstrap_token: bootstrapToken || ''") {
+		t.Fatalf("expected daemon bootstrap client to use the bootstrap secret instead of a site token in %s", scriptsPath)
+	}
+}
+
+func TestDaemonRuntimeBootstrapTemplateUsesDaemonRuntimeFlags(t *testing.T) {
+	indexPath := templatePath("index.html")
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	indexContent := string(indexData)
+	for _, token := range []string{"{{if .DaemonRuntimeEnabled}}", "'sop_chat_runtime', 'local'", "'{{.DaemonURL}}'"} {
+		if !strings.Contains(indexContent, token) {
+			t.Fatalf("expected daemon runtime bootstrap template to use the daemon runtime flags in %s", indexPath)
 		}
 	}
 }
@@ -328,9 +373,22 @@ func TestDaemonProvisioningSystemStoresFoldersDefaultsToSystemDataPath(t *testin
 		t.Fatalf("read template: %v", err)
 	}
 	indexContent := string(indexData)
-	want := `id="setup-sys-stores-folders" placeholder="/path/one, /path/two" value="./.sop-data/{{.SystemDBName}}" style="flex: 1;"`
+	want := `id="setup-sys-stores-folders" placeholder="/path/one, /path/two" value="./.sop-data/system" style="flex: 1;"`
 	if !strings.Contains(indexContent, want) {
 		t.Fatalf("expected daemon provisioning system stores field to default to the system data path in %s", indexPath)
+	}
+}
+
+func TestDaemonProvisioningSimpleSystemDatabasePathDefaultsToSystemFolder(t *testing.T) {
+	indexPath := templatePath("index.html")
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	indexContent := string(indexData)
+	want := `id="setup-reg-path" placeholder="/var/lib/sop/system_db" value="./.sop-data/system" style="width: 100%; box-sizing: border-box;">`
+	if !strings.Contains(indexContent, want) {
+		t.Fatalf("expected daemon provisioning simple system database path to default to a system path in %s", indexPath)
 	}
 }
 

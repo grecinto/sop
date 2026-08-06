@@ -303,6 +303,12 @@ func GetDBOptionsFromConfig(ctx context.Context, db *DatabaseConfig) (sop.Databa
 	log.Info(fmt.Sprintf("Setting up database '%s' at '%s'", db.Name, db.Path))
 	setupOpts, err := database.Setup(ctx, opts)
 	if err != nil {
+		if strings.Contains(err.Error(), "already setup") {
+			log.Info(fmt.Sprintf("Database '%s' already initialized at '%s'; reusing existing options", db.Name, db.Path))
+			if loadedOpts, loadErr := database.GetOptions(ctx, db.Path); loadErr == nil {
+				return loadedOpts, nil
+			}
+		}
 		return sop.DatabaseOptions{}, fmt.Errorf("failed to setup database: %w", err)
 	}
 

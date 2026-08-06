@@ -2,7 +2,7 @@
 <script>
 /**
  * Daemon Authentication Client
- * 
+ *
  * Provides bootstrap-based authentication to local SOP daemon.
  * Handles JWT token management, automatic refresh, and authenticated requests.
  */
@@ -32,31 +32,42 @@
         return (configured || DEFAULT_DAEMON_URL).replace(/\/$/, '');
     }
 
+    function getCurrentClientID() {
+        const candidates = [
+            localStorage.getItem('sop_client_id'),
+            sessionStorage.getItem('sop_client_id'),
+            localStorage.getItem('sop_daemon_client_id'),
+            sessionStorage.getItem('sop_daemon_client_id'),
+            localStorage.getItem('client_id'),
+            sessionStorage.getItem('client_id')
+        ];
+        for (const value of candidates) {
+            if (typeof value === 'string' && value.trim() !== '') {
+                return value.trim();
+            }
+        }
+        return 'sop-ui';
+    }
+
     class DaemonAuthClient {
         constructor() {
             this.accessToken = localStorage.getItem(TOKEN_STORAGE_KEY);
             this.refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
-            
-            // Parse tokenExpiry as number (localStorage returns strings)
+
             const storedExpiry = localStorage.getItem(TOKEN_EXPIRY_KEY);
             this.tokenExpiry = storedExpiry ? parseInt(storedExpiry, 10) : null;
-            
             this.bootstrapping = false;
-            
-            // Track when the daemon last performed a background subscription check.
             this.lastSubscriptionCheck = localStorage.getItem(LAST_SUBSCRIPTION_CHECK_KEY);
+            this.lastBootstrapError = '';
         }
 
-        /**
-         * Bootstrap authentication with daemon using one-time bootstrap secret
-         * @returns {Promise<boolean>} True if authentication succeeded
-         */
         async bootstrap() {
             if (this.bootstrapping) {
                 return false;
             }
 
             this.bootstrapping = true;
+            this.lastBootstrapError = '';
 
             try {
                 const runtimeMode = (typeof getCurrentRuntimeMode === 'function' ? getCurrentRuntimeMode() : 'hq');
@@ -65,54 +76,40 @@
                     return false;
                 }
 
-                // Check if we already have valid tokens
                 if (this.hasValidToken()) {
                     this.bootstrapping = false;
                     void this.pingSubscriptionStatus();
                     return true;
                 }
 
-                const bootstrapToken = [
-                    localStorage.getItem('sop_access_token'),
-                    sessionStorage.getItem('sop_access_token'),
-                    localStorage.getItem('access_token'),
-                    sessionStorage.getItem('access_token')
-                ].find(value => typeof value === 'string' && value.trim() !== '');
-
                 let authPayload;
                 let authEndpoint;
                 let bootstrapSecret = '';
+                const clientID = (typeof getCurrentClientID === 'function' ? getCurrentClientID() : '') || 'sop-ui';
 
-                if (bootstrapToken) {
-                    authPayload = { bootstrap_token: bootstrapToken.trim() };
-                    authEndpoint = `${getLocalRuntimeBaseURL()}/api/daemon/auth`;
-                } else {
-                    const clientID = (typeof getCurrentClientID === 'function' ? getCurrentClientID() : '') || '';
-                    const secretResponse = await fetch(`/api/daemon/bootstrap-secret${clientID ? `?client_id=${encodeURIComponent(clientID)}` : ''}`);
-                    if (!secretResponse.ok) {
-                        if (secretResponse.status === 404) {
-                            console.debug('[DaemonAuth] Daemon not running or bootstrap file not found');
-                            this.bootstrapping = false;
-                            return false;
-                        }
-                        throw new Error(`Failed to get bootstrap secret: ${secretResponse.status}`);
+                const daemonBootstrapURL = `${getLocalRuntimeBaseURL()}/api/daemon/bootstrap-secret${clientID ? `?client_id=${encodeURIComponent(clientID)}` : ''}`;
+                const secretResponse = await fetch(daemonBootstrapURL);
+                if (!secretResponse.ok) {
+                    if (secretResponse.status === 404) {
+                        throw new Error('Daemon bootstrap secret was not available for this client. Confirm the daemon is running and the UI host can read the bootstrap file.');
                     }
-
-                    const secretData = await secretResponse.json();
-                    bootstrapSecret = secretData && secretData.bootstrap_secret;
-
-                    if (!bootstrapSecret) {
-                        throw new Error('Bootstrap secret is empty');
-                    }
-
-                    authPayload = { bootstrap_secret: bootstrapSecret };
-                    authEndpoint = `${getLocalRuntimeBaseURL()}/api/daemon/auth`;
+                    throw new Error(`Failed to get bootstrap secret: ${secretResponse.status}`);
                 }
+
+                const secretData = await secretResponse.json();
+                bootstrapSecret = secretData && secretData.bootstrap_secret;
+
+                if (!bootstrapSecret) {
+                    throw new Error('Bootstrap secret is empty');
+                }
+
+                authPayload = { bootstrap_secret: bootstrapSecret, client_id: clientID };
+                authEndpoint = `${getLocalRuntimeBaseURL()}/api/daemon/auth`;
 
                 const challengeResponse = await fetch(authEndpoint.replace('/api/daemon/auth', '/api/daemon/challenge'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ bootstrap_secret: bootstrapSecret || '', bootstrap_token: bootstrapToken || '' })
+                    body: JSON.stringify({ bootstrap_secret: bootstrapSecret, client_id: clientID })
                 });
 
                 if (!challengeResponse.ok) {
@@ -127,7 +124,7 @@
                     throw new Error('Daemon challenge response was incomplete');
                 }
 
-                const signedChallenge = await sha256Hex(`${bootstrapSecret || bootstrapToken || ''}:${challengeID}`);
+                const signedChallenge = await sha256Hex(`${bootstrapSecret}:${challengeID}`);
                 if (!signedChallenge) {
                     throw new Error('Failed to sign bootstrap challenge');
                 }
@@ -139,7 +136,6 @@
                     bootstrap_challenge_nonce: challengeID
                 };
 
-                // Authenticate with daemon
                 const authResponse = await fetch(authEndpoint, {
                     method: 'POST',
                     headers: {
@@ -154,11 +150,20 @@
                 }
 
                 const authData = await authResponse.json();
+                if (!authData || typeof authData.access_token !== 'string' || authData.access_token.trim() === '') {
+                    throw new Error('Daemon authentication response did not include an access token.');
+                }
+                if (!authData || typeof authData.refresh_token !== 'string' || authData.refresh_token.trim() === '') {
+                    throw new Error('Daemon authentication response did not include a refresh token.');
+                }
+                const expiresInSeconds = Number(authData.expires_in);
+                if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+                    throw new Error('Daemon authentication response did not include a valid token expiry.');
+                }
 
-                // Store tokens
                 this.accessToken = authData.access_token;
                 this.refreshToken = authData.refresh_token;
-                this.tokenExpiry = Date.now() + (authData.expires_in * 1000);
+                this.tokenExpiry = Date.now() + (expiresInSeconds * 1000);
 
                 localStorage.setItem(TOKEN_STORAGE_KEY, this.accessToken);
                 localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, this.refreshToken);
@@ -166,37 +171,31 @@
 
                 this.bootstrapping = false;
                 return true;
-
             } catch (error) {
                 console.error('[DaemonAuth] Bootstrap failed:', error);
+                this.lastBootstrapError = error && error.message ? error.message : String(error || 'Unknown daemon bootstrap error');
                 this.clearTokens();
                 this.bootstrapping = false;
                 return false;
             }
         }
 
-        /**
-         * Check if we have a valid access token
-         * @returns {boolean}
-         */
+        getLastBootstrapError() {
+            return this.lastBootstrapError || '';
+        }
+
         hasValidToken() {
             if (!this.accessToken || !this.tokenExpiry) {
                 return false;
             }
 
-            // Check if token expires in less than 1 minute (refresh early)
-            const expiresIn = this.tokenExpiry - Date.now();            
-            // Ensure expiresIn is a valid number
+            const expiresIn = this.tokenExpiry - Date.now();
             if (isNaN(expiresIn)) {
                 return false;
             }
-                        return expiresIn > 60000; // 1 minute buffer
+            return expiresIn > 60000;
         }
 
-        /**
-         * Determine whether a background subscription check should run.
-         * @returns {boolean}
-         */
         shouldRunSubscriptionCheck() {
             if (!this.lastSubscriptionCheck) {
                 return true;
@@ -211,19 +210,12 @@
             return timeSinceCheck >= SUBSCRIPTION_CHECK_INTERVAL;
         }
 
-        /**
-         * Record that a background subscription check ran successfully.
-         */
         markSubscriptionCheckCompleted() {
             const timestamp = Date.now().toString();
             this.lastSubscriptionCheck = timestamp;
             localStorage.setItem(LAST_SUBSCRIPTION_CHECK_KEY, timestamp);
         }
 
-        /**
-         * Silently ping HQ for subscription status without interrupting the local experience.
-         * @returns {Promise<boolean>}
-         */
         async pingSubscriptionStatus() {
             if (!this.shouldRunSubscriptionCheck()) {
                 return true;
@@ -249,10 +241,6 @@
             }
         }
 
-        /**
-         * Refresh access token using refresh token
-         * @returns {Promise<boolean>}
-         */
         async refresh() {
             if (!this.refreshToken) {
                 console.debug('[DaemonAuth] No refresh token available');
@@ -277,8 +265,6 @@
                 }
 
                 const data = await response.json();
-
-                // Update tokens
                 this.accessToken = data.access_token;
                 this.refreshToken = data.refresh_token;
                 this.tokenExpiry = Date.now() + (data.expires_in * 1000);
@@ -289,7 +275,6 @@
 
                 void this.pingSubscriptionStatus();
                 return true;
-
             } catch (error) {
                 console.error('[DaemonAuth] Token refresh error:', error);
                 this.clearTokens();
@@ -297,19 +282,10 @@
             }
         }
 
-        /**
-         * Make an authenticated request to the daemon
-         * @param {string} endpoint - API endpoint (e.g., '/api/ask')
-         * @param {object} options - Fetch options
-         * @returns {Promise<Response>}
-         */
         async request(endpoint, options = {}) {
-            // Ensure we have valid authentication
             if (!this.hasValidToken()) {
-                // Try to refresh
                 const refreshed = await this.refresh();
                 if (!refreshed) {
-                    // Try to bootstrap without forcing a login redirect.
                     const bootstrapped = await this.bootstrap();
                     if (!bootstrapped) {
                         throw new Error('Failed to authenticate with daemon');
@@ -317,7 +293,6 @@
                 }
             }
 
-            // Make authenticated request
             const headers = {
                 ...options.headers,
                 'Authorization': `Bearer ${this.accessToken}`,
@@ -328,18 +303,15 @@
                 headers
             });
 
-            // If unauthorized, try to refresh and retry once
             if (response.status === 401) {
                 const refreshed = await this.refresh();
                 if (refreshed) {
-                    // Retry with new token
                     headers.Authorization = `Bearer ${this.accessToken}`;
                     return fetch(`${getLocalRuntimeBaseURL()}${endpoint}`, {
                         ...options,
                         headers
                     });
                 } else {
-                    // Try bootstrap and keep the experience local.
                     const bootstrapped = await this.bootstrap();
                     if (bootstrapped) {
                         headers.Authorization = `Bearer ${this.accessToken}`;
@@ -354,9 +326,6 @@
             return response;
         }
 
-        /**
-         * Clear stored tokens
-         */
         clearTokens() {
             this.accessToken = null;
             this.refreshToken = null;
@@ -366,16 +335,11 @@
             localStorage.removeItem(TOKEN_EXPIRY_KEY);
         }
 
-        /**
-         * Get current access token (for debugging)
-         * @returns {string|null}
-         */
         getToken() {
             return this.accessToken;
         }
     }
 
-    // Create global instance
     window.daemonAuth = new DaemonAuthClient();
 
     window.ensureDaemonAuth = async function() {
@@ -388,7 +352,6 @@
         return window.daemonAuth.bootstrap();
     };
 
-    // Auto-bootstrap on page load (non-blocking)
     window.addEventListener('DOMContentLoaded', () => {
         window.ensureDaemonAuth().catch(err => {
             console.debug('[DaemonAuth] Auto-bootstrap failed:', err);

@@ -85,13 +85,13 @@
     </script>
 </head>
 <body>
-{{if .LocalRuntimeBootstrapEnabled}}
+{{if .DaemonRuntimeEnabled}}
 <script>
 (function() {
     try {
         localStorage.setItem('sop_chat_runtime', 'local');
-        localStorage.setItem('sop_daemon_url', '{{.LocalRuntimeURL}}');
-        window.SOP_DAEMON_BASE_URL = '{{.LocalRuntimeURL}}';
+        localStorage.setItem('sop_daemon_url', '{{.DaemonURL}}');
+        window.SOP_DAEMON_BASE_URL = '{{.DaemonURL}}';
     } catch (err) {
         console.debug('[local-runtime-ui] failed to initialize local runtime state', err);
     }

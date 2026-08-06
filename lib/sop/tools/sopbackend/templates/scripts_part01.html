@@ -1023,7 +1023,7 @@
             let authSucceeded = false;
             const authReady = await waitForDaemonAuthClient(4000);
             if (!authReady) {
-                console.warn('[localRuntimeRequest] daemon auth client not available yet; continuing without auth');
+                throw createDaemonAuthHandshakeError('The daemon auth client did not initialize in the UI. Reload the page and retry.');
             } else if (window.daemonAuth) {
                 const existingToken = typeof window.daemonAuth.getToken === 'function' ? window.daemonAuth.getToken() : null;
                 if (existingToken) {
@@ -1048,7 +1048,10 @@
             }
 
             if (authAttempted && !authSucceeded) {
-                throw createDaemonAuthHandshakeError('The daemon did not return an access token.');
+                const bootstrapError = window.daemonAuth && typeof window.daemonAuth.getLastBootstrapError === 'function'
+                    ? window.daemonAuth.getLastBootstrapError()
+                    : '';
+                throw createDaemonAuthHandshakeError(bootstrapError || 'The daemon did not return an access token.');
             }
         }
 
@@ -1079,6 +1082,10 @@
             } catch (err) {
                 // When in local mode, don't fall back to HQ - surface the connection error
                 console.error('Local runtime connection failed:', err);
+                const message = err && err.message ? err.message : '';
+                if (message.includes('Local daemon authentication could not be established')) {
+                    throw err;
+                }
                 throw new Error(`Cannot connect to local runtime at ${daemonBase}. Ensure the runtime is running.`);
             }
         }

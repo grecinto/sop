@@ -179,6 +179,41 @@ func TestBuildListenAddr(t *testing.T) {
 	}
 }
 
+func TestShouldSeedFederatedContentSkipsWhenProvisioningIsRequired(t *testing.T) {
+	ok, reason := shouldSeedFederatedContent(sopbackend.Config{}, sopbackend.ProvisioningDecision{
+		Required: true,
+		Reason:   sopbackend.ProvisioningDecisionReasonMissingConfig,
+	})
+	if ok {
+		t.Fatal("expected seeding to be skipped while provisioning is required")
+	}
+	if !strings.Contains(reason, string(sopbackend.ProvisioningDecisionReasonMissingConfig)) {
+		t.Fatalf("expected skip reason to mention provisioning reason, got %q", reason)
+	}
+}
+
+func TestShouldSeedFederatedContentSkipsWithoutSystemDB(t *testing.T) {
+	ok, reason := shouldSeedFederatedContent(sopbackend.Config{}, sopbackend.ProvisioningDecision{})
+	if ok {
+		t.Fatal("expected seeding to be skipped when no system database is configured")
+	}
+	if reason != "system database is not configured" {
+		t.Fatalf("unexpected skip reason %q", reason)
+	}
+}
+
+func TestShouldSeedFederatedContentAllowsReadySystemDB(t *testing.T) {
+	ok, reason := shouldSeedFederatedContent(sopbackend.Config{
+		SystemDB: &sopbackend.DatabaseConfig{Name: "system"},
+	}, sopbackend.ProvisioningDecision{Required: false})
+	if !ok {
+		t.Fatalf("expected seeding to proceed, got skip reason %q", reason)
+	}
+	if reason != "" {
+		t.Fatalf("expected empty skip reason when seeding is allowed, got %q", reason)
+	}
+}
+
 func TestContinueChatHandlerStreamsProgressAndContent(t *testing.T) {
 	service := &localRAGService{service: &recordingQueryAgent{}}
 

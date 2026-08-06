@@ -214,6 +214,28 @@ func TestDatabase_Setup_ExistingOnDisk(t *testing.T) {
 	}
 }
 
+func TestDatabase_Setup_ExistingOnDiskIsNotTreatedAsFatal(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir()
+
+	opts := sop.DatabaseOptions{
+		StoresFolders: []string{path},
+		Type:          sop.Standalone,
+	}
+	b, _ := json.Marshal(opts)
+	if err := os.WriteFile(filepath.Join(path, "dboptions.json"), b, 0644); err != nil {
+		t.Fatalf("Failed to write options file: %v", err)
+	}
+
+	loadedOpts, err := database.Setup(ctx, sop.DatabaseOptions{StoresFolders: []string{path}, Type: sop.Clustered})
+	if err != nil {
+		t.Fatalf("Setup should succeed when dboptions.json already exists, got error: %v", err)
+	}
+	if loadedOpts.Type != sop.Standalone {
+		t.Fatalf("expected loaded options from disk to preserve existing config, got type %v", loadedOpts.Type)
+	}
+}
+
 func TestDatabase_Setup_MultipleFolders(t *testing.T) {
 	ctx := context.Background()
 	path1 := t.TempDir()

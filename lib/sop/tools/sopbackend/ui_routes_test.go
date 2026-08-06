@@ -94,6 +94,34 @@ func TestLandingPageDataExposesModelCatalogForTemplates(t *testing.T) {
 	}
 }
 
+func TestLandingPageDataEnablesDaemonRuntimeMode(t *testing.T) {
+	router := NewUIRouter(nil, "*.html")
+	req := httptest.NewRequest(http.MethodGet, "/app?mode=daemon&daemon_url=http://127.0.0.1:9191", nil)
+	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root"}))
+
+	data := router.landingPageData(req)
+	if enabled, ok := data["DaemonRuntimeEnabled"].(bool); !ok || !enabled {
+		t.Fatalf("expected daemon runtime mode to be enabled, got %#v", data["DaemonRuntimeEnabled"])
+	}
+	if mode, ok := data["DefaultRuntimeMode"].(string); !ok || mode != "local" {
+		t.Fatalf("expected default runtime mode to be local, got %#v", data["DefaultRuntimeMode"])
+	}
+	if daemonURL, ok := data["DaemonURL"].(string); !ok || daemonURL != "http://127.0.0.1:9191" {
+		t.Fatalf("expected daemon URL override to be preserved, got %#v", data["DaemonURL"])
+	}
+}
+
+func TestLandingPageDataExposesSystemDBNameForTemplates(t *testing.T) {
+	router := NewUIRouter(nil, "*.html")
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root"}))
+
+	data := router.landingPageData(req)
+	if got, ok := data["SystemDBName"].(string); !ok || got != SystemDBName {
+		t.Fatalf("expected landing page data to expose SystemDBName %q, got %#v", SystemDBName, data["SystemDBName"])
+	}
+}
+
 func TestUIRouterRedirectsLogoutToLogin(t *testing.T) {
 	templateFS := fstest.MapFS{
 		"login.html": &fstest.MapFile{Data: []byte("<!doctype html><html><body><h1>SOP Login</h1></body></html>")},

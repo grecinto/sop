@@ -284,9 +284,6 @@ func main() {
 		}
 	}
 
-	// Daemon Bootstrap API (for UI to authenticate with local daemon)
-	http.HandleFunc("/api/daemon/bootstrap-secret", handleDaemonBootstrapSecret)
-
 	// Register backend API handlers
 	sopbackend.RegisterAllHandlers(http.DefaultServeMux)
 	siteapi.RegisterHandlers(http.DefaultServeMux)

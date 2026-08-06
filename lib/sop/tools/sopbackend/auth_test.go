@@ -479,6 +479,32 @@ func TestRegisterAllHandlers_DoesNotExposeProductAccountRoutes(t *testing.T) {
 	}
 }
 
+func TestRegisterAllHandlers_ExposesDaemonBootstrapSecretProxy(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	bootstrapDir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "sop")
+	if err := os.MkdirAll(bootstrapDir, 0o755); err != nil {
+		t.Fatalf("mkdir bootstrap dir: %v", err)
+	}
+	bootstrapPath := filepath.Join(bootstrapDir, "daemon.bootstrap.sop-ui")
+	if err := os.WriteFile(bootstrapPath, []byte("test-bootstrap-secret\n"), 0o600); err != nil {
+		t.Fatalf("write bootstrap file: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	RegisterAllHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/daemon/bootstrap-secret?client_id=sop-ui", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected /api/daemon/bootstrap-secret to return 200, got %d with body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "test-bootstrap-secret") {
+		t.Fatalf("expected bootstrap secret in response, got %s", w.Body.String())
+	}
+}
+
 func TestHandleUpdateUserRole_RejectsLowerPrivilegeUser(t *testing.T) {
 	config = Config{UsersStore: NewUserStore()}
 	if _, err := config.RegisterUser(context.Background(), "admin", "pw123", "admin@example.com", sop.RoleAdmin); err != nil {

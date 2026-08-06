@@ -150,3 +150,73 @@ func TestHandleDaemonProvisionSystemStandaloneUsesRequestedPath(t *testing.T) {
 		t.Fatalf("expected ready status at system path %q, got %#v", systemPath, status)
 	}
 }
+
+func TestHandleDaemonProvisionSystemAddsDefaultErasureConfigWhenMissing(t *testing.T) {
+	workdir := t.TempDir()
+	configPath := filepath.Join(workdir, "daemon-config.json")
+	systemPath := filepath.Join(workdir, "default-system")
+
+	oldConfig := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldConfig)
+	oldPath := localRuntimeConfigPath
+	defer func() { localRuntimeConfigPath = oldPath }()
+	localRuntimeConfigPath = configPath
+
+	body := `{"system_db":{"path":"` + systemPath + `","mode":"standalone"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/provision/system", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	handleDaemonProvisionSystem(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleDaemonProvisionSystem() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	cfg, err := loadDaemonConfigSnapshot(configPath)
+	if err != nil {
+		t.Fatalf("load daemon config: %v", err)
+	}
+	if cfg.SystemDB == nil || len(cfg.SystemDB.ErasureConfigs) == 0 {
+		t.Fatalf("expected system db to contain an erasure config, got %#v", cfg.SystemDB)
+	}
+	first := cfg.SystemDB.ErasureConfigs[0]
+	if first.Key != "" {
+		t.Fatalf("expected default erasure config key, got %q", first.Key)
+	}
+	if first.DataChunks != 1 || first.ParityChunks != 0 {
+		t.Fatalf("expected default erasure config shape 1/0, got %d/%d", first.DataChunks, first.ParityChunks)
+	}
+}
+
+func TestHandleDaemonProvisionSystemNormalizesDefaultErasureConfigKey(t *testing.T) {
+	workdir := t.TempDir()
+	configPath := filepath.Join(workdir, "daemon-config.json")
+	systemPath := filepath.Join(workdir, "default-system")
+
+	oldConfig := sopbackend.GetConfig()
+	defer sopbackend.SetConfig(oldConfig)
+	oldPath := localRuntimeConfigPath
+	defer func() { localRuntimeConfigPath = oldPath }()
+	localRuntimeConfigPath = configPath
+
+	body := `{"system_db":{"path":"` + systemPath + `","mode":"standalone","erasure_config":{"default":{"data_shards_count":1,"parity_shards_count":0,"base_folder_paths_across_drives":["` + systemPath + `"]}}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/daemon/provision/system", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	handleDaemonProvisionSystem(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleDaemonProvisionSystem() status = %d, want %d, body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	cfg, err := loadDaemonConfigSnapshot(configPath)
+	if err != nil {
+		t.Fatalf("load daemon config: %v", err)
+	}
+	if cfg.SystemDB == nil || len(cfg.SystemDB.ErasureConfigs) == 0 {
+		t.Fatalf("expected system db to contain an erasure config, got %#v", cfg.SystemDB)
+	}
+	if cfg.SystemDB.ErasureConfigs[0].Key != "" {
+		t.Fatalf("expected erasure config key to be normalized to empty string, got %q", cfg.SystemDB.ErasureConfigs[0].Key)
+	}
+}
