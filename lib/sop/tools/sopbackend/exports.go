@@ -763,8 +763,9 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 }
 
 var (
-	backgroundShutdownCh   = make(chan struct{})
-	backgroundShutdownOnce sync.Once
+	backgroundShutdownCh      = make(chan struct{})
+	backgroundShutdownOnce    sync.Once
+	backgroundServiceHookOnce sync.Once
 )
 
 var (
@@ -786,6 +787,13 @@ func StartBackgroundServiceWithContext(ctx context.Context, interval, ttl time.D
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	backgroundServiceHookOnce.Do(func() {
+		RegisterBackgroundServiceHook(func(ctx context.Context) {
+			if err := memory.FlushExpiredShortTermMemoryStores(ctx); err != nil {
+				log.Warn("background service: failed to flush STM episodes", "error", err)
+			}
+		})
+	})
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()

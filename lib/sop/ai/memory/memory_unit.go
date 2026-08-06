@@ -38,7 +38,7 @@ func NewMemoryUnit(agentID string) *MemoryUnit {
 	return &MemoryUnit{
 		AgentID:      agentID,
 		AllowedKBs:   []string{},
-		episodeQueue: make(chan map[string]any, 100),
+		episodeQueue: make(chan map[string]any, 1000),
 		stm:          NewShortTermMemoryStore(agentID, MaxSTMEpisodeAge),
 	}
 }
@@ -162,11 +162,20 @@ func (m *MemoryUnit) LogEpisodeToSTM(ctx context.Context, intent string, astPayl
 
 	m.LastEpisodeTS.Store(time.Now().UnixMilli())
 
+	if m.stm != nil {
+		_ = m.stm.FlushIfExpired(ctx)
+	}
+
+	sendCtx := ctx
+	if sendCtx == nil {
+		sendCtx = context.Background()
+	}
+
 	select {
+	case <-sendCtx.Done():
+		return
 	case m.episodeQueue <- payload:
 		log.Debug("Isolated STM: Buffered thought snippet to queue successfully", "agent_id", m.AgentID)
-	default:
-		log.Warn("Isolated STM: Episode queue is full, dropping thought snippet", "agent_id", m.AgentID)
 	}
 }
 
@@ -181,5 +190,8 @@ func (m *MemoryUnit) StartMemoryWorkers(ctx context.Context, systemDB Database) 
 		m.stm = NewShortTermMemoryStore(m.AgentID, MaxSTMEpisodeAge)
 	}
 	m.stm.SetUserID(m.UserID)
+	m.stm.queue = m.episodeQueue
+	m.stm.systemDB = systemDB
+	RegisterShortTermMemoryStore(m.stm)
 	return m.stm.StartPeriodicCommitter(ctx, systemDB, m.episodeQueue)
 }

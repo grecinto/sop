@@ -103,3 +103,42 @@ func TestGitRepoInspectorInspectBuildsSummary(t *testing.T) {
 		t.Fatalf("expected diff preview to mention hello.txt, got %q", summary.DiffPreview)
 	}
 }
+
+func TestGitRepoInspectorResolvesRepoFromNestedWorkingDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo, err := git.PlainInit(tmpDir, false)
+	if err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	filePath := filepath.Join(tmpDir, "hello.txt")
+	if err := os.WriteFile(filePath, []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add("hello.txt"); err != nil {
+		t.Fatalf("add file: %v", err)
+	}
+	if _, err := wt.Commit("initial", &git.CommitOptions{Author: &object.Signature{Name: "tester", Email: "tester@example.com", When: time.Now()}}); err != nil {
+		t.Fatalf("commit file: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("hello again\n"), 0o644); err != nil {
+		t.Fatalf("modify file: %v", err)
+	}
+
+	nestedDir := filepath.Join(tmpDir, "subdir", "nested")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
+	inspector := &GitRepoInspector{}
+	files, err := inspector.ListChangedFiles(Task{WorkingDir: nestedDir}, RunState{})
+	if err != nil {
+		t.Fatalf("ListChangedFiles returned error for nested dir: %v", err)
+	}
+	if len(files) != 1 || files[0] != "hello.txt" {
+		t.Fatalf("expected changed file hello.txt from nested dir, got %v", files)
+	}
+}

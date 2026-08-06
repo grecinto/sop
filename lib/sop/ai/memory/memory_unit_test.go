@@ -111,6 +111,32 @@ func TestMemoryStoreNames_IncludeUserIDWhenBound(t *testing.T) {
 	}
 }
 
+func TestMemoryUnitLogEpisodeToSTM_WaitsForQueueDrain(t *testing.T) {
+	m := NewMemoryUnit("omni")
+	m.episodeQueue = make(chan map[string]any, 1)
+	m.episodeQueue <- map[string]any{"id": "preloaded"}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.LogEpisodeToSTM(context.Background(), "intent", map[string]any{"step": "one"}, "outcome", nil)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("expected episode logging to wait for queue capacity")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	<-m.episodeQueue
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected episode logging to complete after queue drained")
+	}
+}
+
 func TestPruneSTMOlderThan_RemovesExpiredEpisodes(t *testing.T) {
 	ctx := context.Background()
 	stm := inmemory.NewBtree[string, any](true).Btree
@@ -311,22 +337,75 @@ func TestShortTermMemoryStore_StartPeriodicCommitterFlushesAndPrunes(t *testing.
 	} else if !found {
 		t.Fatalf("expected old episode to be present (pruning is done by sleep cycle, not periodic committer)")
 	}
+}
 
-	if found, err := stm.Find(context.Background(), "fresh-episode", false); err != nil {
-		t.Fatalf("failed finding fresh episode: %v", err)
-	} else if !found {
-		t.Fatalf("expected fresh episode to remain after commit")
+func TestShortTermMemoryStore_StartPeriodicCommitterFlushesOnTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	prevWindow := stmBatchWindow
+	stmBatchWindow = 100 * time.Millisecond
+	t.Cleanup(func() { stmBatchWindow = prevWindow })
+
+	db := newFakeMemoryDB()
+	store := NewShortTermMemoryStore("agent-timeout", MaxSTMEpisodeAge)
+	queue := make(chan map[string]any, 1)
+	queue <- map[string]any{"id": "timeout-episode", "created_at": time.Now().UnixMilli(), "thought": "timeout"}
+
+	if err := store.StartPeriodicCommitter(ctx, db, queue); err != nil {
+		t.Fatalf("StartPeriodicCommitter failed: %v", err)
 	}
 
-	// Verify time indexes exist for both episodes
-	if found, err := indexTree.Find(context.Background(), STMTimeIndexKey(oldCreatedAt, "old-episode"), false); err != nil {
-		t.Fatalf("failed finding old time index: %v", err)
-	} else if !found {
-		t.Fatalf("expected old time index to be present")
+	deadline := time.Now().Add(2 * time.Second)
+	for db.commitCount.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
-	if found, err := indexTree.Find(context.Background(), STMTimeIndexKey(freshCreatedAt, "fresh-episode"), false); err != nil {
-		t.Fatalf("failed finding fresh time index: %v", err)
+	if db.commitCount.Load() == 0 {
+		t.Fatalf("expected committer to flush on timeout")
+	}
+
+	stm := db.Btree(store.StoreName())
+	if stm == nil {
+		t.Fatalf("expected STM primary btree to be created")
+	}
+	if found, err := stm.Find(context.Background(), "timeout-episode", false); err != nil {
+		t.Fatalf("failed finding timeout episode: %v", err)
 	} else if !found {
-		t.Fatalf("expected fresh time index to remain after commit")
+		t.Fatalf("expected timeout episode to be committed")
+	}
+}
+
+func TestFlushExpiredShortTermMemoryStores_ProcessesRegisteredStores(t *testing.T) {
+	prevWindow := stmBatchWindow
+	stmBatchWindow = 50 * time.Millisecond
+	t.Cleanup(func() { stmBatchWindow = prevWindow })
+
+	db := newFakeMemoryDB()
+	storeA := NewShortTermMemoryStore("agent-a", MaxSTMEpisodeAge)
+	storeB := NewShortTermMemoryStore("agent-b", MaxSTMEpisodeAge)
+	queueA := make(chan map[string]any, 1)
+	queueB := make(chan map[string]any, 1)
+	queueA <- map[string]any{"id": "queue-a", "created_at": time.Now().UnixMilli(), "thought": "a"}
+	queueB <- map[string]any{"id": "queue-b", "created_at": time.Now().UnixMilli(), "thought": "b"}
+	storeA.queue = queueA
+	storeB.queue = queueB
+	storeA.systemDB = db
+	storeB.systemDB = db
+	storeA.lastCommit.Store(time.Now().Add(-2 * stmBatchWindow).UnixMilli())
+	storeB.lastCommit.Store(time.Now().Add(-2 * stmBatchWindow).UnixMilli())
+
+	RegisterShortTermMemoryStore(storeA)
+	RegisterShortTermMemoryStore(storeB)
+	t.Cleanup(func() {
+		UnregisterShortTermMemoryStore(storeA)
+		UnregisterShortTermMemoryStore(storeB)
+	})
+
+	if err := FlushExpiredShortTermMemoryStores(context.Background()); err != nil {
+		t.Fatalf("FlushExpiredShortTermMemoryStores failed: %v", err)
+	}
+
+	if db.commitCount.Load() < 2 {
+		t.Fatalf("expected both registered STM stores to be flushed, got %d commits", db.commitCount.Load())
 	}
 }

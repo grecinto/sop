@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	log "log/slog"
@@ -14,8 +16,9 @@ import (
 
 const (
 	stmBatchMaxItems = 1000
-	stmBatchWindow   = 30 * time.Second
 )
+
+var stmBatchWindow = 30 * time.Second
 
 type ShortTermMemoryStore struct {
 	agentID string
@@ -24,8 +27,52 @@ type ShortTermMemoryStore struct {
 	byTime  btree.BtreeInterface[string, any]
 	maxAge  time.Duration
 
+	queue      chan map[string]any
+	systemDB   Database
+	lastCommit atomic.Int64
+	mu         sync.RWMutex
+
 	// Hook for session state persistence (work streams, conversation threads)
 	sessionStatePersister func(context.Context, btree.BtreeInterface[string, any]) error
+}
+
+var (
+	stmRegistryMu sync.RWMutex
+	stmRegistry   = make(map[*ShortTermMemoryStore]struct{})
+)
+
+func RegisterShortTermMemoryStore(store *ShortTermMemoryStore) {
+	if store == nil {
+		return
+	}
+	stmRegistryMu.Lock()
+	defer stmRegistryMu.Unlock()
+	stmRegistry[store] = struct{}{}
+}
+
+func UnregisterShortTermMemoryStore(store *ShortTermMemoryStore) {
+	if store == nil {
+		return
+	}
+	stmRegistryMu.Lock()
+	defer stmRegistryMu.Unlock()
+	delete(stmRegistry, store)
+}
+
+func FlushExpiredShortTermMemoryStores(ctx context.Context) error {
+	stmRegistryMu.RLock()
+	stores := make([]*ShortTermMemoryStore, 0, len(stmRegistry))
+	for store := range stmRegistry {
+		stores = append(stores, store)
+	}
+	stmRegistryMu.RUnlock()
+
+	for _, store := range stores {
+		if err := store.FlushIfExpired(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildMemoryScopeID(agentID string, userID string) string {
@@ -137,6 +184,83 @@ func ExtractSTMCreatedAt(payload map[string]any) (int64, bool) {
 
 func NewShortTermMemoryStore(agentID string, maxAge time.Duration) *ShortTermMemoryStore {
 	return &ShortTermMemoryStore{agentID: agentID, maxAge: maxAge}
+}
+
+func (s *ShortTermMemoryStore) FlushIfExpired(ctx context.Context) error {
+	if s == nil || s.systemDB == nil || s.queue == nil {
+		return nil
+	}
+	if s.lastCommit.Load() == 0 {
+		s.lastCommit.Store(time.Now().UnixMilli())
+	}
+	if time.Since(time.UnixMilli(s.lastCommit.Load())) < stmBatchWindow {
+		return nil
+	}
+	return s.flushPending(ctx)
+}
+
+func (s *ShortTermMemoryStore) flushPending(ctx context.Context) error {
+	if s == nil || s.systemDB == nil || s.queue == nil {
+		return nil
+	}
+	select {
+	case payload := <-s.queue:
+		if payload == nil {
+			return nil
+		}
+		return s.commitBatch(ctx, payload)
+	default:
+		return nil
+	}
+}
+
+func (s *ShortTermMemoryStore) commitBatch(ctx context.Context, firstPayload map[string]any) error {
+	if s == nil || s.systemDB == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tx, err := s.systemDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		return err
+	}
+	if err := s.Open(ctx, s.systemDB, tx); err != nil {
+		tx.Rollback(ctx)
+		return err
+	}
+
+	batch := []map[string]any{firstPayload}
+	for {
+		select {
+		case payload := <-s.queue:
+			if payload == nil {
+				continue
+			}
+			batch = append(batch, payload)
+		default:
+			goto commit
+		}
+	}
+
+commit:
+	for _, payload := range batch {
+		if err := s.UpsertEpisode(ctx, payload); err != nil {
+			log.Warn("ShortTermMemoryStore: failed to add item", "agent_id", s.agentID, "error", err)
+		}
+	}
+	if s.sessionStatePersister != nil {
+		if err := s.sessionStatePersister(ctx, s.primary); err != nil {
+			log.Warn("ShortTermMemoryStore: failed to persist session state", "agent_id", s.agentID, "error", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.lastCommit.Store(time.Now().UnixMilli())
+	s.Close()
+	return nil
 }
 
 func (s *ShortTermMemoryStore) SetUserID(userID string) {
@@ -260,6 +384,12 @@ func (s *ShortTermMemoryStore) StartPeriodicCommitter(ctx context.Context, syste
 		return fmt.Errorf("stm episode queue can't be nil")
 	}
 
+	if ch, ok := any(queue).(chan map[string]any); ok {
+		s.queue = ch
+	}
+	s.systemDB = systemDB
+	RegisterShortTermMemoryStore(s)
+
 	go func() {
 		log.Info("ShortTermMemoryStore: Periodic committer started", "agent_id", s.agentID)
 
@@ -272,60 +402,9 @@ func (s *ShortTermMemoryStore) StartPeriodicCommitter(ctx context.Context, syste
 				if firstPayload == nil {
 					continue
 				}
-
-				tx, err := systemDB.BeginTransaction(ctx, sop.ForWriting)
-				if err != nil {
-					log.Warn("ShortTermMemoryStore: tx begin failed", "agent_id", s.agentID, "error", err)
-					continue
+				if err := s.commitBatch(ctx, firstPayload); err != nil {
+					log.Warn("ShortTermMemoryStore: commit failed", "agent_id", s.agentID, "error", err)
 				}
-				if err := s.Open(ctx, systemDB, tx); err != nil {
-					log.Warn("ShortTermMemoryStore: open failed", "agent_id", s.agentID, "error", err)
-					tx.Rollback(ctx)
-					continue
-				}
-
-				// Note: Pruning is handled by sleep cycle consolidation (STM → LTM)
-				// which naturally drains STM every 30 minutes, keeping 0-30 min of data.
-				batchCount := 0
-				if err := s.UpsertEpisode(ctx, firstPayload); err != nil {
-					log.Warn("ShortTermMemoryStore: failed to add item", "agent_id", s.agentID, "error", err)
-				}
-				batchCount++
-				timeout := time.After(stmBatchWindow)
-				batching := true
-				for batching && batchCount < stmBatchMaxItems {
-					select {
-					case nextPayload := <-queue:
-						if nextPayload == nil {
-							continue
-						}
-						if err := s.UpsertEpisode(ctx, nextPayload); err != nil {
-							log.Warn("ShortTermMemoryStore: failed to add item", "agent_id", s.agentID, "error", err)
-							continue
-						}
-						batchCount++
-					case <-timeout:
-						batching = false
-					case <-ctx.Done():
-						batching = false
-					}
-				}
-
-				// Persist session state (work streams) in the same transaction
-				if s.sessionStatePersister != nil {
-					if err := s.sessionStatePersister(ctx, s.primary); err != nil {
-						log.Warn("ShortTermMemoryStore: failed to persist session state",
-							"agent_id", s.agentID, "error", err)
-						// Don't rollback - episodes are more important than session state
-					}
-				}
-
-				if err := tx.Commit(ctx); err != nil {
-					log.Warn("ShortTermMemoryStore: commit failed", "agent_id", s.agentID, "count", batchCount, "error", err)
-				} else {
-					log.Debug("ShortTermMemoryStore: batch committed to STM successfully", "agent_id", s.agentID, "count", batchCount)
-				}
-				s.Close()
 			}
 		}
 	}()

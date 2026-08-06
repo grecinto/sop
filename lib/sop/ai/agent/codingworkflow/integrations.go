@@ -27,12 +27,34 @@ type GitRepoInspector struct {
 	Client GitClient
 }
 
+func resolveRepoPath(start string) (string, error) {
+	if strings.TrimSpace(start) == "" {
+		return "", fmt.Errorf("working directory is required")
+	}
+	current := start
+	for {
+		_, err := git.PlainOpen(current)
+		if err == nil {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("no git repository found for %q", start)
+		}
+		current = parent
+	}
+}
+
 func (g *GitRepoInspector) ListChangedFiles(task Task, state RunState) ([]string, error) {
 	_ = state
-	if g != nil && g.Client != nil {
-		return g.Client.Status(task.WorkingDir)
+	repoPath, err := resolveRepoPath(task.WorkingDir)
+	if err != nil {
+		return nil, fmt.Errorf("open repo: %w", err)
 	}
-	repo, err := git.PlainOpen(task.WorkingDir)
+	if g != nil && g.Client != nil {
+		return g.Client.Status(repoPath)
+	}
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("open repo: %w", err)
 	}
@@ -106,10 +128,14 @@ func (g *GitRepoInspector) Inspect(task Task, state RunState) (RepoInspectionSum
 
 func (c *CommitSummary) CreateCommit(task Task, state RunState) error {
 	_ = state
-	if c != nil && c.Client != nil {
-		return c.Client.Commit(task.WorkingDir, c.Message)
+	repoPath, err := resolveRepoPath(task.WorkingDir)
+	if err != nil {
+		return fmt.Errorf("open repo: %w", err)
 	}
-	repo, err := git.PlainOpen(task.WorkingDir)
+	if c != nil && c.Client != nil {
+		return c.Client.Commit(repoPath, c.Message)
+	}
+	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("open repo: %w", err)
 	}

@@ -3597,7 +3597,7 @@ func extractProviderDetails(cfg *ai.ConfigMap) *ProviderDetails {
 }
 
 func (a *CopilotAgent) noAPIKeyMessage() string {
-	return "⚠️ **AI Copilot Disabled**: No valid API Key found.\n\nPlease go to **Environment Settings** (HDD icon in bottom left) -> **LLM API Key** to configure your Google Gemini or OpenAI key."
+	return "⚠️ **AI Copilot Disabled**: No valid API Key found.\n\nPlease open the **AI** dropdown in the top-left corner, choose your LLM provider/model, and add your API key there."
 }
 
 func (a *CopilotAgent) applyMetaTalkRewrite(ctx context.Context, query string) string {
