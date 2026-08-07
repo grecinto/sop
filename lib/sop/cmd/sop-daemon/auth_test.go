@@ -107,6 +107,45 @@ func TestDaemonRequireAuthPropagatesUserRoleToContext(t *testing.T) {
 	}
 }
 
+func TestDaemonRequireAuthReturnsRecoveryPayloadForExpiredSession(t *testing.T) {
+	h := &DaemonAuthHandler{sessionStore: newInMemoryDaemonSessionStore(5*time.Millisecond, time.Hour)}
+	token, _, err := h.sessionStore.CreateSession(context.Background(), "alice", sop.RoleAdmin)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+
+	h.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rr.Code)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["error"] != "Invalid or expired token" {
+		t.Fatalf("expected invalid/expired token error, got %#v", payload)
+	}
+	recovery, ok := payload["auth_recovery"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected auth_recovery payload, got %#v", payload["auth_recovery"])
+	}
+	if recovery["required"] != true || recovery["flow"] != "daemon_bootstrap" {
+		t.Fatalf("expected daemon bootstrap recovery hints, got %#v", recovery)
+	}
+	if recovery["challenge_path"] != "/api/daemon/challenge" || recovery["bootstrap_auth_path"] != "/api/daemon/auth" || recovery["refresh_path"] != "/api/daemon/refresh" {
+		t.Fatalf("expected recovery endpoint hints, got %#v", recovery)
+	}
+}
+
 func TestHandleBootstrapUsesCurrentBootstrapSecretFromDisk(t *testing.T) {
 	withIsolatedSystemDB(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

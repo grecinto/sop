@@ -102,10 +102,18 @@ The goal is for Continue to successfully complete the IDE coding work it is alre
 - daemon-owned delegated execution at `/api/continue/agent/execute`
 - transport and backend foundations for daemon-owned Continue delegation
 - request-scoped execution correlation through `request_id` while keeping `session_id` as workstream identity
+- typed delegated execution results persisted in daemon-owned session and request snapshots, including daemon-local fallback execution
+- incremental worker NDJSON parsing with bounded diagnostic buffering so large structured delegated results do not require whole-body mirroring in daemon memory
+- typed worker streamed events (including progress and file-change) persisted in daemon-owned session and request snapshots with bounded event payload fields
 - current Ask-side capability scaffolding that can be evolved into the single-tool Continue participant
+- Ask-visible Continue capability surface converged to a single delegated tool (`delegate_continue_task`) with lifecycle helpers kept as non-primary internal helpers
+- Continue capability context/instructions/classification tightened so Continue-originated requests remain normal Ask turns and delegation stays bounded under daemon orchestration
 - provider/model propagation from native Continue chat into Ask payload variables
 - provider/model propagation from the delegated Continue task contract into Continue worker execution payloads
+- daemon-side auto model-tier selection for Continue bridge requests when provider/model are not explicitly pinned (compact -> lower-thinking option, deliberate -> higher-thinking option)
 - metadata flags declaring that provider/model are explicit transport attributes
+- bridge endpoint bearer-token behavior validated across chat, tools, worker registration, delegated execution, and snapshot reads
+- expired-session recovery UX surfaced through a shared daemon bootstrap recovery payload on protected endpoint auth failures (no Continue-specific auth scheme)
 - Continue provider forwarding of `tools` and `tool_choice`
 - translation of daemon `tool_call` events into native Continue `assistant.toolCalls`
 - surfaced Continue IDE-native tools for problems, definitions, type definitions, references, document symbols, and terminal contents
@@ -116,33 +124,17 @@ The goal is for Continue to successfully complete the IDE coding work it is alre
 
 Detailed workflow-surface analysis and SDLC boundary are documented in [docs/CONTINUE_IDE_WORKFLOW_SURFACE.md](docs/CONTINUE_IDE_WORKFLOW_SURFACE.md).
 
-### 1. LAO Continue capability convergence
-
-- simplify the Ask-visible Continue capability to one delegated tool: `delegate_continue_task`
-- move session/metadata inspection into dynamic context and instructions instead of treating inspection as a primary long-term tool surface
-- ensure `Classify()` treats Continue-originated IDE coding asks as normal Ask inputs that happen to have a Continue participant available
-- ensure the daemon LLM receives enough context to compose a Continue-facing objective instead of imitating Continue's lower-level tools
+Token-efficiency planning for Continue-originated requests is documented in [docs/CONTINUE_TOKEN_OPTIMIZATION_PLAN.md](docs/CONTINUE_TOKEN_OPTIMIZATION_PLAN.md).
 
 ### 2. Continue client wiring and workflow shaping
 
 - ensure the Continue-side integration always calls the native `/api/continue/*` endpoints
-- ensure the Continue-side request builder sends provider and model explicitly on chat and delegated execution requests
+- ensure the Continue-side request builder sends provider and model explicitly on chat and delegated execution requests when user intent pins the model; otherwise allow daemon auto tier routing
 - ensure worker registration advertises only capabilities the editor callback truly supports
 - define AI Studio workflow profiles that deliberately decide which Continue tools are exposed per request
 
-### 2a. Ask2Ask contract hardening
-
-- persist the final delegated worker result object in daemon-owned session/workflow state, not only transport status
-- keep the final delegated worker snapshot addressable by `request_id`, not only by `session_id`
-- keep `phase` and `mode` separate across the delegated execution contract; `phase` is workflow position, `mode` is Continue execution posture
-- treat the final delegated result as a typed daemon object even when the Ask-visible tool also renders it as JSON/text for the model
-- incrementally parse worker NDJSON streams so large delegated results do not require whole-body buffering on the proxy path
-- define the streamed event schema alongside the final result schema so worker progress and file-change events remain stable across integrations
-
 ### 3. Authentication hardening
 
-- validate bearer-token behavior across chat, tools, worker registration, and delegated execution
-- finalize recovery UX for expired sessions without introducing a Continue-specific auth scheme
 
 ### 4. Session and workflow polish
 

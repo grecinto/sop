@@ -302,6 +302,9 @@ func TestContinueChatHandler_PropagatesProviderDetailsIntoAgentConfig(t *testing
 	if payload.Variables["llm_provider"] != "gemini" || payload.Variables["llm_model"] != "gemini-2.5-pro" {
 		t.Fatalf("expected provider intent in payload variables, got %#v", payload.Variables)
 	}
+	if _, ok := payload.Variables["continue_routing_tier"]; ok {
+		t.Fatalf("expected no inferred routing hint when provider/model are explicit, got %#v", payload.Variables)
+	}
 	if payload.Variables["llm_url"] != "https://example.test" {
 		t.Fatalf("expected base URL intent in payload variables, got %#v", payload.Variables)
 	}
@@ -466,7 +469,75 @@ func TestContinueToolHandlerAppliesPatchToWorkspaceFile(t *testing.T) {
 		t.Fatalf("read patched file: %v", err)
 	}
 	if string(data) != "after" {
-		t.Fatalf("expected patch to overwrite file contents, got %q", string(data))
+		t.Fatalf("expected patch to overwrite file contents in replace mode, got %q", string(data))
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	if result["mode"] != "replace" {
+		t.Fatalf("expected replace mode for full-content patch, got %#v", result["mode"])
+	}
+}
+
+func TestContinueToolHandlerAppliesUnifiedHunkPatchToLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	lines := make([]string, 0, 1200)
+	for i := 1; i <= 1200; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	original := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(filePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	patch := strings.Join([]string{
+		"@@ -600,3 +600,3 @@",
+		" line 600",
+		"-line 601",
+		"+line 601 patched",
+		" line 602",
+	}, "\n")
+
+	service := &localRAGService{}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.apply_patch", strings.NewReader(fmt.Sprintf(`{"path":"%s","selection":%q}`, filePath, patch)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueTool(rr, req, "code.apply_patch")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read patched file: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "line 601 patched") || strings.Contains(text, "line 601\n") {
+		t.Fatalf("expected targeted hunk update in large file")
+	}
+	if !strings.Contains(text, "line 1200\n") {
+		t.Fatalf("expected non-target lines to remain intact")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	if result["mode"] != "unified_hunk" {
+		t.Fatalf("expected unified_hunk mode, got %#v", result["mode"])
 	}
 }
 
@@ -524,6 +595,52 @@ func TestContinueToolHandlerPreviewsPatchForWorkspaceFile(t *testing.T) {
 	preview := fmt.Sprint(result["preview"])
 	if !strings.Contains(preview, "-before") || !strings.Contains(preview, "+after") {
 		t.Fatalf("expected preview to include old and new content, got %q", preview)
+	}
+	if result["mode"] != "replace" {
+		t.Fatalf("expected replace mode in preview, got %#v", result["mode"])
+	}
+}
+
+func TestContinueToolHandlerPreviewsUnifiedHunkPatchForWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	patch := strings.Join([]string{
+		"@@ -1,3 +1,3 @@",
+		" alpha",
+		"-beta",
+		"+beta patched",
+		" gamma",
+	}, "\n")
+
+	service := &localRAGService{}
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.preview_patch", strings.NewReader(fmt.Sprintf(`{"path":"%s","selection":%q}`, filePath, patch)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	service.handleContinueTool(rr, req, "code.preview_patch")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	preview := fmt.Sprint(result["preview"])
+	if !strings.Contains(preview, "-alpha\nbeta\ngamma") || !strings.Contains(preview, "+alpha\nbeta patched\ngamma") {
+		t.Fatalf("expected preview to include transformed content for hunk patch, got %q", preview)
+	}
+	if result["mode"] != "unified_hunk" {
+		t.Fatalf("expected unified_hunk mode in preview, got %#v", result["mode"])
 	}
 }
 
@@ -791,6 +908,7 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		_, _ = w.Write([]byte("{\"type\":\"progress\",\"message\":\"Continue worker preparing patch\"}\n"))
+		_, _ = w.Write([]byte("{\"type\":\"file_change\",\"file_path\":\"payments/service.go\",\"crud_operation\":\"update\",\"diff_summary\":\"Applied payment patch\",\"metadata\":{\"phase\":\"execution\"}}\n"))
 		_, _ = w.Write([]byte("{\"type\":\"done\",\"result\":{\"status\":\"completed\",\"summary\":\"Patched payments/service.go\",\"modified_files\":[{\"file_path\":\"payments/service.go\",\"crud_operation\":\"update\",\"diff_summary\":\"Applied payment patch\",\"diff_format\":\"unified\",\"metadata\":{\"phase\":\"execution\"}}],\"metadata\":{\"requested_phase\":\"execution\",\"mode\":\"apply\"}}}\n"))
 	}))
 	defer worker.Close()
@@ -864,6 +982,34 @@ func TestRegisterBridgeRoutes_ProxiesContinueAgentExecutionToRegisteredWorker(t 
 	modifiedFiles, ok := result["modified_files"].([]any)
 	if !ok || len(modifiedFiles) != 1 {
 		t.Fatalf("expected one persisted modified file, got %#v", result["modified_files"])
+	}
+	events, ok := snapshot["execution_events"].([]any)
+	if !ok || len(events) < 3 {
+		t.Fatalf("expected persisted execution events on session snapshot, got %#v", snapshot["execution_events"])
+	}
+	progressEvent, ok := events[0].(map[string]any)
+	if !ok || progressEvent["type"] != "progress" {
+		t.Fatalf("expected progress event first, got %#v", events)
+	}
+	fileChangeEvent, ok := events[1].(map[string]any)
+	if !ok || fileChangeEvent["type"] != "file_change" || fileChangeEvent["file_path"] != "payments/service.go" {
+		t.Fatalf("expected file_change event with file path, got %#v", events)
+	}
+
+	requestReq := httptest.NewRequest(http.MethodGet, "/api/continue/requests/"+requestID, nil)
+	requestReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-request")
+	requestRR := httptest.NewRecorder()
+	mux.ServeHTTP(requestRR, requestReq)
+	if requestRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue worker request route status = %d, want %d", requestRR.Code, http.StatusOK)
+	}
+	var requestSnapshot map[string]any
+	if err := json.Unmarshal(requestRR.Body.Bytes(), &requestSnapshot); err != nil {
+		t.Fatalf("decode proxied continue request snapshot: %v", err)
+	}
+	requestEvents, ok := requestSnapshot["execution_events"].([]any)
+	if !ok || len(requestEvents) < 3 {
+		t.Fatalf("expected execution events in request snapshot, got %#v", requestSnapshot["execution_events"])
 	}
 }
 
@@ -943,6 +1089,135 @@ func TestBuildContinueBridgeEnvelope_PreservesContinueToolMetadata(t *testing.T)
 		if !strings.Contains(envelope.Ask.FullPrompt, check) {
 			t.Fatalf("expected %q in full prompt, got %q", check, envelope.Ask.FullPrompt)
 		}
+	}
+}
+
+func TestBuildContinueBridgeEnvelope_TrimsPromptOpenFilesButPreservesStructuredContext(t *testing.T) {
+	envelope, err := buildContinueBridgeEnvelope(continueChatRequest{
+		SessionID: "sess-open-files",
+		Message:   "Review the payment flow",
+		Mode:      "review",
+		Context: struct {
+			OpenFiles    []string `json:"open_files"`
+			SelectedText string   `json:"selected_text"`
+		}{OpenFiles: []string{
+			"payments/service.go",
+			"payments/service_test.go",
+			"payments/retry.go",
+			"payments/retry.go",
+			"docs/PAYMENTS.md",
+			"",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
+	}
+	openFiles, ok := envelope.Ask.Variables["open_files"].([]string)
+	if !ok {
+		t.Fatalf("expected structured open_files variable, got %#v", envelope.Ask.Variables["open_files"])
+	}
+	if len(openFiles) != 4 {
+		t.Fatalf("expected four normalized open files, got %#v", openFiles)
+	}
+	if openFiles[0] != "payments/service.go" || openFiles[3] != "docs/PAYMENTS.md" {
+		t.Fatalf("expected original ordering for normalized open files, got %#v", openFiles)
+	}
+	if !strings.Contains(envelope.Ask.FullPrompt, "[open_files=payments/service.go,payments/service_test.go,payments/retry.go,+1_more]") {
+		t.Fatalf("expected trimmed open_files prompt, got %q", envelope.Ask.FullPrompt)
+	}
+	if strings.Contains(envelope.Ask.FullPrompt, "payments/retry.go,payments/retry.go") || strings.Contains(envelope.Ask.FullPrompt, "docs/PAYMENTS.md]") {
+		t.Fatalf("expected prompt open files to be deduplicated and trimmed, got %q", envelope.Ask.FullPrompt)
+	}
+}
+
+func TestBuildContinueBridgeEnvelope_TrimsPromptSelectedTextButPreservesStructuredContext(t *testing.T) {
+	selectedText := strings.Repeat("func processPayment() error { return nil } ", 12)
+	expectedSelectedText := strings.TrimSpace(selectedText)
+	envelope, err := buildContinueBridgeEnvelope(continueChatRequest{
+		SessionID: "sess-selected-text",
+		Message:   "Explain this selection",
+		Mode:      "review",
+		Context: struct {
+			OpenFiles    []string `json:"open_files"`
+			SelectedText string   `json:"selected_text"`
+		}{SelectedText: selectedText},
+	})
+	if err != nil {
+		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
+	}
+	if envelope.Ask.Variables["selected_text"] != expectedSelectedText {
+		t.Fatalf("expected full selected_text in structured variables, got %#v", envelope.Ask.Variables["selected_text"])
+	}
+	if !strings.Contains(envelope.Ask.FullPrompt, "[selected_text=") {
+		t.Fatalf("expected selected_text in prompt, got %q", envelope.Ask.FullPrompt)
+	}
+	if !strings.Contains(envelope.Ask.FullPrompt, "...") {
+		t.Fatalf("expected trimmed selected_text prompt with ellipsis, got %q", envelope.Ask.FullPrompt)
+	}
+	if strings.Contains(envelope.Ask.FullPrompt, expectedSelectedText) {
+		t.Fatalf("expected prompt selected_text to be trimmed, got %q", envelope.Ask.FullPrompt)
+	}
+}
+
+func TestBuildContinueBridgeEnvelope_AddsCompactRoutingHintForNarrowSelectionRequests(t *testing.T) {
+	envelope, err := buildContinueBridgeEnvelope(continueChatRequest{
+		SessionID: "sess-routing-compact",
+		Message:   "Explain this function",
+		Mode:      "review",
+		Context: struct {
+			OpenFiles    []string `json:"open_files"`
+			SelectedText string   `json:"selected_text"`
+		}{
+			OpenFiles:    []string{"payments/service.go"},
+			SelectedText: "func processPayment() error { return nil }",
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
+	}
+	if envelope.Ask.Variables["continue_routing_tier"] != "compact" || envelope.Ask.Variables["continue_routing_reason"] != "narrow_selection_request" {
+		t.Fatalf("expected compact routing hint, got %#v", envelope.Ask.Variables)
+	}
+	if envelope.Ask.Variables["continue_model_routing_source"] != "daemon_auto" || envelope.Ask.Variables["continue_model_routing_tier"] != "compact" {
+		t.Fatalf("expected daemon auto model routing for compact tier, got %#v", envelope.Ask.Variables)
+	}
+	if strings.TrimSpace(envelope.Ask.ProviderName) == "" || strings.TrimSpace(envelope.Ask.ModelName) == "" {
+		t.Fatalf("expected daemon auto provider/model for compact tier, got provider=%q model=%q", envelope.Ask.ProviderName, envelope.Ask.ModelName)
+	}
+	if envelope.Ask.Variables["llm_provider"] != envelope.Ask.ProviderName || envelope.Ask.Variables["llm_model"] != envelope.Ask.ModelName {
+		t.Fatalf("expected llm provider/model variables to match auto-selected ask provider/model, got %#v", envelope.Ask.Variables)
+	}
+	if !strings.Contains(envelope.Ask.FullPrompt, "[continue_routing_tier=compact]") || !strings.Contains(envelope.Ask.FullPrompt, "[continue_routing_reason=narrow_selection_request]") {
+		t.Fatalf("expected compact routing hint in prompt, got %q", envelope.Ask.FullPrompt)
+	}
+}
+
+func TestBuildContinueBridgeEnvelope_AddsDeliberateRoutingHintForComplexRequests(t *testing.T) {
+	envelope, err := buildContinueBridgeEnvelope(continueChatRequest{
+		SessionID: "sess-routing-deliberate",
+		Message:   "Debug the architecture issue across these files",
+		Mode:      "plan",
+		Context: struct {
+			OpenFiles    []string `json:"open_files"`
+			SelectedText string   `json:"selected_text"`
+		}{
+			OpenFiles: []string{"payments/service.go", "payments/service_test.go", "payments/retry.go", "payments/worker.go"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildContinueBridgeEnvelope failed: %v", err)
+	}
+	if envelope.Ask.Variables["continue_routing_tier"] != "deliberate" || envelope.Ask.Variables["continue_routing_reason"] != "multi_file_or_complex_reasoning" {
+		t.Fatalf("expected deliberate routing hint, got %#v", envelope.Ask.Variables)
+	}
+	if envelope.Ask.Variables["continue_model_routing_source"] != "daemon_auto" || envelope.Ask.Variables["continue_model_routing_tier"] != "deliberate" {
+		t.Fatalf("expected daemon auto model routing for deliberate tier, got %#v", envelope.Ask.Variables)
+	}
+	if strings.TrimSpace(envelope.Ask.ProviderName) == "" || strings.TrimSpace(envelope.Ask.ModelName) == "" {
+		t.Fatalf("expected daemon auto provider/model for deliberate tier, got provider=%q model=%q", envelope.Ask.ProviderName, envelope.Ask.ModelName)
+	}
+	if !strings.Contains(envelope.Ask.FullPrompt, "[continue_routing_tier=deliberate]") || !strings.Contains(envelope.Ask.FullPrompt, "[continue_routing_reason=multi_file_or_complex_reasoning]") {
+		t.Fatalf("expected deliberate routing hint in prompt, got %q", envelope.Ask.FullPrompt)
 	}
 }
 
@@ -1074,10 +1349,88 @@ func TestContinueIDEWorkerBackend_ExecuteTaskProxiesRegisteredWorker(t *testing.
 	if len(received.Guidance.TeamPractices) != 2 || received.Guidance.ExpectedResultFormat != "structured_execution_result" {
 		t.Fatalf("expected structured guidance on worker request, got %#v", received.Guidance)
 	}
+	if !containsString(received.Guidance.ImplementationNotes, "Prefer patch-style or search/replace edits over whole-file rewrites.") {
+		t.Fatalf("expected patch-first implementation note on worker request, got %#v", received.Guidance.ImplementationNotes)
+	}
+	if !containsString(received.Guidance.SuccessCriteria, "Return a structured execution result with modified_files metadata.") {
+		t.Fatalf("expected structured diff success criteria on worker request, got %#v", received.Guidance.SuccessCriteria)
+	}
 	for _, want := range []string{"\"status\": \"completed\""} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("expected canonical JSON execution result to contain %q, got %q", want, result)
 		}
+	}
+}
+
+func TestContinueIDEWorkerBackend_ExecuteTaskAddsStructuredDefaultsForPatchStyleDelegation(t *testing.T) {
+	service := &localRAGService{service: &recordingQueryAgent{}}
+	var received continueAgentExecuteRequest
+	worker := newLoopbackTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte("{\"type\":\"done\",\"result\":{\"status\":\"completed\"}}\n"))
+	}))
+	defer worker.Close()
+
+	service.ensureContinueWorkerStore().Put(continueWorkerRegistration{
+		SessionID:    "continue-worker-3",
+		CallbackURL:  worker.URL,
+		Capabilities: []string{"apply_patch", "read_context"},
+		IDE:          "vscode",
+	})
+
+	backend := newContinueIDEWorkerBackend(service)
+	_, err := backend.ExecuteTask(context.Background(), ideworker.TaskRequest{
+		SessionID:      "continue-worker-3",
+		Task:           "Apply the prepared patch",
+		Mode:           "apply",
+		RequestedPhase: "execution",
+		ToolChoice:     "multi_edit",
+		ActiveFile:     "payments/service.go",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask failed: %v", err)
+	}
+	if received.Guidance.ExpectedResultFormat != "structured_execution_result" {
+		t.Fatalf("expected default structured result format, got %#v", received.Guidance)
+	}
+	if !containsString(received.Guidance.ImplementationNotes, "Prefer patch-style or search/replace edits over whole-file rewrites.") {
+		t.Fatalf("expected default patch-first implementation note, got %#v", received.Guidance.ImplementationNotes)
+	}
+	if !containsString(received.Guidance.SuccessCriteria, "Keep changes bounded to the requested slice.") {
+		t.Fatalf("expected bounded-change success criteria, got %#v", received.Guidance.SuccessCriteria)
+	}
+}
+
+func TestReadContinueWorkerResponse_AvoidsBufferingLargeStructuredDonePayload(t *testing.T) {
+	largeDiff := strings.Repeat("diff-line\n", 12000)
+	body := strings.NewReader("{\"type\":\"progress\",\"message\":\"worker applying patch\"}\n" +
+		"{\"type\":\"file_change\",\"file\":{\"path\":\"payments/service.go\",\"operation\":\"update\",\"summary\":\"Applied payment patch\"}}\n" +
+		fmt.Sprintf("{\"type\":\"done\",\"result\":{\"status\":\"completed\",\"summary\":\"Patched payments/service.go\",\"modified_files\":[{\"file_path\":\"payments/service.go\",\"diff_delta\":%q}]}}\n", largeDiff))
+
+	outcome, err := readContinueWorkerResponse(body, nil, true)
+	if err != nil {
+		t.Fatalf("readContinueWorkerResponse failed: %v", err)
+	}
+	if outcome.FinalResult == nil || outcome.FinalResult.Summary != "Patched payments/service.go" {
+		t.Fatalf("expected structured final result, got %#v", outcome.FinalResult)
+	}
+	if !strings.Contains(outcome.RawBody, "worker applying patch") {
+		t.Fatalf("expected progress summary in raw body, got %q", outcome.RawBody)
+	}
+	if strings.Contains(outcome.RawBody, largeDiff) {
+		t.Fatalf("expected raw body to exclude large structured done payload")
+	}
+	if len(outcome.RawBody) >= len(largeDiff) {
+		t.Fatalf("expected raw body to stay bounded, got %d bytes", len(outcome.RawBody))
+	}
+	if len(outcome.Events) < 3 {
+		t.Fatalf("expected typed stream events, got %#v", outcome.Events)
+	}
+	if outcome.Events[1].Type != "file_change" || outcome.Events[1].FilePath != "payments/service.go" || outcome.Events[1].CRUDOperation != "update" {
+		t.Fatalf("expected typed file_change stream event, got %#v", outcome.Events[1])
 	}
 }
 
@@ -1217,6 +1570,29 @@ func TestRegisterBridgeRoutes_FallsBackWhenRegisteredWorkerLacksRequiredCapabili
 	if snapshot["status"] != "completed" || snapshot["phase"] != "execution" {
 		t.Fatalf("expected completed execution snapshot for daemon fallback path, got %#v", snapshot)
 	}
+	requestID, ok := snapshot["request_id"].(string)
+	if !ok || requestID == "" {
+		t.Fatalf("expected daemon-generated request id on fallback snapshot, got %#v", snapshot)
+	}
+
+	requestReq := httptest.NewRequest(http.MethodGet, "/api/continue/requests/"+requestID, nil)
+	requestReq.Header.Set("X-SOP-Session-ID", "bridge-route-worker-fallback-request")
+	requestRR := httptest.NewRecorder()
+	mux.ServeHTTP(requestRR, requestReq)
+	if requestRR.Code != http.StatusOK {
+		t.Fatalf("mounted continue fallback request route status = %d, want %d", requestRR.Code, http.StatusOK)
+	}
+	var requestSnapshot map[string]any
+	if err := json.Unmarshal(requestRR.Body.Bytes(), &requestSnapshot); err != nil {
+		t.Fatalf("decode fallback continue request snapshot: %v", err)
+	}
+	result, ok := requestSnapshot["execution_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected typed execution_result in fallback request snapshot, got %#v", requestSnapshot["execution_result"])
+	}
+	if result["status"] != "completed" {
+		t.Fatalf("expected completed typed execution_result in fallback request snapshot, got %#v", result)
+	}
 }
 
 func TestRegisterBridgeRoutes_RejectsWorkerRegistrationWithNonLoopbackCallbackURL(t *testing.T) {
@@ -1267,6 +1643,32 @@ func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testi
 	if unauthMetadataRR.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated metadata status = %d, want %d", unauthMetadataRR.Code, http.StatusUnauthorized)
 	}
+	unauthChatReq := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"continue-auth-unauth","message":"hello","workspace":{"root":"."}}`))
+	unauthChatReq.Header.Set("Content-Type", "application/json")
+	unauthChatRR := httptest.NewRecorder()
+	mux.ServeHTTP(unauthChatRR, unauthChatReq)
+	if unauthChatRR.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated continue chat status = %d, want %d", unauthChatRR.Code, http.StatusUnauthorized)
+	}
+	unauthRegisterReq := httptest.NewRequest(http.MethodPost, "/api/continue/worker/register", strings.NewReader(`{"session_id":"continue-auth-unauth","callback_url":"http://127.0.0.1:9999","capabilities":["read_context"],"ide":"vscode"}`))
+	unauthRegisterReq.Header.Set("Content-Type", "application/json")
+	unauthRegisterRR := httptest.NewRecorder()
+	mux.ServeHTTP(unauthRegisterRR, unauthRegisterReq)
+	if unauthRegisterRR.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated worker register status = %d, want %d", unauthRegisterRR.Code, http.StatusUnauthorized)
+	}
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "auth-readme.txt")
+	if err := os.WriteFile(filePath, []byte("auth check"), 0o644); err != nil {
+		t.Fatalf("write auth temp file: %v", err)
+	}
+	unauthToolReq := httptest.NewRequest(http.MethodPost, "/api/continue/tools/repo.read_file", strings.NewReader(fmt.Sprintf(`{"path":"%s","start_line":1,"end_line":1}`, filePath)))
+	unauthToolReq.Header.Set("Content-Type", "application/json")
+	unauthToolRR := httptest.NewRecorder()
+	mux.ServeHTTP(unauthToolRR, unauthToolReq)
+	if unauthToolRR.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated continue tool status = %d, want %d", unauthToolRR.Code, http.StatusUnauthorized)
+	}
 
 	bootstrapChallenge := authHandler.issueBootstrapChallenge()
 	if bootstrapChallenge == nil {
@@ -1297,6 +1699,33 @@ func TestRegisterBridgeRoutes_RequiresBootstrapAuthenticatedBearerToken(t *testi
 	}
 	if !strings.Contains(authMetadataRR.Body.String(), `"client":"continue"`) {
 		t.Fatalf("expected continue metadata payload, got %q", authMetadataRR.Body.String())
+	}
+
+	authChatReq := httptest.NewRequest(http.MethodPost, "/api/continue/chat", strings.NewReader(`{"session_id":"continue-auth-2","message":"hello","workspace":{"root":"."}}`))
+	authChatReq.Header.Set("Authorization", "Bearer "+accessToken)
+	authChatReq.Header.Set("Content-Type", "application/json")
+	authChatRR := httptest.NewRecorder()
+	mux.ServeHTTP(authChatRR, authChatReq)
+	if authChatRR.Code != http.StatusOK {
+		t.Fatalf("authenticated continue chat status = %d, want %d", authChatRR.Code, http.StatusOK)
+	}
+
+	authRegisterReq := httptest.NewRequest(http.MethodPost, "/api/continue/worker/register", strings.NewReader(`{"session_id":"continue-auth-registered","callback_url":"http://127.0.0.1:9999","capabilities":["read_context"],"ide":"vscode"}`))
+	authRegisterReq.Header.Set("Authorization", "Bearer "+accessToken)
+	authRegisterReq.Header.Set("Content-Type", "application/json")
+	authRegisterRR := httptest.NewRecorder()
+	mux.ServeHTTP(authRegisterRR, authRegisterReq)
+	if authRegisterRR.Code != http.StatusOK {
+		t.Fatalf("authenticated worker register status = %d, want %d", authRegisterRR.Code, http.StatusOK)
+	}
+
+	authToolReq := httptest.NewRequest(http.MethodPost, "/api/continue/tools/repo.read_file", strings.NewReader(fmt.Sprintf(`{"path":"%s","start_line":1,"end_line":1}`, filePath)))
+	authToolReq.Header.Set("Authorization", "Bearer "+accessToken)
+	authToolReq.Header.Set("Content-Type", "application/json")
+	authToolRR := httptest.NewRecorder()
+	mux.ServeHTTP(authToolRR, authToolReq)
+	if authToolRR.Code != http.StatusOK {
+		t.Fatalf("authenticated continue tool status = %d, want %d", authToolRR.Code, http.StatusOK)
 	}
 
 	executeReq := httptest.NewRequest(http.MethodPost, "/api/continue/agent/execute", strings.NewReader(`{"request_id":"client-request-auth-1","session_id":"continue-auth-1","task":"Summarize the active file and report the workspace root.","mode":"apply","context":{"workspace_root":".","active_file":"README.md","selected_text":"","open_files":["README.md"]}}`))

@@ -1696,13 +1696,13 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 		// Extract bearer token
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Authorization header required"})
+			h.respondAuthRequired(w, "Authorization header required")
 			return
 		}
 
 		token := extractBearerToken(authHeader)
 		if token == "" {
-			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid authorization header format"})
+			h.respondAuthRequired(w, "Invalid authorization header format")
 			return
 		}
 
@@ -1711,7 +1711,7 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 		if err != nil {
 			claims, claimErr := h.validateHQSignedToken(token)
 			if claimErr != nil {
-				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "Invalid or expired token"})
+				h.respondAuthRequired(w, "Invalid or expired token")
 				return
 			}
 			authCtx := sop.AuthContext{
@@ -1738,6 +1738,24 @@ func (h *DaemonAuthHandler) RequireAuth(next http.HandlerFunc) http.HandlerFunc 
 		h.touchClientSession("", token)
 		next(w, r)
 	}
+}
+
+func (h *DaemonAuthHandler) respondAuthRequired(w http.ResponseWriter, errorMessage string) {
+	if strings.TrimSpace(errorMessage) == "" {
+		errorMessage = "Authentication required"
+	}
+	respondJSON(w, http.StatusUnauthorized, map[string]any{
+		"error": errorMessage,
+		"auth_recovery": map[string]any{
+			"required":                  true,
+			"flow":                      "daemon_bootstrap",
+			"challenge_path":            "/api/daemon/challenge",
+			"bootstrap_auth_path":       "/api/daemon/auth",
+			"refresh_path":              "/api/daemon/refresh",
+			"regenerate_bootstrap_path": "/api/daemon/regenerate-bootstrap",
+			"message":                   "Session expired or missing. Re-authenticate through daemon bootstrap flow.",
+		},
+	})
 }
 
 func readClientID(r *http.Request) string {

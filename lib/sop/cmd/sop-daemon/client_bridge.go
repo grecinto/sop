@@ -80,6 +80,18 @@ type continueWorkflowProfile struct {
 	Guidance         string
 }
 
+type continueRoutingHint struct {
+	Tier   string
+	Reason string
+}
+
+type continueAutoModelSelection struct {
+	Provider string
+	Model    string
+	Tier     string
+	Reason   string
+}
+
 type continueIDEToolDefinition struct {
 	Name         string   `json:"name"`
 	DisplayName  string   `json:"display_name"`
@@ -132,6 +144,18 @@ type continueExecutionResult struct {
 	ModifiedFiles []continueExecutionModifiedFile `json:"modified_files,omitempty"`
 	Artifacts     []continueExecutionArtifact     `json:"artifacts,omitempty"`
 	Metadata      map[string]any                  `json:"metadata,omitempty"`
+}
+
+type continueExecutionEvent struct {
+	Type          string         `json:"type,omitempty"`
+	Status        string         `json:"status,omitempty"`
+	Message       string         `json:"message,omitempty"`
+	Content       string         `json:"content,omitempty"`
+	Error         string         `json:"error,omitempty"`
+	FilePath      string         `json:"file_path,omitempty"`
+	CRUDOperation string         `json:"crud_operation,omitempty"`
+	DiffSummary   string         `json:"diff_summary,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 type continueDelegationReference struct {
@@ -202,6 +226,7 @@ type continueSessionSnapshot struct {
 	ActiveFile      string                   `json:"active_file,omitempty"`
 	WorkspaceRoot   string                   `json:"workspace_root,omitempty"`
 	ExecutionResult *continueExecutionResult `json:"execution_result,omitempty"`
+	ExecutionEvents []continueExecutionEvent `json:"execution_events,omitempty"`
 }
 
 type continueWorkerCallbackOutcome struct {
@@ -209,6 +234,7 @@ type continueWorkerCallbackOutcome struct {
 	ContentType   string
 	RawBody       string
 	FinalResult   *continueExecutionResult
+	Events        []continueExecutionEvent
 	StreamedEvent bool
 }
 
@@ -239,6 +265,10 @@ type continueBridgeWorkerStore struct {
 }
 
 var continueWorkerCapabilityCatalog = []string{"read_context", "apply_patch", "edit_code", "diff_review", "plan_changes"}
+
+const continueWorkerRawBodyLimit = 64 * 1024
+const continueExecutionEventLimit = 64
+const continueExecutionEventTextLimit = 2048
 
 type continueBridgeTransport struct{}
 
@@ -672,7 +702,7 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 			if outcome.StatusCode >= 400 {
 				status = "failed"
 			}
-			s.ensureContinueSessionStore().Put(buildContinueExecutionSnapshot(req.RequestID, chatReq, workflowProfile, requestedPhase, status, chatReq.Message, outcome.FinalResult))
+			s.ensureContinueSessionStore().Put(buildContinueExecutionSnapshot(req.RequestID, chatReq, workflowProfile, requestedPhase, status, chatReq.Message, outcome.FinalResult, outcome.Events))
 			return
 		}
 	}
@@ -723,6 +753,7 @@ func (continueBridgeTransport) proxyAgentExecuteToWorker(ctx context.Context, w 
 		return outcome, fmt.Errorf("copy worker response: %w", err)
 	}
 	outcome.FinalResult = streamOutcome.FinalResult
+	outcome.Events = streamOutcome.Events
 	outcome.StreamedEvent = streamOutcome.StreamedEvent
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
@@ -1073,6 +1104,148 @@ func intersectContinueToolNames(left, right []string) []string {
 	return matched
 }
 
+func normalizeContinueOpenFiles(openFiles []string) []string {
+	if len(openFiles) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	normalized := make([]string, 0, len(openFiles))
+	for _, path := range openFiles {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func continuePromptOpenFiles(openFiles []string) string {
+	normalized := normalizeContinueOpenFiles(openFiles)
+	if len(normalized) == 0 {
+		return ""
+	}
+	const maxPromptOpenFiles = 3
+	if len(normalized) <= maxPromptOpenFiles {
+		return strings.Join(normalized, ",")
+	}
+	return fmt.Sprintf("%s,+%d_more", strings.Join(normalized[:maxPromptOpenFiles], ","), len(normalized)-maxPromptOpenFiles)
+}
+
+func continuePromptSelectedText(selectedText string) string {
+	trimmed := strings.TrimSpace(selectedText)
+	if trimmed == "" {
+		return ""
+	}
+	const maxPromptSelectedTextRunes = 280
+	runes := []rune(trimmed)
+	if len(runes) <= maxPromptSelectedTextRunes {
+		return trimmed
+	}
+	return string(runes[:maxPromptSelectedTextRunes]) + "..."
+}
+
+func inferContinueRoutingHint(req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase string) continueRoutingHint {
+	if strings.TrimSpace(req.Provider) != "" || strings.TrimSpace(req.Model) != "" {
+		return continueRoutingHint{}
+	}
+
+	message := strings.ToLower(strings.TrimSpace(req.Message))
+	selectedText := strings.TrimSpace(req.Context.SelectedText)
+	openFiles := normalizeContinueOpenFiles(req.Context.OpenFiles)
+	hasSelection := selectedText != ""
+	messageRunes := len([]rune(message))
+
+	if hasSelection && len(openFiles) <= 2 && messageRunes > 0 && messageRunes <= 160 &&
+		containsAnyWorkflowSignal(message, "explain", "summarize", "summary", "docstring", "comment", "rename") {
+		return continueRoutingHint{Tier: "compact", Reason: "narrow_selection_request"}
+	}
+
+	if requestedPhase == "planning" || len(openFiles) >= 4 ||
+		containsAnyWorkflowSignal(message, "architecture", "design", "debug", "broken", "failure", "root cause", "multi-file") ||
+		containsAnyWorkflowSignal(strings.ToLower(workflowProfile.TaskType), "implementation", "debugging") {
+		return continueRoutingHint{Tier: "deliberate", Reason: "multi_file_or_complex_reasoning"}
+	}
+
+	return continueRoutingHint{}
+}
+
+func inferAutoModelSelection(routingHint continueRoutingHint) continueAutoModelSelection {
+	if strings.TrimSpace(routingHint.Tier) == "" {
+		return continueAutoModelSelection{}
+	}
+
+	type candidate struct {
+		provider      string
+		model         string
+		thinkingScore int
+	}
+
+	catalog := sopbackend.GetModelCatalog()
+	candidates := make([]candidate, 0)
+	for _, group := range catalog.LLM {
+		for _, option := range group.Options {
+			value := strings.TrimSpace(option.Value)
+			if value == "" {
+				continue
+			}
+			provider, model, ok := strings.Cut(value, ":")
+			if !ok {
+				continue
+			}
+			provider = strings.TrimSpace(provider)
+			model = strings.TrimSpace(model)
+			if provider == "" || model == "" {
+				continue
+			}
+			candidates = append(candidates, candidate{
+				provider:      provider,
+				model:         model,
+				thinkingScore: thinkingLevelScore(option.DefaultThinkingLevel),
+			})
+		}
+	}
+	if len(candidates) == 0 {
+		return continueAutoModelSelection{}
+	}
+
+	pick := candidates[0]
+	tier := strings.ToLower(strings.TrimSpace(routingHint.Tier))
+	switch tier {
+	case "compact":
+		for _, option := range candidates[1:] {
+			if option.thinkingScore < pick.thinkingScore {
+				pick = option
+			}
+		}
+		return continueAutoModelSelection{Provider: pick.provider, Model: pick.model, Tier: "compact", Reason: "auto_select_lower_thinking_model"}
+	case "deliberate":
+		for _, option := range candidates[1:] {
+			if option.thinkingScore > pick.thinkingScore {
+				pick = option
+			}
+		}
+		return continueAutoModelSelection{Provider: pick.provider, Model: pick.model, Tier: "deliberate", Reason: "auto_select_higher_thinking_model"}
+	default:
+		return continueAutoModelSelection{}
+	}
+}
+
+func thinkingLevelScore(level string) int {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "low":
+		return 1
+	case "high":
+		return 3
+	default:
+		return 2
+	}
+}
+
 func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, error) {
 	if strings.TrimSpace(req.Message) == "" {
 		return bridgeChatEnvelope{}, fmt.Errorf("message cannot be empty")
@@ -1084,6 +1257,7 @@ func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, e
 	variables := map[string]any{"continue_bridge": true, "workspace_root": req.Workspace.Root}
 	availableToolNames := continueRequestToolNames(req.Tools)
 	workflowProfile, requestedPhase := resolveContinueWorkflowProfile(req.Mode, req.Message)
+	routingHint := inferContinueRoutingHint(req, workflowProfile, requestedPhase)
 	if mode := strings.TrimSpace(req.Mode); mode != "" {
 		variables["continue_mode"] = mode
 	}
@@ -1093,8 +1267,8 @@ func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, e
 	if selectedText := strings.TrimSpace(req.Context.SelectedText); selectedText != "" {
 		variables["selected_text"] = selectedText
 	}
-	if len(req.Context.OpenFiles) > 0 {
-		variables["open_files"] = append([]string(nil), req.Context.OpenFiles...)
+	if normalizedOpenFiles := normalizeContinueOpenFiles(req.Context.OpenFiles); len(normalizedOpenFiles) > 0 {
+		variables["open_files"] = normalizedOpenFiles
 	}
 	if len(availableToolNames) > 0 {
 		variables["continue_available_tools"] = availableToolNames
@@ -1116,10 +1290,24 @@ func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, e
 	if toolChoice := strings.TrimSpace(req.ToolChoice.Function.Name); toolChoice != "" {
 		variables["continue_tool_choice"] = toolChoice
 	}
+	if routingHint.Tier != "" {
+		variables["continue_routing_tier"] = routingHint.Tier
+		variables["continue_routing_reason"] = routingHint.Reason
+	}
 	providerName := strings.TrimSpace(req.Provider)
 	apiKey := strings.TrimSpace(req.APIKey)
 	modelName := strings.TrimSpace(req.Model)
 	baseURL := strings.TrimSpace(req.URL)
+	if providerName == "" && modelName == "" {
+		autoSelection := inferAutoModelSelection(routingHint)
+		if autoSelection.Provider != "" && autoSelection.Model != "" {
+			providerName = autoSelection.Provider
+			modelName = autoSelection.Model
+			variables["continue_model_routing_source"] = "daemon_auto"
+			variables["continue_model_routing_tier"] = autoSelection.Tier
+			variables["continue_model_routing_reason"] = autoSelection.Reason
+		}
+	}
 	if providerName != "" {
 		variables["llm_provider"] = providerName
 	}
@@ -1133,7 +1321,7 @@ func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, e
 		Ask: bridgeAskRequest{
 			SessionID:    req.SessionID,
 			UserPrompt:   req.Message,
-			FullPrompt:   buildContinueBridgePrompt(req, workflowProfile, requestedPhase),
+			FullPrompt:   buildContinueBridgePrompt(req, workflowProfile, requestedPhase, routingHint),
 			ProviderName: providerName,
 			APIKey:       apiKey,
 			BaseURL:      baseURL,
@@ -1229,13 +1417,37 @@ func buildContinueSessionSnapshot(requestID string, req continueChatRequest, wor
 	}
 }
 
-func buildContinueExecutionSnapshot(requestID string, req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase, status, message string, result *continueExecutionResult) continueSessionSnapshot {
+func buildContinueExecutionSnapshot(requestID string, req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase, status, message string, result *continueExecutionResult, events []continueExecutionEvent) continueSessionSnapshot {
 	snapshot := buildContinueSessionSnapshot(requestID, req, workflowProfile, requestedPhase, status, message)
 	if result != nil {
 		resultCopy := cloneContinueExecutionResult(*result)
 		snapshot.ExecutionResult = &resultCopy
 	}
+	if len(events) > 0 {
+		snapshot.ExecutionEvents = cloneContinueExecutionEvents(events)
+	}
 	return snapshot
+}
+
+func cloneContinueExecutionEvents(src []continueExecutionEvent) []continueExecutionEvent {
+	if len(src) == 0 {
+		return nil
+	}
+	cloned := make([]continueExecutionEvent, 0, len(src))
+	for _, event := range src {
+		cloned = append(cloned, continueExecutionEvent{
+			Type:          event.Type,
+			Status:        event.Status,
+			Message:       event.Message,
+			Content:       event.Content,
+			Error:         event.Error,
+			FilePath:      event.FilePath,
+			CRUDOperation: event.CRUDOperation,
+			DiffSummary:   event.DiffSummary,
+			Metadata:      cloneAnyMap(event.Metadata),
+		})
+	}
+	return cloned
 }
 
 func cloneContinueExecutionResult(src continueExecutionResult) continueExecutionResult {
@@ -1273,6 +1485,21 @@ func cloneContinueExecutionResult(src continueExecutionResult) continueExecution
 	return cloned
 }
 
+func buildContinueExecutionResultFromAnswer(answer string) *continueExecutionResult {
+	trimmed := strings.TrimSpace(answer)
+	if trimmed == "" {
+		return &continueExecutionResult{Status: "completed"}
+	}
+	if result, ok := parseContinueExecutionResult([]byte(trimmed)); ok {
+		resultCopy := cloneContinueExecutionResult(result)
+		return &resultCopy
+	}
+	return &continueExecutionResult{
+		Status:  "completed",
+		Summary: trimmed,
+	}
+}
+
 func cloneAnyMap(src map[string]any) map[string]any {
 	if len(src) == 0 {
 		return nil
@@ -1298,8 +1525,9 @@ func readContinueWorkerResponse(body io.Reader, sink io.Writer, collectRaw bool)
 				}
 			}
 			if collectRaw {
-				raw.Write(line)
+				captureContinueWorkerRaw(&raw, line)
 			}
+			captureContinueWorkerEvent(&outcome, line)
 			captureContinueWorkerResult(&outcome, line)
 		}
 		if err == io.EOF {
@@ -1320,6 +1548,169 @@ func readContinueWorkerResponse(body io.Reader, sink io.Writer, collectRaw bool)
 		}
 	}
 	return outcome, nil
+}
+
+func captureContinueWorkerRaw(raw *strings.Builder, rawLine []byte) {
+	if raw == nil || len(rawLine) == 0 || raw.Len() >= continueWorkerRawBodyLimit {
+		return
+	}
+
+	trimmed := strings.TrimSpace(string(rawLine))
+	if trimmed == "" {
+		return
+	}
+	if _, ok := parseContinueExecutionResult([]byte(trimmed)); ok {
+		return
+	}
+
+	var envelope struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Content string `json:"content"`
+		Error   string `json:"error"`
+		Result  any    `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err == nil {
+		switch envelope.Type {
+		case "done":
+			if envelope.Result != nil {
+				return
+			}
+		case "progress":
+			appendContinueWorkerRawChunk(raw, envelope.Message)
+			return
+		case "content":
+			appendContinueWorkerRawChunk(raw, envelope.Content)
+			return
+		case "error":
+			appendContinueWorkerRawChunk(raw, envelope.Error)
+			if strings.TrimSpace(envelope.Error) == "" {
+				appendContinueWorkerRawChunk(raw, envelope.Message)
+			}
+			return
+		}
+	}
+
+	appendContinueWorkerRawChunk(raw, trimmed)
+}
+
+func appendContinueWorkerRawChunk(raw *strings.Builder, chunk string) {
+	if raw == nil {
+		return
+	}
+	chunk = strings.TrimSpace(chunk)
+	if chunk == "" || raw.Len() >= continueWorkerRawBodyLimit {
+		return
+	}
+	if raw.Len() > 0 {
+		chunk = "\n" + chunk
+	}
+	remaining := continueWorkerRawBodyLimit - raw.Len()
+	if len(chunk) > remaining {
+		if remaining <= len("\n...[truncated]") {
+			return
+		}
+		raw.WriteString(chunk[:remaining-len("\n...[truncated]")])
+		raw.WriteString("\n...[truncated]")
+		return
+	}
+	raw.WriteString(chunk)
+}
+
+func captureContinueWorkerEvent(outcome *continueWorkerCallbackOutcome, rawLine []byte) {
+	if outcome == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(string(rawLine))
+	if trimmed == "" {
+		return
+	}
+
+	var envelope struct {
+		Type          string                  `json:"type"`
+		Status        string                  `json:"status"`
+		Message       string                  `json:"message"`
+		Content       string                  `json:"content"`
+		Error         string                  `json:"error"`
+		FilePath      string                  `json:"file_path"`
+		CRUDOperation string                  `json:"crud_operation"`
+		DiffSummary   string                  `json:"diff_summary"`
+		Metadata      map[string]any          `json:"metadata"`
+		Result        continueExecutionResult `json:"result"`
+		File          struct {
+			Path      string `json:"path"`
+			Operation string `json:"operation"`
+			Summary   string `json:"summary"`
+		} `json:"file"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+		return
+	}
+
+	typ := strings.TrimSpace(envelope.Type)
+	if typ == "" {
+		return
+	}
+	event := continueExecutionEvent{
+		Type:          typ,
+		Status:        strings.TrimSpace(envelope.Status),
+		Message:       strings.TrimSpace(envelope.Message),
+		Content:       strings.TrimSpace(envelope.Content),
+		Error:         strings.TrimSpace(envelope.Error),
+		FilePath:      strings.TrimSpace(envelope.FilePath),
+		CRUDOperation: strings.TrimSpace(envelope.CRUDOperation),
+		DiffSummary:   strings.TrimSpace(envelope.DiffSummary),
+		Metadata:      cloneAnyMap(envelope.Metadata),
+	}
+
+	if event.FilePath == "" {
+		event.FilePath = strings.TrimSpace(envelope.File.Path)
+	}
+	if event.CRUDOperation == "" {
+		event.CRUDOperation = strings.TrimSpace(envelope.File.Operation)
+	}
+	if event.DiffSummary == "" {
+		event.DiffSummary = strings.TrimSpace(envelope.File.Summary)
+	}
+
+	if typ == "done" {
+		if event.Status == "" {
+			event.Status = strings.TrimSpace(envelope.Result.Status)
+		}
+		if event.Message == "" {
+			event.Message = strings.TrimSpace(envelope.Result.Summary)
+		}
+	}
+
+	event.Status = clampContinueEventText(event.Status)
+	event.Message = clampContinueEventText(event.Message)
+	event.Content = clampContinueEventText(event.Content)
+	event.Error = clampContinueEventText(event.Error)
+	event.FilePath = clampContinueEventText(event.FilePath)
+	event.CRUDOperation = clampContinueEventText(event.CRUDOperation)
+	event.DiffSummary = clampContinueEventText(event.DiffSummary)
+
+	appendContinueExecutionEvent(outcome, event)
+}
+
+func appendContinueExecutionEvent(outcome *continueWorkerCallbackOutcome, event continueExecutionEvent) {
+	if outcome == nil || strings.TrimSpace(event.Type) == "" {
+		return
+	}
+	if len(outcome.Events) >= continueExecutionEventLimit {
+		return
+	}
+	outcome.Events = append(outcome.Events, event)
+}
+
+func clampContinueEventText(value string) string {
+	if len(value) <= continueExecutionEventTextLimit {
+		return value
+	}
+	if continueExecutionEventTextLimit <= len("...[truncated]") {
+		return value[:continueExecutionEventTextLimit]
+	}
+	return value[:continueExecutionEventTextLimit-len("...[truncated]")] + "...[truncated]"
 }
 
 func captureContinueWorkerResult(outcome *continueWorkerCallbackOutcome, rawLine []byte) {
@@ -1411,14 +1802,19 @@ func (continueBridgeTransport) streamContinueEnvelope(s *localRAGService, w http
 		sendEvent("done", nil)
 		return
 	}
-	store.Put(buildContinueSessionSnapshot(requestID, req, workflowProfile, requestedPhase, "completed", req.Message))
+	finalResult := buildContinueExecutionResultFromAnswer(answer)
+	localEvents := []continueExecutionEvent{{Type: "done", Status: "completed"}}
+	if summary := strings.TrimSpace(answer); summary != "" {
+		localEvents = append([]continueExecutionEvent{{Type: "content", Content: clampContinueEventText(summary)}}, localEvents...)
+	}
+	store.Put(buildContinueExecutionSnapshot(requestID, req, workflowProfile, requestedPhase, "completed", req.Message, finalResult, localEvents))
 	if strings.TrimSpace(answer) != "" {
 		sendEvent("content", answer)
 	}
 	sendEvent("done", nil)
 }
 
-func buildContinueBridgePrompt(req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase string) string {
+func buildContinueBridgePrompt(req continueChatRequest, workflowProfile continueWorkflowProfile, requestedPhase string, routingHint continueRoutingHint) string {
 	query := req.Message
 	if mode := strings.TrimSpace(req.Mode); mode != "" {
 		query += fmt.Sprintf("\n[continue_mode=%s]", mode)
@@ -1449,6 +1845,10 @@ func buildContinueBridgePrompt(req continueChatRequest, workflowProfile continue
 	if toolChoice := strings.TrimSpace(req.ToolChoice.Function.Name); toolChoice != "" {
 		query += fmt.Sprintf("\n[continue_tool_choice=%s]", toolChoice)
 	}
+	if routingHint.Tier != "" {
+		query += fmt.Sprintf("\n[continue_routing_tier=%s]", routingHint.Tier)
+		query += fmt.Sprintf("\n[continue_routing_reason=%s]", routingHint.Reason)
+	}
 	if provider := strings.TrimSpace(req.Provider); provider != "" {
 		query += fmt.Sprintf("\n[llm_provider=%s]", provider)
 	}
@@ -1461,11 +1861,11 @@ func buildContinueBridgePrompt(req continueChatRequest, workflowProfile continue
 	if strings.TrimSpace(req.Workspace.Active) != "" {
 		query += fmt.Sprintf("\n[active_file=%s]", req.Workspace.Active)
 	}
-	if strings.TrimSpace(req.Context.SelectedText) != "" {
-		query += fmt.Sprintf("\n[selected_text=%s]", req.Context.SelectedText)
+	if promptSelectedText := continuePromptSelectedText(req.Context.SelectedText); promptSelectedText != "" {
+		query += fmt.Sprintf("\n[selected_text=%s]", promptSelectedText)
 	}
-	if len(req.Context.OpenFiles) > 0 {
-		query += fmt.Sprintf("\n[open_files=%s]", strings.Join(req.Context.OpenFiles, ","))
+	if promptOpenFiles := continuePromptOpenFiles(req.Context.OpenFiles); promptOpenFiles != "" {
+		query += fmt.Sprintf("\n[open_files=%s]", promptOpenFiles)
 	}
 	return query
 }

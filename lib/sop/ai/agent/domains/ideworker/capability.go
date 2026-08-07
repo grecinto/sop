@@ -192,9 +192,11 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 	_ = state
 	b := strings.Builder{}
 	b.WriteString("Structured Context: Continue Delegation\n")
-	b.WriteString("- When a Continue-backed IDE worker is available for this session, Ask can delegate one bounded IDE coding subtask to Continue's own Ask/tool loop without giving up daemon control.\n")
-	b.WriteString("- This capability is LAO-oriented: the daemon LLM still classifies and orchestrates the broader request, and Continue only performs the bounded coding slice that is delegated to it.\n")
-	b.WriteString("- Ask-visible tools: delegate_continue_task for start, get_continue_delegation_status for progress, and cancel_continue_delegation for interruption. Use other daemon capabilities normally before or after the Continue delegation when the request needs broader workflow support.\n")
+	b.WriteString("- Continue-originated requests are still normal Ask turns. Bridge metadata provides delegation constraints and context, but it never transfers workflow control away from the daemon Ask pipeline.\n")
+	b.WriteString("- When a Continue-backed IDE worker is available for this session, Ask may delegate one bounded IDE coding subtask to Continue's own Ask/tool loop without giving up daemon control.\n")
+	b.WriteString("- This capability is LAO-oriented: the daemon LLM classifies and orchestrates the broader request, and Continue performs only the delegated coding slice for that step.\n")
+	b.WriteString("- Ask-visible tool: delegate_continue_task. Use other daemon capabilities normally before or after delegation when the request needs broader workflow support.\n")
+	b.WriteString("- Delegation discipline: delegate one bounded objective, consume the returned result, then resume Ask-side orchestration for the next decision.\n")
 	b.WriteString("- Expected Continue result: a final structured execution report covering modified_files, CRUD operation per file, diff deltas or artifact references, and execution metadata.\n")
 	b.WriteString("- Rich delegation parameters are supported: team practices, success criteria, constraints, implementation notes, expected result format, and reference context can be passed as structured guidance.\n")
 	if metadata.HasBridgeContext {
@@ -229,18 +231,6 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 			Schema:      `{"type":"object","properties":{"task":{"type":"string","description":"Focused coding task to delegate to the IDE worker"},"mode":{"type":"string","description":"Worker mode hint such as plan, edit, apply, review, or test"},"requested_phase":{"type":"string","description":"Optional explicit workflow phase such as investigation, planning, execution, review, or delivery"},"allowed_tools":{"type":"array","items":{"type":"string"},"description":"Optional bounded tool subset that the remote Continue Ask turn should be allowed to use"},"tool_choice":{"type":"string","description":"Optional preferred Continue tool name for the delegated turn"},"provider":{"type":"string","description":"Optional provider override to preserve the selected LLM family during delegation"},"model":{"type":"string","description":"Optional model override to preserve the selected model during delegation"},"workspace_root":{"type":"string","description":"Workspace root for the delegated task"},"active_file":{"type":"string","description":"Primary file for the delegated task"},"selected_text":{"type":"string","description":"Selected code snippet or region for the task"},"open_files":{"type":"array","items":{"type":"string"},"description":"Open files that provide extra editor context"},"guidance":{"type":"object","description":"Structured guidance for Continue's Ask pipeline.","properties":{"team_practices":{"type":"array","items":{"type":"string"}},"success_criteria":{"type":"array","items":{"type":"string"}},"constraints":{"type":"array","items":{"type":"string"}},"implementation_notes":{"type":"array","items":{"type":"string"}},"expected_result_format":{"type":"string"},"reference_context":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string"},"source":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}}}},"metadata":{"type":"object"}}}},"required":["task"]}`,
 			Tags:        []string{"R", "U"},
 		},
-		{
-			Name:        getDelegationStatusToolName,
-			Description: "Inspect the current lifecycle state of a delegated Continue task, including progress and partial results.",
-			Schema:      `{"type":"object","properties":{"delegation_id":{"type":"string","description":"Delegation identifier returned by delegate_continue_task"}},"required":["delegation_id"]}`,
-			Tags:        []string{"R", "U"},
-		},
-		{
-			Name:        cancelDelegationToolName,
-			Description: "Cancel an in-flight Continue delegation and capture the latest lifecycle state.",
-			Schema:      `{"type":"object","properties":{"delegation_id":{"type":"string","description":"Delegation identifier returned by delegate_continue_task"}},"required":["delegation_id"]}`,
-			Tags:        []string{"R", "U"},
-		},
 	}
 }
 
@@ -248,10 +238,12 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	metadata := parseContinuePromptMetadata(query)
 	_ = state
 	instructions := `Continue Delegation Guidance:
-- This capability exposes three Ask-visible delegation tools: delegate_continue_task to start, get_continue_delegation_status to observe progress, and cancel_continue_delegation to interrupt a long-running job.
+- This capability exposes one Ask-visible delegation tool: delegate_continue_task.
+- Continue-originated requests remain normal Ask turns. Treat Continue bridge metadata as delegation constraints, never as a workflow handoff.
 - Use delegate_continue_task only for one bounded coding subtask that Continue should complete through its own local Ask/tool loop.
 - Keep Ask as the controller. Classify and orchestrate the larger workflow in the daemon, delegate the IDE coding slice to Continue, consume the result, then continue with the remaining work.
 - Continue is the coding executor for the delegated slice, not the outer workflow controller.
+- Do not choreograph Continue with low-level tool sequences or delegation lifecycle loops. Delegate one objective, let Continue execute it, then continue orchestration in Ask.
 - Expect Continue to finish with a structured execution result that lists modified_files, CRUD operations, diff deltas or diff artifact references, and relevant metadata.
 - When available, pass structured guidance such as team practices from LTM, success criteria, constraints, implementation notes, expected result format, and reference context as parameters to Continue's Ask.
 - If Continue is not available or the request does not benefit from editor-native coding execution, continue with daemon-native tools or other capabilities instead.`
@@ -274,6 +266,7 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	}
 	parts = append(parts, "When delegating, write the task as instructions for Continue's Ask pipeline, not as a sequence of low-level tool calls for AI Studio to imitate.")
 	parts = append(parts, "Delegate the coding objective, expected scope, and success criteria. Let Continue decide how to use its internal IDE tools.")
+	parts = append(parts, "After Continue returns the bounded result, continue with Ask-side phase orchestration and decide the next step in the daemon.")
 	return strings.Join(parts, "\n")
 }
 

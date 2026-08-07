@@ -222,20 +222,14 @@ func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 	}
 }
 
-func TestCapabilityExposeTools_ProvidesDelegationLifecycleTools(t *testing.T) {
+func TestCapabilityExposeTools_ProvidesSingleDelegationTool(t *testing.T) {
 	cap := NewCapability()
 	tools := cap.ExposeTools()
-	if len(tools) != 3 {
-		t.Fatalf("expected 3 Ask-visible tools, got %d", len(tools))
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 Ask-visible tool, got %d", len(tools))
 	}
-	got := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		got = append(got, tool.Name)
-	}
-	for _, want := range []string{"delegate_continue_task", "get_continue_delegation_status", "cancel_continue_delegation"} {
-		if !containsString(got, want) {
-			t.Fatalf("expected tool %q in %#v", want, got)
-		}
+	if tools[0].Name != "delegate_continue_task" {
+		t.Fatalf("expected delegate_continue_task as the only Ask-visible tool, got %#v", tools)
 	}
 }
 
@@ -354,6 +348,9 @@ func TestCapabilityClassifyContinueBridgePromptAsCodingSupport(t *testing.T) {
 	if len(result.Domains) != 1 || result.Domains[0] != "coding" {
 		t.Fatalf("expected coding domain for Continue bridge prompt, got %#v", result.Domains)
 	}
+	if result.Mode != capabilities.CapabilityModeSupporting {
+		t.Fatalf("expected supporting classification mode for Continue bridge prompt, got %v", result.Mode)
+	}
 }
 
 func TestCapabilityBuildInstructionsReflectsContinueBridgeMetadata(t *testing.T) {
@@ -381,15 +378,39 @@ func TestCapabilityBuildInstructionsReflectsContinueBridgeMetadata(t *testing.T)
 
 	instructions := cap.BuildInstructions(query, capabilities.RoutingState{})
 	for _, want := range []string{
+		"normal Ask turns",
+		"never as a workflow handoff",
 		"Current Continue phase: review",
 		"Bound Continue to these tools for this delegated turn when possible: read_file, get_problems.",
 		"Preferred Continue tool for the delegated turn: get_problems.",
 		"instructions for Continue's Ask pipeline",
+		"After Continue returns the bounded result",
 		"structured execution result",
 		"team practices from LTM",
 	} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("expected dynamic instructions to contain %q, got %q", want, instructions)
+		}
+	}
+}
+
+func TestCapabilityBuildContextEmphasizesAskControllerForContinueBridge(t *testing.T) {
+	cap := NewCapability()
+	query := strings.Join([]string{
+		"Apply the prepared patch",
+		"[continue_bridge=true]",
+		"[requested_phase=execution]",
+	}, "\n")
+
+	contextText := cap.BuildContext(query, capabilities.RoutingState{Domain: "coding", CapabilityHint: "execution"})
+	for _, want := range []string{
+		"normal Ask turns",
+		"never transfers workflow control",
+		"delegate one bounded objective",
+		"resume Ask-side orchestration",
+	} {
+		if !strings.Contains(contextText, want) {
+			t.Fatalf("expected BuildContext to contain %q, got %q", want, contextText)
 		}
 	}
 }

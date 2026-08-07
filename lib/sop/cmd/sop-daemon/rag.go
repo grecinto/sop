@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,8 @@ import (
 )
 
 const defaultDaemonConfigFileName = "config.json"
+
+var unifiedHunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
 // WARNING FOR FUTURE COPILOTS / MAINTAINERS:
 //
@@ -702,13 +706,21 @@ func applyContinuePatch(path, patch string) (map[string]any, error) {
 	if strings.TrimSpace(patch) == "" {
 		return nil, fmt.Errorf("patch is required")
 	}
+	originalContent, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	updatedContent, mode, err := applyContinuePatchContent(string(originalContent), patch)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(cleanPath, []byte(patch), 0o644); err != nil {
+	if err := os.WriteFile(cleanPath, []byte(updatedContent), 0o644); err != nil {
 		return nil, err
 	}
-	return map[string]any{"path": cleanPath, "applied": true, "content": patch}, nil
+	return map[string]any{"path": cleanPath, "applied": true, "content": updatedContent, "mode": mode}, nil
 }
 
 func previewContinuePatch(path, patch string) (map[string]any, error) {
@@ -726,8 +738,128 @@ func previewContinuePatch(path, patch string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	preview := fmt.Sprintf("--- %s\n+++ %s\n-%s\n+%s\n", cleanPath, cleanPath, string(oldContent), patch)
-	return map[string]any{"path": cleanPath, "preview": preview, "applied": false}, nil
+	updatedContent, mode, err := applyContinuePatchContent(string(oldContent), patch)
+	if err != nil {
+		return nil, err
+	}
+	preview := fmt.Sprintf("--- %s\n+++ %s\n-%s\n+%s\n", cleanPath, cleanPath, string(oldContent), updatedContent)
+	return map[string]any{"path": cleanPath, "preview": preview, "applied": false, "mode": mode}, nil
+}
+
+func applyContinuePatchContent(original, patch string) (string, string, error) {
+	if !looksLikeUnifiedDiffPatch(patch) {
+		return patch, "replace", nil
+	}
+	updated, err := applyUnifiedDiffHunks(original, patch)
+	if err != nil {
+		return "", "", err
+	}
+	return updated, "unified_hunk", nil
+}
+
+func looksLikeUnifiedDiffPatch(patch string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "@@ ") {
+			return true
+		}
+	}
+	return false
+}
+
+func applyUnifiedDiffHunks(original, patch string) (string, error) {
+	originalLines, trailingNewline := splitContentLines(original)
+	patchLines := strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n")
+
+	result := make([]string, 0, len(originalLines))
+	originalIdx := 0
+	for i := 0; i < len(patchLines); i++ {
+		line := patchLines[i]
+		if strings.HasPrefix(line, "diff --git") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
+			continue
+		}
+		if !strings.HasPrefix(strings.TrimSpace(line), "@@ ") {
+			continue
+		}
+
+		match := unifiedHunkHeaderPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(match) < 3 {
+			return "", fmt.Errorf("invalid unified diff hunk header: %s", line)
+		}
+		oldStart, err := strconv.Atoi(match[1])
+		if err != nil {
+			return "", fmt.Errorf("invalid unified diff hunk start: %w", err)
+		}
+		copyUntil := oldStart - 1
+		if copyUntil < 0 {
+			copyUntil = 0
+		}
+		if copyUntil > len(originalLines) {
+			return "", fmt.Errorf("hunk start %d is beyond file length %d", oldStart, len(originalLines))
+		}
+		for originalIdx < copyUntil {
+			result = append(result, originalLines[originalIdx])
+			originalIdx++
+		}
+
+		for i+1 < len(patchLines) {
+			nextLine := patchLines[i+1]
+			if strings.HasPrefix(strings.TrimSpace(nextLine), "@@ ") {
+				break
+			}
+			i++
+			if strings.HasPrefix(nextLine, "\\") {
+				continue
+			}
+			if nextLine == "" {
+				return "", fmt.Errorf("invalid unified diff payload line")
+			}
+			switch nextLine[0] {
+			case ' ':
+				if originalIdx >= len(originalLines) || originalLines[originalIdx] != nextLine[1:] {
+					return "", fmt.Errorf("context mismatch while applying unified diff")
+				}
+				result = append(result, originalLines[originalIdx])
+				originalIdx++
+			case '-':
+				if originalIdx >= len(originalLines) || originalLines[originalIdx] != nextLine[1:] {
+					return "", fmt.Errorf("delete mismatch while applying unified diff")
+				}
+				originalIdx++
+			case '+':
+				result = append(result, nextLine[1:])
+			default:
+				return "", fmt.Errorf("invalid unified diff line prefix: %q", nextLine[:1])
+			}
+		}
+	}
+
+	for originalIdx < len(originalLines) {
+		result = append(result, originalLines[originalIdx])
+		originalIdx++
+	}
+
+	return joinContentLines(result, trailingNewline), nil
+}
+
+func splitContentLines(content string) ([]string, bool) {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	trailing := strings.HasSuffix(normalized, "\n")
+	trimmed := normalized
+	if trailing {
+		trimmed = strings.TrimSuffix(trimmed, "\n")
+	}
+	if trimmed == "" {
+		return nil, trailing
+	}
+	return strings.Split(trimmed, "\n"), trailing
+}
+
+func joinContentLines(lines []string, trailingNewline bool) string {
+	content := strings.Join(lines, "\n")
+	if trailingNewline {
+		return content + "\n"
+	}
+	return content
 }
 
 func runContinueTest(command, sessionID string) (map[string]any, error) {

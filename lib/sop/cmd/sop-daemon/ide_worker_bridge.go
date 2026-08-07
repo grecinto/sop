@@ -500,6 +500,7 @@ func (b *continueIDEWorkerBackend) executeDelegatedTask(ctx context.Context, req
 	if b.service == nil {
 		return "", fmt.Errorf("IDE worker backend unavailable")
 	}
+	guidance := withContinueDelegationDefaults(req)
 	continueReq := continueAgentExecuteRequest{
 		RequestID:      newContinueRequestID(),
 		TraceID:        strings.TrimSpace(req.TraceID),
@@ -514,7 +515,7 @@ func (b *continueIDEWorkerBackend) executeDelegatedTask(ctx context.Context, req
 		PhaseTools:     append([]string(nil), req.PhaseTools...),
 		AllowedTools:   append([]string(nil), req.AllowedTools...),
 		ToolChoice:     strings.TrimSpace(req.ToolChoice),
-		Guidance:       convertDelegationGuidance(req.Guidance),
+		Guidance:       convertDelegationGuidance(guidance),
 	}
 	continueReq.ResultContract = continueExecutionResultContract{
 		StreamProgress:       true,
@@ -612,6 +613,62 @@ func executeContinueWorkerCallback(ctx context.Context, req continueAgentExecute
 		outcome.ContentType = "application/x-ndjson"
 	}
 	return outcome, nil
+}
+
+func withContinueDelegationDefaults(req ideworker.TaskRequest) ideworker.DelegationGuidance {
+	guidance := req.Guidance
+	guidance.ExpectedResultFormat = strings.TrimSpace(guidance.ExpectedResultFormat)
+	if guidance.ExpectedResultFormat == "" {
+		guidance.ExpectedResultFormat = "structured_execution_result"
+	}
+
+	if looksLikeContinuePatchTask(req) {
+		guidance.ImplementationNotes = appendUniqueStrings(guidance.ImplementationNotes,
+			"Prefer patch-style or search/replace edits over whole-file rewrites.",
+			"Return compact modified_files diff deltas and use artifact refs for large diffs.",
+		)
+		guidance.SuccessCriteria = appendUniqueStrings(guidance.SuccessCriteria,
+			"Keep changes bounded to the requested slice.",
+			"Return a structured execution result with modified_files metadata.",
+		)
+	}
+
+	return guidance
+}
+
+func looksLikeContinuePatchTask(req ideworker.TaskRequest) bool {
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	phase := strings.ToLower(strings.TrimSpace(req.RequestedPhase))
+	toolChoice := strings.ToLower(strings.TrimSpace(req.ToolChoice))
+	if mode == "apply" || phase == "execution" {
+		return true
+	}
+	return toolChoice == "multi_edit" || toolChoice == "apply_patch"
+}
+
+func appendUniqueStrings(base []string, values ...string) []string {
+	seen := make(map[string]bool, len(base))
+	result := make([]string, 0, len(base)+len(values))
+	for _, item := range base {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		result = append(result, trimmed)
+	}
+	for _, item := range values {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		result = append(result, trimmed)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func convertDelegationGuidance(src ideworker.DelegationGuidance) continueDelegationGuidance {
