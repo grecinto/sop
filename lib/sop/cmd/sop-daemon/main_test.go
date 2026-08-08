@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -22,6 +23,7 @@ import (
 	"github.com/sharedcode/sop/ai"
 	sharedagent "github.com/sharedcode/sop/ai/agent"
 	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
+	"github.com/sharedcode/sop/ai/generator"
 	sopfs "github.com/sharedcode/sop/fs"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
@@ -725,6 +727,17 @@ func TestRegisterBridgeRoutes_MountsClientMetadataEndpoints(t *testing.T) {
 	controlModel, ok := continuePayload["control_model"].(map[string]any)
 	if !ok || controlModel["controller"] != "ai_studio_daemon" || controlModel["editor_worker"] != "continue" || controlModel["provider_is_attribute"] != true || controlModel["model_is_attribute"] != true {
 		t.Fatalf("expected continue control model metadata, got %#v", continuePayload)
+	}
+	poolPopulated, ok := controlModel["llm_pool_populated"].(bool)
+	if !ok {
+		t.Fatalf("expected llm_pool_populated boolean in control model metadata, got %#v", controlModel)
+	}
+	hideEditorPoolInputs, ok := controlModel["hide_editor_pool_inputs_when_populated"].(bool)
+	if !ok {
+		t.Fatalf("expected hide_editor_pool_inputs_when_populated boolean in control model metadata, got %#v", controlModel)
+	}
+	if hideEditorPoolInputs != poolPopulated {
+		t.Fatalf("expected hide flag to mirror pool-populated state, got hide=%v populated=%v", hideEditorPoolInputs, poolPopulated)
 	}
 	if controlModel["selection_message"] == "" {
 		t.Fatalf("expected continue control model selection message, got %#v", controlModel)
@@ -2722,6 +2735,471 @@ func TestHandleAskDecryptsEncryptedProviderAPIKey(t *testing.T) {
 	}
 	if providerDetails.APIKey != "secret-key" {
 		t.Fatalf("api key = %q, want %q", providerDetails.APIKey, "secret-key")
+	}
+}
+
+func TestHandleUIHandoffRejectsInvalidPoolCredentialSecret(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"ping","hq":{"base_url":"https://hq.example","user_id":"user-1","session_id":"handoff-invalid-pool"},"llm_credentials":{"openai":{"api_key":"enc:v1:not-valid"}}}`))
+	rr := httptest.NewRecorder()
+
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rr.Body.String(), "invalid llm_credentials[openai].api_key") {
+		t.Fatalf("expected invalid pool api key error, got %q", rr.Body.String())
+	}
+}
+
+func TestHandleAskUsesProviderPoolWhenLegacyFieldsMissing(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	encAnthropic, err := sopbackend.EncryptSecretValue("anthropic-secret")
+	if err != nil {
+		t.Fatalf("EncryptSecretValue() error = %v", err)
+	}
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(fmt.Sprintf(`{"query":"hello","llm_credentials":{"anthropic":{"api_key":%q,"model":"claude-3-5-sonnet-20241022","url":"https://api.anthropic.com"}}}`, encAnthropic)))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	value, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := value.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", value)
+	}
+	if providerDetails.Provider != "anthropic" {
+		t.Fatalf("provider = %q, want %q", providerDetails.Provider, "anthropic")
+	}
+	if providerDetails.APIKey != "anthropic-secret" {
+		t.Fatalf("api key = %q, want %q", providerDetails.APIKey, "anthropic-secret")
+	}
+	if providerDetails.Model != "claude-3-5-sonnet-20241022" {
+		t.Fatalf("model = %q, want %q", providerDetails.Model, "claude-3-5-sonnet-20241022")
+	}
+	if providerDetails.BaseURL != "https://api.anthropic.com" {
+		t.Fatalf("base URL = %q, want %q", providerDetails.BaseURL, "https://api.anthropic.com")
+	}
+}
+
+func TestHandleAskLegacyFieldsTakePrecedenceOverProviderPool(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	encPoolKey, err := sopbackend.EncryptSecretValue("pool-openai-secret")
+	if err != nil {
+		t.Fatalf("EncryptSecretValue() error = %v", err)
+	}
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(fmt.Sprintf(`{"query":"hello","llm_provider":"gemini","llm_api_key":"legacy-secret","llm_model":"gemini-2.5-pro","llm_credentials":{"openai":{"api_key":%q,"model":"gpt-5.4"}}}`, encPoolKey)))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	value, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := value.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", value)
+	}
+	if providerDetails.Provider != "gemini" {
+		t.Fatalf("provider = %q, want %q", providerDetails.Provider, "gemini")
+	}
+	if providerDetails.APIKey != "legacy-secret" {
+		t.Fatalf("api key = %q, want %q", providerDetails.APIKey, "legacy-secret")
+	}
+	if providerDetails.Model != "gemini-2.5-pro" {
+		t.Fatalf("model = %q, want %q", providerDetails.Model, "gemini-2.5-pro")
+	}
+}
+
+func TestHandleAskRejectsInvalidPoolCredentialSecret(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","llm_credentials":{"gemini":{"api_key":"enc:v1:not-valid"}}}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rr.Body.String(), "invalid llm_credentials[gemini].api_key") {
+		t.Fatalf("expected invalid pool api key error, got %q", rr.Body.String())
+	}
+}
+
+func TestHandleAskConfiguresMultiFallbackGeneratorFromCredentialPool(t *testing.T) {
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","llm_credentials":{"openai":{"api_key":"openai-key","model":"gpt-5.4"},"anthropic":{"api_key":"anthropic-key","model":"claude-3-5-sonnet-20241022"}}}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+	value, ok := agent.calls[0].cfg.Get("generator")
+	if !ok {
+		t.Fatal("expected generator in agent config")
+	}
+	if _, ok := value.(*generator.FallbackGenerator); !ok {
+		t.Fatalf("expected fallback generator, got %T", value)
+	}
+
+	pdValue, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := pdValue.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", pdValue)
+	}
+	if providerDetails.Provider != "openai" {
+		t.Fatalf("provider = %q, want %q", providerDetails.Provider, "openai")
+	}
+}
+
+func TestHandleAskGeneratorChainSkipsInvalidPrimaryAndUsesPoolFallback(t *testing.T) {
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","llm_provider":"unsupported","llm_api_key":"bad-key","llm_credentials":{"anthropic":{"api_key":"anthropic-key","model":"claude-3-5-sonnet-20241022"}}}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+
+	pdValue, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := pdValue.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", pdValue)
+	}
+	if providerDetails.Provider != "anthropic" {
+		t.Fatalf("provider = %q, want %q", providerDetails.Provider, "anthropic")
+	}
+	if providerDetails.APIKey != "anthropic-key" {
+		t.Fatalf("api key = %q, want %q", providerDetails.APIKey, "anthropic-key")
+	}
+}
+
+func TestHandleAskLegacyPrimaryStaysFirstWhenPoolPresent(t *testing.T) {
+	agent := &recordingAskAgent{}
+	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
+	req := httptest.NewRequest(http.MethodPost, "/api/ask", strings.NewReader(`{"query":"hello","llm_provider":"gemini","llm_api_key":"legacy-gemini-key","llm_model":"gemini-2.5-pro","llm_credentials":{"openai":{"api_key":"openai-key","model":"gpt-5.4"},"anthropic":{"api_key":"anthropic-key","model":"claude-3-5-sonnet-20241022"}}}`))
+	rr := httptest.NewRecorder()
+
+	svc.handleAsk(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleAsk() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("expected one agent call, got %d", len(agent.calls))
+	}
+
+	value, ok := agent.calls[0].cfg.Get("generator")
+	if !ok {
+		t.Fatal("expected generator in agent config")
+	}
+	if _, ok := value.(*generator.FallbackGenerator); !ok {
+		t.Fatalf("expected fallback generator, got %T", value)
+	}
+
+	pdValue, ok := agent.calls[0].cfg.Get("provider_details")
+	if !ok {
+		t.Fatal("expected provider_details in agent config")
+	}
+	providerDetails, ok := pdValue.(*sharedagent.ProviderDetails)
+	if !ok {
+		t.Fatalf("expected provider_details of type *sharedagent.ProviderDetails, got %T", pdValue)
+	}
+	if providerDetails.Provider != "gemini" {
+		t.Fatalf("provider = %q, want %q", providerDetails.Provider, "gemini")
+	}
+	if providerDetails.APIKey != "legacy-gemini-key" {
+		t.Fatalf("api key = %q, want %q", providerDetails.APIKey, "legacy-gemini-key")
+	}
+}
+
+func TestAskRequestDecodesLLMCredentials(t *testing.T) {
+	var req AskRequest
+	body := `{"query":"hello","llm_credentials":{"gemini":{"api_key":"enc:v1:not-valid","model":"gemini-2.5-pro"}}}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("unmarshal ask request: %v", err)
+	}
+	if len(req.LLMCredentials) != 1 {
+		t.Fatalf("expected one credential entry, got %#v", req.LLMCredentials)
+	}
+	cred, ok := req.LLMCredentials["gemini"]
+	if !ok {
+		t.Fatalf("expected gemini credential, got %#v", req.LLMCredentials)
+	}
+	if cred.APIKey != "enc:v1:not-valid" || cred.Model != "gemini-2.5-pro" {
+		t.Fatalf("unexpected credential decode: %#v", cred)
+	}
+}
+
+func TestNormalizeAndValidateLLMCredentialsRejectsMalformedEncryptedKey(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	_, err := normalizeAndValidateLLMCredentials(map[string]llmCredential{
+		"gemini": {APIKey: "enc:v1:not-valid"},
+	})
+	if err == nil {
+		t.Fatal("expected malformed encrypted key error")
+	}
+}
+
+func TestMergeLLMPoolStatePrefersIncomingNewerVersion(t *testing.T) {
+	existing := daemonSessionContext{
+		LLMCredentials: map[string]llmCredential{
+			"openai": {APIKey: "old-openai", UpdatedAtMS: 100},
+		},
+		LLMPoolVersion:     2,
+		LLMPoolUpdatedAtMS: 100,
+		LLMPoolUpdatedBy:   "daemon",
+	}
+	incoming := map[string]llmCredential{
+		"openai": {APIKey: "new-openai", UpdatedAtMS: 200},
+		"gemini": {APIKey: "gemini-key", UpdatedAtMS: 210},
+	}
+
+	merged, version, updatedAtMS, updatedBy, direction := mergeLLMPoolState(existing, incoming, 5, 250, "client-1")
+
+	if direction != "client_to_daemon" {
+		t.Fatalf("direction = %q, want client_to_daemon", direction)
+	}
+	if got := merged["openai"].APIKey; got != "new-openai" {
+		t.Fatalf("merged openai api key = %q, want %q", got, "new-openai")
+	}
+	if got := merged["gemini"].APIKey; got != "gemini-key" {
+		t.Fatalf("merged gemini api key = %q, want %q", got, "gemini-key")
+	}
+	if version <= 5 {
+		t.Fatalf("version = %d, want > 5", version)
+	}
+	if updatedAtMS <= 0 {
+		t.Fatalf("updatedAtMS = %d, want > 0", updatedAtMS)
+	}
+	if updatedBy != "daemon" {
+		t.Fatalf("updatedBy = %q, want daemon", updatedBy)
+	}
+}
+
+func TestMergeLLMPoolStateDaemonNewerVersionWinsDirection(t *testing.T) {
+	existing := daemonSessionContext{
+		LLMCredentials: map[string]llmCredential{
+			"anthropic": {APIKey: "daemon-anthropic", UpdatedAtMS: 300},
+		},
+		LLMPoolVersion:     8,
+		LLMPoolUpdatedAtMS: 400,
+		LLMPoolUpdatedBy:   "daemon",
+	}
+	incoming := map[string]llmCredential{
+		"anthropic": {APIKey: "stale-anthropic", UpdatedAtMS: 200},
+	}
+
+	merged, version, _, _, direction := mergeLLMPoolState(existing, incoming, 3, 210, "client-1")
+
+	if direction != "daemon_to_client" {
+		t.Fatalf("direction = %q, want daemon_to_client", direction)
+	}
+	if got := merged["anthropic"].APIKey; got != "daemon-anthropic" {
+		t.Fatalf("merged anthropic api key = %q, want %q", got, "daemon-anthropic")
+	}
+	if version != 8 {
+		t.Fatalf("version = %d, want %d", version, 8)
+	}
+}
+
+func TestHandleUIHandoffReturnsCanonicalPoolSyncSnapshot(t *testing.T) {
+	ctxKey := "handoff-sync-snapshot"
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	daemonSessionStore.mu.Lock()
+	delete(daemonSessionStore.data, ctxKey)
+	daemonSessionStore.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"ping","hq":{"base_url":"https://hq.example","user_id":"user-sync","session_id":"handoff-sync-snapshot"},"llm_pool_version":1,"llm_pool_updated_at_ms":1234,"llm_pool_updated_by":"client-1","llm_credentials":{"openai":{"api_key":"openai-key","model":"gpt-5.4","updated_at_ms":1234}}}`))
+	rr := httptest.NewRecorder()
+
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var resp UIHandoffResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.LLMCredentials["openai"].APIKey != "openai-key" {
+		t.Fatalf("expected canonical openai key in response, got %#v", resp.LLMCredentials)
+	}
+	if resp.LLMPoolVersion <= 1 {
+		t.Fatalf("expected daemon-bumped pool version, got %d", resp.LLMPoolVersion)
+	}
+	if resp.LLMPoolSyncDirection != "client_to_daemon" {
+		t.Fatalf("sync direction = %q, want %q", resp.LLMPoolSyncDirection, "client_to_daemon")
+	}
+}
+
+func TestPersistDaemonLLMPoolStateWritesEncryptedDiskSnapshot(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	oldPath := daemonLLMPoolStatePath
+	defer func() { daemonLLMPoolStatePath = oldPath }()
+	daemonLLMPoolStatePath = filepath.Join(t.TempDir(), "state", "daemon_llm_pool_state.json")
+
+	daemonSessionStore.mu.Lock()
+	oldStore := daemonSessionStore.data
+	daemonSessionStore.data = map[string]daemonSessionContext{
+		"session-encrypted": {
+			HQBaseURL:   "https://hq.example",
+			LLMProvider: "openai",
+			LLMAPIKey:   "legacy-secret",
+			LLMModel:    "gpt-5.4",
+			LLMCredentials: map[string]llmCredential{
+				"openai": {APIKey: "openai-secret", Model: "gpt-5.4", UpdatedAtMS: 1234},
+			},
+			LLMPoolVersion:     3,
+			LLMPoolUpdatedAtMS: 1234,
+			LLMPoolUpdatedBy:   "daemon",
+			LastUpdated:        time.UnixMilli(1234).UTC(),
+		},
+	}
+	daemonSessionStore.mu.Unlock()
+	defer func() {
+		daemonSessionStore.mu.Lock()
+		daemonSessionStore.data = oldStore
+		daemonSessionStore.mu.Unlock()
+	}()
+
+	if err := persistDaemonLLMPoolState(); err != nil {
+		t.Fatalf("persistDaemonLLMPoolState() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(daemonLLMPoolStatePath)
+	if err != nil {
+		t.Fatalf("read persisted state: %v", err)
+	}
+	if bytes.Contains(raw, []byte("openai-secret")) || bytes.Contains(raw, []byte("legacy-secret")) {
+		t.Fatalf("expected no plaintext secrets in persisted file, got %q", string(raw))
+	}
+
+	var envelope persistedDaemonLLMEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("decode persisted envelope: %v", err)
+	}
+	if !sopbackend.IsEncryptedSecretValue(envelope.EncryptedPayload) {
+		t.Fatalf("expected encrypted payload envelope, got %#v", envelope)
+	}
+}
+
+func TestLoadDaemonLLMPoolStateSurvivesRestartAndRejectsOlderClientPool(t *testing.T) {
+	t.Setenv("SOP_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	oldPath := daemonLLMPoolStatePath
+	defer func() { daemonLLMPoolStatePath = oldPath }()
+	daemonLLMPoolStatePath = filepath.Join(t.TempDir(), "state", "daemon_llm_pool_state.json")
+
+	ctxKey := "restart-pool-session"
+	daemonSessionStore.mu.Lock()
+	oldStore := daemonSessionStore.data
+	daemonSessionStore.data = map[string]daemonSessionContext{
+		ctxKey: {
+			HQBaseURL:   "https://hq.example",
+			HQSessionID: ctxKey,
+			LLMProvider: "openai",
+			LLMModel:    "gpt-5.4",
+			LLMCredentials: map[string]llmCredential{
+				"openai": {APIKey: "daemon-newer-openai", Model: "gpt-5.4", UpdatedAtMS: 2000},
+			},
+			LLMPoolVersion:     9,
+			LLMPoolUpdatedAtMS: 2000,
+			LLMPoolUpdatedBy:   "daemon",
+			LastUpdated:        time.UnixMilli(2000).UTC(),
+		},
+	}
+	daemonSessionStore.mu.Unlock()
+	defer func() {
+		daemonSessionStore.mu.Lock()
+		daemonSessionStore.data = oldStore
+		daemonSessionStore.mu.Unlock()
+	}()
+
+	if err := persistDaemonLLMPoolState(); err != nil {
+		t.Fatalf("persistDaemonLLMPoolState() error = %v", err)
+	}
+
+	// Simulate daemon restart by clearing in-memory state before loading persisted state.
+	daemonSessionStore.mu.Lock()
+	daemonSessionStore.data = map[string]daemonSessionContext{}
+	daemonSessionStore.mu.Unlock()
+
+	if err := loadDaemonLLMPoolState(); err != nil {
+		t.Fatalf("loadDaemonLLMPoolState() error = %v", err)
+	}
+
+	daemonSessionStore.mu.Lock()
+	loaded := daemonSessionStore.data[ctxKey]
+	daemonSessionStore.mu.Unlock()
+	if loaded.LLMPoolVersion != 9 {
+		t.Fatalf("loaded pool version = %d, want %d", loaded.LLMPoolVersion, 9)
+	}
+	if got := loaded.LLMCredentials["openai"].APIKey; got != "daemon-newer-openai" {
+		t.Fatalf("loaded openai api key = %q, want %q", got, "daemon-newer-openai")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/handoff", strings.NewReader(`{"query":"ping","hq":{"base_url":"https://hq.example","user_id":"user-restart","session_id":"restart-pool-session"},"llm_pool_version":1,"llm_pool_updated_at_ms":1000,"llm_pool_updated_by":"client-1","llm_credentials":{"openai":{"api_key":"client-stale-openai","model":"gpt-5.4","updated_at_ms":1000}}}`))
+	rr := httptest.NewRecorder()
+
+	handleUIHandoff(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleUIHandoff() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var resp UIHandoffResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.LLMPoolSyncDirection != "daemon_to_client" {
+		t.Fatalf("sync direction = %q, want %q", resp.LLMPoolSyncDirection, "daemon_to_client")
+	}
+	if got := resp.LLMCredentials["openai"].APIKey; got != "daemon-newer-openai" {
+		t.Fatalf("canonical openai api key = %q, want %q", got, "daemon-newer-openai")
 	}
 }
 

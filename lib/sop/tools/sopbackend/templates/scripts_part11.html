@@ -826,6 +826,15 @@
         overlay.style.display = 'block';
     }
 
+    function getProviderPoolInputValue(scopePrefix, provider) {
+        const normalized = normalizeProviderSecretKey(provider);
+        if (!normalized || (normalized !== 'openai' && normalized !== 'anthropic' && normalized !== 'gemini')) {
+            return '';
+        }
+        const inputId = `${scopePrefix}-${normalized}-api-key`;
+        return document.getElementById(inputId)?.value.trim() || '';
+    }
+
     function collectChatSettingsConfig() {
         const providerValue = document.getElementById('chat-settings-provider-overlay')?.value || '';
         const parts = splitProviderValue(providerValue);
@@ -848,6 +857,24 @@
         const persistFallbackURL = fallbackValue && selectedProviderUsesURL('chat-settings-fallback-overlay') ? fallbackURL : '';
         const persistFallbackAPIKey = fallbackParts.provider && !isLocalProviderValue(fallbackValue) ? fallbackAPIKey : '';
 
+        const providerPoolKeys = {
+            openai_api_key: document.getElementById('chat-settings-openai-api-key')?.value.trim() || '',
+            anthropic_api_key: document.getElementById('chat-settings-anthropic-api-key')?.value.trim() || '',
+            gemini_api_key: document.getElementById('chat-settings-gemini-api-key')?.value.trim() || ''
+        };
+
+        const primaryProviderKey = normalizeProviderSecretKey(parts.provider);
+        if ((primaryProviderKey === 'openai' || primaryProviderKey === 'anthropic' || primaryProviderKey === 'gemini') && persistAPIKey && !providerPoolKeys[`${primaryProviderKey}_api_key`]) {
+            providerPoolKeys[`${primaryProviderKey}_api_key`] = persistAPIKey;
+        }
+
+        const fallbackProviderKey = normalizeProviderSecretKey(fallbackParts.provider);
+        if ((fallbackProviderKey === 'openai' || fallbackProviderKey === 'anthropic' || fallbackProviderKey === 'gemini') && persistFallbackAPIKey) {
+            if (!providerPoolKeys[`${fallbackProviderKey}_api_key`]) {
+                providerPoolKeys[`${fallbackProviderKey}_api_key`] = persistFallbackAPIKey;
+            }
+        }
+
         return {
             brain_provider: parts.provider,
             brain_model: parts.model,
@@ -862,7 +889,10 @@
             fallback_provider: fallbackParts.provider,
             fallback_model: fallbackParts.model,
             fallback_api_key: persistFallbackAPIKey,
-            fallback_url: persistFallbackURL
+            fallback_url: persistFallbackURL,
+            openai_api_key: providerPoolKeys.openai_api_key,
+            anthropic_api_key: providerPoolKeys.anthropic_api_key,
+            gemini_api_key: providerPoolKeys.gemini_api_key
         };
     }
 
@@ -873,7 +903,8 @@
     function saveChatSettings() {
         // Validate LLM provider and API key
         const providerValue = document.getElementById('chat-settings-provider-overlay')?.value || '';
-        const apiKey = document.getElementById('chat-settings-overlay-api-key')?.value.trim() || '';
+        const parts = splitProviderValue(providerValue);
+        const apiKey = document.getElementById('chat-settings-overlay-api-key')?.value.trim() || getProviderPoolInputValue('chat-settings', parts.provider);
         
         if (providerValue && !isLocalProviderValue(providerValue) && !apiKey) {
             showAlert('API Key is required for the selected LLM provider');
@@ -1017,7 +1048,7 @@
         const payload = {
             provider: parts.provider,
             model: parts.model,
-            api_key: document.getElementById('chat-settings-overlay-api-key')?.value.trim() || '',
+            api_key: document.getElementById('chat-settings-overlay-api-key')?.value.trim() || getProviderPoolInputValue('chat-settings', parts.provider),
             url: document.getElementById('chat-settings-url')?.value.trim() || ''
         };
         runLLMConnectionTest(payload, 'chat-settings-test-status');
@@ -1049,7 +1080,7 @@
         const payload = {
             provider: parts.provider,
             model: parts.model,
-            api_key: document.getElementById('chat-settings-fallback-api-key')?.value.trim() || '',
+            api_key: document.getElementById('chat-settings-fallback-api-key')?.value.trim() || getProviderPoolInputValue('chat-settings', parts.provider),
             url: document.getElementById('chat-settings-fallback-url')?.value.trim() || ''
         };
         runLLMConnectionTest(payload, 'chat-settings-fallback-test-status');
@@ -1067,7 +1098,7 @@
         const primaryPayload = {
             provider: parts.provider,
             model: parts.model,
-            api_key: document.getElementById('setup-brain-api-key')?.value.trim() || '',
+            api_key: document.getElementById('setup-brain-api-key')?.value.trim() || getProviderPoolInputValue('setup', parts.provider),
             url: document.getElementById('setup-brain-url')?.value.trim() || ''
         };
         
@@ -1083,7 +1114,7 @@
             const fallbackPayload = {
                 provider: fallbackParts.provider,
                 model: fallbackParts.model,
-                api_key: document.getElementById('setup-brain-fallback-api-key')?.value.trim() || '',
+                api_key: document.getElementById('setup-brain-fallback-api-key')?.value.trim() || getProviderPoolInputValue('setup', fallbackParts.provider),
                 url: document.getElementById('setup-brain-fallback-url')?.value.trim() || ''
             };
             

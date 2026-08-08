@@ -18,6 +18,7 @@ import (
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent"
 	aidb "github.com/sharedcode/sop/ai/database"
+	"github.com/sharedcode/sop/ai/generator"
 	"github.com/sharedcode/sop/tools/sopbackend"
 )
 
@@ -176,17 +177,135 @@ type AskRequest struct {
 		UserID    string `json:"user_id"`
 		SessionID string `json:"session_id"`
 	} `json:"hq"`
-	LLMProvider   string           `json:"llm_provider,omitempty"`
-	LLMAPIKey     string           `json:"llm_api_key,omitempty"`
-	LLMModel      string           `json:"llm_model,omitempty"`
-	LLMURL        string           `json:"llm_url,omitempty"`
-	ThinkingLevel string           `json:"thinking_level,omitempty"`
-	InputParts    []ai.ContentPart `json:"input_parts,omitempty"`
+	LLMProvider        string                   `json:"llm_provider,omitempty"`
+	LLMAPIKey          string                   `json:"llm_api_key,omitempty"`
+	LLMModel           string                   `json:"llm_model,omitempty"`
+	LLMURL             string                   `json:"llm_url,omitempty"`
+	LLMCredentials     map[string]llmCredential `json:"llm_credentials,omitempty"`
+	LLMPoolVersion     int64                    `json:"llm_pool_version,omitempty"`
+	LLMPoolUpdatedAtMS int64                    `json:"llm_pool_updated_at_ms,omitempty"`
+	LLMPoolUpdatedBy   string                   `json:"llm_pool_updated_by,omitempty"`
+	ThinkingLevel      string                   `json:"thinking_level,omitempty"`
+	InputParts         []ai.ContentPart         `json:"input_parts,omitempty"`
 }
 
 type AskResponse struct {
 	Answer string `json:"answer"`
 	Error  string `json:"error,omitempty"`
+}
+
+type runtimeProviderCandidate struct {
+	Provider string
+	APIKey   string
+	Model    string
+	URL      string
+}
+
+func buildRuntimeProviderChain(provider, apiKey, model, url string, pool map[string]llmCredential) []runtimeProviderCandidate {
+	ordered := make([]runtimeProviderCandidate, 0, 4)
+	seen := make(map[string]struct{})
+
+	add := func(p, k, m, u string) {
+		normalizedProvider := normalizeCredentialProviderKey(p)
+		if normalizedProvider == "" {
+			return
+		}
+		if _, exists := seen[normalizedProvider]; exists {
+			return
+		}
+		ordered = append(ordered, runtimeProviderCandidate{
+			Provider: normalizedProvider,
+			APIKey:   strings.TrimSpace(k),
+			Model:    strings.TrimSpace(m),
+			URL:      strings.TrimSpace(u),
+		})
+		seen[normalizedProvider] = struct{}{}
+	}
+
+	add(provider, apiKey, model, url)
+
+	for _, candidate := range []string{"openai", "anthropic", "gemini"} {
+		cred, ok := pool[candidate]
+		if !ok {
+			continue
+		}
+		add(candidate, cred.APIKey, cred.Model, cred.URL)
+	}
+
+	return ordered
+}
+
+func newGeneratorForRuntimeProvider(candidate runtimeProviderCandidate) (ai.Generator, string, string, string, string, error) {
+	providerName, modelName := agent.NormalizeProviderAndModel(candidate.Provider, candidate.Model)
+	if providerName == "" {
+		return nil, "", "", "", "", fmt.Errorf("provider is required")
+	}
+
+	decryptedAPIKey, err := resolveDaemonSecretValue(candidate.APIKey)
+	if err != nil {
+		return nil, "", "", "", "", err
+	}
+
+	generatorProvider := providerName
+	if generatorProvider == "openai" {
+		generatorProvider = "chatgpt"
+	}
+
+	options := make(map[string]any)
+	if decryptedAPIKey != "" {
+		options["api_key"] = decryptedAPIKey
+	}
+	if modelName != "" {
+		options["model"] = modelName
+	}
+	if candidate.URL != "" {
+		switch generatorProvider {
+		case "ollama":
+			options["base_url"] = candidate.URL
+		default:
+			options["api_url"] = candidate.URL
+		}
+	}
+
+	gen, err := generator.New(generatorProvider, options)
+	if err != nil {
+		return nil, "", "", "", "", err
+	}
+
+	return gen, providerName, decryptedAPIKey, modelName, strings.TrimSpace(candidate.URL), nil
+}
+
+func buildRuntimeGeneratorChain(candidates []runtimeProviderCandidate) (ai.Generator, *agent.ProviderDetails) {
+	resolvedGenerators := make([]ai.Generator, 0, len(candidates))
+	var primaryDetails *agent.ProviderDetails
+
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.Provider) == "" {
+			continue
+		}
+		gen, providerName, decryptedAPIKey, modelName, resolvedURL, err := newGeneratorForRuntimeProvider(candidate)
+		if err != nil {
+			log.Printf("daemon handleAsk: provider init skipped provider=%q error=%v", candidate.Provider, err)
+			continue
+		}
+		if primaryDetails == nil {
+			primaryDetails = &agent.ProviderDetails{
+				Provider: providerName,
+				APIKey:   decryptedAPIKey,
+				Model:    modelName,
+				BaseURL:  resolvedURL,
+			}
+		}
+		resolvedGenerators = append(resolvedGenerators, gen)
+	}
+
+	if len(resolvedGenerators) == 0 {
+		return nil, nil
+	}
+	if len(resolvedGenerators) == 1 {
+		return resolvedGenerators[0], primaryDetails
+	}
+	return generator.NewFallbackGenerator(resolvedGenerators[0], resolvedGenerators[1:]), primaryDetails
 }
 
 type continueChatToolFunction struct {
@@ -208,13 +327,17 @@ type continueChatToolChoice struct {
 }
 
 type continueChatRequest struct {
-	SessionID string `json:"session_id"`
-	Message   string `json:"message"`
-	Provider  string `json:"provider,omitempty"`
-	APIKey    string `json:"api_key,omitempty"`
-	Model     string `json:"model,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Workspace struct {
+	SessionID          string                   `json:"session_id"`
+	Message            string                   `json:"message"`
+	Provider           string                   `json:"provider,omitempty"`
+	APIKey             string                   `json:"api_key,omitempty"`
+	Model              string                   `json:"model,omitempty"`
+	URL                string                   `json:"url,omitempty"`
+	LLMCredentials     map[string]llmCredential `json:"llm_credentials,omitempty"`
+	LLMPoolVersion     int64                    `json:"llm_pool_version,omitempty"`
+	LLMPoolUpdatedAtMS int64                    `json:"llm_pool_updated_at_ms,omitempty"`
+	LLMPoolUpdatedBy   string                   `json:"llm_pool_updated_by,omitempty"`
+	Workspace          struct {
 		Root      string `json:"root"`
 		Active    string `json:"active_file"`
 		Selection struct {
@@ -557,8 +680,15 @@ func (s *localRAGService) storeContinueSessionContext(req continueChatRequest) {
 	refreshToken := strings.TrimSpace(req.Auth.RefreshToken)
 	hqPort := strings.TrimSpace(req.HQ.Port)
 	hqBaseURL := normalizeHQBaseURL(strings.TrimSpace(req.HQ.BaseURL), hqPort)
+	normalizedCredentials, credentialsErr := normalizeAndValidateLLMCredentials(req.LLMCredentials)
+	if credentialsErr != nil {
+		log.Printf("continue session context: ignoring invalid llm_credentials payload: %v", credentialsErr)
+		normalizedCredentials = nil
+	}
 	if accessToken == "" && refreshToken == "" && hqBaseURL == "" && strings.TrimSpace(req.HQ.UserID) == "" && strings.TrimSpace(req.HQ.SessionID) == "" {
-		return
+		if strings.TrimSpace(req.Provider) == "" && strings.TrimSpace(req.APIKey) == "" && strings.TrimSpace(req.Model) == "" && strings.TrimSpace(req.URL) == "" && len(normalizedCredentials) == 0 {
+			return
+		}
 	}
 
 	var storedSessionContext daemonSessionContext
@@ -566,21 +696,35 @@ func (s *localRAGService) storeContinueSessionContext(req continueChatRequest) {
 	if stored, ok := daemonSessionStore.data[sessionKey]; ok {
 		storedSessionContext = stored
 	}
+	mergedCredentials, mergedPoolVersion, mergedPoolUpdatedAtMS, mergedPoolUpdatedBy, _ := mergeLLMPoolState(
+		storedSessionContext,
+		normalizedCredentials,
+		req.LLMPoolVersion,
+		req.LLMPoolUpdatedAtMS,
+		req.LLMPoolUpdatedBy,
+	)
 	daemonSessionStore.data[sessionKey] = daemonSessionContext{
-		AccessToken:   firstNonEmpty(accessToken, storedSessionContext.AccessToken),
-		RefreshToken:  firstNonEmpty(refreshToken, storedSessionContext.RefreshToken),
-		HQBaseURL:     firstNonEmpty(hqBaseURL, storedSessionContext.HQBaseURL),
-		HQPort:        firstNonEmpty(hqPort, storedSessionContext.HQPort),
-		HQUserID:      firstNonEmpty(req.HQ.UserID, storedSessionContext.HQUserID),
-		HQSessionID:   firstNonEmpty(req.HQ.SessionID, storedSessionContext.HQSessionID),
-		LLMProvider:   storedSessionContext.LLMProvider,
-		LLMAPIKey:     storedSessionContext.LLMAPIKey,
-		LLMModel:      storedSessionContext.LLMModel,
-		LLMURL:        storedSessionContext.LLMURL,
-		ThinkingLevel: storedSessionContext.ThinkingLevel,
-		LastUpdated:   time.Now().UTC(),
+		AccessToken:        firstNonEmpty(accessToken, storedSessionContext.AccessToken),
+		RefreshToken:       firstNonEmpty(refreshToken, storedSessionContext.RefreshToken),
+		HQBaseURL:          firstNonEmpty(hqBaseURL, storedSessionContext.HQBaseURL),
+		HQPort:             firstNonEmpty(hqPort, storedSessionContext.HQPort),
+		HQUserID:           firstNonEmpty(req.HQ.UserID, storedSessionContext.HQUserID),
+		HQSessionID:        firstNonEmpty(req.HQ.SessionID, storedSessionContext.HQSessionID),
+		LLMProvider:        firstNonEmpty(req.Provider, storedSessionContext.LLMProvider),
+		LLMAPIKey:          firstNonEmpty(req.APIKey, storedSessionContext.LLMAPIKey),
+		LLMModel:           firstNonEmpty(req.Model, storedSessionContext.LLMModel),
+		LLMURL:             firstNonEmpty(req.URL, storedSessionContext.LLMURL),
+		LLMCredentials:     cloneLLMCredentialsMap(mergedCredentials),
+		LLMPoolVersion:     mergedPoolVersion,
+		LLMPoolUpdatedAtMS: mergedPoolUpdatedAtMS,
+		LLMPoolUpdatedBy:   mergedPoolUpdatedBy,
+		ThinkingLevel:      storedSessionContext.ThinkingLevel,
+		LastUpdated:        time.Now().UTC(),
 	}
 	daemonSessionStore.mu.Unlock()
+	if err := persistDaemonLLMPoolState(); err != nil {
+		log.Printf("Warning: failed to persist daemon LLM pool state from Continue context sync: %v", err)
+	}
 }
 
 func (s *localRAGService) handleContinueTool(w http.ResponseWriter, r *http.Request, toolName string) {
@@ -912,6 +1056,11 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusServiceUnavailable, AskResponse{Error: "local RAG service is not initialized"})
 		return
 	}
+	requestCredentials, requestCredentialsErr := normalizeAndValidateLLMCredentials(req.LLMCredentials)
+	if requestCredentialsErr != nil {
+		respondJSON(w, http.StatusBadRequest, AskResponse{Error: requestCredentialsErr.Error()})
+		return
+	}
 
 	// Setup streaming (same pattern as HQ's /api/ai/chat)
 	// Always initialize streaming - client will receive NDJSON events
@@ -971,24 +1120,58 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		hqPort = strings.TrimSpace(storedSessionContext.HQPort)
 	}
 	hqBaseURL = normalizeHQBaseURL(hqBaseURL, hqPort)
-	if accessToken != "" || refreshToken != "" || hqBaseURL != "" || storedSessionContext.LLMProvider != "" || storedSessionContext.ThinkingLevel != "" {
+	selectedCredentials, selectedPoolVersion, selectedPoolUpdatedAtMS, selectedPoolUpdatedBy, _ := mergeLLMPoolState(
+		storedSessionContext,
+		requestCredentials,
+		req.LLMPoolVersion,
+		req.LLMPoolUpdatedAtMS,
+		req.LLMPoolUpdatedBy,
+	)
+	if len(selectedCredentials) == 0 {
+		selectedCredentials = cloneLLMCredentialsMap(storedSessionContext.LLMCredentials)
+	}
+
+	if accessToken != "" || refreshToken != "" || hqBaseURL != "" || storedSessionContext.LLMProvider != "" || storedSessionContext.ThinkingLevel != "" || len(selectedCredentials) > 0 {
 		ctxKey := payload.SessionID
+		nextProvider := strings.TrimSpace(req.LLMProvider)
+		if nextProvider == "" {
+			nextProvider = strings.TrimSpace(storedSessionContext.LLMProvider)
+		}
+		nextAPIKey := strings.TrimSpace(req.LLMAPIKey)
+		if nextAPIKey == "" {
+			nextAPIKey = strings.TrimSpace(storedSessionContext.LLMAPIKey)
+		}
+		nextModel := strings.TrimSpace(req.LLMModel)
+		if nextModel == "" {
+			nextModel = strings.TrimSpace(storedSessionContext.LLMModel)
+		}
+		nextURL := strings.TrimSpace(req.LLMURL)
+		if nextURL == "" {
+			nextURL = strings.TrimSpace(storedSessionContext.LLMURL)
+		}
 		daemonSessionStore.mu.Lock()
 		daemonSessionStore.data[ctxKey] = daemonSessionContext{
-			AccessToken:   accessToken,
-			RefreshToken:  refreshToken,
-			HQBaseURL:     hqBaseURL,
-			HQPort:        hqPort,
-			HQUserID:      strings.TrimSpace(req.HQ.UserID),
-			HQSessionID:   payload.SessionID,
-			LLMProvider:   strings.TrimSpace(storedSessionContext.LLMProvider),
-			LLMAPIKey:     strings.TrimSpace(storedSessionContext.LLMAPIKey),
-			LLMModel:      strings.TrimSpace(storedSessionContext.LLMModel),
-			LLMURL:        strings.TrimSpace(storedSessionContext.LLMURL),
-			ThinkingLevel: strings.TrimSpace(storedSessionContext.ThinkingLevel),
-			LastUpdated:   time.Now().UTC(),
+			AccessToken:        accessToken,
+			RefreshToken:       refreshToken,
+			HQBaseURL:          hqBaseURL,
+			HQPort:             hqPort,
+			HQUserID:           strings.TrimSpace(req.HQ.UserID),
+			HQSessionID:        payload.SessionID,
+			LLMProvider:        nextProvider,
+			LLMAPIKey:          nextAPIKey,
+			LLMModel:           nextModel,
+			LLMURL:             nextURL,
+			LLMCredentials:     cloneLLMCredentialsMap(selectedCredentials),
+			LLMPoolVersion:     selectedPoolVersion,
+			LLMPoolUpdatedAtMS: selectedPoolUpdatedAtMS,
+			LLMPoolUpdatedBy:   selectedPoolUpdatedBy,
+			ThinkingLevel:      strings.TrimSpace(storedSessionContext.ThinkingLevel),
+			LastUpdated:        time.Now().UTC(),
 		}
 		daemonSessionStore.mu.Unlock()
+		if err := persistDaemonLLMPoolState(); err != nil {
+			log.Printf("Warning: failed to persist daemon LLM pool state from Ask sync: %v", err)
+		}
 	}
 
 	ctx = context.WithValue(ctx, "session_payload", payload)
@@ -1025,18 +1208,52 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		model = strings.TrimSpace(storedSessionContext.LLMModel)
 		url = strings.TrimSpace(storedSessionContext.LLMURL)
 	}
-	decryptedAPIKey, decryptErr := resolveDaemonSecretValue(apiKey)
-	if decryptErr != nil {
-		respondJSON(w, http.StatusBadRequest, AskResponse{Error: "Invalid llm_api_key: " + decryptErr.Error()})
-		return
+	if provider == "" && apiKey == "" && model == "" && url == "" {
+		credentialPool := selectedCredentials
+		if len(credentialPool) == 0 {
+			credentialPool = cloneLLMCredentialsMap(storedSessionContext.LLMCredentials)
+		}
+		for _, candidate := range []string{"openai", "anthropic", "gemini"} {
+			cred, ok := credentialPool[candidate]
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(cred.APIKey) == "" && strings.TrimSpace(cred.Model) == "" && strings.TrimSpace(cred.URL) == "" {
+				continue
+			}
+			provider = candidate
+			apiKey = strings.TrimSpace(cred.APIKey)
+			model = strings.TrimSpace(cred.Model)
+			url = strings.TrimSpace(cred.URL)
+			break
+		}
 	}
-	if provider != "" || apiKey != "" || model != "" || url != "" {
-		providerDetails := &agent.ProviderDetails{
+	credentialPool := selectedCredentials
+	if len(credentialPool) == 0 {
+		credentialPool = cloneLLMCredentialsMap(storedSessionContext.LLMCredentials)
+	}
+	runtimeChain := buildRuntimeProviderChain(provider, apiKey, model, url, credentialPool)
+	runtimeGenerator, runtimePrimaryDetails := buildRuntimeGeneratorChain(runtimeChain)
+	if runtimeGenerator != nil {
+		cfg.Set("generator", runtimeGenerator)
+	}
+
+	providerDetails := runtimePrimaryDetails
+	if providerDetails == nil && (provider != "" || apiKey != "" || model != "" || url != "") {
+		decryptedAPIKey, decryptErr := resolveDaemonSecretValue(apiKey)
+		if decryptErr != nil {
+			respondJSON(w, http.StatusBadRequest, AskResponse{Error: "Invalid llm_api_key: " + decryptErr.Error()})
+			return
+		}
+		providerDetails = &agent.ProviderDetails{
 			Provider: provider,
 			APIKey:   decryptedAPIKey,
 			Model:    model,
 			BaseURL:  url,
 		}
+	}
+
+	if providerDetails != nil {
 		cfg.Set("provider_details", providerDetails)
 		providerName, modelName := agent.NormalizeProviderAndModel(providerDetails.Provider, providerDetails.Model)
 		if providerName != "" {

@@ -488,13 +488,46 @@
     }
 
     function getStoredAIConfig() {
-        return Object.assign({}, getStoredAIConfigRecord(), getStoredAISecrets());
+        const merged = Object.assign({}, getStoredAIConfigRecord(), getStoredAISecrets());
+        return hydrateLegacyAISecretsFromProviderPool(merged);
+    }
+
+    function normalizeProviderSecretKey(provider) {
+        const key = (provider || '').trim().toLowerCase();
+        if (key === 'chatgpt') return 'openai';
+        if (key === 'google') return 'gemini';
+        return key;
+    }
+
+    function providerSecretField(provider) {
+        const normalized = normalizeProviderSecretKey(provider);
+        if (!normalized) return '';
+        if (normalized === 'openai' || normalized === 'anthropic' || normalized === 'gemini') {
+            return `${normalized}_api_key`;
+        }
+        return '';
+    }
+
+    function hydrateLegacyAISecretsFromProviderPool(aiConfig) {
+        const cfg = Object.assign({}, aiConfig || {});
+
+        const primarySecretField = providerSecretField(cfg.brain_provider);
+        if (!cfg.brain_api_key && primarySecretField && cfg[primarySecretField]) {
+            cfg.brain_api_key = cfg[primarySecretField];
+        }
+
+        const fallbackSecretField = providerSecretField(cfg.fallback_provider);
+        if (!cfg.fallback_api_key && fallbackSecretField && cfg[fallbackSecretField]) {
+            cfg.fallback_api_key = cfg[fallbackSecretField];
+        }
+
+        return cfg;
     }
 
     function splitAIConfigAndSecrets(aiConfig) {
         const nextConfig = Object.assign({}, aiConfig || {});
         const nextSecrets = {};
-        ['brain_api_key', 'embedder_api_key', 'fallback_api_key'].forEach((key) => {
+        ['brain_api_key', 'embedder_api_key', 'fallback_api_key', 'openai_api_key', 'anthropic_api_key', 'gemini_api_key'].forEach((key) => {
             if (Object.prototype.hasOwnProperty.call(nextConfig, key)) {
                 if (nextConfig[key]) {
                     nextSecrets[key] = nextConfig[key];
@@ -523,7 +556,7 @@
 
     function clearEncryptedAISecretsForDisplay(aiConfig) {
         const nextConfig = Object.assign({}, aiConfig || {});
-        ['brain_api_key', 'embedder_api_key', 'fallback_api_key'].forEach((key) => {
+        ['brain_api_key', 'embedder_api_key', 'fallback_api_key', 'openai_api_key', 'anthropic_api_key', 'gemini_api_key'].forEach((key) => {
             if (isEncryptedAISecretValue(nextConfig[key])) {
                 nextConfig[key] = '';
             }
@@ -550,6 +583,15 @@
     function prepareAIConfigForSecureStorage(nextConfig, existingConfig) {
         const prepared = Object.assign({}, nextConfig || {});
         const current = existingConfig || {};
+        const resolveProviderSecret = (secretKey) => {
+            const existingValue = (current[secretKey] || '').trim();
+            const nextValue = (prepared[secretKey] || '').trim();
+            if (nextValue) {
+                prepared[secretKey] = encryptAISecretValueForStorage(nextValue);
+                return;
+            }
+            prepared[secretKey] = existingValue;
+        };
         const resolveSecret = (secretKey, providerKey) => {
             const provider = (prepared[providerKey] || '').trim();
             const existingValue = (current[secretKey] || '').trim();
@@ -564,6 +606,29 @@
             }
             prepared[secretKey] = existingValue;
         };
+
+        // Provider-keyed pool secrets are retained independent of active selection.
+        resolveProviderSecret('openai_api_key');
+        resolveProviderSecret('anthropic_api_key');
+        resolveProviderSecret('gemini_api_key');
+
+        // Migrate legacy provider-slotted values into provider-keyed pool when possible.
+        const primaryField = providerSecretField(prepared.brain_provider);
+        if (primaryField && !prepared[primaryField] && (prepared.brain_api_key || current.brain_api_key)) {
+            prepared[primaryField] = encryptAISecretValueForStorage((prepared.brain_api_key || current.brain_api_key || '').trim());
+        }
+        const fallbackField = providerSecretField(prepared.fallback_provider);
+        if (fallbackField && !prepared[fallbackField] && (prepared.fallback_api_key || current.fallback_api_key)) {
+            prepared[fallbackField] = encryptAISecretValueForStorage((prepared.fallback_api_key || current.fallback_api_key || '').trim());
+        }
+
+        // Hydrate legacy slots from provider-keyed secrets to keep existing consumers stable.
+        if (primaryField && !prepared.brain_api_key && prepared[primaryField]) {
+            prepared.brain_api_key = prepared[primaryField];
+        }
+        if (fallbackField && !prepared.fallback_api_key && prepared[fallbackField]) {
+            prepared.fallback_api_key = prepared[fallbackField];
+        }
 
         resolveSecret('brain_api_key', 'brain_provider');
         resolveSecret('embedder_api_key', 'embedder_provider');

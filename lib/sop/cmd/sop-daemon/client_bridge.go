@@ -177,23 +177,27 @@ type continueDelegationGuidance struct {
 }
 
 type continueAgentExecuteRequest struct {
-	RequestID      string                          `json:"request_id,omitempty"`
-	TraceID        string                          `json:"trace_id,omitempty"`
-	RootRequestID  string                          `json:"root_request_id,omitempty"`
-	SessionID      string                          `json:"session_id"`
-	Task           string                          `json:"task"`
-	Provider       string                          `json:"provider,omitempty"`
-	APIKey         string                          `json:"api_key,omitempty"`
-	Model          string                          `json:"model,omitempty"`
-	URL            string                          `json:"url,omitempty"`
-	RequestedPhase string                          `json:"requested_phase,omitempty"`
-	AvailableTools []string                        `json:"available_tools,omitempty"`
-	PhaseTools     []string                        `json:"phase_tools,omitempty"`
-	AllowedTools   []string                        `json:"allowed_tools,omitempty"`
-	ToolChoice     string                          `json:"tool_choice,omitempty"`
-	Guidance       continueDelegationGuidance      `json:"guidance,omitempty"`
-	ResultContract continueExecutionResultContract `json:"result_contract,omitempty"`
-	Auth           struct {
+	RequestID          string                          `json:"request_id,omitempty"`
+	TraceID            string                          `json:"trace_id,omitempty"`
+	RootRequestID      string                          `json:"root_request_id,omitempty"`
+	SessionID          string                          `json:"session_id"`
+	Task               string                          `json:"task"`
+	Provider           string                          `json:"provider,omitempty"`
+	APIKey             string                          `json:"api_key,omitempty"`
+	Model              string                          `json:"model,omitempty"`
+	URL                string                          `json:"url,omitempty"`
+	LLMCredentials     map[string]llmCredential        `json:"llm_credentials,omitempty"`
+	LLMPoolVersion     int64                           `json:"llm_pool_version,omitempty"`
+	LLMPoolUpdatedAtMS int64                           `json:"llm_pool_updated_at_ms,omitempty"`
+	LLMPoolUpdatedBy   string                          `json:"llm_pool_updated_by,omitempty"`
+	RequestedPhase     string                          `json:"requested_phase,omitempty"`
+	AvailableTools     []string                        `json:"available_tools,omitempty"`
+	PhaseTools         []string                        `json:"phase_tools,omitempty"`
+	AllowedTools       []string                        `json:"allowed_tools,omitempty"`
+	ToolChoice         string                          `json:"tool_choice,omitempty"`
+	Guidance           continueDelegationGuidance      `json:"guidance,omitempty"`
+	ResultContract     continueExecutionResultContract `json:"result_contract,omitempty"`
+	Auth               struct {
 		AccessToken  string `json:"access_token,omitempty"`
 		RefreshToken string `json:"refresh_token,omitempty"`
 	} `json:"auth,omitempty"`
@@ -625,6 +629,7 @@ func (continueBridgeTransport) handleChat(s *localRAGService, w http.ResponseWri
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
 		return
 	}
+	s.storeContinueSessionContext(req)
 	envelope, err := buildContinueBridgeEnvelope(req)
 	if err != nil {
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
@@ -661,13 +666,17 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 	req.RequestID = newContinueRequestID()
 
 	chatReq := continueChatRequest{
-		SessionID: req.SessionID,
-		Message:   req.Task,
-		Mode:      req.Mode,
-		Provider:  strings.TrimSpace(req.Provider),
-		APIKey:    strings.TrimSpace(req.APIKey),
-		Model:     strings.TrimSpace(req.Model),
-		URL:       strings.TrimSpace(req.URL),
+		SessionID:          req.SessionID,
+		Message:            req.Task,
+		Mode:               req.Mode,
+		Provider:           strings.TrimSpace(req.Provider),
+		APIKey:             strings.TrimSpace(req.APIKey),
+		Model:              strings.TrimSpace(req.Model),
+		URL:                strings.TrimSpace(req.URL),
+		LLMCredentials:     cloneLLMCredentialsMap(req.LLMCredentials),
+		LLMPoolVersion:     req.LLMPoolVersion,
+		LLMPoolUpdatedAtMS: req.LLMPoolUpdatedAtMS,
+		LLMPoolUpdatedBy:   strings.TrimSpace(req.LLMPoolUpdatedBy),
 	}
 	chatReq.Auth.AccessToken = strings.TrimSpace(req.Auth.AccessToken)
 	chatReq.Auth.RefreshToken = strings.TrimSpace(req.Auth.RefreshToken)
@@ -682,13 +691,13 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 	if strings.TrimSpace(chatReq.Mode) == "" {
 		chatReq.Mode = "coding"
 	}
+	s.storeContinueSessionContext(chatReq)
 	workflowProfile, inferredPhase := resolveContinueWorkflowProfile(chatReq.Mode, chatReq.Message)
 	requestedPhase := strings.TrimSpace(req.RequestedPhase)
 	if requestedPhase == "" {
 		requestedPhase = inferredPhase
 	}
 	if registration, ok := s.ensureContinueWorkerStore().Get(chatReq.SessionID); ok {
-		s.storeContinueSessionContext(chatReq)
 		requiredCapabilities := requiredContinueWorkerCapabilities(req)
 		if continueWorkerSupportsCapabilities(registration, requiredCapabilities) {
 			s.ensureContinueSessionStore().Put(buildContinueSessionSnapshot(req.RequestID, chatReq, workflowProfile, requestedPhase, "in_progress", chatReq.Message))
@@ -854,6 +863,7 @@ func (continueBridgeTransport) writeMetadata(w http.ResponseWriter, s *localRAGS
 	if s != nil {
 		toolNames = s.continueToolNames()
 	}
+	llmPoolPopulated := daemonHasPopulatedLLMPoolState()
 	respondJSON(w, http.StatusOK, map[string]any{
 		"object": "client.capabilities",
 		"client": "continue",
@@ -915,14 +925,51 @@ func (continueBridgeTransport) writeMetadata(w http.ResponseWriter, s *localRAGS
 		},
 		"coding_workflows": continueWorkflowMetadata(),
 		"control_model": map[string]any{
-			"controller":            "ai_studio_daemon",
-			"editor_worker":         "continue",
-			"provider_is_attribute": true,
-			"model_is_attribute":    true,
-			"selection_message":     "Use the daemon-advertised supported LLM list for AI Studio routing. Continue and daemon should present the same provider/model choices.",
-			"supported_llms":        sopbackend.GetModelCatalog().LLM,
+			"controller":                             "ai_studio_daemon",
+			"editor_worker":                          "continue",
+			"provider_is_attribute":                  true,
+			"model_is_attribute":                     true,
+			"llm_pool_populated":                     llmPoolPopulated,
+			"hide_editor_pool_inputs_when_populated": llmPoolPopulated,
+			"selection_message":                      "Use the daemon-advertised supported LLM list for AI Studio routing. Continue and daemon should present the same provider/model choices.",
+			"supported_llms":                         sopbackend.GetModelCatalog().LLM,
 		},
 	})
+}
+
+func daemonHasPopulatedLLMPoolState() bool {
+	daemonSessionStore.mu.Lock()
+	defer daemonSessionStore.mu.Unlock()
+
+	for _, session := range daemonSessionStore.data {
+		if strings.TrimSpace(session.LLMAPIKey) != "" {
+			return true
+		}
+		if llmCredentialsPoolHasUsableKey(session.LLMCredentials) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func llmCredentialsPoolHasUsableKey(pool map[string]llmCredential) bool {
+	for _, provider := range []string{"openai", "anthropic", "gemini"} {
+		cred, ok := pool[provider]
+		if !ok {
+			continue
+		}
+		updatedAt := normalizePoolTimestamp(cred.UpdatedAtMS)
+		deletedAt := normalizePoolTimestamp(cred.DeletedAtMS)
+		if deletedAt > 0 && deletedAt >= updatedAt {
+			continue
+		}
+		if strings.TrimSpace(cred.APIKey) != "" {
+			return true
+		}
+	}
+
+	return false
 }
 
 func continueWorkflowProfiles() []continueWorkflowProfile {

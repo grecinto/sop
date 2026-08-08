@@ -994,6 +994,9 @@
         const model = providerConfig.model || '';
         const apiKey = chatAIConfig.brain_api_key || '';
         const baseURL = chatAIConfig.brain_url || '';
+        const llmPoolSyncPayload = typeof buildLLMPoolSyncPayload === 'function'
+            ? buildLLMPoolSyncPayload(chatAIConfig)
+            : { llm_credentials: {}, llm_pool_version: 0, llm_pool_updated_at_ms: 0, llm_pool_updated_by: 'unknown' };
         const hqPort = (window.location.port || '').trim();
         
         const effectiveSessionID = currentSessionID || 'local-daemon';
@@ -1015,6 +1018,10 @@
             llm_api_key: apiKey,
             llm_model: model,
             llm_url: baseURL,
+            llm_credentials: llmPoolSyncPayload.llm_credentials || {},
+            llm_pool_version: llmPoolSyncPayload.llm_pool_version || 0,
+            llm_pool_updated_at_ms: llmPoolSyncPayload.llm_pool_updated_at_ms || 0,
+            llm_pool_updated_by: llmPoolSyncPayload.llm_pool_updated_by || 'unknown',
             thinking_level: getSelectedThinkingLevel(),
             input_parts: collectChatInputParts()
         };
@@ -1074,6 +1081,19 @@
             throw new Error(errorMessage);
         }
         const data = await response.json().catch(() => null);
+        if (data && typeof applyDaemonLLMPoolSnapshotToLocalConfig === 'function') {
+            try {
+                const mergedConfig = applyDaemonLLMPoolSnapshotToLocalConfig(data);
+                if (typeof syncChatControlsFromAIConfig === 'function') {
+                    syncChatControlsFromAIConfig(mergedConfig);
+                }
+                if (typeof syncSetupWizardControlsFromAIConfig === 'function') {
+                    syncSetupWizardControlsFromAIConfig(mergedConfig);
+                }
+            } catch (syncErr) {
+                console.warn('[ensureLocalAgentReachable] failed to apply daemon LLM pool snapshot', syncErr);
+            }
+        }
         
         // Capture session ID from handoff response for terminal polling
         // BUT: Don't overwrite if we're in floater mode and inherited session ID from URL

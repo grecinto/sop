@@ -758,3 +758,103 @@ func TestSetupWizardUsesSharedSaveRouteWithoutProvisioningModeState(t *testing.T
 		t.Fatalf("expected setup wizard to stop carrying simple-vs-advanced provisioning mode state in %s", scriptsPath)
 	}
 }
+
+func TestDaemonProvisioningWizardUsesStep3ForLLMPoolEntry(t *testing.T) {
+	scriptsPath := templatePath("scripts_part10.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read setup script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+
+	for _, token := range []string{
+		"if (step3) step3.style.display = '';",
+		"const daemonStepId = currentWizardStep <= 2 ? 'step-2' : 'step-3';",
+		"if (currentWizardStep <= 2) {",
+		"currentWizardStep = 3;",
+		"mergeStoredAIConfigSecure({",
+		"finishDaemonSystemSetup();",
+	} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected daemon Step 3 flow token %q in %s", token, scriptsPath)
+		}
+	}
+
+	if strings.Contains(scriptsContent, "if (step3) step3.style.display = daemonProvisioningWizardActive ? 'none' : '';") {
+		t.Fatalf("expected daemon setup flow to keep Step 3 visible in %s", scriptsPath)
+	}
+}
+
+func TestChatSettingsModalExposesDedicatedProviderKeyInputs(t *testing.T) {
+	modalPath := templatePath("modals.html")
+	modalData, err := os.ReadFile(modalPath)
+	if err != nil {
+		t.Fatalf("read chat modal template: %v", err)
+	}
+	modalContent := string(modalData)
+	for _, token := range []string{"chat-settings-openai-api-key", "chat-settings-anthropic-api-key", "chat-settings-gemini-api-key"} {
+		if !strings.Contains(modalContent, token) {
+			t.Fatalf("expected dedicated provider key input %q in %s", token, modalPath)
+		}
+	}
+}
+
+func TestSetupWizardExposesDedicatedProviderKeyInputs(t *testing.T) {
+	indexPath := templatePath("index.html")
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read setup wizard template: %v", err)
+	}
+	indexContent := string(indexData)
+	for _, token := range []string{"setup-openai-api-key", "setup-anthropic-api-key", "setup-gemini-api-key"} {
+		if !strings.Contains(indexContent, token) {
+			t.Fatalf("expected dedicated provider key input %q in %s", token, indexPath)
+		}
+	}
+}
+
+func TestAISecretStorageSupportsProviderKeyedSecretsAndLegacyHydration(t *testing.T) {
+	scriptsPath := templatePath("scripts_part10.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read setup script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+
+	for _, token := range []string{
+		"openai_api_key",
+		"anthropic_api_key",
+		"gemini_api_key",
+		"function hydrateLegacyAISecretsFromProviderPool",
+		"function providerSecretField",
+		"resolveProviderSecret('openai_api_key')",
+		"resolveProviderSecret('anthropic_api_key')",
+		"resolveProviderSecret('gemini_api_key')",
+	} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected provider-keyed secret storage token %q in %s", token, scriptsPath)
+		}
+	}
+}
+
+func TestChatSettingsPersistProviderKeyedSecrets(t *testing.T) {
+	scriptsPath := templatePath("scripts_part11.html")
+	scriptsData, err := os.ReadFile(scriptsPath)
+	if err != nil {
+		t.Fatalf("read chat settings script template: %v", err)
+	}
+	scriptsContent := string(scriptsData)
+
+	for _, token := range []string{
+		"chat-settings-openai-api-key",
+		"chat-settings-anthropic-api-key",
+		"chat-settings-gemini-api-key",
+		"openai_api_key:",
+		"anthropic_api_key:",
+		"gemini_api_key:",
+	} {
+		if !strings.Contains(scriptsContent, token) {
+			t.Fatalf("expected provider-keyed chat settings token %q in %s", token, scriptsPath)
+		}
+	}
+}

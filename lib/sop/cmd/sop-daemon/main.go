@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -320,11 +321,23 @@ type UIHandoffRequest struct {
 		UserID    string `json:"user_id"`
 		SessionID string `json:"session_id"`
 	} `json:"hq"`
-	LLMProvider   string `json:"llm_provider,omitempty"`
-	LLMAPIKey     string `json:"llm_api_key,omitempty"`
-	LLMModel      string `json:"llm_model,omitempty"`
-	LLMURL        string `json:"llm_url,omitempty"`
-	ThinkingLevel string `json:"thinking_level,omitempty"`
+	LLMProvider        string                   `json:"llm_provider,omitempty"`
+	LLMAPIKey          string                   `json:"llm_api_key,omitempty"`
+	LLMModel           string                   `json:"llm_model,omitempty"`
+	LLMURL             string                   `json:"llm_url,omitempty"`
+	LLMCredentials     map[string]llmCredential `json:"llm_credentials,omitempty"`
+	LLMPoolVersion     int64                    `json:"llm_pool_version,omitempty"`
+	LLMPoolUpdatedAtMS int64                    `json:"llm_pool_updated_at_ms,omitempty"`
+	LLMPoolUpdatedBy   string                   `json:"llm_pool_updated_by,omitempty"`
+	ThinkingLevel      string                   `json:"thinking_level,omitempty"`
+}
+
+type llmCredential struct {
+	APIKey      string `json:"api_key,omitempty"`
+	Model       string `json:"model,omitempty"`
+	URL         string `json:"url,omitempty"`
+	UpdatedAtMS int64  `json:"updated_at_ms,omitempty"`
+	DeletedAtMS int64  `json:"deleted_at_ms,omitempty"`
 }
 
 type daemonSecretEncryptRequest struct {
@@ -336,29 +349,294 @@ type daemonSecretEncryptResponse struct {
 }
 
 type UIHandoffResponse struct {
-	Accepted            bool                              `json:"accepted"`
-	Message             string                            `json:"message"`
-	SessionID           string                            `json:"session_id,omitempty"`
-	WelcomeContext      string                            `json:"welcome_context,omitempty"`
-	Error               string                            `json:"error,omitempty"`
-	NeedsRecovery       bool                              `json:"needs_recovery,omitempty"`
-	Recovery            runtimeVectorizationRecoveryState `json:"recovery,omitempty"`
-	StoragePathRecovery runtimeDataPathRecoveryState      `json:"storage_path_recovery,omitempty"`
+	Accepted             bool                              `json:"accepted"`
+	Message              string                            `json:"message"`
+	SessionID            string                            `json:"session_id,omitempty"`
+	LLMProvider          string                            `json:"llm_provider,omitempty"`
+	LLMModel             string                            `json:"llm_model,omitempty"`
+	LLMURL               string                            `json:"llm_url,omitempty"`
+	LLMCredentials       map[string]llmCredential          `json:"llm_credentials,omitempty"`
+	LLMPoolVersion       int64                             `json:"llm_pool_version,omitempty"`
+	LLMPoolUpdatedAtMS   int64                             `json:"llm_pool_updated_at_ms,omitempty"`
+	LLMPoolUpdatedBy     string                            `json:"llm_pool_updated_by,omitempty"`
+	LLMPoolSyncDirection string                            `json:"llm_pool_sync_direction,omitempty"`
+	WelcomeContext       string                            `json:"welcome_context,omitempty"`
+	Error                string                            `json:"error,omitempty"`
+	NeedsRecovery        bool                              `json:"needs_recovery,omitempty"`
+	Recovery             runtimeVectorizationRecoveryState `json:"recovery,omitempty"`
+	StoragePathRecovery  runtimeDataPathRecoveryState      `json:"storage_path_recovery,omitempty"`
 }
 
 type daemonSessionContext struct {
-	AccessToken   string
-	RefreshToken  string
-	HQBaseURL     string
-	HQPort        string
-	HQUserID      string
-	HQSessionID   string
-	LLMProvider   string
-	LLMAPIKey     string
-	LLMModel      string
-	LLMURL        string
-	ThinkingLevel string
-	LastUpdated   time.Time
+	AccessToken        string
+	RefreshToken       string
+	HQBaseURL          string
+	HQPort             string
+	HQUserID           string
+	HQSessionID        string
+	LLMProvider        string
+	LLMAPIKey          string
+	LLMModel           string
+	LLMURL             string
+	LLMCredentials     map[string]llmCredential
+	LLMPoolVersion     int64
+	LLMPoolUpdatedAtMS int64
+	LLMPoolUpdatedBy   string
+	ThinkingLevel      string
+	LastUpdated        time.Time
+}
+
+type persistedDaemonLLMSessionState struct {
+	HQBaseURL          string                   `json:"hq_base_url,omitempty"`
+	HQPort             string                   `json:"hq_port,omitempty"`
+	HQUserID           string                   `json:"hq_user_id,omitempty"`
+	HQSessionID        string                   `json:"hq_session_id,omitempty"`
+	LLMProvider        string                   `json:"llm_provider,omitempty"`
+	LLMAPIKey          string                   `json:"llm_api_key,omitempty"`
+	LLMModel           string                   `json:"llm_model,omitempty"`
+	LLMURL             string                   `json:"llm_url,omitempty"`
+	LLMCredentials     map[string]llmCredential `json:"llm_credentials,omitempty"`
+	LLMPoolVersion     int64                    `json:"llm_pool_version,omitempty"`
+	LLMPoolUpdatedAtMS int64                    `json:"llm_pool_updated_at_ms,omitempty"`
+	LLMPoolUpdatedBy   string                   `json:"llm_pool_updated_by,omitempty"`
+	ThinkingLevel      string                   `json:"thinking_level,omitempty"`
+	LastUpdatedUnixMS  int64                    `json:"last_updated_unix_ms,omitempty"`
+}
+
+type persistedDaemonLLMState struct {
+	SchemaVersion int                                       `json:"schema_version"`
+	Sessions      map[string]persistedDaemonLLMSessionState `json:"sessions,omitempty"`
+}
+
+type persistedDaemonLLMEnvelope struct {
+	EncryptedPayload string `json:"encrypted_payload"`
+}
+
+func normalizeCredentialProviderKey(provider string) string {
+	key := strings.ToLower(strings.TrimSpace(provider))
+	switch key {
+	case "chatgpt":
+		return "openai"
+	case "google":
+		return "gemini"
+	default:
+		return key
+	}
+}
+
+func cloneLLMCredentialsMap(in map[string]llmCredential) map[string]llmCredential {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]llmCredential, len(in))
+	for provider, cred := range in {
+		out[provider] = cred
+	}
+	return out
+}
+
+func normalizePoolVersion(version int64) int64 {
+	if version < 0 {
+		return 0
+	}
+	return version
+}
+
+func normalizePoolTimestamp(ts int64) int64 {
+	if ts < 0 {
+		return 0
+	}
+	return ts
+}
+
+func normalizePoolUpdatedBy(updatedBy string) string {
+	trimmed := strings.TrimSpace(updatedBy)
+	if trimmed == "" {
+		return "unknown"
+	}
+	return trimmed
+}
+
+func credentialLogicalTimestamp(cred llmCredential) int64 {
+	updated := normalizePoolTimestamp(cred.UpdatedAtMS)
+	deleted := normalizePoolTimestamp(cred.DeletedAtMS)
+	if deleted > updated {
+		return deleted
+	}
+	return updated
+}
+
+func normalizeCredentialForComparison(cred llmCredential) llmCredential {
+	return llmCredential{
+		APIKey:      strings.TrimSpace(cred.APIKey),
+		Model:       strings.TrimSpace(cred.Model),
+		URL:         strings.TrimSpace(cred.URL),
+		UpdatedAtMS: normalizePoolTimestamp(cred.UpdatedAtMS),
+		DeletedAtMS: normalizePoolTimestamp(cred.DeletedAtMS),
+	}
+}
+
+func llmCredentialsEqual(a, b map[string]llmCredential) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for provider, av := range a {
+		bv, ok := b[provider]
+		if !ok {
+			return false
+		}
+		if normalizeCredentialForComparison(av) != normalizeCredentialForComparison(bv) {
+			return false
+		}
+	}
+	return true
+}
+
+func comparePoolFreshness(existingVersion, existingUpdatedAt int64, existingUpdatedBy string, incomingVersion, incomingUpdatedAt int64, incomingUpdatedBy string) int {
+	existingVersion = normalizePoolVersion(existingVersion)
+	incomingVersion = normalizePoolVersion(incomingVersion)
+	if existingVersion > incomingVersion {
+		return 1
+	}
+	if incomingVersion > existingVersion {
+		return -1
+	}
+
+	existingUpdatedAt = normalizePoolTimestamp(existingUpdatedAt)
+	incomingUpdatedAt = normalizePoolTimestamp(incomingUpdatedAt)
+	if existingUpdatedAt > incomingUpdatedAt {
+		return 1
+	}
+	if incomingUpdatedAt > existingUpdatedAt {
+		return -1
+	}
+
+	existingUpdatedBy = normalizePoolUpdatedBy(existingUpdatedBy)
+	incomingUpdatedBy = normalizePoolUpdatedBy(incomingUpdatedBy)
+	if existingUpdatedBy > incomingUpdatedBy {
+		return 1
+	}
+	if incomingUpdatedBy > existingUpdatedBy {
+		return -1
+	}
+	return 0
+}
+
+func mergeCredentialEntry(existing, incoming llmCredential, preferIncoming bool) llmCredential {
+	existing = normalizeCredentialForComparison(existing)
+	incoming = normalizeCredentialForComparison(incoming)
+
+	existingTS := credentialLogicalTimestamp(existing)
+	incomingTS := credentialLogicalTimestamp(incoming)
+
+	switch {
+	case incomingTS > existingTS:
+		return incoming
+	case existingTS > incomingTS:
+		return existing
+	default:
+		if preferIncoming {
+			return incoming
+		}
+		return existing
+	}
+}
+
+func mergeCredentialPool(existing, incoming map[string]llmCredential, preferIncoming bool) map[string]llmCredential {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	merged := cloneLLMCredentialsMap(existing)
+	if merged == nil {
+		merged = map[string]llmCredential{}
+	}
+	for _, provider := range []string{"openai", "anthropic", "gemini"} {
+		existingCred, hasExisting := merged[provider]
+		incomingCred, hasIncoming := incoming[provider]
+		switch {
+		case hasExisting && hasIncoming:
+			merged[provider] = mergeCredentialEntry(existingCred, incomingCred, preferIncoming)
+		case hasIncoming:
+			merged[provider] = normalizeCredentialForComparison(incomingCred)
+		case hasExisting:
+			merged[provider] = normalizeCredentialForComparison(existingCred)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
+func mergeLLMPoolState(existing daemonSessionContext, incoming map[string]llmCredential, incomingVersion, incomingUpdatedAt int64, incomingUpdatedBy string) (map[string]llmCredential, int64, int64, string, string) {
+	nowMS := time.Now().UTC().UnixMilli()
+	existingPool := cloneLLMCredentialsMap(existing.LLMCredentials)
+	incomingPool := cloneLLMCredentialsMap(incoming)
+
+	if len(existingPool) == 0 && len(incomingPool) == 0 {
+		return nil, normalizePoolVersion(existing.LLMPoolVersion), normalizePoolTimestamp(existing.LLMPoolUpdatedAtMS), normalizePoolUpdatedBy(existing.LLMPoolUpdatedBy), "no_change"
+	}
+
+	freshness := comparePoolFreshness(existing.LLMPoolVersion, existing.LLMPoolUpdatedAtMS, existing.LLMPoolUpdatedBy, incomingVersion, incomingUpdatedAt, incomingUpdatedBy)
+	preferIncoming := freshness < 0
+	direction := "no_change"
+	if freshness > 0 {
+		direction = "daemon_to_client"
+	} else if freshness < 0 {
+		direction = "client_to_daemon"
+	}
+
+	merged := mergeCredentialPool(existingPool, incomingPool, preferIncoming)
+
+	if llmCredentialsEqual(merged, existingPool) {
+		return merged, normalizePoolVersion(existing.LLMPoolVersion), normalizePoolTimestamp(existing.LLMPoolUpdatedAtMS), normalizePoolUpdatedBy(existing.LLMPoolUpdatedBy), direction
+	}
+
+	nextVersion := normalizePoolVersion(existing.LLMPoolVersion)
+	incomingNormalizedVersion := normalizePoolVersion(incomingVersion)
+	if incomingNormalizedVersion > nextVersion {
+		nextVersion = incomingNormalizedVersion
+	}
+	nextVersion++
+
+	return merged, nextVersion, nowMS, "daemon", direction
+}
+
+func normalizeAndValidateLLMCredentials(raw map[string]llmCredential) (map[string]llmCredential, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	normalized := make(map[string]llmCredential, len(raw))
+	for provider, cred := range raw {
+		providerKey := normalizeCredentialProviderKey(provider)
+		switch providerKey {
+		case "openai", "anthropic", "gemini":
+		default:
+			return nil, fmt.Errorf("unsupported llm_credentials provider %q", provider)
+		}
+
+		trimmedAPIKey := strings.TrimSpace(cred.APIKey)
+		if trimmedAPIKey != "" {
+			if sopbackend.IsEncryptedSecretValue(trimmedAPIKey) {
+				encoded := strings.TrimPrefix(trimmedAPIKey, "enc:v1:")
+				if _, decodeErr := base64.StdEncoding.DecodeString(encoded); decodeErr != nil {
+					return nil, fmt.Errorf("invalid llm_credentials[%s].api_key: decode secured string: %w", providerKey, decodeErr)
+				}
+			}
+			if _, err := resolveDaemonSecretValue(trimmedAPIKey); err != nil {
+				return nil, fmt.Errorf("invalid llm_credentials[%s].api_key: %w", providerKey, err)
+			}
+		}
+
+		normalized[providerKey] = llmCredential{
+			APIKey:      trimmedAPIKey,
+			Model:       strings.TrimSpace(cred.Model),
+			URL:         strings.TrimSpace(cred.URL),
+			UpdatedAtMS: normalizePoolTimestamp(cred.UpdatedAtMS),
+			DeletedAtMS: normalizePoolTimestamp(cred.DeletedAtMS),
+		}
+	}
+	return normalized, nil
 }
 
 func resolveDaemonSecretValue(value string) (string, error) {
@@ -406,6 +684,191 @@ var daemonSessionStore = struct {
 }
 
 var localRuntimeConfigPath string
+var daemonLLMPoolStatePath string
+
+func daemonLLMPoolStateFilePathFromConfig(configPath string) string {
+	trimmed := strings.TrimSpace(configPath)
+	if trimmed == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(trimmed), "daemon_llm_pool_state.json")
+}
+
+func hasPersistableLLMState(ctx daemonSessionContext) bool {
+	if strings.TrimSpace(ctx.LLMProvider) != "" || strings.TrimSpace(ctx.LLMAPIKey) != "" || strings.TrimSpace(ctx.LLMModel) != "" || strings.TrimSpace(ctx.LLMURL) != "" {
+		return true
+	}
+	if len(ctx.LLMCredentials) > 0 {
+		return true
+	}
+	if normalizePoolVersion(ctx.LLMPoolVersion) > 0 || normalizePoolTimestamp(ctx.LLMPoolUpdatedAtMS) > 0 || strings.TrimSpace(ctx.LLMPoolUpdatedBy) != "" {
+		return true
+	}
+	return false
+}
+
+func capturePersistedDaemonLLMState() persistedDaemonLLMState {
+	state := persistedDaemonLLMState{
+		SchemaVersion: 1,
+		Sessions:      map[string]persistedDaemonLLMSessionState{},
+	}
+
+	daemonSessionStore.mu.Lock()
+	defer daemonSessionStore.mu.Unlock()
+
+	for sessionKey, session := range daemonSessionStore.data {
+		if strings.TrimSpace(sessionKey) == "" || !hasPersistableLLMState(session) {
+			continue
+		}
+		state.Sessions[sessionKey] = persistedDaemonLLMSessionState{
+			HQBaseURL:          strings.TrimSpace(session.HQBaseURL),
+			HQPort:             strings.TrimSpace(session.HQPort),
+			HQUserID:           strings.TrimSpace(session.HQUserID),
+			HQSessionID:        strings.TrimSpace(session.HQSessionID),
+			LLMProvider:        strings.TrimSpace(session.LLMProvider),
+			LLMAPIKey:          strings.TrimSpace(session.LLMAPIKey),
+			LLMModel:           strings.TrimSpace(session.LLMModel),
+			LLMURL:             strings.TrimSpace(session.LLMURL),
+			LLMCredentials:     cloneLLMCredentialsMap(session.LLMCredentials),
+			LLMPoolVersion:     normalizePoolVersion(session.LLMPoolVersion),
+			LLMPoolUpdatedAtMS: normalizePoolTimestamp(session.LLMPoolUpdatedAtMS),
+			LLMPoolUpdatedBy:   normalizePoolUpdatedBy(session.LLMPoolUpdatedBy),
+			ThinkingLevel:      strings.TrimSpace(session.ThinkingLevel),
+			LastUpdatedUnixMS:  session.LastUpdated.UTC().UnixMilli(),
+		}
+	}
+
+	if len(state.Sessions) == 0 {
+		state.Sessions = nil
+	}
+	return state
+}
+
+func persistDaemonLLMPoolState() error {
+	path := strings.TrimSpace(daemonLLMPoolStatePath)
+	if path == "" {
+		return nil
+	}
+
+	state := capturePersistedDaemonLLMState()
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("marshal daemon llm pool state: %w", err)
+	}
+
+	encryptedPayload, err := sopbackend.EncryptSecretValue(string(payload))
+	if err != nil {
+		return fmt.Errorf("encrypt daemon llm pool state: %w", err)
+	}
+
+	envelopeBytes, err := json.Marshal(persistedDaemonLLMEnvelope{EncryptedPayload: encryptedPayload})
+	if err != nil {
+		return fmt.Errorf("marshal daemon llm pool envelope: %w", err)
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create daemon llm pool state dir: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(dir, "daemon-llm-pool-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create daemon llm pool temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	if _, writeErr := tmpFile.Write(envelopeBytes); writeErr != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write daemon llm pool state: %w", writeErr)
+	}
+	if err := tmpFile.Chmod(0o600); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod daemon llm pool state temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close daemon llm pool state temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("commit daemon llm pool state: %w", err)
+	}
+
+	return nil
+}
+
+func loadDaemonLLMPoolState() error {
+	path := strings.TrimSpace(daemonLLMPoolStatePath)
+	if path == "" {
+		return nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read daemon llm pool state: %w", err)
+	}
+
+	var envelope persistedDaemonLLMEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("decode daemon llm pool envelope: %w", err)
+	}
+	if strings.TrimSpace(envelope.EncryptedPayload) == "" {
+		return fmt.Errorf("decode daemon llm pool envelope: encrypted_payload is required")
+	}
+
+	decryptedPayload, err := sopbackend.DecryptSecretValue(strings.TrimSpace(envelope.EncryptedPayload))
+	if err != nil {
+		return fmt.Errorf("decrypt daemon llm pool state: %w", err)
+	}
+
+	var state persistedDaemonLLMState
+	if err := json.Unmarshal([]byte(decryptedPayload), &state); err != nil {
+		return fmt.Errorf("decode daemon llm pool state: %w", err)
+	}
+	if state.SchemaVersion <= 0 {
+		state.SchemaVersion = 1
+	}
+
+	daemonSessionStore.mu.Lock()
+	defer daemonSessionStore.mu.Unlock()
+	for sessionKey, persisted := range state.Sessions {
+		key := strings.TrimSpace(sessionKey)
+		if key == "" {
+			continue
+		}
+		existing := daemonSessionStore.data[key]
+		existing.HQBaseURL = firstNonEmpty(strings.TrimSpace(persisted.HQBaseURL), existing.HQBaseURL)
+		existing.HQPort = firstNonEmpty(strings.TrimSpace(persisted.HQPort), existing.HQPort)
+		existing.HQUserID = firstNonEmpty(strings.TrimSpace(persisted.HQUserID), existing.HQUserID)
+		existing.HQSessionID = firstNonEmpty(strings.TrimSpace(persisted.HQSessionID), existing.HQSessionID)
+		existing.LLMProvider = firstNonEmpty(strings.TrimSpace(persisted.LLMProvider), existing.LLMProvider)
+		existing.LLMAPIKey = firstNonEmpty(strings.TrimSpace(persisted.LLMAPIKey), existing.LLMAPIKey)
+		existing.LLMModel = firstNonEmpty(strings.TrimSpace(persisted.LLMModel), existing.LLMModel)
+		existing.LLMURL = firstNonEmpty(strings.TrimSpace(persisted.LLMURL), existing.LLMURL)
+		existing.ThinkingLevel = firstNonEmpty(strings.TrimSpace(persisted.ThinkingLevel), existing.ThinkingLevel)
+		if len(persisted.LLMCredentials) > 0 {
+			normalizedCredentials, normalizeErr := normalizeAndValidateLLMCredentials(persisted.LLMCredentials)
+			if normalizeErr == nil {
+				existing.LLMCredentials = cloneLLMCredentialsMap(normalizedCredentials)
+			} else {
+				log.Printf("daemon llm pool load: ignoring invalid credentials for session %s: %v", key, normalizeErr)
+			}
+		}
+		existing.LLMPoolVersion = normalizePoolVersion(persisted.LLMPoolVersion)
+		existing.LLMPoolUpdatedAtMS = normalizePoolTimestamp(persisted.LLMPoolUpdatedAtMS)
+		existing.LLMPoolUpdatedBy = normalizePoolUpdatedBy(persisted.LLMPoolUpdatedBy)
+		if persisted.LastUpdatedUnixMS > 0 {
+			existing.LastUpdated = time.UnixMilli(persisted.LastUpdatedUnixMS).UTC()
+		}
+		daemonSessionStore.data[key] = existing
+	}
+
+	return nil
+}
 
 type daemonLogLevel string
 
@@ -538,6 +1001,7 @@ func main() {
 		log.Fatalf("Failed to resolve daemon config: %v", err)
 	}
 	localRuntimeConfigPath = resolvedConfig
+	daemonLLMPoolStatePath = daemonLLMPoolStateFilePathFromConfig(resolvedConfig)
 	sopbackend.SetConfigFile(resolvedConfig)
 
 	stateDir := resolveVectorizationRecoveryStateDir(resolvedConfig, sopbackend.GetConfig())
@@ -599,6 +1063,9 @@ func main() {
 		log.Printf("Warning: backend bootstrap failed: %v", err)
 	} else {
 		log.Printf("Loaded daemon configuration from: %s", resolvedConfig)
+	}
+	if err := loadDaemonLLMPoolState(); err != nil {
+		log.Printf("Warning: failed to load daemon LLM pool state from disk: %v", err)
 	}
 	cfg := sopbackend.GetConfig()
 	configureRecoveryStatePersistence(cfg)
@@ -1750,6 +2217,11 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusBadRequest, UIHandoffResponse{Error: "Invalid llm_api_key: " + err.Error()})
 		return
 	}
+	normalizedCredentials, credentialsErr := normalizeAndValidateLLMCredentials(req.LLMCredentials)
+	if credentialsErr != nil {
+		respondJSON(w, http.StatusBadRequest, UIHandoffResponse{Error: credentialsErr.Error()})
+		return
+	}
 
 	ctxKey := strings.TrimSpace(req.HQ.SessionID)
 	if ctxKey == "" {
@@ -1760,31 +2232,74 @@ func handleUIHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	daemonSessionStore.mu.Lock()
+	storedSessionContext := daemonSessionStore.data[ctxKey]
+	mergedCredentials, mergedPoolVersion, mergedPoolUpdatedAtMS, mergedPoolUpdatedBy, syncDirection := mergeLLMPoolState(
+		storedSessionContext,
+		normalizedCredentials,
+		req.LLMPoolVersion,
+		req.LLMPoolUpdatedAtMS,
+		req.LLMPoolUpdatedBy,
+	)
+	nextProvider := strings.TrimSpace(req.LLMProvider)
+	if nextProvider == "" {
+		nextProvider = strings.TrimSpace(storedSessionContext.LLMProvider)
+	}
+	nextAPIKey := strings.TrimSpace(req.LLMAPIKey)
+	if nextAPIKey == "" {
+		nextAPIKey = strings.TrimSpace(storedSessionContext.LLMAPIKey)
+	}
+	nextModel := strings.TrimSpace(req.LLMModel)
+	if nextModel == "" {
+		nextModel = strings.TrimSpace(storedSessionContext.LLMModel)
+	}
+	nextURL := strings.TrimSpace(req.LLMURL)
+	if nextURL == "" {
+		nextURL = strings.TrimSpace(storedSessionContext.LLMURL)
+	}
+	nextThinkingLevel := strings.TrimSpace(req.ThinkingLevel)
+	if nextThinkingLevel == "" {
+		nextThinkingLevel = strings.TrimSpace(storedSessionContext.ThinkingLevel)
+	}
 	daemonSessionStore.data[ctxKey] = daemonSessionContext{
-		AccessToken:   accessToken,
-		RefreshToken:  refreshToken,
-		HQBaseURL:     normalizedHQBaseURL,
-		HQPort:        hqPort,
-		HQUserID:      strings.TrimSpace(req.HQ.UserID),
-		HQSessionID:   strings.TrimSpace(req.HQ.SessionID),
-		LLMProvider:   strings.TrimSpace(req.LLMProvider),
-		LLMAPIKey:     strings.TrimSpace(req.LLMAPIKey),
-		LLMModel:      strings.TrimSpace(req.LLMModel),
-		LLMURL:        strings.TrimSpace(req.LLMURL),
-		ThinkingLevel: strings.TrimSpace(req.ThinkingLevel),
-		LastUpdated:   time.Now().UTC(),
+		AccessToken:        accessToken,
+		RefreshToken:       refreshToken,
+		HQBaseURL:          normalizedHQBaseURL,
+		HQPort:             hqPort,
+		HQUserID:           strings.TrimSpace(req.HQ.UserID),
+		HQSessionID:        strings.TrimSpace(req.HQ.SessionID),
+		LLMProvider:        nextProvider,
+		LLMAPIKey:          nextAPIKey,
+		LLMModel:           nextModel,
+		LLMURL:             nextURL,
+		LLMCredentials:     cloneLLMCredentialsMap(mergedCredentials),
+		LLMPoolVersion:     mergedPoolVersion,
+		LLMPoolUpdatedAtMS: mergedPoolUpdatedAtMS,
+		LLMPoolUpdatedBy:   mergedPoolUpdatedBy,
+		ThinkingLevel:      nextThinkingLevel,
+		LastUpdated:        time.Now().UTC(),
 	}
 	daemonSessionStore.mu.Unlock()
+	if err := persistDaemonLLMPoolState(); err != nil {
+		log.Printf("Warning: failed to persist daemon LLM pool state: %v", err)
+	}
 
 	log.Printf("Accepted UI handoff for session %s", ctxKey)
 	respondJSON(w, http.StatusOK, UIHandoffResponse{
-		Accepted:            true,
-		Message:             "handoff accepted",
-		SessionID:           ctxKey,
-		WelcomeContext:      buildLocalRAGWelcomeContext(),
-		NeedsRecovery:       currentVectorizationNeedsRecovery(),
-		Recovery:            currentVectorizationRecoveryState(),
-		StoragePathRecovery: currentStoragePathRecoveryState(),
+		Accepted:             true,
+		Message:              "handoff accepted",
+		SessionID:            ctxKey,
+		LLMProvider:          nextProvider,
+		LLMModel:             nextModel,
+		LLMURL:               nextURL,
+		LLMCredentials:       cloneLLMCredentialsMap(mergedCredentials),
+		LLMPoolVersion:       mergedPoolVersion,
+		LLMPoolUpdatedAtMS:   mergedPoolUpdatedAtMS,
+		LLMPoolUpdatedBy:     mergedPoolUpdatedBy,
+		LLMPoolSyncDirection: syncDirection,
+		WelcomeContext:       buildLocalRAGWelcomeContext(),
+		NeedsRecovery:        currentVectorizationNeedsRecovery(),
+		Recovery:             currentVectorizationRecoveryState(),
+		StoragePathRecovery:  currentStoragePathRecoveryState(),
 	})
 }
 

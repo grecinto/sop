@@ -1126,6 +1126,23 @@
                     <button type="button" onclick="testSetupBrainConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test LLM connections</button>
                     <div id="setup-brain-test-status" style="display: none; font-size: 12px;"></div>
                 </div>
+                <div style="margin-top: 10px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                    <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 6px;">Provider Key Pool</label>
+                    <div style="display: grid; grid-template-columns: 1fr; gap: 8px;">
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 2px;">OpenAI API Key</label>
+                            <input type="password" id="setup-openai-api-key" placeholder="Enter OpenAI key" style="width: 100%; padding: 4px;">
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 2px;">Anthropic API Key</label>
+                            <input type="password" id="setup-anthropic-api-key" placeholder="Enter Anthropic key" style="width: 100%; padding: 4px;">
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; display: block; margin-bottom: 2px;">Gemini API Key</label>
+                            <input type="password" id="setup-gemini-api-key" placeholder="Enter Gemini key" style="width: 100%; padding: 4px;">
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Embedder Settings -->

@@ -2,6 +2,8 @@
 <script>
     const setupWizardAIConfigDefaults = {{.SetupWizardAIConfigJSON}};
     const setupWizardModelCatalog = {{.ModelCatalogJSON}};
+    const AI_POOL_SYNC_META_STORAGE_KEY = 'sop_ai_pool_sync_meta';
+    const AI_POOL_SYNC_NODE_ID_STORAGE_KEY = 'sop_ai_pool_sync_node_id';
 
     function getStoredAISecrets() {
         const raw = localStorage.getItem('sop_ai_secrets');
@@ -31,13 +33,46 @@
     }
 
     function getStoredAIConfig() {
-        return Object.assign({}, getStoredAIConfigRecord(), getStoredAISecrets());
+        const merged = Object.assign({}, getStoredAIConfigRecord(), getStoredAISecrets());
+        return hydrateLegacyAISecretsFromProviderPool(merged);
+    }
+
+    function normalizeProviderSecretKey(provider) {
+        const key = (provider || '').trim().toLowerCase();
+        if (key === 'chatgpt') return 'openai';
+        if (key === 'google') return 'gemini';
+        return key;
+    }
+
+    function providerSecretField(provider) {
+        const normalized = normalizeProviderSecretKey(provider);
+        if (!normalized) return '';
+        if (normalized === 'openai' || normalized === 'anthropic' || normalized === 'gemini') {
+            return `${normalized}_api_key`;
+        }
+        return '';
+    }
+
+    function hydrateLegacyAISecretsFromProviderPool(aiConfig) {
+        const cfg = Object.assign({}, aiConfig || {});
+
+        const primarySecretField = providerSecretField(cfg.brain_provider);
+        if (!cfg.brain_api_key && primarySecretField && cfg[primarySecretField]) {
+            cfg.brain_api_key = cfg[primarySecretField];
+        }
+
+        const fallbackSecretField = providerSecretField(cfg.fallback_provider);
+        if (!cfg.fallback_api_key && fallbackSecretField && cfg[fallbackSecretField]) {
+            cfg.fallback_api_key = cfg[fallbackSecretField];
+        }
+
+        return cfg;
     }
 
     function splitAIConfigAndSecrets(aiConfig) {
         const nextConfig = Object.assign({}, aiConfig || {});
         const nextSecrets = {};
-        ['brain_api_key', 'embedder_api_key', 'fallback_api_key'].forEach((key) => {
+        ['brain_api_key', 'embedder_api_key', 'fallback_api_key', 'openai_api_key', 'anthropic_api_key', 'gemini_api_key'].forEach((key) => {
             if (Object.prototype.hasOwnProperty.call(nextConfig, key)) {
                 if (nextConfig[key]) {
                     nextSecrets[key] = nextConfig[key];
@@ -54,6 +89,200 @@
         localStorage.setItem('sop_ai_secrets', JSON.stringify(split.secrets || {}));
     }
 
+    function getLLMPoolSyncNodeID() {
+        let nodeID = localStorage.getItem(AI_POOL_SYNC_NODE_ID_STORAGE_KEY);
+        if (nodeID) {
+            return nodeID;
+        }
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            nodeID = window.crypto.randomUUID();
+        } else {
+            nodeID = `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        }
+        localStorage.setItem(AI_POOL_SYNC_NODE_ID_STORAGE_KEY, nodeID);
+        return nodeID;
+    }
+
+    function getStoredLLMPoolSyncMeta() {
+        const fallback = {
+            pool_version: 0,
+            pool_updated_at_ms: 0,
+            pool_updated_by: getLLMPoolSyncNodeID(),
+            providers: {}
+        };
+        const raw = localStorage.getItem(AI_POOL_SYNC_META_STORAGE_KEY);
+        if (!raw) {
+            return fallback;
+        }
+        try {
+            const parsed = JSON.parse(raw) || {};
+            return {
+                pool_version: Number(parsed.pool_version) > 0 ? Number(parsed.pool_version) : 0,
+                pool_updated_at_ms: Number(parsed.pool_updated_at_ms) > 0 ? Number(parsed.pool_updated_at_ms) : 0,
+                pool_updated_by: (parsed.pool_updated_by || '').trim() || getLLMPoolSyncNodeID(),
+                providers: parsed.providers && typeof parsed.providers === 'object' ? parsed.providers : {}
+            };
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    function setStoredLLMPoolSyncMeta(meta) {
+        const next = meta || {};
+        localStorage.setItem(AI_POOL_SYNC_META_STORAGE_KEY, JSON.stringify({
+            pool_version: Number(next.pool_version) > 0 ? Number(next.pool_version) : 0,
+            pool_updated_at_ms: Number(next.pool_updated_at_ms) > 0 ? Number(next.pool_updated_at_ms) : 0,
+            pool_updated_by: (next.pool_updated_by || '').trim() || getLLMPoolSyncNodeID(),
+            providers: next.providers && typeof next.providers === 'object' ? next.providers : {}
+        }));
+    }
+
+    function providerModelAndURLFromConfig(aiConfig, provider) {
+        const cfg = aiConfig || {};
+        const normalizedProvider = normalizeProviderSecretKey(provider);
+        const primaryProvider = normalizeProviderSecretKey(cfg.brain_provider);
+        if (primaryProvider === normalizedProvider) {
+            return {
+                model: (cfg.brain_model || '').trim(),
+                url: (cfg.brain_url || '').trim()
+            };
+        }
+        const fallbackProvider = normalizeProviderSecretKey(cfg.fallback_provider);
+        if (fallbackProvider === normalizedProvider) {
+            return {
+                model: (cfg.fallback_model || '').trim(),
+                url: (cfg.fallback_url || '').trim()
+            };
+        }
+        return { model: '', url: '' };
+    }
+
+    function buildLLMCredentialsPoolForSync(aiConfig) {
+        const cfg = aiConfig || {};
+        const meta = getStoredLLMPoolSyncMeta();
+        const credentials = {};
+        ['openai', 'anthropic', 'gemini'].forEach(provider => {
+            const keyName = `${provider}_api_key`;
+            const apiKey = (cfg[keyName] || '').trim();
+            const providerMeta = (meta.providers && meta.providers[provider]) || {};
+            const updatedAt = Number(providerMeta.updated_at_ms) > 0 ? Number(providerMeta.updated_at_ms) : 0;
+            const deletedAt = Number(providerMeta.deleted_at_ms) > 0 ? Number(providerMeta.deleted_at_ms) : 0;
+            if (!apiKey && !deletedAt) {
+                return;
+            }
+            const routing = providerModelAndURLFromConfig(cfg, provider);
+            credentials[provider] = {
+                api_key: apiKey,
+                model: routing.model,
+                url: routing.url,
+                updated_at_ms: updatedAt,
+                deleted_at_ms: deletedAt
+            };
+        });
+        return credentials;
+    }
+
+    function updateLLMPoolSyncMeta(previousConfig, nextConfig) {
+        const prev = previousConfig || {};
+        const next = nextConfig || {};
+        const meta = getStoredLLMPoolSyncMeta();
+        const providers = Object.assign({}, meta.providers || {});
+        const now = Date.now();
+        let changed = false;
+
+        ['openai', 'anthropic', 'gemini'].forEach(provider => {
+            const keyName = `${provider}_api_key`;
+            const prevValue = (prev[keyName] || '').trim();
+            const nextValue = (next[keyName] || '').trim();
+            if (prevValue === nextValue) {
+                return;
+            }
+            changed = true;
+            const providerMeta = Object.assign({}, providers[provider] || {});
+            if (nextValue) {
+                providerMeta.updated_at_ms = now;
+                providerMeta.deleted_at_ms = 0;
+            } else {
+                providerMeta.deleted_at_ms = now;
+                if (!(Number(providerMeta.updated_at_ms) > 0)) {
+                    providerMeta.updated_at_ms = now;
+                }
+            }
+            providers[provider] = providerMeta;
+        });
+
+        if (changed) {
+            setStoredLLMPoolSyncMeta({
+                pool_version: (Number(meta.pool_version) > 0 ? Number(meta.pool_version) : 0) + 1,
+                pool_updated_at_ms: now,
+                pool_updated_by: getLLMPoolSyncNodeID(),
+                providers: providers
+            });
+        }
+    }
+
+    function buildLLMPoolSyncPayload(aiConfig) {
+        const meta = getStoredLLMPoolSyncMeta();
+        return {
+            llm_credentials: buildLLMCredentialsPoolForSync(aiConfig),
+            llm_pool_version: Number(meta.pool_version) > 0 ? Number(meta.pool_version) : 0,
+            llm_pool_updated_at_ms: Number(meta.pool_updated_at_ms) > 0 ? Number(meta.pool_updated_at_ms) : 0,
+            llm_pool_updated_by: (meta.pool_updated_by || '').trim() || getLLMPoolSyncNodeID()
+        };
+    }
+
+    function applyDaemonLLMPoolSnapshotToLocalConfig(snapshot) {
+        const cfg = getStoredAIConfig();
+        const incoming = snapshot && snapshot.llm_credentials && typeof snapshot.llm_credentials === 'object' ? snapshot.llm_credentials : null;
+        if (!incoming) {
+            return cfg;
+        }
+
+        const nextConfig = Object.assign({}, cfg);
+        ['openai', 'anthropic', 'gemini'].forEach(provider => {
+            const entry = incoming[provider];
+            if (!entry || typeof entry !== 'object') {
+                return;
+            }
+            const keyName = `${provider}_api_key`;
+            const deletedAt = Number(entry.deleted_at_ms) > 0 ? Number(entry.deleted_at_ms) : 0;
+            const apiKey = (entry.api_key || '').trim();
+            nextConfig[keyName] = deletedAt > 0 ? '' : apiKey;
+
+            const normalizedBrainProvider = normalizeProviderSecretKey(nextConfig.brain_provider);
+            if (normalizedBrainProvider === provider) {
+                nextConfig.brain_model = (entry.model || '').trim() || nextConfig.brain_model || '';
+                nextConfig.brain_url = (entry.url || '').trim() || nextConfig.brain_url || '';
+            }
+            const normalizedFallbackProvider = normalizeProviderSecretKey(nextConfig.fallback_provider);
+            if (normalizedFallbackProvider === provider) {
+                nextConfig.fallback_model = (entry.model || '').trim() || nextConfig.fallback_model || '';
+                nextConfig.fallback_url = (entry.url || '').trim() || nextConfig.fallback_url || '';
+            }
+        });
+
+        setStoredAIConfig(nextConfig);
+        const providerMeta = {};
+        ['openai', 'anthropic', 'gemini'].forEach(provider => {
+            const entry = incoming[provider];
+            if (!entry || typeof entry !== 'object') {
+                return;
+            }
+            providerMeta[provider] = {
+                updated_at_ms: Number(entry.updated_at_ms) > 0 ? Number(entry.updated_at_ms) : 0,
+                deleted_at_ms: Number(entry.deleted_at_ms) > 0 ? Number(entry.deleted_at_ms) : 0
+            };
+        });
+        setStoredLLMPoolSyncMeta({
+            pool_version: Number(snapshot.llm_pool_version) > 0 ? Number(snapshot.llm_pool_version) : 0,
+            pool_updated_at_ms: Number(snapshot.llm_pool_updated_at_ms) > 0 ? Number(snapshot.llm_pool_updated_at_ms) : 0,
+            pool_updated_by: (snapshot.llm_pool_updated_by || '').trim() || getLLMPoolSyncNodeID(),
+            providers: providerMeta
+        });
+
+        return getStoredAIConfig();
+    }
+
     function mergeStoredAIConfig(partialConfig) {
         const nextConfig = Object.assign({}, getStoredAIConfig(), partialConfig || {});
         setStoredAIConfig(nextConfig);
@@ -66,7 +295,7 @@
 
     function clearEncryptedAISecretsForDisplay(aiConfig) {
         const nextConfig = Object.assign({}, aiConfig || {});
-        ['brain_api_key', 'embedder_api_key', 'fallback_api_key'].forEach((key) => {
+        ['brain_api_key', 'embedder_api_key', 'fallback_api_key', 'openai_api_key', 'anthropic_api_key', 'gemini_api_key'].forEach((key) => {
             if (isEncryptedAISecretValue(nextConfig[key])) {
                 nextConfig[key] = '';
             }
@@ -93,6 +322,15 @@
     function prepareAIConfigForSecureStorage(nextConfig, existingConfig) {
         const prepared = Object.assign({}, nextConfig || {});
         const current = existingConfig || {};
+        const resolveProviderSecret = (secretKey) => {
+            const existingValue = (current[secretKey] || '').trim();
+            const nextValue = (prepared[secretKey] || '').trim();
+            if (nextValue) {
+                prepared[secretKey] = encryptAISecretValueForStorage(nextValue);
+                return;
+            }
+            prepared[secretKey] = existingValue;
+        };
         const resolveSecret = (secretKey, providerKey) => {
             const provider = (prepared[providerKey] || '').trim();
             const existingValue = (current[secretKey] || '').trim();
@@ -108,6 +346,29 @@
             prepared[secretKey] = existingValue;
         };
 
+        // Provider-keyed pool secrets are retained independent of active selection.
+        resolveProviderSecret('openai_api_key');
+        resolveProviderSecret('anthropic_api_key');
+        resolveProviderSecret('gemini_api_key');
+
+        // Migrate legacy provider-slotted values into provider-keyed pool when possible.
+        const primaryField = providerSecretField(prepared.brain_provider);
+        if (primaryField && !prepared[primaryField] && (prepared.brain_api_key || current.brain_api_key)) {
+            prepared[primaryField] = encryptAISecretValueForStorage((prepared.brain_api_key || current.brain_api_key || '').trim());
+        }
+        const fallbackField = providerSecretField(prepared.fallback_provider);
+        if (fallbackField && !prepared[fallbackField] && (prepared.fallback_api_key || current.fallback_api_key)) {
+            prepared[fallbackField] = encryptAISecretValueForStorage((prepared.fallback_api_key || current.fallback_api_key || '').trim());
+        }
+
+        // Hydrate legacy slots from provider-keyed secrets to keep existing consumers stable.
+        if (primaryField && !prepared.brain_api_key && prepared[primaryField]) {
+            prepared.brain_api_key = prepared[primaryField];
+        }
+        if (fallbackField && !prepared.fallback_api_key && prepared[fallbackField]) {
+            prepared.fallback_api_key = prepared[fallbackField];
+        }
+
         resolveSecret('brain_api_key', 'brain_provider');
         resolveSecret('embedder_api_key', 'embedder_provider');
         resolveSecret('fallback_api_key', 'fallback_provider');
@@ -119,6 +380,7 @@
         const nextConfig = Object.assign({}, existingConfig, partialConfig || {});
         const prepared = prepareAIConfigForSecureStorage(nextConfig, existingConfig);
         setStoredAIConfig(prepared);
+        updateLLMPoolSyncMeta(existingConfig, prepared);
         return prepared;
     }
 
@@ -554,6 +816,9 @@
         const overlayFallback = document.getElementById('chat-settings-fallback-overlay');
         const overlayFallbackURL = document.getElementById('chat-settings-fallback-url');
         const overlayFallbackAPIKey = document.getElementById('chat-settings-fallback-api-key');
+        const overlayOpenAIKey = document.getElementById('chat-settings-openai-api-key');
+        const overlayAnthropicKey = document.getElementById('chat-settings-anthropic-api-key');
+        const overlayGeminiKey = document.getElementById('chat-settings-gemini-api-key');
         if (overlayFallback && cfg.fallback_provider) {
             selectProviderOption(overlayFallback, buildProviderValue(cfg.fallback_provider, cfg.fallback_model), fallbackSource);
         }
@@ -562,6 +827,15 @@
         }
         if (overlayFallbackAPIKey) {
             overlayFallbackAPIKey.value = cfg.fallback_api_key || '';
+        }
+        if (overlayOpenAIKey) {
+            overlayOpenAIKey.value = cfg.openai_api_key || '';
+        }
+        if (overlayAnthropicKey) {
+            overlayAnthropicKey.value = cfg.anthropic_api_key || '';
+        }
+        if (overlayGeminiKey) {
+            overlayGeminiKey.value = cfg.gemini_api_key || '';
         }
 
         toggleChatSettingsFields();
@@ -572,7 +846,7 @@
 
     function syncSetupWizardControlsFromAIConfig(aiConfig) {
         const cfg = clearEncryptedAISecretsForDisplay(aiConfig || {});
-        if (!cfg.brain_provider && !cfg.embedder_provider) {
+        if (!cfg.brain_provider && !cfg.embedder_provider && !cfg.openai_api_key && !cfg.anthropic_api_key && !cfg.gemini_api_key) {
             return;
         }
 
@@ -583,6 +857,9 @@
         const brainURLInput = document.getElementById('setup-brain-url');
         const embedderAPIKeyInput = document.getElementById('setup-embedder-api-key');
         const embedderURLInput = document.getElementById('setup-embedder-url');
+        const setupOpenAIKeyInput = document.getElementById('setup-openai-api-key');
+        const setupAnthropicKeyInput = document.getElementById('setup-anthropic-api-key');
+        const setupGeminiKeyInput = document.getElementById('setup-gemini-api-key');
 
         if (brainAPIKeyInput) {
             brainAPIKeyInput.value = cfg.brain_api_key || '';
@@ -595,6 +872,15 @@
         }
         if (embedderURLInput) {
             embedderURLInput.value = cfg.embedder_url || '';
+        }
+        if (setupOpenAIKeyInput) {
+            setupOpenAIKeyInput.value = cfg.openai_api_key || '';
+        }
+        if (setupAnthropicKeyInput) {
+            setupAnthropicKeyInput.value = cfg.anthropic_api_key || '';
+        }
+        if (setupGeminiKeyInput) {
+            setupGeminiKeyInput.value = cfg.gemini_api_key || '';
         }
 
         toggleProviderAuth();
@@ -637,7 +923,10 @@
             embedder_model: storedConfig.embedder_model || envConfig.embedder_model || defaults.embedder_model,
             embedder_source: embedderSource,
             embedder_url: storedConfig.embedder_url || (embedderSource === 'env' ? envConfig.embedder_url : '') || '',
-            embedder_api_key: storedConfig.embedder_api_key || (embedderSource === 'env' ? envConfig.embedder_api_key : '') || ''
+            embedder_api_key: storedConfig.embedder_api_key || (embedderSource === 'env' ? envConfig.embedder_api_key : '') || '',
+            openai_api_key: storedConfig.openai_api_key || '',
+            anthropic_api_key: storedConfig.anthropic_api_key || '',
+            gemini_api_key: storedConfig.gemini_api_key || ''
         };
     }
 
@@ -746,7 +1035,7 @@
         const step3 = document.getElementById('step-3');
         if (step1) step1.style.display = daemonProvisioningWizardActive ? 'none' : '';
         if (step2) step2.style.display = '';
-        if (step3) step3.style.display = daemonProvisioningWizardActive ? 'none' : '';
+        if (step3) step3.style.display = '';
 
         const manualSharedBrain = document.getElementById('setup-sys-manual-enterprise-group');
         if (manualSharedBrain) {
@@ -916,28 +1205,34 @@
     function updateWizardStep() {
         if (daemonProvisioningWizardActive) {
             document.querySelectorAll('.wizard-step').forEach(el => el.classList.remove('active'));
-            const daemonStep = document.getElementById('step-2');
+            const daemonStepId = currentWizardStep <= 2 ? 'step-2' : 'step-3';
+            const daemonStep = document.getElementById(daemonStepId);
             if (daemonStep) daemonStep.classList.add('active');
 
             const prevBtn = document.getElementById('wizard-prev');
-            if (prevBtn) prevBtn.style.visibility = 'hidden';
+            if (prevBtn) prevBtn.style.visibility = currentWizardStep <= 2 ? 'hidden' : 'visible';
 
             const skipBtn = document.getElementById('wizard-skip');
             if (skipBtn) skipBtn.style.display = 'none';
 
             const nextBtn = document.getElementById('wizard-next');
             if (nextBtn) {
-                nextBtn.textContent = 'Provision System DB';
-                nextBtn.title = 'Click "Provision System DB" to create the configured daemon System DB.';
+                if (currentWizardStep <= 2) {
+                    nextBtn.textContent = 'Next';
+                    nextBtn.title = 'Continue to LLM and key configuration.';
+                } else {
+                    nextBtn.textContent = 'Provision System DB';
+                    nextBtn.title = 'Click "Provision System DB" to create the configured daemon System DB and save LLM settings.';
+                }
                 nextBtn.onclick = wizardNext;
             }
 
             const helpLink = document.getElementById('wizard-help-link');
             if (helpLink) {
-                helpLink.title = 'Open help for daemon provisioning';
+                helpLink.title = currentWizardStep <= 2 ? 'Open help for daemon provisioning' : 'Open help for LLM and key setup';
                 helpLink.onclick = (event) => {
                     event.preventDefault();
-                    showSetupWizardHelp(2);
+                    showSetupWizardHelp(currentWizardStep <= 2 ? 2 : 3);
                 };
             }
             return;
@@ -1103,6 +1398,70 @@
 
     function wizardNext() {
         if (daemonProvisioningWizardActive) {
+            if (currentWizardStep <= 2) {
+                const sysType = document.getElementById('setup-sys-type').value;
+                const sysConn = document.getElementById('setup-sys-conn').value.trim();
+                const regPath = document.getElementById('setup-reg-path').value.trim();
+
+                if (!regPath) {
+                    showAlert('Please enter a system database path');
+                    return;
+                }
+                if (sysType === 'clustered' && !sysConn) {
+                    showAlert('Redis URL is required when clustered mode is selected');
+                    return;
+                }
+
+                currentWizardStep = 3;
+                updateWizardStep();
+                return;
+            }
+
+            const bProviderValue = document.getElementById('setup-brain-provider') ? document.getElementById('setup-brain-provider').value : "";
+            const bParts = splitProviderValue(bProviderValue);
+            let bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
+            const bProviderPoolId = providerSecretField(bParts.provider);
+            if (!bApiKey && bProviderPoolId) {
+                const poolInputId = `setup-${bProviderPoolId.replace(/_/g, '-')}`;
+                bApiKey = document.getElementById(poolInputId)?.value.trim() || '';
+            }
+            if (bProviderValue && !isLocalProviderValue(bProviderValue) && !bApiKey) {
+                return showAlert("API Key is required for the selected LLM provider");
+            }
+
+            const eProviderValue = document.getElementById('setup-embedder-provider') ? document.getElementById('setup-embedder-provider').value : "";
+            const eApiKey = document.getElementById('setup-embedder-api-key') ? document.getElementById('setup-embedder-api-key').value.trim() : "";
+            if (eProviderValue && !isLocalProviderValue(eProviderValue) && !eApiKey) {
+                return showAlert("API Key is required for the selected Embedder provider");
+            }
+
+            const bProvider = bParts.provider;
+            const bModel = bParts.model || (document.getElementById('setup-brain-model') ? document.getElementById('setup-brain-model').value.trim() : "");
+            const bUrl = document.getElementById('setup-brain-url') ? document.getElementById('setup-brain-url').value.trim() : "";
+            const openAIProviderKey = document.getElementById('setup-openai-api-key') ? document.getElementById('setup-openai-api-key').value.trim() : "";
+            const anthropicProviderKey = document.getElementById('setup-anthropic-api-key') ? document.getElementById('setup-anthropic-api-key').value.trim() : "";
+            const geminiProviderKey = document.getElementById('setup-gemini-api-key') ? document.getElementById('setup-gemini-api-key').value.trim() : "";
+            const eParts = splitProviderValue(eProviderValue);
+            const eProvider = eParts.provider;
+            const eModel = eParts.model || (document.getElementById('setup-embedder-model') ? document.getElementById('setup-embedder-model').value.trim() : "");
+            const eUrl = document.getElementById('setup-embedder-url') ? document.getElementById('setup-embedder-url').value.trim() : "";
+
+            mergeStoredAIConfigSecure({
+                brain_provider: bProvider,
+                brain_model: bModel,
+                brain_url: bUrl,
+                brain_api_key: bApiKey,
+                embedder_provider: eProvider,
+                embedder_model: eModel,
+                embedder_url: eUrl,
+                embedder_api_key: eApiKey,
+                openai_api_key: openAIProviderKey || (normalizeProviderSecretKey(bProvider) === 'openai' ? bApiKey : ''),
+                anthropic_api_key: anthropicProviderKey || (normalizeProviderSecretKey(bProvider) === 'anthropic' ? bApiKey : ''),
+                gemini_api_key: geminiProviderKey || (normalizeProviderSecretKey(bProvider) === 'gemini' ? bApiKey : ''),
+            });
+
+            syncChatControlsFromAIConfig(getStoredAIConfig());
+            syncSetupWizardControlsFromAIConfig(getStoredAIConfig());
             finishDaemonSystemSetup();
             return;
         }
@@ -1167,7 +1526,13 @@
 
             // Step 3: Validate AI Configuration before finishing
             const bProviderValue = document.getElementById('setup-brain-provider') ? document.getElementById('setup-brain-provider').value : "";
-            const bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
+            let bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
+            const bParts = splitProviderValue(bProviderValue);
+            const bProviderPoolId = providerSecretField(bParts.provider);
+            if (!bApiKey && bProviderPoolId) {
+                const poolInputId = `setup-${bProviderPoolId.replace(/_/g, '-')}`;
+                bApiKey = document.getElementById(poolInputId)?.value.trim() || '';
+            }
             
             // Check if provider is selected and requires API key (not local/ollama)
             if (bProviderValue && !isLocalProviderValue(bProviderValue) && !bApiKey) {
@@ -1180,6 +1545,10 @@
 
     function wizardPrev() {
         if (daemonProvisioningWizardActive) {
+            if (currentWizardStep > 2) {
+                currentWizardStep = 2;
+                updateWizardStep();
+            }
             return;
         }
         if (currentWizardStep > 1) {
@@ -1526,7 +1895,16 @@
         const bProvider = bParts.provider;
         const bModel = bParts.model || (document.getElementById('setup-brain-model') ? document.getElementById('setup-brain-model').value.trim() : "");
         const bUrl = document.getElementById('setup-brain-url') ? document.getElementById('setup-brain-url').value.trim() : "";
-        const bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
+        let bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
+        const selectedBrainProviderKey = providerSecretField(bProvider);
+        if (!bApiKey && selectedBrainProviderKey) {
+            const poolInputId = `setup-${selectedBrainProviderKey.replace(/_/g, '-')}`;
+            bApiKey = document.getElementById(poolInputId)?.value.trim() || '';
+        }
+
+        const openAIProviderKey = document.getElementById('setup-openai-api-key') ? document.getElementById('setup-openai-api-key').value.trim() : "";
+        const anthropicProviderKey = document.getElementById('setup-anthropic-api-key') ? document.getElementById('setup-anthropic-api-key').value.trim() : "";
+        const geminiProviderKey = document.getElementById('setup-gemini-api-key') ? document.getElementById('setup-gemini-api-key').value.trim() : "";
 
         const eProviderValue = document.getElementById('setup-embedder-provider') ? document.getElementById('setup-embedder-provider').value : "";
         const eParts = splitProviderValue(eProviderValue);
@@ -1665,7 +2043,10 @@
             embedder_provider: eProvider,
             embedder_model: eModel,
             embedder_url: eUrl,
-            embedder_api_key: eApiKey
+            embedder_api_key: eApiKey,
+            openai_api_key: openAIProviderKey || (normalizeProviderSecretKey(bProvider) === 'openai' ? bApiKey : ''),
+            anthropic_api_key: anthropicProviderKey || (normalizeProviderSecretKey(bProvider) === 'anthropic' ? bApiKey : ''),
+            gemini_api_key: geminiProviderKey || (normalizeProviderSecretKey(bProvider) === 'gemini' ? bApiKey : '')
         };
         mergeStoredAIConfigSecure(aiConfig);
 

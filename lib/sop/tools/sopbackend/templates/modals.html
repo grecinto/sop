@@ -421,6 +421,26 @@
             <input type="password" id="chat-settings-fallback-api-key" placeholder="Enter API Key securely" style="width: 100%; padding: 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color);" onchange="persistChatSettingsDraft()">
         </div>
         <div id="chat-settings-fallback-test-status" style="display: none; margin-bottom: 10px; font-size: 12px;"></div>
+        <h4 style="margin-top: 16px; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">Provider Key Pool</h4>
+        <div style="margin-bottom: 10px;">
+            <p style="color: var(--text-muted); font-size: 11px; margin: 0 0 8px 0;">
+                Store keys for OpenAI, Anthropic, and Gemini independently so routing can switch providers without re-entering keys.
+            </p>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 10px;">
+            <div>
+                <label style="display: block; margin-bottom: 4px; font-weight: bold;">OpenAI API Key</label>
+                <input type="password" id="chat-settings-openai-api-key" placeholder="Enter OpenAI key" style="width: 100%; padding: 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color);" onchange="persistChatSettingsDraft()">
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 4px; font-weight: bold;">Anthropic API Key</label>
+                <input type="password" id="chat-settings-anthropic-api-key" placeholder="Enter Anthropic key" style="width: 100%; padding: 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color);" onchange="persistChatSettingsDraft()">
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 4px; font-weight: bold;">Gemini API Key</label>
+                <input type="password" id="chat-settings-gemini-api-key" placeholder="Enter Gemini key" style="width: 100%; padding: 4px; border-radius: 3px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color);" onchange="persistChatSettingsDraft()">
+            </div>
+        </div>
         <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 15px;">
             <button onclick="testChatSettingsFallbackConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Fallback</button>
             <button id="chat-settings-embedder-test-button" onclick="testChatSettingsEmbedderConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test Embedder</button>
