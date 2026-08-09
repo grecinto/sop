@@ -94,6 +94,55 @@ func containsRequiredString(values []any, target string) bool {
 	return false
 }
 
+func TestPlanningPhaseCapabilityExposesRepoStructureIndexTool(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	tools := cap.ExposeTools()
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[tool.Name] = true
+	}
+	if !names["planning_index_repo_structure"] {
+		t.Fatalf("expected planning capability to expose planning_index_repo_structure, got %v", names)
+	}
+}
+
+func TestCollectRepositoryStructureIndexEntries_UsesASTArtifacts(t *testing.T) {
+	tempRoot := t.TempDir()
+	repoFile := filepath.Join(tempRoot, "sample.go")
+	if err := os.WriteFile(repoFile, []byte("package demo\n\nfunc Hello() string {\n  return \"hi\"\n}\n"), 0o644); err != nil {
+		t.Fatalf("write sample file: %v", err)
+	}
+
+	entries, err := collectRepositoryStructureIndexEntries(Task{WorkingDir: tempRoot, ActiveFile: repoFile, Description: "inspect repo"}, nil)
+	if err != nil {
+		t.Fatalf("collectRepositoryStructureIndexEntries failed: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected repository structure entries to be collected")
+	}
+
+	var found bool
+	for _, entry := range entries {
+		if entry.Path == "sample.go" {
+			found = true
+			if len(entry.Functions) == 0 {
+				t.Fatalf("expected AST function extraction for %s", entry.Path)
+			}
+			if len(entry.ASTLeafNodes) == 0 {
+				t.Fatalf("expected AST leaf nodes for %s", entry.Path)
+			}
+			if entry.StructuralPath == "" {
+				t.Fatalf("expected structural path for %s", entry.Path)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected sample.go entry in collected index, got %#v", entries)
+	}
+}
+
 func TestInvestigationPhaseBuildContext_UsesGeneralInvestigationGuidance(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewInvestigationPhaseCapability(infra)
@@ -130,6 +179,30 @@ func TestExecutionPhaseBuildContext_UsesGeneralValidationGuidance(t *testing.T) 
 	}
 }
 
+func TestPlanningPhaseBuildContext_PromptsUserVisiblePlanBeforeImplementation(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	result := cap.BuildContext("plan a refactor", capabilities.RoutingState{})
+	for _, check := range []string{"user-visible plan message", "generated plan details", "approval from the user"} {
+		if !strings.Contains(strings.ToLower(result), check) {
+			t.Fatalf("expected planning context to include %q, got %q", check, result)
+		}
+	}
+}
+
+func TestExecutionPhaseBuildInstructions_PromptsUserVisiblePlanAndApproval(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewExecutionPhaseCapability(infra)
+
+	result := cap.BuildInstructions("apply a small change", capabilities.RoutingState{})
+	for _, check := range []string{"user-visible plan message", "generated plan details", "approval from the user"} {
+		if !strings.Contains(strings.ToLower(result), check) {
+			t.Fatalf("expected execution instructions to include %q, got %q", check, result)
+		}
+	}
+}
+
 func TestExecutionPhaseBuildContext_MentionsIDEWorkerDelegationPath(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewExecutionPhaseCapability(infra)
@@ -148,6 +221,18 @@ func TestExecutionPhaseBuildInstructions_MentionsIDEWorkerDelegationPath(t *test
 
 	result := cap.BuildInstructions("apply a small change", capabilities.RoutingState{})
 	for _, check := range []string{"delegate_continue_task", "Ask as the controller", "bounded coding objective"} {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected execution instructions to include %q, got %q", check, result)
+		}
+	}
+}
+
+func TestExecutionPhaseBuildInstructions_DefinesDelegationRulesForEditVsDaemon(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewExecutionPhaseCapability(infra)
+
+	result := cap.BuildInstructions("apply a small change", capabilities.RoutingState{})
+	for _, check := range []string{"bounded to the active file", "broader multi-file", "daemon-native editing"} {
 		if !strings.Contains(result, check) {
 			t.Fatalf("expected execution instructions to include %q, got %q", check, result)
 		}

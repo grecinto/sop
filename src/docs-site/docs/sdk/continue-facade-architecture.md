@@ -27,6 +27,13 @@ Continue provides the IDE experience:
 
 The Continue integration is intentionally a facade rather than a second orchestrator. Continue does not own the workflow loop. It packages the request, sends it to the daemon bridge, and returns the streamed result.
 
+A useful architectural distinction is:
+
+- AST/tree-sitter and repo indexing remain the core source of structural understanding for planning and investigation.
+- Continue is the preferred IDE-native surface for richer semantic actions once the workflow needs them, such as go-to-definition, find references, rename-oriented refactors, type-aware navigation, and richer completion assistance.
+
+That keeps the default workflow simple: AST-based repo understanding is available from the start, while Continue adds higher-value editor-native semantics later without changing the orchestration boundary.
+
 That keeps the architecture simple:
 
 1. Continue captures editor context and user intent.

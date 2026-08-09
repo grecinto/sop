@@ -424,12 +424,12 @@ WORKFLOW:
 1. Review requirements from intake and evidence from investigation
 2. If Continue bridge metadata is present, use that context to understand the editor-backed coding environment, but do not delegate implementation work during planning
 3. Call planning_build_context to refresh repository understanding
-4. Call planning_search_repo to find implementation patterns
-5. Call planning_inspect_repo to understand current code structure
+4. Investigate the repository using the shared coding workflow tools: call planning_search_repo to find relevant implementation patterns and planning_inspect_repo to inspect the current code structure and changed files
+5. When the task involves code structure, use the shared workflow's AST/tree-sitter-backed analysis capabilities to understand symbols, structure, and relevant code paths before designing the change
 6. Call planning_list_changed_files to check for conflicts
 7. Call planning_plan_changes to generate concrete plan
 8. Review plan quality: each step references specific files/functions
-9. Present plan to user for review
+9. Present a clear user-visible plan message in the chat history that shows the generated plan details and asks for approval from the user before any implementation work begins
 10. If approved: Capture artifact with status="ready_for_execution" and transition_to="execution"
 11. If changes needed: Iterate on plan (update iteration counter)
 
@@ -486,6 +486,7 @@ TOOL SEQUENCE:
 
 CONTROL RULE:
 - Planning may use Continue bridge context if present, but it should not call delegate_continue_task or otherwise delegate implementation work yet.
+- Investigate the codebase with the shared coding workflow repository tools first, and use AST/tree-sitter-backed structural analysis when the feature request requires understanding existing implementation details.
 - Keep Ask as the controller. Use planning to decide what should be executed later, not to start execution inside the planning phase.
 
 QUALITY STANDARDS:
@@ -542,16 +543,17 @@ NOTE: Even in traditional mode, ALWAYS preview before apply and get user approva
 
 CONTROL RULE:
 - Keep Ask as the controller. Use IDE worker delegation only for one bounded execution step, then return to the daemon-owned workflow.
-
-WORKFLOW:
+- Prefer delegate_continue_task only when the edit is bounded to the active file and is clearly editor-native (for example a focused patch, refactor, or localized change).
+- Prefer daemon-native editing when the change is broader multi-file, cross-cutting, or better handled as a direct edit by AI Studio itself.
 1. Review plan from planning phase artifact
-2. If editor-native execution would help and Continue context is available, consider whether this step should be delegated as one bounded Continue coding objective
+2. If editor-native execution would help and Continue context is available, consider whether this step should be delegated as one bounded Continue coding objective; prefer Continue only for bounded edits scoped to the active file, and prefer daemon-native editing for broader multi-file or cross-cutting changes
 3. For each step in plan:
-	a. Call execution_preview_patch to preview changes
-	b. Get user approval for preview (MANDATORY for safety)
-	c. If a Continue worker is connected and the task is a bounded editor-native subtask, call delegate_continue_task to execute that single coding step through Continue
-	d. Otherwise call execution_apply_patch to apply changes directly
-	e. Call execution_run_tests to validate
+	a. Before any implementation or shell command is run, show a user-visible plan message in the chat history that includes the generated plan details and asks for approval from the user before running commands
+	b. Call execution_preview_patch to preview changes
+	c. Get user approval for preview (MANDATORY for safety)
+	d. If a Continue worker is connected and the task is a bounded editor-native subtask scoped to the active file, call delegate_continue_task to execute that single coding step through Continue
+	e. Otherwise call execution_apply_patch to apply changes directly
+	f. Call execution_run_tests to validate
 4. Capture artifact with results
 5. If tests pass: Transition to review
 6. If tests fail: inspect the failure, adjust the patch, and rerun the same targeted tests before expanding scope or returning to planning
@@ -851,9 +853,9 @@ func (c *PhaseCapability) BuildInstructions(query string, state capabilities.Rou
 	case "investigation":
 		return "Use Investigation capability to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) Document evidence, 6) Transition to planning when analysis complete."
 	case "planning":
-		return "Use Planning capability to: 1) Use Continue bridge context when available to understand the editor-backed coding environment, 2) Build context, 3) Research patterns, 4) Generate concrete plan with file/function references, 5) Present plan to user, 6) Capture artifact with status='ready_for_execution', 7) Transition to execution when approved. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
+		return "Use Planning capability to: 1) Use Continue bridge context when available to understand the editor-backed coding environment, 2) Build context, 3) Research patterns, 4) Generate concrete plan with file/function references, 5) Emit a user-visible plan message in the chat history that shows the generated plan details and asks for approval from the user before implementation work begins, 6) Capture artifact with status='ready_for_execution', 7) Transition to execution when approved. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
 	case "execution":
-		return "Use Execution capability to: 1) Preview patches, 2) Get user approval, 3) Decide whether the current step should be delegated to Continue as one bounded coding objective, 4) Use delegate_continue_task only for that bounded Continue subtask when appropriate, otherwise apply patches directly, 5) Run relevant validation after each change, 6) Capture results, 7) Transition to review when complete. SAFETY: Always preview before applying and keep Ask as the controller."
+		return "Use Execution capability to: 1) Show a user-visible plan message in the chat history that includes the generated plan details, 2) Ask for approval from the user before running commands, 3) Preview patches, 4) Get user approval, 5) Decide whether the current step should be delegated to Continue as one bounded coding objective, 6) Use delegate_continue_task only when the edit is bounded to the active file and the task is editor-native (for example a focused patch, refactor, or localized change); if the task is broader multi-file or better handled as direct daemon-native editing, apply patches directly instead, 7) Run relevant validation after each change, 8) Capture results, 9) Transition to review when complete. SAFETY: Always preview before applying and keep Ask as the controller."
 	case "review":
 		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) Decide whether a bounded IDE-native review or validation slice should be delegated to Continue, 4) Use delegate_continue_task only for that bounded subtask when appropriate, 5) Run relevant validation, 6) Validate against requirements, 7) Capture validation results, 8) Transition to delivery if approved or back to execution if issues found."
 	case "delivery":
@@ -1374,6 +1376,8 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 		return c.runSearchRepo(args)
 	case strings.ToLower(c.phaseToolName("list_changed_files")):
 		return c.runListChangedFiles(args)
+	case strings.ToLower(c.phaseToolName("index_repo_structure")):
+		return c.runIndexRepoStructure(args)
 	case strings.ToLower(c.phaseToolName("search_team_patterns")):
 		return c.runSearchTeamPatterns(ctx, args)
 	case strings.ToLower(c.phaseToolName("vectorize_team_patterns")):
@@ -1524,6 +1528,11 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 			Description: "Lists changed files to avoid conflicts. WHEN TO CALL: Before finalizing plan, to ensure plan doesn't conflict with in-progress work. Returns list of changed files.",
 			Schema:      taskSchema,
 			Tags:        []string{"R"}, // Read-only list
+		}, {
+			Name:        c.phaseToolName("index_repo_structure"),
+			Description: "Indexes repository structure using AST/tree-sitter extraction so planning can reason over symbols, imports, and structural paths. WHEN TO CALL: Before designing changes in unfamiliar repositories or when repo structure is needed for planning memory. Returns indexed file entries with functions/imports/structural paths.",
+			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only repo indexing
 		}, {
 			Name:        c.phaseToolName("plan_changes"),
 			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After build_context, search_repo, and inspect_repo complete. This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
@@ -1808,6 +1817,183 @@ func (c *PhaseCapability) runListChangedFiles(args map[string]any) (string, erro
 		return "Changed Files: none", nil
 	}
 	return fmt.Sprintf("Changed Files:\n%s", strings.Join(files, "\n")), nil
+}
+
+// RepositoryStructureIndexEntry captures lightweight repo-structure metadata for planning and memory indexing.
+type RepositoryStructureIndexEntry struct {
+	Path           string
+	Language       string
+	Functions      []string
+	Imports        []string
+	ASTLeafNodes   []string
+	StructuralPath string
+	Summary        string
+}
+
+func collectRepositoryStructureIndexEntries(task Task, infra *SharedInfrastructure) ([]RepositoryStructureIndexEntry, error) {
+	resolvedTask := task
+	workingDir := strings.TrimSpace(resolvedTask.WorkingDir)
+	if workingDir == "" {
+		workingDir = "."
+	}
+	workingDir = filepath.Clean(workingDir)
+
+	entries := []RepositoryStructureIndexEntry{}
+	seen := map[string]struct{}{}
+
+	ops := &ASTOperations{grammar: NewGrammarRegistry()}
+	if infra != nil && infra.GrammarRegistry != nil {
+		ops.grammar = infra.GrammarRegistry
+	}
+
+	walkErr := filepath.WalkDir(workingDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || name == "node_modules" || name == "vendor" || name == "dist" || name == "build" || name == ".next" || name == "coverage" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == filepath.Join(workingDir, ".git") || strings.HasPrefix(filepath.ToSlash(path), "/proc/") {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == "" || !isSupportedRepoIndexExtension(ext) {
+			return nil
+		}
+		if relPath, relErr := filepath.Rel(workingDir, path); relErr == nil {
+			if relPath == "." || relPath == "" {
+				return nil
+			}
+			if _, exists := seen[relPath]; exists {
+				return nil
+			}
+			seen[relPath] = struct{}{}
+			entries = append(entries, RepositoryStructureIndexEntry{Path: filepath.ToSlash(relPath)})
+			return nil
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+
+	if len(entries) == 0 {
+		if resolvedTask.ActiveFile != "" {
+			activePath := resolvedTask.ActiveFile
+			if !filepath.IsAbs(activePath) {
+				activePath = filepath.Join(workingDir, activePath)
+			}
+			if info, err := os.Stat(activePath); err == nil && !info.IsDir() {
+				if relPath, relErr := filepath.Rel(workingDir, activePath); relErr == nil {
+					entries = append(entries, RepositoryStructureIndexEntry{Path: filepath.ToSlash(relPath)})
+				}
+			}
+		}
+	}
+
+	for i := range entries {
+		entryPath := entries[i].Path
+		absPath := entryPath
+		if !filepath.IsAbs(absPath) {
+			absPath = filepath.Join(workingDir, absPath)
+		}
+		content, readErr := os.ReadFile(absPath)
+		if readErr != nil {
+			continue
+		}
+		entryLang := resolveTreeSitterLanguageAliasFromExtension(filepath.Ext(absPath))
+		if entryLang == "" {
+			entryLang = "text"
+		}
+		entries[i].Language = entryLang
+		if _, root, err := ops.ParseFile(absPath, content); err == nil {
+			entries[i].Functions = ops.ExtractFunctions(root, content)
+			entries[i].Imports = ops.ExtractImports(root, content)
+			if len(entries[i].Functions) > 0 {
+				entries[i].ASTLeafNodes = append([]string{}, entries[i].Functions...)
+			}
+			if len(entries[i].Functions) > 0 {
+				entries[i].StructuralPath = buildRepoStructurePath(workingDir, entryPath, entries[i].Functions[0])
+			}
+		}
+		if entries[i].Summary == "" {
+			summaryParts := []string{}
+			if len(entries[i].Functions) > 0 {
+				summaryParts = append(summaryParts, fmt.Sprintf("functions=%s", strings.Join(entries[i].Functions, ",")))
+			}
+			if len(entries[i].Imports) > 0 {
+				summaryParts = append(summaryParts, fmt.Sprintf("imports=%s", strings.Join(entries[i].Imports, ",")))
+			}
+			if len(summaryParts) > 0 {
+				entries[i].Summary = strings.Join(summaryParts, "; ")
+			} else {
+				entries[i].Summary = "ast-indexed"
+			}
+		}
+	}
+
+	return entries, nil
+}
+
+func buildRepoStructurePath(workingDir, relPath, firstFunction string) string {
+	baseName := filepath.Base(filepath.Clean(workingDir))
+	if baseName == "." || baseName == string(filepath.Separator) || baseName == "" {
+		baseName = "repo"
+	}
+	cleanRel := filepath.ToSlash(filepath.Clean(relPath))
+	if strings.HasSuffix(cleanRel, "/") {
+		cleanRel = strings.TrimSuffix(cleanRel, "/")
+	}
+	if cleanRel == "." || cleanRel == "" {
+		return fmt.Sprintf("%s/%s", baseName, firstFunction)
+	}
+	return fmt.Sprintf("%s/%s/%s", baseName, strings.TrimSuffix(cleanRel, filepath.Ext(cleanRel)), firstFunction)
+}
+
+func isSupportedRepoIndexExtension(ext string) bool {
+	switch strings.ToLower(strings.TrimSpace(ext)) {
+	case ".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".rs", ".cs":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *PhaseCapability) runIndexRepoStructure(args map[string]any) (string, error) {
+	task := c.buildTask(args)
+	resolvedTask, candidates := resolveRepoWorkingDir(task)
+	if resolvedTask.WorkingDir == "" {
+		resolvedTask.WorkingDir = task.WorkingDir
+	}
+	entries, err := collectRepositoryStructureIndexEntries(resolvedTask, c.sharedInfra)
+	if err != nil {
+		return formatRepoResolutionFallback("Repository Structure Indexing", resolvedTask, candidates, err), nil
+	}
+	if len(entries) == 0 {
+		return "Repository Structure Index: none", nil
+	}
+	if c.sharedInfra != nil && c.sharedInfra.MemorySink != nil {
+		for _, entry := range entries {
+			c.sharedInfra.MemorySink(CodingMemory{
+				Description:    fmt.Sprintf("Repository structure index for %s", entry.Path),
+				WorkingDir:     resolvedTask.WorkingDir,
+				ActiveFile:     entry.Path,
+				RepositoryHint: filepath.Base(resolvedTask.WorkingDir),
+				StructuralPath: entry.StructuralPath,
+				ASTLeafNodes:   entry.ASTLeafNodes,
+				Plan:           []string{"Indexed repository structure"},
+			})
+		}
+	}
+	parts := []string{"Repository Structure Index"}
+	for _, entry := range entries {
+		parts = append(parts, fmt.Sprintf("- %s [%s] %s", entry.Path, entry.Language, entry.Summary))
+	}
+	return strings.Join(parts, "\n"), nil
 }
 
 func (c *PhaseCapability) runSearchTeamPatterns(ctx context.Context, args map[string]any) (string, error) {

@@ -48,6 +48,21 @@ Without Continue, the project would be materially farther from a practical IDE-i
 
 This does not make Continue the product controller. It makes Continue the current leverage point for IDE-native execution.
 
+## Continue as the semantic action surface
+
+Continue should be remembered as the IDE-side bridge for richer semantic actions that go beyond lightweight AST-based planning.
+
+When the workflow later needs stronger code navigation or refactoring support, Continue is the intended path for features such as:
+
+- go-to-definition
+- go-to-type-definition
+- find references
+- document symbols
+- rename-oriented refactor assistance
+- richer type-aware navigation and completion assistance
+
+In other words, the shared workflow can rely on AST/tree-sitter for repo understanding and planning, while Continue provides the editor-native layer for deeper semantic execution once those capabilities are needed.
+
 ## Continue Mode Gating
 
 Continue does not expose the same tool surface in all modes.

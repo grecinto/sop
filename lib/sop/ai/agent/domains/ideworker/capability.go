@@ -228,7 +228,7 @@ func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 		{
 			Name:        delegateContinueToolName,
 			Description: "Delegate one bounded coding subtask to the connected Continue worker so Continue can run its own Ask/tool loop locally and return the finished result to AI Studio.",
-			Schema:      `{"type":"object","properties":{"task":{"type":"string","description":"Focused coding task to delegate to the IDE worker"},"mode":{"type":"string","description":"Worker mode hint such as plan, edit, apply, review, or test"},"requested_phase":{"type":"string","description":"Optional explicit workflow phase such as investigation, planning, execution, review, or delivery"},"allowed_tools":{"type":"array","items":{"type":"string"},"description":"Optional bounded tool subset that the remote Continue Ask turn should be allowed to use"},"tool_choice":{"type":"string","description":"Optional preferred Continue tool name for the delegated turn"},"provider":{"type":"string","description":"Optional provider override to preserve the selected LLM family during delegation"},"model":{"type":"string","description":"Optional model override to preserve the selected model during delegation"},"workspace_root":{"type":"string","description":"Workspace root for the delegated task"},"active_file":{"type":"string","description":"Primary file for the delegated task"},"selected_text":{"type":"string","description":"Selected code snippet or region for the task"},"open_files":{"type":"array","items":{"type":"string"},"description":"Open files that provide extra editor context"},"guidance":{"type":"object","description":"Structured guidance for Continue's Ask pipeline.","properties":{"team_practices":{"type":"array","items":{"type":"string"}},"success_criteria":{"type":"array","items":{"type":"string"}},"constraints":{"type":"array","items":{"type":"string"}},"implementation_notes":{"type":"array","items":{"type":"string"}},"expected_result_format":{"type":"string"},"reference_context":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string"},"source":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}}}},"metadata":{"type":"object"}}}},"required":["task"]}`,
+			Schema:      `{"type":"object","properties":{"task":{"type":"string","description":"Focused coding task to delegate to the IDE worker"},"mode":{"type":"string","description":"Worker mode hint such as plan, edit, apply, review, or test"},"requested_phase":{"type":"string","description":"Optional explicit workflow phase such as investigation, planning, execution, review, or delivery"},"allowed_tools":{"type":"array","items":{"type":"string"},"description":"Optional bounded tool subset that the remote Continue Ask turn should be allowed to use"},"tool_choice":{"type":"string","description":"Optional preferred Continue tool name for the delegated turn"},"provider":{"type":"string","description":"Optional provider override to preserve the selected LLM family during delegation"},"model":{"type":"string","description":"Optional model override to preserve the selected model during delegation"},"workspace_root":{"type":"string","description":"Workspace root for the delegated task"},"active_file":{"type":"string","description":"Primary file for the delegated task"},"selected_text":{"type":"string","description":"Selected code snippet or region for the task"},"open_files":{"type":"array","items":{"type":"string"},"description":"Open files that provide extra editor context"},"target_file":{"type":"string","description":"Specific file target for edit-style delegation"},"target_symbol":{"type":"string","description":"Symbol or function name to focus the edit on"},"surrounding_snippet":{"type":"string","description":"Snippet around the edit target to provide context to the IDE worker"},"change_intent":{"type":"string","description":"Intent or expected outcome for the requested edit"},"guidance":{"type":"object","description":"Structured guidance for Continue's Ask pipeline.","properties":{"team_practices":{"type":"array","items":{"type":"string"}},"success_criteria":{"type":"array","items":{"type":"string"}},"constraints":{"type":"array","items":{"type":"string"}},"implementation_notes":{"type":"array","items":{"type":"string"}},"expected_result_format":{"type":"string"},"reference_context":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string"},"source":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"}}}},"metadata":{"type":"object"}}}},"required":["task"]}`,
 			Tags:        []string{"R", "U"},
 		},
 	}
@@ -401,8 +401,34 @@ func (c *Capability) delegateTask(ctx context.Context, args map[string]any) (str
 	if activeFile, ok := args["active_file"].(string); ok && strings.TrimSpace(activeFile) != "" {
 		req.ActiveFile = strings.TrimSpace(activeFile)
 	}
+	if targetFile, ok := args["target_file"].(string); ok && strings.TrimSpace(targetFile) != "" {
+		req.ActiveFile = strings.TrimSpace(targetFile)
+	}
 	if selectedText, ok := args["selected_text"].(string); ok && strings.TrimSpace(selectedText) != "" {
 		req.SelectedText = strings.TrimSpace(selectedText)
+	}
+	if surroundingSnippet, ok := args["surrounding_snippet"].(string); ok && strings.TrimSpace(surroundingSnippet) != "" {
+		req.SelectedText = strings.TrimSpace(surroundingSnippet)
+	}
+	if targetSymbol, ok := args["target_symbol"].(string); ok && strings.TrimSpace(targetSymbol) != "" {
+		if req.Guidance.Metadata == nil {
+			req.Guidance.Metadata = map[string]any{}
+		}
+		req.Guidance.Metadata["target_symbol"] = strings.TrimSpace(targetSymbol)
+	}
+	if changeIntent, ok := args["change_intent"].(string); ok && strings.TrimSpace(changeIntent) != "" {
+		if req.Guidance.Metadata == nil {
+			req.Guidance.Metadata = map[string]any{}
+		}
+		req.Guidance.Metadata["change_intent"] = strings.TrimSpace(changeIntent)
+	}
+	if req.ActiveFile != "" {
+		if req.Guidance.Metadata == nil {
+			req.Guidance.Metadata = map[string]any{}
+		}
+		if _, exists := req.Guidance.Metadata["target_file"]; !exists {
+			req.Guidance.Metadata["target_file"] = req.ActiveFile
+		}
 	}
 	if openFiles, ok := args["open_files"]; ok {
 		req.OpenFiles = readStringSlice(openFiles)

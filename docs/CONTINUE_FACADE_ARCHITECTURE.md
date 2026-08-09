@@ -12,6 +12,16 @@ For SDK reuse, the same Ask runtime can also be mounted in reverse as a particip
 
 Continue can contribute editor context, diff-aware execution, and local workflow affordances, but it does not own orchestration, memory, approvals, or long-running workflow state.
 
+## AST vs. Continue semantic layer
+
+The default workflow should keep using AST/tree-sitter and repo-indexing primitives as the primary source of structural understanding for planning and investigation.
+
+Continue is the intended IDE-native bridge for richer semantic actions once the workflow needs them. The important distinction is:
+
+- AST/tree-sitter remains the foundation for repo structure, symbols, imports, and lightweight structural reasoning.
+- Continue is the preferred surface for deeper IDE-native actions such as go-to-definition, go-to-type-definition, find references, document symbols, rename-style refactors, and richer type-aware navigation/completion assistance.
+- These features are optional enhancements, not a prerequisite for the initial planning/execution loop, but they should remain part of the long-term Continue integration plan.
+
 ## Control Boundary
 
 ### Daemon responsibilities

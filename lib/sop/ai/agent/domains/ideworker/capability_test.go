@@ -139,6 +139,40 @@ func TestCapabilityInspectSessionIncludesStructuredContext(t *testing.T) {
 	}
 }
 
+func TestCapabilityDelegateTaskPropagatesStructuredEditContext(t *testing.T) {
+	backend := &fakeBackend{result: "delegated"}
+	cap := NewCapability()
+	cap.SetBackend(backend)
+
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{SessionID: "sess-edit"})
+	_, err := cap.ExecuteTool(ctx, "delegate_continue_task", map[string]any{
+		"task":                "Apply the requested edit",
+		"target_file":         "payments/service.go",
+		"target_symbol":       "processPayment",
+		"surrounding_snippet": "func processPayment() {\n  return nil\n}",
+		"change_intent":       "add validation before returning",
+	}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("delegate_continue_task failed: %v", err)
+	}
+	if backend.lastRequest.ActiveFile != "payments/service.go" {
+		t.Fatalf("expected target file to become active_file, got %q", backend.lastRequest.ActiveFile)
+	}
+	if backend.lastRequest.SelectedText != "func processPayment() {\n  return nil\n}" {
+		t.Fatalf("expected surrounding snippet to become selected_text, got %q", backend.lastRequest.SelectedText)
+	}
+	metadata := backend.lastRequest.Guidance.Metadata
+	if metadata["target_file"] != "payments/service.go" {
+		t.Fatalf("expected target_file metadata to propagate, got %#v", metadata)
+	}
+	if metadata["target_symbol"] != "processPayment" {
+		t.Fatalf("expected target_symbol metadata to propagate, got %#v", metadata)
+	}
+	if metadata["change_intent"] != "add validation before returning" {
+		t.Fatalf("expected change_intent metadata to propagate, got %#v", metadata)
+	}
+}
+
 func TestCapabilityDelegateTaskUsesSessionDefaults(t *testing.T) {
 	backend := &fakeBackend{result: "delegated"}
 	cap := NewCapability()
