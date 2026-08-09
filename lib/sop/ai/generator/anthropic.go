@@ -13,10 +13,11 @@ import (
 )
 
 type anthropic struct {
-	apiKey   string
-	model    string
-	cacheTTL string
-	apiURL   string
+	apiKey       string
+	model        string
+	cacheTTL     string
+	apiURL       string
+	modelProfile ai.ModelProfile
 }
 
 func init() {
@@ -33,11 +34,14 @@ func init() {
 			cacheTTL = strings.TrimSpace(v)
 		}
 		apiURL, _ := cfg["api_url"].(string)
-		return &anthropic{apiKey: apiKey, model: model, cacheTTL: cacheTTL, apiURL: strings.TrimSpace(apiURL)}, nil
+		profile := ai.ResolveModelProfile("anthropic", model, cfg)
+		return &anthropic{apiKey: apiKey, model: model, cacheTTL: cacheTTL, apiURL: strings.TrimSpace(apiURL), modelProfile: profile}, nil
 	})
 }
 
 func (g *anthropic) Name() string { return "anthropic" }
+
+func (g *anthropic) ModelProfile() ai.ModelProfile { return g.modelProfile }
 
 // Claude keeps an owned loop by default so it can exploit provider-native
 // multi-tool turns and message-replay continuity when that is advantageous.
@@ -151,6 +155,8 @@ func (g *anthropic) Generate(ctx context.Context, prompt string, opts ai.GenOpti
 	if g.apiKey == "" {
 		return ai.GenOutput{}, fmt.Errorf("missing Anthropic API Key")
 	}
+
+	opts = ai.ApplyModelProfile(opts, g.modelProfile)
 
 	url := g.messagesURL()
 

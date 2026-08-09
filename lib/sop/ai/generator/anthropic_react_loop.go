@@ -20,9 +20,13 @@ type anthropicOwnedReActLoop struct {
 }
 
 func (g *anthropic) ReActLoop() ai.ReActLoop {
+	maxIterations := 5
+	if g != nil && g.modelProfile.MaxToolTurns > 0 {
+		maxIterations = g.modelProfile.MaxToolTurns
+	}
 	return anthropicOwnedReActLoop{
 		generator:     g,
-		maxIterations: 5,
+		maxIterations: maxIterations,
 	}
 }
 
@@ -62,9 +66,22 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 		)
 	}
 
+	resolvedProfile := ai.ModelProfile{}
+	if !profileIsEmpty(req.ModelProfile) {
+		resolvedProfile = req.ModelProfile
+	} else {
+		resolvedProfile = l.generator.ModelProfile()
+	}
+	maxIterations := l.maxIterations
+	if resolvedProfile.MaxToolTurns > 0 {
+		maxIterations = resolvedProfile.MaxToolTurns
+	} else if maxIterations <= 0 {
+		maxIterations = 5
+	}
+
 	toolResults := make([]ai.ReActToolResult, 0)
 	executedToolCalls := make([]ai.ToolCall, 0)
-	retryState := newOwnedLoopRetryState(l.maxIterations, req.UserQuery, req.CarryoverState)
+	retryState := newOwnedLoopRetryState(maxIterations, req.UserQuery, req.CarryoverState)
 	retryState.configureLearningContext(deriveRetryLearningContext(ctx, req, l.generator.Name(), l.generator.model))
 
 	for iteration := 1; iteration <= retryState.allowedTurns; iteration++ {
@@ -83,6 +100,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 			ForceTemperature:      true,
 			ToolCallContinuations: anthropicToolCallContinuations(req.UserQuery, toolResults, continuations, iteration, false),
 		}
+		opts = ai.ApplyModelProfile(opts, resolvedProfile)
 
 		log.Debug("Anthropic owned loop calling generator",
 			"iteration", iteration,
@@ -196,6 +214,7 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 		Temperature:           0.2,
 		ToolCallContinuations: anthropicToolCallContinuations(req.UserQuery, toolResults, continuations, retryState.allowedTurns+1, true),
 	}
+	finalOpts = ai.ApplyModelProfile(finalOpts, resolvedProfile)
 	log.Debug("Anthropic owned loop entering final turn",
 		"iteration", retryState.allowedTurns+1,
 		"continuations", len(finalOpts.ToolCallContinuations),

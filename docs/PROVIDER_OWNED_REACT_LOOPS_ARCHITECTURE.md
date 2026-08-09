@@ -40,8 +40,53 @@ These pieces are worth sharing across providers when possible:
 - sanitization helpers
 - event normalization helpers
 - common test patterns for retry and escalation semantics
+- the shared ReAct orchestration loop itself, when the provider can fit the same control-flow contract
 
 The current retry layer also includes adaptive retry budget and learned retry memory. Those should be modeled as explicit policy surfaces, with LLM-visible guidance by default and heuristic enforcement only where hard guarantees are required.
+
+## Shared Loop + Provider/Model Profiles
+
+The architecture should favor one shared ReAct orchestration loop with provider-specific and model-specific policy layers.
+
+### Recommended shape
+
+- one shared loop engine for orchestration, tool execution, and repair handling
+- one adapter per provider where prompt formatting, continuation semantics, or transport details differ
+- one model profile per provider/model tier that controls cost/token tradeoffs without changing the outer loop contract
+
+### Why this helps
+
+This allows the system to use cheaper models for simpler tasks while preserving the same control flow and tool execution behavior. For example:
+
+- Gemini: use the same ReAct loop with different Gemini profiles such as pro versus flash
+- Anthropic: use the same loop with different Claude profiles such as Sonnet versus Haiku
+- OpenAI/GPT: use the same loop with different GPT profiles such as GPT-4.1 versus GPT-4.1-mini
+
+The loop remains the same; only the policy profile changes.
+
+### What should vary by model profile
+
+A model profile may tune:
+
+- maximum output tokens
+- iteration budget
+- tool result summarization level
+- temperature and reasoning effort
+- prompt compactness and instruction density
+- repair/retry aggressiveness
+- whether the model is allowed to plan deeply or should be steered toward short, direct tool use
+
+### What should stay stable
+
+The following should remain consistent across profiles:
+
+- tool interface contracts
+- retry and escalation semantics
+- loop state transitions
+- result normalization
+- carryover/continuation handling at the architectural level
+
+This gives the system a clear path to token conservation without forcing a separate outer-loop implementation for every model.
 
 ## Why Full Outer-Loop Unification Was Rejected
 

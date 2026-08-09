@@ -82,6 +82,15 @@ func (a *CompatibleReActAdapter) PrepareLLMRequest(ctx context.Context, state Re
 			"final_chars", len(mainPrompt))
 	}
 
+	profile := state.Request.ModelProfile
+	if profile.Provider == "" && profile.Model == "" && profile.Tier == "" && profile.MaxOutputTokens == 0 && profile.MaxToolTurns == 0 && !profile.CompactPrompt && profile.Temperature == 0 {
+		if state.Request.Generator != nil {
+			if provider, ok := state.Request.Generator.(ai.ModelProfileProvider); ok {
+				profile = provider.ModelProfile()
+			}
+		}
+	}
+
 	// Build generation options
 	var tools []ai.ToolDefinition
 	if state.Request.Executor != nil {
@@ -101,6 +110,7 @@ func (a *CompatibleReActAdapter) PrepareLLMRequest(ctx context.Context, state Re
 		Tools:                 tools,
 		ToolCallContinuations: a.wrapToolCallContinuations(state),
 	}
+	opts = ai.ApplyModelProfile(opts, profile)
 
 	log.Info("Compatible Adapter Prepared Request",
 		"iteration", state.Iteration,

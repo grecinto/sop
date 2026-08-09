@@ -15,9 +15,10 @@ import (
 
 // gemini implements the Generator interface for Google's Gemini models.
 type gemini struct {
-	apiKey string
-	model  string
-	apiURL string
+	apiKey       string
+	model        string
+	apiURL       string
+	modelProfile ai.ModelProfile
 }
 
 func init() {
@@ -31,12 +32,15 @@ func init() {
 			model = ai.DefaultModelGemini
 		}
 		apiURL, _ := cfg["api_url"].(string)
-		return &gemini{apiKey: apiKey, model: model, apiURL: strings.TrimSpace(apiURL)}, nil
+		profile := ai.ResolveModelProfile("gemini", model, cfg)
+		return &gemini{apiKey: apiKey, model: model, apiURL: strings.TrimSpace(apiURL), modelProfile: profile}, nil
 	})
 }
 
 // Name returns the name of the generator.
 func (g *gemini) Name() string { return "gemini" }
+
+func (g *gemini) ModelProfile() ai.ModelProfile { return g.modelProfile }
 
 // Gemini keeps an owned loop by default so it can preserve Gemini-native
 // continuation shaping and multi-tool turns.
@@ -66,9 +70,13 @@ func (g *gemini) ProviderRuntimeCapability() ai.ProviderRuntimeCapability {
 }
 
 func (g *gemini) ReActLoop() ai.ReActLoop {
+	maxIterations := 5
+	if g != nil && g.modelProfile.MaxToolTurns > 0 {
+		maxIterations = g.modelProfile.MaxToolTurns
+	}
 	return geminiOwnedReActLoop{
 		generator:     g,
-		maxIterations: 5,
+		maxIterations: maxIterations,
 	}
 }
 
@@ -142,9 +150,22 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		}
 	}
 
+	resolvedProfile := ai.ModelProfile{}
+	if !profileIsEmpty(req.ModelProfile) {
+		resolvedProfile = req.ModelProfile
+	} else if provider, ok := l.generator.(ai.ModelProfileProvider); ok {
+		resolvedProfile = provider.ModelProfile()
+	}
+	maxIterations := l.maxIterations
+	if resolvedProfile.MaxToolTurns > 0 {
+		maxIterations = resolvedProfile.MaxToolTurns
+	} else if maxIterations <= 0 {
+		maxIterations = 5
+	}
+
 	toolResults := make([]ai.ReActToolResult, 0)
 	executedToolCalls := make([]ai.ToolCall, 0)
-	retryState := newOwnedLoopRetryState(l.maxIterations, req.UserQuery, req.CarryoverState)
+	retryState := newOwnedLoopRetryState(maxIterations, req.UserQuery, req.CarryoverState)
 	retryState.configureLearningContext(deriveRetryLearningContext(ctx, req, l.generator.Name(), geminiGeneratorModel(l.generator)))
 
 	for iteration := 1; iteration <= retryState.allowedTurns; iteration++ {
@@ -168,7 +189,8 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 			},
 			ToolResults: cloneGeminiReActToolResults(toolResults),
 		}
-		turn = prepareGeminiContinuationTurn(turn, l.maxIterations)
+		turn.Options = ai.ApplyModelProfile(turn.Options, resolvedProfile)
+		turn = prepareGeminiContinuationTurn(turn, maxIterations)
 		if l.turnStrategy != nil {
 			turn = l.turnStrategy.PrepareTurn(ctx, turn)
 		}
@@ -293,6 +315,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 		ToolResults: cloneGeminiReActToolResults(toolResults),
 		FinalTurn:   true,
 	}
+	finalTurn.Options = ai.ApplyModelProfile(finalTurn.Options, resolvedProfile)
 	finalTurn = prepareGeminiContinuationTurn(finalTurn, retryState.allowedTurns)
 	if l.turnStrategy != nil {
 		finalTurn = l.turnStrategy.PrepareTurn(ctx, finalTurn)

@@ -60,6 +60,16 @@ That means SOP can implement the same token-saving effects as Continue-style pro
 
 Use request metadata and lightweight heuristics to choose provider/model before Ask execution while preserving the daemon as controller.
 
+This should be implemented as a policy layer over the existing ReAct architecture rather than as a separate controller. The same shared ReAct loop can be reused for multiple provider/model combinations; the difference is the selected model profile.
+
+Recommended policy layers:
+
+- shared loop engine: unchanged orchestration contract
+- provider adapter: transport/prompt/continuation differences
+- model profile: cost/latency/token tradeoffs and prompt compactness
+
+This design allows the system to route simple or low-risk tasks to cheaper models while keeping the same loop semantics for tool use, retries, and repair.
+
 Candidate signals:
 
 - short explanation or summary requests

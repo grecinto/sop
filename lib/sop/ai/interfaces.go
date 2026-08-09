@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/sharedcode/sop"
@@ -287,6 +288,7 @@ type GenOptions struct {
 	TopP             float32
 	Stop             []string
 	Tools            []ToolDefinition // NEW: Pass the schemas via Native API
+	CompactPrompt    bool
 	// ToolCallContinuations carries provider-neutral tool-call/result turns that a
 	// generator can translate into its provider-specific continuation format.
 	ToolCallContinuations []ToolCallContinuation
@@ -306,6 +308,111 @@ type GenOptions struct {
 type ToolCallContinuation struct {
 	ToolCall ToolCall
 	Response any
+}
+
+// ModelProfile captures a provider/model-specific policy for cost, prompt compactness,
+// and loop budgeting.
+type ModelProfile struct {
+	Provider        string
+	Model           string
+	Tier            string
+	MaxOutputTokens int
+	Temperature     float32
+	CompactPrompt   bool
+	MaxToolTurns    int
+}
+
+// ModelProfileProvider exposes a resolved model profile for a generator.
+type ModelProfileProvider interface {
+	ModelProfile() ModelProfile
+}
+
+// ResolveModelProfile returns a model profile derived from explicit config and
+// inferred heuristics. It is intentionally lightweight and does not require
+// provider-specific transport knowledge.
+func ResolveModelProfile(provider, model string, cfg map[string]any) ModelProfile {
+	profile := ModelProfile{Provider: provider, Model: model}
+	if strings.EqualFold(provider, "openai") {
+		provider = "chatgpt"
+	}
+	profile.Provider = provider
+	profile.Model = model
+
+	if cfg != nil {
+		if raw, ok := cfg["model_profile"]; ok {
+			if mp, ok := raw.(map[string]any); ok {
+				if tier, ok := mp["tier"].(string); ok && strings.TrimSpace(tier) != "" {
+					profile.Tier = strings.TrimSpace(tier)
+				}
+				if maxTokens, ok := mp["max_output_tokens"].(int); ok {
+					profile.MaxOutputTokens = maxTokens
+				}
+				if maxTokens, ok := mp["max_output_tokens"].(float64); ok {
+					profile.MaxOutputTokens = int(maxTokens)
+				}
+				if temp, ok := mp["temperature"].(float64); ok {
+					profile.Temperature = float32(temp)
+				}
+				if temp, ok := mp["temperature"].(float32); ok {
+					profile.Temperature = temp
+				}
+				if compact, ok := mp["compact_prompt"].(bool); ok {
+					profile.CompactPrompt = compact
+				}
+				if maxTurns, ok := mp["max_tool_turns"].(int); ok {
+					profile.MaxToolTurns = maxTurns
+				}
+				if maxTurns, ok := mp["max_tool_turns"].(float64); ok {
+					profile.MaxToolTurns = int(maxTurns)
+				}
+			}
+		}
+	}
+
+	if strings.TrimSpace(profile.Tier) == "" {
+		if strings.Contains(strings.ToLower(model), "haiku") || strings.Contains(strings.ToLower(model), "flash") || strings.Contains(strings.ToLower(model), "mini") {
+			profile.Tier = "cheap"
+		} else {
+			profile.Tier = "standard"
+		}
+	}
+
+	if profile.MaxOutputTokens == 0 {
+		profile.MaxOutputTokens = 1024
+	}
+	if profile.Temperature == 0 {
+		if profile.Tier == "cheap" {
+			profile.Temperature = 0.1
+		} else {
+			profile.Temperature = 0.2
+		}
+	}
+	if profile.MaxToolTurns == 0 {
+		if profile.Tier == "cheap" {
+			profile.MaxToolTurns = 3
+		} else {
+			profile.MaxToolTurns = 5
+		}
+	}
+	if !profile.CompactPrompt {
+		profile.CompactPrompt = profile.Tier == "cheap"
+	}
+	return profile
+}
+
+// ApplyModelProfile applies a model profile to generation options without
+// overwriting explicitly set values.
+func ApplyModelProfile(opts GenOptions, profile ModelProfile) GenOptions {
+	if opts.MaxTokens == 0 {
+		opts.MaxTokens = profile.MaxOutputTokens
+	}
+	if opts.Temperature == 0 && profile.Temperature != 0 {
+		opts.Temperature = profile.Temperature
+	}
+	if !opts.CompactPrompt {
+		opts.CompactPrompt = profile.CompactPrompt
+	}
+	return opts
 }
 
 // ToolCall represents a native tool call requested by the LLM.
@@ -443,6 +550,7 @@ type ReasoningRequest struct {
 	UserQuery      string
 	Executor       ToolExecutor
 	Generator      Generator
+	ModelProfile   ModelProfile
 	CarryoverMode  CarryoverMode
 	CarryoverState *CarryoverState
 	HydrationSink  MemoryHydrationSink

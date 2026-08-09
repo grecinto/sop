@@ -31,10 +31,11 @@ const (
 
 // chatgpt implements the Generator interface for OpenAI's ChatGPT models.
 type chatgpt struct {
-	apiKey    string
-	model     string
-	apiURL    string
-	ownedLoop ai.ReActLoop
+	apiKey       string
+	model        string
+	apiURL       string
+	ownedLoop    ai.ReActLoop
+	modelProfile ai.ModelProfile
 }
 
 func init() {
@@ -45,7 +46,8 @@ func init() {
 			model = "gpt-4o"
 		}
 		apiURL, _ := cfg["api_url"].(string)
-		return &chatgpt{apiKey: apiKey, model: model, apiURL: strings.TrimSpace(apiURL)}, nil
+		profile := ai.ResolveModelProfile("chatgpt", model, cfg)
+		return &chatgpt{apiKey: apiKey, model: model, apiURL: strings.TrimSpace(apiURL), modelProfile: profile}, nil
 	})
 }
 
@@ -89,6 +91,8 @@ func (g *chatgpt) ReActLoop() ai.ReActLoop {
 	}
 	return g.ownedLoop
 }
+
+func (g *chatgpt) ModelProfile() ai.ModelProfile { return g.modelProfile }
 
 // Generate sends a single prompt to the Chat Completions API and returns the response.
 // For multi-turn tool-using workflows, use the Responses API via the ReAct loop.
@@ -143,6 +147,8 @@ func (g *chatgpt) Generate(ctx context.Context, prompt string, opts ai.GenOption
 	} else {
 		messages = append(messages, openAIMessage{Role: "user", Content: contentParts})
 	}
+
+	opts = ai.ApplyModelProfile(opts, g.modelProfile)
 
 	// GUARDRAIL: Strict temperature control for deterministic code generation
 	// Default to 0.1 for consistent, deterministic responses unless explicitly overridden

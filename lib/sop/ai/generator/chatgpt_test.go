@@ -134,6 +134,28 @@ func TestChatGPTReActLoopMode_DefaultsToOwned(t *testing.T) {
 	}
 }
 
+func TestChatGPTOwnedLoop_UsesModelProfileForBudgetAndRequestSettings(t *testing.T) {
+	gen := &chatgpt{model: "gpt-4.1-mini", modelProfile: ai.ModelProfile{MaxToolTurns: 2, MaxOutputTokens: 512, Temperature: 0.1, CompactPrompt: true}}
+	loop, ok := gen.ReActLoop().(chatGPTOwnedReActLoop)
+	if !ok {
+		t.Fatalf("expected owned loop, got %#v", gen.ReActLoop())
+	}
+	if loop.maxIterations != 2 {
+		t.Fatalf("expected loop budget 2 from model profile, got %d", loop.maxIterations)
+	}
+
+	request, err := buildChatGPTResponsesRequest(ai.ReasoningRequest{}, "gpt-4.1-mini", nil, gen.modelProfile)
+	if err != nil {
+		t.Fatalf("buildChatGPTResponsesRequest() error = %v", err)
+	}
+	if request.MaxOutputTokens != 512 {
+		t.Fatalf("expected max output tokens 512 from model profile, got %d", request.MaxOutputTokens)
+	}
+	if request.Temperature == nil || *request.Temperature != 0.1 {
+		t.Fatalf("expected temperature 0.1 from model profile, got %#v", request.Temperature)
+	}
+}
+
 func TestChatGPTProviderRuntimeCapability_AdvertisesOwnedNativeContinuation(t *testing.T) {
 	gen := &chatgpt{model: "gpt-4o", apiKey: "test-key"}
 	cap := gen.ProviderRuntimeCapability()

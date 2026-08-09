@@ -32,7 +32,11 @@ type chatGPTOwnedReActLoop struct {
 }
 
 func newChatGPTOwnedReActLoop(g *chatgpt) ai.ReActLoop {
-	return chatGPTOwnedReActLoop{generator: g, maxIterations: 8}
+	maxIterations := 8
+	if g != nil && g.modelProfile.MaxToolTurns > 0 {
+		maxIterations = g.modelProfile.MaxToolTurns
+	}
+	return chatGPTOwnedReActLoop{generator: g, maxIterations: maxIterations}
 }
 
 func (l chatGPTOwnedReActLoop) modelName() string {
@@ -67,18 +71,21 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 	}
 	tools = appendClarificationActionTool(tools)
 
-	request, err := buildChatGPTResponsesRequest(req, l.modelName(), tools)
+	resolvedProfile := resolveOwnedLoopProfile(req, l.generator)
+	request, err := buildChatGPTResponsesRequest(req, l.modelName(), tools, resolvedProfile)
 	if err != nil {
 		return ai.ReasoningResponse{}, fmt.Errorf("failed to build chatgpt owned loop scaffold request: %w", err)
 	}
 
 	maxIterations := l.maxIterations
-	if maxIterations <= 0 {
+	if resolvedProfile.MaxToolTurns > 0 {
+		maxIterations = resolvedProfile.MaxToolTurns
+	} else if maxIterations <= 0 {
 		maxIterations = 3
 	}
 
-	// Adjust iterations for multi-step workflows
-	if requiresExtendedIterations(tools, req.UserQuery) {
+	// Adjust iterations for multi-step workflows, but keep cheaper profiles bounded.
+	if requiresExtendedIterations(tools, req.UserQuery) && maxIterations >= 6 {
 		maxIterations = maxIterations + 3 // Extra steps for git/automation workflows
 	}
 
@@ -153,7 +160,7 @@ func (l chatGPTOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest)
 		}
 		emitChatGPTOwnedLoopHydration(req, partial)
 
-		request = buildContinuationRequest(l.modelName(), req, request, response, toolOutputItems)
+		request = buildContinuationRequest(l.modelName(), req, request, response, toolOutputItems, resolvedProfile)
 		retryState.maybeExtendBudget(toolResults, iteration)
 
 		// Force tool continuation if task requires more steps
@@ -244,13 +251,21 @@ func listToolsForLoop(ctx context.Context, req ai.ReasoningRequest) ([]ai.ToolDe
 	return tools, nil
 }
 
-func buildChatGPTResponsesRequest(req ai.ReasoningRequest, model string, tools []ai.ToolDefinition) (openAIResponsesRequest, error) {
+func buildChatGPTResponsesRequest(req ai.ReasoningRequest, model string, tools []ai.ToolDefinition, profiles ...ai.ModelProfile) (openAIResponsesRequest, error) {
 	responsesTools, err := buildChatGPTResponsesTools(tools)
 	if err != nil {
 		return openAIResponsesRequest{}, err
 	}
 	parallelToolCalls := true
 	store := true
+
+	profile := ai.ModelProfile{}
+	if len(profiles) > 0 {
+		profile = profiles[0]
+	}
+	if profileIsEmpty(profile) {
+		profile = req.ModelProfile
+	}
 
 	request := openAIResponsesRequest{
 		Model:        model,
@@ -266,8 +281,19 @@ func buildChatGPTResponsesRequest(req ai.ReasoningRequest, model string, tools [
 		Store:             &store,
 	}
 	if chatGPTResponsesSupportsTemperature(model) {
-		temperature := float32(0.0)
-		request.Temperature = &temperature
+		if profile.Temperature != 0 {
+			temperature := profile.Temperature
+			request.Temperature = &temperature
+		} else {
+			temperature := float32(0.0)
+			request.Temperature = &temperature
+		}
+	}
+	if profile.MaxOutputTokens > 0 {
+		request.MaxOutputTokens = profile.MaxOutputTokens
+	}
+	if profile.CompactPrompt {
+		request.Instructions = appendCompactPromptGuidance(request.Instructions)
 	}
 
 	if req.Streamer != nil {
@@ -334,8 +360,16 @@ func buildToolChoiceForceCall(tools []openAIResponsesTool) any {
 }
 
 // buildContinuationRequest constructs the follow-up request after tool execution.
-func buildContinuationRequest(model string, req ai.ReasoningRequest, prev openAIResponsesRequest, response openAIResponsesResponse, toolOutputs []openAIResponsesInputItem) openAIResponsesRequest {
-	return openAIResponsesRequest{
+func buildContinuationRequest(model string, req ai.ReasoningRequest, prev openAIResponsesRequest, response openAIResponsesResponse, toolOutputs []openAIResponsesInputItem, profiles ...ai.ModelProfile) openAIResponsesRequest {
+	profile := ai.ModelProfile{}
+	if len(profiles) > 0 {
+		profile = profiles[0]
+	}
+	if profileIsEmpty(profile) {
+		profile = req.ModelProfile
+	}
+
+	request := openAIResponsesRequest{
 		Model:              model,
 		Instructions:       chatGPTSystemInstructions(req.SystemPrompt, len(prev.Tools) > 0),
 		Input:              buildChatGPTContinuationInput(response, toolOutputs),
@@ -348,6 +382,19 @@ func buildContinuationRequest(model string, req ai.ReasoningRequest, prev openAI
 		MaxOutputTokens:    prev.MaxOutputTokens,
 		Stream:             prev.Stream,
 	}
+	if profile.MaxOutputTokens > 0 {
+		request.MaxOutputTokens = profile.MaxOutputTokens
+	}
+	if profile.Temperature != 0 && chatGPTResponsesSupportsTemperature(model) {
+		temperature := profile.Temperature
+		request.Temperature = &temperature
+	} else if prev.Temperature != nil {
+		request.Temperature = prev.Temperature
+	}
+	if profile.CompactPrompt {
+		request.Instructions = appendCompactPromptGuidance(request.Instructions)
+	}
+	return request
 }
 
 // needsToolContinuation determines if the task requires more tool calls based on
@@ -410,6 +457,31 @@ func chatGPTUserPrompt(req ai.ReasoningRequest) string {
 		parts = append(parts, "User Query: "+query)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func appendCompactPromptGuidance(instructions string) string {
+	trimmed := strings.TrimSpace(instructions)
+	if trimmed == "" {
+		return "Keep the response concise and avoid unnecessary verbosity."
+	}
+	if strings.Contains(strings.ToLower(trimmed), "concise") {
+		return trimmed
+	}
+	return trimmed + "\n\nKeep the response concise and avoid unnecessary verbosity."
+}
+
+func profileIsEmpty(profile ai.ModelProfile) bool {
+	return profile.Provider == "" && profile.Model == "" && profile.Tier == "" && profile.MaxOutputTokens == 0 && profile.MaxToolTurns == 0 && profile.Temperature == 0 && !profile.CompactPrompt
+}
+
+func resolveOwnedLoopProfile(req ai.ReasoningRequest, generator *chatgpt) ai.ModelProfile {
+	if !profileIsEmpty(req.ModelProfile) {
+		return req.ModelProfile
+	}
+	if generator != nil {
+		return generator.modelProfile
+	}
+	return ai.ModelProfile{}
 }
 
 func shouldShortCircuitChatGPTOwnedLoopOnToolHint(hint *ai.ToolProgressHint) bool {

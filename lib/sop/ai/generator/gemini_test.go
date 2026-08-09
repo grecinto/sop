@@ -60,6 +60,17 @@ func TestGeminiReActLoopMode_DefaultsToOwned(t *testing.T) {
 	}
 }
 
+func TestGeminiReActLoop_UsesModelProfileForBudget(t *testing.T) {
+	g := &gemini{model: "gemini-2.5-flash", modelProfile: ai.ModelProfile{MaxToolTurns: 2}}
+	loop, ok := g.ReActLoop().(geminiOwnedReActLoop)
+	if !ok {
+		t.Fatalf("expected gemini owned loop, got %#v", g.ReActLoop())
+	}
+	if loop.maxIterations != 2 {
+		t.Fatalf("expected loop budget 2 from model profile, got %d", loop.maxIterations)
+	}
+}
+
 func TestGeminiProviderRuntimeCapability_AdvertisesOwnedThoughtSignatureContinuation(t *testing.T) {
 	g := &gemini{model: "gemini-2.5-flash"}
 	cap := g.ProviderRuntimeCapability()
