@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sharedcode/sop/ai"
 )
 
 const (
@@ -77,6 +79,36 @@ func (s *ToolResultStorage) StoreResult(toolName, result string) (inline string,
 	// Large - return summary with guidance for LLM
 	summary := s.createSummary(toolName, displayResult, filePath, size)
 	return summary, filePath, size, nil
+}
+
+func wrapToolResultWithStorage(ctx context.Context, toolName, rawResult string) (string, error) {
+	storage := getOrCreateToolResultStorage(ctx)
+	if storage == nil {
+		return rawResult, nil
+	}
+
+	resultText, hint, _, _ := unwrapToolResultEnvelopeFull(rawResult)
+	inline, filePath, size, err := storage.StoreResult(toolName, resultText)
+	if err != nil {
+		return "", err
+	}
+
+	envelope := ai.ToolResultEnvelope{
+		ToolResult:   normalizeToolResultPayload(inline),
+		ProgressHint: hint,
+	}
+	if filePath != "" {
+		envelope.FileMetadata = &ai.ToolFileMetadata{
+			FilePath: filePath,
+			FileSize: int64(size),
+		}
+	}
+
+	wrapped, err := json.Marshal(envelope)
+	if err != nil {
+		return inline, nil
+	}
+	return string(wrapped), nil
 }
 
 // unwrapJSONCommandResult extracts stdout from JSON command responses

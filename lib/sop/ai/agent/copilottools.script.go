@@ -302,6 +302,100 @@ func (a *CopilotAgent) toolSaveScript(ctx context.Context, args map[string]any) 
 	return fmt.Sprintf("Script '%s' saved successfully with %d steps.", name, len(steps)), nil
 }
 
+func (a *CopilotAgent) resolveStoredScriptsDB(ctx context.Context) (*database.Database, error) {
+	if a == nil {
+		return nil, fmt.Errorf("agent is nil")
+	}
+	if a.systemDB != nil {
+		return a.systemDB, nil
+	}
+	if opts, ok := a.databases["system"]; ok {
+		return database.NewDatabase(opts), nil
+	}
+	return nil, fmt.Errorf("system database not found")
+}
+
+func (a *CopilotAgent) registerStoredScriptTools(ctx context.Context) {
+	if !StoresFeatureEnabled() {
+		return
+	}
+	if a == nil || a.registry == nil {
+		return
+	}
+
+	db, err := a.resolveStoredScriptsDB(ctx)
+	if err != nil {
+		return
+	}
+
+	tx, err := db.BeginTransaction(ctx, sop.ForReading)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	store, err := db.OpenModelStore(ctx, "scripts", tx)
+	if err != nil {
+		return
+	}
+
+	names, err := store.List(ctx, ai.DefaultScriptCategory)
+	if err != nil {
+		return
+	}
+
+	for _, scriptName := range names {
+		if _, exists := a.registry.Get(scriptName); exists {
+			continue
+		}
+		var script ai.Script
+		if err := store.Load(ctx, ai.DefaultScriptCategory, scriptName, &script); err != nil {
+			continue
+		}
+		desc := script.Description
+		if desc == "" {
+			desc = fmt.Sprintf("Executes the saved script '%s'", scriptName)
+		}
+		name := scriptName
+		a.registry.Register(name, "Execute pre-saved user script. "+desc, storedScriptArgsSchema, wrapStringTool(func(ctx context.Context, args map[string]any) (string, error) {
+			return a.runStoredScript(ctx, name, args)
+		}))
+	}
+}
+
+func (a *CopilotAgent) runStoredScript(ctx context.Context, scriptName string, args map[string]any) (string, error) {
+	if a == nil {
+		return "", fmt.Errorf("agent not initialized")
+	}
+	if strings.TrimSpace(scriptName) == "" {
+		return "", fmt.Errorf("script name required")
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+
+	if dbName, ok := args["database"].(string); ok && strings.TrimSpace(dbName) != "" {
+		if p := ai.GetSessionPayload(ctx); p != nil {
+			newPayload := *p
+			newPayload.CurrentDB = dbName
+			ctx = context.WithValue(ctx, "session_payload", &newPayload)
+		}
+	}
+
+	if a.service != nil {
+		return a.service.RunScript(ctx, scriptName, ai.DefaultScriptCategory, args)
+	}
+
+	agentID := a.Config.ID
+	if agentID == "" {
+		agentID = "copilot"
+	}
+	svc := NewService(nil, a.systemDB, a.databases, a.brain, nil, map[string]ai.Agent[map[string]any]{agentID: a}, false)
+	svc.session = NewRunnerSession()
+	a.service = svc
+	return svc.RunScript(ctx, scriptName, ai.DefaultScriptCategory, args)
+}
+
 func mapScriptStepsArg(args map[string]any, allowEmpty bool) ([]ai.ScriptStep, error) {
 	if stepsRaw, ok := args["steps"]; ok {
 		stepsList, ok := stepsRaw.([]any)

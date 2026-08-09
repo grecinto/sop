@@ -11,6 +11,27 @@ import (
 	"github.com/sharedcode/sop/ai/memory"
 )
 
+func (a *CopilotAgent) InitializePhysicalMemory(ctx context.Context) error {
+	if a == nil {
+		return nil
+	}
+	if a.Memory == nil {
+		a.Memory = memory.NewMemoryUnit(ai.AgentIDOmni)
+	}
+	if a.systemDB == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	a.memoryWorkersCancel = cancel
+
+	a.Memory.BindSession(ctx)
+	return a.Memory.StartMemoryWorkers(ctx, a.systemDB)
+}
+
 // StartSleepCycle launches background consolidators over the isolated Avatar STM
 // migrating Short-Term episodic memories into Semantic Long-Term memory.
 func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, idleTimeoutMinutes int, nowFn func() time.Time) {

@@ -376,6 +376,10 @@ func routingKBName(query string) string {
 	return ""
 }
 
+func shouldRouteToOmniInsteadOfAvatar(query string) bool {
+	return strings.EqualFold(routingKBName(query), "sop")
+}
+
 func (a *CopilotAgent) trySpecializedFocusedRouting(ctx context.Context, query, entity, domain, artifact string) (*TaskContextClassification, bool, error) {
 	if !looksLikeSpecializedRoutingQuery(query) {
 		return nil, false, nil

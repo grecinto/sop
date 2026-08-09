@@ -1193,6 +1193,10 @@ func (s *Service) RecordStep(ctx context.Context, step ai.ScriptStep) {
 	}
 }
 
+func deepCopyMap(input map[string]any) map[string]any {
+	return cloneAnyMap(input)
+}
+
 // RefactorLastSteps implements the ScriptRecorder interface
 func (s *Service) RefactorLastSteps(count int, mode string, name string) error {
 	// TODO: Implement script refactoring logic

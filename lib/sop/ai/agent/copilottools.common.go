@@ -25,7 +25,11 @@ func (a *CopilotAgent) resolveTransaction(ctx context.Context, db *database.Data
 		if p.Transactions != nil {
 			if tAny, ok := p.Transactions[dbName]; ok {
 				if t, ok := tAny.(sop.Transaction); ok {
-					tx = t
+					if t != nil && t.HasBegun() {
+						tx = t
+					} else {
+						delete(p.Transactions, dbName)
+					}
 				}
 			}
 		}
@@ -35,7 +39,11 @@ func (a *CopilotAgent) resolveTransaction(ctx context.Context, db *database.Data
 		if tx == nil && p.Transaction != nil {
 			if dbName == "" || dbName == p.CurrentDB {
 				if t, ok := p.Transaction.(sop.Transaction); ok {
-					tx = t
+					if t != nil && t.HasBegun() {
+						tx = t
+					} else {
+						p.Transaction = nil
+					}
 				}
 			}
 		}
@@ -60,14 +68,7 @@ func (a *CopilotAgent) resolveTransaction(ctx context.Context, db *database.Data
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to begin transaction: %w", err)
 		}
-
-		if p.Transactions == nil {
-			p.Transactions = make(map[string]any)
-		}
-		p.Transactions[dbName] = tx
-		if dbName == "" || dbName == p.CurrentDB {
-			p.Transaction = tx
-		}
+		return tx, true, nil
 	}
 	return tx, false, nil
 }

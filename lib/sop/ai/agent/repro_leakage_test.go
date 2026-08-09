@@ -288,6 +288,7 @@ func TestRepro_Leakage_StateCleaning_Native(t *testing.T) {
 
 	ctx = context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{CurrentDB: "dev_db"})
 	svc.Open(ctx)
+	defer svc.Close(ctx)
 
 	svc.SetGenerator(mockBrain)
 	// svc.SetFeature("history_injection", false) // Cannot access directly, assuming default or ignoring.

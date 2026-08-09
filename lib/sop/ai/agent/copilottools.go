@@ -95,40 +95,6 @@ func formatToolInventoryList(tools []ai.ToolDefinition) string {
 		}
 
 		cmdStr := fmt.Sprintf("/%s", t.Name)
-		if schema := strings.TrimSpace(t.Schema); schema != "" {
-			var simpleArgs []string
-			if strings.HasPrefix(schema, "{") {
-				var schemaMap map[string]any
-				if err := json.Unmarshal([]byte(schema), &schemaMap); err == nil {
-					if props, ok := schemaMap["properties"].(map[string]any); ok {
-						names := make([]string, 0, len(props))
-						for name := range props {
-							names = append(names, name)
-						}
-						sort.Strings(names)
-						for _, name := range names {
-							simpleArgs = append(simpleArgs, "<"+name+">")
-						}
-					}
-				}
-			} else {
-				argsSchema := strings.TrimPrefix(schema, "(")
-				argsSchema = strings.TrimSuffix(argsSchema, ")")
-				if len(argsSchema) > 0 {
-					parts := strings.Split(argsSchema, ",")
-					for _, p := range parts {
-						argName := strings.Split(p, ":")[0]
-						argName = strings.TrimSpace(argName)
-						if argName != "" {
-							simpleArgs = append(simpleArgs, "<"+argName+">")
-						}
-					}
-				}
-			}
-			if len(simpleArgs) > 0 {
-				cmdStr += " " + strings.Join(simpleArgs, " ")
-			}
-		}
 
 		sb.WriteString(fmt.Sprintf("%s: %s\n", cmdStr, desc))
 	}
@@ -180,6 +146,7 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 	}
 	if StoresFeatureEnabled() {
 		a.registerScriptTools(ctx)
+		a.registerStoredScriptTools(ctx)
 	}
 	a.registerRoutingTools(ctx)
 	if a.hasRegisteredCapability("Desktop", "Desktop Automation", "desktop") {
@@ -278,22 +245,12 @@ func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
 }
 
 func (a *CopilotAgent) toolListTools(ctx context.Context, args map[string]any) (string, error) {
-	a.registerTools(ctx)
-
-	registryTools := a.registry.List()
-	visible := make([]ai.ToolDefinition, 0, len(registryTools))
-	for _, t := range registryTools {
-		if t.Hidden {
-			continue
-		}
-		visible = append(visible, ai.ToolDefinition{
-			Name:        t.Name,
-			Description: t.Description,
-			Schema:      t.ArgsSchema,
-		})
+	tools, err := a.ListTools(ctx)
+	if err != nil {
+		return "", err
 	}
 
-	output := formatToolInventoryList(visible)
+	output := formatToolInventoryList(tools)
 
 	// Add command shortcuts section if any prefix handlers are registered
 	if a.capabilityRegistry != nil {

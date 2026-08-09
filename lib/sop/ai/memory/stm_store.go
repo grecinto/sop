@@ -326,8 +326,11 @@ func (s *ShortTermMemoryStore) Close() {
 	if s == nil {
 		return
 	}
+	UnregisterShortTermMemoryStore(s)
 	s.primary = nil
 	s.byTime = nil
+	s.queue = nil
+	s.systemDB = nil
 }
 
 func (s *ShortTermMemoryStore) PruneExpired(ctx context.Context, now time.Time) (int, error) {

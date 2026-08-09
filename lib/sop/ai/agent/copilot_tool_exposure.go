@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 
 	log "log/slog"
 
@@ -243,6 +244,68 @@ func buildNativeToolExposure(routingState *TaskContextClassification) nativeTool
 	return nativeToolExposure{restrict: true, allowed: allowed, domain: routingState.Domain}
 }
 
+func allowedNativeDomainTools(routingState *TaskContextClassification) (map[string]bool, map[string]bool) {
+	allowedSpacesTools := make(map[string]bool)
+	allowedStoresTools := make(map[string]bool)
+	if routingState == nil {
+		return allowedSpacesTools, allowedStoresTools
+	}
+
+	allowAll := len(routingState.Layers) == 0
+	hasCRUD := func(flag string) bool {
+		if allowAll {
+			return true
+		}
+		for _, layer := range routingState.Layers {
+			for _, crud := range layer.CRUD {
+				if strings.EqualFold(strings.TrimSpace(crud), flag) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	allowRead := hasCRUD("R") || allowAll
+	allowCreate := hasCRUD("C") || allowAll
+	allowUpdate := hasCRUD("U") || allowAll
+	allowDelete := hasCRUD("D") || allowAll
+
+	for _, name := range []string{"execute_script", "list_stores", "begin_tx", "commit_tx", "rollback_tx", "open_store", "select", "join", "join_right", "explain_join", "manage_transaction", "scan", "filter", "sort", "project", "limit"} {
+		allowedStoresTools[name] = true
+	}
+	if allowCreate {
+		allowedStoresTools["add"] = true
+	}
+	if allowUpdate {
+		allowedStoresTools["update"] = true
+	}
+	if allowDelete {
+		allowedStoresTools["delete"] = true
+	}
+	if !allowRead && !allowCreate && !allowUpdate && !allowDelete {
+		allowedStoresTools = map[string]bool{}
+	}
+
+	if allowRead {
+		for _, name := range []string{"read_space_config", "search_space", "list_space_categories", "list_space_items"} {
+			allowedSpacesTools[name] = true
+		}
+	}
+	if allowCreate || allowUpdate {
+		for _, name := range []string{"mint_to_space", "update_space_config", "enrich_space", "vectorize_space", "vectorize_space_categories", "vectorize_space_items"} {
+			allowedSpacesTools[name] = true
+		}
+	}
+	if allowDelete {
+		for _, name := range []string{"delete_space", "delete_space_items", "delete_space_categories"} {
+			allowedSpacesTools[name] = true
+		}
+	}
+
+	return allowedSpacesTools, allowedStoresTools
+}
+
 func isNativeDomainTool(name string) bool {
 	return nativeSpaceToolNames[name] || nativeStoreToolNames[name] ||
 		gitToolNames[name] || commandLineToolNames[name] ||
@@ -288,7 +351,12 @@ func (a *CopilotAgent) listRegisteredTools(exposure nativeToolExposure) []ai.Too
 	return tools
 }
 
+const storedScriptArgsSchema = `{"type": "object", "properties": {"database": {"type": "string", "description": "Target database constraint (optional)"}}}`
+
 func (a *CopilotAgent) listStoredScriptTools(ctx context.Context) []ai.ToolDefinition {
+	if !StoresFeatureEnabled() {
+		return nil
+	}
 	if a.systemDB == nil {
 		return nil
 	}
@@ -303,7 +371,6 @@ func (a *CopilotAgent) listStoredScriptTools(ctx context.Context) []ai.ToolDefin
 		return nil
 	}
 
-	const defaultArgsSchema = `{"type": "object", "properties": {"database": {"type": "string", "description": "Target database constraint (optional)"}}}`
 	keys, _ := store.List(ctx, ai.DefaultScriptCategory)
 	tools := make([]ai.ToolDefinition, 0, len(keys))
 	for _, scriptName := range keys {
@@ -318,7 +385,7 @@ func (a *CopilotAgent) listStoredScriptTools(ctx context.Context) []ai.ToolDefin
 		tools = append(tools, ai.ToolDefinition{
 			Name:        scriptName,
 			Description: "Execute pre-saved user script. " + desc,
-			Schema:      defaultArgsSchema,
+			Schema:      storedScriptArgsSchema,
 		})
 	}
 	log.Info("CopilotAgent.listStoredScriptTools: built script tool list", "tool_count", len(tools))
