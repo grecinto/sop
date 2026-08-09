@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Workflow Settings - SOP Cloud</title>
+    <title>Phase Observability - SOP Cloud</title>
     {{template "styles" .}}
     <style>
         body {
@@ -249,14 +249,34 @@
 
     <div class="container">
         <div class="header">
-            <h1>Workflow Settings</h1>
-            <p class="subtitle">Configure coding workflow features and behavior</p>
+            <h1>Phase Observability</h1>
+            <p class="subtitle">Observe the active phase/workstream lifecycle and keep legacy workflow controls clearly separated</p>
         </div>
 
-        <!-- Workflow Undo Feature -->
+        <div class="section">
+            <div class="section-title">Recommended Phase Observability</div>
+            <div class="section-description">
+                The phase-based runtime should expose current phase, status, transition history, evidence, and approval state directly. Legacy workflow controls remain useful for compatibility, recovery, and review, but they should not be the primary status surface.
+            </div>
+
+            <div class="info-box">
+                <div class="info-box-title">What this view should surface</div>
+                <div class="info-box-text">
+                    <ul>
+                        <li><strong>Current phase:</strong> intake, investigation, planning, execution, review, or delivery</li>
+                        <li><strong>Phase status:</strong> exploring, drafting, refining, ready for execution, complete, blocked, approved, or delivered</li>
+                        <li><strong>Transition state:</strong> forward/backward handoff, approval pending, or waiting on user input</li>
+                        <li><strong>Evidence:</strong> findings, tests, file changes, and validation results captured by the phase artifact</li>
+                        <li><strong>Workstream context:</strong> paused, resumed, abandoned, or completed stream state</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Legacy Workflow Compatibility -->
         <div class="section">
             <div class="section-title">
-                Workflow Undo System
+                Legacy Workflow Compatibility
                 <span class="premium-badge">
                     <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="currentColor" viewBox="0 0 16 16">
                         <path d="M3.612 15.443c-.386.198-.824-.149-.746-.592l.83-4.73L.173 6.765c-.329-.314-.158-.888.283-.95l4.898-.696L7.538.792c.197-.39.73-.39.927 0l2.184 4.327 4.898.696c.441.062.612.636.282.95l-3.522 3.356.83 4.73c.078.443-.36.79-.746.592L8 13.187l-4.389 2.256z"/>
@@ -268,7 +288,7 @@
             <div class="info-box">
                 <div class="info-box-title">Semantic Time Travel for Your Code</div>
                 <div class="info-box-text">
-                    Treat each coding workflow as an atomic transaction. Search and restore workflow runs using natural language queries like "undo auth middleware changes from yesterday" or "restore parser improvements from last week."
+                    This compatibility view can still expose undo/history for recovery and review. It should remain secondary to the phase artifact timeline and workstream state because the active runtime is phase-based.
                 </div>
             </div>
 
