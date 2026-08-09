@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/repo"
 )
 
 type AutomationPolicy struct {
@@ -1102,6 +1103,20 @@ func (a *CopilotAgent) toolStatPath(ctx context.Context, args map[string]any) (s
 func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromArgs(args)
 	short := boolFlagFromArgs(args, "short")
+	if client, err := repo.NewClientForPath(path); err == nil {
+		changes, err := client.Status(path, repo.StatusOptions{Short: short})
+		if err != nil {
+			return "", err
+		}
+		if len(changes) == 0 {
+			return "No changes.", nil
+		}
+		var lines []string
+		for _, change := range changes {
+			lines = append(lines, fmt.Sprintf("%s\t%s", change.Status, change.Path))
+		}
+		return strings.Join(lines, "\n"), nil
+	}
 	command := fmt.Sprintf("git --no-pager -C %s status", shellQuote(path))
 	if short {
 		command += " --short"
@@ -1112,6 +1127,16 @@ func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (
 func (a *CopilotAgent) toolGitDiff(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromArgs(args)
 	staged := boolFlagFromArgs(args, "staged")
+	if client, err := repo.NewClientForPath(path); err == nil {
+		diffText, err := client.Diff(path, repo.DiffOptions{Staged: staged})
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(diffText) == "" {
+			return "No diff output.", nil
+		}
+		return diffText, nil
+	}
 	command := fmt.Sprintf("git --no-pager -C %s diff", shellQuote(path))
 	if staged {
 		command += " --staged"
@@ -1137,12 +1162,40 @@ func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (str
 	if count <= 0 {
 		count = 10
 	}
+	if client, err := repo.NewClientForPath(path); err == nil {
+		commits, err := client.Log(path, repo.LogOptions{MaxCount: count})
+		if err != nil {
+			return "", err
+		}
+		if len(commits) == 0 {
+			return "No commits found.", nil
+		}
+		var lines []string
+		for _, commit := range commits {
+			lines = append(lines, fmt.Sprintf("%s %s", commit.Hash, commit.Message))
+		}
+		return strings.Join(lines, "\n"), nil
+	}
 	command := fmt.Sprintf("git --no-pager -C %s log --oneline -n %d", shellQuote(path), count)
 	return a.runLocalAutomationCommand(ctx, args, command, "Inspect recent repository history.", path, 60)
 }
 
 func (a *CopilotAgent) toolGitBranch(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromArgs(args)
+	if client, err := repo.NewClientForPath(path); err == nil {
+		branches, err := client.Branches(path)
+		if err != nil {
+			return "", err
+		}
+		if len(branches) == 0 {
+			return "No branches found.", nil
+		}
+		var lines []string
+		for _, branch := range branches {
+			lines = append(lines, branch.Name)
+		}
+		return strings.Join(lines, "\n"), nil
+	}
 	command := fmt.Sprintf("git --no-pager -C %s branch --all", shellQuote(path))
 	return a.runLocalAutomationCommand(ctx, args, command, "Inspect repository branches.", path, 60)
 }
@@ -1156,6 +1209,12 @@ func (a *CopilotAgent) toolGitCheckout(ctx context.Context, args map[string]any)
 	ref, ok := refRaw.(string)
 	if !ok || strings.TrimSpace(ref) == "" {
 		return "", fmt.Errorf("'ref' must be a non-empty string")
+	}
+	if client, err := repo.NewClientForPath(path); err == nil {
+		if err := client.Checkout(path, ref); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Checked out %s", ref), nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s checkout %s", shellQuote(path), shellQuote(ref))
 	return a.runLocalAutomationCommand(ctx, args, command, "Switch the repository to another branch or revision.", path, 60)
@@ -1172,11 +1231,34 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 		return "", fmt.Errorf("'message' must be a non-empty string")
 	}
 
-	// Check if specific files are provided
+	if client, err := newRepoClientForPath(path); err == nil {
+		files := []string{}
+		if filesRaw, ok := args["files"]; ok {
+			if filesArray, ok := filesRaw.([]any); ok {
+				for _, f := range filesArray {
+					if fileStr, ok := f.(string); ok && strings.TrimSpace(fileStr) != "" {
+						files = append(files, strings.TrimSpace(fileStr))
+					}
+				}
+			} else {
+				return "", fmt.Errorf("'files' must be an array of strings")
+			}
+		}
+		all := true
+		if allRaw, ok := args["all"]; ok {
+			if value, ok := allRaw.(bool); ok {
+				all = value
+			}
+		}
+		if err := client.Commit(path, message, repo.CommitOptions{Files: files, All: all}); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Committed changes to %s", path), nil
+	}
+
 	var command string
 	if filesRaw, ok := args["files"]; ok {
 		if filesArray, ok := filesRaw.([]any); ok && len(filesArray) > 0 {
-			// Stage specific files
 			files := make([]string, 0, len(filesArray))
 			for _, f := range filesArray {
 				if fileStr, ok := f.(string); ok && strings.TrimSpace(fileStr) != "" {
@@ -1194,7 +1276,6 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 			return "", fmt.Errorf("'files' must be an array of strings")
 		}
 	} else {
-		// Fall back to 'all' parameter behavior
 		command = fmt.Sprintf("git --no-pager -C %s add -A && git --no-pager -C %s commit -m %s", shellQuote(path), shellQuote(path), shellQuote(message))
 		if allRaw, ok := args["all"]; ok {
 			if all, ok := allRaw.(bool); ok && !all {
@@ -1208,6 +1289,12 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 
 func (a *CopilotAgent) toolGitPull(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromArgs(args)
+	if client, err := newRepoClientForPath(path); err == nil {
+		if err := client.Pull(path, repo.PullOptions{Rebase: boolFlagFromArgs(args, "rebase")}); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Pulled latest changes for %s", path), nil
+	}
 	command := fmt.Sprintf("git --no-pager -C %s pull", shellQuote(path))
 	if rebase := boolFlagFromArgs(args, "rebase"); rebase {
 		command = fmt.Sprintf("git --no-pager -C %s pull --rebase", shellQuote(path))
@@ -1228,6 +1315,12 @@ func (a *CopilotAgent) toolGitPush(ctx context.Context, args map[string]any) (st
 		if value, ok := branchRaw.(string); ok && strings.TrimSpace(value) != "" {
 			branch = value
 		}
+	}
+	if client, err := repo.NewClientForPath(path); err == nil {
+		if err := client.Push(path, repo.PushOptions{Remote: remote, Branch: branch}); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Pushed changes for %s", path), nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s push %s", shellQuote(path), remote)
 	if branch != "" {

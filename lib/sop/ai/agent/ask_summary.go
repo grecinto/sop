@@ -8,9 +8,8 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop"
-
-	"github.com/go-git/go-git/v5"
 	"github.com/sharedcode/sop/ai"
+	"github.com/sharedcode/sop/ai/agent/repo"
 )
 
 func appendAskCompletionSummary(ctx context.Context, finalText string, toolCalls []ai.ToolCall, outcomeFacts []string) string {
@@ -77,37 +76,23 @@ func findChangedFilesForAskSummary(ctx context.Context) ([]string, error) {
 		return nil, nil
 	}
 
-	candidate := workingDir
-	for {
-		repo, err := git.PlainOpen(candidate)
-		if err == nil {
-			wt, err := repo.Worktree()
-			if err != nil {
-				return nil, err
-			}
-			status, err := wt.Status()
-			if err != nil {
-				return nil, err
-			}
-
-			files := make([]string, 0, len(status))
-			for file := range status {
-				files = append(files, file)
-			}
-			if len(files) == 0 {
-				return nil, nil
-			}
-			return files, nil
-		}
-
-		parent := filepath.Dir(candidate)
-		if parent == candidate {
-			break
-		}
-		candidate = parent
+	client, err := repo.NewClientForPath(workingDir)
+	if err != nil || client == nil {
+		return nil, nil
+	}
+	changes, err := client.Status(workingDir, repo.StatusOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if len(changes) == 0 {
+		return nil, nil
 	}
 
-	return nil, nil
+	files := make([]string, 0, len(changes))
+	for _, change := range changes {
+		files = append(files, change.Path)
+	}
+	return files, nil
 }
 
 func resolveAskSummaryWorkingDir(ctx context.Context) string {
