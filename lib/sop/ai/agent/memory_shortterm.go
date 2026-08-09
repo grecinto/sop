@@ -202,6 +202,12 @@ type WorkStreamContext struct {
 	// Multi-Step Workflow Support
 	MultiStepPlan    *MultiStepPlan `json:"multi_step_plan,omitempty"`    // Multi-step plan (if applicable)
 	CurrentStepIndex int            `json:"current_step_index,omitempty"` // Which step we're on (mirrors MultiStepPlan.CurrentStepIndex)
+
+	// Ask completion metadata captured for the active workstream.
+	// This mirrors the user-visible summary and file list so it can survive
+	// pause/resume and be restored even if the final response text is discarded.
+	CompletionSummary string   `json:"completion_summary,omitempty"`
+	UpdatedFiles      []string `json:"updated_files,omitempty"`
 }
 
 // ConversationThread represents a single conversational thread.

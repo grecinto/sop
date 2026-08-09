@@ -1218,7 +1218,6 @@
                     }
 
                     openUIModal('database-section', 'block');
-                    updateSpaceQualitySidebarVisibility();
                     
                     // Disable UI elements when no databases exist
                     const btnAddDb = document.getElementById('btn-add-database');
@@ -1255,7 +1254,6 @@
                 }
                 
                 openUIModal('database-section', 'block');
-                updateSpaceQualitySidebarVisibility();
 
                 const userDBs = databases.filter(db => !db.is_system);
                 const systemDBs = databases.filter(db => db.is_system);
@@ -1637,7 +1635,6 @@
 
         currentDatabase = name;
         localStorage.setItem('sop_current_database', name);
-        updateSpaceQualitySidebarVisibility();
 
         const btnAddStore = document.getElementById('btn-add-store');
 
@@ -4464,7 +4461,6 @@
                             <div style="font-size: 1.15em; font-weight: 600; margin-bottom: 10px; color: var(--text-color);">
                                 ${t.summaries && t.summaries.length > 0 ? t.summaries[0].replace(/</g, '&lt;') : (t.id ? t.id.substring(0,8) : "Unnamed Item")}
                             </div>
-                            ${workflowStudioActionHtml}
                             <div style="font-size: 0.9em; flex: 1; color: var(--text-muted); line-height: 1.5; margin-bottom: 15px; word-break: break-word; display: flex; flex-direction: column;">
                                 ${contentBodyHtml}
                             </div>

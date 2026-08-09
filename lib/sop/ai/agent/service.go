@@ -2202,6 +2202,10 @@ func (s *Service) ask(ctx context.Context, req AskRequest) (AskResponse, error) 
 	}
 
 	// 11. Persist response outcomes into script/session memory
+	engineResp.FinalText = appendAskCompletionSummary(ctx, engineResp.FinalText, engineResp.ToolCalls, engineResp.OutcomeFacts)
+	if thread := s.session.Memory.GetCurrentThread(); thread != nil {
+		persistAskCompletionState(ctx, thread, engineResp.FinalText, engineResp.ToolCalls, engineResp.OutcomeFacts)
+	}
 	s.updateSessionMemoryWithRequest(ctx, query, engineResp.FinalText, topicResult.assessment, engineResp, genCfg.generator, req.Session)
 
 	return AskResponse{

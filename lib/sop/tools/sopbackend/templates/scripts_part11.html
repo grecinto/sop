@@ -839,7 +839,7 @@
         const providerValue = document.getElementById('chat-settings-provider-overlay')?.value || '';
         const parts = splitProviderValue(providerValue);
         const source = getSelectedProviderOptionSource('chat-settings-provider-overlay');
-        const apiKey = document.getElementById('chat-settings-overlay-api-key')?.value.trim() || '';
+        const apiKey = '';
         const url = document.getElementById('chat-settings-url')?.value.trim() || '';
         const persistURL = providerValue && selectedProviderUsesURL('chat-settings-provider-overlay') ? url : '';
         const persistAPIKey = parts.provider && !isLocalProviderValue(providerValue) ? apiKey : '';
@@ -852,7 +852,7 @@
         const persistEmbedderAPIKey = embedderParts.provider && !isLocalProviderValue(embedderValue) ? embedderAPIKey : '';
         const fallbackValue = document.getElementById('chat-settings-fallback-overlay')?.value || '';
         const fallbackParts = splitProviderValue(fallbackValue);
-        const fallbackAPIKey = document.getElementById('chat-settings-fallback-api-key')?.value.trim() || '';
+        const fallbackAPIKey = '';
         const fallbackURL = document.getElementById('chat-settings-fallback-url')?.value.trim() || '';
         const persistFallbackURL = fallbackValue && selectedProviderUsesURL('chat-settings-fallback-overlay') ? fallbackURL : '';
         const persistFallbackAPIKey = fallbackParts.provider && !isLocalProviderValue(fallbackValue) ? fallbackAPIKey : '';
@@ -904,7 +904,7 @@
         // Validate LLM provider and API key
         const providerValue = document.getElementById('chat-settings-provider-overlay')?.value || '';
         const parts = splitProviderValue(providerValue);
-        const apiKey = document.getElementById('chat-settings-overlay-api-key')?.value.trim() || getProviderPoolInputValue('chat-settings', parts.provider);
+        const apiKey = getProviderPoolInputValue('chat-settings', parts.provider);
         
         if (providerValue && !isLocalProviderValue(providerValue) && !apiKey) {
             showAlert('API Key is required for the selected LLM provider');
@@ -1048,7 +1048,7 @@
         const payload = {
             provider: parts.provider,
             model: parts.model,
-            api_key: document.getElementById('chat-settings-overlay-api-key')?.value.trim() || getProviderPoolInputValue('chat-settings', parts.provider),
+            api_key: getProviderPoolInputValue('chat-settings', parts.provider),
             url: document.getElementById('chat-settings-url')?.value.trim() || ''
         };
         runLLMConnectionTest(payload, 'chat-settings-test-status');
@@ -1080,7 +1080,7 @@
         const payload = {
             provider: parts.provider,
             model: parts.model,
-            api_key: document.getElementById('chat-settings-fallback-api-key')?.value.trim() || getProviderPoolInputValue('chat-settings', parts.provider),
+            api_key: getProviderPoolInputValue('chat-settings', parts.provider),
             url: document.getElementById('chat-settings-fallback-url')?.value.trim() || ''
         };
         runLLMConnectionTest(payload, 'chat-settings-fallback-test-status');
@@ -1098,7 +1098,7 @@
         const primaryPayload = {
             provider: parts.provider,
             model: parts.model,
-            api_key: document.getElementById('setup-brain-api-key')?.value.trim() || getProviderPoolInputValue('setup', parts.provider),
+            api_key: getProviderPoolInputValue('setup', parts.provider),
             url: document.getElementById('setup-brain-url')?.value.trim() || ''
         };
         
@@ -1114,7 +1114,7 @@
             const fallbackPayload = {
                 provider: fallbackParts.provider,
                 model: fallbackParts.model,
-                api_key: document.getElementById('setup-brain-fallback-api-key')?.value.trim() || getProviderPoolInputValue('setup', fallbackParts.provider),
+                api_key: getProviderPoolInputValue('setup', fallbackParts.provider),
                 url: document.getElementById('setup-brain-fallback-url')?.value.trim() || ''
             };
             

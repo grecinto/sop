@@ -232,6 +232,12 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	if err != nil {
 		return "", err
 	}
+	finalText = appendAskCompletionSummary(ctx, finalText, toolCalls, outcomeFacts)
+	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		if thread := a.service.session.Memory.GetCurrentThread(); thread != nil {
+			persistAskCompletionState(ctx, thread, finalText, toolCalls, outcomeFacts)
+		}
+	}
 
 	// 9. Capability lifecycle: OnAfter (same as V1)
 	if selectedCap != nil {

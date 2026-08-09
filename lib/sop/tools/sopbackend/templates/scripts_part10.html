@@ -646,6 +646,17 @@
         });
     }
 
+    function getProviderPoolInputIdForSelect(selectElement) {
+        if (!selectElement) return '';
+        const prefix = (selectElement.id || '').startsWith('chat-settings-') ? 'chat-settings' : 'setup';
+        const parts = splitProviderValue(selectElement.value || '');
+        const provider = normalizeProviderSecretKey(parts.provider);
+        if (!provider || (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini')) {
+            return '';
+        }
+        return `${prefix}-${provider}-api-key`;
+    }
+
     function applyEnvSelectionDefaults(selectId, apiKeyInputId, urlInputId) {
         const select = document.getElementById(selectId);
         if (!select) return;
@@ -657,11 +668,14 @@
         const envOption = findEnvProviderOption(parts.provider, parts.model);
         if (!envOption) return;
 
-        const apiKeyInput = document.getElementById(apiKeyInputId);
+        const apiKeyInput = apiKeyInputId ? document.getElementById(apiKeyInputId) : null;
         const urlInput = document.getElementById(urlInputId);
+        const poolInput = document.getElementById(getProviderPoolInputIdForSelect(select));
 
         if (apiKeyInput && shouldOverwriteWithEnvValue(apiKeyInput.value.trim(), 'api_key')) {
             apiKeyInput.value = envOption.api_key || '';
+        } else if (poolInput && shouldOverwriteWithEnvValue(poolInput.value.trim(), 'api_key')) {
+            poolInput.value = envOption.api_key || '';
         }
         if (urlInput && shouldOverwriteWithEnvValue(urlInput.value.trim(), 'url')) {
             urlInput.value = envOption.url || '';
@@ -669,27 +683,25 @@
     }
 
     function handleSetupBrainProviderChange() {
-        applyEnvSelectionDefaults('setup-brain-provider', 'setup-brain-api-key', 'setup-brain-url');
+        applyEnvSelectionDefaults('setup-brain-provider', null, 'setup-brain-url');
         toggleProviderAuth();
     }
 
     function handleSetupBrainFallbackProviderChange() {
         const provider = document.getElementById('setup-brain-fallback-provider');
-        const apiContainer = document.getElementById('setup-brain-fallback-api-container');
         const urlContainer = document.getElementById('setup-brain-fallback-url-container');
         
         if (!provider || provider.value === '') {
-            if (apiContainer) apiContainer.style.display = 'none';
             if (urlContainer) urlContainer.style.display = 'none';
             return;
         }
         
-        applyEnvSelectionDefaults('setup-brain-fallback-provider', 'setup-brain-fallback-api-key', 'setup-brain-fallback-url');
+        applyEnvSelectionDefaults('setup-brain-fallback-provider', null, 'setup-brain-fallback-url');
         toggleProviderAuth();
     }
 
     function handleChatSettingsProviderChange() {
-        applyEnvSelectionDefaults('chat-settings-provider-overlay', 'chat-settings-overlay-api-key', 'chat-settings-url');
+        applyEnvSelectionDefaults('chat-settings-provider-overlay', null, 'chat-settings-url');
         toggleChatSettingsFields();
         if (typeof persistChatSettingsDraft === 'function') {
             const nextConfig = persistChatSettingsDraft();
@@ -717,7 +729,7 @@
     }
 
     function handleChatSettingsEmbedderProviderChange() {
-        applyEnvSelectionDefaults('chat-settings-embedder-overlay', 'chat-settings-embedder-api-key', 'chat-settings-embedder-url');
+        applyEnvSelectionDefaults('chat-settings-embedder-overlay', null, 'chat-settings-embedder-url');
         toggleChatSettingsFields();
         if (typeof persistChatSettingsDraft === 'function') {
             const nextConfig = persistChatSettingsDraft();
@@ -726,7 +738,7 @@
     }
 
     function handleChatSettingsFallbackChange() {
-        applyEnvSelectionDefaults('chat-settings-fallback-overlay', 'chat-settings-fallback-api-key', 'chat-settings-fallback-url');
+        applyEnvSelectionDefaults('chat-settings-fallback-overlay', null, 'chat-settings-fallback-url');
         toggleChatSettingsFields();
         if (typeof persistChatSettingsDraft === 'function') {
             persistChatSettingsDraft();
@@ -786,15 +798,11 @@
         ensureSetupProviderOption('chat-settings-embedder-overlay', cfg.embedder_provider, cfg.embedder_model, embedderSource);
 
         const overlayURL = document.getElementById('chat-settings-url');
-        const overlayAPIKey = document.getElementById('chat-settings-overlay-api-key');
         const overlayEmbedder = document.getElementById('chat-settings-embedder-overlay');
         const overlayEmbedderURL = document.getElementById('chat-settings-embedder-url');
         const overlayEmbedderAPIKey = document.getElementById('chat-settings-embedder-api-key');
         if (overlayURL) {
             overlayURL.value = cfg.brain_url || '';
-        }
-        if (overlayAPIKey) {
-            overlayAPIKey.value = cfg.brain_api_key || '';
         }
         if (document.getElementById('chat-settings-provider-overlay')) {
             selectProviderOption(document.getElementById('chat-settings-provider-overlay'), buildProviderValue(cfg.brain_provider, cfg.brain_model), source);
@@ -815,7 +823,6 @@
         }
         const overlayFallback = document.getElementById('chat-settings-fallback-overlay');
         const overlayFallbackURL = document.getElementById('chat-settings-fallback-url');
-        const overlayFallbackAPIKey = document.getElementById('chat-settings-fallback-api-key');
         const overlayOpenAIKey = document.getElementById('chat-settings-openai-api-key');
         const overlayAnthropicKey = document.getElementById('chat-settings-anthropic-api-key');
         const overlayGeminiKey = document.getElementById('chat-settings-gemini-api-key');
@@ -824,9 +831,6 @@
         }
         if (overlayFallbackURL) {
             overlayFallbackURL.value = cfg.fallback_url || '';
-        }
-        if (overlayFallbackAPIKey) {
-            overlayFallbackAPIKey.value = cfg.fallback_api_key || '';
         }
         if (overlayOpenAIKey) {
             overlayOpenAIKey.value = cfg.openai_api_key || '';
@@ -853,7 +857,6 @@
         ensureSetupProviderOption('setup-brain-provider', cfg.brain_provider, cfg.brain_model, cfg.brain_source || 'catalog');
         ensureSetupProviderOption('setup-embedder-provider', cfg.embedder_provider, cfg.embedder_model, cfg.embedder_source || 'catalog');
 
-        const brainAPIKeyInput = document.getElementById('setup-brain-api-key');
         const brainURLInput = document.getElementById('setup-brain-url');
         const embedderAPIKeyInput = document.getElementById('setup-embedder-api-key');
         const embedderURLInput = document.getElementById('setup-embedder-url');
@@ -861,9 +864,6 @@
         const setupAnthropicKeyInput = document.getElementById('setup-anthropic-api-key');
         const setupGeminiKeyInput = document.getElementById('setup-gemini-api-key');
 
-        if (brainAPIKeyInput) {
-            brainAPIKeyInput.value = cfg.brain_api_key || '';
-        }
         if (brainURLInput) {
             brainURLInput.value = cfg.brain_url || '';
         }
@@ -1419,7 +1419,7 @@
 
             const bProviderValue = document.getElementById('setup-brain-provider') ? document.getElementById('setup-brain-provider').value : "";
             const bParts = splitProviderValue(bProviderValue);
-            let bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
+            let bApiKey = '';
             const bProviderPoolId = providerSecretField(bParts.provider);
             if (!bApiKey && bProviderPoolId) {
                 const poolInputId = `setup-${bProviderPoolId.replace(/_/g, '-')}`;
@@ -1526,7 +1526,7 @@
 
             // Step 3: Validate AI Configuration before finishing
             const bProviderValue = document.getElementById('setup-brain-provider') ? document.getElementById('setup-brain-provider').value : "";
-            let bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
+            let bApiKey = '';
             const bParts = splitProviderValue(bProviderValue);
             const bProviderPoolId = providerSecretField(bParts.provider);
             if (!bApiKey && bProviderPoolId) {
@@ -1895,7 +1895,7 @@
         const bProvider = bParts.provider;
         const bModel = bParts.model || (document.getElementById('setup-brain-model') ? document.getElementById('setup-brain-model').value.trim() : "");
         const bUrl = document.getElementById('setup-brain-url') ? document.getElementById('setup-brain-url').value.trim() : "";
-        let bApiKey = document.getElementById('setup-brain-api-key') ? document.getElementById('setup-brain-api-key').value.trim() : "";
+        let bApiKey = '';
         const selectedBrainProviderKey = providerSecretField(bProvider);
         if (!bApiKey && selectedBrainProviderKey) {
             const poolInputId = `setup-${selectedBrainProviderKey.replace(/_/g, '-')}`;

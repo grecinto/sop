@@ -1096,10 +1096,6 @@
                             {{template "llmOptions" .}}
                         </select>
                     </div>
-                    <div style="flex: 1;" id="setup-brain-api-container">
-                        <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">API Key</label>
-                        <input type="password" id="setup-brain-api-key" {{if .Env.BRAIN_API_KEY}}placeholder="(Loaded from Environment)" title="A provider-specific API key was automatically detected in your System Environment Variables."{{else}}placeholder="Enter API Key" title="Primary"{{end}} style="width: 100%; padding: 4px;">
-                    </div>
                     <div style="flex: 1; display: none;" id="setup-brain-url-container">
                         <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">Base URL</label>
                         <input type="text" id="setup-brain-url" placeholder="http://localhost:11434" title="Primary" style="width: 100%; padding: 4px;">
@@ -1112,10 +1108,6 @@
                             <option value="">None</option>
                             {{template "llmOptions" .}}
                         </select>
-                    </div>
-                    <div style="flex: 1; display: none;" id="setup-brain-fallback-api-container">
-                        <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">API Key <span style="font-weight: normal;">(Optional)</span></label>
-                        <input type="password" id="setup-brain-fallback-api-key" placeholder="Enter API Key" title="Fallback" style="width: 100%; padding: 4px;">
                     </div>
                     <div style="flex: 1; display: none;" id="setup-brain-fallback-url-container">
                         <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">Base URL <span style="font-weight: normal;">(Optional)</span></label>
