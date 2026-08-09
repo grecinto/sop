@@ -99,6 +99,9 @@ func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai
 
 		// Execute ask (LLM orchestrates WorkStream management via tools)
 		itemCtx := context.WithValue(ctx, ctxKeyAskWorkItemActor, item.Actor)
+		if preferredModel, ok := item.Context["preferred_model"].(string); ok && strings.TrimSpace(preferredModel) != "" {
+			itemCtx = context.WithValue(itemCtx, ai.CtxKeyProvider, preferredModel)
+		}
 		response, err := a.askCore(itemCtx, item.Query, cfg)
 		if err != nil {
 			return response, err

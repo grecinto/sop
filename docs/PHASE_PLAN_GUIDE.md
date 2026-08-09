@@ -1,8 +1,8 @@
 # Phase Plan System - Complete Guide
 
-**Last Updated**: 2026-07-30  
-**Status**: Phases 1-5 Complete (~70%), Phase 6 Pending Integration  
-**Architecture**: Planning-First LLM Orchestration with Participant Pattern
+**Last Updated**: 2026-08-09  
+**Status**: Phase planning is evolving toward layered, per-phase mini-planning  
+**Architecture**: Planning-First LLM Orchestration with layered planner artifacts and participant pattern
 
 ---
 
@@ -33,7 +33,9 @@ The Phase Plan system is a cognitive pattern for multi-step problem-solving wher
 - **Review**: Validation, testing, quality checks
 - **Delivery**: Summarization, documentation, handoff
 
-**PhasePlan**: A planned sequence of phases with checkpoints for reassessment
+**PhasePlan**: A top-level planned sequence of phases with checkpoints for reassessment
+
+**Phase Mini-Plan**: A per-phase planning artifact that turns a phase objective into implementation guidance. It can include architecture/design interpretation, functional feature breakdowns, pseudo-logic trees, file-level implementation tasks, and validation guidance.
 
 **Participant Pattern**: Architecture where capabilities are passive participants, not controllers
 
@@ -179,6 +181,13 @@ Every task, regardless of domain, follows this thinking sequence:
 
 ### Planning-First Approach
 
+The system now uses a layered planning model:
+
+1. **Global phase planner** decides the high-level phase sequence.
+2. **Per-phase mini-planner** converts the phase goal into a task breakdown suitable for implementation.
+3. **Execution handoff** uses that detailed plan to generate or guide code changes per file.
+4. **Task routing classification** tags each phase and subtask with routing metadata so cheaper or faster models can be selected when appropriate.
+
 **Every query starts at Planning Phase** (not heuristic detection):
 
 ```
@@ -204,6 +213,8 @@ Planning Phase (LLM Orchestration):
 ```
 
 ### Phase Jump Opportunities
+
+The same layered model also supports phase-specific replanning. If a phase reveals a better approach, the current phase mini-plan can be refined before implementation continues.
 
 **Two main opportunities to jump phases:**
 
@@ -245,6 +256,49 @@ investigation_capture({
 ```
 Planning → Execution → Review → Delivery
 ```
+
+Within each phase, the planner should produce a more granular breakdown such as:
+
+```
+phase objective
+  → architecture/design interpretation
+  → functional feature decomposition
+  → pseudo-logic tree
+  → implementation plan per file
+  → validation and acceptance criteria
+  → task classification metadata
+```
+
+Each task or phase should be tagged with structured routing fields such as:
+
+- complexity: easy / medium / hard
+- task_type: mechanical / reasoning / implementation / validation / review
+- risk: low / medium / high
+- expected_verification: command or check to run
+- preferred_model: tool-only / cheap / balanced / strong
+
+Routing policy:
+- Deterministic mechanical tasks such as reading a file, running a known test command, grepping output, or applying a straightforward patch should prefer direct tool execution and generally bypass the LLM.
+- Reasoning-heavy tasks such as architecture synthesis, debugging root cause, or making tradeoff-based implementation decisions should use a stronger model.
+- If a task is ambiguous, partially tool-driven, or requires interpretation of results, a lightweight model may be used before handing off to tools.
+
+### Model capability profiles instead of per-model difficulty labels
+
+The preferred model should be selected from a model capability profile, not by attaching a fixed difficulty label to each model entry. A model catalog entry should describe what the model is good at and how it behaves:
+
+- capability_tier: cheap / standard / strong
+- reasoning_strength: 1-5
+- max_tool_turns: integer budget
+- max_output_tokens: output cap
+- compact_prompt: boolean
+- supported_task_types: optional list such as mechanical, reasoning, implementation
+
+Then the router maps task metadata to the best available model profile. In practice:
+- easy + mechanical → cheap or tool-only
+- medium + implementation → standard
+- hard + architecture / debugging / tradeoff-heavy reasoning → strong
+
+This keeps task difficulty and model capability separate, which makes the policy easier to evolve as the catalog changes.
 
 ### Priority Rules for Phase Transitions
 

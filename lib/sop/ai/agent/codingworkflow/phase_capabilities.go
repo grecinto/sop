@@ -989,6 +989,13 @@ func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capab
 		},
 	}
 
+	if preferredModel := extractPreferredModelFromArtifact(artifact); preferredModel != "" {
+		if workItem.Context == nil {
+			workItem.Context = map[string]any{}
+		}
+		workItem.Context["preferred_model"] = preferredModel
+	}
+
 	if err := queue.Enqueue(workItem); err != nil {
 		log.Error("Phase succession: Failed to enqueue next phase",
 			"phase", c.phaseID,
@@ -1004,6 +1011,35 @@ func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capab
 		"artifact_status", artifact.Status)
 
 	return nil
+}
+
+func extractPreferredModelFromArtifact(artifact phaseArtifact) string {
+	if artifact.StructuredData == nil {
+		return ""
+	}
+	if raw, ok := artifact.StructuredData["phase_mini_plan"]; ok && raw != nil {
+		if miniPlan, ok := raw.(map[string]any); ok {
+			if routing, ok := miniPlan["routing"].(map[string]any); ok {
+				if preferredModel, ok := routing["preferred_model"].(string); ok {
+					return strings.TrimSpace(preferredModel)
+				}
+			}
+		}
+	}
+	if raw, ok := artifact.StructuredData["detailed_execution_plan"]; ok && raw != nil {
+		if steps, ok := raw.([]map[string]any); ok {
+			for _, step := range steps {
+				routing, ok := step["routing"].(map[string]any)
+				if !ok || len(routing) == 0 {
+					continue
+				}
+				if preferredModel, ok := routing["preferred_model"].(string); ok {
+					return strings.TrimSpace(preferredModel)
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func clarificationRequestFromCapabilityResult(result capabilities.CapabilityResult) *ai.ClarificationRequest {

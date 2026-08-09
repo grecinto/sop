@@ -21,42 +21,140 @@
             "label": "Google",
             "options": [
                 {
-                    "value": "gemini:gemini-3.5-flash",
-                    "label": "Gemini 3.5 Flash",
-                    "default_thinking_level": "medium",
-                    "thinking_level_range": ["low", "medium", "high"]
-                },
-                {
-                    "value": "gemini:gemini-3.1-pro-preview",
-                    "label": "Gemini 3.1 Pro Preview",
-                    "thinking_level_range": ["low", "medium", "high"]
-                },
-                {
                     "value": "gemini:gemini-2.5-pro",
                     "label": "Gemini 2.5 Pro",
                     "default_thinking_level": "high",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 5,
+                    "max_output_tokens": 8192,
+                    "max_tool_turns": 8,
+                    "compact_prompt": false,
+                    "supported_task_types": ["reasoning", "architecture", "debugging", "implementation", "multimodal"],
+                    "media_capability": 3,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 1.25,
+                    "output_cost_per_1m_tokens": 10.0
                 },
                 {
-                    "value": "gemini:gemini-3.1-flash-lite",
-                    "label": "Gemini 3.1 Flash Lite",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "value": "gemini:gemini-2.5-flash",
+                    "label": "Gemini 2.5 Flash",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 4,
+                    "max_output_tokens": 4096,
+                    "max_tool_turns": 6,
+                    "compact_prompt": true,
+                    "supported_task_types": ["implementation", "validation", "reasoning", "multimodal"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 0.30,
+                    "output_cost_per_1m_tokens": 2.50
                 },
                 {
-                    "value": "gemini:gemma-4-it",
-                    "label": "Gemma 4 Instruct"
+                    "value": "gemini:gemini-2.5-flash-lite",
+                    "label": "Gemini 2.5 Flash Lite",
+                    "default_thinking_level": "low",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "cheap",
+                    "reasoning_strength": 3,
+                    "max_output_tokens": 3072,
+                    "max_tool_turns": 4,
+                    "compact_prompt": true,
+                    "supported_task_types": ["implementation", "validation", "summarization", "mechanical"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 0.10,
+                    "output_cost_per_1m_tokens": 0.40
                 },
                 {
-                    "value": "gemini:gemma-4",
-                    "label": "Gemma 4"
+                    "value": "gemini:gemini-2.0-flash",
+                    "label": "Gemini 2.0 Flash",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 3,
+                    "max_output_tokens": 3072,
+                    "max_tool_turns": 5,
+                    "compact_prompt": true,
+                    "supported_task_types": ["implementation", "validation", "multimodal"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 0.10,
+                    "output_cost_per_1m_tokens": 0.40
+                },
+                {
+                    "value": "gemini:gemini-2.0-flash-lite",
+                    "label": "Gemini 2.0 Flash Lite",
+                    "default_thinking_level": "low",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "cheap",
+                    "reasoning_strength": 2,
+                    "max_output_tokens": 2048,
+                    "max_tool_turns": 3,
+                    "compact_prompt": true,
+                    "supported_task_types": ["mechanical", "validation", "summarization"],
+                    "media_capability": 1,
+                    "supported_media_types": ["image"],
+                    "input_cost_per_1m_tokens": 0.075,
+                    "output_cost_per_1m_tokens": 0.30
                 },
                 {
                     "value": "gemini:gemini-1.5-pro",
-                    "label": "Gemini 1.5 Pro"
+                    "label": "Gemini 1.5 Pro",
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 4,
+                    "max_output_tokens": 4096,
+                    "max_tool_turns": 6,
+                    "compact_prompt": false,
+                    "supported_task_types": ["reasoning", "architecture", "implementation", "multimodal"],
+                    "media_capability": 3,
+                    "supported_media_types": ["image", "audio", "video"]
                 },
                 {
                     "value": "gemini:gemini-1.5-flash",
-                    "label": "Gemini 1.5 Flash"
+                    "label": "Gemini 1.5 Flash",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 3,
+                    "max_output_tokens": 2048,
+                    "max_tool_turns": 5,
+                    "compact_prompt": true,
+                    "supported_task_types": ["implementation", "validation", "summarization"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio"]
+                },
+                {
+                    "value": "gemini:gemini-1.5-flash-8b",
+                    "label": "Gemini 1.5 Flash 8B",
+                    "default_thinking_level": "low",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "cheap",
+                    "reasoning_strength": 2,
+                    "max_output_tokens": 1536,
+                    "max_tool_turns": 3,
+                    "compact_prompt": true,
+                    "supported_task_types": ["mechanical", "validation", "summarization"],
+                    "media_capability": 1,
+                    "supported_media_types": ["image"]
+                },
+                {
+                    "value": "gemini:gemma-3-27b-it",
+                    "label": "Gemma 3 27B Instruct",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "cheap",
+                    "reasoning_strength": 2,
+                    "max_output_tokens": 2048,
+                    "max_tool_turns": 3,
+                    "compact_prompt": true,
+                    "supported_task_types": ["summarization", "validation", "mechanical"],
+                    "media_capability": 1,
+                    "supported_media_types": ["image"]
                 }
             ]
         },
@@ -66,53 +164,120 @@
                 {
                     "value": "anthropic:claude-opus-4-8",
                     "label": "Claude Opus 4.8",
-                    "thinking_level_range": ["medium", "high"]
-                },
-                {
-                    "value": "anthropic:claude-opus-4-7",
-                    "label": "Claude Opus 4.7",
-                    "thinking_level_range": ["medium", "high"]
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 5,
+                    "max_output_tokens": 8192,
+                    "max_tool_turns": 8,
+                    "compact_prompt": false,
+                    "supported_task_types": ["reasoning", "architecture", "debugging", "implementation", "multimodal"],
+                    "media_capability": 3,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 5.0,
+                    "output_cost_per_1m_tokens": 25.0
                 },
                 {
                     "value": "anthropic:claude-opus-4-6",
                     "label": "Claude Opus 4.6",
-                    "thinking_level_range": ["medium", "high"]
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 5,
+                    "max_output_tokens": 8192,
+                    "max_tool_turns": 8,
+                    "compact_prompt": false,
+                    "supported_task_types": ["reasoning", "architecture", "debugging", "implementation", "multimodal"],
+                    "media_capability": 3,
+                    "supported_media_types": ["image", "audio", "video"]
                 },
                 {
                     "value": "anthropic:claude-sonnet-4-6",
                     "label": "Claude Sonnet 4.6",
-                    "thinking_level_range": ["medium", "high"]
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 4,
+                    "max_output_tokens": 4096,
+                    "max_tool_turns": 7,
+                    "compact_prompt": false,
+                    "supported_task_types": ["implementation", "reasoning", "architecture", "debugging", "multimodal"],
+                    "media_capability": 3,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 3.0,
+                    "output_cost_per_1m_tokens": 15.0
                 },
                 {
                     "value": "anthropic:claude-sonnet-4-5",
                     "label": "Claude Sonnet 4.5",
                     "default_thinking_level": "high",
-                    "thinking_level_range": ["medium", "high"]
+                    "thinking_level_range": ["medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 4,
+                    "max_output_tokens": 4096,
+                    "max_tool_turns": 6,
+                    "compact_prompt": false,
+                    "supported_task_types": ["implementation", "reasoning", "architecture", "debugging", "multimodal"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio", "video"]
                 },
                 {
-                    "value": "anthropic:claude-haiku-4-5",
-                    "label": "Claude Haiku 4.5",
-                    "thinking_level_range": ["medium", "high"]
-                },
-                {
-                    "value": "anthropic:claude-opus-4-5",
-                    "label": "Claude Opus 4.5",
-                    "thinking_level_range": ["medium", "high"]
-                },
-                {
-                    "value": "anthropic:claude-opus-4-1",
-                    "label": "Claude Opus 4.1",
-                    "thinking_level_range": ["medium", "high"]
+                    "value": "anthropic:claude-3-7-sonnet",
+                    "label": "Claude 3.7 Sonnet",
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 4,
+                    "max_output_tokens": 4096,
+                    "max_tool_turns": 6,
+                    "compact_prompt": false,
+                    "supported_task_types": ["implementation", "reasoning", "debugging", "multimodal"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio"]
                 },
                 {
                     "value": "anthropic:claude-3-5-sonnet-20241022",
                     "label": "Claude 3.5 Sonnet (Oct 2024)",
-                    "thinking_level_range": ["medium", "high"]
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 3,
+                    "max_output_tokens": 3072,
+                    "max_tool_turns": 5,
+                    "compact_prompt": false,
+                    "supported_task_types": ["implementation", "validation", "reasoning"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio"]
                 },
                 {
                     "value": "anthropic:claude-3-5-haiku",
                     "label": "Claude 3.5 Haiku",
-                    "thinking_level_range": ["medium", "high"]
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["medium", "high"],
+                    "capability_tier": "cheap",
+                    "reasoning_strength": 2,
+                    "max_output_tokens": 2048,
+                    "max_tool_turns": 3,
+                    "compact_prompt": true,
+                    "supported_task_types": ["mechanical", "validation", "summarization"],
+                    "media_capability": 1,
+                    "supported_media_types": ["image"],
+                    "input_cost_per_1m_tokens": 0.8,
+                    "output_cost_per_1m_tokens": 4.0
+                },
+                {
+                    "value": "anthropic:claude-3-haiku",
+                    "label": "Claude 3 Haiku",
+                    "default_thinking_level": "low",
+                    "thinking_level_range": ["medium", "high"],
+                    "capability_tier": "cheap",
+                    "reasoning_strength": 2,
+                    "max_output_tokens": 1536,
+                    "max_tool_turns": 2,
+                    "compact_prompt": true,
+                    "supported_task_types": ["mechanical", "validation", "summarization"],
+                    "media_capability": 1,
+                    "supported_media_types": ["image"]
                 }
             ]
         },
@@ -122,43 +287,160 @@
                 {
                     "value": "openai:gpt-5.5",
                     "label": "GPT-5.5",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 5,
+                    "max_output_tokens": 8192,
+                    "max_tool_turns": 8,
+                    "compact_prompt": false,
+                    "supported_task_types": ["reasoning", "architecture", "debugging", "implementation", "multimodal"],
+                    "media_capability": 3,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 5.0,
+                    "output_cost_per_1m_tokens": 30.0
                 },
                 {
                     "value": "openai:gpt-5.4",
                     "label": "GPT-5.4",
                     "default_thinking_level": "medium",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 4,
+                    "max_output_tokens": 4096,
+                    "max_tool_turns": 6,
+                    "compact_prompt": false,
+                    "supported_task_types": ["implementation", "reasoning", "debugging", "architecture", "multimodal"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 2.5,
+                    "output_cost_per_1m_tokens": 15.0
                 },
                 {
                     "value": "openai:gpt-5.4-mini",
                     "label": "GPT-5.4 Mini",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 3,
+                    "max_output_tokens": 3072,
+                    "max_tool_turns": 5,
+                    "compact_prompt": true,
+                    "supported_task_types": ["implementation", "validation", "reasoning"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio"],
+                    "input_cost_per_1m_tokens": 0.75,
+                    "output_cost_per_1m_tokens": 4.50
                 },
                 {
-                    "value": "openai:gpt-5.2",
-                    "label": "GPT-5.2",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "value": "openai:gpt-4.1",
+                    "label": "GPT-4.1",
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 4,
+                    "max_output_tokens": 8192,
+                    "max_tool_turns": 8,
+                    "compact_prompt": false,
+                    "supported_task_types": ["reasoning", "architecture", "debugging", "implementation", "multimodal"],
+                    "media_capability": 3,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 2.0,
+                    "output_cost_per_1m_tokens": 8.0
                 },
                 {
-                    "value": "openai:gpt-5.5-pro",
-                    "label": "GPT-5.5 Pro",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "value": "openai:gpt-4.1-mini",
+                    "label": "GPT-4.1 Mini",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 3,
+                    "max_output_tokens": 4096,
+                    "max_tool_turns": 5,
+                    "compact_prompt": true,
+                    "supported_task_types": ["implementation", "validation", "reasoning"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio"],
+                    "input_cost_per_1m_tokens": 0.4,
+                    "output_cost_per_1m_tokens": 1.6
                 },
                 {
-                    "value": "openai:gpt-5.4-pro",
-                    "label": "GPT-5.4 Pro",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "value": "openai:gpt-4.1-nano",
+                    "label": "GPT-4.1 Nano",
+                    "default_thinking_level": "low",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "cheap",
+                    "reasoning_strength": 2,
+                    "max_output_tokens": 2048,
+                    "max_tool_turns": 3,
+                    "compact_prompt": true,
+                    "supported_task_types": ["mechanical", "validation", "summarization"],
+                    "media_capability": 1,
+                    "supported_media_types": ["image"],
+                    "input_cost_per_1m_tokens": 0.10,
+                    "output_cost_per_1m_tokens": 0.40
+                },
+                {
+                    "value": "openai:gpt-4o",
+                    "label": "GPT-4o",
+                    "default_thinking_level": "high",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "strong",
+                    "reasoning_strength": 4,
+                    "max_output_tokens": 8192,
+                    "max_tool_turns": 8,
+                    "compact_prompt": false,
+                    "supported_task_types": ["reasoning", "architecture", "debugging", "implementation", "multimodal"],
+                    "media_capability": 3,
+                    "supported_media_types": ["image", "audio", "video"],
+                    "input_cost_per_1m_tokens": 2.5,
+                    "output_cost_per_1m_tokens": 10.0
+                },
+                {
+                    "value": "openai:gpt-4o-mini",
+                    "label": "GPT-4o Mini",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 3,
+                    "max_output_tokens": 3072,
+                    "max_tool_turns": 5,
+                    "compact_prompt": true,
+                    "supported_task_types": ["implementation", "validation", "reasoning"],
+                    "media_capability": 2,
+                    "supported_media_types": ["image", "audio"],
+                    "input_cost_per_1m_tokens": 0.15,
+                    "output_cost_per_1m_tokens": 0.60
+                },
+                {
+                    "value": "openai:gpt-4o-audio-preview",
+                    "label": "GPT-4o Audio Preview",
+                    "default_thinking_level": "medium",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "standard",
+                    "reasoning_strength": 3,
+                    "max_output_tokens": 4096,
+                    "max_tool_turns": 5,
+                    "compact_prompt": false,
+                    "supported_task_types": ["multimodal", "transcription", "summarization"],
+                    "media_capability": 3,
+                    "supported_media_types": ["audio", "image"]
                 },
                 {
                     "value": "openai:gpt-5.4-nano",
                     "label": "GPT-5.4 Nano",
-                    "thinking_level_range": ["low", "medium", "high"]
-                },
-                {
-                    "value": "openai:gpt-5.2-pro",
-                    "label": "GPT-5.2 Pro",
-                    "thinking_level_range": ["low", "medium", "high"]
+                    "default_thinking_level": "low",
+                    "thinking_level_range": ["low", "medium", "high"],
+                    "capability_tier": "cheap",
+                    "reasoning_strength": 2,
+                    "max_output_tokens": 2048,
+                    "max_tool_turns": 3,
+                    "compact_prompt": true,
+                    "supported_task_types": ["mechanical", "validation", "summarization"],
+                    "media_capability": 1,
+                    "supported_media_types": ["image"],
+                    "input_cost_per_1m_tokens": 0.20,
+                    "output_cost_per_1m_tokens": 1.25
                 }
             ]
         }

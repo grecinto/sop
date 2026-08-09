@@ -3,7 +3,11 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sharedcode/sop"
@@ -313,18 +317,269 @@ type ToolCallContinuation struct {
 // ModelProfile captures a provider/model-specific policy for cost, prompt compactness,
 // and loop budgeting.
 type ModelProfile struct {
-	Provider        string
-	Model           string
-	Tier            string
-	MaxOutputTokens int
-	Temperature     float32
-	CompactPrompt   bool
-	MaxToolTurns    int
+	Provider            string
+	Model               string
+	Tier                string
+	MaxOutputTokens     int
+	Temperature         float32
+	CompactPrompt       bool
+	MaxToolTurns        int
+	ReasoningStrength   int
+	SupportedTaskTypes  []string
+	MediaCapability     int
+	SupportedMediaTypes []string
 }
 
 // ModelProfileProvider exposes a resolved model profile for a generator.
 type ModelProfileProvider interface {
 	ModelProfile() ModelProfile
+}
+
+type ModelSelectionRequest struct {
+	Provider              string
+	TaskType              string
+	NeedMultimodal        bool
+	RequiredMediaTypes    []string
+	PreferCheap           bool
+	PreferStrong          bool
+	EstimatedInputTokens  int
+	EstimatedOutputTokens int
+	MaxCostUSD            float64
+}
+
+type ModelCatalogEntry struct {
+	Provider              string
+	Model                 string
+	Label                 string
+	Tier                  string
+	MaxOutputTokens       int
+	Temperature           float32
+	CompactPrompt         bool
+	MaxToolTurns          int
+	ReasoningStrength     int
+	SupportedTaskTypes    []string
+	MediaCapability       int
+	SupportedMediaTypes   []string
+	InputCostPer1MTokens  float64
+	OutputCostPer1MTokens float64
+}
+
+type ModelCatalogRegistry struct {
+	mu      sync.RWMutex
+	entries []ModelCatalogEntry
+}
+
+var (
+	modelCatalogRegistryOnce sync.Once
+	modelCatalogRegistryInst *ModelCatalogRegistry
+)
+
+func GetModelCatalogRegistry() *ModelCatalogRegistry {
+	modelCatalogRegistryOnce.Do(func() {
+		modelCatalogRegistryInst = loadModelCatalogRegistry()
+	})
+	return modelCatalogRegistryInst
+}
+
+func (r *ModelCatalogRegistry) Load() error {
+	entries, err := loadModelCatalogEntries()
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries = entries
+	return nil
+}
+
+func (r *ModelCatalogRegistry) SelectBest(req ModelSelectionRequest) (ModelCatalogEntry, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.entries) == 0 {
+		return ModelCatalogEntry{}, false
+	}
+
+	var best ModelCatalogEntry
+	var bestScore int
+	var bestEstimatedCost float64
+	var found bool
+	for _, entry := range r.entries {
+		if strings.TrimSpace(req.Provider) != "" && !strings.EqualFold(strings.TrimSpace(req.Provider), "auto") {
+			if !strings.EqualFold(strings.TrimSpace(entry.Provider), strings.TrimSpace(req.Provider)) {
+				continue
+			}
+		}
+		if req.TaskType != "" && !supportsTask(entry.SupportedTaskTypes, req.TaskType) {
+			continue
+		}
+		if req.NeedMultimodal && !supportsMultimodal(entry, req.RequiredMediaTypes) {
+			continue
+		}
+		if len(req.RequiredMediaTypes) > 0 && !supportsMedia(entry.SupportedMediaTypes, req.RequiredMediaTypes) {
+			continue
+		}
+		estimatedCost := 0.0
+		if req.MaxCostUSD > 0 {
+			if entry.InputCostPer1MTokens <= 0 && entry.OutputCostPer1MTokens <= 0 {
+				continue
+			}
+			estimatedCost = estimateCatalogModelCost(entry, req.EstimatedInputTokens, req.EstimatedOutputTokens)
+			if estimatedCost > req.MaxCostUSD {
+				continue
+			}
+		}
+		if req.PreferCheap && req.MaxCostUSD > 0 {
+			if !found || estimatedCost < bestEstimatedCost {
+				best = entry
+				bestEstimatedCost = estimatedCost
+				bestScore = 0
+				found = true
+			}
+			continue
+		}
+		score := 0
+		if entry.Tier == "strong" {
+			score += 100
+		} else if entry.Tier == "standard" {
+			score += 60
+		} else if entry.Tier == "cheap" {
+			score += 20
+		}
+		if req.NeedMultimodal {
+			score += entry.MediaCapability * 20
+		}
+		if req.PreferStrong {
+			score += entry.ReasoningStrength * 10
+		}
+		if req.PreferCheap {
+			score -= 20
+		}
+		if req.TaskType != "" && supportsTask(entry.SupportedTaskTypes, req.TaskType) {
+			score += 10
+		}
+		if score > bestScore {
+			best = entry
+			bestScore = score
+			found = true
+		}
+	}
+	return best, found
+}
+
+func loadModelCatalogRegistry() *ModelCatalogRegistry {
+	registry := &ModelCatalogRegistry{}
+	if err := registry.Load(); err != nil {
+		return registry
+	}
+	return registry
+}
+
+func loadModelCatalogEntries() ([]ModelCatalogEntry, error) {
+	var entries []ModelCatalogEntry
+	for _, candidate := range modelCatalogCandidatePaths() {
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+		var catalog modelCatalogFile
+		if err := json.Unmarshal(data, &catalog); err != nil {
+			continue
+		}
+		for _, group := range catalog.LLM {
+			for _, option := range group.Options {
+				provider := ""
+				model := strings.TrimSpace(option.Value)
+				if providerPart, modelPart, ok := strings.Cut(option.Value, ":"); ok {
+					provider = normalizeModelCatalogProvider(strings.TrimSpace(providerPart))
+					model = strings.TrimSpace(modelPart)
+				}
+				if provider == "" {
+					continue
+				}
+				entries = append(entries, ModelCatalogEntry{
+					Provider:              provider,
+					Model:                 model,
+					Label:                 option.Label,
+					Tier:                  strings.TrimSpace(option.CapabilityTier),
+					MaxOutputTokens:       option.MaxOutputTokens,
+					Temperature:           0,
+					CompactPrompt:         option.CompactPrompt != nil && *option.CompactPrompt,
+					MaxToolTurns:          option.MaxToolTurns,
+					ReasoningStrength:     option.ReasoningStrength,
+					SupportedTaskTypes:    append([]string(nil), option.SupportedTaskTypes...),
+					MediaCapability:       option.MediaCapability,
+					SupportedMediaTypes:   append([]string(nil), option.SupportedMediaTypes...),
+					InputCostPer1MTokens:  option.InputCostPer1MTokens,
+					OutputCostPer1MTokens: option.OutputCostPer1MTokens,
+				})
+			}
+		}
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no model catalog entries found")
+	}
+	return entries, nil
+}
+
+func estimateCatalogModelCost(entry ModelCatalogEntry, inputTokens, outputTokens int) float64 {
+	if entry.InputCostPer1MTokens <= 0 && entry.OutputCostPer1MTokens <= 0 {
+		return 0
+	}
+	inputCost := 0.0
+	outputCost := 0.0
+	if entry.InputCostPer1MTokens > 0 && inputTokens > 0 {
+		inputCost = float64(inputTokens) / 1_000_000 * entry.InputCostPer1MTokens
+	}
+	if entry.OutputCostPer1MTokens > 0 && outputTokens > 0 {
+		outputCost = float64(outputTokens) / 1_000_000 * entry.OutputCostPer1MTokens
+	}
+	return inputCost + outputCost
+}
+
+func supportsTask(taskTypes []string, taskType string) bool {
+	if taskType == "" {
+		return true
+	}
+	needle := strings.ToLower(strings.TrimSpace(taskType))
+	for _, candidate := range taskTypes {
+		if strings.EqualFold(strings.TrimSpace(candidate), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func supportsMultimodal(entry ModelCatalogEntry, required []string) bool {
+	if entry.MediaCapability <= 0 {
+		return false
+	}
+	if len(required) == 0 {
+		return entry.MediaCapability >= 2 || entry.ReasoningStrength >= 4
+	}
+	return supportsMedia(entry.SupportedMediaTypes, required)
+}
+
+func supportsMedia(supported []string, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	for _, want := range required {
+		want = strings.ToLower(strings.TrimSpace(want))
+		if want == "" {
+			continue
+		}
+		matched := false
+		for _, have := range supported {
+			if strings.EqualFold(strings.TrimSpace(have), want) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 // ResolveModelProfile returns a model profile derived from explicit config and
@@ -365,6 +620,40 @@ func ResolveModelProfile(provider, model string, cfg map[string]any) ModelProfil
 				if maxTurns, ok := mp["max_tool_turns"].(float64); ok {
 					profile.MaxToolTurns = int(maxTurns)
 				}
+				if reasoningStrength, ok := mp["reasoning_strength"].(int); ok {
+					profile.ReasoningStrength = reasoningStrength
+				}
+				if reasoningStrength, ok := mp["reasoning_strength"].(float64); ok {
+					profile.ReasoningStrength = int(reasoningStrength)
+				}
+				if supported, ok := mp["supported_task_types"].([]string); ok {
+					profile.SupportedTaskTypes = append([]string(nil), supported...)
+				}
+				if supported, ok := mp["supported_task_types"].([]any); ok {
+					profile.SupportedTaskTypes = make([]string, 0, len(supported))
+					for _, item := range supported {
+						if s, ok := item.(string); ok {
+							profile.SupportedTaskTypes = append(profile.SupportedTaskTypes, s)
+						}
+					}
+				}
+				if mediaCapability, ok := mp["media_capability"].(int); ok {
+					profile.MediaCapability = mediaCapability
+				}
+				if mediaCapability, ok := mp["media_capability"].(float64); ok {
+					profile.MediaCapability = int(mediaCapability)
+				}
+				if supported, ok := mp["supported_media_types"].([]string); ok {
+					profile.SupportedMediaTypes = append([]string(nil), supported...)
+				}
+				if supported, ok := mp["supported_media_types"].([]any); ok {
+					profile.SupportedMediaTypes = make([]string, 0, len(supported))
+					for _, item := range supported {
+						if s, ok := item.(string); ok {
+							profile.SupportedMediaTypes = append(profile.SupportedMediaTypes, s)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -374,6 +663,33 @@ func ResolveModelProfile(provider, model string, cfg map[string]any) ModelProfil
 			profile.Tier = "cheap"
 		} else {
 			profile.Tier = "standard"
+		}
+	}
+
+	if catalogProfile := resolveCatalogModelProfile(provider, model); catalogProfile != nil {
+		if profile.Tier == "standard" && strings.TrimSpace(catalogProfile.Tier) != "" {
+			profile.Tier = catalogProfile.Tier
+		}
+		if profile.MaxOutputTokens == 0 && catalogProfile.MaxOutputTokens > 0 {
+			profile.MaxOutputTokens = catalogProfile.MaxOutputTokens
+		}
+		if profile.MaxToolTurns == 0 && catalogProfile.MaxToolTurns > 0 {
+			profile.MaxToolTurns = catalogProfile.MaxToolTurns
+		}
+		if profile.ReasoningStrength == 0 && catalogProfile.ReasoningStrength > 0 {
+			profile.ReasoningStrength = catalogProfile.ReasoningStrength
+		}
+		if len(profile.SupportedTaskTypes) == 0 && len(catalogProfile.SupportedTaskTypes) > 0 {
+			profile.SupportedTaskTypes = append([]string(nil), catalogProfile.SupportedTaskTypes...)
+		}
+		if profile.MediaCapability == 0 && catalogProfile.MediaCapability > 0 {
+			profile.MediaCapability = catalogProfile.MediaCapability
+		}
+		if len(profile.SupportedMediaTypes) == 0 && len(catalogProfile.SupportedMediaTypes) > 0 {
+			profile.SupportedMediaTypes = append([]string(nil), catalogProfile.SupportedMediaTypes...)
+		}
+		if !profile.CompactPrompt && catalogProfile.CompactPrompt {
+			profile.CompactPrompt = true
 		}
 	}
 
@@ -402,6 +718,156 @@ func ResolveModelProfile(provider, model string, cfg map[string]any) ModelProfil
 
 // ApplyModelProfile applies a model profile to generation options without
 // overwriting explicitly set values.
+type modelCatalogFile struct {
+	LLM []modelCatalogGroup `json:"llm,omitempty"`
+}
+
+type modelCatalogGroup struct {
+	Label   string               `json:"label"`
+	Options []modelCatalogOption `json:"options,omitempty"`
+}
+
+type modelCatalogOption struct {
+	Value                 string   `json:"value"`
+	Label                 string   `json:"label"`
+	DefaultThinkingLevel  string   `json:"default_thinking_level,omitempty"`
+	ThinkingLevelRange    []string `json:"thinking_level_range,omitempty"`
+	CapabilityTier        string   `json:"capability_tier,omitempty"`
+	ReasoningStrength     int      `json:"reasoning_strength,omitempty"`
+	MaxOutputTokens       int      `json:"max_output_tokens,omitempty"`
+	MaxToolTurns          int      `json:"max_tool_turns,omitempty"`
+	CompactPrompt         *bool    `json:"compact_prompt,omitempty"`
+	SupportedTaskTypes    []string `json:"supported_task_types,omitempty"`
+	MediaCapability       int      `json:"media_capability,omitempty"`
+	SupportedMediaTypes   []string `json:"supported_media_types,omitempty"`
+	InputCostPer1MTokens  float64  `json:"input_cost_per_1m_tokens,omitempty"`
+	OutputCostPer1MTokens float64  `json:"output_cost_per_1m_tokens,omitempty"`
+}
+
+func resolveCatalogModelProfile(provider, model string) *ModelProfile {
+	provider = normalizeModelCatalogProvider(provider)
+	model = strings.ToLower(strings.TrimSpace(model))
+	if provider == "" || model == "" {
+		return nil
+	}
+
+	for _, candidate := range modelCatalogCandidatePaths() {
+		data, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+		var catalog modelCatalogFile
+		if err := json.Unmarshal(data, &catalog); err != nil {
+			continue
+		}
+		for _, group := range catalog.LLM {
+			for _, option := range group.Options {
+				if !modelCatalogOptionMatches(provider, model, option.Value) {
+					continue
+				}
+				profile := ModelProfile{Provider: provider, Model: model}
+				if strings.TrimSpace(option.CapabilityTier) != "" {
+					profile.Tier = strings.TrimSpace(option.CapabilityTier)
+				}
+				if option.MaxOutputTokens > 0 {
+					profile.MaxOutputTokens = option.MaxOutputTokens
+				}
+				if option.MaxToolTurns > 0 {
+					profile.MaxToolTurns = option.MaxToolTurns
+				}
+				if option.ReasoningStrength > 0 {
+					profile.ReasoningStrength = option.ReasoningStrength
+				}
+				if option.CompactPrompt != nil {
+					profile.CompactPrompt = *option.CompactPrompt
+				}
+				if len(option.SupportedTaskTypes) > 0 {
+					profile.SupportedTaskTypes = append([]string(nil), option.SupportedTaskTypes...)
+				}
+				if option.MediaCapability > 0 {
+					profile.MediaCapability = option.MediaCapability
+				}
+				if len(option.SupportedMediaTypes) > 0 {
+					profile.SupportedMediaTypes = append([]string(nil), option.SupportedMediaTypes...)
+				}
+				return &profile
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeModelCatalogProvider(provider string) string {
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	if provider == "openai" {
+		return "chatgpt"
+	}
+	return provider
+}
+
+func modelCatalogCandidatePaths() []string {
+	seen := map[string]struct{}{}
+	var paths []string
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		cleaned := filepath.Clean(path)
+		if _, ok := seen[cleaned]; ok {
+			return
+		}
+		seen[cleaned] = struct{}{}
+		paths = append(paths, cleaned)
+	}
+
+	if cwd, err := os.Getwd(); err == nil {
+		current := filepath.Clean(cwd)
+		for {
+			add(filepath.Join(current, "model_catalog.json"))
+			add(filepath.Join(current, "lib", "sop", "model_catalog.json"))
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+	}
+
+	if exe, err := os.Executable(); err == nil {
+		current := filepath.Dir(filepath.Clean(exe))
+		for {
+			add(filepath.Join(current, "model_catalog.json"))
+			add(filepath.Join(current, "lib", "sop", "model_catalog.json"))
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+	}
+
+	add("model_catalog.json")
+	return paths
+}
+
+func modelCatalogOptionMatches(provider, model, optionValue string) bool {
+	provider = normalizeModelCatalogProvider(provider)
+	model = strings.ToLower(strings.TrimSpace(model))
+	optionValue = strings.TrimSpace(optionValue)
+	if optionValue == "" {
+		return false
+	}
+
+	if providerPart, modelPart, ok := strings.Cut(optionValue, ":"); ok {
+		if normalizeModelCatalogProvider(providerPart) != provider {
+			return false
+		}
+		return strings.ToLower(strings.TrimSpace(modelPart)) == model
+	}
+
+	return strings.ToLower(optionValue) == model
+}
+
 func ApplyModelProfile(opts GenOptions, profile ModelProfile) GenOptions {
 	if opts.MaxTokens == 0 {
 		opts.MaxTokens = profile.MaxOutputTokens

@@ -1151,6 +1151,12 @@ func (a *CopilotAgent) resolveLLM(ctx context.Context, providerOverride *Provide
 			provider = ProviderChatGPT
 		}
 
+		if providerOverride.Model == "" {
+			if entry, ok := ai.GetModelCatalogRegistry().SelectBest(ai.ModelSelectionRequest{Provider: provider}); ok {
+				resolvedModel = entry.Model
+			}
+		}
+
 		var err error
 		var tempGen ai.Generator
 
@@ -1208,6 +1214,14 @@ func (a *CopilotAgent) resolveGenerator(ctx context.Context) ai.Generator {
 	providerOverrideStr, ok := ctx.Value(ai.CtxKeyProvider).(string)
 	if !ok || providerOverrideStr == "" {
 		return gen
+	}
+	if strings.Contains(providerOverrideStr, ":") {
+		provider, model, _ := strings.Cut(providerOverrideStr, ":")
+		if strings.TrimSpace(model) == "" {
+			if entry, ok := ai.GetModelCatalogRegistry().SelectBest(ai.ModelSelectionRequest{Provider: provider}); ok {
+				providerOverrideStr = provider + ":" + entry.Model
+			}
+		}
 	}
 	var modelOverride string
 	if provider, model, ok := strings.Cut(providerOverrideStr, ":"); ok {

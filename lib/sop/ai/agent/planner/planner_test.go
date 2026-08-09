@@ -1,9 +1,11 @@
 package planner
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 func TestPlannerCapability_RegistersAsPrimaryCodingPlanner(t *testing.T) {
@@ -25,5 +27,145 @@ func TestPlanningPhaseCapability_UsesPlannerPackage(t *testing.T) {
 	}
 	if cap.ID() != "phase_planning" {
 		t.Fatalf("expected phase_planning id, got %q", cap.ID())
+	}
+}
+
+func TestInferPreferredModelScheme_UsesStrongSchemeForPlanningDesignTasks(t *testing.T) {
+	preference, taskType := inferPreferredModelScheme("design a new API and plan rollout", "planning", "hard", "medium")
+	if preference != "strong" {
+		t.Fatalf("expected strong preference for planning/design tasks, got %q", preference)
+	}
+	if taskType != "reasoning" {
+		t.Fatalf("expected reasoning task type for planning/design tasks, got %q", taskType)
+	}
+}
+
+func TestBuildDetailedExecutionPlan_AddsFilesValidationAndExitCriteria(t *testing.T) {
+	steps := buildDetailedExecutionPlan(
+		cw.Task{Description: "fix parser bug", ActiveFile: "lib/parser.go", TaskType: "implementation"},
+		cw.ContextPack{ActiveFile: "lib/parser.go", RelatedFiles: []string{"lib/parser.go", "lib/parser_test.go"}, TestFiles: []string{"lib/parser_test.go"}, DependencyFiles: []string{"lib/errors.go"}},
+		[]string{"inspect parser", "update parser", "validate change"},
+	)
+
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 detailed steps, got %d", len(steps))
+	}
+	if got := steps[0].Files; len(got) == 0 || got[0] != "lib/parser.go" {
+		t.Fatalf("expected first step to include the active file, got %#v", got)
+	}
+	if len(steps[2].Validation) == 0 {
+		t.Fatalf("expected validation guidance for the final step, got %#v", steps[2].Validation)
+	}
+	if joined := strings.Join(steps[2].ExitCriteria, " "); !strings.Contains(strings.ToLower(joined), "tests") {
+		t.Fatalf("expected exit criteria to mention validation, got %#v", steps[2].ExitCriteria)
+	}
+}
+
+func TestBuildExecutionGuidanceFromArtifact_UsesStructuredPlan(t *testing.T) {
+	artifact := phaseArtifact{
+		PhaseID: "planning",
+		StructuredData: map[string]any{
+			"detailed_execution_plan": []map[string]any{{
+				"title":         "Step 1",
+				"description":   "inspect parser",
+				"files":         []string{"lib/parser.go"},
+				"validation":    []string{"run parser tests"},
+				"exit_criteria": []string{"tests pass"},
+			}},
+		},
+	}
+
+	guidance := buildExecutionGuidanceFromArtifact(artifact)
+	if !strings.Contains(guidance, "inspect parser") {
+		t.Fatalf("expected guidance to include the detailed step, got %q", guidance)
+	}
+	if !strings.Contains(guidance, "run parser tests") {
+		t.Fatalf("expected guidance to include validation guidance, got %q", guidance)
+	}
+}
+
+func TestBuildExecutionGuidanceFromArtifact_UsesMiniPlan(t *testing.T) {
+	artifact := phaseArtifact{
+		PhaseID: "planning",
+		StructuredData: map[string]any{
+			"phase_mini_plan": map[string]any{
+				"objective":           "add parser validation",
+				"architecture_design": []string{"keep the change localized"},
+				"functional_features": []string{"inspect parser", "add validation"},
+				"pseudo_logic":        []string{"read parser token stream"},
+				"file_plan": []map[string]any{{
+					"file": "lib/parser.go",
+					"role": "primary implementation file",
+				}},
+			},
+		},
+	}
+
+	guidance := buildExecutionGuidanceFromArtifact(artifact)
+	if !strings.Contains(guidance, "add parser validation") {
+		t.Fatalf("expected guidance to include objective, got %q", guidance)
+	}
+	if !strings.Contains(guidance, "primary implementation file") {
+		t.Fatalf("expected guidance to include file plan role, got %q", guidance)
+	}
+}
+
+func TestBuildPhaseMiniPlan_ProducesStructuredArtifacts(t *testing.T) {
+	task := cw.Task{Description: "add parser validation for malformed input", ActiveFile: "lib/parser.go", TaskType: "implementation"}
+	pack := cw.ContextPack{ActiveFile: "lib/parser.go", RelatedFiles: []string{"lib/parser.go", "lib/parser_test.go"}, TestFiles: []string{"lib/parser_test.go"}, DependencyFiles: []string{"lib/errors.go"}, CodeStructureSummary: "parser uses a token stream", RepositorySummary: "Go package"}
+
+	miniPlan := buildPhaseMiniPlan(task, pack, []string{"inspect parser", "update parser", "validate change"})
+	if got, ok := miniPlan["objective"].(string); !ok || !strings.Contains(strings.ToLower(got), "parser") {
+		t.Fatalf("expected objective to mention the task, got %#v", miniPlan["objective"])
+	}
+	if design, ok := miniPlan["architecture_design"].([]string); !ok || len(design) == 0 {
+		t.Fatalf("expected architecture design guidance, got %#v", miniPlan["architecture_design"])
+	}
+	if features, ok := miniPlan["functional_features"].([]string); !ok || len(features) == 0 {
+		t.Fatalf("expected functional features, got %#v", miniPlan["functional_features"])
+	}
+	if pseudo, ok := miniPlan["pseudo_logic"].([]string); !ok || len(pseudo) == 0 {
+		t.Fatalf("expected pseudo logic steps, got %#v", miniPlan["pseudo_logic"])
+	}
+}
+
+func TestBuildTaskRoutingMetadata_AddsClassificationFields(t *testing.T) {
+	routing := buildTaskRoutingMetadata("run go test ./...", "mechanical", "easy", "low")
+	if routing["complexity"] != "easy" {
+		t.Fatalf("expected easy complexity, got %#v", routing["complexity"])
+	}
+	if routing["task_type"] != "mechanical" {
+		t.Fatalf("expected mechanical task type, got %#v", routing["task_type"])
+	}
+	preferred := routing["preferred_model"].(string)
+	if preferred == "" || !strings.Contains(preferred, ":") {
+		t.Fatalf("expected a concrete provider:model recommendation, got %#v", routing["preferred_model"])
+	}
+	if got, _ := routing["expected_verification"].(string); !strings.Contains(got, "go test") {
+		t.Fatalf("expected verification guidance, got %#v", routing["expected_verification"])
+	}
+}
+
+func TestBuildTaskRoutingMetadata_PrefersStrongerModelForMediaAnalysis(t *testing.T) {
+	routing := buildTaskRoutingMetadata("analyze this video clip and summarize the key moments", "implementation", "hard", "high")
+	if got, _ := routing["preferred_model"].(string); got == "" || !strings.Contains(got, ":") {
+		t.Fatalf("expected a concrete provider:model recommendation for media analysis, got %#v", got)
+	}
+	if got, _ := routing["media_required"].(bool); !got {
+		t.Fatalf("expected media_required to be true for media analysis, got %#v", routing["media_required"])
+	}
+	if got, _ := routing["media_types"].([]string); len(got) == 0 || got[0] != "video" {
+		t.Fatalf("expected media_types to include video, got %#v", routing["media_types"])
+	}
+}
+
+func TestBuildPhaseMiniPlan_IncludesRoutingMetadata(t *testing.T) {
+	miniPlan := buildPhaseMiniPlan(cw.Task{Description: "add parser validation", ActiveFile: "lib/parser.go", TaskType: "implementation"}, cw.ContextPack{}, []string{"add validation"})
+	routing, ok := miniPlan["routing"].(map[string]any)
+	if !ok || len(routing) == 0 {
+		t.Fatalf("expected routing metadata in mini plan, got %#v", miniPlan["routing"])
+	}
+	if got, _ := routing["preferred_model"].(string); got == "" {
+		t.Fatalf("expected preferred model to be populated, got %#v", routing["preferred_model"])
 	}
 }

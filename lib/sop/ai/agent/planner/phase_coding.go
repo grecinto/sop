@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 // CodingPhase implements phase capability for coding_workflow domain.
@@ -407,7 +408,97 @@ func (p *CodingPhase) runPlanChanges(args map[string]any) (string, error) {
 	if len(plan) == 0 {
 		return "Execution Plan: none", nil
 	}
+
+	detailedSteps := buildDetailedExecutionPlan(task, pack, plan)
+	if len(detailedSteps) > 0 {
+		miniPlan := buildPhaseMiniPlan(task, pack, plan)
+		structuredData := map[string]any{
+			"phase_mini_plan":         miniPlan,
+			"detailed_execution_plan": serializeDetailedExecutionPlan(detailedSteps),
+			"base_plan":               plan,
+		}
+		if _, err := p.runCapture(map[string]any{
+			"summary":         fmt.Sprintf("Execution plan for %s", strings.TrimSpace(task.Description)),
+			"status":          "ready_for_execution",
+			"plan":            toStringSlice(plan),
+			"notes":           []any{fmt.Sprintf("Target files: %s", strings.Join(collectTargetFiles(task, pack), ", "))},
+			"structured_data": structuredData,
+		}); err != nil {
+			return "", fmt.Errorf("capture planning artifact: %w", err)
+		}
+		return fmt.Sprintf("Execution Plan:\n%s", formatDetailedExecutionPlan(detailedSteps)), nil
+	}
 	return fmt.Sprintf("Execution Plan:\n%s", strings.Join(plan, "\n")), nil
+}
+
+func serializeDetailedExecutionPlan(steps []detailedExecutionStep) []map[string]any {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, map[string]any{
+			"title":         step.Title,
+			"description":   step.Description,
+			"files":         step.Files,
+			"validation":    step.Validation,
+			"exit_criteria": step.ExitCriteria,
+		})
+	}
+	return out
+}
+
+func formatDetailedExecutionPlan(steps []detailedExecutionStep) string {
+	if len(steps) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(steps)*3+1)
+	lines = append(lines, "Detailed execution plan:")
+	for idx, step := range steps {
+		line := fmt.Sprintf("%d. %s", idx+1, step.Description)
+		if len(step.Files) > 0 {
+			line += fmt.Sprintf(" [files: %s]", strings.Join(step.Files, ", "))
+		}
+		lines = append(lines, line)
+		if len(step.Validation) > 0 {
+			lines = append(lines, fmt.Sprintf("   validation: %s", strings.Join(step.Validation, "; ")))
+		}
+		if len(step.ExitCriteria) > 0 {
+			lines = append(lines, fmt.Sprintf("   exit criteria: %s", strings.Join(step.ExitCriteria, "; ")))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func toStringSlice(values []string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
+}
+
+func collectTargetFiles(task cw.Task, pack cw.ContextPack) []string {
+	files := make([]string, 0, 8)
+	if task.ActiveFile != "" {
+		files = append(files, task.ActiveFile)
+	}
+	for _, file := range pack.RelatedFiles {
+		if file != "" && !containsString(files, file) {
+			files = append(files, file)
+		}
+	}
+	for _, file := range pack.DependencyFiles {
+		if file != "" && !containsString(files, file) {
+			files = append(files, file)
+		}
+	}
+	for _, file := range pack.TestFiles {
+		if file != "" && !containsString(files, file) {
+			files = append(files, file)
+		}
+	}
+	return files
 }
 
 func (p *CodingPhase) runPreviewPatch(args map[string]any) (string, error) {

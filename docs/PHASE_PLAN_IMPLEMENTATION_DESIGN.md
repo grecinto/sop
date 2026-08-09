@@ -12,10 +12,12 @@ This document describes the **Phase Plan System** implementation - a Planning-Fi
 
 **Key Design Principles**:
 1. **Planning-First**: Every task starts with planning phase (universal entry point)
-2. **Participant Pattern**: Capabilities are passive participants, not controllers
-3. **Cursor-Based Progression**: PhasePlan uses a cursor to track current phase
-4. **Explicit State Management**: State passed as parameters, not through context
-5. **User Visibility**: Rich feedback shows progress, checkpoints, and roadmap
+2. **Layered Planning**: A global phase plan is complemented by per-phase mini-plans that are detailed enough for implementation
+3. **Task Classification Routing**: Each phase and subtask carries routing metadata so the system can select cheaper or better-suited models where appropriate
+4. **Participant Pattern**: Capabilities are passive participants, not controllers
+5. **Cursor-Based Progression**: PhasePlan uses a cursor to track current phase
+6. **Explicit State Management**: State passed as parameters, not through context
+7. **User Visibility**: Rich feedback shows progress, checkpoints, and roadmap
 
 ---
 
@@ -46,6 +48,15 @@ Completion
 ```
 
 ### Phase Capability Architecture
+
+The planning contract is now modeled as multiple layers:
+
+- **Top-level phase plan**: determines the workflow sequence and checkpoints.
+- **Per-phase mini-plan**: produces an implementation-ready breakdown for the active phase, including architecture/design synthesis, functional features, pseudo-logic, file-level tasks, and validation guidance.
+- **Task routing metadata**: classifies each phase and subtask with complexity, task type, risk, verification expectations, and a preferred model tier so execution can route work to cheaper or better-suited models.
+- **Model capability profiles**: the model catalog should describe each model’s capability tier, reasoning strength, output budget, tool-turn budget, prompt compactness, and supported task types. The router should use those profiles to choose the right model for the task rather than treating difficulty as a fixed attribute of the model itself.
+
+A key routing rule is that simple mechanical work should not require an LLM round-trip when deterministic tool execution can satisfy the task. Examples include running a known test command, inspecting file contents, grepping output, or applying a straightforward patch. Reasoning-heavy tasks should use stronger models, while simple interpretation tasks may use lightweight models if needed.
 
 Each phase is implemented as a **passive capability** that responds to the Ask pipeline:
 
@@ -132,6 +143,14 @@ Why flexible map instead of typed structs?
 - ❌ **Type safety**: Loss of compile-time checking (accepted tradeoff)
 
 ### Planning Tools
+
+The planning tool chain should produce structured artifacts in this order:
+
+1. **Global phase plan** from the feature request.
+2. **Phase mini-plan** for the active phase.
+3. **Task routing metadata** for the phase and each granular subtask.
+4. **Implementation guidance** for each relevant file.
+5. **Validation plan** that defines tests, checks, or acceptance criteria.
 
 Two core tools for plan management:
 

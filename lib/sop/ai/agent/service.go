@@ -488,6 +488,8 @@ func (s *Service) resolveTopicRoutingGenerator(ctx context.Context) ai.Generator
 		}
 		if providerOverride.Model != "" {
 			configMap["model"] = providerOverride.Model
+		} else if entry, ok := ai.GetModelCatalogRegistry().SelectBest(ai.ModelSelectionRequest{Provider: provider}); ok {
+			configMap["model"] = entry.Model
 		}
 
 		if gen == nil || gen.Name() != provider {
@@ -1677,6 +1679,8 @@ func (s *Service) resolveGeneratorAndCarryover(ctx context.Context, topicAssessm
 		}
 		if providerOverride.Model != "" {
 			configMap["model"] = providerOverride.Model
+		} else if entry, ok := ai.GetModelCatalogRegistry().SelectBest(ai.ModelSelectionRequest{Provider: provider}); ok {
+			configMap["model"] = entry.Model
 		}
 
 		// Create generator with config
@@ -2399,6 +2403,8 @@ func (s *Service) resolveGeneratorAndCarryoverWithRequest(ctx context.Context, g
 		}
 		if providerOverride.Model != "" {
 			configMap["model"] = providerOverride.Model
+		} else if entry, ok := ai.GetModelCatalogRegistry().SelectBest(ai.ModelSelectionRequest{Provider: provider}); ok {
+			configMap["model"] = entry.Model
 		}
 
 		// Create generator with config
