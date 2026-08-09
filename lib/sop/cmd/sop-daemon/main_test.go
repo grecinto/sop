@@ -3244,6 +3244,29 @@ func TestExecuteHandlerRunsShellCommand(t *testing.T) {
 	}
 }
 
+func TestExecuteHandlerPassesStdinToCommand(t *testing.T) {
+	reqBody := `{"command":"cat","stdin":"hello from stdin\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(reqBody))
+	rr := httptest.NewRecorder()
+
+	executeHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("executeHandler() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var resp ExecuteResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0, stderr=%q", resp.ExitCode, resp.Stderr)
+	}
+	if !strings.Contains(resp.Stdout, "hello from stdin") {
+		t.Fatalf("stdout = %q, want it to contain echoed stdin", resp.Stdout)
+	}
+}
+
 func TestExecuteHandlerHandlesCancellation(t *testing.T) {
 	// Create a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())

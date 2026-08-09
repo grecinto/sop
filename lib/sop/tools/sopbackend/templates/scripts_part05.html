@@ -2587,7 +2587,11 @@
             try {
                 const result = await showActionApprovalModal(normalizedEvent.payload);
                 if (result.approved) {
-                    await executeApprovedAction(result.payload, result.autoApproved, result.executionMode || 'background');
+                    if (result.requiresSecureInput) {
+                        promptForSecureInput(result.payload, result.autoApproved, result.executionMode || 'background');
+                    } else {
+                        await executeApprovedAction(result.payload, result.autoApproved, result.executionMode || 'background');
+                    }
                 } else {
                     appendChatMessage('ai', '❌ Action denied by user.');
                 }
@@ -2953,6 +2957,33 @@
         }
 
         const message = input.value.trim();
+
+        if (_pendingSecureInputContext) {
+            if (!message) return;
+            if (/^cancel$/i.test(message)) {
+                clearPendingSecureInput();
+                appendChatMessage('ai', '❌ Secure input cancelled.');
+                return;
+            }
+
+            const pending = _pendingSecureInputContext;
+            const displayMessage = '🔒 [secure input provided]';
+            chatHistory.push(displayMessage);
+            historyIndex = -1;
+            appendChatMessage('user', displayMessage);
+            input.value = '';
+            input.style.height = '40px';
+            if (sendBtn) sendBtn.disabled = true;
+            scrollChatHistoryToBottom();
+
+            try {
+                await executeApprovedAction({ ...pending.payload, secure_input_value: message }, pending.autoApproved, pending.executionMode || 'background');
+            } finally {
+                clearPendingSecureInput();
+                if (sendBtn) sendBtn.disabled = false;
+            }
+            return;
+        }
         const agentSelect = document.getElementById('agent-select');
         const agent = agentSelect ? agentSelect.value : 'db_admin';
 
@@ -3050,6 +3081,7 @@
     let _currentApprovalResolve = null;
     let _currentApprovalReject = null;
     let _sessionApprovals = {}; // Track auto-approvals: { action_type: true }
+    let _pendingSecureInputContext = null;
 
     function isSessionApproved(actionType) {
         return _sessionApprovals[actionType] === true;
@@ -3105,6 +3137,16 @@
         } else {
             if (indicator) indicator.style.display = 'none';
         }
+    }
+
+    function clearPendingSecureInput() {
+        _pendingSecureInputContext = null;
+    }
+
+    function promptForSecureInput(payload, autoApproved = false, executionMode = 'background') {
+        const promptText = payload.secure_input_prompt || payload.approval_reason || 'This action requires sensitive input. Please enter the value in the chat box and send it to continue.';
+        _pendingSecureInputContext = { payload, autoApproved, executionMode };
+        appendChatMessage('ai', `🔒 Secure input required\n\n${promptText}\n\nType the value in the chat box and press Enter to continue. Type "cancel" to abort.`);
     }
 
     function shouldUseTerminal(command) {
@@ -3259,6 +3301,7 @@
             const handleAllow = () => {
                 const rememberForSession = sessionCheckbox.checked;
                 const executionMode = terminalModeRadio.checked ? 'terminal' : 'background';
+                const requiresSecureInput = !!(payload.requires_password_prompt || payload.requires_secure_input || payload.secure_input_required || payload.secure_input_prompt);
                 if (promptForWorkingDir) {
                     const chosenWorkingDir = (workingDirSelect.value || workingDirInput.value || '').trim();
                     if (!chosenWorkingDir) {
@@ -3281,7 +3324,9 @@
                         approved: true, 
                         payload, 
                         sessionApproval: rememberForSession,
-                        executionMode: executionMode
+                        executionMode: executionMode,
+                        autoApproved: rememberForSession || isSessionApproved(actionType),
+                        requiresSecureInput: requiresSecureInput
                     });
                 }
             };
@@ -3323,7 +3368,8 @@
                     reasoning: payload.reasoning || '',
                     working_dir: payload.working_dir || '',
                     timeout_seconds: payload.timeout_seconds || 600,
-                    execution_mode: executionMode
+                    execution_mode: executionMode,
+                    stdin: payload.secure_input_value || ''
                 };
 
                 const res = await fetch(getLocalRuntimeBaseURL().replace(/\/$/, '') + '/api/execute', {

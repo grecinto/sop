@@ -289,6 +289,7 @@ type ExecuteRequest struct {
 	Reasoning      string `json:"reasoning,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	ExecutionMode  string `json:"execution_mode,omitempty"` // "background" or "terminal"
+	Stdin          string `json:"stdin,omitempty"`
 }
 
 type ExecuteResponse struct {
@@ -2716,6 +2717,9 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 	cmd.Stderr = &stderr
 
 	// Start command and monitor for cancellation
+	if req.Stdin != "" {
+		cmd.Stdin = strings.NewReader(req.Stdin)
+	}
 	if err := cmd.Start(); err != nil {
 		resp := ExecuteResponse{
 			Stdout:   stdout.String(),
