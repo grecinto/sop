@@ -102,27 +102,8 @@ func (cae *CodeArtifactExtractor) extractFromFile(filePath string, content []byt
 // getLanguageFromPath returns the tree-sitter language for a file path.
 // Supports: Go, Python, Java, Rust, JavaScript, TypeScript
 func (cae *CodeArtifactExtractor) getLanguageFromPath(filePath string) *ts.Language {
-	ext := filepath.Ext(filePath)
-
-	switch ext {
-	case ".go":
-		return golang.GetLanguage()
-	case ".py":
-		return python.GetLanguage()
-	case ".java":
-		return java.GetLanguage()
-	case ".rs":
-		return rust.GetLanguage()
-	case ".js", ".jsx":
-		return javascript.GetLanguage()
-	case ".ts", ".tsx":
-		return typescript.GetLanguage()
-	// Note: C# support unavailable (tree-sitter package issues)
-	// case ".cs":
-	//     return c_sharp.GetLanguage()
-	default:
-		return nil
-	}
+	lang, _ := resolveTreeSitterLanguageForPath(filePath)
+	return lang
 }
 
 // extractPackageName extracts the package/namespace name from AST.

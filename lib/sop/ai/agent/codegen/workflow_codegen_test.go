@@ -219,6 +219,57 @@ func TestCompileToBinaryPlaceholder(t *testing.T) {
 	t.Logf("Generated source at: %s", outputPath)
 }
 
+func TestCompileWorkflowSupportedTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	workflowPath := filepath.Join(tmpDir, "targeted_workflow.json")
+
+	workflowJSON := `{
+  "workflow_id": "targeted-workflow-v1",
+  "name": "Targeted Workflow",
+  "description": "A workflow used to verify target-language generation",
+  "version": "1.0.0",
+  "steps": [
+    {
+      "step": 1,
+      "actor": "reader",
+      "priority": 100,
+      "query_template": "Inspect the repository",
+      "tools_expected": ["read_file"]
+    }
+  ]
+}`
+
+	if err := os.WriteFile(workflowPath, []byte(workflowJSON), 0644); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	testCases := []struct {
+		name     string
+		target   TargetLanguage
+		expected string
+	}{
+		{name: "java", target: TargetLanguageJava, expected: "class WorkflowApp"},
+		{name: "rust", target: TargetLanguageRust, expected: "fn main()"},
+		{name: "typescript", target: TargetLanguageTypeScript, expected: "async function executeWorkflow"},
+		{name: "javascript", target: TargetLanguageJavaScript, expected: "export function buildSteps"},
+		{name: "react", target: TargetLanguageReact, expected: "export function"},
+		{name: "angular", target: TargetLanguageAngular, expected: "@Component"},
+		{name: "htmlcss", target: TargetLanguageHTMLCSS, expected: "<!DOCTYPE html>"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, err := CompileWorkflow(workflowPath, tc.target)
+			if err != nil {
+				t.Fatalf("CompileWorkflow(%s) failed: %v", tc.target, err)
+			}
+			if !strings.Contains(code, tc.expected) {
+				t.Fatalf("generated code for %s does not contain %q:\n%s", tc.target, tc.expected, code)
+			}
+		})
+	}
+}
+
 func TestExpandTemplate(t *testing.T) {
 	// This tests the template expansion logic that will be in the generated code
 	tests := []struct {
@@ -318,5 +369,106 @@ func TestGeneratedWorkflowStructure(t *testing.T) {
 	stepCount := strings.Count(goCode, "Step:")
 	if stepCount < 3 {
 		t.Errorf("Expected at least 3 step definitions, found %d", stepCount)
+	}
+}
+
+func TestCompileWorkflowMultiLanguageTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	workflowPath := filepath.Join(tmpDir, "multilang_workflow.json")
+
+	workflowJSON := `{
+  "workflow_id": "multilang-workflow-v1",
+  "name": "MultiLang Workflow",
+  "description": "Checks multi-language generation",
+  "version": "1.0.0",
+  "steps": [
+    {
+      "step": 1,
+      "actor": "planner",
+      "priority": 100,
+      "query_template": "Plan: {original_query}",
+      "tools_expected": ["read_file"]
+    }
+  ]
+}`
+
+	if err := os.WriteFile(workflowPath, []byte(workflowJSON), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		target   TargetLanguage
+		contains []string
+		notEmpty bool
+	}{
+		{
+			name:     "go",
+			target:   TargetLanguageGo,
+			contains: []string{"package main", "func executeWorkflow"},
+			notEmpty: true,
+		},
+		{
+			name:     "csharp",
+			target:   TargetLanguageCSharp,
+			contains: []string{"public sealed class WorkflowStep", "public static class Multilang_workflow_v1Workflow"},
+			notEmpty: true,
+		},
+		{
+			name:     "python",
+			target:   TargetLanguagePython,
+			contains: []string{"from dataclasses import dataclass", "def build_steps()"},
+			notEmpty: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code, err := CompileWorkflow(workflowPath, tc.target)
+			if err != nil {
+				t.Fatalf("CompileWorkflow(%s) failed: %v", tc.target, err)
+			}
+			if tc.notEmpty && strings.TrimSpace(code) == "" {
+				t.Fatal("expected non-empty generated code")
+			}
+			for _, want := range tc.contains {
+				if !strings.Contains(code, want) {
+					t.Fatalf("generated code for %s missing %q", tc.target, want)
+				}
+			}
+		})
+	}
+}
+
+func TestCompileWorkflowUnsupportedTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	workflowPath := filepath.Join(tmpDir, "unsupported_target_workflow.json")
+
+	workflowJSON := `{
+  "workflow_id": "unsupported-workflow-v1",
+  "name": "Unsupported Workflow",
+  "description": "Unsupported target test",
+  "version": "1.0.0",
+  "steps": [
+    {
+      "step": 1,
+      "actor": "planner",
+      "priority": 100,
+      "query_template": "Plan",
+      "tools_expected": []
+    }
+  ]
+}`
+
+	if err := os.WriteFile(workflowPath, []byte(workflowJSON), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	_, err := CompileWorkflow(workflowPath, TargetLanguage("ruby"))
+	if err == nil {
+		t.Fatal("expected unsupported target error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "unsupported") {
+		t.Fatalf("expected unsupported target error, got %v", err)
 	}
 }

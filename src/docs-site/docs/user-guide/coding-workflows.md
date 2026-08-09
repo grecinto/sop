@@ -133,14 +133,21 @@ AI Studio workflows provide **comprehensive support for multiple programming lan
 
 ### Supported Languages
 
-| Language | Test Execution | Code Analysis | Context Gathering | Project Detection |
-|----------|----------------|---------------|-------------------|-------------------|
-| **Go** | ✅ `go test` | ✅ AST-based | ✅ Full | `go.mod` |
-| **Python** | ✅ `pytest` / `unittest` | ✅ AST-based | ✅ Full | `requirements.txt`, `setup.py`, `pyproject.toml` |
-| **Java** | ✅ `mvn test` / `gradle test` | ✅ AST-based | ✅ Full | `pom.xml`, `build.gradle` |
-| **Rust** | ✅ `cargo test` | ✅ AST-based | ✅ Full | `Cargo.toml` |
-| **JavaScript/TypeScript** | ✅ `npm test` / `yarn test` | ✅ AST-based | ✅ Full | `package.json` |
-| **C#** | ✅ `dotnet test` | ⚠️ Limited | ⚠️ Limited | `*.csproj`, `*.sln` |
+The shared coding workflow stack currently supports the following languages for reading, analysis, and workflow/script generation:
+
+| Language | Workflow support |
+|----------|------------------|
+| **Go** | ✅ Reader/analyzer + generation + test-aware workflow integration |
+| **Python** | ✅ Reader/analyzer + generation + test-aware workflow integration |
+| **JavaScript / TypeScript** | ✅ Reader/analyzer + generation + JSX/TSX-aware parsing and generation |
+| **Java** | ✅ Reader/analyzer + generation + build/test-aware context |
+| **Rust** | ✅ Reader/analyzer + generation + test-aware context |
+| **C#** | ✅ Reader/analyzer + generation + AST parsing and symbol extraction |
+| **HTML / CSS** | ✅ Reader/analyzer + generation for markup and styling workflows |
+| **React** | ✅ Reader/analyzer + generation for component-oriented workflows |
+| **Angular** | ✅ Reader/analyzer + generation for component/template workflows |
+
+> In practice, the shared coding workflow stack exposes first-class support for these languages across the reader/analyzer path and the workflow/script generator layer.
 
 ### Automatic Language Detection
 
@@ -153,6 +160,8 @@ When you open a project, AI Studio:
 You don't need to configure anything—workflows automatically use the right tools for your language.
 
 ### Language-Specific Features
+
+> Current status: the shared AST layer now supports C# parsing and symbol/import extraction for `.cs` files, and workflow code generation now supports Go, C#, and Python targets through the shared compiler layer. The same workflow definition can be emitted in multiple target languages, with additional backends added as needed.
 
 **Test Execution**:
 - Go: Smart test selection based on active file, runs `go test ./...`

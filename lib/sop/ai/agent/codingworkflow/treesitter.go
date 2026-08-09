@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	ts "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
 )
 
 // TreeSitterParser wraps tree-sitter with language-specific parsing logic.
@@ -77,12 +76,8 @@ func (p *TreeSitterParser) ParseStructure(content string) (string, error) {
 }
 
 func (p *TreeSitterParser) getLanguage() *ts.Language {
-	switch p.language {
-	case "go", "golang":
-		return golang.GetLanguage()
-	default:
-		return nil
-	}
+	lang, _ := resolveTreeSitterLanguageForAlias(p.language)
+	return lang
 }
 
 func (p *TreeSitterParser) isSymbolNode(nodeType string) bool {
@@ -155,6 +150,18 @@ func (p *TreeSitterParser) fallbackParse(content string) []string {
 					symbols = append(symbols, name)
 				}
 			}
+		case "html", "htm":
+			for _, name := range p.extractHTMLSymbols(trimmed) {
+				if name != "" && !contains(symbols, name) {
+					symbols = append(symbols, name)
+				}
+			}
+		case "css", "scss", "sass", "less":
+			for _, name := range p.extractCSSSelectors(trimmed) {
+				if name != "" && !contains(symbols, name) {
+					symbols = append(symbols, name)
+				}
+			}
 		}
 	}
 	return symbols
@@ -212,4 +219,57 @@ func (p *TreeSitterParser) extractJSSymbol(line string) string {
 		}
 	}
 	return ""
+}
+
+func (p *TreeSitterParser) extractHTMLSymbols(line string) []string {
+	line = strings.TrimSpace(line)
+	var names []string
+	for _, token := range strings.Split(line, "<") {
+		if token == "" {
+			continue
+		}
+		end := strings.Index(token, ">")
+		if end <= 0 {
+			continue
+		}
+		tag := strings.TrimSpace(token[:end])
+		if tag == "" || strings.HasPrefix(tag, "/") || strings.HasPrefix(tag, "!") {
+			continue
+		}
+		if idx := strings.Index(tag, " "); idx > 0 {
+			tag = tag[:idx]
+		}
+		if idx := strings.Index(tag, "\t"); idx > 0 {
+			tag = tag[:idx]
+		}
+		if idx := strings.Index(tag, "/"); idx > 0 {
+			tag = tag[:idx]
+		}
+		if tag != "" {
+			names = append(names, tag)
+		}
+	}
+	return names
+}
+
+func (p *TreeSitterParser) extractCSSSelectors(line string) []string {
+	line = strings.TrimSpace(line)
+	if strings.Contains(line, "{") {
+		prefix := strings.Split(line, "{")[0]
+		prefix = strings.TrimSpace(prefix)
+		if prefix != "" {
+			parts := strings.FieldsFunc(prefix, func(r rune) bool {
+				return r == ',' || r == ' ' || r == '\t'
+			})
+			var names []string
+			for _, part := range parts {
+				trimmed := strings.Trim(part, ".#:[]")
+				if trimmed != "" {
+					names = append(names, trimmed)
+				}
+			}
+			return names
+		}
+	}
+	return nil
 }

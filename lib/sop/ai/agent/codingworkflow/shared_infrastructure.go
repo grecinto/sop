@@ -3,9 +3,10 @@ package codingworkflow
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	ts "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
 )
 
 const (
@@ -319,9 +320,11 @@ func (a *ASTOperations) ParseFile(filePath string, content []byte) (*ts.Parser, 
 		return nil, nil, fmt.Errorf("grammar registry not initialized")
 	}
 
-	// For tree-sitter, we need the actual language object
-	// For now, default to Go (can be extended with language detection from file extension)
-	lang := golang.GetLanguage()
+	lang, alias := resolveTreeSitterLanguageForPath(filePath)
+	if lang == nil {
+		return nil, nil, fmt.Errorf("unsupported file type for AST parsing: %s", filepath.Ext(filePath))
+	}
+
 	parser := ts.NewParser()
 	parser.SetLanguage(lang)
 
@@ -331,7 +334,7 @@ func (a *ASTOperations) ParseFile(filePath string, content []byte) (*ts.Parser, 
 	}
 
 	if tree == nil {
-		return nil, nil, fmt.Errorf("parse returned nil tree")
+		return nil, nil, fmt.Errorf("parse returned nil tree for language %q", alias)
 	}
 
 	root := tree.RootNode()
@@ -343,83 +346,82 @@ func (a *ASTOperations) ParseFile(filePath string, content []byte) (*ts.Parser, 
 }
 
 // ExtractFunctions extracts function names from a parsed AST.
-// Works for Go files (can be extended for other languages).
+// Supports Go, Python, JavaScript/TypeScript, Java, and Rust AST shapes.
 func (a *ASTOperations) ExtractFunctions(root *ts.Node, content []byte) []string {
 	if root == nil {
 		return nil
 	}
 
-	var functions []string
-	cursor := ts.NewTreeCursor(root)
-	defer cursor.Close()
-
-	// Walk tree looking for function declarations
-	var walk func()
-	walk = func() {
-		node := cursor.CurrentNode()
-		if node.Type() == "function_declaration" || node.Type() == "method_declaration" {
-			// Find the name node
-			for i := uint32(0); i < node.ChildCount(); i++ {
-				child := node.Child(int(i))
-				if child.Type() == "identifier" {
-					name := content[child.StartByte():child.EndByte()]
-					functions = append(functions, string(name))
-					break
-				}
-			}
-		}
-
-		if cursor.GoToFirstChild() {
-			walk()
-			cursor.GoToParent()
-		}
-
-		for cursor.GoToNextSibling() {
-			walk()
-		}
+	functionNodeTypes := map[string]bool{
+		"function_declaration":    true,
+		"method_declaration":      true,
+		"function_definition":     true,
+		"constructor_declaration": true,
+		"function_item":           true,
+		"method_definition":       true,
 	}
 
-	walk()
+	functions := make([]string, 0)
+	seen := make(map[string]struct{})
+
+	walkAST(root, func(node *ts.Node) {
+		if node == nil || !functionNodeTypes[node.Type()] {
+			return
+		}
+
+		name := extractNodeName(node, content)
+		if name == "" {
+			return
+		}
+
+		if _, exists := seen[name]; exists {
+			return
+		}
+
+		seen[name] = struct{}{}
+		functions = append(functions, name)
+	})
+
 	return functions
 }
 
 // ExtractImports extracts import statements from a parsed AST.
-// Works for Go files (can be extended for other languages).
+// Supports Go, Python, JavaScript/TypeScript, Java, and Rust AST shapes.
 func (a *ASTOperations) ExtractImports(root *ts.Node, content []byte) []string {
 	if root == nil {
 		return nil
 	}
 
-	var imports []string
-	cursor := ts.NewTreeCursor(root)
-	defer cursor.Close()
-
-	// Walk tree looking for import declarations
-	var walk func()
-	walk = func() {
-		node := cursor.CurrentNode()
-		if node.Type() == "import_declaration" || node.Type() == "import_spec" {
-			// Extract the import path
-			for i := uint32(0); i < node.ChildCount(); i++ {
-				child := node.Child(int(i))
-				if child.Type() == "interpreted_string_literal" {
-					path := content[child.StartByte():child.EndByte()]
-					imports = append(imports, string(path))
-				}
-			}
-		}
-
-		if cursor.GoToFirstChild() {
-			walk()
-			cursor.GoToParent()
-		}
-
-		for cursor.GoToNextSibling() {
-			walk()
-		}
+	importNodeTypes := map[string]bool{
+		"import_spec":           true,
+		"import_declaration":    true,
+		"import_statement":      true,
+		"import_from_statement": true,
+		"use_declaration":       true,
+		"using_directive":       true,
 	}
 
-	walk()
+	imports := make([]string, 0)
+	seen := make(map[string]struct{})
+
+	walkAST(root, func(node *ts.Node) {
+		if node == nil || !importNodeTypes[node.Type()] {
+			return
+		}
+
+		value := extractImportValue(node, content)
+		if value == "" {
+			return
+		}
+
+		if _, exists := seen[value]; exists {
+			return
+		}
+
+		seen[value] = struct{}{}
+		imports = append(imports, value)
+	})
+
 	return imports
 }
 
@@ -480,11 +482,18 @@ func (a *ASTOperations) FindSymbolAtPosition(root *ts.Node, content []byte, line
 	for targetNode != nil {
 		nodeType := targetNode.Type()
 		if nodeType == "function_declaration" || nodeType == "method_declaration" ||
-			nodeType == "type_declaration" || nodeType == "var_declaration" {
+			nodeType == "function_definition" || nodeType == "constructor_declaration" ||
+			nodeType == "function_item" || nodeType == "method_definition" ||
+			nodeType == "type_declaration" || nodeType == "var_declaration" ||
+			nodeType == "type_spec" || nodeType == "class_definition" ||
+			nodeType == "class_declaration" || nodeType == "interface_declaration" ||
+			nodeType == "enum_declaration" || nodeType == "struct_item" ||
+			nodeType == "trait_item" {
 			// Extract name
 			for i := uint32(0); i < targetNode.ChildCount(); i++ {
 				child := targetNode.Child(int(i))
-				if child.Type() == "identifier" || child.Type() == "type_identifier" {
+				if child.Type() == "identifier" || child.Type() == "type_identifier" ||
+					child.Type() == "field_identifier" || child.Type() == "property_identifier" {
 					name := content[child.StartByte():child.EndByte()]
 					return string(name), nodeType, nil
 				}
@@ -494,6 +503,92 @@ func (a *ASTOperations) FindSymbolAtPosition(root *ts.Node, content []byte, line
 	}
 
 	return "", "", fmt.Errorf("no symbol found")
+}
+
+func walkAST(node *ts.Node, visit func(*ts.Node)) {
+	if node == nil || visit == nil {
+		return
+	}
+
+	visit(node)
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		walkAST(node.NamedChild(i), visit)
+	}
+}
+
+func extractNodeName(node *ts.Node, content []byte) string {
+	if node == nil {
+		return ""
+	}
+
+	for _, fieldName := range []string{"name", "identifier"} {
+		if child := node.ChildByFieldName(fieldName); child != nil {
+			if name := normalizeNodeText(child.Content(content)); name != "" {
+				return name
+			}
+		}
+	}
+
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		child := node.NamedChild(i)
+		if child == nil {
+			continue
+		}
+		switch child.Type() {
+		case "identifier", "field_identifier", "property_identifier", "type_identifier":
+			if name := normalizeNodeText(child.Content(content)); name != "" {
+				return name
+			}
+		}
+	}
+
+	return ""
+}
+
+func extractImportValue(node *ts.Node, content []byte) string {
+	if node == nil {
+		return ""
+	}
+
+	stringNodeTypes := map[string]bool{
+		"interpreted_string_literal": true,
+		"raw_string_literal":         true,
+		"string":                     true,
+		"string_literal":             true,
+	}
+
+	if literal := findFirstNodeContent(node, content, stringNodeTypes); literal != "" {
+		return strings.Trim(literal, "\"'`")
+	}
+
+	text := normalizeNodeText(node.Content(content))
+	if text == "" {
+		return ""
+	}
+
+	return text
+}
+
+func findFirstNodeContent(node *ts.Node, content []byte, types map[string]bool) string {
+	if node == nil {
+		return ""
+	}
+
+	if types[node.Type()] {
+		return normalizeNodeText(node.Content(content))
+	}
+
+	for i := 0; i < int(node.NamedChildCount()); i++ {
+		if value := findFirstNodeContent(node.NamedChild(i), content, types); value != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func normalizeNodeText(text string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
 }
 
 // ContextPackOperations provides helper methods for building and manipulating ContextPacks.

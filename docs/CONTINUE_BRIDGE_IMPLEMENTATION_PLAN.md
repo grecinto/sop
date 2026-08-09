@@ -1,6 +1,6 @@
 # Continue Native Transport Implementation Plan
 
-**Status**: Active
+**Status**: Completed for the implemented rollout sections 2a and 2b; remaining work is limited to follow-on Continue client wiring and operational hardening.
 
 ## Goal
 
@@ -291,6 +291,95 @@ Validation:
 - all phase exit criteria above are green in CI and local verification
 - no regressions in existing Continue native transport endpoints and auth-protected flows
 - plan status in this document is updated from active rollout to completed for section 2a
+
+### 2b. Complete multi-language AST/tree-sitter package for coding workflows
+
+- replace Go-hardcoded AST parsing in shared workflow infrastructure with language-aware parser selection by file extension and grammar registry
+- promote tree-sitter language resolution into one shared package surface so `ASTOperations`, context builders, artifact extraction, and workflow tools use the same language map
+- make `ParseFile`, `ExtractFunctions`, `ExtractImports`, and related AST helpers first-class for Go, Python, JavaScript, TypeScript, Java, and Rust
+- preserve regex/text fallback only for unsupported languages or unsupported constructs, rather than treating non-Go languages as the default degraded path
+- align Continue delegation guidance with actual coding-workflow coverage so bounded editor execution is not forced to compensate for avoidable Go-only infrastructure gaps
+- correct product and implementation docs that currently imply broader AST parity than the package actually provides today
+
+Current implementation summary:
+
+- `TreeSitterParser` is now effectively multi-language in the shared workflow layer for AST parsing and extraction, including C# support via `.cs` files and C# aliases
+- workflow code generation is now implemented through a target-language abstraction with concrete Go, C#, and Python backends, so the same workflow or script definition can be emitted in multiple targets
+- higher-level workflow helpers now receive consistent semantic structure for supported languages, and the remaining work is primarily broader target expansion and workflow-specific template coverage rather than a basic Go-only gap
+
+#### Phased rollout timeline
+
+##### Phase 1: Shared language resolution and parser routing
+
+- add a shared file-extension-to-language resolver used across coding workflow infrastructure
+- update `ASTOperations.ParseFile` to select tree-sitter grammar by file path instead of hardcoding Go
+- ensure unsupported languages fail gracefully into existing fallback paths without breaking current workflows
+
+##### Phase 2: Multi-language AST extraction parity
+
+- generalize `ExtractFunctions` for Go, Python, JavaScript, TypeScript, Java, and Rust node shapes
+- generalize `ExtractImports` for language-specific import/include forms where supported
+- extend symbol-at-position and related AST queries to return correct language-specific declarations where grammar support exists
+
+##### Phase 3: Workflow integration and context quality
+
+- update context-building helpers and shared workflow steps to consume the multi-language AST helpers consistently
+- eliminate stray Go-only structural parsing in multi-language context builders when an active file is not Go
+- ensure Continue-bounded coding tasks and daemon-owned coding workflows receive the same language-aware structure signals
+
+##### Phase 4: Documentation, tests, and contract truthfulness
+
+- update implementation and user-facing docs to distinguish full tree-sitter support from fallback parsing where needed
+- add tests for parser selection and AST extraction across supported languages
+- explicitly document any remaining unsupported languages or partial-query limitations instead of implying parity
+
+#### Exit criteria and validation matrix
+
+##### Phase 1 exit criteria
+
+- shared AST workflow infrastructure no longer hardcodes Go as the parsing language for non-Go files
+- parser routing is deterministic by file extension/path for supported languages
+- unsupported languages continue to work through existing fallback behavior without regression
+
+Validation:
+
+- add focused tests for file-path-to-language resolution and `ParseFile` routing
+- rerun coding workflow package tests: `export GOTELEMETRY=off && go test ./lib/sop/ai/agent/codingworkflow`
+
+##### Phase 2 exit criteria
+
+- function extraction works for Go, Python, JavaScript/TypeScript, Java, and Rust using tree-sitter where grammar support exists
+- import extraction returns language-appropriate results for the same supported set, or is explicitly documented where partial
+- AST helper outputs are no longer materially better for Go than for the other supported languages in the same package surface
+
+Validation:
+
+- add per-language fixtures and table-driven AST extraction tests
+- verify symbol extraction and import extraction results for each supported language
+
+##### Phase 3 exit criteria
+
+- context builders and coding workflow steps use the same multi-language AST helper path instead of mixed Go-only and fallback paths
+- Continue-delegated coding slices receive consistent code-structure signals across supported languages
+- no existing Go workflow behavior regresses while adding parity for other languages
+
+Validation:
+
+- add workflow integration tests covering at least one Go file and one non-Go file in the same task family
+- rerun daemon and coding workflow suites:
+  - `export GOTELEMETRY=off && go test ./lib/sop/cmd/sop-daemon`
+  - `export GOTELEMETRY=off && go test ./lib/sop/ai/agent/codingworkflow`
+
+##### Phase 4 exit criteria
+
+- implementation docs no longer overstate AST parity
+- product-facing docs clearly describe supported languages and any remaining fallback cases
+- the multi-language package plan is marked complete only when tests and docs match the actual implementation
+
+Validation:
+
+- update the coding workflow implementation docs and user-facing coding workflow support matrix
+- verify documentation claims against the final parser and extractor test matrix
 
 ### 3. Authentication hardening
 

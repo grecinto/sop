@@ -1143,19 +1143,11 @@ func inferSymbolName(input string) string {
 }
 
 func extensionToLanguage(ext string) string {
+	if alias := resolveTreeSitterLanguageAliasFromExtension(ext); alias != "" {
+		return alias
+	}
+
 	switch ext {
-	case ".go":
-		return "go"
-	case ".py":
-		return "python"
-	case ".js", ".jsx":
-		return "javascript"
-	case ".ts", ".tsx":
-		return "typescript"
-	case ".java":
-		return "java"
-	case ".rs":
-		return "rust"
 	case ".cs":
 		return "csharp"
 	default:
@@ -1215,9 +1207,6 @@ func collectASTLeafNodes(content, workingDir, activeFile string) ([]string, stri
 	// V1: Use enhanced tree-sitter parser with multi-language support
 	ext := filepath.Ext(activeFile)
 	lang := extensionToLanguage(ext)
-	if lang == "" {
-		lang = "go"
-	}
 
 	tsParser := NewTreeSitterParser(lang)
 	leaves, err := tsParser.ParseSymbols(content)

@@ -19,6 +19,9 @@ func main() {
 		inputFile   = flag.String("input", "", "Path to workflow JSON file")
 		outputFile  = flag.String("output", "", "Output path for compiled binary (default: workflow name)")
 		outputGo    = flag.String("output-go", "", "Output path for generated Go source (optional)")
+		outputCs    = flag.String("output-cs", "", "Output path for generated C# source (optional)")
+		outputPy    = flag.String("output-py", "", "Output path for generated Python source (optional)")
+		targetLang  = flag.String("target", "go", "Target language for generated source: go, csharp, python")
 		scriptMode  = flag.Bool("script", false, "Compile a script instead of a workflow")
 		showVersion = flag.Bool("version", false, "Show version information")
 		verbose     = flag.Bool("v", false, "Verbose output")
@@ -35,8 +38,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s -input workflow.json -output my-workflow\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Generate Go source only:\n")
 		fmt.Fprintf(os.Stderr, "  %s -input workflow.json -output-go workflow.go\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Generate C# source:\n")
+		fmt.Fprintf(os.Stderr, "  %s -input workflow.json -target csharp -output-cs workflow.cs\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Compile a script:\n")
-		fmt.Fprintf(os.Stderr, "  %s -script -input script.json -output-go script.go\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -script -input script.json -target python -output-py script.py\n\n", os.Args[0])
 	}
 
 	flag.Parse()
@@ -66,79 +71,151 @@ func main() {
 
 	// Compile based on mode
 	if *scriptMode {
-		if err := compileScript(*inputFile, *outputGo, *verbose); err != nil {
+		if err := compileScript(*inputFile, *targetLang, *outputGo, *outputCs, *outputPy, *verbose); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		if err := compileWorkflow(*inputFile, *outputFile, *outputGo, *verbose); err != nil {
+		if err := compileWorkflow(*inputFile, *outputFile, *targetLang, *outputGo, *outputCs, *outputPy, *verbose); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	}
 }
 
-// compileScript compiles a JSON script to Go source
-func compileScript(inputFile, outputGo string, verbose bool) error {
-	// Generate Go source
-	goCode, err := codegen.CompileScriptToGo(inputFile)
+// compileScript compiles a JSON script to source in the requested target language
+func compileScript(inputFile, targetLang, outputGo, outputCs, outputPy string, verbose bool) error {
+	target := codegen.TargetLanguage(strings.ToLower(strings.TrimSpace(targetLang)))
+	var (
+		code string
+		err  error
+	)
+
+	switch target {
+	case codegen.TargetLanguageGo:
+		code, err = codegen.CompileScriptToGo(inputFile)
+	case codegen.TargetLanguageCSharp:
+		code, err = codegen.CompileScriptToCSharp(inputFile)
+	case codegen.TargetLanguagePython:
+		code, err = codegen.CompileScriptToPython(inputFile)
+	case codegen.TargetLanguageTypeScript, codegen.TargetLanguageJavaScript, codegen.TargetLanguageReact, codegen.TargetLanguageAngular, codegen.TargetLanguageHTMLCSS:
+		code, err = codegen.CompileScript(inputFile, target)
+	default:
+		return fmt.Errorf("unsupported target language: %s", targetLang)
+	}
 	if err != nil {
 		return fmt.Errorf("compile script: %w", err)
 	}
 
-	// Determine output path
-	if outputGo == "" {
-		// Default: same name as input with .go extension
+	outputPath := outputGo
+	switch target {
+	case codegen.TargetLanguageCSharp:
+		outputPath = outputCs
+	case codegen.TargetLanguagePython:
+		outputPath = outputPy
+	}
+
+	if outputPath == "" {
 		base := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
-		outputGo = base + "_compiled.go"
+		switch target {
+		case codegen.TargetLanguageCSharp:
+			outputPath = base + "_compiled.cs"
+		case codegen.TargetLanguagePython:
+			outputPath = base + "_compiled.py"
+		case codegen.TargetLanguageTypeScript, codegen.TargetLanguageReact:
+			outputPath = base + "_compiled.tsx"
+		case codegen.TargetLanguageJavaScript:
+			outputPath = base + "_compiled.js"
+		case codegen.TargetLanguageAngular:
+			outputPath = base + "_compiled.ts"
+		case codegen.TargetLanguageHTMLCSS:
+			outputPath = base + "_compiled.html"
+		default:
+			outputPath = base + "_compiled.go"
+		}
 	}
 
-	// Write Go source
-	if err := os.WriteFile(outputGo, []byte(goCode), 0644); err != nil {
-		return fmt.Errorf("write Go source: %w", err)
+	if err := os.WriteFile(outputPath, []byte(code), 0644); err != nil {
+		return fmt.Errorf("write source: %w", err)
 	}
 
-	fmt.Printf("✓ Generated Go source: %s\n", outputGo)
-	fmt.Printf("  Size: %d bytes\n", len(goCode))
+	fmt.Printf("✓ Generated %s source: %s\n", target, outputPath)
+	fmt.Printf("  Size: %d bytes\n", len(code))
 
 	if verbose {
 		fmt.Printf("\nTo use in your code:\n")
-		fmt.Printf("  import \"./compiled\"\n")
-		fmt.Printf("  result, err := compiled.ScriptName(ctx, input)\n")
+		if target == codegen.TargetLanguageGo {
+			fmt.Printf("  import \"./compiled\"\n")
+			fmt.Printf("  result, err := compiled.ScriptName(ctx, input)\n")
+		}
 	}
 
 	return nil
 }
 
-// compileWorkflow compiles a JSON workflow to Go source and optionally to binary
-func compileWorkflow(inputFile, outputBinary, outputGo string, verbose bool) error {
-	// Generate Go source
-	goCode, err := codegen.CompileWorkflowToGo(inputFile)
+// compileWorkflow compiles a JSON workflow to source and optionally to binary
+func compileWorkflow(inputFile, outputBinary, targetLang, outputGo, outputCs, outputPy string, verbose bool) error {
+	target := codegen.TargetLanguage(strings.ToLower(strings.TrimSpace(targetLang)))
+	var (
+		code string
+		err  error
+	)
+
+	switch target {
+	case codegen.TargetLanguageGo:
+		code, err = codegen.CompileWorkflowToGo(inputFile)
+	case codegen.TargetLanguageCSharp:
+		code, err = codegen.CompileWorkflowToCSharp(inputFile)
+	case codegen.TargetLanguagePython:
+		code, err = codegen.CompileWorkflowToPython(inputFile)
+	case codegen.TargetLanguageTypeScript, codegen.TargetLanguageJavaScript, codegen.TargetLanguageReact, codegen.TargetLanguageAngular, codegen.TargetLanguageHTMLCSS:
+		code, err = codegen.CompileWorkflow(inputFile, target)
+	default:
+		return fmt.Errorf("unsupported target language: %s", targetLang)
+	}
 	if err != nil {
 		return fmt.Errorf("compile workflow: %w", err)
 	}
 
-	// Determine Go source path
-	goSourcePath := outputGo
-	if goSourcePath == "" {
-		// Use temp file if only building binary
+	outputPath := outputGo
+	switch target {
+	case codegen.TargetLanguageCSharp:
+		outputPath = outputCs
+	case codegen.TargetLanguagePython:
+		outputPath = outputPy
+	}
+
+	if outputPath == "" {
 		if outputBinary != "" {
-			goSourcePath = filepath.Join(os.TempDir(), "workflow_main.go")
+			outputPath = filepath.Join(os.TempDir(), "workflow_main.go")
 		} else {
-			// Default: same name as input with .go extension
 			base := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
-			goSourcePath = base + "_compiled.go"
+			switch target {
+			case codegen.TargetLanguageCSharp:
+				outputPath = base + "_compiled.cs"
+			case codegen.TargetLanguagePython:
+				outputPath = base + "_compiled.py"
+			case codegen.TargetLanguageTypeScript, codegen.TargetLanguageReact:
+				outputPath = base + "_compiled.tsx"
+			case codegen.TargetLanguageJavaScript:
+				outputPath = base + "_compiled.js"
+			case codegen.TargetLanguageAngular:
+				outputPath = base + "_compiled.ts"
+			case codegen.TargetLanguageHTMLCSS:
+				outputPath = base + "_compiled.html"
+			default:
+				outputPath = base + "_compiled.go"
+			}
 		}
 	}
 
-	// Write Go source
-	if err := os.WriteFile(goSourcePath, []byte(goCode), 0644); err != nil {
-		return fmt.Errorf("write Go source: %w", err)
+	if err := os.WriteFile(outputPath, []byte(code), 0644); err != nil {
+		return fmt.Errorf("write source: %w", err)
 	}
 
-	if outputGo != "" {
-		fmt.Printf("✓ Generated Go source: %s\n", goSourcePath)
-		fmt.Printf("  Size: %d bytes\n", len(goCode))
+	if outputGo != "" || outputCs != "" || outputPy != "" || outputBinary == "" {
+		fmt.Printf("✓ Generated %s source: %s\n", target, outputPath)
+		fmt.Printf("  Size: %d bytes\n", len(code))
 	}
 
 	// Compile to binary if requested
@@ -154,8 +231,13 @@ func compileWorkflow(inputFile, outputBinary, outputGo string, verbose bool) err
 			// (go build handles this automatically)
 		}
 
-		// Run go build
-		cmd := exec.Command("go", "build", "-o", binaryPath, goSourcePath)
+		// Run go build only for Go output
+		if target != codegen.TargetLanguageGo {
+			fmt.Printf("Skipping binary build for target %s; source emitted at %s\n", target, outputPath)
+			return nil
+		}
+
+		cmd := exec.Command("go", "build", "-o", binaryPath, outputPath)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 
@@ -177,14 +259,14 @@ func compileWorkflow(inputFile, outputBinary, outputGo string, verbose bool) err
 			fmt.Printf("  ./%s \"your query here\"\n", filepath.Base(binaryPath))
 		}
 
-		// Clean up temp Go source if it was temporary
-		if outputGo == "" {
-			os.Remove(goSourcePath)
+		// Clean up temp source if it was temporary
+		if outputGo == "" && outputCs == "" && outputPy == "" {
+			os.Remove(outputPath)
 		}
 	} else {
 		if verbose {
 			fmt.Printf("\nTo compile to binary:\n")
-			fmt.Printf("  go build -o my-workflow %s\n", goSourcePath)
+			fmt.Printf("  go build -o my-workflow %s\n", outputPath)
 		}
 	}
 

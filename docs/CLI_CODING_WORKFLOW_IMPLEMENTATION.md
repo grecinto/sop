@@ -1,7 +1,7 @@
 # CLI Coding Workflow Implementation
 
-**Last Updated**: 2026-07-28  
-**Status**: ✅ Capability-Based Service Adapter + Participant Pattern  
+**Last Updated**: 2026-08-08  
+**Status**: ✅ Capability-Based Service Adapter + Participant Pattern + Multi-Language AST Support + Multi-Language Code Generation  
 **Post-V1**: Data-Driven Workflows with Infrastructure Integration
 
 ## Purpose
@@ -14,6 +14,7 @@ This document captures the coding workflow capability that makes SOP feel like a
 
 **Infrastructure Foundation**:
 - ✅ AST/tree-sitter parsing via GrammarRegistry
+- ✅ Shared parser routing for Go, Python, JavaScript/TypeScript, Java, Rust, and C#
 - ✅ ContextManager for rich code context assembly
 - ✅ PatchEngine for precise code modifications
 - ✅ TestRunner with output parsing and iteration
@@ -53,6 +54,8 @@ This document captures the coding workflow capability that makes SOP feel like a
 - 📋 Workflow marketplace/sharing
 
 **Rationale**: V1 proves infrastructure-backed orchestration works. Post-V1 wraps this in a data-driven, user-customizable layer.
+
+**Current implementation note**: The shared AST layer now supports C# parsing and symbol/import extraction for .cs files, and workflow code generation now uses a target-language abstraction with concrete Go, C#, and Python backends. The same workflow or script definition can be emitted in multiple targets, with additional language backends added as needed.
 
 ---
 

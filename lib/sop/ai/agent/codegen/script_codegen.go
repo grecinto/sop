@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/format"
 	"os"
+	"sort"
 	"strings"
 	"text/template"
 )
@@ -31,31 +32,110 @@ type ScriptInstructionCodegen struct {
 // CompileScriptToGo generates Go source code from a JSON script definition.
 // Returns formatted Go code as a string.
 func CompileScriptToGo(scriptPath string) (string, error) {
-	// Read script file
+	return CompileScript(scriptPath, TargetLanguageGo)
+}
+
+// CompileScript generates source code from a script definition in the requested target language.
+func CompileScript(scriptPath string, target TargetLanguage) (string, error) {
+	script, err := loadScriptDefinition(scriptPath)
+	if err != nil {
+		return "", err
+	}
+
+	switch normalizeTargetLanguage(target) {
+	case TargetLanguageGo:
+		code, err := generateScriptGoCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate Go code: %w", err)
+		}
+
+		formatted, err := format.Source([]byte(code))
+		if err != nil {
+			return "", fmt.Errorf("format Go code: %w (source: %s)", err, code)
+		}
+
+		return string(formatted), nil
+	case TargetLanguageCSharp:
+		code, err := generateScriptCSharpCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate C# code: %w", err)
+		}
+		return code, nil
+	case TargetLanguagePython:
+		code, err := generateScriptPythonCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate Python code: %w", err)
+		}
+		return code, nil
+	case TargetLanguageJava:
+		code, err := generateScriptJavaCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate Java code: %w", err)
+		}
+		return code, nil
+	case TargetLanguageRust:
+		code, err := generateScriptRustCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate Rust code: %w", err)
+		}
+		return code, nil
+	case TargetLanguageTypeScript:
+		code, err := generateScriptTypeScriptCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate TypeScript code: %w", err)
+		}
+		return code, nil
+	case TargetLanguageJavaScript:
+		code, err := generateScriptJavaScriptCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate JavaScript code: %w", err)
+		}
+		return code, nil
+	case TargetLanguageReact:
+		code, err := generateScriptReactCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate React code: %w", err)
+		}
+		return code, nil
+	case TargetLanguageAngular:
+		code, err := generateScriptAngularCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate Angular code: %w", err)
+		}
+		return code, nil
+	case TargetLanguageHTMLCSS:
+		code, err := generateScriptHTMLCSSCode(&script)
+		if err != nil {
+			return "", fmt.Errorf("generate HTML/CSS code: %w", err)
+		}
+		return code, nil
+	default:
+		return "", fmt.Errorf("unsupported script codegen target: %q", target)
+	}
+}
+
+// CompileScriptToCSharp generates C# source code from a script definition.
+func CompileScriptToCSharp(scriptPath string) (string, error) {
+	return CompileScript(scriptPath, TargetLanguageCSharp)
+}
+
+// CompileScriptToPython generates Python source code from a script definition.
+func CompileScriptToPython(scriptPath string) (string, error) {
+	return CompileScript(scriptPath, TargetLanguagePython)
+}
+
+func loadScriptDefinition(scriptPath string) (ScriptDefinition, error) {
 	data, err := os.ReadFile(scriptPath)
 	if err != nil {
-		return "", fmt.Errorf("read script file: %w", err)
+		return ScriptDefinition{}, fmt.Errorf("read script file: %w", err)
 	}
 
-	// Parse JSON
 	var script ScriptDefinition
 	if err := json.Unmarshal(data, &script); err != nil {
-		return "", fmt.Errorf("parse script JSON: %w", err)
+		return ScriptDefinition{}, fmt.Errorf("parse script JSON: %w", err)
 	}
 
-	// Generate Go code
-	code, err := generateScriptGoCode(&script)
-	if err != nil {
-		return "", fmt.Errorf("generate Go code: %w", err)
-	}
-
-	// Format with gofmt
-	formatted, err := format.Source([]byte(code))
-	if err != nil {
-		return "", fmt.Errorf("format Go code: %w (source: %s)", err, code)
-	}
-
-	return string(formatted), nil
+	return script, nil
 }
 
 // generateScriptGoCode creates Go source from ScriptDefinition
@@ -97,6 +177,52 @@ func sanitizeName(name string) string {
 	return sanitized
 }
 
+func toPascalCaseIdentifier(name string) string {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9')
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if len(part) == 1 {
+			result = append(result, strings.ToUpper(part))
+			continue
+		}
+		result = append(result, strings.ToUpper(part[:1])+strings.ToLower(part[1:]))
+	}
+	return strings.Join(result, "")
+}
+
+func toCamelCaseIdentifier(name string) string {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9')
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts[0]) == 0 {
+		return ""
+	}
+	result := strings.ToLower(parts[0][:1]) + strings.ToLower(parts[0][1:])
+	for _, part := range parts[1:] {
+		if part == "" {
+			continue
+		}
+		if len(part) == 1 {
+			result += strings.ToUpper(part)
+			continue
+		}
+		result += strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+	}
+	return result
+}
+
 // toGoValue converts JSON value to Go literal string
 func toGoValue(v any) string {
 	switch val := v.(type) {
@@ -128,6 +254,173 @@ func toGoValue(v any) string {
 // goComment wraps text in Go comment format
 func goComment(text string) string {
 	return fmt.Sprintf("// %s", text)
+}
+
+func toCSharpValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return fmt.Sprintf("\"%s\"", strings.ReplaceAll(val, "\"", "\\\""))
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	case float64, int, int64:
+		return fmt.Sprintf("%v", val)
+	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("{ \"%s\", %s }", strings.ReplaceAll(k, "\"", "\\\""), toCSharpValue(val[k])))
+		}
+		return fmt.Sprintf("new Dictionary<string, object> { %s }", strings.Join(parts, ", "))
+	case []any:
+		parts := make([]string, 0, len(val))
+		for _, item := range val {
+			parts = append(parts, toCSharpValue(item))
+		}
+		return fmt.Sprintf("new List<object> { %s }", strings.Join(parts, ", "))
+	default:
+		return "null"
+	}
+}
+
+func toPythonValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return fmt.Sprintf("%q", val)
+	case bool:
+		if val {
+			return "True"
+		}
+		return "False"
+	case float64, int, int64:
+		return fmt.Sprintf("%v", val)
+	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%q: %s", k, toPythonValue(val[k])))
+		}
+		return fmt.Sprintf("{%s}", strings.Join(parts, ", "))
+	case []any:
+		parts := make([]string, 0, len(val))
+		for _, item := range val {
+			parts = append(parts, toPythonValue(item))
+		}
+		return fmt.Sprintf("[%s]", strings.Join(parts, ", "))
+	default:
+		return "None"
+	}
+}
+
+func toJavaValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return fmt.Sprintf("\"%s\"", strings.ReplaceAll(val, "\"", "\\\""))
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	case float64, int, int64:
+		return fmt.Sprintf("%v", val)
+	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("\"%s\": %s", strings.ReplaceAll(k, "\"", "\\\""), toJavaValue(val[k])))
+		}
+		return fmt.Sprintf("Map.of(%s)", strings.Join(parts, ", "))
+	case []any:
+		parts := make([]string, 0, len(val))
+		for _, item := range val {
+			parts = append(parts, toJavaValue(item))
+		}
+		return fmt.Sprintf("List.of(%s)", strings.Join(parts, ", "))
+	default:
+		return "null"
+	}
+}
+
+func toRustValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return fmt.Sprintf("\"%s\"", strings.ReplaceAll(val, "\"", "\\\""))
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	case float64, int, int64:
+		return fmt.Sprintf("%v", val)
+	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("\"%s\": %s", strings.ReplaceAll(k, "\"", "\\\""), toRustValue(val[k])))
+		}
+		return fmt.Sprintf("serde_json::json!({%s})", strings.Join(parts, ", "))
+	case []any:
+		parts := make([]string, 0, len(val))
+		for _, item := range val {
+			parts = append(parts, toRustValue(item))
+		}
+		return fmt.Sprintf("vec![%s]", strings.Join(parts, ", "))
+	default:
+		return "None"
+	}
+}
+
+func toTypeScriptValue(v any) string {
+	switch val := v.(type) {
+	case string:
+		return fmt.Sprintf("\"%s\"", strings.ReplaceAll(val, "\"", "\\\""))
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	case float64, int, int64:
+		return fmt.Sprintf("%v", val)
+	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%q: %s", k, toTypeScriptValue(val[k])))
+		}
+		return fmt.Sprintf("{%s}", strings.Join(parts, ", "))
+	case []any:
+		parts := make([]string, 0, len(val))
+		for _, item := range val {
+			parts = append(parts, toTypeScriptValue(item))
+		}
+		return fmt.Sprintf("[%s]", strings.Join(parts, ", "))
+	default:
+		return "undefined"
+	}
 }
 
 const scriptTemplate = `// Code generated by sop-compile-workflow. DO NOT EDIT.
@@ -555,3 +848,366 @@ func executeSort(ctx context.Context, args map[string]any, input any) (any, erro
 	return result, nil
 }
 `
+
+func generateScriptCSharpCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-csharp").Funcs(template.FuncMap{
+		"sanitizeName":  sanitizeName,
+		"toCSharpValue": toCSharpValue,
+		"add":           func(a, b int) int { return a + b },
+	}).Parse(scriptCSharpTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute C# template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func generateScriptPythonCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-python").Funcs(template.FuncMap{
+		"sanitizeName":  sanitizeName,
+		"toPythonValue": toPythonValue,
+		"add":           func(a, b int) int { return a + b },
+	}).Parse(scriptPythonTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute Python template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func generateScriptJavaCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-java").Funcs(template.FuncMap{
+		"sanitizeName":  sanitizeName,
+		"toJavaValue":   toJavaValue,
+		"add":           func(a, b int) int { return a + b },
+		"javaClassName": toPascalCaseIdentifier,
+	}).Parse(scriptJavaTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute Java template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func generateScriptRustCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-rust").Funcs(template.FuncMap{
+		"sanitizeName":   sanitizeName,
+		"toRustValue":    toRustValue,
+		"add":            func(a, b int) int { return a + b },
+		"rustIdentifier": toRustIdentifier,
+	}).Parse(scriptRustTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute Rust template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func generateScriptTypeScriptCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-typescript").Funcs(template.FuncMap{
+		"sanitizeName":      sanitizeName,
+		"toTypeScriptValue": toTypeScriptValue,
+		"add":               func(a, b int) int { return a + b },
+		"tsFunctionName":    toCamelCaseIdentifier,
+	}).Parse(scriptTypeScriptTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute TypeScript template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func generateScriptJavaScriptCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-javascript").Funcs(template.FuncMap{
+		"sanitizeName":      sanitizeName,
+		"toTypeScriptValue": toTypeScriptValue,
+		"add":               func(a, b int) int { return a + b },
+		"tsFunctionName":    toCamelCaseIdentifier,
+	}).Parse(scriptJavaScriptTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute JavaScript template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func generateScriptHTMLCSSCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-htmlcss").Funcs(template.FuncMap{
+		"sanitizeName": sanitizeName,
+	}).Parse(scriptHTMLCSSTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute HTML/CSS template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func generateScriptReactCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-react").Funcs(template.FuncMap{
+		"sanitizeName":      sanitizeName,
+		"toTypeScriptValue": toTypeScriptValue,
+		"add":               func(a, b int) int { return a + b },
+		"tsFunctionName":    toCamelCaseIdentifier,
+	}).Parse(scriptReactTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute React template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+func generateScriptAngularCode(script *ScriptDefinition) (string, error) {
+	tmpl := template.Must(template.New("script-angular").Funcs(template.FuncMap{
+		"sanitizeName":      sanitizeName,
+		"toTypeScriptValue": toTypeScriptValue,
+		"add":               func(a, b int) int { return a + b },
+		"tsFunctionName":    toCamelCaseIdentifier,
+	}).Parse(scriptAngularTemplate))
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, script); err != nil {
+		return "", fmt.Errorf("execute Angular template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+const scriptCSharpTemplate = `// Code generated by sop-compile-workflow. DO NOT EDIT.
+using System;
+using System.Collections.Generic;
+
+public static class {{ sanitizeName .Name }}Script {
+	// {{ .Description }}
+	public static Dictionary<string, object?> Run(Dictionary<string, object?> input) {
+		object? lastResult = null;
+		var variables = new Dictionary<string, object?>(input);
+
+{{- range $idx, $step := .Script }}
+		// Step {{ add $idx 1 }}: {{ $step.Op }}{{ if $step.Name }} - {{ $step.Name }}{{ end }}
+		lastResult = ExecuteOperation("{{ $step.Op }}", {{ toCSharpValue $step.Args }}, {{ if $step.InputVar }}variables["{{ $step.InputVar }}"]{{ else }}lastResult{{ end }});
+		{{- if $step.ResultVar }}
+		variables["{{ $step.ResultVar }}"] = lastResult;
+		{{- end }}
+
+{{- end }}
+		return new Dictionary<string, object?> {
+			{ "{{ .Output }}", lastResult }
+		};
+	}
+
+	private static object? ExecuteOperation(string op, Dictionary<string, object> args, object? input) {
+		// Runtime adapters provide concrete implementations for these operations.
+		return new Dictionary<string, object?> {
+			{ "op", op },
+			{ "args", args },
+			{ "input", input },
+		};
+	}
+}
+`
+
+const scriptPythonTemplate = `# Code generated by sop-compile-workflow. DO NOT EDIT.
+# {{ .Description }}
+
+def run(input_data: dict) -> dict:
+	last_result = None
+	variables = dict(input_data)
+
+{{- range $idx, $step := .Script }}
+	# Step {{ add $idx 1 }}: {{ $step.Op }}{{ if $step.Name }} - {{ $step.Name }}{{ end }}
+	last_result = execute_operation("{{ $step.Op }}", {{ toPythonValue $step.Args }}, {{ if $step.InputVar }}variables["{{ $step.InputVar }}"]{{ else }}last_result{{ end }})
+	{{- if $step.ResultVar }}
+	variables["{{ $step.ResultVar }}"] = last_result
+	{{- end }}
+
+{{- end }}
+	return {
+		"{{ .Output }}": last_result,
+	}
+
+
+def execute_operation(op: str, args: dict, input_value):
+	# Runtime adapters provide concrete implementations for these operations.
+	return {
+		"op": op,
+		"args": args,
+		"input": input_value,
+	}
+`
+
+const scriptJavaTemplate = `// Code generated by sop-compile-workflow. DO NOT EDIT.
+import java.util.HashMap;
+import java.util.Map;
+
+public class {{ javaClassName .Name }}Script {
+	public static Map<String, Object> run(Map<String, Object> inputData) {
+		Object lastResult = null;
+		Map<String, Object> variables = new HashMap<>(inputData);
+
+{{- range $idx, $step := .Script }}
+		// Step {{ add $idx 1 }}: {{ $step.Op }}{{ if $step.Name }} - {{ $step.Name }}{{ end }}
+		lastResult = executeOperation("{{ $step.Op }}", {{ toJavaValue $step.Args }}, {{ if $step.InputVar }}variables.get("{{ $step.InputVar }}"){{ else }}lastResult{{ end }});
+		{{- if $step.ResultVar }}
+		variables.put("{{ $step.ResultVar }}", lastResult);
+		{{- end }}
+
+{{- end }}
+		Map<String, Object> result = new HashMap<>();
+		result.put("{{ .Output }}", lastResult);
+		return result;
+	}
+
+	private static Object executeOperation(String op, Object args, Object inputValue) {
+		Map<String, Object> result = new HashMap<>();
+		result.put("op", op);
+		result.put("args", args);
+		result.put("input", inputValue);
+		return result;
+	}
+}
+`
+
+const scriptRustTemplate = `// Code generated by sop-compile-workflow. DO NOT EDIT.
+use serde_json::Value;
+use std::collections::HashMap;
+
+pub fn {{ rustIdentifier .Name }}(input_data: HashMap<String, Value>) -> HashMap<String, Value> {
+	let mut last_result: Option<Value> = None;
+	let mut variables = input_data;
+
+{{- range $idx, $step := .Script }}
+	// Step {{ add $idx 1 }}: {{ $step.Op }}{{ if $step.Name }} - {{ $step.Name }}{{ end }}
+	last_result = Some(execute_operation("{{ $step.Op }}", {{ toRustValue $step.Args }}, {{ if $step.InputVar }}variables.get("{{ $step.InputVar }}").cloned().unwrap_or(Value::Null){{ else }}last_result.clone().unwrap_or(Value::Null){{ end }}));
+	{{- if $step.ResultVar }}
+	variables.insert("{{ $step.ResultVar }}".to_string(), last_result.clone().unwrap_or(Value::Null));
+	{{- end }}
+
+{{- end }}
+	let mut result = HashMap::new();
+	result.insert("{{ .Output }}".to_string(), last_result.unwrap_or(Value::Null));
+	result
+}
+
+fn execute_operation(op: &str, args: Value, input_value: Value) -> Value {
+	serde_json::json!({
+		"op": op,
+		"args": args,
+		"input": input_value
+	})
+}
+`
+
+const scriptTypeScriptTemplate = `// Code generated by sop-compile-workflow. DO NOT EDIT.
+export async function {{ tsFunctionName .Name }}(inputData: Record<string, unknown>): Promise<Record<string, unknown>> {
+	let lastResult: unknown = undefined;
+	const variables: Record<string, unknown> = { ...inputData };
+
+{{- range $idx, $step := .Script }}
+	// Step {{ add $idx 1 }}: {{ $step.Op }}{{ if $step.Name }} - {{ $step.Name }}{{ end }}
+	lastResult = executeOperation("{{ $step.Op }}", {{ toTypeScriptValue $step.Args }}, {{ if $step.InputVar }}variables["{{ $step.InputVar }}"]{{ else }}lastResult{{ end }});
+	{{- if $step.ResultVar }}
+	variables["{{ $step.ResultVar }}"] = lastResult;
+	{{- end }}
+
+{{- end }}
+	return {
+		"{{ .Output }}": lastResult,
+	};
+}
+
+export function executeOperation(op: string, args: unknown, inputValue: unknown): unknown {
+	return {
+		op,
+		args,
+		input: inputValue,
+	};
+}
+`
+
+const scriptJavaScriptTemplate = `// Code generated by sop-compile-workflow. DO NOT EDIT.
+export function {{ tsFunctionName .Name }}(inputData) {
+	let lastResult = undefined;
+	const variables = { ...inputData };
+
+{{- range $idx, $step := .Script }}
+	// Step {{ add $idx 1 }}: {{ $step.Op }}{{ if $step.Name }} - {{ $step.Name }}{{ end }}
+	lastResult = executeOperation("{{ $step.Op }}", {{ toTypeScriptValue $step.Args }}, {{ if $step.InputVar }}variables["{{ $step.InputVar }}"]{{ else }}lastResult{{ end }});
+	{{- if $step.ResultVar }}
+	variables["{{ $step.ResultVar }}"] = lastResult;
+	{{- end }}
+
+{{- end }}
+	return {
+		"{{ .Output }}": lastResult,
+	};
+}
+
+export function executeOperation(op, args, inputValue) {
+	return {
+		op,
+		args,
+		input: inputValue,
+	};
+}
+`
+
+const scriptHTMLCSSTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>{{ .Name }}</h1>
+    <p>{{ .Description }}</p>
+    <ul>
+{{- range .Script }}
+      <li>{{ .Op }}</li>
+{{- end }}
+    </ul>
+  </div>
+</body>
+</html>
+`
+
+const scriptReactTemplate = `import React from "react";
+
+export function {{ tsFunctionName .Name }}(inputData: Record<string, unknown>): Record<string, unknown> {
+    let lastResult: unknown = undefined;
+    const variables: Record<string, unknown> = { ...inputData };
+{{- range $idx, $step := .Script }}
+    // Step {{ add $idx 1 }}: {{ $step.Op }}{{ if $step.Name }} - {{ $step.Name }}{{ end }}
+    lastResult = executeOperation("{{ $step.Op }}", {{ toTypeScriptValue $step.Args }}, {{ if $step.InputVar }}variables["{{ $step.InputVar }}"]{{ else }}lastResult{{ end }});
+{{- if $step.ResultVar }}
+    variables["{{ $step.ResultVar }}"] = lastResult;
+{{- end }}
+{{- end }}
+    return { "{{ .Output }}": lastResult };
+}
+
+export function executeOperation(op: string, args: unknown, inputValue: unknown): unknown {
+    return { op, args, input: inputValue };
+}
+`
+
+const scriptAngularTemplate = "import { Component } from \"@angular/core\";\n\n@Component({\n  selector: \"app-{{ sanitizeName .Name }}\",\n  template: `\n    <section>\n      <h1>{{ .Name }}</h1>\n      <p>{{ .Description }}</p>\n    </section>\n  `\n})\nexport class {{ sanitizeName .Name }}Component {}\n"

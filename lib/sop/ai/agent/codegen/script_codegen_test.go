@@ -135,6 +135,55 @@ func TestToGoValue(t *testing.T) {
 	}
 }
 
+func TestCompileScriptSupportedTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "targeted_script.json")
+
+	scriptJSON := `{
+  "name": "targeted_script",
+  "description": "A script used to verify target-language generation",
+  "input": "repo_path",
+  "output": "summary",
+  "script": [
+    {
+      "op": "read_file",
+      "args": {"path": "/tmp/example.txt"},
+      "result_var": "content"
+    }
+  ]
+}`
+
+	if err := os.WriteFile(scriptPath, []byte(scriptJSON), 0644); err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+
+	testCases := []struct {
+		name     string
+		target   TargetLanguage
+		expected string
+	}{
+		{name: "java", target: TargetLanguageJava, expected: "public class TargetedScript"},
+		{name: "rust", target: TargetLanguageRust, expected: "fn targeted_script"},
+		{name: "typescript", target: TargetLanguageTypeScript, expected: "export async function targetedScript"},
+		{name: "javascript", target: TargetLanguageJavaScript, expected: "export function targetedScript"},
+		{name: "react", target: TargetLanguageReact, expected: "export function"},
+		{name: "angular", target: TargetLanguageAngular, expected: "@Component"},
+		{name: "htmlcss", target: TargetLanguageHTMLCSS, expected: "<!DOCTYPE html>"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, err := CompileScript(scriptPath, tc.target)
+			if err != nil {
+				t.Fatalf("CompileScript(%s) failed: %v", tc.target, err)
+			}
+			if !strings.Contains(code, tc.expected) {
+				t.Fatalf("generated code for %s does not contain %q:\n%s", tc.target, tc.expected, code)
+			}
+		})
+	}
+}
+
 func TestCompileRealScript(t *testing.T) {
 	// Test with actual extract_go_test_errors.json
 	scriptPath := filepath.Join("..", "..", "..", "..", "workflow_scripts", "extract_go_test_errors.json")
@@ -518,5 +567,97 @@ func TestMixedOperations(t *testing.T) {
 		if !strings.Contains(goCode, expectedVar) {
 			t.Errorf("Generated code should reference %s variable", varName)
 		}
+	}
+}
+
+func TestCompileScriptMultiLanguageTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "multilang_script.json")
+
+	scriptJSON := `{
+  "name": "multi_target_script",
+  "description": "Generate script for multiple languages",
+  "input": "input_data",
+  "output": "result",
+  "script": [
+    {
+      "op": "format",
+      "args": {"template": "hello {{input}}"},
+      "result_var": "formatted"
+    }
+  ]
+}`
+
+	if err := os.WriteFile(scriptPath, []byte(scriptJSON), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		target   TargetLanguage
+		contains []string
+	}{
+		{
+			name:     "go",
+			target:   TargetLanguageGo,
+			contains: []string{"package compiled", "executeFormat"},
+		},
+		{
+			name:     "csharp",
+			target:   TargetLanguageCSharp,
+			contains: []string{"public static class Multi_target_scriptScript", "ExecuteOperation"},
+		},
+		{
+			name:     "python",
+			target:   TargetLanguagePython,
+			contains: []string{"def run(input_data: dict)", "def execute_operation"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			code, err := CompileScript(scriptPath, tc.target)
+			if err != nil {
+				t.Fatalf("CompileScript(%s) failed: %v", tc.target, err)
+			}
+			if strings.TrimSpace(code) == "" {
+				t.Fatal("expected non-empty generated code")
+			}
+			for _, want := range tc.contains {
+				if !strings.Contains(code, want) {
+					t.Fatalf("generated code for %s missing %q", tc.target, want)
+				}
+			}
+		})
+	}
+}
+
+func TestCompileScriptUnsupportedTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "unsupported_target_script.json")
+
+	scriptJSON := `{
+  "name": "unsupported_target_script",
+  "description": "Unsupported target script test",
+  "input": "input_data",
+  "output": "result",
+  "script": [
+    {
+      "op": "format",
+      "args": {"template": "hi"}
+    }
+  ]
+}`
+
+	if err := os.WriteFile(scriptPath, []byte(scriptJSON), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	_, err := CompileScript(scriptPath, TargetLanguage("ruby"))
+	if err == nil {
+		t.Fatal("expected unsupported target error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "unsupported") {
+		t.Fatalf("expected unsupported target error, got %v", err)
 	}
 }

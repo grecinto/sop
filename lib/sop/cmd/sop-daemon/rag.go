@@ -288,6 +288,7 @@ func buildRuntimeGeneratorChain(candidates []runtimeProviderCandidate) (ai.Gener
 			log.Printf("daemon handleAsk: provider init skipped provider=%q error=%v", candidate.Provider, err)
 			continue
 		}
+		resolvedGenerators = append(resolvedGenerators, gen)
 		if primaryDetails == nil {
 			primaryDetails = &agent.ProviderDetails{
 				Provider: providerName,
@@ -296,7 +297,6 @@ func buildRuntimeGeneratorChain(candidates []runtimeProviderCandidate) (ai.Gener
 				BaseURL:  resolvedURL,
 			}
 		}
-		resolvedGenerators = append(resolvedGenerators, gen)
 	}
 
 	if len(resolvedGenerators) == 0 {
@@ -1202,19 +1202,22 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	apiKey := strings.TrimSpace(req.LLMAPIKey)
 	model := strings.TrimSpace(req.LLMModel)
 	url := strings.TrimSpace(req.LLMURL)
-	if provider == "" && apiKey == "" && model == "" && url == "" {
+	legacyFieldsProvided := provider != "" || apiKey != "" || model != "" || url != ""
+	if !legacyFieldsProvided {
 		provider = strings.TrimSpace(storedSessionContext.LLMProvider)
 		apiKey = strings.TrimSpace(storedSessionContext.LLMAPIKey)
 		model = strings.TrimSpace(storedSessionContext.LLMModel)
 		url = strings.TrimSpace(storedSessionContext.LLMURL)
 	}
-	if provider == "" && apiKey == "" && model == "" && url == "" {
-		credentialPool := selectedCredentials
-		if len(credentialPool) == 0 {
-			credentialPool = cloneLLMCredentialsMap(storedSessionContext.LLMCredentials)
-		}
+	runtimeCredentialPool := selectedCredentials
+	if len(requestCredentials) > 0 {
+		runtimeCredentialPool = cloneLLMCredentialsMap(requestCredentials)
+	} else if len(runtimeCredentialPool) == 0 {
+		runtimeCredentialPool = cloneLLMCredentialsMap(storedSessionContext.LLMCredentials)
+	}
+	if !legacyFieldsProvided && (len(requestCredentials) > 0 || len(runtimeCredentialPool) > 0) {
 		for _, candidate := range []string{"openai", "anthropic", "gemini"} {
-			cred, ok := credentialPool[candidate]
+			cred, ok := runtimeCredentialPool[candidate]
 			if !ok {
 				continue
 			}
@@ -1227,12 +1230,13 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 			url = strings.TrimSpace(cred.URL)
 			break
 		}
+	} else if !legacyFieldsProvided {
+		provider = strings.TrimSpace(storedSessionContext.LLMProvider)
+		apiKey = strings.TrimSpace(storedSessionContext.LLMAPIKey)
+		model = strings.TrimSpace(storedSessionContext.LLMModel)
+		url = strings.TrimSpace(storedSessionContext.LLMURL)
 	}
-	credentialPool := selectedCredentials
-	if len(credentialPool) == 0 {
-		credentialPool = cloneLLMCredentialsMap(storedSessionContext.LLMCredentials)
-	}
-	runtimeChain := buildRuntimeProviderChain(provider, apiKey, model, url, credentialPool)
+	runtimeChain := buildRuntimeProviderChain(provider, apiKey, model, url, runtimeCredentialPool)
 	runtimeGenerator, runtimePrimaryDetails := buildRuntimeGeneratorChain(runtimeChain)
 	if runtimeGenerator != nil {
 		cfg.Set("generator", runtimeGenerator)

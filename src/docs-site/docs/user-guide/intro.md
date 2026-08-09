@@ -45,7 +45,7 @@ Built on the **LLM as Orchestrator** paradigm, AI Studio breaks down complex tas
 
 **Intelligent Undo** 🔄 - Experiment fearlessly with an industry-leading undo system that treats each workflow as a searchable transaction. Find and restore past changes using natural language: "undo authentication middleware changes" just works. No git history pollution, no manual bisecting.
 
-**Multi-language support**: Works seamlessly with Go, Python, Java, Rust, JavaScript, TypeScript, and C#. Automatically detects your project type and uses the right tools for testing, analysis, and code generation.
+**Multi-language support**: Works seamlessly with Go, Python, JavaScript/TypeScript, Java, Rust, C#, HTML/CSS, React, and Angular. Automatically detects your project type and uses the right tools for testing, analysis, and code generation.
 
 [Learn about Intelligent Coding →](./coding-workflows)
 

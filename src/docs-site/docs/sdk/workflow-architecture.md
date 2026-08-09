@@ -11,6 +11,22 @@ AI Studio provides two complementary workflow approaches that both execute throu
 
 Both approaches implement a **participant pattern** where workflows are passive responders and the Ask pipeline maintains control of execution flow.
 
+## Supported Coding Workflow Languages
+
+The shared coding workflow stack supports the following languages for reading, analysis, and workflow/script generation:
+
+- **Go**
+- **Python**
+- **JavaScript / TypeScript**
+- **Java**
+- **Rust**
+- **C#**
+- **HTML / CSS**
+- **React**
+- **Angular**
+
+This coverage is exposed through both the reader/analyzer layer and the workflow/script generation layer, so teams can use the same workflow model across front-end, back-end, and full-stack projects.
+
 ## The Ask Pipeline: LLM as Orchestrator Architecture
 
 The Ask pipeline (`CopilotAgent.ask()`) embodies the **LLM as Orchestrator** paradigm—the central architectural principle where the LLM makes all execution decisions, controls flow, and orchestrates capabilities dynamically.

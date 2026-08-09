@@ -492,7 +492,7 @@ for _, result := range results {
 
 ## Known Limitations (V1)
 
-1. **Tree-sitter grammars:** Only Go has full AST parsing; Python/JS/TS use fallback regex
+1. **Tree-sitter grammars:** Only Go has full AST parsing; Python/JS/TS use fallback regex. The tracked completion plan for full shared-package multi-language parity now lives in [docs/CONTINUE_BRIDGE_IMPLEMENTATION_PLAN.md §2b](../../../../docs/CONTINUE_BRIDGE_IMPLEMENTATION_PLAN.md).
 2. **File search:** Basic filename/content matching; no advanced ranking
 3. **Orchestration:** Interface-based; no real state machine integration yet
 4. **LSP support:** Not implemented
