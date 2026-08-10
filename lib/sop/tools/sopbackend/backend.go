@@ -306,6 +306,9 @@ func (b *Backend) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/space/auto-share", WithAuth(HandleSetSpaceAutoShare))
 	mux.HandleFunc("/api/space/auto-shared", WithAuth(HandleListAutoSharedSpaces))
 	mux.HandleFunc("/api/space/pull", WithAuth(HandleDaemonPullSpace)) // Daemon pulls Space from HQ
+	mux.HandleFunc("/api/federation/model-catalog", WithAuth(HandleGetModelCatalogFederation))
+	mux.HandleFunc("/api/federation/model-catalog/refresh", WithAuth(HandleRefreshModelCatalogFederation))
+	mux.HandleFunc("/api/federation/model-catalog/share", WithAuth(HandleShareModelCatalogFederation))
 
 	// LTM Category Auto-Share Endpoints (SA only)
 	mux.HandleFunc("/api/ltm/category/auto-share", WithAuth(HandleSetCategoryAutoShare))

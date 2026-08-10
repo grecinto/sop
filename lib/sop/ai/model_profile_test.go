@@ -167,8 +167,14 @@ func TestModelCatalogRegistry_LoadsOfficialPricingMetadata(t *testing.T) {
 	for _, entry := range registry.entries {
 		if entry.Provider == "gemini" && entry.Model == "gemini-2.5-flash" {
 			found = true
-			if entry.InputCostPer1MTokens <= 0 || entry.OutputCostPer1MTokens <= 0 {
-				t.Fatalf("expected official pricing metadata for gemini-2.5-flash, got input=%v output=%v", entry.InputCostPer1MTokens, entry.OutputCostPer1MTokens)
+			if entry.PricingStatus == "unknown" && (entry.LastKnownInputCostUSD <= 0 && entry.LastKnownOutputCostUSD <= 0) {
+				t.Fatalf("expected pricing metadata or a last-known price for gemini-2.5-flash, got status=%q input=%v output=%v", entry.PricingStatus, entry.InputCostPer1MTokens, entry.OutputCostPer1MTokens)
+			}
+			if entry.InputCostPer1MTokens <= 0 && entry.LastKnownInputCostUSD <= 0 {
+				t.Fatalf("expected official pricing metadata or a last-known input price for gemini-2.5-flash, got input=%v last_known_input=%v", entry.InputCostPer1MTokens, entry.LastKnownInputCostUSD)
+			}
+			if entry.OutputCostPer1MTokens <= 0 && entry.LastKnownOutputCostUSD <= 0 {
+				t.Fatalf("expected official pricing metadata or a last-known output price for gemini-2.5-flash, got output=%v last_known_output=%v", entry.OutputCostPer1MTokens, entry.LastKnownOutputCostUSD)
 			}
 			if entry.InputCostPer1MTokens < 0.2 || entry.OutputCostPer1MTokens < 1.0 {
 				t.Fatalf("expected pricing to reflect official Gemini rates for gemini-2.5-flash, got input=%v output=%v", entry.InputCostPer1MTokens, entry.OutputCostPer1MTokens)
@@ -198,6 +204,33 @@ func TestModelCatalogRegistry_PrefersCheapestCompatibleFlashLiteForBudgetSensiti
 	}
 	if entry.Model != "gemini-2.0-flash-lite" && entry.Model != "gemini-2.5-flash-lite" {
 		t.Fatalf("expected a flash-lite model for budget-sensitive validation, got %q", entry.Model)
+	}
+}
+
+func TestModelCatalogRegistry_UsesLastKnownPricingWhenOfficialPricingIsMissing(t *testing.T) {
+	tempDir := t.TempDir()
+	catalogPath := filepath.Join(tempDir, "model_catalog.json")
+	catalog := `{"llm":[{"label":"Test","options":[{"value":"test:legacy","label":"Legacy","capability_tier":"cheap","reasoning_strength":2,"max_output_tokens":1024,"max_tool_turns":3,"compact_prompt":true,"supported_task_types":["implementation"],"pricing_status":"last_known","pricing_source":"manual","last_known_input_cost_usd":0.2,"last_known_output_cost_usd":0.4}]}]}`
+	if err := os.WriteFile(catalogPath, []byte(catalog), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	registry := loadModelCatalogRegistry()
+	entry, ok := registry.SelectBest(ModelSelectionRequest{Provider: "test", TaskType: "implementation", EstimatedInputTokens: 6000, EstimatedOutputTokens: 1000, MaxCostUSD: 0.01, PreferCheap: true})
+	if !ok {
+		t.Fatal("expected registry to return a matching model")
+	}
+	if entry.Model != "legacy" {
+		t.Fatalf("expected legacy model to be selected from last-known pricing, got %q", entry.Model)
 	}
 }
 

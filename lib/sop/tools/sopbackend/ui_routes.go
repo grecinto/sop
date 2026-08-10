@@ -123,6 +123,7 @@ func (r *UIRouter) RegisterWithOptions(mux *http.ServeMux, includeRoot bool) {
 	mux.HandleFunc("/privacy/advanced", RequireAuth(HandlePrivacyAdvancedPage))
 	mux.HandleFunc("/hq-login", r.handleHQLoginPage)
 	mux.HandleFunc("/app", RequireAuth(r.handleIndex))
+	mux.HandleFunc("/app/federation/model-catalog", RequireAuth(r.handleFederationModelCatalogPage))
 	mux.HandleFunc("/app/subscribe", RequireAuth(r.handleSubscribe))
 	mux.HandleFunc("/app/unsubscribe", RequireAuth(r.handleUnsubscribe))
 	mux.HandleFunc("/app/unregister", RequireAuth(r.handleUnregister))
@@ -237,6 +238,21 @@ func (r *UIRouter) handleIndex(w http.ResponseWriter, req *http.Request) {
 
 	data := r.landingPageData(req)
 	if err := r.executeTemplateWithFallback(w, data, "landing.html", "index.html"); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (r *UIRouter) handleFederationModelCatalogPage(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if r.Templates == nil {
+		http.Error(w, "templates not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	data := r.landingPageData(req)
+	data["PageTitle"] = "Federation / Model Catalog"
+	data["FederationModelCatalog"] = buildModelCatalogFederationPayload(modelCatalog)
+	if err := r.executeTemplateWithFallback(w, data, "federation_model_catalog", "landing.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

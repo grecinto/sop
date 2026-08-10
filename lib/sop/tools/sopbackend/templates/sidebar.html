@@ -103,6 +103,17 @@
             </div>
         </div>
 
+        <div style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <h3 style="margin: 0; font-size: 1.05em; cursor: pointer; display: flex; align-items: center;" onmouseover="this.style.color='var(--success-bg)'" onmouseout="this.style.color=''">
+                    Federation
+                </h3>
+            </div>
+            <button onclick="window.location.href='/app/federation/model-catalog'" style="width: 100%; text-align: left; background: transparent; color: var(--text-color); border: 1px solid var(--border-color); padding: 7px 8px; border-radius: 4px; cursor: pointer;">
+                Model Catalog
+            </button>
+        </div>
+
         <script>
             function toggleSidebarList(containerId, caretId) {
                 const container = document.getElementById(containerId);
@@ -115,11 +126,170 @@
                     caret.textContent = '▶';
                 }
             }
+
+            function showFederationModelCatalog() {
+                const modal = document.getElementById('federation-modal');
+                if (modal) {
+                    modal.style.display = 'flex';
+                    loadFederationModelCatalog();
+                }
+            }
+
+            function closeFederationModelCatalogModal() {
+                const modal = document.getElementById('federation-modal');
+                if (modal) {
+                    modal.style.display = 'none';
+                }
+            }
+
+            async function loadFederationModelCatalog() {
+                const statusEl = document.getElementById('federation-status');
+                const summaryEl = document.getElementById('federation-summary');
+                const bodyEl = document.getElementById('federation-model-catalog-body');
+                const refreshBtn = document.getElementById('federation-refresh-btn');
+                const shareBtn = document.getElementById('federation-share-btn');
+                if (!statusEl || !summaryEl || !bodyEl || !refreshBtn || !shareBtn) {
+                    return;
+                }
+                statusEl.textContent = 'Loading model catalog...';
+                refreshBtn.disabled = true;
+                shareBtn.disabled = true;
+                try {
+                    const response = await fetch('/api/federation/model-catalog', {headers: {'Accept': 'application/json'}});
+                    const payload = await response.json();
+                    if (!response.ok) {
+                        throw new Error(payload.error || 'Failed to load model catalog');
+                    }
+                    renderFederationModelCatalog(payload);
+                } catch (err) {
+                    statusEl.textContent = err.message || 'Unable to load model catalog';
+                    summaryEl.innerHTML = '<span style="color: var(--danger-bg);">Unable to load federation data.</span>';
+                }
+            }
+
+            function renderFederationModelCatalog(payload) {
+                const statusEl = document.getElementById('federation-status');
+                const summaryEl = document.getElementById('federation-summary');
+                const bodyEl = document.getElementById('federation-model-catalog-body');
+                const refreshBtn = document.getElementById('federation-refresh-btn');
+                const shareBtn = document.getElementById('federation-share-btn');
+                if (!statusEl || !summaryEl || !bodyEl || !refreshBtn || !shareBtn) {
+                    return;
+                }
+                const rows = payload.rows || [];
+                const revision = payload.revision || 'n/a';
+                const refreshed = payload.last_refreshed_at || 'n/a';
+                const shared = payload.last_shared_at || 'n/a';
+                summaryEl.innerHTML = `Revision: <strong>${revision.slice(0, 12)}</strong> &nbsp;•&nbsp; Last refreshed: <strong>${refreshed}</strong> &nbsp;•&nbsp; Last shared: <strong>${shared}</strong>`;
+                statusEl.textContent = rows.length > 0 ? 'Showing current catalog entries.' : 'No catalog entries were returned.';
+                if (!rows.length) {
+                    bodyEl.innerHTML = '<tr><td colspan="6" style="padding: 12px;">No model catalog rows found.</td></tr>';
+                } else {
+                    bodyEl.innerHTML = rows.map((row) => {
+                        const input = typeof row.input_cost_per_1m_tokens === 'number' ? row.input_cost_per_1m_tokens.toFixed(2) : 'n/a';
+                        const output = typeof row.output_cost_per_1m_tokens === 'number' ? row.output_cost_per_1m_tokens.toFixed(2) : 'n/a';
+                        const lastInput = typeof row.last_known_input_cost_usd === 'number' ? row.last_known_input_cost_usd.toFixed(2) : 'n/a';
+                        const lastOutput = typeof row.last_known_output_cost_usd === 'number' ? row.last_known_output_cost_usd.toFixed(2) : 'n/a';
+                        return `<tr><td>${row.provider || ''}</td><td>${row.model || ''}</td><td>${row.value || ''}</td><td>${input}</td><td>${output}</td><td>${lastInput}/${lastOutput}</td></tr>`;
+                    }).join('');
+                }
+                refreshBtn.disabled = false;
+                shareBtn.disabled = !payload.can_federate;
+                shareBtn.title = payload.can_federate ? 'Share the current catalog to copilots' : 'The catalog must be refreshed before it can be federated again';
+            }
+
+            async function refreshFederationCatalog() {
+                const statusEl = document.getElementById('federation-status');
+                const refreshBtn = document.getElementById('federation-refresh-btn');
+                const shareBtn = document.getElementById('federation-share-btn');
+                if (!statusEl || !refreshBtn || !shareBtn) {
+                    return;
+                }
+                refreshBtn.disabled = true;
+                shareBtn.disabled = true;
+                statusEl.textContent = 'Refreshing pricing metadata...';
+                try {
+                    const response = await fetch('/api/federation/model-catalog/refresh', {method: 'POST', headers: {'Accept': 'application/json'}});
+                    const payload = await response.json();
+                    if (!response.ok) {
+                        throw new Error(payload.error || 'Failed to refresh model catalog');
+                    }
+                    renderFederationModelCatalog(payload);
+                } catch (err) {
+                    statusEl.textContent = err.message || 'Unable to refresh catalog';
+                }
+            }
+
+            async function shareFederationCatalog() {
+                const statusEl = document.getElementById('federation-status');
+                const refreshBtn = document.getElementById('federation-refresh-btn');
+                const shareBtn = document.getElementById('federation-share-btn');
+                if (!statusEl || !refreshBtn || !shareBtn) {
+                    return;
+                }
+                if (shareBtn.disabled) {
+                    return;
+                }
+                refreshBtn.disabled = true;
+                shareBtn.disabled = true;
+                statusEl.textContent = 'Sharing catalog to copilots...';
+                try {
+                    const response = await fetch('/api/federation/model-catalog/share', {method: 'POST', headers: {'Accept': 'application/json'}});
+                    const payload = await response.json();
+                    if (!response.ok) {
+                        throw new Error(payload.error || 'Failed to share model catalog');
+                    }
+                    renderFederationModelCatalog(payload);
+                    statusEl.textContent = 'Catalog shared to copilots.';
+                } catch (err) {
+                    statusEl.textContent = err.message || 'Unable to share catalog';
+                }
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const modal = document.getElementById('federation-modal');
+                if (modal) {
+                    modal.addEventListener('click', function(event) {
+                        if (event.target === modal) {
+                            closeFederationModelCatalogModal();
+                        }
+                    });
+                }
+            });
         </script>
 
     </div>
     
     <!-- Sidebar Footer -->
+    <div id="federation-modal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: 9999; align-items: center; justify-content: center; padding: 16px;">
+        <div style="width: min(980px, 100%); max-height: 90vh; overflow: auto; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); padding: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin: 0;">Federation / Model Catalog</h3>
+                <button onclick="closeFederationModelCatalogModal()" style="background: transparent; border: none; color: var(--text-color); cursor: pointer; font-size: 1.2em;">×</button>
+            </div>
+            <div id="federation-summary" style="margin-bottom: 10px; color: var(--text-muted); font-size: 0.95em;"></div>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+                <button id="federation-refresh-btn" onclick="refreshFederationCatalog()" style="padding: 7px 12px; border: 1px solid var(--border-color); background: var(--active-bg); color: white; border-radius: 4px; cursor: pointer;">Fetch latest prices</button>
+                <button id="federation-share-btn" onclick="shareFederationCatalog()" style="padding: 7px 12px; border: 1px solid var(--border-color); background: var(--sidebar-bg); color: var(--text-color); border-radius: 4px; cursor: pointer;">Federate out to copilots</button>
+            </div>
+            <div id="federation-status" style="margin-bottom: 8px; color: var(--text-muted);">Loading…</div>
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.95em;">
+                    <thead>
+                        <tr style="background: var(--sidebar-bg);">
+                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Provider</th>
+                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Model</th>
+                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Catalog Value</th>
+                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Input / 1M</th>
+                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Output / 1M</th>
+                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Last Known</th>
+                        </tr>
+                    </thead>
+                    <tbody id="federation-model-catalog-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
     <div style="padding-top: 10px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; align-items: center; gap: 10px;">
         <button id="env-manager-btn" onclick="showEnvironmentsManager()" title="Manage Environments" style="display: none; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px;">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">

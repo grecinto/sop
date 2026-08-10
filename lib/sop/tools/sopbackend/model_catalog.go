@@ -19,10 +19,16 @@ type ModelCatalogGroup struct {
 }
 
 type ModelCatalogOption struct {
-	Value                string   `json:"value"`
-	Label                string   `json:"label"`
-	DefaultThinkingLevel string   `json:"default_thinking_level,omitempty"`
-	ThinkingLevelRange   []string `json:"thinking_level_range,omitempty"`
+	Value                  string   `json:"value"`
+	Label                  string   `json:"label"`
+	DefaultThinkingLevel   string   `json:"default_thinking_level,omitempty"`
+	ThinkingLevelRange     []string `json:"thinking_level_range,omitempty"`
+	InputCostPer1MTokens   float64  `json:"input_cost_per_1m_tokens,omitempty"`
+	OutputCostPer1MTokens  float64  `json:"output_cost_per_1m_tokens,omitempty"`
+	PricingStatus          string   `json:"pricing_status,omitempty"`
+	PricingSource          string   `json:"pricing_source,omitempty"`
+	LastKnownInputCostUSD  float64  `json:"last_known_input_cost_usd,omitempty"`
+	LastKnownOutputCostUSD float64  `json:"last_known_output_cost_usd,omitempty"`
 }
 
 func defaultLocalEmbedderOptions() []ModelCatalogOption {

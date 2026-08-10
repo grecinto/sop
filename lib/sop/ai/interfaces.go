@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -348,20 +349,24 @@ type ModelSelectionRequest struct {
 }
 
 type ModelCatalogEntry struct {
-	Provider              string
-	Model                 string
-	Label                 string
-	Tier                  string
-	MaxOutputTokens       int
-	Temperature           float32
-	CompactPrompt         bool
-	MaxToolTurns          int
-	ReasoningStrength     int
-	SupportedTaskTypes    []string
-	MediaCapability       int
-	SupportedMediaTypes   []string
-	InputCostPer1MTokens  float64
-	OutputCostPer1MTokens float64
+	Provider               string
+	Model                  string
+	Label                  string
+	Tier                   string
+	MaxOutputTokens        int
+	Temperature            float32
+	CompactPrompt          bool
+	MaxToolTurns           int
+	ReasoningStrength      int
+	SupportedTaskTypes     []string
+	MediaCapability        int
+	SupportedMediaTypes    []string
+	InputCostPer1MTokens   float64
+	OutputCostPer1MTokens  float64
+	PricingStatus          string
+	PricingSource          string
+	LastKnownInputCostUSD  float64
+	LastKnownOutputCostUSD float64
 }
 
 type ModelCatalogRegistry struct {
@@ -420,9 +425,6 @@ func (r *ModelCatalogRegistry) SelectBest(req ModelSelectionRequest) (ModelCatal
 		}
 		estimatedCost := 0.0
 		if req.MaxCostUSD > 0 {
-			if entry.InputCostPer1MTokens <= 0 && entry.OutputCostPer1MTokens <= 0 {
-				continue
-			}
 			estimatedCost = estimateCatalogModelCost(entry, req.EstimatedInputTokens, req.EstimatedOutputTokens)
 			if estimatedCost > req.MaxCostUSD {
 				continue
@@ -497,20 +499,24 @@ func loadModelCatalogEntries() ([]ModelCatalogEntry, error) {
 					continue
 				}
 				entries = append(entries, ModelCatalogEntry{
-					Provider:              provider,
-					Model:                 model,
-					Label:                 option.Label,
-					Tier:                  strings.TrimSpace(option.CapabilityTier),
-					MaxOutputTokens:       option.MaxOutputTokens,
-					Temperature:           0,
-					CompactPrompt:         option.CompactPrompt != nil && *option.CompactPrompt,
-					MaxToolTurns:          option.MaxToolTurns,
-					ReasoningStrength:     option.ReasoningStrength,
-					SupportedTaskTypes:    append([]string(nil), option.SupportedTaskTypes...),
-					MediaCapability:       option.MediaCapability,
-					SupportedMediaTypes:   append([]string(nil), option.SupportedMediaTypes...),
-					InputCostPer1MTokens:  option.InputCostPer1MTokens,
-					OutputCostPer1MTokens: option.OutputCostPer1MTokens,
+					Provider:               provider,
+					Model:                  model,
+					Label:                  option.Label,
+					Tier:                   strings.TrimSpace(option.CapabilityTier),
+					MaxOutputTokens:        option.MaxOutputTokens,
+					Temperature:            0,
+					CompactPrompt:          option.CompactPrompt != nil && *option.CompactPrompt,
+					MaxToolTurns:           option.MaxToolTurns,
+					ReasoningStrength:      option.ReasoningStrength,
+					SupportedTaskTypes:     append([]string(nil), option.SupportedTaskTypes...),
+					MediaCapability:        option.MediaCapability,
+					SupportedMediaTypes:    append([]string(nil), option.SupportedMediaTypes...),
+					InputCostPer1MTokens:   option.InputCostPer1MTokens,
+					OutputCostPer1MTokens:  option.OutputCostPer1MTokens,
+					PricingStatus:          option.PricingStatus,
+					PricingSource:          option.PricingSource,
+					LastKnownInputCostUSD:  option.LastKnownInputCostUSD,
+					LastKnownOutputCostUSD: option.LastKnownOutputCostUSD,
 				})
 			}
 		}
@@ -522,16 +528,24 @@ func loadModelCatalogEntries() ([]ModelCatalogEntry, error) {
 }
 
 func estimateCatalogModelCost(entry ModelCatalogEntry, inputTokens, outputTokens int) float64 {
-	if entry.InputCostPer1MTokens <= 0 && entry.OutputCostPer1MTokens <= 0 {
-		return 0
+	inputRate := entry.InputCostPer1MTokens
+	if inputRate <= 0 {
+		inputRate = entry.LastKnownInputCostUSD
+	}
+	outputRate := entry.OutputCostPer1MTokens
+	if outputRate <= 0 {
+		outputRate = entry.LastKnownOutputCostUSD
+	}
+	if inputRate <= 0 && outputRate <= 0 {
+		return math.Inf(1)
 	}
 	inputCost := 0.0
 	outputCost := 0.0
-	if entry.InputCostPer1MTokens > 0 && inputTokens > 0 {
-		inputCost = float64(inputTokens) / 1_000_000 * entry.InputCostPer1MTokens
+	if inputRate > 0 && inputTokens > 0 {
+		inputCost = float64(inputTokens) / 1_000_000 * inputRate
 	}
-	if entry.OutputCostPer1MTokens > 0 && outputTokens > 0 {
-		outputCost = float64(outputTokens) / 1_000_000 * entry.OutputCostPer1MTokens
+	if outputRate > 0 && outputTokens > 0 {
+		outputCost = float64(outputTokens) / 1_000_000 * outputRate
 	}
 	return inputCost + outputCost
 }
@@ -728,20 +742,24 @@ type modelCatalogGroup struct {
 }
 
 type modelCatalogOption struct {
-	Value                 string   `json:"value"`
-	Label                 string   `json:"label"`
-	DefaultThinkingLevel  string   `json:"default_thinking_level,omitempty"`
-	ThinkingLevelRange    []string `json:"thinking_level_range,omitempty"`
-	CapabilityTier        string   `json:"capability_tier,omitempty"`
-	ReasoningStrength     int      `json:"reasoning_strength,omitempty"`
-	MaxOutputTokens       int      `json:"max_output_tokens,omitempty"`
-	MaxToolTurns          int      `json:"max_tool_turns,omitempty"`
-	CompactPrompt         *bool    `json:"compact_prompt,omitempty"`
-	SupportedTaskTypes    []string `json:"supported_task_types,omitempty"`
-	MediaCapability       int      `json:"media_capability,omitempty"`
-	SupportedMediaTypes   []string `json:"supported_media_types,omitempty"`
-	InputCostPer1MTokens  float64  `json:"input_cost_per_1m_tokens,omitempty"`
-	OutputCostPer1MTokens float64  `json:"output_cost_per_1m_tokens,omitempty"`
+	Value                  string   `json:"value"`
+	Label                  string   `json:"label"`
+	DefaultThinkingLevel   string   `json:"default_thinking_level,omitempty"`
+	ThinkingLevelRange     []string `json:"thinking_level_range,omitempty"`
+	CapabilityTier         string   `json:"capability_tier,omitempty"`
+	ReasoningStrength      int      `json:"reasoning_strength,omitempty"`
+	MaxOutputTokens        int      `json:"max_output_tokens,omitempty"`
+	MaxToolTurns           int      `json:"max_tool_turns,omitempty"`
+	CompactPrompt          *bool    `json:"compact_prompt,omitempty"`
+	SupportedTaskTypes     []string `json:"supported_task_types,omitempty"`
+	MediaCapability        int      `json:"media_capability,omitempty"`
+	SupportedMediaTypes    []string `json:"supported_media_types,omitempty"`
+	InputCostPer1MTokens   float64  `json:"input_cost_per_1m_tokens,omitempty"`
+	OutputCostPer1MTokens  float64  `json:"output_cost_per_1m_tokens,omitempty"`
+	PricingStatus          string   `json:"pricing_status,omitempty"`
+	PricingSource          string   `json:"pricing_source,omitempty"`
+	LastKnownInputCostUSD  float64  `json:"last_known_input_cost_usd,omitempty"`
+	LastKnownOutputCostUSD float64  `json:"last_known_output_cost_usd,omitempty"`
 }
 
 func resolveCatalogModelProfile(provider, model string) *ModelProfile {

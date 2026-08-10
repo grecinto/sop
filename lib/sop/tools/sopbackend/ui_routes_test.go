@@ -64,6 +64,22 @@ func TestUIRouterFindsTemplatesWhenWorkingDirectoryChanges(t *testing.T) {
 	}
 }
 
+func TestUIRouterExposesFederationModelCatalogPage(t *testing.T) {
+	router := NewUIRouter(nil, "*.html")
+
+	req := httptest.NewRequest(http.MethodGet, "/app/federation/model-catalog", nil)
+	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root"}))
+	rec := httptest.NewRecorder()
+	router.handleFederationModelCatalogPage(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected federation model catalog page to render with status 200, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "Fetch latest prices") {
+		t.Fatalf("expected federation model catalog page to contain the refresh action, got %q", body)
+	}
+}
+
 func TestLandingPageDataExposesModelCatalogForTemplates(t *testing.T) {
 	router := NewUIRouter(nil, "*.html")
 	req := httptest.NewRequest(http.MethodGet, "/app", nil)
