@@ -99,7 +99,9 @@ type progressSink func(string)
 // relying on the native tool-call format for tool execution and recovery.
 func (e *CompatibleReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) (ai.ReasoningResponse, error) {
 	// Initialize file-backed tool result storage for this session (all engines)
+	_, hadStorage := ctx.Value(ctxKeyToolResultStorage).(*ToolResultStorage)
 	storage := getOrCreateToolResultStorage(ctx)
+	storageOwned := storage != nil && !hadStorage
 	if storage != nil {
 		ctx = context.WithValue(ctx, ctxKeyToolResultStorage, storage)
 		// NOTE: DO NOT cleanup here in daemon mode - files need to persist across reasoning loops
@@ -109,13 +111,13 @@ func (e *CompatibleReActEngine) Run(ctx context.Context, req ai.ReasoningRequest
 
 	if loop := resolveOwnedReActLoop(req); loop != nil {
 		resp, err := loop.Run(ctx, req)
-		if storage != nil {
+		if storageOwned {
 			_ = storage.Cleanup()
 		}
 		return resp, err
 	}
 	resp, err := e.runDefaultLoop(ctx, req)
-	if storage != nil {
+	if storageOwned {
 		_ = storage.Cleanup()
 	}
 	return resp, err

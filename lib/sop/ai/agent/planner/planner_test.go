@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -31,6 +32,83 @@ func TestPlannerCapabilityBuildGuidanceProfileUsesLightGuidance(t *testing.T) {
 	}
 }
 
+func TestBasePhaseBuildInstructionsUsesAuthoringProfileOverrides(t *testing.T) {
+	base := newBasePhase("planning", "Planning", "Plan work", "coding_workflow", nil)
+	base.setAuthoringProfile(PhaseAuthoringProfile{
+		Domain: "coding_workflow",
+		Instructions: map[string]string{
+			"planning": "Use the authored planning instruction",
+		},
+	})
+
+	if got := base.BuildInstructions("plan a parser refactor", capabilities.RoutingState{}); got != "Use the authored planning instruction" {
+		t.Fatalf("expected authored planning instruction, got %q", got)
+	}
+}
+
+func TestBasePhaseBuildGuidanceProfileUsesAuthoringProfileRules(t *testing.T) {
+	base := newBasePhase("planning", "Planning", "Plan work", "coding_workflow", nil)
+	base.setAuthoringProfile(PhaseAuthoringProfile{
+		Domain:     "coding_workflow",
+		Principles: []string{"Prefer authored principles"},
+		PhaseRules: map[string][]capabilities.GuidanceRule{
+			"planning": {{Description: "Prefer authored phase guidance", AppliesTo: []string{"planning"}}},
+		},
+	})
+
+	profile := base.BuildGuidanceProfile("plan a parser refactor", capabilities.RoutingState{})
+	if len(profile.PhaseRules) == 0 {
+		t.Fatal("expected authored phase rules to be present")
+	}
+	if got := profile.PhaseRules[0].Description; got != "Prefer authored phase guidance" {
+		t.Fatalf("expected authored phase guidance rule, got %q", got)
+	}
+	if !containsStringInTest(profile.Principles, "Prefer authored principles") {
+		t.Fatalf("expected authored principle to be included, got %#v", profile.Principles)
+	}
+}
+
+func TestDesktopPhaseRunExecuteCommand_UsesSharedInfraExecutor(t *testing.T) {
+	var received map[string]any
+	phase := newDesktopPhase("execution", &cw.SharedInfrastructure{LocalCommandExecutor: func(ctx context.Context, args map[string]any) (string, error) {
+		received = args
+		return "bounded output", nil
+	}})
+	output, err := phase.runExecuteCommand(context.Background(), map[string]any{"command": "go test ./..."})
+	if err != nil {
+		t.Fatalf("expected command execution to succeed, got %v", err)
+	}
+	if output != "bounded output" {
+		t.Fatalf("expected shared executor result, got %q", output)
+	}
+	if got, _ := received["command"].(string); got != "go test ./..." {
+		t.Fatalf("expected command to be forwarded to shared executor, got %#v", received)
+	}
+	if got, _ := received["reasoning"].(string); strings.TrimSpace(got) == "" {
+		t.Fatalf("expected desktop phase to provide reasoning to shared executor, got %#v", received)
+	}
+}
+
+func TestStoresPhaseRunDesignQuery_FormatsStorePlan(t *testing.T) {
+	phase := newStoresPhase("planning", nil)
+	output, err := phase.runDesignQuery(map[string]any{"database": "orders", "store": "customers"})
+	if err != nil {
+		t.Fatalf("expected query design to succeed, got %v", err)
+	}
+	if !strings.Contains(output, "orders") || !strings.Contains(output, "customers") {
+		t.Fatalf("expected plan to mention the database and store, got %q", output)
+	}
+}
+
+func containsStringInTest(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPlanningPhaseCapability_UsesPlannerPackage(t *testing.T) {
 	cap := NewPlanningPhaseCapability(nil)
 	if cap == nil {
@@ -38,6 +116,21 @@ func TestPlanningPhaseCapability_UsesPlannerPackage(t *testing.T) {
 	}
 	if cap.ID() != "phase_planning" {
 		t.Fatalf("expected phase_planning id, got %q", cap.ID())
+	}
+}
+
+func TestPlanningPhaseCapabilityBuildGuidanceProfileUsesPhaseRules(t *testing.T) {
+	cap := NewPlanningPhaseCapability(nil)
+	provider, ok := cap.(capabilities.StructuredGuidanceProvider)
+	if !ok {
+		t.Fatal("expected planning phase capability to expose structured guidance")
+	}
+	profile := provider.BuildGuidanceProfile("plan a parser refactor", capabilities.RoutingState{})
+	if len(profile.PhaseRules) == 0 {
+		t.Fatal("expected planning phase capability to provide phase rules")
+	}
+	if profile.Intensity != capabilities.GuidanceIntensityLight {
+		t.Fatalf("expected light guidance intensity, got %q", profile.Intensity)
 	}
 }
 

@@ -16,7 +16,7 @@ func TestToolResultStorage_ListReadGrep(t *testing.T) {
 		baseDir:   tempDir,
 	}
 
-	// Store some test results (need >20KB to trigger file storage)
+	// Store some test results large enough to trigger file-backed storage
 	testOutput1 := strings.Repeat("line content with more data\n", 1000) +
 		"ERROR: Test failed\n" +
 		strings.Repeat("more line content here\n", 1000)
@@ -158,7 +158,7 @@ func TestToolResultAnalysis_AgentTools(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
 
-	// Store a test result file (need >20KB to trigger file storage)
+	// Store a test result file large enough to trigger file-backed storage
 	testOutput := strings.Repeat("INFO: Starting test run\n", 500) +
 		"ERROR: Connection timeout\n" +
 		"ERROR: Retry failed\n" +

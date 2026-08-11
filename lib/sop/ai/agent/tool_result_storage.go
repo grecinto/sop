@@ -16,7 +16,7 @@ import (
 const (
 	// toolResultThreshold defines when LLM gets summary vs full output
 	// ALL results are written to temp file, but LLM gets full result if <= threshold
-	toolResultThreshold = 2 * 1024 // 5KB - triggers summarization for most test outputs
+	toolResultThreshold = 4 * 1024 // 4KB balances direct reasoning with prompt-budget protection
 
 	// toolResultMaxInline defines the summary size for file-backed results
 	// We show head + tail of this size total
@@ -87,17 +87,21 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, rawResult string) 
 		return rawResult, nil
 	}
 
+	hadEnvelope := isToolResultEnvelope(rawResult)
 	resultText, hint, _, _ := unwrapToolResultEnvelopeFull(rawResult)
 	inline, filePath, size, err := storage.StoreResult(toolName, resultText)
 	if err != nil {
 		return "", err
+	}
+	if size <= toolResultThreshold && hint == nil && !hadEnvelope {
+		return inline, nil
 	}
 
 	envelope := ai.ToolResultEnvelope{
 		ToolResult:   normalizeToolResultPayload(inline),
 		ProgressHint: hint,
 	}
-	if filePath != "" {
+	if filePath != "" && size > toolResultThreshold {
 		envelope.FileMetadata = &ai.ToolFileMetadata{
 			FilePath: filePath,
 			FileSize: int64(size),
@@ -109,6 +113,20 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, rawResult string) 
 		return inline, nil
 	}
 	return string(wrapped), nil
+}
+
+func isToolResultEnvelope(rawResult string) bool {
+	trimmed := strings.TrimSpace(rawResult)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+		return false
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return false
+	}
+	_, ok := payload["tool_result"]
+	return ok
 }
 
 // unwrapJSONCommandResult extracts stdout from JSON command responses
@@ -243,11 +261,14 @@ func (s *ToolResultStorage) createStandardSummary(result, filePath string, sizeK
 	// Guide the LLM on how to analyze the full output
 	sb.WriteString("\n---\n")
 	sb.WriteString(fmt.Sprintf("Full output: %s (%.1fKB)\n", filePath, sizeKB))
-	sb.WriteString("To analyze based on your request:\n")
-	sb.WriteString("  • Targeted search: analyze_tool_result(file_path=\"\", operation=\"grep\", pattern=\"PATTERN\")\n")
-	sb.WriteString("  • Slice lines: analyze_tool_result(file_path=\"\", operation=\"sed\", start_line=X, end_line=Y)\n")
-	sb.WriteString("  • Inspect boundaries: analyze_tool_result(file_path=\"\", operation=\"head\" or \"tail\", max_matches=N)\n")
-	sb.WriteString("  • Count content: analyze_tool_result(file_path=\"\", operation=\"wc\")\n")
+	sb.WriteString("Do not infer the final outcome from the truncated preview alone when the full result is file-backed.\n")
+	sb.WriteString("Use the saved file to confirm the outcome based on your request:\n")
+	sb.WriteString(fmt.Sprintf("  • Known signal or pass/fail token: grep_tool_result(file_path=\"%s\", pattern=\"PATTERN\")\n", filePath))
+	sb.WriteString(fmt.Sprintf("  • Open-ended review of a specific section: read_tool_result(file_path=\"%s\", start_line=X, end_line=Y)\n", filePath))
+	sb.WriteString(fmt.Sprintf("  • Targeted text analysis: analyze_tool_result(file_path=\"%s\", operation=\"grep\", pattern=\"PATTERN\")\n", filePath))
+	sb.WriteString(fmt.Sprintf("  • Slice lines: analyze_tool_result(file_path=\"%s\", operation=\"sed\", start_line=X, end_line=Y)\n", filePath))
+	sb.WriteString(fmt.Sprintf("  • Inspect boundaries: analyze_tool_result(file_path=\"%s\", operation=\"head\" or \"tail\", max_matches=N)\n", filePath))
+	sb.WriteString(fmt.Sprintf("  • Count content: analyze_tool_result(file_path=\"%s\", operation=\"wc\")\n", filePath))
 
 	return sb.String()
 }

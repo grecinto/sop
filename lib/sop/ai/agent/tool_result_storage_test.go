@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 func TestNewToolResultStorage(t *testing.T) {
@@ -61,6 +64,25 @@ func TestStoreResult_SmallInline(t *testing.T) {
 	}
 }
 
+func TestWrapToolResultWithStorage_SmallResultReturnsRawInlineContent(t *testing.T) {
+	storage, err := NewToolResultStorage("test-inline-envelope")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
+	ctx = context.WithValue(ctx, SessionPayloadKey, &ai.SessionPayload{SessionID: "test-inline-envelope"})
+
+	wrapped, err := wrapToolResultWithStorage(ctx, "list_directory", "small inline result")
+	if err != nil {
+		t.Fatalf("wrapToolResultWithStorage() error = %v", err)
+	}
+	if wrapped != "small inline result" {
+		t.Fatalf("expected raw inline result, got %q", wrapped)
+	}
+}
+
 func TestStoreResult_LargeFileBacked(t *testing.T) {
 	storage, err := NewToolResultStorage("test-large")
 	if err != nil {
@@ -106,8 +128,8 @@ func TestStoreResult_LargeFileBacked(t *testing.T) {
 		t.Errorf("Summary should include file path")
 	}
 
-	// Phase 2: Passing tests use standard summary format with "To analyze" guidance
-	if !strings.Contains(inline, "To analyze") {
+	// Phase 2: Passing tests use standard summary format with explicit file-backed guidance.
+	if !strings.Contains(inline, "Use the saved file to confirm the outcome based on your request") {
 		t.Errorf("Summary should include standard analysis guidance")
 	}
 
@@ -131,7 +153,7 @@ func TestStoreResult_TestToolRecommendations(t *testing.T) {
 	}
 
 	// Phase 2: Passing tests (no failure indicators) use standard summary format
-	if !strings.Contains(inline, "To analyze") {
+	if !strings.Contains(inline, "Use the saved file to confirm the outcome based on your request") {
 		t.Errorf("Expected standard analysis guidance for passing tests")
 	}
 }
@@ -144,15 +166,24 @@ func TestStoreResult_BuildToolRecommendations(t *testing.T) {
 	defer storage.Cleanup()
 
 	largeResult := strings.Repeat("build output\n", 2000)
-	inline, _, _, err := storage.StoreResult("compile_project", largeResult)
+	inline, filePath, _, err := storage.StoreResult("compile_project", largeResult)
 
 	if err != nil {
 		t.Fatalf("StoreResult failed: %v", err)
 	}
 
 	// Phase 2: Build tools use standard summary format
-	if !strings.Contains(inline, "To analyze") {
+	if !strings.Contains(inline, "Use the saved file to confirm the outcome based on your request") {
 		t.Errorf("Expected standard analysis guidance for build tools")
+	}
+	if !strings.Contains(inline, filePath) {
+		t.Errorf("Expected concrete file path in analysis guidance, got: %s", inline)
+	}
+	if !strings.Contains(inline, "Do not infer the final outcome from the truncated preview alone") {
+		t.Errorf("Expected explicit warning against inferring from preview, got: %s", inline)
+	}
+	if !strings.Contains(inline, "grep_tool_result(file_path=") {
+		t.Errorf("Expected grep_tool_result recommendation for known-signal analysis, got: %s", inline)
 	}
 }
 
@@ -187,7 +218,7 @@ func TestStoreResult_HeadAndTail(t *testing.T) {
 
 	// Phase 2: Standard summary format includes head and tail with analysis guidance
 	// The exact format may vary, but should have analysis instructions
-	if !strings.Contains(inline, "To analyze") && !strings.Contains(inline, "Full output") {
+	if !strings.Contains(inline, "Use the saved file to confirm the outcome based on your request") && !strings.Contains(inline, "Full output") {
 		t.Errorf("Summary should include analysis guidance")
 	}
 }

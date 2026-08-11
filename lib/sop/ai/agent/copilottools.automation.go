@@ -473,7 +473,7 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 		a.registry.Register("git_push", "Pushes a branch to a remote repository.", gitPushArgsSchema, wrapStringTool(a.toolGitPush))
 
 		// Phase 2.3: Tool Result Analysis - efficiently process large tool outputs
-		a.registry.Register("list_tool_results", "Lists all stored tool result files from the current session. When a tool produces large output (>20KB), it's stored to a file. Use this to see what result files are available for analysis.", listToolResultsArgsSchema, wrapStringTool(a.toolListToolResults))
+		a.registry.Register("list_tool_results", "Lists all stored tool result files from the current session. When a tool produces large output, it's stored to a file for follow-up analysis. Use this to see what result files are available.", listToolResultsArgsSchema, wrapStringTool(a.toolListToolResults))
 		a.registry.Register("read_tool_result", "Reads a specific line range from a stored tool result file. Use this after identifying line numbers with grep_tool_result, or to view specific sections of large test/build outputs.", readToolResultArgsSchema, wrapStringTool(a.toolReadToolResult))
 		a.registry.Register("grep_tool_result", "Searches for a text pattern within a stored tool result file and returns matching lines with line numbers. Use this to find errors, failures, or specific patterns in large outputs.", grepToolResultArgsSchema, wrapStringTool(a.toolGrepToolResult))
 		a.registry.Register("analyze_tool_result", "Analyzes a stored tool result file using a lightweight operation such as grep, awk, sed, head, tail, wc, or cat. This is the preferred path for targeted inspection when the LLM wants a slice of the output without forcing the full temp file into context.", analyzeToolResultArgsSchema, wrapStringTool(a.toolAnalyzeToolResult))
@@ -1343,7 +1343,7 @@ func (a *CopilotAgent) toolListToolResults(ctx context.Context, args map[string]
 	}
 
 	if len(results) == 0 {
-		return "No stored tool results found. Large tool outputs (>20KB) are automatically stored for analysis.", nil
+		return "No stored tool results found. Large tool outputs are automatically stored for analysis.", nil
 	}
 
 	var sb strings.Builder

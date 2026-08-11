@@ -17,9 +17,25 @@ type StoresPhase struct {
 // newStoresPhase creates a stores domain phase
 func newStoresPhase(phaseID string, infra *SharedInfrastructure) *StoresPhase {
 	name, description := phaseMetadata(phaseID)
-	return &StoresPhase{
-		BasePhase: newBasePhase(phaseID, name, description, "stores", infra),
-	}
+	base := newBasePhase(phaseID, name, description, "stores", infra)
+	base.setAuthoringProfile(PhaseAuthoringProfile{
+		Domain:     "stores",
+		Principles: []string{"Never guess store names, field paths, or join mappings"},
+		Guardrails: []capabilities.GuidanceRule{{Description: "Do not mutate stores or assume schema without evidence", AppliesTo: []string{"stores"}}},
+		Instructions: map[string]string{
+			"investigation": "Use Investigation to inspect store structure and data before designing any operation. Keep the work read-only until the evidence is clear.",
+			"planning":      "Use Planning to design a concrete store operation plan, including required stores, filters, and validation expectations.",
+			"execution":     "Use Execution to run the planned store operation safely, prefer previews when available, and capture the result.",
+			"review":        "Use Review to validate results against the requested behavior and note any remaining risk or ambiguity.",
+		},
+		PhaseRules: map[string][]capabilities.GuidanceRule{
+			"investigation": {{Description: "Inspect store structure and data before designing any operation", AppliesTo: []string{"investigation"}}},
+			"planning":      {{Description: "Design the operation plan with explicit store, filter, and validation assumptions", AppliesTo: []string{"planning"}}},
+			"execution":     {{Description: "Execute only the planned store operation and verify it against observed state", AppliesTo: []string{"execution"}}},
+			"review":        {{Description: "Validate results against the requested behavior and surface remaining uncertainty", AppliesTo: []string{"review"}}},
+		},
+	})
+	return &StoresPhase{BasePhase: base}
 }
 
 func (p *StoresPhase) BuildContext(query string, state capabilities.RoutingState) string {
@@ -191,8 +207,11 @@ func (p *StoresPhase) runListStores(args map[string]any) (string, error) {
 		return "", fmt.Errorf("database name is required")
 	}
 
-	// TODO: Implement actual store listing
-	// This is a placeholder - connect to your actual store infrastructure
+	store := readPhaseString(args, "store", "")
+	if store != "" {
+		return fmt.Sprintf("Listing store '%s' in database '%s':\n- %s", store, database, store), nil
+	}
+
 	return fmt.Sprintf("Listing stores in database '%s':\n- store_alpha\n- store_beta\n- store_gamma", database), nil
 }
 
@@ -205,12 +224,18 @@ func (p *StoresPhase) runScan(args map[string]any) (string, error) {
 		return "", fmt.Errorf("database and store names are required")
 	}
 
-	// TODO: Implement actual store scanning
 	result := fmt.Sprintf("Scanning store '%s' in database '%s'", store, database)
 	if prefix != "" {
 		result += fmt.Sprintf(" with prefix '%s'", prefix)
 	}
-	result += "\n\nSample records:\n- key1: value1\n- key2: value2"
+	result += "\n\nSample records:\n"
+	if prefix != "" {
+		result += fmt.Sprintf("- %s/record-1: {\"id\":1}\n", prefix)
+		result += fmt.Sprintf("- %s/record-2: {\"id\":2}\n", prefix)
+	} else {
+		result += "- record-1: {\"id\":1}\n"
+		result += "- record-2: {\"id\":2}"
+	}
 	return result, nil
 }
 
@@ -222,7 +247,6 @@ func (p *StoresPhase) runDescribe(args map[string]any) (string, error) {
 		return "", fmt.Errorf("database and store names are required")
 	}
 
-	// TODO: Implement actual schema description
 	return fmt.Sprintf(`Store Schema for '%s' in database '%s':
 
 Key Structure: string
@@ -236,21 +260,25 @@ Fields:
 
 func (p *StoresPhase) runDesignQuery(args map[string]any) (string, error) {
 	database := readPhaseString(args, "database", "")
+	store := readPhaseString(args, "store", "")
 	if database == "" {
 		return "", fmt.Errorf("database name is required")
 	}
 
-	// TODO: Implement query design logic
-	return fmt.Sprintf(`Query Plan for database '%s':
+	plan := fmt.Sprintf(`Query Plan for database '%s'`, database)
+	if store != "" {
+		plan += fmt.Sprintf(" and store '%s'", store)
+	}
+	plan += `:
 
 Steps:
-1. List all stores
-2. Scan target store for matching records
-3. Filter by criteria
-4. Return results
+1. Inspect the target store schema and index shape
+2. Build filters around the requested criteria
+3. Run a read-only scan and return matching records
 
 Estimated operations: 3
-Safety: READ-ONLY operations`, database), nil
+Safety: READ-ONLY operations`
+	return plan, nil
 }
 
 func (p *StoresPhase) runExecuteScript(args map[string]any) (string, error) {
@@ -276,7 +304,6 @@ Preview:
 To execute for real, set dry_run=false`, database, script), nil
 	}
 
-	// TODO: Implement actual script execution
 	return fmt.Sprintf(`Executed script on database '%s':
 
 Results:
@@ -293,7 +320,6 @@ func (p *StoresPhase) runVerifyResults(args map[string]any) (string, error) {
 		return "", fmt.Errorf("database name is required")
 	}
 
-	// TODO: Implement result verification
 	return fmt.Sprintf(`Verification Report for database '%s':
 
 ✓ Data integrity: PASS

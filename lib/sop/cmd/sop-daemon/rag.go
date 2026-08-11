@@ -365,16 +365,24 @@ type continueChatRequest struct {
 }
 
 type continueToolRequest struct {
-	Path       string `json:"path"`
-	Query      string `json:"query"`
-	StartLine  int    `json:"start_line"`
-	EndLine    int    `json:"end_line"`
-	Recursive  bool   `json:"recursive"`
-	Limit      int    `json:"limit"`
-	SessionID  string `json:"session_id"`
-	Workspace  string `json:"workspace"`
-	Selection  string `json:"selection"`
-	ActiveFile string `json:"active_file"`
+	Path       string             `json:"path"`
+	Query      string             `json:"query"`
+	StartLine  int                `json:"start_line"`
+	EndLine    int                `json:"end_line"`
+	Recursive  bool               `json:"recursive"`
+	Limit      int                `json:"limit"`
+	SessionID  string             `json:"session_id"`
+	Workspace  string             `json:"workspace"`
+	Selection  string             `json:"selection"`
+	ActiveFile string             `json:"active_file"`
+	Find       string             `json:"find"`
+	Replace    string             `json:"replace"`
+	Edits      []continueTextEdit `json:"edits"`
+}
+
+type continueTextEdit struct {
+	Find    string `json:"find"`
+	Replace string `json:"replace"`
 }
 
 type localRAGService struct {
@@ -899,6 +907,79 @@ func applyContinuePatchContent(original, patch string) (string, string, error) {
 		return "", "", err
 	}
 	return updated, "unified_hunk", nil
+}
+
+func resolveContinueEditPath(path, activeFile string) string {
+	if trimmed := strings.TrimSpace(path); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(activeFile)
+}
+
+func applyContinueSingleFindAndReplace(path, find, replace string) (map[string]any, error) {
+	cleanPath, originalContent, err := readContinueEditableFile(path)
+	if err != nil {
+		return nil, err
+	}
+	updatedContent, replacements, err := replaceOnceOrFail(string(originalContent), find, replace)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(cleanPath, []byte(updatedContent), 0o644); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": cleanPath, "applied": true, "content": updatedContent, "mode": "single_find_and_replace", "replacements": replacements}, nil
+}
+
+func applyContinueMultiEdit(path string, edits []continueTextEdit) (map[string]any, error) {
+	cleanPath, originalContent, err := readContinueEditableFile(path)
+	if err != nil {
+		return nil, err
+	}
+	updatedContent := string(originalContent)
+	totalReplacements := 0
+	for _, edit := range edits {
+		nextContent, replacements, err := replaceOnceOrFail(updatedContent, edit.Find, edit.Replace)
+		if err != nil {
+			return nil, err
+		}
+		updatedContent = nextContent
+		totalReplacements += replacements
+	}
+	if err := os.WriteFile(cleanPath, []byte(updatedContent), 0o644); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": cleanPath, "applied": true, "content": updatedContent, "mode": "multi_edit", "replacements": totalReplacements}, nil
+}
+
+func readContinueEditableFile(path string) (string, []byte, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return "", nil, fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+	}
+	originalContent, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return "", nil, err
+	}
+	return cleanPath, originalContent, nil
+}
+
+func replaceOnceOrFail(content, find, replace string) (string, int, error) {
+	needle := strings.TrimSpace(find)
+	if needle == "" {
+		return "", 0, fmt.Errorf("find is required")
+	}
+	count := strings.Count(content, find)
+	if count == 0 {
+		return "", 0, fmt.Errorf("find text not found")
+	}
+	if count > 1 {
+		return "", 0, fmt.Errorf("find text matched %d locations; provide a more specific snippet or use multi_edit with narrower edits", count)
+	}
+	return strings.Replace(content, find, replace, 1), 1, nil
 }
 
 func looksLikeUnifiedDiffPatch(patch string) bool {

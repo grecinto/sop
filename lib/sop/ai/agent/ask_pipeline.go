@@ -804,6 +804,9 @@ func (a *CopilotAgent) getOrCreateSharedInfra() *planner.SharedInfrastructure {
 	// Inject session queue accessor for work item enqueueing (Participant Pattern)
 	infra.GetSessionQueue = a.getSessionQueueForCapabilities
 
+	// Reuse the existing local automation command path for desktop phase tools.
+	infra.LocalCommandExecutor = a.toolExecuteLocalCommand
+
 	// Inject PhasePlanMutator for dynamic phase plan modification (LLM orchestration)
 	infra.PhasePlanMutator = planner.NewSTMPhasePlanMutator(a.getSTMForPhaseCapabilities)
 

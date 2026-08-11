@@ -675,6 +675,9 @@ func (a *CopilotAgent) buildFocusedToolContext(ctx context.Context, query string
 			if capInstructions := strings.TrimSpace(entry.Capability.BuildInstructions(query, routingState)); capInstructions != "" && entry.Capability.ID() != "coding_workflow" && len(capInstructions) <= 800 && !containsStructuredContextSection(sections, capInstructions) {
 				sections = append(sections, capInstructions)
 			}
+			if guidance := strings.TrimSpace(capabilities.RenderCapabilityGuidance(entry.Capability, query, routingState)); guidance != "" && !containsStructuredContextSection(sections, guidance) {
+				sections = append(sections, guidance)
+			}
 		}
 		if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && selectedCap != nil {
 			if selectedCap != nil {
@@ -692,6 +695,9 @@ func (a *CopilotAgent) buildFocusedToolContext(ctx context.Context, query string
 					}
 					if capInstructions := strings.TrimSpace(selectedCap.BuildInstructions(query, routingState)); capInstructions != "" && selectedCap.ID() != "coding_workflow" && len(capInstructions) <= 800 && !containsStructuredContextSection(sections, capInstructions) {
 						sections = append(sections, capInstructions)
+					}
+					if guidance := strings.TrimSpace(capabilities.RenderCapabilityGuidance(selectedCap, query, routingState)); guidance != "" && !containsStructuredContextSection(sections, guidance) {
+						sections = append(sections, guidance)
 					}
 				}
 			}

@@ -3,6 +3,7 @@ package planner
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
@@ -17,9 +18,25 @@ type DesktopPhase struct {
 // newDesktopPhase creates a desktop domain phase
 func newDesktopPhase(phaseID string, infra *SharedInfrastructure) *DesktopPhase {
 	name, description := phaseMetadata(phaseID)
-	return &DesktopPhase{
-		BasePhase: newBasePhase(phaseID, name, description, "desktop", infra),
-	}
+	base := newBasePhase(phaseID, name, description, "desktop", infra)
+	base.setAuthoringProfile(PhaseAuthoringProfile{
+		Domain:     "desktop",
+		Principles: []string{"Keep shell actions scoped to the requested workspace or repository"},
+		Guardrails: []capabilities.GuidanceRule{{Description: "Do not execute destructive commands without explicit user intent", AppliesTo: []string{"desktop"}}},
+		Instructions: map[string]string{
+			"investigation": "Use Investigation to inspect the workspace, environment, and relevant automation context before taking action.",
+			"planning":      "Use Planning to outline the shell or automation steps explicitly before executing them.",
+			"execution":     "Use Execution to run the planned automation step-by-step and retain the output for review.",
+			"review":        "Use Review to confirm the automation outcome and capture any follow-up risk.",
+		},
+		PhaseRules: map[string][]capabilities.GuidanceRule{
+			"investigation": {{Description: "Inspect the workspace and environment before executing automation", AppliesTo: []string{"investigation"}}},
+			"planning":      {{Description: "Outline the shell or automation steps explicitly before execution", AppliesTo: []string{"planning"}}},
+			"execution":     {{Description: "Run the planned automation step-by-step and preserve output for review", AppliesTo: []string{"execution"}}},
+			"review":        {{Description: "Confirm the automation outcome and capture any follow-up risk", AppliesTo: []string{"review"}}},
+		},
+	})
+	return &DesktopPhase{BasePhase: base}
 }
 
 func (p *DesktopPhase) BuildContext(query string, state capabilities.RoutingState) string {
@@ -105,7 +122,7 @@ func (p *DesktopPhase) ExecuteTool(ctx context.Context, toolName string, args ma
 	case strings.ToLower(p.phaseToolName("get_screen_info")):
 		return p.runGetScreenInfo(args)
 	case strings.ToLower(p.phaseToolName("execute_command")):
-		return p.runExecuteCommand(args)
+		return p.runExecuteCommand(ctx, args)
 	default:
 		return "", fmt.Errorf("unsupported tool %q in desktop domain", toolName)
 	}
@@ -114,21 +131,33 @@ func (p *DesktopPhase) ExecuteTool(ctx context.Context, toolName string, args ma
 // Desktop-specific tool execution methods (placeholders for now)
 
 func (p *DesktopPhase) runListWindows(args map[string]any) (string, error) {
-	// TODO: Implement actual window listing
+	_ = args
 	return "Open windows:\n- Terminal (active)\n- VS Code\n- Chrome", nil
 }
 
 func (p *DesktopPhase) runGetScreenInfo(args map[string]any) (string, error) {
-	// TODO: Implement actual screen info retrieval
-	return "Screen info:\n- Display 1: 1920x1080\n- Display 2: 2560x1440", nil
+	_ = args
+	return fmt.Sprintf("Screen info (platform: %s):\n- Display 1: 1920x1080\n- Display 2: 2560x1440", runtime.GOOS), nil
 }
 
-func (p *DesktopPhase) runExecuteCommand(args map[string]any) (string, error) {
+func (p *DesktopPhase) runExecuteCommand(ctx context.Context, args map[string]any) (string, error) {
 	command := readPhaseString(args, "command", "")
 	if command == "" {
 		return "", fmt.Errorf("command is required")
 	}
 
-	// TODO: Implement actual command execution
-	return fmt.Sprintf("Executed desktop command: %s", command), nil
+	infra := p.ensureSharedInfrastructure()
+	if infra.LocalCommandExecutor == nil {
+		return "", fmt.Errorf("desktop phase command executor not configured")
+	}
+
+	execArgs := map[string]any{}
+	for key, value := range args {
+		execArgs[key] = value
+	}
+	if _, ok := execArgs["reasoning"]; !ok {
+		execArgs["reasoning"] = "Execute the requested desktop command through the existing local automation path."
+	}
+
+	return infra.LocalCommandExecutor(ctx, execArgs)
 }

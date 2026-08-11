@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -503,10 +504,16 @@ func (s *localRAGService) continueToolHandlers() map[string]continueToolHandler 
 			return listContinueFiles(req.Path, req.Recursive)
 		},
 		"code.apply_patch": func(req continueToolRequest) (any, error) {
-			return applyContinuePatch(req.Path, req.Selection)
+			return s.handleContinuePatchTool(req)
 		},
 		"code.preview_patch": func(req continueToolRequest) (any, error) {
 			return previewContinuePatch(req.Path, req.Selection)
+		},
+		"single_find_and_replace": func(req continueToolRequest) (any, error) {
+			return s.handleContinueEditTool(req, "single_find_and_replace")
+		},
+		"multi_edit": func(req continueToolRequest) (any, error) {
+			return s.handleContinueEditTool(req, "multi_edit")
 		},
 		"test.run": func(req continueToolRequest) (any, error) {
 			return runContinueTest(req.Query, req.SessionID)
@@ -514,6 +521,228 @@ func (s *localRAGService) continueToolHandlers() map[string]continueToolHandler 
 		"agent.ask": func(req continueToolRequest) (any, error) {
 			return s.delegateContinueAgent(req.Query, req.SessionID)
 		},
+	}
+}
+
+func (s *localRAGService) handleContinuePatchTool(req continueToolRequest) (any, error) {
+	targetPath := resolveContinueEditPath(req.Path, req.ActiveFile)
+	if delegatedResult, delegated, err := s.tryDelegateContinueEditTool(req, "code.apply_patch", targetPath); delegated {
+		return delegatedResult, err
+	}
+	return applyContinuePatch(req.Path, req.Selection)
+}
+
+func (s *localRAGService) handleContinueEditTool(req continueToolRequest, toolName string) (any, error) {
+	targetPath := resolveContinueEditPath(req.Path, req.ActiveFile)
+	if delegatedResult, delegated, err := s.tryDelegateContinueEditTool(req, toolName, targetPath); delegated {
+		return delegatedResult, err
+	}
+
+	switch toolName {
+	case "single_find_and_replace":
+		return applyContinueSingleFindAndReplace(targetPath, req.Find, req.Replace)
+	case "multi_edit":
+		return applyContinueMultiEdit(targetPath, req.Edits)
+	default:
+		return nil, fmt.Errorf("unsupported edit tool: %s", toolName)
+	}
+}
+
+func (s *localRAGService) tryDelegateContinueEditTool(req continueToolRequest, toolName, targetPath string) (any, bool, error) {
+	if s == nil {
+		return nil, false, nil
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" || strings.TrimSpace(targetPath) == "" {
+		return nil, false, nil
+	}
+	snapshot, ok := s.ensureContinueSessionStore().Get(sessionID)
+	if !ok {
+		return nil, false, nil
+	}
+	editContext, ok := resolveContinueOpenFileContext(targetPath, req, snapshot)
+	if !ok {
+		return nil, false, nil
+	}
+	registration, ok := s.ensureContinueWorkerStore().Get(sessionID)
+	if !ok {
+		return nil, false, nil
+	}
+	delegatedReq, err := buildContinueEditDelegationRequest(toolName, req, editContext)
+	if err != nil {
+		return nil, false, nil
+	}
+	requiredCapabilities := requiredContinueWorkerCapabilities(delegatedReq)
+	if !continueWorkerSupportsCapabilities(registration, requiredCapabilities) {
+		return nil, false, nil
+	}
+	outcome, err := executeContinueWorkerCallback(context.Background(), delegatedReq, registration)
+	if err != nil {
+		return nil, true, err
+	}
+	if outcome.StatusCode >= http.StatusBadRequest {
+		trimmedBody := strings.TrimSpace(outcome.RawBody)
+		if trimmedBody == "" {
+			trimmedBody = http.StatusText(outcome.StatusCode)
+		}
+		return nil, true, fmt.Errorf("IDE worker returned status %d: %s", outcome.StatusCode, trimmedBody)
+	}
+	result := map[string]any{
+		"path":      editContext.ActiveFile,
+		"applied":   true,
+		"delegated": true,
+		"worker":    "continue",
+		"mode":      toolName,
+	}
+	if outcome.FinalResult != nil {
+		result["execution_result"] = cloneContinueExecutionResult(*outcome.FinalResult)
+		if summary := strings.TrimSpace(outcome.FinalResult.Summary); summary != "" {
+			result["summary"] = summary
+		}
+	}
+	if strings.TrimSpace(outcome.RawBody) != "" {
+		result["raw_result"] = strings.TrimSpace(outcome.RawBody)
+	}
+	return result, true, nil
+}
+
+type continueEditDelegationContext struct {
+	SessionID     string
+	WorkspaceRoot string
+	ActiveFile    string
+	OpenFiles     []string
+	TargetPath    string
+}
+
+func resolveContinueOpenFileContext(targetPath string, req continueToolRequest, snapshot continueSessionSnapshot) (continueEditDelegationContext, bool) {
+	workspaceRoot := resolveContinueWorkspaceRoot(strings.TrimSpace(req.Workspace), strings.TrimSpace(snapshot.WorkspaceRoot))
+	matchedFile := matchContinueOpenFile(targetPath, workspaceRoot, strings.TrimSpace(snapshot.ActiveFile), snapshot.OpenFiles)
+	if matchedFile == "" {
+		fallbackActive := strings.TrimSpace(req.ActiveFile)
+		if fallbackActive == "" {
+			fallbackActive = strings.TrimSpace(snapshot.ActiveFile)
+		}
+		matchedFile = matchContinueOpenFile(targetPath, workspaceRoot, fallbackActive, nil)
+	}
+	if matchedFile == "" {
+		return continueEditDelegationContext{}, false
+	}
+	openFiles := normalizeContinueOpenFiles(snapshot.OpenFiles)
+	if len(openFiles) == 0 {
+		openFiles = []string{matchedFile}
+	}
+	return continueEditDelegationContext{
+		SessionID:     strings.TrimSpace(req.SessionID),
+		WorkspaceRoot: workspaceRoot,
+		ActiveFile:    matchedFile,
+		OpenFiles:     openFiles,
+		TargetPath:    strings.TrimSpace(targetPath),
+	}, true
+}
+
+func resolveContinueWorkspaceRoot(candidates ...string) string {
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		if filepath.IsAbs(trimmed) {
+			return filepath.Clean(trimmed)
+		}
+		return filepath.Clean(filepath.Join(cwd(), trimmed))
+	}
+	return cwd()
+}
+
+func matchContinueOpenFile(targetPath, workspaceRoot, activeFile string, openFiles []string) string {
+	targetComparable := continueComparablePath(targetPath, workspaceRoot)
+	if targetComparable == "" {
+		return ""
+	}
+	if trimmedActive := strings.TrimSpace(activeFile); trimmedActive != "" {
+		if continueComparablePath(trimmedActive, workspaceRoot) == targetComparable {
+			return trimmedActive
+		}
+	}
+	for _, openFile := range normalizeContinueOpenFiles(openFiles) {
+		if continueComparablePath(openFile, workspaceRoot) == targetComparable {
+			return openFile
+		}
+	}
+	return ""
+}
+
+func continueComparablePath(path, workspaceRoot string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed)
+	}
+	root := resolveContinueWorkspaceRoot(workspaceRoot)
+	return filepath.Clean(filepath.Join(root, trimmed))
+}
+
+func buildContinueEditDelegationRequest(toolName string, req continueToolRequest, editContext continueEditDelegationContext) (continueAgentExecuteRequest, error) {
+	workerToolName := continueDelegatedToolChoice(toolName)
+	if workerToolName == "" {
+		return continueAgentExecuteRequest{}, fmt.Errorf("unsupported edit tool: %s", toolName)
+	}
+	continueReq := continueAgentExecuteRequest{
+		RequestID:      newContinueRequestID(),
+		SessionID:      editContext.SessionID,
+		Mode:           "apply",
+		RequestedPhase: "execution",
+		AllowedTools:   []string{"read_file", workerToolName},
+		ToolChoice:     workerToolName,
+	}
+	continueReq.Context.WorkspaceRoot = editContext.WorkspaceRoot
+	continueReq.Context.ActiveFile = editContext.ActiveFile
+	continueReq.Context.OpenFiles = append([]string(nil), editContext.OpenFiles...)
+
+	switch toolName {
+	case "code.apply_patch":
+		if strings.TrimSpace(req.Selection) == "" {
+			return continueAgentExecuteRequest{}, fmt.Errorf("selection is required")
+		}
+		continueReq.Task = fmt.Sprintf("Apply the provided patch to %s only. Use patch-style editing, keep the change bounded to this file, and do not make unrelated modifications.\n\nPatch content:\n\n%s", editContext.ActiveFile, req.Selection)
+		continueReq.Context.SelectedText = req.Selection
+	case "single_find_and_replace":
+		if strings.TrimSpace(req.Find) == "" {
+			return continueAgentExecuteRequest{}, fmt.Errorf("find is required")
+		}
+		continueReq.Task = fmt.Sprintf("Apply one exact find-and-replace edit to %s only. Replace this exact snippet:\n\n%s\n\nwith:\n\n%s\n\nDo not rewrite the whole file or make unrelated changes.", editContext.ActiveFile, req.Find, req.Replace)
+		continueReq.Context.SelectedText = req.Find
+	case "multi_edit":
+		if len(req.Edits) == 0 {
+			return continueAgentExecuteRequest{}, fmt.Errorf("edits are required")
+		}
+		var task strings.Builder
+		task.WriteString(fmt.Sprintf("Apply the following exact edits to %s only. Do not rewrite the whole file or make unrelated changes.\n", editContext.ActiveFile))
+		for index, edit := range req.Edits {
+			if strings.TrimSpace(edit.Find) == "" {
+				return continueAgentExecuteRequest{}, fmt.Errorf("edit %d find is required", index)
+			}
+			task.WriteString(fmt.Sprintf("\nEdit %d find:\n%s\n\nEdit %d replace:\n%s\n", index+1, edit.Find, index+1, edit.Replace))
+		}
+		continueReq.Task = task.String()
+		continueReq.Context.SelectedText = req.Edits[0].Find
+	default:
+		return continueAgentExecuteRequest{}, fmt.Errorf("unsupported edit tool: %s", toolName)
+	}
+
+	return continueReq, nil
+}
+
+func continueDelegatedToolChoice(toolName string) string {
+	switch toolName {
+	case "code.apply_patch":
+		return "apply_patch"
+	case "single_find_and_replace", "multi_edit":
+		return toolName
+	default:
+		return ""
 	}
 }
 

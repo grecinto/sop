@@ -58,6 +58,9 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	// Inject session queue accessor for work item enqueueing (Participant Pattern)
 	cwfInfra.GetSessionQueue = a.getSessionQueueForCapabilities
 
+	// Reuse the existing local automation command path for desktop phase tools.
+	cwfInfra.LocalCommandExecutor = a.toolExecuteLocalCommand
+
 	// Inject LTM accessor for team patterns (explicit parameter passing, not context)
 	cwfInfra.LTMAccessor = func(ctx context.Context) (any, error) {
 		return a.getOrCreateLTM(ctx)

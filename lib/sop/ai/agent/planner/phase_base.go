@@ -13,6 +13,18 @@ import (
 
 // BasePhase provides common functionality shared by all domain-specific phase implementations.
 // Domain phases embed this struct to inherit shared behavior (artifact storage, classification, etc.)
+type PhaseAuthoringProfile struct {
+	Domain       string
+	Principles   []string
+	Guardrails   []capabilities.GuidanceRule
+	Instructions map[string]string
+	PhaseRules   map[string][]capabilities.GuidanceRule
+}
+
+type PhaseAuthoringProvider interface {
+	PhaseAuthoringProfile() PhaseAuthoringProfile
+}
+
 type BasePhase struct {
 	sharedInfra            *SharedInfrastructure
 	phaseID                string
@@ -22,6 +34,7 @@ type BasePhase struct {
 	captureTool            string
 	stateTool              string
 	classificationStrategy PhaseClassificationStrategy
+	authoringProfile       PhaseAuthoringProfile
 }
 
 // newBasePhase creates a new base phase with common fields
@@ -156,6 +169,140 @@ func (b *BasePhase) OnAfter(ctx context.Context, query string, state capabilitie
 	_ = state
 	_ = result
 	return nil
+}
+
+func (b *BasePhase) setAuthoringProfile(profile PhaseAuthoringProfile) {
+	if profile.Domain == "" {
+		profile.Domain = b.domain
+	}
+	b.authoringProfile = profile
+}
+
+func (b *BasePhase) BuildInstructions(query string, state capabilities.RoutingState) string {
+	_ = query
+	_ = state
+
+	if instruction, ok := b.authoringProfile.Instructions[b.phaseID]; ok && strings.TrimSpace(instruction) != "" {
+		return instruction
+	}
+
+	switch b.domain {
+	case "stores":
+		switch b.phaseID {
+		case "investigation":
+			return "Use Investigation to inspect store structure and data before designing any operation. Keep the work read-only until the evidence is clear."
+		case "planning":
+			return "Use Planning to design a concrete store operation plan, including required stores, filters, and validation expectations."
+		case "execution":
+			return "Use Execution to run the planned store operation safely, prefer previews when available, and capture the result."
+		case "review":
+			return "Use Review to validate results against the requested behavior and note any remaining risk or ambiguity."
+		default:
+			return fmt.Sprintf("Use %s capability to work with stores", b.name)
+		}
+	case "spaces":
+		switch b.phaseID {
+		case "investigation":
+			return "Use Investigation to inspect the relevant space content, configuration, and scope before changing anything."
+		case "planning":
+			return "Use Planning to define a narrow change scope and the expected knowledge impact before applying mutations."
+		case "execution":
+			return "Use Execution to apply the planned knowledge change with explicit validation and minimal blast radius."
+		case "review":
+			return "Use Review to confirm the final knowledge state and ensure the change stayed within the intended scope."
+		default:
+			return fmt.Sprintf("Use %s capability to work with spaces/knowledge bases", b.name)
+		}
+	case "desktop":
+		switch b.phaseID {
+		case "investigation":
+			return "Use Investigation to inspect the workspace, environment, and relevant automation context before taking action."
+		case "planning":
+			return "Use Planning to outline the shell or automation steps explicitly before executing them."
+		case "execution":
+			return "Use Execution to run the planned automation step-by-step and retain the output for review."
+		case "review":
+			return "Use Review to confirm the automation outcome and capture any follow-up risk."
+		default:
+			return fmt.Sprintf("Use %s capability to work with desktop automation", b.name)
+		}
+	default:
+		switch b.phaseID {
+		case "intake":
+			return "Use Intake to gather scope, constraints, and success criteria before acting."
+		case "investigation":
+			return "Use Investigation to gather evidence from the repository, tests, and surrounding code before making changes."
+		case "planning":
+			return "Use Planning to create a concrete design brief with constraints, trade-offs, and validation steps."
+		case "testing":
+			return "Use Testing to shape the change with the relevant validation surfaces and capture the outcome."
+		case "execution":
+			return "Use Execution to implement the plan safely and keep the change scoped to the observed need."
+		case "review":
+			return "Use Review to validate the implementation against the evidence and requirements."
+		case "delivery":
+			return "Use Delivery to summarize the result, decisions, and follow-up steps clearly."
+		default:
+			return fmt.Sprintf("Use %s capability to work through the current workflow phase", b.name)
+		}
+	}
+}
+
+func (b *BasePhase) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
+	_ = query
+	_ = state
+
+	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, fmt.Sprintf("You are the %s capability for %s.", b.name, b.description))
+	base.Principles = []string{"Prefer evidence over assumption", "Keep the current phase focused on its responsibilities"}
+	base.VerificationRules = []capabilities.GuidanceRule{{Description: "Capture the evidence or validation result that supports the current phase decision", AppliesTo: []string{b.phaseID}}}
+
+	phaseRules := []capabilities.GuidanceRule{{Description: fmt.Sprintf("Operate as the %s phase capability and keep the current phase focused on its job.", b.name), AppliesTo: []string{b.phaseID}}}
+	if rules, ok := b.authoringProfile.PhaseRules[b.phaseID]; ok && len(rules) > 0 {
+		phaseRules = append([]capabilities.GuidanceRule{}, rules...)
+	} else {
+		switch b.phaseID {
+		case "investigation":
+			phaseRules = append(phaseRules, capabilities.GuidanceRule{Description: "Gather evidence before proposing a fix or change", AppliesTo: []string{"investigation"}})
+		case "planning":
+			phaseRules = append(phaseRules, capabilities.GuidanceRule{Description: "Create a concrete plan with constraints, dependencies, and validation steps", AppliesTo: []string{"planning"}})
+		case "execution":
+			phaseRules = append(phaseRules, capabilities.GuidanceRule{Description: "Implement only the scoped change and preserve the surrounding contract", AppliesTo: []string{"execution"}})
+		case "review":
+			phaseRules = append(phaseRules, capabilities.GuidanceRule{Description: "Validate the result against the evidence and surface remaining uncertainty", AppliesTo: []string{"review"}})
+		case "delivery":
+			phaseRules = append(phaseRules, capabilities.GuidanceRule{Description: "Summarize the outcome, decisions, and follow-up steps clearly", AppliesTo: []string{"delivery"}})
+		}
+	}
+
+	var guardrails []capabilities.GuidanceRule
+	if len(b.authoringProfile.Guardrails) > 0 {
+		guardrails = append(guardrails, b.authoringProfile.Guardrails...)
+	} else {
+		switch b.domain {
+		case "stores":
+			base.Principles = append(base.Principles, "Never guess store names, field paths, or join mappings")
+			guardrails = append(guardrails, capabilities.GuidanceRule{Description: "Do not mutate stores or assume schema without evidence", AppliesTo: []string{"stores"}})
+		case "spaces":
+			base.Principles = append(base.Principles, "Treat persisted knowledge changes as high-impact operations")
+			guardrails = append(guardrails, capabilities.GuidanceRule{Description: "Do not refresh or delete large knowledge surfaces without explicit intent", AppliesTo: []string{"spaces"}})
+		case "desktop":
+			base.Principles = append(base.Principles, "Keep shell actions scoped to the requested workspace or repository")
+			guardrails = append(guardrails, capabilities.GuidanceRule{Description: "Do not execute destructive commands without explicit user intent", AppliesTo: []string{"desktop"}})
+		default:
+			base.Principles = append(base.Principles, "Use the most relevant tools and evidence for the task")
+		}
+	}
+
+	if len(b.authoringProfile.Principles) > 0 {
+		base.Principles = append(base.Principles, b.authoringProfile.Principles...)
+	}
+
+	base.PhaseRules = phaseRules
+	base.Guardrails = guardrails
+
+	profile := capabilities.GuidanceProfile{}.
+		ApplyDefaults(base)
+	return profile
 }
 
 // Common helper methods

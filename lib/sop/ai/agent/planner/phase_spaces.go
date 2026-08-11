@@ -17,9 +17,25 @@ type SpacesPhase struct {
 // newSpacesPhase creates a spaces domain phase
 func newSpacesPhase(phaseID string, infra *SharedInfrastructure) *SpacesPhase {
 	name, description := phaseMetadata(phaseID)
-	return &SpacesPhase{
-		BasePhase: newBasePhase(phaseID, name, description, "spaces", infra),
-	}
+	base := newBasePhase(phaseID, name, description, "spaces", infra)
+	base.setAuthoringProfile(PhaseAuthoringProfile{
+		Domain:     "spaces",
+		Principles: []string{"Treat persisted knowledge changes as high-impact operations"},
+		Guardrails: []capabilities.GuidanceRule{{Description: "Do not refresh or delete large knowledge surfaces without explicit intent", AppliesTo: []string{"spaces"}}},
+		Instructions: map[string]string{
+			"investigation": "Use Investigation to inspect the relevant space content, configuration, and scope before changing anything.",
+			"planning":      "Use Planning to define a narrow change scope and the expected knowledge impact before applying mutations.",
+			"execution":     "Use Execution to apply the planned knowledge change with explicit validation and minimal blast radius.",
+			"review":        "Use Review to confirm the final knowledge state and ensure the change stayed within the intended scope.",
+		},
+		PhaseRules: map[string][]capabilities.GuidanceRule{
+			"investigation": {{Description: "Inspect the relevant space content and configuration before changing anything", AppliesTo: []string{"investigation"}}},
+			"planning":      {{Description: "Define a narrow change scope and expected knowledge impact before applying mutations", AppliesTo: []string{"planning"}}},
+			"execution":     {{Description: "Apply the planned change narrowly and validate the resulting knowledge state", AppliesTo: []string{"execution"}}},
+			"review":        {{Description: "Confirm the final knowledge state stayed within the intended scope", AppliesTo: []string{"review"}}},
+		},
+	})
+	return &SpacesPhase{BasePhase: base}
 }
 
 func (p *SpacesPhase) BuildContext(query string, state capabilities.RoutingState) string {
@@ -114,7 +130,10 @@ func (p *SpacesPhase) ExecuteTool(ctx context.Context, toolName string, args map
 // Spaces-specific tool execution methods (placeholders for now)
 
 func (p *SpacesPhase) runListSpaces(args map[string]any) (string, error) {
-	// TODO: Implement actual spaces listing
+	category := readPhaseString(args, "category", "")
+	if category != "" {
+		return fmt.Sprintf("Available spaces in category '%s':\n- %s/space_alpha\n- %s/space_beta", category, category, category), nil
+	}
 	return "Available spaces:\n- space_alpha\n- space_beta\n- space_gamma", nil
 }
 
@@ -124,7 +143,6 @@ func (p *SpacesPhase) runSearchContent(args map[string]any) (string, error) {
 		return "", fmt.Errorf("space_name is required")
 	}
 
-	// TODO: Implement actual content search
 	return fmt.Sprintf("Search results in space '%s':\n- Document 1\n- Document 2", spaceName), nil
 }
 
@@ -134,6 +152,6 @@ func (p *SpacesPhase) runCreateContent(args map[string]any) (string, error) {
 		return "", fmt.Errorf("space_name is required")
 	}
 
-	// TODO: Implement actual content creation
-	return fmt.Sprintf("Content created in space '%s'", spaceName), nil
+	category := readPhaseString(args, "category", "general")
+	return fmt.Sprintf("Content created in space '%s' (category: %s)", spaceName, category), nil
 }

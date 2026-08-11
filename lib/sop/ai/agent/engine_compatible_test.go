@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -647,7 +648,7 @@ func TestCompatibleReActEngine_DelegatesToOwnedReActLoopWhenProvided(t *testing.
 	}
 }
 
-func TestCompatibleReActEngine_CleansUpToolResultStorageAfterLoop(t *testing.T) {
+func TestCompatibleReActEngine_PreservesInheritedToolResultStorageAfterLoop(t *testing.T) {
 	engine := &CompatibleReActEngine{}
 	gen := &loopMockGenerator{}
 	executor := &loopMockExecutor{}
@@ -666,8 +667,33 @@ func TestCompatibleReActEngine_CleansUpToolResultStorageAfterLoop(t *testing.T) 
 	if resp.FinalText == "" {
 		t.Fatal("expected a final response")
 	}
-	if _, err := os.Stat(storage.GetSessionDir()); !os.IsNotExist(err) {
-		t.Fatalf("expected tool result storage dir to be cleaned up, stat err = %v", err)
+	if _, err := os.Stat(storage.GetSessionDir()); err != nil {
+		t.Fatalf("expected inherited tool result storage dir to remain available, stat err = %v", err)
+	}
+}
+
+func TestCompatibleReActEngine_CleansUpOwnedToolResultStorageAfterLoop(t *testing.T) {
+	engine := &CompatibleReActEngine{}
+	gen := &loopMockGenerator{}
+	executor := &loopMockExecutor{}
+	sessionID := "cleanup-owned-test"
+	expectedDir := filepath.Join(os.TempDir(), "sop-tool-results", sessionID)
+	ctx := context.WithValue(context.Background(), SessionPayloadKey, &ai.SessionPayload{SessionID: sessionID})
+
+	resp, err := engine.Run(ctx, ai.ReasoningRequest{
+		SystemPrompt: "You are a test assistant.",
+		UserQuery:    "Find users",
+		Executor:     executor,
+		Generator:    gen,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if resp.FinalText == "" {
+		t.Fatal("expected a final response")
+	}
+	if _, err := os.Stat(expectedDir); !os.IsNotExist(err) {
+		t.Fatalf("expected owned tool result storage dir to be cleaned up, stat err = %v", err)
 	}
 }
 

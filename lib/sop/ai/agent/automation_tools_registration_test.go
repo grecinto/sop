@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,6 +222,44 @@ func TestPostgresQueryUsesLocalCommandExecutor(t *testing.T) {
 	}
 	if !strings.Contains(received.Command, "select 1") {
 		t.Fatalf("expected query in command, got %q", received.Command)
+	}
+}
+
+func TestExecute_WrapsLargeCommandResultsWithStoredEnvelope(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		return `{"stdout":"` + strings.Repeat("large command output line\n", 400) + `","stderr":"","exit_code":0}`, nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := &CopilotAgent{registry: NewRegistry()}
+	ag.registerTools(context.Background())
+
+	storage, err := NewToolResultStorage("execute-large-command")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
+	ctx = context.WithValue(ctx, SessionPayloadKey, &ai.SessionPayload{SessionID: "execute-large-command"})
+
+	out, err := ag.Execute(ctx, "execute_local_command", map[string]any{"command": "printf 'x'", "timeout_seconds": 60})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var envelope ai.ToolResultEnvelope
+	if err := json.Unmarshal([]byte(out), &envelope); err != nil {
+		t.Fatalf("expected file-backed tool result envelope, got %q: %v", out, err)
+	}
+	if envelope.FileMetadata == nil || strings.TrimSpace(envelope.FileMetadata.FilePath) == "" {
+		t.Fatalf("expected file metadata for large command result, got %+v", envelope.FileMetadata)
+	}
+	if !strings.Contains(string(envelope.ToolResult), "Use the saved file to confirm the outcome based on your request") {
+		t.Fatalf("expected stored summary guidance, got %s", string(envelope.ToolResult))
 	}
 }
 

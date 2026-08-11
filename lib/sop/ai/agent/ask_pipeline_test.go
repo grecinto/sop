@@ -90,6 +90,17 @@ func TestAskPhaseFactoryIntegration(t *testing.T) {
 	t.Logf("✅ Aggregated %d tools from phases", len(allTools))
 }
 
+func TestGetOrCreateSharedInfra_WiresLocalCommandExecutor(t *testing.T) {
+	agent := &CopilotAgent{}
+	infra := agent.getOrCreateSharedInfra()
+	if infra == nil {
+		t.Fatal("expected shared infrastructure")
+	}
+	if infra.LocalCommandExecutor == nil {
+		t.Fatal("expected shared infrastructure to reuse the local command executor")
+	}
+}
+
 func TestTryAskColdStartRouting_AttachesAskClassification(t *testing.T) {
 	ag := &CopilotAgent{}
 	taskCtx, err := ag.tryAskColdStartRouting(context.Background(), "List stores", &askRoutingTestGenerator{Response: `{"domains":["stores"],"phase":"investigation","phase_plan":["investigation"],"intent":"read_data","crud":["R"],"confidence":"high","reasoning":"store listing"}`}, false)

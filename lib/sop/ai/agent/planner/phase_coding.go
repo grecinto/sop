@@ -17,9 +17,28 @@ type CodingPhase struct {
 // newCodingPhase creates a coding workflow phase
 func newCodingPhase(phaseID string, infra *SharedInfrastructure) *CodingPhase {
 	name, description := phaseMetadata(phaseID)
-	return &CodingPhase{
-		BasePhase: newBasePhase(phaseID, name, description, "coding_workflow", infra),
-	}
+	base := newBasePhase(phaseID, name, description, "coding_workflow", infra)
+	base.setAuthoringProfile(PhaseAuthoringProfile{
+		Domain:     "coding_workflow",
+		Principles: []string{"Use the most relevant tools and evidence for the task"},
+		Instructions: map[string]string{
+			"intake":        "Use Intake to gather scope, constraints, and success criteria before acting.",
+			"investigation": "Use Investigation to gather evidence from the repository, tests, and surrounding code before making changes.",
+			"planning":      "Use Planning to create a concrete design brief with constraints, trade-offs, and validation steps.",
+			"testing":       "Use Testing to shape the change with the relevant validation surfaces and capture the outcome.",
+			"execution":     "Use Execution to implement the plan safely and keep the change scoped to the observed need.",
+			"review":        "Use Review to validate the implementation against the evidence and requirements.",
+			"delivery":      "Use Delivery to summarize the result, decisions, and follow-up steps clearly.",
+		},
+		PhaseRules: map[string][]capabilities.GuidanceRule{
+			"investigation": {{Description: "Gather evidence before proposing a fix or change", AppliesTo: []string{"investigation"}}},
+			"planning":      {{Description: "Create a concrete plan with constraints, dependencies, and validation steps", AppliesTo: []string{"planning"}}},
+			"execution":     {{Description: "Implement only the scoped change and preserve the surrounding contract", AppliesTo: []string{"execution"}}},
+			"review":        {{Description: "Validate the result against the evidence and surface remaining uncertainty", AppliesTo: []string{"review"}}},
+			"delivery":      {{Description: "Summarize the outcome, decisions, and follow-up steps clearly", AppliesTo: []string{"delivery"}}},
+		},
+	})
+	return &CodingPhase{BasePhase: base}
 }
 
 func (p *CodingPhase) BuildContext(query string, state capabilities.RoutingState) string {
@@ -244,24 +263,7 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
 }
 
 func (p *CodingPhase) BuildInstructions(query string, state capabilities.RoutingState) string {
-	switch p.phaseID {
-	case "intake":
-		return "Use Intake: Ask questions → Gather requirements → Identify the appropriate domain toolset → Capture artifact → Transition"
-	case "investigation":
-		return "Use Investigation: Build context → Choose the right domain tools for the task → Inspect → Search → Document evidence → Transition"
-	case "planning":
-		return "Use Planning: Assess → Create path → Choose the right domain tools for the phase → Plan changes → Capture → Transition. Use tests or validation cases as a design aid when they help pin down the intended behavior, contracts, or interfaces; avoid making TDD a hard constraint."
-	case "testing":
-		return "Use Testing: Review requirements → Use the relevant test/validation tools for the phase → Add or adjust tests or validation cases when helpful → Run tests → Capture results → Transition. Treat tests as a tool for design clarity and regression confidence, not as a rigid mandate."
-	case "execution":
-		return "Use Execution: Preview → Approve → Use the appropriate execution tools for the domain → Apply → Test → Capture → Transition. SAFETY: Always preview first. MULTI-FILE: Use apply_multi_file_patch for batch operations"
-	case "review":
-		return "Use Review: Build context → Use the relevant review/validation tools for the domain → Inspect → Test → Validate → Capture → Transition"
-	case "delivery":
-		return "Use Delivery: Review artifacts → Summarize → Document → Capture → Exit"
-	default:
-		return fmt.Sprintf("Use %s capability", p.name)
-	}
+	return p.BasePhase.BuildInstructions(query, state)
 }
 
 func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map[string]any, state capabilities.RoutingState) (string, error) {

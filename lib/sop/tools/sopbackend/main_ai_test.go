@@ -15,6 +15,11 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
+func resetContinueBridgeStateForTest() {
+	continueSessionState = newContinueBridgeSessionStore()
+	continueWorkerState = newContinueBridgeWorkerStore()
+}
+
 func TestFormatUserFacingAgentErrorRedactsToolFailureNoise(t *testing.T) {
 	msg := formatUserFacingAgentError("copilot", fmt.Errorf("tool 'list_directory' not found in any registered agent for request 123e4567-e89b-12d3-a456-426614174000"))
 	if !strings.Contains(msg, "could not find the requested tool") {
@@ -178,6 +183,7 @@ func TestHandleContinueToolReadsFilesFromWorkspace(t *testing.T) {
 }
 
 func TestHandleContinueToolAppliesPatchToWorkspaceFile(t *testing.T) {
+	resetContinueBridgeStateForTest()
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "sample.txt")
 	if err := os.WriteFile(filePath, []byte("before"), 0o644); err != nil {
@@ -199,6 +205,146 @@ func TestHandleContinueToolAppliesPatchToWorkspaceFile(t *testing.T) {
 	}
 	if string(data) != "after" {
 		t.Fatalf("expected patch to overwrite file contents, got %q", string(data))
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	if result["mode"] != "replace" {
+		t.Fatalf("expected replace mode for full-content patch, got %#v", result["mode"])
+	}
+}
+
+func TestHandleContinueToolDelegatesPatchToRegisteredWorkerForOpenFile(t *testing.T) {
+	resetContinueBridgeStateForTest()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "payments"), 0o755); err != nil {
+		t.Fatalf("create temp workspace: %v", err)
+	}
+	filePath := filepath.Join(dir, "payments", "service.go")
+	if err := os.WriteFile(filePath, []byte("before"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	continueSessionState.Put(continueSessionSnapshot{SessionID: "continue-patch-1", ActiveFile: "payments/service.go", OpenFiles: []string{"payments/service.go"}, WorkspaceRoot: dir, Status: "active"})
+
+	var received continueAgentExecuteRequest
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte("{\"type\":\"done\",\"result\":{\"status\":\"completed\",\"summary\":\"Applied editor-native patch\"}}\n"))
+	}))
+	defer worker.Close()
+	continueWorkerState.Put(continueWorkerRegistration{SessionID: "continue-patch-1", CallbackURL: worker.URL, Capabilities: []string{"apply_patch", "read_context"}, IDE: "vscode"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.apply_patch", strings.NewReader(fmt.Sprintf(`{"session_id":"continue-patch-1","workspace":%q,"path":%q,"selection":"after"}`, dir, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after delegated patch: %v", err)
+	}
+	if string(data) != "before" {
+		t.Fatalf("expected delegated patch to avoid local disk mutation, got %q", string(data))
+	}
+	if received.ToolChoice != "apply_patch" || len(received.AllowedTools) != 2 || received.AllowedTools[1] != "apply_patch" {
+		t.Fatalf("expected apply_patch delegation contract, got %#v", received)
+	}
+}
+
+func TestHandleContinueToolAppliesUnifiedHunkPatchToLargeFile(t *testing.T) {
+	resetContinueBridgeStateForTest()
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	lines := make([]string, 0, 1200)
+	for i := 1; i <= 1200; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	original := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(filePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	patch := strings.Join([]string{
+		"@@ -600,3 +600,3 @@",
+		" line 600",
+		"-line 601",
+		"+line 601 patched",
+		" line 602",
+	}, "\n")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.apply_patch", strings.NewReader(fmt.Sprintf(`{"path":"%s","selection":%q}`, filePath, patch)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read patched file: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "line 601 patched") || strings.Contains(text, "line 601\n") {
+		t.Fatalf("expected targeted hunk update in large file")
+	}
+	if !strings.Contains(text, "line 1200\n") {
+		t.Fatalf("expected non-target lines to remain intact")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	if result["mode"] != "unified_hunk" {
+		t.Fatalf("expected unified_hunk mode, got %#v", result["mode"])
+	}
+}
+
+func TestHandleContinueToolFallsBackToLocalPatchWhenTargetFileIsNotOpen(t *testing.T) {
+	resetContinueBridgeStateForTest()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "payments"), 0o755); err != nil {
+		t.Fatalf("create temp workspace: %v", err)
+	}
+	filePath := filepath.Join(dir, "payments", "service.go")
+	if err := os.WriteFile(filePath, []byte("before"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	continueSessionState.Put(continueSessionSnapshot{SessionID: "continue-patch-2", ActiveFile: "payments/other.go", OpenFiles: []string{"payments/other.go"}, WorkspaceRoot: dir, Status: "active"})
+	continueWorkerState.Put(continueWorkerRegistration{SessionID: "continue-patch-2", CallbackURL: "http://127.0.0.1:1", Capabilities: []string{"apply_patch", "read_context"}, IDE: "vscode"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.apply_patch", strings.NewReader(fmt.Sprintf(`{"session_id":"continue-patch-2","workspace":%q,"path":%q,"selection":"after"}`, dir, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read patched file: %v", err)
+	}
+	if string(data) != "after" {
+		t.Fatalf("expected local fallback patch to update file, got %q", string(data))
 	}
 }
 
@@ -225,6 +371,203 @@ func TestHandleContinueToolRunsCommandsForValidation(t *testing.T) {
 	}
 }
 
+func TestHandleContinueToolPreviewsPatchForWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("before"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.preview_patch", strings.NewReader(fmt.Sprintf(`{"path":"%s","selection":"after"}`, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	preview := fmt.Sprint(result["preview"])
+	if !strings.Contains(preview, "-before") || !strings.Contains(preview, "+after") {
+		t.Fatalf("expected preview to include old and new content, got %q", preview)
+	}
+	if result["mode"] != "replace" {
+		t.Fatalf("expected replace mode in preview, got %#v", result["mode"])
+	}
+}
+
+func TestHandleContinueToolPreviewsUnifiedHunkPatchForWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	patch := strings.Join([]string{
+		"@@ -1,3 +1,3 @@",
+		" alpha",
+		"-beta",
+		"+beta patched",
+		" gamma",
+	}, "\n")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/code.preview_patch", strings.NewReader(fmt.Sprintf(`{"path":"%s","selection":%q}`, filePath, patch)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", payload["result"])
+	}
+	preview := fmt.Sprint(result["preview"])
+	if !strings.Contains(preview, "-alpha\nbeta\ngamma") || !strings.Contains(preview, "+alpha\nbeta patched\ngamma") {
+		t.Fatalf("expected preview to include transformed content for hunk patch, got %q", preview)
+	}
+	if result["mode"] != "unified_hunk" {
+		t.Fatalf("expected unified_hunk mode in preview, got %#v", result["mode"])
+	}
+}
+
+func TestHandleContinueToolAppliesSingleFindAndReplace(t *testing.T) {
+	resetContinueBridgeStateForTest()
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/single_find_and_replace", strings.NewReader(fmt.Sprintf(`{"path":"%s","find":"beta","replace":"beta patched"}`, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if string(data) != "alpha\nbeta patched\ngamma\n" {
+		t.Fatalf("unexpected file content: %q", string(data))
+	}
+}
+
+func TestHandleContinueToolDelegatesSingleFindAndReplaceToRegisteredWorkerForOpenFile(t *testing.T) {
+	resetContinueBridgeStateForTest()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "payments"), 0o755); err != nil {
+		t.Fatalf("create temp workspace: %v", err)
+	}
+	filePath := filepath.Join(dir, "payments", "service.go")
+	if err := os.WriteFile(filePath, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	continueSessionState.Put(continueSessionSnapshot{SessionID: "continue-edit-1", ActiveFile: "payments/service.go", OpenFiles: []string{"payments/service.go"}, WorkspaceRoot: dir, Status: "active"})
+
+	var received continueAgentExecuteRequest
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, _ = w.Write([]byte("{\"type\":\"done\",\"result\":{\"status\":\"completed\",\"summary\":\"Applied editor-native replacement\"}}\n"))
+	}))
+	defer worker.Close()
+	continueWorkerState.Put(continueWorkerRegistration{SessionID: "continue-edit-1", CallbackURL: worker.URL, Capabilities: []string{"apply_patch", "read_context"}, IDE: "vscode"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/single_find_and_replace", strings.NewReader(fmt.Sprintf(`{"session_id":"continue-edit-1","workspace":%q,"path":%q,"find":"beta","replace":"beta patched"}`, dir, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after delegated edit: %v", err)
+	}
+	if string(data) != "alpha\nbeta\ngamma\n" {
+		t.Fatalf("expected delegated edit to avoid local disk mutation, got %q", string(data))
+	}
+	if received.ToolChoice != "single_find_and_replace" || received.Context.ActiveFile != "payments/service.go" {
+		t.Fatalf("expected focused delegated edit request, got %#v", received)
+	}
+}
+
+func TestHandleContinueToolAppliesMultiEdit(t *testing.T) {
+	resetContinueBridgeStateForTest()
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/multi_edit", strings.NewReader(fmt.Sprintf(`{"path":"%s","edits":[{"find":"alpha","replace":"alpha patched"},{"find":"gamma","replace":"gamma patched"}]}`, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if string(data) != "alpha patched\nbeta\ngamma patched\n" {
+		t.Fatalf("unexpected file content: %q", string(data))
+	}
+}
+
+func TestHandleContinueToolFallsBackToLocalMultiEditWhenTargetFileIsNotOpen(t *testing.T) {
+	resetContinueBridgeStateForTest()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "payments"), 0o755); err != nil {
+		t.Fatalf("create temp workspace: %v", err)
+	}
+	filePath := filepath.Join(dir, "payments", "service.go")
+	if err := os.WriteFile(filePath, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	continueSessionState.Put(continueSessionSnapshot{SessionID: "continue-edit-2", ActiveFile: "payments/other.go", OpenFiles: []string{"payments/other.go"}, WorkspaceRoot: dir, Status: "active"})
+	continueWorkerState.Put(continueWorkerRegistration{SessionID: "continue-edit-2", CallbackURL: "http://127.0.0.1:1", Capabilities: []string{"apply_patch", "read_context"}, IDE: "vscode"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/multi_edit", strings.NewReader(fmt.Sprintf(`{"session_id":"continue-edit-2","workspace":%q,"path":%q,"edits":[{"find":"alpha","replace":"alpha patched"},{"find":"gamma","replace":"gamma patched"}]}`, dir, filePath)))
+	rr := httptest.NewRecorder()
+
+	handleContinueTool(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("handleContinueTool() status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read edited file: %v", err)
+	}
+	if string(data) != "alpha patched\nbeta\ngamma patched\n" {
+		t.Fatalf("expected local fallback edit, got %q", string(data))
+	}
+}
+
 func TestHandleContinueToolDelegatesToAgentRuntime(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/continue/tools/agent.ask", strings.NewReader(`{"query":"reply with hello"}`))
 	rr := httptest.NewRecorder()
@@ -245,6 +588,7 @@ func TestHandleContinueToolDelegatesToAgentRuntime(t *testing.T) {
 }
 
 func TestContinueToolRouteIsRegisteredOnBackendMux(t *testing.T) {
+	resetContinueBridgeStateForTest()
 	oldConfig := config
 	config = Config{DisableAuth: true}
 	defer func() { config = oldConfig }()
@@ -260,6 +604,27 @@ func TestContinueToolRouteIsRegisteredOnBackendMux(t *testing.T) {
 
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("expected router to reach tool handler, got status %d body %q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestContinueWorkerRegisterRouteIsRegisteredOnBackendMux(t *testing.T) {
+	resetContinueBridgeStateForTest()
+	oldConfig := config
+	config = Config{DisableAuth: true}
+	defer func() { config = oldConfig }()
+
+	mux := http.NewServeMux()
+	backend := &Backend{Config: &config, ModelCatalog: &ModelCatalog{}, LoadedAgents: loadedAgents, ActiveSessions: activeSessions}
+	backend.RegisterHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/continue/worker/register", strings.NewReader(`{"session_id":"worker-session-1","callback_url":"http://127.0.0.1:4321/callback","capabilities":["apply_patch","read_context"],"ide":"vscode"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected worker register route to succeed, got status %d body %q", rr.Code, rr.Body.String())
 	}
 }
 

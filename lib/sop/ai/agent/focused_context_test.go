@@ -8,6 +8,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	capabilities "github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/database"
 	sopdb "github.com/sharedcode/sop/database"
 )
@@ -225,6 +226,57 @@ func TestBuildSystemPrompt_IncludesTaskGuidanceSynthesis(t *testing.T) {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("expected prompt to contain %q, got: %s", expected, prompt)
 		}
+	}
+}
+
+func TestBuildFocusedToolContext_IncludesStructuredCapabilityGuidance(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+
+	cap := &focusedContextGuidanceCapability{}
+	ag.capabilityRegistry = capabilities.NewRegistry(cap)
+
+	contextText := ag.buildFocusedToolContext(ctx, "fix a parser bug", &TaskContextClassification{Domain: "General", RoutingGate: RoutingGateFocused})
+	if !strings.Contains(contextText, "ROLE") {
+		t.Fatalf("expected focused tool context to include structured guidance role heading, got: %s", contextText)
+	}
+	if !strings.Contains(contextText, "Investigate before acting") {
+		t.Fatalf("expected focused tool context to include structured guidance content, got: %s", contextText)
+	}
+}
+
+type focusedContextGuidanceCapability struct{}
+
+func (c *focusedContextGuidanceCapability) ID() string   { return "guidance" }
+func (c *focusedContextGuidanceCapability) Name() string { return "Guidance" }
+func (c *focusedContextGuidanceCapability) Entitlement() capabilities.Entitlement {
+	return capabilities.Entitlement{}
+}
+func (c *focusedContextGuidanceCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
+	return capabilities.ClassificationResult{Relevant: true, Score: 1, Mode: capabilities.CapabilityModePrimary}
+}
+func (c *focusedContextGuidanceCapability) BuildContext(query string, state capabilities.RoutingState) string {
+	return ""
+}
+func (c *focusedContextGuidanceCapability) ExposeTools() []capabilities.ToolDefinition { return nil }
+func (c *focusedContextGuidanceCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
+	return ""
+}
+func (c *focusedContextGuidanceCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
+	return nil
+}
+func (c *focusedContextGuidanceCapability) OnBefore(ctx context.Context, query string, state capabilities.RoutingState) error {
+	return nil
+}
+func (c *focusedContextGuidanceCapability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
+	return nil
+}
+func (c *focusedContextGuidanceCapability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
+	return capabilities.GuidanceProfile{
+		Role:       "Investigate before acting",
+		Principles: []string{"Prefer evidence over assumption"},
+		Guardrails: []capabilities.GuidanceRule{{Description: "Do not patch without tracing the failing path"}},
 	}
 }
 

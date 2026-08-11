@@ -8,7 +8,7 @@
 
 ## Overview
 
-Large tool outputs (>20KB) are automatically stored in temporary files instead of being truncated. This gives the AI strategic affordances to analyze large outputs using registered analysis tools, eliminating information loss and preventing false positives in test result analysis.
+Large tool outputs (>4KB in the current runtime) are automatically summarized and backed by temporary files instead of being dumped inline into later reasoning turns. This gives the AI strategic affordances to analyze large outputs using registered analysis tools, eliminating information loss and preventing false positives in test result analysis.
 
 **Impact:**
 - ✅ Zero false positives on test analysis
@@ -46,7 +46,7 @@ Tool Output: 100KB
   ↓
 Write to: /tmp/sop-tool-results/{sessionID}/{tool}-{timestamp}.txt
   ↓
-LLM Sees: 2KB summary + "Use grep_tool_result() to find errors"
+LLM Sees: bounded summary + "Use grep_tool_result() to find errors"
   ↓
 LLM: grep_tool_result(pattern: "FAIL|ERROR")
   ↓
@@ -63,7 +63,7 @@ Result: ✅ No information loss, token-efficient, accurate
 
 **Actual Implementation**: Used envelope pattern at tool executor level - much cleaner:
 
-1. ✅ **General-Purpose**: Implemented at `CopilotAgent.Execute()` - works for ALL tools automatically
+1. ✅ **General-Purpose**: Implemented at `CopilotAgent.Execute()` so large tool results are handled consistently on the normal Ask path
 2. ✅ **Envelope Pattern**: Used existing `ToolResultEnvelope` pattern instead of prompt changes
 3. ✅ **Universal Provider Support**: Works with Anthropic, ChatGPT, Gemini, and the compatible/shared loop path
 4. ✅ **Analysis Tools**: LLM uses registered tools instead of shell commands in prompts
@@ -92,8 +92,8 @@ type ToolResultStorage struct {
 }
 
 const (
-    toolResultThreshold = 20 * 1024  // 20KB threshold
-    toolResultSummarySize = 2 * 1024 // 2KB summary size
+    toolResultThreshold = 4 * 1024   // current large-result threshold
+    toolResultSummarySize = 1536     // bounded head/tail summary window
 )
 
 // Store large outputs automatically
@@ -124,40 +124,39 @@ func (t *ToolResultStorage) Cleanup() error
 ```
 
 **Features:**
-- Automatic threshold-based storage (>20KB)
-- 2KB summaries (head 1KB + tail 1KB)
+- Automatic threshold-based storage with large-result summarization (>4KB in the current runtime)
+- Bounded summaries for large outputs
 - Security: Path validation within session directory
 - Session-scoped isolation
+
+**Current semantics:**
+- All results are written to a session-scoped temp file for auditing and debugging.
+- Small plain results keep their original response shape in `Execute()` so structured JSON tools do not regress.
+- Large results, or results already using `ToolResultEnvelope`, return a bounded LLM-facing payload plus `file_metadata` for follow-up analysis.
 
 #### 2. Tool Executor Integration
 **File**: `lib/sop/ai/agent/copilot.go`
 
 ```go
-// Universal integration point - ALL tools flow through Execute()
+// Universal integration point - large results are normalized here
 func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[string]any) (string, error) {
     // ... execute tool handler ...
     result, err := handler(ctx, args)
     
-    // Wrap result with storage (happens for ALL tools)
+    // Wrap result with storage when appropriate
     return wrapToolResultWithStorage(ctx, toolName, result)
 }
 
 // Checks size and stores if needed
 func wrapToolResultWithStorage(ctx context.Context, toolName string, result string) string {
     storage := getOrCreateToolResultStorage(ctx)
-    if storage == nil || len(result) < toolResultThreshold {
-        // Return as-is wrapped in envelope
-        return wrapInEnvelope(result, "", nil)
+    if storage == nil {
+        return result
     }
-    
-    // Store to file
-    summary, filePath, fileSize, err := storage.StoreResult(toolName, result)
-    
-    // Return envelope with file metadata
-    return wrapInEnvelope(summary, "", &ToolFileMetadata{
-        FilePath: filePath,
-        FileSize: fileSize,
-    })
+
+    // Small plain results pass through unchanged.
+    // Large results, or already-enveloped results, are returned with summary + file metadata.
+    return wrapStoredOrOriginalResult(...)
 }
 ```
 
@@ -177,10 +176,12 @@ type ToolResultEnvelope struct {
 }
 ```
 
-All tool results are wrapped in this envelope. Provider loops extract:
-- `tool_result`: Summary for LLM (2KB if stored, full if <20KB)
+Large results, and tool results that already carry progress metadata, are wrapped in this envelope. Provider loops extract:
+- `tool_result`: Summary for LLM when file-backed
 - `file_metadata`: File path and size when stored
 - `progress_hint`: Optional status messages
+
+Small plain results may still be returned as their original string payload so existing structured tool contracts stay stable.
 
 #### 4. Event Streaming
 **File**: `lib/sop/ai/stream_events.go`
@@ -283,7 +284,7 @@ func (e *CompatibleReActEngine) Run(ctx context.Context, req ai.TaskExecRequest)
     storage := getOrCreateToolResultStorage(ctx)
     if storage != nil {
         ctx = context.WithValue(ctx, ctxKeyToolResultStorage, storage)
-        defer storage.Cleanup()  // Clean up on exit
+        // Clean up only when this run owns the storage instance.
     }
     
     // Context propagates to all provider loops and the compatible/shared path
@@ -293,7 +294,7 @@ func (e *CompatibleReActEngine) Run(ctx context.Context, req ai.TaskExecRequest)
 
 **Context Flow:**
 ```
-Engine Start → Create Storage → Store in Context
+Engine Start → Create Storage (or inherit existing storage) → Store in Context
     ↓
 Provider Loops (Anthropic/GPT/Gemini) inherit context
     ↓
@@ -301,7 +302,24 @@ Tool execution via Execute(ctx, ...) → Storage available
     ↓
 Analysis tools access same storage instance
     ↓
-Engine Exit → defer Cleanup() removes temp directory
+Owning Engine Exit → Cleanup() removes temp directory
+
+---
+
+## Compatibility With Continue Token Optimization
+
+This design is compatible with the Continue token-optimization work because the two mechanisms operate at different seams:
+
+- Continue token optimization trims and normalizes request context before Ask prompt assembly.
+- File-backed tool results bound tool output after execution, before those outputs can bloat subsequent reasoning turns.
+
+They reinforce each other in practice:
+
+- The Continue bridge reduces initial prompt cost using selected text, trimmed open-file context, model tiering, and prompt-order discipline.
+- File-backed wrapping prevents large command, test, and build outputs from giving those savings back on follow-up turns.
+- Continue delegation already prefers compact diffs and artifact references, which matches the same "avoid large inline payloads" goal.
+
+The main caveat is documentation drift: threshold values and wrapping semantics should be treated as runtime contracts owned by `tool_result_storage.go` and its tests, not as fixed assumptions in older design notes.
 ```
 
 ---
@@ -504,7 +522,7 @@ These were in the original plan but aren't needed:
 ## FAQ
 
 **Q: Does this work for all tools?**  
-A: Yes! Implementation at Execute() level means ANY tool automatically gets file-backing for outputs >20KB.
+A: Large results from the normal `Execute()` path are handled centrally, and small plain results preserve their original shape. In the current runtime, summarization and `file_metadata` kick in above the 4KB threshold or when a tool already returns an envelope.
 
 **Q: Does this work with all LLMs?**  
 A: Yes! All provider loops (Anthropic, ChatGPT, Gemini, Native) extract file metadata from envelopes.

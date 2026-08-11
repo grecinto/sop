@@ -1941,6 +1941,16 @@ CRITICAL RULES:
 		wrote = true
 	}
 
+	if wrote {
+		sb.WriteString("\n")
+		sb.WriteString(`FILE-BACKED TOOL RESULTS:
+- If a tool result includes file_path or says full output was saved, do not conclude from the truncated preview alone.
+- For known signals such as PASS, FAIL, panic, timeout, or ERROR, call grep_tool_result(file_path="...", pattern="...") first.
+- For open-ended investigation, call read_tool_result(file_path="...", start_line=X, end_line=Y) or analyze_tool_result(file_path="...", operation="sed"|"head"|"tail"|"wc").
+- Use the saved file to confirm the outcome before making a final claim.
+`)
+	}
+
 	if !wrote {
 		return ""
 	}
@@ -2210,7 +2220,11 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 	if err != nil {
 		return "", err
 	}
-	return formatToolResult(ctx, res)
+	formatted, err := formatToolResult(ctx, res)
+	if err != nil {
+		return "", err
+	}
+	return wrapToolResultWithStorage(ctx, toolName, formatted)
 }
 
 func (a *CopilotAgent) logThought(ctx context.Context, intent, astPayload, outcome string) {

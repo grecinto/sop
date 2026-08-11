@@ -1,6 +1,7 @@
 package sopbackend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,11 +9,14 @@ import (
 	"html"
 	"io"
 	log "log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +34,84 @@ import (
 	"github.com/sharedcode/sop/btree"
 	"github.com/sharedcode/sop/database"
 )
+
+var unifiedHunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+
+const continueWorkerRawBodyLimit = 64 * 1024
+
+type continueSessionSnapshot struct {
+	SessionID     string
+	Status        string
+	ActiveFile    string
+	OpenFiles     []string
+	WorkspaceRoot string
+	UpdatedAt     time.Time
+}
+
+type continueWorkerRegistration struct {
+	SessionID    string   `json:"session_id"`
+	CallbackURL  string   `json:"callback_url"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	IDE          string   `json:"ide,omitempty"`
+	UpdatedAt    string   `json:"updated_at,omitempty"`
+}
+
+type continueBridgeSessionStore struct {
+	mu       sync.RWMutex
+	sessions map[string]continueSessionSnapshot
+}
+
+type continueBridgeWorkerStore struct {
+	mu      sync.RWMutex
+	workers map[string]continueWorkerRegistration
+}
+
+type continueExecutionResult struct {
+	Status        string                          `json:"status,omitempty"`
+	Summary       string                          `json:"summary,omitempty"`
+	ModifiedFiles []continueExecutionModifiedFile `json:"modified_files,omitempty"`
+	Metadata      map[string]any                  `json:"metadata,omitempty"`
+}
+
+type continueExecutionModifiedFile struct {
+	FilePath      string         `json:"file_path,omitempty"`
+	CRUDOperation string         `json:"crud_operation,omitempty"`
+	DiffSummary   string         `json:"diff_summary,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+type continueWorkerCallbackOutcome struct {
+	StatusCode  int
+	ContentType string
+	RawBody     string
+	FinalResult *continueExecutionResult
+}
+
+type continueAgentExecuteRequest struct {
+	RequestID      string   `json:"request_id,omitempty"`
+	SessionID      string   `json:"session_id"`
+	Task           string   `json:"task"`
+	Mode           string   `json:"mode,omitempty"`
+	RequestedPhase string   `json:"requested_phase,omitempty"`
+	AllowedTools   []string `json:"allowed_tools,omitempty"`
+	ToolChoice     string   `json:"tool_choice,omitempty"`
+	Context        struct {
+		WorkspaceRoot string   `json:"workspace_root"`
+		ActiveFile    string   `json:"active_file"`
+		SelectedText  string   `json:"selected_text,omitempty"`
+		OpenFiles     []string `json:"open_files,omitempty"`
+	} `json:"context"`
+}
+
+type continueEditDelegationContext struct {
+	SessionID     string
+	WorkspaceRoot string
+	ActiveFile    string
+	OpenFiles     []string
+}
+
+var continueSessionState = newContinueBridgeSessionStore()
+var continueWorkerState = newContinueBridgeWorkerStore()
 
 // ObfuscationMode defines the global obfuscation policy.
 type ObfuscationMode string
@@ -150,6 +232,7 @@ func handleContinueChat(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(chatReq.SessionID) == "" {
 		chatReq.SessionID = uuid.NewString()
 	}
+	storeContinueSessionContext(payload)
 
 	// Reuse the existing AI chat pipeline with NDJSON streaming.
 	// The bridge is intentionally thin: the editor supplies context and the daemon handles execution.
@@ -302,16 +385,24 @@ type continueToolHint struct {
 }
 
 type continueToolRequest struct {
-	Path       string `json:"path"`
-	Query      string `json:"query"`
-	StartLine  int    `json:"start_line"`
-	EndLine    int    `json:"end_line"`
-	Recursive  bool   `json:"recursive"`
-	Limit      int    `json:"limit"`
-	SessionID  string `json:"session_id"`
-	Workspace  string `json:"workspace"`
-	Selection  string `json:"selection"`
-	ActiveFile string `json:"active_file"`
+	Path       string             `json:"path"`
+	Query      string             `json:"query"`
+	StartLine  int                `json:"start_line"`
+	EndLine    int                `json:"end_line"`
+	Recursive  bool               `json:"recursive"`
+	Limit      int                `json:"limit"`
+	SessionID  string             `json:"session_id"`
+	Workspace  string             `json:"workspace"`
+	Selection  string             `json:"selection"`
+	ActiveFile string             `json:"active_file"`
+	Find       string             `json:"find"`
+	Replace    string             `json:"replace"`
+	Edits      []continueTextEdit `json:"edits"`
+}
+
+type continueTextEdit struct {
+	Find    string `json:"find"`
+	Replace string `json:"replace"`
 }
 
 type continueWorkspaceContext struct {
@@ -384,6 +475,21 @@ func handleContinueSessionState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if snapshot, ok := continueSessionState.Get(sessionID); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"session_id":     snapshot.SessionID,
+			"status":         snapshot.Status,
+			"phase":          "investigation",
+			"message":        "SOP bridge session is active",
+			"active_file":    snapshot.ActiveFile,
+			"open_files":     snapshot.OpenFiles,
+			"workspace_root": snapshot.WorkspaceRoot,
+		})
+		return
+	}
+
 	if _, exists := activeSessions.Get(sessionID); !exists {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
@@ -397,6 +503,54 @@ func handleContinueSessionState(w http.ResponseWriter, r *http.Request) {
 		"phase":      "investigation",
 		"message":    "SOP bridge session is active",
 	})
+}
+
+func handleContinueWorkerRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var registration continueWorkerRegistration
+	if err := json.NewDecoder(r.Body).Decode(&registration); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(registration.SessionID) == "" || strings.TrimSpace(registration.CallbackURL) == "" {
+		http.Error(w, "session_id and callback_url are required", http.StatusBadRequest)
+		return
+	}
+	if err := validateContinueWorkerCallbackURL(registration.CallbackURL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	registration.Capabilities = normalizeContinueWorkerCapabilities(registration.Capabilities)
+	registration.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	continueWorkerState.Put(registration)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "worker": registration})
+}
+
+func handleContinueWorkerState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sessionID := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/continue/workers/"), "/api/sop/workers/"))
+	if sessionID == "" {
+		http.Error(w, "session id is required", http.StatusBadRequest)
+		return
+	}
+	registration, ok := continueWorkerState.Get(sessionID)
+	if !ok {
+		http.Error(w, "worker not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(registration)
 }
 
 func handleContinueTool(w http.ResponseWriter, r *http.Request) {
@@ -427,9 +581,13 @@ func handleContinueTool(w http.ResponseWriter, r *http.Request) {
 	case "repo.list_files":
 		result, err = listContinueFiles(req.Path, req.Recursive)
 	case "code.apply_patch":
-		result, err = applyContinuePatch(req.Path, req.Selection)
+		result, err = handleContinuePatchTool(req)
 	case "code.preview_patch":
 		result, err = previewContinuePatch(req.Path, req.Selection)
+	case "single_find_and_replace":
+		result, err = handleContinueEditTool(req, "single_find_and_replace")
+	case "multi_edit":
+		result, err = handleContinueEditTool(req, "multi_edit")
 	case "test.run":
 		result, err = runContinueTest(req.Query, req.SessionID)
 	case "agent.ask":
@@ -446,6 +604,83 @@ func handleContinueTool(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "tool": toolName, "result": result})
+}
+
+func handleContinuePatchTool(req continueToolRequest) (any, error) {
+	targetPath := resolveContinueEditPath(req.Path, req.ActiveFile)
+	if delegatedResult, delegated, err := tryDelegateContinueEditTool(req, "code.apply_patch", targetPath); delegated {
+		return delegatedResult, err
+	}
+	return applyContinuePatch(req.Path, req.Selection)
+}
+
+func handleContinueEditTool(req continueToolRequest, toolName string) (any, error) {
+	targetPath := resolveContinueEditPath(req.Path, req.ActiveFile)
+	if delegatedResult, delegated, err := tryDelegateContinueEditTool(req, toolName, targetPath); delegated {
+		return delegatedResult, err
+	}
+	switch toolName {
+	case "single_find_and_replace":
+		return applyContinueSingleFindAndReplace(targetPath, req.Find, req.Replace)
+	case "multi_edit":
+		return applyContinueMultiEdit(targetPath, req.Edits)
+	default:
+		return nil, fmt.Errorf("unsupported edit tool: %s", toolName)
+	}
+}
+
+func tryDelegateContinueEditTool(req continueToolRequest, toolName, targetPath string) (any, bool, error) {
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" || strings.TrimSpace(targetPath) == "" {
+		return nil, false, nil
+	}
+	snapshot, ok := continueSessionState.Get(sessionID)
+	if !ok {
+		return nil, false, nil
+	}
+	editContext, ok := resolveContinueOpenFileContext(targetPath, req, snapshot)
+	if !ok {
+		return nil, false, nil
+	}
+	registration, ok := continueWorkerState.Get(sessionID)
+	if !ok {
+		return nil, false, nil
+	}
+	delegatedReq, err := buildContinueEditDelegationRequest(toolName, req, editContext)
+	if err != nil {
+		return nil, false, nil
+	}
+	if !continueWorkerSupportsCapabilities(registration, delegatedReq) {
+		return nil, false, nil
+	}
+	outcome, err := executeContinueWorkerCallback(context.Background(), delegatedReq, registration)
+	if err != nil {
+		return nil, true, err
+	}
+	if outcome.StatusCode >= http.StatusBadRequest {
+		trimmedBody := strings.TrimSpace(outcome.RawBody)
+		if trimmedBody == "" {
+			trimmedBody = http.StatusText(outcome.StatusCode)
+		}
+		return nil, true, fmt.Errorf("IDE worker returned status %d: %s", outcome.StatusCode, trimmedBody)
+	}
+	result := map[string]any{
+		"path":      editContext.ActiveFile,
+		"applied":   true,
+		"delegated": true,
+		"worker":    "continue",
+		"mode":      continueDelegatedToolChoice(toolName),
+	}
+	if outcome.FinalResult != nil {
+		result["execution_result"] = cloneContinueExecutionResult(*outcome.FinalResult)
+		if summary := strings.TrimSpace(outcome.FinalResult.Summary); summary != "" {
+			result["summary"] = summary
+		}
+	}
+	if strings.TrimSpace(outcome.RawBody) != "" {
+		result["raw_result"] = strings.TrimSpace(outcome.RawBody)
+	}
+	return result, true, nil
 }
 
 func readContinueFile(path string, startLine, endLine int) (map[string]any, error) {
@@ -547,13 +782,21 @@ func applyContinuePatch(path, patch string) (map[string]any, error) {
 	if strings.TrimSpace(patch) == "" {
 		return nil, fmt.Errorf("patch is required")
 	}
+	originalContent, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	updatedContent, mode, err := applyContinuePatchContent(string(originalContent), patch)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(cleanPath), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(cleanPath, []byte(patch), 0o644); err != nil {
+	if err := os.WriteFile(cleanPath, []byte(updatedContent), 0o644); err != nil {
 		return nil, err
 	}
-	return map[string]any{"path": cleanPath, "applied": true, "content": patch}, nil
+	return map[string]any{"path": cleanPath, "applied": true, "content": updatedContent, "mode": mode}, nil
 }
 
 func previewContinuePatch(path, patch string) (map[string]any, error) {
@@ -571,8 +814,598 @@ func previewContinuePatch(path, patch string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	preview := fmt.Sprintf("--- %s\n+++ %s\n-%s\n+%s\n", cleanPath, cleanPath, string(oldContent), patch)
-	return map[string]any{"path": cleanPath, "preview": preview, "applied": false}, nil
+	updatedContent, mode, err := applyContinuePatchContent(string(oldContent), patch)
+	if err != nil {
+		return nil, err
+	}
+	preview := fmt.Sprintf("--- %s\n+++ %s\n-%s\n+%s\n", cleanPath, cleanPath, string(oldContent), updatedContent)
+	return map[string]any{"path": cleanPath, "preview": preview, "applied": false, "mode": mode}, nil
+}
+
+func applyContinuePatchContent(original, patch string) (string, string, error) {
+	if !looksLikeUnifiedDiffPatch(patch) {
+		return patch, "replace", nil
+	}
+	updated, err := applyUnifiedDiffHunks(original, patch)
+	if err != nil {
+		return "", "", err
+	}
+	return updated, "unified_hunk", nil
+}
+
+func storeContinueSessionContext(req continueChatRequest) {
+	if strings.TrimSpace(req.SessionID) == "" {
+		return
+	}
+	continueSessionState.Put(continueSessionSnapshot{
+		SessionID:     strings.TrimSpace(req.SessionID),
+		Status:        "active",
+		ActiveFile:    strings.TrimSpace(req.Workspace.ActiveFile),
+		OpenFiles:     normalizeContinueOpenFiles(req.Context.OpenFiles),
+		WorkspaceRoot: strings.TrimSpace(req.Workspace.Root),
+		UpdatedAt:     time.Now().UTC(),
+	})
+}
+
+func normalizeContinueOpenFiles(openFiles []string) []string {
+	if len(openFiles) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	result := make([]string, 0, len(openFiles))
+	for _, path := range openFiles {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		result = append(result, trimmed)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func resolveContinueOpenFileContext(targetPath string, req continueToolRequest, snapshot continueSessionSnapshot) (continueEditDelegationContext, bool) {
+	workspaceRoot := resolveContinueWorkspaceRoot(strings.TrimSpace(req.Workspace), strings.TrimSpace(snapshot.WorkspaceRoot))
+	matchedFile := matchContinueOpenFile(targetPath, workspaceRoot, strings.TrimSpace(snapshot.ActiveFile), snapshot.OpenFiles)
+	if matchedFile == "" {
+		fallbackActive := strings.TrimSpace(req.ActiveFile)
+		if fallbackActive == "" {
+			fallbackActive = strings.TrimSpace(snapshot.ActiveFile)
+		}
+		matchedFile = matchContinueOpenFile(targetPath, workspaceRoot, fallbackActive, nil)
+	}
+	if matchedFile == "" {
+		return continueEditDelegationContext{}, false
+	}
+	openFiles := normalizeContinueOpenFiles(snapshot.OpenFiles)
+	if len(openFiles) == 0 {
+		openFiles = []string{matchedFile}
+	}
+	return continueEditDelegationContext{
+		SessionID:     strings.TrimSpace(req.SessionID),
+		WorkspaceRoot: workspaceRoot,
+		ActiveFile:    matchedFile,
+		OpenFiles:     openFiles,
+	}, true
+}
+
+func resolveContinueWorkspaceRoot(candidates ...string) string {
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		if filepath.IsAbs(trimmed) {
+			return filepath.Clean(trimmed)
+		}
+		return filepath.Clean(filepath.Join(cwd(), trimmed))
+	}
+	return cwd()
+}
+
+func matchContinueOpenFile(targetPath, workspaceRoot, activeFile string, openFiles []string) string {
+	targetComparable := continueComparablePath(targetPath, workspaceRoot)
+	if targetComparable == "" {
+		return ""
+	}
+	if trimmedActive := strings.TrimSpace(activeFile); trimmedActive != "" && continueComparablePath(trimmedActive, workspaceRoot) == targetComparable {
+		return trimmedActive
+	}
+	for _, openFile := range normalizeContinueOpenFiles(openFiles) {
+		if continueComparablePath(openFile, workspaceRoot) == targetComparable {
+			return openFile
+		}
+	}
+	return ""
+}
+
+func continueComparablePath(path, workspaceRoot string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed)
+	}
+	return filepath.Clean(filepath.Join(resolveContinueWorkspaceRoot(workspaceRoot), trimmed))
+}
+
+func resolveContinueEditPath(path, activeFile string) string {
+	if trimmed := strings.TrimSpace(path); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(activeFile)
+}
+
+func applyContinueSingleFindAndReplace(path, find, replace string) (map[string]any, error) {
+	cleanPath, originalContent, err := readContinueEditableFile(path)
+	if err != nil {
+		return nil, err
+	}
+	updatedContent, replacements, err := replaceOnceOrFail(string(originalContent), find, replace)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(cleanPath, []byte(updatedContent), 0o644); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": cleanPath, "applied": true, "content": updatedContent, "mode": "single_find_and_replace", "replacements": replacements}, nil
+}
+
+func applyContinueMultiEdit(path string, edits []continueTextEdit) (map[string]any, error) {
+	cleanPath, originalContent, err := readContinueEditableFile(path)
+	if err != nil {
+		return nil, err
+	}
+	updatedContent := string(originalContent)
+	totalReplacements := 0
+	for _, edit := range edits {
+		nextContent, replacements, err := replaceOnceOrFail(updatedContent, edit.Find, edit.Replace)
+		if err != nil {
+			return nil, err
+		}
+		updatedContent = nextContent
+		totalReplacements += replacements
+	}
+	if err := os.WriteFile(cleanPath, []byte(updatedContent), 0o644); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": cleanPath, "applied": true, "content": updatedContent, "mode": "multi_edit", "replacements": totalReplacements}, nil
+}
+
+func readContinueEditableFile(path string) (string, []byte, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return "", nil, fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Clean(filepath.Join(cwd(), cleanPath))
+	}
+	originalContent, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return "", nil, err
+	}
+	return cleanPath, originalContent, nil
+}
+
+func replaceOnceOrFail(content, find, replace string) (string, int, error) {
+	needle := strings.TrimSpace(find)
+	if needle == "" {
+		return "", 0, fmt.Errorf("find is required")
+	}
+	count := strings.Count(content, find)
+	if count == 0 {
+		return "", 0, fmt.Errorf("find text not found")
+	}
+	if count > 1 {
+		return "", 0, fmt.Errorf("find text matched %d locations; provide a more specific snippet or use multi_edit with narrower edits", count)
+	}
+	return strings.Replace(content, find, replace, 1), 1, nil
+}
+
+func buildContinueEditDelegationRequest(toolName string, req continueToolRequest, editContext continueEditDelegationContext) (continueAgentExecuteRequest, error) {
+	workerToolName := continueDelegatedToolChoice(toolName)
+	if workerToolName == "" {
+		return continueAgentExecuteRequest{}, fmt.Errorf("unsupported edit tool: %s", toolName)
+	}
+	continueReq := continueAgentExecuteRequest{
+		RequestID:      uuid.NewString(),
+		SessionID:      editContext.SessionID,
+		Mode:           "apply",
+		RequestedPhase: "execution",
+		AllowedTools:   []string{"read_file", workerToolName},
+		ToolChoice:     workerToolName,
+	}
+	continueReq.Context.WorkspaceRoot = editContext.WorkspaceRoot
+	continueReq.Context.ActiveFile = editContext.ActiveFile
+	continueReq.Context.OpenFiles = append([]string(nil), editContext.OpenFiles...)
+
+	switch toolName {
+	case "code.apply_patch":
+		if strings.TrimSpace(req.Selection) == "" {
+			return continueAgentExecuteRequest{}, fmt.Errorf("selection is required")
+		}
+		continueReq.Task = fmt.Sprintf("Apply the provided patch to %s only. Use patch-style editing, keep the change bounded to this file, and do not make unrelated modifications.\n\nPatch content:\n\n%s", editContext.ActiveFile, req.Selection)
+		continueReq.Context.SelectedText = req.Selection
+	case "single_find_and_replace":
+		if strings.TrimSpace(req.Find) == "" {
+			return continueAgentExecuteRequest{}, fmt.Errorf("find is required")
+		}
+		continueReq.Task = fmt.Sprintf("Apply one exact find-and-replace edit to %s only. Replace this exact snippet:\n\n%s\n\nwith:\n\n%s\n\nDo not rewrite the whole file or make unrelated changes.", editContext.ActiveFile, req.Find, req.Replace)
+		continueReq.Context.SelectedText = req.Find
+	case "multi_edit":
+		if len(req.Edits) == 0 {
+			return continueAgentExecuteRequest{}, fmt.Errorf("edits are required")
+		}
+		var task strings.Builder
+		task.WriteString(fmt.Sprintf("Apply the following exact edits to %s only. Do not rewrite the whole file or make unrelated changes.\n", editContext.ActiveFile))
+		for index, edit := range req.Edits {
+			if strings.TrimSpace(edit.Find) == "" {
+				return continueAgentExecuteRequest{}, fmt.Errorf("edit %d find is required", index)
+			}
+			task.WriteString(fmt.Sprintf("\nEdit %d find:\n%s\n\nEdit %d replace:\n%s\n", index+1, edit.Find, index+1, edit.Replace))
+		}
+		continueReq.Task = task.String()
+		continueReq.Context.SelectedText = req.Edits[0].Find
+	}
+	return continueReq, nil
+}
+
+func continueDelegatedToolChoice(toolName string) string {
+	switch toolName {
+	case "code.apply_patch":
+		return "apply_patch"
+	case "single_find_and_replace", "multi_edit":
+		return toolName
+	default:
+		return ""
+	}
+}
+
+func continueWorkerSupportsCapabilities(registration continueWorkerRegistration, req continueAgentExecuteRequest) bool {
+	available := make(map[string]bool, len(registration.Capabilities))
+	for _, capability := range registration.Capabilities {
+		available[strings.ToLower(strings.TrimSpace(capability))] = true
+	}
+	for _, capability := range requiredContinueWorkerCapabilities(req) {
+		if !available[capability] {
+			return false
+		}
+	}
+	return true
+}
+
+func requiredContinueWorkerCapabilities(req continueAgentExecuteRequest) []string {
+	required := []string{}
+	if strings.TrimSpace(req.Context.ActiveFile) != "" || len(req.Context.OpenFiles) > 0 || strings.TrimSpace(req.Context.SelectedText) != "" {
+		required = append(required, "read_context")
+	}
+	if strings.TrimSpace(req.ToolChoice) != "" || strings.TrimSpace(req.Mode) == "apply" || strings.TrimSpace(req.RequestedPhase) == "execution" {
+		required = append(required, "apply_patch")
+	}
+	return required
+}
+
+func normalizeContinueWorkerCapabilities(capabilities []string) []string {
+	seen := make(map[string]bool, len(capabilities))
+	result := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		trimmed := strings.ToLower(strings.TrimSpace(capability))
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func validateContinueWorkerCallbackURL(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Errorf("callback_url is required")
+	}
+	parsedURL, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("callback_url must be a valid URL: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("callback_url must use http or https")
+	}
+	if parsedURL.Host == "" || parsedURL.User != nil {
+		return fmt.Errorf("callback_url must include a loopback host without user info")
+	}
+	host := strings.TrimSpace(parsedURL.Hostname())
+	if host == "localhost" {
+		return nil
+	}
+	if parsedIP := net.ParseIP(host); parsedIP != nil && parsedIP.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("callback_url host must be loopback-only")
+}
+
+func executeContinueWorkerCallback(ctx context.Context, req continueAgentExecuteRequest, registration continueWorkerRegistration) (continueWorkerCallbackOutcome, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("marshal worker request: %w", err)
+	}
+	callbackReq, err := http.NewRequestWithContext(ctx, http.MethodPost, registration.CallbackURL, bytes.NewReader(body))
+	if err != nil {
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("build worker callback request: %w", err)
+	}
+	callbackReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(callbackReq)
+	if err != nil {
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("call IDE worker: %w", err)
+	}
+	defer resp.Body.Close()
+	outcome, err := readContinueWorkerResponse(resp.Body)
+	if err != nil {
+		return continueWorkerCallbackOutcome{}, fmt.Errorf("read worker response: %w", err)
+	}
+	outcome.StatusCode = resp.StatusCode
+	outcome.ContentType = strings.TrimSpace(resp.Header.Get("Content-Type"))
+	return outcome, nil
+}
+
+func readContinueWorkerResponse(body io.Reader) (continueWorkerCallbackOutcome, error) {
+	reader := bufio.NewReader(body)
+	var raw strings.Builder
+	outcome := continueWorkerCallbackOutcome{}
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			captureContinueWorkerRaw(&raw, line)
+			captureContinueWorkerResult(&outcome, line)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return outcome, err
+		}
+	}
+	outcome.RawBody = raw.String()
+	return outcome, nil
+}
+
+func captureContinueWorkerRaw(raw *strings.Builder, rawLine []byte) {
+	if raw == nil || raw.Len() >= continueWorkerRawBodyLimit {
+		return
+	}
+	trimmed := strings.TrimSpace(string(rawLine))
+	if trimmed == "" {
+		return
+	}
+	var envelope struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Content string `json:"content"`
+		Error   string `json:"error"`
+		Result  any    `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err == nil {
+		switch envelope.Type {
+		case "done":
+			if envelope.Result != nil {
+				return
+			}
+		case "progress":
+			trimmed = strings.TrimSpace(envelope.Message)
+		case "content":
+			trimmed = strings.TrimSpace(envelope.Content)
+		case "error":
+			trimmed = strings.TrimSpace(envelope.Error)
+		}
+	}
+	if trimmed == "" {
+		return
+	}
+	if raw.Len() > 0 {
+		raw.WriteByte('\n')
+	}
+	remaining := continueWorkerRawBodyLimit - raw.Len()
+	if len(trimmed) > remaining {
+		raw.WriteString(trimmed[:remaining])
+		return
+	}
+	raw.WriteString(trimmed)
+}
+
+func captureContinueWorkerResult(outcome *continueWorkerCallbackOutcome, rawLine []byte) {
+	trimmed := strings.TrimSpace(string(rawLine))
+	if trimmed == "" || outcome == nil {
+		return
+	}
+	var envelope struct {
+		Type   string                  `json:"type"`
+		Result continueExecutionResult `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+		return
+	}
+	if envelope.Type == "done" {
+		resultCopy := cloneContinueExecutionResult(envelope.Result)
+		outcome.FinalResult = &resultCopy
+	}
+}
+
+func cloneContinueExecutionResult(src continueExecutionResult) continueExecutionResult {
+	result := continueExecutionResult{Status: src.Status, Summary: src.Summary}
+	if len(src.ModifiedFiles) > 0 {
+		result.ModifiedFiles = make([]continueExecutionModifiedFile, len(src.ModifiedFiles))
+		copy(result.ModifiedFiles, src.ModifiedFiles)
+	}
+	if len(src.Metadata) > 0 {
+		result.Metadata = cloneAnyMap(src.Metadata)
+	}
+	return result
+}
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(src))
+	for key, value := range src {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func newContinueBridgeSessionStore() *continueBridgeSessionStore {
+	return &continueBridgeSessionStore{sessions: map[string]continueSessionSnapshot{}}
+}
+
+func newContinueBridgeWorkerStore() *continueBridgeWorkerStore {
+	return &continueBridgeWorkerStore{workers: map[string]continueWorkerRegistration{}}
+}
+
+func (s *continueBridgeSessionStore) Put(snapshot continueSessionSnapshot) {
+	if s == nil || strings.TrimSpace(snapshot.SessionID) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[snapshot.SessionID] = snapshot
+}
+
+func (s *continueBridgeSessionStore) Get(sessionID string) (continueSessionSnapshot, bool) {
+	if s == nil || strings.TrimSpace(sessionID) == "" {
+		return continueSessionSnapshot{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot, ok := s.sessions[sessionID]
+	return snapshot, ok
+}
+
+func (s *continueBridgeWorkerStore) Put(registration continueWorkerRegistration) {
+	if s == nil || strings.TrimSpace(registration.SessionID) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workers[registration.SessionID] = registration
+}
+
+func (s *continueBridgeWorkerStore) Get(sessionID string) (continueWorkerRegistration, bool) {
+	if s == nil || strings.TrimSpace(sessionID) == "" {
+		return continueWorkerRegistration{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	registration, ok := s.workers[sessionID]
+	return registration, ok
+}
+
+func looksLikeUnifiedDiffPatch(patch string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "@@ ") {
+			return true
+		}
+	}
+	return false
+}
+
+func applyUnifiedDiffHunks(original, patch string) (string, error) {
+	originalLines, trailingNewline := splitContentLines(original)
+	patchLines := strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n")
+
+	result := make([]string, 0, len(originalLines))
+	originalIdx := 0
+	for i := 0; i < len(patchLines); i++ {
+		line := patchLines[i]
+		if strings.HasPrefix(line, "diff --git") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
+			continue
+		}
+		if !strings.HasPrefix(strings.TrimSpace(line), "@@ ") {
+			continue
+		}
+
+		match := unifiedHunkHeaderPattern.FindStringSubmatch(strings.TrimSpace(line))
+		if len(match) < 3 {
+			return "", fmt.Errorf("invalid unified diff hunk header: %s", line)
+		}
+		oldStart, err := strconv.Atoi(match[1])
+		if err != nil {
+			return "", fmt.Errorf("invalid unified diff hunk start: %w", err)
+		}
+		copyUntil := oldStart - 1
+		if copyUntil < 0 {
+			copyUntil = 0
+		}
+		if copyUntil > len(originalLines) {
+			return "", fmt.Errorf("hunk start %d is beyond file length %d", oldStart, len(originalLines))
+		}
+		for originalIdx < copyUntil {
+			result = append(result, originalLines[originalIdx])
+			originalIdx++
+		}
+
+		for i+1 < len(patchLines) {
+			nextLine := patchLines[i+1]
+			if strings.HasPrefix(strings.TrimSpace(nextLine), "@@ ") {
+				break
+			}
+			i++
+			if strings.HasPrefix(nextLine, "\\") {
+				continue
+			}
+			if nextLine == "" {
+				return "", fmt.Errorf("invalid unified diff payload line")
+			}
+			switch nextLine[0] {
+			case ' ':
+				if originalIdx >= len(originalLines) || originalLines[originalIdx] != nextLine[1:] {
+					return "", fmt.Errorf("context mismatch while applying unified diff")
+				}
+				result = append(result, originalLines[originalIdx])
+				originalIdx++
+			case '-':
+				if originalIdx >= len(originalLines) || originalLines[originalIdx] != nextLine[1:] {
+					return "", fmt.Errorf("delete mismatch while applying unified diff")
+				}
+				originalIdx++
+			case '+':
+				result = append(result, nextLine[1:])
+			default:
+				return "", fmt.Errorf("invalid unified diff line prefix: %q", nextLine[:1])
+			}
+		}
+	}
+
+	for originalIdx < len(originalLines) {
+		result = append(result, originalLines[originalIdx])
+		originalIdx++
+	}
+
+	return joinContentLines(result, trailingNewline), nil
+}
+
+func splitContentLines(content string) ([]string, bool) {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	trailing := strings.HasSuffix(normalized, "\n")
+	trimmed := normalized
+	if trailing {
+		trimmed = strings.TrimSuffix(trimmed, "\n")
+	}
+	if trimmed == "" {
+		return nil, trailing
+	}
+	return strings.Split(trimmed, "\n"), trailing
+}
+
+func joinContentLines(lines []string, trailingNewline bool) string {
+	content := strings.Join(lines, "\n")
+	if trailingNewline {
+		return content + "\n"
+	}
+	return content
 }
 
 func runContinueTest(command, sessionID string) (map[string]any, error) {

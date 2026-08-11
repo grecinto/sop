@@ -242,6 +242,11 @@ type SharedInfrastructure struct {
 	// EmbedderAccessor provides access to the embeddings provider for vectorization
 	// Returns any to avoid import cycle, caller should type assert to ai.Embeddings
 	EmbedderAccessor func(ctx context.Context) (any, error)
+
+	// LocalCommandExecutor reuses the agent's bounded local-command path for
+	// desktop/shell phase tools so they preserve known-command wrapping and
+	// large-output handling instead of bypassing it with ad hoc execution.
+	LocalCommandExecutor func(ctx context.Context, args map[string]any) (string, error)
 }
 
 // WorkQueueAccessor provides a generic interface for enqueueing work items
