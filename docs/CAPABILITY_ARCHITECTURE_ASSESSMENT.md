@@ -15,7 +15,7 @@ The capability architecture is **exactly what you expected**. Both coding workfl
 
 ### The Capability Contract
 
-Every capability implements the `Capability` interface:
+Every capability implements the `Capability` interface, and may also provide structured guidance through an optional guidance provider:
 
 ```go
 // lib/sop/ai/agent/capabilities/capability.go
@@ -23,13 +23,51 @@ type Capability interface {
     ID() string                      // Unique identifier
     Name() string                    // Human-readable name
     Entitlement() Entitlement        // Access control (base, premium, etc.)
-    CanHandle(query, state) bool     // Routing decision
+    Classify(query, state) ClassificationResult
     BuildContext(query, state) string // Context injection
     ExposeTools() []ToolDefinition   // Tool registration
     BuildInstructions(query, state) string // LLM instructions
-    Run(query, state) (CapabilityResult, error) // Execution
+    Handoff(ctx, query, state) *Handoff
+    OnBefore/OnAfter(...)
+}
+
+type StructuredGuidanceProvider interface {
+    BuildGuidanceProfile(query string, state RoutingState) GuidanceProfile
 }
 ```
+
+Structured guidance is now treated as a first-class capability surface. It gives the Ask loop:
+- role and operating principles
+- phase and task-family behavior guidance
+- tool-selection heuristics
+- validation expectations
+- guardrails and escalation rules
+
+To keep authoring simple, guidance is intentionally progressive:
+- minimal guidance for simple capabilities that only need light steering
+- light guidance for ordinary capabilities that benefit from role and guardrail hints
+- deep guidance for complex domain-specific capabilities that need richer heuristics, examples, and verification expectations
+
+### Progressive Guidance Model
+
+Capability authors can choose the level of guidance that fits the task:
+
+```go
+// Simple capability: no special steering needed
+profile := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityMinimal, "Answer simple requests")
+
+// Standard capability: role + guardrails
+profile := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Help with common automation tasks")
+profile.Principles = []string{"Prefer the safest available action"}
+profile.Guardrails = []capabilities.GuidanceRule{{Description: "Do not mutate state without confirmation"}}
+
+// Complex capability: richer domain-specific guidance
+profile := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityDeep, "Guide web research workflows")
+profile.SituationRules = []capabilities.GuidanceRule{{Description: "Use supporting evidence before drawing conclusions"}}
+profile.ToolSelection = []capabilities.GuidanceRule{{Description: "Prefer search and crawl tools for discovery"}}
+```
+
+This keeps authoring lightweight for simple capabilities while leaving room for deep domain-specific behavior when a capability truly needs it.
 
 ### Capability Registry
 

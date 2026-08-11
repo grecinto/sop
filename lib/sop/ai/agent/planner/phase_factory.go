@@ -9,7 +9,7 @@ import (
 // This is the factory method that selects the appropriate domain-specific implementation.
 //
 // Domain values: "coding_workflow", "stores", "spaces", "desktop"
-// Phase IDs: "intake", "investigation", "planning", "execution", "review", "delivery"
+// Phase IDs: "intake", "investigation", "planning", "testing", "execution", "review", "delivery"
 func NewPhase(domain, phaseID string, infra *SharedInfrastructure) capabilities.Capability {
 	switch domain {
 	case "coding_workflow", "coding", "codingworkflow":
@@ -39,6 +39,10 @@ func NewInvestigationPhaseCapability(infra *SharedInfrastructure) capabilities.C
 
 func NewPlanningPhaseCapability(infra *SharedInfrastructure) capabilities.Capability {
 	return newCodingPhase("planning", infra)
+}
+
+func NewTestingPhaseCapability(infra *SharedInfrastructure) capabilities.Capability {
+	return newCodingPhase("testing", infra)
 }
 
 func NewExecutionPhaseCapability(infra *SharedInfrastructure) capabilities.Capability {

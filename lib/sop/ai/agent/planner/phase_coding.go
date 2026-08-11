@@ -38,6 +38,11 @@ WORKFLOW: Build context → Inspect repo → Search patterns → Document eviden
 OBJECTIVE: Create execution strategy
 PLANNING-FIRST: Call planning_assess_and_route FIRST
 WORKFLOW: Assess → Create succession path → Build context → Plan changes → Capture artifact`
+	case "testing":
+		return `PHASE: Testing & Validation
+OBJECTIVE: Verify behavior with tests and regressions
+GUIDANCE: Use tests as a design aid when they clarify contracts, interfaces, or expected behavior; do not force TDD when the right abstraction is still being explored
+WORKFLOW: Review requirements → Add/adjust tests or validation cases → Run tests → Capture results`
 	case "execution":
 		return `PHASE: Execution & Implementation
 OBJECTIVE: Apply changes safely
@@ -177,7 +182,18 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
 			Schema:      taskSchema,
 		}, {
 			Name:        p.phaseToolName("plan_changes"),
-			Description: "Generates execution plan",
+			Description: "Generates execution plan. Use tests or validation cases as a design aid when they help specify contracts, interfaces, or expected behavior; avoid making TDD mandatory for exploratory work.",
+			Schema:      taskSchema,
+		}}
+
+	case "testing":
+		return []capabilities.ToolDefinition{{
+			Name:        p.phaseToolName("run_tests"),
+			Description: "Runs tests and validation commands. WHEN TO CALL: After adding or updating tests, or to validate the current implementation. Use tests as a design aid and regression check, not as a rigid requirement for exploratory work.",
+			Schema:      taskSchema,
+		}, {
+			Name:        p.phaseToolName("build_context"),
+			Description: "Builds context for test planning and failure triage.",
 			Schema:      taskSchema,
 		}}
 
@@ -230,15 +246,17 @@ func (p *CodingPhase) getCodingTools() []capabilities.ToolDefinition {
 func (p *CodingPhase) BuildInstructions(query string, state capabilities.RoutingState) string {
 	switch p.phaseID {
 	case "intake":
-		return "Use Intake: Ask questions → Gather requirements → Capture artifact → Transition"
+		return "Use Intake: Ask questions → Gather requirements → Identify the appropriate domain toolset → Capture artifact → Transition"
 	case "investigation":
-		return "Use Investigation: Build context → Inspect → Search → Document evidence → Transition"
+		return "Use Investigation: Build context → Choose the right domain tools for the task → Inspect → Search → Document evidence → Transition"
 	case "planning":
-		return "Use Planning: Assess → Create path → Plan changes → Capture → Transition"
+		return "Use Planning: Assess → Create path → Choose the right domain tools for the phase → Plan changes → Capture → Transition. Use tests or validation cases as a design aid when they help pin down the intended behavior, contracts, or interfaces; avoid making TDD a hard constraint."
+	case "testing":
+		return "Use Testing: Review requirements → Use the relevant test/validation tools for the phase → Add or adjust tests or validation cases when helpful → Run tests → Capture results → Transition. Treat tests as a tool for design clarity and regression confidence, not as a rigid mandate."
 	case "execution":
-		return "Use Execution: Preview → Approve → Apply → Test → Capture → Transition. SAFETY: Always preview first. MULTI-FILE: Use apply_multi_file_patch for batch operations"
+		return "Use Execution: Preview → Approve → Use the appropriate execution tools for the domain → Apply → Test → Capture → Transition. SAFETY: Always preview first. MULTI-FILE: Use apply_multi_file_patch for batch operations"
 	case "review":
-		return "Use Review: Build context → Inspect → Test → Validate → Capture → Transition"
+		return "Use Review: Build context → Use the relevant review/validation tools for the domain → Inspect → Test → Validate → Capture → Transition"
 	case "delivery":
 		return "Use Delivery: Review artifacts → Summarize → Document → Capture → Exit"
 	default:
@@ -277,6 +295,8 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 		return p.runListChangedFiles(args)
 	case strings.ToLower(p.phaseToolName("plan_changes")):
 		return p.runPlanChanges(args)
+	case strings.ToLower(p.phaseToolName("run_tests")):
+		return p.runTests(args)
 	case strings.ToLower(p.phaseToolName("preview_patch")):
 		return p.runPreviewPatch(args)
 	case strings.ToLower(p.phaseToolName("apply_patch")):

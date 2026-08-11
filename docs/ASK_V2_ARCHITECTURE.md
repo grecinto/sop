@@ -140,6 +140,17 @@ This keeps the model as the decision-maker for orchestration while preserving de
 
 ## Why This Shape Works
 
+The current architecture is now being extended to better support design-first behavior. In addition to repo grounding and phase-specific tool use, planning is being nudged to produce an explicit design brief for architecture and feature-design requests. The expected shape includes:
+
+- problem framing and scope
+- constraints and non-goals
+- candidate approaches and trade-offs
+- relevant repo/domain evidence
+- Team Practice / Core Playbook guidance when applicable
+- clear risks and validation ideas
+
+That plan is tracked in [docs/ARCHITECTURE_DESIGN_PROMPT_PLAN.md](ARCHITECTURE_DESIGN_PROMPT_PLAN.md).
+
 The design keeps the system aligned with the architectural principles already documented in the repo:
 - Ask is the controller
 - capabilities are passive participants
@@ -147,6 +158,29 @@ The design keeps the system aligned with the architectural principles already do
 - state handoff is explicit and persisted
 
 In short, the system now behaves like an orchestrator-first agent with a shared session brain rather than a collection of loosely coupled heuristics.
+
+## Structured Capability Guidance
+
+Capabilities should not only expose tools; they should also expose a structured guidance profile that tells the Ask loop how that capability should behave. This profile is now treated as a first-class contract for guidance, alongside tool exposure.
+
+A capability guidance profile contains:
+- a role statement
+- core principles
+- phase-specific rules
+- task-situation rules
+- tool-selection heuristics
+- verification expectations
+- guardrails and escalation guidance
+
+This is intentionally layered so that the system can support:
+- shared domain-agnostic guidance
+- capability-specific behavior
+- phase- or task-family-specific steering
+- domain-specific evidence requirements
+
+The guidance contract is also progressive. Simple capabilities can stay terse and rely on minimal role/guardrail hints, while complex capabilities can opt into light or deep profiles with richer rules, tool heuristics, and verification expectations. This lets capability authors keep the prompt compact for ordinary behavior and still encode domain-specific expertise where it matters.
+
+The Ask pipeline composes this guidance into the effective system prompt, while the capability remains responsible for defining the policy and behavioral expectations. This makes the guidance stronger, more reusable, and easier to test than free-form context strings.
 
 ---
 

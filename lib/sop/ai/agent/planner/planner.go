@@ -236,6 +236,31 @@ func buildExecutionGuidanceFromArtifact(artifact phaseArtifact) string {
 			if objective, _ := miniPlan["objective"].(string); strings.TrimSpace(objective) != "" {
 				lines = append(lines, "- Objective: "+objective)
 			}
+			if designBrief, ok := miniPlan["design_brief"].(map[string]any); ok && len(designBrief) > 0 {
+				if problem, _ := designBrief["problem_statement"].(string); strings.TrimSpace(problem) != "" {
+					lines = append(lines, "- Problem: "+problem)
+				}
+				if constraints, _ := designBrief["constraints"].(string); strings.TrimSpace(constraints) != "" {
+					lines = append(lines, "- Constraints: "+constraints)
+				}
+				if tradeoffs, _ := designBrief["trade_offs"].(string); strings.TrimSpace(tradeoffs) != "" {
+					lines = append(lines, "- Trade-offs: "+tradeoffs)
+				}
+				if approach, _ := designBrief["recommended_approach"].(string); strings.TrimSpace(approach) != "" {
+					lines = append(lines, "- Recommended approach: "+approach)
+				}
+			}
+			if investigationBrief, ok := miniPlan["investigation_brief"].(map[string]any); ok && len(investigationBrief) > 0 {
+				if focus, _ := investigationBrief["investigation_focus"].(string); strings.TrimSpace(focus) != "" {
+					lines = append(lines, "- Investigation focus: "+focus)
+				}
+				if questions, _ := investigationBrief["analysis_questions"].(string); strings.TrimSpace(questions) != "" {
+					lines = append(lines, "- Analysis questions: "+questions)
+				}
+				if evidence, _ := investigationBrief["evidence_to_collect"].(string); strings.TrimSpace(evidence) != "" {
+					lines = append(lines, "- Evidence to collect: "+evidence)
+				}
+			}
 			if design, ok := miniPlan["architecture_design"].([]string); ok && len(design) > 0 {
 				lines = append(lines, "- Architecture/design: "+strings.Join(design, " | "))
 			}
@@ -303,7 +328,12 @@ func buildPhaseMiniPlan(task cw.Task, pack cw.ContextPack, baseSteps []string) m
 		objective += fmt.Sprintf(" in %s", task.ActiveFile)
 	}
 
+	situation := inferCodingSituation(task.Description)
+
 	architectureDesign := []string{}
+	if situation.DesignFocus != "" {
+		architectureDesign = append(architectureDesign, situation.DesignFocus)
+	}
 	if pack.CodeStructureSummary != "" {
 		architectureDesign = append(architectureDesign, fmt.Sprintf("Align the change with the existing structure: %s", pack.CodeStructureSummary))
 	}
@@ -329,6 +359,9 @@ func buildPhaseMiniPlan(task cw.Task, pack cw.ContextPack, baseSteps []string) m
 	}
 
 	pseudoLogic := []string{}
+	if situation.InvestigationFocus != "" {
+		pseudoLogic = append(pseudoLogic, situation.InvestigationFocus)
+	}
 	if task.ActiveFile != "" {
 		pseudoLogic = append(pseudoLogic, fmt.Sprintf("Open %s and inspect the relevant logic", task.ActiveFile))
 	}
@@ -344,6 +377,9 @@ func buildPhaseMiniPlan(task cw.Task, pack cw.ContextPack, baseSteps []string) m
 
 	return map[string]any{
 		"objective":           objective,
+		"situation":           map[string]any{"id": situation.ID, "label": situation.Label, "description": situation.Description},
+		"design_brief":        buildDesignBrief(task, pack, baseSteps),
+		"investigation_brief": buildInvestigationBrief(task, pack, baseSteps),
 		"architecture_design": architectureDesign,
 		"functional_features": functionalFeatures,
 		"pseudo_logic":        pseudoLogic,
@@ -396,6 +432,168 @@ func inferTaskRisk(description string) string {
 		return "low"
 	default:
 		return "medium"
+	}
+}
+
+type codingSituation struct {
+	ID                 string
+	Label              string
+	Description        string
+	InvestigationFocus string
+	DesignFocus        string
+	VerificationFocus  string
+	PreferredModelHint string
+	Complexity         string
+	Risk               string
+}
+
+func inferCodingSituation(description string) codingSituation {
+	lower := strings.ToLower(strings.TrimSpace(description))
+	switch {
+	case strings.Contains(lower, "bug") || strings.Contains(lower, "debug") || strings.Contains(lower, "fix"):
+		return codingSituation{
+			ID:                 "bug_fix",
+			Label:              "Bug fix",
+			Description:        "Investigate a defect, trace the failing path, and isolate the root cause before changing behavior",
+			InvestigationFocus: "Trace the failing execution path, reproduce the symptom, and identify the minimal root cause",
+			DesignFocus:        "Preserve existing behavior while narrowing the fix to the affected contract or flow",
+			VerificationFocus:  "Reproduce the bug, run the relevant tests, and confirm the fix with regression coverage",
+			PreferredModelHint: "strong",
+			Complexity:         "hard",
+			Risk:               "high",
+		}
+	case strings.Contains(lower, "design") || strings.Contains(lower, "architecture") || strings.Contains(lower, "api") || strings.Contains(lower, "contract"):
+		return codingSituation{
+			ID:                 "new_feature",
+			Label:              "New feature or design",
+			Description:        "Define the shape of a capability, interface, or workflow before implementation",
+			InvestigationFocus: "Clarify the user need, boundaries, and constraints before choosing the implementation shape",
+			DesignFocus:        "Frame the core abstraction, responsibilities, interfaces, and trade-offs",
+			VerificationFocus:  "Validate the proposed design against constraints, risks, and likely integration points",
+			PreferredModelHint: "strong",
+			Complexity:         "hard",
+			Risk:               "medium",
+		}
+	case strings.Contains(lower, "refactor") || strings.Contains(lower, "cleanup") || strings.Contains(lower, "simplify"):
+		return codingSituation{
+			ID:                 "refactor",
+			Label:              "Refactor",
+			Description:        "Improve structure or maintainability without changing external behavior",
+			InvestigationFocus: "Map the current responsibilities and identify stable seams before changing structure",
+			DesignFocus:        "Preserve behavior while improving cohesion, boundaries, and readability",
+			VerificationFocus:  "Run existing tests and confirm behavior remains stable through the refactor",
+			PreferredModelHint: "balanced",
+			Complexity:         "hard",
+			Risk:               "high",
+		}
+	case strings.Contains(lower, "test") || strings.Contains(lower, "validate") || strings.Contains(lower, "coverage"):
+		return codingSituation{
+			ID:                 "test_and_validation",
+			Label:              "Testing and validation",
+			Description:        "Strengthen test coverage, validation logic, or reliability checks",
+			InvestigationFocus: "Inspect the current failure mode, coverage gaps, or validation assumptions",
+			DesignFocus:        "Choose the smallest assertion or validation strategy that improves confidence",
+			VerificationFocus:  "Execute the relevant test suite and capture evidence of the improvement",
+			PreferredModelHint: "tool-only",
+			Complexity:         "easy",
+			Risk:               "low",
+		}
+	case strings.Contains(lower, "integrat") || strings.Contains(lower, "pipeline") || strings.Contains(lower, "deploy") || strings.Contains(lower, "migration"):
+		return codingSituation{
+			ID:                 "integration_or_migration",
+			Label:              "Integration or migration",
+			Description:        "Move behavior across systems, interfaces, or deployment boundaries",
+			InvestigationFocus: "Map the source and destination contracts, dependencies, and compatibility risks",
+			DesignFocus:        "Define the compatibility strategy, transitional steps, and rollback approach",
+			VerificationFocus:  "Exercise the end-to-end path and validate compatibility at the boundary",
+			PreferredModelHint: "strong",
+			Complexity:         "hard",
+			Risk:               "high",
+		}
+	default:
+		return codingSituation{
+			ID:                 "implementation",
+			Label:              "Implementation",
+			Description:        "Deliver a focused change or feature with clear scope and verification",
+			InvestigationFocus: "Inspect the relevant code path and supporting context before implementing",
+			DesignFocus:        "Keep the change localized and aligned with the surrounding architecture",
+			VerificationFocus:  "Validate the change with the most relevant tests or checks",
+			PreferredModelHint: "balanced",
+			Complexity:         "medium",
+			Risk:               "medium",
+		}
+	}
+}
+
+func buildDesignBrief(task cw.Task, pack cw.ContextPack, baseSteps []string) map[string]any {
+	description := strings.TrimSpace(task.Description)
+	problemStatement := description
+	if problemStatement == "" {
+		problemStatement = "Design the requested capability or feature with clear boundaries and a practical implementation path"
+	}
+
+	constraints := []string{}
+	if pack.CodeStructureSummary != "" {
+		constraints = append(constraints, "fit the existing structure: "+pack.CodeStructureSummary)
+	}
+	if pack.RepositorySummary != "" {
+		constraints = append(constraints, "match repository conventions: "+pack.RepositorySummary)
+	}
+	if len(constraints) == 0 {
+		constraints = append(constraints, "keep the design scoped to the stated requirement")
+	}
+
+	nonGoals := []string{"avoid premature implementation detail", "avoid introducing unrelated abstractions"}
+	if len(baseSteps) > 0 {
+		nonGoals = append(nonGoals, "avoid solving problems outside the stated scope")
+	}
+
+	recommendedApproach := "Describe the planned structure, interfaces, and responsibilities first, then align implementation steps to that design"
+	if len(baseSteps) > 0 {
+		recommendedApproach += fmt.Sprintf(" with the implementation path: %s", strings.Join(baseSteps, " → "))
+	}
+
+	return map[string]any{
+		"problem_statement":    problemStatement,
+		"constraints":          strings.Join(constraints, " | "),
+		"non_goals":            strings.Join(nonGoals, " | "),
+		"recommended_approach": recommendedApproach,
+		"trade_offs":           "Prefer clarity of interfaces and maintainability over premature optimization; call out the main risk if the design is uncertain",
+		"risks":                "Flag unclear requirements, missing context, or significant cross-cutting changes before implementation begins",
+	}
+}
+
+func buildInvestigationBrief(task cw.Task, pack cw.ContextPack, baseSteps []string) map[string]any {
+	description := strings.TrimSpace(task.Description)
+	investigationFocus := description
+	if investigationFocus == "" {
+		investigationFocus = "Investigate the failing path and identify the root cause before proposing a fix"
+	}
+
+	analysisQuestions := []string{"What code path triggers the bug?", "Where does the current behavior diverge from the expected behavior?"}
+	if len(pack.RelatedFiles) > 0 {
+		analysisQuestions = append(analysisQuestions, fmt.Sprintf("Which related files or modules participate in this flow: %s?", strings.Join(pack.RelatedFiles, ", ")))
+	}
+	if len(pack.TestFiles) > 0 {
+		analysisQuestions = append(analysisQuestions, fmt.Sprintf("What existing tests or coverage should be used as evidence: %s?", strings.Join(pack.TestFiles, ", ")))
+	}
+	if len(baseSteps) > 0 {
+		analysisQuestions = append(analysisQuestions, fmt.Sprintf("What evidence should be gathered before changing the flow: %s?", strings.Join(baseSteps, " → ")))
+	}
+
+	evidenceToCollect := []string{"trace the relevant execution path", "capture the failing behavior or error", "inspect nearby code and surrounding tests"}
+	if pack.CodeStructureSummary != "" {
+		evidenceToCollect = append(evidenceToCollect, "map the flow against the current structure: "+pack.CodeStructureSummary)
+	}
+	if pack.DependencyFiles != nil && len(pack.DependencyFiles) > 0 {
+		evidenceToCollect = append(evidenceToCollect, "review dependent modules: "+strings.Join(pack.DependencyFiles, ", "))
+	}
+
+	return map[string]any{
+		"investigation_focus": investigationFocus,
+		"analysis_questions":  strings.Join(analysisQuestions, " | "),
+		"evidence_to_collect": strings.Join(evidenceToCollect, " | "),
+		"expected_outcome":    "Identify the root cause, confirm the scope of the bug, and define a minimal fix strategy",
 	}
 }
 
@@ -595,9 +793,9 @@ func inferMediaTypes(description string) []string {
 func buildPhasePlanSequence(query string) []string {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if strings.Contains(q, "review") || strings.Contains(q, "validate") || strings.Contains(q, "check") {
-		return []string{"intake", "investigation", "review", "delivery"}
+		return []string{"intake", "investigation", "testing", "review", "delivery"}
 	}
-	return []string{"intake", "investigation", "planning", "execution", "review", "delivery"}
+	return []string{"intake", "investigation", "planning", "testing", "execution", "review", "delivery"}
 }
 
 func collectCheckpointNames(args map[string]any) []string {

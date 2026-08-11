@@ -655,13 +655,21 @@ func (a *CopilotAgent) buildPhasePrompt(ctx context.Context, query string, class
 			CRUDFlags:      crudFlags,
 		}
 
-		// Get context and instructions from phase
+		// Get context, instructions, and structured guidance from phase
 		context := phase.BuildContext(query, routingState)
 		instructions := phase.BuildInstructions(query, routingState)
+		guidance := capabilities.RenderCapabilityGuidance(phase, query, routingState)
 
 		combined := ""
 		if context != "" {
 			combined = context
+		}
+		if guidance != "" {
+			if combined != "" {
+				combined += "\n\n" + guidance
+			} else {
+				combined = guidance
+			}
 		}
 		if instructions != "" {
 			if combined != "" {

@@ -21,6 +21,18 @@
 
 ### What Is the Phase Plan System?
 
+### Design-oriented planning guidance
+
+The system is being strengthened so that design-oriented requests (feature design, architecture design, API/module design) are handled with a more explicit architecture mindset. In practice, that means planning should:
+
+- require a short design brief before implementation is proposed
+- surface constraints, non-goals, and assumptions
+- discuss trade-offs and likely risks
+- consult Team Practice from the Core Playbook when relevant
+- use the appropriate domain toolset for the task
+
+A working plan for this hardening effort is documented in [docs/ARCHITECTURE_DESIGN_PROMPT_PLAN.md](ARCHITECTURE_DESIGN_PROMPT_PLAN.md).
+
 The Phase Plan system is a cognitive pattern for multi-step problem-solving where an AI agent automatically plans and executes a sequence of phases (investigation, planning, execution, review, delivery) to complete complex tasks.
 
 ### Key Concepts

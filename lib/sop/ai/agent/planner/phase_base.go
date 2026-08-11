@@ -348,6 +348,11 @@ func (b *BasePhase) validateCompletionCriteria(artifact phaseArtifact) error {
 			return fmt.Errorf("planning phase requires a summary of the approach")
 		}
 
+	case "testing":
+		if strings.TrimSpace(artifact.Summary) == "" {
+			return fmt.Errorf("testing phase requires a summary of the test results or validation outcome")
+		}
+
 	case "execution":
 		// Execution must document what was done
 		if strings.TrimSpace(artifact.Summary) == "" {
@@ -492,6 +497,8 @@ func phaseKeywords(phaseID string) []string {
 		return []string{"plan", "design", "architecture", "approach", "proposal", "strategy"}
 	case "execution":
 		return []string{"implement", "execute", "patch", "modify", "write", "change", "fix"}
+	case "testing":
+		return []string{"test", "testing", "verify", "validate", "assert", "coverage", "regression"}
 	case "review":
 		return []string{"review", "validate", "verify", "check", "test", "quality"}
 	case "delivery":
@@ -511,6 +518,8 @@ func phaseMetadata(phaseID string) (name, description string) {
 		return "Planning & Design", "planning and design for implementation"
 	case "execution":
 		return "Execution & Implementation", "implementation and execution"
+	case "testing":
+		return "Testing & Validation", "test-first validation and regression checks"
 	case "review":
 		return "Review & Validation", "validation, verification, and review"
 	case "delivery":

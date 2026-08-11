@@ -159,6 +159,52 @@ func TestBuildTaskRoutingMetadata_PrefersStrongerModelForMediaAnalysis(t *testin
 	}
 }
 
+func TestInferCodingSituation_ClassifiesTaskFamilies(t *testing.T) {
+	bugFix := inferCodingSituation("fix the parser bug that drops malformed input")
+	if bugFix.ID != "bug_fix" {
+		t.Fatalf("expected bug_fix situation, got %q", bugFix.ID)
+	}
+	if bugFix.InvestigationFocus == "" {
+		t.Fatalf("expected investigation focus for bug fix, got %#v", bugFix)
+	}
+
+	feature := inferCodingSituation("add a new API endpoint for exports")
+	if feature.ID != "new_feature" {
+		t.Fatalf("expected new_feature situation, got %q", feature.ID)
+	}
+	if feature.DesignFocus == "" {
+		t.Fatalf("expected design focus for new feature, got %#v", feature)
+	}
+}
+
+func TestBuildPhaseMiniPlan_ProducesDesignBriefForDesignRequests(t *testing.T) {
+	miniPlan := buildPhaseMiniPlan(cw.Task{Description: "design a new API for the platform", ActiveFile: "lib/api.go", TaskType: "implementation"}, cw.ContextPack{CodeStructureSummary: "service layer", RepositorySummary: "Go package"}, []string{"define request contract", "wire handler"})
+	designBrief, ok := miniPlan["design_brief"].(map[string]any)
+	if !ok || len(designBrief) == 0 {
+		t.Fatalf("expected design brief in mini plan, got %#v", miniPlan["design_brief"])
+	}
+	if got, _ := designBrief["problem_statement"].(string); got == "" {
+		t.Fatalf("expected problem_statement in design brief, got %#v", designBrief)
+	}
+	if got, _ := designBrief["recommended_approach"].(string); got == "" {
+		t.Fatalf("expected recommended_approach in design brief, got %#v", designBrief)
+	}
+}
+
+func TestBuildPhaseMiniPlan_ProducesInvestigationBriefForBugFixRequests(t *testing.T) {
+	miniPlan := buildPhaseMiniPlan(cw.Task{Description: "fix the parser bug that drops malformed input", ActiveFile: "lib/parser.go", TaskType: "implementation"}, cw.ContextPack{CodeStructureSummary: "parser uses a token stream", RelatedFiles: []string{"lib/parser.go", "lib/parser_test.go"}, TestFiles: []string{"lib/parser_test.go"}, DependencyFiles: []string{"lib/errors.go"}}, []string{"inspect parser", "trace failure path", "patch bug"})
+	investigationBrief, ok := miniPlan["investigation_brief"].(map[string]any)
+	if !ok || len(investigationBrief) == 0 {
+		t.Fatalf("expected investigation brief in mini plan, got %#v", miniPlan["investigation_brief"])
+	}
+	if got, _ := investigationBrief["investigation_focus"].(string); got == "" {
+		t.Fatalf("expected investigation_focus in investigation brief, got %#v", investigationBrief)
+	}
+	if got, _ := investigationBrief["analysis_questions"].(string); got == "" {
+		t.Fatalf("expected analysis_questions in investigation brief, got %#v", investigationBrief)
+	}
+}
+
 func TestBuildPhaseMiniPlan_IncludesRoutingMetadata(t *testing.T) {
 	miniPlan := buildPhaseMiniPlan(cw.Task{Description: "add parser validation", ActiveFile: "lib/parser.go", TaskType: "implementation"}, cw.ContextPack{}, []string{"add validation"})
 	routing, ok := miniPlan["routing"].(map[string]any)
@@ -167,5 +213,25 @@ func TestBuildPhaseMiniPlan_IncludesRoutingMetadata(t *testing.T) {
 	}
 	if got, _ := routing["preferred_model"].(string); got == "" {
 		t.Fatalf("expected preferred model to be populated, got %#v", routing["preferred_model"])
+	}
+}
+
+func TestBuildPhasePlanSequence_IncludesTestingPhase(t *testing.T) {
+	sequence := buildPhasePlanSequence("implement a parser fix with regression coverage")
+	if len(sequence) < 7 {
+		t.Fatalf("expected at least 7 phases, got %d", len(sequence))
+	}
+	if sequence[3] != "testing" {
+		t.Fatalf("expected testing to appear before execution, got %#v", sequence)
+	}
+}
+
+func TestNewTestingPhaseCapability_ExposesTestingPhase(t *testing.T) {
+	cap := NewTestingPhaseCapability(nil)
+	if cap == nil {
+		t.Fatal("expected testing phase capability")
+	}
+	if cap.ID() != "phase_testing" {
+		t.Fatalf("expected phase_testing id, got %q", cap.ID())
 	}
 }

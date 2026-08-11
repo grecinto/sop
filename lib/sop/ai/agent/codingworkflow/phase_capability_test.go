@@ -191,6 +191,18 @@ func TestPlanningPhaseBuildContext_PromptsUserVisiblePlanBeforeImplementation(t 
 	}
 }
 
+func TestPlanningPhaseBuildContext_EncouragesArchitecturalDesignThinking(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	result := cap.BuildContext("design a new feature for the platform", capabilities.RoutingState{})
+	for _, check := range []string{"trade-offs", "interfaces", "non-goals", "architecture review"} {
+		if !strings.Contains(strings.ToLower(result), check) {
+			t.Fatalf("expected planning context to include architecturally relevant guidance %q, got %q", check, result)
+		}
+	}
+}
+
 func TestExecutionPhaseBuildInstructions_PromptsUserVisiblePlanAndApproval(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewExecutionPhaseCapability(infra)
@@ -275,6 +287,44 @@ func TestPlanningPhaseBuildInstructions_MentionsIDEWorkerInspectionOnly(t *testi
 		if !strings.Contains(result, check) {
 			t.Fatalf("expected planning instructions to include %q, got %q", check, result)
 		}
+	}
+	for _, check := range []string{"first-class phase", "Research patterns and confirm assumptions"} {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected planning instructions to include %q, got %q", check, result)
+		}
+	}
+}
+
+func TestExecutionAndReviewInstructionsEncourageInvestigationWhenDetailsAreInsufficient(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewExecutionPhaseCapability(infra)
+	result := cap.BuildInstructions("apply a small change", capabilities.RoutingState{})
+	for _, check := range []string{"under-specified", "additional investigation/research"} {
+		if !strings.Contains(result, check) {
+			t.Fatalf("expected execution instructions to include %q, got %q", check, result)
+		}
+	}
+
+	reviewCap := NewReviewPhaseCapability(infra)
+	reviewResult := reviewCap.BuildInstructions("review the applied patch", capabilities.RoutingState{})
+	if !strings.Contains(reviewResult, "additional investigation/research") {
+		t.Fatalf("expected review instructions to encourage research when details are insufficient, got %q", reviewResult)
+	}
+}
+
+func TestPhaseCapabilityBuildGuidanceProfile_ReturnsStructuredRules(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	profile := cap.BuildGuidanceProfile("plan a refactor", capabilities.RoutingState{})
+	if profile.Role == "" {
+		t.Fatal("expected planning guidance role")
+	}
+	if len(profile.PhaseRules) == 0 {
+		t.Fatalf("expected planning phase rules, got %#v", profile)
+	}
+	if len(profile.VerificationRules) == 0 {
+		t.Fatalf("expected verification rules, got %#v", profile)
 	}
 }
 

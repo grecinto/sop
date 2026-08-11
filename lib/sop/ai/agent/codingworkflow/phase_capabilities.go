@@ -43,6 +43,10 @@ func NewPlanningPhaseCapability(sharedInfra *SharedInfrastructure) *PhaseCapabil
 	return newPhaseCapability(sharedInfra, "planning", "Planning & Design", "planning and design for implementation")
 }
 
+func NewTestingPhaseCapability(sharedInfra *SharedInfrastructure) *PhaseCapability {
+	return newPhaseCapability(sharedInfra, "testing", "Testing & Validation", "test-first validation and regression checks")
+}
+
 func NewExecutionPhaseCapability(sharedInfra *SharedInfrastructure) *PhaseCapability {
 	return newPhaseCapability(sharedInfra, "execution", "Execution & Implementation", "implementation and patch application")
 }
@@ -87,6 +91,66 @@ func (c *PhaseCapability) Entitlement() capabilities.Entitlement {
 			Actions:  []string{"read", "write"},
 			Gate:     capabilities.GateReadAccess,
 		}},
+	}
+}
+
+func (c *PhaseCapability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	phaseRules := []capabilities.GuidanceRule{}
+	verificationRules := []capabilities.GuidanceRule{}
+	guardrails := []capabilities.GuidanceRule{}
+
+	phaseRules = append(phaseRules, capabilities.GuidanceRule{
+		ID:          "phase_role",
+		Category:    "phase",
+		Priority:    "high",
+		Description: fmt.Sprintf("Operate as the %s phase capability and keep the current phase focused on its job.", c.name),
+		AppliesTo:   []string{c.phaseID},
+	})
+
+	switch c.phaseID {
+	case "intake":
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "intake_scope", Category: "phase", Priority: "high", Description: "Clarify scope, goals, and constraints before acting", AppliesTo: []string{"intake"}})
+		verificationRules = append(verificationRules, capabilities.GuidanceRule{ID: "intake_verification", Category: "verification", Priority: "medium", Description: "Capture a concrete requirements artifact before moving on", AppliesTo: []string{"intake"}})
+	case "investigation":
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "investigate_evidence", Category: "phase", Priority: "high", Description: "Gather evidence from the repository, tests, and surrounding code before proposing a fix", AppliesTo: []string{"investigation"}})
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "trace_flow", Category: "phase", Priority: "high", Description: "Trace the relevant flow or execution path before changing behavior", AppliesTo: []string{"investigation"}})
+		verificationRules = append(verificationRules, capabilities.GuidanceRule{ID: "investigation_validation", Category: "verification", Priority: "medium", Description: "Support the next phase with concrete evidence and findings", AppliesTo: []string{"investigation"}})
+	case "planning":
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "design_brief", Category: "phase", Priority: "high", Description: "Create a structured design brief with problem statement, constraints, trade-offs, and recommended approach", AppliesTo: []string{"planning"}})
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "team_practice", Category: "phase", Priority: "high", Description: "Look up relevant Team Practice guidance from the Core Playbook when it applies", AppliesTo: []string{"planning"}})
+		verificationRules = append(verificationRules, capabilities.GuidanceRule{ID: "planning_verification", Category: "verification", Priority: "medium", Description: "Ensure the plan includes concrete steps, dependencies, and validation ideas", AppliesTo: []string{"planning"}})
+	case "testing":
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "test_guidance", Category: "phase", Priority: "high", Description: "Use the relevant tests or validation surfaces to shape the change", AppliesTo: []string{"testing"}})
+		verificationRules = append(verificationRules, capabilities.GuidanceRule{ID: "testing_verification", Category: "verification", Priority: "medium", Description: "Capture the exact test or validation command and result", AppliesTo: []string{"testing"}})
+	case "execution":
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "preview_before_apply", Category: "phase", Priority: "high", Description: "Preview changes and obtain approval before applying patches", AppliesTo: []string{"execution"}})
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "keep_scope", Category: "phase", Priority: "medium", Description: "Keep the change scoped to the observed need and validate after each significant change", AppliesTo: []string{"execution"}})
+		verificationRules = append(verificationRules, capabilities.GuidanceRule{ID: "execution_verification", Category: "verification", Priority: "high", Description: "Run the most relevant validation step before concluding the change", AppliesTo: []string{"execution"}})
+	case "review":
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "review_evidence", Category: "phase", Priority: "high", Description: "Validate the implementation against requirements and evidence", AppliesTo: []string{"review"}})
+		verificationRules = append(verificationRules, capabilities.GuidanceRule{ID: "review_verification", Category: "verification", Priority: "high", Description: "Report what was validated and what remains uncertain", AppliesTo: []string{"review"}})
+	case "delivery":
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "handoff_summary", Category: "phase", Priority: "medium", Description: "Summarize the outcome, important decisions, and follow-up steps clearly", AppliesTo: []string{"delivery"}})
+	}
+
+	if strings.Contains(lower, "bug") || strings.Contains(lower, "debug") || strings.Contains(lower, "fix") {
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "bug_fix_focus", Category: "situation", Priority: "high", Description: "Treat the task as a bug-fix investigation and trace the failing path before changing behavior", AppliesTo: []string{"bug_fix"}})
+		guardrails = append(guardrails, capabilities.GuidanceRule{ID: "bug_fix_guardrail", Category: "guardrail", Priority: "high", Description: "Do not patch the symptom without identifying the root cause", AppliesTo: []string{"bug_fix"}})
+	}
+	if strings.Contains(lower, "design") || strings.Contains(lower, "architecture") || strings.Contains(lower, "api") || strings.Contains(lower, "contract") {
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "design_focus", Category: "situation", Priority: "high", Description: "Frame the requested capability with constraints, trade-offs, and recommended approach before implementation", AppliesTo: []string{"design"}})
+	}
+	if strings.Contains(lower, "refactor") || strings.Contains(lower, "cleanup") || strings.Contains(lower, "simplify") {
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "refactor_focus", Category: "situation", Priority: "high", Description: "Preserve behavior while improving structure and maintainability", AppliesTo: []string{"refactor"}})
+	}
+
+	return capabilities.GuidanceProfile{
+		Role:              fmt.Sprintf("You are the %s capability for %s.", c.name, c.description),
+		Principles:        []string{"Prefer evidence over assumption", "Keep the current phase focused on its responsibilities", "Use the most relevant tools and evidence for the task"},
+		PhaseRules:        phaseRules,
+		VerificationRules: verificationRules,
+		Guardrails:        guardrails,
 	}
 }
 
@@ -195,6 +259,8 @@ func phaseKeywords(phaseID string) []string {
 		return []string{"inspect", "investigate", "analy", "debug", "trace", "error", "repo", "search"}
 	case "planning":
 		return []string{"plan", "design", "architecture", "approach", "proposal", "strategy"}
+	case "testing":
+		return []string{"test", "testing", "verify", "validate", "regression", "coverage", "assert"}
 	case "execution":
 		return []string{"implement", "execute", "patch", "modify", "write", "change", "fix"}
 	case "review":
@@ -226,6 +292,8 @@ func (c *PhaseCapability) buildPhaseSpecificContext(query string, state capabili
 		return c.buildInvestigationContext()
 	case "planning":
 		return c.buildPlanningContext()
+	case "testing":
+		return c.buildTestingContext()
 	case "execution":
 		return c.buildExecutionContext()
 	case "review":
@@ -402,6 +470,7 @@ OBJECTIVE:
 - Create an ordered set of implementation steps
 - Identify relevant files, functions, and code locations
 - Output: A concrete execution plan with >= 3 steps
+- Before finalizing design or implementation choices, look up relevant Team Practice guidance from the Core Playbook (CP) and incorporate it when it applies
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on change complexity and risk:
@@ -425,13 +494,15 @@ WORKFLOW:
 2. If Continue bridge metadata is present, use that context to understand the editor-backed coding environment, but do not delegate implementation work during planning
 3. Call planning_build_context to refresh repository understanding
 4. Investigate the repository using the shared coding workflow tools: call planning_search_repo to find relevant implementation patterns and planning_inspect_repo to inspect the current code structure and changed files
-5. When the task involves code structure, use the shared workflow's AST/tree-sitter-backed analysis capabilities to understand symbols, structure, and relevant code paths before designing the change
-6. Call planning_list_changed_files to check for conflicts
-7. Call planning_plan_changes to generate concrete plan
-8. Review plan quality: each step references specific files/functions
-9. Present a clear user-visible plan message in the chat history that shows the generated plan details and asks for approval from the user before any implementation work begins
-10. If approved: Capture artifact with status="ready_for_execution" and transition_to="execution"
-11. If changes needed: Iterate on plan (update iteration counter)
+5. Use the right tool family for the domain and phase: for coding, prefer AST/tree-sitter and repository inspection tools; for stores, prefer schema/relationship/data inspection tools before SQL or scripting; for testing, inspect test tools and current failures before proposing fixes; for other domains, use the relevant domain-specific investigation tools instead of generic search alone
+6. When the task involves code structure, use the shared workflow's AST/tree-sitter-backed analysis capabilities to understand symbols, structure, and relevant code paths before designing the change
+7. Check whether there is relevant Team Practice guidance in the Core Playbook (CP) for the domain, architecture, or coding pattern being considered; if present, treat it as a design constraint or strong recommendation rather than optional commentary
+8. Call planning_list_changed_files to check for conflicts
+9. Call planning_plan_changes to generate concrete plan
+10. Review plan quality: each step references specific files/functions
+11. Present a clear user-visible plan message in the chat history that shows the generated plan details and asks for approval from the user before any implementation work begins
+12. If approved: Capture artifact with status="ready_for_execution" and transition_to="execution"
+13. If changes needed: Iterate on plan (update iteration counter)
 
 COMPLETION CRITERIA:
 □ Context gathered and patterns researched
@@ -496,6 +567,9 @@ QUALITY STANDARDS:
 ❌ VAGUE: "Add caching to user lookup"
 ✅ CONCRETE: "Add unit tests for cache hit/miss/invalidation in user_service_test.go"
 ❌ VAGUE: "Add tests"
+✅ ARCHITECTURE: Surface the main design trade-offs, interfaces, contracts, and non-goals before committing to a plan
+✅ TEAM PRACTICE: Look up relevant Team Practice guidance from the Core Playbook (CP) for the design area and incorporate it in the proposed approach when it is applicable
+✅ REVIEW: If the change is architecturally significant, explicitly note the likely risks and ask for architecture review when the approach is uncertain
 
 BLOCKING CONDITIONS:
 - Requirements unclear → Return to intake
@@ -512,6 +586,28 @@ ASK WHEN:
 - Novel implementation without established patterns
 PRESENT FOR REVIEW:
 "Implementation plan: [formatted plan with steps]. Does this look correct?"`
+}
+
+func (c *PhaseCapability) buildTestingContext() string {
+	return `PHASE: Testing & Validation
+
+OBJECTIVE:
+- Validate behavior with tests and regressions
+- Confirm that the implementation matches the planned behavior
+- Capture concrete evidence from the test run
+
+WORKFLOW:
+1. Review the current plan and requirements
+2. Use the relevant test or validation tools for the phase before proposing a change: inspect failing tests, relevant suites, or domain-specific validation surfaces
+3. Add or refine a focused test or validation case when the change is behavioral or bug-fix oriented
+4. Run the relevant test or validation command
+5. Capture the result and any follow-up work
+6. Transition to execution or review as appropriate
+
+QUALITY STANDARDS:
+✅ DESIGN AID: Use a focused test or validation case when it helps clarify intended behavior, contracts, or interfaces
+✅ REGRESSION: Cover the bug or behavior change with a targeted test when possible
+✅ EVIDENCE: Report the exact command and pass/fail result`
 }
 
 func (c *PhaseCapability) buildExecutionContext() string {
@@ -546,8 +642,9 @@ CONTROL RULE:
 - Prefer delegate_continue_task only when the edit is bounded to the active file and is clearly editor-native (for example a focused patch, refactor, or localized change).
 - Prefer daemon-native editing when the change is broader multi-file, cross-cutting, or better handled as a direct edit by AI Studio itself.
 1. Review plan from planning phase artifact
-2. If editor-native execution would help and Continue context is available, consider whether this step should be delegated as one bounded Continue coding objective; prefer Continue only for bounded edits scoped to the active file, and prefer daemon-native editing for broader multi-file or cross-cutting changes
-3. For each step in plan:
+2. Use the right tool family for the domain and phase: for coding, prefer code-editing and AST-backed inspection tools; for stores, prefer the store/query tooling over ad hoc scripting; for testing, use the relevant test execution and inspection tools; for other domains, rely on the phase-specific toolset rather than generic shell commands
+3. If editor-native execution would help and Continue context is available, consider whether this step should be delegated as one bounded Continue coding objective; prefer Continue only for bounded edits scoped to the active file, and prefer daemon-native editing for broader multi-file or cross-cutting changes
+4. For each step in plan:
 	a. Before any implementation or shell command is run, show a user-visible plan message in the chat history that includes the generated plan details and asks for approval from the user before running commands
 	b. Call execution_preview_patch to preview changes
 	c. Get user approval for preview (MANDATORY for safety)
@@ -651,14 +748,15 @@ CONTROL RULE:
 WORKFLOW:
 1. Call review_build_context to understand current state
 2. Call review_inspect_repo to see applied changes
-3. If IDE-native review or validation would help and Continue context is available, consider whether this slice should be delegated as one bounded Continue coding objective
-4. Call review_run_tests to validate functionality
-5. If a bounded editor-native review step is useful, call delegate_continue_task for a focused diff review, IDE-scoped validation, or localized follow-up check
-6. Compare results against requirements from intake
-7. Check quality: code style, test coverage, documentation
-8. Capture artifact with validation results
-9. If approved: Transition to delivery
-10. If issues found: Return to execution or planning
+3. Use the right tool family for the domain and phase: for coding, inspect the relevant code paths and diffs; for stores, validate against schema/data expectations; for testing, review the relevant test results and failure context; for other domains, use the review-focused toolset for that domain
+4. If IDE-native review or validation would help and Continue context is available, consider whether this slice should be delegated as one bounded Continue coding objective
+5. Call review_run_tests to validate functionality
+6. If a bounded editor-native review step is useful, call delegate_continue_task for a focused diff review, IDE-scoped validation, or localized follow-up check
+7. Compare results against requirements from intake
+8. Check quality: code style, test coverage, documentation
+9. Capture artifact with validation results
+10. If approved: Transition to delivery
+11. If issues found: Return to execution or planning
 
 COMPLETION CRITERIA:
 □ All requirements validated
@@ -853,11 +951,13 @@ func (c *PhaseCapability) BuildInstructions(query string, state capabilities.Rou
 	case "investigation":
 		return "Use Investigation capability to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) Document evidence, 6) Transition to planning when analysis complete."
 	case "planning":
-		return "Use Planning capability to: 1) Use Continue bridge context when available to understand the editor-backed coding environment, 2) Build context, 3) Research patterns, 4) Generate concrete plan with file/function references, 5) Emit a user-visible plan message in the chat history that shows the generated plan details and asks for approval from the user before implementation work begins, 6) Capture artifact with status='ready_for_execution', 7) Transition to execution when approved. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
+		return "Use Planning capability to: 1) Treat planning as a first-class phase, not an afterthought, 2) Use Continue bridge context when available to understand the editor-backed coding environment, 3) Build context, 4) Research patterns and confirm assumptions, 5) Generate a concrete plan with file/function references, 6) Check relevant Team Practice guidance from the Core Playbook (CP) before finalizing design or implementation choices, 7) Use tests or validation cases as a design aid when they clarify contracts, interfaces, or expected behavior, 8) Emit a user-visible plan message in the chat history that shows the generated plan details and asks for approval from the user before implementation work begins, 9) Capture artifact with status='ready_for_execution', 10) Transition to execution when approved. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
+	case "testing":
+		return "Use Testing capability to: 1) Add or refine tests or validation cases when they clarify the intended behavior, 2) Use tests as a tool for design clarity and regression confidence, 3) Run the relevant test or validation command, 4) Capture the results, 5) Transition to execution or review as appropriate."
 	case "execution":
-		return "Use Execution capability to: 1) Show a user-visible plan message in the chat history that includes the generated plan details, 2) Ask for approval from the user before running commands, 3) Preview patches, 4) Get user approval, 5) Decide whether the current step should be delegated to Continue as one bounded coding objective, 6) Use delegate_continue_task only when the edit is bounded to the active file and the task is editor-native (for example a focused patch, refactor, or localized change); if the task is broader multi-file or better handled as direct daemon-native editing, apply patches directly instead, 7) Run relevant validation after each change, 8) Capture results, 9) Transition to review when complete. SAFETY: Always preview before applying and keep Ask as the controller."
+		return "Use Execution capability to: 1) Show a user-visible plan message in the chat history that includes the generated plan details, 2) Ask for approval from the user before running commands, 3) Preview patches, 4) Get user approval, 5) If the task is under-specified, pause and do additional investigation/research before changing code, 6) Decide whether the current step should be delegated to Continue as one bounded coding objective, 7) Use delegate_continue_task only when the edit is bounded to the active file and the task is editor-native (for example a focused patch, refactor, or localized change); if the task is broader multi-file or better handled as direct daemon-native editing, apply patches directly instead, 8) Run relevant validation after each change, 9) Capture results, 10) Transition to review when complete. SAFETY: Always preview before applying and keep Ask as the controller."
 	case "review":
-		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) Decide whether a bounded IDE-native review or validation slice should be delegated to Continue, 4) Use delegate_continue_task only for that bounded subtask when appropriate, 5) Run relevant validation, 6) Validate against requirements, 7) Capture validation results, 8) Transition to delivery if approved or back to execution if issues found."
+		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) If the review scope is unclear or the implementation details are incomplete, do additional investigation/research before finalizing the result, 4) Decide whether a bounded IDE-native review or validation slice should be delegated to Continue, 5) Use delegate_continue_task only for that bounded subtask when appropriate, 6) Run relevant validation, 7) Validate against requirements, 8) Capture validation results, 9) Transition to delivery if approved or back to execution if issues found."
 	case "delivery":
 		return "Use Delivery capability to: 1) Review all phase artifacts, 2) Summarize changes made, 3) Document decisions, 4) Capture delivery summary, 5) Signal exit to complete workflow."
 	default:

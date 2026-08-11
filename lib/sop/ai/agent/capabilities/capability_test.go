@@ -8,6 +8,35 @@ import (
 	"github.com/sharedcode/sop/ai"
 )
 
+func TestRenderCapabilityGuidance_RendersStructuredProfile(t *testing.T) {
+	cap := &guidanceCapability{}
+	rendered := RenderCapabilityGuidance(cap, "fix a parser bug", RoutingState{})
+	if !strings.Contains(rendered, "ROLE") {
+		t.Fatalf("expected guidance role heading, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "Investigate before acting") {
+		t.Fatalf("expected structured guidance content, got %q", rendered)
+	}
+}
+
+func TestProgressiveGuidanceSupport(t *testing.T) {
+	minimal := NewGuidanceProfile(GuidanceIntensityMinimal, "Help with simple tasks")
+	if minimal.Intensity != GuidanceIntensityMinimal {
+		t.Fatalf("expected minimal guidance intensity, got %q", minimal.Intensity)
+	}
+	if minimal.IsEmpty() {
+		t.Fatal("expected minimal guidance profile to be considered non-empty")
+	}
+
+	merged := MergeGuidanceProfiles(minimal, GuidanceProfile{Role: "Handle domain-specific workflows"})
+	if merged.Role == "" {
+		t.Fatal("expected merged guidance profile to preserve role information")
+	}
+	if merged.Intensity != GuidanceIntensityMinimal {
+		t.Fatalf("expected merged intensity to stay minimal, got %q", merged.Intensity)
+	}
+}
+
 func TestRegistryResolvesCapabilityByID(t *testing.T) {
 	reg := NewRegistry()
 	cap := &testCapability{id: "stores", name: "Stores"}
@@ -80,6 +109,34 @@ func TestNewRegistryRegistersCapabilitiesAtConstruction(t *testing.T) {
 	}
 	if cap.ID() != "spaces" {
 		t.Fatalf("expected spaces capability, got %q", cap.ID())
+	}
+}
+
+type guidanceCapability struct{}
+
+func (c *guidanceCapability) ID() string               { return "guidance" }
+func (c *guidanceCapability) Name() string             { return "Guidance" }
+func (c *guidanceCapability) Entitlement() Entitlement { return Entitlement{} }
+func (c *guidanceCapability) Classify(query string, state RoutingState) ClassificationResult {
+	return ClassificationResult{Relevant: true, Score: 1, Mode: CapabilityModePrimary}
+}
+func (c *guidanceCapability) BuildContext(query string, state RoutingState) string      { return "" }
+func (c *guidanceCapability) ExposeTools() []ToolDefinition                             { return nil }
+func (c *guidanceCapability) BuildInstructions(query string, state RoutingState) string { return "" }
+func (c *guidanceCapability) Handoff(ctx context.Context, query string, state RoutingState) *Handoff {
+	return nil
+}
+func (c *guidanceCapability) OnBefore(ctx context.Context, query string, state RoutingState) error {
+	return nil
+}
+func (c *guidanceCapability) OnAfter(ctx context.Context, query string, state RoutingState, result CapabilityResult) error {
+	return nil
+}
+func (c *guidanceCapability) BuildGuidanceProfile(query string, state RoutingState) GuidanceProfile {
+	return GuidanceProfile{
+		Role:       "Investigate before acting",
+		Principles: []string{"Prefer evidence over assumption"},
+		Guardrails: []GuidanceRule{{Description: "Do not patch without tracing the failing path"}},
 	}
 }
 

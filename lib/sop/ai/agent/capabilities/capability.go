@@ -5,6 +5,7 @@ import (
 	"fmt"
 	log "log/slog"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -39,6 +40,78 @@ type ToolDefinition struct {
 	Description string
 	Schema      string
 	Tags        []string // CRUD tags: C, R, U, D for tool filtering (Phase 3 optimization)
+}
+
+// GuidanceRule is a single reusable instruction unit for a capability.
+type GuidanceRule struct {
+	ID          string
+	Category    string
+	Priority    string
+	Description string
+	AppliesTo   []string
+	When        string
+}
+
+// GuidanceIntensity describes how much domain-specific steering a capability wants to contribute.
+type GuidanceIntensity string
+
+const (
+	GuidanceIntensityMinimal GuidanceIntensity = "minimal"
+	GuidanceIntensityLight   GuidanceIntensity = "light"
+	GuidanceIntensityDeep    GuidanceIntensity = "deep"
+)
+
+// GuidanceProfile is a structured, composable guidance contract that capabilities can expose.
+type GuidanceProfile struct {
+	Intensity         GuidanceIntensity
+	Role              string
+	Principles        []string
+	PhaseRules        []GuidanceRule
+	SituationRules    []GuidanceRule
+	ToolSelection     []GuidanceRule
+	VerificationRules []GuidanceRule
+	Guardrails        []GuidanceRule
+}
+
+// NewGuidanceProfile creates a progressive guidance profile with a sensible default intensity.
+func NewGuidanceProfile(intensity GuidanceIntensity, role string) GuidanceProfile {
+	if intensity == "" {
+		intensity = GuidanceIntensityMinimal
+	}
+	return GuidanceProfile{Intensity: intensity, Role: role}
+}
+
+// IsEmpty reports whether a guidance profile contributes any meaningful steering.
+func (p GuidanceProfile) IsEmpty() bool {
+	return p.Intensity == "" && p.Role == "" && len(p.Principles) == 0 && len(p.PhaseRules) == 0 && len(p.SituationRules) == 0 && len(p.ToolSelection) == 0 && len(p.VerificationRules) == 0 && len(p.Guardrails) == 0
+}
+
+// MergeGuidanceProfiles combines two profiles, preserving the most informative values.
+func MergeGuidanceProfiles(profiles ...GuidanceProfile) GuidanceProfile {
+	merged := GuidanceProfile{}
+	for _, profile := range profiles {
+		if profile.Intensity != "" {
+			merged.Intensity = profile.Intensity
+		}
+		if merged.Role == "" {
+			merged.Role = profile.Role
+		}
+		merged.Principles = append(merged.Principles, profile.Principles...)
+		merged.PhaseRules = append(merged.PhaseRules, profile.PhaseRules...)
+		merged.SituationRules = append(merged.SituationRules, profile.SituationRules...)
+		merged.ToolSelection = append(merged.ToolSelection, profile.ToolSelection...)
+		merged.VerificationRules = append(merged.VerificationRules, profile.VerificationRules...)
+		merged.Guardrails = append(merged.Guardrails, profile.Guardrails...)
+	}
+	if merged.Intensity == "" {
+		merged.Intensity = GuidanceIntensityMinimal
+	}
+	return merged
+}
+
+// StructuredGuidanceProvider allows a capability to contribute structured guidance.
+type StructuredGuidanceProvider interface {
+	BuildGuidanceProfile(query string, state RoutingState) GuidanceProfile
 }
 
 // ToolExecutor can handle capability-specific tool invocations from the Ask loop.
@@ -135,6 +208,66 @@ type Capability interface {
 	// Lifecycle event handlers
 	OnBefore(ctx context.Context, query string, state RoutingState) error
 	OnAfter(ctx context.Context, query string, state RoutingState, result CapabilityResult) error
+}
+
+// RenderCapabilityGuidance renders a capability's structured guidance profile for the Ask prompt.
+func RenderCapabilityGuidance(cap Capability, query string, state RoutingState) string {
+	if cap == nil {
+		return ""
+	}
+	provider, ok := cap.(StructuredGuidanceProvider)
+	if !ok {
+		return ""
+	}
+	profile := provider.BuildGuidanceProfile(query, state)
+	return RenderGuidanceProfile(profile)
+}
+
+// RenderGuidanceProfile converts a structured guidance profile into prompt text.
+func RenderGuidanceProfile(profile GuidanceProfile) string {
+	if profile.IsEmpty() {
+		return ""
+	}
+
+	var lines []string
+	if profile.Intensity != "" && profile.Intensity != GuidanceIntensityMinimal {
+		lines = append(lines, "GUIDANCE INTENSITY")
+		lines = append(lines, string(profile.Intensity))
+	}
+	if profile.Role != "" {
+		lines = append(lines, "ROLE")
+		lines = append(lines, profile.Role)
+	}
+	if len(profile.Principles) > 0 {
+		lines = append(lines, "PRINCIPLES")
+		lines = append(lines, fmt.Sprintf("- %s", strings.Join(profile.Principles, "\n- ")))
+	}
+	for _, section := range []struct {
+		name  string
+		items []GuidanceRule
+	}{
+		{name: "PHASE RULES", items: profile.PhaseRules},
+		{name: "SITUATION RULES", items: profile.SituationRules},
+		{name: "TOOL SELECTION", items: profile.ToolSelection},
+		{name: "VERIFICATION RULES", items: profile.VerificationRules},
+		{name: "GUARDRAILS", items: profile.Guardrails},
+	} {
+		if len(section.items) == 0 {
+			continue
+		}
+		lines = append(lines, section.name)
+		for _, rule := range section.items {
+			line := fmt.Sprintf("- %s", rule.Description)
+			if rule.When != "" {
+				line += fmt.Sprintf(" (when: %s)", rule.When)
+			}
+			if len(rule.AppliesTo) > 0 {
+				line += fmt.Sprintf(" [applies to: %s]", strings.Join(rule.AppliesTo, ", "))
+			}
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // PrefixHandler extends Capability to enable direct command-prefix routing.
