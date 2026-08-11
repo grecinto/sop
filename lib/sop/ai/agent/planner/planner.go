@@ -79,6 +79,20 @@ func (c *PlannerCapability) BuildInstructions(query string, state capabilities.R
 	return "For new coding tasks, start by creating a PhasePlan with the create_phase_plan tool before taking implementation actions. Persist the plan into the current work stream so the later phase capabilities can continue the workflow.\n\n" + cw.CodeFormatInstructions
 }
 
+func (c *PlannerCapability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
+	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide workflow planning safely and clearly")
+	base.Principles = []string{"Prefer phased planning for work that spans multiple steps or validation checkpoints"}
+	base.Guardrails = []capabilities.GuidanceRule{{Description: "Do not skip planning for architecture changes, significant validation, or multi-file edits"}}
+
+	profile := capabilities.GuidanceProfile{
+		Role:          "Guide structured workflow planning for multi-step tasks",
+		Principles:    []string{"Use the simplest plan that still preserves the key checkpoints and risks"},
+		ToolSelection: []capabilities.GuidanceRule{{Description: "Prefer create_phase_plan for high-level workflow orchestration and leave implementation detail to the later execution phases"}},
+	}.ApplyDefaults(base)
+
+	return profile
+}
+
 func (c *PlannerCapability) ExposeTools() []capabilities.ToolDefinition {
 	return []capabilities.ToolDefinition{{
 		Name:        "create_phase_plan",

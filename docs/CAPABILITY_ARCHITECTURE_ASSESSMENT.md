@@ -67,7 +67,23 @@ profile.SituationRules = []capabilities.GuidanceRule{{Description: "Use supporti
 profile.ToolSelection = []capabilities.GuidanceRule{{Description: "Prefer search and crawl tools for discovery"}}
 ```
 
-This keeps authoring lightweight for simple capabilities while leaving room for deep domain-specific behavior when a capability truly needs it.
+This keeps authoring lightweight for simple capabilities while leaving room for deep domain-specific behavior when a capability truly needs it. In practice, the goal is to avoid over-engineering: keep the profile small unless the capability's domain really warrants richer steering.
+
+A useful authoring pattern for new capabilities is a base-plus-override model:
+
+```go
+base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide this capability safely")
+base.Principles = []string{"Prefer simple, predictable steps"}
+base.Guardrails = []capabilities.GuidanceRule{{Description: "Do not mutate state without confirmation"}}
+
+profile := capabilities.GuidanceProfile{
+    Principles: []string{"Add only the domain-specific rule that is truly necessary"},
+}.ApplyDefaults(base)
+
+return profile
+```
+
+That pattern makes the system feel lightweight for simple capabilities while still allowing richer behavior for advanced or high-risk domains. For very simple capabilities, returning an empty profile is also acceptable and lets the phase-level guidance remain the primary source of behavior.
 
 ### Capability Registry
 

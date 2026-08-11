@@ -223,6 +223,19 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 	return strings.TrimSpace(b.String())
 }
 
+func (c *Capability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
+	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide bounded IDE delegation and preserve Ask-side orchestration")
+	base.Principles = []string{"Keep Ask as the controller for the larger workflow", "Preserve structured success criteria and constraints for the delegated turn"}
+	base.Guardrails = []capabilities.GuidanceRule{{Description: "Do not hand off the entire workflow to Continue when the daemon still needs to orchestrate the next step"}}
+	base.ToolSelection = []capabilities.GuidanceRule{{Description: "Prefer delegation when the task is editor-native and bounded, otherwise use the daemon-native capability path"}}
+
+	profile := capabilities.GuidanceProfile{
+		Principles: []string{"Delegate only one bounded coding slice at a time"},
+	}.ApplyDefaults(base)
+
+	return profile
+}
+
 func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 	return []capabilities.ToolDefinition{
 		{

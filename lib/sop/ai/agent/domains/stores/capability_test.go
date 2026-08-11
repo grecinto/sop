@@ -33,3 +33,14 @@ func TestStoresCapabilityBuildsExecutionContext(t *testing.T) {
 		t.Fatalf("expected stores domain header, got %q", ctx)
 	}
 }
+
+func TestStoresCapabilityBuildsGuidanceProfile(t *testing.T) {
+	cap := NewCapability()
+	profile := cap.BuildGuidanceProfile("show inventory", capabilities.RoutingState{Domain: "Stores"})
+	if profile.Intensity != capabilities.GuidanceIntensityLight {
+		t.Fatalf("expected light guidance intensity, got %q", profile.Intensity)
+	}
+	if len(profile.ToolSelection) == 0 {
+		t.Fatal("expected stores capability to provide tool-selection guidance")
+	}
+}

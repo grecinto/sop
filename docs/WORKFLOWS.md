@@ -8,7 +8,7 @@
 - Added a Coding Workflow Services capability that exposes reusable coding-workflow helpers through the capability contract
 - Kept Ask/ReAct as the authoritative execution loop while allowing coding-specific primitives to participate lightly
 - Implemented participant pattern for workflow execution and workflow setup hooks
-- Added Dynamic Planner capability with OnFinish hook
+- Added Dynamic Planner capability with structured guidance and phase-planning support
 - Refactored WorkflowManagerCapability for single-step enqueueing
 - Deprecated controller-style execution entry points for the capability layer
 - Achieved 100% Ask pipeline reuse for workflow steps and structured coding assistance
@@ -121,10 +121,10 @@ Next Ask Iteration Processes Workflow Steps
 ```
 
 **Key Components:**
-- **PlannerCapability** (`lib/sop/ai/agent/codingworkflow/planner_capability.go`)
-  - Implements `WorkflowPlanner` interface with `OnFinish()` hook
-  - Generates plans using task classification and heuristics
-  - Converts plans to executable Steps using public API
+- **PlannerCapability** (`lib/sop/ai/agent/planner/planner.go`)
+  - Implements the standard capability interface and contributes structured guidance for planning
+  - Generates phase plans using task classification and heuristics
+  - Converts plans to executable execution guidance for later phases
   
 - **WorkflowPlanner Interface** (`lib/sop/ai/agent/capabilities/capability.go`)
   ```go

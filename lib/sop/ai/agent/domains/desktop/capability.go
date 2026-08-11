@@ -142,6 +142,18 @@ func (c *Capability) Classify(query string, state capabilities.RoutingState) cap
 func (c *Capability) BuildContext(query string, state capabilities.RoutingState) string {
 	return "Structured Context: Desktop Automation\n- Use local automation tools for shell, git, file, and workspace tasks when the request involves repository work, local file editing, or developer workflow operations."
 }
+
+func (c *Capability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
+	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide local automation and shell workflows safely")
+	base.Principles = []string{"Prefer predictable sequential steps unless the user explicitly requests parallel execution"}
+	base.Guardrails = []capabilities.GuidanceRule{{Description: "Do not execute destructive commands without explicit user intent"}}
+
+	profile := capabilities.GuidanceProfile{
+		Principles: []string{"Keep shell actions scoped to the requested workspace or repository"},
+	}.ApplyDefaults(base)
+
+	return profile
+}
 func (c *Capability) ExposeTools() []capabilities.ToolDefinition {
 	return []capabilities.ToolDefinition{{
 		Name:        "execute_local_command",

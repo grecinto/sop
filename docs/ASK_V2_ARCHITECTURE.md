@@ -178,7 +178,12 @@ This is intentionally layered so that the system can support:
 - phase- or task-family-specific steering
 - domain-specific evidence requirements
 
-The guidance contract is also progressive. Simple capabilities can stay terse and rely on minimal role/guardrail hints, while complex capabilities can opt into light or deep profiles with richer rules, tool heuristics, and verification expectations. This lets capability authors keep the prompt compact for ordinary behavior and still encode domain-specific expertise where it matters.
+The guidance contract is also progressive. Simple capabilities can stay terse and rely on minimal role/guardrail hints, while ordinary capabilities can use light profiles with a role and a few guardrails, and complex capabilities can opt into deep profiles with richer rules, tool heuristics, and verification expectations. This lets capability authors keep the prompt compact for ordinary behavior and still encode domain-specific expertise where it matters.
+
+Authoring guidance:
+- use minimal guidance for trivial capabilities with no special behavior
+- use light guidance when a capability needs a clear role or a small set of safety rules
+- use deep guidance when the domain has important workflows, evidence requirements, or tool-selection heuristics
 
 The Ask pipeline composes this guidance into the effective system prompt, while the capability remains responsible for defining the policy and behavioral expectations. This makes the guidance stronger, more reusable, and easier to test than free-form context strings.
 

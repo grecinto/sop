@@ -33,3 +33,14 @@ func TestSpacesCapabilityBuildsExecutionContext(t *testing.T) {
 		t.Fatalf("expected spaces domain header, got %q", ctx)
 	}
 }
+
+func TestSpacesCapabilityBuildsGuidanceProfile(t *testing.T) {
+	cap := NewCapability()
+	profile := cap.BuildGuidanceProfile("show spaces", capabilities.RoutingState{Domain: "Spaces"})
+	if profile.Intensity != capabilities.GuidanceIntensityLight {
+		t.Fatalf("expected light guidance intensity, got %q", profile.Intensity)
+	}
+	if len(profile.Guardrails) == 0 {
+		t.Fatal("expected spaces capability to provide guardrails")
+	}
+}

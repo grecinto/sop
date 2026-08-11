@@ -129,6 +129,18 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	}
 	return "Use the Stores capability to translate requests into executable store operations and keep the workflow aligned with the current domain context."
 }
+
+func (c *Capability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
+	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide store operations with schema awareness and safe validation")
+	base.Principles = []string{"Validate behavior before changing persistence logic"}
+	base.ToolSelection = []capabilities.GuidanceRule{{Description: "Prefer inspection and validation tooling before writing or mutating store operations"}}
+
+	profile := capabilities.GuidanceProfile{
+		Principles: []string{"Never guess store names, field paths, or join mappings"},
+	}.ApplyDefaults(base)
+
+	return profile
+}
 func (c *Capability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
 	_ = ctx
 	_ = query

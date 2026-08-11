@@ -37,6 +37,33 @@ func TestProgressiveGuidanceSupport(t *testing.T) {
 	}
 }
 
+func TestGuidanceProfileApplyDefaultsInheritsBaseGuidance(t *testing.T) {
+	defaults := GuidanceProfile{
+		Intensity:  GuidanceIntensityLight,
+		Role:       "Handle common tasks",
+		Principles: []string{"Prefer safety"},
+		Guardrails: []GuidanceRule{{Description: "Do not mutate state without confirmation"}},
+	}
+	override := GuidanceProfile{
+		Role:       "Handle domain-specific workflows",
+		Principles: []string{"Prefer evidence over assumption"},
+	}
+
+	resolved := override.ApplyDefaults(defaults)
+	if resolved.Role != "Handle domain-specific workflows" {
+		t.Fatalf("expected child role to override the base role, got %q", resolved.Role)
+	}
+	if resolved.Intensity != GuidanceIntensityLight {
+		t.Fatalf("expected inherited intensity to be preserved, got %q", resolved.Intensity)
+	}
+	if len(resolved.Principles) != 2 {
+		t.Fatalf("expected inherited and child principles to be combined, got %d", len(resolved.Principles))
+	}
+	if len(resolved.Guardrails) != 1 {
+		t.Fatalf("expected base guardrails to be preserved, got %d", len(resolved.Guardrails))
+	}
+}
+
 func TestRegistryResolvesCapabilityByID(t *testing.T) {
 	reg := NewRegistry()
 	cap := &testCapability{id: "stores", name: "Stores"}

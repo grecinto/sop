@@ -20,6 +20,17 @@ func TestPlannerCapability_RegistersAsPrimaryCodingPlanner(t *testing.T) {
 	}
 }
 
+func TestPlannerCapabilityBuildGuidanceProfileUsesLightGuidance(t *testing.T) {
+	cap := NewPlannerCapability(nil)
+	profile := cap.BuildGuidanceProfile("plan a parser refactor", capabilities.RoutingState{CapabilityHint: "planner"})
+	if profile.Intensity != capabilities.GuidanceIntensityLight {
+		t.Fatalf("expected light guidance intensity, got %q", profile.Intensity)
+	}
+	if len(profile.ToolSelection) == 0 {
+		t.Fatal("expected planner capability to provide tool-selection guidance")
+	}
+}
+
 func TestPlanningPhaseCapability_UsesPlannerPackage(t *testing.T) {
 	cap := NewPlanningPhaseCapability(nil)
 	if cap == nil {

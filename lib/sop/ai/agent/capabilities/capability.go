@@ -109,6 +109,51 @@ func MergeGuidanceProfiles(profiles ...GuidanceProfile) GuidanceProfile {
 	return merged
 }
 
+// ApplyDefaults merges a child profile with a base/default profile so the child inherits the baseline
+// and only overrides the fields it explicitly provides.
+func (p GuidanceProfile) ApplyDefaults(base GuidanceProfile) GuidanceProfile {
+	if p.Intensity == "" {
+		p.Intensity = base.Intensity
+	}
+	if p.Role == "" {
+		p.Role = base.Role
+	}
+	if len(p.Principles) == 0 {
+		p.Principles = append([]string{}, base.Principles...)
+	} else if len(base.Principles) > 0 {
+		p.Principles = append(append([]string{}, base.Principles...), p.Principles...)
+	}
+	if len(p.PhaseRules) == 0 {
+		p.PhaseRules = append([]GuidanceRule{}, base.PhaseRules...)
+	} else if len(base.PhaseRules) > 0 {
+		p.PhaseRules = append(append([]GuidanceRule{}, base.PhaseRules...), p.PhaseRules...)
+	}
+	if len(p.SituationRules) == 0 {
+		p.SituationRules = append([]GuidanceRule{}, base.SituationRules...)
+	} else if len(base.SituationRules) > 0 {
+		p.SituationRules = append(append([]GuidanceRule{}, base.SituationRules...), p.SituationRules...)
+	}
+	if len(p.ToolSelection) == 0 {
+		p.ToolSelection = append([]GuidanceRule{}, base.ToolSelection...)
+	} else if len(base.ToolSelection) > 0 {
+		p.ToolSelection = append(append([]GuidanceRule{}, base.ToolSelection...), p.ToolSelection...)
+	}
+	if len(p.VerificationRules) == 0 {
+		p.VerificationRules = append([]GuidanceRule{}, base.VerificationRules...)
+	} else if len(base.VerificationRules) > 0 {
+		p.VerificationRules = append(append([]GuidanceRule{}, base.VerificationRules...), p.VerificationRules...)
+	}
+	if len(p.Guardrails) == 0 {
+		p.Guardrails = append([]GuidanceRule{}, base.Guardrails...)
+	} else if len(base.Guardrails) > 0 {
+		p.Guardrails = append(append([]GuidanceRule{}, base.Guardrails...), p.Guardrails...)
+	}
+	if p.Intensity == "" {
+		p.Intensity = GuidanceIntensityMinimal
+	}
+	return p
+}
+
 // StructuredGuidanceProvider allows a capability to contribute structured guidance.
 type StructuredGuidanceProvider interface {
 	BuildGuidanceProfile(query string, state RoutingState) GuidanceProfile

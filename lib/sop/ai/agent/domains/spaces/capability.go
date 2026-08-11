@@ -101,6 +101,18 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	}
 	return "Use the Spaces capability to execute the relevant Space operations and keep the workflow aligned with the current domain context."
 }
+
+func (c *Capability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
+	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide space mutations and knowledge operations carefully")
+	base.Principles = []string{"Prefer narrow-scoped mutations unless the user explicitly requests broad refreshes"}
+	base.Guardrails = []capabilities.GuidanceRule{{Description: "Do not refresh or delete large knowledge surfaces without explicit user intent"}}
+
+	profile := capabilities.GuidanceProfile{
+		Principles: []string{"Treat persisted knowledge changes as high-impact operations"},
+	}.ApplyDefaults(base)
+
+	return profile
+}
 func (c *Capability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
 	_ = ctx
 	_ = query

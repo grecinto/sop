@@ -61,6 +61,8 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-31.
 | [ASK_V2_ARCHITECTURE.md](ASK_V2_ARCHITECTURE.md) | ⭐ **V2 Ask Pipeline**: Pure LLM orchestration with phase factory pattern, zero-heuristic routing, domain-agnostic design, and conversational feedback system for user transparency |
 | [ASK_V2_IMPLEMENTATION_SUMMARY.md](ASK_V2_IMPLEMENTATION_SUMMARY.md) | **V2 Ask Implementation**: Complete implementation guide, code structure, migration paths, and integration patterns |
 | [ASK_V2_VERIFICATION.md](ASK_V2_VERIFICATION.md) | **V2 Ask Testing**: Test coverage, verification checklist, and validation strategy |
+| [STRUCTURED_GUIDANCE_MODEL.md](STRUCTURED_GUIDANCE_MODEL.md) | **Developer guide**: how phase guidance, capability guidance, and domain-specific guidance compose for new capabilities |
+| [DOMAIN_AUTHORING_GUIDE.md](DOMAIN_AUTHORING_GUIDE.md) | **Domain authoring guide**: how to plug an application domain into the agent so AI Studio adopts it and works effectively within that domain |
 | [V2_ASK_LLM_ORCHESTRATOR_GAPS.md](V2_ASK_LLM_ORCHESTRATOR_GAPS.md) | **✅ STATUS**: V2 Ask orchestrator gaps update - WorkStream management and phase completion enforcement are now implemented; remaining items are refinement work |
 | [TOKEN_CONSUMPTION_ANALYSIS.md](TOKEN_CONSUMPTION_ANALYSIS.md) | **Token Cost Analysis**: V2 (LLM Orchestrator) uses 2.5-6x more tokens vs V1 (Heuristics) - hybrid approach can achieve cost parity while maintaining orchestration benefits |
 | [TOKEN_CONSUMPTION_SUMMARY.md](TOKEN_CONSUMPTION_SUMMARY.md) | **Token Cost TL;DR**: Executive summary with hybrid optimization strategy - fast-path classification + domain pre-filtering recommendations |

@@ -145,13 +145,17 @@ func (c *PhaseCapability) BuildGuidanceProfile(query string, state capabilities.
 		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "refactor_focus", Category: "situation", Priority: "high", Description: "Preserve behavior while improving structure and maintainability", AppliesTo: []string{"refactor"}})
 	}
 
-	return capabilities.GuidanceProfile{
-		Role:              fmt.Sprintf("You are the %s capability for %s.", c.name, c.description),
-		Principles:        []string{"Prefer evidence over assumption", "Keep the current phase focused on its responsibilities", "Use the most relevant tools and evidence for the task"},
-		PhaseRules:        phaseRules,
-		VerificationRules: verificationRules,
-		Guardrails:        guardrails,
-	}
+	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, fmt.Sprintf("You are the %s capability for %s.", c.name, c.description))
+	base.Principles = []string{"Prefer evidence over assumption", "Keep the current phase focused on its responsibilities"}
+	base.PhaseRules = phaseRules
+	base.VerificationRules = verificationRules
+	base.Guardrails = guardrails
+
+	profile := capabilities.GuidanceProfile{
+		Principles: []string{"Use the most relevant tools and evidence for the task"},
+	}.ApplyDefaults(base)
+
+	return profile
 }
 
 func (c *PhaseCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {

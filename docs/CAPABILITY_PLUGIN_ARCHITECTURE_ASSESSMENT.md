@@ -166,10 +166,10 @@ type RoutingState struct {
 **File**: `lib/sop/ai/agent/capabilities/capability.go`
 
 ```go
-// Registry.Resolve() returns first matching capability
+// Registry.Resolve() returns the best matching capability using classification and entitlement rules.
 func (r *Registry) Resolve(query string, state RoutingState) (Capability, bool) {
     for _, cap := range r.capabilities {
-        if cap.CanHandle(query, state) {
+        if result := cap.Classify(query, state); result.Relevant {
             return cap, true
         }
     }
@@ -180,27 +180,26 @@ func (r *Registry) Resolve(query string, state RoutingState) (Capability, bool) 
 ### Example: Coding Workflow Capability
 
 ```go
-// lib/sop/ai/agent/codingworkflow/capability.go
-func (c *Capability) CanHandle(query string, state capabilities.RoutingState) bool {
+// lib/sop/ai/agent/codingworkflow/phase_capabilities.go
+func (c *PhaseCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
     q := strings.ToLower(query)
-    
-    // Check routing hint first (fast path)
-    if state.CapabilityHint == "coding_workflow" {
-        return true
+
+    if state.CapabilityHint == "coding_workflow" || state.CapabilityHint == "planning" {
+        return capabilities.ClassificationResult{Relevant: true, Score: 20, Mode: capabilities.CapabilityModePrimary}
     }
-    
-    // Fallback to keyword matching
-    return strings.Contains(q, "fix") ||
-           strings.Contains(q, "refactor") ||
-           strings.Contains(q, "patch") ||
-           // ... 35+ keywords
+
+    if strings.Contains(q, "fix") || strings.Contains(q, "refactor") || strings.Contains(q, "patch") {
+        return capabilities.ClassificationResult{Relevant: true, Score: 18, Mode: capabilities.CapabilityModePrimary}
+    }
+
+    return capabilities.ClassificationResult{}
 }
 ```
 
 ### ✅ Clean Separation
 
 - **Capabilities don't touch routing logic**
-- **New capability**: Implement `CanHandle()` with domain-specific logic
+- **New capability**: Implement `Classify()` with domain-specific logic and optionally `BuildGuidanceProfile()` for richer steering
 - **Three gates** ensure contextual routing (explicit → continuity → discovery)
 - **Routing state** provides context without tight coupling
 

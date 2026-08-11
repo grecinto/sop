@@ -50,3 +50,14 @@ func TestDesktopCapabilityBuildsInstructions(t *testing.T) {
 		t.Error("expected instructions to mention session recovery")
 	}
 }
+
+func TestDesktopCapabilityBuildsGuidanceProfile(t *testing.T) {
+	cap := NewCapability()
+	profile := cap.BuildGuidanceProfile("run tests", capabilities.RoutingState{Domain: "Desktop"})
+	if profile.Intensity != capabilities.GuidanceIntensityLight {
+		t.Fatalf("expected light guidance intensity, got %q", profile.Intensity)
+	}
+	if len(profile.Guardrails) == 0 {
+		t.Fatal("expected desktop capability to provide guardrails")
+	}
+}

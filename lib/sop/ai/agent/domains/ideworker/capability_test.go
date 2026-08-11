@@ -448,3 +448,14 @@ func TestCapabilityBuildContextEmphasizesAskControllerForContinueBridge(t *testi
 		}
 	}
 }
+
+func TestCapabilityBuildGuidanceProfileUsesLightGuidance(t *testing.T) {
+	cap := NewCapability()
+	profile := cap.BuildGuidanceProfile("delegate a small patch", capabilities.RoutingState{Domain: "coding"})
+	if profile.Intensity != capabilities.GuidanceIntensityLight {
+		t.Fatalf("expected light guidance intensity, got %q", profile.Intensity)
+	}
+	if len(profile.Guardrails) == 0 {
+		t.Fatal("expected IDE worker capability to provide guardrails")
+	}
+}
