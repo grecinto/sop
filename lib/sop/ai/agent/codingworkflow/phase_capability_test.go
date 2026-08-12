@@ -179,6 +179,18 @@ func TestExecutionPhaseBuildContext_UsesGeneralValidationGuidance(t *testing.T) 
 	}
 }
 
+func TestTestingPhaseBuildContext_DefaultCoverageTargetAndIterationGuardrail(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewTestingPhaseCapability(infra)
+
+	result := cap.BuildContext("validate a new service", capabilities.RoutingState{})
+	for _, check := range []string{"70%", "higher target", "not a reason to block normal iteration", "relevant package", "stale tests"} {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(check)) {
+			t.Fatalf("expected testing context to include %q, got %q", check, result)
+		}
+	}
+}
+
 func TestPlanningPhaseBuildContext_PromptsUserVisiblePlanBeforeImplementation(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewPlanningPhaseCapability(infra)
@@ -199,6 +211,18 @@ func TestPlanningPhaseBuildContext_EncouragesArchitecturalDesignThinking(t *test
 	for _, check := range []string{"trade-offs", "interfaces", "non-goals", "architecture review"} {
 		if !strings.Contains(strings.ToLower(result), check) {
 			t.Fatalf("expected planning context to include architecturally relevant guidance %q, got %q", check, result)
+		}
+	}
+}
+
+func TestPlanningPhaseBuildContext_UsesDesignSessionApprovalFlow(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewPlanningPhaseCapability(infra)
+
+	result := cap.BuildContext("design a new workflow for approval gating", capabilities.RoutingState{})
+	for _, check := range []string{"design session", "user approval", "record the approved plan", "transition to execution", "design document", "diagram", "modular", "comments"} {
+		if !strings.Contains(strings.ToLower(result), check) {
+			t.Fatalf("expected planning context to include %q, got %q", check, result)
 		}
 	}
 }

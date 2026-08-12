@@ -1214,15 +1214,16 @@ Classify the interjection type:
    - Example: "Forget all that, let's redesign the database"
 
 3. **refine**: User redirects/clarifies current task (stay in stream, maybe jump phase)
-   - Signals: "actually", "instead", "jump to", "skip to"
+   - Signals: "actually", "instead", "jump to", "skip to", "also add", "and also", "update the plan"
    - Example: "Actually, jump to planning - I know the fix"
+   - Strict rule: this is not a fresh reset. Preserve the current workstream, merge new requirements into the existing plan/design, and update only the affected parts. Do not discard prior requirements unless the user explicitly says to replace them. If new requirements conflict with prior decisions, surface the conflict and resolve it explicitly.
 
 Respond with JSON:
 {
   "type": "pause_new|clear_restart|refine",
   "target_phase": "investigation|planning|execution|review|delivery|null",
   "confidence": 0.0-1.0,
-  "reasoning": "Brief explanation"
+  "reasoning": "Brief explanation, including whether new requirements should be merged with the current plan/design"
 }
 ```
 

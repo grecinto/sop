@@ -475,6 +475,8 @@ OBJECTIVE:
 - Identify relevant files, functions, and code locations
 - Output: A concrete execution plan with >= 3 steps
 - Before finalizing design or implementation choices, look up relevant Team Practice guidance from the Core Playbook (CP) and incorporate it when it applies
+- When code will be generated, follow the general design and coding best practices of the language and ecosystem: keep the design modular, use appropriate object-oriented structure when relevant, separate responsibilities across small focused units, prefer established patterns over ad hoc logic, and keep the implementation consistent with the surrounding codebase's architecture
+- Add concise comments only where they clarify intent, contracts, invariants, or non-obvious logic
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on change complexity and risk:
@@ -485,13 +487,20 @@ This phase supports TWO interaction modes - choose based on change complexity an
   - Low risk (localized changes, good test coverage)
   - Execute: Gather context → Research patterns → Generate plan → Present for approval → Capture (all in one response)
 
-• ITERATIVE MODE (Short interactions):
+• ITERATIVE MODE (Short interactions, design session):
   - Complex changes requiring architecture decisions
   - Multiple implementation strategies possible
   - High risk (breaking changes, cross-cutting concerns)
-  - User wants to validate approach before detailed planning
-  - Execute: Present high-level approach → Get feedback → Refine → Present detailed plan → Get approval
+  - User wants to validate the design before detailed implementation
+  - Execute: Present high-level design/approach → Get feedback → Refine → Present detailed plan/design → User approves → Record approved plan → Transition to execution
   - Capture intermediate artifact with status="drafting" after each iteration
+
+IMPORTANT RULE FOR DESIGN-ORIENTED REQUESTS:
+- Planning is a design session, not an implementation session.
+- For feature design, architecture design, workflow design, API/module design, or proposal work, produce a design brief before proposing implementation details.
+- The design brief must include scope, constraints, non-goals, assumptions, key trade-offs, risks, likely interfaces, and the recommended approach.
+- If the user asks for diagrams, design docs, architecture proposals, or other design artifacts, generate those in planning and present them for review.
+- Do not jump into implementation until the user signals approval of the design/plan.
 
 WORKFLOW:
 1. Review requirements from intake and evidence from investigation
@@ -503,10 +512,12 @@ WORKFLOW:
 7. Check whether there is relevant Team Practice guidance in the Core Playbook (CP) for the domain, architecture, or coding pattern being considered; if present, treat it as a design constraint or strong recommendation rather than optional commentary
 8. Call planning_list_changed_files to check for conflicts
 9. Call planning_plan_changes to generate concrete plan
-10. Review plan quality: each step references specific files/functions
-11. Present a clear user-visible plan message in the chat history that shows the generated plan details and asks for approval from the user before any implementation work begins
-12. If approved: Capture artifact with status="ready_for_execution" and transition_to="execution"
-13. If changes needed: Iterate on plan (update iteration counter)
+10. Review plan quality: each step references specific files/functions and the design is grounded in evidence
+11. Present a clear user-visible plan message in the chat history that shows the generated plan details, design trade-offs, and any diagrams or design docs requested, and asks for approval from the user before implementation work begins
+12. If the user changes requirements or requests refinements: iterate on the design and update the artifact (status="refining") until user approval is reached
+13. If approved: record the approved plan in the active workstream artifact, capture status="ready_for_execution", and transition_to="execution"
+14. If user requests additional documentation: generate design documentation and keep it attached to the planning artifact before moving forward
+15. If changes needed: iterate on plan (update iteration counter), but remain in design-review mode until explicit approval is signaled
 
 COMPLETION CRITERIA:
 □ Context gathered and patterns researched
@@ -599,6 +610,8 @@ OBJECTIVE:
 - Validate behavior with tests and regressions
 - Confirm that the implementation matches the planned behavior
 - Capture concrete evidence from the test run
+- Default coverage target for the relevant package or affected feature area: 70% line coverage or higher, unless the user explicitly specifies a different requirement
+- If the user specifies a higher target, follow the higher target; coverage is a quality bar for the relevant scope, not a reason to block normal iteration or design refinement unnecessarily
 
 WORKFLOW:
 1. Review the current plan and requirements
@@ -611,7 +624,10 @@ WORKFLOW:
 QUALITY STANDARDS:
 ✅ DESIGN AID: Use a focused test or validation case when it helps clarify intended behavior, contracts, or interfaces
 ✅ REGRESSION: Cover the bug or behavior change with a targeted test when possible
-✅ EVIDENCE: Report the exact command and pass/fail result`
+✅ COVERAGE: Default target is 70% for the relevant scope; higher user-specified thresholds override this default
+✅ STALE TESTS: If a code mutation changes behavior, contracts, or interfaces, update or replace stale tests to match the new expected behavior; do not leave outdated assertions in place just because they still compile
+✅ EVIDENCE: Report the exact command and pass/fail result
+✅ ITERATION: Do not let a default coverage floor block normal iteration when the user is still refining design or implementation; prefer focused validation and incremental improvement`
 }
 
 func (c *PhaseCapability) buildExecutionContext() string {
@@ -621,6 +637,8 @@ OBJECTIVE:
 - Apply planned changes to the codebase
 - Follow the execution plan from the planning phase
 - Validate the work with the most relevant evidence
+- Produce code that is modular, maintainable, readable, and aligned with the language's general design and coding best practices, including object-oriented organization, separation of concerns, and established design patterns where appropriate
+- Add brief, useful comments for non-obvious logic, contracts, invariants, or API/behavior intent; avoid noisy comments that only restate obvious code
 - Output: Applied changes and validation results
 
 INTERACTION MODES:

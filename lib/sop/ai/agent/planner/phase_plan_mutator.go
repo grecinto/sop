@@ -261,7 +261,7 @@ func NewPhasePlanMutationTool(mutator PhasePlanMutator) *PhasePlanMutationTool {
 func (t *PhasePlanMutationTool) ToolDefinition() string {
 	return `{
   "name": "mutate_phase_plan",
-  "description": "Dynamically modify the phase plan during conversation. Use when user requests changes or when you discover the current plan doesn't match requirements.",
+  "description": "Dynamically modify the phase plan during conversation. Use when user requests changes or when you discover the current plan doesn't match requirements. For refinement interjections or added requirements, merge the new requirements into the current plan/design instead of replacing the existing plan; preserve prior decisions unless the user explicitly changes them and call out conflicts clearly.",
   "parameters": {
     "type": "object",
     "required": ["action"],
