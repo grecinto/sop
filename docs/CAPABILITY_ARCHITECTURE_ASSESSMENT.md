@@ -13,6 +13,51 @@ The capability architecture is **exactly what you expected**. Both coding workfl
 
 ## Architecture Overview
 
+### Capability-First Design Rule
+
+The platform is organized as a pluggable capability system, not as a single monolithic loop with special-case domains bolted on.
+
+This means we separate capability responsibilities by scope:
+
+- General capabilities: cross-cutting concerns that apply across domains, such as routing, memory, session continuity, approvals, policy, retrieval, fallback behavior, and state management.
+- Domain-specific capabilities: specialized execution domains such as coding workflow, desktop automation, research, data operations, or other operational surfaces.
+- Runtime bridge capabilities: adapters that connect external systems or editor-native execution environments, such as Continue, into the same Ask pipeline without changing the outer control model.
+
+The important architectural principle is: all of these still participate through the same capability contract and the same Ask/ReAct orchestration boundary. Continue is not a competing architecture or a second controller model. It is an integration substrate for editor-aware execution that should be wrapped behind a capability participant when needed.
+
+This also means the system can evolve naturally:
+
+- a new general capability can add shared operational rules
+- a new coding workflow capability can add repository-aware execution patterns
+- a new desktop capability can add shell, app, and OS automation patterns
+- a Continue integration can augment the local IDE execution layer without taking ownership of orchestration, memory, or approval policy
+
+The result is a capability ecosystem in which some capabilities are broad and general, some are domain-specific, and some are narrow adapters for a runtime environment. The orchestration remains centralized; the capability surface remains pluggable.
+
+### LLM Interaction Contract
+
+This architecture also defines the interaction discipline the LLM must follow.
+
+The governing rule is simple:
+
+- Ask/ReAct is the outer controller and remains the sole source of workflow direction.
+- Capabilities participate only within their declared scope and task family.
+- General capabilities handle cross-cutting concerns such as memory, routing, state, approval, and recovery.
+- Domain capabilities handle task families such as coding workflow or desktop automation.
+- Bridge capabilities such as Continue provide editor-native execution only through explicit delegation.
+
+The LLM should therefore follow these behavior rules:
+
+- classify first, then select the most relevant capability or phase
+- keep scope tight and do not broaden the task without a reason
+- state the objective and the bounded change before acting
+- preserve the current plan and workstream unless the user changes the task
+- update affected tests when behavior changes
+- prefer minimal validation over broad suites
+- return the result to the outer loop instead of attempting to own the workflow itself
+
+This is the key adaptation from Continue’s strengths: it gives the LLM stronger local execution discipline without letting any bridge capability become a second controller.
+
 ### The Capability Contract
 
 Every capability implements the `Capability` interface, and may also provide structured guidance through an optional guidance provider:

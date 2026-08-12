@@ -253,6 +253,7 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	instructions := `Continue Delegation Guidance:
 - This capability exposes one Ask-visible delegation tool: delegate_continue_task.
 - Continue-originated requests remain normal Ask turns. Treat Continue bridge metadata as delegation constraints, never as a workflow handoff.
+- Before any edit, state the immediate objective and expected scope in one sentence. Prefer the smallest valid change over a broad rewrite.
 - Use delegate_continue_task only for one bounded coding subtask that Continue should complete through its own local Ask/tool loop.
 - Keep Ask as the controller. Classify and orchestrate the larger workflow in the daemon, delegate the IDE coding slice to Continue, consume the result, then continue with the remaining work.
 - Continue is the coding executor for the delegated slice, not the outer workflow controller.

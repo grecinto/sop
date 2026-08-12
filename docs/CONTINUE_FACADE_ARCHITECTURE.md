@@ -4,13 +4,55 @@
 
 ## Summary
 
-Continue is the IDE surface. AI Studio and the daemon are the controller.
+Continue is the IDE surface and an optional execution participant. AI Studio and the daemon remain the controller.
 
 That is the governing rule for this integration.
+
+This design fits our pluggable capability system: the platform is composed of general capabilities, domain-specific capabilities, and runtime bridge capabilities. Continue is not a second architecture or a parallel capability framework. It is a specialized IDE-native worker that can be connected into the same capability-based Ask pipeline through a thin adapter or participant tool.
+
+The capability stack therefore looks like this:
+
+- General capabilities: routing, memory, retrieval, policy, session continuity, approvals, and common orchestration behaviors.
+- Domain capabilities: coding workflow, desktop automation, research, and other task-specific execution surfaces.
+- Bridge capabilities: Continue, editor workers, IDE adapters, and external automation surfaces that contribute local execution power without owning the authoritative Ask loop.
 
 For SDK reuse, the same Ask runtime can also be mounted in reverse as a participant under another controller. That does not change the internal rule above for the default Continue bridge. It adds a second supported boundary: another agent may call SOP Ask as a delegated worker while SOP Ask still controls its own inner capability pipeline.
 
 Continue can contribute editor context, diff-aware execution, and local workflow affordances, but it does not own orchestration, memory, approvals, or long-running workflow state.
+
+## Capability-first integration model
+
+Continue should be treated as a capability adapter rather than as a replacement for the platform model.
+
+In practice, that means:
+
+- general capabilities remain the shared foundation for all domains
+- coding workflow remains a domain capability with its own phase logic and repository-aware behavior
+- desktop remains a domain capability with OS and shell automation behavior
+- Continue is an IDE bridge capability that exposes one bounded local execution channel for editor-native tasks
+- the daemon Ask loop remains the single controller for workflow progression, unification, and memory
+
+This keeps the architecture aligned with the project’s intent: a capability-pluggable design system where specialists can be added without rewriting the controller or the core orchestration model.
+
+## LLM interaction contract
+
+The relevant lesson from Continue is not about replacing the orchestration model. It is about tightening how the LLM behaves during a delegated or local execution turn.
+
+The interaction contract for the Ask/ReAct system should therefore be:
+
+- Ask remains the controller of workflow progression, memory, and phase transitions.
+- Capabilities remain passive participants that classify tasks, inject context, expose tools, and return bounded work.
+- General, domain, and bridge capabilities each contribute within their own scope; they do not bypass the Ask loop.
+- A delegated IDE worker such as Continue participates only through an explicit bounded tool or participant boundary.
+- Before editing, the LLM must state the immediate objective and the expected scope in one sentence.
+- Prefer the smallest valid change over a broad rewrite; do not expand scope unless the task requires it.
+- If a task is multi-step, sequence it through the Ask workflow rather than collapsing it into one uncontrolled loop.
+- Maintain the current user intent, workstream, and plan unless the user explicitly changes scope.
+- If behavior changes, update the relevant tests or validation checks to match the new contract; stale tests are not assumed valid.
+- Validate with the smallest relevant command or check that exercises the changed behavior.
+- If a sub-task is editor-native or IDE-specific, delegate it to the bridge capability and return a result that the outer workflow can continue from.
+
+This is the practical adaptation of Continue’s strengths: better local execution discipline, bounded steps, and a clearer delegation contract, while retaining our stronger orchestration-first architecture.
 
 ## AST vs. Continue semantic layer
 

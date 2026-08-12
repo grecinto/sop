@@ -125,6 +125,14 @@ When to use:
 - User explicitly says "pause", "stop", "switch to" → Pause current WorkStream
 - User says "resume", "continue", "back to" → Resume paused WorkStream
 - User says "cancel", "abandon", "forget about" → Abandon WorkStream
+- User adds or changes requirements in the current task → refine the current workstream by merging new requirements into the current plan, preserving prior decisions unless the user explicitly says otherwise
+- User starts a truly unrelated task → use pause_new to pause the current workstream and start a new one
+- User wants to abandon all current work and begin fresh → use clear_restart
+
+Refinement rule:
+- For refine interjections or added requirements, keep the current workstream alive and merge the new requirements into the current plan/design rather than replacing it.
+- Preserve the current design, constraints, and prior decisions unless the user explicitly changes them.
+- If the new prompt conflicts with the current plan, call out the conflict and update the plan with the smallest necessary delta.
 
 You decide when to pause/resume/jump based on context - no automatic handling.`
 }

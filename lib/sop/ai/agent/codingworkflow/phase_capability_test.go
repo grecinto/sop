@@ -179,6 +179,24 @@ func TestExecutionPhaseBuildContext_UsesGeneralValidationGuidance(t *testing.T) 
 	}
 }
 
+func TestExecutionPhaseBuildContext_UsesBoundedInteractionContract(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewExecutionPhaseCapability(infra)
+
+	result := cap.BuildContext("apply a focused fix", capabilities.RoutingState{})
+	for _, check := range []string{
+		"smallest valid change",
+		"one sentence",
+		"state the immediate objective",
+		"bounded IDE execution",
+		"delegate only one bounded subtask",
+	} {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(check)) {
+			t.Fatalf("expected execution context to include %q, got %q", check, result)
+		}
+	}
+}
+
 func TestTestingPhaseBuildContext_DefaultCoverageTargetAndIterationGuardrail(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewTestingPhaseCapability(infra)

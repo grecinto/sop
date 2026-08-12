@@ -482,6 +482,22 @@ func TestWorkStreamManagementBuildContext_IncludesPauseReason(t *testing.T) {
 	}
 }
 
+func TestWorkStreamManagementBuildInstructions_RefinePreservesCurrentWorkStream(t *testing.T) {
+	cap := NewWorkStreamManagement(nil, nil)
+	result := cap.BuildInstructions("refine the current plan with a new requirement", RoutingState{})
+	for _, check := range []string{
+		"refine",
+		"merge the new requirements into the current plan",
+		"preserve the current design",
+		"pause_new",
+		"clear_restart",
+	} {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(check)) {
+			t.Fatalf("expected workstream instructions to include %q, got %q", check, result)
+		}
+	}
+}
+
 func TestWorkStreamManagementListWorkStreams_IncludesPauseReason(t *testing.T) {
 	thread := &stubWorkStreamThread{
 		ctx:          &stubWorkStreamContext{currentPhase: "planning"},

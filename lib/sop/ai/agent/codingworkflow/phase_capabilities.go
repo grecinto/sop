@@ -636,6 +636,7 @@ func (c *PhaseCapability) buildExecutionContext() string {
 OBJECTIVE:
 - Apply planned changes to the codebase
 - Follow the execution plan from the planning phase
+- Before any implementation or shell command is run, state the immediate objective and expected scope in one sentence; prefer the smallest valid change over a broader rewrite
 - Validate the work with the most relevant evidence
 - Produce code that is modular, maintainable, readable, and aligned with the language's general design and coding best practices, including object-oriented organization, separation of concerns, and established design patterns where appropriate
 - Add brief, useful comments for non-obvious logic, contracts, invariants, or API/behavior intent; avoid noisy comments that only restate obvious code
@@ -663,6 +664,9 @@ CONTROL RULE:
 - Keep Ask as the controller. Use IDE worker delegation only for one bounded execution step, then return to the daemon-owned workflow.
 - Prefer delegate_continue_task only when the edit is bounded to the active file and is clearly editor-native (for example a focused patch, refactor, or localized change).
 - Prefer daemon-native editing when the change is broader multi-file, cross-cutting, or better handled as a direct edit by AI Studio itself.
+- This is bounded IDE execution: state the immediate objective, expected scope, and validation path in one sentence before any edit.
+- Delegate only one bounded subtask to Continue or another bridge worker; do not hand over the broader workflow.
+- Keep the change to the smallest valid scope; do not broaden or refactor the surrounding system unless the plan explicitly requires it.
 1. Review plan from planning phase artifact
 2. Use the right tool family for the domain and phase: for coding, prefer code-editing and AST-backed inspection tools; for stores, prefer the store/query tooling over ad hoc scripting; for testing, use the relevant test execution and inspection tools; for other domains, rely on the phase-specific toolset rather than generic shell commands
 3. If editor-native execution would help and Continue context is available, consider whether this step should be delegated as one bounded Continue coding objective; prefer Continue only for bounded edits scoped to the active file, and prefer daemon-native editing for broader multi-file or cross-cutting changes
