@@ -504,6 +504,17 @@ func buildSelectedSpaceResearchQueries(query, kbName string, state *ResearchWork
 			}
 		}
 	}
+	if len(categorizerPaths) > 0 {
+		filtered := make([]string, 0, len(base))
+		for _, candidate := range base {
+			if strings.Contains(candidate, "Semantic/") || strings.Contains(candidate, "/") {
+				filtered = append(filtered, candidate)
+			}
+		}
+		if len(filtered) > 0 {
+			return filtered
+		}
+	}
 	return base
 }
 

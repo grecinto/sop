@@ -34,6 +34,47 @@ Previously, all LTM content was synced to daemons without filtering, leading to:
 - Potential exposure of sensitive/experimental data
 - Wasted bandwidth and storage
 
+## Memory Recall Gap and Expansion Need
+
+The current LTM/STM/MRU architecture is good for tight, recent continuity, and it now includes the broader bounded recall behavior needed for a true virtual memory surface.
+
+In practice, the implementation works well when the query is:
+- direct and specific
+- semantically close to the active task
+- already anchored in the current thread, current KB, or recent artifacts
+- nearby in the same category path or semantic neighborhood
+
+It remains intentionally conservative when the system needs to:
+- recover near-topic facts without exact keyword overlap
+- bridge related workstreams or adjacent domains
+- reintroduce older but still relevant memory after a pause
+- recall long-tail facts that are useful but not in the current prompt window
+
+The important design decision is that this broader recall is intentionally bounded and governed by relevance, recency, and retention. We do not rely on provider-side context expansion to recover those signals.
+
+The LTM semantic index is the main lever for this behavior. Retrieval is anchored on the semantic index and nested category hierarchy whenever the domain context is structured, especially for:
+- category-path-aware queries
+- nested semantic subtrees
+- workflow and code-memory retrieval
+- domain-specific concept neighborhoods
+
+In other words, retrieval should not rely on simple raw text search alone. For structured domains, path-first matching and semantic category fallback are preferred before broad fuzzy recall. This increases precision while keeping semantic recall broad enough to be useful.
+
+The final policy is documented in [VIRTUAL_MEMORY_RECALL_PLAN.md](VIRTUAL_MEMORY_RECALL_PLAN.md). It now reflects the production memory model: bounded multi-horizon recall, exact-path-first and semantic fallback, stale filtering, archive-first retention, and pressure-aware compaction.
+
+## Production Memory Policy Summary
+
+The final system behavior is:
+- MRU and STM are fast, local, and highest-priority recall sources
+- LTM exact path match is preferred for structured domains
+- semantic neighborhood expansion is used only when the exact path is weak or absent
+- recall scoring is bounded and source-aware, rather than unbounded prompt stuffing
+- stale or cold entries are filtered before active memory injection
+- long-tail archived memory is summarized rather than retained in full detail forever
+- compaction and pruning happen earlier when storage pressure rises
+
+This is the implemented version of the “virtual memory” layer: rich enough to support real continuity without becoming a noisy or expensive full-history scan.
+
 ## Solution: Category-Level Auto-Share Control
 
 ### Core Features
@@ -558,6 +599,18 @@ The actual embeddings should not be duplicated inside every prompt or stored as 
 - store or reference the actual embedding in the vector subsystem keyed by category/item ID
 - keep a lightweight vector hash or version marker on the object for de-duplication and refresh logic
 
+## Distinct roots: Memory vs Coding
+
+The shared LTM substrate is intentionally reused across surfaces, but the category roots remain distinct.
+
+- General memory entries should live under a `Memory` root (or equivalent general-memory namespace) so conversational, planning, and research recall do not collapse into code-specific buckets.
+- Coding workflow artifacts should live under a separate `Coding` root and, when relevant, subtrees such as `Coding/Workflow`, `Coding/Semantic`, and `Coding/Repo/<repo>`.
+- The lifecycle rules are shared (forecast -> archive -> compact) because the aging problem is the same, but the taxonomy is not shared so retrieval remains precise.
+
+This matters for repo-aware memory, AST/tree-sitter artifacts, and code-structure recall. They may be stored in the same underlying LTM system, but they should not share the same root category with general LTM memory entries. Otherwise repo metadata crowds out general memory recall and vice versa.
+
+The same principle applies to any future domain surface: the lifecycle engine is reusable, while each domain keeps its own category root and retrieval boundary.
+
 ## Design Principles
 
 - Keep LTM general-purpose and shared across capabilities.
@@ -565,6 +618,7 @@ The actual embeddings should not be duplicated inside every prompt or stored as 
 - Add scoped context so retrieval stays precise for repos, spaces, projects, or users.
 - Preserve continuity for nearby work while avoiding stale context from unrelated topics.
 - Prefer explicit metadata and lifecycle rules over implicit assumptions.
+- Keep domain-specific roots separate even when they share the same storage substrate.
 
 ## Current Lifecycle Semantics
 

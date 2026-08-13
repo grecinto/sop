@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -37,7 +38,65 @@ import (
 
 var unifiedHunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
+var (
+	ltmPressureUIHooksMu sync.Mutex
+	ltmPressureUIHooks   []func(string, any)
+)
+
 const continueWorkerRawBodyLimit = 64 * 1024
+
+func SetLTMPressureChatEventHook() {
+	agent.SetLTMPressureEventHook(func(notification agent.LTMPressureNotification) {
+		message := strings.TrimSpace(notification.Message)
+		if message == "" {
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(notification.PressureState), "normal") {
+			return
+		}
+		if len(notification.FreeUpTargets) > 0 {
+			message = fmt.Sprintf("%s\n\nStorage cleanup paths:\n- %s\n- %s", message, notification.FreeUpTargets[0], notification.FreeUpTargets[1])
+		}
+		event := ai.BuildAssistantMessageEvent("commentary", fmt.Sprintf("⚠️ %s", message))
+		ltmPressureUIHooksMu.Lock()
+		copyHooks := append([]func(string, any){}, ltmPressureUIHooks...)
+		ltmPressureUIHooksMu.Unlock()
+		for _, hook := range copyHooks {
+			if hook != nil {
+				hook(ai.ReasoningEventAssistantMessage, event)
+			}
+		}
+	})
+}
+
+func registerLTMPressureUIHook(hook func(string, any)) {
+	if hook == nil {
+		return
+	}
+	ltmPressureUIHooksMu.Lock()
+	defer ltmPressureUIHooksMu.Unlock()
+	for _, existing := range ltmPressureUIHooks {
+		if reflect.ValueOf(existing).Pointer() == reflect.ValueOf(hook).Pointer() {
+			return
+		}
+	}
+	ltmPressureUIHooks = append(ltmPressureUIHooks, hook)
+}
+
+func unregisterLTMPressureUIHook(hook func(string, any)) {
+	if hook == nil {
+		return
+	}
+	ltmPressureUIHooksMu.Lock()
+	defer ltmPressureUIHooksMu.Unlock()
+	filtered := ltmPressureUIHooks[:0]
+	for _, existing := range ltmPressureUIHooks {
+		if reflect.ValueOf(existing).Pointer() != reflect.ValueOf(hook).Pointer() {
+			filtered = append(filtered, existing)
+		}
+	}
+	ltmPressureUIHooks = filtered
+}
 
 type continueSessionSnapshot struct {
 	SessionID     string
@@ -294,6 +353,7 @@ func handleAIChat(w http.ResponseWriter, r *http.Request) {
 
 	llmSettings := resolveLLMSettings(r)
 	ctx, payload, cfg, fullMessage := constructPayload(r.Context(), w, req, llmSettings, sendEvent, rs)
+	defer unregisterLTMPressureUIHook(sendEvent)
 	log.Debug("HTTP AI Chat Payload",
 		"session_id", req.SessionID,
 		"current_db", payload.CurrentDB,
@@ -1928,6 +1988,9 @@ func InjectSharedRuntimeContext(ctx context.Context, sendEvent func(string, any)
 	}
 	if w != nil {
 		ctx = context.WithValue(ctx, agent.CtxKeyJSONStreamer, agent.NewNDJSONStreamer(&DirectFlushingWriter{w: w}))
+	}
+	if sendEvent != nil {
+		registerLTMPressureUIHook(sendEvent)
 	}
 	return ctx
 }

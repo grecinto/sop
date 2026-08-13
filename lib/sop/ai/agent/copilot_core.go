@@ -332,6 +332,57 @@ func (a *CopilotAgent) rehydrateMRUFromMemory(ctx context.Context) {
 
 // CopilotAgent is a specialized agent for database administration tasks.
 // It implements the ai.Agent interface.
+type LTMPressureNotification struct {
+	Timestamp     time.Time
+	Severity      string
+	Title         string
+	Message       string
+	UsageRatio    float64
+	PressureState string
+	Threshold     float64
+	Action        string
+	Retriiggered  bool
+	PrunedCount   int
+	ArchivedCount int
+	FreeUpTargets []string
+	FreeUpContext string
+}
+
+type LTMPressureNotifier func(notification LTMPressureNotification)
+
+var (
+	defaultLTMPressureNotifier LTMPressureNotifier = func(LTMPressureNotification) {}
+	ltmPressureEventHookMu     sync.Mutex
+	ltmPressureEventHook       func(LTMPressureNotification)
+)
+
+func SetDefaultLTMPressureNotifier(notifier LTMPressureNotifier) {
+	if notifier == nil {
+		defaultLTMPressureNotifier = func(LTMPressureNotification) {}
+		return
+	}
+	defaultLTMPressureNotifier = notifier
+}
+
+func DefaultLTMPressureNotifier() LTMPressureNotifier {
+	return defaultLTMPressureNotifier
+}
+
+func SetLTMPressureEventHook(hook func(LTMPressureNotification)) {
+	ltmPressureEventHookMu.Lock()
+	defer ltmPressureEventHookMu.Unlock()
+	ltmPressureEventHook = hook
+}
+
+func EmitLTMPressureNotification(notification LTMPressureNotification) {
+	ltmPressureEventHookMu.Lock()
+	hook := ltmPressureEventHook
+	ltmPressureEventHookMu.Unlock()
+	if hook != nil {
+		hook(notification)
+	}
+}
+
 type CopilotAgent struct {
 	Config       Config
 	brain        ai.Generator
@@ -343,6 +394,12 @@ type CopilotAgent struct {
 
 	// Encapsulated memory and context boundaries
 	Memory *memory.MemoryUnit
+
+	// LTM storage pressure user transparency
+	LTMPressureNotifier      LTMPressureNotifier
+	ltmPressureAlertMu       sync.Mutex
+	lastLTMPressureAlert     time.Time
+	ltmPressureAlertCooldown time.Duration
 
 	// Compiled Scripts Cache
 	compiledScripts   map[string]CachedScript
@@ -488,7 +545,58 @@ func (a *CopilotAgent) recordCodingMemory(mem cw.CodingMemory) {
 			UpdatedAt:      time.Now().UnixMilli(),
 		})
 	}
+	if strings.TrimSpace(mem.Outcome) != "" && (strings.TrimSpace(mem.TestStatus) == "" || !strings.Contains(strings.ToLower(mem.TestStatus), "fail")) {
+		a.promoteSuccessfulOutcomeToLTM(context.Background(), summary, mem.Outcome)
+	}
 	a.markMRUCategoryWithSource("CODING_WORKFLOW_LAST", ctx, MRUSourceAskOutcome)
+}
+
+func (a *CopilotAgent) promoteSuccessfulOutcomeToLTM(ctx context.Context, query, outcome string) {
+	if a == nil || a.systemDB == nil || strings.TrimSpace(outcome) == "" {
+		return
+	}
+	if a.Memory == nil {
+		a.Memory = memory.NewMemoryUnit(ai.AgentIDOmni)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	category := buildRecallPromotionCategoryPath(query)
+	if category == "" {
+		category = "Coding/Semantic/general"
+	}
+
+	payload := map[string]any{
+		"type":        "successful_outcome",
+		"query":       strings.TrimSpace(query),
+		"outcome":     strings.TrimSpace(outcome),
+		"category":    category,
+		"source":      "durable_ltm_promotion",
+		"promoted_at": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	var embedder ai.Embeddings
+	if a.service != nil && a.service.Domain() != nil {
+		embedder = a.service.Domain().Embedder()
+	}
+
+	tx, err := a.systemDB.BeginTransaction(ctx, sop.ForWriting)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	kb, err := a.systemDB.OpenKnowledgeBase(ctx, a.Memory.LongTermMemoryName(), tx, a.brain, embedder, false, true)
+	if err != nil {
+		return
+	}
+	if err := kb.IngestThought(ctx, strings.TrimSpace(outcome), category, "system", nil, payload); err != nil {
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return
+	}
 }
 
 func (a *CopilotAgent) recordPlannerPlan(query string, planText string) {

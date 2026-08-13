@@ -4110,6 +4110,69 @@
             treeRoot.parentNode.appendChild(pagingWrap);
         }
 
+        window.renderRetentionPolicySummary = function(cat, container) {
+            if (!cat || !container) return;
+            const metadata = cat.metadata && typeof cat.metadata === 'object' ? cat.metadata : {};
+            const lifecycleStatus = (metadata.lifecycle_status || metadata.lifecycleStatus || 'active').toString().trim().toLowerCase();
+            const effectiveStatus = lifecycleStatus || 'active';
+            const summary = effectiveStatus === 'archived'
+                ? 'Retention policy: archived items are preserved for reference, then pruned after the archive ageing window.'
+                : 'Retention policy: inactive repo memory is archived after the stale window; archived entries are pruned after the long-tail retention window.';
+
+            const existing = container.querySelector('[data-retention-policy="true"]');
+            if (existing) existing.remove();
+
+            const callout = document.createElement('div');
+            callout.dataset.retentionPolicy = 'true';
+            callout.style.display = 'inline-flex';
+            callout.style.alignItems = 'center';
+            callout.style.marginLeft = '8px';
+            callout.style.padding = '4px 8px';
+            callout.style.borderRadius = '999px';
+            callout.style.background = effectiveStatus === 'archived' ? 'rgba(156, 163, 175, 0.12)' : 'rgba(59, 130, 246, 0.08)';
+            callout.style.border = '1px solid rgba(148, 163, 184, 0.35)';
+            callout.style.color = 'var(--text-muted)';
+            callout.style.fontSize = '0.72em';
+            callout.title = summary;
+            callout.textContent = 'Retention Policy';
+            container.appendChild(callout);
+        };
+
+        window.archiveCategoryLifecycle = async function(cat, spaceName, categoryLabel, currentOffset = 0, currentLimit = (window._currentLimit || 50), lastCatId = "", lastItemId = "") {
+            if (!cat || !spaceName) return;
+            const metadata = cat.metadata && typeof cat.metadata === 'object' ? { ...cat.metadata } : {};
+            metadata.lifecycle_status = 'archived';
+            metadata.status = 'archived';
+            metadata.lifecycle_reason = 'manual_archive';
+            metadata.archived_at = Date.now();
+            metadata.archived_by = 'user';
+
+            try {
+                const res = await authFetch(`/api/spaces/category/add?name=${encodeURIComponent(spaceName)}&database=${encodeURIComponent(currentDatabase)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: cat.id,
+                        name: cat.name,
+                        description: cat.description || '',
+                        metadata: metadata
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    showAlert(errText || 'Failed to archive repository state.', null, 'Archive Failed', 'red');
+                    return;
+                }
+
+                showAlert(`"${categoryLabel || cat.name}" has been archived.`, () => {
+                    window.fetchItemsForCategory(spaceName, cat.id, categoryLabel || cat.name, null, { ...cat, metadata }, currentOffset, currentLimit, lastCatId, lastItemId);
+                }, 'Repository Archived', 'orange');
+            } catch (err) {
+                showAlert('Network error: ' + err.message, null, 'Archive Failed', 'red');
+            }
+        };
+
         window.reactivateCategoryLifecycle = async function(cat, spaceName, categoryLabel, currentOffset = 0, currentLimit = (window._currentLimit || 50), lastCatId = "", lastItemId = "") {
         if (!cat || !spaceName) return;
         const metadata = cat.metadata && typeof cat.metadata === 'object' ? { ...cat.metadata } : {};
@@ -4266,6 +4329,30 @@
                     if (categoryIndicator) {
                         categoryIndicator.style.marginLeft = '10px';
                         headerTitle.appendChild(categoryIndicator);
+                    }
+                    window.renderRetentionPolicySummary(catObj, headerTitle);
+
+                    if (!isReadOnlyKB && !isCategoryActive) {
+                        const archiveBtn = document.createElement('span');
+                        archiveBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path d="M2.5 5.5A1.5 1.5 0 0 1 4 4h8a1.5 1.5 0 0 1 1.5 1.5v.5h-11v-.5zm1 2.5h9v5.5a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 3.5 13.5V8zm3 1.5a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 1 0v-2a.5.5 0 0 0-.5-.5zm4 0a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 1 0v-2a.5.5 0 0 0-.5-.5z"/></svg>';
+                        archiveBtn.title = 'Archive repository state now';
+                        archiveBtn.style.marginLeft = '8px';
+                        archiveBtn.style.cursor = 'pointer';
+                        archiveBtn.style.display = 'inline-flex';
+                        archiveBtn.style.alignItems = 'center';
+                        archiveBtn.style.color = '#d97706';
+                        archiveBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            showConfirm(
+                                'Archive this repository category now so it enters the retention window and is eligible for later pruning?',
+                                () => window.archiveCategoryLifecycle(catObj, spaceName, categoryName, offset, limit, lastCatId, lastItemId),
+                                null,
+                                'Archive Repository',
+                                'Archive Now',
+                                'Cancel'
+                            );
+                        };
+                        headerTitle.appendChild(archiveBtn);
                     }
 
                     if (!isReadOnlyKB && !isCategoryActive) {

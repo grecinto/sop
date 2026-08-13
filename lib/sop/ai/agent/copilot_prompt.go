@@ -245,6 +245,13 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 			}
 		}
 	}
+	if memoryRecall := a.buildVirtualMemoryRecallContext(ctx, query); memoryRecall != "" {
+		if focusedExecutionContext != "" {
+			focusedExecutionContext = memoryRecall + "\n\n" + focusedExecutionContext
+		} else {
+			focusedExecutionContext = memoryRecall
+		}
+	}
 	if leanStoresAssembly && strings.EqualFold(taskClassification.Domain, StoresDomain) {
 		focusedExecutionContext = trimPromptComponentContent(ComponentFocusedContext, focusedExecutionContext, 1000)
 	}

@@ -197,6 +197,336 @@ func TestServiceToolExecutor_ListTools_ReflectsRegisteredAgents(t *testing.T) {
 	}
 }
 
+type recordingVectorStore struct {
+	calls []string
+	items []ai.Hit[map[string]any]
+}
+
+func (m *recordingVectorStore) UpdateEmbedderInfo(ctx context.Context, provider string, model string, dimensions int) error {
+	return nil
+}
+func (m *recordingVectorStore) Upsert(ctx context.Context, item ai.Item[map[string]any]) error {
+	return nil
+}
+func (m *recordingVectorStore) UpsertBatch(ctx context.Context, items []ai.Item[map[string]any]) error {
+	return nil
+}
+func (m *recordingVectorStore) Get(ctx context.Context, id string) (*ai.Item[map[string]any], error) {
+	return nil, nil
+}
+func (m *recordingVectorStore) Delete(ctx context.Context, id string) error { return nil }
+func (m *recordingVectorStore) Query(ctx context.Context, vec []float32, k int, filter func(map[string]any) bool) ([]ai.Hit[map[string]any], error) {
+	if filter != nil {
+		filtered := make([]ai.Hit[map[string]any], 0, len(m.items))
+		for _, hit := range m.items {
+			if hit.Payload == nil {
+				continue
+			}
+			if filter(hit.Payload) {
+				filtered = append(filtered, hit)
+			}
+		}
+		m.calls = append(m.calls, "filtered")
+		return filtered, nil
+	}
+	m.calls = append(m.calls, "unfiltered")
+	return m.items, nil
+}
+func (m *recordingVectorStore) Count(ctx context.Context) (int64, error) { return 0, nil }
+func (m *recordingVectorStore) AddCentroid(ctx context.Context, vec []float32) (int, error) {
+	return 0, nil
+}
+func (m *recordingVectorStore) Optimize(ctx context.Context) error    { return nil }
+func (m *recordingVectorStore) Consolidate(ctx context.Context) error { return nil }
+func (m *recordingVectorStore) SetDeduplication(enabled bool)         {}
+func (m *recordingVectorStore) Centroids(ctx context.Context) (btree.BtreeInterface[int, ai.Centroid], error) {
+	return nil, nil
+}
+func (m *recordingVectorStore) Vectors(ctx context.Context) (btree.BtreeInterface[ai.VectorKey, []float32], error) {
+	return nil, nil
+}
+func (m *recordingVectorStore) Content(ctx context.Context) (btree.BtreeInterface[ai.ContentKey, string], error) {
+	return nil, nil
+}
+func (m *recordingVectorStore) Lookup(ctx context.Context) (btree.BtreeInterface[int, string], error) {
+	return nil, nil
+}
+func (m *recordingVectorStore) Version(ctx context.Context) (int64, error) { return 0, nil }
+
+type recordingDomain struct {
+	vectorStore *recordingVectorStore
+}
+
+func (m *recordingDomain) ID() string              { return "recording" }
+func (m *recordingDomain) Name() string            { return "Recording Domain" }
+func (m *recordingDomain) Embedder() ai.Embeddings { return &MockEmbedder{} }
+func (m *recordingDomain) Index(ctx context.Context, tx sop.Transaction) (ai.VectorStore[map[string]any], error) {
+	return m.vectorStore, nil
+}
+func (m *recordingDomain) TextIndex(ctx context.Context, tx sop.Transaction) (ai.TextIndex, error) {
+	return nil, nil
+}
+func (m *recordingDomain) BeginTransaction(ctx context.Context, mode sop.TransactionMode) (sop.Transaction, error) {
+	return &MockTransaction{}, nil
+}
+func (m *recordingDomain) Policies() ai.PolicyEngine                               { return nil }
+func (m *recordingDomain) Classifier() ai.Classifier                               { return nil }
+func (m *recordingDomain) Prompt(ctx context.Context, kind string) (string, error) { return "", nil }
+func (m *recordingDomain) Memory(ctx context.Context, tx sop.Transaction) (any, error) {
+	return nil, nil
+}
+func (m *recordingDomain) DataPath() string { return "/tmp" }
+
+func TestBuildCategoryPathCandidates_UsesSemanticAndPathHints(t *testing.T) {
+	candidates := buildCategoryPathCandidates("retry logic in Payments/Retry/Recovery")
+	if len(candidates) == 0 {
+		t.Fatal("expected semantic/path candidates, got none")
+	}
+	seen := map[string]bool{}
+	for _, c := range candidates {
+		seen[c] = true
+	}
+	if !seen["Payments/Retry/Recovery"] {
+		t.Fatalf("expected explicit path to be included, got %#v", candidates)
+	}
+	if !seen["Coding/Semantic/retry-logic"] && !seen["Semantic/retry-logic"] {
+		t.Fatalf("expected semantic retry bucket to be included, got %#v", candidates)
+	}
+}
+
+func TestServiceSearch_PrioritizesPathScopedResults(t *testing.T) {
+	vs := &recordingVectorStore{items: []ai.Hit[map[string]any]{
+		{ID: "path-hit", Score: 0.9, Payload: map[string]any{"category": "Payments/Retry/Recovery", "text": "retry audit path"}},
+		{ID: "other-hit", Score: 0.8, Payload: map[string]any{"category": "General", "text": "other content"}},
+	}}
+	svc := &Service{domain: &recordingDomain{vectorStore: vs}}
+
+	results, err := svc.Search(context.Background(), "path:Payments/Retry/Recovery retry logic", 10)
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected path-scoped results")
+	}
+	if results[0].ID != "path-hit" {
+		t.Fatalf("expected path-scoped result to rank first, got %#v", results)
+	}
+	if len(vs.calls) == 0 {
+		t.Fatal("expected a scoped vector search call")
+	}
+}
+
+func TestCategoryMatchesAnyPath_IsSegmentAwareForSemanticBuckets(t *testing.T) {
+	if !categoryMatchesAnyPath("Engineering/Parsing/AST", []string{"Coding/Semantic/parsing"}) {
+		t.Fatal("expected parsing semantic bucket to match the parsing hierarchy")
+	}
+	if categoryMatchesAnyPath("Engineering/UI/Navigation", []string{"Coding/Semantic/parsing"}) {
+		t.Fatal("expected unrelated navigation category to avoid parsing semantic match")
+	}
+}
+
+func TestRankMemoryRecallCandidates_PrefersExactPathAndSemanticMatches(t *testing.T) {
+	candidates := []memoryRecallCandidate{
+		{Source: "ltm", Label: "General", Summary: "generic retry guidance for shipping workflows", Category: "General", Recency: 0.5, Semantic: 0.25, TopicAffinity: 0.1, SourcePriority: 0.4, Continuity: 0.2, Outcome: 0.3},
+		{Source: "mru", Label: "Payments/Retry/Recovery", Summary: "retry audit and recovery flow for payments", Category: "Payments/Retry/Recovery", Recency: 0.95, Semantic: 0.9, TopicAffinity: 0.9, SourcePriority: 0.85, Continuity: 0.9, Outcome: 0.9},
+		{Source: "stm", Label: "Engineering/Payments", Summary: "last run showed payment retries are mirrored across retry workers", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.82, TopicAffinity: 0.8, SourcePriority: 0.7, Continuity: 0.8, Outcome: 0.75},
+	}
+
+	ranked := rankMemoryRecallCandidates("retry logic in Payments/Retry/Recovery", candidates, 3)
+	if len(ranked) != 3 {
+		t.Fatalf("expected 3 ranked candidates, got %d", len(ranked))
+	}
+	if ranked[0].Category != "Payments/Retry/Recovery" {
+		t.Fatalf("expected exact path candidate to rank first, got %#v", ranked)
+	}
+	if ranked[1].Category != "Engineering/Payments" {
+		t.Fatalf("expected semantic adjacent category to rank second, got %#v", ranked)
+	}
+}
+
+func TestEvaluateMemoryRecallPolicy_ExpandsWhenExactPathMissing(t *testing.T) {
+	policy := evaluateMemoryRecallPolicy("retry logic after payment errors", []memoryRecallCandidate{
+		{Source: "ltm", Label: "General", Summary: "payment retries are common", Category: "General", Recency: 0.6, Semantic: 0.4, TopicAffinity: 0.3, SourcePriority: 0.4, Continuity: 0.2, Outcome: 0.2},
+		{Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.6, Continuity: 0.7, Outcome: 0.6},
+	}, 2)
+	if !policy.Expand {
+		t.Fatal("expected policy to trigger expansion when exact-path hit is absent")
+	}
+	if policy.ExactPathHits != 0 {
+		t.Fatalf("expected zero exact-path hits, got %d", policy.ExactPathHits)
+	}
+	if policy.SemanticHits != 1 {
+		t.Fatalf("expected one semantic hit, got %d", policy.SemanticHits)
+	}
+}
+
+func TestSummarizeMemoryRecall_ReportsBudgetAndSourceMix(t *testing.T) {
+	candidates := []memoryRecallCandidate{
+		{Source: "mru", Label: "Payments/Retry/Recovery", Summary: "first retry recovered", Category: "Payments/Retry/Recovery", Recency: 0.9, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.8, Continuity: 0.9, Outcome: 0.8},
+		{Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.7, Continuity: 0.8, Outcome: 0.7},
+		{Source: "ltm", Label: "Learned Knowledge", Summary: "system recovered after retry", Category: "LTM", Recency: 0.5, Semantic: 0.9, TopicAffinity: 0.6, SourcePriority: 0.5, Continuity: 0.5, Outcome: 0.6},
+	}
+	policy := evaluateMemoryRecallPolicy("retry logic in Payments/Retry/Recovery", candidates, 2)
+	result := summarizeMemoryRecall("retry logic in Payments/Retry/Recovery", candidates, 2, policy)
+	if result.TotalCandidates != 3 {
+		t.Fatalf("expected 3 total candidates, got %d", result.TotalCandidates)
+	}
+	if result.BudgetLimit != 2 {
+		t.Fatalf("expected budget limit 2, got %d", result.BudgetLimit)
+	}
+	if got := result.SourceCounts["mru"]; got != 1 {
+		t.Fatalf("expected 1 mru hit, got %d", got)
+	}
+	if result.Expand {
+		t.Fatal("expected no expansion when exact path hit exists")
+	}
+}
+
+func TestPlanAskMemoryRecall_UsesExactPathFirstAndSemanticExpansion(t *testing.T) {
+	withExact := planAskMemoryRecall("retry logic in Payments/Retry/Recovery", []memoryRecallCandidate{{Source: "mru", Label: "Payments/Retry/Recovery", Summary: "retry workflow", Category: "Payments/Retry/Recovery", Recency: 0.95, Semantic: 0.9, TopicAffinity: 0.9, SourcePriority: 0.85, Continuity: 0.9, Outcome: 0.9}, {Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.7, Continuity: 0.8, Outcome: 0.7}})
+	if !withExact.Enabled {
+		t.Fatal("expected exact-path recall to be enabled")
+	}
+	if withExact.Expand {
+		t.Fatal("expected exact-path recall not to expand")
+	}
+
+	withSemanticOnly := planAskMemoryRecall("retry logic after payment errors", []memoryRecallCandidate{{Source: "ltm", Label: "General", Summary: "payment retry guidance", Category: "General", Recency: 0.6, Semantic: 0.4, TopicAffinity: 0.3, SourcePriority: 0.4, Continuity: 0.2, Outcome: 0.2}, {Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.6, Continuity: 0.7, Outcome: 0.6}})
+	if !withSemanticOnly.Enabled {
+		t.Fatal("expected semantic fallback recall to be enabled")
+	}
+	if !withSemanticOnly.Expand {
+		t.Fatal("expected semantic fallback recall to expand")
+	}
+
+	staleOnly := planAskMemoryRecall("retry logic after payment errors", []memoryRecallCandidate{{Source: "ltm", Label: "General", Summary: "stale retry guidance", Category: "General", Recency: 0.2, Semantic: 0.2, TopicAffinity: 0.1, SourcePriority: 0.1, Continuity: 0.1, Outcome: 0.1, Stale: true}})
+	if staleOnly.Enabled {
+		t.Fatal("expected stale long-tail candidates to be excluded from Ask recall")
+	}
+
+	noSignals := planAskMemoryRecall("random unrelated query", []memoryRecallCandidate{{Source: "ltm", Label: "General", Summary: "unrelated knowledge", Category: "General", Recency: 0.1, Semantic: 0.1, TopicAffinity: 0.1, SourcePriority: 0.1, Continuity: 0.1, Outcome: 0.1}})
+	if noSignals.Enabled {
+		t.Fatal("expected unrelated candidates to be filtered out by the Ask recall gate")
+	}
+}
+
+func TestBuildRecallPromotionCategoryPath_UsesSemanticBucketPattern(t *testing.T) {
+	path := buildRecallPromotionCategoryPath("retry logic after payment errors")
+	if !strings.Contains(path, "Coding") || !strings.Contains(path, "Semantic") {
+		t.Fatalf("expected semantic promotion path to include Coding/Semantic, got %q", path)
+	}
+	if !strings.Contains(strings.ToLower(path), "retry") && !strings.Contains(strings.ToLower(path), "payment") {
+		t.Fatalf("expected semantic path to reflect the active topic, got %q", path)
+	}
+}
+
+func TestBuildMemoryRecallEval_ReportsPrecisionAndBudget(t *testing.T) {
+	eval := buildMemoryRecallEval("retry logic in Payments/Retry/Recovery", []memoryRecallCandidate{
+		{Source: "mru", Label: "Payments/Retry/Recovery", Summary: "first retry recovered", Category: "Payments/Retry/Recovery", Recency: 0.9, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.8, Continuity: 0.9, Outcome: 0.8},
+		{Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.7, Continuity: 0.8, Outcome: 0.7},
+	}, 2, memoryRecallPolicy{ExactPathHits: 1, SemanticHits: 1, Expand: false})
+	if eval.BudgetLimit != 2 {
+		t.Fatalf("expected budget limit 2, got %d", eval.BudgetLimit)
+	}
+	if eval.TotalCandidates != 2 {
+		t.Fatalf("expected 2 candidates, got %d", eval.TotalCandidates)
+	}
+	if eval.Precision <= 0 {
+		t.Fatalf("expected positive precision score, got %f", eval.Precision)
+	}
+}
+
+func TestBuildMemoryRecallQualityReport_TracksExactAndSemanticRates(t *testing.T) {
+	report := buildMemoryRecallQualityReport("retry logic after payment errors", []memoryRecallCandidate{
+		{Source: "ltm", Label: "General", Summary: "payment retry guidance", Category: "General", Recency: 0.6, Semantic: 0.4, TopicAffinity: 0.3, SourcePriority: 0.4, Continuity: 0.2, Outcome: 0.2},
+		{Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.6, Continuity: 0.7, Outcome: 0.6},
+	}, 2, memoryRecallPolicy{ExactPathHits: 0, SemanticHits: 1, Expand: true})
+	if report.TotalCandidates != 2 {
+		t.Fatalf("expected 2 candidates, got %d", report.TotalCandidates)
+	}
+	if report.Expand != true {
+		t.Fatal("expected expansion to be reported")
+	}
+	if report.ExactHitRate != 0 {
+		t.Fatalf("expected exact hit rate 0, got %f", report.ExactHitRate)
+	}
+	if report.SemanticHitRate <= 0 {
+		t.Fatalf("expected semantic hit rate > 0, got %f", report.SemanticHitRate)
+	}
+}
+
+func TestRunMemoryRecallQualityHarness_AggregatesExactSemanticAndExpansionRates(t *testing.T) {
+	samples := buildMemoryRecallBenchmarkSamples()
+	metrics := runMemoryRecallQualityHarness(samples)
+	if metrics.TotalQueries != len(samples) {
+		t.Fatalf("expected %d queries, got %d", len(samples), metrics.TotalQueries)
+	}
+	if metrics.ExpansionRate <= 0 {
+		t.Fatalf("expected positive expansion rate, got %f", metrics.ExpansionRate)
+	}
+	if metrics.ExactHitRate <= 0 {
+		t.Fatalf("expected positive exact-hit rate, got %f", metrics.ExactHitRate)
+	}
+	if metrics.SemanticHitRate <= 0 {
+		t.Fatalf("expected positive semantic-hit rate, got %f", metrics.SemanticHitRate)
+	}
+	if metrics.FailRate <= 0 {
+		t.Fatalf("expected stale-memory fail rate to be tracked, got %f", metrics.FailRate)
+	}
+}
+
+func BenchmarkRunMemoryRecallQualityHarness(b *testing.B) {
+	samples := buildMemoryRecallBenchmarkSamples()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = runMemoryRecallQualityHarness(samples)
+	}
+}
+
+func BenchmarkPlanAskMemoryRecall(b *testing.B) {
+	queries := []struct {
+		query      string
+		candidates []memoryRecallCandidate
+	}{
+		{
+			query: "retry logic in Payments/Retry/Recovery",
+			candidates: []memoryRecallCandidate{
+				{Source: "mru", Label: "Payments/Retry/Recovery", Summary: "retry workflow", Category: "Payments/Retry/Recovery", Recency: 0.95, Semantic: 0.9, TopicAffinity: 0.9, SourcePriority: 0.85, Continuity: 0.9, Outcome: 0.9},
+				{Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.7, Continuity: 0.8, Outcome: 0.7},
+			},
+		},
+		{
+			query: "retry logic after payment errors",
+			candidates: []memoryRecallCandidate{
+				{Source: "ltm", Label: "General", Summary: "payment retries are common", Category: "General", Recency: 0.6, Semantic: 0.4, TopicAffinity: 0.3, SourcePriority: 0.4, Continuity: 0.2, Outcome: 0.2},
+				{Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.6, Continuity: 0.7, Outcome: 0.6},
+			},
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, item := range queries {
+			_ = planAskMemoryRecall(item.query, item.candidates)
+		}
+	}
+}
+
+func TestBuildVirtualMemoryRecallContext_IncludesRecallQualityMetrics(t *testing.T) {
+	agent := &CopilotAgent{service: &Service{session: NewRunnerSession()}}
+	agent.service.session.Memory = NewShortTermMemory()
+	thread := &ConversationThread{ID: sop.NewUUID(), Category: "Engineering/Payments", Status: "open", Label: "Payments", Exchanges: []Interaction{{Role: RoleUser, Content: "retry logic after payment errors"}}}
+	agent.service.session.Memory.AddThread(thread)
+	agent.service.session.Memory.CurrentThreadID = thread.ID
+	agent.service.session.Memory.AddRuntimeCaveat("Payments", "retry worker issue", "coding_workflow", "Engineering/Payments", "Payments")
+	ctx := context.Background()
+	summary := agent.buildVirtualMemoryRecallContext(ctx, "retry logic after payment errors")
+	if !strings.Contains(summary, "drift:") || !strings.Contains(summary, "exact_hit_rate") || !strings.Contains(summary, "semantic_hit_rate") {
+		t.Fatalf("expected drift summary plus exact_hit_rate and semantic_hit_rate metrics in memory neighborhood, got: %s", summary)
+	}
+}
+
 func TestPerformTopicRouting_WithNilSession_DoesNotPanic(t *testing.T) {
 	svc := &Service{EnableHistoryInjection: true}
 
@@ -527,5 +857,9 @@ func TestService_Ask_NoObfuscation(t *testing.T) {
 
 // SplitCentroid mocks the base method.
 func (m *MockVectorStore) SplitCentroid(ctx context.Context, centroidID int) error {
+	return nil
+}
+
+func (m *recordingVectorStore) SplitCentroid(ctx context.Context, centroidID int) error {
 	return nil
 }

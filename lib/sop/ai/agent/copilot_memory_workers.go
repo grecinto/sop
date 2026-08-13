@@ -246,14 +246,40 @@ func (a *CopilotAgent) StartSleepCycle(ctx context.Context, hourlyInterval int, 
 					tx.Rollback(ctx)
 					continue
 				}
-				prunedCount, err := a.applyLTMLifecycleCompaction(ctx, ltm, time.Now())
+				storagePressure := 0.0
+				if a.systemDB != nil {
+					storagePressure = estimateLTMStoragePressure(a.systemDB.StoragePath())
+				}
+				pressureSummary := decideLTMPressureAction(a.systemDB.StoragePath(), time.Now())
+				if pressureSummary["triggered"] == true {
+					log.Warn("CopilotAgent: LTM pressure threshold reached; triggering cleanup workflow", "agent_id", a.Memory.AgentID,
+						"usage_ratio", pressureSummary["usage_ratio"],
+						"pressure_state", pressureSummary["pressure_state"],
+						"threshold", pressureSummary["threshold"],
+						"action", pressureSummary["action"])
+					retiredCount, err := a.applyLTMLifecycleRetention(ctx, ltm, time.Now())
+					if err != nil {
+						log.Warn("CopilotAgent: Failed applying lifecycle retention during pressure-triggered sweep", "agent_id", a.Memory.AgentID, "error", err)
+					} else if retiredCount > 0 {
+						log.Info("CopilotAgent: Archived stale LTM entries during pressure-triggered sweep", "agent_id", a.Memory.AgentID, "count", retiredCount)
+					}
+					if repoRetiredCount, err := archiveStaleRepoScopedMemoryForPressure(ctx, ltm, time.Now(), storagePressure); err != nil {
+						log.Warn("CopilotAgent: Failed archiving stale repo-scoped memory during pressure-triggered sweep", "agent_id", a.Memory.AgentID, "error", err)
+					} else if repoRetiredCount > 0 {
+						log.Info("CopilotAgent: Archived stale repo-scoped memory during pressure-triggered sweep", "agent_id", a.Memory.AgentID, "count", repoRetiredCount)
+					}
+				}
+				prunedCount, err := a.applyLTMLifecycleCompactionWithStoragePressure(ctx, ltm, time.Now(), storagePressure)
 				if err != nil {
 					log.Warn("CopilotAgent: Failed applying lifecycle compaction", "agent_id", a.Memory.AgentID, "error", err)
 					tx.Rollback(ctx)
 					continue
 				}
 				if prunedCount > 0 {
-					log.Debug("CopilotAgent: Pruned archived LTM entries", "agent_id", a.Memory.AgentID, "count", prunedCount)
+					log.Debug("CopilotAgent: Pruned archived LTM entries", "agent_id", a.Memory.AgentID, "count", prunedCount, "storage_pressure", storagePressure)
+				}
+				if pressureSummary["triggered"] == true {
+					a.notifyLTMPressureUser(pressureSummary, 0, prunedCount)
 				}
 				if err := tx.Commit(ctx); err != nil {
 					log.Warn("CopilotAgent: Failed committing lifecycle compaction", "agent_id", a.Memory.AgentID, "error", err)

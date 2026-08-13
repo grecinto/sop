@@ -823,6 +823,493 @@ func normalizeCategoryPath(path string) string {
 	return path
 }
 
+func buildCategoryPathCandidates(query string) []string {
+	if strings.TrimSpace(query) == "" {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	candidates := make([]string, 0, 8)
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		candidate = normalizeCategoryPath(candidate)
+		if candidate == "" || seen[candidate] {
+			return
+		}
+		seen[candidate] = true
+		candidates = append(candidates, candidate)
+	}
+
+	if path, _ := extractCategoryPath(query); path != "" {
+		add(path)
+	}
+
+	text := strings.ToLower(strings.TrimSpace(query))
+	for _, part := range strings.FieldsFunc(text, func(r rune) bool {
+		return r == ':' || r == ';' || r == ',' || r == '.' || r == '(' || r == ')' || r == '[' || r == ']' || r == '{' || r == '}' || r == '\n' || r == '\t'
+	}) {
+		if strings.Contains(part, "/") {
+			add(part)
+		}
+	}
+
+	for _, semanticPath := range buildSemanticResearchPaths(query) {
+		add(semanticPath)
+		add(strings.TrimPrefix(semanticPath, "Coding/"))
+		if strings.HasPrefix(semanticPath, "Coding/Semantic/") {
+			bucket := strings.TrimPrefix(semanticPath, "Coding/Semantic/")
+			add("Semantic/" + bucket)
+			parts := strings.Split(bucket, "/")
+			if len(parts) > 0 {
+				add("Coding/Semantic/" + parts[0])
+				add("Semantic/" + parts[0])
+			}
+		}
+	}
+	for _, concept := range extractSemanticConceptsFromText(query) {
+		if concept == "" {
+			continue
+		}
+		add("Coding/Semantic/" + concept)
+		add("Semantic/" + concept)
+	}
+
+	// If query contains a slash-delimited path-like phrase but no explicit path marker,
+	// keep it as a candidate as well.
+	for _, token := range strings.Fields(query) {
+		if strings.Contains(token, "/") {
+			add(token)
+		}
+	}
+
+	return candidates
+}
+
+func categoryMatchesAnyPath(category string, candidates []string) bool {
+	if category == "" || len(candidates) == 0 {
+		return false
+	}
+	category = strings.TrimSpace(category)
+	categoryLower := strings.ToLower(category)
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if category == candidate || strings.HasPrefix(category, candidate+"/") {
+			return true
+		}
+		candidateLower := strings.ToLower(candidate)
+		candidateLower = strings.TrimPrefix(candidateLower, "coding/")
+		candidateLower = strings.TrimPrefix(candidateLower, "semantic/")
+		if strings.Contains(categoryLower, candidateLower) {
+			return true
+		}
+		if strings.HasPrefix(candidateLower, "semantic/") {
+			semanticCandidate := strings.TrimPrefix(candidateLower, "semantic/")
+			if strings.Contains(categoryLower, semanticCandidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type memoryRecallCandidate struct {
+	Source         string
+	Label          string
+	Summary        string
+	Category       string
+	Recency        float64
+	Semantic       float64
+	TopicAffinity  float64
+	SourcePriority float64
+	Continuity     float64
+	Outcome        float64
+	Stale          bool
+}
+
+type memoryRecallPolicy struct {
+	ExactPathHits int
+	SemanticHits  int
+	Expand        bool
+	Reason        string
+	TopScore      float64
+}
+
+type memoryRecallSummary struct {
+	Query           string
+	TotalCandidates int
+	BudgetLimit     int
+	Expand          bool
+	ExactPathHits   int
+	SemanticHits    int
+	SourceCounts    map[string]int
+}
+
+type memoryRecallEval struct {
+	Query           string
+	TotalCandidates int
+	BudgetLimit     int
+	ExactPathHits   int
+	SemanticHits    int
+	Expand          bool
+	Precision       float64
+	Coverage        float64
+	SourceCounts    map[string]int
+	Reason          string
+}
+
+type memoryRecallQualityReport struct {
+	Query           string
+	TotalCandidates int
+	BudgetLimit     int
+	Expand          bool
+	ExactHitRate    float64
+	SemanticHitRate float64
+	ExactPathHits   int
+	SemanticHits    int
+	SourceCounts    map[string]int
+}
+
+type memoryRecallQualitySample struct {
+	Query      string
+	Candidates []memoryRecallCandidate
+	Limit      int
+	Policy     memoryRecallPolicy
+	Stale      bool
+}
+
+type memoryRecallQualityMetrics struct {
+	TotalQueries    int
+	ExactHitRate    float64
+	SemanticHitRate float64
+	ExpansionRate   float64
+	FailRate        float64
+}
+
+type askMemoryRecallPlan struct {
+	Enabled      bool
+	Expand       bool
+	Reason       string
+	Budget       int
+	ExactHits    int
+	SemanticHits int
+}
+
+func planAskMemoryRecall(query string, candidates []memoryRecallCandidate) askMemoryRecallPlan {
+	plan := askMemoryRecallPlan{Budget: 6, Enabled: len(candidates) > 0}
+	if len(candidates) == 0 {
+		plan.Enabled = false
+		plan.Reason = "no recall candidates"
+		return plan
+	}
+
+	filtered := make([]memoryRecallCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Stale {
+			continue
+		}
+		filtered = append(filtered, candidate)
+	}
+	if len(filtered) == 0 {
+		plan.Enabled = false
+		plan.Reason = "stale long-tail candidates excluded"
+		return plan
+	}
+
+	policy := evaluateMemoryRecallPolicy(query, filtered, plan.Budget)
+	plan.Expand = policy.Expand
+	plan.Reason = policy.Reason
+	plan.ExactHits = policy.ExactPathHits
+	plan.SemanticHits = policy.SemanticHits
+	if policy.ExactPathHits > 0 {
+		plan.Reason = "exact path hit available"
+		plan.Expand = false
+		return plan
+	}
+	if policy.SemanticHits > 0 {
+		plan.Reason = "semantic neighborhood expansion"
+		plan.Expand = true
+		return plan
+	}
+	plan.Enabled = false
+	plan.Reason = "no relevant recall candidates"
+	return plan
+}
+
+func buildRecallPromotionCategoryPath(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "Coding/Semantic/general"
+	}
+
+	concepts := extractSemanticConceptsFromText(query)
+	if len(concepts) == 0 {
+		concepts = []string{"general"}
+	}
+	path := buildSemanticCategoryPathFromConcepts(concepts)
+	if path == "" || path == "Coding/Semantic/general" {
+		return "Coding/Semantic/general"
+	}
+	return path
+}
+
+func summarizeMemoryRecall(query string, candidates []memoryRecallCandidate, limit int, policy memoryRecallPolicy) memoryRecallSummary {
+	summary := memoryRecallSummary{
+		Query:           strings.TrimSpace(query),
+		TotalCandidates: len(candidates),
+		BudgetLimit:     limit,
+		Expand:          policy.Expand,
+		ExactPathHits:   policy.ExactPathHits,
+		SemanticHits:    policy.SemanticHits,
+		SourceCounts:    make(map[string]int),
+	}
+	for _, candidate := range candidates {
+		if candidate.Source == "" {
+			continue
+		}
+		summary.SourceCounts[strings.ToLower(candidate.Source)]++
+	}
+	return summary
+}
+
+func buildMemoryRecallEval(query string, candidates []memoryRecallCandidate, limit int, policy memoryRecallPolicy) memoryRecallEval {
+	summary := summarizeMemoryRecall(query, candidates, limit, policy)
+	total := summary.TotalCandidates
+	if total == 0 {
+		return memoryRecallEval{
+			Query:           summary.Query,
+			TotalCandidates: 0,
+			BudgetLimit:     limit,
+			SourceCounts:    summary.SourceCounts,
+			Reason:          policy.Reason,
+		}
+	}
+
+	positive := policy.ExactPathHits + policy.SemanticHits
+	if positive < 1 {
+		positive = 1
+	}
+	precision := float64(positive) / float64(total)
+	coverage := precision
+	return memoryRecallEval{
+		Query:           summary.Query,
+		TotalCandidates: total,
+		BudgetLimit:     limit,
+		ExactPathHits:   policy.ExactPathHits,
+		SemanticHits:    policy.SemanticHits,
+		Expand:          policy.Expand,
+		Precision:       precision,
+		Coverage:        coverage,
+		SourceCounts:    summary.SourceCounts,
+		Reason:          policy.Reason,
+	}
+}
+
+func buildMemoryRecallQualityReport(query string, candidates []memoryRecallCandidate, limit int, policy memoryRecallPolicy) memoryRecallQualityReport {
+	eval := buildMemoryRecallEval(query, candidates, limit, policy)
+	report := memoryRecallQualityReport{
+		Query:           strings.TrimSpace(query),
+		TotalCandidates: eval.TotalCandidates,
+		BudgetLimit:     limit,
+		Expand:          policy.Expand,
+		ExactPathHits:   policy.ExactPathHits,
+		SemanticHits:    policy.SemanticHits,
+		SourceCounts:    eval.SourceCounts,
+	}
+	if eval.TotalCandidates == 0 {
+		report.ExactHitRate = 0
+		report.SemanticHitRate = 0
+		return report
+	}
+	report.ExactHitRate = float64(policy.ExactPathHits) / float64(eval.TotalCandidates)
+	report.SemanticHitRate = float64(policy.SemanticHits) / float64(eval.TotalCandidates)
+	return report
+}
+
+func buildMemoryRecallBenchmarkSamples() []memoryRecallQualitySample {
+	return []memoryRecallQualitySample{
+		{Query: "retry logic in Payments/Retry/Recovery", Candidates: []memoryRecallCandidate{
+			{Source: "mru", Label: "Payments/Retry/Recovery", Summary: "retry audit and recovery flow for payments", Category: "Payments/Retry/Recovery", Recency: 0.95, Semantic: 0.9, TopicAffinity: 0.9, SourcePriority: 0.85, Continuity: 0.9, Outcome: 0.9},
+			{Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue in payments", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.7, Continuity: 0.8, Outcome: 0.7},
+		}, Limit: 2, Policy: memoryRecallPolicy{ExactPathHits: 1, SemanticHits: 1, Expand: false}, Stale: false},
+		{Query: "retry logic after payment errors", Candidates: []memoryRecallCandidate{
+			{Source: "ltm", Label: "General", Summary: "payment retries are common", Category: "General", Recency: 0.6, Semantic: 0.4, TopicAffinity: 0.3, SourcePriority: 0.4, Continuity: 0.2, Outcome: 0.2},
+			{Source: "stm", Label: "Engineering/Payments", Summary: "retry worker issue", Category: "Engineering/Payments", Recency: 0.8, Semantic: 0.8, TopicAffinity: 0.7, SourcePriority: 0.6, Continuity: 0.7, Outcome: 0.6},
+		}, Limit: 2, Policy: memoryRecallPolicy{ExactPathHits: 0, SemanticHits: 1, Expand: true}, Stale: false},
+		{Query: "refund processing path", Candidates: []memoryRecallCandidate{
+			{Source: "mru", Label: "Refunds/Processing", Summary: "latest payment refund issue", Category: "Refunds/Processing", Recency: 0.95, Semantic: 0.9, TopicAffinity: 0.9, SourcePriority: 0.85, Continuity: 0.9, Outcome: 0.9},
+		}, Limit: 1, Policy: memoryRecallPolicy{ExactPathHits: 1, SemanticHits: 0, Expand: false}, Stale: false},
+		{Query: "expedite export indexing issue", Candidates: []memoryRecallCandidate{
+			{Source: "ltm", Label: "General", Summary: "old export work from a prior sprint", Category: "General", Recency: 0.15, Semantic: 0.2, TopicAffinity: 0.1, SourcePriority: 0.1, Continuity: 0.1, Outcome: 0.1, Stale: true},
+		}, Limit: 1, Policy: memoryRecallPolicy{ExactPathHits: 0, SemanticHits: 0, Expand: false}, Stale: true},
+	}
+}
+
+func runMemoryRecallQualityHarness(samples []memoryRecallQualitySample) memoryRecallQualityMetrics {
+	if len(samples) == 0 {
+		return memoryRecallQualityMetrics{TotalQueries: 0}
+	}
+	metrics := memoryRecallQualityMetrics{TotalQueries: len(samples)}
+	exactTotal := 0
+	semanticTotal := 0
+	expansionTotal := 0
+	failTotal := 0
+	for _, sample := range samples {
+		report := buildMemoryRecallQualityReport(sample.Query, sample.Candidates, sample.Limit, sample.Policy)
+		if report.ExactPathHits > 0 {
+			exactTotal++
+		}
+		if report.SemanticHits > 0 {
+			semanticTotal++
+		}
+		if report.Expand {
+			expansionTotal++
+		}
+		if sample.Stale {
+			failTotal++
+		}
+	}
+	if len(samples) > 0 {
+		metrics.ExactHitRate = float64(exactTotal) / float64(len(samples))
+		metrics.SemanticHitRate = float64(semanticTotal) / float64(len(samples))
+		metrics.ExpansionRate = float64(expansionTotal) / float64(len(samples))
+		metrics.FailRate = float64(failTotal) / float64(len(samples))
+	}
+	return metrics
+}
+
+func summarizeMemoryRecallDrift(samples []memoryRecallQualitySample) string {
+	if len(samples) == 0 {
+		return "memory recall drift: no samples"
+	}
+	metrics := runMemoryRecallQualityHarness(samples)
+	return fmt.Sprintf("memory recall drift: total_queries=%d exact_hit_rate=%.3f semantic_hit_rate=%.3f expansion_rate=%.3f fail_rate=%.3f",
+		metrics.TotalQueries,
+		metrics.ExactHitRate,
+		metrics.SemanticHitRate,
+		metrics.ExpansionRate,
+		metrics.FailRate,
+	)
+}
+
+func evaluateMemoryRecallPolicy(query string, candidates []memoryRecallCandidate, limit int) memoryRecallPolicy {
+	if len(candidates) == 0 {
+		return memoryRecallPolicy{Reason: "no candidates"}
+	}
+
+	candidatePaths := buildCategoryPathCandidates(query)
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	queryTokens := map[string]struct{}{}
+	for _, part := range strings.FieldsFunc(queryLower, func(r rune) bool {
+		return r == '/' || r == '_' || r == '-' || r == '.' || r == ':' || r == ';' || r == ',' || r == '(' || r == ')' || r == '[' || r == ']' || r == '{' || r == '}' || r == '\n' || r == '\t' || r == ' '
+	}) {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			queryTokens[part] = struct{}{}
+		}
+	}
+	policy := memoryRecallPolicy{TopScore: -1}
+	for _, candidate := range candidates {
+		score := 4.0*candidate.Recency + 3.0*candidate.Semantic + 2.5*candidate.TopicAffinity + 2.0*candidate.SourcePriority + 1.5*candidate.Continuity + 1.0*candidate.Outcome
+		if score > policy.TopScore {
+			policy.TopScore = score
+		}
+		if candidate.Category != "" && categoryMatchesAnyPath(candidate.Category, candidatePaths) {
+			policy.ExactPathHits++
+		}
+		categoryLower := strings.ToLower(candidate.Category)
+		labelLower := strings.ToLower(candidate.Label)
+		isSemantic := strings.Contains(categoryLower, "semantic") || strings.Contains(categoryLower, "coding/") || strings.Contains(labelLower, "semantic")
+		if !isSemantic {
+			for token := range queryTokens {
+				if strings.Contains(categoryLower, token) || strings.Contains(labelLower, token) {
+					isSemantic = true
+					break
+				}
+			}
+		}
+		if isSemantic {
+			policy.SemanticHits++
+		}
+	}
+
+	policy.Expand = policy.ExactPathHits == 0 && policy.SemanticHits > 0 && len(candidates) >= 1
+	if policy.Expand {
+		policy.Reason = "no exact path hit; widening to semantic neighborhood"
+	}
+	if policy.ExactPathHits > 0 {
+		policy.Reason = "exact path hit available"
+	}
+	if limit > 0 && len(candidates) > limit && policy.ExactPathHits == 0 {
+		policy.Expand = true
+		policy.Reason = "candidate set exceeds budget and no exact path hit"
+	}
+	return policy
+}
+
+func rankMemoryRecallCandidates(query string, candidates []memoryRecallCandidate, limit int) []memoryRecallCandidate {
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	candidatePaths := buildCategoryPathCandidates(query)
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	queryTokens := map[string]struct{}{}
+	for _, part := range strings.FieldsFunc(queryLower, func(r rune) bool {
+		return r == '/' || r == '_' || r == '-' || r == '.' || r == ':' || r == ';' || r == ',' || r == '(' || r == ')' || r == '[' || r == ']' || r == '{' || r == '}' || r == '\n' || r == '\t' || r == ' '
+	}) {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			queryTokens[part] = struct{}{}
+		}
+	}
+
+	ranked := append([]memoryRecallCandidate(nil), candidates...)
+	for i := range ranked {
+		candidate := &ranked[i]
+		score := 4.0*candidate.Recency + 3.0*candidate.Semantic + 2.5*candidate.TopicAffinity + 2.0*candidate.SourcePriority + 1.5*candidate.Continuity + 1.0*candidate.Outcome
+
+		if candidate.Category != "" && categoryMatchesAnyPath(candidate.Category, candidatePaths) {
+			score += 4.0
+		}
+		if candidate.Category != "" {
+			categoryLower := strings.ToLower(candidate.Category)
+			for token := range queryTokens {
+				if strings.Contains(categoryLower, token) {
+					score += 1.5
+					break
+				}
+			}
+		}
+		if strings.TrimSpace(candidate.Label) != "" {
+			labelLower := strings.ToLower(candidate.Label)
+			for token := range queryTokens {
+				if strings.Contains(labelLower, token) {
+					score += 0.75
+					break
+				}
+			}
+		}
+		if strings.HasPrefix(strings.ToLower(candidate.Category), "coding/semantic/") || strings.HasPrefix(strings.ToLower(candidate.Category), "semantic/") {
+			score += 0.75
+		}
+		candidate.SourcePriority = score
+	}
+
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].SourcePriority > ranked[j].SourcePriority
+	})
+	if limit > 0 && len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	return ranked
+}
+
 // Search performs a semantic search in the domain's knowledge base.
 // It enforces policies and uses the domain's embedder.
 // This implements HYBRID SEARCH:
@@ -850,10 +1337,14 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]ai.Hit
 		return nil, nil
 	}
 
-	// 2a. Check for explicit CategoryPath in query (rare but supported)
+	// 2a. Check for explicit CategoryPath or semantic bucket hints in query.
 	categoryPath, cleanQuery := extractCategoryPath(query)
+	candidatePaths := buildCategoryPathCandidates(query)
 	if categoryPath != "" {
 		log.Debug("CategoryPath detected in query", "path", categoryPath, "clean_query", cleanQuery)
+	}
+	if len(candidatePaths) > 0 {
+		log.Debug("Category path candidates built", "query", query, "candidates", candidatePaths)
 	}
 	queryToEmbed := cleanQuery
 	if queryToEmbed == "" {
@@ -883,18 +1374,18 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]ai.Hit
 	var textErr error
 
 	// Vector Search (Semantic similarity via embeddings)
-	// If CategoryPath specified, use filter to scope results to that category
+	// Prefer explicit category paths and semantic neighborhood candidates to keep search tight.
 	var queryFilter func(map[string]any) bool
-	if categoryPath != "" {
-		// CategoryPath filter: match items in the specified category hierarchy
+	if len(candidatePaths) > 0 {
 		queryFilter = func(payload map[string]any) bool {
 			if cat, ok := payload["category"].(string); ok {
-				// Match exact path or sub-paths
-				return cat == categoryPath || strings.HasPrefix(cat, categoryPath+"/")
+				return categoryMatchesAnyPath(cat, candidatePaths)
 			}
 			return false
 		}
-		log.Debug("Scoping search to CategoryPath", "path", categoryPath)
+		if categoryPath != "" {
+			log.Debug("Scoping search to CategoryPath", "path", categoryPath, "candidates", candidatePaths)
+		}
 	}
 	vectorHits, vecErr = idx.Query(ctx, vecs[0], limit, queryFilter)
 
@@ -927,15 +1418,12 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]ai.Hit
 	}
 
 	// Process Vector Hits
-	// CategoryPath hits get a boost since they match explicit user intent
+	// CategoryPath and semantic bucket hits get a boost since they match explicit user intent.
 	for rank, hit := range vectorHits {
 		boost := 1.0
-		if categoryPath != "" {
-			// Boost hits from the specified category path
-			if cat, ok := hit.Payload["category"].(string); ok {
-				if cat == categoryPath || strings.HasPrefix(cat, categoryPath+"/") {
-					boost = 1.5 // 50% boost for category path matches
-				}
+		if cat, ok := hit.Payload["category"].(string); ok {
+			if categoryMatchesAnyPath(cat, candidatePaths) {
+				boost = 1.5
 			}
 		}
 		scores[hit.ID] += boost / (k + float64(rank+1))

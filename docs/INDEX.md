@@ -105,6 +105,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-31.
 | Document | Description |
 |----------|-------------|
 | [LONG_TERM_MEMORY.md](LONG_TERM_MEMORY.md) | Hybrid memory system, category auto-share |
+| [VIRTUAL_MEMORY_RECALL_PLAN.md](VIRTUAL_MEMORY_RECALL_PLAN.md) | **🧠 Virtual memory recall plan**: broadens MRU/STM/LTM recall with bounded multi-horizon retrieval and near-topic expansion |
 | [STREAMING_DOCUMENT_STORAGE.md](STREAMING_DOCUMENT_STORAGE.md) | Vector/tensor-native document storage for space items, first-class Space UI surfaces, DocID-backed references, and document-card/detail-view browsing |
 
 ---

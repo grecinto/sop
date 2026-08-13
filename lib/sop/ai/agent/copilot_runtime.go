@@ -2044,6 +2044,139 @@ func (a *CopilotAgent) getSessionMemoryContext() string {
 	return convHistory
 }
 
+func (a *CopilotAgent) buildVirtualMemoryRecallContext(ctx context.Context, query string) string {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return ""
+	}
+
+	candidates := make([]memoryRecallCandidate, 0, 12)
+	for _, item := range a.getMRUSnapshot() {
+		if strings.TrimSpace(item.Context) == "" {
+			continue
+		}
+		candidates = append(candidates, memoryRecallCandidate{
+			Source:         item.Source,
+			Label:          item.Category,
+			Summary:        item.Context,
+			Category:       item.Category,
+			Recency:        clampMemoryRecallValue(float64(item.LastAccessed)/float64(time.Now().UnixMilli()+1), 0, 1),
+			Semantic:       0.65,
+			TopicAffinity:  0.6,
+			SourcePriority: 0.7,
+			Continuity:     0.8,
+			Outcome:        0.7,
+		})
+	}
+
+	if thread := a.service.session.Memory.GetCurrentThread(); thread != nil {
+		for _, ex := range thread.Exchanges {
+			text := strings.TrimSpace(ex.Content)
+			if text == "" {
+				continue
+			}
+			if len(text) > 220 {
+				text = text[:220] + "..."
+			}
+			candidates = append(candidates, memoryRecallCandidate{
+				Source:         "stm",
+				Label:          string(ex.Role),
+				Summary:        text,
+				Category:       thread.Category,
+				Recency:        0.8,
+				Semantic:       0.7,
+				TopicAffinity:  0.75,
+				SourcePriority: 0.8,
+				Continuity:     0.9,
+				Outcome:        0.7,
+			})
+		}
+	}
+	for _, caveat := range a.service.session.Memory.GetRuntimeCaveats(3) {
+		sum := strings.TrimSpace(caveat.Summary)
+		if sum == "" {
+			continue
+		}
+		candidates = append(candidates, memoryRecallCandidate{
+			Source:         "stm",
+			Label:          caveat.CategoryRoot,
+			Summary:        sum,
+			Category:       caveat.CategoryRoot,
+			Recency:        0.7,
+			Semantic:       0.75,
+			TopicAffinity:  0.8,
+			SourcePriority: 0.8,
+			Continuity:     0.8,
+			Outcome:        0.7,
+		})
+	}
+	if ltm := strings.TrimSpace(a.getLTMSemanticContext(ctx, query)); ltm != "" {
+		candidates = append(candidates, memoryRecallCandidate{
+			Source:         "ltm",
+			Label:          "Learned Knowledge",
+			Summary:        ltm,
+			Category:       "LTM",
+			Recency:        0.5,
+			Semantic:       0.9,
+			TopicAffinity:  0.7,
+			SourcePriority: 0.6,
+			Continuity:     0.5,
+			Outcome:        0.8,
+		})
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	plan := planAskMemoryRecall(query, candidates)
+	if !plan.Enabled {
+		return ""
+	}
+	policy := evaluateMemoryRecallPolicy(query, candidates, plan.Budget)
+	ranked := rankMemoryRecallCandidates(query, candidates, plan.Budget)
+	if len(ranked) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Memory Neighborhood:\n")
+	summary := summarizeMemoryRecall(query, candidates, plan.Budget, policy)
+	quality := buildMemoryRecallQualityReport(query, candidates, plan.Budget, policy)
+	if drift := summarizeMemoryRecallDrift([]memoryRecallQualitySample{{Query: query, Candidates: candidates, Limit: plan.Budget, Policy: policy}}); drift != "" {
+		sb.WriteString(fmt.Sprintf("- drift: %s\n", drift))
+	}
+	sb.WriteString(fmt.Sprintf("- recall: exact_path_hits=%d semantic_hits=%d expand=%t budget_limit=%d total_candidates=%d exact_hit_rate=%.3f semantic_hit_rate=%.3f\n",
+		summary.ExactPathHits, summary.SemanticHits, summary.Expand, summary.BudgetLimit, summary.TotalCandidates, quality.ExactHitRate, quality.SemanticHitRate))
+	for source, count := range summary.SourceCounts {
+		sb.WriteString(fmt.Sprintf("- source_mix[%s]=%d\n", source, count))
+	}
+	for _, candidate := range ranked {
+		label := strings.TrimSpace(candidate.Label)
+		if label == "" {
+			label = candidate.Source
+		}
+		summaryText := strings.TrimSpace(candidate.Summary)
+		if summaryText == "" {
+			continue
+		}
+		if len(summaryText) > 220 {
+			summaryText = summaryText[:220] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("- [%s] %s\n", strings.ToUpper(candidate.Source), label))
+		sb.WriteString(fmt.Sprintf("  %s\n", summaryText))
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func clampMemoryRecallValue(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
 // ============================================================================
 // BASELINE ReACT ENGINE (10 Turn Loop Abstraction)
 // ============================================================================

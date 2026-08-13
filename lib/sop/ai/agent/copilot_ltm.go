@@ -3,14 +3,33 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/ai/memory"
+)
+
+const (
+	ltmRepoStaleArchiveDays          = 90
+	ltmRepoStalePruneDays            = 180
+	ltmGenericArchiveDays            = 120
+	ltmGenericHardPruneDays          = 730
+	ltmArchivedSummaryMinAgeDays     = 180
+	ltmColdUnusedLastUsedDays        = 120
+	ltmColdUnusedAgeDays             = 270
+	ltmPressureForecastThreshold     = 0.7
+	ltmPressureCleanupThreshold      = 0.85
+	ltmPressureCriticalThreshold     = 0.95
+	ltmRepoNearThresholdPressure     = 0.7
+	ltmRepoHighPressureThreshold     = 0.85
+	ltmRepoPressureArchiveAgeDays    = 60
+	ltmRepoPressureArchiveMinAgeDays = 30
 )
 
 func buildLTMMemoryCategoryPath(category, capability, scopeType, scopeID string) string {
@@ -47,35 +66,50 @@ func buildCodingMemoryLTMPayloadAndIndexes(mem cw.CodingMemory) (map[string]any,
 	if scopeID == "" {
 		scopeID = "default"
 	}
+	now := time.Now().UnixMilli()
 	canonicalPayload := map[string]any{
-		"document_id":      docID.String(),
-		"payload_type":     "coding_workflow_memory",
-		"description":      strings.TrimSpace(mem.Description),
-		"active_file":      strings.TrimSpace(mem.ActiveFile),
-		"files_touched":    mem.FilesTouched,
-		"outcome":          strings.TrimSpace(mem.Outcome),
-		"test_status":      strings.TrimSpace(mem.TestStatus),
-		"lesson":           strings.TrimSpace(mem.Lesson),
-		"next_step":        strings.TrimSpace(mem.NextStep),
-		"repository_hint":  strings.TrimSpace(mem.RepositoryHint),
-		"structural_path":  strings.TrimSpace(mem.StructuralPath),
-		"ast_leaf_nodes":   mem.ASTLeafNodes,
-		"status":           "active",
-		"lifecycle_status": "active",
-		"scope_type":       scopeType,
-		"scope_id":         scopeID,
-		"recorded_at":      time.Now().UnixMilli(),
+		"document_id":                 docID.String(),
+		"payload_type":                "coding_workflow_memory",
+		"description":                 strings.TrimSpace(mem.Description),
+		"active_file":                 strings.TrimSpace(mem.ActiveFile),
+		"files_touched":               mem.FilesTouched,
+		"outcome":                     strings.TrimSpace(mem.Outcome),
+		"test_status":                 strings.TrimSpace(mem.TestStatus),
+		"lesson":                      strings.TrimSpace(mem.Lesson),
+		"next_step":                   strings.TrimSpace(mem.NextStep),
+		"repository_hint":             strings.TrimSpace(mem.RepositoryHint),
+		"structural_path":             strings.TrimSpace(mem.StructuralPath),
+		"ast_leaf_nodes":              mem.ASTLeafNodes,
+		"status":                      "active",
+		"lifecycle_status":            "active",
+		"scope_type":                  scopeType,
+		"scope_id":                    scopeID,
+		"lifecycle_access_count":      1,
+		"lifecycle_last_used_at":      now,
+		"lifecycle_last_evaluated_at": now,
+		"updated_at":                  now,
+		"recorded_at":                 now,
 	}
 	pathIndexPath := buildCodingMemoryPathIndexCategoryPath(mem)
 	codeStructureIndexPath := buildCodingMemoryCodeStructureCategoryPath(mem)
 	semanticIndexPath := buildCodingMemorySemanticCategoryPath(mem)
 	indexPayload := map[string]any{
-		"document_id":          docID.String(),
-		"payload_type":         "coding_workflow_memory",
-		"canonical_payload":    canonicalPayload,
-		"path_index":           pathIndexPath,
-		"code_structure_index": codeStructureIndexPath,
-		"semantic_index":       semanticIndexPath,
+		"document_id":                 docID.String(),
+		"payload_type":                "coding_workflow_memory",
+		"canonical_payload":           canonicalPayload,
+		"path_index":                  pathIndexPath,
+		"code_structure_index":        codeStructureIndexPath,
+		"semantic_index":              semanticIndexPath,
+		"status":                      "active",
+		"lifecycle_status":            "active",
+		"scope_type":                  scopeType,
+		"scope_id":                    scopeID,
+		"repository_hint":             strings.TrimSpace(mem.RepositoryHint),
+		"lifecycle_access_count":      1,
+		"lifecycle_last_used_at":      now,
+		"lifecycle_last_evaluated_at": now,
+		"updated_at":                  now,
+		"recorded_at":                 now,
 	}
 	entries := []codingMemoryLTMIndexEntry{
 		{Kind: "path", CategoryPath: pathIndexPath, Payload: indexPayload},
@@ -102,24 +136,39 @@ func buildCodingMemoryLTMThoughts(mem cw.CodingMemory, documentID string, entrie
 		if strings.EqualFold(strings.TrimSpace(entry.Kind), "path") || strings.EqualFold(strings.TrimSpace(entry.Kind), "code_structure") {
 			mode = memory.IndexPopulationModeReference
 		}
+		stored := map[string]any{
+			"document_id":                 documentID,
+			"index_kind":                  entry.Kind,
+			"canonical_payload":           entry.Payload["canonical_payload"],
+			"path_index":                  entry.Payload["path_index"],
+			"code_structure_index":        entry.Payload["code_structure_index"],
+			"semantic_index":              entry.Payload["semantic_index"],
+			"status":                      entry.Payload["status"],
+			"lifecycle_status":            entry.Payload["lifecycle_status"],
+			"scope_type":                  entry.Payload["scope_type"],
+			"scope_id":                    entry.Payload["scope_id"],
+			"repository_hint":             entry.Payload["repository_hint"],
+			"lifecycle_access_count":      entry.Payload["lifecycle_access_count"],
+			"lifecycle_last_used_at":      entry.Payload["lifecycle_last_used_at"],
+			"lifecycle_last_evaluated_at": entry.Payload["lifecycle_last_evaluated_at"],
+			"updated_at":                  entry.Payload["updated_at"],
+			"recorded_at":                 entry.Payload["recorded_at"],
+		}
 		thoughts = append(thoughts, memory.Thought[map[string]any]{
 			Summaries:           []string{text},
 			CategoryPath:        entry.CategoryPath,
 			DocID:               memory.DocIDs{documentID},
 			IndexPopulationMode: mode,
-			Data: map[string]any{
-				"document_id":          documentID,
-				"index_kind":           entry.Kind,
-				"canonical_payload":    entry.Payload["canonical_payload"],
-				"path_index":           entry.Payload["path_index"],
-				"code_structure_index": entry.Payload["code_structure_index"],
-				"semantic_index":       entry.Payload["semantic_index"],
-			},
+			Data:                stored,
 		})
 	}
 	return thoughts
 }
 
+// Coding workflow artifacts intentionally live under a distinct root category from
+// general LTM memory. The underlying LTM substrate is shared, but the taxonomy is
+// separated so repo/code intelligence recall stays in the Coding namespace while
+// conversational memory stays in the Memory namespace.
 func buildCodingMemoryPathIndexCategoryPath(mem cw.CodingMemory) string {
 	parts := []string{"Coding", "Workflow"}
 	repoHint := strings.TrimSpace(mem.RepositoryHint)
@@ -163,6 +212,30 @@ func buildCodingMemoryCodeStructureCategoryPath(mem cw.CodingMemory) string {
 //   - "Coding/Semantic/error-handling/retry-logic"
 //   - "Coding/Semantic/data-persistence/database/sql-query"
 //   - "Coding/Semantic/http-networking/middleware/authentication"
+func buildSemanticCategoryPathFromConcepts(concepts []string) string {
+	parts := []string{"Coding", "Semantic"}
+	for _, concept := range concepts {
+		concept = strings.TrimSpace(concept)
+		if concept == "" {
+			continue
+		}
+		concept = strings.ToLower(concept)
+		concept = strings.NewReplacer(" ", "-", "/", "-", "_", "-", ".", "-").Replace(concept)
+		concept = strings.Trim(concept, "-")
+		if concept == "" {
+			continue
+		}
+		parts = append(parts, concept)
+		if len(parts) >= 5 {
+			break
+		}
+	}
+	if len(parts) <= 2 {
+		parts = append(parts, "general")
+	}
+	return strings.Join(parts, "/")
+}
+
 func buildCodingMemorySemanticCategoryPath(mem cw.CodingMemory) string {
 	parts := []string{"Coding", "Semantic"}
 	seed := []string{}
@@ -193,23 +266,18 @@ func buildCodingMemorySemanticCategoryPath(mem cw.CodingMemory) string {
 			break
 		}
 	}
-	// Extract semantic concepts from code content
-	// Use deterministic keyword extraction (same formula for storage & retrieval)
 	concepts := extractSemanticConcepts(mem)
-
-	// Build nested semantic category path (max 5 levels deep for pigeon holes)
-	for i, concept := range concepts {
-		if i >= 3 { // Limit depth: Coding/Semantic/{c1}/{c2}/{c3}
-			break
+	if len(concepts) > 0 {
+		for _, concept := range concepts {
+			parts = append(parts, strings.ToLower(strings.TrimSpace(concept)))
+			if len(parts) >= 5 {
+				break
+			}
 		}
-		parts = append(parts, concept)
 	}
-
-	// Ensure at least one semantic concept
-	if len(parts) == 2 {
+	if len(parts) <= 2 {
 		parts = append(parts, "general")
 	}
-
 	return strings.Join(parts, "/")
 }
 
@@ -307,17 +375,11 @@ func buildSemanticResearchPaths(query string) []string {
 	if len(concepts) == 0 {
 		return nil
 	}
-	parts := []string{"Coding", "Semantic"}
-	for _, concept := range concepts {
-		if len(parts) >= 5 {
-			break
-		}
-		parts = append(parts, concept)
-	}
-	if len(parts) <= 2 {
+	path := buildSemanticCategoryPathFromConcepts(concepts)
+	if path == "" || path == "Coding/Semantic/general" {
 		return nil
 	}
-	return []string{strings.Join(parts, "/")}
+	return []string{path}
 }
 
 // buildCodeTreeCategoryPath constructs hierarchical code-tree category paths
@@ -668,6 +730,144 @@ type ltmLifecycleStatus struct {
 	Score        int
 }
 
+type StorageLifecyclePolicy struct {
+	Kind               string
+	ScopeType          string
+	ScopeID            string
+	StoragePath        string
+	ForecastThreshold  float64
+	CleanupThreshold   float64
+	Cooldown           time.Duration
+	ArchiveAfterDays   int
+	HardPruneAfterDays int
+}
+
+func NewStorageLifecyclePolicy(kind, scopeType, scopeID, storagePath string) StorageLifecyclePolicy {
+	policy := StorageLifecyclePolicy{
+		Kind:               strings.TrimSpace(kind),
+		ScopeType:          strings.TrimSpace(scopeType),
+		ScopeID:            strings.TrimSpace(scopeID),
+		StoragePath:        strings.TrimSpace(storagePath),
+		ForecastThreshold:  ltmPressureForecastThreshold,
+		CleanupThreshold:   ltmPressureCleanupThreshold,
+		Cooldown:           12 * time.Hour,
+		ArchiveAfterDays:   ltmRepoStaleArchiveDays,
+		HardPruneAfterDays: ltmGenericHardPruneDays,
+	}
+	if policy.Kind == "" {
+		policy.Kind = "generic"
+	}
+	if policy.ScopeType == "" {
+		policy.ScopeType = "repo"
+	}
+	return policy
+}
+
+func (p StorageLifecyclePolicy) BuildPressureSummary(now time.Time) map[string]any {
+	pressure := estimateLTMStoragePressure(p.StoragePath)
+	threshold := p.CleanupThreshold
+	if threshold <= 0 {
+		threshold = ltmPressureCleanupThreshold
+	}
+	forecastThreshold := p.ForecastThreshold
+	if forecastThreshold <= 0 {
+		forecastThreshold = ltmPressureForecastThreshold
+	}
+	state := "normal"
+	switch {
+	case pressure >= ltmPressureCriticalThreshold:
+		state = "critical"
+	case pressure >= threshold:
+		state = "high"
+	case pressure >= forecastThreshold:
+		state = "moderate"
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return map[string]any{
+		"kind":               p.Kind,
+		"scope_type":         p.ScopeType,
+		"scope_id":           p.ScopeID,
+		"timestamp":          now.UnixMilli(),
+		"usage_ratio":        pressure,
+		"forecast_threshold": forecastThreshold,
+		"threshold":          threshold,
+		"pressure_state":     state,
+		"cleanup_triggered":  pressure >= threshold,
+		"forecast_triggered": pressure >= forecastThreshold,
+	}
+}
+
+func (p StorageLifecyclePolicy) DecideAction(summary map[string]any) map[string]any {
+	if summary == nil {
+		return nil
+	}
+	pressure, _ := summary["usage_ratio"].(float64)
+	state := strings.TrimSpace(fmt.Sprint(summary["pressure_state"]))
+	action := "monitor"
+	switch {
+	case state == "critical":
+		action = "archive_and_compact"
+	case state == "high":
+		action = "compact"
+	case pressure >= p.ForecastThreshold:
+		action = "monitor_and_review"
+	}
+	summary["action"] = action
+	summary["triggered"] = summary["forecast_triggered"] == true || summary["cleanup_triggered"] == true
+	return summary
+}
+
+func (p StorageLifecyclePolicy) TouchAccess(payload map[string]any, now time.Time) map[string]any {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["scope_type"])) == "" {
+		payload["scope_type"] = p.ScopeType
+	}
+	if p.ScopeID != "" {
+		payload["scope_id"] = p.ScopeID
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["scope_id"])) == "" {
+		payload["scope_id"] = p.ScopeID
+	}
+	count := 1
+	if existingCount, ok := payload["lifecycle_access_count"].(int); ok {
+		count = existingCount + 1
+	} else if existingCount, ok := payload["lifecycle_access_count"].(int64); ok {
+		count = int(existingCount) + 1
+	} else if existingCount, ok := payload["lifecycle_access_count"].(float64); ok {
+		count = int(existingCount) + 1
+	}
+	payload["lifecycle_access_count"] = count
+	payload["lifecycle_last_used_at"] = now.UnixMilli()
+	payload["lifecycle_last_evaluated_at"] = now.UnixMilli()
+	payload["updated_at"] = now.UnixMilli()
+	payload["status"] = "active"
+	payload["lifecycle_status"] = "active"
+	payload["scope_valid"] = true
+	delete(payload, "archived_at")
+	delete(payload, "archive_reason")
+	return payload
+}
+
+func (p StorageLifecyclePolicy) EvaluateStatus(lastUsedDays, ageDays, accessCount, relevanceScore int, scopeValid bool) ltmLifecycleStatus {
+	if lastUsedDays <= 14 && ageDays <= 30 && accessCount >= 2 && relevanceScore >= 10 {
+		return ltmLifecycleStatus{State: "active", Reason: "recent_and_relevant", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 20}
+	}
+	if lastUsedDays <= 90 && accessCount >= 1 {
+		return ltmLifecycleStatus{State: "warm", Reason: "recently_seen", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 45}
+	}
+	if !scopeValid {
+		return ltmLifecycleStatus{State: "stale", Reason: "invalid_scope", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 100}
+	}
+	return ltmLifecycleStatus{State: "stale", Reason: "cold_or_unused", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 80}
+}
+
 func applyLTMLifecycleSignal(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], signal ltmLifecycleSignal) error {
 	if ctx == nil || kb == nil || signal.Action == "" {
 		return nil
@@ -778,13 +978,305 @@ func evaluateLTMLifecycleStatus(lastUsedDays, ageDays, accessCount, relevanceSco
 	if lastUsedDays <= 14 && ageDays <= 30 && accessCount >= 2 && relevanceScore >= 10 {
 		return ltmLifecycleStatus{State: "active", Reason: "recent_and_relevant", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 20}
 	}
-	if lastUsedDays <= 60 && accessCount >= 1 {
+	if lastUsedDays <= 90 && accessCount >= 1 {
 		return ltmLifecycleStatus{State: "warm", Reason: "recently_seen", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 45}
 	}
 	if !scopeValid {
 		return ltmLifecycleStatus{State: "stale", Reason: "invalid_scope", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 100}
 	}
 	return ltmLifecycleStatus{State: "stale", Reason: "cold_or_unused", LastUsedDays: lastUsedDays, AgeDays: ageDays, Score: 80}
+}
+
+func buildLTMPressureSummary(storagePath string, now time.Time) map[string]any {
+	pressure := estimateLTMStoragePressure(storagePath)
+	threshold := ltmPressureCleanupThreshold
+	state := "normal"
+	switch {
+	case pressure >= ltmPressureCriticalThreshold:
+		state = "critical"
+	case pressure >= ltmPressureCleanupThreshold:
+		state = "high"
+	case pressure >= ltmPressureForecastThreshold:
+		state = "moderate"
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return map[string]any{
+		"timestamp":          now.UnixMilli(),
+		"usage_ratio":        pressure,
+		"threshold":          threshold,
+		"pressure_state":     state,
+		"cleanup_triggered":  pressure >= threshold,
+		"forecast_triggered": pressure >= ltmPressureForecastThreshold,
+	}
+}
+
+func decideLTMPressureAction(storagePath string, now time.Time) map[string]any {
+	summary := buildLTMPressureSummary(storagePath, now)
+	pressure, _ := summary["usage_ratio"].(float64)
+	state := strings.TrimSpace(fmt.Sprint(summary["pressure_state"]))
+	action := "monitor"
+	switch {
+	case state == "critical":
+		action = "archive_and_compact"
+	case state == "high":
+		action = "compact"
+	case pressure >= ltmPressureForecastThreshold:
+		action = "monitor_and_review"
+	}
+	summary["action"] = action
+	summary["triggered"] = summary["forecast_triggered"] == true || summary["cleanup_triggered"] == true
+	return summary
+}
+
+func buildLTMFreeUpGuidance() []string {
+	return []string{
+		"Open Data Manager → Long-Term Memory and archive stale repo/category memory.",
+		"Use the AI chat memory cleanup flow to retire older repo or semantic entries before the next pressure spike.",
+	}
+}
+
+func (a *CopilotAgent) notifyLTMPressureUser(summary map[string]any, archivedCount, prunedCount int) {
+	if a == nil {
+		return
+	}
+	if summary == nil {
+		return
+	}
+	if a.LTMPressureNotifier == nil {
+		a.LTMPressureNotifier = defaultLTMPressureNotifier
+	}
+	if a.LTMPressureNotifier == nil {
+		return
+	}
+	if a.ltmPressureAlertCooldown <= 0 {
+		a.ltmPressureAlertCooldown = 12 * time.Hour
+	}
+	pressure, _ := summary["usage_ratio"].(float64)
+	threshold, _ := summary["threshold"].(float64)
+	state := strings.TrimSpace(fmt.Sprint(summary["pressure_state"]))
+	if state == "" {
+		state = "monitor"
+	}
+	if threshold <= 0 {
+		threshold = 0.85
+	}
+	severity := "info"
+	if state == "critical" {
+		severity = "error"
+	} else if state == "high" {
+		severity = "warning"
+	}
+	forecastTriggered := summary["forecast_triggered"] == true || summary["triggered"] == true
+	cleanupTriggered := summary["cleanup_triggered"] == true || summary["triggered"] == true
+	triggered := forecastTriggered || cleanupTriggered
+	if !triggered {
+		return
+	}
+	title := "Memory forecast"
+	message := fmt.Sprintf("Local memory is approaching its limit at %.2f%% usage. The recommended cleanup threshold is %.2f%%, so a maintenance pass is a good idea soon.", pressure*100, threshold*100)
+	if cleanupTriggered {
+		title = "Memory cleanup triggered"
+		message = fmt.Sprintf("Local memory has reached %.2f%% usage and the daemon has started cleanup. It auto-archived %d entries and pruned %d stale records.", pressure*100, archivedCount, prunedCount)
+		if archivedCount == 0 && prunedCount == 0 {
+			message = fmt.Sprintf("Local memory has reached %.2f%% usage and the daemon is now cleaning up stale entries to protect local disk space.", pressure*100)
+		}
+	}
+	freeUpTargets := buildLTMFreeUpGuidance()
+	message = fmt.Sprintf("%s Two cleanup paths are available: %s %s", message, freeUpTargets[0], freeUpTargets[1])
+	now := time.Now()
+	a.ltmPressureAlertMu.Lock()
+	defer a.ltmPressureAlertMu.Unlock()
+	retriggered := !a.lastLTMPressureAlert.IsZero() && now.Sub(a.lastLTMPressureAlert) < a.ltmPressureAlertCooldown
+	if retriggered {
+		severity = "warning"
+		if cleanupTriggered {
+			message = fmt.Sprintf("Storage pressure re-triggered after a recent cleanup: %s", message)
+		} else {
+			message = fmt.Sprintf("Memory pressure forecast re-triggered; a cleanup window is still likely: %s", message)
+		}
+	}
+	notification := LTMPressureNotification{
+		Timestamp:     now,
+		Severity:      severity,
+		Title:         title,
+		Message:       message,
+		UsageRatio:    pressure,
+		PressureState: state,
+		Threshold:     threshold,
+		Action:        fmt.Sprint(summary["action"]),
+		Retriiggered:  retriggered,
+		PrunedCount:   prunedCount,
+		ArchivedCount: archivedCount,
+		FreeUpTargets: freeUpTargets,
+		FreeUpContext: "storage_pressure",
+	}
+	a.lastLTMPressureAlert = now
+	a.LTMPressureNotifier(notification)
+}
+
+func summarizeLongTailArchivedMemory(payload map[string]any) string {
+	if payload == nil || len(payload) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	for _, key := range []string{"query", "summary", "outcome", "lesson", "next_step", "description"} {
+		if v, ok := payload[key]; ok {
+			text := strings.TrimSpace(fmt.Sprint(v))
+			if text != "" && len(text) <= 220 {
+				parts = append(parts, text)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	summary := strings.Join(parts, " | ")
+	if len(summary) > 220 {
+		summary = summary[:217] + "..."
+	}
+	return summary
+}
+
+func shouldSummarizeArchivedMemory(payload map[string]any, now time.Time) bool {
+	if payload == nil || len(payload) == 0 || now.IsZero() {
+		return false
+	}
+	status := strings.TrimSpace(fmt.Sprint(payload["lifecycle_status"]))
+	if status == "" {
+		status = strings.TrimSpace(fmt.Sprint(payload["status"]))
+	}
+	if !strings.EqualFold(status, "archived") {
+		return false
+	}
+	archivedAt := int64(0)
+	if v, ok := payload["archived_at"].(int64); ok {
+		archivedAt = v
+	} else if v, ok := payload["archived_at"].(int); ok {
+		archivedAt = int64(v)
+	} else if v, ok := payload["archived_at"].(float64); ok {
+		archivedAt = int64(v)
+	}
+	if archivedAt == 0 {
+		return false
+	}
+	if now.UnixMilli()-archivedAt < int64(ltmArchivedSummaryMinAgeDays*24*time.Hour/time.Millisecond) {
+		return false
+	}
+	accessCount := 1
+	if v, ok := payload["lifecycle_access_count"].(int); ok {
+		accessCount = v
+	} else if v, ok := payload["lifecycle_access_count"].(int64); ok {
+		accessCount = int(v)
+	} else if v, ok := payload["lifecycle_access_count"].(float64); ok {
+		accessCount = int(v)
+	}
+	return accessCount <= 1
+}
+
+func shouldArchiveRepoScopedMemoryForPressure(payload map[string]any, now time.Time, storagePressure float64) bool {
+	if payload == nil || len(payload) == 0 || now.IsZero() {
+		return false
+	}
+	if !isRepoScopedLTMPayload(payload) {
+		return false
+	}
+	if storagePressure < 0.7 {
+		return false
+	}
+	status := strings.TrimSpace(fmt.Sprint(payload["lifecycle_status"]))
+	if status == "" {
+		status = strings.TrimSpace(fmt.Sprint(payload["status"]))
+	}
+	if status == "" || strings.EqualFold(status, "active") || strings.EqualFold(status, "warm") {
+		return false
+	}
+	if strings.EqualFold(status, "archived") || strings.EqualFold(status, "deleted") {
+		return false
+	}
+
+	lastUsedAt := int64(0)
+	if v, ok := payload["lifecycle_last_used_at"].(int64); ok {
+		lastUsedAt = v
+	} else if v, ok := payload["lifecycle_last_used_at"].(int); ok {
+		lastUsedAt = int64(v)
+	} else if v, ok := payload["lifecycle_last_used_at"].(float64); ok {
+		lastUsedAt = int64(v)
+	}
+	recordedAt := int64(0)
+	if v, ok := payload["recorded_at"].(int64); ok {
+		recordedAt = v
+	} else if v, ok := payload["recorded_at"].(int); ok {
+		recordedAt = int64(v)
+	} else if v, ok := payload["recorded_at"].(float64); ok {
+		recordedAt = int64(v)
+	}
+	if lastUsedAt == 0 {
+		lastUsedAt = recordedAt
+	}
+	if recordedAt == 0 {
+		recordedAt = lastUsedAt
+	}
+	accessCount := 1
+	if v, ok := payload["lifecycle_access_count"].(int); ok {
+		accessCount = v
+	} else if v, ok := payload["lifecycle_access_count"].(int64); ok {
+		accessCount = int(v)
+	} else if v, ok := payload["lifecycle_access_count"].(float64); ok {
+		accessCount = int(v)
+	}
+	if storagePressure >= ltmRepoHighPressureThreshold && strings.EqualFold(status, "stale") && (accessCount <= 1 || ageDaysFromTimestamp(now, recordedAt) >= ltmRepoPressureArchiveMinAgeDays) {
+		return true
+	}
+	lastUsedDays := 0
+	if lastUsedAt > 0 && now.UnixMilli() > lastUsedAt {
+		lastUsedDays = int((now.UnixMilli() - lastUsedAt) / int64(24*time.Hour/time.Millisecond))
+	}
+	ageDays := 0
+	if recordedAt > 0 && now.UnixMilli() > recordedAt {
+		ageDays = int((now.UnixMilli() - recordedAt) / int64(24*time.Hour/time.Millisecond))
+	}
+	return strings.EqualFold(status, "stale") && storagePressure >= ltmRepoNearThresholdPressure && (lastUsedDays >= ltmRepoStaleArchiveDays || ageDays >= ltmRepoStaleArchiveDays+ltmRepoPressureArchiveMinAgeDays || (accessCount <= 1 && ageDays >= ltmRepoPressureArchiveAgeDays))
+}
+
+func shouldPruneRepoScopedMemoryByAge(payload map[string]any, now time.Time) bool {
+	if payload == nil || len(payload) == 0 || now.IsZero() {
+		return false
+	}
+	if !isRepoScopedLTMPayload(payload) {
+		return false
+	}
+	status := strings.TrimSpace(fmt.Sprint(payload["lifecycle_status"]))
+	if status == "" {
+		status = strings.TrimSpace(fmt.Sprint(payload["status"]))
+	}
+	if !strings.EqualFold(status, "archived") {
+		return false
+	}
+
+	archivedAt := int64(0)
+	if v, ok := payload["archived_at"].(int64); ok {
+		archivedAt = v
+	} else if v, ok := payload["archived_at"].(int); ok {
+		archivedAt = int64(v)
+	} else if v, ok := payload["archived_at"].(float64); ok {
+		archivedAt = int64(v)
+	}
+	if archivedAt == 0 {
+		return false
+	}
+	return ageDaysFromTimestamp(now, archivedAt) >= ltmRepoStalePruneDays
+}
+
+func ageDaysFromTimestamp(now time.Time, ts int64) int {
+	if now.IsZero() || ts <= 0 {
+		return 0
+	}
+	if now.UnixMilli() <= ts {
+		return 0
+	}
+	return int((now.UnixMilli() - ts) / int64(24*time.Hour/time.Millisecond))
 }
 
 func decideLTMLifecycleRetention(payload map[string]any, now time.Time) ltmLifecycleRetentionDecision {
@@ -849,13 +1341,60 @@ func decideLTMLifecycleRetention(payload map[string]any, now time.Time) ltmLifec
 	if !scopeValid {
 		return ltmLifecycleRetentionDecision{Action: "archive", Reason: "invalid_scope", Confidence: 90}
 	}
-	if strings.EqualFold(status, "stale") && (lastUsedDays > 90 || ageDays > 180 || (accessCount <= 1 && ageDays > 90)) {
+	if strings.EqualFold(status, "stale") && (lastUsedDays > ltmColdUnusedLastUsedDays || ageDays > ltmColdUnusedAgeDays || (accessCount <= 1 && ageDays > ltmColdUnusedLastUsedDays)) {
 		return ltmLifecycleRetentionDecision{Action: "archive", Reason: "cold_or_unused", Confidence: 80}
 	}
-	if lastUsedDays > 180 && accessCount <= 1 {
+	if lastUsedDays > ltmColdUnusedAgeDays && accessCount <= 1 {
 		return ltmLifecycleRetentionDecision{Action: "archive", Reason: "unused_for_long_time", Confidence: 75}
 	}
 	return ltmLifecycleRetentionDecision{}
+}
+
+func archiveStaleRepoScopedMemoryForPressure(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], now time.Time, storagePressure float64) (int, error) {
+	if ctx == nil || kb == nil || now.IsZero() {
+		return 0, nil
+	}
+	itemsTree, err := kb.Store.Items(ctx)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	ok, err := itemsTree.First(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for ok {
+		currentKey := itemsTree.GetCurrentKey()
+		item, err := itemsTree.GetCurrentValue(ctx)
+		if err != nil {
+			return 0, err
+		}
+		payload, okPayload := any(item.Data).(map[string]any)
+		if !okPayload || payload == nil {
+			payload = map[string]any{}
+		}
+		if shouldArchiveRepoScopedMemoryForPressure(payload, now, storagePressure) {
+			payload["lifecycle_status"] = "archived"
+			payload["status"] = "archived"
+			payload["archived_at"] = now.UnixMilli()
+			payload["archive_reason"] = "storage_pressure_stale_repo"
+			payload["lifecycle_last_evaluated_at"] = now.UnixMilli()
+			payload["updated_at"] = now.UnixMilli()
+			if summary := summarizeLongTailArchivedMemory(payload); summary != "" {
+				payload["archived_summary"] = summary
+			}
+			item.Data = payload
+			if _, err := itemsTree.UpdateCurrentItem(ctx, currentKey.Key, item); err != nil {
+				return 0, err
+			}
+			count++
+		}
+		ok, err = itemsTree.Next(ctx)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return count, nil
 }
 
 func (a *CopilotAgent) applyLTMLifecycleRetention(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], now time.Time) (int, error) {
@@ -889,6 +1428,9 @@ func (a *CopilotAgent) applyLTMLifecycleRetention(ctx context.Context, kb *memor
 			payload["updated_at"] = now.UnixMilli()
 			payload["archived_at"] = now.UnixMilli()
 			payload["archive_reason"] = decision.Reason
+			if summary := summarizeLongTailArchivedMemory(payload); summary != "" {
+				payload["archived_summary"] = summary
+			}
 			item.Data = payload
 			if _, err := itemsTree.UpdateCurrentItem(ctx, currentKey.Key, item); err != nil {
 				return 0, err
@@ -904,6 +1446,33 @@ func (a *CopilotAgent) applyLTMLifecycleRetention(ctx context.Context, kb *memor
 }
 
 func decideLTMLifecycleCompaction(payload map[string]any, now time.Time) bool {
+	return decideLTMLifecycleCompactionWithStoragePressure(payload, now, 0)
+}
+
+func estimateLTMStoragePressure(storagePath string) float64 {
+	if strings.TrimSpace(storagePath) == "" {
+		return 0
+	}
+	if _, err := os.Stat(storagePath); err != nil {
+		return 0
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(storagePath, &stat); err != nil {
+		return 0
+	}
+	total := uint64(stat.Blocks) * uint64(stat.Bsize)
+	if total == 0 {
+		return 0
+	}
+	available := uint64(stat.Bavail) * uint64(stat.Bsize)
+	used := total - available
+	if used > total {
+		return 1.0
+	}
+	return float64(used) / float64(total)
+}
+
+func decideLTMLifecycleCompactionWithStoragePressure(payload map[string]any, now time.Time, storagePressure float64) bool {
 	if payload == nil || len(payload) == 0 || now.IsZero() {
 		return false
 	}
@@ -925,10 +1494,31 @@ func decideLTMLifecycleCompaction(payload map[string]any, now time.Time) bool {
 	if archivedAt == 0 {
 		return false
 	}
-	return now.UnixMilli()-archivedAt >= int64(7*24*time.Hour/time.Millisecond)
+	if shouldSummarizeArchivedMemory(payload, now) {
+		payload["archived_summary"] = summarizeLongTailArchivedMemory(payload)
+	}
+
+	if storagePressure > 0 {
+		if storagePressure < 0 {
+			storagePressure = 0
+		} else if storagePressure > 1 {
+			storagePressure = 1
+		}
+		if storagePressure >= ltmPressureCleanupThreshold {
+			return now.UnixMilli()-archivedAt >= int64(ltmRepoStalePruneDays*24*time.Hour/time.Millisecond)
+		}
+	}
+	if now.UnixMilli()-archivedAt >= int64(ltmGenericHardPruneDays*24*time.Hour/time.Millisecond) {
+		return true
+	}
+	return now.UnixMilli()-archivedAt >= int64(ltmGenericArchiveDays*24*time.Hour/time.Millisecond)
 }
 
 func (a *CopilotAgent) applyLTMLifecycleCompaction(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], now time.Time) (int, error) {
+	return a.applyLTMLifecycleCompactionWithStoragePressure(ctx, kb, now, 0)
+}
+
+func (a *CopilotAgent) applyLTMLifecycleCompactionWithStoragePressure(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], now time.Time, storagePressure float64) (int, error) {
 	if ctx == nil || kb == nil || a == nil || now.IsZero() {
 		return 0, nil
 	}
@@ -951,7 +1541,7 @@ func (a *CopilotAgent) applyLTMLifecycleCompaction(ctx context.Context, kb *memo
 		if !okPayload {
 			payload = map[string]any{}
 		}
-		if decideLTMLifecycleCompaction(payload, now) {
+		if decideLTMLifecycleCompactionWithStoragePressure(payload, now, storagePressure) || shouldPruneRepoScopedMemoryByAge(payload, now) {
 			pruneKeys = append(pruneKeys, memory.ItemKey{CategoryID: currentKey.Key.CategoryID, ItemID: currentKey.Key.ItemID})
 		}
 		ok, err = itemsTree.Next(ctx)

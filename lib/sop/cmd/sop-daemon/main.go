@@ -1094,6 +1094,8 @@ func main() {
 
 	// Initialize local session registry for rate limiting
 	localRegistry := NewSessionRegistry(SubscriptionPolicy{MaxRequests: *policyMaxRequests, Window: *policyWindow})
+	installDefaultLTMPressureNotifier()
+	sopbackend.SetLTMPressureChatEventHook()
 
 	if cfg.SystemDB != nil {
 		if err := bootstrapSOPKnowledgeBaseIfNeeded(
