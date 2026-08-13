@@ -474,10 +474,14 @@ func persistCarryoverState(stm *ShortTermMemory, state *ai.CarryoverState) {
 }
 
 func resetTopicSwitchProjection(ctx context.Context, session *RunnerSession) {
+	resetTopicSwitchProjectionForSession(ai.GetSessionPayload(ctx), session)
+}
+
+func resetTopicSwitchProjectionForSession(payload *ai.SessionPayload, session *RunnerSession) {
 	if session == nil || session.Memory == nil {
 		return
 	}
-	if payload := ai.GetSessionPayload(ctx); payload != nil && payload.Variables != nil {
+	if payload != nil && payload.Variables != nil {
 		delete(payload.Variables, "RoutingState")
 	}
 	session.Memory.ResetProjectionForTopicSwitch()

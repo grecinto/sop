@@ -2429,40 +2429,31 @@ func participantAskContextAndConfig(ctx context.Context, req AskRequest) (contex
 			req.Session.Variables[ai.ParticipantTraceIDVariableKey] = traceID
 		}
 	}
-	ctx = context.WithValue(ctx, SessionPayloadKey, req.Session)
-	if req.Writer != nil {
-		ctx = context.WithValue(ctx, ai.CtxKeyWriter, req.Writer)
-	}
-	if req.EventStreamer != nil {
-		ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, req.EventStreamer)
-	}
-	if req.ProgressSink != nil {
-		ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, req.ProgressSink)
-	}
-	if req.Executor != nil {
-		ctx = context.WithValue(ctx, ai.CtxKeyExecutor, req.Executor)
-	}
-	if req.ScriptRecorder != nil {
-		ctx = context.WithValue(ctx, ai.CtxKeyScriptRecorder, req.ScriptRecorder)
-	}
-	if req.Database != nil {
-		ctx = context.WithValue(ctx, ai.CtxKeyDatabase, req.Database)
-	}
-	if req.ProviderOverride != nil {
-		if provider := strings.TrimSpace(req.ProviderOverride.Provider); provider != "" {
-			ctx = context.WithValue(ctx, ai.CtxKeyProvider, provider)
-		}
-		if apiKey := strings.TrimSpace(req.ProviderOverride.APIKey); apiKey != "" {
-			ctx = context.WithValue(ctx, ai.CtxKeyAPIKey, apiKey)
-		}
-		if baseURL := strings.TrimSpace(req.ProviderOverride.BaseURL); baseURL != "" {
-			ctx = context.WithValue(ctx, ai.CtxKeyBaseURL, baseURL)
-		}
-	}
 
 	cfg := req.Options
 	if cfg == nil {
 		cfg = ai.NewConfigMap()
+	}
+	if req.Session != nil {
+		cfg.Set("payload", req.Session)
+	}
+	if req.Writer != nil {
+		cfg.Set("writer", req.Writer)
+	}
+	if req.EventStreamer != nil {
+		cfg.Set("event_streamer", req.EventStreamer)
+	}
+	if req.ProgressSink != nil {
+		cfg.Set("progress_sink", req.ProgressSink)
+	}
+	if req.Executor != nil {
+		cfg.Set("executor", req.Executor)
+	}
+	if req.ScriptRecorder != nil {
+		cfg.Set("recorder", req.ScriptRecorder)
+	}
+	if req.Database != nil {
+		cfg.Set("database", req.Database)
 	}
 	if strings.TrimSpace(req.DefaultFormat) != "" {
 		cfg.Set("default_format", strings.TrimSpace(req.DefaultFormat))
@@ -2862,14 +2853,111 @@ func (s *Service) handlePendingUserConfirmationWithRequest(ctx context.Context, 
 
 // performTopicRoutingWithRequest is the explicit-parameter version of performTopicRouting
 func (s *Service) performTopicRoutingWithRequest(ctx context.Context, query string, session *ai.SessionPayload) *topicRoutingResult {
-	ctx = context.WithValue(ctx, "session_payload", session)
-	return s.performTopicRouting(ctx, query)
+	if s == nil {
+		return &topicRoutingResult{assessment: &TopicAssessment{IsNewTopic: true}, isNewTopic: true}
+	}
+	if s.session == nil {
+		s.session = NewRunnerSession()
+	}
+
+	var topicAssessment *TopicAssessment
+	if s.EnableHistoryInjection && s.session.Memory != nil {
+		assessment, err := s.identifyTopic(ctx, query)
+		if err != nil {
+			log.Warn("Topic identification failed, defaulting to new topic", "error", err)
+			topicAssessment = &TopicAssessment{IsNewTopic: true}
+		} else {
+			topicAssessment = assessment
+		}
+		if !topicAssessment.IsNewTopic && topicAssessment.TopicUUID != "" {
+			topicID, err := sop.ParseUUID(topicAssessment.TopicUUID)
+			if err == nil {
+				s.session.Memory.PromoteThread(topicID)
+			}
+		}
+	} else {
+		s.session.Memory = NewShortTermMemory()
+		topicAssessment = &TopicAssessment{IsNewTopic: true}
+	}
+
+	result := &topicRoutingResult{assessment: topicAssessment}
+	if topicAssessment != nil && topicAssessment.IsNewTopic {
+		resetTopicSwitchProjectionForSession(session, s.session)
+		result.isNewTopic = true
+	}
+	return result
 }
 
 // buildPromptInputsWithRequest is the explicit-parameter version of buildPromptInputs
 func (s *Service) buildPromptInputsWithRequest(ctx context.Context, query string, hits []ai.Hit[map[string]any], session *ai.SessionPayload) *promptInputs {
-	ctx = context.WithValue(ctx, "session_payload", session)
-	return s.buildPromptInputs(ctx, query, hits)
+	result := &promptInputs{}
+	result.contextText = s.formatContext(hits)
+	if s.domain != nil {
+		result.systemPrompt, _ = s.domain.Prompt(ctx, "system")
+	}
+	if session != nil && session.UserID != "" && s.systemDB != nil {
+		agentID := session.AgentID
+		if agentID == "" {
+			agentID = ai.AgentIDOmni
+		}
+		kbName := memory.BuildLTMStoreName(agentID, session.UserID)
+		if tx, err := s.systemDB.BeginTransaction(ctx, sop.ForReading); err == nil {
+			if kb, err := s.systemDB.OpenKnowledgeBase(ctx, kbName, tx, s.generator, nil, false, true); err == nil {
+				if batch, err := kb.Search(ctx, []memory.SearchRequest[map[string]any]{{Text: query, Limit: 5}}); err == nil && len(batch) > 0 && len(batch[0]) > 0 {
+					userHits := batch[0]
+					var prefText strings.Builder
+					prefText.WriteString("\n\n[User Preferences & Active Memory Ledger for this query]\n")
+					for _, hit := range userHits {
+						if txt, ok := hit.Payload["thought"].(string); ok {
+							prefText.WriteString(fmt.Sprintf("- %s\n", txt))
+						} else if txt, ok := hit.Payload["text"].(string); ok {
+							prefText.WriteString(fmt.Sprintf("- %s\n", txt))
+						} else {
+							b, _ := json.Marshal(hit.Payload)
+							prefText.WriteString(fmt.Sprintf("- %s\n", string(b)))
+						}
+					}
+					result.systemPrompt = fmt.Sprintf("%s%s", result.systemPrompt, prefText.String())
+				}
+			}
+			tx.Rollback(ctx)
+		}
+	}
+	if s.EnableHistoryInjection && s.session.Memory != nil && len(s.session.Memory.Order) > 0 {
+		var historyBuilder strings.Builder
+		for _, threadID := range s.session.Memory.Order {
+			thread, ok := s.session.Memory.Threads[threadID]
+			if !ok {
+				continue
+			}
+			historyBuilder.WriteString(fmt.Sprintf("\n--- Conversation Thread: %s ---\n", thread.Label))
+			if thread.Category != "" {
+				historyBuilder.WriteString(fmt.Sprintf("Category: %s\n", thread.Category))
+			}
+			if thread.ContextNotes != "" {
+				historyBuilder.WriteString(fmt.Sprintf("Context: %s\n", thread.ContextNotes))
+			}
+			historyBuilder.WriteString(fmt.Sprintf("Root: %s\n", thread.RootPrompt))
+			for _, interaction := range thread.Exchanges {
+				roleName := "User"
+				if interaction.Role == RoleAssistant {
+					roleName = "Copilot"
+				} else if interaction.Role == RoleSystem {
+					roleName = "System"
+				}
+				historyBuilder.WriteString(fmt.Sprintf("%s: %s\n", roleName, interaction.Content))
+			}
+			if thread.Conclusion != "" {
+				historyBuilder.WriteString(fmt.Sprintf("Conclusion: %s\n", thread.Conclusion))
+			}
+			historyBuilder.WriteString("--------------------------------\n")
+		}
+		result.historyText = historyBuilder.String()
+		if result.historyText != "" {
+			result.historyText = "\n\n[Existing Conversation Threads]\n" + result.historyText
+		}
+	}
+	return result
 }
 
 // resolveGeneratorAndCarryoverWithRequest is the explicit-parameter version that accepts ProviderOverride explicitly

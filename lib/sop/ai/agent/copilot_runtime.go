@@ -69,6 +69,15 @@ func (a *CopilotAgent) AskParallel(ctx context.Context, query string, cfg *ai.Co
 	var wg sync.WaitGroup
 
 	defaultWorkingDir := resolveParallelWorkingDir(ctx, query)
+	if cfgWorkingDir, ok := configString(cfg, "working_dir"); ok && strings.TrimSpace(cfgWorkingDir) != "" {
+		defaultWorkingDir = strings.TrimSpace(cfgWorkingDir)
+	}
+	basePayload := extractAskPayloadFromConfig(cfg)
+	if basePayload == nil {
+		if payload, ok := ctx.Value("session_payload").(*ai.SessionPayload); ok && payload != nil {
+			basePayload = payload
+		}
+	}
 
 	for i, subQuery := range subQueries {
 		wg.Add(1)
@@ -78,49 +87,29 @@ func (a *CopilotAgent) AskParallel(ctx context.Context, query string, cfg *ai.Co
 		threadCtx := ctx
 		if i > 0 {
 			threadCtx = context.WithValue(ctx, "parallel_execution_mode", true)
-
-			// Create unique session ID for this parallel thread
-			// Format: {base_session_id}_thread_{thread_number}
-			baseSessionID := ""
-			if payload, ok := ctx.Value("session_payload").(*ai.SessionPayload); ok && payload != nil {
-				baseSessionID = payload.SessionID
-			}
-			if baseSessionID == "" {
-				baseSessionID = "parallel"
-			}
-			threadSessionID := fmt.Sprintf("%s_thread_%d", baseSessionID, i)
-
-			// Create new session payload for this thread
-			threadPayload := &ai.SessionPayload{
-				SessionID: threadSessionID,
-			}
-			if origPayload, ok := ctx.Value("session_payload").(*ai.SessionPayload); ok && origPayload != nil {
-				// Copy other fields from original payload
-				threadPayload.UserID = origPayload.UserID
-				threadPayload.ClientID = origPayload.ClientID
-				threadPayload.ActiveDomain = origPayload.ActiveDomain
-				threadPayload.ActiveRepo = origPayload.ActiveRepo
-			}
-			threadCtx = context.WithValue(threadCtx, "session_payload", threadPayload)
 		}
 
 		normalizedSubQuery, explicitWorkingDir := extractParallelTaskWorkingDir(subQuery)
+		threadCfg := cloneConfigMap(cfg)
+		if i > 0 {
+			threadCfg.Set("payload", deriveParallelThreadPayload(basePayload, i))
+		}
 		if explicitWorkingDir != "" {
-			threadCtx = context.WithValue(threadCtx, ctxKeyWorkingDir, explicitWorkingDir)
+			threadCfg.Set("working_dir", explicitWorkingDir)
 		} else if defaultWorkingDir != "" {
-			threadCtx = context.WithValue(threadCtx, ctxKeyWorkingDir, defaultWorkingDir)
+			threadCfg.Set("working_dir", defaultWorkingDir)
 		}
 
-		go func(idx int, q string, tCtx context.Context) {
+		go func(idx int, q string, tCtx context.Context, askCfg *ai.ConfigMap) {
 			defer wg.Done()
 			sessionID := ""
-			if payload, ok := tCtx.Value("session_payload").(*ai.SessionPayload); ok && payload != nil {
+			if payload := extractAskPayloadFromConfig(askCfg); payload != nil {
 				sessionID = payload.SessionID
 			}
 			log.Info("Parallel thread start", "thread", idx, "query", q, "session_id", sessionID, "working_dir", resolveParallelWorkingDir(tCtx, q))
-			results[idx], errors[idx] = a.Ask(tCtx, q, cfg)
+			results[idx], errors[idx] = a.Ask(tCtx, q, askCfg)
 			log.Info("Parallel thread complete", "thread", idx, "session_id", sessionID, "error", errors[idx] != nil)
-		}(i, normalizedSubQuery, threadCtx)
+		}(i, normalizedSubQuery, threadCtx, threadCfg)
 	}
 
 	// 3. Wait for all threads to complete
@@ -409,6 +398,57 @@ func buildCapabilityResultData(toolCalls []ai.ToolCall, outcomeFacts []string, o
 
 func (a *CopilotAgent) applyAskConfig(ctx context.Context, cfg *ai.ConfigMap) context.Context {
 	if cfg != nil {
+		if val, ok := cfg.Get("payload"); ok {
+			if payload, ok := val.(*ai.SessionPayload); ok && payload != nil {
+				ctx = context.WithValue(ctx, SessionPayloadKey, payload)
+			}
+		}
+		if val, ok := cfg.Get("writer"); ok {
+			if writer, ok := val.(io.Writer); ok && writer != nil {
+				ctx = context.WithValue(ctx, ai.CtxKeyWriter, writer)
+			}
+		}
+		if val, ok := cfg.Get("event_streamer"); ok {
+			if streamer, ok := val.(func(string, any)); ok && streamer != nil {
+				ctx = context.WithValue(ctx, ai.CtxKeyEventStreamer, streamer)
+			}
+		}
+		if val, ok := cfg.Get("progress_sink"); ok {
+			if sink, ok := val.(func(string)); ok && sink != nil {
+				ctx = context.WithValue(ctx, ai.CtxKeyProgressSink, sink)
+			}
+		}
+		if val, ok := cfg.Get("executor"); ok {
+			if executor, ok := val.(ai.ToolExecutor); ok && executor != nil {
+				ctx = context.WithValue(ctx, ai.CtxKeyExecutor, executor)
+			}
+		}
+		if val, ok := cfg.Get("recorder"); ok {
+			if recorder, ok := val.(ai.ScriptRecorder); ok && recorder != nil {
+				ctx = context.WithValue(ctx, ai.CtxKeyScriptRecorder, recorder)
+			}
+		}
+		if val, ok := cfg.Get("database"); ok {
+			if db, ok := val.(*database.Database); ok && db != nil {
+				ctx = context.WithValue(ctx, ai.CtxKeyDatabase, db)
+			}
+		}
+		if providerDetails := extractProviderDetails(cfg); providerDetails != nil {
+			if provider := strings.TrimSpace(providerDetails.Provider); provider != "" {
+				ctx = context.WithValue(ctx, ai.CtxKeyProvider, provider)
+			}
+			if apiKey := strings.TrimSpace(providerDetails.APIKey); apiKey != "" {
+				ctx = context.WithValue(ctx, ai.CtxKeyAPIKey, apiKey)
+			}
+			if baseURL := strings.TrimSpace(providerDetails.BaseURL); baseURL != "" {
+				ctx = context.WithValue(ctx, ai.CtxKeyBaseURL, baseURL)
+			}
+		}
+		if val, ok := cfg.Get("working_dir"); ok {
+			if workingDir, ok := val.(string); ok && strings.TrimSpace(workingDir) != "" {
+				ctx = context.WithValue(ctx, ctxKeyWorkingDir, strings.TrimSpace(workingDir))
+			}
+		}
 		if val, ok := cfg.Get("default_format"); ok {
 			if format, ok := val.(string); ok && strings.TrimSpace(format) != "" {
 				ctx = context.WithValue(ctx, ai.CtxKeyDefaultFormat, strings.TrimSpace(format))
@@ -426,6 +466,54 @@ func (a *CopilotAgent) applyAskConfig(ctx context.Context, cfg *ai.ConfigMap) co
 		}
 	}
 	return ctx
+}
+
+func cloneConfigMap(cfg *ai.ConfigMap) *ai.ConfigMap {
+	if cfg == nil {
+		return ai.NewConfigMap()
+	}
+	cloned := ai.NewConfigMap()
+	for key, value := range cfg.ToMap() {
+		cloned.Set(key, value)
+	}
+	return cloned
+}
+
+func extractAskPayloadFromConfig(cfg *ai.ConfigMap) *ai.SessionPayload {
+	if cfg == nil {
+		return nil
+	}
+	if val, ok := cfg.Get("payload"); ok {
+		if payload, ok := val.(*ai.SessionPayload); ok {
+			return payload
+		}
+	}
+	return nil
+}
+
+func deriveParallelThreadPayload(base *ai.SessionPayload, threadIndex int) *ai.SessionPayload {
+	baseSessionID := "parallel"
+	threadPayload := &ai.SessionPayload{}
+	if base != nil {
+		*threadPayload = *base
+		if base.SessionID != "" {
+			baseSessionID = base.SessionID
+		}
+	}
+	threadPayload.SessionID = fmt.Sprintf("%s_thread_%d", baseSessionID, threadIndex)
+	return threadPayload
+}
+
+func configString(cfg *ai.ConfigMap, key string) (string, bool) {
+	if cfg == nil {
+		return "", false
+	}
+	if val, ok := cfg.Get(key); ok {
+		if text, ok := val.(string); ok {
+			return text, true
+		}
+	}
+	return "", false
 }
 
 // ============================================================================
