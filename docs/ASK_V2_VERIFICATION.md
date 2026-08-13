@@ -1,11 +1,13 @@
-# AskV2 Implementation Verification
+# AskV2 Implementation Verification (Historical Snapshot)
 
 **Date**: 2026-07-30  
-**Status**: ✅ COMPLETE - Compiles Successfully  
+**Status**: Historical verification snapshot for the original feature-flagged AskV2 path  
+
+Historical note: this document describes an earlier `AskV2` / `use_v2_pipeline` rollout shape. That explicit V2 path is no longer present in the current repo layout. For the live implementation, use [docs/ASK_V2_ARCHITECTURE.md](./ASK_V2_ARCHITECTURE.md), [docs/ASK_V2_IMPLEMENTATION_SUMMARY.md](./ASK_V2_IMPLEMENTATION_SUMMARY.md), and [docs/RETRY_ORCHESTRATION_STATE.md](./RETRY_ORCHESTRATION_STATE.md).
 
 ---
 
-## Compilation Status
+## Original Compilation Status
 
 ### ✅ Build Success
 ```bash
@@ -14,13 +16,13 @@ go build -o /dev/null .
 # Result: Success (no errors)
 ```
 
-### ✅ Files Created
+### ✅ Files Created At The Time
 - `classifier_v2.go` (343 lines) - Multi-domain classification
 - `copilot_v2.go` (556 lines) - AskV2 pipeline with Phase Factory
 - `docs/ASK_V2_ARCHITECTURE.md` (700+ lines) - Complete architecture docs
 - `docs/ASK_V2_IMPLEMENTATION_SUMMARY.md` (400+ lines) - Implementation guide
 
-### ✅ Files Modified
+### ✅ Files Modified At The Time
 - `copilot.go` - Added feature flag routing (`Ask()` → `AskV2()` or `askV1()`)
 
 ---
@@ -68,9 +70,9 @@ func (p *Phase) ExecuteTool(toolName, args) {
 
 ---
 
-## Feature Flag Usage
+## Original Feature Flag Usage
 
-### Enable V2 Pipeline
+### Enable V2 Pipeline (Historical Example)
 ```go
 import "github.com/sharedcode/sop/ai"
 
@@ -82,9 +84,9 @@ response, err := agent.Ask(ctx, query, cfg)
 // Routes to askV1() when flag is false/absent
 ```
 
-### Default Behavior
-- **Default**: V1 Pipeline (backward compatible)
-- **Opt-in**: V2 Pipeline via `use_v2_pipeline = true`
+### Original Default Behavior
+- **Default at the time**: V1 Pipeline (backward compatible)
+- **Opt-in at the time**: V2 Pipeline via `use_v2_pipeline = true`
 
 ---
 
@@ -220,7 +222,7 @@ query="Query stores and search spaces for 'auth'"
 
 ## Summary
 
-**AskV2 is complete and ready for testing.**
+**This was the original verification snapshot for the now-superseded AskV2 feature-flag path.**
 
 ### What Was Built
 1. ✅ Enhanced LLM classification (multi-domain + phase)
@@ -230,19 +232,20 @@ query="Query stores and search spaces for 'auth'"
 5. ✅ Phase succession via work queue
 6. ✅ Full architectural pattern compliance
 7. ✅ Comprehensive documentation
-8. ✅ Feature flag for safe migration
+8. ✅ Feature flag for safe migration at the time
 
 ### What Changed
 - **V1 Routing**: Partially fixed (removed some heuristics)
 - **V2 Pipeline**: Created from scratch (clean implementation)
-- **Feature Flag**: Added to `copilot.go` for routing
+- **Feature Flag**: Added to `copilot.go` for routing in the original rollout shape
 - **Architecture**: Documented in 3 files (1100+ lines)
 
-### What's Next
-- Write unit tests
-- Integration testing
-- Performance validation
-- Enable by default
-- Deprecate V1
+### What Happened Later
+- the explicit `AskV2` feature-flag path was superseded by the current Ask/retry/cognition architecture
+- the active implementation moved to the current Ask pipeline, provider-owned ReAct loops, structured clarification state, and cognitive/retry policy surfaces
+- the current verification target is the live package test suite rather than this historical feature-flag rollout snapshot
 
-**Zero heuristics. Pure LLM orchestration. Phase Factory integration. ✅**
+For the current implementation story, see:
+- [docs/ASK_V2_ARCHITECTURE.md](./ASK_V2_ARCHITECTURE.md)
+- [docs/ASK_V2_IMPLEMENTATION_SUMMARY.md](./ASK_V2_IMPLEMENTATION_SUMMARY.md)
+- [docs/RETRY_ORCHESTRATION_STATE.md](./RETRY_ORCHESTRATION_STATE.md)

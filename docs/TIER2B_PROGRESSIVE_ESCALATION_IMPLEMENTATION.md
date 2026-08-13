@@ -1,8 +1,10 @@
 # Tier 2B: Progressive 3-Tier Escalation Implementation
 
-**Status**: 🔨 Core Complete, Tests In Progress  
+**Status**: ✅ Complete and later extended by structured escalation, clarification state, and cognitive recovery handling  
 **Timeline**: Week 3-4 of V2 Ask optimization roadmap  
 **Effort**: ~65 lines of implementation + comprehensive tests
+
+Historical note: this document captures the original Tier 2B milestone. Later work moved the implementation beyond simple progressive retry tiers into the current retry/cognition architecture, including Ask-pipeline influence, structured clarification state, and suggested-phase recovery metadata.
 
 ## Overview
 
@@ -396,16 +398,11 @@ Result: Tier 2A hint overrode default progression, triggered research on first f
 - Unit tests (3 tests passing)
 - Tier 2A hint override integration
 
-### 🔄 In Progress
+### Later Follow-Through
 
-- Integration test updates (several tests need adjustment for 3-retry behavior)
-- containsProgressMessage() updated to use substring matching for flexibility
-
-### 📋 Remaining Work
-
-- Finish updating integration tests to expect 3 retries
-- Production validation and metrics collection
-- Gap #2 (LLM-driven phase transitions) integration
+- Integration expectations were updated in later work.
+- Production validation moved forward into the broader retry/cognition implementation.
+- Phase recovery later evolved beyond this document's original scope through coding-workflow escalation and suggested-phase handling.
 
 ## Code Statistics
 
@@ -429,19 +426,24 @@ Result: Tier 2A hint overrode default progression, triggered research on first f
 
 ## Next Steps
 
-### Immediate
+### Immediate (Original Milestone Follow-Up)
 
 1. ✅ Complete integration test updates
 2. ✅ Run full test suite to verify no regressions
 3. ✅ Document Tier 2B completion
 
-### Tier 2C (Week 5-6) - Adaptive Learning
+### Later Evolution
 
-After Tier 2B validation:
-- Adaptive budget allocation (5-12 iterations based on complexity)
-- Progress detection (error specificity tracking)
-- Error pattern learning with cross-session memory
-- Expected: +10% retry (80% → 90%), -40-60% token waste
+The follow-on work this document anticipated is now represented by the current retry/cognition architecture:
+- explicit retry and cognitive policy surfaces
+- Ask-pipeline clarification pause and stop/escalate behavior
+- LLM-backed blocked-turn cognitive assessment
+- coding-workflow escalation that can honor suggested recovery phases
+
+For the current architecture, see:
+- [docs/RETRY_ORCHESTRATION_STATE.md](./RETRY_ORCHESTRATION_STATE.md)
+- [docs/ASK_V2_ARCHITECTURE.md](./ASK_V2_ARCHITECTURE.md)
+- [docs/ASK_V2_IMPLEMENTATION_SUMMARY.md](./ASK_V2_IMPLEMENTATION_SUMMARY.md)
 
 ## Related Documentation
 
@@ -452,4 +454,4 @@ After Tier 2B validation:
 
 ---
 
-**Tier 2B Impact**: +10% retry efficiency through progressive 3-tier escalation, reduces premature user clarifications by 50%
+**Tier 2B Impact**: +10% retry efficiency at the original milestone, plus the foundation that later evolved into the broader retry/cognition flow.

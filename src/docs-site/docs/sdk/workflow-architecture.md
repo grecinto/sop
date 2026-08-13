@@ -11,6 +11,8 @@ AI Studio provides two complementary workflow approaches that both execute throu
 
 Both approaches implement a **participant pattern** where workflows are passive responders and the Ask pipeline maintains control of execution flow.
 
+They also improve token efficiency. The combination of phases and domains lets the orchestrator narrow the active context, tool surface, and recovery choices for each turn instead of paying prompt cost for the whole platform at once.
+
 ## Supported Coding Workflow Languages
 
 The shared coding workflow stack supports the following languages for reading, analysis, and workflow/script generation:
@@ -83,6 +85,16 @@ The Ask pipeline is "our moat" because it provides:
 ✅ **Observable execution** - Metrics, logs, and tracing at every step
 
 By executing workflows *through* the Ask pipeline rather than *bypassing* it, every workflow step inherits these capabilities.
+
+### Why This Also Saves Tokens
+
+The same architecture improves cost efficiency without collapsing into a rigid workflow engine.
+
+- **Phases reduce prompt bloat** by narrowing what kind of work is appropriate now.
+- **Domains reduce prompt bloat** by narrowing where that work should happen.
+- **Recovery reduces wasted turns** by letting the system pause, move backward, or stop instead of burning tokens in the wrong phase.
+
+This is an important distinction from simpler "plan mode then execute" products. AI Studio does not conserve tokens by splitting behavior into separate simplified experiences. It conserves tokens by keeping one orchestration model and making each turn context-dense.
 
 ## External Agent Integration Pattern
 

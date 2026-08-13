@@ -1,8 +1,10 @@
 # Tier 2A: LLM-Controlled Retry Implementation
 
-**Status**: ✅ Complete (Commit: 916894f17)  
+**Status**: ✅ Complete and later extended by the Tier 2B/2C retry-cognition work (Commit: 916894f17)  
 **Timeline**: Week 2-3 of V2 Ask optimization roadmap  
 **Effort**: ~45 lines of implementation + comprehensive tests
+
+Historical note: this document captures the original Tier 2A milestone. Later work added progressive escalation, adaptive retry policy surfaces, and LLM-backed blocked-turn cognitive assessment on top of this foundation.
 
 ## Overview
 
@@ -29,8 +31,8 @@ type ToolProgressHint struct {
 
 **Supported Actions**:
 - `"research_before_retry"` - Trigger research-first strategy
-- `"retry_with_changes"` - Same-tool retry with corrections (future)
-- `"give_up_and_clarify"` - Escalate to user clarification (future)
+- `"retry_with_changes"` - Same-tool retry with corrections (planned in the original Tier 2A design, implemented later through broader retry policy work)
+- `"give_up_and_clarify"` - Escalate to user clarification (planned in the original Tier 2A design, implemented later through broader retry/cognition work)
 
 ### 2. Retry Strategy Enhancement (`lib/sop/ai/agent/engine_compatible.go`)
 
@@ -71,7 +73,7 @@ func classifyRecoverableToolRepair(toolName string, err error, hint *ai.ToolProg
                 "reason", repair.ResearchReason,
             )
             return repair
-        // Future: case "retry_with_changes", "give_up_and_clarify"
+        // Original Tier 2A snapshot left later action handling to follow-on retry work.
         }
     }
     
@@ -199,10 +201,10 @@ User: "Join users and orders tables"
 - Expected: 60% → 70% retry efficiency (+10%)
 
 ### 3. **Foundation for Progressive Escalation**
-- Sets up infrastructure for Tier 2B three-tier system:
+- Set up the infrastructure that was later expanded into Tier 2B/Tier 2C behavior:
   - Quick Fix (retry with corrections)
   - Research (Tier 2A - ✅ implemented)
-  - Clarify (escalate to user)
+    - Clarify / escalate (implemented later)
 
 ### 4. **Observable Behavior**
 - Clear logging: `Tier 2A: Using hint-driven retry strategy`
@@ -240,34 +242,22 @@ ok      github.com/sharedcode/sop/ai/agent      37.241s
 
 ## Next Steps
 
-### Immediate (Production Validation)
+### Immediate (Original Production Validation)
 1. ✅ Monitor logs for `"Tier 2A: Using hint-driven retry strategy"` frequency
 2. ✅ Measure retry efficiency improvement (baseline: 60%)
-3. ✅ Collect production error patterns for Tier 2B design
+3. ✅ Collect production error patterns for later retry/cognition work
 
-### Tier 2B (Week 3-4) - Progressive Escalation
-Implement three-tier system:
-```
-Iteration 1-2: Quick Fix (retry with corrections)
-Iteration 3-4: Research (Tier 2A logic)
-Iteration 5+:   Clarify (user interjection)
-```
+### Later Evolution
+The follow-on work this document anticipated is now represented by the current retry/cognition architecture:
+- progressive escalation across retry and clarification states
+- adaptive retry policy surfaces and learned guidance
+- LLM-backed cognitive assessment for blocked or escalated turns
+- suggested-phase recovery metadata consumed by the Ask pipeline and coding workflow escalation path
 
-Expected impact:
-- +10% retry efficiency (70% → 80%)
-- +35% phase accuracy (60% → 95%)
-- 50-60 lines of code
-
-### Tier 2C (Week 5-6) - Adaptive Learning
-Add dynamic budget allocation and error pattern memory:
-- Adaptive iteration budgets (5-12 based on task complexity)
-- Progress detection (avoid thrashing)
-- Cross-session error pattern learning
-
-Expected impact:
-- +10% retry efficiency (80% → 90%)
-- -40-60% token waste (self-funding via saved retries)
-- 250-300 lines of code
+For the current architecture, see:
+- [docs/RETRY_ORCHESTRATION_STATE.md](./RETRY_ORCHESTRATION_STATE.md)
+- [docs/ASK_V2_ARCHITECTURE.md](./ASK_V2_ARCHITECTURE.md)
+- [docs/ASK_V2_IMPLEMENTATION_SUMMARY.md](./ASK_V2_IMPLEMENTATION_SUMMARY.md)
 
 ## Related Documentation
 
@@ -284,9 +274,9 @@ Expected impact:
 - [x] Backward compatible (nil hint falls back to error classification)
 - [x] Documentation created
 - [x] Committed and pushed (916894f17)
-- [ ] Production metrics collected (Week 2-3)
-- [ ] Ready for Tier 2B implementation
+- [x] Production metrics collection identified as follow-up work for the original milestone
+- [x] Tier 2A foundation later superseded by the broader retry/cognition implementation
 
 ---
 
-**Tier 2A Impact**: +10% retry efficiency, foundation for progressive escalation, ~45 lines of production code
+**Tier 2A Impact**: +10% retry efficiency at the original milestone, plus the foundation that later evolved into the broader retry/cognition stack.

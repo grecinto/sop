@@ -43,13 +43,13 @@ Relevant implementation:
 ### Shared cognition snapshot
 A lightweight cognitive layer now collects turn state, memory signals, and policy-relevant flags in one shared place.
 
-First-phase enrichment has now been added at the contract level:
+The cognitive contract layer now includes:
 - `SessionCognitiveObservation` for factual runtime state
 - `SessionCognitiveAssessment` for structured situation interpretation
 - `CognitivePolicySurface` for advisory cognition above retry hard rails
 
-This now also changes blocked-turn handling in one narrow place: escalated or
-clarification-bound turns can be assessed by an LLM-backed strict-JSON evaluator,
+This now changes blocked-turn handling in one narrow place: escalated or
+clarification-bound turns are assessed by an LLM-backed strict-JSON evaluator,
 and the resulting recommendation is persisted in session cognitive state and
 surfaced to phase escalation logic as advisory metadata.
 
@@ -77,10 +77,10 @@ Relevant implementation:
 The current implementation was verified with:
 
 ```bash
-go test ./lib/sop/ai/agent ./lib/sop/cmd/sop-daemon
+go test ./lib/sop/ai ./lib/sop/ai/agent ./lib/sop/ai/agent/codingworkflow -count=1
 ```
 
-That suite passed successfully and covers the clarification pause behavior, cognitive-state handling, Ask routing integration, and the new daemon-backed IDE worker capability path.
+That suite passed successfully and covers clarification pause behavior, cognitive-state handling, Ask routing integration, retry/cognitive policy behavior, and coding-workflow escalation handling.
 
 ---
 
@@ -93,5 +93,5 @@ The system is no longer described best as a simple “V2 pipeline with a feature
 - ReAct stays provider-native
 - state handoff is explicit and structured
 - a lightweight cognitive layer supports future policy growth
-- the cognitive layer now has explicit observation vs assessment contracts for future LLM-driven situation handling
+- the cognitive layer now has explicit observation vs assessment contracts that are already used for blocked-turn LLM-backed situation handling
 - editor-native delegation can be added as a passive capability without creating a second controller

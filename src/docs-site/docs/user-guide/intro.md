@@ -26,6 +26,7 @@ AI Studio's architecture is built on a fundamental principle: **the LLM is alway
 - 🎯 **Adaptive execution** - The AI chooses the right approach for your specific situation, not a pre-programmed script
 - 🧠 **Intelligent decision-making** - Task classification, tool selection, and flow control all driven by AI reasoning
 - 🔄 **Natural adjustments** - The AI can pivot, revisit phases, or change strategy based on what it discovers
+- 🛟 **Built-in recovery** - If execution is stuck, the AI can pause for clarification, move backward to the right phase, or stop cleanly instead of forcing a broken plan forward
 - 💬 **Conversational control** - You guide with natural language, not configuration files
 
 This is the core difference between AI Studio and rigid workflow systems—the intelligence orchestrates everything.
@@ -40,6 +41,8 @@ Built on the **LLM as Orchestrator** paradigm, AI Studio breaks down complex tas
 **Proven Templates** 📚 - For common tasks like testing, debugging, or refactoring, AI Studio can follow battle-tested patterns from your team's knowledge base. This ensures consistency and lets you encode your team's best practices.
 
 **Real-Time Adjustments** - Change your mind mid-execution? Just type your modification and the AI adapts its orchestration without starting over. Add error handling, include extra validation, or refine the approach as you go.
+
+**Phase Recovery Without Workflow Splitting** - AI Studio does not need a separate simplified "plan mode" for hard cases. The same workflow can revisit Investigation or Planning, pause for one missing fact, or stop when the environment requires user control.
 
 **Transparent Reasoning** 💬 - AI Studio shows you what it understood from your request before taking action. See the execution plan, significant discoveries during analysis, and LLM thinking—all in collapsible sections so you control the level of detail. This transparency lets you interject or correct before execution begins.
 

@@ -97,9 +97,9 @@ The cognitive layer is a lightweight shared view of the current session. It coll
 - terminal reason and last decision
 - memory signals
 
-The first enrichment phase also defines two new structured surfaces:
+The cognitive layer now exposes two structured surfaces:
 - a factual `SessionCognitiveObservation` assembled by Ask/ReAct/phase machinery
-- an advisory `SessionCognitiveAssessment` that can later be produced by an LLM-backed policy evaluator
+- an advisory `SessionCognitiveAssessment` produced by deterministic fallback policy plus LLM-backed evaluation on blocked or escalated turns
 
 This split is deliberate. The runtime should gather facts deterministically, while
 the policy layer interprets whether the system is progressing, stalling, looping,
@@ -153,7 +153,8 @@ The current implementation uses:
 
 The new contract layer adds an explicit `CognitivePolicySurface` above the retry
 surface. Its responsibility is advisory situation recognition, not loop control.
-This allows a future LLM-driven assessor to classify failures such as:
+The current implementation already supports LLM-backed assessment for blocked or
+escalated turns and uses the same contract to classify failures such as:
 - missing fact
 - wrong tool
 - wrong phase
@@ -168,9 +169,9 @@ and recommend structured next actions such as:
 - move backward a phase
 - exit
 
-The default implementation remains deterministic as a fallback hard rail, and the
-agent layer now also has an LLM-backed assessor for turns that are already blocked
-or escalated.
+The default implementation remains deterministic as a fallback hard rail, while
+the agent layer invokes an LLM-backed assessor only when the turn is already
+blocked or escalated.
 
 This keeps the model as the decision-maker for orchestration while preserving deterministic guardrails where needed.
 
@@ -232,7 +233,7 @@ The Ask pipeline composes this guidance into the effective system prompt, while 
 The current implementation was verified with:
 
 ```bash
-go test ./lib/sop/ai/agent/...
+go test ./lib/sop/ai ./lib/sop/ai/agent ./lib/sop/ai/agent/codingworkflow -count=1
 ```
 
 That suite passed successfully and covered the new clarification, cognitive-state, and phase-routing behaviors.

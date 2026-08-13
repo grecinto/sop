@@ -153,8 +153,8 @@ It currently owns:
 
 The cognitive surface is intentionally adjacent to, but separate from, the retry
 surface. Retry policy continues to provide deterministic hard rails, while the
-cognitive policy surface is the future insertion point for LLM-driven assessment
-of overall session state.
+cognitive policy surface now provides the contract used by both deterministic
+fallback logic and LLM-backed assessment of overall session state.
 
 The first implementation phase now defines:
 
@@ -163,7 +163,7 @@ The first implementation phase now defines:
 - `SessionCognitiveInput` as the policy input contract
 - `DefaultCognitivePolicySurface` as the current deterministic fallback
 
-This allows future LLM-based cognition to answer questions such as:
+This allows the current LLM-backed cognition path to answer questions such as:
 
 - Are we making progress or looping?
 - Is the blocker a missing fact, wrong tool, wrong phase, or terminal failure?
@@ -231,7 +231,7 @@ What exists now:
 
 What still needs architectural tightening:
 
-- make the policy points explicit as interfaces
+- keep refining interface boundaries as more policy points become explicit
 - distinguish recommendation surfaces from enforcement surfaces more formally
 - ensure adaptive machinery does not silently decide what the model should decide
 

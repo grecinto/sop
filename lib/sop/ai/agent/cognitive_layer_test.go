@@ -54,6 +54,76 @@ func TestEvaluateSessionCognitivePolicy_EscalatesRetryWhenTierIsHigh(t *testing.
 	}
 }
 
+func TestEvaluateSessionCognitivePolicy_UsesAssessmentToPauseForClarification(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	payload.CognitiveState = &ai.SessionCognitiveState{LastAssessment: &ai.SessionCognitiveAssessment{
+		FailureClass:        ai.CognitiveFailureClassMissingFact,
+		RetryAction:         ai.CognitiveRetryActionAskClarification,
+		ClarificationNeeded: true,
+		Rationale:           "A missing requirement blocks safe continuation.",
+	}}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	decision := ag.evaluateSessionCognitivePolicy(ctx, "continue the workflow", "phase:planning", 3, "planning", "tool_error", "clarification needed")
+	if decision.Action != "pause_for_clarification" {
+		t.Fatalf("expected pause_for_clarification action, got %q", decision.Action)
+	}
+	if decision.Reason != "A missing requirement blocks safe continuation." {
+		t.Fatalf("expected cognitive rationale to be preserved, got %q", decision.Reason)
+	}
+	if payload.CognitiveState == nil || !payload.CognitiveState.QueuePaused {
+		t.Fatalf("expected queue to be paused, got %#v", payload.CognitiveState)
+	}
+}
+
+func TestEvaluateSessionCognitivePolicy_UsesAssessmentToStopOnTerminalBlock(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	payload.CognitiveState = &ai.SessionCognitiveState{LastAssessment: &ai.SessionCognitiveAssessment{
+		FailureClass:   ai.CognitiveFailureClassTerminalFailure,
+		RetryAction:    ai.CognitiveRetryActionStop,
+		SuggestedPhase: "delivery",
+		Rationale:      "The environment block requires user control before continuing.",
+	}}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	decision := ag.evaluateSessionCognitivePolicy(ctx, "deploy the change", "phase:execution", 4, "execution", "tool_error", "terminal environment block")
+	if decision.Action != "stop" {
+		t.Fatalf("expected stop action, got %q", decision.Action)
+	}
+	if decision.SuggestedPhase != "delivery" {
+		t.Fatalf("expected suggested phase to be preserved, got %q", decision.SuggestedPhase)
+	}
+	if decision.Reason != "The environment block requires user control before continuing." {
+		t.Fatalf("expected cognitive rationale to be preserved, got %q", decision.Reason)
+	}
+}
+
+func TestEvaluateSessionCognitivePolicy_UsesAssessmentToMoveBackwardToSuggestedPhase(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	payload.CognitiveState = &ai.SessionCognitiveState{LastAssessment: &ai.SessionCognitiveAssessment{
+		FailureClass:   ai.CognitiveFailureClassWrongPhase,
+		PhaseAction:    ai.CognitivePhaseActionMoveBackward,
+		RetryAction:    ai.CognitiveRetryActionResearchFirst,
+		SuggestedPhase: "investigation",
+		Rationale:      "Execution is looping because the task needs more investigation first.",
+	}}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	decision := ag.evaluateSessionCognitivePolicy(ctx, "fix failing tests", "phase:execution", 5, "execution", "tool_error", "looping failures")
+	if decision.Action != "escalate_retry" {
+		t.Fatalf("expected escalate_retry action, got %q", decision.Action)
+	}
+	if decision.SuggestedPhase != "investigation" {
+		t.Fatalf("expected suggested phase investigation, got %q", decision.SuggestedPhase)
+	}
+	if decision.Reason != "Execution is looping because the task needs more investigation first." {
+		t.Fatalf("expected cognitive rationale to be preserved, got %q", decision.Reason)
+	}
+}
+
 func TestBuildSessionCognitiveState_UsesMemorySignals(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: NewRunnerSession()}

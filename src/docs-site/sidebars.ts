@@ -30,6 +30,7 @@ const sidebars: SidebarsConfig = {
     'fleet-learning',
     'green-earth-tech',
     'ai-studio-memory-advantage',
+    'token-efficiency-advantage',
     {
       type: 'category',
       label: 'SDK Documentation',

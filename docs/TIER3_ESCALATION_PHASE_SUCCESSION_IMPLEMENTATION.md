@@ -3,7 +3,9 @@
 **Status**: ✅ Complete  
 **Date**: 2026-01-31  
 **Lines Changed**: ~120 lines across 6 files  
-**Test Status**: All existing tests pass, 2 pre-existing test assertion updates pending
+**Test Status**: Package tests pass; the original pending assertion-update note is now resolved
+
+Historical note: this document captures the original Tier 3 milestone. Later work extended this path with structured cognitive assessment and suggested-phase recovery so the Ask pipeline can influence backward recovery without breaking the participant pattern.
 
 ## Overview
 
@@ -247,14 +249,9 @@ ok      github.com/sharedcode/sop/ai/agent/codegen      (cached)
 ok      github.com/sharedcode/sop/ai/agent/planner      (cached)
 ```
 
-### Known Test Failures (Pre-existing)
-❌ 2 Tier 2B integration tests need assertion updates:
-- `TestNativeReActEngine_RoutedAmbiguityEscalatesToClarificationAfterFirstRepairAttempt`
-- `TestNativeReActEngine_NonRoutedAmbiguityEscalatesToClarificationAfterFirstRepairAttempt`
-
-**Issue**: Tests expect old behavior (escalate after 1 failure) but Tier 2B changed threshold to 2 failures.  
-**Fix Needed**: Update assertions: `gen.calls 4→5`, `executor.callCount 3→4`  
-**Impact**: No functional regression - these tests validate old behavior pre-Tier 2B
+### Historical Test Note
+The original milestone left two Tier 2B-era assertions behind while the retry threshold was changing.
+Those package-level expectations have since been updated, and the current package test suite passes.
 
 ## Benefits
 
@@ -312,18 +309,19 @@ User: "Deploy the updated API to production"
 - **Test Regression**: 0 new failures
 - **Compilation**: ✅ Clean build
 
-## Next Steps
+## Follow-Through
 
 1. ✅ **Core Implementation**: Complete
 2. ✅ **Compilation**: Verified
-3. ✅ **Test Validation**: All existing tests pass
-4. ⏳ **Fix 2 integration tests**: Update assertions for new Tier 2B behavior
-5. ⏳ **End-to-End Testing**: Test actual Tier 3→backward phase transitions in live workflows
-6. ⏳ **Documentation**: Update INDEX.md to reference this implementation
+3. ✅ **Test Validation**: Package tests pass
+4. ✅ **Documentation**: Indexed and aligned with the current retry/cognition docs
+5. 📋 **Optional Further Validation**: Exercise Tier 3→backward phase transitions in live workflows when doing end-to-end workflow testing
 
 ## Related Documentation
 
 - [TIER2B_PROGRESSIVE_ESCALATION_IMPLEMENTATION.md](./TIER2B_PROGRESSIVE_ESCALATION_IMPLEMENTATION.md) - Progressive retry system
+- [RETRY_ORCHESTRATION_STATE.md](./RETRY_ORCHESTRATION_STATE.md) - Current retry/cognition architecture
+- [ASK_V2_ARCHITECTURE.md](./ASK_V2_ARCHITECTURE.md) - Current Ask pipeline architecture
 - [ARCHITECTURE_PATTERNS.md](./ARCHITECTURE_PATTERNS.md) - Participant Pattern
 - [PLANNING_FIRST_LLM_ORCHESTRATION.md](./PLANNING_FIRST_LLM_ORCHESTRATION.md) - Phase succession design
 - [WORKFLOWS.md](./WORKFLOWS.md) - Workflow architecture

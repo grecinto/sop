@@ -67,6 +67,8 @@ The **Dynamic Planner** is AI Studio's intelligent task analyzer that:
 
 Every decision—from which phase to enter, which tools to use, when to pivot—is made by the LLM reasoning about your specific context, not by pre-programmed rules.
 
+That includes recovery decisions. If execution is clearly stuck, the system does not have to pretend progress or force a simplified fallback workflow. It can pause for clarification, stop on a terminal block, or move backward to an earlier phase when the current phase is no longer the right place to continue.
+
 **Example:**
 ```
 You: Debug the authentication timeout issue
@@ -114,8 +116,43 @@ AI Studio executes through **structured phases** that organize the work into cle
 - **Adaptive**: Not all tasks need all phases (simple fix might skip Planning)
 - **Resumable**: Can pause and resume between phases
 - **Revisitable**: Can return to earlier phase if new information emerges
+- **Self-correcting**: Can move backward when the task is in the wrong phase or local execution is looping
+- **Clarification-aware**: Can pause and wait for one missing fact instead of guessing
+- **Stop-capable**: Can stop cleanly when the environment or task state requires user control
 - **Tool-aware**: Each phase has access to relevant coding tools
 - **Integration-aware**: A phase can use local tools, remote tools, or a mix when external systems describe their capabilities in metadata
+
+### Recovery Without a Separate "Plan Mode"
+
+One common weakness in phase-based systems is that they can become brittle once execution starts. If the AI enters the wrong phase, hits repeated failures, or discovers that one missing fact blocks safe progress, a simpler product often falls back to a separate "plan first, then execute" mode.
+
+AI Studio does not need that split.
+
+Instead, the same workflow can recover inside the existing phase architecture:
+
+- if a task needs more evidence, the workflow can move back to Investigation
+- if the design needs revision, it can move back to Planning
+- if one missing fact blocks progress, it can pause for clarification
+- if the situation is truly blocked, it can stop cleanly instead of continuing blindly
+
+This keeps one coherent workflow model for both normal execution and worst-case recovery.
+
+### Why This Is Also More Token-Efficient
+
+The same phase system helps conserve tokens.
+
+Instead of exposing every possible tool and instruction on every turn, AI Studio can keep each step focused on the current phase and the active domain. That means the model spends more of its prompt budget on the work that matters right now and less on irrelevant capabilities.
+
+It also saves tokens indirectly by avoiding bad turns:
+
+- fewer wrong-tool attempts
+- fewer blind retries in the wrong phase
+- less wasted continuation when clarification is needed
+- less need to restart in a separate simplified workflow
+
+So the benefit is not just better organization. It is better output per token spent.
+
+For the customer-facing comparison and positioning, see [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage).
 
 ### Knowledge Base Templates (Optional)
 
@@ -366,6 +403,8 @@ AI Studio: [Classifies as Testing task]
 ```
 
 This approach keeps workflows focused and prevents confusion between different objectives.
+
+It also means you do not need to switch into a separate simplified workflow just because the task got messy. The same workflow can recover, revisit earlier phases, and continue once it has the right information.
 
 ## Visual Indicators
 

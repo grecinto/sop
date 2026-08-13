@@ -27,6 +27,7 @@ The SDK provides:
 - **Parallel Ask Flow**: Split complex requests into parallel sub-asks, gather the results at the end, and keep each execution (proess) isolated so one failing task does not bring down the others or the daemon
 - **KB-driven workflows**: The agent can follow knowledge-base-defined workflows(data driven!) for tasks such as "fix failing tests", orchestrating the steps from failure capture to analysis and verification
 - **Dynamic Planner & Workflow Architecture**: AI-generated workflows with participant pattern execution through the Ask pipeline, ensuring 100% pipeline reuse with provider continuity and memory integration
+- **Phase + domain token efficiency**: Structured phases and domain-aware tool surfaces keep the active prompt focused, reduce irrelevant tool exposure, and cut wasted retry turns without falling back to rigid routing
 - **Multi-language coding workflows**: Shared readers/analyzers and workflow/script generators support Go, Python, JavaScript/TypeScript, Java, Rust, C#, HTML/CSS, React, and Angular
 - **Ask as Participant**: Reuse SOP Ask under another controller through typed in-process or HTTP participant contracts, including reverse-role integrations with Continue-like agents
 - **Workflow Undo System**: Semantic, domain-aware undo with multi-dimensional indexing, natural language search, and time-ranked results. Each workflow runs as an atomic transaction that can be intelligently searched and restored
@@ -43,11 +44,28 @@ Key advantages include:
 - **Lower infrastructure overhead**: because the SDK can be hosted in end-user servers, it reduces reliance on always-on cloud vector services
 - **Better fit for AI workloads**: retrieval and memory operate as first-class platform capabilities, not as an afterthought
 
+## Why Phase + Domain Conserves Tokens
+
+The workflow architecture is not only about control flow. It is also a token-efficiency strategy.
+
+By combining **phase awareness** with **domain awareness**, AI Studio avoids the common failure mode where every turn has to expose every tool, every instruction set, and every recovery path at once.
+
+This reduces token waste in three ways:
+
+- **Smaller active tool surface**: Investigation, Planning, Execution, Review, and Delivery each foreground only the kinds of actions that make sense in that moment.
+- **Smaller active domain surface**: The model reasons inside the relevant domain slice instead of paying prompt budget for unrelated platform capabilities.
+- **Fewer wasted retries**: When the workflow can pause for clarification, move backward to the right phase, or stop cleanly, it avoids spending tokens on blind continuation.
+
+The result is better per-token usefulness, not just a smaller prompt. AI Studio keeps the LLM in control while still making each turn denser and more relevant.
+
+For a customer-facing explanation of why this matters competitively, read [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage).
+
 ## Next Steps
 
 - Read the [SDK History](./history) page for the SOP origin, licensing, and source-availability model
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
+- Read [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage)
 - Understand the [Workflow Architecture](./workflow-architecture) - Dynamic Planner, KB workflows, and the Ask pipeline execution model
 - Read about the [Continue Facade Architecture](./continue-facade-architecture) - how Continue can either act as an editor-side companion under SOP control or call SOP Ask as a participant in reverse-role integrations
 - Follow the [Ask Participant Mode](./ask-participant-mode) guide for concrete embedding, HTTP, and NDJSON streaming examples

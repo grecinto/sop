@@ -1,8 +1,10 @@
 # V2 Ask ReAct Loop Gap Analysis
 
 **Created**: 2026-07-31  
-**Status**: Analysis Complete  
+**Status**: Historical analysis; key Tier 1, Tier 2A, Tier 2B, and core Tier 2C directions were later implemented and refined  
 **Purpose**: Identify gaps between V2 Ask architecture and optimal LLM-driven ReAct orchestration
+
+Historical note: this document captures the original gap analysis and staged roadmap. The current codebase has since implemented the core retry/cognition path, clarification pause behavior, progressive escalation, and policy-surface framing. For current architecture, prefer [docs/ASK_V2_ARCHITECTURE.md](./ASK_V2_ARCHITECTURE.md), [docs/ASK_V2_IMPLEMENTATION_SUMMARY.md](./ASK_V2_IMPLEMENTATION_SUMMARY.md), and [docs/RETRY_ORCHESTRATION_STATE.md](./RETRY_ORCHESTRATION_STATE.md).
 
 ---
 
@@ -1241,16 +1243,16 @@ Resume Instructions: %s`,
 
 ---
 
-### Tier 2: HIGH Impact, MEDIUM Effort 🎯 NEXT
+### Tier 2: HIGH Impact, MEDIUM Effort ✅ LATER IMPLEMENTED AND REFINED
 
-#### **Tier 2A: LLM-Controlled Retry** (Week 2-3)
+#### **Tier 2A: LLM-Controlled Retry** (Original Week 2-3 plan)
 
 3. **Gap 3 Phase 1: LLM-Driven Retry Strategy**
    - Effort: 20-30 lines (use existing ToolProgressHint from Gap #5)
    - Impact: LLM chooses retry strategy via hints
    - Cost: Minimal (reuses hint infrastructure)
    - Expected improvement: +20% retry efficiency (50% → 70%)
-   - **Implement first**: Foundation for adaptive retry
+    - **Historical outcome**: Implemented first as the foundation for later retry/cognition work
 
 **Implementation**:
 ```go
@@ -1264,14 +1266,14 @@ if err != nil && isRecoverableError(err) {
 }
 ```
 
-#### **Tier 2B: Progressive Escalation** (Week 3-4)
+#### **Tier 2B: Progressive Escalation** (Original Week 3-4 plan)
 
 4. **Gap 3 Phase 2: 3-Tier Progressive Escalation**
    - Effort: 40-50 lines (escalation logic)
    - Impact: Graduated response based on failure count
    - Cost: Minimal
    - Expected improvement: +30% retry efficiency (70% → 80%)
-   - **Implement second**: Builds on 2A
+    - **Historical outcome**: Later implemented in evolved form with clarification/escalation state and Ask-pipeline influence
 
 **Implementation**:
 ```go
@@ -1288,14 +1290,14 @@ func determineRetryTier(errorType string, failureCount int, hint *ai.ToolProgres
    - Impact: LLM controls phase progression
    - Cost: Minimal
    - Expected improvement: +35% phase transition accuracy (60% → 95%)
-   - **Implement in parallel with 2B**
+    - **Historical outcome**: Later implemented in evolved form through coding-workflow phase escalation and suggested-phase recovery
 
-**Deliverable (Tier 2A+2B)**: LLM controls retry strategy + phase transitions  
+**Deliverable (Tier 2A+2B)**: Original target was LLM-controlled retry strategy plus phase transitions; the current implementation reaches this through explicit retry/cognitive policy contracts and Ask-controlled escalation handling.  
 **Total Impact**: +30% retry efficiency, +35% phase accuracy
 
 ---
 
-### Tier 2C: Adaptive & Learning 🚀 ADVANCED (Week 5-6)
+### Tier 2C: Adaptive & Learning 🚀 ADVANCED (Original Week 5-6 plan)
 
 Status update: the first-pass Tier 2C machinery is now implemented, but the architectural framing has been corrected. The target is not “heuristics first, then expose guidance.” The target is **LAO-first**, with explicit policy surfaces where either LLM guidance or heuristic/rules enforcement can be used intentionally.
 
@@ -1344,7 +1346,7 @@ nextStrategy := learner.RecommendStrategy(err, context)  // Use learned strategy
 
 ---
 
-### Tier 3: MEDIUM Impact, MEDIUM Effort 📋 FUTURE
+### Tier 3: MEDIUM Impact, MEDIUM Effort 📋 LATER / PARTIAL FOLLOW-ON
 
 7. **Gap 4: Tool Result Access Patterns**
    - Effort: Update result summary format
@@ -1402,7 +1404,7 @@ func formatToolProgressHintForLLM(hint *ai.ToolProgressHint) string {
 
 ---
 
-### 🎯 Phase 2A: LLM-Controlled Retry (Week 2-3) - NEXT
+### 🎯 Phase 2A: LLM-Controlled Retry (Original Week 2-3 roadmap item; later implemented)
 
 **Focus**: Let LLM choose retry strategy via ToolProgressHint
 
@@ -1429,14 +1431,14 @@ if err != nil && isRecoverableError(err) {
 **Files to modify**:
 - `lib/sop/ai/agent/engine_compatible.go` (20-30 lines)
 
-**Expected outcomes**:
+**Original expected outcomes**:
 - LLM-driven retry strategy selection
 - Retry efficiency: 50% → 70%
 - Fewer wasted same-tool retries
 
 ---
 
-### 🎯 Phase 2B: Progressive Escalation + Phase Control (Week 3-4)
+### 🎯 Phase 2B: Progressive Escalation + Phase Control (Original Week 3-4 roadmap item; later implemented in evolved form)
 
 **Focus**: 3-tier progressive escalation + LLM-controlled phase transitions
 
@@ -1484,14 +1486,14 @@ func isPhaseCompleteV2(captureStatus string) bool {
 - `lib/sop/ai/agent/engine_compatible.go` (40-50 lines for escalation)
 - `lib/sop/ai/agent/copilot_v2.go` (10 lines for phase control)
 
-**Expected outcomes**:
+**Original expected outcomes**:
 - Graduated retry response (Tier 1 → 2 → 3)
 - Retry efficiency: 70% → 80%
 - Phase transition accuracy: 60% → 95%
 
 ---
 
-### 🚀 Phase 2C: Adaptive Budget & Learning (Week 5-6)
+### 🚀 Phase 2C: Adaptive Budget & Learning (Original Week 5-6 roadmap item; partially implemented and reframed)
 
 **Focus**: Adaptive budgets, progress detection, error pattern learning
 
@@ -1594,7 +1596,7 @@ func (l *RetryPatternLearner) RecordOutcome(err error, strategy RetryStrategy, s
 - In-memory learning (session-scoped)
 - Optional: Persist to SQLite for cross-session learning
 
-**Expected outcomes**:
+**Original expected outcomes**:
 - Adaptive budgets: 5-12 iterations based on complexity
 - Automatic progress detection and budget extension
 - Cross-session error pattern learning
@@ -1603,7 +1605,7 @@ func (l *RetryPatternLearner) RecordOutcome(err error, strategy RetryStrategy, s
 
 ---
 
-### Phase 3: Advanced Features (Future)
+### Phase 3: Advanced Features (Later follow-on)
 
 - **Gap 4**: File-backed result access patterns
 - **Gap 6**: Mid-phase clarification
@@ -1636,7 +1638,7 @@ func (l *RetryPatternLearner) RecordOutcome(err error, strategy RetryStrategy, s
 
 ---
 
-**After Tier 2A** (LLM-Controlled Retry):
+**After Tier 2A** (Original target state for LLM-Controlled Retry):
 - Tool selection accuracy: 90% (maintained)
 - Retry efficiency: **60% → 70%** (+10% from LLM strategy choice)
 - Phase transition accuracy: 60% (unchanged)
@@ -1644,11 +1646,11 @@ func (l *RetryPatternLearner) RecordOutcome(err error, strategy RetryStrategy, s
 - Cost: Minimal (uses existing hint infrastructure)
 - **ROI**: Excellent (near-zero cost, 10% efficiency gain)
 
-**Status**: Planned (Week 2-3)
+**Status**: Later implemented, then extended by the broader retry/cognition architecture
 
 ---
 
-**After Tier 2B** (Progressive Escalation + Phase Control):
+**After Tier 2B** (Original target state for Progressive Escalation + Phase Control):
 - Tool selection accuracy: 90% (maintained)
 - Retry efficiency: **70% → 80%** (+10% from graduated response)
 - Phase transition accuracy: **60% → 95%** (+35% from LLM control)
@@ -1656,11 +1658,11 @@ func (l *RetryPatternLearner) RecordOutcome(err error, strategy RetryStrategy, s
 - Cost: Minimal
 - **ROI**: Excellent (low cost, major phase accuracy improvement)
 
-**Status**: Planned (Week 3-4)
+**Status**: Later implemented in evolved form via structured escalation, clarification state, and phase-recovery metadata
 
 ---
 
-**After Tier 2C** (Adaptive Budget & Learning):
+**After Tier 2C** (Original target state for Adaptive Budget & Learning):
 - Tool selection accuracy: **90% → 95%** (+5% from learned patterns)
 - Retry efficiency: **80% → 90%** (+10% from learning + progress detection)
 - Phase transition accuracy: 95% (maintained)
@@ -1670,7 +1672,7 @@ func (l *RetryPatternLearner) RecordOutcome(err error, strategy RetryStrategy, s
 - Cost: Minimal (actually reduces long-term token waste)
 - **ROI**: Outstanding (pays for itself in token savings)
 
-**Status**: Planned (Week 5-6)
+**Status**: First-pass machinery later implemented, then architecturally reframed around LAO-first policy surfaces
 
 ---
 
@@ -1780,9 +1782,9 @@ The current V2 implementation has **7 gaps** preventing optimal LLM orchestratio
 
 ---
 
-### 🎯 Tier 2A: LLM-Controlled Retry (Week 2-3)
+### 🎯 Tier 2A: LLM-Controlled Retry (Historical roadmap item)
 
-**Next Implementation**:
+**Historical next implementation**:
 3. ❌ → 🔄 **Error recovery hardcoded** → LLM chooses via ToolProgressHint
 
 **Expected Impact**:
@@ -1792,9 +1794,9 @@ The current V2 implementation has **7 gaps** preventing optimal LLM orchestratio
 
 ---
 
-### 🎯 Tier 2B: Progressive Escalation (Week 3-4)
+### 🎯 Tier 2B: Progressive Escalation (Historical roadmap item)
 
-**Following Implementation**:
+**Historical follow-on implementation**:
 3. (Enhanced) **3-Tier Progressive Retry** → Quick Fix → Research → Clarify
 4. ❌ → 🔄 **Phase transitions automatic** → LLM controls via capture status
 
@@ -1806,9 +1808,9 @@ The current V2 implementation has **7 gaps** preventing optimal LLM orchestratio
 
 ---
 
-### 🚀 Tier 2C: Adaptive & Learning (Week 5-6)
+### 🚀 Tier 2C: Adaptive & Learning (Historical roadmap item)
 
-**Advanced Implementation**:
+**Historical advanced implementation target**:
 3. (Complete) **Adaptive Budget & Learning** → System learns optimal strategies
 
 **Components**:
@@ -1880,21 +1882,11 @@ Session 2:
 
 ---
 
-### Implementation Recommendation
+### Historical Recommendation
 
-**Start Now** (Week 2-3):
-- Implement Tier 2A (LLM-controlled retry via ToolProgressHint)
-- Validate in production for 1 week
-- Measure: retry efficiency, strategy selection accuracy
+This was the original rollout recommendation. The relevant follow-on work has since landed in evolved form. For the current state and implementation-aligned guidance, use:
+- [docs/ASK_V2_ARCHITECTURE.md](./ASK_V2_ARCHITECTURE.md)
+- [docs/ASK_V2_IMPLEMENTATION_SUMMARY.md](./ASK_V2_IMPLEMENTATION_SUMMARY.md)
+- [docs/RETRY_ORCHESTRATION_STATE.md](./RETRY_ORCHESTRATION_STATE.md)
 
-**Then** (Week 3-4):
-- Add Tier 2B (progressive escalation + phase control)
-- Validate in production for 1 week
-- Measure: tier distribution, phase accuracy
-
-**Finally** (Week 5-6):
-- Add Tier 2C (adaptive budget + learning)
-- Requires: production error patterns from 2A+2B
-- Measure: learning effectiveness, token savings
-
-The fixes align perfectly with the ReAct pattern: **LLM reasons → LLM acts → LLM sees feedback → LLM adjusts → System learns → System adapts**.
+The durable principle still holds: **LLM reasons → LLM acts → LLM sees feedback → LLM adjusts**, while explicit policy surfaces advise or constrain narrow decisions without replacing Ask as controller.
