@@ -704,10 +704,14 @@ func TestPlanningPhaseCapabilityMaturesAcrossIterations(t *testing.T) {
 	}
 }
 
-type stubWorkQueue struct{ enqueued int }
+type stubWorkQueue struct {
+	enqueued int
+	lastItem any
+}
 
 func (q *stubWorkQueue) Enqueue(item any) error {
 	q.enqueued++
+	q.lastItem = item
 	return nil
 }
 
@@ -761,6 +765,43 @@ func TestPhaseCapabilityOnAfter_PersistsClarificationAndSkipsTransition(t *testi
 	}
 	if request["missing_fact"] != "output shape" || request["source"] != "execute_script" {
 		t.Fatalf("unexpected clarification request payload in artifact: %#v", request)
+	}
+}
+
+func TestPhaseCapabilityHandleEscalation_UsesCognitiveSuggestedPhase(t *testing.T) {
+	queue := &stubWorkQueue{}
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory(), GetSessionQueue: func() WorkQueueAccessor { return queue }}
+	cap := NewExecutionPhaseCapability(infra)
+
+	err := cap.handleEscalation(context.Background(), "fix the parser bug", map[string]any{
+		"tier":            3,
+		"failed_tool":     "execution_apply_patch",
+		"failure_count":   2,
+		"error_type":      "repeated test regressions",
+		"phase_action":    "move_backward",
+		"suggested_phase": "investigation",
+		"explanation":     "Repeated execution failures suggest the task needs renewed investigation before further implementation.",
+	})
+	if err != nil {
+		t.Fatalf("handleEscalation failed: %v", err)
+	}
+	if queue.enqueued != 1 {
+		t.Fatalf("expected one queued recovery item, got %d", queue.enqueued)
+	}
+	raw, err := json.Marshal(queue.lastItem)
+	if err != nil {
+		t.Fatalf("failed to marshal queued item: %v", err)
+	}
+	var item map[string]any
+	if err := json.Unmarshal(raw, &item); err != nil {
+		t.Fatalf("failed to decode queued item: %v", err)
+	}
+	if item["Actor"] != "phase:investigation" {
+		t.Fatalf("expected suggested phase to override default backward phase, got %#v", item)
+	}
+	ctxMap, _ := item["Context"].(map[string]any)
+	if ctxMap["explanation"] != "Repeated execution failures suggest the task needs renewed investigation before further implementation." {
+		t.Fatalf("expected cognitive explanation to be preserved, got %#v", ctxMap)
 	}
 }
 

@@ -43,8 +43,22 @@ Relevant implementation:
 ### Shared cognition snapshot
 A lightweight cognitive layer now collects turn state, memory signals, and policy-relevant flags in one shared place.
 
+First-phase enrichment has now been added at the contract level:
+- `SessionCognitiveObservation` for factual runtime state
+- `SessionCognitiveAssessment` for structured situation interpretation
+- `CognitivePolicySurface` for advisory cognition above retry hard rails
+
+This now also changes blocked-turn handling in one narrow place: escalated or
+clarification-bound turns can be assessed by an LLM-backed strict-JSON evaluator,
+and the resulting recommendation is persisted in session cognitive state and
+surfaced to phase escalation logic as advisory metadata.
+
 Relevant implementation:
 - [lib/sop/ai/agent/cognitive_layer.go](lib/sop/ai/agent/cognitive_layer.go)
+- [lib/sop/ai/interfaces.go](lib/sop/ai/interfaces.go)
+- [lib/sop/ai/retry.go](lib/sop/ai/retry.go)
+- [lib/sop/ai/agent/ask_pipeline.go](lib/sop/ai/agent/ask_pipeline.go)
+- [lib/sop/ai/agent/codingworkflow/phase_capabilities.go](lib/sop/ai/agent/codingworkflow/phase_capabilities.go)
 
 ### Continue delegation capability
 Ask now also has the foundations for a Continue-backed capability participant. The correct target shape is LAO-preserving: Continue requests still go through the normal Ask pipeline, and Continue participates as a passive coding executor that exposes one delegated tool embodying Continue's own local Ask/tool loop.
@@ -79,4 +93,5 @@ The system is no longer described best as a simple “V2 pipeline with a feature
 - ReAct stays provider-native
 - state handoff is explicit and structured
 - a lightweight cognitive layer supports future policy growth
+- the cognitive layer now has explicit observation vs assessment contracts for future LLM-driven situation handling
 - editor-native delegation can be added as a passive capability without creating a second controller

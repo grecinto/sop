@@ -1427,6 +1427,96 @@ type SessionCognitiveState struct {
 	LastDecision         string
 	LastDecisionReason   string
 	MemorySignals        []string
+	RecentToolNames      []string
+	RecentProgressDeltas []float64
+	RecentFailureClasses []string
+	LoopRisk             string
+	LastAssessment       *SessionCognitiveAssessment
+}
+
+type CognitiveFailureClass string
+
+const (
+	CognitiveFailureClassNone              CognitiveFailureClass = "none"
+	CognitiveFailureClassImplementationBug CognitiveFailureClass = "implementation_bug"
+	CognitiveFailureClassMissingFact       CognitiveFailureClass = "missing_fact"
+	CognitiveFailureClassWrongTool         CognitiveFailureClass = "wrong_tool"
+	CognitiveFailureClassWrongPhase        CognitiveFailureClass = "wrong_phase"
+	CognitiveFailureClassRequirementsShift CognitiveFailureClass = "requirements_shift"
+	CognitiveFailureClassEnvironmentBlock  CognitiveFailureClass = "environment_block"
+	CognitiveFailureClassTerminalFailure   CognitiveFailureClass = "terminal_failure"
+	CognitiveFailureClassLooping           CognitiveFailureClass = "looping"
+)
+
+type CognitiveProgressState string
+
+const (
+	CognitiveProgressStateUnknown     CognitiveProgressState = "unknown"
+	CognitiveProgressStateProgressing CognitiveProgressState = "progressing"
+	CognitiveProgressStateStalled     CognitiveProgressState = "stalled"
+	CognitiveProgressStateRegressing  CognitiveProgressState = "regressing"
+	CognitiveProgressStateLooping     CognitiveProgressState = "looping"
+	CognitiveProgressStateComplete    CognitiveProgressState = "complete"
+)
+
+type CognitivePhaseAction string
+
+const (
+	CognitivePhaseActionStayCurrent  CognitivePhaseAction = "stay_current"
+	CognitivePhaseActionMoveForward  CognitivePhaseAction = "move_forward"
+	CognitivePhaseActionMoveBackward CognitivePhaseAction = "move_backward"
+	CognitivePhaseActionExit         CognitivePhaseAction = "exit"
+)
+
+type CognitiveRetryAction string
+
+const (
+	CognitiveRetryActionContinue         CognitiveRetryAction = "continue"
+	CognitiveRetryActionRetrySameTool    CognitiveRetryAction = "retry_same_tool"
+	CognitiveRetryActionRetryDifferent   CognitiveRetryAction = "retry_different_tool"
+	CognitiveRetryActionResearchFirst    CognitiveRetryAction = "research_first"
+	CognitiveRetryActionAskClarification CognitiveRetryAction = "ask_clarification"
+	CognitiveRetryActionStop             CognitiveRetryAction = "stop"
+)
+
+// SessionCognitiveObservation is the factual runtime view assembled by the
+// Ask/ReAct/phase machinery before any advisory policy interprets what to do next.
+// It is intentionally descriptive rather than prescriptive.
+type SessionCognitiveObservation struct {
+	CurrentTurn          int               `json:"current_turn,omitempty"`
+	CurrentActor         string            `json:"current_actor,omitempty"`
+	CurrentPhase         string            `json:"current_phase,omitempty"`
+	CurrentQuery         string            `json:"current_query,omitempty"`
+	PendingClarification bool              `json:"pending_clarification,omitempty"`
+	ClarificationStatus  string            `json:"clarification_status,omitempty"`
+	QueuePaused          bool              `json:"queue_paused,omitempty"`
+	RetryTier            int               `json:"retry_tier,omitempty"`
+	EscalationTier       int               `json:"escalation_tier,omitempty"`
+	LastToolOutcome      string            `json:"last_tool_outcome,omitempty"`
+	TerminalReason       string            `json:"terminal_reason,omitempty"`
+	RecentToolNames      []string          `json:"recent_tool_names,omitempty"`
+	RecentOutcomes       []string          `json:"recent_outcomes,omitempty"`
+	RecentProgressDeltas []float64         `json:"recent_progress_deltas,omitempty"`
+	RecentFailureClasses []string          `json:"recent_failure_classes,omitempty"`
+	MemorySignals        []string          `json:"memory_signals,omitempty"`
+	LatestHint           *ToolProgressHint `json:"latest_hint,omitempty"`
+	LatestRetryGuidance  *RetryGuidance    `json:"latest_retry_guidance,omitempty"`
+	Metadata             map[string]any    `json:"metadata,omitempty"`
+}
+
+// SessionCognitiveAssessment is the interpreted view of a session situation.
+// It is designed for structured LLM or hybrid policy output and can be persisted
+// back into SessionCognitiveState without turning the policy layer into a controller.
+type SessionCognitiveAssessment struct {
+	FailureClass        CognitiveFailureClass  `json:"failure_class,omitempty"`
+	ProgressState       CognitiveProgressState `json:"progress_state,omitempty"`
+	PhaseAction         CognitivePhaseAction   `json:"phase_action,omitempty"`
+	RetryAction         CognitiveRetryAction   `json:"retry_action,omitempty"`
+	SuggestedPhase      string                 `json:"suggested_phase,omitempty"`
+	ClarificationNeeded bool                   `json:"clarification_needed,omitempty"`
+	LoopRisk            string                 `json:"loop_risk,omitempty"`
+	Confidence          string                 `json:"confidence,omitempty"`
+	Rationale           string                 `json:"rationale,omitempty"`
 }
 
 // ClarificationState tracks a pending assistant clarification before the target ask resumes.

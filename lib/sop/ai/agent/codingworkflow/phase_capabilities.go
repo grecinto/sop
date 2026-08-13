@@ -1351,12 +1351,30 @@ func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, es
 	failedTool, _ := escalation["failed_tool"].(string)
 	failureCount, _ := escalation["failure_count"].(int)
 	errorType, _ := escalation["error_type"].(string)
+	suggestedPhase, _ := escalation["suggested_phase"].(string)
+	phaseAction, _ := escalation["phase_action"].(string)
+	assessmentExplanation, _ := escalation["explanation"].(string)
 
 	log.Info("Phase succession: Handling Tier 3 escalation",
 		"current_phase", c.phaseID,
 		"failed_tool", failedTool,
 		"failure_count", failureCount,
-		"error_type", errorType)
+		"error_type", errorType,
+		"suggested_phase", suggestedPhase,
+		"phase_action", phaseAction)
+
+	if strings.EqualFold(strings.TrimSpace(phaseAction), "stay_current") || strings.EqualFold(strings.TrimSpace(suggestedPhase), c.phaseID) {
+		log.Info("Phase succession: Cognitive assessment recommended staying in the current phase",
+			"phase", c.phaseID,
+			"reason", assessmentExplanation)
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(phaseAction), "exit") {
+		log.Info("Phase succession: Cognitive assessment recommended exit",
+			"phase", c.phaseID,
+			"reason", assessmentExplanation)
+		return nil
+	}
 
 	// Determine backward phase transition based on current phase
 	var targetPhase string
@@ -1386,6 +1404,15 @@ func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, es
 		log.Warn("Phase succession: No backward transition available for phase",
 			"phase", c.phaseID)
 		return nil
+	}
+
+	if suggested := strings.TrimSpace(strings.ToLower(suggestedPhase)); suggested != "" && suggested != c.phaseID {
+		targetPhase = suggested
+		if strings.TrimSpace(assessmentExplanation) != "" {
+			transitionReason = strings.TrimSpace(assessmentExplanation)
+		} else {
+			transitionReason = fmt.Sprintf("Cognitive assessment recommended moving from %s to %s after repeated failures", c.phaseID, suggested)
+		}
 	}
 
 	// Get queue accessor

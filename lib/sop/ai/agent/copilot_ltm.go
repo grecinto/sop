@@ -18,6 +18,8 @@ import (
 const (
 	ltmRepoStaleArchiveDays          = 90
 	ltmRepoStalePruneDays            = 180
+	ltmArchivedCompactionDays        = 30
+	ltmPressureCompactionDays        = 14
 	ltmGenericArchiveDays            = 120
 	ltmGenericHardPruneDays          = 730
 	ltmArchivedSummaryMinAgeDays     = 180
@@ -1505,13 +1507,13 @@ func decideLTMLifecycleCompactionWithStoragePressure(payload map[string]any, now
 			storagePressure = 1
 		}
 		if storagePressure >= ltmPressureCleanupThreshold {
-			return now.UnixMilli()-archivedAt >= int64(ltmRepoStalePruneDays*24*time.Hour/time.Millisecond)
+			return now.UnixMilli()-archivedAt >= int64(ltmPressureCompactionDays*24*time.Hour/time.Millisecond)
 		}
 	}
 	if now.UnixMilli()-archivedAt >= int64(ltmGenericHardPruneDays*24*time.Hour/time.Millisecond) {
 		return true
 	}
-	return now.UnixMilli()-archivedAt >= int64(ltmGenericArchiveDays*24*time.Hour/time.Millisecond)
+	return now.UnixMilli()-archivedAt >= int64(ltmArchivedCompactionDays*24*time.Hour/time.Millisecond)
 }
 
 func (a *CopilotAgent) applyLTMLifecycleCompaction(ctx context.Context, kb *memory.KnowledgeBase[map[string]any], now time.Time) (int, error) {

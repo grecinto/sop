@@ -138,6 +138,20 @@ type RetryPolicySurface interface {
 	RepairEnforcementPolicy
 }
 
+// CognitivePolicySurface evaluates the overall execution situation using the
+// factual session observation assembled by the runtime. It is intentionally
+// advisory: Ask remains the controller and deterministic retry/approval rails
+// still enforce hard safety limits.
+type CognitivePolicySurface interface {
+	ShouldEvaluateSessionCognition(input SessionCognitiveInput) bool
+	EvaluateSessionCognition(input SessionCognitiveInput) SessionCognitiveAssessment
+}
+
+type SessionCognitiveInput struct {
+	Observation SessionCognitiveObservation
+	Metadata    map[string]any
+}
+
 // Candidate for interface capture toward LAO: if advisory model guidance and
 // heuristic hard-rail enforcement keep evolving independently, split this input
 // into narrower advisory vs enforcement contracts instead of growing one mixed surface.
@@ -189,6 +203,8 @@ type DefaultRetryPolicySurface struct {
 	coordinator *RetryCoordinator
 }
 
+type DefaultCognitivePolicySurface struct{}
+
 func NewDefaultRetryPolicySurface() RetryPolicySurface {
 	return NewDefaultRetryPolicySurfaceWithCoordinator(nil)
 }
@@ -198,6 +214,123 @@ func NewDefaultRetryPolicySurfaceWithCoordinator(coordinator *RetryCoordinator) 
 		coordinator = NewRetryCoordinator()
 	}
 	return &DefaultRetryPolicySurface{coordinator: coordinator}
+}
+
+func NewDefaultCognitivePolicySurface() CognitivePolicySurface {
+	return &DefaultCognitivePolicySurface{}
+}
+
+func (p *DefaultCognitivePolicySurface) ShouldEvaluateSessionCognition(input SessionCognitiveInput) bool {
+	obs := input.Observation
+	if obs.PendingClarification || strings.TrimSpace(obs.TerminalReason) != "" {
+		return true
+	}
+	if obs.EscalationTier > 0 || obs.RetryTier > 0 {
+		return true
+	}
+	if len(obs.RecentFailureClasses) >= 2 || len(obs.RecentToolNames) >= 3 {
+		return true
+	}
+	if obs.LatestHint != nil && (strings.TrimSpace(obs.LatestHint.SuggestedAction) != "" || obs.LatestHint.CompletionDelta <= 0) {
+		return true
+	}
+	return false
+}
+
+func (p *DefaultCognitivePolicySurface) EvaluateSessionCognition(input SessionCognitiveInput) SessionCognitiveAssessment {
+	obs := input.Observation
+	assessment := SessionCognitiveAssessment{
+		FailureClass:  CognitiveFailureClassNone,
+		ProgressState: CognitiveProgressStateUnknown,
+		PhaseAction:   CognitivePhaseActionStayCurrent,
+		RetryAction:   CognitiveRetryActionContinue,
+		LoopRisk:      "low",
+		Confidence:    "medium",
+		Rationale:     "no cognitive intervention required",
+	}
+
+	if obs.PendingClarification {
+		assessment.FailureClass = CognitiveFailureClassMissingFact
+		assessment.ProgressState = CognitiveProgressStateStalled
+		assessment.RetryAction = CognitiveRetryActionAskClarification
+		assessment.ClarificationNeeded = true
+		assessment.LoopRisk = "medium"
+		assessment.Rationale = "pending clarification should pause further autonomous progress"
+		return assessment
+	}
+
+	if strings.TrimSpace(obs.TerminalReason) != "" {
+		assessment.FailureClass = CognitiveFailureClassTerminalFailure
+		assessment.ProgressState = CognitiveProgressStateRegressing
+		assessment.PhaseAction = CognitivePhaseActionExit
+		assessment.RetryAction = CognitiveRetryActionStop
+		assessment.LoopRisk = "low"
+		assessment.Confidence = "high"
+		assessment.Rationale = "terminal outcome detected; stop and return control to the user"
+		return assessment
+	}
+
+	if obs.EscalationTier >= 3 || obs.RetryTier >= 3 {
+		assessment.FailureClass = CognitiveFailureClassLooping
+		assessment.ProgressState = CognitiveProgressStateLooping
+		assessment.PhaseAction = CognitivePhaseActionMoveBackward
+		assessment.RetryAction = CognitiveRetryActionAskClarification
+		assessment.ClarificationNeeded = true
+		assessment.LoopRisk = "high"
+		assessment.Confidence = "high"
+		assessment.Rationale = "retry/escalation tier reached a looping threshold and should trigger reassessment"
+		return assessment
+	}
+
+	if obs.LatestHint != nil {
+		switch strings.TrimSpace(obs.LatestHint.SuggestedAction) {
+		case "research_before_retry":
+			assessment.FailureClass = CognitiveFailureClassMissingFact
+			assessment.ProgressState = CognitiveProgressStateStalled
+			assessment.RetryAction = CognitiveRetryActionResearchFirst
+			assessment.LoopRisk = "medium"
+			assessment.Rationale = "latest tool hint recommends gathering more evidence before retrying"
+			return assessment
+		case "give_up_and_clarify":
+			assessment.FailureClass = CognitiveFailureClassMissingFact
+			assessment.ProgressState = CognitiveProgressStateStalled
+			assessment.RetryAction = CognitiveRetryActionAskClarification
+			assessment.ClarificationNeeded = true
+			assessment.LoopRisk = "medium"
+			assessment.Rationale = "latest tool hint indicates a missing fact is blocking further progress"
+			return assessment
+		case "retry_with_changes":
+			assessment.FailureClass = CognitiveFailureClassWrongTool
+			assessment.ProgressState = CognitiveProgressStateStalled
+			assessment.RetryAction = CognitiveRetryActionRetryDifferent
+			assessment.LoopRisk = "medium"
+			assessment.Rationale = "latest tool hint indicates the next attempt should change the approach"
+			return assessment
+		}
+		if obs.LatestHint.CompletionDelta >= 1.0 {
+			assessment.ProgressState = CognitiveProgressStateComplete
+			assessment.RetryAction = CognitiveRetryActionStop
+			assessment.Confidence = "high"
+			assessment.Rationale = "tool progress reached completion"
+			return assessment
+		}
+		if obs.LatestHint.CompletionDelta > 0 {
+			assessment.ProgressState = CognitiveProgressStateProgressing
+			assessment.Rationale = "recent tool result indicates measurable progress"
+			return assessment
+		}
+	}
+
+	if len(obs.RecentFailureClasses) >= 2 {
+		assessment.FailureClass = CognitiveFailureClassLooping
+		assessment.ProgressState = CognitiveProgressStateLooping
+		assessment.RetryAction = CognitiveRetryActionRetryDifferent
+		assessment.LoopRisk = "medium"
+		assessment.Rationale = "repeated failures detected without enough evidence of progress"
+		return assessment
+	}
+
+	return assessment
 }
 
 func (p *DefaultRetryPolicySurface) IsRecoverable(err error) bool {

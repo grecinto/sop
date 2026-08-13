@@ -2422,6 +2422,7 @@ func participantAskContextAndConfig(ctx context.Context, req AskRequest) (contex
 		if req.Session.Variables == nil {
 			req.Session.Variables = make(map[string]any)
 		}
+		ctx = context.WithValue(ctx, SessionPayloadKey, req.Session)
 		if requestID := strings.TrimSpace(req.RequestID); requestID != "" {
 			req.Session.Variables[ai.ParticipantRequestIDVariableKey] = requestID
 		}

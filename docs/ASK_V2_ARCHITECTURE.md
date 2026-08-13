@@ -97,8 +97,25 @@ The cognitive layer is a lightweight shared view of the current session. It coll
 - terminal reason and last decision
 - memory signals
 
+The first enrichment phase also defines two new structured surfaces:
+- a factual `SessionCognitiveObservation` assembled by Ask/ReAct/phase machinery
+- an advisory `SessionCognitiveAssessment` that can later be produced by an LLM-backed policy evaluator
+
+This split is deliberate. The runtime should gather facts deterministically, while
+the policy layer interprets whether the system is progressing, stalling, looping,
+needs clarification, or should move backward/forward in phase. Ask remains the
+only controller.
+
 Relevant implementation:
 - lib/sop/ai/agent/cognitive_layer.go
+- lib/sop/ai/interfaces.go
+- lib/sop/ai/retry.go
+
+Current status:
+- blocked or escalated Ask turns now assemble a structured cognitive observation
+- the agent evaluates that observation with a strict-JSON LLM prompt when the turn is clearly in trouble
+- the resulting assessment is persisted into session cognitive state and attached to escalation metadata
+- phase escalation can honor a suggested recovery phase instead of always using the default backward map
 
 ### Phase capabilities
 Phase capabilities remain passive participants. They expose tools and instructions, and they can raise clarification or phase-transition state, but they do not own the outer orchestration loop.
@@ -133,6 +150,27 @@ The retry layer is not a hidden orchestrator. It exposes explicit policy points 
 The current implementation uses:
 - hard rails for safety and bounded execution
 - structured guidance for provider-owned loops and model-visible recovery context
+
+The new contract layer adds an explicit `CognitivePolicySurface` above the retry
+surface. Its responsibility is advisory situation recognition, not loop control.
+This allows a future LLM-driven assessor to classify failures such as:
+- missing fact
+- wrong tool
+- wrong phase
+- terminal failure
+- looping without progress
+
+and recommend structured next actions such as:
+- retry same tool
+- retry with a different tool
+- research first
+- ask clarification
+- move backward a phase
+- exit
+
+The default implementation remains deterministic as a fallback hard rail, and the
+agent layer now also has an LLM-backed assessor for turns that are already blocked
+or escalated.
 
 This keeps the model as the decision-maker for orchestration while preserving deterministic guardrails where needed.
 

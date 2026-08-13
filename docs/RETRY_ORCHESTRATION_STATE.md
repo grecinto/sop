@@ -140,6 +140,7 @@ The current code shape now exposes explicit policy interfaces:
 - `RetryBudgetPolicy`
 - `RepairEnforcementPolicy`
 - `RetryPolicySurface`
+- `CognitivePolicySurface`
 
 It currently owns:
 
@@ -149,6 +150,32 @@ It currently owns:
 - structured `RetryGuidance` payload construction
 - scope-aware recommendation logic
 - error fingerprint normalization
+
+The cognitive surface is intentionally adjacent to, but separate from, the retry
+surface. Retry policy continues to provide deterministic hard rails, while the
+cognitive policy surface is the future insertion point for LLM-driven assessment
+of overall session state.
+
+The first implementation phase now defines:
+
+- `SessionCognitiveObservation` as the factual runtime snapshot
+- `SessionCognitiveAssessment` as the interpreted outcome
+- `SessionCognitiveInput` as the policy input contract
+- `DefaultCognitivePolicySurface` as the current deterministic fallback
+
+This allows future LLM-based cognition to answer questions such as:
+
+- Are we making progress or looping?
+- Is the blocker a missing fact, wrong tool, wrong phase, or terminal failure?
+- Should the next action be retry, research, clarification, backward phase shift, or stop?
+
+Current implementation status:
+
+- The fallback `DefaultCognitivePolicySurface` remains deterministic.
+- The agent layer now assembles `SessionCognitiveObservation` objects for blocked or escalated turns.
+- Those observations can be evaluated by a strict-JSON LLM prompt.
+- The returned assessment is stored in session cognitive state and attached to escalation metadata.
+- Phase escalation can use `suggested_phase` from that assessment as an override to the default backward recovery map.
 
 ## Provider-Owned Loop State
 

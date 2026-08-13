@@ -131,3 +131,45 @@ func TestBuildRepairDirectiveFromRetryGuidance_UsesStructuredStrategy(t *testing
 		t.Fatalf("expected research-first directive from structured guidance, got %q", directive)
 	}
 }
+
+func TestDefaultCognitivePolicySurface_ShouldEvaluateOnRetryOrClarificationSignals(t *testing.T) {
+	policy := NewDefaultCognitivePolicySurface()
+	if !policy.ShouldEvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{PendingClarification: true}}) {
+		t.Fatal("expected pending clarification to trigger cognitive evaluation")
+	}
+	if !policy.ShouldEvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{RetryTier: 1}}) {
+		t.Fatal("expected retry tier to trigger cognitive evaluation")
+	}
+	if policy.ShouldEvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{CurrentPhase: "planning"}}) {
+		t.Fatal("expected quiet state not to trigger cognitive evaluation")
+	}
+}
+
+func TestDefaultCognitivePolicySurface_EvaluateSessionCognition(t *testing.T) {
+	policy := NewDefaultCognitivePolicySurface()
+	assessment := policy.EvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{
+		CurrentPhase:         "execution",
+		EscalationTier:       3,
+		RecentFailureClasses: []string{"implementation_bug", "implementation_bug"},
+	}})
+	if assessment.FailureClass != CognitiveFailureClassLooping {
+		t.Fatalf("expected looping failure class, got %#v", assessment)
+	}
+	if assessment.PhaseAction != CognitivePhaseActionMoveBackward {
+		t.Fatalf("expected backward phase action, got %#v", assessment)
+	}
+	if assessment.RetryAction != CognitiveRetryActionAskClarification {
+		t.Fatalf("expected ask clarification retry action, got %#v", assessment)
+	}
+
+	assessment = policy.EvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{
+		CurrentPhase: "investigation",
+		LatestHint:   &ToolProgressHint{SuggestedAction: "research_before_retry"},
+	}})
+	if assessment.RetryAction != CognitiveRetryActionResearchFirst {
+		t.Fatalf("expected research-first retry action, got %#v", assessment)
+	}
+	if assessment.FailureClass != CognitiveFailureClassMissingFact {
+		t.Fatalf("expected missing-fact failure class, got %#v", assessment)
+	}
+}

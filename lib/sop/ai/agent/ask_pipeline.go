@@ -235,6 +235,7 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	if err != nil {
 		return "", err
 	}
+	a.refreshSessionCognitiveAssessment(ctx, query, taskContext.CapabilityHint, finalText, toolCalls, escalationState, clarificationRequest, gen)
 	finalText = appendAskCompletionSummary(ctx, finalText, toolCalls, outcomeFacts)
 	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
 		if thread := a.service.session.Memory.GetCurrentThread(); thread != nil {
