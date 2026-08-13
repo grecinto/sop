@@ -149,7 +149,7 @@ Populate ` + "`automation_families`" + ` ONLY when the request clearly involves:
 
 Leave empty for general database or knowledge operations.
 
-### 7. Recommend Research Phase
+### 7. Recommend Deeper Investigation
 Set ` + "`research_recommended: true`" + ` when the request involves:
 
 **Advanced/Complex Operations:**
@@ -175,7 +175,7 @@ Set ` + "`research_recommended: true`" + ` when the request involves:
 - Single-step operations with clear intent
 - User provides explicit command to execute
 
-Research phase consults KB for project conventions, best practices, and systematic approaches before execution.
+Despite the field name, this does not create a separate lifecycle phase. It flags that the assistant should do deeper investigation using KB, LTM, or playbooks before execution.
 `
 		automationExamples = `
 **Query: "run git status and show me the changes"**

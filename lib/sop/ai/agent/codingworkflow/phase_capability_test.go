@@ -245,6 +245,24 @@ func TestPlanningPhaseBuildContext_UsesDesignSessionApprovalFlow(t *testing.T) {
 	}
 }
 
+func TestPhaseContext_KeepsNoCodeBrainstormingInsideCurrentPhase(t *testing.T) {
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
+	cap := NewExecutionPhaseCapability(infra)
+
+	result := cap.BuildContext("No code changes — brainstorm the API shape and tradeoffs", capabilities.RoutingState{})
+	for _, check := range []string{"no code changes", "brainstorm", "stay in the current execution phase", "do not leave the phase", "earlier or later phase", "explicit user agreement"} {
+		if !strings.Contains(strings.ToLower(result), strings.ToLower(check)) {
+			t.Fatalf("expected execution context to include %q in no-code brainstorming guidance, got %q", check, result)
+		}
+	}
+}
+
+func TestNoCodeBrainstormingRequest_IsRecognized(t *testing.T) {
+	if !isNoCodeBrainstormingRequest("no code changes, let's brainstorm a better API shape") {
+		t.Fatal("expected no-code brainstorming request to be recognized")
+	}
+}
+
 func TestExecutionPhaseBuildInstructions_PromptsUserVisiblePlanAndApproval(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewExecutionPhaseCapability(infra)

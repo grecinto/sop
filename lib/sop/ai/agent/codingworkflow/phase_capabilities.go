@@ -278,6 +278,9 @@ func phaseKeywords(phaseID string) []string {
 
 func (c *PhaseCapability) BuildContext(query string, state capabilities.RoutingState) string {
 	contextText := c.buildPhaseSpecificContext(query, state)
+	if isNoCodeBrainstormingRequest(query) {
+		contextText = buildNoCodeBrainstormingContext(c.phaseID, c.name) + "\n\n" + contextText
+	}
 	artifact, err := c.loadExistingArtifact()
 	if err != nil {
 		return contextText
@@ -286,6 +289,64 @@ func (c *PhaseCapability) BuildContext(query string, state capabilities.RoutingS
 		return contextText + "\n\n" + clarificationText
 	}
 	return contextText
+}
+
+func buildNoCodeBrainstormingContext(phaseID, phaseName string) string {
+	_ = phaseName
+	return fmt.Sprintf(`NO-CODE BRAINSTORMING MODE
+- Treat this as a design/planning discussion, not an implementation request.
+- The user has indicated no code changes are wanted or the task is explicitly discussion-only.
+- Stay in the current %s phase and participate in brainstorming, trade-off analysis, option comparison, and design refinement when the outcome is additive to the current phase and plan.
+- If the discussion is not additive to the current phase or current plan, discuss whether the user wants to move to an earlier or later phase; only shift phases when the context clearly warrants it or there is explicit user agreement.
+- Do not leave the phase for implementation work unless the user explicitly asks to move back to planning/design or an earlier phase, or the situation clearly requires a meaningful phase transition.
+- Keep the conversation focused on concepts, constraints, interfaces, trade-offs, risks, and the recommended direction.
+- If the user reaches a consensus or asks to continue from planning/design, capture that as the next step and resume from the appropriate earlier phase only with explicit agreement.`, phaseID)
+}
+
+func isNoCodeBrainstormingRequest(query string) bool {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	if lower == "" {
+		return false
+	}
+	noCodeSignals := []string{
+		"no code changes",
+		"no-code changes",
+		"no implementation",
+		"without code changes",
+		"no patch",
+		"no edits",
+		"no code",
+		"without changing code",
+		"no implementation changes",
+	}
+	designSignals := []string{
+		"brainstorm",
+		"design",
+		"architecture",
+		"tradeoff",
+		"trade-off",
+		"approach",
+		"proposal",
+		"options",
+		"plan",
+		"planning",
+		"discuss",
+		"review the design",
+		"talk through",
+	}
+	for _, signal := range noCodeSignals {
+		if strings.Contains(lower, signal) {
+			for _, designSignal := range designSignals {
+				if strings.Contains(lower, designSignal) {
+					return true
+				}
+			}
+			if strings.Contains(lower, "brainstorm") || strings.Contains(lower, "design") || strings.Contains(lower, "architecture") || strings.Contains(lower, "options") || strings.Contains(lower, "tradeoff") || strings.Contains(lower, "plan") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *PhaseCapability) buildPhaseSpecificContext(query string, state capabilities.RoutingState) string {
