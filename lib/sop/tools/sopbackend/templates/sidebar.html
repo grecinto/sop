@@ -101,17 +101,23 @@
                     </ul>
                 </div>
             </div>
-        </div>
 
-        <div style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 12px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                <h3 style="margin: 0; font-size: 1.05em; cursor: pointer; display: flex; align-items: center;" onmouseover="this.style.color='var(--success-bg)'" onmouseout="this.style.color=''">
-                    Federation
-                </h3>
+            <!-- Federation Section -->
+            <div id="federation-section" title="Federation: review and share model catalog metadata with copilots." style="margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                    <h3 style="margin: 0; font-size: 1.1em; cursor: pointer; display: flex; align-items: center;" onclick="toggleSidebarList('federation-submenu', 'federation-caret')" onmouseover="this.style.color='var(--success-bg)'" onmouseout="this.style.color=''">
+                        <span id="federation-caret" style="display: inline-block; width: 14px; text-align: center; margin-right: 5px; font-size: 0.8em; transition: transform 0.2s;">▶</span>
+                        Federation
+                    </h3>
+                </div>
+                <div id="federation-submenu" style="display: none;">
+                    <ul id="federation-list" style="margin-bottom: 0;">
+                        <li id="federation-model-catalog-item" class="truncate-text" title="Model Catalog" onclick="showFederationModelCatalog(this)">
+                            Model Catalog
+                        </li>
+                    </ul>
+                </div>
             </div>
-            <button onclick="window.location.href='/app/federation/model-catalog'" style="width: 100%; text-align: left; background: transparent; color: var(--text-color); border: 1px solid var(--border-color); padding: 7px 8px; border-radius: 4px; cursor: pointer;">
-                Model Catalog
-            </button>
         </div>
 
         <script>
@@ -127,19 +133,100 @@
                 }
             }
 
-            function showFederationModelCatalog() {
-                const modal = document.getElementById('federation-modal');
-                if (modal) {
-                    modal.style.display = 'flex';
-                    loadFederationModelCatalog();
+            async function showFederationModelCatalog(element) {
+                const previousActive = document.querySelector('#sidebar li.active');
+                document.querySelectorAll('#sidebar li').forEach(el => el.classList.remove('active'));
+                if (element) {
+                    element.classList.add('active');
                 }
-            }
 
-            function closeFederationModelCatalogModal() {
-                const modal = document.getElementById('federation-modal');
-                if (modal) {
-                    modal.style.display = 'none';
+                if (typeof closeDetail === 'function') {
+                    const canContinue = await closeDetail();
+                    if (!canContinue) {
+                        document.querySelectorAll('#sidebar li').forEach(el => el.classList.remove('active'));
+                        if (previousActive) {
+                            previousActive.classList.add('active');
+                        }
+                        return;
+                    }
                 }
+
+                currentStore = null;
+                if (typeof window !== 'undefined') {
+                    window.currentStore = null;
+                    window.currentStoreInfo = null;
+                }
+
+                const detailPanel = document.getElementById('detail-panel');
+                if (detailPanel) {
+                    detailPanel.style.display = 'none';
+                }
+
+                const toolbar = document.getElementById('toolbar');
+                if (toolbar) toolbar.style.display = 'none';
+                const pagination = document.getElementById('pagination');
+                if (pagination) pagination.style.display = 'none';
+                const paginationTop = document.getElementById('pagination-top');
+                if (paginationTop) paginationTop.style.display = 'none';
+
+                [
+                    'btn-code-store',
+                    'btn-edit-store',
+                    'btn-edit-kb',
+                    'btn-export-kb',
+                    'btn-import-kb',
+                    'btn-add-kb-category',
+                    'btn-add-space-item',
+                    'btn-delete-kb',
+                    'btn-view-store',
+                    'btn-edit-cel',
+                    'btn-delete-store'
+                ].forEach(id => {
+                    const btn = document.getElementById(id);
+                    if (btn) btn.style.display = 'none';
+                });
+
+                const titleEl = document.getElementById('current-store-title');
+                if (titleEl) {
+                    titleEl.textContent = 'Model Catalog';
+                }
+
+                const grid = document.getElementById('data-grid');
+                if (!grid) {
+                    return;
+                }
+
+                grid.innerHTML = `
+                    <div style="width: 100%; max-width: none; margin: 0; box-sizing: border-box; padding-right: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
+                            <div>
+                                <div id="federation-summary" style="margin-top: 6px; color: var(--text-muted); font-size: 0.95em;"></div>
+                            </div>
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button id="federation-refresh-btn" onclick="refreshFederationCatalog()" style="padding: 8px 12px; border: 1px solid var(--border-color); background: var(--active-bg); color: white; border-radius: 4px; cursor: pointer;">Fetch latest prices</button>
+                                <button id="federation-share-btn" onclick="shareFederationCatalog()" style="padding: 8px 12px; border: 1px solid var(--border-color); background: var(--sidebar-bg); color: var(--text-color); border-radius: 4px; cursor: pointer;">Federate out to copilots</button>
+                            </div>
+                        </div>
+                        <div id="federation-status" style="margin-bottom: 10px; color: var(--text-muted);">Loading...</div>
+                        <div style="overflow-x: auto; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 6px;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 0.95em; margin-top: 0;">
+                                <thead>
+                                    <tr style="background: var(--sidebar-bg);">
+                                        <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Provider</th>
+                                        <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Model</th>
+                                        <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Catalog Value</th>
+                                        <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Input / 1M</th>
+                                        <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Output / 1M</th>
+                                        <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Last Known</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="federation-model-catalog-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+
+                await loadFederationModelCatalog();
             }
 
             async function loadFederationModelCatalog() {
@@ -155,11 +242,7 @@
                 refreshBtn.disabled = true;
                 shareBtn.disabled = true;
                 try {
-                    const response = await fetch('/api/federation/model-catalog', {headers: {'Accept': 'application/json'}});
-                    const payload = await response.json();
-                    if (!response.ok) {
-                        throw new Error(payload.error || 'Failed to load model catalog');
-                    }
+                    const payload = await runtimeDataCall('/api/federation/model-catalog', 'GET', null, {'Accept': 'application/json'});
                     renderFederationModelCatalog(payload);
                 } catch (err) {
                     statusEl.textContent = err.message || 'Unable to load model catalog';
@@ -209,11 +292,7 @@
                 shareBtn.disabled = true;
                 statusEl.textContent = 'Refreshing pricing metadata...';
                 try {
-                    const response = await fetch('/api/federation/model-catalog/refresh', {method: 'POST', headers: {'Accept': 'application/json'}});
-                    const payload = await response.json();
-                    if (!response.ok) {
-                        throw new Error(payload.error || 'Failed to refresh model catalog');
-                    }
+                    const payload = await runtimeDataCall('/api/federation/model-catalog/refresh', 'POST', null, {'Accept': 'application/json'});
                     renderFederationModelCatalog(payload);
                 } catch (err) {
                     statusEl.textContent = err.message || 'Unable to refresh catalog';
@@ -234,61 +313,15 @@
                 shareBtn.disabled = true;
                 statusEl.textContent = 'Sharing catalog to copilots...';
                 try {
-                    const response = await fetch('/api/federation/model-catalog/share', {method: 'POST', headers: {'Accept': 'application/json'}});
-                    const payload = await response.json();
-                    if (!response.ok) {
-                        throw new Error(payload.error || 'Failed to share model catalog');
-                    }
+                    const payload = await runtimeDataCall('/api/federation/model-catalog/share', 'POST', null, {'Accept': 'application/json'});
                     renderFederationModelCatalog(payload);
                     statusEl.textContent = 'Catalog shared to copilots.';
                 } catch (err) {
                     statusEl.textContent = err.message || 'Unable to share catalog';
                 }
             }
-
-            document.addEventListener('DOMContentLoaded', function() {
-                const modal = document.getElementById('federation-modal');
-                if (modal) {
-                    modal.addEventListener('click', function(event) {
-                        if (event.target === modal) {
-                            closeFederationModelCatalogModal();
-                        }
-                    });
-                }
-            });
         </script>
 
-    </div>
-    
-    <!-- Sidebar Footer -->
-    <div id="federation-modal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: 9999; align-items: center; justify-content: center; padding: 16px;">
-        <div style="width: min(980px, 100%); max-height: 90vh; overflow: auto; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); padding: 20px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <h3 style="margin: 0;">Federation / Model Catalog</h3>
-                <button onclick="closeFederationModelCatalogModal()" style="background: transparent; border: none; color: var(--text-color); cursor: pointer; font-size: 1.2em;">×</button>
-            </div>
-            <div id="federation-summary" style="margin-bottom: 10px; color: var(--text-muted); font-size: 0.95em;"></div>
-            <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
-                <button id="federation-refresh-btn" onclick="refreshFederationCatalog()" style="padding: 7px 12px; border: 1px solid var(--border-color); background: var(--active-bg); color: white; border-radius: 4px; cursor: pointer;">Fetch latest prices</button>
-                <button id="federation-share-btn" onclick="shareFederationCatalog()" style="padding: 7px 12px; border: 1px solid var(--border-color); background: var(--sidebar-bg); color: var(--text-color); border-radius: 4px; cursor: pointer;">Federate out to copilots</button>
-            </div>
-            <div id="federation-status" style="margin-bottom: 8px; color: var(--text-muted);">Loading…</div>
-            <div style="overflow-x: auto;">
-                <table style="width: 100%; border-collapse: collapse; font-size: 0.95em;">
-                    <thead>
-                        <tr style="background: var(--sidebar-bg);">
-                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Provider</th>
-                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Model</th>
-                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Catalog Value</th>
-                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Input / 1M</th>
-                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Output / 1M</th>
-                            <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border-color);">Last Known</th>
-                        </tr>
-                    </thead>
-                    <tbody id="federation-model-catalog-body"></tbody>
-                </table>
-            </div>
-        </div>
     </div>
     <div style="padding-top: 10px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; align-items: center; gap: 10px;">
         <button id="env-manager-btn" onclick="showEnvironmentsManager()" title="Manage Environments" style="display: none; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px;">

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{if .PageTitle}}{{.PageTitle}}{{else}}Federation / Model Catalog{{end}}</title>
+    <title>{{if .PageTitle}}{{.PageTitle}}{{else}}Model Catalog{{end}}</title>
     {{template "styles" .}}
 </head>
 <body>
@@ -12,7 +12,7 @@
 <div id="main" style="padding: 20px; overflow: auto;">
     <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
         <div>
-            <h1 style="margin: 0;">Federation / Model Catalog</h1>
+            <h1 style="margin: 0;">Model Catalog</h1>
             <div id="federation-summary" style="margin-top: 6px; color: var(--text-muted); font-size: 0.95em;"></div>
         </div>
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
@@ -58,8 +58,8 @@ async function loadFederationModelCatalog() {
     refreshBtn.disabled = true;
     shareBtn.disabled = true;
     try {
-        const response = await fetch('/api/federation/model-catalog', {headers: {'Accept': 'application/json'}});
-        const payload = await response.json();
+        const response = await authFetch('/api/federation/model-catalog', {headers: {'Accept': 'application/json'}});
+        const payload = await parseFederationJSONResponse(response, 'Failed to load model catalog');
         if (!response.ok) {
             throw new Error(payload.error || 'Failed to load model catalog');
         }
@@ -111,8 +111,8 @@ async function refreshFederationCatalog() {
     shareBtn.disabled = true;
     statusEl.textContent = 'Refreshing pricing metadata...';
     try {
-        const response = await fetch('/api/federation/model-catalog/refresh', {method: 'POST', headers: {'Accept': 'application/json'}});
-        const payload = await response.json();
+        const response = await authFetch('/api/federation/model-catalog/refresh', {method: 'POST', headers: {'Accept': 'application/json'}});
+        const payload = await parseFederationJSONResponse(response, 'Failed to refresh model catalog');
         if (!response.ok) {
             throw new Error(payload.error || 'Failed to refresh model catalog');
         }
@@ -136,8 +136,8 @@ async function shareFederationCatalog() {
     shareBtn.disabled = true;
     statusEl.textContent = 'Sharing catalog to copilots...';
     try {
-        const response = await fetch('/api/federation/model-catalog/share', {method: 'POST', headers: {'Accept': 'application/json'}});
-        const payload = await response.json();
+        const response = await authFetch('/api/federation/model-catalog/share', {method: 'POST', headers: {'Accept': 'application/json'}});
+        const payload = await parseFederationJSONResponse(response, 'Failed to share model catalog');
         if (!response.ok) {
             throw new Error(payload.error || 'Failed to share model catalog');
         }
@@ -145,6 +145,22 @@ async function shareFederationCatalog() {
         statusEl.textContent = 'Catalog shared to copilots.';
     } catch (err) {
         statusEl.textContent = err.message || 'Unable to share catalog';
+    }
+}
+
+async function parseFederationJSONResponse(response, fallbackMessage) {
+    const contentType = response.headers.get('content-type') || '';
+    const raw = await response.text();
+    if (!contentType.includes('application/json')) {
+        if (!response.ok) {
+            throw new Error(`${fallbackMessage} (${response.status})`);
+        }
+        throw new Error('Unexpected non-JSON response while loading Model Catalog');
+    }
+    try {
+        return JSON.parse(raw);
+    } catch (err) {
+        throw new Error('Invalid JSON response while loading Model Catalog');
     }
 }
 

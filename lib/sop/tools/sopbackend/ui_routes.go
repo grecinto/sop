@@ -250,7 +250,7 @@ func (r *UIRouter) handleFederationModelCatalogPage(w http.ResponseWriter, req *
 	}
 
 	data := r.landingPageData(req)
-	data["PageTitle"] = "Federation / Model Catalog"
+	data["PageTitle"] = "Model Catalog"
 	data["FederationModelCatalog"] = buildModelCatalogFederationPayload(modelCatalog)
 	if err := r.executeTemplateWithFallback(w, data, "federation_model_catalog", "landing.html", "index.html"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

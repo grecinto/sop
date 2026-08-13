@@ -80,6 +80,28 @@ func TestUIRouterExposesFederationModelCatalogPage(t *testing.T) {
 	}
 }
 
+func TestRegisterAllHandlersWithoutRootExposesFederationModelCatalogAPI(t *testing.T) {
+	defer SetDisableAuth(false)
+	SetDisableAuth(true)
+
+	mux := http.NewServeMux()
+	RegisterAllHandlersWithoutRoot(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/federation/model-catalog", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected federation model catalog API to return status 200, got %d with body %q", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("expected federation model catalog API to return JSON content type, got %q", ct)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "rows") {
+		t.Fatalf("expected federation model catalog API to return catalog payload, got %q", body)
+	}
+}
+
 func TestLandingPageDataExposesModelCatalogForTemplates(t *testing.T) {
 	router := NewUIRouter(nil, "*.html")
 	req := httptest.NewRequest(http.MethodGet, "/app", nil)

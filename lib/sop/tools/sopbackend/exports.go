@@ -754,6 +754,9 @@ func RegisterAllHandlersWithOptions(mux *http.ServeMux, includeRoot bool) {
 	mux.HandleFunc("/api/daemon/hq-retrieve", WithAuth(HandleHQRetrieve))
 	mux.HandleFunc("/api/daemon/pull-space", WithAuth(HandleDaemonPullSpace)) // Daemon pulls Space from HQ
 	mux.HandleFunc("/api/daemon/acknowledge-space", WithAuth(handleAcknowledgeSpace))
+	mux.HandleFunc("/api/federation/model-catalog", WithAuth(HandleGetModelCatalogFederation))
+	mux.HandleFunc("/api/federation/model-catalog/refresh", WithAuth(HandleRefreshModelCatalogFederation))
+	mux.HandleFunc("/api/federation/model-catalog/share", WithAuth(HandleShareModelCatalogFederation))
 
 	// KB Quality Management Endpoints
 	initKBQuality()

@@ -94,7 +94,7 @@ Fleet learning inherits the same durability model as the embedded KnowledgeBase 
 
 That matters for local Copilot and agent workflows because the runtime can continue to learn, retrieve, and reason from the persisted content even when the local embedder or storage path is temporarily unavailable. The repair pass later brings the semantic index back into consistency without requiring manual intervention.
 
-For the daemon on the user host, the policy is intentionally conservative. The first vectorization failures are treated as skip-and-continue events. If the same targets keep failing over time, the daemon escalates to a recovery prompt that asks the user whether to continue ignoring the issue, rebuild the indexes, or clear stale semantic indexes and rebuild them from the persisted content. In non-daemon environments, the SetupWizard can create a recovery disk or folder that hosts a persistent local queue store for pending vectorization work, allowing the system to automate self-healing after restarts and to preserve progress across sessions.
+For the user's workspace, the policy is intentionally conservative. The first vectorization failures are treated as skip-and-continue events. If the same targets keep failing over time, AI Studio offers a recovery prompt that asks whether to continue ignoring the issue, rebuild the indexes, or clear stale semantic indexes and rebuild them from the persisted content. The SetupWizard can create a recovery disk or folder that hosts a persistent queue for pending vectorization work, allowing the system to automate self-healing after restarts and preserve progress across sessions.
 
 ### Benchmark PoC: retrieval quality using industry-style vector DB metrics
 
@@ -179,7 +179,7 @@ The federation model is intentionally narrow. At the federation boundary, we do 
 3. If the user has opted in, only an approved, scrubbed signal is shared.
 4. The receiving environment can use that signal to improve guidance without needing the full underlying context.
 
-This approach is meant to be transparent and auditable at the local layer. In the local daemon and UI, the user has complete visibility into federation activity/data, with the data organized clearly and surfaced through high-level summaries and direct control knobs for review and management.
+This approach is transparent and auditable in the workspace. Users can review federation activity and data through clear summaries and direct controls.
 
 ## Transparency and user ownership
 
@@ -191,7 +191,7 @@ That principle shapes how we approach federation and fleet learning. The goal is
 
 ## Storage and ownership model
 
-In HQ, fleet-learning and federation content is treated as product workflow state rather than platform control state. That means the shared content and related workspace artifacts belong with the user-facing data domain, while system-level control information such as sessions, RBAC, and entitlement policy remains in the system database.
+Fleet learning and federation content is treated as product data connected to the user's workspace. Shared content and related workspace artifacts remain separate from system-level access and entitlement controls.
 
 Scripts are handled the same way:
 
