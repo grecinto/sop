@@ -15,7 +15,7 @@ Traditional vector databases use overnight K-Means clustering in data centers to
 
 ## Overview
 
-The SDK originates from [Scalable Objects Persistence (SOP)](https://github.com/sharedcode/sop), the MIT-licensed open source foundation for the platform.
+The SDK originates from [Scalable Objects Persistence (SOP)](https://github.com/sharedcode/sop), the MIT-licensed open source foundation beneath AI Studio.
 
 The SDK provides:
 
@@ -24,17 +24,17 @@ The SDK provides:
 - **Swarm Computing**: Distributed, resilient retrieval and memory infrastructure with no single point of failure
 - **End-user hosting**: The SDK can run on customer servers, private infrastructure, or edge deployments
 - **Integration Options**: Use the SDK through UI, API, or tool calls
-- **Parallel Ask Flow**: Split complex requests into parallel sub-asks, gather the results at the end, and keep each execution (proess) isolated so one failing task does not bring down the others or the daemon
+- **Parallel Ask Flow**: Split complex requests into parallel sub-asks, gather the results at the end, and keep each execution isolated so one failing task does not affect the others
 - **KB-driven workflows**: The agent can follow knowledge-base-defined workflows(data driven!) for tasks such as "fix failing tests", orchestrating the steps from failure capture to analysis and verification
 - **Dynamic Planner & Workflow Architecture**: AI-generated workflows with participant pattern execution through the Ask pipeline, ensuring 100% pipeline reuse with provider continuity and memory integration
 - **Phase + domain token efficiency**: Structured phases and domain-aware tool surfaces keep the active prompt focused, reduce irrelevant tool exposure, and cut wasted retry turns without falling back to rigid routing
 - **Multi-language coding workflows**: Shared readers/analyzers and workflow/script generators support Go, Python, JavaScript/TypeScript, Java, Rust, C#, HTML/CSS, React, and Angular
-- **Ask as Participant**: Reuse SOP Ask under another controller through typed in-process or HTTP participant contracts, including reverse-role integrations with Continue-like agents
-- **Workflow Undo System**: Semantic, domain-aware undo with multi-dimensional indexing, natural language search, and time-ranked results. Each workflow runs as an atomic transaction that can be intelligently searched and restored
+- **Ask as Participant**: Use AI Studio Ask as a bounded participant through typed in-process or HTTP contracts, including integrations with Continue-like agents
+- **Undo and Restore**: Session-aware, workstream-based change history with natural language search and restore support
 
 ## Why this matters for AI platforms
 
-SOP is not just a vector index. It is an AI-native platform for memory, routing, retrieval, and distributed execution. The architecture is designed to scale through independent nodes rather than a single centralized bottleneck, which makes it well suited for copilots, agents, and other real-time AI systems.
+AI Studio is more than a vector index. It brings memory, routing, retrieval, and distributed execution together in one platform for copilots, agents, and real-time AI systems.
 
 Key advantages include:
 
@@ -66,7 +66,7 @@ For a customer-facing explanation of why this matters competitively, read [Why A
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
 - Read [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage)
-- Understand the [Workflow Architecture](./workflow-architecture) - Dynamic Planner, KB workflows, and the Ask pipeline execution model
-- Read about the [Continue Facade Architecture](./continue-facade-architecture) - how Continue can either act as an editor-side companion under SOP control or call SOP Ask as a participant in reverse-role integrations
+- Understand the [Workflow Architecture](./workflow-architecture) - dynamic phases, workstreams, and the Ask pipeline execution model
+- Read about the [Continue Facade Architecture](./continue-facade-architecture) - how Continue connects to AI Studio as an editor-side companion or participant
 - Follow the [Ask Participant Mode](./ask-participant-mode) guide for concrete embedding, HTTP, and NDJSON streaming examples
-- Read about the [Workflow Undo System](./undo-system) - Transaction management, multi-dimensional indexing, and semantic search integration
+- Read about [Undo and Restore](./undo-system) - session-aware workstream history, search, and recovery

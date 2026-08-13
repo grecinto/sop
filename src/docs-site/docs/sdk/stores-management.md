@@ -2,13 +2,13 @@
 
 ## Technical reference for developers
 
-**Stores** provide a visual database management experience for the SOP platform and are also part of the broader SDK and AI Studio workflow. This page is intended for developers who want to understand how Stores fit into the platform, how to work with them programmatically, and how they differ from other data-oriented features.
+**Stores** provide a visual database management experience for AI Studio and its SDK. This page is intended for developers who want to understand how Stores fit into the platform, how to work with them programmatically, and how they differ from other data-oriented features.
 
 This document focuses on technical usage, integration patterns, and implementation workflows rather than day-to-day UI guidance.
 
 ## Development workflows: Code-First vs Data-First
 
-SOP supports two complementary development workflows, giving you flexibility in how you build and manage your applications:
+AI Studio supports two complementary development approaches, giving you flexibility in how you build and manage your applications:
 
 ### Code-First workflow
 Define stores and logic in your application code first, then use Stores UI to inspect and manage them:
@@ -36,7 +36,7 @@ Create stores and seed data in the Stores UI, then open them from your applicati
 This workflow is ideal when:
 - You're prototyping or exploring data models
 - You want to see results immediately
-- You're learning SOP's data model
+- You're learning the data model
 - Non-developers need to participate in schema design
 
 ### Hybrid approach
@@ -45,7 +45,7 @@ Most teams use both workflows:
 - Transition to **Code-First** as the application matures and requirements solidify
 - Continue using **Stores UI** for data inspection, debugging, and ad-hoc operations
 
-Both workflows provide full access to SOP's capabilities—choose based on your team's preferences and project needs.
+Both approaches provide full access to AI Studio's data capabilities. Choose the one that best fits your team's preferences and project needs.
 
 ## What you can do with Stores
 
@@ -73,9 +73,9 @@ Both workflows provide full access to SOP's capabilities—choose based on your 
 - Roll back when needed
 - Inspect transaction state
 
-## Why Stores matters for SOP developers
+## Why Stores Matters for AI Studio Developers
 
-Professional database management tools are essential for productive development. Stores brings enterprise-grade capabilities to the open source SOP project, making it easier for developers to build, debug, and operate SOP-based applications.
+Professional database management tools make development more productive. Stores makes it easier to build, debug, and operate AI Studio applications.
 
 **Accelerates development:**
 - Instantly inspect data structures without writing inspection code
@@ -84,10 +84,10 @@ Professional database management tools are essential for productive development.
 - Debug retrieval logic with real-time feedback
 
 **Lowers barriers to entry:**
-- New developers can explore SOP visually before diving into the API
+- New developers can explore AI Studio visually before diving into the API
 - Non-developers can participate in schema design and data operations
 - Visual tools make complex B-tree operations intuitive
-- Learn SOP's data model through interactive exploration
+- Learn the data model through interactive exploration
 
 **Professional operations:**
 - Manage production databases with confidence
@@ -96,18 +96,18 @@ Professional database management tools are essential for productive development.
 - Verify data integrity across deployments
 
 **Built for the community:**
-Stores is our contribution to the SOP ecosystem. By providing professional tooling alongside the open source database engine, we're helping SOP compete with commercial alternatives while maintaining its open source roots.
+Stores gives AI Studio developers a practical visual way to work with structured data alongside the platform's open-source foundation.
 
 ## UI vs programmatic API
 
-The SOP SDK provides both visual tools and a powerful programmatic API. This dual approach gives SOP the kind of professional developer experience that enterprise databases offer, while maintaining its open source flexibility.
+The AI Studio SDK provides both visual tools and a powerful programmatic API. This dual approach gives teams a flexible developer experience for exploration, automation, and production use.
 
 **Use the Stores UI for:**
 - Development and debugging workflows
 - Exploring unfamiliar databases
 - Ad-hoc queries and data operations
 - Administrative tasks and data curation
-- Learning SOP's architecture and capabilities
+- Learning AI Studio's data architecture and capabilities
 
 **Use the programmatic API for:**
 - Production application logic
@@ -125,11 +125,11 @@ store := db.Store("users")
 item, _ := store.Get(ctx, "user123")
 ```
 
-Both approaches are first-class citizens in the SOP ecosystem. The visual tools accelerate development and operations, while the programmatic API provides the control and performance needed for production systems.
+Both approaches work together naturally. The visual tools accelerate development and operations, while the programmatic API provides the control and performance needed for production systems.
 
 ## AI-powered database operations
 
-Stores integrates with AI Copilot, bringing conversational database management to the SOP project. This innovative approach makes database operations accessible through natural language, setting SOP apart from traditional database systems.
+Stores integrates with AI Studio, bringing conversational database management to your workspace. This makes database operations accessible through natural language.
 
 **Ask questions about your data:**
 - "What stores exist in the system database?"
@@ -149,7 +149,7 @@ Stores integrates with AI Copilot, bringing conversational database management t
 - Suggest query optimizations
 - Debug data issues
 
-This conversational interface is particularly valuable during development, making database exploration intuitive for both experienced and new SOP developers.
+This conversational interface is particularly valuable during development, making database exploration intuitive for both experienced and new AI Studio developers.
 
 ## Common use cases
 
@@ -182,21 +182,16 @@ This conversational interface is particularly valuable during development, makin
 - Learn about the [Vector Database Architecture](./vector-database)
 - Explore the [AI Database Platform](./ai-database)
 - See [SDK overview](./intro) for programmatic database access
-- Visit the [SOP GitHub repository](https://github.com/sharedcode/sop) for source code and examples
+- Visit the [SOP GitHub repository](https://github.com/sharedcode/sop) to learn about the open-source foundation behind the SDK
 
-## Contributing to the SOP ecosystem
+## Open-Source Foundation
 
-Stores represents our commitment to the SOP open source community. By providing professional-grade management tools, we're helping SOP compete with commercial database offerings while maintaining its open source values.
+AI Studio builds on the open-source SOP foundation and continues to benefit from its community and persistence technologies.
 
-**What this brings to SOP developers:**
+**What this brings to AI Studio developers:**
 - Enterprise-quality tooling at no cost
 - Visual database management that rivals commercial products
 - AI-powered operations that set new standards for database UX
 - Support for both hobbyist and enterprise use cases
 
-**Why we contribute:**
-We build AI Copilot and other products on top of SOP's solid foundation. By contributing back professional tooling, we strengthen the ecosystem that powers our platform. When SOP thrives, everyone building on it benefits—including us.
-
-This is the kind of symbiotic relationship that makes open source sustainable: the project gets better tools, developers get better experiences, and companies building on the platform establish themselves as community contributors rather than just consumers.
-
-**Get involved:** Join the [SOP community on GitHub](https://github.com/sharedcode/sop) to contribute, report issues, or suggest improvements. Together, we're building database infrastructure that's accessible to everyone.
+**Learn more:** Visit the [SOP community on GitHub](https://github.com/sharedcode/sop) to explore the open-source project behind the SDK.

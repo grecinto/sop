@@ -98,7 +98,7 @@ This is why we believe AI Studio can be more token-efficient than many Cursor-st
 
 Continue is still useful as an editor-side companion.
 
-The difference is where control lives. AI Studio keeps the daemon Ask pipeline as the orchestrator, while Continue acts as a thin IDE surface and delegated worker when needed. That means customers can keep Continue's editor ergonomics without giving up the daemon-side token discipline.
+AI Studio keeps the Ask pipeline as the orchestrator, while Continue acts as an IDE surface and delegated worker when needed. This combines editor ergonomics with focused, efficient task execution.
 
 ## Why Customers Should Care
 

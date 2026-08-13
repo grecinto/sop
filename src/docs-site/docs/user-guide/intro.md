@@ -6,21 +6,21 @@ description: Complete guide to using AI Studio for coding, debugging, and knowle
 
 # AI Studio User Guide
 
-Welcome to AI Studio - an intelligent coding assistant that runs on your own infrastructure with persistent memory, structured workflows, and privacy-first architecture.
+Welcome to AI Studio - an intelligent coding assistant that runs on your own infrastructure with persistent memory, adaptive phases, and privacy-first architecture.
 
 ## What is AI Studio?
 
-AI Studio is a self-hosted AI platform that helps you code, debug, test, and manage knowledge without relying on third-party cloud services. Unlike consumer copilots that operate through closed wrappers, AI Studio gives you:
+AI Studio is a self-hosted AI platform that helps you code, debug, test, and manage knowledge in your own environment. It gives you:
 
 - **Full control**: Runs on your infrastructure, uses your chosen LLM provider
-- **LLM as Orchestrator**: The AI makes all decisions—no rigid scripts, pure intelligent reasoning
-- **Persistent memory**: Learns from your codebase and workflow patterns
+- **LLM as Orchestrator**: The AI chooses the right approach and tools for each task
+- **Persistent memory**: Keeps useful context from your codebase and workstreams
 - **Privacy-first**: Your code and data never leave your environment
 - **Open source**: Inspect, extend, and customize everything
 
 ### The LLM as Orchestrator Paradigm
 
-AI Studio's architecture is built on a fundamental principle: **the LLM is always in control**. Unlike traditional automation systems with fixed workflows and rule-based routing, AI Studio lets the AI reason about your task and orchestrate the solution dynamically.
+AI Studio is built around a simple principle: **the LLM guides the work**. It reasons about your task, chooses an approach, and adapts as the work develops.
 
 **What this means for you:**
 - 🎯 **Adaptive execution** - The AI chooses the right approach for your specific situation, not a pre-programmed script
@@ -29,7 +29,7 @@ AI Studio's architecture is built on a fundamental principle: **the LLM is alway
 - 🛟 **Built-in recovery** - If execution is stuck, the AI can pause for clarification, move backward to the right phase, or stop cleanly instead of forcing a broken plan forward
 - 💬 **Conversational control** - You guide with natural language, not configuration files
 
-This is the core difference between AI Studio and rigid workflow systems—the intelligence orchestrates everything.
+This gives each task a natural flow that can respond to your goals, feedback, and discoveries.
 
 ## Key Features
 
@@ -42,11 +42,11 @@ Built on the **LLM as Orchestrator** paradigm, AI Studio breaks down complex tas
 
 **Real-Time Adjustments** - Change your mind mid-execution? Just type your modification and the AI adapts its orchestration without starting over. Add error handling, include extra validation, or refine the approach as you go.
 
-**Phase Recovery Without Workflow Splitting** - AI Studio does not need a separate simplified "plan mode" for hard cases. The same workflow can revisit Investigation or Planning, pause for one missing fact, or stop when the environment requires user control.
+**Phase Recovery** - AI Studio can revisit Investigation or Planning, pause for one missing fact, or stop when the environment requires your attention.
 
 **Transparent Reasoning** 💬 - AI Studio shows you what it understood from your request before taking action. See the execution plan, significant discoveries during analysis, and LLM thinking—all in collapsible sections so you control the level of detail. This transparency lets you interject or correct before execution begins.
 
-**Intelligent Undo** 🔄 - Experiment fearlessly with an industry-leading undo system that treats each workflow as a searchable transaction. Find and restore past changes using natural language: "undo authentication middleware changes" just works. No git history pollution, no manual bisecting.
+**Intelligent Undo** 🔄 - Experiment freely with searchable restore history connected to your sessions and workstreams. Find and restore past changes using natural language, such as "undo authentication middleware changes."
 
 **Multi-language support**: Works seamlessly with Go, Python, JavaScript/TypeScript, Java, Rust, C#, HTML/CSS, React, and Angular. Automatically detects your project type and uses the right tools for testing, analysis, and code generation.
 
@@ -62,13 +62,13 @@ Optionally share validated coding patterns across your team without exposing pro
 
 [Learn about Fleet Learning →](../fleet-learning)
 
-### Remote Daemon Access
-Connect AI Studio to daemons running on local or remote machines in your private network. Work securely without exposing systems to the public internet.
+### AI Studio Connections
+Connect AI Studio to the runtime that powers your workspace and work securely with your files and tools.
 
-[Learn about Remote Access →](./remote-daemon-access)
+[Learn about AI Studio Connections →](./remote-daemon-access)
 
 ### Continue as a Companion
-If you use Continue in your editor, it can act as a thin companion that sends coding requests to the SOP daemon for execution. The daemon remains the runtime that orchestrates workflows, approvals, memory, and long-running tool execution.
+If you use Continue in your editor, it can act as a companion that sends coding requests to AI Studio. AI Studio provides orchestration, approvals, memory, and long-running tool execution.
 
 [Learn about the Continue facade architecture →](../sdk/continue-facade-architecture)
 
@@ -83,7 +83,7 @@ The AI window is the main surface for interaction. It stays visible while the AI
 2. **Configure your LLM provider** - Add API keys for OpenAI, Google Gemini, or other providers
 3. **Start coding** - Ask AI Studio to help with implementation, debugging, or testing
 4. **Build knowledge spaces** - Organize project documentation and patterns for better context
-5. **Customize workflows** - Tailor the system to your team's practices
+5. **Customize your workspace** - Tailor the system to your team's practices
 
 ## What's Next?
 

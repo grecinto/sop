@@ -172,13 +172,13 @@ This gives the runtime two complementary behaviors:
 
 The repair queue is intentionally separate from the live semantic index so that temporary failures do not corrupt the primary content path. That makes the system resilient to local embedder issues, transient storage problems, or partial batch failures without turning every write into a fragile operation.
 
-For daemon and local-host deployments, the failure policy is intentionally user-friendly. The first failures are treated as soft degradations: the content remains available, the semantic index is skipped for that target, and the runtime keeps going. Once a target fails repeatedly, the system escalates to a user-visible recovery prompt that offers three actions:
+For workspace deployments, the failure policy is intentionally user-friendly. The first failures are treated as soft degradations: the content remains available, the semantic index is skipped for that target, and the runtime keeps going. Once a target fails repeatedly, the system escalates to a user-visible recovery prompt that offers three actions:
 
 - Continue ignoring the failure for now.
 - Rebuild the affected semantic indexes.
 - Clear stale semantic indexes and rebuild from the persisted content.
 
-For non-daemon deployments, the SetupWizard can provision a dedicated recovery disk or folder that hosts a durable local store for the repair queue. That store can be implemented as a small B-Tree-backed queue in a separate directory, and it becomes the authority for pending vectorization work so the runtime can automate self-healing even after a restart.
+For other deployments, the SetupWizard can provision a dedicated recovery disk or folder that hosts a durable store for the repair queue. That store can be implemented as a small B-Tree-backed queue in a separate directory, and it becomes the authority for pending vectorization work so the runtime can automate self-healing even after a restart.
 
 ## Technical Summary
 

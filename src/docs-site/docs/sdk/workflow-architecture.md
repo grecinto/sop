@@ -1,17 +1,18 @@
 # Workflow Architecture
 
-This document covers the technical architecture of AI Studio's intelligent workflow system, including the Dynamic Planner, Knowledge Base workflows, and the Ask pipeline execution model.
+This document covers the current AI Studio workflow model: a dynamic, phase-capability system controlled by the Ask pipeline.
 
 ## Overview
 
-AI Studio provides two complementary workflow approaches that both execute through a unified Ask pipeline:
+AI Studio's workflow model is built around phase capabilities. The system does this:
 
-1. **Dynamic Planner** - AI-generated workflows using task analysis and LLM reasoning
-2. **Knowledge Base Workflows** - Pre-defined templates stored in knowledge bases
+1. **Classify the task** in the context of the current workstream
+2. **Select the most relevant phase capability** such as intake, investigation, planning, execution, review, or delivery
+3. **Expose only the tools and guidance relevant to that phase**
+4. **Let the Ask pipeline remain the orchestrator** across turns, tool calls, and recovery decisions
+5. **Persist phase state in workstream memory** so the task can pause, resume, or jump safely
 
-Both approaches implement a **participant pattern** where workflows are passive responders and the Ask pipeline maintains control of execution flow.
-
-They also improve token efficiency. The combination of phases and domains lets the orchestrator narrow the active context, tool surface, and recovery choices for each turn instead of paying prompt cost for the whole platform at once.
+This keeps the architecture flexible: the LLM decides what to do next, while the capability layer provides structured context, phase-specific tools, and artifact capture.
 
 ## Supported Coding Workflow Languages
 
@@ -29,88 +30,204 @@ The shared coding workflow stack supports the following languages for reading, a
 
 This coverage is exposed through both the reader/analyzer layer and the workflow/script generation layer, so teams can use the same workflow model across front-end, back-end, and full-stack projects.
 
-## The Ask Pipeline: LLM as Orchestrator Architecture
+## The Ask Pipeline
 
-The Ask pipeline (`CopilotAgent.ask()`) embodies the **LLM as Orchestrator** paradigm—the central architectural principle where the LLM makes all execution decisions, controls flow, and orchestrates capabilities dynamically.
+The Ask pipeline (`CopilotAgent.ask()`) embodies the **LLM as Orchestrator** paradigm: the LLM decides the execution path, controls flow, and chooses the right capability or phase at each turn.
 
-### Core Principle: LLM Controls Everything
+### How Decisions Are Made
 
-Unlike traditional systems with rule-based routing and fixed workflows:
-- ❌ **NOT**: Heuristics decide which tools to call
-- ❌ **NOT**: Pre-programmed workflows control execution flow  
-- ❌ **NOT**: Configuration files determine task handling
-
-✅ **INSTEAD**: The LLM reasons about the task, chooses capabilities, selects tools, and controls execution flow through natural language understanding and multi-turn reasoning.
-
-### Pipeline Architecture
-
-The Ask pipeline provides:
+The LLM reasons about the task, selects the relevant phase capability, chooses tools, and adapts based on evidence and user feedback.
 
 ### Pipeline Stages
 
 1. **Routing & Classification**
-   - Three-gate routing: prefix, continuation, cold-start
-   - Task classification for workflow selection
-   - Capability hint detection
+   - prefix, continuation, and cold-start routing
+   - phase and domain classification
+   - explicit capability hints and context selection
 
 2. **Capability Selection**
-   - Registry lookup and capability matching via `CanHandle()`
-   - Participant hook invocation for Ask continuity
-   - Context building via `BuildContext()` and `BuildInstructions()`
+   - registry lookup and capability matching
+   - phase guidance and relevant tool exposure
+   - memory and STM context loading
 
 3. **System Prompt Construction**
-   - Assembles LLM context from capabilities
-   - Includes memory (STM + LTM), tools, and instructions
-   - KB search integration for enriched context
+   - capability instructions assembled into the active prompt
+   - workstream state integrated into the current context
+   - domain-specific tools and guardrails applied
 
 4. **Reasoning Engine Delegation**
-   - Provider-specific ReAct loops (Gemini, Claude, GPT-4)
-   - Tool call execution through capability handlers
-   - Multi-turn conversation continuity
+   - provider-specific ReAct loop
+   - tool call execution via capability handlers
+   - multi-turn continuity with memory kept intact
 
 5. **Post-Execution Hooks**
-   - `OnAfterTurn()` for step lifecycle management
-   - `OnFinish()` for workflow setup (WorkflowPlanner interface)
-   - Epilogue and cleanup
+   - state capture, artifact persistence, and cleanup
+   - phase transitions and workstream updates
+   - resume, pause, or recovery decisions as needed
 
-### Why This Matters
+### What This Provides
 
-The Ask pipeline is "our moat" because it provides:
+The Ask pipeline provides:
 
-✅ **Battle-tested provider reasoning** - Years of refinement in multi-turn conversations
-✅ **Memory integration** - Automatic STM/LTM access for every capability
-✅ **Tool framework** - Unified tool registry with authorization and observability
-✅ **Conversation continuity** - Provider maintains context across turns
-✅ **Authorization gates** - Entitlement checks built into the pipeline
-✅ **Observable execution** - Metrics, logs, and tracing at every step
+- **Provider reasoning continuity** across turns
+- **Tool framework integration** with authorization and observability
+- **Memory integration** through STM and LTM
+- **Adaptive phase control** that stays responsive to the task
+- **Strong recovery behavior** for user corrections and blocked execution
 
-By executing workflows *through* the Ask pipeline rather than *bypassing* it, every workflow step inherits these capabilities.
+By keeping the phase model inside the Ask pipeline, every phase inherits the same orchestration, memory, and tool access benefits.
 
-### Why This Also Saves Tokens
+### Why This Is Token-Efficient
 
-The same architecture improves cost efficiency without collapsing into a rigid workflow engine.
+The same architecture improves cost efficiency without forcing each turn into a rigid execution path.
 
-- **Phases reduce prompt bloat** by narrowing what kind of work is appropriate now.
-- **Domains reduce prompt bloat** by narrowing where that work should happen.
-- **Recovery reduces wasted turns** by letting the system pause, move backward, or stop instead of burning tokens in the wrong phase.
+- **Phases reduce prompt bloat** by narrowing the active tool surface and task focus.
+- **Domains reduce prompt bloat** by excluding unrelated capabilities.
+- **Recovery reduces wasted turns** by allowing the system to pause, jump, or stop instead of continuing in the wrong phase.
 
-This is an important distinction from simpler "plan mode then execute" products. AI Studio does not conserve tokens by splitting behavior into separate simplified experiences. It conserves tokens by keeping one orchestration model and making each turn context-dense.
+This keeps each turn focused, dense, and relevant.
 
-## External Agent Integration Pattern
+## Phase Capability Model
 
-The same workflow architecture can wrap external agents and external tool systems without giving up AI Studio control.
+The current workflow architecture is centered on phase capabilities. Each capability represents one stage of the work and exposes only the tools, guardrails, and context appropriate for that stage.
+
+### Core Phase Set
+
+The active phase model includes:
+
+- **Intake** - clarify scope, constraints, and objectives
+- **Investigation** - inspect code, tests, and repo context
+- **Planning** - shape the fix or approach before implementation
+- **Execution** - apply changes and run the relevant implementation steps
+- **Review** - validate outputs and confirm correctness
+- **Delivery** - summarize the result and handoff
+
+Each phase participates in the overall flow while the Ask loop keeps the broader task coordinated.
+
+### Example Phase Capability
+
+```go
+type PhaseCapability struct {
+    sharedInfra *SharedInfrastructure
+    phaseID     string
+    name        string
+    description string
+    captureTool string
+    stateTool   string
+}
+```
+
+The capability uses `Classify()` to determine whether the current query fits the phase and `BuildGuidanceProfile()` to provide phase-specific guidance and guardrails.
+
+```go
+func (c *PhaseCapability) Classify(query string, state capabilities.RoutingState) capabilities.ClassificationResult {
+    if c == nil {
+        return capabilities.ClassificationResult{}
+    }
+
+    if state.Domain != "" && state.Domain != "coding_workflow" && state.Domain != "CodingWorkflow" {
+        return capabilities.ClassificationResult{}
+    }
+
+    lower := strings.ToLower(strings.TrimSpace(query))
+    if lower == "" {
+        return capabilities.ClassificationResult{}
+    }
+
+    startingPhase := detectStartingPhase(lower)
+    if startingPhase == c.phaseID {
+        return capabilities.ClassificationResult{Relevant: true, Score: 14, Mode: capabilities.CapabilityModePrimary}
+    }
+
+    for _, keyword := range phaseKeywords(c.phaseID) {
+        if strings.Contains(lower, keyword) {
+            return capabilities.ClassificationResult{Relevant: true, Score: 12, Mode: capabilities.CapabilityModeSupporting}
+        }
+    }
+
+    return capabilities.ClassificationResult{}
+}
+```
+
+This approach gives the model a clear entry point while still allowing it to adjust as new evidence appears.
+
+## Dynamic Phase Planning and Recovery
+
+The phase system is intentionally adaptive. Plans are not rigid scripts; they are dynamic phase structures the LLM can revise as the task evolves.
+
+### Adaptive Flow
+
+The phase system is designed to respond to the task as it unfolds. It does not assume a single predetermined path:
+
+- the model can skip a phase when it is unnecessary
+- it can jump forward or backward when the task changes
+- it can pause for clarification without abandoning the context
+- it can recover after failure by returning to a more appropriate phase
+
+This is exactly where the workstream and phase-plan mutation layer matters.
+
+### WorkStream Management Tools
+
+The system exposes explicit orchestration tools to allow the LLM to change flow in a controlled way:
+
+- `list_workstreams`
+- `get_workstream_details`
+- `jump_to_phase`
+- `pause_workstream`
+- `resume_workstream`
+- `abandon_workstream`
+
+These tools let the LLM manage the current workstream state while the Ask pipeline keeps the broader execution flow consistent.
+
+### Example: Adaptive Phase Movement
+
+```text
+User: "Skip planning and implement directly"
+→ LLM recognizes user interjection
+→ Calls jump_to_phase(phase="execution")
+→ Workstream state is updated
+→ Next turn continues from execution phase with prior context retained
+```
+
+```text
+User: "Actually, we need to investigate the data layer first"
+→ LLM judges the task needs more evidence
+→ Calls jump_to_phase(phase="investigation")
+→ Existing artifacts remain available
+→ The task resumes from the correct analytical stage
+```
+
+This gives the system a flexible plan while preserving continuity across the full task.
+
+## WorkStream Persistence and Recovery
+
+Phase progress is stored in workstream memory so it survives across turns. That means the model can recover context even when the user pauses, asks a clarifying question, or changes direction.
+
+### Persistent State Includes
+
+- current phase
+- planned phases and current index
+- artifact history and capture metadata
+- phase iteration counts
+- pause/resume lifecycle state
+
+This allows the system to treat work as resumable execution, not a one-shot prompt run.
+
+## External Agent Integration
+
+The same phase-based architecture can connect external agents and tool surfaces while keeping the task connected to AI Studio.
 
 ### Metadata-Driven Participants
 
-An external integration should ideally describe itself in metadata:
+An external integration can describe itself in metadata:
 
 - supported phases
 - phase-specific available tools
-- mode constraints
+- constraint information
 - request-scoped callable tool subsets
-- request-scoped tool-choice hints
+- request-scoped hints for delegation
 
-AI Studio can then load that metadata into a capability and treat the external system as a passive participant.
+AI Studio can then load that metadata into a capability and treat the remote system as a passive participant.
 
 ### Thin Wrapper Capability
 
@@ -118,716 +235,96 @@ The recommended pattern is a thin wrapper capability that:
 
 - ingests remote capability metadata
 - maps remote phases onto AI Studio phases
-- exposes one bounded delegation tool when the remote system is itself an agent/orchestrator
+- exposes a bounded delegation tool when the remote system is itself an agent/orchestrator
 - forwards execution to the remote backend
 - returns control to the Ask pipeline after each bounded step
 
-For Continue specifically, the recommended target is a single delegated tool that represents Continue's own local Ask/tool loop rather than a mirrored catalog of Continue's internal read/edit/search tools. AI Studio keeps the outer LLM-as-Orchestrator role; Continue completes the bounded IDE coding slice and returns the result.
-
-This preserves the participant pattern:
+This keeps responsibilities clear:
 
 - AI Studio remains the orchestrator
 - the external system remains a tool substrate or delegated worker
 - no external agent becomes the workflow controller
 
-This pattern is domain-agnostic. It works for coding integrations like Continue, and it can be extended to other agent surfaces and domains as long as they can describe their capabilities as data.
+This pattern is domain-agnostic. It works for coding integrations like Continue and can also be extended to other agent surfaces as long as they can describe their capabilities as data.
 
 ## Ask as Participant
 
-The same workflow runtime can also be reused under an external controller.
+The same runtime can also be reused under an external controller, but the internal boundary remains clear.
 
 This is a different boundary from the participant pattern inside Ask:
 
-- externally, SOP Ask may be one participant in a larger multi-agent system
-- internally, SOP Ask remains the orchestrator of its own capabilities and tools
+- externally, AI Studio Ask may be one participant in a larger multi-agent system
+- within the delegated turn, AI Studio Ask remains the orchestrator of its own capabilities and tools
 
-That distinction matters. The architecture does not permit phase or domain capabilities inside SOP to become controllers. Instead, the supported composition is:
+The supported composition is:
 
-1. An outer agent decides a bounded SOP Ask turn is useful.
+1. An outer agent decides a bounded AI Studio Ask turn is useful.
 2. The outer agent calls SOP through a typed request or participant HTTP endpoint.
-3. SOP Ask runs its normal routing, capability selection, ReAct loop, and memory access.
-4. SOP returns a structured result to the outer controller.
+3. AI Studio Ask runs its normal routing, capability selection, ReAct loop, and memory access.
+4. AI Studio returns a structured result to the outer controller.
 
-The SDK surfaces for this mode are:
-
-- `AskWithRequest` for in-process embedding
-- `NewParticipantHandler` for exposing SOP Ask over HTTP
-- `ParticipantClient` for remote invocation
-- `ParticipantClient.AskStream` for remote invocation with NDJSON progress streaming
-
-These participant requests also support `request_id` for the current delegated call and `root_request_id` for the overall Ask-to-Ask tree. SOP generates a SOP-owned `root_request_id` for outbound delegation when needed and rejects any participant request that later re-enters SOP carrying that SOP-owned root.
-
-This lets you reverse roles with Continue or another controller without weakening the LLM-as-Orchestrator design inside SOP itself.
+This lets you use Continue or another controller as the outer layer while AI Studio continues to manage the delegated turn.
 
 For concrete embedding and streaming examples, see [Ask Participant Mode](./ask-participant-mode).
 
-### Conversational Feedback System
+## Conversational Feedback
 
-The V2 Ask pipeline includes an advanced **conversational feedback system** that provides user-facing transparency during execution. This system gives users visibility into LLM reasoning and control over verbosity without breaking the participant pattern.
+The Ask pipeline also includes a conversational feedback layer that makes the phase flow transparent without making the phase capabilities themselves the controller.
 
-#### Design Goals
+### Design Goals
 
-1. **Grounding Confirmation** - Echo back what the LLM understood before executing tools
-2. **Plan Transparency** - Show the execution approach before the ReAct loop begins
-3. **Discovery Visibility** - Highlight significant findings during tool execution
-4. **User Control** - Make all conversational chatter collapsible and expandable
+1. **Grounding confirmation** before tools execute
+2. **Plan visibility** before the ReAct loop begins
+3. **Finding summaries** during execution
+4. **User control** through collapsible feedback output
 
-#### Architecture
+### Emission Points
 
-The feedback system adds **three emission points** at the orchestrator level in `askV2Core()`:
+The feedback system emits at the orchestrator level:
 
 ```go
-// 1. GROUNDING ECHO - After classification, before tool execution
 if v2Class, ok := ctx.Value("v2_classification").(*TaskContextV2); ok {
     a.emitGroundingSummary(ctx, query, v2Class)
 }
 
-// 2. PLAN DESCRIPTION - Before ReAct loop starts
 if v2Class, ok := ctx.Value("v2_classification").(*TaskContextV2); ok {
     a.emitPlanDescription(ctx, query, v2Class, phases)
 }
 
-// 3. FINDINGS SUMMARY - During tool execution (in reactLoop)
 a.emitFindingsSummary(ctx, toolName, result, significance)
 ```
 
-**Pattern Compliance:**
-- ✅ Emissions happen at **orchestrator level** (askV2Core), NOT in phases
-- ✅ Phases remain **passive participants** - they don't emit conversational events
-- ✅ LLM still **orchestrates execution** - emissions are observation, not control
-- ✅ **Explicit parameters** - classification passed to emission helpers
+This keeps the experience clear:
 
-#### Event Types
+- the orchestrator emits user-visible reasoning summaries
+- phases stay focused on their own responsibilities
+- the LLM still decides what to do next
 
-The system uses specialized phase constants to categorize conversational messages:
+## Benefits of the Phase Model
 
-```go
-const (
-    PhaseGrounding  = "grounding"   // Understanding confirmation
-    PhasePlanning   = "planning"    // Approach description  
-    PhaseFindings   = "findings"    // Discovery summary
-    PhaseCommentary = "commentary"  // General chatter
-)
-```
+The phase capability workflow gives AI Studio a few practical advantages:
 
-Each event flows through the existing streaming infrastructure:
+- **Adaptive reasoning** when the task shape changes
+- **Safe recovery** when the user interjects or the current phase is wrong
+- **Context continuity** across turns and pauses
+- **Token efficiency** by limiting active instructions and tools to the relevant phase
+- **Single orchestration model** with the LLM in control
 
-```
-askV2Core → emitGroundingSummary → streamer callback
-                                        ↓
-                        BuildAssistantMessageEvent("grounding", text)
-                                        ↓
-                                NDJSON over HTTP
-                                        ↓
-                            Backend SetupStream (filter)
-                                        ↓
-                                    UI Renderer
-                                        ↓
-                        Collapsible <details> element
-```
-
-#### User Experience
-
-**Before** (without conversational feedback):
-```
-User: "Fix the authentication bug"
-[LLM immediately starts executing tools]
-[Final answer appears]
-```
-
-**After** (with conversational feedback):
-```
-User: "Fix the authentication bug"
-
-🎯 Understanding ▼
-   I understand you want to: Fix the authentication bug
-   - Domains: coding_workflow
-   - Phase: investigation
-   - Confidence: high
-
-📋 Plan ▼
-   Phase Plan: investigation → execution → review
-   
-   I'll proceed through these phases:
-   1. Investigation: Search codebase for auth-related files
-   2. Execution: Apply fixes based on findings
-   3. Review: Validate changes and run tests
-   
-   Available capabilities: 12 tools
-   Starting with investigation phase...
-
-[LLM executes search_codebase tool]
-
-🔍 Findings ▼
-   Discovery from search_codebase:
-   Found 3 authentication-related files:
-   - lib/auth/session.go (session validation)
-   - lib/auth/token.go (token expiration bug found)
-   - handlers/login.go (uses token.go)
-   
-   Next: Read token.go to analyze bug
-
-[Final answer with solution]
-```
-
-**Benefits:**
-- ✅ **Understand intent** - Confirm LLM understood correctly before execution
-- ✅ **See the plan** - Know what steps will happen before they start  
-- ✅ **Track progress** - Collapsible findings show what was discovered
-- ✅ **Control verbosity** - Expand/collapse chatter as needed
-- ✅ **Enable interjection** - User can stop/correct before execution
-- ✅ **Debug reasoning** - Visible thought process for troubleshooting
-
-#### Implementation Status
-
-**Status**: Architecture designed, documented in [ASK_V2_ARCHITECTURE.md](https://github.com/grecinto/sop-cloud/blob/main/docs/ASK_V2_ARCHITECTURE.md#conversational-feedback-system)
-
-**Implementation Phases:**
-1. Backend event emissions (`lib/sop/ai/agent/copilot_v2.go`)
-2. Event streaming layer (`lib/sop/ai/stream_events.go`)
-3. UI rendering with collapsible `<details>` elements
-4. CSS styling for phase-specific visual accents
-5. Integration testing and validation
-
-This enhancement provides user-facing transparency while maintaining all core V2 patterns. The Ask pipeline remains the sole orchestrator, phases remain passive, and the LLM continues to control execution flow via ReAct.
-
-## Dynamic Planner Architecture
-
-### Component Overview
-
-The Dynamic Planner (`PlannerCapability`) generates custom workflows using task analysis and converts them to executable steps.
-
-**Key Components:**
-
-```go
-type PlannerCapability struct {
-    orchestrator     *Orchestrator
-    workflowManager  *WorkflowManager
-}
-
-// Core interfaces
-type Capability interface {
-    ID() string
-    Name() string
-    CanHandle(ctx, query, state) bool
-    Run(ctx, query, state) (CapabilityResult, error)
-    // ... other methods
-}
-
-type WorkflowPlanner interface {
-    Capability
-    OnFinish(ctx context.Context, result CapabilityResult) error
-}
-```
-
-### Execution Flow
-
-1. **Task Classification**
-   ```
-   User query → TaskClassifier.Classify()
-     → Determines: debugging, implementation, testing, refactoring, etc.
-   ```
-
-2. **Plan Generation**
-   ```
-   PlannerCapability.Run()
-     → generatePlan() creates WorkflowPlan
-     → Fallback heuristics or LLM-based planning
-     → Returns CapabilityResult with plan in Data map
-   ```
-
-3. **OnFinish Hook (Post-Execution)**
-   ```
-   Ask pipeline calls OnFinish() after Run() completes
-     → Extract WorkflowPlan from result.Data
-     → Convert to Steps via planToSteps()
-     → Store steps in result.Data["workflow_steps_ready"]
-     → Mark result.Data["workflow_trigger_needed"] = true
-   ```
-
-4. **Workflow Trigger Enqueue**
-   ```
-   Ask pipeline detects workflow_trigger_needed
-     → Creates WorkItem with actor="workflow_manager"
-     → Enqueues to WorkQueue
-     → Next Ask iteration processes trigger
-   ```
-
-5. **Step-by-Step Execution**
-   ```
-   Each workflow step → Full Ask pipeline iteration
-     → Capability routing → Run() → ReAct loop → Tool calls
-     → Provider maintains conversation context
-     → Memory integration throughout
-   ```
-
-### Step Conversion
-
-The `planToSteps()` function converts abstract workflow phases to concrete Step implementations:
-
-```go
-// Mapping from plan phase types to Step constructors
-"analyze"    → NewAnalyzeCodeStep(description)
-"generate"   → NewGeneratePatchStep(description)
-"apply"      → NewApplyFixStep(nil)
-"verify"     → NewVerifyFixStep(workingDir)
-"research"   → NewAnalyzeCodeStep(description)
-"design"     → NewDesignStep(description)
-```
-
-These Step implementations are from the coding workflow public API and provide:
-- Lifecycle hooks: `OnBeforeExecute`, `OnAfterExecute`, `OnAfterTurn`, `OnAfterToolResult`
-- Shared infrastructure access: file system, test runners, code analysis
-- Retry logic and error handling
-- Signal processing for user feedback
-
-## Knowledge Base Workflows
-
-### Architecture
-
-KB workflows are pre-defined templates stored in knowledge bases (Core Playbook or Spaces):
-
-```go
-type WorkflowDefinition struct {
-    ID              string
-    Name            string
-    CategoryPath    string   // e.g., "Debugging/Authentication"
-    Description     string
-    Steps           []WorkflowStep
-    TriggerPatterns []string
-    Metadata        map[string]any
-}
-
-type WorkflowStep struct {
-    Step               int
-    Title              string
-    Actor              string
-    Priority           int
-    QueryTemplate      string  // "{original_query}" expansion
-    ToolsExpected      []string
-    Instructions       string
-    RequiredContext    map[string]any
-    SuccessCriteria    []string
-    Condition          string  // e.g., "tests_passed", "code_changed"
-}
-```
-
-### Workflow Manager
-
-The `WorkflowManager` handles KB workflow discovery and execution:
-
-```go
-type WorkflowManager struct {
-    kb                  *memory.KnowledgeBase
-    selectedKBs         []*memory.KnowledgeBase
-    conditionRegistry   map[string]ConditionFunc
-    scriptExecutor      *ScriptExecutor
-    workflowCache       *WorkflowCache
-}
-
-// Participant pattern method - enqueues one step at a time
-func (wm *WorkflowManager) EnqueueNextStep(
-    ctx context.Context,
-    queue *WorkQueue,
-    workflow *WorkflowDefinition,
-    stepIndex int,
-    originalQuery string,
-) error {
-    // Expands template, builds condition, creates WorkItem
-    // Enqueues single step - Ask pipeline calls back for next
-}
-```
-
-### Discovery
-
-KB workflows are matched via:
-
-1. **Semantic search** - Query vector matches workflow description
-2. **Trigger patterns** - Regex patterns in workflow metadata
-3. **Category path** - Hierarchical organization (e.g., "Testing/Go")
-
-Example:
-```
-Query: "debug authentication timeout"
-  → Semantic search in Core Playbook
-  → Finds: "Authentication/Debugging/Session Timeout"
-  → Returns WorkflowDefinition
-```
-
-## Participant vs Controller Pattern
-
-### ❌ Controller Pattern (Anti-Pattern)
-
-In a controller pattern, the capability controls execution flow:
-
-```
-Capability.Orchestrate() {
-    for each step {
-        queue.Enqueue(step)  // Enqueues ALL steps upfront
-    }
-}
-→ Capability decides when each step runs
-→ Bypasses Ask pipeline for step execution
-→ Loses provider continuity and memory integration
-```
-
-**Problems:**
-- Separate execution engine needed
-- No provider conversation context between steps
-- Memory and tool access must be reimplemented
-- Defeats the purpose of the Ask pipeline
-
-### ✅ Participant Pattern (Correct)
-
-In a participant pattern, the Ask pipeline controls flow and capabilities respond:
-
-```
-Capability.Run() {
-    // Generate plan/result
-    return CapabilityResult
-}
-
-Capability.OnFinish(result) {
-    // Set up workflow trigger
-    result.Data["workflow_steps_ready"] = steps
-    result.Data["workflow_trigger_needed"] = true
-}
-
-Ask Pipeline {
-    → Calls Run()
-    → Calls OnFinish() after reasoning completes
-    → Detects workflow_trigger_needed
-    → Enqueues trigger to queue
-    → Processes queue naturally
-    → Each step goes through full Ask iteration
-}
-```
-
-**Benefits:**
-- 100% Ask pipeline reuse
-- Full provider reasoning for every step
-- Memory integration automatic
-- Tool framework access built-in
-- Authorization and observability included
-
-## WorkQueue Architecture
-
-The `WorkQueue` enables multi-turn orchestration:
-
-```go
-type WorkQueue struct {
-    items      []WorkItem
-    maxDepth   int
-    maxPerActor map[string]int
-    actorCount map[string]int
-}
-
-type WorkItem struct {
-    Query        string
-    Actor        string
-    Priority     int
-    Context      map[string]any
-    ParentItemID string
-    TurnNumber   int
-    ID           string
-    Condition    func(TurnResult) bool
-}
-
-type TurnResult struct {
-    TurnNumber  int
-    Actor       string
-    Response    string
-    ToolCalls   []any
-    Error       error
-    Data        map[string]any
-}
-```
-
-### Context Injection
-
-WorkQueue is injected into the Ask pipeline context:
-
-```go
-// In Ask()
-queue := NewWorkQueue()
-ctx = WithWorkQueue(ctx, queue)
-
-// Capabilities can access it
-queue := GetWorkQueue(ctx)
-if queue != nil {
-    queue.Enqueue(workItem)
-}
-```
-
-This allows capabilities to enqueue work without breaking encapsulation or bypassing the Ask pipeline.
-
-## OnFinish Hook Implementation
-
-The `OnFinish()` hook is called by the Ask pipeline after capability execution completes:
-
-```go
-// In CopilotAgent.ask() - after delegateToReasoningEngine()
-if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok {
-    if planner, ok := selectedCap.(capabilities.WorkflowPlanner); ok {
-        if capResult, ok := ctx.Value(ctxKeyCapabilityResult).(capabilities.CapabilityResult); ok {
-            if err := planner.OnFinish(ctx, capResult); err != nil {
-                log.Warn("WorkflowPlanner OnFinish failed", "error", err)
-            }
-        }
-    }
-}
-```
-
-### Why OnFinish Instead of Orchestrate
-
-**OnFinish advantages:**
-1. Called *after* reasoning completes - plan is fully formed
-2. Doesn't control execution - just prepares next step
-3. Maintains participant pattern - Ask pipeline remains controller
-4. No import cycles - clean separation of concerns
-5. Capability result is available - can use LLM output
-
-**Old Orchestrate problems:**
-1. Called *during* capability selection - premature
-2. Controlled entire workflow - violated participant pattern
-3. Required accessing work queue directly - tight coupling
-4. Created import cycles between packages
-5. Bypassed Ask pipeline benefits
-
-## Tool Execution Chain
-
-When workflow steps use tools:
-
-```
-1. Step instructions mention tool (e.g., "use read_file")
-2. Provider ReAct loop decides to call tool
-3. Provider calls req.Executor.Execute(toolName, args)
-4. CopilotAgent.Execute() dispatches to registry
-5. registry.Get(toolName) returns toolDef
-6. toolDef.Handler() executes (may call capability.Run())
-7. Result returns to provider ReAct loop
-8. Provider continues reasoning with result
-```
-
-This ensures tools are called *by the provider* based on LLM reasoning, not hard-coded in capability logic.
-
-## Example: Dynamic Planner Flow
-
-Complete end-to-end flow for AI-generated workflow:
-
-```
-1. User: "Debug authentication timeout"
-
-2. Ask pipeline routing
-   → TaskContext created
-   → No capability hint, evaluates CanHandle() for all
-   → PlannerCapability.CanHandle() returns false (opt-in via hint)
-   
-3. User: "Use planner to debug authentication timeout"
-
-4. Ask pipeline routing with hint
-   → TaskContext.CapabilityHint = "planner"
-   → PlannerCapability.CanHandle() returns true
-   → ctx = WithValue(ctx, ctxKeySelectedCapability, plannerCap)
-
-5. Capability execution
-   → PlannerCapability.Run() called
-   → generatePlan() analyzes task
-   → Creates WorkflowPlan with phases: analyze, diagnose, fix, verify
-   → Returns CapabilityResult with plan in Data
-
-6. Reasoning engine delegation
-   → delegateToReasoningEngine() called
-   → Provider generates natural language response about plan
-   → Returns finalText to user
-
-7. OnFinish hook
-   → Ask pipeline calls plannerCap.OnFinish(ctx, result)
-   → Extract plan from result.Data["plan"]
-   → planToSteps() converts phases to concrete Steps
-   → Store steps in result.Data["workflow_steps_ready"]
-   → Mark result.Data["workflow_trigger_needed"] = true
-   → Returns nil
-
-8. Ask pipeline detects trigger needed
-   → Creates WorkItem with actor="workflow_manager"
-   → WorkItem.Context contains workflow_steps, original_query
-   → Enqueues to work queue
-   → Returns response to user
-
-9. Next Ask iteration
-   → queue.Dequeue() returns workflow_manager trigger
-   → New ask() call with trigger query
-   → WorkflowManager detects trigger context
-   → Enqueues first step to queue
-   → Processes first step through full Ask iteration
-
-10. Each subsequent step
-    → Step completes → condition evaluated
-    → If success, enqueue next step
-    → Full Ask pipeline for each step
-    → Provider maintains conversation context
-```
-
-## Code Workflow Public API
-
-The Dynamic Planner reuses the public Step API from `lib/sop/ai/agent/codingworkflow`:
-
-```go
-// Public constructors for reusable steps
-func NewAnalyzeCodeStep(description string) Step
-func NewGeneratePatchStep(description string) Step
-func NewApplyFixStep(editableFiles []string) Step
-func NewVerifyFixStep(workingDir string) Step
-func NewDesignStep(description string) Step
-func NewReadTestSourceStep() Step
-func NewReadImplementationStep() Step
-```
-
-These Steps provide:
-- Shared infrastructure (`SharedInfrastructure`) for file access, test running
-- Lifecycle hooks for extensibility
-- Retry logic and error handling
-- Signal processing for interruptions
-
-By reusing these, the Dynamic Planner inherits proven workflow components without reimplementing core functionality.
+The result is a workflow architecture that is dynamic, resumable, and clear without sacrificing structure.
 
 ## Best Practices for SDK Integration
 
-### When to Use Dynamic Planner
+### When to Use Phase Capabilities
 
-- Complex, unique tasks that don't fit templates
-- Investigation scenarios requiring custom analysis steps
-- Tasks where optimal approach isn't predetermined
-- Situations requiring LLM reasoning about workflow structure
+- complex or ambiguous coding tasks that need an adaptive plan
+- debugging, refactoring, or implementation work with uncertain scope
+- tasks that need user correction or mid-flight recovery
+- scenarios where tool exposure should stay narrow and phase-specific
 
-### When to Use KB Workflows
+### Where Adaptive Phases Help Most
 
-- Standardized team processes (e.g., code review checklist)
-- Compliance workflows with required steps
-- Domain-specific patterns (e.g., "Deploy to Production")
-- Reproducible workflows that should be consistent
+- when the user may revise the path mid-task
+- when the task may require re-entry to earlier evidence-gathering stages
+- when the execution flow should remain under the Ask pipeline rather than a separate controller
 
-### Extending the System
-
-**Adding new Step types:**
-```go
-// In lib/sop/ai/agent/codingworkflow/workflow_steps.go
-func NewCustomStep(params) Step {
-    return &step{
-        description: "...",
-        execute: func(ctx, exec, infra, state) error {
-            // Implementation
-        },
-    }
-}
-```
-
-**Adding new workflow phases:**
-```go
-// In planner_capability.go planToSteps()
-case "custom_phase":
-    return NewCustomStep(phase.Description)
-```
-
-**Creating KB workflows:**
-```yaml
-# In knowledge base
-workflow:
-  id: custom_workflow_id
-  name: My Custom Workflow
-  category_path: MyTeam/CustomProcess
-  trigger_patterns:
-    - "follow team process for.*"
-  steps:
-    - step: 1
-      title: Analyze Requirements
-      actor: analyst
-      query_template: "Analyze requirements for: {original_query}"
-      tools_expected: ["read_file", "search_space"]
-```
-
-## Performance Considerations
-
-### Queue Depth Limits
-
-```go
-queue.SetMaxPerActor("workflow_manager", 10)  // Prevent infinite loops
-queue.SetMaxDepth(50)                          // Global limit
-```
-
-### Capability Result Caching
-
-Store large data in separate storage:
-```go
-result.Data["plan_summary"] = "Short description"
-result.Data["full_plan_path"] = "/tmp/plan_12345.json"
-```
-
-### Memory Footprint
-
-- Each WorkItem: ~1-2 KB
-- Plan with 5 steps: ~5-10 KB
-- TurnResult history: ~10-50 KB per workflow
-
-Total memory impact is minimal for typical workflows (under 100 KB).
-
-## Testing and Observability
-
-### Logging
-
-The system provides structured logging at key points:
-
-```go
-log.Info("Workflow trigger enqueued", 
-    "workflow", plan.Name,
-    "steps", len(steps),
-    "queue_depth", queue.Depth())
-
-log.Warn("WorkflowPlanner OnFinish failed",
-    "capability", cap.ID(),
-    "error", err)
-```
-
-### Metrics
-
-Track workflow execution:
-- Workflow start/completion times
-- Step success/failure rates
-- Queue depth over time
-- Capability selection distribution
-
-### Testing
-
-Unit test capabilities independently:
-```go
-func TestPlannerCapability(t *testing.T) {
-    cap := NewPlannerCapability(orchestrator, wfManager)
-    result, err := cap.Run(ctx, "debug issue", state)
-    assert.NoError(t, err)
-    assert.NotNil(t, result.Data["plan"])
-}
-```
-
-Integration test through Ask pipeline:
-```go
-func TestWorkflowExecution(t *testing.T) {
-    agent := NewCopilotAgent(...)
-    response, err := agent.Ask(ctx, "use planner to fix bug")
-    // Verify workflow triggered and executed
-}
-```
-
-## Summary
-
-The AI Studio workflow architecture provides:
-
-1. **Two workflow approaches** - Dynamic AI generation + KB templates
-2. **Unified execution** - Both use Ask pipeline for 100% consistency
-3. **Participant pattern** - Capabilities respond, Ask pipeline controls
-4. **OnFinish hook** - Clean post-execution workflow setup
-5. **WorkQueue orchestration** - Multi-turn coordination without tight coupling
-6. **Reusable components** - Public Step API for workflow construction
-7. **Battle-tested foundation** - Provider reasoning, memory, tools built-in
-
-This architecture ensures every workflow benefits from years of refinement in the Ask pipeline while maintaining clean separation of concerns and extensibility.
+The phase capability model works especially well for agentic programming, recovery, and multi-turn reasoning.

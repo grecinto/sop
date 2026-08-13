@@ -6,18 +6,12 @@ description: AI Studio's Dynamic Planner and Phase system for intelligent multi-
 
 # Intelligent Coding with AI Studio
 
-AI Studio uses the **LLM as Orchestrator** paradigm—the AI makes all decisions about how to approach your task. Through a **Dynamic Planner** and **Phase-based execution system**, it analyzes your request, generates a custom plan, and executes it intelligently. No rigid workflows, no pre-programmed scripts—just pure AI reasoning adapting to your specific needs.
+AI Studio uses the **LLM as Orchestrator** paradigm—the AI chooses how to approach your task. Through a **Dynamic Planner** and **phase-based execution system**, it analyzes your request, creates a plan, and adapts as the work develops.
 
-### LLM as Orchestrator: Intelligence in Control
+### LLM-Guided Work
 
-AI Studio's approach is fundamentally different from traditional automation:
+AI Studio's LLM-guided approach provides:
 
-**Traditional Systems:**
-- Fixed workflows triggered by keywords
-- Rule-based routing ("if debugging, then run steps 1-5")
-- Rigid, pre-programmed execution paths
-
-**AI Studio (LLM as Orchestrator):**
 - 🤖 **AI analyzes your task** and determines the best approach
 - 🎯 **Dynamic planning** tailored to your specific situation
 - 🔄 **Adaptive execution** that adjusts based on discoveries
@@ -27,9 +21,7 @@ You describe what you want, and the AI orchestrates everything—from task class
 
 ## Works Across Native and Remote Tool Surfaces
 
-AI Studio's workflow system is not limited to one built-in tool stack.
-
-Because the phase system is richer than any single editor integration, AI Studio can consume external agent metadata and use external tool surfaces as participants in the workflow.
+AI Studio can work with both its native tools and connected editor tools.
 
 In practice, that means AI Studio can:
 
@@ -39,12 +31,12 @@ In practice, that means AI Studio can:
 - delegate a bounded step remotely
 - keep orchestration, memory, and handoff inside AI Studio
 
-This is why the product can integrate with systems like Continue without giving up the AI Studio workflow model.
+This lets integrations such as Continue contribute editor context and actions while AI Studio keeps the task connected to its phases, memory, and workstream.
 
 :::tip For Developers
 Want to understand the technical architecture? See the SDK documentation:
 - **[Workflow Architecture](../sdk/workflow-architecture)** - Dynamic Planner, Ask pipeline, participant pattern, conversational feedback
-- **[Undo System](../sdk/undo-system)** - Transaction management, semantic search, multi-dimensional indexing
+- **[Undo and Restore](../sdk/undo-system)** - Session-aware workstream history, semantic search, and recovery
 :::
 
 ## How It Works: Dynamic Planner + Phase System
@@ -65,9 +57,9 @@ The **Dynamic Planner** is AI Studio's intelligent task analyzer that:
 4. **LLM orchestrates execution** - Selects tools, controls flow, adapts to findings
 5. **Continuous reasoning** - LLM adjusts plan based on your feedback and discoveries
 
-Every decision—from which phase to enter, which tools to use, when to pivot—is made by the LLM reasoning about your specific context, not by pre-programmed rules.
+Every decision—from which phase to enter, which tools to use, and when to pivot—is guided by the LLM reasoning about your specific context.
 
-That includes recovery decisions. If execution is clearly stuck, the system does not have to pretend progress or force a simplified fallback workflow. It can pause for clarification, stop on a terminal block, or move backward to an earlier phase when the current phase is no longer the right place to continue.
+The same reasoning guides recovery. If execution needs more information, AI Studio can pause for clarification, stop when your attention is needed, or move back to an earlier phase when that is the best way forward.
 
 **Example:**
 ```
@@ -122,35 +114,31 @@ AI Studio executes through **structured phases** that organize the work into cle
 - **Tool-aware**: Each phase has access to relevant coding tools
 - **Integration-aware**: A phase can use local tools, remote tools, or a mix when external systems describe their capabilities in metadata
 
-### Recovery Without a Separate "Plan Mode"
+### Recovery Within the Same Task
 
-One common weakness in phase-based systems is that they can become brittle once execution starts. If the AI enters the wrong phase, hits repeated failures, or discovers that one missing fact blocks safe progress, a simpler product often falls back to a separate "plan first, then execute" mode.
-
-AI Studio does not need that split.
-
-Instead, the same workflow can recover inside the existing phase architecture:
+The phase system keeps the task connected while the work changes:
 
 - if a task needs more evidence, the workflow can move back to Investigation
 - if the design needs revision, it can move back to Planning
 - if one missing fact blocks progress, it can pause for clarification
 - if the situation is truly blocked, it can stop cleanly instead of continuing blindly
 
-This keeps one coherent workflow model for both normal execution and worst-case recovery.
+This keeps the conversation, artifacts, and decisions together as the task develops.
 
 ### Why This Is Also More Token-Efficient
 
 The same phase system helps conserve tokens.
 
-Instead of exposing every possible tool and instruction on every turn, AI Studio can keep each step focused on the current phase and the active domain. That means the model spends more of its prompt budget on the work that matters right now and less on irrelevant capabilities.
+AI Studio keeps each turn focused on the current phase and active domain, so the model can spend more of its prompt budget on the work that matters right now.
 
-It also saves tokens indirectly by avoiding bad turns:
+It also reduces unnecessary work:
 
 - fewer wrong-tool attempts
 - fewer blind retries in the wrong phase
 - less wasted continuation when clarification is needed
-- less need to restart in a separate simplified workflow
+- less need to repeat context when the task changes direction
 
-So the benefit is not just better organization. It is better output per token spent.
+The result is better output per token spent.
 
 For the customer-facing comparison and positioning, see [Why AI Studio Uses Fewer Tokens](../token-efficiency-advantage).
 
@@ -288,7 +276,7 @@ When you ask AI Studio to implement or refactor something, those practices can b
 
 This is especially useful in real projects because the enrichment survives different execution paths:
 
-- direct daemon-owned coding tools can use it
+- direct AI Studio coding tools can use it
 - multi-phase workflow planning can use it
 - delegated IDE companions such as Continue can use it
 
@@ -485,144 +473,35 @@ A: Yes. Modifications are queued and incorporated at the next available step tra
 
 ---
 
-## Workflow Undo System 🚀
+## Undo and Restore
 
-AI Studio includes an **industry-leading workflow undo system** that treats each workflow run as a transaction you can intelligently search and restore.
+AI Studio keeps searchable restore history connected to your sessions and workstreams. When a workstream changes files, the system records the surrounding context and the file changes so you can find and restore useful points in your work later.
 
-### Why This Matters
+### Search Your Workstream History
 
-Unlike traditional undo (Ctrl+Z) or git revert, the Workflow Undo System:
+Use natural language to find earlier changes by topic, component, file area, or time:
 
-- ✅ **Understands your codebase**: Search by application component ("auth middleware", "database layer")
-- ✅ **Combines time + relevance**: Recent changes rank higher, but old relevant changes still surface
-- ✅ **Preserves workflow context**: Know *why* changes were made, not just *what* changed
-- ✅ **No git pollution**: Experimental workflows don't clutter your commit history
-- ✅ **Multi-day history**: 30+ days of searchable workflow history
-
-### Natural Language Search
-
-Find past workflows using plain English:
-
-```bash
-# Semantic search with time ranking
-$ sop workflow find "authentication middleware"
-
-Found 5 matching workflows (ranked by recency + relevance):
-
-1. [Jul 27, 14:30] ⭐ Add JWT validation          (score: 0.95)
-   Component: Authentication System → Middleware
-   Files: auth/middleware.go, api/handler.go
-   Changes: +45 -12 lines
-   
-2. [Jul 26, 10:15] ⭐ Fix session timeout bug     (score: 0.88)
-   Component: Authentication System → Middleware
-   Files: auth/middleware.go
-   Changes: +8 -3 lines
-
-Restore to which point? (1-2, or 'browse'): _
+```text
+"Show me the authentication middleware changes from earlier"
+"Find the parser fix from this morning"
+"Restore the latest session timeout update"
 ```
 
-### How It Works
+Results combine meaning and recency, making it easier to find the change you remember without needing to know its exact file name.
 
-**Automatic Transaction Recording**:
-1. Each workflow run is captured as a transaction
-2. Files are backed up before modification
-3. Code artifacts (functions, classes) are extracted via AST analysis
-4. Transaction is indexed in multiple dimensions:
-   - **Date** (exact filtering)
-   - **Code artifacts** (semantic search)
-   - **Workflow metadata** (type, tags, description)
+### Restore What You Need
 
-**Intelligent Ranking**:
-- Combines **semantic relevance** (how well it matches your query)
-- With **time recency** (recent changes rank higher)
-- Default: 70% relevance + 30% recency (configurable)
+AI Studio supports practical recovery options:
 
-### Common Workflows
+- restore a complete change set from a workstream
+- restore selected files when only part of the work should be reversed
+- preview a restore before applying it
 
-**Find recent changes to a component:**
-```bash
-$ sop workflow find "parser engine" --date today
-```
-
-**Restore to a specific point:**
-```bash
-$ sop workflow restore txn_20260727_143022
-```
-
-**Preview before restoring:**
-```bash
-$ sop workflow restore txn_20260727_143022 --dry-run
-```
-
-**Selective file restore:**
-```bash
-$ sop workflow restore txn_20260727_143022 --files-only auth/middleware.go
-```
-
-**Browse by component:**
-```bash
-$ sop workflow list --component "Authentication System"
-```
-
-### Time-Ranked Results
-
-Results are automatically ranked to show the most relevant recent changes first:
-
-- **Today's changes**: Get maximum boost (recency = 1.0)
-- **This week**: Moderate boost (recency = 0.5)
-- **Older changes**: Minimal boost, but still surface if highly relevant
-
-**Example**: Searching "auth middleware" returns today's JWT changes first, but also surfaces a highly relevant authentication refactor from last month if it's semantically similar.
-
-### Multi-Dimensional Index
-
-Each transaction is accessible via multiple paths:
-
-```
-Date Path:        2026-07-27 → "Add JWT validation"
-Component Path:   Authentication System → Middleware → "Add JWT validation"
-Type Path:        security_enhancement → "Add JWT validation"
-```
-
-This enables both:
-- Fast date lookups: "What changed today?"
-- Semantic searches: "Authentication middleware changes"
-
-### Benefits for Developers
-
-**Time Savings**:
-- 10-30 minutes per undo operation (vs. manual git bisect)
-- 2-5 hours per week for frequent experimenters
-- 100+ hours per year
-
-**Confidence Boost**:
-- Experiment freely—undo is one semantic query away
-- No fear of breaking working code
-- Try multiple approaches in parallel
-
-**Context Preservation**:
-- Understand why changes were made
-- See full workflow context
-- Learn from past attempts
-
-### Storage & Retention
-
-- Default: 30 days of history
-- Automatic cleanup with milestone protection
-- ~48 KB per typical transaction
-- Compressed backups for older changes
+Restore history also includes useful details such as changed files, summaries, repository areas, and related code artifacts.
 
 ### Learn More
 
-For complete technical details and SDK integration:
-- **[Workflow Undo System (SDK)](../sdk/undo-system)** - Architecture documentation covering:
-  - Transaction lifecycle and commit/rollback mechanisms
-  - Multi-dimensional indexing (date, code artifacts, workflow types)
-  - Semantic search with time ranking algorithms
-  - AST-based code artifact extraction
-  - Storage architecture and performance optimizations
-  - CLI integration and testing strategies
+See [Undo and Restore](../sdk/undo-system) for the SDK view of session-aware workstream history, semantic search, and recovery.
 
 ---
 
@@ -630,7 +509,7 @@ For complete technical details and SDK integration:
 
 AI Studio's **LLM as Orchestrator** paradigm delivers truly intelligent coding assistance:
 
-- **LLM makes all decisions** - No rigid workflows, pure AI reasoning drives everything
+- **LLM-guided decisions** - AI Studio reasons about the task and chooses the next step
 - **Dynamic Planner** generates custom plans tailored to your specific task
 - **Phase-based execution** organizes work into clear, manageable stages
 - **Adaptive intelligence** adjusts approach based on discoveries and feedback
@@ -639,28 +518,18 @@ AI Studio's **LLM as Orchestrator** paradigm delivers truly intelligent coding a
 - **Multi-language support** works seamlessly with Go, Python, Java, Rust, JavaScript, TypeScript, and C#
 - **Transparent reasoning** shows you what AI Studio understood and plans to do
 
-Just describe what you want to accomplish. The LLM analyzes your task, reasons about the best approach, generates an appropriate phase plan, and orchestrates execution with the right tools. This is agentic AI at its best—intelligent, adaptive, and in control.
+Just describe what you want to accomplish. The LLM analyzes your task, reasons about the best approach, creates an appropriate phase plan, and uses the right tools. The result is an intelligent, adaptive coding experience that stays connected to your work.
 
 ---
 
 ## For Developers & SDK Users
 
-This guide focuses on using workflows from an end-user perspective. If you're integrating AI Studio or want to understand the technical architecture:
+This guide focuses on using AI Studio from an end-user perspective. For SDK integration details:
 
 - **[Workflow Architecture (SDK)](../sdk/workflow-architecture)** - Complete technical documentation covering:
-  - Dynamic Planner implementation and OnFinish hooks
-  - Ask pipeline architecture and execution model
-  - Participant vs Controller pattern explained
-  - WorkQueue orchestration and context injection
-  - Knowledge Base workflow structure
-  - Step API and reusable components
-  - Integration best practices and testing
+   - Dynamic phase planning and the Ask pipeline
+   - Workstream state and phase transitions
+   - Capability integration and reusable components
+   - Integration best practices and testing
 
-- **[Undo System Architecture (SDK)](../sdk/undo-system)** - Technical details on the undo system:
-  - Transaction lifecycle and atomic commits
-  - Multi-dimensional indexing strategies
-  - Semantic search with time ranking
-  - AST-based code artifact extraction
-  - Storage architecture and performance
-  - Rollback mechanisms and integrity checks
-  - CLI integration and SDK best practices
+- **[Undo and Restore (SDK)](../sdk/undo-system)** - Session-aware workstream history, semantic search, restore, and SDK integration
