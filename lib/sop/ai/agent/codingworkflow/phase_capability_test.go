@@ -250,7 +250,7 @@ func TestPhaseContext_KeepsNoCodeBrainstormingInsideCurrentPhase(t *testing.T) {
 	cap := NewExecutionPhaseCapability(infra)
 
 	result := cap.BuildContext("No code changes — brainstorm the API shape and tradeoffs", capabilities.RoutingState{})
-	for _, check := range []string{"no code changes", "brainstorm", "stay in the current execution phase", "do not leave the phase", "earlier or later phase", "explicit user agreement"} {
+	for _, check := range []string{"no code changes", "brainstorm", "stay in the current execution phase", "do not leave the phase", "earlier or later phase", "explicit user agreement", "AI Studio Undo", "undo/restore"} {
 		if !strings.Contains(strings.ToLower(result), strings.ToLower(check)) {
 			t.Fatalf("expected execution context to include %q in no-code brainstorming guidance, got %q", check, result)
 		}

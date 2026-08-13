@@ -297,10 +297,12 @@ func buildNoCodeBrainstormingContext(phaseID, phaseName string) string {
 - Treat this as a design/planning discussion, not an implementation request.
 - The user has indicated no code changes are wanted or the task is explicitly discussion-only.
 - Stay in the current %s phase and participate in brainstorming, trade-off analysis, option comparison, and design refinement when the outcome is additive to the current phase and plan.
+- If the user rejects a patch, says no code changes, or asks to back out, do not continue implementation. Acknowledge the concern, keep the conversation in discussion mode, and continue with design, planning, trade-offs, or problem framing inside the current phase.
 - If the discussion is not additive to the current phase or current plan, discuss whether the user wants to move to an earlier or later phase; only shift phases when the context clearly warrants it or there is explicit user agreement.
 - Do not leave the phase for implementation work unless the user explicitly asks to move back to planning/design or an earlier phase, or the situation clearly requires a meaningful phase transition.
 - Keep the conversation focused on concepts, constraints, interfaces, trade-offs, risks, and the recommended direction.
-- If the user reaches a consensus or asks to continue from planning/design, capture that as the next step and resume from the appropriate earlier phase only with explicit agreement.`, phaseID)
+- If the user reaches a consensus or asks to continue from planning/design, capture that as the next step and resume from the appropriate earlier phase only with explicit agreement.
+- Mention the AI Studio Undo/restore path only as a safety/recovery option when the user wants to revert or back out; it is not the default next step for discussion-only requests.`, phaseID)
 }
 
 func isNoCodeBrainstormingRequest(query string) bool {
