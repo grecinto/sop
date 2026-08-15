@@ -386,6 +386,19 @@ func GetModelCatalogRegistry() *ModelCatalogRegistry {
 	return modelCatalogRegistryInst
 }
 
+func (r *ModelCatalogRegistry) FindEntry(provider, model string) (ModelCatalogEntry, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	for _, entry := range r.entries {
+		if strings.EqualFold(strings.TrimSpace(entry.Provider), provider) && strings.EqualFold(strings.TrimSpace(entry.Model), model) {
+			return entry, true
+		}
+	}
+	return ModelCatalogEntry{}, false
+}
+
 func (r *ModelCatalogRegistry) Load() error {
 	entries, err := loadModelCatalogEntries()
 	if err != nil {

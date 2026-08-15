@@ -165,6 +165,73 @@ func TestShouldPauseAskQueue_WhenClarificationStateIsResolved(t *testing.T) {
 	}
 }
 
+func TestAskCore_AsksForRepoContextBeforeCodingWorkflowClassification(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.SetGenerator(&askRoutingTestGenerator{Response: `{"domains":["coding_workflow"],"phase":"execution","phase_plan":["investigation","execution","review"],"intent":"generate_code","confidence":"high","reasoning":"fixing code"}`})
+
+	resp, err := ag.askCore(context.Background(), "fix failing tests", nil)
+	if err != nil {
+		t.Fatalf("askCore failed: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(resp), "repository or working directory") {
+		t.Fatalf("expected vague repo-fix ask to request repository or working directory before coding workflow routing, got: %s", resp)
+	}
+}
+
+func TestAskCore_RejectsLocalOnlyWorkflowWhenDisabled(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.SetGenerator(&askRoutingTestGenerator{Response: `{"domains":["coding_workflow"],"phase":"execution","phase_plan":["investigation","execution","review"],"intent":"generate_code","confidence":"high","reasoning":"fixing code"}`})
+
+	resp, err := ag.askCore(context.Background(), "fix failing tests", nil)
+	if err != nil {
+		t.Fatalf("askCore failed: %v", err)
+	}
+	if !strings.Contains(resp, "Desktop automation and/or coding workflow is not available in this setup") {
+		t.Fatalf("expected unsupported local-only capability message, got: %s", resp)
+	}
+}
+
+func TestAskTaskContext_NormalizesRepoFixPathQueriesToCodingWorkflowOnly(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ctx := ag.normalizeAskTaskContext(AskTaskContext{
+		Domains:   []string{"coding_workflow", "desktop"},
+		Phase:     "execution",
+		PhasePlan: []string{"investigation", "execution", "review"},
+		Intent:    "generate_code",
+		CRUD:      []string{"R", "U"},
+		Confidence: "high",
+		Reasoning:  "The user wants failing tests fixed in a local code folder, which requires inspecting the code/tests and then modifying existing files.",
+		OriginalQuery: "The current folder ../lib/sop, fix failing tests under this folder.",
+	})
+	if len(ctx.Domains) != 1 || ctx.Domains[0] != "coding_workflow" {
+		t.Fatalf("expected repo-fix folder query to normalize to coding_workflow only, got %v", ctx.Domains)
+	}
+}
+
+func TestBuildAskClassificationPrompt_UsesActiveCognitiveStateForContinuity(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any), CognitiveState: &ai.SessionCognitiveState{
+		CurrentQuery: "fix failing tests",
+		CurrentPhase: "execution",
+		LastAssessment: &ai.SessionCognitiveAssessment{
+			SuggestedPhase: "execution",
+			Rationale:      "Keep the repo-fix task in coding_workflow while the user scopes it to a local folder.",
+		},
+	}}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	prompt := ag.buildAskClassificationPrompt(ctx, "The current folder ../lib/sop, fix failing tests under this folder.", nil, nil)
+	if !strings.Contains(prompt, "coding_workflow") || !strings.Contains(prompt, "preserve the active coding_workflow lead") {
+		t.Fatalf("expected active cognitive state to steer classification continuity, got prompt: %s", prompt)
+	}
+}
+
 func TestAskCore_QueuedPhaseActorUsesPersistedAskClassification(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.registry = NewRegistry()

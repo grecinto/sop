@@ -162,13 +162,25 @@ Token-efficiency planning for Continue-originated requests is documented in [doc
 - completed: provider-keyed credential fields added to Ask and handoff payloads while preserving all existing single-provider fields
 - completed: existing request behavior preserved when new fields are absent
 - completed: decode/validation tests added for mixed legacy/new payload shapes and malformed encrypted provider-pool secrets
+- in progress: Phase 1 ranking policy for provider selection now follows a stable cold-start preference order, then recent pool history/recency, then cost-aware sorting within the eligible intelligence tier
+
+Selection policy for Phase 1:
+- cold start: use industry-default preference ordering (`gemini` → `anthropic` → `openai`) unless a user override is explicit
+- eligible check: discard models that do not meet the requested thinking/intelligence level for the task
+- history boost: prefer models with newer successful/validated metadata to avoid repeatedly choosing low-quality or flaky providers; a proven provider with better history can outrank a cheaper but unproven model when both are eligible
+- cost floor: among otherwise equivalent eligible models, prefer the lower estimated cost
+- explicit overrides remain first if the user or request pins a provider/model directly
+
+This is intentionally a hybrid strategy: a fixed preference list keeps startup stable and avoids random bad choices, while history and cost keep the runtime adaptive and economical once there is data.
 
 ##### Phase 2: Daemon session persistence and runtime selection
 
 - completed: provider-keyed LLM credentials are persisted in daemon session context and reused when request-level legacy fields are omitted
 - completed: runtime provider chain now orders explicit active provider first, then remaining credentialed pool providers
 - completed: Ask runtime now initializes `FallbackGenerator` with multiple fallbacks from the resolved chain
-- completed: tests added for chain ordering, credential filtering, and degraded initialization paths
+- completed: per-provider outcome history (`success_count`, `failure_count`, `last_success_at_ms`, `last_failure_at_ms`, `last_validated_at_ms`) is persisted in the daemon pool and re-used during subsequent ranking
+- completed: ranking integrates historical reliability as a stronger signal than raw price once a provider has proven outcomes, while still preserving intelligence eligibility and cold-start defaults
+- completed: tests added for chain ordering, credential filtering, degraded initialization paths, and history-aware provider sorting
 
 ##### Phase 3: UI secret model and migration
 

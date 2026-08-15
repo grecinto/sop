@@ -34,13 +34,11 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 	if a == nil || a.capabilityRegistry != nil {
 		return
 	}
-	desktopCap := desktop.NewCapability()
-	desktopCap.SetCommandExecutor(a.toolExecuteLocalCommand)    // For LLM tool calls
-	desktopCap.SetRawCommandExecutor(a.rawLocalCommandExecutor) // For direct /c commands
 	ideWorkerCap := ideworker.NewCapability()
 
-	// Build capability list dynamically based on feature flags
-	caps := []capabilities.Capability{desktopCap, ideWorkerCap}
+	// Build capability list dynamically based on feature flags.
+	// Desktop automation and coding workflow are local-runtime only and must stay unavailable in HQ.
+	caps := []capabilities.Capability{ideWorkerCap}
 
 	// Stores feature disabled by default for v1 (AI Copilot focus)
 	if StoresFeatureEnabled() {
@@ -49,127 +47,132 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 
 	caps = append(caps, spaces.NewCapability())
 
-	// Register the local coding workflow capability by default so repository-oriented
-	// requests can still be routed through the established workflow entry point.
-	cwfInfra := cw.NewDefaultSharedInfrastructure()
-	// Inject STM accessor for phase succession (explicit parameter passing, not context)
-	cwfInfra.STMAccessor = a.getSTMForPhaseCapabilities
+	if localDesktopAutomationEnabled.Load() {
+		desktopCap := desktop.NewCapability()
+		desktopCap.SetCommandExecutor(a.toolExecuteLocalCommand)    // For LLM tool calls
+		desktopCap.SetRawCommandExecutor(a.rawLocalCommandExecutor) // For direct /c commands
+		caps = append(caps, desktopCap)
 
-	// Inject session queue accessor for work item enqueueing (Participant Pattern)
-	cwfInfra.GetSessionQueue = a.getSessionQueueForCapabilities
+		cwfInfra := cw.NewDefaultSharedInfrastructure()
+		// Inject STM accessor for phase succession (explicit parameter passing, not context)
+		cwfInfra.STMAccessor = a.getSTMForPhaseCapabilities
 
-	// Reuse the existing local automation command path for desktop phase tools.
-	cwfInfra.LocalCommandExecutor = a.toolExecuteLocalCommand
+		// Inject session queue accessor for work item enqueueing (Participant Pattern)
+		cwfInfra.GetSessionQueue = a.getSessionQueueForCapabilities
 
-	// Inject LTM accessor for team patterns (explicit parameter passing, not context)
-	cwfInfra.LTMAccessor = func(ctx context.Context) (any, error) {
-		return a.getOrCreateLTM(ctx)
-	}
+		// Reuse the existing local automation command path for desktop phase tools.
+		cwfInfra.LocalCommandExecutor = a.toolExecuteLocalCommand
 
-	// Inject database accessor for team patterns vectorization
-	cwfInfra.DatabaseAccessor = func(ctx context.Context) (any, error) {
-		if a.systemDB == nil {
-			return nil, fmt.Errorf("systemDB not available")
+		// Inject LTM accessor for team patterns (explicit parameter passing, not context)
+		cwfInfra.LTMAccessor = func(ctx context.Context) (any, error) {
+			return a.getOrCreateLTM(ctx)
 		}
-		return a.systemDB, nil
-	}
 
-	// Inject LTM name accessor for team patterns vectorization
-	cwfInfra.LTMName = func() string {
-		a.Memory.BindSession(context.Background())
-		return a.Memory.LongTermMemoryName()
-	}
-
-	// Inject LLM accessor for team patterns vectorization
-	cwfInfra.LLMAccessor = func(ctx context.Context) (any, error) {
-		if a.brain == nil {
-			return nil, fmt.Errorf("LLM (brain) not available")
-		}
-		return a.brain, nil
-	}
-
-	// Inject embedder accessor for team patterns vectorization
-	cwfInfra.EmbedderAccessor = func(ctx context.Context) (any, error) {
-		if a.service == nil || a.service.Domain() == nil {
-			return nil, fmt.Errorf("service domain not available")
-		}
-		embedder := a.service.Domain().Embedder()
-		if embedder == nil {
-			return nil, fmt.Errorf("embedder not available")
-		}
-		return embedder, nil
-	}
-
-	// Enable adaptive classification and dynamic plan mutation (LLM orchestration)
-	classificationHistory := plannerpkg.NewClassificationHistory()
-	wrappedGenerator := plannerpkg.WrapGenerator(a.brain)
-	cwfInfra.PhaseClassificationStrategy = plannerpkg.NewAdaptiveStrategy(
-		wrappedGenerator, // LLM generator for classification escalation
-		classificationHistory,
-	)
-	cwfInfra.ClassificationHistory = classificationHistory
-	cwfInfra.PhasePlanMutator = plannerpkg.NewSTMPhasePlanMutator(a.getSTMForPhaseCapabilities)
-
-	// Planner (universal - works across all domains)
-	caps = append(caps, plannerpkg.NewPlannerCapability(cwfInfra))
-
-	// Multi-Step Planner (decomposes multi-goal queries into sequential steps)
-	// Note: No StepExecutor - phases execute directly (Participant Pattern)
-	caps = append(caps, multistepplanner.NewMultiStepPlannerCapability(cwfInfra))
-
-	// WorkStream Management (LLM orchestrates pause/resume/jump via tools)
-	// Provides: list_workstreams, get_workstream_details, jump_to_phase,
-	//           pause_workstream, resume_workstream, abandon_workstream
-	// Note: Uses direct session STM adapter so pause/resume state mutations persist.
-	caps = append(caps, capabilities.NewWorkStreamManagement(
-		func() capabilities.STMReader {
-			if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
-				return nil
+		// Inject database accessor for team patterns vectorization
+		cwfInfra.DatabaseAccessor = func(ctx context.Context) (any, error) {
+			if a.systemDB == nil {
+				return nil, fmt.Errorf("systemDB not available")
 			}
-			return &sessionSTMReaderAdapter{stm: a.service.session.Memory}
-		},
-		func() capabilities.PhasePlanMutator {
-			if cwfInfra.PhasePlanMutator != nil {
-				if m, ok := cwfInfra.PhasePlanMutator.(capabilities.PhasePlanMutator); ok {
-					return m
+			return a.systemDB, nil
+		}
+
+		// Inject LTM name accessor for team patterns vectorization
+		cwfInfra.LTMName = func() string {
+			a.Memory.BindSession(context.Background())
+			return a.Memory.LongTermMemoryName()
+		}
+
+		// Inject LLM accessor for team patterns vectorization
+		cwfInfra.LLMAccessor = func(ctx context.Context) (any, error) {
+			if a.brain == nil {
+				return nil, fmt.Errorf("LLM (brain) not available")
+			}
+			return a.brain, nil
+		}
+
+		// Inject embedder accessor for team patterns vectorization
+		cwfInfra.EmbedderAccessor = func(ctx context.Context) (any, error) {
+			if a.service == nil || a.service.Domain() == nil {
+				return nil, fmt.Errorf("service domain not available")
+			}
+			embedder := a.service.Domain().Embedder()
+			if embedder == nil {
+				return nil, fmt.Errorf("embedder not available")
+			}
+			return embedder, nil
+		}
+
+		// Enable adaptive classification and dynamic plan mutation (LLM orchestration)
+		classificationHistory := plannerpkg.NewClassificationHistory()
+		wrappedGenerator := plannerpkg.WrapGenerator(a.brain)
+		cwfInfra.PhaseClassificationStrategy = plannerpkg.NewAdaptiveStrategy(
+			wrappedGenerator, // LLM generator for classification escalation
+			classificationHistory,
+		)
+		cwfInfra.ClassificationHistory = classificationHistory
+		cwfInfra.PhasePlanMutator = plannerpkg.NewSTMPhasePlanMutator(a.getSTMForPhaseCapabilities)
+
+		// Planner (universal - works across all domains)
+		caps = append(caps, plannerpkg.NewPlannerCapability(cwfInfra))
+
+		// Multi-Step Planner (decomposes multi-goal queries into sequential steps)
+		// Note: No StepExecutor - phases execute directly (Participant Pattern)
+		caps = append(caps, multistepplanner.NewMultiStepPlannerCapability(cwfInfra))
+
+		// WorkStream Management (LLM orchestrates pause/resume/jump via tools)
+		// Provides: list_workstreams, get_workstream_details, jump_to_phase,
+		//           pause_workstream, resume_workstream, abandon_workstream
+		// Note: Uses direct session STM adapter so pause/resume state mutations persist.
+		caps = append(caps, capabilities.NewWorkStreamManagement(
+			func() capabilities.STMReader {
+				if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+					return nil
 				}
-			}
-			return nil
-		},
-	))
+				return &sessionSTMReaderAdapter{stm: a.service.session.Memory}
+			},
+			func() capabilities.PhasePlanMutator {
+				if cwfInfra.PhasePlanMutator != nil {
+					if m, ok := cwfInfra.PhasePlanMutator.(capabilities.PhasePlanMutator); ok {
+						return m
+					}
+				}
+				return nil
+			},
+		))
 
-	// Note: No explicit InterjectionInterpreter needed
-	// LLM interprets user interjections naturally and calls WorkStream management tools
-	// The tool calls (jump_to_phase, pause_workstream, etc.) ARE the orchestration signals
-	// This aligns with implicit orchestration model used in Stores/Spaces domains
+		// Note: No explicit InterjectionInterpreter needed
+		// LLM interprets user interjections naturally and calls WorkStream management tools
+		// The tool calls (jump_to_phase, pause_workstream, etc.) ARE the orchestration signals
+		// This aligns with implicit orchestration model used in Stores/Spaces domains
 
-	// Coding domain phases (full SDLC workflow)
-	for _, phaseID := range []string{"intake", "investigation", "planning", "execution", "review", "delivery"} {
-		caps = append(caps, plannerpkg.NewPhase("coding_workflow", phaseID, cwfInfra))
-	}
+		// Coding domain phases (full SDLC workflow)
+		for _, phaseID := range []string{"intake", "investigation", "planning", "execution", "review", "delivery"} {
+			caps = append(caps, plannerpkg.NewPhase("coding_workflow", phaseID, cwfInfra))
+		}
 
-	// Stores domain phases (methodical query workflow)
-	// Investigation = Read-only (list, scan, describe)
-	// Planning = Query design
-	// Execution = Mutations (create, update, delete)
-	// Review = Validation
-	for _, phaseID := range []string{"investigation", "planning", "execution", "review"} {
-		caps = append(caps, plannerpkg.NewPhase("stores", phaseID, cwfInfra))
-	}
+		// Stores domain phases (methodical query workflow)
+		// Investigation = Read-only (list, scan, describe)
+		// Planning = Query design
+		// Execution = Mutations (create, update, delete)
+		// Review = Validation
+		for _, phaseID := range []string{"investigation", "planning", "execution", "review"} {
+			caps = append(caps, plannerpkg.NewPhase("stores", phaseID, cwfInfra))
+		}
 
-	// Spaces domain phases (knowledge management workflow)
-	// Investigation = Read-only (read_config, list_items)
-	// Execution = Mutations (mint, enrich)
-	// Review = Validation
-	for _, phaseID := range []string{"investigation", "execution", "review"} {
-		caps = append(caps, plannerpkg.NewPhase("spaces", phaseID, cwfInfra))
-	}
+		// Spaces domain phases (knowledge management workflow)
+		// Investigation = Read-only (read_config, list_items)
+		// Execution = Mutations (mint, enrich)
+		// Review = Validation
+		for _, phaseID := range []string{"investigation", "execution", "review"} {
+			caps = append(caps, plannerpkg.NewPhase("spaces", phaseID, cwfInfra))
+		}
 
-	// Desktop domain phases (automation workflow)
-	// Planning = Script creation
-	// Execution = Command execution
-	for _, phaseID := range []string{"planning", "execution"} {
-		caps = append(caps, plannerpkg.NewPhase("desktop", phaseID, cwfInfra))
+		// Desktop domain phases (automation workflow)
+		// Planning = Script creation
+		// Execution = Command execution
+		for _, phaseID := range []string{"planning", "execution"} {
+			caps = append(caps, plannerpkg.NewPhase("desktop", phaseID, cwfInfra))
+		}
 	}
 
 	a.capabilityRegistry = capabilities.NewRegistry(caps...)

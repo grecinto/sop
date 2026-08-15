@@ -478,12 +478,14 @@ func TestListTools_LowRiskExposedToolsUseJSONSchemas(t *testing.T) {
 }
 
 func TestListToolsIncludesCommandShortcuts(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.Background()
 	payload := &ai.SessionPayload{CurrentDB: "system"}
 	ctx = context.WithValue(ctx, "session_payload", payload)
 
-	// Ensure desktop capability is registered (which provides command shortcuts)
 	agent.ensureCapabilityRegistry()
 	agent.registerTools(ctx)
 
@@ -492,7 +494,6 @@ func TestListToolsIncludesCommandShortcuts(t *testing.T) {
 		t.Fatalf("list_tools failed: %v", err)
 	}
 
-	// Unwrap ToolResultEnvelope if present
 	var envelope ai.ToolResultEnvelope
 	if err := json.Unmarshal([]byte(output), &envelope); err == nil && len(envelope.ToolResult) > 0 {
 		var unwrapped string
@@ -501,12 +502,10 @@ func TestListToolsIncludesCommandShortcuts(t *testing.T) {
 		}
 	}
 
-	// Check for command shortcuts section
 	if !strings.Contains(output, "### Command Shortcuts") {
 		t.Errorf("list_tools output should include Command Shortcuts section.\nGot:\n%s", output)
 	}
 
-	// Check for the supported desktop automation shortcuts
 	expectedShortcuts := []string{"/c", "/cmd", "/shell", "/exec"}
 	for _, shortcut := range expectedShortcuts {
 		if !strings.Contains(output, shortcut+" <command>:") {
@@ -514,7 +513,6 @@ func TestListToolsIncludesCommandShortcuts(t *testing.T) {
 		}
 	}
 
-	// Check for example usage
 	if !strings.Contains(output, "Example:") && !strings.Contains(output, "/cmd ls") {
 		t.Errorf("list_tools output should include example usage.\nGot:\n%s", output)
 	}

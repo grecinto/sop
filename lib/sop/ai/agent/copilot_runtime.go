@@ -317,7 +317,48 @@ func (a *CopilotAgent) handleKBDirectDisplay(ctx context.Context, rawQuery strin
 	return response, nil
 }
 
+func isLocalOnlyCapabilityRequest(domain, capabilityHint string) bool {
+	domain = strings.TrimSpace(strings.ToLower(domain))
+	capabilityHint = strings.TrimSpace(strings.ToLower(capabilityHint))
+	if domain == "desktop" || domain == "desktop automation" || domain == "desktop_automation" || domain == "coding_workflow" || domain == "coding" || domain == "codingworkflow" {
+		return true
+	}
+	if capabilityHint == "desktop_automation" || capabilityHint == "desktop" || capabilityHint == "coding_workflow" || capabilityHint == "coding" || capabilityHint == "codingworkflow" {
+		return true
+	}
+	return false
+}
+
+func unsupportedLocalCapabilityResponse(taskCtx *TaskContextClassification) string {
+	if taskCtx == nil || !isLocalOnlyCapabilityRequest(taskCtx.Domain, taskCtx.CapabilityHint) {
+		return ""
+	}
+	if localDesktopAutomationEnabled.Load() {
+		return ""
+	}
+	return "Desktop automation and/or coding workflow is not available in this setup. This capability is only available in local daemon mode."
+}
+
+func shouldAskForMoreContextForVagueRepoTask(query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return false
+	}
+	patterns := []string{"fix failing tests", "fix the failing tests", "fix tests", "debug the repo", "debug this repo", "troubleshoot the project", "repair the project", "fix the bug"}
+	for _, p := range patterns {
+		if strings.Contains(q, p) {
+			return !strings.Contains(q, "repo") && !strings.Contains(q, "repository") && !strings.Contains(q, "path") && !strings.Contains(q, "directory") && !strings.Contains(q, "workspace") && !strings.Contains(q, "project")
+		}
+	}
+	return false
+}
+
 func (a *CopilotAgent) resolveCapability(ctx context.Context, query string, taskContext *TaskContextClassification) (context.Context, capabilities.Capability) {
+	if taskContext != nil {
+		if response := unsupportedLocalCapabilityResponse(taskContext); response != "" {
+			return context.WithValue(ctx, ctxKeySelectedCapability, nil), nil
+		}
+	}
 	routingState := capabilities.RoutingState{
 		Domain:         taskContext.Domain,
 		Gate:           taskContext.RoutingGate,

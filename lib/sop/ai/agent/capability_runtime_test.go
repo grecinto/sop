@@ -27,6 +27,9 @@ func TestBuildFocusedToolContextUsesCapabilityRegistry(t *testing.T) {
 }
 
 func TestNewCopilotAgentRegistersDesktopCapability(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	if ag.capabilityRegistry == nil {
 		t.Fatal("expected capability registry to be initialized")
@@ -34,7 +37,7 @@ func TestNewCopilotAgentRegistersDesktopCapability(t *testing.T) {
 
 	cap, ok := ag.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: "Desktop"})
 	if !ok {
-		t.Fatal("expected desktop capability to be registered")
+		t.Fatal("expected desktop capability to be registered when local automation is enabled")
 	}
 	if cap.ID() != desktop.CapabilityID {
 		t.Fatalf("expected desktop capability id %q, got %q", desktop.CapabilityID, cap.ID())
@@ -81,8 +84,10 @@ func TestNewCopilotAgentRegistersSpacesCapability(t *testing.T) {
 }
 
 func TestNewCopilotAgentRegistersCodingWorkflowCapabilityByDefault(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
 	ag := NewCopilotAgent(Config{}, nil, nil)
-	// Phase capabilities should be registered by default
 	var foundPhaseCapability bool
 	for _, cap := range ag.capabilityRegistry.ListAll() {
 		if cap != nil && strings.HasPrefix(cap.ID(), "phase_") {
@@ -91,11 +96,14 @@ func TestNewCopilotAgentRegistersCodingWorkflowCapabilityByDefault(t *testing.T)
 		}
 	}
 	if !foundPhaseCapability {
-		t.Fatal("expected phase capabilities to be registered by default")
+		t.Fatal("expected local-only coding workflow phase capabilities to be registered when local automation is enabled")
 	}
 }
 
 func TestNewCopilotAgentRegistersWorkStreamManagementCapability(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	var found bool
 	for _, cap := range ag.capabilityRegistry.ListAll() {
@@ -105,7 +113,7 @@ func TestNewCopilotAgentRegistersWorkStreamManagementCapability(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("expected WorkStreamManagement capability to be registered")
+		t.Fatal("expected WorkStreamManagement capability to be registered when local automation is enabled")
 	}
 }
 

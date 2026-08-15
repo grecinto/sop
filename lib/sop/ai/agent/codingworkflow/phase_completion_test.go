@@ -229,6 +229,30 @@ func TestPhaseCapture_AllowsCompleteWithoutRequiredCriteria(t *testing.T) {
 	}
 }
 
+func TestPhaseCapture_DoesNotAutoAdvanceWithoutExplicitTransition(t *testing.T) {
+	sharedInfra := NewDefaultSharedInfrastructure()
+	capability := NewInvestigationPhaseCapability(sharedInfra)
+
+	result, err := capability.runCapture(map[string]any{
+		"summary": "Investigation complete",
+		"status":  "complete",
+	})
+	if err != nil {
+		t.Fatalf("runCapture failed: %v", err)
+	}
+	if strings.Contains(result, "Next phase:") {
+		t.Fatalf("expected no automatic next phase when transition is not explicit, got: %s", result)
+	}
+
+	artifact, err := capability.loadExistingArtifact()
+	if err != nil {
+		t.Fatalf("loadExistingArtifact failed: %v", err)
+	}
+	if artifact.TransitionTo != "" {
+		t.Fatalf("expected TransitionTo to remain empty without explicit transition, got %q", artifact.TransitionTo)
+	}
+}
+
 // TestHandoff_IncludesPreviousPhaseContext verifies that handoff prompts include context from previous phases
 func TestHandoff_IncludesPreviousPhaseContext(t *testing.T) {
 	sharedInfra := NewDefaultSharedInfrastructure()

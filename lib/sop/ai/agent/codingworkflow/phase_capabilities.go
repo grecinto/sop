@@ -2698,19 +2698,17 @@ func (c *PhaseCapability) runCapture(args map[string]any) (string, error) {
 		artifact.TransitionDirection = previous.TransitionDirection
 	}
 
-	// Phase Succession: Determine next phase from PhasePlan if complete
-	// Priority Rules:
-	// 1. Exit requests: Always honored (artifact.ExitRequested)
-	// 2. Explicit transitions: LLM-provided transition_to overrides plan (checkpoints or user requests)
-	// 3. Automatic succession: Use plan if no explicit transition
+	// IMPORTANT: Do not auto-advance workflow progression here.
+	// The Ask pipeline remains the single orchestration controller; phase capabilities
+	// are passive participants that record state and may expose explicit transitions,
+	// but they must not silently move the conversation to a later phase without an
+	// explicit user/LLM decision.
 	if strings.ToLower(strings.TrimSpace(artifact.Status)) == "complete" {
 		if artifact.TransitionTo == "" && !artifact.ExitRequested {
-			// No explicit transition provided - use plan's next phase
-			nextPhase, direction := c.determineNextPhaseFromPlan()
-			if nextPhase != "" {
-				artifact.TransitionTo = nextPhase
-				artifact.TransitionDirection = direction
-			}
+			// Explicit state capture only. Leave transition unset so the orchestrator can
+			// decide whether a later phase is appropriate based on missing facts and policy.
+			artifact.TransitionTo = ""
+			artifact.TransitionDirection = ""
 		}
 	}
 

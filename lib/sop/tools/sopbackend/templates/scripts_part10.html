@@ -687,19 +687,6 @@
         toggleProviderAuth();
     }
 
-    function handleSetupBrainFallbackProviderChange() {
-        const provider = document.getElementById('setup-brain-fallback-provider');
-        const urlContainer = document.getElementById('setup-brain-fallback-url-container');
-        
-        if (!provider || provider.value === '') {
-            if (urlContainer) urlContainer.style.display = 'none';
-            return;
-        }
-        
-        applyEnvSelectionDefaults('setup-brain-fallback-provider', null, 'setup-brain-fallback-url');
-        toggleProviderAuth();
-    }
-
     function handleChatSettingsProviderChange() {
         applyEnvSelectionDefaults('chat-settings-provider-overlay', null, 'chat-settings-url');
         toggleChatSettingsFields();
@@ -734,14 +721,6 @@
         if (typeof persistChatSettingsDraft === 'function') {
             const nextConfig = persistChatSettingsDraft();
             syncSetupWizardControlsFromAIConfig(nextConfig);
-        }
-    }
-
-    function handleChatSettingsFallbackChange() {
-        applyEnvSelectionDefaults('chat-settings-fallback-overlay', null, 'chat-settings-fallback-url');
-        toggleChatSettingsFields();
-        if (typeof persistChatSettingsDraft === 'function') {
-            persistChatSettingsDraft();
         }
     }
 
@@ -817,21 +796,9 @@
             overlayEmbedderAPIKey.value = cfg.embedder_api_key || '';
         }
 
-        const fallbackSource = cfg.fallback_source || 'catalog';
-        if (cfg.fallback_provider) {
-            ensureSetupProviderOption('chat-settings-fallback-overlay', cfg.fallback_provider, cfg.fallback_model, fallbackSource);
-        }
-        const overlayFallback = document.getElementById('chat-settings-fallback-overlay');
-        const overlayFallbackURL = document.getElementById('chat-settings-fallback-url');
         const overlayOpenAIKey = document.getElementById('chat-settings-openai-api-key');
         const overlayAnthropicKey = document.getElementById('chat-settings-anthropic-api-key');
         const overlayGeminiKey = document.getElementById('chat-settings-gemini-api-key');
-        if (overlayFallback && cfg.fallback_provider) {
-            selectProviderOption(overlayFallback, buildProviderValue(cfg.fallback_provider, cfg.fallback_model), fallbackSource);
-        }
-        if (overlayFallbackURL) {
-            overlayFallbackURL.value = cfg.fallback_url || '';
-        }
         if (overlayOpenAIKey) {
             overlayOpenAIKey.value = cfg.openai_api_key || '';
         }

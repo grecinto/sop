@@ -732,26 +732,6 @@
         if (bUrlC) bUrlC.style.display = showBrainURL ? 'block' : 'none';
         if (!showBrainURL && bUrlInput) bUrlInput.value = '';
 
-        // Fallback Brain Provider
-        const fbProv = document.getElementById('setup-brain-fallback-provider')?.value || '';
-        const fbApiC = document.getElementById('setup-brain-fallback-api-container');
-        const fbUrlC = document.getElementById('setup-brain-fallback-url-container');
-        const fbUrlInput = document.getElementById('setup-brain-fallback-url');
-        
-        if (fbProv === '') {
-            // None selected
-            if (fbApiC) fbApiC.style.display = 'none';
-            if (fbUrlC) fbUrlC.style.display = 'none';
-            if (fbUrlInput) fbUrlInput.value = '';
-        } else {
-            const isFallbackLocal = isLocalProviderValue(fbProv);
-            const showFallbackURL = selectedProviderUsesURL('setup-brain-fallback-provider');
-            
-            if (fbApiC) fbApiC.style.display = isFallbackLocal ? 'none' : 'block';
-            if (fbUrlC) fbUrlC.style.display = showFallbackURL ? 'block' : 'none';
-            if (!showFallbackURL && fbUrlInput) fbUrlInput.value = '';
-        }
-
         const eProv = document.getElementById('setup-embedder-provider')?.value || '';
         const eApiC = document.getElementById('setup-embedder-api-container');
         const eUrlC = document.getElementById('setup-embedder-url-container');
@@ -850,13 +830,6 @@
         const embedderURL = document.getElementById('chat-settings-embedder-url')?.value.trim() || '';
         const persistEmbedderURL = embedderValue && selectedProviderUsesURL('chat-settings-embedder-overlay') ? embedderURL : '';
         const persistEmbedderAPIKey = embedderParts.provider && !isLocalProviderValue(embedderValue) ? embedderAPIKey : '';
-        const fallbackValue = document.getElementById('chat-settings-fallback-overlay')?.value || '';
-        const fallbackParts = splitProviderValue(fallbackValue);
-        const fallbackAPIKey = '';
-        const fallbackURL = document.getElementById('chat-settings-fallback-url')?.value.trim() || '';
-        const persistFallbackURL = fallbackValue && selectedProviderUsesURL('chat-settings-fallback-overlay') ? fallbackURL : '';
-        const persistFallbackAPIKey = fallbackParts.provider && !isLocalProviderValue(fallbackValue) ? fallbackAPIKey : '';
-
         const providerPoolKeys = {
             openai_api_key: document.getElementById('chat-settings-openai-api-key')?.value.trim() || '',
             anthropic_api_key: document.getElementById('chat-settings-anthropic-api-key')?.value.trim() || '',
@@ -866,13 +839,6 @@
         const primaryProviderKey = normalizeProviderSecretKey(parts.provider);
         if ((primaryProviderKey === 'openai' || primaryProviderKey === 'anthropic' || primaryProviderKey === 'gemini') && persistAPIKey && !providerPoolKeys[`${primaryProviderKey}_api_key`]) {
             providerPoolKeys[`${primaryProviderKey}_api_key`] = persistAPIKey;
-        }
-
-        const fallbackProviderKey = normalizeProviderSecretKey(fallbackParts.provider);
-        if ((fallbackProviderKey === 'openai' || fallbackProviderKey === 'anthropic' || fallbackProviderKey === 'gemini') && persistFallbackAPIKey) {
-            if (!providerPoolKeys[`${fallbackProviderKey}_api_key`]) {
-                providerPoolKeys[`${fallbackProviderKey}_api_key`] = persistFallbackAPIKey;
-            }
         }
 
         return {
@@ -886,10 +852,6 @@
             embedder_source: embedderSource,
             embedder_api_key: persistEmbedderAPIKey,
             embedder_url: persistEmbedderURL,
-            fallback_provider: fallbackParts.provider,
-            fallback_model: fallbackParts.model,
-            fallback_api_key: persistFallbackAPIKey,
-            fallback_url: persistFallbackURL,
             openai_api_key: providerPoolKeys.openai_api_key,
             anthropic_api_key: providerPoolKeys.anthropic_api_key,
             gemini_api_key: providerPoolKeys.gemini_api_key
@@ -940,13 +902,6 @@
         const embedderTestButton = document.getElementById('chat-settings-embedder-test-button');
         const isLocalEmbedder = isLocalProviderValue(embedderProvider) || isKelindarLocalEmbedderValue(embedderProvider);
         const showEmbedderURL = !isLocalEmbedder && selectedProviderUsesURL('chat-settings-embedder-overlay');
-        const fallbackProvider = document.getElementById('chat-settings-fallback-overlay')?.value || '';
-        const fallbackURLContainer = document.getElementById('chat-settings-fallback-url-container');
-        const fallbackAPIKeyContainer = document.getElementById('chat-settings-fallback-apikey-container');
-        const fallbackURLInput = document.getElementById('chat-settings-fallback-url');
-        const isLocalFallback = isLocalProviderValue(fallbackProvider);
-        const showFallbackURL = selectedProviderUsesURL('chat-settings-fallback-overlay');
-        
         if (provider === '') {
             if (urlContainer) urlContainer.style.display = 'none';
             if (apiKeyContainer) apiKeyContainer.style.display = 'none';
@@ -967,16 +922,6 @@
             if (embedderAPIKeyContainer) embedderAPIKeyContainer.style.display = isLocalEmbedder ? 'none' : 'block';
             if (!showEmbedderURL && embedderURLInput) embedderURLInput.value = '';
             if (embedderTestButton) embedderTestButton.style.display = isLocalEmbedder ? 'none' : 'inline-block';
-        }
-
-        if (fallbackProvider === '') {
-            if (fallbackURLContainer) fallbackURLContainer.style.display = 'none';
-            if (fallbackAPIKeyContainer) fallbackAPIKeyContainer.style.display = 'none';
-            if (fallbackURLInput) fallbackURLInput.value = '';
-        } else {
-            if (fallbackURLContainer) fallbackURLContainer.style.display = showFallbackURL ? 'block' : 'none';
-            if (fallbackAPIKeyContainer) fallbackAPIKeyContainer.style.display = isLocalFallback ? 'none' : 'block';
-            if (!showFallbackURL && fallbackURLInput) fallbackURLInput.value = '';
         }
     }
 
@@ -1070,22 +1015,6 @@
         runEmbedderConnectionTest(payload, 'chat-settings-embedder-test-status');
     }
 
-    function testChatSettingsFallbackConnection() {
-        const providerValue = document.getElementById('chat-settings-fallback-overlay')?.value || '';
-        const parts = splitProviderValue(providerValue);
-        if (!parts.provider) {
-            showAlert('Please choose a fallback provider first.');
-            return;
-        }
-        const payload = {
-            provider: parts.provider,
-            model: parts.model,
-            api_key: getProviderPoolInputValue('chat-settings', parts.provider),
-            url: document.getElementById('chat-settings-fallback-url')?.value.trim() || ''
-        };
-        runLLMConnectionTest(payload, 'chat-settings-fallback-test-status');
-    }
-
     function testSetupBrainConnection() {
         const providerValue = document.getElementById('setup-brain-provider')?.value || '';
         const parts = splitProviderValue(providerValue);
@@ -1093,64 +1022,15 @@
             showAlert('Please choose an LLM provider first.');
             return;
         }
-        
-        const statusEl = document.getElementById('setup-brain-test-status');
-        const primaryPayload = {
+
+        const payload = {
             provider: parts.provider,
             model: parts.model,
             api_key: getProviderPoolInputValue('setup', parts.provider),
             url: document.getElementById('setup-brain-url')?.value.trim() || ''
         };
-        
-        // Check if fallback is configured
-        const fallbackProviderValue = document.getElementById('setup-brain-fallback-provider')?.value || '';
-        const hasFallback = fallbackProviderValue && fallbackProviderValue !== '';
-        
-        if (hasFallback) {
-            // Test both primary and fallback
-            setConnectionTestStatus('setup-brain-test-status', 'Testing primary and fallback connections...', true);
-            
-            const fallbackParts = splitProviderValue(fallbackProviderValue);
-            const fallbackPayload = {
-                provider: fallbackParts.provider,
-                model: fallbackParts.model,
-                api_key: getProviderPoolInputValue('setup', fallbackParts.provider),
-                url: document.getElementById('setup-brain-fallback-url')?.value.trim() || ''
-            };
-            
-            // Test both with individual error handling
-            Promise.allSettled([
-                apiCall('/api/ai/test-connection', 'POST', primaryPayload, {}),
-                apiCall('/api/ai/test-connection', 'POST', fallbackPayload, {})
-            ]).then(([primaryResult, fallbackResult]) => {
-                let messages = [];
-                let hasError = false;
-                
-                if (primaryResult.status === 'fulfilled') {
-                    const msg = primaryResult.value.response || 'Connected successfully';
-                    messages.push(`✓ Primary: ${msg}`);
-                } else {
-                    hasError = true;
-                    messages.push(`✗ Primary: ${primaryResult.reason?.message || 'Connection failed'}`);
-                }
-                
-                if (fallbackResult.status === 'fulfilled') {
-                    const msg = fallbackResult.value.response || 'Connected successfully';
-                    messages.push(`✓ Fallback: ${msg}`);
-                } else {
-                    hasError = true;
-                    messages.push(`✗ Fallback: ${fallbackResult.reason?.message || 'Connection failed'}`);
-                }
-                
-                const detailedMessage = messages.join('\n');
-                const statusMessage = hasError ? 'Some connections failed' : 'Both connections successful';
-                setConnectionTestStatus('setup-brain-test-status', statusMessage, !hasError);
-                showAlert(detailedMessage, null, 'LLM Connection Test', hasError ? 'var(--error-color)' : 'var(--success-color)');
-            });
-        } else {
-            // Test primary only
-            runLLMConnectionTest(primaryPayload, 'setup-brain-test-status');
-        }
+
+        runLLMConnectionTest(payload, 'setup-brain-test-status');
     }
 
     function testSetupEmbedderConnection() {

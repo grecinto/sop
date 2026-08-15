@@ -1091,28 +1091,18 @@
             <div style="margin-bottom: 15px; padding: 10px; background: var(--pre-bg); border-radius: 4px;">
                 <div style="display: flex; align-items: stretch; gap: 10px; margin-bottom: 5px;">
                     <div style="flex: 1;">
-                        <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">LLM / Brain (Primary)</label>
-                        <select id="setup-brain-provider" style="width: 100%; padding: 4px;" onchange="handleSetupBrainProviderChange()" title="Primary">
+                        <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">LLM / Brain (Selected Pool Model)</label>
+                        <select id="setup-brain-provider" style="width: 100%; padding: 4px;" onchange="handleSetupBrainProviderChange()" title="Selected pool model">
                             {{template "llmOptions" .}}
                         </select>
                     </div>
                     <div style="flex: 1; display: none;" id="setup-brain-url-container">
                         <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">Base URL</label>
-                        <input type="text" id="setup-brain-url" placeholder="http://localhost:11434" title="Primary" style="width: 100%; padding: 4px;">
+                        <input type="text" id="setup-brain-url" placeholder="http://localhost:11434" title="Selected pool model" style="width: 100%; padding: 4px;">
                     </div>
                 </div>
-                <div style="display: flex; align-items: stretch; gap: 10px; margin-bottom: 10px;">
-                    <div style="flex: 1;">
-                        <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">Fallback LLM <span style="font-weight: normal;">(Optional)</span></label>
-                        <select id="setup-brain-fallback-provider" style="width: 100%; padding: 4px;" onchange="handleSetupBrainFallbackProviderChange()" title="Fallback">
-                            <option value="">None</option>
-                            {{template "llmOptions" .}}
-                        </select>
-                    </div>
-                    <div style="flex: 1; display: none;" id="setup-brain-fallback-url-container">
-                        <label style="font-weight: bold; font-size: 12px; display: block; margin-bottom: 2px;">Base URL <span style="font-weight: normal;">(Optional)</span></label>
-                        <input type="text" id="setup-brain-fallback-url" placeholder="http://localhost:11434" title="Fallback" style="width: 100%; padding: 4px;">
-                    </div>
+                <div style="margin-top: 4px; margin-bottom: 10px; color: var(--text-muted); font-size: 11px; line-height: 1.4;">
+                    Routing is pool-based: the system selects the least expensive model in the pool that still meets the requested intelligence level.
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <button type="button" onclick="testSetupBrainConnection()" style="padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border-color); background: var(--pre-bg); color: var(--text-color); cursor: pointer;">Test LLM connections</button>

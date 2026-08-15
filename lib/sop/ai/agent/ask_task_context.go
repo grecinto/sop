@@ -80,7 +80,7 @@ func (a *CopilotAgent) ClassifyAskTaskContext(ctx context.Context, query string,
 	}
 
 	// Build classification prompt
-	prompt := a.buildAskClassificationPrompt(query, storesList, spacesList)
+	prompt := a.buildAskClassificationPrompt(ctx, query, storesList, spacesList)
 
 	// Call LLM for classification
 	resp, err := gen.Generate(ctx, prompt, ai.GenOptions{
@@ -109,6 +109,7 @@ func (a *CopilotAgent) ClassifyAskTaskContext(ctx context.Context, query string,
 	// Validate and normalize
 	result.OriginalQuery = query
 	result = a.normalizeAskTaskContext(result)
+	result = a.applyCognitiveStateContinuity(ctx, result)
 
 	log.Info("AskTaskContext Classification",
 		"domains", result.Domains,
@@ -127,7 +128,7 @@ func (a *CopilotAgent) ClassifyAskTaskContext(ctx context.Context, query string,
 // - Phase: What phase this query represents
 // - PhasePlan: Full sequence of phases needed
 // - Intent: High-level intent category
-func (a *CopilotAgent) buildAskClassificationPrompt(query string, stores, spaces []string) string {
+func (a *CopilotAgent) buildAskClassificationPrompt(ctx context.Context, query string, stores, spaces []string) string {
 	storesHint := ""
 	if len(stores) > 0 {
 		storesHint = fmt.Sprintf("\nAvailable Stores: %s", strings.Join(stores[:min(5, len(stores))], ", "))
@@ -137,6 +138,8 @@ func (a *CopilotAgent) buildAskClassificationPrompt(query string, stores, spaces
 	if len(spaces) > 0 {
 		spacesHint = fmt.Sprintf("\nAvailable Spaces: %s", strings.Join(spaces[:min(5, len(spaces))], ", "))
 	}
+
+	cognitiveGuidance := buildAskClassificationCognitiveGuidance(ctx)
 
 	return fmt.Sprintf(`You are a task classifier for an AI assistant. Analyze the user query and classify it into domains, phases, and intent.
 
@@ -153,6 +156,9 @@ func (a *CopilotAgent) buildAskClassificationPrompt(query string, stores, spaces
 - **execution**: Write operations, changes, implementations
 - **review**: Validation, testing, verification
 - **delivery**: Summary, documentation, cleanup
+
+**Session Cognitive State (authoritative continuity signal):**
+%s
 
 **User Query:**
 %s
@@ -173,31 +179,39 @@ Analyze the query and return a JSON object with this structure:
 
 **Classification Guidelines:**
 
-1. **Multi-Domain Detection**: If query involves multiple domains, include ALL relevant ones
+1. **Priority of existing task continuity**: If the session cognitive state shows an active task, preserve that lead unless the user clearly changes topic. The active task is more authoritative than path metadata or incidental folder mentions.
+   - Example: active task = "fix failing tests in repo" and new query says "The current folder ../lib/sop, fix failing tests under this folder" → keep **coding_workflow**.
+   - Example: active task = repo repair, and user says "show me git status" or "run ls" → switch to **desktop** only because they explicitly ask to execute shell/git commands.
+
+2. **Path metadata is not a new domain trigger**: A local folder, repo path, or working directory is context for the task, not a separate desktop-action signal.
+   - A repo location like "../lib/sop" or "my project folder" does not by itself mean "desktop automation".
+   - Use it to scope the repo, not to reclassify the task.
+
+3. **Multi-Domain Detection**: If query involves multiple domains, include ALL relevant ones
    - "Query stores and search spaces" → ["stores", "spaces"]
    - "List stores" → ["stores"]
 
-2. **Phase Selection**: Choose based on what the query is asking to DO
+4. **Phase Selection**: Choose based on what the query is asking to DO
    - Read-only operations → "investigation"
    - Write operations → "execution"
    - Planning/design questions → "planning"
    - Validation/testing → "review"
    - Simple direct commands → "execution" (single phase)
 
-3. **PhasePlan Thickness**: Vary plan complexity based on task complexity
+5. **PhasePlan Thickness**: Vary plan complexity based on task complexity
    - Simple queries → Single phase: ["investigation"]
    - Medium queries → Two phases: ["investigation", "execution"]
    - Complex queries → Full SDLC: ["intake", "investigation", "planning", "execution", "review"]
    - Direct commands (e.g., /cmd ls) → ["execution"]
 
-4. **Intent Categories:**
+6. **Intent Categories:**
    - "read_data": Queries, searches, listings, descriptions
    - "mutate_data": Inserts, updates, deletes, modifications
    - "generate_code": Code generation, refactoring, implementation
    - "analyze": Analysis, investigation, understanding
    - "plan": Planning, design, strategy
 
-5. **CRUD Classification (Phase 3 Optimization):**
+7. **CRUD Classification (Phase 3 Optimization):**
    - "C" (Create): Insert, add, create new records/files/resources
    - "R" (Read): Query, list, get, search, scan, describe, read
    - "U" (Update): Modify, edit, update, patch existing records/files
@@ -217,6 +231,17 @@ Query: "List stores in production database"
   "reasoning": "Simple read-only store listing operation"
 }
 
+Query: "The current folder ../lib/sop, fix failing tests under this folder."
+{
+  "domains": ["coding_workflow"],
+  "phase": "execution",
+  "phase_plan": ["investigation", "execution", "review"],
+  "intent": "generate_code",
+  "crud": ["R", "U"],
+  "confidence": "high",
+  "reasoning": "A local repo path scopes the task to the current codebase; it does not switch the task out of coding_workflow."
+}
+
 Query: "Query stores and search spaces for 'authentication'"
 {
   "domains": ["stores", "spaces"],
@@ -226,28 +251,6 @@ Query: "Query stores and search spaces for 'authentication'"
   "crud": ["R"],
   "confidence": "high",
   "reasoning": "Read-only operations across two domains"
-}
-
-Query: "Refactor authentication to use OAuth2"
-{
-  "domains": ["coding_workflow"],
-  "phase": "intake",
-  "phase_plan": ["intake", "investigation", "planning", "execution", "review"],
-  "intent": "generate_code",
-  "crud": ["R", "U"],
-  "confidence": "high",
-  "reasoning": "Complex code refactoring requires full SDLC, needs reading and updating code"
-}
-
-Query: "Migrate user data from stores to spaces"
-{
-  "domains": ["stores", "spaces"],
-  "phase": "investigation",
-  "phase_plan": ["investigation", "planning", "execution", "review"],
-  "intent": "mutate_data",
-  "crud": ["R", "C", "D"],
-  "confidence": "high",
-  "reasoning": "Data migration across domains requires reading from stores, creating in spaces, potentially deleting from stores"
 }
 
 Query: "/cmd ls -la"
@@ -261,29 +264,38 @@ Query: "/cmd ls -la"
   "reasoning": "Direct shell command execution, read-only"
 }
 
-Query: "Create a new store called 'users'"
-{
-  "domains": ["stores"],
-  "phase": "execution",
-  "phase_plan": ["execution"],
-  "intent": "mutate_data",
-  "crud": ["C"],
-  "confidence": "high",
-  "reasoning": "Direct create operation"
+Return ONLY the JSON object, no other text.`, cognitiveGuidance, query, storesHint, spacesHint)
 }
 
-Query: "Delete old logs from stores"
-{
-  "domains": ["stores"],
-  "phase": "execution",
-  "phase_plan": ["investigation", "execution"],
-  "intent": "mutate_data",
-  "crud": ["R", "D"],
-  "confidence": "high",
-  "reasoning": "Need to read/find logs first, then delete them"
-}
-
-Return ONLY the JSON object, no other text.`, query, storesHint, spacesHint)
+func buildAskClassificationCognitiveGuidance(ctx context.Context) string {
+	payload := ai.GetSessionPayload(ctx)
+	if payload == nil || payload.CognitiveState == nil {
+		return "No active cognitive state available; classify based on the user's current query and explicit task semantics."
+	}
+	state := payload.CognitiveState
+	parts := []string{"Active cognitive state summary:"}
+	if strings.TrimSpace(state.CurrentQuery) != "" {
+		parts = append(parts, "- current_query: "+state.CurrentQuery)
+	}
+	if strings.TrimSpace(state.CurrentPhase) != "" {
+		parts = append(parts, "- current_phase: "+state.CurrentPhase)
+	}
+	if state.LastAssessment != nil {
+		if strings.TrimSpace(state.LastAssessment.SuggestedPhase) != "" {
+			parts = append(parts, "- last_assessment.suggested_phase: "+state.LastAssessment.SuggestedPhase)
+		}
+		if strings.TrimSpace(state.LastAssessment.Rationale) != "" {
+			parts = append(parts, "- last_assessment.rationale: "+state.LastAssessment.Rationale)
+		}
+	}
+	if strings.TrimSpace(state.LastDecisionReason) != "" {
+		parts = append(parts, "- last_decision_reason: "+state.LastDecisionReason)
+	}
+	if len(state.MemorySignals) > 0 {
+		parts = append(parts, "- memory_signals: "+strings.Join(state.MemorySignals, " | "))
+	}
+	parts = append(parts, "- rule: preserve the active coding_workflow lead when the user adds repo path or folder context, unless they explicitly request shell/git/file execution.")
+	return strings.Join(parts, "\n")
 }
 
 // normalizeAskTaskContext validates and normalizes the LLM classification result.
@@ -296,6 +308,12 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 	// Normalize domain names
 	for i, domain := range result.Domains {
 		result.Domains[i] = normalizeDomainName(domain)
+	}
+
+	// Repo-fix queries that identify a local folder are coding_workflow tasks, not desktop automation tasks.
+	// Desktop should only be used for direct shell/git/file operations, not for code repair requests scoped to a repo.
+	if containsRepoFixIntent(result) {
+		result.Domains = []string{"coding_workflow"}
 	}
 
 	// Ensure phase is set
@@ -345,6 +363,80 @@ func (a *CopilotAgent) buildFallbackClassification(query string) *AskTaskContext
 		Reasoning:     "Fallback classification due to LLM parse failure",
 		OriginalQuery: query,
 	}
+}
+
+func (a *CopilotAgent) applyCognitiveStateContinuity(ctx context.Context, result AskTaskContext) AskTaskContext {
+	payload := ai.GetSessionPayload(ctx)
+	if payload == nil || payload.CognitiveState == nil {
+		return result
+	}
+	state := payload.CognitiveState
+	if state == nil {
+		return result
+	}
+
+	userQuery := strings.ToLower(strings.TrimSpace(result.OriginalQuery))
+	activeQuery := strings.ToLower(strings.TrimSpace(state.CurrentQuery))
+	activePhase := strings.ToLower(strings.TrimSpace(state.CurrentPhase))
+	activeReason := strings.ToLower(strings.TrimSpace(state.LastDecisionReason))
+	if state.LastAssessment != nil {
+		activeReason += " " + strings.ToLower(strings.TrimSpace(state.LastAssessment.Rationale))
+	}
+
+	isRepoFixLead := false
+	for _, marker := range []string{"fix failing tests", "fix the bug", "debug failing tests", "repair", "troubleshoot", "bug fix", "repo fix", "code fix"} {
+		if strings.Contains(activeQuery, marker) || strings.Contains(userQuery, marker) {
+			isRepoFixLead = true
+			break
+		}
+	}
+	if !isRepoFixLead {
+		if strings.Contains(activeReason, "coding_workflow") || strings.Contains(activeReason, "repo-fix") || strings.Contains(activeReason, "current codebase") || strings.Contains(activeReason, "local folder") {
+			isRepoFixLead = true
+		}
+	}
+
+	if isRepoFixLead && !isExplicitDesktopDirective(userQuery) {
+		result.Domains = []string{"coding_workflow"}
+		if result.Intent == "" || result.Intent == "general" {
+			result.Intent = "generate_code"
+		}
+		if strings.TrimSpace(result.Phase) == "" {
+			result.Phase = "investigation"
+		}
+		if activePhase != "" {
+			result.Phase = normalizePhase(activePhase)
+		}
+	}
+	return result
+}
+
+func isExplicitDesktopDirective(query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return false
+	}
+	if strings.HasPrefix(query, "/cmd") || strings.Contains(query, "git status") || strings.Contains(query, "git log") || strings.Contains(query, "ls -") || strings.Contains(query, "pwd") || strings.Contains(query, "run shell") {
+		return true
+	}
+	return strings.Contains(query, "shell") && (strings.Contains(query, "run") || strings.Contains(query, "execute") || strings.Contains(query, "command"))
+}
+
+func containsRepoFixIntent(result AskTaskContext) bool {
+	query := strings.ToLower(strings.TrimSpace(result.OriginalQuery))
+	if query == "" {
+		return false
+	}
+	if !strings.Contains(query, "fix") && !strings.Contains(query, "repair") && !strings.Contains(query, "debug") && !strings.Contains(query, "troubleshoot") {
+		return false
+	}
+	if !strings.Contains(query, "test") && !strings.Contains(query, "tests") && !strings.Contains(query, "bug") && !strings.Contains(query, "failure") && !strings.Contains(query, "error") {
+		return false
+	}
+	if strings.Contains(query, "shell") || strings.Contains(query, "git status") || strings.Contains(query, "ls ") || strings.Contains(query, "pwd") {
+		return false
+	}
+	return true
 }
 
 func cloneAskTaskContext(taskCtx *AskTaskContext) *AskTaskContext {

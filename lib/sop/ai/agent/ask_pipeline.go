@@ -187,6 +187,12 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	if a.shouldDirectDisplayKB(taskContext) {
 		return a.handleKBDirectDisplay(ctx, rawQuery, intent, taskContext)
 	}
+	if response := unsupportedLocalCapabilityResponse(taskContext); response != "" {
+		return response, nil
+	}
+	if shouldAskForMoreContextForVagueRepoTask(query) {
+		return "I can help with that repo fix. Please tell me which repository or working directory to inspect, and share the failing test output or the error details you want me to investigate.", nil
+	}
 
 	// 6. Episode tracking and capability setup (same as V1)
 	a.trackEpisodeMetadata(ctx, intent)
