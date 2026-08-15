@@ -32,6 +32,29 @@ func TestPlannerCapabilityBuildGuidanceProfileUsesLightGuidance(t *testing.T) {
 	}
 }
 
+func TestPlannerCapabilityBuildContext_UsesDiscoveryImplementationLanguage(t *testing.T) {
+	cap := NewPlannerCapability(nil)
+	contextText := cap.BuildContext("fix failing tests", capabilities.RoutingState{CapabilityHint: "planner"})
+	for _, check := range []string{"discovery", "implementation", "continuous Ask/ReAct transaction"} {
+		if !strings.Contains(contextText, check) {
+			t.Fatalf("expected planner context to include %q, got %q", check, contextText)
+		}
+	}
+	if strings.Contains(contextText, "full SDLC") {
+		t.Fatalf("did not expect planner context to keep legacy full SDLC guidance, got %q", contextText)
+	}
+}
+
+func TestPlannerCapabilityBuildInstructions_AvoidsMandatoryPhasePlanForCoding(t *testing.T) {
+	cap := NewPlannerCapability(nil)
+	instructions := cap.BuildInstructions("fix failing tests", capabilities.RoutingState{CapabilityHint: "planner"})
+	for _, check := range []string{"do not force a full SDLC phase plan", "two-mode runtime", "create_phase_plan only when"} {
+		if !strings.Contains(instructions, check) {
+			t.Fatalf("expected planner instructions to include %q, got %q", check, instructions)
+		}
+	}
+}
+
 func TestBasePhaseBuildInstructionsUsesAuthoringProfileOverrides(t *testing.T) {
 	base := newBasePhase("planning", "Planning", "Plan work", "coding_workflow", nil)
 	base.setAuthoringProfile(PhaseAuthoringProfile{
@@ -211,6 +234,41 @@ func TestBuildExecutionGuidanceFromArtifact_UsesMiniPlan(t *testing.T) {
 	}
 	if !strings.Contains(guidance, "primary implementation file") {
 		t.Fatalf("expected guidance to include file plan role, got %q", guidance)
+	}
+}
+
+func TestBuildPhasePlanSequence_DefaultsToDiscoveryPlanningExecution(t *testing.T) {
+	plan := buildPhasePlanSequence("fix failing tests in the repository")
+	joined := strings.Join(plan, ",")
+	if joined != "investigation,planning,execution" {
+		t.Fatalf("expected default coding phase sequence to be investigation,planning,execution, got %v", plan)
+	}
+}
+
+func TestBuildPhasePlanSequence_ValidationOnlyUsesInvestigationExecution(t *testing.T) {
+	plan := buildPhasePlanSequence("validate the parser behavior after the fix")
+	joined := strings.Join(plan, ",")
+	if joined != "investigation,execution" {
+		t.Fatalf("expected validation-oriented sequence to be investigation,execution, got %v", plan)
+	}
+}
+
+func TestPlanningPhaseBuildContext_UsesDiscoveryModeLanguage(t *testing.T) {
+	cap := NewPlanningPhaseCapability(nil)
+	contextBuilder, ok := cap.(interface {
+		BuildContext(string, capabilities.RoutingState) string
+	})
+	if !ok {
+		t.Fatal("expected planning phase capability to expose BuildContext")
+	}
+	contextText := contextBuilder.BuildContext("plan a parser fix", capabilities.RoutingState{})
+	for _, check := range []string{"Discovery mode", "Continue directly into implementation"} {
+		if !strings.Contains(contextText, check) {
+			t.Fatalf("expected planning build context to include %q, got %q", check, contextText)
+		}
+	}
+	if strings.Contains(contextText, "PLANNING-FIRST: Call planning_assess_and_route FIRST") {
+		t.Fatalf("did not expect legacy planning-first instruction, got %q", contextText)
 	}
 }
 

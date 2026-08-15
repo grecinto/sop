@@ -334,11 +334,16 @@ type UIHandoffRequest struct {
 }
 
 type llmCredential struct {
-	APIKey      string `json:"api_key,omitempty"`
-	Model       string `json:"model,omitempty"`
-	URL         string `json:"url,omitempty"`
-	UpdatedAtMS int64  `json:"updated_at_ms,omitempty"`
-	DeletedAtMS int64  `json:"deleted_at_ms,omitempty"`
+	APIKey            string `json:"api_key,omitempty"`
+	Model             string `json:"model,omitempty"`
+	URL               string `json:"url,omitempty"`
+	UpdatedAtMS       int64  `json:"updated_at_ms,omitempty"`
+	DeletedAtMS       int64  `json:"deleted_at_ms,omitempty"`
+	SuccessCount      int    `json:"success_count,omitempty"`
+	FailureCount      int    `json:"failure_count,omitempty"`
+	LastSuccessAtMS   int64  `json:"last_success_at_ms,omitempty"`
+	LastFailureAtMS   int64  `json:"last_failure_at_ms,omitempty"`
+	LastValidatedAtMS int64  `json:"last_validated_at_ms,omitempty"`
 }
 
 type daemonSecretEncryptRequest struct {
@@ -469,12 +474,49 @@ func credentialLogicalTimestamp(cred llmCredential) int64 {
 
 func normalizeCredentialForComparison(cred llmCredential) llmCredential {
 	return llmCredential{
-		APIKey:      strings.TrimSpace(cred.APIKey),
-		Model:       strings.TrimSpace(cred.Model),
-		URL:         strings.TrimSpace(cred.URL),
-		UpdatedAtMS: normalizePoolTimestamp(cred.UpdatedAtMS),
-		DeletedAtMS: normalizePoolTimestamp(cred.DeletedAtMS),
+		APIKey:            strings.TrimSpace(cred.APIKey),
+		Model:             strings.TrimSpace(cred.Model),
+		URL:               strings.TrimSpace(cred.URL),
+		UpdatedAtMS:       normalizePoolTimestamp(cred.UpdatedAtMS),
+		DeletedAtMS:       normalizePoolTimestamp(cred.DeletedAtMS),
+		SuccessCount:      cred.SuccessCount,
+		FailureCount:      cred.FailureCount,
+		LastSuccessAtMS:   normalizePoolTimestamp(cred.LastSuccessAtMS),
+		LastFailureAtMS:   normalizePoolTimestamp(cred.LastFailureAtMS),
+		LastValidatedAtMS: normalizePoolTimestamp(cred.LastValidatedAtMS),
 	}
+}
+
+func recordLLMProviderOutcome(pool map[string]llmCredential, provider string, success bool, nowMS int64) map[string]llmCredential {
+	if len(pool) == 0 && strings.TrimSpace(provider) == "" {
+		return nil
+	}
+	cloned := cloneLLMCredentialsMap(pool)
+	if cloned == nil {
+		cloned = map[string]llmCredential{}
+	}
+	providerKey := normalizeCredentialProviderKey(provider)
+	if providerKey == "" {
+		return cloned
+	}
+	cred := cloned[providerKey]
+	cred.APIKey = strings.TrimSpace(cred.APIKey)
+	cred.Model = strings.TrimSpace(cred.Model)
+	cred.URL = strings.TrimSpace(cred.URL)
+	if nowMS <= 0 {
+		nowMS = time.Now().UTC().UnixMilli()
+	}
+	cred.UpdatedAtMS = normalizePoolTimestamp(nowMS)
+	cred.LastValidatedAtMS = normalizePoolTimestamp(nowMS)
+	if success {
+		cred.SuccessCount++
+		cred.LastSuccessAtMS = normalizePoolTimestamp(nowMS)
+	} else {
+		cred.FailureCount++
+		cred.LastFailureAtMS = normalizePoolTimestamp(nowMS)
+	}
+	cloned[providerKey] = cred
+	return cloned
 }
 
 func llmCredentialsEqual(a, b map[string]llmCredential) bool {
@@ -630,11 +672,16 @@ func normalizeAndValidateLLMCredentials(raw map[string]llmCredential) (map[strin
 		}
 
 		normalized[providerKey] = llmCredential{
-			APIKey:      trimmedAPIKey,
-			Model:       strings.TrimSpace(cred.Model),
-			URL:         strings.TrimSpace(cred.URL),
-			UpdatedAtMS: normalizePoolTimestamp(cred.UpdatedAtMS),
-			DeletedAtMS: normalizePoolTimestamp(cred.DeletedAtMS),
+			APIKey:            trimmedAPIKey,
+			Model:             strings.TrimSpace(cred.Model),
+			URL:               strings.TrimSpace(cred.URL),
+			UpdatedAtMS:       normalizePoolTimestamp(cred.UpdatedAtMS),
+			DeletedAtMS:       normalizePoolTimestamp(cred.DeletedAtMS),
+			SuccessCount:      cred.SuccessCount,
+			FailureCount:      cred.FailureCount,
+			LastSuccessAtMS:   normalizePoolTimestamp(cred.LastSuccessAtMS),
+			LastFailureAtMS:   normalizePoolTimestamp(cred.LastFailureAtMS),
+			LastValidatedAtMS: normalizePoolTimestamp(cred.LastValidatedAtMS),
 		}
 	}
 	return normalized, nil

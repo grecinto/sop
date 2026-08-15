@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -195,44 +196,228 @@ type AskResponse struct {
 }
 
 type runtimeProviderCandidate struct {
-	Provider string
-	APIKey   string
-	Model    string
-	URL      string
+	Provider          string
+	APIKey            string
+	Model             string
+	URL               string
+	UpdatedAtMS       int64
+	SuccessCount      int
+	FailureCount      int
+	LastSuccessAtMS   int64
+	LastFailureAtMS   int64
+	LastValidatedAtMS int64
 }
 
-func buildRuntimeProviderChain(provider, apiKey, model, url string, pool map[string]llmCredential) []runtimeProviderCandidate {
-	ordered := make([]runtimeProviderCandidate, 0, 4)
+func runtimeCandidatePreferenceRank(provider string) int {
+	switch normalizeCredentialProviderKey(provider) {
+	case "gemini":
+		return 0
+	case "anthropic":
+		return 1
+	case "openai":
+		return 2
+	default:
+		return 100
+	}
+}
+
+func buildRuntimeProviderChain(provider, apiKey, model, url string, pool map[string]llmCredential, thinkingLevel string) []runtimeProviderCandidate {
+	ordered := make([]runtimeProviderCandidate, 0, 8)
 	seen := make(map[string]struct{})
 
-	add := func(p, k, m, u string) {
+	add := func(p, k, m, u string, updatedAtMS int64, successCount int, failureCount int, lastSuccessAtMS int64, lastFailureAtMS int64, lastValidatedAtMS int64) {
 		normalizedProvider := normalizeCredentialProviderKey(p)
 		if normalizedProvider == "" {
 			return
 		}
-		if _, exists := seen[normalizedProvider]; exists {
+		normalizedModel := strings.TrimSpace(m)
+		key := normalizedProvider + ":" + normalizedModel
+		if normalizedModel == "" {
+			key = normalizedProvider
+		}
+		if _, exists := seen[key]; exists {
 			return
 		}
 		ordered = append(ordered, runtimeProviderCandidate{
-			Provider: normalizedProvider,
-			APIKey:   strings.TrimSpace(k),
-			Model:    strings.TrimSpace(m),
-			URL:      strings.TrimSpace(u),
+			Provider:          normalizedProvider,
+			APIKey:            strings.TrimSpace(k),
+			Model:             normalizedModel,
+			URL:               strings.TrimSpace(u),
+			UpdatedAtMS:       updatedAtMS,
+			SuccessCount:      successCount,
+			FailureCount:      failureCount,
+			LastSuccessAtMS:   lastSuccessAtMS,
+			LastFailureAtMS:   lastFailureAtMS,
+			LastValidatedAtMS: lastValidatedAtMS,
 		})
-		seen[normalizedProvider] = struct{}{}
+		seen[key] = struct{}{}
 	}
 
-	add(provider, apiKey, model, url)
+	add(provider, apiKey, model, url, 0, 0, 0, 0, 0, 0)
 
 	for _, candidate := range []string{"openai", "anthropic", "gemini"} {
 		cred, ok := pool[candidate]
 		if !ok {
 			continue
 		}
-		add(candidate, cred.APIKey, cred.Model, cred.URL)
+		add(candidate, cred.APIKey, cred.Model, cred.URL, cred.UpdatedAtMS, cred.SuccessCount, cred.FailureCount, cred.LastSuccessAtMS, cred.LastFailureAtMS, cred.LastValidatedAtMS)
+	}
+	for providerName, cred := range pool {
+		if providerName == "" {
+			continue
+		}
+		add(providerName, cred.APIKey, cred.Model, cred.URL, cred.UpdatedAtMS, cred.SuccessCount, cred.FailureCount, cred.LastSuccessAtMS, cred.LastFailureAtMS, cred.LastValidatedAtMS)
 	}
 
+	if len(ordered) <= 1 {
+		return ordered
+	}
+
+	primary := ordered[0]
+	rest := append([]runtimeProviderCandidate(nil), ordered[1:]...)
+	if len(rest) > 1 {
+		sort.SliceStable(rest, func(i, j int) bool {
+			return runtimeCandidateSortValue(rest[i], rest[j], thinkingLevel) < runtimeCandidateSortValue(rest[j], rest[i], thinkingLevel)
+		})
+	}
+	ordered = append([]runtimeProviderCandidate{primary}, rest...)
 	return ordered
+}
+
+func runtimeCandidateSortValue(a, b runtimeProviderCandidate, thinkingLevel string) int {
+	if strings.TrimSpace(a.Provider) == "" || strings.TrimSpace(a.Model) == "" {
+		return 1
+	}
+	if strings.TrimSpace(b.Provider) == "" || strings.TrimSpace(b.Model) == "" {
+		return 0
+	}
+
+	entryA, _ := ai.GetModelCatalogRegistry().FindEntry(a.Provider, a.Model)
+	entryB, _ := ai.GetModelCatalogRegistry().FindEntry(b.Provider, b.Model)
+
+	requiredMin := runtimeRequiredIntelligenceScore(thinkingLevel)
+	eligibleA := !isHighIntelligenceRequiredForCandidate(entryA, requiredMin)
+	eligibleB := !isHighIntelligenceRequiredForCandidate(entryB, requiredMin)
+	if eligibleA != eligibleB {
+		if eligibleA {
+			return -1
+		}
+		return 1
+	}
+
+	prefA := runtimeCandidatePreferenceRank(a.Provider)
+	prefB := runtimeCandidatePreferenceRank(b.Provider)
+	if prefA != prefB {
+		return prefA - prefB
+	}
+
+	if a.SuccessCount != b.SuccessCount {
+		if a.SuccessCount > b.SuccessCount {
+			return -1
+		}
+		return 1
+	}
+	if a.FailureCount != b.FailureCount {
+		if a.FailureCount < b.FailureCount {
+			return -1
+		}
+		return 1
+	}
+	if a.LastSuccessAtMS != b.LastSuccessAtMS {
+		if a.LastSuccessAtMS == 0 {
+			return 1
+		}
+		if b.LastSuccessAtMS == 0 {
+			return -1
+		}
+		if a.LastSuccessAtMS > b.LastSuccessAtMS {
+			return -1
+		}
+		return 1
+	}
+
+	if a.UpdatedAtMS != b.UpdatedAtMS {
+		if a.UpdatedAtMS == 0 {
+			return 1
+		}
+		if b.UpdatedAtMS == 0 {
+			return -1
+		}
+		if a.UpdatedAtMS != b.UpdatedAtMS {
+			return int(b.UpdatedAtMS - a.UpdatedAtMS)
+		}
+	}
+
+	costA := runtimeCandidateEstimatedCost(entryA, a)
+	costB := runtimeCandidateEstimatedCost(entryB, b)
+	if costA != costB {
+		return int((costA - costB) * 1_000_000)
+	}
+
+	intA := runtimeCandidateIntelligenceScore(entryA)
+	intB := runtimeCandidateIntelligenceScore(entryB)
+	if intA != intB {
+		return intB - intA
+	}
+	return 0
+}
+
+func runtimeCandidateEstimatedCost(entry ai.ModelCatalogEntry, candidate runtimeProviderCandidate) float64 {
+	if entry.Provider == "" || entry.Model == "" {
+		return 1_000_000_000.0
+	}
+	if entry.InputCostPer1MTokens <= 0 && entry.OutputCostPer1MTokens <= 0 && entry.LastKnownInputCostUSD <= 0 && entry.LastKnownOutputCostUSD <= 0 {
+		return 1_000_000_000.0
+	}
+	if entry.InputCostPer1MTokens <= 0 {
+		return entry.LastKnownInputCostUSD + entry.LastKnownOutputCostUSD
+	}
+	if entry.OutputCostPer1MTokens <= 0 {
+		return entry.InputCostPer1MTokens + entry.LastKnownOutputCostUSD
+	}
+	return entry.InputCostPer1MTokens + entry.OutputCostPer1MTokens
+}
+
+func runtimeCandidateIntelligenceScore(entry ai.ModelCatalogEntry) int {
+	if entry.Provider == "" || entry.Model == "" {
+		return 0
+	}
+	if entry.ReasoningStrength > 0 {
+		return entry.ReasoningStrength
+	}
+	switch strings.ToLower(strings.TrimSpace(entry.Tier)) {
+	case "strong":
+		return 5
+	case "standard":
+		return 3
+	case "cheap":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func runtimeRequiredIntelligenceScore(thinkingLevel string) int {
+	switch strings.ToLower(strings.TrimSpace(thinkingLevel)) {
+	case "low":
+		return 1
+	case "medium":
+		return 3
+	case "high":
+		return 5
+	default:
+		return 1
+	}
+}
+
+func isHighIntelligenceRequiredForCandidate(entry ai.ModelCatalogEntry, requiredMin int) bool {
+	if requiredMin <= 0 {
+		return false
+	}
+	if entry.Provider == "" || entry.Model == "" {
+		return false
+	}
+	return runtimeCandidateIntelligenceScore(entry) < requiredMin
 }
 
 func newGeneratorForRuntimeProvider(candidate runtimeProviderCandidate) (ai.Generator, string, string, string, string, error) {
@@ -1317,7 +1502,7 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		model = strings.TrimSpace(storedSessionContext.LLMModel)
 		url = strings.TrimSpace(storedSessionContext.LLMURL)
 	}
-	runtimeChain := buildRuntimeProviderChain(provider, apiKey, model, url, runtimeCredentialPool)
+	runtimeChain := buildRuntimeProviderChain(provider, apiKey, model, url, runtimeCredentialPool, trimmedThinkingLevel)
 	runtimeGenerator, runtimePrimaryDetails := buildRuntimeGeneratorChain(runtimeChain)
 	if runtimeGenerator != nil {
 		cfg.Set("generator", runtimeGenerator)
@@ -1402,6 +1587,25 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err != nil {
+			if providerDetails != nil {
+				providerKey := normalizeCredentialProviderKey(providerDetails.Provider)
+				if providerKey != "" {
+					runtimeCredentialPool = recordLLMProviderOutcome(runtimeCredentialPool, providerKey, false, time.Now().UTC().UnixMilli())
+					if len(runtimeCredentialPool) > 0 {
+						daemonSessionStore.mu.Lock()
+						stored := daemonSessionStore.data[sessionKey]
+						stored.LLMCredentials = cloneLLMCredentialsMap(runtimeCredentialPool)
+						stored.LLMPoolUpdatedAtMS = time.Now().UTC().UnixMilli()
+						stored.LLMPoolUpdatedBy = "daemon"
+						stored.LastUpdated = time.Now().UTC()
+						daemonSessionStore.data[sessionKey] = stored
+						daemonSessionStore.mu.Unlock()
+						if persistErr := persistDaemonLLMPoolState(); persistErr != nil {
+							log.Printf("Warning: failed to persist daemon LLM pool state after provider failure: %v", persistErr)
+						}
+					}
+				}
+			}
 			log.Printf("daemon ask request failed: query=%q error=%v", req.Query, err)
 			sendEvent("error", err.Error())
 			return
@@ -1411,6 +1615,25 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 		// 	logVerbose("daemon shared-memory promotion failed: query=%q error=%v", req.Query, err)
 		// }
 		logVerbose("daemon handleAsk: completed via agent query=%q answer_len=%d", req.Query, len(answer))
+	}
+	if providerDetails != nil {
+		providerKey := normalizeCredentialProviderKey(providerDetails.Provider)
+		if providerKey != "" {
+			runtimeCredentialPool = recordLLMProviderOutcome(runtimeCredentialPool, providerKey, true, time.Now().UTC().UnixMilli())
+			if len(runtimeCredentialPool) > 0 {
+				daemonSessionStore.mu.Lock()
+				stored := daemonSessionStore.data[sessionKey]
+				stored.LLMCredentials = cloneLLMCredentialsMap(runtimeCredentialPool)
+				stored.LLMPoolUpdatedAtMS = time.Now().UTC().UnixMilli()
+				stored.LLMPoolUpdatedBy = "daemon"
+				stored.LastUpdated = time.Now().UTC()
+				daemonSessionStore.data[sessionKey] = stored
+				daemonSessionStore.mu.Unlock()
+				if persistErr := persistDaemonLLMPoolState(); persistErr != nil {
+					log.Printf("Warning: failed to persist daemon LLM pool state after provider success: %v", persistErr)
+				}
+			}
+		}
 	}
 
 	// Send final content if nothing was streamed during execution

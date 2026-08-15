@@ -190,9 +190,6 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	if response := unsupportedLocalCapabilityResponse(taskContext); response != "" {
 		return response, nil
 	}
-	if shouldAskForMoreContextForVagueRepoTask(query) {
-		return "I can help with that repo fix. Please tell me which repository or working directory to inspect, and share the failing test output or the error details you want me to investigate.", nil
-	}
 
 	// 6. Episode tracking and capability setup (same as V1)
 	a.trackEpisodeMetadata(ctx, intent)
@@ -220,7 +217,7 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		log.Info("Phase plan resolved", "plan", plan, "current_phase", currentPhase)
 
 		// Create domain-specific phase proxies
-		phases := a.createPhaseProxies(askCtx.Domains, currentPhase)
+		phases := a.createPhaseProxies(askCtx.Domains, currentPhase, askCtx)
 		log.Info("Phase proxies created", "count", len(phases), "domains", askCtx.Domains)
 
 		// Aggregate tools from all phases with CRUD filtering
@@ -360,8 +357,10 @@ func (a *CopilotAgent) applyQueuedPhaseActorContext(ctx context.Context, taskCon
 		taskContext = &TaskContextClassification{}
 	}
 	phaseName = normalizePhase(phaseName)
+	phaseName = normalizeCodingRuntimePhaseForClassification(persisted, phaseName)
 	if persisted != nil {
 		persisted.Phase = phaseName
+		persisted.PhasePlan = normalizeCodingRuntimePlanForClassification(persisted, persisted.PhasePlan)
 		taskContext.AskClassification = persisted
 		if len(persisted.Domains) == 1 {
 			taskContext.Domain = persisted.Domains[0]
@@ -397,9 +396,11 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 		log.Warn("No STM available for WorkStream integration")
 		// Fallback: use classification plan or default
 		if len(classification.PhasePlan) > 0 {
-			return classification.PhasePlan, classification.PhasePlan[0]
+			plan = normalizeCodingRuntimePlanForClassification(classification, classification.PhasePlan)
+			return plan, normalizeCodingRuntimePhaseForClassification(classification, plan[0])
 		}
-		return []string{classification.Phase}, classification.Phase
+		phase := normalizeCodingRuntimePhaseForClassification(classification, classification.Phase)
+		return []string{phase}, phase
 	}
 
 	// Check if we're resuming an existing WorkStream
@@ -410,15 +411,17 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 			existingPlan := streamCtx.GetPhasePlan()
 			if existingPlan != nil {
 				// Resuming existing plan - use cursor to determine current phase
-				plannedPhases := existingPlan.GetPlannedPhases()
+				rawPlannedPhases := existingPlan.GetPlannedPhases()
+				plannedPhases := normalizeCodingRuntimePlanForClassification(classification, rawPlannedPhases)
 				currentIndex := existingPlan.GetCurrentIndex()
 
-				if currentIndex < len(plannedPhases) {
+				if currentIndex < len(rawPlannedPhases) {
+					currentPhase = normalizeCodingRuntimePhaseForClassification(classification, rawPlannedPhases[currentIndex])
 					log.Info("Resuming WorkStream from existing PhasePlan",
 						"plan", plannedPhases,
 						"current_index", currentIndex,
-						"current_phase", plannedPhases[currentIndex])
-					return plannedPhases, plannedPhases[currentIndex]
+						"current_phase", currentPhase)
+					return plannedPhases, currentPhase
 				}
 
 				// Plan complete - all phases done
@@ -430,10 +433,10 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 
 	// New WorkStream - use classification plan or default
 	if len(classification.PhasePlan) > 0 {
-		plan = classification.PhasePlan
+		plan = normalizeCodingRuntimePlanForClassification(classification, classification.PhasePlan)
 	} else {
 		// Default: single phase from classification
-		plan = []string{classification.Phase}
+		plan = []string{normalizeCodingRuntimePhaseForClassification(classification, classification.Phase)}
 	}
 
 	currentPhase = plan[0]
@@ -461,11 +464,66 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 	return plan, currentPhase
 }
 
+func normalizeCodingRuntimePhaseForClassification(classification *AskTaskContext, phase string) string {
+	rawPhase := strings.TrimSpace(strings.ToLower(phase))
+	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		return normalizePhase(rawPhase)
+	}
+	switch rawPhase {
+	case "", "intake":
+		return "investigation"
+	case "testing", "review", "delivery":
+		return "execution"
+	default:
+		return normalizePhase(rawPhase)
+	}
+}
+
+func normalizeCodingRuntimePlanForClassification(classification *AskTaskContext, phases []string) []string {
+	if len(phases) == 0 {
+		return phases
+	}
+	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		cloned := append([]string(nil), phases...)
+		for idx, phase := range cloned {
+			cloned[idx] = normalizePhase(phase)
+		}
+		return cloned
+	}
+	normalized := make([]string, 0, len(phases))
+	for _, phase := range phases {
+		mapped := normalizeCodingRuntimePhaseForClassification(classification, phase)
+		if mapped == "" {
+			continue
+		}
+		if len(normalized) == 0 || normalized[len(normalized)-1] != mapped {
+			normalized = append(normalized, mapped)
+		}
+	}
+	if len(normalized) == 0 {
+		return []string{"investigation", "planning", "execution"}
+	}
+	return normalized
+}
+
+func askClassificationHasDomain(domains []string, want string) bool {
+	want = strings.TrimSpace(strings.ToLower(want))
+	if want == "" {
+		return false
+	}
+	for _, domain := range domains {
+		if strings.TrimSpace(strings.ToLower(domain)) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // createPhaseProxies creates domain-specific phase capabilities via Phase Factory.
 //
 // USER SPECIFICATION:
 // For EACH domain in classification:
-//  1. Invoke: NewPhase(domain, currentPhase, sharedInfra)
+//  1. Invoke: NewPhase(domain, phaseID, sharedInfra)
 //  2. Factory returns domain-specific phase (StoresPhase, SpacesPhase, etc.)
 //  3. Each phase is a proxy/delegator for that domain+phase combination
 //
@@ -473,7 +531,7 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 //
 //	domains=["stores", "spaces"], phase="investigation"
 //	→ StoresPhase("investigation") + SpacesPhase("investigation")
-func (a *CopilotAgent) createPhaseProxies(domains []string, currentPhase string) []capabilities.Capability {
+func (a *CopilotAgent) createPhaseProxies(domains []string, currentPhase string, classification *AskTaskContext) []capabilities.Capability {
 	phases := []capabilities.Capability{}
 
 	// Get or create shared infrastructure for phases
@@ -481,25 +539,73 @@ func (a *CopilotAgent) createPhaseProxies(domains []string, currentPhase string)
 
 	// Create phase proxy for each domain
 	for _, domain := range domains {
-		log.Info("Creating phase proxy",
-			"domain", domain,
-			"phase", currentPhase)
+		for _, phaseID := range resolveDomainToolPhases(domain, currentPhase, classification) {
+			log.Info("Creating phase proxy",
+				"domain", domain,
+				"phase", phaseID)
 
-		phase := planner.NewPhase(domain, currentPhase, infra)
-		if phase != nil {
-			phases = append(phases, phase)
-			log.Info("Phase proxy created",
-				"domain", domain,
-				"phase", currentPhase,
-				"capability_id", phase.ID())
-		} else {
-			log.Warn("Phase Factory returned nil",
-				"domain", domain,
-				"phase", currentPhase)
+			phase := planner.NewPhase(domain, phaseID, infra)
+			if phase != nil {
+				phases = append(phases, phase)
+				log.Info("Phase proxy created",
+					"domain", domain,
+					"phase", phaseID,
+					"capability_id", phase.ID())
+			} else {
+				log.Warn("Phase Factory returned nil",
+					"domain", domain,
+					"phase", phaseID)
+			}
 		}
 	}
 
 	return phases
+}
+
+func resolveDomainToolPhases(domain, currentPhase string, classification *AskTaskContext) []string {
+	domain = strings.TrimSpace(strings.ToLower(domain))
+	currentPhase = normalizePhase(currentPhase)
+	if currentPhase == "" {
+		currentPhase = "investigation"
+	}
+	if domain != "coding_workflow" && domain != "coding" && domain != "codingworkflow" {
+		return []string{currentPhase}
+	}
+	if useCodingImplementationBundle(classification, currentPhase) {
+		return []string{"investigation", "planning", "execution"}
+	}
+	return []string{"investigation", "planning"}
+}
+
+func useCodingImplementationBundle(classification *AskTaskContext, currentPhase string) bool {
+	currentPhase = normalizePhase(currentPhase)
+	switch currentPhase {
+	case "execution", "review", "delivery":
+		return true
+	}
+	if classification == nil {
+		return false
+	}
+	switch strings.TrimSpace(strings.ToLower(classification.Intent)) {
+	case "generate_code", "mutate_data":
+		return true
+	}
+	for _, crud := range classification.CRUD {
+		switch strings.TrimSpace(strings.ToUpper(crud)) {
+		case "C", "U", "D":
+			return true
+		}
+	}
+	if containsRepoFixIntent(*classification) {
+		return true
+	}
+	query := strings.ToLower(strings.TrimSpace(classification.OriginalQuery))
+	for _, marker := range []string{"fix", "patch", "implement", "update", "modify", "change", "write", "failing test", "tests fail", "bug"} {
+		if strings.Contains(query, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // aggregatePhaseTools collects tools from ALL phase proxies.
@@ -519,6 +625,7 @@ func (a *CopilotAgent) aggregatePhaseTools(phases []capabilities.Capability, cla
 
 	for _, phase := range phases {
 		phaseTools := phase.ExposeTools()
+		phaseTools = filterCodingRuntimeTools(phaseTools, classification)
 
 		// Phase 3 optimization: Filter tools by CRUD flags
 		filteredTools := capabilities.FilterToolsByCRUD(phaseTools, crudFlags)
@@ -537,6 +644,22 @@ func (a *CopilotAgent) aggregatePhaseTools(phases []capabilities.Capability, cla
 		"crud_flags", classification.CRUD)
 
 	return allTools
+}
+
+func filterCodingRuntimeTools(tools []capabilities.ToolDefinition, classification *AskTaskContext) []capabilities.ToolDefinition {
+	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		return tools
+	}
+	filtered := make([]capabilities.ToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		switch strings.TrimSpace(tool.Name) {
+		case "planning_assess_and_route", "planning_create_succession_path":
+			continue
+		default:
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
 }
 
 // registerPhaseTools registers all phase tools in the tool registry.

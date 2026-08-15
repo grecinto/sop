@@ -145,8 +145,11 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 		// The tool calls (jump_to_phase, pause_workstream, etc.) ARE the orchestration signals
 		// This aligns with implicit orchestration model used in Stores/Spaces domains
 
-		// Coding domain phases (full SDLC workflow)
-		for _, phaseID := range []string{"intake", "investigation", "planning", "execution", "review", "delivery"} {
+		// Coding domain phases (runtime surfaces)
+		// The Ask coding runtime now uses discovery + implementation behavior.
+		// Keep only the active coding surfaces registered by default; legacy phase
+		// names are normalized at Ask resume time for backward compatibility.
+		for _, phaseID := range []string{"investigation", "planning", "execution"} {
 			caps = append(caps, plannerpkg.NewPhase("coding_workflow", phaseID, cwfInfra))
 		}
 

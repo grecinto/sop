@@ -517,3 +517,27 @@ func TestListToolsIncludesCommandShortcuts(t *testing.T) {
 		t.Errorf("list_tools output should include example usage.\nGot:\n%s", output)
 	}
 }
+
+func TestEnsureCapabilityRegistry_RegistersOnlyActiveCodingPhases(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	agent.ensureCapabilityRegistry()
+	caps := agent.capabilityRegistry.ListAll()
+	ids := make(map[string]bool, len(caps))
+	for _, cap := range caps {
+		ids[cap.ID()] = true
+	}
+
+	for _, expected := range []string{"phase_investigation", "phase_planning", "phase_execution"} {
+		if !ids[expected] {
+			t.Fatalf("expected capability registry to include %s, got %v", expected, ids)
+		}
+	}
+	for _, unexpected := range []string{"phase_intake", "phase_testing", "phase_review", "phase_delivery"} {
+		if ids[unexpected] {
+			t.Fatalf("did not expect capability registry to include legacy coding phase %s, got %v", unexpected, ids)
+		}
+	}
+}

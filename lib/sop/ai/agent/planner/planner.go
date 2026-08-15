@@ -72,22 +72,22 @@ func (c *PlannerCapability) Classify(query string, state capabilities.RoutingSta
 }
 
 func (c *PlannerCapability) BuildContext(query string, state capabilities.RoutingState) string {
-	return "Universal phase planner context:\n- Use this planner for tasks that benefit from structured workflow (coding, stores, spaces, desktop automation, etc.).\n- Create a persistent PhasePlan that adapts to task complexity: simple queries may need only 1-2 phases, complex tasks need full workflow.\n- Phase sequence examples: [investigation, execution] for queries, [intake, investigation, planning, execution, review, delivery] for full SDLC.\n- The domain determines which tools are available in each phase."
+	return "Universal phase planner context:\n- Use this planner for tasks that benefit from structured workflow (coding, stores, spaces, desktop automation, etc.).\n- For coding tasks, prefer the simplest runtime shape that lets the LLM complete the job in one continuous Ask/ReAct transaction.\n- Coding runtime modes are usually [discovery, implementation], where discovery means investigation plus planning, and implementation means mutation plus validation.\n- Persist planning metadata only when it improves continuity; do not introduce extra workflow turns unless the task or user requires them.\n- The domain determines which tools are available in each runtime mode."
 }
 
 func (c *PlannerCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	return "For new coding tasks, start by creating a PhasePlan with the create_phase_plan tool before taking implementation actions. Persist the plan into the current work stream so the later phase capabilities can continue the workflow.\n\n" + cw.CodeFormatInstructions
+	return "For coding tasks, do not force a full SDLC phase plan by default. Prefer a two-mode runtime: discovery when more evidence or design clarity is needed, implementation when the task is action-oriented and can proceed in one continuous Ask/ReAct transaction. Use create_phase_plan only when persistent workflow structure genuinely improves the task.\n\n" + cw.CodeFormatInstructions
 }
 
 func (c *PlannerCapability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
 	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide workflow planning safely and clearly")
-	base.Principles = []string{"Prefer phased planning for work that spans multiple steps or validation checkpoints"}
+	base.Principles = []string{"Prefer the lightest workflow structure that preserves continuity, safety, and validation"}
 	base.Guardrails = []capabilities.GuidanceRule{{Description: "Do not skip planning for architecture changes, significant validation, or multi-file edits"}}
 
 	profile := capabilities.GuidanceProfile{
 		Role:          "Guide structured workflow planning for multi-step tasks",
 		Principles:    []string{"Use the simplest plan that still preserves the key checkpoints and risks"},
-		ToolSelection: []capabilities.GuidanceRule{{Description: "Prefer create_phase_plan for high-level workflow orchestration and leave implementation detail to the later execution phases"}},
+		ToolSelection: []capabilities.GuidanceRule{{Description: "Prefer create_phase_plan only when an explicit persisted workflow will help more than a continuous discovery/implementation loop"}},
 	}.ApplyDefaults(base)
 
 	return profile
@@ -133,7 +133,7 @@ func (c *PlannerCapability) ExecuteTool(ctx context.Context, toolName string, ar
 	}
 	reasoning := firstStringArg(args, "reasoning")
 	if strings.TrimSpace(reasoning) == "" {
-		reasoning = "Cold-start coding requests benefit from a structured progression through intake, investigation, planning, execution, review, and delivery."
+		reasoning = "Coding requests usually work best with a lightweight discovery-to-implementation progression unless the task explicitly needs more workflow structure."
 	}
 	confidence := firstStringArg(args, "confidence")
 	if strings.TrimSpace(confidence) == "" {
@@ -806,10 +806,13 @@ func inferMediaTypes(description string) []string {
 
 func buildPhasePlanSequence(query string) []string {
 	q := strings.ToLower(strings.TrimSpace(query))
-	if strings.Contains(q, "review") || strings.Contains(q, "validate") || strings.Contains(q, "check") {
-		return []string{"intake", "investigation", "testing", "review", "delivery"}
+	if strings.Contains(q, "design") || strings.Contains(q, "architecture") || strings.Contains(q, "plan") {
+		return []string{"investigation", "planning", "execution"}
 	}
-	return []string{"intake", "investigation", "planning", "testing", "execution", "review", "delivery"}
+	if strings.Contains(q, "review") || strings.Contains(q, "validate") || strings.Contains(q, "check") {
+		return []string{"investigation", "execution"}
+	}
+	return []string{"investigation", "planning", "execution"}
 }
 
 func collectCheckpointNames(args map[string]any) []string {

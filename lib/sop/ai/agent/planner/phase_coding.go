@@ -22,13 +22,13 @@ func newCodingPhase(phaseID string, infra *SharedInfrastructure) *CodingPhase {
 		Domain:     "coding_workflow",
 		Principles: []string{"Use the most relevant tools and evidence for the task"},
 		Instructions: map[string]string{
-			"intake":        "Use Intake to gather scope, constraints, and success criteria before acting.",
-			"investigation": "Use Investigation to gather evidence from the repository, tests, and surrounding code before making changes.",
-			"planning":      "Use Planning to create a concrete design brief with constraints, trade-offs, and validation steps.",
-			"testing":       "Use Testing to shape the change with the relevant validation surfaces and capture the outcome.",
-			"execution":     "Use Execution to implement the plan safely and keep the change scoped to the observed need.",
-			"review":        "Use Review to validate the implementation against the evidence and requirements.",
-			"delivery":      "Use Delivery to summarize the result, decisions, and follow-up steps clearly.",
+			"intake":        "Use Intake only when scope, constraints, or success criteria are genuinely missing.",
+			"investigation": "Use Investigation as part of discovery mode to gather evidence from the repository, tests, and surrounding code before making changes.",
+			"planning":      "Use Planning as part of discovery mode to create only the amount of design structure the task actually needs.",
+			"testing":       "Use Testing as embedded validation behavior, not a separate runtime destination, unless an older workflow artifact explicitly resumes here.",
+			"execution":     "Use Execution as implementation mode to inspect, patch, validate, and continue the same Ask/ReAct transaction until the task is done.",
+			"review":        "Use Review only when resuming an older workflow artifact; otherwise validate inside implementation mode.",
+			"delivery":      "Use Delivery only when resuming an older workflow artifact; otherwise summarize directly from implementation mode.",
 		},
 		PhaseRules: map[string][]capabilities.GuidanceRule{
 			"investigation": {{Description: "Gather evidence before proposing a fix or change", AppliesTo: []string{"investigation"}}},
@@ -49,32 +49,31 @@ OBJECTIVE: Gather requirements, clarify scope
 WORKFLOW: Ask questions → Build context → Document requirements → Capture artifact`
 	case "investigation":
 		return `PHASE: Investigation & Analysis
-OBJECTIVE: Understand current state, find patterns
+OBJECTIVE: Discovery mode for understanding current state and finding patterns
 REQUIRED: investigation_build_context (call first)
-WORKFLOW: Build context → Inspect repo → Search patterns → Document evidence`
+WORKFLOW: Build context → Inspect repo → Search patterns → Document evidence → Continue directly into implementation when the next step is clear`
 	case "planning":
 		return `PHASE: Planning & Design
-OBJECTIVE: Create execution strategy
-PLANNING-FIRST: Call planning_assess_and_route FIRST
-WORKFLOW: Assess → Create succession path → Build context → Plan changes → Capture artifact`
+OBJECTIVE: Discovery mode design aid when a concrete plan adds value
+WORKFLOW: Build context → Plan changes → Capture planning evidence → Continue directly into implementation when the next step is clear`
 	case "testing":
 		return `PHASE: Testing & Validation
-OBJECTIVE: Verify behavior with tests and regressions
+OBJECTIVE: Legacy validation phase for older artifacts; prefer running tests from discovery or implementation in the current coding runtime
 GUIDANCE: Use tests as a design aid when they clarify contracts, interfaces, or expected behavior; do not force TDD when the right abstraction is still being explored
 WORKFLOW: Review requirements → Add/adjust tests or validation cases → Run tests → Capture results`
 	case "execution":
 		return `PHASE: Execution & Implementation
-OBJECTIVE: Apply changes safely
+OBJECTIVE: Implementation mode for applying changes safely in a continuous Ask/ReAct transaction
 SAFETY: Always preview before apply
 MULTI-FILE: Use apply_multi_file_patch for multiple related files (faster than sequential apply_patch)
-WORKFLOW: Preview → Approve → Apply → Test → Capture results`
+WORKFLOW: Preview → Approve → Apply → Test → Capture results → Summarize or continue implementation as needed`
 	case "review":
 		return `PHASE: Review & Validation
-OBJECTIVE: Validate changes
+OBJECTIVE: Legacy review phase for older artifacts; prefer validating inside implementation mode in the current coding runtime
 WORKFLOW: Build context → Inspect changes → Run tests → Validate → Capture results`
 	case "delivery":
 		return `PHASE: Delivery & Handoff
-OBJECTIVE: Summarize and complete
+OBJECTIVE: Legacy delivery phase for older artifacts; prefer summarizing directly from implementation mode in the current coding runtime
 WORKFLOW: Review artifacts → Summarize → Document → Capture → Signal exit`
 	default:
 		return fmt.Sprintf("Phase: %s for coding workflow", p.name)

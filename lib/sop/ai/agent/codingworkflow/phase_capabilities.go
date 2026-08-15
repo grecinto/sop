@@ -698,7 +698,7 @@ func (c *PhaseCapability) buildExecutionContext() string {
 
 OBJECTIVE:
 - Apply planned changes to the codebase
-- Follow the execution plan from the planning phase
+- Use implementation mode as a continuous repo-fix loop: inspect as needed, change code, validate, and summarize
 - Before any implementation or shell command is run, state the immediate objective and expected scope in one sentence; prefer the smallest valid change over a broader rewrite
 - Validate the work with the most relevant evidence
 - Produce code that is modular, maintainable, readable, and aligned with the language's general design and coding best practices, including object-oriented organization, separation of concerns, and established design patterns where appropriate
@@ -741,8 +741,8 @@ CONTROL RULE:
 	e. Otherwise call execution_apply_patch to apply changes directly
 	f. Call execution_run_tests to validate
 4. Capture artifact with results
-5. If tests pass: Transition to review
-6. If tests fail: inspect the failure, adjust the patch, and rerun the same targeted tests before expanding scope or returning to planning
+	5. If tests pass: summarize the result and either continue implementation or conclude the workflow
+	6. If tests fail: inspect the failure, adjust the patch, and rerun the same targeted tests before expanding scope or returning to planning
 
 COMPLETION CRITERIA:
 □ All planned changes applied
@@ -750,14 +750,14 @@ COMPLETION CRITERIA:
 □ Tests executed and passing
 □ No regressions introduced
 □ Artifact captured with status="complete"
-□ Ready to transition to review
+□ Ready to summarize or continue with the next implementation step
 
 PHASE TRANSITIONS:
 You can move FORWARD or BACKWARD. Capture transition intent when ready:
 
-• FORWARD to Review (typical path):
-  - All changes applied and tests passing
-  - Capture: status="complete", transition_to="review", transition_from="planning", transition_direction="forward"
+• FORWARD within Implementation (typical path):
+	- All changes applied and tests passing
+	- Capture: status="complete", next_steps=[summary or final response], exit_requested=true when done
 
 • BACKWARD to Planning (plan was flawed):
   - Implementation reveals plan won't work
@@ -775,9 +775,8 @@ ARTIFACT FIELDS:
 - plan: (from planning - what was executed)
 - notes: Implementation details, issues encountered
 - evidence: Patches applied, test results
-- next_steps: Guidance for review phase
-- transition_to: "review"
-- transition_direction: "forward"
+- next_steps: Guidance for summary or additional implementation work
+- exit_requested: true when the workflow is done
 
 SAFETY RULES (CRITICAL):
 ⚠️  MUST preview patch before applying
@@ -810,10 +809,9 @@ func (c *PhaseCapability) buildReviewContext() string {
 	return `PHASE: Review & Validation
 
 OBJECTIVE:
-- Validate that the implementation meets the requirements
-- Review the resulting changes and evidence
-- Check for regressions or unresolved issues
-- Output: Validation results and approval status
+- Legacy validation metadata for workflows that still persist review artifacts
+- In the current coding runtime, validation usually happens inside implementation mode instead of a separate review turn
+- Output: Validation summary when older workstreams resume into review
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on testing complexity and findings:
@@ -907,10 +905,9 @@ func (c *PhaseCapability) buildDeliveryContext() string {
 	return `PHASE: Delivery & Handoff
 
 OBJECTIVE:
-- Summarize completed work
-- Document key changes and decisions
-- Prepare a clear handoff to the user
-- Output: A concise delivery summary
+- Legacy handoff metadata for workflows that still persist delivery artifacts
+- In the current coding runtime, summarization normally happens directly from implementation mode instead of a separate delivery turn
+- Output: A concise handoff summary when older workstreams resume into delivery
 
 INTERACTION MODES:
 This phase supports TWO interaction modes - choose based on delivery scope:
@@ -1038,17 +1035,17 @@ func (c *PhaseCapability) BuildInstructions(query string, state capabilities.Rou
 	case "intake":
 		return "Use Intake capability to: 1) Ask clarifying questions, 2) Gather requirements, 3) Define scope and constraints, 4) Capture requirements artifact, 5) Transition to investigation when clear."
 	case "investigation":
-		return "Use Investigation capability to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) Document evidence, 6) Transition to planning when analysis complete."
+		return "Use Investigation capability as discovery mode to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) Run targeted validation when it helps reproduce or understand the issue, 6) Document evidence, 7) Continue directly into implementation when the next step is obvious."
 	case "planning":
-		return "Use Planning capability to: 1) Treat planning as a first-class phase, not an afterthought, 2) Use Continue bridge context when available to understand the editor-backed coding environment, 3) Build context, 4) Research patterns and confirm assumptions, 5) Generate a concrete plan with file/function references, 6) Check relevant Team Practice guidance from the Core Playbook (CP) before finalizing design or implementation choices, 7) Use tests or validation cases as a design aid when they clarify contracts, interfaces, or expected behavior, 8) Emit a user-visible plan message in the chat history that shows the generated plan details and asks for approval from the user before implementation work begins, 9) Capture artifact with status='ready_for_execution', 10) Transition to execution when approved. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
+		return "Use Planning capability as part of discovery mode to: 1) Use Continue bridge context when available to understand the editor-backed coding environment, 2) Build context, 3) Research patterns and confirm assumptions, 4) Generate a concrete plan with file/function references when a plan adds value, 5) Check relevant Team Practice guidance from the Core Playbook (CP) before finalizing design or implementation choices, 6) Use tests or validation cases as a design aid when they clarify contracts, interfaces, or expected behavior, 7) Emit a user-visible plan message only when approval or explicit design review is needed, 8) Capture planning evidence for continuity, 9) Continue directly into implementation when the task is action-oriented. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
 	case "testing":
-		return "Use Testing capability to: 1) Add or refine tests or validation cases when they clarify the intended behavior, 2) Use tests as a tool for design clarity and regression confidence, 3) Run the relevant test or validation command, 4) Capture the results, 5) Transition to execution or review as appropriate."
+		return "Use Testing capability as legacy validation metadata only: 1) Add or refine tests or validation cases when they clarify the intended behavior, 2) Use tests as a tool for design clarity and regression confidence, 3) Run the relevant test or validation command, 4) Capture the results. In the current coding runtime, testing is usually performed from discovery or implementation instead of a separate testing phase."
 	case "execution":
-		return "Use Execution capability to: 1) Show a user-visible plan message in the chat history that includes the generated plan details, 2) Ask for approval from the user before running commands, 3) Preview patches, 4) Get user approval, 5) If the task is under-specified, pause and do additional investigation/research before changing code, 6) Decide whether the current step should be delegated to Continue as one bounded coding objective, 7) Use delegate_continue_task only when the edit is bounded to the active file and the task is editor-native (for example a focused patch, refactor, or localized change); if the task is broader multi-file or better handled as direct daemon-native editing, apply patches directly instead, 8) Run relevant validation after each change, 9) Capture results, 10) Transition to review when complete. SAFETY: Always preview before applying and keep Ask as the controller."
+		return "Use Execution capability as implementation mode to: 1) Show a user-visible plan message only when approval is required before running commands, 2) Ask for approval from the user before destructive actions, 3) Preview patches, 4) Get user approval, 5) If the task is under-specified, pause and do additional discovery before changing code, 6) Decide whether the current step should be delegated to Continue as one bounded coding objective, 7) Use delegate_continue_task only when the edit is bounded to the active file and the task is editor-native; if the task is broader multi-file or better handled as direct daemon-native editing, apply patches directly instead, 8) Run relevant validation after each change, 9) Capture results, 10) Summarize or continue implementation when complete. SAFETY: Always preview before applying and keep Ask as the controller."
 	case "review":
-		return "Use Review capability to: 1) Build context, 2) Inspect changes, 3) If the review scope is unclear or the implementation details are incomplete, do additional investigation/research before finalizing the result, 4) Decide whether a bounded IDE-native review or validation slice should be delegated to Continue, 5) Use delegate_continue_task only for that bounded subtask when appropriate, 6) Run relevant validation, 7) Validate against requirements, 8) Capture validation results, 9) Transition to delivery if approved or back to execution if issues found."
+		return "Use Review capability only when resuming an older review artifact: 1) Build context, 2) Inspect changes, 3) Run relevant validation, 4) Validate against requirements, 5) Capture validation results. In the current coding runtime, this work usually happens inside implementation mode instead of a separate review phase."
 	case "delivery":
-		return "Use Delivery capability to: 1) Review all phase artifacts, 2) Summarize changes made, 3) Document decisions, 4) Capture delivery summary, 5) Signal exit to complete workflow."
+		return "Use Delivery capability only when resuming an older delivery artifact: 1) Review the stored artifacts, 2) Summarize changes made, 3) Document decisions, 4) Capture the handoff summary, 5) Signal exit to complete workflow. In the current coding runtime, final summarization usually happens directly from implementation mode instead of a separate delivery phase."
 	default:
 		return fmt.Sprintf("Use the %s capability to gather or record the current phase state, preserve a meaningful artifact in memory, and hand the conversation forward with a clear summary for the next phase when the user chooses to move on.", c.name)
 	}

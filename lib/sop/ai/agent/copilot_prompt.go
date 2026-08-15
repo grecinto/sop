@@ -103,6 +103,11 @@ func buildTaskGuidanceSynthesis(query string, taskClassification TaskContextClas
 	if strings.Contains(lower, "test") || strings.Contains(lower, "failing") || strings.Contains(lower, "error") {
 		lines = append(lines, "- Validation note: prefer targeted verification and rerun the relevant checks after changes.")
 	}
+	if shouldAskForMoreContextForVagueRepoTask(trimmedQuery) {
+		lines = append(lines, "- Clarification directive: the repository or working directory is still missing.")
+		lines = append(lines, "- Stay in the current Ask/ReAct continuation. Ask one short clarification question using the clarification action instead of returning a standalone answer.")
+		lines = append(lines, "- Do not call repo inspection, test execution, or edit tools until the user identifies the repo/workdir.")
+	}
 
 	lines = append(lines, "- Guardrail: avoid broad or speculative changes and stay grounded in the available evidence.")
 	return strings.Join(lines, "\n")

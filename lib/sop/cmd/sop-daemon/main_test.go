@@ -3226,6 +3226,88 @@ func TestHandleAskGeneratorChainSkipsInvalidPrimaryAndUsesPoolFallback(t *testin
 	}
 }
 
+func TestRecordProviderHistoryTracksSuccessAndFailure(t *testing.T) {
+	base := map[string]llmCredential{
+		"anthropic": {APIKey: "anthropic-secret", Model: "claude-3-5-sonnet-20241022", SuccessCount: 1, FailureCount: 0, LastSuccessAtMS: 1000},
+	}
+	updated := recordLLMProviderOutcome(base, "anthropic", true, 2000)
+	if updated["anthropic"].SuccessCount != 2 {
+		t.Fatalf("success_count = %d, want %d", updated["anthropic"].SuccessCount, 2)
+	}
+	if updated["anthropic"].LastSuccessAtMS != 2000 {
+		t.Fatalf("last_success_at_ms = %d, want %d", updated["anthropic"].LastSuccessAtMS, 2000)
+	}
+	updated = recordLLMProviderOutcome(updated, "anthropic", false, 3000)
+	if updated["anthropic"].FailureCount != 1 {
+		t.Fatalf("failure_count = %d, want %d", updated["anthropic"].FailureCount, 1)
+	}
+	if updated["anthropic"].LastFailureAtMS != 3000 {
+		t.Fatalf("last_failure_at_ms = %d, want %d", updated["anthropic"].LastFailureAtMS, 3000)
+	}
+}
+
+func TestBuildRuntimeProviderChainPrefersProvenModelOverCheaperUnprovenModel(t *testing.T) {
+	tempDir := t.TempDir()
+	catalogPath := filepath.Join(tempDir, "model_catalog.json")
+	catalog := `{"llm":[{"label":"Test","options":[{"value":"test:cheap-low","label":"Cheap Low","capability_tier":"cheap","reasoning_strength":2,"max_output_tokens":1024,"max_tool_turns":3,"compact_prompt":true,"supported_task_types":["implementation"],"input_cost_per_1m_tokens":0.1,"output_cost_per_1m_tokens":0.2},{"value":"test:expensive-high","label":"Expensive High","capability_tier":"strong","reasoning_strength":5,"max_output_tokens":4096,"max_tool_turns":8,"compact_prompt":false,"supported_task_types":["implementation"],"input_cost_per_1m_tokens":3.0,"output_cost_per_1m_tokens":12.0}]}]}`
+	if err := os.WriteFile(catalogPath, []byte(catalog), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	chain := buildRuntimeProviderChain("test:cheap-low", "primary-key", "cheap-low", "https://primary", map[string]llmCredential{
+		"test": {APIKey: "pool-key", Model: "expensive-high", URL: "https://expensive", SuccessCount: 7, FailureCount: 1, LastSuccessAtMS: 2000},
+	}, "medium")
+	if len(chain) != 2 {
+		t.Fatalf("expected 2 candidates, got %d: %+v", len(chain), chain)
+	}
+	if chain[0].Model != "cheap-low" {
+		t.Fatalf("expected explicit primary model to stay first, got %+v", chain)
+	}
+	if chain[1].Model != "expensive-high" {
+		t.Fatalf("expected proven model to outrank the cheaper but unproven model, got %+v", chain)
+	}
+}
+
+func TestBuildRuntimeProviderChainRanksCheapestEligiblePoolModelByThinkingLevel(t *testing.T) {
+	tempDir := t.TempDir()
+	catalogPath := filepath.Join(tempDir, "model_catalog.json")
+	catalog := `{"llm":[{"label":"Test","options":[{"value":"test:cheap-low","label":"Cheap Low","capability_tier":"cheap","reasoning_strength":2,"max_output_tokens":1024,"max_tool_turns":3,"compact_prompt":true,"supported_task_types":["implementation"],"input_cost_per_1m_tokens":0.1,"output_cost_per_1m_tokens":0.2},{"value":"test:expensive-high","label":"Expensive High","capability_tier":"strong","reasoning_strength":5,"max_output_tokens":4096,"max_tool_turns":8,"compact_prompt":false,"supported_task_types":["implementation"],"input_cost_per_1m_tokens":3.0,"output_cost_per_1m_tokens":12.0}]}]}`
+	if err := os.WriteFile(catalogPath, []byte(catalog), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	chain := buildRuntimeProviderChain("test:expensive-high", "primary-key", "expensive-high", "https://primary", map[string]llmCredential{
+		"test": {APIKey: "pool-key", Model: "cheap-low", URL: "https://cheap"},
+	}, "medium")
+	if len(chain) != 2 {
+		t.Fatalf("expected 2 candidates, got %d: %+v", len(chain), chain)
+	}
+	if chain[0].Model != "expensive-high" {
+		t.Fatalf("expected explicit primary model to stay first, got %+v", chain)
+	}
+	if chain[1].Model != "cheap-low" {
+		t.Fatalf("expected cheaper eligible model to rank next, got %+v", chain)
+	}
+}
+
 func TestHandleAskLegacyPrimaryStaysFirstWhenPoolPresent(t *testing.T) {
 	agent := &recordingAskAgent{}
 	svc := &localRAGService{service: agent, shellSessions: newPTYShellSessionManager()}
