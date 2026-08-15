@@ -67,8 +67,8 @@ func TestUIRouterFindsTemplatesWhenWorkingDirectoryChanges(t *testing.T) {
 func TestUIRouterExposesFederationModelCatalogPage(t *testing.T) {
 	router := NewUIRouter(nil, "*.html")
 
-	req := httptest.NewRequest(http.MethodGet, "/app/federation/model-catalog", nil)
-	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root"}))
+	req := httptest.NewRequest(http.MethodGet, "/app/hq/federation/model-catalog", nil)
+	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root", Roles: []string{sop.RoleSystemAdmin}}))
 	rec := httptest.NewRecorder()
 	router.handleFederationModelCatalogPage(rec, req)
 
@@ -129,6 +129,39 @@ func TestLandingPageDataExposesModelCatalogForTemplates(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected landing page data to include a local embedder option, got %#v", catalog)
+	}
+}
+
+func TestLandingPageDataHidesFederationMenuForNonSystemAdmin(t *testing.T) {
+	router := NewUIRouter(nil, "*.html")
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "alice", Roles: []string{sop.RoleAdmin}}))
+
+	data := router.landingPageData(req)
+	if got, ok := data["FederationMenuVisible"].(bool); ok && got {
+		t.Fatalf("expected federation menu to be hidden for non-system-admin user, got %#v", data["FederationMenuVisible"])
+	}
+}
+
+func TestLandingPageDataShowsFederationMenuForSystemAdmin(t *testing.T) {
+	router := NewUIRouter(nil, "*.html")
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root", Roles: []string{sop.RoleSystemAdmin}}))
+
+	data := router.landingPageData(req)
+	if got, ok := data["FederationMenuVisible"].(bool); !ok || !got {
+		t.Fatalf("expected federation menu to be visible for SystemAdmin, got %#v", data["FederationMenuVisible"])
+	}
+}
+
+func TestLandingPageDataHidesFederationMenuForSystemAdminInDaemonMode(t *testing.T) {
+	router := NewUIRouter(nil, "*.html")
+	req := httptest.NewRequest(http.MethodGet, "/app?mode=daemon", nil)
+	req = req.WithContext(sop.ContextWithAuth(context.Background(), sop.AuthContext{UserID: "root", Roles: []string{sop.RoleSystemAdmin}}))
+
+	data := router.landingPageData(req)
+	if got, ok := data["FederationMenuVisible"].(bool); ok && got {
+		t.Fatalf("expected federation menu to be hidden in daemon mode, got %#v", data["FederationMenuVisible"])
 	}
 }
 

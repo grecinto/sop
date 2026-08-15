@@ -242,10 +242,39 @@ func (r *UIRouter) handleIndex(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func federationModelCatalogVisibleForRequest(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("mode")))
+	if mode == "daemon" || strings.Contains(strings.ToLower(req.URL.Path), "/daemon") {
+		return false
+	}
+
+	auth := sop.GetAuthFromContext(req.Context())
+	if auth.IsSystem {
+		return true
+	}
+	for _, role := range auth.Roles {
+		if strings.EqualFold(role, sop.RoleSystemAdmin) {
+			return true
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(auth.UserID), "root") {
+		return true
+	}
+	return false
+}
+
 func (r *UIRouter) handleFederationModelCatalogPage(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Templates == nil {
 		http.Error(w, "templates not initialized", http.StatusInternalServerError)
+		return
+	}
+	if !federationModelCatalogVisibleForRequest(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -424,6 +453,8 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		}
 	}
 
+	federationMenuVisible := federationModelCatalogVisibleForRequest(req)
+
 	isAdmin := false
 	for _, role := range auth.Roles {
 		if sop.IsAdminRole(role) || strings.EqualFold(role, sop.RoleSystemAdmin) {
@@ -591,6 +622,7 @@ func (r *UIRouter) landingPageData(req *http.Request) map[string]any {
 		"SetupWizardAIConfigJSON": r.setupWizardAIConfigJSON(),
 		"ModelCatalog":            GetModelCatalog(),
 		"ModelCatalogJSON":        r.modelCatalogJSON(),
+		"FederationMenuVisible":   federationMenuVisible,
 		"ParentSiteURL":           parentSiteURL,
 		"ParentSiteLabel":         parentSiteLabel,
 	}

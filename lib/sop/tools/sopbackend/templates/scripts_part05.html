@@ -135,6 +135,9 @@
         if (typeof window.syncEnvironmentManagerVisibility === 'function') {
             window.syncEnvironmentManagerVisibility();
         }
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('sop:runtime-mode-changed', { detail: { runtime } }));
+        }
         localStorage.removeItem('sop_current_database');
         localStorage.removeItem('sop_current_store');
         if (typeof window !== 'undefined') {

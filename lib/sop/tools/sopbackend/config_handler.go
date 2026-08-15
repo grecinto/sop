@@ -28,14 +28,49 @@ func handleListEnvironments(w http.ResponseWriter, r *http.Request) {
 
 	var sets []string
 	for _, f := range files {
-		if !f.IsDir() && filepath.Ext(f.Name()) == ".json" {
-			// Basic heuristic: check if it has "system_db" or "databases" field?
-			// For now, simpler: just list all single-level JSONs or assume naming convention?
-			// Let's just list all JSONs for now, user can pick.
+		if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+			continue
+		}
+		if isAIStudioEnvironmentConfigFile(f.Name()) {
 			sets = append(sets, f.Name())
 		}
 	}
 	json.NewEncoder(w).Encode(sets)
+}
+
+func isAIStudioEnvironmentConfigFile(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	var raw any
+	if err := json.NewDecoder(file).Decode(&raw); err != nil {
+		return false
+	}
+
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	// Valid AI Studio environment configs have the core config shape, not arbitrary JSON documents.
+	// Require at least one of the config fields that distinguish environment files from unrelated JSON.
+	_, hasPort := obj["port"]
+	_, hasDatabases := obj["databases"]
+	_, hasSystemDB := obj["system_db"]
+	_, hasPageSize := obj["pageSize"]
+	_, hasProductionMode := obj["production_mode"]
+	_, hasSessionSecret := obj["session_secret"]
+	_, hasSessionTTL := obj["session_token_ttl_minutes"]
+	_, hasAuthProvider := obj["auth_provider"]
+	_, hasUsersStore := obj["users_store"]
+
+	return hasPort || hasDatabases || hasSystemDB || hasPageSize || hasProductionMode || hasSessionSecret || hasSessionTTL || hasAuthProvider || hasUsersStore
 }
 
 // handleCreateEnvironment creates a new empty JSON config file and switches to it.

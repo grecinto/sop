@@ -1635,6 +1635,9 @@
 
         currentDatabase = name;
         localStorage.setItem('sop_current_database', name);
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('sop:database-changed', { detail: { database: name } }));
+        }
 
         const btnAddStore = document.getElementById('btn-add-store');
 

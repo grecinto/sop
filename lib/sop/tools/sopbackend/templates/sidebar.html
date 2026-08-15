@@ -103,7 +103,7 @@
             </div>
 
             <!-- Federation Section -->
-            <div id="federation-section" title="Federation: review and share model catalog metadata with copilots." style="margin-bottom: 12px;">
+            <div id="federation-section" title="Federation: review and share model catalog metadata with copilots." style="margin-bottom: 12px; display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
                     <h3 style="margin: 0; font-size: 1.1em; cursor: pointer; display: flex; align-items: center;" onclick="toggleSidebarList('federation-submenu', 'federation-caret')" onmouseover="this.style.color='var(--success-bg)'" onmouseout="this.style.color=''">
                         <span id="federation-caret" style="display: inline-block; width: 14px; text-align: center; margin-right: 5px; font-size: 0.8em; transition: transform 0.2s;">▶</span>
@@ -121,6 +121,32 @@
         </div>
 
         <script>
+            function syncFederationSectionVisibility() {
+                const section = document.getElementById('federation-section');
+                const submenu = document.getElementById('federation-submenu');
+                if (!section) {
+                    return;
+                }
+
+                const authAllowed = {{ if .FederationMenuVisible }}true{{ else }}false{{ end }};
+                const runtimeMode = typeof getChatRuntimeMode === 'function' ? getChatRuntimeMode() : 'hq';
+                const activeDatabase = (typeof currentDatabase !== 'undefined' && currentDatabase)
+                    ? String(currentDatabase)
+                    : (localStorage.getItem('sop_current_database') || '').trim();
+                const systemDatabaseNames = new Set([
+                    'system',
+                    typeof SYSTEM_DB_NAME !== 'undefined' ? String(SYSTEM_DB_NAME).trim() : '',
+                    typeof window !== 'undefined' && window.SYSTEM_DB_NAME ? String(window.SYSTEM_DB_NAME).trim() : ''
+                ].filter(Boolean));
+                const isSystemDatabase = activeDatabase !== '' && systemDatabaseNames.has(activeDatabase);
+                const shouldShow = authAllowed && runtimeMode !== 'local' && isSystemDatabase;
+
+                section.style.display = shouldShow ? '' : 'none';
+                if (submenu) {
+                    submenu.style.display = shouldShow ? 'none' : 'none';
+                }
+            }
+
             function toggleSidebarList(containerId, caretId) {
                 const container = document.getElementById(containerId);
                 const caret = document.getElementById(caretId);
@@ -132,6 +158,11 @@
                     caret.textContent = '▶';
                 }
             }
+
+            document.addEventListener('DOMContentLoaded', syncFederationSectionVisibility);
+            window.addEventListener('storage', syncFederationSectionVisibility);
+            window.addEventListener('sop:database-changed', syncFederationSectionVisibility);
+            window.addEventListener('sop:runtime-mode-changed', syncFederationSectionVisibility);
 
             async function showFederationModelCatalog(element) {
                 const previousActive = document.querySelector('#sidebar li.active');
