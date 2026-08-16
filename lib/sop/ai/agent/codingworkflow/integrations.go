@@ -31,7 +31,15 @@ func resolveRepoPath(start string) (string, error) {
 	if strings.TrimSpace(start) == "" {
 		return "", fmt.Errorf("working directory is required")
 	}
-	current := start
+	current := filepath.Clean(strings.TrimSpace(start))
+	if current == "." {
+		if cwd, err := os.Getwd(); err == nil {
+			current = cwd
+		}
+	}
+	if info, err := os.Stat(current); err == nil && !info.IsDir() {
+		current = filepath.Dir(current)
+	}
 	for {
 		_, err := git.PlainOpen(current)
 		if err == nil {

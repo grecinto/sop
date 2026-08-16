@@ -111,6 +111,10 @@ Results aggregated: "Tests passed ✓, Formatting OK ✓"
 
 The current coding Ask runtime should be understood as task-mode-oriented even though some internal capability implementations still use phase terminology for continuity and compatibility.
 
+For the next milestone that reconnects strong LLM-authored planning with workstream execution and crash-safe resume, see [STRUCTURED_PLANNER_EXECUTION_DESIGN.md](STRUCTURED_PLANNER_EXECUTION_DESIGN.md).
+
+Task-mode wording should be treated as a compatibility framing, not as the only valid architecture. The stronger design goal is that phase state remains internal execution context while Ask keeps working through the current step and adjacent local work without unnecessary visible phase hops.
+
 ### Live Ask runtime contract
 
 For coding tasks, the live prompt and tool surface should prefer two runtime modes:
@@ -125,6 +129,8 @@ For coding tasks, the live prompt and tool surface should prefer two runtime mod
   - Use when the task is action-oriented and can usually be completed without an explicit phase handoff.
 
 **Prompt rule**: phase semantics are internal metadata for continuity; the live coding prompt should steer the model with runtime-mode wording rather than teaching a full SDLC phase taxonomy on every turn.
+
+Equivalent future implementation: once phase-aligned prompt context and tool surfaces are strong enough, the system can reduce explicit task-mode framing and still preserve the same Ask-first behavior. The key is to avoid turning phase progression into workflow ceremony.
 
 **Routing rule**: for coding tasks, the live routing hint should also use runtime-mode values (`discovery` or `implementation`) instead of phase names. Internal phase IDs remain useful for stored artifacts, compatibility with older workstreams, and specialized capability logic, but they should not be the primary live Ask control primitive.
 

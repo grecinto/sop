@@ -142,3 +142,37 @@ func TestGitRepoInspectorResolvesRepoFromNestedWorkingDirectory(t *testing.T) {
 		t.Fatalf("expected changed file hello.txt from nested dir, got %v", files)
 	}
 }
+
+func TestResolveRepoPathUsesCurrentWorkingDirectoryForDot(t *testing.T) {
+	tmpDir := t.TempDir()
+	if _, err := git.PlainInit(tmpDir, false); err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prevWD)
+	}()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir repo: %v", err)
+	}
+
+	resolved, err := resolveRepoPath(".")
+	if err != nil {
+		t.Fatalf("resolveRepoPath returned error: %v", err)
+	}
+	resolvedReal, err := filepath.EvalSymlinks(resolved)
+	if err != nil {
+		resolvedReal = resolved
+	}
+	tmpDirReal, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		tmpDirReal = tmpDir
+	}
+	if resolvedReal != tmpDirReal {
+		t.Fatalf("expected repo path %q, got %q", tmpDirReal, resolvedReal)
+	}
+}

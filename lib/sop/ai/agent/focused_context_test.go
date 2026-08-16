@@ -9,6 +9,7 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	capabilities "github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/ai/database"
 	sopdb "github.com/sharedcode/sop/database"
 )
@@ -250,6 +251,89 @@ func TestBuildSystemPrompt_CodingWorkflowUsesRuntimeModeWording(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_CodingWorkflowFixFailingTestsRequiresPlanFirst(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.PhasePlan = &PhasePlan{PlannedPhases: []string{"investigation", "planning", "execution"}, CurrentIndex: 2}
+	ag.service.session.Memory.AddThread(thread)
+
+	prompt := ag.buildSystemPrompt(ctx, "fix failing tests in the parser package", TaskContextClassification{
+		Domain:         "coding_workflow",
+		RoutingGate:    RoutingGateDiscovery,
+		CapabilityHint: codingRuntimeModeImplementation,
+		AskClassification: &AskTaskContext{
+			Domains:       []string{"coding_workflow"},
+			Phase:         "execution",
+			PhasePlan:     []string{"investigation", "planning", "execution"},
+			Intent:        "generate_code",
+			CRUD:          []string{"R", "U"},
+			OriginalQuery: "fix failing tests in the parser package",
+		},
+	})
+
+	if !strings.Contains(prompt, "Plan-first contract") {
+		t.Fatalf("expected prompt to require plan-first execution for failing tests, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "planning_plan_changes") {
+		t.Fatalf("expected prompt to mention planning_plan_changes, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Same-turn execution rule") {
+		t.Fatalf("expected prompt to include same-turn execution rule, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "=== Active Execution Brief ===") {
+		t.Fatalf("expected prompt to include an execution brief, got: %s", prompt)
+	}
+}
+
+func TestBuildSystemPrompt_CodingWorkflowUsesAuthoredPlanStepsWhenAvailable(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.PhasePlan = &PhasePlan{PlannedPhases: []string{"investigation", "planning", "execution"}, CurrentIndex: 2}
+	ag.service.session.Memory.AddThread(thread)
+	artifact := `{"summary":"Execution plan for fix failing tests in parser","status":"ready_for_execution","plan":["inspect parser tests","patch parser","run parser tests"],"structured_data":{"detailed_execution_plan":[{"title":"Step 1","description":"Identify the exact parser tests that fail and capture their output.","files":["lib/parser_test.go"],"validation":["failing parser test named"],"exit_criteria":["failing parser test isolated"]},{"title":"Step 2","description":"Patch parser error handling for malformed input.","files":["lib/parser.go"],"validation":["change remains localized"],"exit_criteria":["parser malformed-input path updated"]},{"title":"Step 3","description":"Run parser tests and confirm the original failing test passes.","files":["lib/parser_test.go"],"validation":["targeted parser tests pass"],"exit_criteria":["original failing parser tests pass"]}]}}`
+	if err := ag.service.session.Memory.SaveWorkflowMemory("phase-artifact:planning", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed planning artifact: %v", err)
+	}
+
+	prompt := ag.buildSystemPrompt(ctx, "fix failing tests in the parser package", TaskContextClassification{
+		Domain:         "coding_workflow",
+		RoutingGate:    RoutingGateDiscovery,
+		CapabilityHint: codingRuntimeModeImplementation,
+		AskClassification: &AskTaskContext{
+			Domains:       []string{"coding_workflow"},
+			Phase:         "execution",
+			PhasePlan:     []string{"investigation", "planning", "execution"},
+			Intent:        "generate_code",
+			CRUD:          []string{"R", "U"},
+			OriginalQuery: "fix failing tests in the parser package",
+		},
+	})
+
+	if strings.Contains(prompt, "Plan-first contract") {
+		t.Fatalf("did not expect authored plan prompt to keep the plan-first contract, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Patch parser error handling for malformed input.") {
+		t.Fatalf("expected authored execution step in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Execution contract: use the active execution brief") {
+		t.Fatalf("expected authored plan prompt to use execution contract, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Focus files: lib/parser.go") {
+		t.Fatalf("expected authored plan prompt to include context instructions from files, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Exit criteria: parser malformed-input path updated") {
+		t.Fatalf("expected authored plan prompt to include exit criteria context instructions, got: %s", prompt)
+	}
+}
+
 func TestBuildFocusedToolContext_IncludesStructuredCapabilityGuidance(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
@@ -477,6 +561,91 @@ func TestBuildSystemPrompt_IncludesCrossDomainFocusedContext(t *testing.T) {
 	}
 	if !strings.Contains(systemTools, "You are a Stores Database Expert Agent") {
 		t.Fatalf("expected cross-domain system tools to preserve the Stores capability guidance, got: %s", systemTools)
+	}
+}
+
+func TestBuildSystemPrompt_StoresFocusedContext_IncludesStructuredPlanSummary(t *testing.T) {
+	SetStoresFeatureEnabled(true)
+	defer SetStoresFeatureEnabled(false)
+
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}, Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Validate store results"}
+	thread.InitializeWorkStream("review")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Validate the users store results",
+		WorkflowShape: "repair",
+		Domain:        "stores",
+		Steps: []cw.StructuredPlanStep{{
+			StepID:             "store_1",
+			Goal:               "Verify the expected store results",
+			ActionInstruction:  "Validate the expected store result contract.",
+			Files:              []string{"users"},
+			DecisionRule:       "Confirm schema and result expectations before changing the store operation.",
+			AllowedChangeScope: "narrow store operation or query change only",
+			Validation:         []string{"verify the expected store results"},
+			ExitCriteria:       []string{"store validation is explicit"},
+		}},
+		CurrentStep: 0,
+	}
+	ag.service.session.Memory.AddThread(thread)
+
+	prompt := ag.buildSystemPrompt(ctx, "validate users store results", TaskContextClassification{
+		Domain:      StoresDomain,
+		DBArtifacts: []string{"users"},
+		Layers:      []LayerInfo{{Name: "Single-Domain", CRUD: []string{"R"}}},
+	})
+	if !strings.Contains(prompt, "=== Active Structured Plan ===") {
+		t.Fatalf("expected stores focused context to include active structured plan summary, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Validate the expected store result contract.") {
+		t.Fatalf("expected stores structured plan action in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Allowed scope: narrow store operation or query change only") {
+		t.Fatalf("expected stores structured plan scope in prompt, got: %s", prompt)
+	}
+}
+
+func TestBuildSystemPrompt_SpacesFocusedContext_IncludesStructuredPlanSummary(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}, Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Plan space mutation"}
+	thread.InitializeWorkStream("planning")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Plan knowledge update for pricing",
+		WorkflowShape: "repair",
+		Domain:        "spaces",
+		Steps: []cw.StructuredPlanStep{{
+			StepID:             "space_1",
+			Goal:               "Design the knowledge mutation",
+			ActionInstruction:  "Design the target knowledge mutation.",
+			Files:              []string{"pricing"},
+			DecisionRule:       "Distinguish retrieval drift from stale knowledge before mutating the space.",
+			AllowedChangeScope: "narrow retrieval or knowledge mutation only",
+			Validation:         []string{"confirm the resulting knowledge state"},
+			ExitCriteria:       []string{"mutation plan is explicit"},
+		}},
+		CurrentStep: 0,
+	}
+	ag.service.session.Memory.AddThread(thread)
+
+	prompt := ag.buildSystemPrompt(ctx, "plan pricing space mutation", TaskContextClassification{
+		Domain:      SpacesDomain,
+		DBArtifacts: []string{"pricing"},
+		Layers:      []LayerInfo{{Name: "Single-Domain", CRUD: []string{"U"}}},
+	})
+	if !strings.Contains(prompt, "=== Active Structured Plan ===") {
+		t.Fatalf("expected spaces focused context to include active structured plan summary, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Design the target knowledge mutation.") {
+		t.Fatalf("expected spaces structured plan action in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Allowed scope: narrow retrieval or knowledge mutation only") {
+		t.Fatalf("expected spaces structured plan scope in prompt, got: %s", prompt)
 	}
 }
 

@@ -192,6 +192,20 @@ func TestToolResultAnalysis_AgentTools(t *testing.T) {
 	if !strings.Contains(result, "Line 501:") {
 		t.Error("expected line numbers in grep output")
 	}
+	if !strings.Contains(result, "Suggested next step:") || !strings.Contains(result, "read_tool_result(file_path=") {
+		t.Errorf("expected grep output to suggest follow-up reads, got: %s", result)
+	}
+
+	result, err = agent.toolGrepToolResult(ctx, map[string]any{
+		"file_path": filePath,
+		"pattern":   "fail|error|panic",
+	})
+	if err != nil {
+		t.Fatalf("toolGrepToolResult regex failed: %v", err)
+	}
+	if !strings.Contains(result, "Connection timeout") || !strings.Contains(result, "Retry failed") {
+		t.Errorf("expected alternation pattern to find error lines, got: %s", result)
+	}
 
 	// Test read_tool_result
 	result, err = agent.toolReadToolResult(ctx, map[string]any{
@@ -204,5 +218,83 @@ func TestToolResultAnalysis_AgentTools(t *testing.T) {
 	}
 	if !strings.Contains(result, "Connection timeout") || !strings.Contains(result, "Retry failed") {
 		t.Errorf("expected both error lines, got: %s", result)
+	}
+}
+
+func TestToolResultAnalysis_GrepToolResultSuggestsSourceLookupForFailingTests(t *testing.T) {
+	agent := &CopilotAgent{}
+	storage, err := NewToolResultStorage("test-session-fail-block")
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
+	testOutput := strings.Join([]string{
+		"=== RUN   TestRepositoryConfigAllowsSOPKBPreloadByDefault",
+		"--- FAIL: TestRepositoryConfigAllowsSOPKBPreloadByDefault (0.00s)",
+		"FAIL\tgithub.com/sharedcode/sop/tools/sopbackend\t4.591s",
+	}, "\n")
+	_, filePath, _, err := storage.StoreResult("run_repo_tests", testOutput)
+	if err != nil {
+		t.Fatalf("failed to store test result: %v", err)
+	}
+
+	result, err := agent.toolGrepToolResult(ctx, map[string]any{
+		"file_path": filePath,
+		"pattern":   "FAIL|--- FAIL",
+	})
+	if err != nil {
+		t.Fatalf("toolGrepToolResult failed: %v", err)
+	}
+	if !strings.Contains(result, "grep_repo_text(path=\".\", query=\"func TestRepositoryConfigAllowsSOPKBPreloadByDefault\")") {
+		t.Fatalf("expected grep output to suggest source lookup for failing test, got: %s", result)
+	}
+	if !strings.Contains(result, "inspect files under package github.com/sharedcode/sop/tools/sopbackend") {
+		t.Fatalf("expected grep output to mention failing package, got: %s", result)
+	}
+}
+
+func TestToolResultAnalysis_ReadAndAnalyzeSuggestSourceLookupForFailingTests(t *testing.T) {
+	agent := &CopilotAgent{}
+	storage, err := NewToolResultStorage("test-session-read-fail-block")
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
+	testOutput := strings.Join([]string{
+		"=== RUN   TestRepositoryConfigAllowsSOPKBPreloadByDefault",
+		"--- FAIL: TestRepositoryConfigAllowsSOPKBPreloadByDefault (0.00s)",
+		"FAIL\tgithub.com/sharedcode/sop/tools/sopbackend\t4.591s",
+	}, "\n")
+	_, filePath, _, err := storage.StoreResult("run_repo_tests", testOutput)
+	if err != nil {
+		t.Fatalf("failed to store test result: %v", err)
+	}
+
+	readResult, err := agent.toolReadToolResult(ctx, map[string]any{
+		"file_path":  filePath,
+		"start_line": 1,
+		"end_line":   3,
+	})
+	if err != nil {
+		t.Fatalf("toolReadToolResult failed: %v", err)
+	}
+	if !strings.Contains(readResult, "grep_repo_text(path=\".\", query=\"func TestRepositoryConfigAllowsSOPKBPreloadByDefault\")") {
+		t.Fatalf("expected read_tool_result to suggest source lookup, got: %s", readResult)
+	}
+
+	analyzeResult, err := agent.toolAnalyzeToolResult(ctx, map[string]any{
+		"file_path":   filePath,
+		"operation":   "tail",
+		"max_matches": 10,
+	})
+	if err != nil {
+		t.Fatalf("toolAnalyzeToolResult failed: %v", err)
+	}
+	if !strings.Contains(analyzeResult, "inspect files under package github.com/sharedcode/sop/tools/sopbackend") {
+		t.Fatalf("expected analyze_tool_result to suggest package inspection, got: %s", analyzeResult)
 	}
 }

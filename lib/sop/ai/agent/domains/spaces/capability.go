@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
@@ -80,6 +81,47 @@ func (c *Capability) BuildExecutionContext(input ExecutionContextInput) string {
 		sb.WriteString(fmt.Sprintf("Target Spaces: %s\n", strings.Join(input.DBArtifacts, ", ")))
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func (c *Capability) BuildPlanningContext(query string, state capabilities.RoutingState) string {
+	parts := []string{
+		"Spaces Planning Context",
+		"- Domain focus: persisted knowledge mutations, retrieval quality, and semantic scope control.",
+		"- Primary planning concerns: target spaces, category scope, retrieval inputs, mutation boundaries, and knowledge integrity.",
+		"- Preserve semantic intent and avoid broad refresh/delete operations unless the user explicitly requests them.",
+		"- Validation should prove the expected retrieval or knowledge-state outcome after the planned mutation.",
+	}
+	if domain := strings.TrimSpace(state.Domain); domain != "" {
+		parts = append(parts, "- Active domain routing: "+domain)
+	}
+	if lower := strings.ToLower(strings.TrimSpace(query)); strings.Contains(lower, "fail") || strings.Contains(lower, "test") || strings.Contains(lower, "validate") {
+		parts = append(parts, "- Repair rule: determine whether the issue is retrieval drift, mutation drift, or stale expectation before changing knowledge state.")
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (c *Capability) EvaluateStepCompletion(query string, state capabilities.RoutingState, actionText string, validation []string, toolCalls []ai.ToolCall, outcomeFacts []string) bool {
+	_ = query
+	_ = state
+	text := strings.ToLower(strings.TrimSpace(actionText + " " + strings.Join(validation, " ")))
+	for _, toolCall := range toolCalls {
+		toolName := strings.ToLower(strings.TrimSpace(toolCall.Name))
+		switch {
+		case strings.Contains(text, "inspect") || strings.Contains(text, "search") || strings.Contains(text, "scope"):
+			if strings.Contains(toolName, "list_spaces") || strings.Contains(toolName, "search_content") {
+				return true
+			}
+		case strings.Contains(text, "plan") || strings.Contains(text, "design") || strings.Contains(text, "mutation"):
+			if strings.Contains(toolName, "design_mutation") {
+				return true
+			}
+		case strings.Contains(text, "create") || strings.Contains(text, "update") || strings.Contains(text, "knowledge") || strings.Contains(text, "validate"):
+			if strings.Contains(toolName, "create_content") {
+				return true
+			}
+		}
+	}
+	return len(toolCalls) > 0 && len(outcomeFacts) > 0
 }
 
 func orderedCRUDFlags(flags map[string]bool) []string {

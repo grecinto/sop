@@ -119,7 +119,17 @@ func (a *CopilotAgent) hasRegisteredCapability(domains ...string) bool {
 	if a == nil || a.capabilityRegistry == nil {
 		return false
 	}
+	all := a.capabilityRegistry.ListAll()
 	for _, domain := range domains {
+		normalized := strings.ToLower(strings.TrimSpace(domain))
+		for _, cap := range all {
+			if cap == nil {
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(cap.ID())) == normalized || strings.ToLower(strings.TrimSpace(cap.Name())) == normalized {
+				return true
+			}
+		}
 		if _, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: domain}); ok {
 			return true
 		}
@@ -130,9 +140,7 @@ func (a *CopilotAgent) hasRegisteredCapability(domains ...string) bool {
 // registerTools registers all available tools for the CopilotAgent.
 func (a *CopilotAgent) registerTools(ctx context.Context) {
 	log.Info("CopilotAgent.registerTools: starting")
-	if a.registry == nil {
-		a.registry = NewRegistry()
-	}
+	a.registry = NewRegistry()
 
 	a.registerSystemTools(ctx)
 	if a.hasRegisteredCapability(StoresDomain) && StoresFeatureEnabled() {
@@ -174,13 +182,92 @@ func shouldRegisterCapabilityTool(cap capabilities.Capability, toolName string) 
 	return policy.isShellAutomationEnabled() || localDesktopAutomationEnabled.Load()
 }
 
-func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
+func shouldDeferCapabilityToolRegistration(cap capabilities.Capability, taskCtx *TaskContextClassification) bool {
+	if cap == nil || taskCtx == nil || taskCtx.AskClassification == nil {
+		return false
+	}
+	id := strings.TrimSpace(cap.ID())
+	if strings.HasPrefix(id, "phase_") {
+		return true
+	}
+	switch id {
+	case "planner", "multi_step_planner":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *CopilotAgent) relevantCapabilitiesForToolRegistration(ctx context.Context) []capabilities.Capability {
 	a.ensureCapabilityRegistry()
+	if a.capabilityRegistry == nil {
+		return nil
+	}
+
+	taskCtx := activeRoutingState(ctx)
+	if taskCtx == nil {
+		return a.capabilityRegistry.ListAll()
+	}
+
+	routingState := capabilities.RoutingState{
+		Domain:         taskCtx.Domain,
+		Gate:           taskCtx.RoutingGate,
+		CapabilityHint: taskCtx.CapabilityHint,
+		CRUDFlags:      make(map[string]bool),
+	}
+	if taskCtx.AskClassification != nil {
+		if len(taskCtx.AskClassification.Domains) > 0 {
+			routingState.Domain = strings.TrimSpace(taskCtx.AskClassification.Domains[0])
+		}
+		for _, crud := range taskCtx.AskClassification.CRUD {
+			routingState.CRUDFlags[crud] = true
+		}
+	}
+
+	query := ""
+	if taskCtx.AskClassification != nil {
+		query = strings.TrimSpace(taskCtx.AskClassification.OriginalQuery)
+	}
+
+	selected := make([]capabilities.Capability, 0)
+	seen := make(map[string]struct{})
+	for _, cap := range a.capabilityRegistry.ListAll() {
+		if cap == nil || shouldDeferCapabilityToolRegistration(cap, taskCtx) {
+			continue
+		}
+		if _, exists := seen[cap.ID()]; exists {
+			continue
+		}
+		if taskCtx.AskClassification != nil {
+			switch cap.ID() {
+			case "ide_worker", "workstream_management":
+				seen[cap.ID()] = struct{}{}
+				selected = append(selected, cap)
+				continue
+			}
+		}
+		result := cap.Classify(query, routingState)
+		if result.Mode != capabilities.CapabilityModePrimary && result.Mode != capabilities.CapabilityModeSupporting {
+			continue
+		}
+		if !result.Relevant {
+			continue
+		}
+		seen[cap.ID()] = struct{}{}
+		selected = append(selected, cap)
+	}
+	if len(selected) == 0 && taskCtx.AskClassification == nil {
+		return a.capabilityRegistry.ListAll()
+	}
+	return selected
+}
+
+func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
 	if a.capabilityRegistry == nil {
 		return
 	}
 
-	caps := a.capabilityRegistry.ListAll()
+	caps := a.relevantCapabilitiesForToolRegistration(ctx)
 	for _, cap := range caps {
 		tools := cap.ExposeTools()
 		for _, toolDef := range tools {

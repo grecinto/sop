@@ -42,6 +42,8 @@ The output is persisted into the active workstream so later turns can resume fro
 ### 3. Runtime surfaces are built for the selected domains
 For each relevant domain, the system creates the runtime surface that best fits the task. In coding workflow, the live Ask prompt uses task-mode wording and exposes a discovery or implementation runtime surface rather than teaching the model a full SDLC phase taxonomy for every turn. Internal phase metadata can still exist for continuity and compatibility, but it is not the primary prompt frame.
 
+This should be read as an implementation choice, not a permanent architectural requirement. The important invariant is that phase state remains internal execution context rather than a required conversational transport protocol. If the phase-aligned tool surfaces and prompt context become strong enough, the system can simplify away from explicit task-mode wording without reintroducing brittle phase hops.
+
 ### 4. The model orchestrates tool use inside a provider-owned ReAct loop
 The model sees the available tools and chooses the next operation. This remains the main execution loop for tool calls, retries, and recovery.
 
@@ -54,6 +56,8 @@ After each turn, the system inspects structured state for:
 
 ### 6. Continuation happens only when the current state allows it
 If a later turn is genuinely needed and no clarification is pending, the next continuation item can be enqueued. If clarification is pending, the queue pauses and waits for the user to respond. Coding asks should prefer one continuous Ask/ReAct turn when the task can be completed without an extra handoff.
+
+The same rule applies to internal phase progression: if the next local step is still actionable, Ask should keep going rather than externalizing progress into a visible phase transition.
 
 ### 7. Memory and cognition persist across turns
 The session payload carries a lightweight cognitive snapshot, while MRU and workstream state preserve continuity for future turns.
@@ -68,6 +72,8 @@ The Ask pipeline is the controller of outer-flow behavior. It owns:
 - work-item ordering
 - phase context preservation
 - pause behavior when clarification is pending
+
+Future build-target note: if HQ and daemon should ship different capability surfaces, that separation should happen at build/import time rather than only through runtime registration flags. See [STRUCTURED_PLANNER_EXECUTION_DESIGN.md](STRUCTURED_PLANNER_EXECUTION_DESIGN.md) for the TODO.
 
 For coding workflow specifically, the persisted workstream may still store phase metadata for continuity, but the live Ask routing hint is task-mode-oriented (`discovery` or `implementation`) rather than phase-oriented.
 

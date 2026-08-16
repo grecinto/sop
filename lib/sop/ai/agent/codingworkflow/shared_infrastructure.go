@@ -21,7 +21,7 @@ type ContextManager interface {
 
 // Planner produces a structured execution plan for a task based on the assembled context.
 type Planner interface {
-	Plan(Task, RunState, ContextPack) ([]string, error)
+	Plan(Task, RunState, ContextPack) (StructuredPlan, error)
 }
 
 // ExpertiseRetriever produces a short, high-signal guidance capsule for a task.
@@ -88,9 +88,26 @@ type WorkStreamReader interface {
 type WorkStreamContextReader interface {
 	GetPhasePlan() PhasePlanReader
 	SetPhasePlan(PhasePlanReader)
+	GetStructuredPlan() StructuredPlanReader
+	SetStructuredPlan(StructuredPlanReader)
 	GetMultiStepPlan() MultiStepPlanReader
 	SetMultiStepPlan(MultiStepPlanReader)
 	GetPhaseArtifacts() map[string]map[string]any
+}
+
+// StructuredPlanReader provides read/write access to a structured execution plan.
+type StructuredPlanReader interface {
+	GetObjective() string
+	GetWorkflowShape() string
+	GetDomain() string
+	GetSystemContext() StructuredSystemContext
+	GetSteps() []StructuredPlanStep
+	SetSteps([]StructuredPlanStep)
+	GetCurrentStep() int
+	SetCurrentStep(int)
+	GetCompletedSteps() []string
+	SetCompletedSteps([]string)
+	GetCompletionGate() StructuredCompletionGate
 }
 
 // PhasePlanReader provides read/write access to PhasePlan
@@ -239,6 +256,10 @@ type SharedInfrastructure struct {
 	// Returns any to avoid import cycle, caller should type assert to ai.Generator
 	LLMAccessor func(ctx context.Context) (any, error)
 
+	// PlanningContextResolver lets domain capabilities contribute planning context
+	// while the planner remains domain agnostic in schema and lifecycle.
+	PlanningContextResolver func(query string, domain string) string
+
 	// EmbedderAccessor provides access to the embeddings provider for vectorization
 	// Returns any to avoid import cycle, caller should type assert to ai.Embeddings
 	EmbedderAccessor func(ctx context.Context) (any, error)
@@ -288,7 +309,11 @@ func (s *SharedInfrastructure) ensureDefaults() *SharedInfrastructure {
 		s.TestRunner = &DefaultTestRunner{}
 	}
 	if s.Planner == nil {
-		s.Planner = &DefaultPlanner{}
+		if s.LLMAccessor != nil {
+			s.Planner = NewLLMPlanner(s.LLMAccessor, &DefaultPlanner{})
+		} else {
+			s.Planner = &DefaultPlanner{}
+		}
 	}
 	if s.ExpertiseRetriever == nil {
 		s.ExpertiseRetriever = &DefaultExpertiseRetriever{}

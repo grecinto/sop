@@ -409,7 +409,7 @@ const gitPushArgsSchema = `{"type":"object","properties":{"path":{"type":"string
 // Phase 2.3: Tool Result Analysis
 const listToolResultsArgsSchema = `{"type":"object","properties":{}}`
 const readToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"start_line":{"type":"integer","description":"Starting line number (1-indexed)."},"end_line":{"type":"integer","description":"Ending line number (inclusive)."}},"required":["file_path"]}`
-const grepToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"pattern":{"type":"string","description":"Text pattern to search for within the file."},"max_matches":{"type":"integer","description":"Maximum number of matching lines to return (default: 100)."}},"required":["file_path","pattern"]}`
+const grepToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"pattern":{"type":"string","description":"Case-insensitive text or regex pattern to search for within the file. Supports alternation such as FAIL|Error|panic."},"max_matches":{"type":"integer","description":"Maximum number of matching lines to return (default: 100)."}},"required":["file_path","pattern"]}`
 const analyzeToolResultArgsSchema = `{"type":"object","properties":{"file_path":{"type":"string","description":"Path to the stored tool result file."},"operation":{"type":"string","description":"Analysis operation to run: grep, awk, sed, head, tail, wc, or cat."},"pattern":{"type":"string","description":"Text pattern to search for when using grep or awk."},"start_line":{"type":"integer","description":"First line number to include for sed operations (1-indexed)."},"end_line":{"type":"integer","description":"Last line number to include for sed operations (inclusive)."},"max_matches":{"type":"integer","description":"Maximum number of lines to return for grep/awk/head/tail operations."}},"required":["file_path","operation"]}`
 
 const postgresQueryArgsSchema = `{"type":"object","properties":{"query":{"type":"string","description":"Read-only SQL query to run against PostgreSQL."},"connection_string":{"type":"string","description":"Optional PostgreSQL connection string such as postgresql://user:pass@host:5432/dbname."},"host":{"type":"string","description":"Optional PostgreSQL host name."},"port":{"type":"string","description":"Optional PostgreSQL port."},"database":{"type":"string","description":"Optional PostgreSQL database name."},"user":{"type":"string","description":"Optional PostgreSQL user name."},"password":{"type":"string","description":"Optional PostgreSQL password."}},"required":["query"]}`
@@ -475,7 +475,7 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 		// Phase 2.3: Tool Result Analysis - efficiently process large tool outputs
 		a.registry.Register("list_tool_results", "Lists all stored tool result files from the current session. When a tool produces large output, it's stored to a file for follow-up analysis. Use this to see what result files are available.", listToolResultsArgsSchema, wrapStringTool(a.toolListToolResults))
 		a.registry.Register("read_tool_result", "Reads a specific line range from a stored tool result file. Use this after identifying line numbers with grep_tool_result, or to view specific sections of large test/build outputs.", readToolResultArgsSchema, wrapStringTool(a.toolReadToolResult))
-		a.registry.Register("grep_tool_result", "Searches for a text pattern within a stored tool result file and returns matching lines with line numbers. Use this to find errors, failures, or specific patterns in large outputs.", grepToolResultArgsSchema, wrapStringTool(a.toolGrepToolResult))
+		a.registry.Register("grep_tool_result", "Searches for a case-insensitive text or regex pattern within a stored tool result file and returns matching lines with line numbers. Supports alternation patterns like FAIL|Error|panic to find failures in large outputs.", grepToolResultArgsSchema, wrapStringTool(a.toolGrepToolResult))
 		a.registry.Register("analyze_tool_result", "Analyzes a stored tool result file using a lightweight operation such as grep, awk, sed, head, tail, wc, or cat. This is the preferred path for targeted inspection when the LLM wants a slice of the output without forcing the full temp file into context.", analyzeToolResultArgsSchema, wrapStringTool(a.toolAnalyzeToolResult))
 
 		if policy.isPostgresReadEnabled() {
@@ -1411,7 +1411,67 @@ func (a *CopilotAgent) toolReadToolResult(ctx context.Context, args map[string]a
 	}
 
 	lineCount := strings.Count(content, "\n")
-	return fmt.Sprintf("[Lines %d-%d from %s]\n\n%s", startLine, startLine+lineCount, filepath.Base(filePath), content), nil
+	result := fmt.Sprintf("[Lines %d-%d from %s]\n\n%s", startLine, startLine+lineCount, filepath.Base(filePath), content)
+	if guidance := buildFailureFollowupGuidance(content); guidance != "" {
+		result += "\n\n" + guidance
+	}
+	return result, nil
+}
+
+func buildFailureFollowupGuidance(content string) string {
+	lines := strings.Split(content, "\n")
+	failingTests := make([]string, 0)
+	failingPackages := make([]string, 0)
+	seenTests := make(map[string]struct{})
+	seenPackages := make(map[string]struct{})
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "--- FAIL:") {
+			name := strings.TrimSpace(strings.TrimPrefix(trimmed, "--- FAIL:"))
+			if idx := strings.Index(name, "("); idx > 0 {
+				name = strings.TrimSpace(name[:idx])
+			}
+			if name != "" {
+				if _, ok := seenTests[name]; !ok {
+					seenTests[name] = struct{}{}
+					failingTests = append(failingTests, name)
+				}
+			}
+		}
+		if strings.HasPrefix(trimmed, "FAIL\t") {
+			parts := strings.Split(trimmed, "\t")
+			if len(parts) >= 2 {
+				pkg := strings.TrimSpace(parts[1])
+				if pkg != "" {
+					if _, ok := seenPackages[pkg]; !ok {
+						seenPackages[pkg] = struct{}{}
+						failingPackages = append(failingPackages, pkg)
+					}
+				}
+			}
+		}
+	}
+
+	if len(failingTests) == 0 && len(failingPackages) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Suggested next step:\n")
+	for i, testName := range failingTests {
+		if i >= 3 {
+			break
+		}
+		sb.WriteString(fmt.Sprintf("  • grep_repo_text(path=\".\", query=\"func %s\")\n", testName))
+	}
+	for i, pkg := range failingPackages {
+		if i >= 2 {
+			break
+		}
+		sb.WriteString(fmt.Sprintf("  • inspect files under package %s and read the failing test plus the implementation it exercises\n", pkg))
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 func (a *CopilotAgent) toolGrepToolResult(ctx context.Context, args map[string]any) (string, error) {
@@ -1470,6 +1530,73 @@ func (a *CopilotAgent) toolGrepToolResult(ctx context.Context, args map[string]a
 
 	if maxMatches > 0 && len(matches) >= maxMatches {
 		sb.WriteString(fmt.Sprintf("\n(Showing first %d matches. Use max_matches parameter to see more.)\n", maxMatches))
+	}
+
+	sb.WriteString("\n")
+	suggestionCount := 0
+	seenLines := make(map[int]struct{})
+	failingTests := make([]string, 0)
+	failingPackages := make([]string, 0)
+	seenTests := make(map[string]struct{})
+	seenPackages := make(map[string]struct{})
+	for _, match := range matches {
+		trimmed := strings.TrimSpace(match.Content)
+		if strings.HasPrefix(trimmed, "--- FAIL:") {
+			name := strings.TrimSpace(strings.TrimPrefix(trimmed, "--- FAIL:"))
+			if idx := strings.Index(name, "("); idx > 0 {
+				name = strings.TrimSpace(name[:idx])
+			}
+			if name != "" {
+				if _, ok := seenTests[name]; !ok {
+					seenTests[name] = struct{}{}
+					failingTests = append(failingTests, name)
+				}
+			}
+		}
+		if strings.HasPrefix(trimmed, "FAIL\t") {
+			parts := strings.Split(trimmed, "\t")
+			if len(parts) >= 2 {
+				pkg := strings.TrimSpace(parts[1])
+				if pkg != "" {
+					if _, ok := seenPackages[pkg]; !ok {
+						seenPackages[pkg] = struct{}{}
+						failingPackages = append(failingPackages, pkg)
+					}
+				}
+			}
+		}
+		if _, exists := seenLines[match.LineNumber]; exists {
+			continue
+		}
+		seenLines[match.LineNumber] = struct{}{}
+		startLine := match.LineNumber - 20
+		if startLine < 1 {
+			startLine = 1
+		}
+		endLine := match.LineNumber + 20
+		if suggestionCount == 0 {
+			sb.WriteString("Suggested next step:\n")
+		}
+		sb.WriteString(fmt.Sprintf("  • read_tool_result(file_path=\"%s\", start_line=%d, end_line=%d)\n", filePath, startLine, endLine))
+		suggestionCount++
+		if suggestionCount >= 3 {
+			break
+		}
+	}
+	if len(failingTests) > 0 || len(failingPackages) > 0 {
+		sb.WriteString("\nSuggested source lookup:\n")
+		for i, testName := range failingTests {
+			if i >= 3 {
+				break
+			}
+			sb.WriteString(fmt.Sprintf("  • grep_repo_text(path=\".\", query=\"func %s\")\n", testName))
+		}
+		for i, pkg := range failingPackages {
+			if i >= 2 {
+				break
+			}
+			sb.WriteString(fmt.Sprintf("  • inspect files under package %s after reading the failing block above\n", pkg))
+		}
 	}
 
 	return sb.String(), nil
@@ -1558,16 +1685,36 @@ func (a *CopilotAgent) toolAnalyzeToolResult(ctx context.Context, args map[strin
 	}
 
 	prefix := strings.ToLower(strings.TrimSpace(operation))
+	guidance := buildFailureFollowupGuidance(result)
 	switch prefix {
 	case "grep", "awk":
-		return fmt.Sprintf("[%s result for %s]\n\n%s", prefix, filepath.Base(filePath), result), nil
+		formatted := fmt.Sprintf("[%s result for %s]\n\n%s", prefix, filepath.Base(filePath), result)
+		if guidance != "" {
+			formatted += "\n\n" + guidance
+		}
+		return formatted, nil
 	case "sed":
-		return fmt.Sprintf("[sed result for %s]\n\n%s", filepath.Base(filePath), result), nil
+		formatted := fmt.Sprintf("[sed result for %s]\n\n%s", filepath.Base(filePath), result)
+		if guidance != "" {
+			formatted += "\n\n" + guidance
+		}
+		return formatted, nil
 	case "head", "tail", "cat":
-		return fmt.Sprintf("[%s result for %s]\n\n%s", prefix, filepath.Base(filePath), result), nil
+		formatted := fmt.Sprintf("[%s result for %s]\n\n%s", prefix, filepath.Base(filePath), result)
+		if guidance != "" {
+			formatted += "\n\n" + guidance
+		}
+		return formatted, nil
 	case "wc":
-		return fmt.Sprintf("[wc result for %s]\n\n%s", filepath.Base(filePath), result), nil
+		formatted := fmt.Sprintf("[wc result for %s]\n\n%s", filepath.Base(filePath), result)
+		if guidance != "" {
+			formatted += "\n\n" + guidance
+		}
+		return formatted, nil
 	default:
+		if guidance != "" {
+			return result + "\n\n" + guidance, nil
+		}
 		return result, nil
 	}
 }

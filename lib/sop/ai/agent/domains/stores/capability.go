@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
@@ -108,6 +109,47 @@ func (c *Capability) BuildExecutionContext(input ExecutionContextInput) string {
 		sb.WriteString("- Use execute_script for multi-step store workflows when the request requires a concrete plan or mutation.")
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func (c *Capability) BuildPlanningContext(query string, state capabilities.RoutingState) string {
+	parts := []string{
+		"Stores Planning Context",
+		"- Domain focus: persisted store operations and schema-aware query design.",
+		"- Primary planning concerns: target database, store names, field paths, relation assumptions, and mutation safety.",
+		"- Preserve data-contract compatibility unless the user explicitly requests a schema or behavior change.",
+		"- Validation should prove the query or mutation against observed store shape and expected results.",
+	}
+	if domain := strings.TrimSpace(state.Domain); domain != "" {
+		parts = append(parts, "- Active domain routing: "+domain)
+	}
+	if lower := strings.ToLower(strings.TrimSpace(query)); strings.Contains(lower, "fail") || strings.Contains(lower, "test") || strings.Contains(lower, "validate") {
+		parts = append(parts, "- Repair rule: determine whether the issue is incorrect store logic, stale expectation, or missing evidence before changing the operation.")
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (c *Capability) EvaluateStepCompletion(query string, state capabilities.RoutingState, actionText string, validation []string, toolCalls []ai.ToolCall, outcomeFacts []string) bool {
+	_ = query
+	_ = state
+	text := strings.ToLower(strings.TrimSpace(actionText + " " + strings.Join(validation, " ")))
+	for _, toolCall := range toolCalls {
+		toolName := strings.ToLower(strings.TrimSpace(toolCall.Name))
+		switch {
+		case strings.Contains(text, "inspect") || strings.Contains(text, "schema") || strings.Contains(text, "describe"):
+			if strings.Contains(toolName, "list_stores") || strings.Contains(toolName, "scan") || strings.Contains(toolName, "describe") {
+				return true
+			}
+		case strings.Contains(text, "plan") || strings.Contains(text, "design"):
+			if strings.Contains(toolName, "design_query") {
+				return true
+			}
+		case strings.Contains(text, "execute") || strings.Contains(text, "query") || strings.Contains(text, "verify") || strings.Contains(text, "validate"):
+			if strings.Contains(toolName, "execute_script") || strings.Contains(toolName, "verify_results") {
+				return true
+			}
+		}
+	}
+	return len(toolCalls) > 0 && len(outcomeFacts) > 0
 }
 
 func orderedCRUDFlags(flags map[string]bool) []string {

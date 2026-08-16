@@ -93,6 +93,9 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 		}
 		return nil, fmt.Errorf("LLM (brain) not available")
 	}
+	sharedInfra.PlanningContextResolver = agent.resolvePlanningContextForDomain
+	cw.SetDefaultPlanningContextResolver(sharedInfra.PlanningContextResolver)
+	sharedInfra.Planner = cw.NewLLMPlanner(sharedInfra.LLMAccessor, sharedInfra.Planner)
 	// Inject embedder accessor
 	sharedInfra.EmbedderAccessor = func(ctx context.Context) (any, error) {
 		if agent != nil && agent.service != nil && agent.service.Domain() != nil {
@@ -109,9 +112,8 @@ func NewCopilotAgent(cfg Config, databases map[string]sop.DatabaseOptions, syste
 			opt(agent)
 		}
 	}
-	// Tools are registered dynamically in Open() or Ask() to ensure context propagation
-	// context.Background() is used here to ensure tools are available even if Open() is not called or context context is missing
-	agent.registerTools(context.Background())
+	// Tools are registered dynamically per Ask/Execute/ListTools call so the registry
+	// can be scoped by the active routing state instead of being pre-populated globally.
 
 	return agent
 }

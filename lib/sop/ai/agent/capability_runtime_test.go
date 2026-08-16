@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sharedcode/sop"
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	"github.com/sharedcode/sop/ai/agent/domains/desktop"
 	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
@@ -55,6 +56,42 @@ func TestNewCopilotAgentRegistersIDEWorkerCapability(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected IDE worker capability to be registered")
+	}
+}
+
+func TestResolvePlanningContextForDomain_Coding(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	contextText := ag.resolvePlanningContextForDomain("fix failing tests in parser", "coding_workflow")
+	if !strings.Contains(contextText, "Coding Planning Context") {
+		t.Fatalf("expected coding planning context, got %q", contextText)
+	}
+}
+
+func TestResolvePlanningContextForDomain_Desktop(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	contextText := ag.resolvePlanningContextForDomain("run git status", "desktop")
+	if !strings.Contains(contextText, "Desktop Planning Context") {
+		t.Fatalf("expected desktop planning context, got %q", contextText)
+	}
+}
+
+func TestResolvePlanningContextForDomain_Stores(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	contextText := ag.resolvePlanningContextForDomain("fix store validation issue", "stores")
+	if !strings.Contains(contextText, "Stores Planning Context") {
+		t.Fatalf("expected stores planning context, got %q", contextText)
+	}
+}
+
+func TestResolvePlanningContextForDomain_Spaces(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	contextText := ag.resolvePlanningContextForDomain("fix knowledge retrieval issue", "spaces")
+	if !strings.Contains(contextText, "Spaces Planning Context") {
+		t.Fatalf("expected spaces planning context, got %q", contextText)
 	}
 }
 
@@ -114,6 +151,51 @@ func TestNewCopilotAgentRegistersWorkStreamManagementCapability(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected WorkStreamManagement capability to be registered when local automation is enabled")
+	}
+}
+
+func TestRegisterTools_ScopesCapabilityToolRegistrationForCodingWorkflowRouting(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}}
+	payload.Variables["RoutingState"] = &TaskContextClassification{
+		Domain:         "coding_workflow",
+		RoutingGate:    RoutingGateDiscovery,
+		CapabilityHint: "execution",
+		AskClassification: &AskTaskContext{
+			Domains:       []string{"coding_workflow"},
+			Phase:         "execution",
+			PhasePlan:     []string{"investigation", "execution"},
+			Intent:        "generate_code",
+			CRUD:          []string{"R", "U"},
+			OriginalQuery: "fix failing tests",
+		},
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	ag.registerTools(ctx)
+
+	found := map[string]bool{}
+	for _, tool := range ag.registry.List() {
+		found[tool.Name] = true
+	}
+
+	if found["create_phase_plan"] {
+		t.Fatalf("did not expect planner tool to be globally registered for scoped coding workflow routing")
+	}
+	if found["decompose_multi_step_plan"] {
+		t.Fatalf("did not expect multi-step planner tool to be globally registered for scoped coding workflow routing")
+	}
+	if found["investigation_capture"] || found["planning_capture"] || found["execution_capture"] {
+		t.Fatalf("did not expect phase capability tools to be globally registered; phase factory should own them for the turn")
+	}
+	if !found["delegate_continue_task"] {
+		t.Fatalf("expected scoped supporting capability tool delegate_continue_task to remain available")
+	}
+	if !found["list_workstreams"] {
+		t.Fatalf("expected workstream management tool to remain available")
 	}
 }
 

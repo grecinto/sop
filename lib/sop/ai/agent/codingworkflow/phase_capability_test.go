@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 )
@@ -570,6 +571,31 @@ func TestInvestigationBuildContext_UsesWorkspaceRootFromSessionWhenWorkingDirIsD
 	}
 	if strings.Contains(result, "Repository Context Unavailable") {
 		t.Fatalf("expected resolved workspace context, got %q", result)
+	}
+}
+
+func TestInvestigationInspectRepo_UsesWorkspaceRootFromSessionWhenWorkingDirIsDot(t *testing.T) {
+	repoRoot := t.TempDir()
+	if _, err := git.PlainInit(repoRoot, false); err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	cap := NewInvestigationPhaseCapability(&SharedInfrastructure{Memory: NewInMemorySessionMemory()})
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		Variables: map[string]any{"workspace_root": repoRoot},
+	})
+
+	result, execErr := cap.ExecuteTool(ctx, "investigation_inspect_repo", map[string]any{
+		"query":       "fix failing tests",
+		"working_dir": ".",
+	}, capabilities.RoutingState{})
+	if execErr != nil {
+		t.Fatalf("expected workspace_root to resolve inspect repo, got error: %v", execErr)
+	}
+	if !strings.Contains(result, "Repository Inspection") {
+		t.Fatalf("expected repository inspection result, got %q", result)
+	}
+	if strings.Contains(result, "Unavailable") {
+		t.Fatalf("expected resolved repository inspection, got %q", result)
 	}
 }
 

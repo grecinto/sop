@@ -24,6 +24,7 @@ Comprehensive guide to SOP platform documentation. Last updated: 2026-07-31.
 | [WORKFLOWS.md](WORKFLOWS.md) | Consolidated workflow architecture, Ask/queue evolution, lifecycle hooks, and workflow-manager direction |
 | [SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md](SOPBACKEND_HOST_FRAMEWORK_REFACTOR_PLAN.md) | Shared host-framework refactor plan for HQ, daemon, and future Corporate server, including provisioning and federation shaping |
 | [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](CLI_CODING_WORKFLOW_IMPLEMENTATION.md) | Coding workflow implementation details and current architecture direction |
+| [STRUCTURED_PLANNER_EXECUTION_DESIGN.md](STRUCTURED_PLANNER_EXECUTION_DESIGN.md) | Design plan for LLM-authored structured coding plans, workstream step execution, and crash-safe resume guidance |
 | [CONTINUE_FACADE_ARCHITECTURE.md](CONTINUE_FACADE_ARCHITECTURE.md) | VS Code + Continue facade pattern for exposing the shared coding workflow framework through the editor |
 | [CONTINUE_BRIDGE_IMPLEMENTATION_PLAN.md](CONTINUE_BRIDGE_IMPLEMENTATION_PLAN.md) | Concrete bridge plan, endpoint layout, and tool contract for integrating Continue with the daemon-backed workflow runtime |
 | [CONTINUE_TOKEN_OPTIMIZATION_PLAN.md](CONTINUE_TOKEN_OPTIMIZATION_PLAN.md) | Plan for Continue-class token savings on the native bridge while preserving SOP Ask as the sole orchestrator |

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 // SpacesPhase implements phase capability for spaces domain.
@@ -81,6 +82,13 @@ func (p *SpacesPhase) getSpacesTools() []capabilities.ToolDefinition {
 			Schema:      spaceTaskSchema,
 		}}
 
+	case "planning":
+		return []capabilities.ToolDefinition{{
+			Name:        p.phaseToolName("design_mutation"),
+			Description: "Designs a knowledge mutation or retrieval-change plan before execution.",
+			Schema:      spaceTaskSchema,
+		}}
+
 	case "execution":
 		return []capabilities.ToolDefinition{{
 			Name:        p.phaseToolName("create_content"),
@@ -120,6 +128,8 @@ func (p *SpacesPhase) ExecuteTool(ctx context.Context, toolName string, args map
 		return p.runListSpaces(args)
 	case strings.ToLower(p.phaseToolName("search_content")):
 		return p.runSearchContent(args)
+	case strings.ToLower(p.phaseToolName("design_mutation")):
+		return p.runDesignMutation(args)
 	case strings.ToLower(p.phaseToolName("create_content")):
 		return p.runCreateContent(args)
 	default:
@@ -144,6 +154,42 @@ func (p *SpacesPhase) runSearchContent(args map[string]any) (string, error) {
 	}
 
 	return fmt.Sprintf("Search results in space '%s':\n- Document 1\n- Document 2", spaceName), nil
+}
+
+func (p *SpacesPhase) runDesignMutation(args map[string]any) (string, error) {
+	spaceName := readPhaseString(args, "space_name", "")
+	if spaceName == "" {
+		return "", fmt.Errorf("space_name is required")
+	}
+	category := readPhaseString(args, "category", "")
+	if p.sharedInfra != nil && p.sharedInfra.Planner != nil {
+		task := cw.Task{
+			Description: fmt.Sprintf("Design the knowledge change plan for space %q category %q", spaceName, category),
+			TaskType:    "planning",
+			State:       cw.RunState{Metadata: map[string]string{"domain": "spaces", "space_name": spaceName, "category": category, "phase": p.phaseID}},
+		}
+		pack := cw.ContextPack{RepositorySummary: fmt.Sprintf("space=%s category=%s", spaceName, category)}
+		plan, err := p.sharedInfra.Planner.Plan(task, task.State, pack)
+		if err == nil && len(plan.Steps) > 0 {
+			basePlan := cw.BasePlanFromStructuredPlan(plan)
+			structuredData := map[string]any{"structured_plan": plan, "base_plan": basePlan}
+			_, _ = p.runCapture(map[string]any{
+				"summary":         fmt.Sprintf("Space plan for %s", spaceName),
+				"status":          "ready_for_execution",
+				"plan":            toStringSlice(basePlan),
+				"structured_data": structuredData,
+			})
+			if len(basePlan) > 0 {
+				return fmt.Sprintf("Execution Plan:\n%s", strings.Join(basePlan, "\n")), nil
+			}
+		}
+	}
+	plan := fmt.Sprintf("Knowledge Change Plan for space '%s'", spaceName)
+	if category != "" {
+		plan += fmt.Sprintf(" (category: %s)", category)
+	}
+	plan += ":\n\nSteps:\n1. Inspect the target knowledge scope\n2. Define the intended mutation or retrieval change\n3. Validate the resulting knowledge state and semantic scope"
+	return plan, nil
 }
 
 func (p *SpacesPhase) runCreateContent(args map[string]any) (string, error) {

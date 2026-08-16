@@ -31,6 +31,73 @@ type Task struct {
 	State            RunState
 }
 
+// StructuredSystemContext captures domain-neutral architectural context for a planned task.
+type StructuredSystemContext struct {
+	Subsystem         string   `json:"subsystem,omitempty"`
+	PrimaryTargets    []string `json:"primary_targets,omitempty"`
+	SupportingTargets []string `json:"supporting_targets,omitempty"`
+	Interfaces        []string `json:"interfaces,omitempty"`
+	Contracts         []string `json:"contracts,omitempty"`
+	Invariants        []string `json:"invariants,omitempty"`
+	DomainConstraints []string `json:"domain_constraints,omitempty"`
+}
+
+// StructuredPlanStep captures one operational step in a structured plan.
+type StructuredPlanStep struct {
+	StepID             string   `json:"step_id,omitempty"`
+	StepDomain         string   `json:"step_domain,omitempty"`
+	Goal               string   `json:"goal,omitempty"`
+	Files              []string `json:"files,omitempty"`
+	EvidenceToCollect  []string `json:"evidence_to_collect,omitempty"`
+	DecisionRule       string   `json:"decision_rule,omitempty"`
+	AllowedChangeScope string   `json:"allowed_change_scope,omitempty"`
+	ActionInstruction  string   `json:"action_instruction,omitempty"`
+	Validation         []string `json:"validation,omitempty"`
+	ExitCriteria       []string `json:"exit_criteria,omitempty"`
+	EscalateIf         []string `json:"escalate_if,omitempty"`
+	Status             string   `json:"status,omitempty"`
+	Notes              []string `json:"notes,omitempty"`
+	UpdatedAt          int64    `json:"updated_at,omitempty"`
+}
+
+// StructuredCompletionGate captures final completion requirements for the structured plan.
+type StructuredCompletionGate struct {
+	Requirements []string `json:"requirements,omitempty"`
+}
+
+// StructuredPlan is the first-class domain-neutral execution plan persisted in workstream state.
+type StructuredPlan struct {
+	Objective      string                   `json:"objective,omitempty"`
+	WorkflowShape  string                   `json:"workflow_shape,omitempty"`
+	Domain         string                   `json:"domain,omitempty"`
+	SystemContext  StructuredSystemContext  `json:"system_context,omitempty"`
+	Steps          []StructuredPlanStep     `json:"steps,omitempty"`
+	CurrentStep    int                      `json:"current_step,omitempty"`
+	CompletedSteps []string                 `json:"completed_steps,omitempty"`
+	CompletionGate StructuredCompletionGate `json:"completion_gate,omitempty"`
+	CreatedAt      int64                    `json:"created_at,omitempty"`
+	UpdatedAt      int64                    `json:"updated_at,omitempty"`
+}
+
+// BasePlanFromStructuredPlan projects the structured plan into the legacy step list
+// used by older planning and execution paths.
+func BasePlanFromStructuredPlan(plan StructuredPlan) []string {
+	if len(plan.Steps) == 0 {
+		return nil
+	}
+	base := make([]string, 0, len(plan.Steps))
+	for _, step := range plan.Steps {
+		text := strings.TrimSpace(step.ActionInstruction)
+		if text == "" {
+			text = strings.TrimSpace(step.Goal)
+		}
+		if text != "" {
+			base = append(base, text)
+		}
+	}
+	return base
+}
+
 // ContextPack is a compact package of repository context for the model.
 type ContextPack struct {
 	ActiveFile            string

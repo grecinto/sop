@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 // StoresPhase implements phase capability for stores domain.
@@ -263,6 +264,28 @@ func (p *StoresPhase) runDesignQuery(args map[string]any) (string, error) {
 	store := readPhaseString(args, "store", "")
 	if database == "" {
 		return "", fmt.Errorf("database name is required")
+	}
+	if p.sharedInfra != nil && p.sharedInfra.Planner != nil {
+		task := cw.Task{
+			Description: fmt.Sprintf("Design the store operation plan for database %q and store %q", database, store),
+			TaskType:    "planning",
+			State:       cw.RunState{Metadata: map[string]string{"domain": "stores", "database": database, "store": store, "phase": p.phaseID}},
+		}
+		pack := cw.ContextPack{RepositorySummary: fmt.Sprintf("database=%s", database)}
+		plan, err := p.sharedInfra.Planner.Plan(task, task.State, pack)
+		if err == nil && len(plan.Steps) > 0 {
+			basePlan := cw.BasePlanFromStructuredPlan(plan)
+			structuredData := map[string]any{"structured_plan": plan, "base_plan": basePlan}
+			_, _ = p.runCapture(map[string]any{
+				"summary":         fmt.Sprintf("Store plan for database %s", database),
+				"status":          "ready_for_execution",
+				"plan":            toStringSlice(basePlan),
+				"structured_data": structuredData,
+			})
+			if len(basePlan) > 0 {
+				return fmt.Sprintf("Execution Plan:\n%s", strings.Join(basePlan, "\n")), nil
+			}
+		}
 	}
 
 	plan := fmt.Sprintf(`Query Plan for database '%s'`, database)

@@ -2414,10 +2414,11 @@ func (c *PhaseCapability) runPlanChanges(ctx context.Context, args map[string]an
 	if err != nil {
 		return "", fmt.Errorf("plan changes: %w", err)
 	}
-	if len(plan) == 0 {
+	basePlan := BasePlanFromStructuredPlan(plan)
+	if len(basePlan) == 0 {
 		return "Execution Plan: none", nil
 	}
-	return fmt.Sprintf("Execution Plan:\n%s", strings.Join(plan, "\n")), nil
+	return fmt.Sprintf("Execution Plan:\n%s", strings.Join(basePlan, "\n")), nil
 }
 
 func (c *PhaseCapability) runPreviewPatch(args map[string]any) (string, error) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
 
 type askRoutingTestGenerator struct {
@@ -113,6 +114,8 @@ func containsDomain(domains []string, want string) bool {
 
 // TestClassifyAskTaskContext_Fallback tests that Ask classification has fallback behavior.
 func TestClassifyAskTaskContext_Fallback(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
 	agent := &CopilotAgent{}
 
 	// Test fallback classification
@@ -132,6 +135,144 @@ func TestClassifyAskTaskContext_Fallback(t *testing.T) {
 
 	t.Logf("✅ Fallback classification: domains=%v, phase=%s, intent=%s",
 		fallback.Domains, fallback.Phase, fallback.Intent)
+}
+
+func TestBuildFallbackClassification_UsesDaemonDefaultDomains(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	agent := &CopilotAgent{}
+	fallback := agent.buildFallbackClassification("do something")
+	if len(fallback.Domains) != 2 || fallback.Domains[0] != "coding_workflow" || fallback.Domains[1] != "desktop" {
+		t.Fatalf("expected daemon fallback domains coding_workflow+desktop, got %#v", fallback.Domains)
+	}
+}
+
+func TestBuildFallbackClassification_UsesHQDefaultDomains(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	agent := &CopilotAgent{}
+	fallback := agent.buildFallbackClassification("do something")
+	if len(fallback.Domains) != 2 || fallback.Domains[0] != "stores" || fallback.Domains[1] != "spaces" {
+		t.Fatalf("expected HQ fallback domains stores+spaces, got %#v", fallback.Domains)
+	}
+}
+
+func TestNormalizeAskTaskContext_UsesDaemonDefaultDomainsForGeneral(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	agent := &CopilotAgent{}
+	ctx := agent.normalizeAskTaskContext(AskTaskContext{Domains: []string{"general"}, OriginalQuery: "help me"})
+	if len(ctx.Domains) != 2 || ctx.Domains[0] != "coding_workflow" || ctx.Domains[1] != "desktop" {
+		t.Fatalf("expected general ambiguous ask to lean daemon defaults, got %#v", ctx.Domains)
+	}
+	if !ctx.DomainOfferNeeded {
+		t.Fatal("expected daemon default domains to be treated as an offer")
+	}
+}
+
+func TestNormalizeAskTaskContext_UsesHQDefaultDomainsForGeneral(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	agent := &CopilotAgent{}
+	ctx := agent.normalizeAskTaskContext(AskTaskContext{Domains: []string{"general"}, OriginalQuery: "help me"})
+	if len(ctx.Domains) != 2 || ctx.Domains[0] != "stores" || ctx.Domains[1] != "spaces" {
+		t.Fatalf("expected general ambiguous ask to lean HQ defaults, got %#v", ctx.Domains)
+	}
+	if !ctx.DomainOfferNeeded {
+		t.Fatal("expected HQ default domains to be treated as an offer")
+	}
+}
+
+func TestNormalizeAskTaskContext_ClearStoresQueryDoesNotNeedOffer(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	agent := &CopilotAgent{}
+	ctx := agent.normalizeAskTaskContext(AskTaskContext{Domains: []string{"general"}, OriginalQuery: "list stores in production database"})
+	if len(ctx.Domains) != 1 || ctx.Domains[0] != "stores" {
+		t.Fatalf("expected clear stores query to infer stores domain, got %#v", ctx.Domains)
+	}
+	if ctx.DomainOfferNeeded {
+		t.Fatal("did not expect clear stores query to require a domain offer")
+	}
+}
+
+func TestNormalizeAskTaskContext_ClearSpacesQueryDoesNotNeedOffer(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	agent := &CopilotAgent{}
+	ctx := agent.normalizeAskTaskContext(AskTaskContext{Domains: []string{"general"}, OriginalQuery: "search the pricing knowledge base"})
+	if len(ctx.Domains) != 1 || ctx.Domains[0] != "spaces" {
+		t.Fatalf("expected clear spaces query to infer spaces domain, got %#v", ctx.Domains)
+	}
+	if ctx.DomainOfferNeeded {
+		t.Fatal("did not expect clear spaces query to require a domain offer")
+	}
+}
+
+func TestNormalizeAskTaskContext_ClearCodingQueryDoesNotNeedOffer(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	agent := &CopilotAgent{}
+	ctx := agent.normalizeAskTaskContext(AskTaskContext{Domains: []string{"general"}, OriginalQuery: "fix failing tests in the parser package"})
+	if len(ctx.Domains) != 1 || ctx.Domains[0] != "coding_workflow" {
+		t.Fatalf("expected clear coding query to infer coding_workflow domain, got %#v", ctx.Domains)
+	}
+	if ctx.DomainOfferNeeded {
+		t.Fatal("did not expect clear coding query to require a domain offer")
+	}
+}
+
+func TestNormalizeAskTaskContext_ClearDesktopQueryDoesNotNeedOffer(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	agent := &CopilotAgent{}
+	ctx := agent.normalizeAskTaskContext(AskTaskContext{Domains: []string{"general"}, OriginalQuery: "run git status"})
+	if len(ctx.Domains) != 1 || ctx.Domains[0] != "desktop" {
+		t.Fatalf("expected clear desktop query to infer desktop domain, got %#v", ctx.Domains)
+	}
+	if ctx.DomainOfferNeeded {
+		t.Fatal("did not expect clear desktop query to require a domain offer")
+	}
+}
+
+func TestAskCore_AmbiguousHQAskOffersStoresOrSpaces(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(false)
+	defer SetLocalDesktopAutomationEnabled(false)
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.SetGenerator(&askRoutingTestGenerator{Response: `{"domains":["general"],"phase":"investigation","phase_plan":["investigation"],"intent":"general","confidence":"low","reasoning":"ambiguous ask"}`})
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	resp, err := ag.askCore(ctx, "help me with this", nil)
+	if err != nil {
+		t.Fatalf("askCore failed: %v", err)
+	}
+	if !strings.Contains(resp, "Stores or Spaces") {
+		t.Fatalf("expected HQ ambiguous ask to offer Stores or Spaces, got: %s", resp)
+	}
+	if payload.ClarificationState == nil || payload.ClarificationState.Status != "pending" {
+		t.Fatalf("expected pending clarification state, got %+v", payload.ClarificationState)
+	}
+}
+
+func TestAskCore_AmbiguousDaemonAskOffersCodingOrDesktop(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.SetGenerator(&askRoutingTestGenerator{Response: `{"domains":["general"],"phase":"investigation","phase_plan":["investigation"],"intent":"general","confidence":"low","reasoning":"ambiguous ask"}`})
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	resp, err := ag.askCore(ctx, "help me with this", nil)
+	if err != nil {
+		t.Fatalf("askCore failed: %v", err)
+	}
+	if !strings.Contains(resp, "coding/repo changes or desktop/local commands") {
+		t.Fatalf("expected daemon ambiguous ask to offer coding or desktop, got: %s", resp)
+	}
+	if payload.ClarificationState == nil || payload.ClarificationState.Status != "pending" {
+		t.Fatalf("expected pending clarification state, got %+v", payload.ClarificationState)
+	}
 }
 
 // TestAskPhaseFactoryIntegration tests that the Ask pipeline can create phase proxies.
@@ -167,48 +308,45 @@ func TestAskPhaseFactoryIntegration(t *testing.T) {
 	t.Logf("✅ Aggregated %d tools from phases", len(allTools))
 }
 
-func TestCreatePhaseProxies_CodingWorkflowImplementationBundleIncludesExecutionTools(t *testing.T) {
+func TestCreatePhaseProxies_CodingWorkflowRespectsExecutionPhase(t *testing.T) {
 	agent := &CopilotAgent{}
 	classification := &AskTaskContext{
 		Domains:       []string{"coding_workflow"},
-		Phase:         "investigation",
+		Phase:         "execution",
 		PhasePlan:     []string{"investigation", "execution", "review"},
 		Intent:        "generate_code",
 		CRUD:          []string{"R", "U"},
 		OriginalQuery: "fix failing tests in the current repository",
 	}
 
-	phases := agent.createPhaseProxies([]string{"coding_workflow"}, "investigation", classification)
+	phases := agent.createPhaseProxies([]string{"coding_workflow"}, "execution", classification)
 	tools := agent.aggregatePhaseTools(phases, classification)
 	toolNames := make(map[string]bool, len(tools))
 	for _, tool := range tools {
 		toolNames[tool.Name] = true
 	}
 
-	if !toolNames["investigation_inspect_repo"] {
-		t.Fatalf("expected implementation bundle to keep investigation tools, got %v", toolNames)
-	}
 	if !toolNames["execution_run_tests"] {
-		t.Fatalf("expected implementation bundle to expose execution_run_tests, got %v", toolNames)
+		t.Fatalf("expected execution phase to expose execution_run_tests, got %v", toolNames)
 	}
 	if !toolNames["execution_apply_patch"] {
-		t.Fatalf("expected implementation bundle to expose execution_apply_patch, got %v", toolNames)
+		t.Fatalf("expected execution phase to expose execution_apply_patch, got %v", toolNames)
 	}
-	if toolNames["planning_assess_and_route"] {
-		t.Fatalf("did not expect implementation bundle to expose planning_assess_and_route, got %v", toolNames)
+	if toolNames["investigation_inspect_repo"] {
+		t.Fatalf("did not expect execution phase to expose investigation tools, got %v", toolNames)
 	}
-	if toolNames["planning_create_succession_path"] {
-		t.Fatalf("did not expect implementation bundle to expose planning_create_succession_path, got %v", toolNames)
+	if toolNames["planning_plan_changes"] {
+		t.Fatalf("did not expect execution phase to expose planning tools, got %v", toolNames)
 	}
 	if toolNames["review_build_context"] {
-		t.Fatalf("did not expect implementation bundle to expose review_build_context, got %v", toolNames)
+		t.Fatalf("did not expect execution phase to expose review_build_context, got %v", toolNames)
 	}
 	if toolNames["delivery_build_context"] {
-		t.Fatalf("did not expect implementation bundle to expose delivery_build_context, got %v", toolNames)
+		t.Fatalf("did not expect execution phase to expose delivery_build_context, got %v", toolNames)
 	}
 }
 
-func TestCreatePhaseProxies_CodingWorkflowDiscoveryBundleAvoidsMutationTools(t *testing.T) {
+func TestCreatePhaseProxies_CodingWorkflowRespectsInvestigationPhase(t *testing.T) {
 	agent := &CopilotAgent{}
 	classification := &AskTaskContext{
 		Domains:       []string{"coding_workflow"},
@@ -227,19 +365,19 @@ func TestCreatePhaseProxies_CodingWorkflowDiscoveryBundleAvoidsMutationTools(t *
 	}
 
 	if !toolNames["investigation_search_repo"] {
-		t.Fatalf("expected discovery bundle to expose investigation tools, got %v", toolNames)
+		t.Fatalf("expected investigation phase to expose investigation tools, got %v", toolNames)
 	}
-	if !toolNames["planning_plan_changes"] {
-		t.Fatalf("expected discovery bundle to expose planning tools, got %v", toolNames)
+	if toolNames["planning_plan_changes"] {
+		t.Fatalf("did not expect investigation phase to expose planning tools, got %v", toolNames)
 	}
 	if toolNames["planning_assess_and_route"] {
-		t.Fatalf("did not expect discovery bundle to expose planning_assess_and_route, got %v", toolNames)
+		t.Fatalf("did not expect investigation phase to expose planning_assess_and_route, got %v", toolNames)
 	}
 	if toolNames["planning_create_succession_path"] {
-		t.Fatalf("did not expect discovery bundle to expose planning_create_succession_path, got %v", toolNames)
+		t.Fatalf("did not expect investigation phase to expose planning_create_succession_path, got %v", toolNames)
 	}
 	if toolNames["execution_apply_patch"] {
-		t.Fatalf("did not expect discovery bundle to expose execution_apply_patch, got %v", toolNames)
+		t.Fatalf("did not expect investigation phase to expose execution_apply_patch, got %v", toolNames)
 	}
 }
 
@@ -327,6 +465,392 @@ func TestResolvePhasePlan_CanonicalizesCodingWorkStreamPlanOnResume(t *testing.T
 	}
 	if currentPhase != "execution" {
 		t.Fatalf("expected persisted non-active coding phase to canonicalize to execution, got %q", currentPhase)
+	}
+	if thread.StreamContext.PhasePlan.ExecutionBrief == nil || len(thread.StreamContext.PhasePlan.ExecutionBrief.Steps) == 0 {
+		t.Fatal("expected resumed coding plan to gain an execution brief")
+	}
+}
+
+func TestResolvePhasePlan_AttachesExecutionBriefForFailingTests(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	ag.service.session.Memory.AddThread(thread)
+
+	plan, currentPhase := ag.resolvePhasePlan(context.Background(), &AskTaskContext{
+		Domains:       []string{"coding_workflow"},
+		Phase:         "execution",
+		PhasePlan:     []string{"investigation", "planning", "execution"},
+		Intent:        "generate_code",
+		CRUD:          []string{"R", "U"},
+		Confidence:    "high",
+		Reasoning:     "repo repair requires evidence then implementation",
+		OriginalQuery: "fix failing tests in the parser package",
+	})
+
+	if strings.Join(plan, ",") != "investigation,planning,execution" {
+		t.Fatalf("expected canonical coding plan, got %v", plan)
+	}
+	if currentPhase != "execution" {
+		t.Fatalf("expected execution runtime phase, got %q", currentPhase)
+	}
+	if thread.StreamContext == nil || thread.StreamContext.PhasePlan == nil || thread.StreamContext.PhasePlan.ExecutionBrief == nil {
+		t.Fatal("expected execution brief to be attached to the persisted phase plan")
+	}
+	brief := thread.StreamContext.PhasePlan.ExecutionBrief
+	if brief.WorkflowShape != "checkpointed_fix" {
+		t.Fatalf("expected checkpointed_fix workflow shape, got %q", brief.WorkflowShape)
+	}
+	if len(brief.Steps) < 5 {
+		t.Fatalf("expected multiple execution steps, got %#v", brief.Steps)
+	}
+	if !strings.Contains(strings.ToLower(brief.Steps[0].Description), "failing tests") {
+		t.Fatalf("expected first step to target failing tests, got %#v", brief.Steps[0])
+	}
+}
+
+func TestBuildPhasePrompt_IncludesExecutionBrief(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.PhasePlan = &PhasePlan{
+		PlannedPhases: []string{"investigation", "planning", "execution"},
+		CurrentIndex:  2,
+		ExecutionBrief: &ExecutionBrief{
+			WorkflowShape: "checkpointed_fix",
+			Objective:     "fix failing tests in the parser package",
+			CurrentFocus:  "Work through the current implementation steps in order, validate after each meaningful change, and summarize remaining risk before concluding.",
+			Steps: []ExecutionBriefStep{
+				{Title: "Step 1", Phase: "investigation", Description: "Identify the exact failing tests and capture the current failure output."},
+				{Title: "Step 2", Phase: "planning", Description: "Choose the smallest repair and the narrowest validation target before editing files."},
+				{Title: "Step 3", Phase: "execution", Description: "Implement the smallest plausible fix that explains the observed failure.", Validation: []string{"change stays within the observed repair boundary"}},
+			},
+			CompletionCriteria: []string{"The most relevant validation step has been rerun or the blocker is recorded."},
+		},
+	}
+	ag.service.session.Memory.AddThread(thread)
+
+	classification := &AskTaskContext{
+		Domains:       []string{"coding_workflow"},
+		Phase:         "execution",
+		PhasePlan:     []string{"investigation", "planning", "execution"},
+		Intent:        "generate_code",
+		CRUD:          []string{"R", "U"},
+		Confidence:    "high",
+		Reasoning:     "fixing code",
+		OriginalQuery: "fix failing tests in the parser package",
+	}
+	phases := ag.createPhaseProxies([]string{"coding_workflow"}, "execution", classification)
+	prompt := ag.buildPhasePrompt(context.Background(), classification.OriginalQuery, classification, phases)
+
+	if !strings.Contains(prompt, "=== Active Execution Brief ===") {
+		t.Fatalf("expected prompt to include execution brief, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Implement the smallest plausible fix") {
+		t.Fatalf("expected prompt to include active execution step, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Workflow Shape: checkpointed_fix") {
+		t.Fatalf("expected prompt to include workflow shape, got %s", prompt)
+	}
+}
+
+func TestResolvePhasePlan_PrefersAuthoredPlanningArtifactForExecutionBrief(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Implement parser validation"}
+	ag.service.session.Memory.AddThread(thread)
+	artifact := `{"summary":"Execution plan for add parser validation","status":"ready_for_execution","plan":["inspect parser","add validation","run parser tests"],"structured_data":{"detailed_execution_plan":[{"title":"Step 1","description":"Inspect parser error handling and malformed-input path.","validation":["affected code path identified"]},{"title":"Step 2","description":"Implement parser validation for malformed input.","validation":["change remains localized"]},{"title":"Step 3","description":"Run parser tests and confirm malformed input behavior.","validation":["targeted parser tests pass"]}]}}`
+	if err := ag.service.session.Memory.SaveWorkflowMemory("phase-artifact:planning", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed planning artifact: %v", err)
+	}
+
+	_, _ = ag.resolvePhasePlan(context.Background(), &AskTaskContext{
+		Domains:       []string{"coding_workflow"},
+		Phase:         "execution",
+		PhasePlan:     []string{"investigation", "planning", "execution"},
+		Intent:        "generate_code",
+		CRUD:          []string{"R", "U"},
+		Confidence:    "high",
+		Reasoning:     "feature implementation",
+		OriginalQuery: "implement parser validation for malformed input",
+	})
+
+	brief := thread.StreamContext.PhasePlan.ExecutionBrief
+	if brief == nil {
+		t.Fatal("expected execution brief to be attached")
+	}
+	if len(brief.Steps) != 3 {
+		t.Fatalf("expected authored execution brief to keep 3 steps, got %#v", brief.Steps)
+	}
+	if brief.Steps[1].Description != "Implement parser validation for malformed input." {
+		t.Fatalf("expected authored step description, got %#v", brief.Steps[1])
+	}
+	if brief.WorkflowShape != "feature_plan" {
+		t.Fatalf("expected feature_plan workflow shape from authored plan, got %q", brief.WorkflowShape)
+	}
+}
+
+func TestCurrentExecutionBrief_UsesPersistedStructuredPlan(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix parser behavior"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Fix parser failing tests",
+		WorkflowShape: "repair",
+		Domain:        "coding_workflow",
+		Steps: []cw.StructuredPlanStep{
+			{StepID: "repair_1", Goal: "Localize failing behavior", ActionInstruction: "Inspect the failing test and parser implementation together.", EvidenceToCollect: []string{"failing assertion", "implicated code path"}, Validation: []string{"repair direction is explicit"}},
+			{StepID: "repair_2", Goal: "Apply repair", ActionInstruction: "Patch the parser or test based on the chosen contract.", AllowedChangeScope: "localized patch", Files: []string{"lib/parser.go", "lib/parser_test.go"}, Validation: []string{"targeted parser tests pass"}},
+		},
+		CompletionGate: cw.StructuredCompletionGate{Requirements: []string{"rerun the original failing test"}},
+	}
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", PhasePlan: []string{"investigation", "planning", "execution"}, OriginalQuery: "fix parser failing tests"}
+
+	brief := ag.currentExecutionBrief(classification, "fix parser failing tests")
+	if brief == nil {
+		t.Fatal("expected execution brief")
+	}
+	if len(brief.Steps) != 2 {
+		t.Fatalf("expected projected structured plan steps, got %#v", brief.Steps)
+	}
+	if brief.Steps[0].Description != "Inspect the failing test and parser implementation together." {
+		t.Fatalf("expected first structured plan instruction to drive description, got %#v", brief.Steps[0])
+	}
+	if got := strings.Join(brief.Steps[1].ContextInstructions, " "); !strings.Contains(got, "Allowed scope: localized patch") {
+		t.Fatalf("expected structured plan context instructions to include allowed scope, got %#v", brief.Steps[1].ContextInstructions)
+	}
+	if got := brief.CompletionCriteria; len(got) != 1 || got[0] != "rerun the original failing test" {
+		t.Fatalf("expected structured plan completion gate, got %#v", got)
+	}
+}
+
+func TestUpdateStructuredPlanProgressAfterTurn_ActivatesAndAdvancesStep(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix parser behavior"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Fix parser failing tests",
+		WorkflowShape: "repair",
+		Domain:        "coding_workflow",
+		Steps: []cw.StructuredPlanStep{
+			{StepID: "repair_1", Goal: "Inspect failing behavior", ActionInstruction: "Inspect the failing test and parser implementation together.", Status: "pending"},
+			{StepID: "repair_2", Goal: "Apply fix", ActionInstruction: "Apply the smallest valid patch.", Status: "pending"},
+		},
+		CurrentStep: 0,
+	}
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "investigation", PhasePlan: []string{"investigation", "planning", "execution"}}
+
+	ag.updateStructuredPlanProgressAfterTurn(classification, []ai.ToolCall{{Name: "investigation_inspect_repo"}}, []string{"Found failing parser path"}, nil)
+
+	plan := thread.StreamContext.StructuredPlan
+	if plan.Steps[0].Status != "complete" {
+		t.Fatalf("expected first step complete, got %#v", plan.Steps[0])
+	}
+	if plan.CurrentStep != 1 {
+		t.Fatalf("expected current step to advance, got %#v", plan)
+	}
+	if plan.Steps[1].Status != "active" {
+		t.Fatalf("expected next step active, got %#v", plan.Steps[1])
+	}
+	if len(plan.CompletedSteps) != 1 || plan.CompletedSteps[0] != "repair_1" {
+		t.Fatalf("expected completed steps to include repair_1, got %#v", plan.CompletedSteps)
+	}
+}
+
+func TestUpdateStructuredPlanProgressAfterTurn_DoesNotAdvanceOnClarification(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix parser behavior"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Fix parser failing tests",
+		WorkflowShape: "repair",
+		Domain:        "coding_workflow",
+		Steps: []cw.StructuredPlanStep{{
+			StepID:            "repair_1",
+			Goal:              "Run targeted tests",
+			ActionInstruction: "Run the original failing test.",
+			Status:            "pending",
+		}},
+		CurrentStep: 0,
+	}
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", PhasePlan: []string{"investigation", "planning", "execution"}}
+
+	ag.updateStructuredPlanProgressAfterTurn(classification, []ai.ToolCall{{Name: compatibleClarificationToolName}}, nil, &ai.ClarificationRequest{Status: "pending"})
+
+	plan := thread.StreamContext.StructuredPlan
+	if plan.CurrentStep != 0 {
+		t.Fatalf("expected current step to remain unchanged, got %#v", plan)
+	}
+	if plan.Steps[0].Status != "active" {
+		t.Fatalf("expected pending step to become active but not complete, got %#v", plan.Steps[0])
+	}
+	if len(plan.CompletedSteps) != 0 {
+		t.Fatalf("expected no completed steps, got %#v", plan.CompletedSteps)
+	}
+}
+
+func TestEnqueueStructuredPlanContinuationAfterTurn_QueuesNextStepOnce(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix parser behavior"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Fix parser failing tests",
+		WorkflowShape: "repair",
+		Domain:        "coding_workflow",
+		Steps: []cw.StructuredPlanStep{
+			{StepID: "repair_1", Goal: "Inspect failing behavior", ActionInstruction: "Inspect the failing test and parser implementation together.", Status: "complete"},
+			{StepID: "repair_2", Goal: "Apply fix", ActionInstruction: "Apply the smallest valid patch.", Status: "active"},
+		},
+		CurrentStep:    1,
+		CompletedSteps: []string{"repair_1"},
+	}
+	ag.service.session.Memory.AddThread(thread)
+	ag.service.session.Memory.SetRoutingState(&TaskContextClassification{AskClassification: &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", PhasePlan: []string{"investigation", "planning", "execution"}}})
+
+	ag.enqueueStructuredPlanContinuationAfterTurn("fix parser failing tests", &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", PhasePlan: []string{"investigation", "planning", "execution"}}, 0, nil)
+	queue := ag.getOrCreateSessionQueue()
+	snapshot := queue.Snapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("expected one continuation item, got %#v", snapshot)
+	}
+	if snapshot[0].Actor != "phase:planning" {
+		t.Fatalf("expected queued continuation to target planning phase, got %#v", snapshot[0])
+	}
+	if flag, _ := snapshot[0].Context["structured_plan_continuation"].(bool); !flag {
+		t.Fatalf("expected structured plan continuation flag, got %#v", snapshot[0].Context)
+	}
+	if step, _ := snapshot[0].Context["structured_plan_step"].(int); step != 1 {
+		t.Fatalf("expected queued continuation to point at current step 1, got %#v", snapshot[0].Context)
+	}
+
+	ag.enqueueStructuredPlanContinuationAfterTurn("fix parser failing tests", &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", PhasePlan: []string{"investigation", "planning", "execution"}}, 0, nil)
+	if got := len(queue.Snapshot()); got != 1 {
+		t.Fatalf("expected duplicate continuation to be ignored, got %d items", got)
+	}
+
+	routing := ag.service.session.Memory.GetRoutingState()
+	if routing == nil || routing.AskClassification == nil || routing.AskClassification.Phase != "planning" {
+		t.Fatalf("expected routing state phase to move to planning, got %+v", routing)
+	}
+}
+
+func TestUpdateStructuredPlanProgressAfterTurn_UsesStoresCapabilityCompletion(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Validate store results"}
+	thread.InitializeWorkStream("review")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Validate store results",
+		WorkflowShape: "repair",
+		Domain:        "stores",
+		Steps: []cw.StructuredPlanStep{{
+			StepID:            "store_1",
+			Goal:              "Verify the expected store results",
+			ActionInstruction: "Validate the expected store result contract.",
+			Status:            "pending",
+		}},
+		CurrentStep: 0,
+	}
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"stores"}, Phase: "review", OriginalQuery: "validate store results"}
+
+	ag.updateStructuredPlanProgressAfterTurn(classification, []ai.ToolCall{{Name: "review_verify_results"}}, []string{"Store validation succeeded"}, nil)
+
+	if thread.StreamContext.StructuredPlan.Steps[0].Status != "complete" {
+		t.Fatalf("expected stores capability completion to complete step, got %#v", thread.StreamContext.StructuredPlan.Steps[0])
+	}
+}
+
+func TestUpdateStructuredPlanProgressAfterTurn_UsesSpacesCapabilityCompletion(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Plan space mutation"}
+	thread.InitializeWorkStream("planning")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Plan a space mutation",
+		WorkflowShape: "repair",
+		Domain:        "spaces",
+		Steps: []cw.StructuredPlanStep{{
+			StepID:            "space_1",
+			Goal:              "Design the knowledge mutation",
+			ActionInstruction: "Design the target knowledge mutation.",
+			Status:            "pending",
+		}},
+		CurrentStep: 0,
+	}
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"spaces"}, Phase: "planning", OriginalQuery: "plan space mutation"}
+
+	ag.updateStructuredPlanProgressAfterTurn(classification, []ai.ToolCall{{Name: "planning_design_mutation"}}, []string{"Mutation plan ready"}, nil)
+
+	if thread.StreamContext.StructuredPlan.Steps[0].Status != "complete" {
+		t.Fatalf("expected spaces capability completion to complete step, got %#v", thread.StreamContext.StructuredPlan.Steps[0])
+	}
+}
+
+func TestUpdateStructuredPlanProgressAfterTurn_UsesCodingCapabilityCompletion(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix parser behavior"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Fix parser failing tests",
+		WorkflowShape: "repair",
+		Domain:        "coding_workflow",
+		Steps: []cw.StructuredPlanStep{{
+			StepID:            "repair_1",
+			Goal:              "Apply the smallest valid patch",
+			ActionInstruction: "Apply the smallest valid patch.",
+			Status:            "pending",
+		}},
+		CurrentStep: 0,
+	}
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", OriginalQuery: "fix parser behavior"}
+
+	ag.updateStructuredPlanProgressAfterTurn(classification, []ai.ToolCall{{Name: "execution_apply_patch"}}, []string{"Patch applied"}, nil)
+
+	if thread.StreamContext.StructuredPlan.Steps[0].Status != "complete" {
+		t.Fatalf("expected coding capability completion to complete step, got %#v", thread.StreamContext.StructuredPlan.Steps[0])
+	}
+}
+
+func TestUpdateStructuredPlanProgressAfterTurn_UsesDesktopCapabilityCompletion(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Run git status"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.StructuredPlan = &cw.StructuredPlan{
+		Objective:     "Inspect repository state",
+		WorkflowShape: "repair",
+		Domain:        "desktop",
+		Steps: []cw.StructuredPlanStep{{
+			StepID:            "desktop_1",
+			Goal:              "Run the repository inspection command",
+			ActionInstruction: "Run git status in the current workspace.",
+			Status:            "pending",
+		}},
+		CurrentStep: 0,
+	}
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"desktop"}, Phase: "execution", OriginalQuery: "run git status"}
+
+	ag.updateStructuredPlanProgressAfterTurn(classification, []ai.ToolCall{{Name: "execute_local_command"}}, []string{"git status completed"}, nil)
+
+	if thread.StreamContext.StructuredPlan.Steps[0].Status != "complete" {
+		t.Fatalf("expected desktop capability completion to complete step, got %#v", thread.StreamContext.StructuredPlan.Steps[0])
 	}
 }
 

@@ -10,6 +10,8 @@
 
 **Goal**: Make Phase Plan System work for ALL domains (Stores, Spaces, Desktop, Coding) to improve success rate through methodical workflows.
 
+For the follow-on design that adds LLM-authored structured master plans and workstream step execution across all domains, see [STRUCTURED_PLANNER_EXECUTION_DESIGN.md](STRUCTURED_PLANNER_EXECUTION_DESIGN.md).
+
 **Key Insight**: Planner generates domain-agnostic PhasePlans. Phase capabilities surface domain-specific tools.
 
 **Why This Matters**: Stores/Spaces currently expose tools randomly. Adding phases gives them Investigation → Planning → Execution structure, improving success rate.

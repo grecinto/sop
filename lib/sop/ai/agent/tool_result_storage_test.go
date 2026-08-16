@@ -83,6 +83,42 @@ func TestWrapToolResultWithStorage_SmallResultReturnsRawInlineContent(t *testing
 	}
 }
 
+func TestWrapToolResultWithStorage_BypassesAnalysisTools(t *testing.T) {
+	storage, err := NewToolResultStorage("test-analysis-bypass")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	ctx := context.WithValue(context.Background(), ctxKeyToolResultStorage, storage)
+	ctx = context.WithValue(ctx, SessionPayloadKey, &ai.SessionPayload{SessionID: "test-analysis-bypass"})
+
+	_, _, _, err = storage.StoreResult("run_repo_tests", strings.Repeat("x", 5000))
+	if err != nil {
+		t.Fatalf("failed to seed stored result: %v", err)
+	}
+	before, err := storage.ListStoredResults()
+	if err != nil {
+		t.Fatalf("ListStoredResults before failed: %v", err)
+	}
+
+	raw := strings.Repeat("listed result\n", 300)
+	wrapped, err := wrapToolResultWithStorage(ctx, "list_tool_results", raw)
+	if err != nil {
+		t.Fatalf("wrapToolResultWithStorage() error = %v", err)
+	}
+	if wrapped != raw {
+		t.Fatalf("expected raw result for analysis tool, got %q", wrapped)
+	}
+	after, err := storage.ListStoredResults()
+	if err != nil {
+		t.Fatalf("ListStoredResults after failed: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("expected analysis tool output to avoid recursive storage, before=%d after=%d", len(before), len(after))
+	}
+}
+
 func TestStoreResult_LargeFileBacked(t *testing.T) {
 	storage, err := NewToolResultStorage("test-large")
 	if err != nil {
@@ -345,6 +381,70 @@ func TestGrepResult_MissingFileReturnsEmpty(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("expected no matches for missing file, got %+v", matches)
+	}
+}
+
+func TestGrepResult_SupportsCaseInsensitiveAlternation(t *testing.T) {
+	storage, err := NewToolResultStorage("test-grep-regex")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	output := "ok\nERROR: first failure\npanic: boom\n--- FAIL: TestSomething\n"
+	_, filePath, _, err := storage.StoreResult("run_repo_tests", output)
+	if err != nil {
+		t.Fatalf("StoreResult failed: %v", err)
+	}
+
+	matches, err := storage.GrepResult(filePath, "fail|error|panic", 10)
+	if err != nil {
+		t.Fatalf("GrepResult failed: %v", err)
+	}
+	if len(matches) != 3 {
+		t.Fatalf("expected 3 regex matches, got %d: %#v", len(matches), matches)
+	}
+	if !strings.Contains(matches[0].Content, "ERROR") {
+		t.Fatalf("expected first match to include ERROR line, got %#v", matches[0])
+	}
+	if !strings.Contains(matches[2].Content, "--- FAIL") {
+		t.Fatalf("expected fail block match, got %#v", matches[2])
+	}
+}
+
+func TestReadResultLines_ResolvesWildcardAndBasenamePaths(t *testing.T) {
+	storage, err := NewToolResultStorage("test-path-resolution")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	output := "line one\nline two\nline three\n"
+	_, filePath, _, err := storage.StoreResult("run_repo_tests", output)
+	if err != nil {
+		t.Fatalf("StoreResult failed: %v", err)
+	}
+
+	wildcardPath := filepath.Join(storage.GetSessionDir(), "run_repo_tests-*.txt")
+	content, err := storage.ReadResultLines(wildcardPath, 1, 2)
+	if err != nil {
+		t.Fatalf("ReadResultLines wildcard failed: %v", err)
+	}
+	if !strings.Contains(content, "line one") || !strings.Contains(content, "line two") {
+		t.Fatalf("expected wildcard resolution to read stored file, got %q", content)
+	}
+
+	baseNamePath := "run_repo_tests.txt"
+	content, err = storage.ReadResultLines(baseNamePath, 2, 3)
+	if err != nil {
+		t.Fatalf("ReadResultLines basename failed: %v", err)
+	}
+	if !strings.Contains(content, "line two") || !strings.Contains(content, "line three") {
+		t.Fatalf("expected basename resolution to read stored file, got %q", content)
+	}
+
+	if filepath.Base(filePath) == baseNamePath {
+		t.Fatalf("test setup invalid: expected stored file to include unique suffix")
 	}
 }
 

@@ -123,6 +123,46 @@ func TestStoresPhaseRunDesignQuery_FormatsStorePlan(t *testing.T) {
 	}
 }
 
+type staticStructuredPlanner struct {
+	plan cw.StructuredPlan
+}
+
+func (p *staticStructuredPlanner) Plan(task cw.Task, state cw.RunState, pack cw.ContextPack) (cw.StructuredPlan, error) {
+	return p.plan, nil
+}
+
+func TestStoresPhaseRunDesignQuery_UsesSharedStructuredPlannerWhenAvailable(t *testing.T) {
+	phase := newStoresPhase("planning", &cw.SharedInfrastructure{Planner: &staticStructuredPlanner{plan: cw.StructuredPlan{
+		Objective:     "Plan store repair",
+		WorkflowShape: "repair",
+		Domain:        "stores",
+		Steps:         []cw.StructuredPlanStep{{StepID: "step_1", Goal: "Inspect store shape", ActionInstruction: "Inspect the target store and validate the expected query behavior."}},
+	}}})
+	output, err := phase.runDesignQuery(map[string]any{"database": "orders", "store": "customers"})
+	if err != nil {
+		t.Fatalf("expected structured planner path to succeed, got %v", err)
+	}
+	if !strings.Contains(output, "Inspect the target store and validate the expected query behavior.") {
+		t.Fatalf("expected output to use shared structured planner, got %q", output)
+	}
+}
+
+func TestSpacesPhaseRunDesignMutation_UsesSharedStructuredPlannerWhenAvailable(t *testing.T) {
+	phase := newSpacesPhase("planning", &cw.SharedInfrastructure{Planner: &staticStructuredPlanner{plan: cw.StructuredPlan{
+		Objective:     "Plan space mutation",
+		WorkflowShape: "repair",
+		Domain:        "spaces",
+		Steps:         []cw.StructuredPlanStep{{StepID: "step_1", Goal: "Inspect knowledge scope", ActionInstruction: "Inspect the target space scope and define the intended knowledge change."}},
+	}}})
+	output, err := phase.runDesignMutation(map[string]any{"space_name": "products", "category": "pricing"})
+	if err != nil {
+		t.Fatalf("expected spaces structured planner path to succeed, got %v", err)
+	}
+	if !strings.Contains(output, "Inspect the target space scope and define the intended knowledge change.") {
+		t.Fatalf("expected output to use shared structured planner, got %q", output)
+	}
+}
+
 func containsStringInTest(items []string, target string) bool {
 	for _, item := range items {
 		if item == target {
@@ -185,6 +225,33 @@ func TestBuildDetailedExecutionPlan_AddsFilesValidationAndExitCriteria(t *testin
 	}
 	if joined := strings.Join(steps[2].ExitCriteria, " "); !strings.Contains(strings.ToLower(joined), "tests") {
 		t.Fatalf("expected exit criteria to mention validation, got %#v", steps[2].ExitCriteria)
+	}
+}
+
+func TestDefaultPlanner_PlanReturnsStructuredPlan(t *testing.T) {
+	planner := &cw.DefaultPlanner{}
+	plan, err := planner.Plan(
+		cw.Task{Description: "fix failing tests in parser", ActiveFile: "lib/parser.go", TaskType: "implementation"},
+		cw.RunState{},
+		cw.ContextPack{ActiveFile: "lib/parser.go", RelatedFiles: []string{"lib/parser.go", "lib/parser_test.go"}, TestFiles: []string{"lib/parser_test.go"}, DependencyFiles: []string{"lib/errors.go"}, CodeStructureSummary: "parser uses a token stream", ModuleName: "parser"},
+	)
+	if err != nil {
+		t.Fatalf("expected structured planner to succeed, got %v", err)
+	}
+	if plan.Domain != "coding_workflow" {
+		t.Fatalf("expected coding_workflow domain, got %#v", plan)
+	}
+	if len(plan.Steps) == 0 {
+		t.Fatalf("expected structured plan steps, got %#v", plan)
+	}
+	if len(cw.BasePlanFromStructuredPlan(plan)) == 0 {
+		t.Fatalf("expected structured plan to project into legacy steps, got %#v", plan)
+	}
+	if got := plan.SystemContext.PrimaryTargets; len(got) == 0 || got[0] != "lib/parser.go" {
+		t.Fatalf("expected primary targets in structured system context, got %#v", got)
+	}
+	if got := plan.CompletionGate.Requirements; len(got) == 0 {
+		t.Fatalf("expected completion gate requirements, got %#v", got)
 	}
 }
 

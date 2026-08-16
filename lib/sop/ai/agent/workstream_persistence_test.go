@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/sharedcode/sop"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/inmemory"
 )
 
@@ -26,7 +27,26 @@ func TestShortTermMemory_PersistAndRehydrate(t *testing.T) {
 		Label:       "Test Feature Implementation",
 		StreamState: WorkStreamActive,
 		StreamContext: &WorkStreamContext{
-			CurrentPhase:   "execution",
+			CurrentPhase: "execution",
+			StructuredPlan: &cw.StructuredPlan{
+				Objective:     "Repair and validate parser behavior",
+				WorkflowShape: "repair",
+				Domain:        "coding_workflow",
+				SystemContext: cw.StructuredSystemContext{
+					Subsystem:         "parser",
+					PrimaryTargets:    []string{"lib/parser.go", "lib/parser_test.go"},
+					SupportingTargets: []string{"lib/errors.go"},
+					Contracts:         []string{"parser errors stay stable for malformed input"},
+				},
+				Steps: []cw.StructuredPlanStep{{
+					StepID:            "repair_1",
+					Goal:              "Localize the failing behavior",
+					ActionInstruction: "Read test and implementation together",
+					Status:            "active",
+				}},
+				CurrentStep:    0,
+				CompletedSteps: []string{},
+			},
 			PhaseHistory:   []string{"planning", "intake", "execution"},
 			IterationCount: 3,
 			PhaseIterations: map[string]int{
@@ -91,6 +111,15 @@ func TestShortTermMemory_PersistAndRehydrate(t *testing.T) {
 	if restoredThread.StreamContext.CurrentPhase != "execution" {
 		t.Errorf("Expected CurrentPhase %s, got %s", "execution", restoredThread.StreamContext.CurrentPhase)
 	}
+	if restoredThread.StreamContext.StructuredPlan == nil {
+		t.Fatal("StructuredPlan not restored")
+	}
+	if restoredThread.StreamContext.StructuredPlan.Objective != "Repair and validate parser behavior" {
+		t.Fatalf("expected structured plan objective to persist, got %#v", restoredThread.StreamContext.StructuredPlan)
+	}
+	if got := restoredThread.StreamContext.StructuredPlan.SystemContext.PrimaryTargets; len(got) != 2 || got[0] != "lib/parser.go" {
+		t.Fatalf("expected structured plan primary targets to persist, got %#v", got)
+	}
 
 	if len(restoredThread.StreamContext.PhaseHistory) != 3 {
 		t.Errorf("Expected 3 phases in history, got %d", len(restoredThread.StreamContext.PhaseHistory))
@@ -98,6 +127,35 @@ func TestShortTermMemory_PersistAndRehydrate(t *testing.T) {
 
 	if len(restoredThread.Exchanges) != 2 {
 		t.Errorf("Expected 2 exchanges, got %d", len(restoredThread.Exchanges))
+	}
+}
+
+func TestWorkStreamContextAdapter_GetStructuredPlan(t *testing.T) {
+	ctx := &WorkStreamContext{
+		StructuredPlan: &cw.StructuredPlan{
+			Objective:      "Investigate and repair failing tests",
+			WorkflowShape:  "repair",
+			Domain:         "coding_workflow",
+			SystemContext:  cw.StructuredSystemContext{Subsystem: "parser", PrimaryTargets: []string{"lib/parser.go", "lib/parser_test.go"}},
+			Steps:          []cw.StructuredPlanStep{{StepID: "s1", Goal: "Localize failure", Status: "active"}},
+			CurrentStep:    0,
+			CompletedSteps: []string{},
+			CompletionGate: cw.StructuredCompletionGate{Requirements: []string{"rerun the failing test"}},
+		},
+	}
+	adapter := &workStreamContextAdapter{ctx: ctx}
+	plan := adapter.GetStructuredPlan()
+	if plan == nil {
+		t.Fatal("expected structured plan reader")
+	}
+	if got := plan.GetObjective(); got != "Investigate and repair failing tests" {
+		t.Fatalf("expected objective to round-trip, got %q", got)
+	}
+	if got := plan.GetSystemContext().Subsystem; got != "parser" {
+		t.Fatalf("expected subsystem to round-trip, got %q", got)
+	}
+	if got := plan.GetCompletionGate().Requirements; len(got) != 1 || got[0] != "rerun the failing test" {
+		t.Fatalf("expected completion gate to round-trip, got %#v", got)
 	}
 }
 

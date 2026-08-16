@@ -12,6 +12,7 @@ import (
 
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/btree"
 )
 
@@ -134,7 +135,8 @@ type PhasePlan struct {
 	Checkpoints     map[string]bool `json:"checkpoints"`      // Re-assess triggers: {"after_investigation": true}
 	Reasoning       string          `json:"reasoning"`        // Why this path was chosen
 	Confidence      string          `json:"confidence"`       // "high", "medium", "low"
-	LastUpdated     int64           `json:"last_updated"`     // Timestamp of last path modification
+	ExecutionBrief  *ExecutionBrief `json:"execution_brief,omitempty"`
+	LastUpdated     int64           `json:"last_updated"` // Timestamp of last path modification
 }
 
 // LoopDetectionState tracks iteration patterns to prevent infinite loops
@@ -174,9 +176,10 @@ type StepDefinition struct {
 
 // WorkStreamContext captures the phase progression and artifacts
 type WorkStreamContext struct {
-	CurrentPhase   string                    `json:"current_phase"`   // Current executing phase
-	PhaseHistory   []string                  `json:"phase_history"`   // All phases executed: [intake, investigation, planning, ...]
-	PhasePlan      *PhasePlan                `json:"phase_plan"`      // THE PLAN - persisted across pause/resume
+	CurrentPhase   string                    `json:"current_phase"` // Current executing phase
+	PhaseHistory   []string                  `json:"phase_history"` // All phases executed: [intake, investigation, planning, ...]
+	PhasePlan      *PhasePlan                `json:"phase_plan"`    // THE PLAN - persisted across pause/resume
+	StructuredPlan *cw.StructuredPlan        `json:"structured_plan,omitempty"`
 	PhaseArtifacts map[string]map[string]any `json:"phase_artifacts"` // Artifacts from each phase
 	LastToolCalls  []string                  `json:"last_tool_calls"` // Tools called in this stream
 
@@ -291,6 +294,7 @@ type ShortTermMemory struct {
 	Threads               map[sop.UUID]*ConversationThread
 	Order                 []sop.UUID // Maintains the sequence of threads
 	CurrentThreadID       sop.UUID   // The currently active thread
+	WorkflowMemory        map[string]map[string]string
 	RuntimeCaveats        []RuntimeCaveat
 	SessionBoundaries     []SessionBoundary
 	LastRoutingState      *TaskContextClassification
@@ -304,9 +308,40 @@ type ShortTermMemory struct {
 // NewShortTermMemory initializes the memory structure.
 func NewShortTermMemory() *ShortTermMemory {
 	return &ShortTermMemory{
-		Threads: make(map[sop.UUID]*ConversationThread),
-		Order:   make([]sop.UUID, 0),
+		Threads:        make(map[sop.UUID]*ConversationThread),
+		Order:          make([]sop.UUID, 0),
+		WorkflowMemory: make(map[string]map[string]string),
 	}
+}
+
+func (stm *ShortTermMemory) SaveWorkflowMemory(key string, values map[string]string) error {
+	if stm == nil {
+		return fmt.Errorf("short-term memory not available")
+	}
+	if stm.WorkflowMemory == nil {
+		stm.WorkflowMemory = make(map[string]map[string]string)
+	}
+	cloned := make(map[string]string, len(values))
+	for k, v := range values {
+		cloned[k] = v
+	}
+	stm.WorkflowMemory[key] = cloned
+	return nil
+}
+
+func (stm *ShortTermMemory) LoadWorkflowMemory(key string) (map[string]string, error) {
+	if stm == nil || stm.WorkflowMemory == nil {
+		return nil, fmt.Errorf("memory not found")
+	}
+	values, exists := stm.WorkflowMemory[key]
+	if !exists {
+		return nil, fmt.Errorf("memory not found")
+	}
+	cloned := make(map[string]string, len(values))
+	for k, v := range values {
+		cloned[k] = v
+	}
+	return cloned, nil
 }
 
 const MaxConversationThreads = 20

@@ -2028,10 +2028,14 @@ func (a *CopilotAgent) getCodingWorkflowContext() string {
 Step 1: CAPTURE TEST FAILURE
 - Run: execute_local_command(command="go test -v -run TestName ./path", reasoning="capture full test error")
 - If output shows file_path: IMMEDIATELY call read_tool_result(file_path="...") to read it
+- If the saved output is large: call grep_tool_result(file_path="...", pattern="FAIL|Error|panic|--- FAIL") first
+- If grep_tool_result returns matching line numbers: IMMEDIATELY call read_tool_result around the first failing line
 - Extract actual error message
 - NEVER proceed without seeing the error
 
 Step 2: UNDERSTAND THE TEST
+- If the failure block shows --- FAIL: TestName, call grep_repo_text(path=".", query="func TestName") to locate the test source
+- If the failure block shows FAIL\tpackage/path, use that package path to narrow file inspection
 - Call: read_file(path="path/to/test.go", start_line=N, end_line=M)
 - Understand what the test is checking
 - Identify which functions it calls
@@ -2065,6 +2069,8 @@ CRITICAL RULES:
 ✗ NEVER skip reading the error output
 ✗ NEVER skip reading test and implementation code
 ✗ NEVER proceed without completing prior step
+✗ NEVER call list_tool_results again once you already have the failing run_repo_tests file path
+✗ NEVER default to generic head/tail on the saved test log when grep_tool_result already found failing lines
 ✓ ALWAYS show passing test output as proof
 `)
 		wrote = true
@@ -2075,6 +2081,7 @@ CRITICAL RULES:
 		sb.WriteString(`FILE-BACKED TOOL RESULTS:
 - If a tool result includes file_path or says full output was saved, do not conclude from the truncated preview alone.
 - For known signals such as PASS, FAIL, panic, timeout, or ERROR, call grep_tool_result(file_path="...", pattern="...") first.
+- If grep_tool_result returns concrete failing line numbers, call read_tool_result(file_path="...", start_line=N, end_line=M) around those lines before any broader head/tail read.
 - For open-ended investigation, call read_tool_result(file_path="...", start_line=X, end_line=Y) or analyze_tool_result(file_path="...", operation="sed"|"head"|"tail"|"wc").
 - Use the saved file to confirm the outcome before making a final claim.
 `)

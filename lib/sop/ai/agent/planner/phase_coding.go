@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
 	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 )
@@ -78,6 +79,55 @@ WORKFLOW: Review artifacts → Summarize → Document → Capture → Signal exi
 	default:
 		return fmt.Sprintf("Phase: %s for coding workflow", p.name)
 	}
+}
+
+func (p *CodingPhase) BuildPlanningContext(query string, state capabilities.RoutingState) string {
+	parts := []string{
+		"Coding Planning Context",
+		"- Domain focus: repository-aware implementation, repair, refactor, and validation work.",
+		"- Primary planning concerns: active files, nearby tests, interfaces, symbols, dependency paths, and behavior contracts.",
+		"- Preserve local correctness and existing contracts unless the user explicitly requests a behavior or architecture change.",
+		"- Validation should prove the code, tests, and intended contract still align after the planned change.",
+	}
+	if hint := strings.TrimSpace(state.CapabilityHint); hint != "" {
+		parts = append(parts, "- Active runtime hint: "+hint)
+	}
+	lower := strings.ToLower(strings.TrimSpace(query))
+	if strings.Contains(lower, "fail") || strings.Contains(lower, "test") {
+		parts = append(parts, "- Repair rule: determine whether the failing behavior comes from outdated tests, broken code, or both before choosing the repair path.")
+	}
+	if strings.Contains(lower, "design") || strings.Contains(lower, "architect") {
+		parts = append(parts, "- Architecture rule: surface contracts, trade-offs, and slice boundaries before broad implementation work.")
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (p *CodingPhase) EvaluateStepCompletion(query string, state capabilities.RoutingState, actionText string, validation []string, toolCalls []ai.ToolCall, outcomeFacts []string) bool {
+	_ = query
+	_ = state
+	text := strings.ToLower(strings.TrimSpace(actionText + " " + strings.Join(validation, " ")))
+	for _, toolCall := range toolCalls {
+		toolName := strings.ToLower(strings.TrimSpace(toolCall.Name))
+		switch {
+		case strings.Contains(text, "inspect") || strings.Contains(text, "search") || strings.Contains(text, "trace") || strings.Contains(text, "identify"):
+			if strings.Contains(toolName, "inspect_repo") || strings.Contains(toolName, "search_repo") || strings.Contains(toolName, "build_context") || strings.Contains(toolName, "list_changed_files") {
+				return true
+			}
+		case strings.Contains(text, "plan") || strings.Contains(text, "design") || strings.Contains(text, "decide"):
+			if strings.Contains(toolName, "plan_changes") || strings.Contains(toolName, "build_context") {
+				return true
+			}
+		case strings.Contains(text, "validate") || strings.Contains(text, "test") || strings.Contains(text, "verify"):
+			if strings.Contains(toolName, "run_tests") {
+				return true
+			}
+		case strings.Contains(text, "patch") || strings.Contains(text, "apply") || strings.Contains(text, "implement") || strings.Contains(text, "fix") || strings.Contains(text, "edit"):
+			if strings.Contains(toolName, "apply_patch") || strings.Contains(toolName, "apply_multi_file_patch") || strings.Contains(toolName, "preview_patch") {
+				return true
+			}
+		}
+	}
+	return len(toolCalls) > 0 && len(outcomeFacts) > 0
 }
 
 func (p *CodingPhase) ExposeTools() []capabilities.ToolDefinition {
@@ -425,23 +475,25 @@ func (p *CodingPhase) runPlanChanges(args map[string]any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("plan changes: %w", err)
 	}
+	basePlan := cw.BasePlanFromStructuredPlan(plan)
 
-	if len(plan) == 0 {
+	if len(basePlan) == 0 {
 		return "Execution Plan: none", nil
 	}
 
-	detailedSteps := buildDetailedExecutionPlan(task, pack, plan)
+	detailedSteps := buildDetailedExecutionPlan(task, pack, basePlan)
 	if len(detailedSteps) > 0 {
-		miniPlan := buildPhaseMiniPlan(task, pack, plan)
+		miniPlan := buildPhaseMiniPlan(task, pack, basePlan)
 		structuredData := map[string]any{
+			"structured_plan":         plan,
 			"phase_mini_plan":         miniPlan,
 			"detailed_execution_plan": serializeDetailedExecutionPlan(detailedSteps),
-			"base_plan":               plan,
+			"base_plan":               basePlan,
 		}
 		if _, err := p.runCapture(map[string]any{
 			"summary":         fmt.Sprintf("Execution plan for %s", strings.TrimSpace(task.Description)),
 			"status":          "ready_for_execution",
-			"plan":            toStringSlice(plan),
+			"plan":            toStringSlice(basePlan),
 			"notes":           []any{fmt.Sprintf("Target files: %s", strings.Join(collectTargetFiles(task, pack), ", "))},
 			"structured_data": structuredData,
 		}); err != nil {
@@ -449,7 +501,7 @@ func (p *CodingPhase) runPlanChanges(args map[string]any) (string, error) {
 		}
 		return fmt.Sprintf("Execution Plan:\n%s", formatDetailedExecutionPlan(detailedSteps)), nil
 	}
-	return fmt.Sprintf("Execution Plan:\n%s", strings.Join(plan, "\n")), nil
+	return fmt.Sprintf("Execution Plan:\n%s", strings.Join(basePlan, "\n")), nil
 }
 
 func serializeDetailedExecutionPlan(steps []detailedExecutionStep) []map[string]any {

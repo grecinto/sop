@@ -31,8 +31,11 @@ func WithCapability(cap capabilities.Capability) CapabilityOption {
 }
 
 func (a *CopilotAgent) ensureCapabilityRegistry() {
-	if a == nil || a.capabilityRegistry != nil {
+	if a == nil {
 		return
+	}
+	if a.capabilityRegistry == nil {
+		a.capabilityRegistry = capabilities.NewRegistry()
 	}
 	ideWorkerCap := ideworker.NewCapability()
 
@@ -47,12 +50,14 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 
 	caps = append(caps, spaces.NewCapability())
 
-	if localDesktopAutomationEnabled.Load() {
+	if localDesktopAutomationEnabled.Load() || GetAutomationPolicy().Enabled {
 		desktopCap := desktop.NewCapability()
 		desktopCap.SetCommandExecutor(a.toolExecuteLocalCommand)    // For LLM tool calls
 		desktopCap.SetRawCommandExecutor(a.rawLocalCommandExecutor) // For direct /c commands
 		caps = append(caps, desktopCap)
+	}
 
+	if localDesktopAutomationEnabled.Load() {
 		cwfInfra := cw.NewDefaultSharedInfrastructure()
 		// Inject STM accessor for phase succession (explicit parameter passing, not context)
 		cwfInfra.STMAccessor = a.getSTMForPhaseCapabilities
@@ -89,6 +94,9 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 			}
 			return a.brain, nil
 		}
+		cwfInfra.PlanningContextResolver = a.resolvePlanningContextForDomain
+		cw.SetDefaultPlanningContextResolver(cwfInfra.PlanningContextResolver)
+		cwfInfra.Planner = cw.NewLLMPlanner(cwfInfra.LLMAccessor, cwfInfra.Planner)
 
 		// Inject embedder accessor for team patterns vectorization
 		cwfInfra.EmbedderAccessor = func(ctx context.Context) (any, error) {
@@ -178,7 +186,9 @@ func (a *CopilotAgent) ensureCapabilityRegistry() {
 		}
 	}
 
-	a.capabilityRegistry = capabilities.NewRegistry(caps...)
+	for _, cap := range caps {
+		a.capabilityRegistry.Register(cap)
+	}
 }
 
 type sessionSTMReaderAdapter struct {
@@ -502,6 +512,29 @@ func (w *workStreamContextAdapter) SetPhasePlan(plan cw.PhasePlanReader) {
 	// The adapter pattern allows phase capabilities to work with the plan
 }
 
+func (w *workStreamContextAdapter) GetStructuredPlan() cw.StructuredPlanReader {
+	if w == nil || w.ctx == nil || w.ctx.StructuredPlan == nil {
+		return nil
+	}
+	return &structuredPlanAdapter{plan: w.ctx.StructuredPlan}
+}
+
+func (w *workStreamContextAdapter) SetStructuredPlan(plan cw.StructuredPlanReader) {
+	if w == nil || w.ctx == nil || plan == nil {
+		return
+	}
+	w.ctx.StructuredPlan = &cw.StructuredPlan{
+		Objective:      plan.GetObjective(),
+		WorkflowShape:  plan.GetWorkflowShape(),
+		Domain:         plan.GetDomain(),
+		SystemContext:  plan.GetSystemContext(),
+		Steps:          append([]cw.StructuredPlanStep(nil), plan.GetSteps()...),
+		CurrentStep:    plan.GetCurrentStep(),
+		CompletedSteps: append([]string(nil), plan.GetCompletedSteps()...),
+		CompletionGate: plan.GetCompletionGate(),
+	}
+}
+
 func (w *workStreamContextAdapter) GetMultiStepPlan() cw.MultiStepPlanReader {
 	if w == nil || w.ctx == nil {
 		return nil
@@ -575,6 +608,87 @@ func (m *multiStepPlanAdapter) GetTotalSteps() int {
 		return 0
 	}
 	return m.plan.TotalSteps
+}
+
+type structuredPlanAdapter struct {
+	plan *cw.StructuredPlan
+}
+
+func (s *structuredPlanAdapter) GetObjective() string {
+	if s == nil || s.plan == nil {
+		return ""
+	}
+	return s.plan.Objective
+}
+
+func (s *structuredPlanAdapter) GetWorkflowShape() string {
+	if s == nil || s.plan == nil {
+		return ""
+	}
+	return s.plan.WorkflowShape
+}
+
+func (s *structuredPlanAdapter) GetDomain() string {
+	if s == nil || s.plan == nil {
+		return ""
+	}
+	return s.plan.Domain
+}
+
+func (s *structuredPlanAdapter) GetSystemContext() cw.StructuredSystemContext {
+	if s == nil || s.plan == nil {
+		return cw.StructuredSystemContext{}
+	}
+	return s.plan.SystemContext
+}
+
+func (s *structuredPlanAdapter) GetSteps() []cw.StructuredPlanStep {
+	if s == nil || s.plan == nil {
+		return nil
+	}
+	return s.plan.Steps
+}
+
+func (s *structuredPlanAdapter) SetSteps(steps []cw.StructuredPlanStep) {
+	if s == nil || s.plan == nil {
+		return
+	}
+	s.plan.Steps = append([]cw.StructuredPlanStep(nil), steps...)
+}
+
+func (s *structuredPlanAdapter) GetCurrentStep() int {
+	if s == nil || s.plan == nil {
+		return -1
+	}
+	return s.plan.CurrentStep
+}
+
+func (s *structuredPlanAdapter) SetCurrentStep(idx int) {
+	if s == nil || s.plan == nil {
+		return
+	}
+	s.plan.CurrentStep = idx
+}
+
+func (s *structuredPlanAdapter) GetCompletedSteps() []string {
+	if s == nil || s.plan == nil {
+		return nil
+	}
+	return s.plan.CompletedSteps
+}
+
+func (s *structuredPlanAdapter) SetCompletedSteps(steps []string) {
+	if s == nil || s.plan == nil {
+		return
+	}
+	s.plan.CompletedSteps = append([]string(nil), steps...)
+}
+
+func (s *structuredPlanAdapter) GetCompletionGate() cw.StructuredCompletionGate {
+	if s == nil || s.plan == nil {
+		return cw.StructuredCompletionGate{}
+	}
+	return s.plan.CompletionGate
 }
 
 // stepAdapter adapts StepDefinition to StepReader interface

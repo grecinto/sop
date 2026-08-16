@@ -49,6 +49,10 @@ type AskTaskContext struct {
 
 	// OriginalQuery: The unmodified user query
 	OriginalQuery string `json:"original_query"`
+
+	// DomainOfferNeeded indicates the current domains are only environment-default suggestions
+	// and should be confirmed with the user before planning/tool registration proceeds.
+	DomainOfferNeeded bool `json:"-"`
 }
 
 // ClassifyAskTaskContext performs enhanced LLM-based classification that returns:
@@ -141,6 +145,7 @@ func (a *CopilotAgent) buildAskClassificationPrompt(ctx context.Context, query s
 	}
 
 	cognitiveGuidance := buildAskClassificationCognitiveGuidance(ctx)
+	environmentGuidance := buildAskClassificationEnvironmentGuidance()
 
 	return fmt.Sprintf(`You are a task classifier for an AI assistant. Analyze the user query and classify it into domains, phases, and intent.
 
@@ -158,6 +163,9 @@ func (a *CopilotAgent) buildAskClassificationPrompt(ctx context.Context, query s
 - **delivery**: Summary, documentation, cleanup for domains that expose a separate delivery surface
 
 **Session Cognitive State (authoritative continuity signal):**
+%s
+
+**Environment default-domain guidance:**
 %s
 
 **User Query:**
@@ -269,7 +277,14 @@ Query: "/cmd ls -la"
   "reasoning": "Direct shell command execution, read-only"
 }
 
-Return ONLY the JSON object, no other text.`, cognitiveGuidance, query, storesHint, spacesHint)
+Return ONLY the JSON object, no other text.`, cognitiveGuidance, environmentGuidance, query, storesHint, spacesHint)
+}
+
+func buildAskClassificationEnvironmentGuidance() string {
+	if isDaemonPreferredDomainEnvironment() {
+		return "If the query is ambiguous or the domain is not identifiable, lean toward coding_workflow and desktop rather than generic/general routing."
+	}
+	return "If the query is ambiguous or the domain is not identifiable, lean toward stores and spaces rather than generic/general routing."
 }
 
 func buildAskClassificationCognitiveGuidance(ctx context.Context) string {
@@ -305,14 +320,30 @@ func buildAskClassificationCognitiveGuidance(ctx context.Context) string {
 
 // normalizeAskTaskContext validates and normalizes the LLM classification result.
 func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskContext {
+	usedDefaultDomains := false
+	explicitDomains := inferExplicitDomainsFromQuery(result.OriginalQuery)
+	if len(explicitDomains) > 0 {
+		result.Domains = explicitDomains
+		usedDefaultDomains = false
+	}
 	// Ensure at least one domain
 	if len(result.Domains) == 0 {
-		result.Domains = []string{"general"}
+		result.Domains = defaultAskDomains()
+		usedDefaultDomains = true
 	}
 
 	// Normalize domain names
 	for i, domain := range result.Domains {
 		result.Domains[i] = normalizeDomainName(domain)
+	}
+	if shouldUseDefaultAskDomains(result.Domains) {
+		if len(explicitDomains) > 0 {
+			result.Domains = explicitDomains
+			usedDefaultDomains = false
+		} else {
+			result.Domains = defaultAskDomains()
+			usedDefaultDomains = true
+		}
 	}
 
 	// Repo-fix queries that identify a local folder are coding_workflow tasks, not desktop automation tasks.
@@ -354,21 +385,84 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 	if result.Confidence == "" {
 		result.Confidence = "medium"
 	}
+	result.DomainOfferNeeded = usedDefaultDomains && !containsRepoFixIntent(result)
 
 	return result
 }
 
 // buildFallbackClassification creates a safe default classification when LLM fails.
 func (a *CopilotAgent) buildFallbackClassification(query string) *AskTaskContext {
-	return &AskTaskContext{
-		Domains:       []string{"general"},
-		Phase:         "investigation",
-		PhasePlan:     []string{"investigation"},
-		Intent:        "general",
-		Confidence:    "low",
-		Reasoning:     "Fallback classification due to LLM parse failure",
-		OriginalQuery: query,
+	domains := inferExplicitDomainsFromQuery(query)
+	domainOfferNeeded := false
+	if len(domains) == 0 {
+		domains = defaultAskDomains()
+		domainOfferNeeded = true
 	}
+	return &AskTaskContext{
+		Domains:           domains,
+		Phase:             "investigation",
+		PhasePlan:         []string{"investigation"},
+		Intent:            "general",
+		Confidence:        "low",
+		Reasoning:         fmt.Sprintf("Fallback classification due to LLM parse failure; leaning to environment defaults: %s", strings.Join(defaultAskDomains(), ", ")),
+		OriginalQuery:     query,
+		DomainOfferNeeded: domainOfferNeeded,
+	}
+}
+
+func inferExplicitDomainsFromQuery(query string) []string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil
+	}
+	if isExplicitDesktopDirective(q) {
+		return []string{"desktop"}
+	}
+	if containsRepoFixIntent(AskTaskContext{OriginalQuery: query}) {
+		return []string{"coding_workflow"}
+	}
+	domains := make([]string, 0, 2)
+	if strings.Contains(q, "store") || strings.Contains(q, "stores") || strings.Contains(q, "database") || strings.Contains(q, "table") {
+		domains = append(domains, "stores")
+	}
+	if strings.Contains(q, "space") || strings.Contains(q, "spaces") || strings.Contains(q, "knowledge base") || strings.Contains(q, "kb") {
+		if !contains(domains, "spaces") {
+			domains = append(domains, "spaces")
+		}
+	}
+	if len(domains) > 0 {
+		return domains
+	}
+	for _, marker := range []string{"code", "coding", "repo", "repository", "patch", "implement", "refactor", "parser", "test", "tests", "bug", "compile", "function", "class", "module"} {
+		if strings.Contains(q, marker) {
+			return []string{"coding_workflow"}
+		}
+	}
+	return nil
+}
+
+func shouldUseDefaultAskDomains(domains []string) bool {
+	if len(domains) == 0 {
+		return true
+	}
+	for _, domain := range domains {
+		normalized := strings.TrimSpace(strings.ToLower(domain))
+		if normalized != "" && normalized != "general" {
+			return false
+		}
+	}
+	return true
+}
+
+func defaultAskDomains() []string {
+	if isDaemonPreferredDomainEnvironment() {
+		return []string{"coding_workflow", "desktop"}
+	}
+	return []string{"stores", "spaces"}
+}
+
+func isDaemonPreferredDomainEnvironment() bool {
+	return localDesktopAutomationEnabled.Load() || GetAutomationPolicy().Enabled
 }
 
 func (a *CopilotAgent) applyCognitiveStateContinuity(ctx context.Context, result AskTaskContext) AskTaskContext {
@@ -459,6 +553,7 @@ func cloneAskTaskContext(taskCtx *AskTaskContext) *AskTaskContext {
 	if taskCtx.CRUD != nil {
 		cloned.CRUD = append([]string(nil), taskCtx.CRUD...)
 	}
+	cloned.DomainOfferNeeded = taskCtx.DomainOfferNeeded
 	return &cloned
 }
 

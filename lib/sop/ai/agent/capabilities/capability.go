@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 // RoutingState is the minimal routing context shared between the core Ask pipeline and capabilities.
@@ -157,6 +159,18 @@ func (p GuidanceProfile) ApplyDefaults(base GuidanceProfile) GuidanceProfile {
 // StructuredGuidanceProvider allows a capability to contribute structured guidance.
 type StructuredGuidanceProvider interface {
 	BuildGuidanceProfile(query string, state RoutingState) GuidanceProfile
+}
+
+// PlanningContextProvider allows a capability to contribute domain-specific
+// planning context while the shared planner schema remains domain agnostic.
+type PlanningContextProvider interface {
+	BuildPlanningContext(query string, state RoutingState) string
+}
+
+// StepCompletionProvider allows a capability to decide whether a structured plan
+// step should advance based on domain-specific semantics.
+type StepCompletionProvider interface {
+	EvaluateStepCompletion(query string, state RoutingState, actionText string, validation []string, toolCalls []ai.ToolCall, outcomeFacts []string) bool
 }
 
 // ToolExecutor can handle capability-specific tool invocations from the Ask loop.

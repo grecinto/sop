@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/sharedcode/sop/ai"
 	ts "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
 )
@@ -285,9 +286,66 @@ func inferTaskInputs(query string) (workingDir, activeFile string) {
 // DefaultPlanner creates a concise execution plan for an edit task.
 type DefaultPlanner struct{}
 
-func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]string, error) {
+// LLMPlanner asks the configured model to produce a structured plan and falls back
+// to DefaultPlanner if generation or parsing fails.
+type LLMPlanner struct {
+	LLMAccessor func(context.Context) (any, error)
+	Fallback    Planner
+}
+
+func NewLLMPlanner(llmAccessor func(context.Context) (any, error), fallback Planner) *LLMPlanner {
+	if fallback == nil {
+		fallback = &DefaultPlanner{}
+	}
+	return &LLMPlanner{LLMAccessor: llmAccessor, Fallback: fallback}
+}
+
+func (p *LLMPlanner) Plan(task Task, state RunState, pack ContextPack) (StructuredPlan, error) {
+	if p == nil || p.LLMAccessor == nil {
+		return p.planWithFallback(task, state, pack)
+	}
+	llm, err := p.LLMAccessor(context.Background())
+	if err != nil {
+		return p.planWithFallback(task, state, pack)
+	}
+	gen, ok := llm.(ai.Generator)
+	if !ok || gen == nil {
+		return p.planWithFallback(task, state, pack)
+	}
+
+	prompt, err := buildStructuredPlannerPrompt(task, state, pack)
+	if err != nil {
+		return p.planWithFallback(task, state, pack)
+	}
+	resp, err := gen.Generate(context.Background(), prompt, ai.GenOptions{
+		Temperature:    0.1,
+		MaxTokens:      2200,
+		ThinkingLevel:  "low",
+		ResponseSchema: structuredPlannerResponseSchema(),
+	})
+	if err != nil {
+		return p.planWithFallback(task, state, pack)
+	}
+
+	plan, ok := parseStructuredPlannerResponse(resp.Text)
+	if !ok {
+		return p.planWithFallback(task, state, pack)
+	}
+	return normalizeStructuredPlan(plan, task, state, pack), nil
+}
+
+func (p *LLMPlanner) planWithFallback(task Task, state RunState, pack ContextPack) (StructuredPlan, error) {
+	if p != nil && p.Fallback != nil {
+		return p.Fallback.Plan(task, state, pack)
+	}
+	return (&DefaultPlanner{}).Plan(task, state, pack)
+}
+
+func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) (StructuredPlan, error) {
 	_ = state
 	plan := []string{}
+	workflowShape := "implementation"
+	domain := "coding_workflow"
 	if strings.TrimSpace(pack.ExpertiseSummary) != "" {
 		plan = append(plan, "gather grounding from the selected Space and expertise guidance")
 	}
@@ -296,26 +354,29 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]st
 		plan = append(plan, fmt.Sprintf("reason about %q", task.Description))
 	}
 	if pack.TaskType == "planning" {
+		workflowShape = "design_implementation"
 		plan = append(plan, "clarify goals and constraints")
 		plan = append(plan, "discuss architecture and tradeoffs")
 		plan = append(plan, "prepare an implementation-ready plan")
-		return plan, nil
+		return buildStructuredPlanFromBase(task, pack, domain, workflowShape, plan), nil
 	}
 	if pack.TaskType == "analysis" {
+		workflowShape = "analysis"
 		plan = append(plan, "derive a solution")
 		plan = append(plan, "validate the proposed approach")
 		if pack.ContinuationSummary != "" {
 			plan = append(plan, fmt.Sprintf("resume from prior context: %s", pack.ContinuationSummary))
 		}
-		return plan, nil
+		return buildStructuredPlanFromBase(task, pack, domain, workflowShape, plan), nil
 	}
 	if pack.TaskType == "generation" {
+		workflowShape = "generation"
 		plan = append(plan, "compose the requested artifact")
 		plan = append(plan, "validate the structure")
 		if pack.RepositorySummary != "" {
 			plan = append(plan, fmt.Sprintf("check the target schema: %s", pack.RepositorySummary))
 		}
-		return plan, nil
+		return buildStructuredPlanFromBase(task, pack, domain, workflowShape, plan), nil
 	}
 	if task.ActiveFile != "" {
 		plan = append(plan, fmt.Sprintf("edit active file %s", task.ActiveFile))
@@ -354,7 +415,539 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) ([]st
 	}
 	plan = append(plan, "validate the change against the repository context")
 	plan = append(plan, "run targeted tests and inspect failures")
-	return plan, nil
+	return buildStructuredPlanFromBase(task, pack, domain, workflowShape, plan), nil
+}
+
+func buildStructuredPlanFromBase(task Task, pack ContextPack, domain, workflowShape string, base []string) StructuredPlan {
+	steps := make([]StructuredPlanStep, 0, len(base))
+	for idx, item := range base {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		files := make([]string, 0, 4)
+		for _, file := range pack.RelatedFiles {
+			if file != "" && !contains(files, file) {
+				files = append(files, file)
+			}
+		}
+		for _, file := range pack.DependencyFiles {
+			if file != "" && !contains(files, file) {
+				files = append(files, file)
+			}
+		}
+		if len(files) == 0 && task.ActiveFile != "" {
+			files = append(files, task.ActiveFile)
+		}
+		steps = append(steps, StructuredPlanStep{
+			StepID:            fmt.Sprintf("step_%d", idx+1),
+			StepDomain:        domain,
+			Goal:              item,
+			Files:             append([]string(nil), files...),
+			ActionInstruction: item,
+			Validation:        defaultValidationForStructuredStep(idx, len(base), pack),
+			ExitCriteria:      defaultExitCriteriaForStructuredStep(idx, len(base), pack),
+			Status:            "pending",
+		})
+	}
+	objective := strings.TrimSpace(task.Description)
+	if objective == "" {
+		objective = "Complete the requested task"
+	}
+	return StructuredPlan{
+		Objective:      objective,
+		WorkflowShape:  workflowShape,
+		Domain:         domain,
+		SystemContext:  defaultStructuredSystemContext(task, pack),
+		Steps:          steps,
+		CurrentStep:    0,
+		CompletedSteps: []string{},
+		CompletionGate: StructuredCompletionGate{Requirements: defaultCompletionGateRequirements(pack)},
+	}
+}
+
+func defaultStructuredSystemContext(task Task, pack ContextPack) StructuredSystemContext {
+	primary := []string{}
+	if task.ActiveFile != "" {
+		primary = append(primary, task.ActiveFile)
+	}
+	for _, file := range pack.TestFiles {
+		if file != "" && !contains(primary, file) {
+			primary = append(primary, file)
+		}
+	}
+	supporting := []string{}
+	for _, file := range pack.DependencyFiles {
+		if file != "" && !contains(supporting, file) && !contains(primary, file) {
+			supporting = append(supporting, file)
+		}
+	}
+	interfaces := append([]string(nil), pack.Symbols...)
+	constraints := []string{}
+	if pack.RepositorySummary != "" {
+		constraints = append(constraints, "Repository context: "+pack.RepositorySummary)
+	}
+	if pack.CodeStructureSummary != "" {
+		constraints = append(constraints, "Structure summary: "+pack.CodeStructureSummary)
+	}
+	return StructuredSystemContext{
+		Subsystem:         inferSubsystemFromPlanContext(task, pack),
+		PrimaryTargets:    primary,
+		SupportingTargets: supporting,
+		Interfaces:        interfaces,
+		Contracts:         defaultContractsForStructuredPlan(task, pack),
+		Invariants:        defaultInvariantsForStructuredPlan(task, pack),
+		DomainConstraints: constraints,
+	}
+}
+
+func inferSubsystemFromPlanContext(task Task, pack ContextPack) string {
+	if task.ActiveFile != "" {
+		return strings.TrimSpace(task.ActiveFile)
+	}
+	if pack.ModuleName != "" {
+		return pack.ModuleName
+	}
+	return "coding workflow"
+}
+
+func defaultContractsForStructuredPlan(task Task, pack ContextPack) []string {
+	contracts := []string{"Keep the change aligned with the intended behavior of the active task."}
+	if len(pack.TestFiles) > 0 {
+		contracts = append(contracts, "Tests and implementation should reflect the same intended contract.")
+	}
+	return contracts
+}
+
+func defaultInvariantsForStructuredPlan(task Task, pack ContextPack) []string {
+	invariants := []string{"Keep the change scoped to the evidence gathered for the task."}
+	if task.ActiveFile != "" {
+		invariants = append(invariants, "Prefer the active file and its nearby dependencies before widening scope.")
+	}
+	return invariants
+}
+
+func defaultValidationForStructuredStep(idx, total int, pack ContextPack) []string {
+	validation := []string{"review the resulting diff"}
+	if len(pack.TestFiles) > 0 {
+		validation = append(validation, fmt.Sprintf("run or inspect relevant tests: %s", strings.Join(pack.TestFiles, ", ")))
+	}
+	if idx == total-1 {
+		validation = append(validation, "confirm the change satisfies the original request")
+	}
+	return validation
+}
+
+func defaultFilesForStructuredStep(task Task, pack ContextPack) []string {
+	files := make([]string, 0, len(pack.RelatedFiles)+len(pack.DependencyFiles)+1)
+	if task.ActiveFile != "" {
+		files = append(files, task.ActiveFile)
+	}
+	for _, file := range pack.RelatedFiles {
+		if file != "" && !contains(files, file) {
+			files = append(files, file)
+		}
+	}
+	for _, file := range pack.DependencyFiles {
+		if file != "" && !contains(files, file) {
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
+func defaultEvidenceForStructuredStep(idx, total int, task Task, pack ContextPack) []string {
+	evidence := []string{"local behavior or state evidence from the current context"}
+	if idx == 0 {
+		evidence = []string{"target scope", "current behavior or current state", "nearest supporting context"}
+	}
+	if len(pack.TestFiles) > 0 {
+		evidence = append(evidence, fmt.Sprintf("validation evidence from %s", strings.Join(pack.TestFiles, ", ")))
+	}
+	lower := strings.ToLower(strings.TrimSpace(task.Description))
+	if strings.Contains(lower, "store") || strings.Contains(lower, "database") {
+		evidence = append(evidence, "schema and result-shape evidence")
+	}
+	if strings.Contains(lower, "space") || strings.Contains(lower, "knowledge") {
+		evidence = append(evidence, "retrieval or knowledge-state evidence")
+	}
+	if idx == total-1 {
+		evidence = append(evidence, "final validation outcome")
+	}
+	return evidence
+}
+
+func defaultDecisionRuleForStructuredStep(idx, total int, task Task, pack ContextPack) string {
+	lower := strings.ToLower(strings.TrimSpace(task.Description))
+	if idx == 0 {
+		if len(pack.TestFiles) > 0 {
+			return "Decide whether the issue is in the implementation, the expectation, or missing context before changing anything."
+		}
+		return "Decide the narrowest correct next action from the observed context before mutating state."
+	}
+	if strings.Contains(lower, "store") || strings.Contains(lower, "database") {
+		return "Prefer the smallest store operation or query change that matches observed schema and expected result contract."
+	}
+	if strings.Contains(lower, "space") || strings.Contains(lower, "knowledge") {
+		return "Prefer the narrowest retrieval or knowledge mutation scope that preserves the intended knowledge contract."
+	}
+	if idx == total-1 {
+		return "Only conclude success when validation aligns with the original objective and no unresolved blocker remains."
+	}
+	return "Prefer the smallest change or operation that satisfies the current step without broadening scope."
+}
+
+func defaultAllowedScopeForStructuredStep(idx, total int, task Task, pack ContextPack) string {
+	if idx == 0 {
+		return "analysis only"
+	}
+	if idx == total-1 {
+		return "validation and summary only"
+	}
+	lower := strings.ToLower(strings.TrimSpace(task.Description))
+	if strings.Contains(lower, "store") || strings.Contains(lower, "database") {
+		return "narrow store operation or query change only"
+	}
+	if strings.Contains(lower, "space") || strings.Contains(lower, "knowledge") {
+		return "narrow retrieval or knowledge mutation only"
+	}
+	if len(pack.TestFiles) > 0 {
+		return "localized code and/or expectation change only"
+	}
+	return "localized change only"
+}
+
+func defaultNotesForStructuredStep(idx, total int, task Task, pack ContextPack) []string {
+	notes := []string{}
+	if idx == 0 && strings.TrimSpace(pack.CodeStructureSummary) != "" {
+		notes = append(notes, "structure: "+pack.CodeStructureSummary)
+	}
+	if strings.TrimSpace(pack.RepositorySummary) != "" {
+		notes = append(notes, "context: "+pack.RepositorySummary)
+	}
+	if idx == total-1 {
+		notes = append(notes, "summarize what changed and what remains uncertain")
+	}
+	if strings.TrimSpace(task.Description) != "" {
+		notes = append(notes, "task: "+strings.TrimSpace(task.Description))
+	}
+	return notes
+}
+
+func defaultExitCriteriaForStructuredStep(idx, total int, pack ContextPack) []string {
+	criteria := []string{"step result is captured in the plan context"}
+	if len(pack.TestFiles) > 0 {
+		criteria = append(criteria, "relevant tests pass or are explicitly accounted for")
+	}
+	if idx == total-1 {
+		criteria = append(criteria, "execution can hand off cleanly to final validation")
+	}
+	return criteria
+}
+
+func defaultCompletionGateRequirements(pack ContextPack) []string {
+	requirements := []string{"Current objective is satisfied or the blocking condition is explicit."}
+	if len(pack.TestFiles) > 0 {
+		requirements = append(requirements, "The most relevant validation step has been rerun or the blocker is recorded.")
+	}
+	requirements = append(requirements, "The final summary states what changed and what remains uncertain.")
+	return requirements
+}
+
+func buildStructuredPlannerPrompt(task Task, state RunState, pack ContextPack) (string, error) {
+	domain := inferPlanDomain(task, state, pack)
+	planningContext := ""
+	if defaultSharedPlanningContextResolver != nil {
+		planningContext = defaultSharedPlanningContextResolver(queryTextForPlanningPrompt(task, pack), domain)
+	}
+	domainGuidance := domainSpecificPlannerGuidance(domain)
+	planQualityRules := []string{
+		"- Every step must explain what to inspect or change, why it matters, and how it will be validated.",
+		"- Prefer structural context over vague choreography: targets, contracts, invariants, decision rules, and validation must be explicit.",
+		"- Keep the plan narrow and operational; avoid broad speculative rewrites.",
+		"- If the task is a repair, include a decision rule that distinguishes stale expectations from broken implementation or incorrect operations.",
+		"- If the task is a design or feature change, make slice boundaries and acceptance checks explicit before broad execution.",
+	}
+	examples := plannerPromptExamples(domain)
+	payload := map[string]any{
+		"task":               task,
+		"state":              state,
+		"pack":               pack,
+		"domain":             domain,
+		"capability_context": planningContext,
+		"planner_guidance":   domainGuidance,
+	}
+	bytes, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`You are a domain-agnostic execution planner for an AI agent.
+
+Generate a strict JSON structured plan that can be persisted in workstream state and executed step-by-step.
+
+Requirements:
+- Use the provided context only.
+- Produce a plan that is narrow, grounded, and operational.
+- Include structural context: subsystem, primary targets, supporting targets, interfaces, contracts, invariants, and domain constraints when available.
+- For each step include: step_id, step_domain, goal, files, evidence_to_collect, decision_rule, allowed_change_scope, action_instruction, validation, exit_criteria, escalate_if, status, notes.
+- Default each step status to "pending".
+- Use concise, actionable language.
+- Do not wrap the JSON in markdown.
+
+Quality bar:
+%s
+
+Domain-specific planning guidance:
+%s
+
+Examples:
+%s
+
+Context:
+%s`, strings.Join(planQualityRules, "\n"), domainGuidance, examples, string(bytes)), nil
+}
+
+func domainSpecificPlannerGuidance(domain string) string {
+	switch strings.TrimSpace(strings.ToLower(domain)) {
+	case "stores":
+		return strings.Join([]string{
+			"- For Stores, identify target databases or stores, schema assumptions, relation boundaries, and whether the plan is read-only or mutating.",
+			"- Good plans mention result-shape validation and the specific store operation or script boundary.",
+		}, "\n")
+	case "spaces":
+		return strings.Join([]string{
+			"- For Spaces, identify target spaces, category scope, retrieval inputs, mutation boundaries, and semantic integrity expectations.",
+			"- Good plans mention the expected retrieval or knowledge-state outcome after each mutation step.",
+		}, "\n")
+	case "desktop":
+		return strings.Join([]string{
+			"- For Desktop, identify working directory, command scope, filesystem boundaries, and command validation steps.",
+			"- Good plans distinguish bounded inspection commands from commands that mutate local state.",
+		}, "\n")
+	default:
+		return strings.Join([]string{
+			"- For Coding, identify subsystem, primary files, supporting files, interfaces, tests, and behavior contracts.",
+			"- Good plans distinguish code defects, stale tests, and broader architectural mismatch before editing.",
+		}, "\n")
+	}
+}
+
+func plannerPromptExamples(domain string) string {
+	switch strings.TrimSpace(strings.ToLower(domain)) {
+	case "stores":
+		return strings.Join([]string{
+			"- Example step goal: Inspect the target store schema before mutating query logic.",
+			"- Example decision rule: If the result shape differs from the schema expectation, verify the store path before changing the script.",
+			"- Example validation: run the read-only scan and verify the expected records or mutation count.",
+		}, "\n")
+	case "spaces":
+		return strings.Join([]string{
+			"- Example step goal: Inspect the target space scope and the current knowledge surface.",
+			"- Example decision rule: If retrieval is wrong, distinguish stale expectation from stale knowledge before mutating content.",
+			"- Example validation: confirm the intended retrieval or knowledge-state outcome after the change.",
+		}, "\n")
+	case "desktop":
+		return strings.Join([]string{
+			"- Example step goal: Inspect the repository or workspace state with a bounded command.",
+			"- Example decision rule: If the command can mutate state, require the narrowest scope and explicit validation path.",
+			"- Example validation: verify command output and resulting filesystem or git state.",
+		}, "\n")
+	default:
+		return strings.Join([]string{
+			"- Example step goal: Compare the failing behavior to the nearest implementation path.",
+			"- Example decision rule: Distinguish stale expectations from broken implementation before editing code or tests.",
+			"- Example validation: rerun the narrowest relevant test or check before widening scope.",
+		}, "\n")
+	}
+}
+
+var defaultSharedPlanningContextResolver func(query string, domain string) string
+
+// SetDefaultPlanningContextResolver lets the host inject capability-provided planning context
+// into the shared planner prompt without changing the Planner contract.
+func SetDefaultPlanningContextResolver(resolver func(query string, domain string) string) {
+	defaultSharedPlanningContextResolver = resolver
+}
+
+func queryTextForPlanningPrompt(task Task, pack ContextPack) string {
+	if strings.TrimSpace(task.Description) != "" {
+		return strings.TrimSpace(task.Description)
+	}
+	if strings.TrimSpace(pack.ContinuationSummary) != "" {
+		return strings.TrimSpace(pack.ContinuationSummary)
+	}
+	return ""
+}
+
+func structuredPlannerResponseSchema() map[string]any {
+	stepSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"step_id":              map[string]any{"type": "string"},
+			"step_domain":          map[string]any{"type": "string"},
+			"goal":                 map[string]any{"type": "string"},
+			"files":                map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"evidence_to_collect":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"decision_rule":        map[string]any{"type": "string"},
+			"allowed_change_scope": map[string]any{"type": "string"},
+			"action_instruction":   map[string]any{"type": "string"},
+			"validation":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"exit_criteria":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"escalate_if":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"status":               map[string]any{"type": "string"},
+			"notes":                map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+		"required": []string{"goal", "action_instruction"},
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"objective":      map[string]any{"type": "string"},
+			"workflow_shape": map[string]any{"type": "string"},
+			"domain":         map[string]any{"type": "string"},
+			"system_context": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"subsystem":          map[string]any{"type": "string"},
+					"primary_targets":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"supporting_targets": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"interfaces":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"contracts":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"invariants":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"domain_constraints": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
+			},
+			"steps": map[string]any{"type": "array", "items": stepSchema},
+			"completion_gate": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"requirements": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
+			},
+		},
+		"required": []string{"objective", "workflow_shape", "steps"},
+	}
+}
+
+func parseStructuredPlannerResponse(text string) (StructuredPlan, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return StructuredPlan{}, false
+	}
+	var plan StructuredPlan
+	if err := json.Unmarshal([]byte(trimmed), &plan); err == nil {
+		return plan, true
+	}
+	if cleaned := extractJSONFromMarkdownLocal(trimmed); cleaned != "" {
+		if err := json.Unmarshal([]byte(cleaned), &plan); err == nil {
+			return plan, true
+		}
+	}
+	return StructuredPlan{}, false
+}
+
+func extractJSONFromMarkdownLocal(text string) string {
+	start := strings.Index(text, "```")
+	if start == -1 {
+		return ""
+	}
+	remainder := text[start+3:]
+	if strings.HasPrefix(strings.ToLower(remainder), "json") {
+		remainder = remainder[4:]
+	}
+	end := strings.Index(remainder, "```")
+	if end == -1 {
+		return ""
+	}
+	return strings.TrimSpace(remainder[:end])
+}
+
+func normalizeStructuredPlan(plan StructuredPlan, task Task, state RunState, pack ContextPack) StructuredPlan {
+	if strings.TrimSpace(plan.Objective) == "" {
+		plan.Objective = strings.TrimSpace(task.Description)
+	}
+	if strings.TrimSpace(plan.Objective) == "" {
+		plan.Objective = "Complete the requested task"
+	}
+	if strings.TrimSpace(plan.Domain) == "" {
+		plan.Domain = inferPlanDomain(task, state, pack)
+	}
+	if strings.TrimSpace(plan.WorkflowShape) == "" {
+		plan.WorkflowShape = defaultWorkflowShape(task, pack)
+	}
+	if len(plan.SystemContext.PrimaryTargets) == 0 && len(plan.SystemContext.SupportingTargets) == 0 {
+		plan.SystemContext = defaultStructuredSystemContext(task, pack)
+	}
+	if len(plan.CompletionGate.Requirements) == 0 {
+		plan.CompletionGate.Requirements = defaultCompletionGateRequirements(pack)
+	}
+	if len(plan.Steps) == 0 {
+		plan = buildStructuredPlanFromBase(task, pack, plan.Domain, plan.WorkflowShape, []string{"inspect relevant context", "define the next safe action", "validate the result"})
+		return plan
+	}
+	for idx := range plan.Steps {
+		if strings.TrimSpace(plan.Steps[idx].StepID) == "" {
+			plan.Steps[idx].StepID = fmt.Sprintf("step_%d", idx+1)
+		}
+		if strings.TrimSpace(plan.Steps[idx].StepDomain) == "" {
+			plan.Steps[idx].StepDomain = plan.Domain
+		}
+		if strings.TrimSpace(plan.Steps[idx].Status) == "" {
+			plan.Steps[idx].Status = "pending"
+		}
+		if len(plan.Steps[idx].Files) == 0 {
+			plan.Steps[idx].Files = defaultFilesForStructuredStep(task, pack)
+		}
+		if len(plan.Steps[idx].EvidenceToCollect) == 0 {
+			plan.Steps[idx].EvidenceToCollect = defaultEvidenceForStructuredStep(idx, len(plan.Steps), task, pack)
+		}
+		if strings.TrimSpace(plan.Steps[idx].DecisionRule) == "" {
+			plan.Steps[idx].DecisionRule = defaultDecisionRuleForStructuredStep(idx, len(plan.Steps), task, pack)
+		}
+		if strings.TrimSpace(plan.Steps[idx].AllowedChangeScope) == "" {
+			plan.Steps[idx].AllowedChangeScope = defaultAllowedScopeForStructuredStep(idx, len(plan.Steps), task, pack)
+		}
+		if len(plan.Steps[idx].Validation) == 0 {
+			plan.Steps[idx].Validation = defaultValidationForStructuredStep(idx, len(plan.Steps), pack)
+		}
+		if len(plan.Steps[idx].ExitCriteria) == 0 {
+			plan.Steps[idx].ExitCriteria = defaultExitCriteriaForStructuredStep(idx, len(plan.Steps), pack)
+		}
+		if len(plan.Steps[idx].Notes) == 0 {
+			plan.Steps[idx].Notes = defaultNotesForStructuredStep(idx, len(plan.Steps), task, pack)
+		}
+	}
+	if plan.CurrentStep < 0 || plan.CurrentStep >= len(plan.Steps) {
+		plan.CurrentStep = 0
+	}
+	return plan
+}
+
+func inferPlanDomain(task Task, state RunState, pack ContextPack) string {
+	if state.Metadata != nil {
+		if domain := strings.TrimSpace(state.Metadata["domain"]); domain != "" {
+			return domain
+		}
+	}
+	if state.Args != nil {
+		if domain := strings.TrimSpace(state.Args["domain"]); domain != "" {
+			return domain
+		}
+	}
+	return "coding_workflow"
+}
+
+func defaultWorkflowShape(task Task, pack ContextPack) string {
+	if pack.TaskType == "planning" {
+		return "design_implementation"
+	}
+	if pack.TaskType == "analysis" {
+		return "analysis"
+	}
+	if pack.TaskType == "generation" {
+		return "generation"
+	}
+	return "implementation"
 }
 
 // DefaultRepoIndexer returns a lightweight list of repository files.

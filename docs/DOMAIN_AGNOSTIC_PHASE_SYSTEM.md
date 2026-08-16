@@ -61,6 +61,8 @@ BuildExecutionContext(ExecutionContextInput{
 
 ## Architecture Design
 
+For the next-step design that makes the planner LLM-authored, persists structured plans in workstream state, and executes them step-by-step across domains, see [STRUCTURED_PLANNER_EXECUTION_DESIGN.md](STRUCTURED_PLANNER_EXECUTION_DESIGN.md).
+
 ### Principle: Separation of Concerns
 
 **Planner** (Universal):

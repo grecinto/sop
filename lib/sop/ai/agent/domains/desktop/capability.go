@@ -143,6 +143,51 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 	return "Structured Context: Desktop Automation\n- Use local automation tools for shell, git, file, and workspace tasks when the request involves repository work, local file editing, or developer workflow operations."
 }
 
+func (c *Capability) BuildPlanningContext(query string, state capabilities.RoutingState) string {
+	parts := []string{
+		"Desktop Planning Context",
+		"- Domain focus: local shell, git, file, and workspace automation.",
+		"- Primary planning concerns: working directory, command scope, shell state, filesystem boundaries, and safety of local actions.",
+		"- Prefer predictable sequential command plans unless the user explicitly requests background or parallel execution.",
+		"- Validation should prove the command outcome and resulting workspace state.",
+	}
+	if domain := strings.TrimSpace(state.Domain); domain != "" {
+		parts = append(parts, "- Active domain routing: "+domain)
+	}
+	lower := strings.ToLower(strings.TrimSpace(query))
+	if strings.Contains(lower, "git") || strings.Contains(lower, "shell") || strings.Contains(lower, "command") {
+		parts = append(parts, "- Command rule: keep commands bounded to the explicit repository or workspace context before expanding scope.")
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (c *Capability) EvaluateStepCompletion(query string, state capabilities.RoutingState, actionText string, validation []string, toolCalls []ai.ToolCall, outcomeFacts []string) bool {
+	_ = query
+	_ = state
+	text := strings.ToLower(strings.TrimSpace(actionText + " " + strings.Join(validation, " ")))
+	for _, toolCall := range toolCalls {
+		toolName := strings.ToLower(strings.TrimSpace(toolCall.Name))
+		if toolName == "" {
+			continue
+		}
+		switch {
+		case strings.Contains(text, "inspect") || strings.Contains(text, "list") || strings.Contains(text, "check"):
+			if strings.Contains(toolName, "execute_local_command") {
+				return true
+			}
+		case strings.Contains(text, "run") || strings.Contains(text, "execute") || strings.Contains(text, "command") || strings.Contains(text, "git"):
+			if strings.Contains(toolName, "execute_local_command") {
+				return true
+			}
+		case strings.Contains(text, "validate") || strings.Contains(text, "verify"):
+			if strings.Contains(toolName, "execute_local_command") {
+				return true
+			}
+		}
+	}
+	return len(toolCalls) > 0 && len(outcomeFacts) > 0
+}
+
 func (c *Capability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
 	base := capabilities.NewGuidanceProfile(capabilities.GuidanceIntensityLight, "Guide local automation and shell workflows safely")
 	base.Principles = []string{"Prefer predictable sequential steps unless the user explicitly requests parallel execution"}

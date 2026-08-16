@@ -76,6 +76,8 @@ func (a *CopilotAgent) getFocusedExecutionContext(ctx context.Context, query str
 	}
 
 	switch {
+	case isCodingWorkflowTaskClassification(taskClassification):
+		return a.buildCodingFocusedExecutionContext(query, taskClassification)
 	case strings.EqualFold(taskClassification.Domain, StoresDomain):
 		return a.buildStoresFocusedExecutionContext(ctx, taskClassification)
 	case strings.EqualFold(taskClassification.Domain, SpacesDomain):
@@ -83,6 +85,77 @@ func (a *CopilotAgent) getFocusedExecutionContext(ctx context.Context, query str
 	default:
 		return a.buildAutomationFamilyFocusedExecutionContext(ctx, query, taskClassification)
 	}
+}
+
+func (a *CopilotAgent) buildCodingFocusedExecutionContext(query string, taskClassification TaskContextClassification) string {
+	classification := taskClassification.AskClassification
+	if classification == nil {
+		classification = &AskTaskContext{
+			Domains:       []string{"coding_workflow"},
+			Phase:         taskClassification.CapabilityHint,
+			PhasePlan:     []string{"investigation", "planning", "execution"},
+			Intent:        "generate_code",
+			OriginalQuery: query,
+		}
+	}
+	currentPhase := normalizePhase(classification.Phase)
+	if currentPhase == "" {
+		currentPhase = normalizePhase(taskClassification.CapabilityHint)
+	}
+	if currentPhase == "" {
+		currentPhase = "investigation"
+	}
+	brief := a.currentExecutionBrief(classification, query)
+	hasAuthoredPlan := a.hasStoredPlanningArtifact()
+	requirePlanFirst := shouldRequirePlanFirstForCodingAsk(query, brief, hasAuthoredPlan)
+
+	lines := []string{
+		"Coding Execution Context",
+		"- Ask objective: complete as much of the active plan as possible in this Ask/ReAct turn before stopping.",
+		"- Stop only for clarification, approval, a real checkpoint, blocked validation, or genuine turn exhaustion.",
+		"- Do not externalize normal forward progress into phase movement when the next step can be completed in the current Ask/ReAct loop.",
+	}
+
+	if requirePlanFirst {
+		lines = append(lines,
+			"- Plan-first contract: before applying patches or running broad validation, call planning_build_context and planning_plan_changes to generate a concrete execution plan.",
+			"- Same-turn execution rule: after the plan is captured, continue directly into execution in this Ask/ReAct turn instead of stopping at the plan.",
+			"- Step-following rule: execute the planned steps in order, validate each meaningful change, and continue while the task remains local and safe.",
+		)
+	} else {
+		lines = append(lines,
+			"- Execution contract: use the active execution brief as the working sequence for this turn.",
+			"- Step progression: start with the current step, do the action, validate it, then continue to the next step while progress remains local and safe.",
+		)
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(query))
+	if strings.Contains(lower, "test") || strings.Contains(lower, "failing") {
+		lines = append(lines,
+			"- Failing-test policy: identify the exact failing tests, trace the failing path, make the smallest justified fix, rerun the narrowest relevant tests, and widen validation only when the local fix holds.",
+		)
+	}
+
+	if briefText := renderExecutionBrief(currentPhase, brief); briefText != "" {
+		lines = append(lines, briefText)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func shouldRequirePlanFirstForCodingAsk(query string, brief *ExecutionBrief, hasAuthoredPlan bool) bool {
+	if hasAuthoredPlan {
+		return false
+	}
+	if brief == nil {
+		return true
+	}
+	switch strings.TrimSpace(brief.WorkflowShape) {
+	case "checkpointed_fix", "feature_plan", "behavior_preserving_refactor":
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(query))
+	return strings.Contains(lower, "failing test") || strings.Contains(lower, "failing tests") || strings.Contains(lower, "fix failing")
 }
 
 func (a *CopilotAgent) buildCrossDomainFocusedExecutionContext(ctx context.Context, query string, taskClassification TaskContextClassification) string {
@@ -190,10 +263,18 @@ func filterAutomationFamiliesByPolicy(families []string) []string {
 }
 
 func (a *CopilotAgent) buildStoresFocusedExecutionContext(ctx context.Context, taskClassification TaskContextClassification) string {
+	structuredPlanText := ""
+	if plan := a.currentStructuredPlan(); plan != nil && (strings.EqualFold(plan.Domain, "stores") || strings.EqualFold(plan.Domain, "cross_domain")) {
+		structuredPlanText = renderStructuredPlanSummary(plan)
+	}
 	if a != nil && a.capabilityRegistry != nil {
 		if cap, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: StoresDomain}); ok {
 			if storesCap, ok := cap.(storesExecutionContextBuilder); ok {
-				return storesCap.BuildExecutionContext(a.storesExecutionContextInputFromTask(ctx, taskClassification))
+				base := storesCap.BuildExecutionContext(a.storesExecutionContextInputFromTask(ctx, taskClassification))
+				if structuredPlanText != "" {
+					return strings.TrimSpace(base + "\n\n" + structuredPlanText)
+				}
+				return base
 			}
 		}
 	}
@@ -263,14 +344,26 @@ func (a *CopilotAgent) buildStoresFocusedExecutionContext(ctx context.Context, t
 		sb.WriteString(buildScriptAuthoringContext(taskClassification.Domain, crudFlags))
 	}
 
-	return strings.TrimSpace(sb.String())
+	base := strings.TrimSpace(sb.String())
+	if structuredPlanText != "" {
+		return strings.TrimSpace(base + "\n\n" + structuredPlanText)
+	}
+	return base
 }
 
 func (a *CopilotAgent) buildSpacesFocusedExecutionContext(taskClassification TaskContextClassification) string {
+	structuredPlanText := ""
+	if plan := a.currentStructuredPlan(); plan != nil && (strings.EqualFold(plan.Domain, "spaces") || strings.EqualFold(plan.Domain, "cross_domain")) {
+		structuredPlanText = renderStructuredPlanSummary(plan)
+	}
 	if a != nil && a.capabilityRegistry != nil {
 		if cap, ok := a.capabilityRegistry.Resolve("", capabilities.RoutingState{Domain: SpacesDomain}); ok {
 			if spacesCap, ok := cap.(spacesExecutionContextBuilder); ok {
-				return spacesCap.BuildExecutionContext(a.spacesExecutionContextInputFromTask(taskClassification))
+				base := spacesCap.BuildExecutionContext(a.spacesExecutionContextInputFromTask(taskClassification))
+				if structuredPlanText != "" {
+					return strings.TrimSpace(base + "\n\n" + structuredPlanText)
+				}
+				return base
 			}
 		}
 	}
@@ -291,7 +384,11 @@ func (a *CopilotAgent) buildSpacesFocusedExecutionContext(taskClassification Tas
 		sb.WriteString(ops)
 	}
 
-	return strings.TrimSpace(sb.String())
+	base := strings.TrimSpace(sb.String())
+	if structuredPlanText != "" {
+		return strings.TrimSpace(base + "\n\n" + structuredPlanText)
+	}
+	return base
 }
 
 func (a *CopilotAgent) getActiveSessionDatabase(ctx context.Context) (*database.Database, string) {

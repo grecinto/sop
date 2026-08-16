@@ -10,6 +10,7 @@ import (
 
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	cw "github.com/sharedcode/sop/ai/agent/codingworkflow"
 	"github.com/sharedcode/sop/ai/agent/planner"
 )
 
@@ -183,6 +184,10 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	taskContext = a.applyQueuedPhaseActorContext(ctx, taskContext, persistedAskCtx)
 	taskContext = normalizeCodingRuntimeRouting(taskContext)
 	log.Info("Copilot Ask Routing", "routing_gate", taskContext.RoutingGate, "task_context", summarizeTaskContextForLog(*taskContext), "query", query)
+	if req := buildDefaultDomainOfferClarification(query, taskContext); req != nil {
+		a.updateClarificationState(ctx, query, "", nil, req)
+		return req.AssistantQuestion, nil
+	}
 
 	// 5. KB direct display fast path (same as V1)
 	if a.shouldDirectDisplayKB(taskContext) {
@@ -233,12 +238,20 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	// 7. Prompt construction and query enrichment (same as V1)
 	fullPrompt := a.buildSystemPrompt(ctx, query, *taskContext)
 	query = a.enrichQueryWithKBResults(query, taskContext)
+	previousStructuredPlanStep := -1
+	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		if thread := a.service.session.Memory.GetCurrentThread(); thread != nil && thread.StreamContext != nil && thread.StreamContext.StructuredPlan != nil {
+			previousStructuredPlanStep = thread.StreamContext.StructuredPlan.CurrentStep
+		}
+	}
 
 	// 8. Delegate to Reasoning engine/ReAct loop (same as V1)
 	finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, escalationState, clarificationRequest, err := a.reactLoop(ctx, query, gen, fullPrompt)
 	if err != nil {
 		return "", err
 	}
+	a.updateStructuredPlanProgressAfterTurn(taskContext.AskClassification, toolCalls, outcomeFacts, clarificationRequest)
+	a.enqueueStructuredPlanContinuationAfterTurn(query, taskContext.AskClassification, previousStructuredPlanStep, clarificationRequest)
 	a.refreshSessionCognitiveAssessment(ctx, query, taskContext.CapabilityHint, finalText, toolCalls, escalationState, clarificationRequest, gen)
 	finalText = appendAskCompletionSummary(ctx, finalText, toolCalls, outcomeFacts)
 	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
@@ -265,6 +278,26 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, clarificationRequest)
 
 	return finalText, nil
+}
+
+func buildDefaultDomainOfferClarification(query string, taskContext *TaskContextClassification) *ai.ClarificationRequest {
+	if taskContext == nil || taskContext.AskClassification == nil || !taskContext.AskClassification.DomainOfferNeeded {
+		return nil
+	}
+	question := ""
+	if isDaemonPreferredDomainEnvironment() {
+		question = "Do you want to work in coding/repo changes or desktop/local commands?"
+	} else {
+		question = "Do you want to work in Stores or Spaces?"
+	}
+	return &ai.ClarificationRequest{
+		TargetQuery:       strings.TrimSpace(query),
+		AssistantQuestion: question,
+		MissingFact:       "domain or area of work",
+		Reason:            "default domains are only a suggested offer when the ask is ambiguous",
+		Source:            compatibleClarificationToolName,
+		Status:            "pending",
+	}
 }
 
 // evaluateAskRoutingGates is the Ask-pipeline version of three-gate routing.
@@ -438,6 +471,7 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 
 				if currentIndex < len(rawPlannedPhases) {
 					currentPhase = resolveActiveCodingRuntimePhase(classification, rawPlannedPhases[currentIndex])
+					a.attachExecutionBriefToCurrentWorkStream(classification, plannedPhases, classification.OriginalQuery)
 					log.Info("Resuming WorkStream from existing PhasePlan",
 						"plan", plannedPhases,
 						"current_index", currentIndex,
@@ -476,6 +510,7 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 	if err := stm.CreatePhasePlan(plan, checkpoints, classification.Reasoning, classification.Confidence); err != nil {
 		log.Warn("Failed to store PhasePlan in WorkStream", "error", err)
 	} else {
+		a.attachExecutionBriefToCurrentWorkStream(classification, plan, classification.OriginalQuery)
 		log.Info("Created PhasePlan in WorkStream",
 			"plan", plan,
 			"checkpoints", checkpoints,
@@ -626,18 +661,13 @@ func (a *CopilotAgent) createPhaseProxies(domains []string, currentPhase string,
 }
 
 func resolveDomainToolPhases(domain, currentPhase string, classification *AskTaskContext) []string {
+	_ = classification
 	domain = strings.TrimSpace(strings.ToLower(domain))
 	currentPhase = normalizePhase(currentPhase)
 	if currentPhase == "" {
 		currentPhase = "investigation"
 	}
-	if domain != "coding_workflow" && domain != "coding" && domain != "codingworkflow" {
-		return []string{currentPhase}
-	}
-	if useCodingImplementationBundle(classification, currentPhase) {
-		return []string{"investigation", "planning", "execution"}
-	}
-	return []string{"investigation", "planning"}
+	return []string{currentPhase}
 }
 
 func useCodingImplementationBundle(classification *AskTaskContext, currentPhase string) bool {
@@ -887,6 +917,9 @@ func (a *CopilotAgent) buildPhasePrompt(ctx context.Context, query string, class
 	if synthesis != "" {
 		phaseContext = synthesis + "\n\n"
 	}
+	if executionBrief := renderExecutionBrief(classification.Phase, a.currentExecutionBrief(classification, query)); executionBrief != "" {
+		phaseContext += executionBrief + "\n\n"
+	}
 
 	phaseContext += fmt.Sprintf("=== Phase System V2 ===\nCurrent Phase: %s\nDomains: %s\nPhasePlan: %s\n\n%s",
 		classification.Phase,
@@ -999,9 +1032,21 @@ func (a *CopilotAgent) getOrCreateSharedInfra() *planner.SharedInfrastructure {
 
 	// Reuse the existing local automation command path for desktop phase tools.
 	infra.LocalCommandExecutor = a.toolExecuteLocalCommand
+	infra.LLMAccessor = func(ctx context.Context) (any, error) {
+		if a == nil || a.brain == nil {
+			return nil, fmt.Errorf("LLM (brain) not available")
+		}
+		return a.brain, nil
+	}
+	infra.PlanningContextResolver = a.resolvePlanningContextForDomain
+	cw.SetDefaultPlanningContextResolver(infra.PlanningContextResolver)
+	infra.Planner = cw.NewLLMPlanner(infra.LLMAccessor, infra.Planner)
 
 	// Inject PhasePlanMutator for dynamic phase plan modification (LLM orchestration)
 	infra.PhasePlanMutator = planner.NewSTMPhasePlanMutator(a.getSTMForPhaseCapabilities)
+	if a != nil && a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		infra.Memory = &sessionWorkflowMemoryAdapter{stm: a.service.session.Memory}
+	}
 
 	// Enable adaptive classification and dynamic plan mutation (LLM orchestration)
 	classificationHistory := planner.NewClassificationHistory()

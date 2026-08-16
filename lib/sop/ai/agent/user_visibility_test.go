@@ -486,6 +486,29 @@ func (a *contextTestAdapter) SetPhasePlan(plan codingworkflow.PhasePlanReader) {
 	// In production, this would properly copy the plan data
 }
 
+func (a *contextTestAdapter) GetStructuredPlan() codingworkflow.StructuredPlanReader {
+	if a.ctx == nil || a.ctx.StructuredPlan == nil {
+		return nil
+	}
+	return &structuredPlanAdapter{plan: a.ctx.StructuredPlan}
+}
+
+func (a *contextTestAdapter) SetStructuredPlan(plan codingworkflow.StructuredPlanReader) {
+	if a.ctx == nil || plan == nil {
+		return
+	}
+	a.ctx.StructuredPlan = &codingworkflow.StructuredPlan{
+		Objective:      plan.GetObjective(),
+		WorkflowShape:  plan.GetWorkflowShape(),
+		Domain:         plan.GetDomain(),
+		SystemContext:  plan.GetSystemContext(),
+		Steps:          append([]codingworkflow.StructuredPlanStep(nil), plan.GetSteps()...),
+		CurrentStep:    plan.GetCurrentStep(),
+		CompletedSteps: append([]string(nil), plan.GetCompletedSteps()...),
+		CompletionGate: plan.GetCompletionGate(),
+	}
+}
+
 func (a *contextTestAdapter) GetMultiStepPlan() codingworkflow.MultiStepPlanReader {
 	// Test stub - return nil
 	return nil

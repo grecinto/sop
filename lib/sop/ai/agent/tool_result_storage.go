@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -86,6 +87,9 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, rawResult string) 
 	if storage == nil {
 		return rawResult, nil
 	}
+	if shouldBypassToolResultStorage(toolName) {
+		return rawResult, nil
+	}
 
 	hadEnvelope := isToolResultEnvelope(rawResult)
 	resultText, hint, _, _ := unwrapToolResultEnvelopeFull(rawResult)
@@ -113,6 +117,15 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, rawResult string) 
 		return inline, nil
 	}
 	return string(wrapped), nil
+}
+
+func shouldBypassToolResultStorage(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "list_tool_results", "read_tool_result", "grep_tool_result", "analyze_tool_result":
+		return true
+	default:
+		return false
+	}
 }
 
 func isToolResultEnvelope(rawResult string) bool {
@@ -511,14 +524,99 @@ func (s *ToolResultStorage) ListStoredResults() ([]StoredResult, error) {
 	return results, nil
 }
 
-// ReadResultLines reads a line range from a stored result file
-func (s *ToolResultStorage) ReadResultLines(filePath string, startLine, endLine int) (string, error) {
-	// Validate file is in session directory
-	if !strings.HasPrefix(filePath, s.baseDir) {
-		return "", fmt.Errorf("file path is outside session directory")
+func (s *ToolResultStorage) resolveStoredResultPath(filePath string) (string, error) {
+	trimmed := strings.TrimSpace(filePath)
+	if trimmed == "" {
+		return "", fmt.Errorf("file path is required")
 	}
 
-	content, err := os.ReadFile(filePath)
+	candidate := trimmed
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(s.baseDir, candidate)
+	}
+
+	if resolved, ok, err := s.resolveStoredResultExact(candidate); err != nil {
+		return "", err
+	} else if ok {
+		return resolved, nil
+	}
+
+	if resolved, ok, err := s.resolveStoredResultGlob(candidate); err != nil {
+		return "", err
+	} else if ok {
+		return resolved, nil
+	}
+
+	baseName := filepath.Base(trimmed)
+	if resolved, ok, err := s.resolveStoredResultExact(filepath.Join(s.baseDir, baseName)); err != nil {
+		return "", err
+	} else if ok {
+		return resolved, nil
+	}
+
+	if strings.HasSuffix(baseName, ".txt") {
+		stem := strings.TrimSuffix(baseName, ".txt")
+		if resolved, ok, err := s.resolveStoredResultGlob(filepath.Join(s.baseDir, stem+"-*.txt")); err != nil {
+			return "", err
+		} else if ok {
+			return resolved, nil
+		}
+	}
+
+	return "", nil
+}
+
+func (s *ToolResultStorage) resolveStoredResultExact(candidate string) (string, bool, error) {
+	cleaned := filepath.Clean(candidate)
+	if !strings.HasPrefix(cleaned, s.baseDir) {
+		return "", false, fmt.Errorf("file path is outside session directory")
+	}
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("failed to stat result file: %w", err)
+	}
+	if info.IsDir() {
+		return "", false, nil
+	}
+	return cleaned, true, nil
+}
+
+func (s *ToolResultStorage) resolveStoredResultGlob(pattern string) (string, bool, error) {
+	prefix := pattern
+	if idx := strings.IndexAny(pattern, "*?["); idx >= 0 {
+		prefix = pattern[:idx]
+	}
+	base := filepath.Clean(filepath.Dir(prefix))
+	if !strings.HasPrefix(base, s.baseDir) {
+		return "", false, fmt.Errorf("file path is outside session directory")
+	}
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", false, fmt.Errorf("invalid file path pattern: %w", err)
+	}
+	if len(matches) == 0 {
+		return "", false, nil
+	}
+	if len(matches) > 1 {
+		return "", false, fmt.Errorf("file path pattern matched %d files; provide a more specific path", len(matches))
+	}
+	return filepath.Clean(matches[0]), true, nil
+}
+
+// ReadResultLines reads a line range from a stored result file
+func (s *ToolResultStorage) ReadResultLines(filePath string, startLine, endLine int) (string, error) {
+	resolvedPath, err := s.resolveStoredResultPath(filePath)
+	if err != nil {
+		return "", err
+	}
+	if resolvedPath == "" {
+		return "", nil
+	}
+
+	content, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -549,12 +647,15 @@ func (s *ToolResultStorage) ReadResultLines(filePath string, startLine, endLine 
 
 // GrepResult searches for a pattern in a stored result file
 func (s *ToolResultStorage) GrepResult(filePath, pattern string, maxMatches int) ([]GrepMatch, error) {
-	// Validate file is in session directory
-	if !strings.HasPrefix(filePath, s.baseDir) {
-		return nil, fmt.Errorf("file path is outside session directory")
+	resolvedPath, err := s.resolveStoredResultPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if resolvedPath == "" {
+		return nil, nil
 	}
 
-	content, err := os.ReadFile(filePath)
+	content, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -564,9 +665,16 @@ func (s *ToolResultStorage) GrepResult(filePath, pattern string, maxMatches int)
 
 	lines := strings.Split(string(content), "\n")
 	var matches []GrepMatch
+	trimmedPattern := strings.TrimSpace(pattern)
+	matcher := func(line string) bool {
+		return strings.Contains(strings.ToLower(line), strings.ToLower(trimmedPattern))
+	}
+	if re, compileErr := regexp.Compile("(?i)" + trimmedPattern); compileErr == nil {
+		matcher = re.MatchString
+	}
 
 	for lineNum, line := range lines {
-		if strings.Contains(line, pattern) {
+		if matcher(line) {
 			matches = append(matches, GrepMatch{
 				LineNumber: lineNum + 1, // 1-indexed
 				Content:    line,
@@ -584,11 +692,15 @@ func (s *ToolResultStorage) GrepResult(filePath, pattern string, maxMatches int)
 // AnalyzeResult performs lightweight line-oriented analysis on a stored result file.
 // Supported operations: grep, awk, sed, head, tail, wc, cat.
 func (s *ToolResultStorage) AnalyzeResult(filePath, operation, pattern string, startLine, endLine, maxMatches int) (string, error) {
-	if !strings.HasPrefix(filePath, s.baseDir) {
-		return "", fmt.Errorf("file path is outside session directory")
+	resolvedPath, err := s.resolveStoredResultPath(filePath)
+	if err != nil {
+		return "", err
+	}
+	if resolvedPath == "" {
+		return "", nil
 	}
 
-	content, err := os.ReadFile(filePath)
+	content, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -617,7 +729,7 @@ func (s *ToolResultStorage) AnalyzeResult(filePath, operation, pattern string, s
 			}
 		}
 		if len(matches) == 0 {
-			return fmt.Sprintf("No matches found for pattern '%s' in %s", pattern, filepath.Base(filePath)), nil
+			return fmt.Sprintf("No matches found for pattern '%s' in %s", pattern, filepath.Base(resolvedPath)), nil
 		}
 		return strings.Join(matches, "\n"), nil
 	case "sed":
