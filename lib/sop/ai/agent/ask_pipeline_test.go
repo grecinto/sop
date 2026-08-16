@@ -531,8 +531,8 @@ func TestApplyQueuedPhaseActorContext_CanonicalizesNonActiveCodingQueuedActor(t 
 		PhasePlan: []string{"investigation", "planning", "execution"},
 	}
 	taskCtx := ag.applyQueuedPhaseActorContext(ctx, &TaskContextClassification{}, persisted)
-	if taskCtx.CapabilityHint != "execution" {
-		t.Fatalf("expected non-active coding queued actor review to canonicalize to execution, got %q", taskCtx.CapabilityHint)
+	if taskCtx.CapabilityHint != codingRuntimeModeImplementation {
+		t.Fatalf("expected non-active coding queued actor review to canonicalize to implementation runtime, got %q", taskCtx.CapabilityHint)
 	}
 	if taskCtx.AskClassification == nil || taskCtx.AskClassification.Phase != "execution" {
 		t.Fatalf("expected persisted classification phase to normalize to execution, got %+v", taskCtx.AskClassification)
@@ -542,7 +542,7 @@ func TestApplyQueuedPhaseActorContext_CanonicalizesNonActiveCodingQueuedActor(t 
 func TestNormalizeCodingRuntimeRouting_UsesImplementationSurfaceForActionOrientedCodingAsk(t *testing.T) {
 	taskCtx := normalizeCodingRuntimeRouting(&TaskContextClassification{
 		Domain:         "coding_workflow",
-		CapabilityHint: "planning",
+		CapabilityHint: codingRuntimeModeDiscovery,
 		AskClassification: &AskTaskContext{
 			Domains:       []string{"coding_workflow"},
 			Phase:         "planning",
@@ -552,8 +552,8 @@ func TestNormalizeCodingRuntimeRouting_UsesImplementationSurfaceForActionOriente
 			OriginalQuery: "fix failing tests in the repository",
 		},
 	})
-	if taskCtx.CapabilityHint != "execution" {
-		t.Fatalf("expected action-oriented coding ask to select execution runtime surface, got %q", taskCtx.CapabilityHint)
+	if taskCtx.CapabilityHint != codingRuntimeModeImplementation {
+		t.Fatalf("expected action-oriented coding ask to select implementation runtime surface, got %q", taskCtx.CapabilityHint)
 	}
 	if taskCtx.AskClassification == nil || taskCtx.AskClassification.Phase != "planning" {
 		t.Fatalf("expected Ask classification to preserve entry-phase semantics, got %+v", taskCtx.AskClassification)

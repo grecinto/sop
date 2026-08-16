@@ -54,6 +54,42 @@ func buildTaskGuidanceSynthesis(query string, taskClassification TaskContextClas
 		return ""
 	}
 
+	if isCodingWorkflowTaskClassification(taskClassification) {
+		runtimeMode := inferCodingRuntimeMode(taskClassification, trimmedQuery)
+		if runtimeMode == "" {
+			runtimeMode = "discovery"
+		}
+
+		lines := []string{
+			"Task Guidance Synthesis",
+			fmt.Sprintf("- Selected Runtime Mode: %s", runtimeMode),
+			fmt.Sprintf("- Selected Domain: %s", strings.TrimSpace(taskClassification.Domain)),
+			"- Runtime contract: phase semantics are internal continuity metadata for coding tasks; do not wait for explicit phase handoffs inside this Ask/ReAct turn.",
+		}
+
+		switch runtimeMode {
+		case "implementation":
+			lines = append(lines, "- Primary directive: use the available coding tools adaptively to inspect, patch, validate, and complete the task in one continuous Ask/ReAct turn unless blocked by clarification or approval requirements.")
+			lines = append(lines, "- Discovery inside implementation is allowed: if details are missing, inspect or plan just enough, then continue directly to the code/test change in the same turn.")
+		default:
+			lines = append(lines, "- Primary directive: gather the evidence or design clarity needed to act safely, then continue directly into implementation in the same Ask/ReAct turn when the next step becomes obvious.")
+			lines = append(lines, "- Do not stop after a plan unless the user asked for design-only work, explicit review, or approval before implementation.")
+		}
+
+		lower := strings.ToLower(trimmedQuery)
+		if strings.Contains(lower, "test") || strings.Contains(lower, "failing") || strings.Contains(lower, "error") {
+			lines = append(lines, "- Validation note: prefer targeted verification and rerun the relevant checks after changes.")
+		}
+		if shouldAskForMoreContextForVagueRepoTask(trimmedQuery) {
+			lines = append(lines, "- Clarification directive: the repository or working directory is still missing.")
+			lines = append(lines, "- Stay in the current Ask/ReAct continuation. Ask one short clarification question using the clarification action instead of returning a standalone answer.")
+			lines = append(lines, "- Do not call repo inspection, test execution, or edit tools until the user identifies the repo/workdir.")
+		}
+
+		lines = append(lines, "- Guardrail: avoid broad or speculative changes and stay grounded in the available evidence.")
+		return strings.Join(lines, "\n")
+	}
+
 	phase := strings.TrimSpace(taskClassification.CapabilityHint)
 	if phase == "" {
 		lower := strings.ToLower(trimmedQuery)
@@ -111,6 +147,38 @@ func buildTaskGuidanceSynthesis(query string, taskClassification TaskContextClas
 
 	lines = append(lines, "- Guardrail: avoid broad or speculative changes and stay grounded in the available evidence.")
 	return strings.Join(lines, "\n")
+}
+
+func isCodingWorkflowTaskClassification(taskClassification TaskContextClassification) bool {
+	domain := strings.TrimSpace(strings.ToLower(taskClassification.Domain))
+	switch domain {
+	case "coding_workflow", "codingworkflow", "coding":
+		return true
+	default:
+		return false
+	}
+}
+
+func inferCodingRuntimeMode(taskClassification TaskContextClassification, query string) string {
+	if !isCodingWorkflowTaskClassification(taskClassification) {
+		return ""
+	}
+	hint := strings.TrimSpace(strings.ToLower(taskClassification.CapabilityHint))
+	switch hint {
+	case codingRuntimeModeImplementation, codingRuntimeModeDiscovery:
+		return hint
+	case "execution", "review", "delivery":
+		return codingRuntimeModeImplementation
+	case "investigation", "planning", "intake":
+		return codingRuntimeModeDiscovery
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	for _, marker := range []string{"fix", "patch", "implement", "update", "modify", "change", "write", "failing test", "tests fail", "bug"} {
+		if strings.Contains(q, marker) {
+			return codingRuntimeModeImplementation
+		}
+	}
+	return codingRuntimeModeDiscovery
 }
 
 func (a *CopilotAgent) buildSpacesToolDescriptionContext() string {

@@ -13,8 +13,8 @@ The current architecture is built around LLM-as-Orchestrator (LAO), not around h
 The system behaves like this:
 
 1. The Ask pipeline receives the user request and owns the outer flow.
-2. A phase-aware routing step classifies the task and resolves a planned phase sequence.
-3. The agent creates domain phase proxies and exposes their tools to the model.
+2. A routing step classifies the task and resolves the domain plus the lightest runtime shape needed to complete it.
+3. The agent creates domain capabilities and, for coding tasks, exposes a task-mode-oriented runtime surface to the model.
 4. The provider-owned ReAct loop remains the place where the model decides which tool to call next.
 5. Structured state is carried between turns for clarification, retry guidance, and phase progression.
 6. A lightweight session-cognition snapshot gives the pipeline a shared view of the current turn, memory signals, and policy-relevant flags.
@@ -31,16 +31,16 @@ The Ask entrypoint accepts a query plus config and prepares the shared session c
 ### 2. Cold-start routing classifies the task
 The agent resolves a task context with:
 - domains
-- current phase
-- phase plan
+- runtime mode or current phase metadata
+- phase plan when persistent continuity still benefits from it
 - intent
 - confidence
 - CRUD expectations
 
-The output is persisted into the active workstream so later turns can resume from the same plan.
+The output is persisted into the active workstream so later turns can resume from the same continuity state.
 
-### 3. Phase proxies are built for the selected domains
-For each relevant domain, the system creates a phase-capability proxy for the current phase. Those proxies expose tools and instructions to the model but do not own workflow control.
+### 3. Runtime surfaces are built for the selected domains
+For each relevant domain, the system creates the runtime surface that best fits the task. In coding workflow, the live Ask prompt uses task-mode wording and exposes a discovery or implementation runtime surface rather than teaching the model a full SDLC phase taxonomy for every turn. Internal phase metadata can still exist for continuity and compatibility, but it is not the primary prompt frame.
 
 ### 4. The model orchestrates tool use inside a provider-owned ReAct loop
 The model sees the available tools and chooses the next operation. This remains the main execution loop for tool calls, retries, and recovery.
@@ -52,8 +52,8 @@ After each turn, the system inspects structured state for:
 - terminal outcome
 - queue pause conditions
 
-### 6. Phase succession happens only when the current state allows it
-If the current phase is complete and no clarification is pending, the next phase can be enqueued. If clarification is pending, the queue pauses and waits for the user to respond.
+### 6. Continuation happens only when the current state allows it
+If a later turn is genuinely needed and no clarification is pending, the next continuation item can be enqueued. If clarification is pending, the queue pauses and waits for the user to respond. Coding asks should prefer one continuous Ask/ReAct turn when the task can be completed without an extra handoff.
 
 ### 7. Memory and cognition persist across turns
 The session payload carries a lightweight cognitive snapshot, while MRU and workstream state preserve continuity for future turns.
@@ -68,6 +68,8 @@ The Ask pipeline is the controller of outer-flow behavior. It owns:
 - work-item ordering
 - phase context preservation
 - pause behavior when clarification is pending
+
+For coding workflow specifically, the persisted workstream may still store phase metadata for continuity, but the live Ask routing hint is task-mode-oriented (`discovery` or `implementation`) rather than phase-oriented.
 
 Relevant implementation:
 - lib/sop/ai/agent/ask_pipeline.go

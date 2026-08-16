@@ -367,7 +367,7 @@ func (a *CopilotAgent) applyQueuedPhaseActorContext(ctx context.Context, taskCon
 			taskContext.Domain = persisted.Domains[0]
 		}
 	}
-	taskContext.CapabilityHint = resolveActiveCodingRuntimePhase(persisted, phaseName)
+	taskContext.CapabilityHint = resolveActiveCodingRuntimeMode(persisted, phaseName)
 	return taskContext
 }
 
@@ -378,14 +378,14 @@ func normalizeCodingRuntimeRouting(taskContext *TaskContextClassification) *Task
 	if !askClassificationHasDomain(taskContext.AskClassification.Domains, "coding_workflow") {
 		return taskContext
 	}
-	activePhase := resolveActiveCodingRuntimePhase(taskContext.AskClassification, taskContext.CapabilityHint)
-	if activePhase == "" {
-		activePhase = resolveActiveCodingRuntimePhase(taskContext.AskClassification, taskContext.AskClassification.Phase)
+	runtimeMode := resolveActiveCodingRuntimeMode(taskContext.AskClassification, taskContext.CapabilityHint)
+	if runtimeMode == "" {
+		runtimeMode = resolveActiveCodingRuntimeMode(taskContext.AskClassification, taskContext.AskClassification.Phase)
 	}
-	if activePhase == "" {
-		activePhase = "investigation"
+	if runtimeMode == "" {
+		runtimeMode = codingRuntimeModeDiscovery
 	}
-	taskContext.CapabilityHint = activePhase
+	taskContext.CapabilityHint = runtimeMode
 	taskContext.Domain = "coding_workflow"
 	taskContext.AskClassification.PhasePlan = canonicalizeCodingRuntimePlan(taskContext.AskClassification, taskContext.AskClassification.PhasePlan)
 	return taskContext
@@ -516,6 +516,30 @@ func resolveActiveCodingRuntimePhase(classification *AskTaskContext, phase strin
 		return "planning"
 	}
 	return "investigation"
+}
+
+func resolveActiveCodingRuntimeMode(classification *AskTaskContext, phaseOrHint string) string {
+	hint := strings.TrimSpace(strings.ToLower(phaseOrHint))
+	switch hint {
+	case codingRuntimeModeImplementation:
+		return hint
+	case codingRuntimeModeDiscovery:
+		if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+			return hint
+		}
+		if useCodingImplementationBundle(classification, canonicalizeCodingRuntimePhase(classification, classification.Phase)) {
+			return codingRuntimeModeImplementation
+		}
+		return hint
+	}
+	resolvedPhase := canonicalizeCodingRuntimePhase(classification, phaseOrHint)
+	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		return resolvedPhase
+	}
+	if useCodingImplementationBundle(classification, resolvedPhase) {
+		return codingRuntimeModeImplementation
+	}
+	return codingRuntimeModeDiscovery
 }
 
 func canonicalizeCodingRuntimePlan(classification *AskTaskContext, phases []string) []string {

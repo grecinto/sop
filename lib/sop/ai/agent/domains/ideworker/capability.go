@@ -169,18 +169,14 @@ func (c *Capability) Classify(query string, state capabilities.RoutingState) cap
 		"continue",
 		"editor",
 		"ide worker",
-		"patch",
-		"diff",
-		"refactor",
-		"implement",
-		"review",
-		"test",
-		"workspace",
+		"ide delegation",
 	) {
 		return capabilities.ClassificationResult{Relevant: true, Score: 20, Mode: capabilities.CapabilityModeSupporting}
 	}
 
-	if containsAny(strings.ToLower(strings.TrimSpace(state.Domain)), "desktop", "coding") || containsAny(strings.ToLower(strings.TrimSpace(state.CapabilityHint)), "planning", "execution", "review", "delivery") {
+	stateDomain := strings.ToLower(strings.TrimSpace(state.Domain))
+	stateHint := strings.ToLower(strings.TrimSpace(state.CapabilityHint))
+	if containsAny(stateDomain, "continue", "ide_worker", "editor") || containsAny(stateHint, "continue", "ide_worker", "editor") {
 		return capabilities.ClassificationResult{Relevant: true, Score: 12, Mode: capabilities.CapabilityModeSupporting}
 	}
 
@@ -218,7 +214,7 @@ func (c *Capability) BuildContext(query string, state capabilities.RoutingState)
 		if metadata.ToolChoice != "" {
 			b.WriteString(fmt.Sprintf("- continue_tool_choice: %s\n", metadata.ToolChoice))
 		}
-		b.WriteString("- delegation_contract: compose a bounded Continue task, pass phase/tool constraints through delegate_continue_task, accept streamed progress during execution, then continue daemon orchestration with the final structured result.\n")
+		b.WriteString("- delegation_contract: compose a bounded Continue task, pass continuity/tool constraints through delegate_continue_task, accept streamed progress during execution, then continue daemon task-mode orchestration with the final structured result.\n")
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -270,7 +266,7 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	}
 	parts := []string{instructions}
 	if metadata.RequestedPhase != "" {
-		parts = append(parts, fmt.Sprintf("Current Continue phase: %s. Keep delegation scoped to that phase unless the user changes the ask.", metadata.RequestedPhase))
+		parts = append(parts, fmt.Sprintf("Current Continue continuity hint: %s. Keep delegation scoped to that bounded slice unless the user changes the ask.", metadata.RequestedPhase))
 	}
 	if len(boundedTools) > 0 {
 		parts = append(parts, fmt.Sprintf("Bound Continue to these tools for this delegated turn when possible: %s.", strings.Join(boundedTools, ", ")))
@@ -280,7 +276,7 @@ func (c *Capability) BuildInstructions(query string, state capabilities.RoutingS
 	}
 	parts = append(parts, "When delegating, write the task as instructions for Continue's Ask pipeline, not as a sequence of low-level tool calls for AI Studio to imitate.")
 	parts = append(parts, "Delegate the coding objective, expected scope, and success criteria. Let Continue decide how to use its internal IDE tools.")
-	parts = append(parts, "After Continue returns the bounded result, continue with Ask-side phase orchestration and decide the next step in the daemon.")
+	parts = append(parts, "After Continue returns the bounded result, continue with Ask-side task-mode orchestration and decide the next step in the daemon.")
 	return strings.Join(parts, "\n")
 }
 

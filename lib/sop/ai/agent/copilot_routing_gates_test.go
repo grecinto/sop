@@ -72,7 +72,7 @@ func TestTryAskContinuationBasedRouting_SimplifiesCodingRefinementToExecution(t 
 	ag.service.session.Memory.SetRoutingState(&TaskContextClassification{
 		Domain:         "coding_workflow",
 		RoutingGate:    RoutingGateContinuity,
-		CapabilityHint: "planning",
+		CapabilityHint: codingRuntimeModeDiscovery,
 		AskClassification: &AskTaskContext{
 			Domains:       []string{"coding_workflow"},
 			Phase:         "planning",
@@ -94,8 +94,8 @@ func TestTryAskContinuationBasedRouting_SimplifiesCodingRefinementToExecution(t 
 	if taskCtx.Domain != "coding_workflow" {
 		t.Fatalf("expected coding_workflow continuity domain, got %q", taskCtx.Domain)
 	}
-	if taskCtx.CapabilityHint != "execution" {
-		t.Fatalf("expected additive coding refinement to move to execution, got %q", taskCtx.CapabilityHint)
+	if taskCtx.CapabilityHint != codingRuntimeModeImplementation {
+		t.Fatalf("expected additive coding refinement to move to implementation mode, got %q", taskCtx.CapabilityHint)
 	}
 	if taskCtx.IntentFamily != intentFamilyRepoEdit {
 		t.Fatalf("expected additive coding refinement to use repo_edit intent family, got %q", taskCtx.IntentFamily)

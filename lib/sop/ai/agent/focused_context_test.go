@@ -229,6 +229,27 @@ func TestBuildSystemPrompt_IncludesTaskGuidanceSynthesis(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_CodingWorkflowUsesRuntimeModeWording(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+
+	prompt := ag.buildSystemPrompt(ctx, "fix failing tests", TaskContextClassification{
+		Domain:         "coding_workflow",
+		RoutingGate:    RoutingGateDiscovery,
+		CapabilityHint: codingRuntimeModeImplementation,
+	})
+
+	for _, expected := range []string{"Task Guidance Synthesis", "Selected Runtime Mode: implementation", "Selected Domain: coding_workflow", "phase semantics are internal continuity metadata"} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("expected coding prompt to contain %q, got: %s", expected, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Selected Phase:") {
+		t.Fatalf("expected coding prompt to avoid Selected Phase wording, got: %s", prompt)
+	}
+}
+
 func TestBuildFocusedToolContext_IncludesStructuredCapabilityGuidance(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
@@ -243,6 +264,22 @@ func TestBuildFocusedToolContext_IncludesStructuredCapabilityGuidance(t *testing
 	}
 	if !strings.Contains(contextText, "Investigate before acting") {
 		t.Fatalf("expected focused tool context to include structured guidance content, got: %s", contextText)
+	}
+}
+
+func TestBuildFocusedToolContext_CodingWorkflowUsesRuntimeContextInsteadOfPhaseContext(t *testing.T) {
+	ctx := context.Background()
+	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
+	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
+
+	contextText := ag.buildFocusedToolContext(ctx, "fix a parser bug", &TaskContextClassification{Domain: "coding_workflow", RoutingGate: RoutingGateDiscovery, CapabilityHint: codingRuntimeModeImplementation})
+	for _, expected := range []string{"Structured Context: Coding Runtime", "Runtime Mode: implementation", "Phase semantics are internal continuity metadata only"} {
+		if !strings.Contains(contextText, expected) {
+			t.Fatalf("expected coding focused context to include %q, got: %s", expected, contextText)
+		}
+	}
+	if strings.Contains(contextText, "PHASE:") {
+		t.Fatalf("expected coding focused context to avoid phase document injection, got: %s", contextText)
 	}
 }
 

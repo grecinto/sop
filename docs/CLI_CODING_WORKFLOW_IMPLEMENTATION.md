@@ -107,9 +107,30 @@ Results aggregated: "Tests passed ✓, Formatting OK ✓"
 
 **Implementation**: Wrapper around existing `Ask()` - no modifications to core orchestration logic required.
 
-## Phase-as-Capability SDLC Model
+## Task-Mode Coding Runtime
 
-For implementation planning and delivery, the coding workflow should be organized around reusable SDLC phase capabilities rather than a single generic editing loop. This gives the system a clearer contract for execution, review, and validation while keeping the runtime flexible and conversational.
+The current coding Ask runtime should be understood as task-mode-oriented even though some internal capability implementations still use phase terminology for continuity and compatibility.
+
+### Live Ask runtime contract
+
+For coding tasks, the live prompt and tool surface should prefer two runtime modes:
+
+1. **Discovery**
+  - Investigation plus lightweight planning.
+  - Use when more evidence, repo understanding, or design clarity is needed.
+  - If the next implementation step becomes obvious, continue directly into implementation in the same Ask/ReAct turn.
+
+2. **Implementation**
+  - Broad coding surface that allows inspection, planning, edit, and validation tools in one continuous Ask/ReAct transaction.
+  - Use when the task is action-oriented and can usually be completed without an explicit phase handoff.
+
+**Prompt rule**: phase semantics are internal metadata for continuity; the live coding prompt should steer the model with runtime-mode wording rather than teaching a full SDLC phase taxonomy on every turn.
+
+**Routing rule**: for coding tasks, the live routing hint should also use runtime-mode values (`discovery` or `implementation`) instead of phase names. Internal phase IDs remain useful for stored artifacts, compatibility with older workstreams, and specialized capability logic, but they should not be the primary live Ask control primitive.
+
+## Internal Phase-as-Capability Model
+
+Internally, the coding workflow still uses reusable SDLC phase capabilities rather than a single generic editing loop. These remain useful for continuity, compatibility with older workstreams, and specialized guidance surfaces, but they should not force separate user-visible turns when one Ask/ReAct transaction can finish the task.
 
 ### Recommended phase capabilities
 

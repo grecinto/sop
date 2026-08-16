@@ -387,6 +387,15 @@ func TestCapabilityClassifyContinueBridgePromptAsCodingSupport(t *testing.T) {
 	}
 }
 
+func TestCapabilityClassify_DoesNotMatchGenericCodingAskWithoutContinueSignals(t *testing.T) {
+	cap := NewCapability()
+
+	result := cap.Classify("implement the payment fix", capabilities.RoutingState{Domain: "coding", CapabilityHint: "implementation"})
+	if result.Relevant {
+		t.Fatalf("expected generic coding ask without Continue signals to skip ideworker classification, got %#v", result)
+	}
+}
+
 func TestCapabilityBuildInstructionsReflectsContinueBridgeMetadata(t *testing.T) {
 	cap := NewCapability()
 	query := strings.Join([]string{
@@ -414,7 +423,7 @@ func TestCapabilityBuildInstructionsReflectsContinueBridgeMetadata(t *testing.T)
 	for _, want := range []string{
 		"normal Ask turns",
 		"never as a workflow handoff",
-		"Current Continue phase: review",
+		"Current Continue continuity hint: review",
 		"Bound Continue to these tools for this delegated turn when possible: read_file, get_problems.",
 		"Preferred Continue tool for the delegated turn: get_problems.",
 		"instructions for Continue's Ask pipeline",
@@ -441,7 +450,7 @@ func TestCapabilityBuildContextEmphasizesAskControllerForContinueBridge(t *testi
 		"normal Ask turns",
 		"never transfers workflow control",
 		"delegate one bounded objective",
-		"resume Ask-side orchestration",
+		"continue daemon task-mode orchestration",
 	} {
 		if !strings.Contains(contextText, want) {
 			t.Fatalf("expected BuildContext to contain %q, got %q", want, contextText)

@@ -171,6 +171,9 @@ func (c *PhaseCapability) Classify(query string, state capabilities.RoutingState
 
 	// Explicit capability hint takes highest priority
 	if hint := strings.TrimSpace(strings.ToLower(state.CapabilityHint)); hint != "" {
+		if hint == "implementation" && c.phaseID == "execution" {
+			return capabilities.ClassificationResult{Relevant: true, Score: 15, Mode: capabilities.CapabilityModePrimary}
+		}
 		if strings.Contains(hint, c.phaseID) || strings.Contains(hint, strings.ReplaceAll(c.name, " ", "_")) {
 			return capabilities.ClassificationResult{Relevant: true, Score: 15, Mode: capabilities.CapabilityModePrimary}
 		}

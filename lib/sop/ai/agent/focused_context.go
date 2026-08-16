@@ -660,6 +660,9 @@ func (a *CopilotAgent) buildFocusedToolContext(ctx context.Context, query string
 	if taskCtx == nil {
 		return ""
 	}
+	if isCodingWorkflowTaskClassification(*taskCtx) {
+		return buildCodingRuntimeFocusedContext(query, *taskCtx)
+	}
 
 	var sections []string
 	if a != nil && a.capabilityRegistry != nil {
@@ -680,25 +683,23 @@ func (a *CopilotAgent) buildFocusedToolContext(ctx context.Context, query string
 			}
 		}
 		if selectedCap, ok := ctx.Value(ctxKeySelectedCapability).(capabilities.Capability); ok && selectedCap != nil {
-			if selectedCap != nil {
-				selectedID := selectedCap.ID()
-				seenSelected := false
-				for _, entry := range classified {
-					if entry.Capability != nil && entry.Capability.ID() == selectedID {
-						seenSelected = true
-						break
-					}
+			selectedID := selectedCap.ID()
+			seenSelected := false
+			for _, entry := range classified {
+				if entry.Capability != nil && entry.Capability.ID() == selectedID {
+					seenSelected = true
+					break
 				}
-				if !seenSelected {
-					if capContext := strings.TrimSpace(selectedCap.BuildContext(query, routingState)); capContext != "" && !containsStructuredContextSection(sections, capContext) {
-						sections = append(sections, capContext)
-					}
-					if capInstructions := strings.TrimSpace(selectedCap.BuildInstructions(query, routingState)); capInstructions != "" && selectedCap.ID() != "coding_workflow" && len(capInstructions) <= 800 && !containsStructuredContextSection(sections, capInstructions) {
-						sections = append(sections, capInstructions)
-					}
-					if guidance := strings.TrimSpace(capabilities.RenderCapabilityGuidance(selectedCap, query, routingState)); guidance != "" && !containsStructuredContextSection(sections, guidance) {
-						sections = append(sections, guidance)
-					}
+			}
+			if !seenSelected {
+				if capContext := strings.TrimSpace(selectedCap.BuildContext(query, routingState)); capContext != "" && !containsStructuredContextSection(sections, capContext) {
+					sections = append(sections, capContext)
+				}
+				if capInstructions := strings.TrimSpace(selectedCap.BuildInstructions(query, routingState)); capInstructions != "" && selectedCap.ID() != "coding_workflow" && len(capInstructions) <= 800 && !containsStructuredContextSection(sections, capInstructions) {
+					sections = append(sections, capInstructions)
+				}
+				if guidance := strings.TrimSpace(capabilities.RenderCapabilityGuidance(selectedCap, query, routingState)); guidance != "" && !containsStructuredContextSection(sections, guidance) {
+					sections = append(sections, guidance)
 				}
 			}
 		}
@@ -734,4 +735,35 @@ func (a *CopilotAgent) buildFocusedToolContext(ctx context.Context, query string
 	default:
 		return ""
 	}
+}
+
+func buildCodingRuntimeFocusedContext(query string, taskCtx TaskContextClassification) string {
+	runtimeMode := inferCodingRuntimeMode(taskCtx, query)
+	if runtimeMode == "" {
+		runtimeMode = "discovery"
+	}
+	lines := []string{
+		"Structured Context: Coding Runtime",
+		fmt.Sprintf("- Runtime Mode: %s", runtimeMode),
+		"- Phase semantics are internal continuity metadata only; do not wait for explicit investigation/planning/execution transitions inside this Ask/ReAct turn.",
+		"- Use the available coding tools adaptively based on the current evidence, not as a rigid SDLC checklist.",
+	}
+	switch runtimeMode {
+	case "implementation":
+		lines = append(lines,
+			"- Implementation contract: inspect or plan only as much as needed, then make the change, validate it, and continue until the user-visible task is complete.",
+			"- Approval contract: ask for approval before destructive actions or applying patches that need explicit user confirmation.",
+			"- Validation contract: run focused verification after each meaningful code change.",
+		)
+	default:
+		lines = append(lines,
+			"- Discovery contract: inspect the repo, gather evidence, and refine the approach until the next concrete implementation step is obvious.",
+			"- Continuation contract: when the task becomes actionable, continue directly into implementation in the same Ask/ReAct turn unless the user asked for design-only output or approval first.",
+			"- Planning is lightweight: produce a user-visible plan only when it adds value or when review/approval is explicitly needed.",
+		)
+	}
+	if shouldAskForMoreContextForVagueRepoTask(query) {
+		lines = append(lines, "- Clarification contract: if the repository/workdir is missing, ask one short clarification question before using repo/test/edit tools.")
+	}
+	return strings.Join(lines, "\n")
 }
