@@ -110,8 +110,11 @@ func TestProgressVisibility(t *testing.T) {
 
 	// Complete investigation phase
 	args := map[string]any{
-		"status":  "complete",
-		"summary": "Investigation completed successfully",
+		"status":               "complete",
+		"summary":              "Investigation completed successfully",
+		"transition_to":        "planning",
+		"transition_from":      "investigation",
+		"transition_direction": "forward",
 	}
 
 	routingState := capabilities.RoutingState{Domain: "codingworkflow"}
@@ -127,11 +130,11 @@ func TestProgressVisibility(t *testing.T) {
 	if !strings.Contains(result, "📊 PROGRESS:") {
 		t.Error("Expected progress indicator in completion message")
 	}
-	if !strings.Contains(result, "1/3 phases complete") {
-		t.Error("Expected phase count in progress")
+	if !strings.Contains(result, "0/3 phases complete") {
+		t.Error("Expected active-plan progress count to remain at the current cursor position")
 	}
-	if !strings.Contains(result, "(33%)") {
-		t.Error("Expected percentage in progress")
+	if !strings.Contains(result, "(0%)") {
+		t.Error("Expected percentage in progress for the current cursor position")
 	}
 	if !strings.Contains(result, "✅") {
 		t.Error("Expected checkmark for completed phase")
@@ -139,8 +142,8 @@ func TestProgressVisibility(t *testing.T) {
 	if !strings.Contains(result, "⏭️") {
 		t.Error("Expected next phase indicator")
 	}
-	if !strings.Contains(result, "→ Next phase:") {
-		t.Error("Expected next phase announcement")
+	if !strings.Contains(result, "→ Next phase: Planning & Design") {
+		t.Error("Expected next phase announcement for the planned forward transition")
 	}
 }
 
@@ -182,8 +185,11 @@ func TestCheckpointVisibility(t *testing.T) {
 
 	// Complete investigation phase (checkpoint)
 	args := map[string]any{
-		"status":  "complete",
-		"summary": "Investigation completed",
+		"status":               "complete",
+		"summary":              "Investigation completed",
+		"transition_to":        "planning",
+		"transition_from":      "investigation",
+		"transition_direction": "forward",
 	}
 
 	routingState := capabilities.RoutingState{Domain: "codingworkflow"}

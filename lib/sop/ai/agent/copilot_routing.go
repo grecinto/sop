@@ -195,8 +195,74 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 			taskCtx.SpacesArtifacts = append([]string(nil), anchor.SpacesArtifacts...)
 		}
 	}
+	simplifyCodingWorkflowContinuation(taskCtx, query)
 	a.applyCapabilityRoutingHints(ctx, taskCtx, query)
 	return taskCtx, nil
+}
+
+func simplifyCodingWorkflowContinuation(taskCtx *TaskContextClassification, query string) {
+	if taskCtx == nil || isExplicitDesktopDirective(query) {
+		return
+	}
+
+	isCodingWorkflow := false
+	if taskCtx.AskClassification != nil && askClassificationHasDomain(taskCtx.AskClassification.Domains, "coding_workflow") {
+		isCodingWorkflow = true
+	}
+	switch strings.TrimSpace(strings.ToLower(taskCtx.Domain)) {
+	case "coding_workflow", "coding", "codingworkflow":
+		isCodingWorkflow = true
+	}
+	switch strings.TrimSpace(strings.ToLower(taskCtx.CapabilityHint)) {
+	case "coding_workflow", "coding", "codingworkflow", "investigation", "planning", "execution", "review", "delivery":
+		isCodingWorkflow = true
+	}
+	if strings.EqualFold(taskCtx.IntentFamily, intentFamilyRepoEdit) {
+		isCodingWorkflow = true
+	}
+	if !isCodingWorkflow {
+		return
+	}
+
+	taskCtx.Domain = "coding_workflow"
+	taskCtx.CapabilityHint = "execution"
+	if strings.TrimSpace(taskCtx.IntentFamily) == "" || strings.EqualFold(taskCtx.IntentFamily, intentFamilyGeneral) {
+		taskCtx.IntentFamily = intentFamilyRepoEdit
+	}
+
+	if taskCtx.AskClassification == nil {
+		taskCtx.AskClassification = &AskTaskContext{
+			Domains:       []string{"coding_workflow"},
+			Phase:         "execution",
+			PhasePlan:     []string{"execution"},
+			Intent:        "generate_code",
+			CRUD:          []string{"R", "U"},
+			Confidence:    "high",
+			Reasoning:     "Continuity keeps additive coding follow-ups in implementation mode.",
+			OriginalQuery: query,
+		}
+		return
+	}
+
+	taskCtx.AskClassification.Domains = []string{"coding_workflow"}
+	taskCtx.AskClassification.Phase = "execution"
+	taskCtx.AskClassification.PhasePlan = canonicalizeCodingRuntimePlan(taskCtx.AskClassification, taskCtx.AskClassification.PhasePlan)
+	if !contains(taskCtx.AskClassification.PhasePlan, "execution") {
+		taskCtx.AskClassification.PhasePlan = append(taskCtx.AskClassification.PhasePlan, "execution")
+	}
+	if len(taskCtx.AskClassification.PhasePlan) == 0 {
+		taskCtx.AskClassification.PhasePlan = []string{"execution"}
+	}
+	switch strings.TrimSpace(strings.ToLower(taskCtx.AskClassification.Intent)) {
+	case "", "general", "analyze", "plan":
+		taskCtx.AskClassification.Intent = "generate_code"
+	}
+	if len(taskCtx.AskClassification.CRUD) == 0 {
+		taskCtx.AskClassification.CRUD = []string{"R", "U"}
+	}
+	if strings.TrimSpace(taskCtx.AskClassification.OriginalQuery) == "" {
+		taskCtx.AskClassification.OriginalQuery = query
+	}
 }
 
 func (a *CopilotAgent) tryColdStartBasedRouting(ctx context.Context, query string, gen ai.Generator, isTest bool) (*TaskContextClassification, error) {

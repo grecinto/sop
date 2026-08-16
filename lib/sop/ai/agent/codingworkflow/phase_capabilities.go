@@ -296,12 +296,12 @@ func buildNoCodeBrainstormingContext(phaseID, phaseName string) string {
 	return fmt.Sprintf(`NO-CODE BRAINSTORMING MODE
 - Treat this as a design/planning discussion, not an implementation request.
 - The user has indicated no code changes are wanted or the task is explicitly discussion-only.
-- Stay in the current %s phase and participate in brainstorming, trade-off analysis, option comparison, and design refinement when the outcome is additive to the current phase and plan.
+- Stay in the current %s phase and participate in brainstorming, trade-off analysis, option comparison, and design refinement inside the active implementation conversation.
 - If the user rejects a patch, says no code changes, or asks to back out, do not continue implementation. Acknowledge the concern, keep the conversation in discussion mode, and continue with design, planning, trade-offs, or problem framing inside the current phase.
-- If the discussion is not additive to the current phase or current plan, discuss whether the user wants to move to an earlier or later phase; only shift phases when the context clearly warrants it or there is explicit user agreement.
-- Do not leave the phase for implementation work unless the user explicitly asks to move back to planning/design or an earlier phase, or the situation clearly requires a meaningful phase transition.
+- Do not treat normal design clarification, investigation, or planning refinement as a separate phase redirect; implementation mode already covers those activities for the active coding task.
+- Only leave the current conversation when the user clearly switches to a different task, pauses the workstream, or explicitly wants to resume legacy paused work.
 - Keep the conversation focused on concepts, constraints, interfaces, trade-offs, risks, and the recommended direction.
-- If the user reaches a consensus or asks to continue from planning/design, capture that as the next step and resume from the appropriate earlier phase only with explicit agreement.
+- If the user reaches a consensus or wants to continue, capture that as the next step and resume implementation work in the same workstream.
 - Mention the AI Studio Undo/restore path only as a safety/recovery option when the user wants to revert or back out; it is not the default next step for discussion-only requests.`, phaseID)
 }
 

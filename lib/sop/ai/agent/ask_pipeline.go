@@ -357,10 +357,10 @@ func (a *CopilotAgent) applyQueuedPhaseActorContext(ctx context.Context, taskCon
 		taskContext = &TaskContextClassification{}
 	}
 	phaseName = normalizePhase(phaseName)
-	phaseName = normalizeCodingRuntimePhaseForClassification(persisted, phaseName)
+	phaseName = canonicalizeCodingRuntimePhase(persisted, phaseName)
 	if persisted != nil {
 		persisted.Phase = phaseName
-		persisted.PhasePlan = normalizeCodingRuntimePlanForClassification(persisted, persisted.PhasePlan)
+		persisted.PhasePlan = canonicalizeCodingRuntimePlan(persisted, persisted.PhasePlan)
 		taskContext.AskClassification = persisted
 		if len(persisted.Domains) == 1 {
 			taskContext.Domain = persisted.Domains[0]
@@ -396,10 +396,10 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 		log.Warn("No STM available for WorkStream integration")
 		// Fallback: use classification plan or default
 		if len(classification.PhasePlan) > 0 {
-			plan = normalizeCodingRuntimePlanForClassification(classification, classification.PhasePlan)
-			return plan, normalizeCodingRuntimePhaseForClassification(classification, plan[0])
+			plan = canonicalizeCodingRuntimePlan(classification, classification.PhasePlan)
+			return plan, canonicalizeCodingRuntimePhase(classification, plan[0])
 		}
-		phase := normalizeCodingRuntimePhaseForClassification(classification, classification.Phase)
+		phase := canonicalizeCodingRuntimePhase(classification, classification.Phase)
 		return []string{phase}, phase
 	}
 
@@ -410,13 +410,13 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 		if streamCtx != nil {
 			existingPlan := streamCtx.GetPhasePlan()
 			if existingPlan != nil {
-				// Resuming existing plan - use cursor to determine current phase
+				// Resuming existing plan - enforce the active coding runtime contract if this is a coding workflow.
 				rawPlannedPhases := existingPlan.GetPlannedPhases()
-				plannedPhases := normalizeCodingRuntimePlanForClassification(classification, rawPlannedPhases)
+				plannedPhases := canonicalizeCodingRuntimePlan(classification, rawPlannedPhases)
 				currentIndex := existingPlan.GetCurrentIndex()
 
 				if currentIndex < len(rawPlannedPhases) {
-					currentPhase = normalizeCodingRuntimePhaseForClassification(classification, rawPlannedPhases[currentIndex])
+					currentPhase = canonicalizeCodingRuntimePhase(classification, rawPlannedPhases[currentIndex])
 					log.Info("Resuming WorkStream from existing PhasePlan",
 						"plan", plannedPhases,
 						"current_index", currentIndex,
@@ -433,10 +433,10 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 
 	// New WorkStream - use classification plan or default
 	if len(classification.PhasePlan) > 0 {
-		plan = normalizeCodingRuntimePlanForClassification(classification, classification.PhasePlan)
+		plan = canonicalizeCodingRuntimePlan(classification, classification.PhasePlan)
 	} else {
 		// Default: single phase from classification
-		plan = []string{normalizeCodingRuntimePhaseForClassification(classification, classification.Phase)}
+		plan = []string{canonicalizeCodingRuntimePhase(classification, classification.Phase)}
 	}
 
 	currentPhase = plan[0]
@@ -464,7 +464,11 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 	return plan, currentPhase
 }
 
-func normalizeCodingRuntimePhaseForClassification(classification *AskTaskContext, phase string) string {
+// canonicalizeCodingRuntimePhase enforces the active coding runtime contract.
+// Coding workflow accepts only investigation, planning, and execution; any other
+// coding phase token is folded into the active runtime surface rather than reviving
+// a broader SDLC model.
+func canonicalizeCodingRuntimePhase(classification *AskTaskContext, phase string) string {
 	rawPhase := strings.TrimSpace(strings.ToLower(phase))
 	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
 		return normalizePhase(rawPhase)
@@ -479,7 +483,7 @@ func normalizeCodingRuntimePhaseForClassification(classification *AskTaskContext
 	}
 }
 
-func normalizeCodingRuntimePlanForClassification(classification *AskTaskContext, phases []string) []string {
+func canonicalizeCodingRuntimePlan(classification *AskTaskContext, phases []string) []string {
 	if len(phases) == 0 {
 		return phases
 	}
@@ -492,7 +496,7 @@ func normalizeCodingRuntimePlanForClassification(classification *AskTaskContext,
 	}
 	normalized := make([]string, 0, len(phases))
 	for _, phase := range phases {
-		mapped := normalizeCodingRuntimePhaseForClassification(classification, phase)
+		mapped := canonicalizeCodingRuntimePhase(classification, phase)
 		if mapped == "" {
 			continue
 		}

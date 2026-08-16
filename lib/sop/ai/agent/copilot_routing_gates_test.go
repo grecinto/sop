@@ -66,6 +66,54 @@ func TestFinalizeRoutingResultPersistsStateForContinuityGate(t *testing.T) {
 	}
 }
 
+func TestTryAskContinuationBasedRouting_SimplifiesCodingRefinementToExecution(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}, Memory: NewShortTermMemory()}}
+	ag.service.session.Memory.SetRoutingState(&TaskContextClassification{
+		Domain:         "coding_workflow",
+		RoutingGate:    RoutingGateContinuity,
+		CapabilityHint: "planning",
+		AskClassification: &AskTaskContext{
+			Domains:       []string{"coding_workflow"},
+			Phase:         "planning",
+			PhasePlan:     []string{"investigation", "planning"},
+			Intent:        "plan",
+			CRUD:          []string{"R"},
+			Confidence:    "high",
+			OriginalQuery: "plan the parser fix",
+		},
+	})
+
+	taskCtx, err := ag.tryAskContinuationBasedRouting(context.Background(), "also update the failing test expectations while you're at it", nil, false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if taskCtx == nil {
+		t.Fatal("expected a continuity routing result")
+	}
+	if taskCtx.Domain != "coding_workflow" {
+		t.Fatalf("expected coding_workflow continuity domain, got %q", taskCtx.Domain)
+	}
+	if taskCtx.CapabilityHint != "execution" {
+		t.Fatalf("expected additive coding refinement to move to execution, got %q", taskCtx.CapabilityHint)
+	}
+	if taskCtx.IntentFamily != intentFamilyRepoEdit {
+		t.Fatalf("expected additive coding refinement to use repo_edit intent family, got %q", taskCtx.IntentFamily)
+	}
+	if taskCtx.AskClassification == nil {
+		t.Fatal("expected Ask classification to be preserved for continuity")
+	}
+	if taskCtx.AskClassification.Phase != "execution" {
+		t.Fatalf("expected Ask classification phase to simplify to execution, got %q", taskCtx.AskClassification.Phase)
+	}
+	if !contains(taskCtx.AskClassification.PhasePlan, "execution") {
+		t.Fatalf("expected Ask classification phase plan to include execution, got %v", taskCtx.AskClassification.PhasePlan)
+	}
+	if taskCtx.AskClassification.Intent != "generate_code" {
+		t.Fatalf("expected Ask classification intent to simplify to generate_code, got %q", taskCtx.AskClassification.Intent)
+	}
+}
+
 func TestEvaluateAskRoutingGates_ClassifiesSummaryQueriesAsDiscovery(t *testing.T) {
 	ctx := context.Background()
 	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}

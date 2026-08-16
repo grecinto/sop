@@ -535,7 +535,10 @@ func TestEnsureCapabilityRegistry_RegistersOnlyActiveCodingPhases(t *testing.T) 
 			t.Fatalf("expected capability registry to include %s, got %v", expected, ids)
 		}
 	}
-	for _, unexpected := range []string{"phase_intake", "phase_testing", "phase_review", "phase_delivery"} {
+	// The registry is shared across domains, so generic phase IDs like phase_review may
+	// still be present for stores/spaces. This assertion only guards against stale coding-only
+	// runtime surfaces that should no longer be registered by default.
+	for _, unexpected := range []string{"phase_intake", "phase_testing", "phase_delivery"} {
 		if ids[unexpected] {
 			t.Fatalf("did not expect capability registry to include legacy coding phase %s, got %v", unexpected, ids)
 		}

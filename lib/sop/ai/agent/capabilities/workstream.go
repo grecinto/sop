@@ -108,29 +108,28 @@ func (w *WorkStreamManagement) BuildContext(query string, state RoutingState) st
 }
 
 func (w *WorkStreamManagement) BuildInstructions(query string, state RoutingState) string {
-	return `WorkStream Management: You can pause, resume, list, jump phases, and abandon WorkStreams.
+	return `WorkStream Management: You can pause, resume, inspect, and abandon WorkStreams. Phase jumps remain available for legacy resume/override cases only.
 
 Use these tools to manage multi-phase tasks:
 - list_workstreams: See current WorkStream state and progress
 - get_workstream_details: Get detailed phase plan information
-- jump_to_phase: Skip to a different phase (forward or backward)
+- jump_to_phase: Legacy override for paused/resumed workflows when you must explicitly reposition a persisted phase cursor
 - pause_workstream: Pause current task (can be resumed later)
 - resume_workstream: Continue a paused task
 - abandon_workstream: Permanently cancel a task
 
 When to use:
-- User wants to skip ahead → jump_to_phase (e.g., "just implement it now")
-- User wants to go back → jump_to_phase (e.g., "review requirements first")
 - User starts new task while another is active → Consider pausing current WorkStream
 - User explicitly says "pause", "stop", "switch to" → Pause current WorkStream
 - User says "resume", "continue", "back to" → Resume paused WorkStream
 - User says "cancel", "abandon", "forget about" → Abandon WorkStream
-- User adds or changes requirements in the current task → refine the current workstream by merging new requirements into the current plan, preserving prior decisions unless the user explicitly says otherwise
+- User adds or changes requirements in the current coding task → keep the current workstream active and continue in implementation mode while merging the new requirements into the current plan and execution context
 - User starts a truly unrelated task → use pause_new to pause the current workstream and start a new one
 - User wants to abandon all current work and begin fresh → use clear_restart
 
 Refinement rule:
 - For refine interjections or added requirements, keep the current workstream alive and merge the new requirements into the current plan/design rather than replacing it.
+- For active coding workflow turns, do not treat ordinary investigation, planning, or design refinement as a reason to jump phases; implementation mode already covers that work.
 - Preserve the current design, constraints, and prior decisions unless the user explicitly changes them.
 - If the new prompt conflicts with the current plan, call out the conflict and update the plan with the smallest necessary delta.
 
@@ -153,7 +152,7 @@ func (w *WorkStreamManagement) ExposeTools() []ToolDefinition {
 		},
 		{
 			Name:        "jump_to_phase",
-			Description: "Jump to a specific phase in the current WorkStream. Use when user wants to skip ahead (e.g., 'just implement it now') or go back (e.g., 'review requirements first'). Updates the phase plan and continues from the target phase.",
+			Description: "Legacy override: jump to a specific phase in the current WorkStream when you must reposition a persisted or resumed workflow cursor explicitly. Do not use this for normal coding refinements; implementation mode already covers investigation and planning follow-ups.",
 			Schema:      `{"type": "object", "properties": {"phase": {"type": "string", "enum": ["intake", "investigation", "planning", "execution", "review", "delivery"], "description": "Target phase to jump to"}}, "required": ["phase"]}`,
 			Tags:        []string{"U"}, // Updates WorkStream phase
 		},

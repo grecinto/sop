@@ -250,7 +250,7 @@ func TestPhaseContext_KeepsNoCodeBrainstormingInsideCurrentPhase(t *testing.T) {
 	cap := NewExecutionPhaseCapability(infra)
 
 	result := cap.BuildContext("No code changes — brainstorm the API shape and tradeoffs", capabilities.RoutingState{})
-	for _, check := range []string{"no code changes", "brainstorm", "stay in the current execution phase", "do not leave the phase", "earlier or later phase", "explicit user agreement", "AI Studio Undo", "undo/restore"} {
+	for _, check := range []string{"no code changes", "brainstorm", "stay in the current execution phase", "do not treat normal design clarification", "implementation mode already covers", "AI Studio Undo", "undo/restore"} {
 		if !strings.Contains(strings.ToLower(result), strings.ToLower(check)) {
 			t.Fatalf("expected execution context to include %q in no-code brainstorming guidance, got %q", check, result)
 		}
@@ -268,7 +268,7 @@ func TestExecutionPhaseBuildInstructions_PromptsUserVisiblePlanAndApproval(t *te
 	cap := NewExecutionPhaseCapability(infra)
 
 	result := cap.BuildInstructions("apply a small change", capabilities.RoutingState{})
-	for _, check := range []string{"user-visible plan message", "generated plan details", "approval from the user"} {
+	for _, check := range []string{"user-visible plan message", "approval from the user", "preview patches"} {
 		if !strings.Contains(strings.ToLower(result), check) {
 			t.Fatalf("expected execution instructions to include %q, got %q", check, result)
 		}
@@ -316,7 +316,7 @@ func TestReviewPhaseBuildInstructions_MentionsIDEWorkerDelegationPath(t *testing
 	cap := NewReviewPhaseCapability(infra)
 
 	result := cap.BuildInstructions("review the applied patch", capabilities.RoutingState{})
-	for _, check := range []string{"delegate_continue_task", "bounded IDE-native review or validation slice"} {
+	for _, check := range []string{"older review artifact", "implementation mode instead of a separate review phase", "Run relevant validation"} {
 		if !strings.Contains(result, check) {
 			t.Fatalf("expected review instructions to include %q, got %q", check, result)
 		}
@@ -343,12 +343,12 @@ func TestPlanningPhaseBuildInstructions_MentionsIDEWorkerInspectionOnly(t *testi
 	cap := NewPlanningPhaseCapability(infra)
 
 	result := cap.BuildInstructions("plan a refactor", capabilities.RoutingState{})
-	for _, check := range []string{"delegate_continue_task", "Ask as the controller", "Continue bridge context"} {
+	for _, check := range []string{"Use Continue bridge context when available", "Do not call delegate_continue_task during planning", "keep Ask as the controller"} {
 		if !strings.Contains(result, check) {
 			t.Fatalf("expected planning instructions to include %q, got %q", check, result)
 		}
 	}
-	for _, check := range []string{"first-class phase", "Research patterns and confirm assumptions"} {
+	for _, check := range []string{"Research patterns and confirm assumptions", "Continue directly into implementation"} {
 		if !strings.Contains(result, check) {
 			t.Fatalf("expected planning instructions to include %q, got %q", check, result)
 		}
@@ -359,7 +359,7 @@ func TestExecutionAndReviewInstructionsEncourageInvestigationWhenDetailsAreInsuf
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewExecutionPhaseCapability(infra)
 	result := cap.BuildInstructions("apply a small change", capabilities.RoutingState{})
-	for _, check := range []string{"under-specified", "additional investigation/research"} {
+	for _, check := range []string{"under-specified", "do additional discovery before changing code"} {
 		if !strings.Contains(result, check) {
 			t.Fatalf("expected execution instructions to include %q, got %q", check, result)
 		}
@@ -367,8 +367,8 @@ func TestExecutionAndReviewInstructionsEncourageInvestigationWhenDetailsAreInsuf
 
 	reviewCap := NewReviewPhaseCapability(infra)
 	reviewResult := reviewCap.BuildInstructions("review the applied patch", capabilities.RoutingState{})
-	if !strings.Contains(reviewResult, "additional investigation/research") {
-		t.Fatalf("expected review instructions to encourage research when details are insufficient, got %q", reviewResult)
+	if !strings.Contains(reviewResult, "implementation mode instead of a separate review phase") {
+		t.Fatalf("expected review instructions to clarify the fallback runtime path when resuming older review artifacts, got %q", reviewResult)
 	}
 }
 

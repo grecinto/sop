@@ -294,16 +294,16 @@ func TestAsk_PersistsPhasePlanForDiscoveryColdStart(t *testing.T) {
 	}
 }
 
-func TestNormalizeCodingRuntimePlanForClassification_CollapsesLegacyCodingPhases(t *testing.T) {
+func TestCanonicalizeCodingRuntimePlan_UsesActiveCodingPhasesOnly(t *testing.T) {
 	classification := &AskTaskContext{Domains: []string{"coding_workflow"}}
-	plan := normalizeCodingRuntimePlanForClassification(classification, []string{"intake", "investigation", "planning", "testing", "execution", "review", "delivery"})
+	plan := canonicalizeCodingRuntimePlan(classification, []string{"intake", "investigation", "planning", "testing", "execution", "review", "delivery"})
 	joined := strings.Join(plan, ",")
 	if joined != "investigation,planning,execution" {
-		t.Fatalf("expected legacy coding plan to collapse to investigation,planning,execution, got %v", plan)
+		t.Fatalf("expected coding plan to use only active runtime phases investigation,planning,execution, got %v", plan)
 	}
 }
 
-func TestResolvePhasePlan_NormalizesLegacyCodingWorkStreamPlanOnResume(t *testing.T) {
+func TestResolvePhasePlan_CanonicalizesCodingWorkStreamPlanOnResume(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
 	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
@@ -326,7 +326,7 @@ func TestResolvePhasePlan_NormalizesLegacyCodingWorkStreamPlanOnResume(t *testin
 		t.Fatalf("expected resumed coding plan to normalize to investigation,planning,execution, got %v", plan)
 	}
 	if currentPhase != "execution" {
-		t.Fatalf("expected legacy review phase to normalize to execution, got %q", currentPhase)
+		t.Fatalf("expected persisted non-active coding phase to canonicalize to execution, got %q", currentPhase)
 	}
 }
 
@@ -522,7 +522,7 @@ func TestAskCore_QueuedPhaseActorUsesPersistedAskClassification(t *testing.T) {
 	}
 }
 
-func TestApplyQueuedPhaseActorContext_NormalizesLegacyCodingQueuedActor(t *testing.T) {
+func TestApplyQueuedPhaseActorContext_CanonicalizesNonActiveCodingQueuedActor(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.WithValue(context.Background(), ctxKeyAskWorkItemActor, "phase:review")
 	persisted := &AskTaskContext{
@@ -532,7 +532,7 @@ func TestApplyQueuedPhaseActorContext_NormalizesLegacyCodingQueuedActor(t *testi
 	}
 	taskCtx := ag.applyQueuedPhaseActorContext(ctx, &TaskContextClassification{}, persisted)
 	if taskCtx.CapabilityHint != "execution" {
-		t.Fatalf("expected legacy coding queued actor review to normalize to execution, got %q", taskCtx.CapabilityHint)
+		t.Fatalf("expected non-active coding queued actor review to canonicalize to execution, got %q", taskCtx.CapabilityHint)
 	}
 	if taskCtx.AskClassification == nil || taskCtx.AskClassification.Phase != "execution" {
 		t.Fatalf("expected persisted classification phase to normalize to execution, got %+v", taskCtx.AskClassification)

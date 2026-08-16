@@ -131,6 +131,16 @@ func TestStepSharedInfrastructureInjection(t *testing.T) {
 	}
 }
 
+func TestDetectUserRedirect_DoesNotTreatPhaseRefinementAsTaskSwitch(t *testing.T) {
+	step := &BaseStep{}
+	ctx := context.WithValue(context.Background(), "latest_user_query", "actually, investigate the failing tests first and then update the expectations")
+
+	isRedirect, feedback := step.DetectUserRedirect(ctx)
+	if isRedirect {
+		t.Fatalf("expected implementation-compatible refinement to stay in the current conversation, got redirect with feedback %q", feedback)
+	}
+}
+
 // TestStepOutcomeHandling verifies that different StepOutcome values are
 // properly handled by the workflow.
 func TestStepOutcomeHandling(t *testing.T) {

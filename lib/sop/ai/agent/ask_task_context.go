@@ -19,14 +19,15 @@ type AskTaskContext struct {
 	// Examples: ["stores"], ["spaces"], ["stores", "spaces"], ["coding_workflow"]
 	Domains []string `json:"domains"`
 
-	// Phase: The current phase for this query
-	// Values: "intake", "investigation", "planning", "execution", "review", "delivery"
-	// Single-step queries default to appropriate phase (usually "investigation" or "execution")
+	// Phase: The current phase for this query.
+	// Coding workflow uses the active runtime phases: investigation, planning, execution.
+	// Other domains may still use review/delivery when they expose those surfaces.
 	Phase string `json:"phase"`
 
-	// PhasePlan: Complete sequence of phases for this task
+	// PhasePlan: Complete sequence of phases for this task.
+	// Coding workflow phase plans are canonicalized to investigation, planning, execution.
 	// Single-phase: ["investigation"]
-	// Multi-phase: ["investigation", "planning", "execution", "review"]
+	// Multi-phase: ["investigation", "planning", "execution"]
 	// The Ask pipeline processes phases sequentially via work queue
 	PhasePlan []string `json:"phase_plan"`
 
@@ -150,12 +151,11 @@ func (a *CopilotAgent) buildAskClassificationPrompt(ctx context.Context, query s
 - **desktop**: Local file operations, shell commands, git operations
 
 **Available Phases:**
-- **intake**: Initial requirements gathering, clarification
 - **investigation**: Read-only exploration, discovery, analysis
 - **planning**: Design, strategy, approach planning
 - **execution**: Write operations, changes, implementations
-- **review**: Validation, testing, verification
-- **delivery**: Summary, documentation, cleanup
+- **review**: Validation, testing, verification for domains that expose a separate review surface
+- **delivery**: Summary, documentation, cleanup for domains that expose a separate delivery surface
 
 **Session Cognitive State (authoritative continuity signal):**
 %s
@@ -195,13 +195,18 @@ Analyze the query and return a JSON object with this structure:
    - Read-only operations → "investigation"
    - Write operations → "execution"
    - Planning/design questions → "planning"
-   - Validation/testing → "review"
+	- Validation/testing → "review" only for domains that still expose a separate review phase
    - Simple direct commands → "execution" (single phase)
+
+4a. **Coding workflow uses active phases only**:
+	- For **coding_workflow**, return only: "investigation", "planning", or "execution"
+	- Do **not** emit "intake", "testing", "review", or "delivery" for coding_workflow
+	- In coding_workflow, validation/testing/handoff happen inside the implementation conversation rather than separate phases
 
 5. **PhasePlan Thickness**: Vary plan complexity based on task complexity
    - Simple queries → Single phase: ["investigation"]
    - Medium queries → Two phases: ["investigation", "execution"]
-   - Complex queries → Full SDLC: ["intake", "investigation", "planning", "execution", "review"]
+	- Complex coding queries → ["investigation", "planning", "execution"]
    - Direct commands (e.g., /cmd ls) → ["execution"]
 
 6. **Intent Categories:**
@@ -235,7 +240,7 @@ Query: "The current folder ../lib/sop, fix failing tests under this folder."
 {
   "domains": ["coding_workflow"],
   "phase": "execution",
-  "phase_plan": ["investigation", "execution", "review"],
+	"phase_plan": ["investigation", "execution"],
   "intent": "generate_code",
   "crud": ["R", "U"],
   "confidence": "high",
@@ -321,18 +326,19 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 		result.Phase = "investigation" // Default to investigation
 	}
 
-	// Normalize phase name
-	result.Phase = normalizePhase(result.Phase)
+	// Normalize phase name using the active runtime contract for coding_workflow.
+	result.Phase = canonicalizeCodingRuntimePhase(&result, result.Phase)
 
 	// Ensure phase_plan is set
 	if len(result.PhasePlan) == 0 {
 		result.PhasePlan = []string{result.Phase}
 	}
 
-	// Normalize phase names in plan
+	// Normalize phase names in plan using the active runtime contract for coding_workflow.
 	for i, phase := range result.PhasePlan {
-		result.PhasePlan[i] = normalizePhase(phase)
+		result.PhasePlan[i] = canonicalizeCodingRuntimePhase(&result, phase)
 	}
+	result.PhasePlan = canonicalizeCodingRuntimePlan(&result, result.PhasePlan)
 
 	// Ensure current phase is in plan
 	if !contains(result.PhasePlan, result.Phase) {
@@ -405,7 +411,7 @@ func (a *CopilotAgent) applyCognitiveStateContinuity(ctx context.Context, result
 			result.Phase = "investigation"
 		}
 		if activePhase != "" {
-			result.Phase = normalizePhase(activePhase)
+			result.Phase = canonicalizeCodingRuntimePhase(&result, activePhase)
 		}
 	}
 	return result

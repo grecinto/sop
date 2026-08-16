@@ -136,7 +136,8 @@ func (b *BaseStep) OnAfterToolResult(
 }
 
 // OnAfterTurn decides whether to continue the step.
-// Default implementation checks for user redirects/modifications.
+// Default implementation only treats explicit task switches as redirects;
+// normal coding refinements stay in the current execution conversation.
 func (b *BaseStep) OnAfterTurn(ctx context.Context, turnNumber int, state capabilities.RoutingState) (bool, error) {
 	// Check if user wants to redirect workflow
 	if isRedirect, feedback := b.DetectUserRedirect(ctx); isRedirect {
@@ -157,7 +158,7 @@ func (b *BaseStep) OnAfterTurn(ctx context.Context, turnNumber int, state capabi
 }
 
 // OnFinalize returns the final step result.
-// Default implementation checks for redirect/modify and returns appropriate outcome.
+// Default implementation checks for explicit task switches or modifications and returns the appropriate outcome.
 // Subclasses can override this to provide more specific results.
 func (b *BaseStep) OnFinalize(ctx context.Context, state capabilities.RoutingState) (StepResult, error) {
 	// Check if user requested redirect
@@ -222,8 +223,8 @@ func (b *BaseStep) StopContinuation() {
 	b.continueSteps = false
 }
 
-// DetectUserRedirect checks if user input indicates a workflow direction change.
-// Returns true and the user feedback if redirect detected.
+// DetectUserRedirect checks if user input explicitly switches away from the current task.
+// Normal design, investigation, and implementation refinements stay in the active conversation.
 func (b *BaseStep) DetectUserRedirect(ctx context.Context) (bool, string) {
 	userMessage := extractLastUserMessage(ctx)
 	if userMessage == "" {
@@ -232,41 +233,23 @@ func (b *BaseStep) DetectUserRedirect(ctx context.Context) (bool, string) {
 
 	lowerMsg := strings.ToLower(userMessage)
 
-	// Keywords that indicate user wants to change direction
-	redirectKeywords := []string{
-		"no,",       // "No, I want to..."
-		"wait,",     // "Wait, let's..."
-		"actually,", // "Actually, ..."
-		"instead",   // "Instead, let's..."
-		"first",     // "Test first", "Debug first"
-		"before",    // "Before that..."
-		"stop",      // "Stop, let's..."
-		"change",    // "Change direction"
-		"switch",    // "Switch to..."
+	redirectSignals := []string{
+		"switch to ",
+		"switch over to ",
+		"pause this",
+		"pause the current",
+		"pause the workstream",
+		"stop this and",
+		"work on something else",
+		"different task",
+		"new task",
+		"abandon this",
+		"cancel this and",
+		"forget this and",
 	}
 
-	for _, keyword := range redirectKeywords {
+	for _, keyword := range redirectSignals {
 		if strings.Contains(lowerMsg, keyword) {
-			return true, userMessage
-		}
-	}
-
-	// Check for explicit task type mentions that conflict with current workflow
-	taskMentions := []string{
-		"test", "testing",
-		"debug", "debugging", "fix",
-		"refactor", "refactoring",
-		"document", "documentation",
-		"implement", "implementation",
-		"architect", "architecture", "design",
-	}
-
-	// If user mentions a task type with "first", "instead", etc., it's likely a redirect
-	for _, mention := range taskMentions {
-		if strings.Contains(lowerMsg, mention+" first") ||
-			strings.Contains(lowerMsg, mention+" instead") ||
-			strings.Contains(lowerMsg, "do "+mention) ||
-			strings.Contains(lowerMsg, "run "+mention) {
 			return true, userMessage
 		}
 	}

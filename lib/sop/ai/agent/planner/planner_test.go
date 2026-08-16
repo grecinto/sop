@@ -378,13 +378,18 @@ func TestBuildPhaseMiniPlan_IncludesRoutingMetadata(t *testing.T) {
 	}
 }
 
-func TestBuildPhasePlanSequence_IncludesTestingPhase(t *testing.T) {
+func TestBuildPhasePlanSequence_UsesActiveCodingPhasesOnly(t *testing.T) {
 	sequence := buildPhasePlanSequence("implement a parser fix with regression coverage")
-	if len(sequence) < 7 {
-		t.Fatalf("expected at least 7 phases, got %d", len(sequence))
+	if len(sequence) != 3 {
+		t.Fatalf("expected active coding sequence to contain only investigation, planning, execution, got %#v", sequence)
 	}
-	if sequence[3] != "testing" {
-		t.Fatalf("expected testing to appear before execution, got %#v", sequence)
+	if sequence[0] != "investigation" || sequence[1] != "planning" || sequence[2] != "execution" {
+		t.Fatalf("expected active coding sequence to be investigation,planning,execution, got %#v", sequence)
+	}
+	for _, phase := range sequence {
+		if phase == "testing" || phase == "review" || phase == "delivery" {
+			t.Fatalf("did not expect legacy phase %q in the active coding sequence, got %#v", phase, sequence)
+		}
 	}
 }
 
