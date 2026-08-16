@@ -24,6 +24,27 @@ func (s stubContextManager) BuildContext(task Task, state RunState) (ContextPack
 	return s.pack, nil
 }
 
+type capturingContextManager struct {
+	seen Task
+	pack ContextPack
+	err  error
+}
+
+func (c *capturingContextManager) BuildContext(task Task, state RunState) (ContextPack, error) {
+	c.seen = task
+	if c.err != nil {
+		return ContextPack{}, c.err
+	}
+	pack := c.pack
+	if pack.WorkingDir == "" {
+		pack.WorkingDir = task.WorkingDir
+	}
+	if pack.ActiveFile == "" {
+		pack.ActiveFile = task.ActiveFile
+	}
+	return pack, nil
+}
+
 func TestPhaseCapabilityToolSchemasUseObjectLevelRequiredFields(t *testing.T) {
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory()}
 	cap := NewPlanningPhaseCapability(infra)
@@ -481,6 +502,74 @@ func TestInvestigationInspectRepoReportsGuidanceWhenRepositoryUnavailable(t *tes
 	}
 	if !strings.Contains(result, "provide working_dir") {
 		t.Fatalf("expected guidance to provide working_dir, got %q", result)
+	}
+}
+
+func TestInvestigationBuildContextReportsGuidanceWhenRepositoryUnavailable(t *testing.T) {
+	tempRoot := t.TempDir()
+	workingDir := filepath.Join(tempRoot, "scratch")
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		t.Fatalf("create temp working dir: %v", err)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(prevWD)
+	}()
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir temp working dir: %v", err)
+	}
+
+	cap := NewInvestigationPhaseCapability(&SharedInfrastructure{Memory: NewInMemorySessionMemory()})
+	result, execErr := cap.ExecuteTool(context.Background(), "investigation_build_context", map[string]any{
+		"query":       "fix failing tests",
+		"working_dir": ".",
+		"active_file": ".",
+	}, capabilities.RoutingState{})
+	if execErr != nil {
+		t.Fatalf("expected graceful repo guidance, got error: %v", execErr)
+	}
+	if !strings.Contains(result, "Repository Context Unavailable") {
+		t.Fatalf("expected unavailable guidance, got %q", result)
+	}
+	if !strings.Contains(result, "provide working_dir") {
+		t.Fatalf("expected guidance to provide working_dir, got %q", result)
+	}
+	if strings.Contains(result, "read active file") {
+		t.Fatalf("expected sanitized active file handling, got %q", result)
+	}
+}
+
+func TestInvestigationBuildContext_UsesWorkspaceRootFromSessionWhenWorkingDirIsDot(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git dir: %v", err)
+	}
+	ctxManager := &capturingContextManager{}
+	cap := NewInvestigationPhaseCapability(&SharedInfrastructure{
+		Memory:         NewInMemorySessionMemory(),
+		ContextManager: ctxManager,
+	})
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		Variables: map[string]any{"workspace_root": repoRoot},
+	})
+
+	result, execErr := cap.ExecuteTool(ctx, "investigation_build_context", map[string]any{
+		"query":       "fix failing tests",
+		"working_dir": ".",
+		"active_file": ".",
+	}, capabilities.RoutingState{})
+	if execErr != nil {
+		t.Fatalf("expected workspace_root to resolve build context, got error: %v", execErr)
+	}
+	if ctxManager.seen.WorkingDir != repoRoot {
+		t.Fatalf("expected workspace_root to become working dir, got %q", ctxManager.seen.WorkingDir)
+	}
+	if strings.Contains(result, "Repository Context Unavailable") {
+		t.Fatalf("expected resolved workspace context, got %q", result)
 	}
 }
 

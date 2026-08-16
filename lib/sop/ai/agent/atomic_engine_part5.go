@@ -539,8 +539,9 @@ func (e *ScriptEngine) Join(ctx context.Context, input any, args map[string]any)
 	if rightAlias == "" {
 
 		if isRightStore && rightStore != nil {
-			rightAlias = rightStore.GetStoreInfo().Name
-			if rightAlias == "" {
+			if name := strings.TrimSpace(rightStore.GetStoreInfo().Name); name != "" {
+				rightAlias = name
+			} else {
 				rightAlias = rightVar
 			}
 		} else if a, ok := args["store"].(string); ok && a != "" {
@@ -552,6 +553,7 @@ func (e *ScriptEngine) Join(ctx context.Context, input any, args map[string]any)
 		}
 	}
 
+	rightAlias = strings.TrimSpace(strings.TrimPrefix(rightAlias, "@"))
 	leftAlias, _ := args["left_alias"].(string)
 
 	log.Debug("Join", "RightVar", rightVar, "IsStore", isRightStore, "JoinType", joinType)

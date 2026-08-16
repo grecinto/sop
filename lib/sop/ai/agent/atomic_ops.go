@@ -345,6 +345,18 @@ func sanitizeScript(script []ScriptInstruction) []ScriptInstruction {
 				}
 			}
 
+			if _, hasAlias := instr.Args["right_alias"]; !hasAlias {
+				for _, key := range []string{"with", "store", "right_store", "right", "right_dataset"} {
+					if ref, ok := instr.Args[key].(string); ok {
+						ref = strings.TrimSpace(strings.TrimPrefix(ref, "@"))
+						if origin, ok := varOrigins[ref]; ok {
+							instr.Args["right_alias"] = origin
+							break
+						}
+					}
+				}
+			}
+
 			if _, hasAlias := instr.Args["alias"]; !hasAlias {
 				if _, hasRightAlias := instr.Args["right_alias"]; !hasRightAlias {
 

@@ -190,8 +190,9 @@ func (s *ToolResultStorage) createTestFailureSummary(result, filePath string, si
 
 	sb.WriteString("⚠️  TEST FAILURE DETECTED\n\n")
 
-	// Extract critical error section (first 50 lines or until first blank line after error)
-	criticalSection := extractCriticalErrorSection(result, 50)
+	// Extract the most relevant failure block(s), even when the decisive failure
+	// appears deep in the output after many passing tests.
+	criticalSection := extractCriticalFailureHighlights(result, 50)
 	sb.WriteString("CRITICAL ERROR OUTPUT:\n")
 	sb.WriteString(strings.Repeat("=", 80))
 	sb.WriteString("\n")
@@ -210,15 +211,17 @@ func (s *ToolResultStorage) createTestFailureSummary(result, filePath string, si
 
 	sb.WriteString("NEXT STEPS (DO NOT SKIP):\n")
 	sb.WriteString("1. ✓ Error captured above - analyze the failure message\n")
-	sb.WriteString("2. Read the failing test source code to understand what's being tested\n")
-	sb.WriteString("3. Read the implementation code that the test is checking\n")
-	sb.WriteString("4. Identify the root cause by matching error to code\n")
-	sb.WriteString("5. Apply the fix using patch_file\n")
-	sb.WriteString("6. Re-run the test to verify the fix works\n\n")
+	sb.WriteString("2. Identify the failing test name/package from the failure block above\n")
+	sb.WriteString("3. Read the failing test source code to understand what's being tested\n")
+	sb.WriteString("4. Read the implementation code that the test is checking\n")
+	sb.WriteString("5. Identify the root cause by matching error to code\n")
+	sb.WriteString("6. Apply the fix using patch_file\n")
+	sb.WriteString("7. Re-run the test to verify the fix works\n\n")
 
 	sb.WriteString("If you need more context from the test output:\n")
 	sb.WriteString(fmt.Sprintf("  • Read specific lines: read_tool_result(file_path=\"%s\", start_line=X, end_line=Y)\n", filePath))
 	sb.WriteString(fmt.Sprintf("  • Search patterns: grep_tool_result(file_path=\"%s\", pattern=\"PATTERN\")\n", filePath))
+	sb.WriteString("  • After finding a failing test name, inspect that test file and the implementation it exercises before concluding anything\n")
 
 	return sb.String()
 }
@@ -384,6 +387,58 @@ func extractCriticalErrorSection(result string, maxLines int) string {
 	}
 
 	return strings.Join(lines[startIdx:endIdx], "\n")
+}
+
+// extractCriticalFailureHighlights prefers explicit failure blocks over the first
+// generic error-looking line so the model sees the decisive failing test even
+// when it appears deep in large test logs.
+func extractCriticalFailureHighlights(result string, maxLines int) string {
+	lines := strings.Split(result, "\n")
+	markers := []int{}
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "--- FAIL:") || strings.HasPrefix(trimmed, "panic:") || strings.HasPrefix(trimmed, "FAIL\t") || trimmed == "FAIL" {
+			markers = append(markers, i)
+		}
+	}
+	if len(markers) == 0 {
+		return extractCriticalErrorSection(result, maxLines)
+	}
+
+	startMarker := markers[len(markers)-1]
+	for _, idx := range markers {
+		if strings.HasPrefix(strings.TrimSpace(lines[idx]), "--- FAIL:") {
+			startMarker = idx
+			break
+		}
+	}
+
+	startIdx := startMarker - 5
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	endIdx := startIdx + maxLines
+	if endIdx > len(lines) {
+		endIdx = len(lines)
+	}
+
+	for i := startMarker + 1; i < len(lines) && i < endIdx; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "FAIL\t") {
+			endIdx = i + 1
+			break
+		}
+		if strings.HasPrefix(trimmed, "ok\t") || (strings.HasPrefix(trimmed, "=== RUN") && i > startMarker+1) {
+			endIdx = i
+			break
+		}
+	}
+
+	section := strings.TrimSpace(strings.Join(lines[startIdx:endIdx], "\n"))
+	if section != "" {
+		return section
+	}
+	return extractCriticalErrorSection(result, maxLines)
 }
 
 // CleanupOldToolResults removes tool result directories older than the given TTL

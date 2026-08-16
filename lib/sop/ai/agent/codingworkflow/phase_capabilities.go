@@ -1621,27 +1621,27 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 	case strings.ToLower(c.phaseToolName("create_succession_path")):
 		return c.runCreateSuccessionPath(args)
 	case strings.ToLower(c.phaseToolName("build_context")):
-		return c.runBuildContext(args)
+		return c.runBuildContext(ctx, args)
 	case strings.ToLower(c.phaseToolName("inspect_repo")):
-		return c.runInspectRepo(args)
+		return c.runInspectRepo(ctx, args)
 	case strings.ToLower(c.phaseToolName("search_repo")):
-		return c.runSearchRepo(args)
+		return c.runSearchRepo(ctx, args)
 	case strings.ToLower(c.phaseToolName("list_changed_files")):
-		return c.runListChangedFiles(args)
+		return c.runListChangedFiles(ctx, args)
 	case strings.ToLower(c.phaseToolName("index_repo_structure")):
-		return c.runIndexRepoStructure(args)
+		return c.runIndexRepoStructure(ctx, args)
 	case strings.ToLower(c.phaseToolName("search_team_patterns")):
 		return c.runSearchTeamPatterns(ctx, args)
 	case strings.ToLower(c.phaseToolName("vectorize_team_patterns")):
 		return c.runVectorizeTeamPatterns(ctx, args)
 	case strings.ToLower(c.phaseToolName("plan_changes")):
-		return c.runPlanChanges(args)
+		return c.runPlanChanges(ctx, args)
 	case strings.ToLower(c.phaseToolName("preview_patch")):
 		return c.runPreviewPatch(args)
 	case strings.ToLower(c.phaseToolName("apply_patch")):
 		return c.runApplyPatch(args)
 	case strings.ToLower(c.phaseToolName("run_tests")):
-		return c.runTests(args)
+		return c.runTests(ctx, args)
 	default:
 		return "", fmt.Errorf("unsupported tool %q", toolName)
 	}
@@ -1894,7 +1894,39 @@ func formatPhaseClarificationContext(artifact phaseArtifact) string {
 	return strings.Join(parts, "\n")
 }
 
-func (c *PhaseCapability) buildTask(args map[string]any) Task {
+func resolveContextWorkingDir(ctx context.Context, workingDir string) string {
+	trimmed := strings.TrimSpace(workingDir)
+	cleaned := filepath.Clean(trimmed)
+	if trimmed != "" && cleaned != "." && cleaned != string(filepath.Separator) {
+		return trimmed
+	}
+	if ctx != nil {
+		if ctxWorkingDir, ok := ctx.Value("working_dir").(string); ok {
+			candidate := strings.TrimSpace(ctxWorkingDir)
+			if candidate != "" && filepath.Clean(candidate) != "." {
+				return candidate
+			}
+		}
+	}
+	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		if payload.Variables != nil {
+			for _, key := range []string{"working_dir", "workspace_root"} {
+				if raw, ok := payload.Variables[key].(string); ok {
+					candidate := strings.TrimSpace(raw)
+					if candidate != "" && filepath.Clean(candidate) != "." {
+						return candidate
+					}
+				}
+			}
+		}
+		if repoHint := strings.TrimSpace(payload.ActiveRepo); repoHint != "" && filepath.IsAbs(repoHint) && filepath.Clean(repoHint) != "." {
+			return repoHint
+		}
+	}
+	return trimmed
+}
+
+func (c *PhaseCapability) buildTask(ctx context.Context, args map[string]any) Task {
 	query := readPhaseString(args, "query", "")
 	if query == "" {
 		query = readPhaseString(args, "task", "")
@@ -1903,8 +1935,11 @@ func (c *PhaseCapability) buildTask(args map[string]any) Task {
 		query = readPhaseString(args, "description", "")
 	}
 
-	workingDir := readPhaseString(args, "working_dir", "")
+	workingDir := resolveContextWorkingDir(ctx, readPhaseString(args, "working_dir", ""))
 	activeFile := readPhaseString(args, "active_file", "")
+	if cleanedActiveFile := filepath.Clean(strings.TrimSpace(activeFile)); cleanedActiveFile == "." || cleanedActiveFile == string(filepath.Separator) {
+		activeFile = ""
+	}
 	if workingDir == "" || activeFile == "" {
 		inferredDir, inferredFile := inferTaskInputs(query)
 		if workingDir == "" {
@@ -1987,8 +2022,11 @@ func formatRepoResolutionFallback(toolLabel string, task Task, candidates []stri
 	return strings.Join(parts, "\n")
 }
 
-func (c *PhaseCapability) runBuildContext(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+func (c *PhaseCapability) runBuildContext(ctx context.Context, args map[string]any) (string, error) {
+	task, candidates := resolveRepoWorkingDir(c.buildTask(ctx, args))
+	if task.ActiveFile == "" && len(candidates) == 0 && !isGitRepositoryDir(task.WorkingDir) {
+		return formatRepoResolutionFallback("Repository Context", task, candidates, fmt.Errorf("no git repository found for %q", task.WorkingDir)), nil
+	}
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -1996,7 +2034,7 @@ func (c *PhaseCapability) runBuildContext(args map[string]any) (string, error) {
 	packOps := infra.NewContextPackOperations()
 	pack, err := packOps.BuildContextForTask(task, task.State)
 	if err != nil {
-		return "", fmt.Errorf("build context: %w", err)
+		return formatRepoResolutionFallback("Repository Context", task, candidates, fmt.Errorf("build context: %w", err)), nil
 	}
 	if infra.RepoIndexer != nil {
 		_, _ = infra.RepoIndexer.Index(task, task.State)
@@ -2010,8 +2048,8 @@ func (c *PhaseCapability) runBuildContext(args map[string]any) (string, error) {
 	return contextText, nil
 }
 
-func (c *PhaseCapability) runInspectRepo(args map[string]any) (string, error) {
-	task, candidates := resolveRepoWorkingDir(c.buildTask(args))
+func (c *PhaseCapability) runInspectRepo(ctx context.Context, args map[string]any) (string, error) {
+	task, candidates := resolveRepoWorkingDir(c.buildTask(ctx, args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2033,8 +2071,8 @@ func (c *PhaseCapability) runInspectRepo(args map[string]any) (string, error) {
 	return strings.Join(parts, "\n"), nil
 }
 
-func (c *PhaseCapability) runSearchRepo(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any) (string, error) {
+	task := c.buildTask(ctx, args)
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2054,8 +2092,8 @@ func (c *PhaseCapability) runSearchRepo(args map[string]any) (string, error) {
 	return fmt.Sprintf("Search Results:\n%s", strings.Join(results, "\n")), nil
 }
 
-func (c *PhaseCapability) runListChangedFiles(args map[string]any) (string, error) {
-	task, candidates := resolveRepoWorkingDir(c.buildTask(args))
+func (c *PhaseCapability) runListChangedFiles(ctx context.Context, args map[string]any) (string, error) {
+	task, candidates := resolveRepoWorkingDir(c.buildTask(ctx, args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2215,8 +2253,8 @@ func isSupportedRepoIndexExtension(ext string) bool {
 	}
 }
 
-func (c *PhaseCapability) runIndexRepoStructure(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+func (c *PhaseCapability) runIndexRepoStructure(ctx context.Context, args map[string]any) (string, error) {
+	task := c.buildTask(ctx, args)
 	resolvedTask, candidates := resolveRepoWorkingDir(task)
 	if resolvedTask.WorkingDir == "" {
 		resolvedTask.WorkingDir = task.WorkingDir
@@ -2358,8 +2396,8 @@ func (c *PhaseCapability) runVectorizeTeamPatterns(ctx context.Context, args map
 	return "✅ Team patterns are now indexed and ready for search.", nil
 }
 
-func (c *PhaseCapability) runPlanChanges(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+func (c *PhaseCapability) runPlanChanges(ctx context.Context, args map[string]any) (string, error) {
+	task := c.buildTask(ctx, args)
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2383,7 +2421,7 @@ func (c *PhaseCapability) runPlanChanges(args map[string]any) (string, error) {
 }
 
 func (c *PhaseCapability) runPreviewPatch(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+	task := c.buildTask(context.Background(), args)
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2401,7 +2439,7 @@ func (c *PhaseCapability) runPreviewPatch(args map[string]any) (string, error) {
 }
 
 func (c *PhaseCapability) runApplyPatch(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+	task := c.buildTask(context.Background(), args)
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2422,8 +2460,8 @@ func (c *PhaseCapability) runApplyPatch(args map[string]any) (string, error) {
 	return fmt.Sprintf("Applied patch to %s", patch.FilePath), nil
 }
 
-func (c *PhaseCapability) runTests(args map[string]any) (string, error) {
-	task := c.buildTask(args)
+func (c *PhaseCapability) runTests(ctx context.Context, args map[string]any) (string, error) {
+	task := c.buildTask(ctx, args)
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")

@@ -187,6 +187,41 @@ func TestStoreResult_BuildToolRecommendations(t *testing.T) {
 	}
 }
 
+func TestStoreResult_TestFailureSummarySurfacesLateFailingTestBlock(t *testing.T) {
+	storage, err := NewToolResultStorage("test-late-failure")
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Cleanup()
+
+	var output strings.Builder
+	for i := 0; i < 300; i++ {
+		output.WriteString("=== RUN   TestPassingCase\n")
+		output.WriteString("ok\tgithub.com/sharedcode/sop/pkg\t0.010s\n")
+	}
+	output.WriteString("=== RUN   TestFloaterUsesSharedRuntimeResponseHandler\n")
+	output.WriteString("--- FAIL: TestFloaterUsesSharedRuntimeResponseHandler (0.00s)\n")
+	output.WriteString("FAIL\n")
+	output.WriteString("FAIL\tgithub.com/sharedcode/sop/tools/httpserver\t1.862s\n")
+
+	inline, _, _, err := storage.StoreResult("run_repo_tests", output.String())
+	if err != nil {
+		t.Fatalf("StoreResult failed: %v", err)
+	}
+	if !strings.Contains(inline, "TestFloaterUsesSharedRuntimeResponseHandler") {
+		t.Fatalf("expected late failing test name to be surfaced, got: %s", inline)
+	}
+	if !strings.Contains(inline, "github.com/sharedcode/sop/tools/httpserver") {
+		t.Fatalf("expected failing package to be surfaced, got: %s", inline)
+	}
+	if !strings.Contains(inline, "Read the failing test source code") {
+		t.Fatalf("expected next-step guidance to inspect the test source, got: %s", inline)
+	}
+	if !strings.Contains(inline, "After finding a failing test name") {
+		t.Fatalf("expected explicit handoff to source inspection, got: %s", inline)
+	}
+}
+
 func TestStoreResult_HeadAndTail(t *testing.T) {
 	storage, err := NewToolResultStorage("test-head-tail")
 	if err != nil {

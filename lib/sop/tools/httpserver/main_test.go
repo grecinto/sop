@@ -212,10 +212,10 @@ func TestFloaterUsesSharedRuntimeResponseHandler(t *testing.T) {
 	if !strings.Contains(content, "function handleRuntimeResponse") {
 		t.Fatalf("expected shared runtime response handler in chat script")
 	}
-	if !strings.Contains(content, "await handleRuntimeResponse(response, loadingId, 'local')") {
+	if !strings.Contains(content, "await handleRuntimeResponse(response, 'local')") {
 		t.Fatalf("expected local runtime branch to call the shared runtime response handler")
 	}
-	if !strings.Contains(content, "await handleRuntimeResponse(response, loadingId, 'hq')") {
+	if !strings.Contains(content, "await handleRuntimeResponse(response, 'hq')") {
 		t.Fatalf("expected remote runtime branch to call the shared runtime response handler")
 	}
 }
