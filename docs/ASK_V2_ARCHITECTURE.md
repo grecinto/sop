@@ -31,6 +31,8 @@ The Ask entrypoint accepts a query plus config and prepares the shared session c
 ### 2. Cold-start routing classifies the task
 The agent resolves a task context with:
 - domains
+- task shape
+- orchestration level
 - runtime mode or current phase metadata
 - phase plan when persistent continuity still benefits from it
 - intent
@@ -41,6 +43,23 @@ The output is persisted into the active workstream so later turns can resume fro
 
 ### 3. Runtime surfaces are built for the selected domains
 For each relevant domain, the system creates the runtime surface that best fits the task. In coding workflow, the live Ask prompt uses task-mode wording and exposes a discovery or implementation runtime surface rather than teaching the model a full SDLC phase taxonomy for every turn. Internal phase metadata can still exist for continuity and compatibility, but it is not the primary prompt frame.
+
+The current implementation now adds a middle control layer between raw task mode and internal phase state:
+
+- `task_shape`: what kind of work this is
+- `orchestration_level`: whether the ask should remain single-turn or enter a managed workflow
+- `phase`: the next disciplined step only when managed workflow control is active
+
+This prevents two failure modes:
+
+- phase-heavy ceremony for simple asks
+- ad hoc execution for complex asks like repo-wide test repair
+
+The intended control order is:
+
+1. classify the task shape
+2. decide whether the ask stays `single_turn` or becomes `managed_workflow`
+3. only then activate internal phase control
 
 This should be read as an implementation choice, not a permanent architectural requirement. The important invariant is that phase state remains internal execution context rather than a required conversational transport protocol. If the phase-aligned tool surfaces and prompt context become strong enough, the system can simplify away from explicit task-mode wording without reintroducing brittle phase hops.
 
@@ -76,6 +95,8 @@ The Ask pipeline is the controller of outer-flow behavior. It owns:
 Future build-target note: if HQ and daemon should ship different capability surfaces, that separation should happen at build/import time rather than only through runtime registration flags. See [STRUCTURED_PLANNER_EXECUTION_DESIGN.md](STRUCTURED_PLANNER_EXECUTION_DESIGN.md) for the TODO.
 
 For coding workflow specifically, the persisted workstream may still store phase metadata for continuity, but the live Ask routing hint is task-mode-oriented (`discovery` or `implementation`) rather than phase-oriented.
+
+The important refinement is that `implementation` no longer implies immediate execution readiness. A coding ask can be implementation-oriented at the task-mode level while still entering managed `investigation` or `planning` internally when the work requires diagnosis, sequencing, or design.
 
 Relevant implementation:
 - lib/sop/ai/agent/ask_pipeline.go
@@ -130,6 +151,27 @@ Phase capabilities remain passive participants. They expose tools and instructio
 
 Relevant implementation:
 - lib/sop/ai/agent/codingworkflow/phase_capabilities.go
+
+### Orchestration-level contract
+
+The runtime now distinguishes between two orchestration levels:
+
+- `single_turn`: the next action is obvious, local, and easy to validate
+- `managed_workflow`: the ask needs diagnosis, sequencing, tradeoff analysis, or more than one meaningful step
+
+This is the middle ground between the original phase-heavy design and the later over-ad-hoc implementation path.
+
+Examples:
+
+- `rename this symbol` -> usually `single_turn`
+- `run this test` -> usually `single_turn`
+- `fix failing tests` -> usually `managed_workflow`
+- `implement this feature across the repo` -> usually `managed_workflow`
+- `refactor subsystem X` -> usually `managed_workflow`
+
+When managed workflow is selected, execution should begin only when the ask is execution-ready. For issue-oriented asks, that means the system should already have a failing behavior, a root-cause hypothesis, a causal path, and a focused validation target before it treats execution as the active phase.
+
+For coding workflow, execution readiness is no longer just a classifier opinion. The runtime can promote a managed coding ask into execution when a persisted planning artifact is present with `status=ready_for_execution`. This keeps phase entry tied to actual planning output instead of letting write-intent language skip directly into execution.
 
 ---
 

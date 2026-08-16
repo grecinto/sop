@@ -19,6 +19,12 @@ type AskTaskContext struct {
 	// Examples: ["stores"], ["spaces"], ["stores", "spaces"], ["coding_workflow"]
 	Domains []string `json:"domains"`
 
+	// TaskShape: Stable description of the requested work.
+	TaskShape string `json:"task_shape,omitempty"`
+
+	// OrchestrationLevel: Whether the ask should stay lightweight or enter managed workflow control.
+	OrchestrationLevel string `json:"orchestration_level,omitempty"`
+
 	// Phase: The current phase for this query.
 	// Coding workflow uses the active runtime phases: investigation, planning, execution.
 	// Other domains may still use review/delivery when they expose those surfaces.
@@ -47,6 +53,9 @@ type AskTaskContext struct {
 	// Reasoning: LLM's explanation for why it chose these domains/phases
 	Reasoning string `json:"reasoning"`
 
+	// ExecutionReady: Whether the request is grounded enough to start in execution.
+	ExecutionReady bool `json:"execution_ready,omitempty"`
+
 	// OriginalQuery: The unmodified user query
 	OriginalQuery string `json:"original_query"`
 
@@ -54,6 +63,18 @@ type AskTaskContext struct {
 	// and should be confirmed with the user before planning/tool registration proceeds.
 	DomainOfferNeeded bool `json:"-"`
 }
+
+const (
+	taskShapeDirectAnswer       = "direct_answer"
+	taskShapeDirectAction       = "direct_action"
+	taskShapeIssueInvestigation = "issue_investigation"
+	taskShapeDesignOrFeature    = "design_or_feature"
+	taskShapeRefactorCampaign   = "refactor_campaign"
+	taskShapeMultiDomain        = "multi_domain_workflow"
+
+	orchestrationSingleTurn      = "single_turn"
+	orchestrationManagedWorkflow = "managed_workflow"
+)
 
 // ClassifyAskTaskContext performs enhanced LLM-based classification that returns:
 // 1. Domain(s) - Can be multiple (e.g., ["stores", "spaces"])
@@ -118,9 +139,12 @@ func (a *CopilotAgent) ClassifyAskTaskContext(ctx context.Context, query string,
 
 	log.Info("AskTaskContext Classification",
 		"domains", result.Domains,
+		"task_shape", result.TaskShape,
+		"orchestration_level", result.OrchestrationLevel,
 		"phase", result.Phase,
 		"phase_plan", result.PhasePlan,
 		"intent", result.Intent,
+		"execution_ready", result.ExecutionReady,
 		"confidence", result.Confidence,
 		"reasoning", result.Reasoning)
 
@@ -177,12 +201,15 @@ Analyze the query and return a JSON object with this structure:
 
 {
   "domains": ["domain1", "domain2"],  // One or more domains (can be multiple)
+	"task_shape": "shape_name",          // direct_answer|direct_action|issue_investigation|design_or_feature|refactor_campaign|multi_domain_workflow
+	"orchestration_level": "level",      // single_turn|managed_workflow
   "phase": "phase_name",              // Current phase for this query
   "phase_plan": ["phase1", "phase2"], // Full sequence of phases (can be single phase)
   "intent": "intent_category",        // High-level intent
   "crud": ["C", "R", "U", "D"],       // CRUD operations (one or more: C=Create, R=Read, U=Update, D=Delete)
   "confidence": "high|medium|low",    // Your confidence level
-  "reasoning": "explanation"          // Why you chose these domains/phases
+	"reasoning": "explanation",         // Why you chose these domains/phases
+	"execution_ready": false             // true only when the first change is already concrete
 }
 
 **Classification Guidelines:**
@@ -206,7 +233,15 @@ Analyze the query and return a JSON object with this structure:
 	- Validation/testing → "review" only for domains that still expose a separate review phase
    - Simple direct commands → "execution" (single phase)
 
-4a. **Coding workflow uses active phases only**:
+4a. **Task shape and orchestration level**:
+	- Use "single_turn" only when the next action is obvious, narrow, and easy to validate.
+	- Use "managed_workflow" when the ask needs diagnosis, sequencing, tradeoffs, or more than one meaningful step.
+	- Issue-oriented asks such as "fix failing tests" or "debug why" should normally be task_shape="issue_investigation" and orchestration_level="managed_workflow".
+	- Design/architecture/approach asks should normally be task_shape="design_or_feature" and orchestration_level="managed_workflow".
+	- Refactor asks that span multiple files or invariants should normally be task_shape="refactor_campaign" and orchestration_level="managed_workflow".
+	- Set execution_ready=true only when the first concrete change is already known; write intent alone is not enough.
+
+4b. **Coding workflow uses active phases only**:
 	- For **coding_workflow**, return only: "investigation", "planning", or "execution"
 	- Do **not** emit "intake", "testing", "review", or "delivery" for coding_workflow
 	- In coding_workflow, validation/testing/handoff happen inside the implementation conversation rather than separate phases
@@ -236,23 +271,29 @@ Analyze the query and return a JSON object with this structure:
 Query: "List stores in production database"
 {
   "domains": ["stores"],
+	"task_shape": "direct_answer",
+	"orchestration_level": "single_turn",
   "phase": "investigation",
   "phase_plan": ["investigation"],
   "intent": "read_data",
   "crud": ["R"],
   "confidence": "high",
-  "reasoning": "Simple read-only store listing operation"
+	"reasoning": "Simple read-only store listing operation",
+	"execution_ready": true
 }
 
 Query: "The current folder ../lib/sop, fix failing tests under this folder."
 {
   "domains": ["coding_workflow"],
-  "phase": "execution",
-	"phase_plan": ["investigation", "execution"],
+	"task_shape": "issue_investigation",
+	"orchestration_level": "managed_workflow",
+	"phase": "investigation",
+	"phase_plan": ["investigation", "planning", "execution"],
   "intent": "generate_code",
   "crud": ["R", "U"],
   "confidence": "high",
-  "reasoning": "A local repo path scopes the task to the current codebase; it does not switch the task out of coding_workflow."
+	"reasoning": "A local repo path scopes the task to the current codebase; it does not switch the task out of coding_workflow, and failing tests require diagnosis before repair.",
+	"execution_ready": false
 }
 
 Query: "Query stores and search spaces for 'authentication'"
@@ -352,9 +393,22 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 		result.Domains = []string{"coding_workflow"}
 	}
 
+	if strings.TrimSpace(result.TaskShape) == "" {
+		result.TaskShape = inferAskTaskShape(result)
+	}
+	if strings.TrimSpace(result.OrchestrationLevel) == "" {
+		result.OrchestrationLevel = inferAskOrchestrationLevel(result)
+	}
+	if !result.ExecutionReady {
+		result.ExecutionReady = inferExecutionReadiness(result)
+	}
+
 	// Ensure phase is set
 	if result.Phase == "" {
 		result.Phase = "investigation" // Default to investigation
+	}
+	if result.OrchestrationLevel == orchestrationManagedWorkflow {
+		result.Phase = chooseManagedWorkflowPhase(result)
 	}
 
 	// Normalize phase name using the active runtime contract for coding_workflow.
@@ -362,7 +416,7 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 
 	// Ensure phase_plan is set
 	if len(result.PhasePlan) == 0 {
-		result.PhasePlan = []string{result.Phase}
+		result.PhasePlan = defaultPhasePlanForAsk(result)
 	}
 
 	// Normalize phase names in plan using the active runtime contract for coding_workflow.
@@ -374,6 +428,15 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 	// Ensure current phase is in plan
 	if !contains(result.PhasePlan, result.Phase) {
 		result.PhasePlan = append([]string{result.Phase}, result.PhasePlan...)
+	}
+	if result.OrchestrationLevel == orchestrationManagedWorkflow {
+		if len(result.PhasePlan) == 0 || askClassificationHasDomain(result.Domains, "coding_workflow") {
+			result.PhasePlan = defaultPhasePlanForAsk(result)
+		}
+		if !contains(result.PhasePlan, result.Phase) {
+			result.PhasePlan = append([]string{result.Phase}, result.PhasePlan...)
+		}
+		result.PhasePlan = canonicalizeCodingRuntimePlan(&result, result.PhasePlan)
 	}
 
 	// Default intent
@@ -390,6 +453,85 @@ func (a *CopilotAgent) normalizeAskTaskContext(result AskTaskContext) AskTaskCon
 	return result
 }
 
+func inferAskTaskShape(result AskTaskContext) string {
+	query := strings.ToLower(strings.TrimSpace(result.OriginalQuery))
+	if len(result.Domains) > 1 {
+		return taskShapeMultiDomain
+	}
+	if containsRepoFixIntent(result) || strings.Contains(query, "debug") || strings.Contains(query, "diagnose") || strings.Contains(query, "investigate why") {
+		return taskShapeIssueInvestigation
+	}
+	if strings.Contains(query, "refactor") || strings.Contains(query, "cleanup") || strings.Contains(query, "simplify") {
+		return taskShapeRefactorCampaign
+	}
+	if strings.Contains(query, "design") || strings.Contains(query, "architecture") || strings.Contains(query, "approach") || strings.Contains(query, "plan") || strings.Contains(query, "strategy") || strings.Contains(query, "implement") || strings.Contains(query, "feature") {
+		return taskShapeDesignOrFeature
+	}
+	if isExplicitDesktopDirective(query) {
+		return taskShapeDirectAction
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(result.Intent)), "read") || strings.EqualFold(result.Intent, "analyze") {
+		return taskShapeDirectAnswer
+	}
+	return taskShapeDirectAction
+}
+
+func inferAskOrchestrationLevel(result AskTaskContext) string {
+	if len(result.PhasePlan) > 1 {
+		return orchestrationManagedWorkflow
+	}
+	switch result.TaskShape {
+	case taskShapeIssueInvestigation, taskShapeDesignOrFeature, taskShapeRefactorCampaign, taskShapeMultiDomain:
+		return orchestrationManagedWorkflow
+	default:
+		return orchestrationSingleTurn
+	}
+}
+
+func inferExecutionReadiness(result AskTaskContext) bool {
+	if result.OrchestrationLevel == orchestrationSingleTurn {
+		return true
+	}
+	if containsRepoFixIntent(result) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(result.Phase), "execution")
+}
+
+func chooseManagedWorkflowPhase(result AskTaskContext) string {
+	phase := canonicalizeCodingRuntimePhase(&result, result.Phase)
+	if phase == "planning" {
+		return "planning"
+	}
+	if result.ExecutionReady && phase == "execution" {
+		return "execution"
+	}
+	switch result.TaskShape {
+	case taskShapeDesignOrFeature, taskShapeRefactorCampaign:
+		return "planning"
+	default:
+		return "investigation"
+	}
+}
+
+func defaultPhasePlanForAsk(result AskTaskContext) []string {
+	if result.OrchestrationLevel != orchestrationManagedWorkflow {
+		return []string{result.Phase}
+	}
+	if askClassificationHasDomain(result.Domains, "coding_workflow") {
+		switch result.TaskShape {
+		case taskShapeDesignOrFeature, taskShapeRefactorCampaign:
+			return []string{"planning", "execution"}
+		default:
+			return []string{"investigation", "planning", "execution"}
+		}
+	}
+	if result.Phase != "" {
+		return []string{result.Phase}
+	}
+	return []string{"investigation"}
+}
+
 // buildFallbackClassification creates a safe default classification when LLM fails.
 func (a *CopilotAgent) buildFallbackClassification(query string) *AskTaskContext {
 	domains := inferExplicitDomainsFromQuery(query)
@@ -399,14 +541,17 @@ func (a *CopilotAgent) buildFallbackClassification(query string) *AskTaskContext
 		domainOfferNeeded = true
 	}
 	return &AskTaskContext{
-		Domains:           domains,
-		Phase:             "investigation",
-		PhasePlan:         []string{"investigation"},
-		Intent:            "general",
-		Confidence:        "low",
-		Reasoning:         fmt.Sprintf("Fallback classification due to LLM parse failure; leaning to environment defaults: %s", strings.Join(defaultAskDomains(), ", ")),
-		OriginalQuery:     query,
-		DomainOfferNeeded: domainOfferNeeded,
+		Domains:            domains,
+		TaskShape:          taskShapeDirectAnswer,
+		OrchestrationLevel: orchestrationSingleTurn,
+		Phase:              "investigation",
+		PhasePlan:          []string{"investigation"},
+		Intent:             "general",
+		ExecutionReady:     true,
+		Confidence:         "low",
+		Reasoning:          fmt.Sprintf("Fallback classification due to LLM parse failure; leaning to environment defaults: %s", strings.Join(defaultAskDomains(), ", ")),
+		OriginalQuery:      query,
+		DomainOfferNeeded:  domainOfferNeeded,
 	}
 }
 

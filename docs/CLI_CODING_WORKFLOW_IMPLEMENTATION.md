@@ -128,11 +128,20 @@ For coding tasks, the live prompt and tool surface should prefer two runtime mod
   - Broad coding surface that allows inspection, planning, edit, and validation tools in one continuous Ask/ReAct transaction.
   - Use when the task is action-oriented and can usually be completed without an explicit phase handoff.
 
+Implementation should be read as a write-capable runtime bundle, not as proof that the task is ready to patch immediately. The current routing contract now distinguishes:
+
+- `single_turn` asks: narrow, obvious, local changes that can complete without workflow ceremony
+- `managed_workflow` asks: bug fixes, repo-wide test repair, multi-file features, or refactors that need discovery or planning before editing
+
+For managed workflow coding asks, implementation-mode wording may still be active at the top level while the internal phase begins in `investigation` or `planning`. This is deliberate. The runtime should expose enough discovery/planning surface to ground the change before it enters execution.
+
 **Prompt rule**: phase semantics are internal metadata for continuity; the live coding prompt should steer the model with runtime-mode wording rather than teaching a full SDLC phase taxonomy on every turn.
 
 Equivalent future implementation: once phase-aligned prompt context and tool surfaces are strong enough, the system can reduce explicit task-mode framing and still preserve the same Ask-first behavior. The key is to avoid turning phase progression into workflow ceremony.
 
 **Routing rule**: for coding tasks, the live routing hint should also use runtime-mode values (`discovery` or `implementation`) instead of phase names. Internal phase IDs remain useful for stored artifacts, compatibility with older workstreams, and specialized capability logic, but they should not be the primary live Ask control primitive.
+
+**Execution-readiness rule**: implementation-oriented asks should only start in execution when the first concrete change is already known. Requests such as `fix failing tests` should normally be treated as managed workflow and start in investigation, even though the eventual task mode is still implementation-oriented.
 
 ## Internal Phase-as-Capability Model
 

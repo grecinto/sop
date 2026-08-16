@@ -220,6 +220,18 @@ func TestNormalizeAskTaskContext_ClearCodingQueryDoesNotNeedOffer(t *testing.T) 
 	if ctx.DomainOfferNeeded {
 		t.Fatal("did not expect clear coding query to require a domain offer")
 	}
+	if ctx.TaskShape != taskShapeIssueInvestigation {
+		t.Fatalf("expected repo-fix ask to classify as issue investigation, got %q", ctx.TaskShape)
+	}
+	if ctx.OrchestrationLevel != orchestrationManagedWorkflow {
+		t.Fatalf("expected repo-fix ask to require managed workflow, got %q", ctx.OrchestrationLevel)
+	}
+	if ctx.Phase != "investigation" {
+		t.Fatalf("expected repo-fix ask to start in investigation, got %q", ctx.Phase)
+	}
+	if got := strings.Join(ctx.PhasePlan, ","); got != "investigation,planning,execution" {
+		t.Fatalf("expected repo-fix plan to include investigation, planning, execution, got %s", got)
+	}
 }
 
 func TestNormalizeAskTaskContext_ClearDesktopQueryDoesNotNeedOffer(t *testing.T) {
@@ -349,12 +361,14 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsExecutionPhase(t *testing.T) {
 func TestCreatePhaseProxies_CodingWorkflowRespectsInvestigationPhase(t *testing.T) {
 	agent := &CopilotAgent{}
 	classification := &AskTaskContext{
-		Domains:       []string{"coding_workflow"},
-		Phase:         "investigation",
-		PhasePlan:     []string{"investigation", "planning"},
-		Intent:        "analyze",
-		CRUD:          []string{"R"},
-		OriginalQuery: "investigate why the parser behaves this way",
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "investigation",
+		PhasePlan:          []string{"investigation", "planning"},
+		Intent:             "analyze",
+		CRUD:               []string{"R"},
+		OriginalQuery:      "investigate why the parser behaves this way",
 	}
 
 	phases := agent.createPhaseProxies([]string{"coding_workflow"}, "investigation", classification)
@@ -367,17 +381,61 @@ func TestCreatePhaseProxies_CodingWorkflowRespectsInvestigationPhase(t *testing.
 	if !toolNames["investigation_search_repo"] {
 		t.Fatalf("expected investigation phase to expose investigation tools, got %v", toolNames)
 	}
-	if toolNames["planning_plan_changes"] {
-		t.Fatalf("did not expect investigation phase to expose planning tools, got %v", toolNames)
+	if !toolNames["planning_plan_changes"] {
+		t.Fatalf("expected managed investigation phase to expose planning tools, got %v", toolNames)
 	}
-	if toolNames["planning_assess_and_route"] {
-		t.Fatalf("did not expect investigation phase to expose planning_assess_and_route, got %v", toolNames)
-	}
-	if toolNames["planning_create_succession_path"] {
-		t.Fatalf("did not expect investigation phase to expose planning_create_succession_path, got %v", toolNames)
+	if !toolNames["planning_build_context"] {
+		t.Fatalf("expected managed investigation phase to expose planning_build_context, got %v", toolNames)
 	}
 	if toolNames["execution_apply_patch"] {
 		t.Fatalf("did not expect investigation phase to expose execution_apply_patch, got %v", toolNames)
+	}
+}
+
+func TestResolveActiveCodingRuntimePhase_ManagedWorkflowRepoFixStaysInInvestigation(t *testing.T) {
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	if got := resolveActiveCodingRuntimePhase(classification, classification.Phase); got != "investigation" {
+		t.Fatalf("expected managed repo-fix ask to stay in investigation until execution-ready, got %q", got)
+	}
+}
+
+func TestResolvePhasePlan_PromotesManagedCodingExecutionWhenPlanningArtifactIsReady(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	ag.service.session.Memory.AddThread(thread)
+	artifact := `{"summary":"Execution plan for fix failing tests","status":"ready_for_execution","plan":["inspect failing tests","patch root cause","rerun focused tests"],"structured_data":{"detailed_execution_plan":[{"title":"Step 1","description":"Identify the exact failing tests and root cause.","validation":["root cause stated"]}]}}`
+	if err := ag.service.session.Memory.SaveWorkflowMemory("phase-artifact:planning", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed planning artifact: %v", err)
+	}
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	plan, currentPhase := ag.resolvePhasePlan(context.Background(), classification)
+	if !classification.ExecutionReady {
+		t.Fatal("expected ready_for_execution planning artifact to promote execution readiness")
+	}
+	if currentPhase != "execution" {
+		t.Fatalf("expected managed coding ask to enter execution when planning artifact is ready, got %q", currentPhase)
+	}
+	if got := strings.Join(plan, ","); got != "investigation,planning,execution" {
+		t.Fatalf("expected canonical coding phase plan, got %s", got)
 	}
 }
 
@@ -934,7 +992,7 @@ func TestAskCore_ResumesClarificationAnswerAndRunsTestsInSameWorkflow(t *testing
 		t.Fatalf("expected pending clarification after first turn, got %+v", payload.ClarificationState)
 	}
 
-	secondResp, err := ag.askCore(ctx, "this current folder", nil)
+	secondResp, err := ag.askCore(ctx, "current repo", nil)
 	if err != nil {
 		t.Fatalf("second askCore failed: %v", err)
 	}
@@ -943,6 +1001,10 @@ func TestAskCore_ResumesClarificationAnswerAndRunsTestsInSameWorkflow(t *testing
 	}
 	if payload.ClarificationState != nil {
 		t.Fatalf("expected clarification state to clear after resumed ask completes, got %+v", payload.ClarificationState)
+	}
+	routing := payload.Variables["RoutingState"]
+	if routing == nil {
+		t.Fatal("expected resumed clarification flow to preserve routing state")
 	}
 	if gen.calls < 5 {
 		t.Fatalf("expected resumed workflow to reach test tool execution and final response, got %d generator calls", gen.calls)
@@ -1060,6 +1122,38 @@ func TestApplyQueuedPhaseActorContext_CanonicalizesNonActiveCodingQueuedActor(t 
 	}
 	if taskCtx.AskClassification == nil || taskCtx.AskClassification.Phase != "execution" {
 		t.Fatalf("expected persisted classification phase to normalize to execution, got %+v", taskCtx.AskClassification)
+	}
+}
+
+func TestApplyQueuedPhaseActorContext_PromotesExecutionReadyFromPlanningArtifact(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	artifact := `{"summary":"Execution plan for fix failing tests","status":"ready_for_execution","plan":["inspect failing tests","patch root cause","rerun focused tests"]}`
+	if err := ag.service.session.Memory.SaveWorkflowMemory("phase-artifact:planning", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed planning artifact: %v", err)
+	}
+	ctx := context.WithValue(context.Background(), ctxKeyAskWorkItemActor, "phase:execution")
+	persisted := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "investigation",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	taskCtx := ag.applyQueuedPhaseActorContext(ctx, &TaskContextClassification{}, persisted)
+	if taskCtx.AskClassification == nil {
+		t.Fatal("expected ask classification to be attached")
+	}
+	if !taskCtx.AskClassification.ExecutionReady {
+		t.Fatal("expected queued actor context to promote execution readiness from ready_for_execution artifact")
+	}
+	if taskCtx.AskClassification.Phase != "execution" {
+		t.Fatalf("expected queued actor classification phase to resolve to execution, got %+v", taskCtx.AskClassification)
+	}
+	if taskCtx.CapabilityHint != codingRuntimeModeImplementation {
+		t.Fatalf("expected queued execution actor to keep implementation runtime surface, got %q", taskCtx.CapabilityHint)
 	}
 }
 

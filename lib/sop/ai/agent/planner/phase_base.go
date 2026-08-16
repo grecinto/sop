@@ -456,14 +456,60 @@ func (b *BasePhase) runState(args map[string]any) (string, error) {
 	return string(artifactJSON), nil
 }
 
+func shouldRequireRootCauseEvidence(artifact phaseArtifact) bool {
+	summary := strings.ToLower(strings.TrimSpace(artifact.Summary))
+	if summary == "" {
+		return false
+	}
+	issueSignals := []string{"issue", "problem", "failure", "failing", "failed", "bug", "error", "regression", "broken", "incorrect", "wrong", "crash", "exception", "fault", "incident", "misbehavior"}
+	for _, signal := range issueSignals {
+		if strings.Contains(summary, signal) {
+			return true
+		}
+	}
+	for _, step := range artifact.Plan {
+		stepText := strings.ToLower(step)
+		for _, signal := range issueSignals {
+			if strings.Contains(stepText, signal) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requireRootCauseEvidence(artifact phaseArtifact) error {
+	summaryText := strings.ToLower(strings.TrimSpace(artifact.Summary))
+	notesText := strings.ToLower(strings.Join(artifact.Notes, " "))
+	evidenceText := strings.ToLower(strings.Join(artifact.Evidence, " "))
+	planText := strings.ToLower(strings.Join(artifact.Plan, " "))
+
+	rootCauseSeen := strings.Contains(summaryText, "root cause") || strings.Contains(notesText, "root cause") || strings.Contains(evidenceText, "root cause") || strings.Contains(planText, "root cause")
+	causalTraceSeen := strings.Contains(summaryText, "causal trace") || strings.Contains(summaryText, "cause-and-effect") || strings.Contains(summaryText, "dependency path") || strings.Contains(summaryText, "execution path") || strings.Contains(notesText, "causal trace") || strings.Contains(notesText, "cause-and-effect") || strings.Contains(notesText, "dependency path") || strings.Contains(notesText, "execution path") || strings.Contains(evidenceText, "causal trace") || strings.Contains(evidenceText, "cause-and-effect") || strings.Contains(evidenceText, "dependency path") || strings.Contains(evidenceText, "execution path") || strings.Contains(planText, "causal trace") || strings.Contains(planText, "cause-and-effect") || strings.Contains(planText, "dependency path") || strings.Contains(planText, "execution path")
+
+	if !rootCauseSeen {
+		return fmt.Errorf("issue-oriented planning requires a root cause statement before ready_for_execution")
+	}
+	if !causalTraceSeen {
+		return fmt.Errorf("issue-oriented planning requires a causal trace before ready_for_execution")
+	}
+	return nil
+}
+
 // validateCompletionCriteria checks if phase-specific success criteria are met
 // before allowing the phase to be marked as complete.
 func (b *BasePhase) validateCompletionCriteria(artifact phaseArtifact) error {
 	status := strings.ToLower(strings.TrimSpace(artifact.Status))
 
 	// Only validate when marking phase as complete
-	if status != "complete" && status != "approved" && status != "delivered" {
+	if status != "complete" && status != "approved" && status != "delivered" && status != "ready_for_execution" {
 		return nil // In-progress statuses don't need validation
+	}
+
+	if shouldRequireRootCauseEvidence(artifact) {
+		if err := requireRootCauseEvidence(artifact); err != nil {
+			return err
+		}
 	}
 
 	// Phase-specific validation

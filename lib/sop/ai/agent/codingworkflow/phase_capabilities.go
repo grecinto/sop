@@ -2751,6 +2751,10 @@ func (c *PhaseCapability) runCapture(args map[string]any) (string, error) {
 		}
 	}
 
+	if err := validatePhaseArtifactForStatus(artifact); err != nil {
+		return "", err
+	}
+
 	if err := c.persistArtifact(artifact); err != nil {
 		return "", err
 	}
@@ -2850,6 +2854,60 @@ func (c *PhaseCapability) loadExistingArtifact() (phaseArtifact, error) {
 		return phaseArtifact{}, fmt.Errorf("decode phase artifact: %w", err)
 	}
 	return artifact, nil
+}
+
+func validatePhaseArtifactForStatus(artifact phaseArtifact) error {
+	status := strings.ToLower(strings.TrimSpace(artifact.Status))
+	if status != "ready_for_execution" && status != "complete" && status != "approved" && status != "delivered" {
+		return nil
+	}
+	if !shouldRequireRootCauseEvidenceForPhase(artifact) {
+		return nil
+	}
+	if err := requireRootCauseEvidenceForPhase(artifact); err != nil {
+		return err
+	}
+	return nil
+}
+
+func shouldRequireRootCauseEvidenceForPhase(artifact phaseArtifact) bool {
+	summary := strings.ToLower(strings.TrimSpace(artifact.Summary))
+	if summary == "" {
+		return false
+	}
+	issueSignals := []string{"issue", "problem", "failure", "failing", "failed", "bug", "error", "regression", "broken", "incorrect", "wrong", "crash", "exception", "fault", "incident", "misbehavior"}
+	for _, signal := range issueSignals {
+		if strings.Contains(summary, signal) {
+			return true
+		}
+	}
+	for _, step := range artifact.Plan {
+		stepText := strings.ToLower(step)
+		for _, signal := range issueSignals {
+			if strings.Contains(stepText, signal) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requireRootCauseEvidenceForPhase(artifact phaseArtifact) error {
+	summaryText := strings.ToLower(strings.TrimSpace(artifact.Summary))
+	notesText := strings.ToLower(strings.Join(artifact.Notes, " "))
+	evidenceText := strings.ToLower(strings.Join(artifact.Evidence, " "))
+	planText := strings.ToLower(strings.Join(artifact.Plan, " "))
+
+	rootCauseSeen := strings.Contains(summaryText, "root cause") || strings.Contains(notesText, "root cause") || strings.Contains(evidenceText, "root cause") || strings.Contains(planText, "root cause")
+	causalTraceSeen := strings.Contains(summaryText, "causal trace") || strings.Contains(summaryText, "cause-and-effect") || strings.Contains(summaryText, "dependency path") || strings.Contains(summaryText, "execution path") || strings.Contains(notesText, "causal trace") || strings.Contains(notesText, "cause-and-effect") || strings.Contains(notesText, "dependency path") || strings.Contains(notesText, "execution path") || strings.Contains(evidenceText, "causal trace") || strings.Contains(evidenceText, "cause-and-effect") || strings.Contains(evidenceText, "dependency path") || strings.Contains(evidenceText, "execution path") || strings.Contains(planText, "causal trace") || strings.Contains(planText, "cause-and-effect") || strings.Contains(planText, "dependency path") || strings.Contains(planText, "execution path")
+
+	if !rootCauseSeen {
+		return fmt.Errorf("issue-oriented planning requires a root cause statement before ready_for_execution")
+	}
+	if !causalTraceSeen {
+		return fmt.Errorf("issue-oriented planning requires a causal trace before ready_for_execution")
+	}
+	return nil
 }
 
 func (c *PhaseCapability) persistArtifact(artifact phaseArtifact) error {

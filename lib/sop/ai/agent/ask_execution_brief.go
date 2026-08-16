@@ -579,6 +579,27 @@ func (a *CopilotAgent) hasStoredPlanningArtifact() bool {
 	return ok
 }
 
+func (a *CopilotAgent) promoteExecutionReadinessFromPlanningArtifact(classification *AskTaskContext) {
+	if classification == nil || classification.ExecutionReady {
+		return
+	}
+	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		return
+	}
+	artifact, ok := a.loadStoredPlanningArtifact()
+	if !ok {
+		return
+	}
+	status := strings.TrimSpace(strings.ToLower(artifact.Status))
+	if status != "ready_for_execution" {
+		return
+	}
+	classification.ExecutionReady = true
+	if strings.TrimSpace(classification.Phase) == "" || strings.EqualFold(strings.TrimSpace(classification.Phase), "investigation") {
+		classification.Phase = "execution"
+	}
+}
+
 func executionBriefFromStoredPlanningArtifact(artifact storedPlanningArtifact, classification *AskTaskContext, plannedPhases []string, query string) *ExecutionBrief {
 	if classification == nil {
 		return nil

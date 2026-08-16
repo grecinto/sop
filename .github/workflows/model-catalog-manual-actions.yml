@@ -1,0 +1,38 @@
+name: Model Catalog Manual Actions
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Choose the operation to run'
+        required: true
+        default: 'refresh-pricing'
+        type: choice
+        options:
+          - refresh-pricing
+          - federate-share
+
+jobs:
+  run-action:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: SA refresh pricing button
+        if: ${{ github.event.inputs.action == 'refresh-pricing' }}
+        run: |
+          python3 scripts/update_model_catalog_pricing.py --catalog lib/sop/model_catalog.json --write
+          git status --short lib/sop/model_catalog.json
+
+      - name: SA federate share button
+        if: ${{ github.event.inputs.action == 'federate-share' }}
+        run: |
+          echo "Federated share requested."
+          echo "Shared artifact: lib/sop/model_catalog.json"
+          echo "Next integration point: publish this artifact to your copilot distribution channel or package registry."

@@ -253,6 +253,27 @@ func TestPhaseCapture_DoesNotAutoAdvanceWithoutExplicitTransition(t *testing.T) 
 	}
 }
 
+func TestPhaseCapture_RequiresRootCauseAndCausalTraceForIssuePlans(t *testing.T) {
+	sharedInfra := NewDefaultSharedInfrastructure()
+	capability := NewPlanningPhaseCapability(sharedInfra)
+
+	_, err := capability.runCapture(map[string]any{
+		"summary": "Resolve failing workflow issue",
+		"status":  "ready_for_execution",
+		"plan": []any{
+			"Inspect the failing transition path",
+			"Apply the fix",
+			"Validate the outcome",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected planning capture to require root cause and causal trace for an issue-oriented plan")
+	}
+	if !strings.Contains(err.Error(), "root cause") && !strings.Contains(err.Error(), "causal trace") {
+		t.Fatalf("expected a root cause/causal-trace enforcement error, got: %v", err)
+	}
+}
+
 // TestHandoff_IncludesPreviousPhaseContext verifies that handoff prompts include context from previous phases
 func TestHandoff_IncludesPreviousPhaseContext(t *testing.T) {
 	sharedInfra := NewDefaultSharedInfrastructure()

@@ -393,6 +393,7 @@ func (a *CopilotAgent) applyQueuedPhaseActorContext(ctx context.Context, taskCon
 	phaseName = normalizePhase(phaseName)
 	phaseName = canonicalizeCodingRuntimePhase(persisted, phaseName)
 	if persisted != nil {
+		a.promoteExecutionReadinessFromPlanningArtifact(persisted)
 		persisted.Phase = resolveActiveCodingRuntimePhase(persisted, phaseName)
 		persisted.PhasePlan = canonicalizeCodingRuntimePlan(persisted, persisted.PhasePlan)
 		taskContext.AskClassification = persisted
@@ -444,6 +445,8 @@ func (a *CopilotAgent) getPersistedAskClassification() *AskTaskContext {
 // - If new: Use LLM-generated plan or default to single phase
 // - Store plan in WorkStream via STM for persistence across turns
 func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *AskTaskContext) (plan []string, currentPhase string) {
+	a.promoteExecutionReadinessFromPlanningArtifact(classification)
+
 	// Get STM accessor for WorkStream integration
 	stm := a.getSTMForPhaseCapabilities()
 	if stm == nil {
@@ -494,7 +497,11 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 		plan = []string{canonicalizeCodingRuntimePhase(classification, classification.Phase)}
 	}
 
-	currentPhase = resolveActiveCodingRuntimePhase(classification, plan[0])
+	phaseAnchor := plan[0]
+	if classification != nil && classification.ExecutionReady && strings.EqualFold(strings.TrimSpace(classification.Phase), "execution") {
+		phaseAnchor = classification.Phase
+	}
+	currentPhase = resolveActiveCodingRuntimePhase(classification, phaseAnchor)
 
 	// Store PhasePlan in WorkStream for persistence
 	checkpoints := make(map[string]bool)
@@ -543,6 +550,15 @@ func resolveActiveCodingRuntimePhase(classification *AskTaskContext, phase strin
 	resolved := canonicalizeCodingRuntimePhase(classification, phase)
 	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
 		return resolved
+	}
+	if strings.TrimSpace(strings.ToLower(classification.OrchestrationLevel)) == orchestrationManagedWorkflow {
+		if resolved == "planning" {
+			return "planning"
+		}
+		if classification.ExecutionReady && resolved == "execution" {
+			return "execution"
+		}
+		return "investigation"
 	}
 	if useCodingImplementationBundle(classification, resolved) {
 		return "execution"
@@ -661,11 +677,18 @@ func (a *CopilotAgent) createPhaseProxies(domains []string, currentPhase string,
 }
 
 func resolveDomainToolPhases(domain, currentPhase string, classification *AskTaskContext) []string {
-	_ = classification
 	domain = strings.TrimSpace(strings.ToLower(domain))
 	currentPhase = normalizePhase(currentPhase)
 	if currentPhase == "" {
 		currentPhase = "investigation"
+	}
+	if domain == "coding_workflow" && classification != nil && strings.TrimSpace(strings.ToLower(classification.OrchestrationLevel)) == orchestrationManagedWorkflow {
+		switch currentPhase {
+		case "planning":
+			return []string{"investigation", "planning"}
+		case "investigation":
+			return []string{"investigation", "planning"}
+		}
 	}
 	return []string{currentPhase}
 }
