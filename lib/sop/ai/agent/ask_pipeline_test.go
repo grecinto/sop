@@ -538,3 +538,53 @@ func TestApplyQueuedPhaseActorContext_CanonicalizesNonActiveCodingQueuedActor(t 
 		t.Fatalf("expected persisted classification phase to normalize to execution, got %+v", taskCtx.AskClassification)
 	}
 }
+
+func TestNormalizeCodingRuntimeRouting_UsesImplementationSurfaceForActionOrientedCodingAsk(t *testing.T) {
+	taskCtx := normalizeCodingRuntimeRouting(&TaskContextClassification{
+		Domain:         "coding_workflow",
+		CapabilityHint: "planning",
+		AskClassification: &AskTaskContext{
+			Domains:       []string{"coding_workflow"},
+			Phase:         "planning",
+			PhasePlan:     []string{"investigation", "planning", "execution"},
+			Intent:        "generate_code",
+			CRUD:          []string{"R", "U"},
+			OriginalQuery: "fix failing tests in the repository",
+		},
+	})
+	if taskCtx.CapabilityHint != "execution" {
+		t.Fatalf("expected action-oriented coding ask to select execution runtime surface, got %q", taskCtx.CapabilityHint)
+	}
+	if taskCtx.AskClassification == nil || taskCtx.AskClassification.Phase != "planning" {
+		t.Fatalf("expected Ask classification to preserve entry-phase semantics, got %+v", taskCtx.AskClassification)
+	}
+}
+
+func TestResolvePhasePlan_UsesImplementationSurfaceWhenPersistedCodingPlanIsStillAtPlanning(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.InitializeWorkStream("planning")
+	thread.StreamContext.PhasePlan = &PhasePlan{
+		PlannedPhases:   []string{"investigation", "planning", "execution"},
+		CurrentIndex:    1,
+		CompletedPhases: []string{"investigation"},
+		RemainingPhases: []string{"planning", "execution"},
+	}
+	ag.service.session.Memory.AddThread(thread)
+
+	plan, currentPhase := ag.resolvePhasePlan(context.Background(), &AskTaskContext{
+		Domains:       []string{"coding_workflow"},
+		Phase:         "planning",
+		PhasePlan:     []string{"investigation", "planning", "execution"},
+		Intent:        "generate_code",
+		CRUD:          []string{"R", "U"},
+		OriginalQuery: "fix failing tests in the repository",
+	})
+	if strings.Join(plan, ",") != "investigation,planning,execution" {
+		t.Fatalf("expected canonical coding runtime plan, got %v", plan)
+	}
+	if currentPhase != "execution" {
+		t.Fatalf("expected persisted planning cursor for action-oriented coding ask to expose implementation surface, got %q", currentPhase)
+	}
+}

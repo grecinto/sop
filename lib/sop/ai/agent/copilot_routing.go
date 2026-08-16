@@ -233,25 +233,27 @@ func simplifyCodingWorkflowContinuation(taskCtx *TaskContextClassification, quer
 	if taskCtx.AskClassification == nil {
 		taskCtx.AskClassification = &AskTaskContext{
 			Domains:       []string{"coding_workflow"},
-			Phase:         "execution",
-			PhasePlan:     []string{"execution"},
+			Phase:         "investigation",
+			PhasePlan:     []string{"investigation", "planning", "execution"},
 			Intent:        "generate_code",
 			CRUD:          []string{"R", "U"},
 			Confidence:    "high",
-			Reasoning:     "Continuity keeps additive coding follow-ups in implementation mode.",
+			Reasoning:     "Continuity keeps additive coding follow-ups in the coding workflow while the runtime surface moves directly into implementation mode.",
 			OriginalQuery: query,
 		}
 		return
 	}
 
 	taskCtx.AskClassification.Domains = []string{"coding_workflow"}
-	taskCtx.AskClassification.Phase = "execution"
 	taskCtx.AskClassification.PhasePlan = canonicalizeCodingRuntimePlan(taskCtx.AskClassification, taskCtx.AskClassification.PhasePlan)
 	if !contains(taskCtx.AskClassification.PhasePlan, "execution") {
 		taskCtx.AskClassification.PhasePlan = append(taskCtx.AskClassification.PhasePlan, "execution")
 	}
 	if len(taskCtx.AskClassification.PhasePlan) == 0 {
-		taskCtx.AskClassification.PhasePlan = []string{"execution"}
+		taskCtx.AskClassification.PhasePlan = []string{"investigation", "planning", "execution"}
+	}
+	if strings.TrimSpace(taskCtx.AskClassification.Phase) == "" {
+		taskCtx.AskClassification.Phase = "investigation"
 	}
 	switch strings.TrimSpace(strings.ToLower(taskCtx.AskClassification.Intent)) {
 	case "", "general", "analyze", "plan":

@@ -103,8 +103,8 @@ func TestTryAskContinuationBasedRouting_SimplifiesCodingRefinementToExecution(t 
 	if taskCtx.AskClassification == nil {
 		t.Fatal("expected Ask classification to be preserved for continuity")
 	}
-	if taskCtx.AskClassification.Phase != "execution" {
-		t.Fatalf("expected Ask classification phase to simplify to execution, got %q", taskCtx.AskClassification.Phase)
+	if taskCtx.AskClassification.Phase != "planning" {
+		t.Fatalf("expected Ask classification phase to preserve planning/discovery semantics, got %q", taskCtx.AskClassification.Phase)
 	}
 	if !contains(taskCtx.AskClassification.PhasePlan, "execution") {
 		t.Fatalf("expected Ask classification phase plan to include execution, got %v", taskCtx.AskClassification.PhasePlan)
