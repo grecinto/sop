@@ -587,7 +587,22 @@ func GetField(source any, field string) any {
 		// Dot-Notation setup
 		if idx := strings.Index(field, "."); idx > 0 {
 			stripped = field[idx+1:]
-			// 2. Stripped exact match
+			prefix := field[:idx]
+			var qualifiedMatch any
+			for k, v := range m {
+				if strings.EqualFold(k, field) {
+					return v
+				}
+				if strings.HasPrefix(strings.ToLower(k), strings.ToLower(prefix)+".") && strings.HasSuffix(strings.ToLower(k), "."+strings.ToLower(stripped)) {
+					if qualifiedMatch == nil {
+						qualifiedMatch = v
+					}
+				}
+			}
+			if qualifiedMatch != nil {
+				return qualifiedMatch
+			}
+			// 2. Stripped exact match, only after alias-qualified candidates lose.
 			if v, ok := m[stripped]; ok {
 				return v
 			}
@@ -702,52 +717,55 @@ func extractVal(key any, val any, field string) any {
 	// If the user requests "users.name" but the data has "a.name" (system alias), we match it.
 	// We check if 'field' has a dot suffix that matches any key's dot suffix.
 	// We also support "naked" field requests (e.g. "name") matching prefixed keys (e.g. "users.name").
-	{
-		var suffix string
-		if dotIdx := strings.LastIndex(field, "."); dotIdx != -1 {
-			suffix = field[dotIdx:] // ".name"
-		} else {
-			suffix = "." + field // ".name"
-		}
+	var suffix string
+	var aliasPrefix string
+	if dotIdx := strings.LastIndex(field, "."); dotIdx != -1 {
+		suffix = field[dotIdx:] // ".name"
+		aliasPrefix = field[:dotIdx]
+	} else {
+		suffix = "." + field // ".name"
+	}
 
-		// Helper to check map for suffix
-		checkMap := func(source any) any {
-			// Handle OrderedMap unwrapping
-			var m map[string]any
-			if om, ok := source.(*OrderedMap); ok {
-				m = om.m
-			} else if om, ok := source.(OrderedMap); ok {
-				m = om.m
-			} else if mp, ok := source.(map[string]any); ok {
-				m = mp
-			}
-
-			if m != nil {
-				// Priority 1: Exact Base Name Match (e.g. "name" matches "users.name")
-				// This handles cases where data is flat (un-prefixed) but query uses alias.
-				if len(suffix) > 1 {
-					if v, ok := m[suffix[1:]]; ok {
-						return v
-					}
-				}
-
-				// Priority 2: Suffix Match (e.g. "a.name" matches "users.name")
-				for k, v := range m {
-					if strings.HasSuffix(k, suffix) {
-						// Found a candidate
-						return v
-					}
-				}
-			}
+	checkMap := func(source any) any {
+		if source == nil {
 			return nil
 		}
+		var m map[string]any
+		if om, ok := source.(*OrderedMap); ok {
+			m = om.m
+		} else if om, ok := source.(OrderedMap); ok {
+			m = om.m
+		} else if mp, ok := source.(map[string]any); ok {
+			m = mp
+		}
+		if m == nil {
+			return nil
+		}
+		if aliasPrefix != "" {
+			for k, v := range m {
+				if strings.HasPrefix(strings.ToLower(k), strings.ToLower(aliasPrefix)+".") && strings.HasSuffix(strings.ToLower(k), strings.ToLower(suffix)) {
+					return v
+				}
+			}
+		}
+		if len(suffix) > 1 {
+			if v, ok := m[suffix[1:]]; ok {
+				return v
+			}
+		}
+		for k, v := range m {
+			if strings.HasSuffix(k, suffix) {
+				return v
+			}
+		}
+		return nil
+	}
 
-		if v := checkMap(key); v != nil {
-			return v
-		}
-		if v := checkMap(val); v != nil {
-			return v
-		}
+	if v := checkMap(key); v != nil {
+		return v
+	}
+	if v := checkMap(val); v != nil {
+		return v
 	}
 
 	// Fallback logic for primitive values if "Value" or "value" is requested

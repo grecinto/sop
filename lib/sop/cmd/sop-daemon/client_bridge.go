@@ -858,6 +858,7 @@ func (continueBridgeTransport) handleChat(s *localRAGService, w http.ResponseWri
 		respondJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "Invalid JSON body: " + err.Error()})
 		return
 	}
+	normalizeContinueWorkspaceContext(&req)
 	s.storeContinueSessionContext(req)
 	envelope, err := buildContinueBridgeEnvelope(req)
 	if err != nil {
@@ -917,6 +918,7 @@ func (continueBridgeTransport) handleAgentExecute(s *localRAGService, w http.Res
 	chatReq.Workspace.Active = req.Context.ActiveFile
 	chatReq.Context.SelectedText = req.Context.SelectedText
 	chatReq.Context.OpenFiles = req.Context.OpenFiles
+	normalizeContinueWorkspaceContext(&chatReq)
 	if strings.TrimSpace(chatReq.Mode) == "" {
 		chatReq.Mode = "coding"
 	}
@@ -1522,7 +1524,32 @@ func thinkingLevelScore(level string) int {
 	}
 }
 
+func normalizeContinueWorkspaceContext(req *continueChatRequest) {
+	if req == nil {
+		return
+	}
+	trimmedRoot := strings.TrimSpace(req.Workspace.Root)
+	trimmedActive := strings.TrimSpace(req.Workspace.Active)
+	normalizedOpenFiles := normalizeContinueOpenFiles(req.Context.OpenFiles)
+
+	if trimmedRoot == "" || filepath.Clean(trimmedRoot) == "." {
+		if filepath.IsAbs(trimmedActive) {
+			trimmedRoot = filepath.Dir(trimmedActive)
+		} else {
+			for _, openFile := range normalizedOpenFiles {
+				if filepath.IsAbs(openFile) {
+					trimmedRoot = filepath.Dir(openFile)
+					break
+				}
+			}
+		}
+	}
+
+	req.Workspace.Root = resolveContinueWorkspaceRoot(trimmedRoot)
+}
+
 func buildContinueBridgeEnvelope(req continueChatRequest) (bridgeChatEnvelope, error) {
+	normalizeContinueWorkspaceContext(&req)
 	if strings.TrimSpace(req.Message) == "" {
 		return bridgeChatEnvelope{}, fmt.Errorf("message cannot be empty")
 	}

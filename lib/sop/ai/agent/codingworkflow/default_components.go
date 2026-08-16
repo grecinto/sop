@@ -174,6 +174,11 @@ func classifyTaskType(task Task, state RunState, resolvedActiveFile string) stri
 			return "code"
 		}
 	}
+	if state.Metadata != nil {
+		if continuationSummary, ok := state.Metadata["continuation_summary"]; ok && strings.TrimSpace(continuationSummary) != "" {
+			return "analysis"
+		}
+	}
 	if strings.Contains(description, "generate") || strings.Contains(description, "json") || strings.Contains(description, "script") || strings.Contains(description, "lego") {
 		return "generation"
 	}
@@ -358,7 +363,7 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) (Stru
 		plan = append(plan, "clarify goals and constraints")
 		plan = append(plan, "discuss architecture and tradeoffs")
 		plan = append(plan, "prepare an implementation-ready plan")
-		return buildStructuredPlanFromBase(task, pack, domain, workflowShape, plan), nil
+		return buildStructuredPlanFromBase(task, state, pack, domain, workflowShape, plan), nil
 	}
 	if pack.TaskType == "analysis" {
 		workflowShape = "analysis"
@@ -367,7 +372,7 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) (Stru
 		if pack.ContinuationSummary != "" {
 			plan = append(plan, fmt.Sprintf("resume from prior context: %s", pack.ContinuationSummary))
 		}
-		return buildStructuredPlanFromBase(task, pack, domain, workflowShape, plan), nil
+		return buildStructuredPlanFromBase(task, state, pack, domain, workflowShape, plan), nil
 	}
 	if pack.TaskType == "generation" {
 		workflowShape = "generation"
@@ -376,7 +381,7 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) (Stru
 		if pack.RepositorySummary != "" {
 			plan = append(plan, fmt.Sprintf("check the target schema: %s", pack.RepositorySummary))
 		}
-		return buildStructuredPlanFromBase(task, pack, domain, workflowShape, plan), nil
+		return buildStructuredPlanFromBase(task, state, pack, domain, workflowShape, plan), nil
 	}
 	if task.ActiveFile != "" {
 		plan = append(plan, fmt.Sprintf("edit active file %s", task.ActiveFile))
@@ -415,10 +420,10 @@ func (d *DefaultPlanner) Plan(task Task, state RunState, pack ContextPack) (Stru
 	}
 	plan = append(plan, "validate the change against the repository context")
 	plan = append(plan, "run targeted tests and inspect failures")
-	return buildStructuredPlanFromBase(task, pack, domain, workflowShape, plan), nil
+	return buildStructuredPlanFromBase(task, state, pack, domain, workflowShape, plan), nil
 }
 
-func buildStructuredPlanFromBase(task Task, pack ContextPack, domain, workflowShape string, base []string) StructuredPlan {
+func buildStructuredPlanFromBase(task Task, state RunState, pack ContextPack, domain, workflowShape string, base []string) StructuredPlan {
 	steps := make([]StructuredPlanStep, 0, len(base))
 	for idx, item := range base {
 		item = strings.TrimSpace(item)
@@ -462,7 +467,7 @@ func buildStructuredPlanFromBase(task Task, pack ContextPack, domain, workflowSh
 		Steps:          steps,
 		CurrentStep:    0,
 		CompletedSteps: []string{},
-		CompletionGate: StructuredCompletionGate{Requirements: defaultCompletionGateRequirements(pack)},
+		CompletionGate: StructuredCompletionGate{Requirements: defaultCompletionGateRequirements(task, state, pack)},
 	}
 }
 
@@ -645,11 +650,30 @@ func defaultExitCriteriaForStructuredStep(idx, total int, pack ContextPack) []st
 	return criteria
 }
 
-func defaultCompletionGateRequirements(pack ContextPack) []string {
+func defaultCompletionGateRequirements(task Task, state RunState, pack ContextPack) []string {
+	domain := inferPlanDomain(task, state, pack)
+	lowerDomain := strings.TrimSpace(strings.ToLower(domain))
 	requirements := []string{"Current objective is satisfied or the blocking condition is explicit."}
-	if len(pack.TestFiles) > 0 {
-		requirements = append(requirements, "The most relevant validation step has been rerun or the blocker is recorded.")
+
+	switch lowerDomain {
+	case "stores":
+		requirements = append(requirements,
+			"The store result shape matches the store contract and any mutation resolves the observed mismatch.",
+			"Read-only vs mutating behavior is checked against the relevant store schema and result-shape validation contract.")
+	case "spaces":
+		requirements = append(requirements,
+			"The retrieval or knowledge-state outcome matches the intended space semantics after the mutation.",
+			"Any content change is scoped to the target space and validated for semantic integrity.")
+	case "desktop":
+		requirements = append(requirements,
+			"The command output or filesystem state matches the expected execution result without widening scope.",
+			"Destructive or mutating commands are explicitly validated and constrained to the intended target.")
+	default:
+		if len(pack.TestFiles) > 0 {
+			requirements = append(requirements, "The most relevant validation step has been rerun or the blocker is recorded.")
+		}
 	}
+
 	requirements = append(requirements, "The final summary states what changed and what remains uncertain.")
 	return requirements
 }
@@ -711,8 +735,8 @@ func domainSpecificPlannerGuidance(domain string) string {
 	switch strings.TrimSpace(strings.ToLower(domain)) {
 	case "stores":
 		return strings.Join([]string{
-			"- For Stores, identify target databases or stores, schema assumptions, relation boundaries, and whether the plan is read-only or mutating.",
-			"- Good plans mention result-shape validation and the specific store operation or script boundary.",
+			"- For Stores, identify target databases or stores, schema assumptions, relation boundaries, and whether the plan is read-only vs mutating.",
+			"- Good plans mention store schema and result-shape validation and the specific store operation or script boundary.",
 		}, "\n")
 	case "spaces":
 		return strings.Join([]string{
@@ -736,27 +760,27 @@ func plannerPromptExamples(domain string) string {
 	switch strings.TrimSpace(strings.ToLower(domain)) {
 	case "stores":
 		return strings.Join([]string{
-			"- Example step goal: Inspect the target store schema before mutating query logic.",
-			"- Example decision rule: If the result shape differs from the schema expectation, verify the store path before changing the script.",
-			"- Example validation: run the read-only scan and verify the expected records or mutation count.",
+			"- Example step goal: Inspect the target store schema and read-only vs mutating boundaries before touching query logic.",
+			"- Example decision rule: If the result shape differs from the schema expectation, verify the store path, scope, and read-only vs mutating contract before changing the script.",
+			"- Example validation: run the read-only scan and verify the expected records, mutation count, and store schema and result-shape validation.",
 		}, "\n")
 	case "spaces":
 		return strings.Join([]string{
-			"- Example step goal: Inspect the target space scope and the current knowledge surface.",
+			"- Example step goal: Inspect the target space scope, current knowledge surface, and any retrieval/mutation boundaries.",
 			"- Example decision rule: If retrieval is wrong, distinguish stale expectation from stale knowledge before mutating content.",
-			"- Example validation: confirm the intended retrieval or knowledge-state outcome after the change.",
+			"- Example validation: confirm the intended retrieval or knowledge-state outcome and semantic integrity after the change.",
 		}, "\n")
 	case "desktop":
 		return strings.Join([]string{
-			"- Example step goal: Inspect the repository or workspace state with a bounded command.",
-			"- Example decision rule: If the command can mutate state, require the narrowest scope and explicit validation path.",
-			"- Example validation: verify command output and resulting filesystem or git state.",
+			"- Example step goal: Inspect the repository or workspace state with a bounded command and explicit shell or filesystem scope.",
+			"- Example decision rule: If the command can mutate state, require the narrowest scope, a safe target, and explicit validation path before execution.",
+			"- Example validation: verify command output, git state, filesystem changes, and the final execution result against the original goal.",
 		}, "\n")
 	default:
 		return strings.Join([]string{
-			"- Example step goal: Compare the failing behavior to the nearest implementation path.",
+			"- Example step goal: Compare the failing behavior to the nearest implementation path and the relevant test contract.",
 			"- Example decision rule: Distinguish stale expectations from broken implementation before editing code or tests.",
-			"- Example validation: rerun the narrowest relevant test or check before widening scope.",
+			"- Example validation: rerun the narrowest relevant test or check before widening scope and confirm the fix with a regression signal.",
 		}, "\n")
 	}
 }
@@ -879,10 +903,10 @@ func normalizeStructuredPlan(plan StructuredPlan, task Task, state RunState, pac
 		plan.SystemContext = defaultStructuredSystemContext(task, pack)
 	}
 	if len(plan.CompletionGate.Requirements) == 0 {
-		plan.CompletionGate.Requirements = defaultCompletionGateRequirements(pack)
+		plan.CompletionGate.Requirements = defaultCompletionGateRequirements(task, state, pack)
 	}
 	if len(plan.Steps) == 0 {
-		plan = buildStructuredPlanFromBase(task, pack, plan.Domain, plan.WorkflowShape, []string{"inspect relevant context", "define the next safe action", "validate the result"})
+		plan = buildStructuredPlanFromBase(task, state, pack, plan.Domain, plan.WorkflowShape, []string{"inspect relevant context", "define the next safe action", "validate the result"})
 		return plan
 	}
 	for idx := range plan.Steps {

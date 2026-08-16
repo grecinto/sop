@@ -695,6 +695,10 @@ func (e *ScriptEngine) Join(ctx context.Context, input any, args map[string]any)
 
 	if useLookupJoin {
 
+		aliasNames := []string{rightAlias}
+		if explicitAlias, _ := args["alias"].(string); strings.TrimSpace(explicitAlias) != "" && !containsAlias(aliasNames, explicitAlias) {
+			aliasNames = append(aliasNames, strings.TrimSpace(explicitAlias))
+		}
 		cursor := &JoinRightCursor{
 			left:           leftCursor,
 			right:          rightStore,
@@ -703,6 +707,7 @@ func (e *ScriptEngine) Join(ctx context.Context, input any, args map[string]any)
 			ctx:            ctx,
 			engine:         e,
 			rightStoreName: rightAlias,
+			aliasNames:     aliasNames,
 		}
 
 		return e.handleInto(ctx, cursor, args)

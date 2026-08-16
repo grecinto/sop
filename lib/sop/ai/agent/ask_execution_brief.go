@@ -189,8 +189,11 @@ func (a *CopilotAgent) currentStructuredPlan() *cw.StructuredPlan {
 }
 
 func (a *CopilotAgent) currentExecutionBrief(classification *AskTaskContext, query string) *ExecutionBrief {
-	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+	if classification == nil {
 		return nil
+	}
+	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		return a.executionBriefFromStructuredPlan(classification, query)
 	}
 	if authored := a.loadAuthoredExecutionBrief(classification, classification.PhasePlan, query); authored != nil {
 		return authored
@@ -222,24 +225,27 @@ func (a *CopilotAgent) executionBriefFromStructuredPlan(classification *AskTaskC
 	}
 	workflowShape := strings.TrimSpace(plan.WorkflowShape)
 	if workflowShape == "" {
-		workflowShape = inferCodingWorkflowShape(objective, classification.PhasePlan)
+		workflowShape = inferWorkflowShapeForDomain(strings.TrimSpace(plan.Domain), objective, classification.PhasePlan)
 	}
-	currentPhase := resolveActiveCodingRuntimePhase(classification, classification.Phase)
+	currentPhase := strings.TrimSpace(classification.Phase)
+	if currentPhase == "" {
+		currentPhase = stepPhaseForStructuredPlanStep(plan.Steps[plan.CurrentStep], plan.CurrentStep)
+	}
 	briefSteps := executionBriefStepsFromStructuredPlan(plan)
 	if len(briefSteps) == 0 {
 		return nil
 	}
 	completionCriteria := plan.CompletionGate.Requirements
 	if len(completionCriteria) == 0 {
-		completionCriteria = buildCodingCompletionCriteria(workflowShape)
+		completionCriteria = buildCompletionCriteriaForDomain(strings.TrimSpace(plan.Domain), workflowShape)
 	}
 	return &ExecutionBrief{
 		WorkflowShape:      workflowShape,
 		Objective:          objective,
-		CurrentFocus:       currentFocusForCodingPhase(currentPhase, workflowShape),
+		CurrentFocus:       currentFocusForExecutionDomain(strings.TrimSpace(plan.Domain), currentPhase, workflowShape),
 		Steps:              briefSteps,
 		CompletionCriteria: completionCriteria,
-		EscalationRules:    buildCodingEscalationRules(workflowShape),
+		EscalationRules:    buildEscalationRulesForDomain(strings.TrimSpace(plan.Domain), workflowShape),
 		CreatedAt:          plan.CreatedAt,
 	}
 }
@@ -282,8 +288,17 @@ func executionBriefStepsFromStructuredPlan(plan *cw.StructuredPlan) []ExecutionB
 }
 
 func stepPhaseForStructuredPlanStep(step cw.StructuredPlanStep, idx int) string {
-	if strings.TrimSpace(step.StepDomain) != "" {
-		return strings.TrimSpace(step.StepDomain)
+	if phase := normalizedStructuredPlanPhase(step.StepDomain); phase != "" {
+		return phase
+	}
+	text := strings.ToLower(strings.TrimSpace(step.ActionInstruction + " " + step.Goal + " " + strings.Join(step.Validation, " ") + " " + strings.Join(step.ExitCriteria, " ")))
+	switch {
+	case actionLooksLikeValidation(text):
+		return "review"
+	case actionLooksLikePlanning(text):
+		return "planning"
+	case actionLooksLikeInvestigation(text):
+		return "investigation"
 	}
 	switch {
 	case idx == 0:
@@ -292,6 +307,102 @@ func stepPhaseForStructuredPlanStep(step cw.StructuredPlanStep, idx int) string 
 		return "planning"
 	default:
 		return "execution"
+	}
+}
+
+func inferWorkflowShapeForDomain(domain, query string, plannedPhases []string) string {
+	if strings.EqualFold(strings.TrimSpace(domain), "coding_workflow") || strings.EqualFold(strings.TrimSpace(domain), "coding") {
+		return inferCodingWorkflowShape(query, plannedPhases)
+	}
+	lower := strings.ToLower(strings.TrimSpace(query))
+	switch {
+	case strings.Contains(lower, "review") || strings.Contains(lower, "validate") || strings.Contains(lower, "verify"):
+		return "verification"
+	case strings.Contains(lower, "plan") || strings.Contains(lower, "design"):
+		return "design"
+	case strings.Contains(lower, "fix") || strings.Contains(lower, "repair") || strings.Contains(lower, "fail"):
+		return "repair"
+	default:
+		return "execution"
+	}
+}
+
+func currentFocusForExecutionDomain(domain, currentPhase, workflowShape string) string {
+	if strings.EqualFold(strings.TrimSpace(domain), "coding_workflow") || strings.EqualFold(strings.TrimSpace(domain), "coding") || strings.TrimSpace(domain) == "" {
+		return currentFocusForCodingPhase(currentPhase, workflowShape)
+	}
+	switch strings.ToLower(strings.TrimSpace(domain)) {
+	case "stores":
+		switch currentPhase {
+		case "investigation":
+			return "Confirm the target stores, schema evidence, and result contract before changing query or mutation behavior."
+		case "planning":
+			return "Choose the narrowest store operation or script boundary, and make read-only vs mutating scope explicit before execution."
+		case "review":
+			return "Validate the observed store results against the requested contract and call out remaining schema or data-shape uncertainty."
+		default:
+			return "Execute the smallest store change or validation step that matches the observed schema and requested result contract."
+		}
+	case "spaces":
+		switch currentPhase {
+		case "investigation":
+			return "Inspect the current retrieval or knowledge surface before changing persisted knowledge state."
+		case "planning":
+			return "Constrain the mutation scope, semantic intent, and validation path before changing space content or configuration."
+		case "review":
+			return "Confirm the resulting retrieval or knowledge-state outcome and note any remaining semantic ambiguity."
+		default:
+			return "Apply the narrowest knowledge mutation or retrieval step that preserves the intended space semantics."
+		}
+	case "desktop":
+		switch currentPhase {
+		case "investigation":
+			return "Confirm the working directory, command target, and safety boundary before running local automation."
+		case "planning":
+			return "Sequence the command plan so shell state, filesystem scope, and validation are explicit before execution."
+		case "review":
+			return "Validate command output and resulting filesystem or git state against the requested outcome."
+		default:
+			return "Run the narrowest safe command sequence that satisfies the requested local automation task."
+		}
+	default:
+		return "Stay grounded in the current evidence and execute the next smallest validated step."
+	}
+}
+
+func buildCompletionCriteriaForDomain(domain, workflowShape string) []string {
+	if strings.EqualFold(strings.TrimSpace(domain), "coding_workflow") || strings.EqualFold(strings.TrimSpace(domain), "coding") || strings.TrimSpace(domain) == "" {
+		return buildCodingCompletionCriteria(workflowShape)
+	}
+	return []string{
+		"Current objective is satisfied or the blocking condition is explicit.",
+		"The most relevant domain-specific validation step has been rerun or the blocker is recorded.",
+		"The final summary states what changed and what remains uncertain.",
+	}
+}
+
+func buildEscalationRulesForDomain(domain, workflowShape string) []string {
+	if strings.EqualFold(strings.TrimSpace(domain), "coding_workflow") || strings.EqualFold(strings.TrimSpace(domain), "coding") || strings.TrimSpace(domain) == "" {
+		return buildCodingEscalationRules(workflowShape)
+	}
+	switch strings.ToLower(strings.TrimSpace(domain)) {
+	case "stores":
+		return []string{
+			"If the observed store shape conflicts with the expected contract, step back to investigation before widening the mutation.",
+			"If a requested mutation requires broader schema or relation changes, promote the work to a larger planned store workflow instead of patching opportunistically.",
+		}
+	case "spaces":
+		return []string{
+			"If retrieval evidence conflicts with the expected outcome, step back to investigation before widening the knowledge mutation.",
+			"If the requested change expands semantic scope across multiple spaces or categories, promote it to a broader planned workflow.",
+		}
+	case "desktop":
+		return []string{
+			"If command output does not support the intended outcome, step back to investigation before running broader or riskier commands.",
+			"If the task expands beyond the explicit workspace or shell boundary, restate the command plan before continuing.",
+		}
+	default:
+		return []string{"If the local hypothesis fails, step back to investigation before broadening scope."}
 	}
 }
 

@@ -805,12 +805,23 @@ func (jc *JoinRightCursor) mergeResult(l any, rAny any, rKey any) any {
 
 		for _, k := range rKeys {
 			val := rMap[k]
-
+			aliases := make([]string, 0, 2+len(jc.aliasNames))
 			cleanRightAlias := strings.TrimSpace(jc.rightStoreName)
 			if cleanRightAlias != "" {
-				key := cleanRightAlias + "." + strings.TrimSpace(k)
-				newMap[key] = val
-				newKeys = append(newKeys, key)
+				aliases = append(aliases, cleanRightAlias)
+			}
+			for _, alias := range jc.aliasNames {
+				clean := strings.TrimSpace(alias)
+				if clean != "" && clean != cleanRightAlias && !containsAlias(aliases, clean) {
+					aliases = append(aliases, clean)
+				}
+			}
+			if len(aliases) > 0 {
+				for _, alias := range aliases {
+					key := alias + "." + strings.TrimSpace(k)
+					newMap[key] = val
+					newKeys = append(newKeys, key)
+				}
 			} else {
 				// No alias -> Naked
 				newMap[k] = val
@@ -819,6 +830,15 @@ func (jc *JoinRightCursor) mergeResult(l any, rAny any, rKey any) any {
 		}
 	}
 	return &OrderedMap{m: newMap, keys: newKeys, isImplicit: true}
+}
+
+func containsAlias(aliases []string, target string) bool {
+	for _, alias := range aliases {
+		if strings.EqualFold(alias, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // Helper for Join Numeric Coercion

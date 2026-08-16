@@ -35,6 +35,14 @@ func (a *CopilotAgent) updateStructuredPlanProgressAfterTurn(classification *Ask
 	if clarificationRequest != nil {
 		return
 	}
+	if shouldMarkStructuredPlanStepRefining(classification, current, toolCalls, outcomeFacts) {
+		current.Status = "refining"
+		current.UpdatedAt = now
+		if phase := stepPhaseForStructuredPlanStep(*current, plan.CurrentStep); phase != "" {
+			thread.StreamContext.CurrentPhase = phase
+		}
+		return
+	}
 	if !a.shouldAdvanceStructuredPlanStepForDomain(classification, current, toolCalls, outcomeFacts) {
 		return
 	}
@@ -116,6 +124,23 @@ func shouldAdvanceStructuredPlanStep(step *cw.StructuredPlanStep, toolCalls []ai
 	return len(toolCalls) > 0 && len(outcomeFacts) > 0
 }
 
+func shouldMarkStructuredPlanStepRefining(classification *AskTaskContext, step *cw.StructuredPlanStep, toolCalls []ai.ToolCall, outcomeFacts []string) bool {
+	if classification == nil || step == nil {
+		return false
+	}
+	if len(toolCalls) == 0 && len(outcomeFacts) == 0 {
+		return false
+	}
+	phase := stepPhaseForStructuredPlanStep(*step, 0)
+	if phase != "planning" && phase != "review" {
+		return false
+	}
+	if shouldAdvanceStructuredPlanStep(step, toolCalls, outcomeFacts) {
+		return false
+	}
+	return true
+}
+
 func (a *CopilotAgent) shouldAdvanceStructuredPlanStepForDomain(classification *AskTaskContext, step *cw.StructuredPlanStep, toolCalls []ai.ToolCall, outcomeFacts []string) bool {
 	if classification == nil || a == nil || a.capabilityRegistry == nil || step == nil {
 		return shouldAdvanceStructuredPlanStep(step, toolCalls, outcomeFacts)
@@ -148,6 +173,23 @@ func toolMatchesStructuredPlanStep(toolName, actionText string) bool {
 	default:
 		return false
 	}
+}
+
+var canonicalStructuredPlanPhases = map[string]struct{}{
+	"intake":        {},
+	"investigation": {},
+	"planning":      {},
+	"execution":     {},
+	"review":        {},
+	"delivery":      {},
+}
+
+func normalizedStructuredPlanPhase(text string) string {
+	phase := strings.TrimSpace(strings.ToLower(text))
+	if _, ok := canonicalStructuredPlanPhases[phase]; ok {
+		return phase
+	}
+	return ""
 }
 
 func actionLooksLikeValidation(text string) bool {

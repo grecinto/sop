@@ -1199,7 +1199,7 @@ func TestRegisterBridgeRoutes_TracksContinueAgentExecutionSessionState(t *testin
 	if snapshot["phase"] != "planning" || snapshot["workflow_profile"] != "feature_implementation" || snapshot["task_type"] != "implementation" {
 		t.Fatalf("expected planning feature-implementation session snapshot, got %#v", snapshot)
 	}
-	if snapshot["active_file"] != "billing/service.go" || snapshot["workspace_root"] != "." {
+	if snapshot["active_file"] != "billing/service.go" || snapshot["workspace_root"] != cwd() {
 		t.Fatalf("expected workspace context in session snapshot, got %#v", snapshot)
 	}
 
@@ -1363,6 +1363,9 @@ func TestBuildContinueBridgeEnvelope_PopulatesStructuredIDEContextVariables(t *t
 	}
 	if envelope.Ask.Variables["selected_text"] != "func processPayment()" {
 		t.Fatalf("expected selected_text variable, got %#v", envelope.Ask.Variables)
+	}
+	if envelope.Ask.Variables["workspace_root"] != cwd() {
+		t.Fatalf("expected normalized workspace_root variable, got %#v", envelope.Ask.Variables["workspace_root"])
 	}
 	openFiles, ok := envelope.Ask.Variables["open_files"].([]string)
 	if !ok || len(openFiles) != 2 {

@@ -230,6 +230,7 @@ type JoinRightCursor struct {
 	// Dataset info for prefixing
 	rightStoreName string
 	leftStoreName  string
+	aliasNames     []string
 
 	// Legacy / Runtime State
 	useFallback  bool  // optimization: materialization fallback

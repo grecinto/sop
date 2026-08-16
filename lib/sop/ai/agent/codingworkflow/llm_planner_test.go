@@ -190,3 +190,60 @@ func TestLLMPlanner_NormalizeStructuredPlanEnrichesMissingStepFields(t *testing.
 		t.Fatalf("expected normalization to add notes, got %#v", plan.Steps[0])
 	}
 }
+
+func TestLLMPlanner_PromptIncludesRicherFewShotExamplesForNonCodingDomains(t *testing.T) {
+	gen := &llmPlannerTestGenerator{response: `{
+		"objective": "Repair store result shape",
+		"workflow_shape": "repair",
+		"domain": "stores",
+		"steps": [
+			{"step_id":"step_1","goal":"Inspect the store path","action_instruction":"Check the store schema and query path before changing logic."}
+		]
+	}`}
+	planner := NewLLMPlanner(
+		func(ctx context.Context) (any, error) { return gen, nil },
+		&DefaultPlanner{},
+	)
+
+	_, err := planner.Plan(
+		Task{Description: "repair users store result shape", TaskType: "analysis", State: RunState{Metadata: map[string]string{"domain": "stores"}}},
+		RunState{Metadata: map[string]string{"domain": "stores"}},
+		ContextPack{TaskType: "analysis"},
+	)
+	if err != nil {
+		t.Fatalf("expected planner to succeed, got %v", err)
+	}
+	if !strings.Contains(gen.prompt, "result-shape validation") || !strings.Contains(gen.prompt, "read-only vs mutating") {
+		t.Fatalf("expected planner prompt to include richer stores-specific few-shot guidance, got %s", gen.prompt)
+	}
+}
+
+func TestNormalizeStructuredPlan_UsesDomainSpecificCompletionGateRequirements(t *testing.T) {
+	plan := normalizeStructuredPlan(StructuredPlan{
+		Domain: "stores",
+		Steps: []StructuredPlanStep{{
+			StepID:            "step_1",
+			Goal:              "Inspect store path",
+			ActionInstruction: "Check store schema and expected results.",
+			Status:            "pending",
+		}},
+	}, Task{Description: "repair users store result shape"}, RunState{Metadata: map[string]string{"domain": "stores"}}, ContextPack{TestFiles: []string{"users_store_test.go"}})
+
+	if len(plan.CompletionGate.Requirements) == 0 {
+		t.Fatal("expected domain-specific completion gate requirements")
+	}
+	if !containsAny(plan.CompletionGate.Requirements, "result shape matches the store contract", "store schema and result-shape validation") {
+		t.Fatalf("expected store completion guidance in completion gate, got %#v", plan.CompletionGate.Requirements)
+	}
+}
+
+func containsAny(items []string, targets ...string) bool {
+	for _, item := range items {
+		for _, target := range targets {
+			if strings.Contains(strings.ToLower(item), strings.ToLower(target)) {
+				return true
+			}
+		}
+	}
+	return false
+}
