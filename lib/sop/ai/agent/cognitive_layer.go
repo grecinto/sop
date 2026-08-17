@@ -59,6 +59,15 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 			Reason:           reason,
 		}
 	}
+	if currentPhase == "planning" && a.hasExecutionReadyPlanningArtifact() {
+		reason := "managed coding planning produced a ready_for_execution planning artifact; continue in execution and use the persisted plan"
+		a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
+		return phaseTransactionDecision{
+			EnqueueNextPhase: true,
+			NextPhase:        "execution",
+			Reason:           reason,
+		}
+	}
 	if classification.ExecutionReady {
 		return phaseTransactionDecision{}
 	}

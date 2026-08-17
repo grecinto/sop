@@ -260,3 +260,40 @@ func TestEvaluatePhaseTransactionCognitiveDecision_RequeuesExecutionWhenValidati
 		t.Fatalf("expected cognitive suggested phase execution, got %#v", payload.CognitiveState.LastAssessment)
 	}
 }
+
+func TestEvaluatePhaseTransactionCognitiveDecision_QueuesExecutionWhenPlanningArtifactIsReady(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	artifact := `{"summary":"Execution plan for fix failing tests","status":"ready_for_execution","plan":["inspect failing tests","patch root cause","rerun focused tests"]}`
+	if err := ag.service.session.Memory.SaveWorkflowMemory("phase-artifact:planning", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed planning artifact: %v", err)
+	}
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "planning",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransactionCognitiveDecision(ctx, classification.OriginalQuery, classification, []ai.ToolCall{{Name: "planning_plan_changes"}}, []string{"Execution plan captured"}, "Execution plan captured with ready_for_execution status.", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected ready planning artifact to enqueue execution")
+	}
+	if decision.NextPhase != "execution" {
+		t.Fatalf("expected suggested next phase execution, got %q", decision.NextPhase)
+	}
+	if payload.CognitiveState == nil || payload.CognitiveState.LastAssessment == nil {
+		t.Fatalf("expected cognitive state assessment to be stored, got %#v", payload.CognitiveState)
+	}
+	if payload.CognitiveState.LastAssessment.SuggestedPhase != "execution" {
+		t.Fatalf("expected cognitive suggested phase execution, got %#v", payload.CognitiveState.LastAssessment)
+	}
+	if payload.CognitiveState.LastDecision != "enqueue_phase" {
+		t.Fatalf("expected cognitive last decision to record enqueue_phase, got %#v", payload.CognitiveState)
+	}
+}

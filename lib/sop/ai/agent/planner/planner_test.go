@@ -131,6 +131,37 @@ func (p *staticStructuredPlanner) Plan(task cw.Task, state cw.RunState, pack cw.
 	return p.plan, nil
 }
 
+type captureStructuredPlanner struct {
+	plan         cw.StructuredPlan
+	observedPack cw.ContextPack
+}
+
+func (p *captureStructuredPlanner) Plan(task cw.Task, state cw.RunState, pack cw.ContextPack) (cw.StructuredPlan, error) {
+	p.observedPack = pack
+	return p.plan, nil
+}
+
+type plannerTestContextManager struct {
+	pack cw.ContextPack
+}
+
+func (m plannerTestContextManager) BuildContext(task cw.Task, state cw.RunState) (cw.ContextPack, error) {
+	pack := m.pack
+	if pack.WorkingDir == "" {
+		pack.WorkingDir = task.WorkingDir
+	}
+	if pack.ActiveFile == "" {
+		pack.ActiveFile = task.ActiveFile
+	}
+	if state.Metadata != nil {
+		if summary := strings.TrimSpace(state.Metadata["continuation_summary"]); summary != "" {
+			pack.ContinuationSummary = summary
+			pack.ResumedFromState = true
+		}
+	}
+	return pack, nil
+}
+
 func TestStoresPhaseRunDesignQuery_UsesSharedStructuredPlannerWhenAvailable(t *testing.T) {
 	phase := newStoresPhase("planning", &cw.SharedInfrastructure{Planner: &staticStructuredPlanner{plan: cw.StructuredPlan{
 		Objective:     "Plan store repair",
@@ -144,6 +175,38 @@ func TestStoresPhaseRunDesignQuery_UsesSharedStructuredPlannerWhenAvailable(t *t
 	}
 	if !strings.Contains(output, "Inspect the target store and validate the expected query behavior.") {
 		t.Fatalf("expected output to use shared structured planner, got %q", output)
+	}
+}
+
+func TestCodingPhaseRunPlanChanges_UsesStoredPhaseContinuationSummary(t *testing.T) {
+	planner := &captureStructuredPlanner{plan: cw.StructuredPlan{
+		Objective:     "Plan repo repair",
+		WorkflowShape: "repair",
+		Domain:        "coding_workflow",
+		Steps:         []cw.StructuredPlanStep{{StepID: "step_1", Goal: "Investigate failure", ActionInstruction: "Inspect the exact failing test, identify the root cause, and trace the dependency path through the responsible code path."}},
+	}}
+	infra := &cw.SharedInfrastructure{
+		ContextManager: plannerTestContextManager{pack: cw.ContextPack{WorkingDir: "/tmp/demo", TestFiles: []string{"parser_test.go"}}},
+		Planner:        planner,
+		Memory:         cw.NewInMemorySessionMemory(),
+	}
+	if err := infra.Memory.Save("phase-handoff:planning", map[string]string{"continuation_summary": "=== Phase Transaction Handoff ===\nGrounded outcome facts:\n- --- FAIL: TestParserRejectsInvalidInput"}); err != nil {
+		t.Fatalf("save continuation summary: %v", err)
+	}
+	phase := newCodingPhase("planning", infra)
+
+	output, err := phase.runPlanChanges(map[string]any{"query": "plan parser validation improvements", "working_dir": "/tmp/demo"})
+	if err != nil {
+		t.Fatalf("expected planning to succeed, got %v", err)
+	}
+	if !strings.Contains(output, "identify the root cause") {
+		t.Fatalf("expected structured plan output, got %q", output)
+	}
+	if !strings.Contains(planner.observedPack.ContinuationSummary, "TestParserRejectsInvalidInput") {
+		t.Fatalf("expected planner to receive stored continuation summary, got %#v", planner.observedPack)
+	}
+	if !planner.observedPack.ResumedFromState {
+		t.Fatalf("expected planner context pack to mark resumed state, got %#v", planner.observedPack)
 	}
 }
 

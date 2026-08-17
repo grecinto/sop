@@ -154,6 +154,12 @@ func buildPhaseTransactionContinuationGuidance(decision phaseTransactionDecision
 		}
 		return fmt.Sprintf("Controller guidance: continue in planning and produce or refine the execution-ready plan artifact. Missing requirement: %s", reason)
 	case "execution":
+		if strings.Contains(strings.ToLower(reason), "ready_for_execution") || strings.Contains(strings.ToLower(reason), "execution-ready plan") || strings.Contains(strings.ToLower(reason), "persisted plan") {
+			if reason == "" {
+				reason = "A persisted execution-ready plan artifact is available."
+			}
+			return fmt.Sprintf("Controller guidance: continue in execution and work directly from the persisted execution-ready plan artifact before concluding. Transition trigger: %s", reason)
+		}
 		if reason == "" {
 			reason = "Focused validation evidence is still required before completion."
 		}
@@ -394,6 +400,7 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		a.notifySupportingPostTurnObservers(ctx, query, routingState, selectedCap, capResult)
 	}
 	transactionDecision := a.evaluatePhaseTransaction(ctx, rawQuery, taskContext.AskClassification, toolCalls, outcomeFacts, finalText, clarificationRequest)
+	a.persistPhaseTransactionHandoff(rawQuery, taskContext.AskClassification, transactionDecision, toolCalls, outcomeFacts, finalText)
 	a.enqueuePhaseTransactionDecision(rawQuery, transactionDecision)
 
 	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
@@ -1036,6 +1043,9 @@ func (a *CopilotAgent) buildPhasePrompt(ctx context.Context, query string, class
 	phaseContext := ""
 	if synthesis != "" {
 		phaseContext = synthesis + "\n\n"
+	}
+	if handoff := a.renderPhaseTransactionHandoff(classification, query); handoff != "" {
+		phaseContext += handoff + "\n\n"
 	}
 	if executionBrief := renderExecutionBrief(classification.Phase, a.currentExecutionBrief(classification, query)); executionBrief != "" {
 		phaseContext += executionBrief + "\n\n"

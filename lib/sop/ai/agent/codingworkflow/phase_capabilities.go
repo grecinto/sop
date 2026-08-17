@@ -1097,9 +1097,12 @@ func (c *PhaseCapability) OnBefore(ctx context.Context, query string, state capa
 	return nil
 }
 
-// OnAfter handles phase succession after ReAct loop completes.
-// This is called AFTER all provider-specific ReAct loops (ChatGPT, Anthropic, Gemini, default)
-// complete, making it provider-agnostic and the single source of truth for phase transitions.
+// OnAfter handles legacy post-turn cleanup after ReAct loop completion.
+//
+// Normal coding phase progression is now owned by the Ask transaction evaluator
+// in the active planner-backed Ask path. Keep this legacy capability hook limited
+// to clarification and escalation handling so older surfaces do not compete with
+// the controller-owned transition seam.
 func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capabilities.RoutingState, result capabilities.CapabilityResult) error {
 	// 0. Check for Tier 3 escalation FIRST (takes priority over normal phase succession)
 	if escalation, ok := result.Data["escalation_state"].(map[string]any); ok && escalation != nil {
@@ -1115,89 +1118,6 @@ func (c *PhaseCapability) OnAfter(ctx context.Context, query string, state capab
 	if clarificationRequest := clarificationRequestFromCapabilityResult(result); clarificationRequest != nil {
 		return c.handleClarificationRequest(query, clarificationRequest)
 	}
-
-	// 1. Check if a capture tool was called (phase completion signal)
-	if !c.wasCaptureToolCalled(result) {
-		return nil // Phase still in progress
-	}
-
-	// 2. Load artifact to check transition intent
-	artifact, err := c.loadExistingArtifact()
-	if err != nil {
-		// No artifact yet or load failed - not an error, just no transition
-		return nil
-	}
-
-	// 3. Check if exit was requested
-	if artifact.ExitRequested {
-		log.Info("Phase succession: Exit requested, workflow complete",
-			"phase", c.phaseID,
-			"artifact_status", artifact.Status)
-		return nil
-	}
-
-	// 4. Check if next phase is specified
-	if artifact.TransitionTo == "" {
-		// No transition specified - phase may be incomplete or workflow complete
-		log.Debug("Phase succession: No transition specified",
-			"phase", c.phaseID,
-			"artifact_status", artifact.Status)
-		return nil
-	}
-
-	// 5. Enqueue next phase (AFTER ReAct, in common pipeline)
-	if c.sharedInfra == nil || c.sharedInfra.GetSessionQueue == nil {
-		log.Warn("Phase succession: No queue accessor available",
-			"phase", c.phaseID,
-			"next_phase", artifact.TransitionTo)
-		return nil // Not an error - infrastructure may not support queueing
-	}
-
-	queue := c.sharedInfra.GetSessionQueue()
-	if queue == nil {
-		log.Warn("Phase succession: Queue accessor returned nil",
-			"phase", c.phaseID,
-			"next_phase", artifact.TransitionTo)
-		return nil
-	}
-
-	// Build work item for next phase
-	// Use anonymous struct to avoid import cycle - WorkQueueAccessor handles conversion
-	workItem := struct {
-		Query    string
-		Actor    string
-		Priority int
-		Context  map[string]any
-	}{
-		Query:    query, // Carry forward original query
-		Actor:    "phase:" + artifact.TransitionTo,
-		Priority: 10, // PriorityPhaseSuccession
-		Context: map[string]any{
-			"from_phase":           c.phaseID,
-			"transition_direction": artifact.TransitionDirection,
-		},
-	}
-
-	if preferredModel := extractPreferredModelFromArtifact(artifact); preferredModel != "" {
-		if workItem.Context == nil {
-			workItem.Context = map[string]any{}
-		}
-		workItem.Context["preferred_model"] = preferredModel
-	}
-
-	if err := queue.Enqueue(workItem); err != nil {
-		log.Error("Phase succession: Failed to enqueue next phase",
-			"phase", c.phaseID,
-			"next_phase", artifact.TransitionTo,
-			"error", err)
-		return fmt.Errorf("failed to enqueue next phase %s: %w", artifact.TransitionTo, err)
-	}
-
-	log.Info("Phase succession: Enqueued next phase",
-		"from_phase", c.phaseID,
-		"to_phase", artifact.TransitionTo,
-		"direction", artifact.TransitionDirection,
-		"artifact_status", artifact.Status)
 
 	return nil
 }

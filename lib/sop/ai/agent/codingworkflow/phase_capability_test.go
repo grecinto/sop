@@ -883,6 +883,38 @@ func TestPhaseCapabilityOnAfter_PersistsClarificationAndSkipsTransition(t *testi
 	}
 }
 
+func TestPhaseCapabilityOnAfter_DoesNotEnqueueNormalTransition(t *testing.T) {
+	queue := &stubWorkQueue{}
+	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory(), GetSessionQueue: func() WorkQueueAccessor { return queue }}
+	cap := NewPlanningPhaseCapability(infra)
+
+	_, err := cap.ExecuteTool(context.Background(), "planning_capture", map[string]any{
+		"summary":              "Ready to hand off",
+		"status":               "ready_for_execution",
+		"transition_to":        "execution",
+		"transition_from":      "planning",
+		"transition_direction": "forward",
+		"plan":                 []string{"inspect parser", "patch root cause"},
+		"notes":                []string{"root cause confirmed", "causal trace through parser validation path"},
+	}, capabilities.RoutingState{})
+	if err != nil {
+		t.Fatalf("planning capture failed: %v", err)
+	}
+
+	err = cap.OnAfter(context.Background(), "fix failing tests", capabilities.RoutingState{}, capabilities.CapabilityResult{
+		Summary: "Execution-ready plan persisted",
+		Data: map[string]any{
+			"tool_calls": []ai.ToolCall{{Name: "planning_capture"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("OnAfter failed: %v", err)
+	}
+	if queue.enqueued != 0 {
+		t.Fatalf("expected legacy OnAfter to skip normal phase enqueue, got %d queued items", queue.enqueued)
+	}
+}
+
 func TestPhaseCapabilityHandleEscalation_UsesCognitiveSuggestedPhase(t *testing.T) {
 	queue := &stubWorkQueue{}
 	infra := &SharedInfrastructure{Memory: NewInMemorySessionMemory(), GetSessionQueue: func() WorkQueueAccessor { return queue }}

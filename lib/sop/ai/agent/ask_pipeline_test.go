@@ -613,6 +613,48 @@ func TestBuildPhasePrompt_IncludesExecutionBrief(t *testing.T) {
 	}
 }
 
+func TestBuildPhasePrompt_IncludesPhaseTransactionHandoff(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.InitializeWorkStream("planning")
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "planning",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+	decision := phaseTransactionDecision{EnqueueNextPhase: true, NextPhase: "planning", Reason: "managed coding issue workflow requires planning after failing-test investigation"}
+	ag.persistPhaseTransactionHandoff(classification.OriginalQuery, classification, decision, []ai.ToolCall{{Name: "run_repo_tests", Args: map[string]any{"package": "./..."}}}, []string{"--- FAIL: TestAuthenticateUser_ValidCredentials"}, "Observed a failing authentication test after running the focused repo test command.")
+
+	phases := ag.createPhaseProxies([]string{"coding_workflow"}, "planning", classification)
+	prompt := ag.buildPhasePrompt(context.Background(), classification.OriginalQuery, classification, phases)
+
+	if !strings.Contains(prompt, "=== Phase Transaction Handoff ===") {
+		t.Fatalf("expected prompt to include phase transaction handoff, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "run_repo_tests") {
+		t.Fatalf("expected prompt to include observed tool call, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "--- FAIL: TestAuthenticateUser_ValidCredentials") {
+		t.Fatalf("expected prompt to include failing test evidence, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Prior-turn analysis:") {
+		t.Fatalf("expected prompt to include prior-turn analysis, got %s", prompt)
+	}
+	values, err := ag.service.session.Memory.LoadWorkflowMemory("phase-handoff:planning")
+	if err != nil {
+		t.Fatalf("expected stored planning handoff, got %v", err)
+	}
+	if strings.TrimSpace(values["handoff_json"]) == "" {
+		t.Fatalf("expected non-empty handoff payload, got %#v", values)
+	}
+}
+
 func TestResolvePhasePlan_PrefersAuthoredPlanningArtifactForExecutionBrief(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
@@ -1278,6 +1320,47 @@ func TestEvaluatePhaseTransaction_QueuesPlanningWhenExecutionLacksReadyArtifact(
 	}
 	if decision.NextPhase != "planning" {
 		t.Fatalf("expected next phase planning, got %q", decision.NextPhase)
+	}
+}
+
+func TestEvaluatePhaseTransaction_QueuesExecutionWhenPlanningArtifactIsReady(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	artifact := `{"summary":"Execution plan for fix failing tests","status":"ready_for_execution","plan":["inspect failing tests","patch root cause","rerun focused tests"]}`
+	if err := ag.service.session.Memory.SaveWorkflowMemory("phase-artifact:planning", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed planning artifact: %v", err)
+	}
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "planning",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, []ai.ToolCall{{Name: "planning_plan_changes"}}, []string{"Execution plan captured"}, "Execution plan captured with ready_for_execution status.", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected ready planning artifact to enqueue execution")
+	}
+	if decision.NextPhase != "execution" {
+		t.Fatalf("expected next phase execution, got %q", decision.NextPhase)
+	}
+	queue := ag.getOrCreateSessionQueue()
+	ag.enqueuePhaseTransactionDecision(classification.OriginalQuery, decision)
+	snapshot := queue.Snapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("expected exactly one queued continuation, got %d", len(snapshot))
+	}
+	if snapshot[0].Actor != "phase:execution" {
+		t.Fatalf("expected queued actor phase:execution, got %q", snapshot[0].Actor)
+	}
+	if got, _ := snapshot[0].Context["controller_guidance"].(string); !strings.Contains(got, "persisted execution-ready plan artifact") {
+		t.Fatalf("expected controller guidance to describe the persisted plan handoff, got %q", got)
+	}
+	if got, _ := snapshot[0].Context["reason"].(string); !strings.Contains(strings.ToLower(got), "ready_for_execution") {
+		t.Fatalf("expected reason to mention ready planning artifact, got %q", got)
 	}
 }
 

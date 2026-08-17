@@ -372,6 +372,11 @@ func (p *CodingPhase) buildTask(args map[string]any) Task {
 		Args:     map[string]string{},
 		Metadata: map[string]string{"phase": p.phaseID},
 	}
+	if p.phaseID == "planning" {
+		if continuationSummary := p.loadPhaseContinuationSummary(); continuationSummary != "" {
+			state.Metadata["continuation_summary"] = continuationSummary
+		}
+	}
 
 	return Task{
 		WorkingDir:  workingDir,
@@ -380,6 +385,18 @@ func (p *CodingPhase) buildTask(args map[string]any) Task {
 		TaskType:    p.phaseID,
 		State:       state,
 	}
+}
+
+func (p *CodingPhase) loadPhaseContinuationSummary() string {
+	infra := p.ensureSharedInfrastructure()
+	if infra == nil || infra.Memory == nil {
+		return ""
+	}
+	values, err := infra.Memory.Load("phase-handoff:planning")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values["continuation_summary"])
 }
 
 func (p *CodingPhase) runBuildContext(args map[string]any) (string, error) {
