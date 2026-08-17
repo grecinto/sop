@@ -157,8 +157,16 @@ func buildEffectiveQueueQuery(item WorkItem) string {
 	}
 
 	if strings.TrimSpace(originalQuery) != "" {
+		guidance, _ := item.Context["controller_guidance"].(string)
+		guidance = strings.TrimSpace(guidance)
 		if strings.TrimSpace(item.Query) == "" {
+			if guidance != "" {
+				return fmt.Sprintf("Original request: %s\n%s", originalQuery, guidance)
+			}
 			return fmt.Sprintf("Original request: %s", originalQuery)
+		}
+		if guidance != "" {
+			return fmt.Sprintf("Original request: %s\nCurrent step: %s\n%s", originalQuery, item.Query, guidance)
 		}
 		return fmt.Sprintf("Original request: %s\nCurrent step: %s", originalQuery, item.Query)
 	}

@@ -15,6 +15,94 @@ type sessionCognitiveDecision struct {
 	SuggestedPhase string
 }
 
+func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Context, query string, classification *AskTaskContext, toolCalls []ai.ToolCall, outcomeFacts []string, finalText string, clarificationRequest *ai.ClarificationRequest) phaseTransactionDecision {
+	if a == nil || classification == nil {
+		return phaseTransactionDecision{}
+	}
+	if clarificationRequest != nil {
+		return phaseTransactionDecision{}
+	}
+	currentPhase := strings.TrimSpace(strings.ToLower(classification.Phase))
+
+	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		if currentPhase == "execution" && !phaseTransactionHasGenericCompletionEvidence(toolCalls, outcomeFacts, finalText) {
+			reason := "current execution step is still incomplete; continue in the active phase until the capability confirms completion"
+			return phaseTransactionDecision{
+				EnqueueNextPhase: true,
+				NextPhase:        "execution",
+				Reason:           reason,
+			}
+		}
+		return phaseTransactionDecision{}
+	}
+	if strings.TrimSpace(strings.ToLower(classification.OrchestrationLevel)) != orchestrationManagedWorkflow {
+		return phaseTransactionDecision{}
+	}
+	if currentPhase == "execution" && classification.ExecutionReady {
+		if phaseTransactionMutatedCode(toolCalls) && !phaseTransactionHasValidationEvidence(toolCalls, outcomeFacts, finalText) {
+			reason := firstNonEmpty(strings.TrimSpace(query), strings.TrimSpace(classification.OriginalQuery), "managed coding execution requires focused validation evidence after code changes before completion")
+			a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
+			return phaseTransactionDecision{
+				EnqueueNextPhase: true,
+				NextPhase:        "execution",
+				Reason:           reason,
+			}
+		}
+		return phaseTransactionDecision{}
+	}
+	if currentPhase == "execution" && !a.hasExecutionReadyPlanningArtifact() {
+		reason := firstNonEmpty(strings.TrimSpace(query), strings.TrimSpace(classification.OriginalQuery), "managed coding execution requires a ready_for_execution planning artifact before implementation can proceed")
+		a.recordPhaseTransactionCognitiveState(ctx, "planning", reason)
+		return phaseTransactionDecision{
+			EnqueueNextPhase: true,
+			NextPhase:        "planning",
+			Reason:           reason,
+		}
+	}
+	if classification.ExecutionReady {
+		return phaseTransactionDecision{}
+	}
+	if currentPhase != "investigation" {
+		return phaseTransactionDecision{}
+	}
+	if a.hasExecutionReadyPlanningArtifact() || a.isPhaseComplete(ctx, currentPhase, toolCalls, finalText) {
+		return phaseTransactionDecision{}
+	}
+	if !phaseTransactionFoundFailingTests(toolCalls, outcomeFacts, finalText) {
+		return phaseTransactionDecision{}
+	}
+	reason := firstNonEmpty(strings.TrimSpace(query), strings.TrimSpace(classification.OriginalQuery), "managed coding issue workflow requires planning after failing-test investigation")
+	a.recordPhaseTransactionCognitiveState(ctx, "planning", reason)
+	return phaseTransactionDecision{
+		EnqueueNextPhase: true,
+		NextPhase:        "planning",
+		Reason:           reason,
+	}
+}
+
+func (a *CopilotAgent) recordPhaseTransactionCognitiveState(ctx context.Context, suggestedPhase string, reason string) {
+	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		state := payload.CognitiveState
+		if state == nil {
+			state = &ai.SessionCognitiveState{}
+			payload.CognitiveState = state
+		}
+		state.LastDecision = "enqueue_phase"
+		state.LastDecisionReason = reason
+		state.LastAssessment = &ai.SessionCognitiveAssessment{
+			FailureClass:   ai.CognitiveFailureClassImplementationBug,
+			ProgressState:  ai.CognitiveProgressStateProgressing,
+			PhaseAction:    ai.CognitivePhaseActionMoveForward,
+			RetryAction:    ai.CognitiveRetryActionContinue,
+			SuggestedPhase: strings.TrimSpace(suggestedPhase),
+			LoopRisk:       "low",
+			Confidence:     "high",
+			Rationale:      reason,
+		}
+		state.LoopRisk = "low"
+	}
+}
+
 func (a *CopilotAgent) buildSessionCognitiveState(ctx context.Context, query string, actor string, turn int, phase string) *ai.SessionCognitiveState {
 	payload := ai.GetSessionPayload(ctx)
 	if payload == nil {

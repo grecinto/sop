@@ -230,7 +230,7 @@ func TestBuildSystemPrompt_IncludesTaskGuidanceSynthesis(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt_CodingWorkflowUsesRuntimeModeWording(t *testing.T) {
+func TestBuildSystemPrompt_CodingWorkflowUsesPhaseWording(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
@@ -238,16 +238,16 @@ func TestBuildSystemPrompt_CodingWorkflowUsesRuntimeModeWording(t *testing.T) {
 	prompt := ag.buildSystemPrompt(ctx, "fix failing tests", TaskContextClassification{
 		Domain:         "coding_workflow",
 		RoutingGate:    RoutingGateDiscovery,
-		CapabilityHint: codingRuntimeModeImplementation,
+		CapabilityHint: "execution",
 	})
 
-	for _, expected := range []string{"Task Guidance Synthesis", "Selected Runtime Mode: implementation", "Selected Domain: coding_workflow", "phase semantics are internal continuity metadata"} {
+	for _, expected := range []string{"Task Guidance Synthesis", "Selected Phase: execution", "Selected Domain: coding_workflow", "phase semantics are internal continuity metadata"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("expected coding prompt to contain %q, got: %s", expected, prompt)
 		}
 	}
-	if strings.Contains(prompt, "Selected Phase:") {
-		t.Fatalf("expected coding prompt to avoid Selected Phase wording, got: %s", prompt)
+	if strings.Contains(prompt, "Selected Runtime Mode:") {
+		t.Fatalf("expected coding prompt to retire runtime-mode wording, got: %s", prompt)
 	}
 }
 
@@ -264,7 +264,7 @@ func TestBuildSystemPrompt_CodingWorkflowFixFailingTestsRequiresPlanFirst(t *tes
 	prompt := ag.buildSystemPrompt(ctx, "fix failing tests in the parser package", TaskContextClassification{
 		Domain:         "coding_workflow",
 		RoutingGate:    RoutingGateDiscovery,
-		CapabilityHint: codingRuntimeModeImplementation,
+		CapabilityHint: "execution",
 		AskClassification: &AskTaskContext{
 			Domains:       []string{"coding_workflow"},
 			Phase:         "execution",
@@ -306,7 +306,7 @@ func TestBuildSystemPrompt_CodingWorkflowUsesAuthoredPlanStepsWhenAvailable(t *t
 	prompt := ag.buildSystemPrompt(ctx, "fix failing tests in the parser package", TaskContextClassification{
 		Domain:         "coding_workflow",
 		RoutingGate:    RoutingGateDiscovery,
-		CapabilityHint: codingRuntimeModeImplementation,
+		CapabilityHint: "execution",
 		AskClassification: &AskTaskContext{
 			Domains:       []string{"coding_workflow"},
 			Phase:         "execution",
@@ -351,13 +351,13 @@ func TestBuildFocusedToolContext_IncludesStructuredCapabilityGuidance(t *testing
 	}
 }
 
-func TestBuildFocusedToolContext_CodingWorkflowUsesRuntimeContextInsteadOfPhaseContext(t *testing.T) {
+func TestBuildFocusedToolContext_CodingWorkflowUsesCanonicalPhaseContext(t *testing.T) {
 	ctx := context.Background()
 	sysDB := database.NewDatabase(sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}})
 	ag := NewCopilotAgent(Config{}, map[string]sop.DatabaseOptions{}, sysDB)
 
-	contextText := ag.buildFocusedToolContext(ctx, "fix a parser bug", &TaskContextClassification{Domain: "coding_workflow", RoutingGate: RoutingGateDiscovery, CapabilityHint: codingRuntimeModeImplementation})
-	for _, expected := range []string{"Structured Context: Coding Runtime", "Runtime Mode: implementation", "Phase semantics are internal continuity metadata only"} {
+	contextText := ag.buildFocusedToolContext(ctx, "fix a parser bug", &TaskContextClassification{Domain: "coding_workflow", RoutingGate: RoutingGateDiscovery, CapabilityHint: "execution"})
+	for _, expected := range []string{"Structured Context: Coding Runtime", "Active Phase: execution", "Phase semantics are internal continuity metadata only"} {
 		if !strings.Contains(contextText, expected) {
 			t.Fatalf("expected coding focused context to include %q, got: %s", expected, contextText)
 		}

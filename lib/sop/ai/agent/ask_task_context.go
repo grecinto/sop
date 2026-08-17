@@ -566,14 +566,13 @@ func inferExplicitDomainsFromQuery(query string) []string {
 	if containsRepoFixIntent(AskTaskContext{OriginalQuery: query}) {
 		return []string{"coding_workflow"}
 	}
-	domains := make([]string, 0, 2)
-	if strings.Contains(q, "store") || strings.Contains(q, "stores") || strings.Contains(q, "database") || strings.Contains(q, "table") {
-		domains = append(domains, "stores")
-	}
 	if strings.Contains(q, "space") || strings.Contains(q, "spaces") || strings.Contains(q, "knowledge base") || strings.Contains(q, "kb") {
-		if !contains(domains, "spaces") {
-			domains = append(domains, "spaces")
-		}
+		return []string{"spaces"}
+	}
+
+	domains := make([]string, 0, 2)
+	if strings.Contains(q, "store") || strings.Contains(q, "stores") || strings.Contains(q, "database") || strings.Contains(q, "data") || strings.Contains(q, "table") || strings.Contains(q, "schema") || strings.Contains(q, "row") || strings.Contains(q, "rows") || strings.Contains(q, "record") || strings.Contains(q, "records") || strings.Contains(q, "column") || strings.Contains(q, "columns") || strings.Contains(q, "query") || strings.Contains(q, "join") || strings.Contains(q, "scan") || strings.Contains(q, "filter") || strings.Contains(q, "projection") || strings.Contains(q, "select") || strings.Contains(q, "alias") || strings.Contains(q, "list") || strings.Contains(q, "show") || strings.Contains(q, "fetch") || strings.Contains(q, "find") {
+		domains = append(domains, "stores")
 	}
 	if len(domains) > 0 {
 		return domains

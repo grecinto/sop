@@ -214,7 +214,7 @@ func simplifyCodingWorkflowContinuation(taskCtx *TaskContextClassification, quer
 		isCodingWorkflow = true
 	}
 	switch strings.TrimSpace(strings.ToLower(taskCtx.CapabilityHint)) {
-	case "coding_workflow", "coding", "codingworkflow", "investigation", "planning", "execution", "review", "delivery", codingRuntimeModeDiscovery, codingRuntimeModeImplementation:
+	case "coding_workflow", "coding", "codingworkflow", "investigation", "planning", "execution", "review", "delivery":
 		isCodingWorkflow = true
 	}
 	if strings.EqualFold(taskCtx.IntentFamily, intentFamilyRepoEdit) {
@@ -225,7 +225,7 @@ func simplifyCodingWorkflowContinuation(taskCtx *TaskContextClassification, quer
 	}
 
 	taskCtx.Domain = "coding_workflow"
-	taskCtx.CapabilityHint = codingRuntimeModeImplementation
+	taskCtx.CapabilityHint = "execution"
 	if strings.TrimSpace(taskCtx.IntentFamily) == "" || strings.EqualFold(taskCtx.IntentFamily, intentFamilyGeneral) {
 		taskCtx.IntentFamily = intentFamilyRepoEdit
 	}

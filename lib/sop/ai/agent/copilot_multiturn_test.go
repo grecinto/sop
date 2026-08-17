@@ -122,6 +122,24 @@ func TestBuildEffectiveQueueQueryPreservesOriginalRequestContext(t *testing.T) {
 	}
 }
 
+func TestBuildEffectiveQueueQueryIncludesControllerGuidance(t *testing.T) {
+	item := WorkItem{
+		Query: "Controller guidance: continue in planning and produce the execution-ready plan artifact.",
+		Context: map[string]any{
+			"original_query":      "fix failing tests",
+			"controller_guidance": "Controller guidance: continue in planning and produce the execution-ready plan artifact.",
+		},
+	}
+
+	effective := buildEffectiveQueueQuery(item)
+	if !strings.Contains(effective, "Original request: fix failing tests") {
+		t.Fatalf("expected original request context to be preserved, got %q", effective)
+	}
+	if !strings.Contains(effective, "Controller guidance: continue in planning") {
+		t.Fatalf("expected controller guidance to be included, got %q", effective)
+	}
+}
+
 func TestConditionalWorkItemExecution(t *testing.T) {
 	queue := NewWorkQueue()
 

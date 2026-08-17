@@ -75,8 +75,6 @@ const (
 	capabilityHintCodingWorkflow    = "coding_workflow"
 	capabilityHintDesktopAutomation = "desktop_automation"
 	capabilityHintGeneral           = "general"
-	codingRuntimeModeDiscovery      = "discovery"
-	codingRuntimeModeImplementation = "implementation"
 
 	intentFamilyRepoEdit  = "repo_edit"
 	intentFamilyLocalOps  = "local_ops"

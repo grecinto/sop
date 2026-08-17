@@ -138,6 +138,128 @@ func shouldPauseAskQueue(ctx context.Context) bool {
 	return status == "pending" || status == "clarifying" || status == "needs_clarification"
 }
 
+type phaseTransactionDecision struct {
+	EnqueueNextPhase bool
+	NextPhase        string
+	Reason           string
+}
+
+func buildPhaseTransactionContinuationGuidance(decision phaseTransactionDecision) string {
+	nextPhase := strings.TrimSpace(strings.ToLower(decision.NextPhase))
+	reason := strings.TrimSpace(decision.Reason)
+	switch nextPhase {
+	case "planning":
+		if reason == "" {
+			reason = "Planning is still required before execution can continue."
+		}
+		return fmt.Sprintf("Controller guidance: continue in planning and produce or refine the execution-ready plan artifact. Missing requirement: %s", reason)
+	case "execution":
+		if reason == "" {
+			reason = "Focused validation evidence is still required before completion."
+		}
+		return fmt.Sprintf("Controller guidance: continue in execution and satisfy the missing validation requirement before completion. Missing requirement: %s", reason)
+	default:
+		if reason == "" {
+			return ""
+		}
+		return fmt.Sprintf("Controller guidance: continue with the required workflow follow-up. Missing requirement: %s", reason)
+	}
+}
+
+func (a *CopilotAgent) evaluatePhaseTransaction(ctx context.Context, query string, classification *AskTaskContext, toolCalls []ai.ToolCall, outcomeFacts []string, finalText string, clarificationRequest *ai.ClarificationRequest) phaseTransactionDecision {
+	return a.evaluatePhaseTransactionCognitiveDecision(ctx, query, classification, toolCalls, outcomeFacts, finalText, clarificationRequest)
+}
+
+func phaseTransactionFoundFailingTests(toolCalls []ai.ToolCall, outcomeFacts []string, finalText string) bool {
+	usedTestTool := false
+	for _, toolCall := range toolCalls {
+		name := strings.TrimSpace(strings.ToLower(toolCall.Name))
+		if strings.Contains(name, "run_tests") || strings.Contains(name, "run_repo_tests") || strings.Contains(name, "test") {
+			usedTestTool = true
+			break
+		}
+	}
+	if !usedTestTool {
+		return false
+	}
+	for _, candidate := range append(append([]string{}, outcomeFacts...), finalText) {
+		lower := strings.ToLower(strings.TrimSpace(candidate))
+		if strings.Contains(lower, "--- fail:") || strings.Contains(lower, "failing tests") || strings.Contains(lower, "tests failed") || strings.Contains(lower, " fail\t") || strings.Contains(lower, "^fail$") || strings.Contains(lower, "panic:") || strings.Contains(lower, "\nfail\n") {
+			return true
+		}
+		if strings.Contains(lower, "--- fail") || strings.Contains(lower, "\nfail") {
+			return true
+		}
+	}
+	return false
+}
+
+func phaseTransactionMutatedCode(toolCalls []ai.ToolCall) bool {
+	for _, toolCall := range toolCalls {
+		name := strings.TrimSpace(strings.ToLower(toolCall.Name))
+		if strings.Contains(name, "apply_patch") || strings.Contains(name, "write_file") || strings.Contains(name, "edit_file") || strings.Contains(name, "generate_patch") {
+			return true
+		}
+	}
+	return false
+}
+
+func phaseTransactionHasValidationEvidence(toolCalls []ai.ToolCall, outcomeFacts []string, finalText string) bool {
+	for _, toolCall := range toolCalls {
+		name := strings.TrimSpace(strings.ToLower(toolCall.Name))
+		if strings.Contains(name, "run_tests") || strings.Contains(name, "run_repo_tests") || strings.Contains(name, "validate") || strings.Contains(name, "verify") || strings.Contains(name, "review") {
+			return true
+		}
+	}
+	for _, candidate := range append(append([]string{}, outcomeFacts...), finalText) {
+		lower := strings.ToLower(strings.TrimSpace(candidate))
+		if strings.Contains(lower, "tests passed") || strings.Contains(lower, "validation passed") || strings.Contains(lower, "verified") || strings.Contains(lower, "rerun") || strings.Contains(lower, "ok\t") || strings.Contains(lower, "pass\t") {
+			return true
+		}
+	}
+	return false
+}
+
+func phaseTransactionHasGenericCompletionEvidence(toolCalls []ai.ToolCall, outcomeFacts []string, finalText string) bool {
+	if len(toolCalls) == 0 && len(outcomeFacts) == 0 && strings.TrimSpace(finalText) == "" {
+		return false
+	}
+	for _, candidate := range append(append([]string{}, outcomeFacts...), finalText) {
+		lower := strings.ToLower(strings.TrimSpace(candidate))
+		if lower == "" {
+			continue
+		}
+		if strings.Contains(lower, "complete") || strings.Contains(lower, "done") || strings.Contains(lower, "finished") || strings.Contains(lower, "success") || strings.Contains(lower, "validated") || strings.Contains(lower, "verified") || strings.Contains(lower, "returned") {
+			return true
+		}
+	}
+	return len(toolCalls) > 0 && len(outcomeFacts) > 0
+}
+
+func (a *CopilotAgent) enqueuePhaseTransactionDecision(query string, decision phaseTransactionDecision) {
+	if a == nil || !decision.EnqueueNextPhase || strings.TrimSpace(decision.NextPhase) == "" {
+		return
+	}
+	queue := a.getOrCreateSessionQueue()
+	targetActor := "phase:" + strings.TrimSpace(decision.NextPhase)
+	for _, item := range queue.Snapshot() {
+		if item.Actor == targetActor {
+			return
+		}
+	}
+	_ = queue.Enqueue(WorkItem{
+		Query:    strings.TrimSpace(buildPhaseTransactionContinuationGuidance(decision)),
+		Actor:    targetActor,
+		Priority: PriorityPhaseSuccession,
+		Context: map[string]any{
+			"phase_transaction_continuation": true,
+			"original_query":                 strings.TrimSpace(query),
+			"controller_guidance":            strings.TrimSpace(buildPhaseTransactionContinuationGuidance(decision)),
+			"reason":                         strings.TrimSpace(decision.Reason),
+		},
+	})
+}
+
 func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
 	// 1. Setup and early validation (same as V1)
 	ctx = a.applyAskConfig(ctx, cfg)
@@ -271,6 +393,8 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		}
 		a.notifySupportingPostTurnObservers(ctx, query, routingState, selectedCap, capResult)
 	}
+	transactionDecision := a.evaluatePhaseTransaction(ctx, rawQuery, taskContext.AskClassification, toolCalls, outcomeFacts, finalText, clarificationRequest)
+	a.enqueuePhaseTransactionDecision(rawQuery, transactionDecision)
 
 	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
 
@@ -401,7 +525,7 @@ func (a *CopilotAgent) applyQueuedPhaseActorContext(ctx context.Context, taskCon
 			taskContext.Domain = persisted.Domains[0]
 		}
 	}
-	taskContext.CapabilityHint = resolveActiveCodingRuntimeMode(persisted, phaseName)
+	taskContext.CapabilityHint = phaseName
 	return taskContext
 }
 
@@ -412,14 +536,14 @@ func normalizeCodingRuntimeRouting(taskContext *TaskContextClassification) *Task
 	if !askClassificationHasDomain(taskContext.AskClassification.Domains, "coding_workflow") {
 		return taskContext
 	}
-	runtimeMode := resolveActiveCodingRuntimeMode(taskContext.AskClassification, taskContext.CapabilityHint)
-	if runtimeMode == "" {
-		runtimeMode = resolveActiveCodingRuntimeMode(taskContext.AskClassification, taskContext.AskClassification.Phase)
+	phase := resolveActiveCodingRuntimePhase(taskContext.AskClassification, taskContext.AskClassification.Phase)
+	if phase == "" {
+		phase = canonicalizeCodingRuntimePhase(taskContext.AskClassification, taskContext.CapabilityHint)
 	}
-	if runtimeMode == "" {
-		runtimeMode = codingRuntimeModeDiscovery
+	if phase == "" {
+		phase = "investigation"
 	}
-	taskContext.CapabilityHint = runtimeMode
+	taskContext.CapabilityHint = phase
 	taskContext.Domain = "coding_workflow"
 	taskContext.AskClassification.PhasePlan = canonicalizeCodingRuntimePlan(taskContext.AskClassification, taskContext.AskClassification.PhasePlan)
 	return taskContext
@@ -560,37 +684,10 @@ func resolveActiveCodingRuntimePhase(classification *AskTaskContext, phase strin
 		}
 		return "investigation"
 	}
-	if useCodingImplementationBundle(classification, resolved) {
-		return "execution"
-	}
 	if resolved == "planning" {
 		return "planning"
 	}
 	return "investigation"
-}
-
-func resolveActiveCodingRuntimeMode(classification *AskTaskContext, phaseOrHint string) string {
-	hint := strings.TrimSpace(strings.ToLower(phaseOrHint))
-	switch hint {
-	case codingRuntimeModeImplementation:
-		return hint
-	case codingRuntimeModeDiscovery:
-		if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
-			return hint
-		}
-		if useCodingImplementationBundle(classification, canonicalizeCodingRuntimePhase(classification, classification.Phase)) {
-			return codingRuntimeModeImplementation
-		}
-		return hint
-	}
-	resolvedPhase := canonicalizeCodingRuntimePhase(classification, phaseOrHint)
-	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
-		return resolvedPhase
-	}
-	if useCodingImplementationBundle(classification, resolvedPhase) {
-		return codingRuntimeModeImplementation
-	}
-	return codingRuntimeModeDiscovery
 }
 
 func canonicalizeCodingRuntimePlan(classification *AskTaskContext, phases []string) []string {

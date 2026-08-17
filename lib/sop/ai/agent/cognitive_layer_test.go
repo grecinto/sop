@@ -169,3 +169,94 @@ func TestRefreshSessionCognitiveAssessment_UsesLLMRecommendationForEscalation(t 
 		t.Fatalf("expected cognitive assessment prompt to include strict schema, got %q", gen.prompt)
 	}
 }
+
+func TestEvaluatePhaseTransactionCognitiveDecision_QueuesPlanningAfterFailingTestInvestigation(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "investigation",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransactionCognitiveDecision(ctx, classification.OriginalQuery, classification, []ai.ToolCall{{Name: "run_repo_tests"}}, []string{"--- FAIL: TestAuthenticateUser_ValidCredentials"}, "", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected failing-test investigation to enqueue planning")
+	}
+	if decision.NextPhase != "planning" {
+		t.Fatalf("expected suggested next phase planning, got %q", decision.NextPhase)
+	}
+	if payload.CognitiveState == nil || payload.CognitiveState.LastAssessment == nil {
+		t.Fatalf("expected cognitive state assessment to be stored, got %#v", payload.CognitiveState)
+	}
+	if payload.CognitiveState.LastAssessment.SuggestedPhase != "planning" {
+		t.Fatalf("expected cognitive suggested phase planning, got %#v", payload.CognitiveState.LastAssessment)
+	}
+	if payload.CognitiveState.LastDecision != "enqueue_phase" {
+		t.Fatalf("expected cognitive last decision to record enqueue_phase, got %#v", payload.CognitiveState)
+	}
+}
+
+func TestEvaluatePhaseTransactionCognitiveDecision_QueuesPlanningWhenExecutionLacksReadyArtifact(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransactionCognitiveDecision(ctx, classification.OriginalQuery, classification, nil, nil, "", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected missing ready-for-execution artifact to enqueue planning")
+	}
+	if decision.NextPhase != "planning" {
+		t.Fatalf("expected suggested next phase planning, got %q", decision.NextPhase)
+	}
+	if payload.CognitiveState == nil || payload.CognitiveState.LastAssessment == nil {
+		t.Fatalf("expected cognitive state assessment to be stored, got %#v", payload.CognitiveState)
+	}
+	if payload.CognitiveState.LastAssessment.SuggestedPhase != "planning" {
+		t.Fatalf("expected cognitive suggested phase planning, got %#v", payload.CognitiveState.LastAssessment)
+	}
+}
+
+func TestEvaluatePhaseTransactionCognitiveDecision_RequeuesExecutionWhenValidationEvidenceIsMissing(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		ExecutionReady:     true,
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransactionCognitiveDecision(ctx, classification.OriginalQuery, classification, []ai.ToolCall{{Name: "execution_apply_patch"}}, []string{"Patch applied"}, "", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected missing validation evidence to continue execution")
+	}
+	if decision.NextPhase != "execution" {
+		t.Fatalf("expected suggested next phase execution, got %q", decision.NextPhase)
+	}
+	if payload.CognitiveState == nil || payload.CognitiveState.LastAssessment == nil {
+		t.Fatalf("expected cognitive state assessment to be stored, got %#v", payload.CognitiveState)
+	}
+	if payload.CognitiveState.LastAssessment.SuggestedPhase != "execution" {
+		t.Fatalf("expected cognitive suggested phase execution, got %#v", payload.CognitiveState.LastAssessment)
+	}
+}

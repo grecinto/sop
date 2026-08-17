@@ -835,22 +835,27 @@ func (a *CopilotAgent) buildFocusedToolContext(ctx context.Context, query string
 }
 
 func buildCodingRuntimeFocusedContext(query string, taskCtx TaskContextClassification) string {
-	runtimeMode := inferCodingRuntimeMode(taskCtx, query)
-	if runtimeMode == "" {
-		runtimeMode = "discovery"
+	phase := inferCodingPhase(taskCtx, query)
+	if phase == "" {
+		phase = "investigation"
 	}
 	lines := []string{
 		"Structured Context: Coding Runtime",
-		fmt.Sprintf("- Runtime Mode: %s", runtimeMode),
+		fmt.Sprintf("- Active Phase: %s", phase),
 		"- Phase semantics are internal continuity metadata only; do not wait for explicit investigation/planning/execution transitions inside this Ask/ReAct turn.",
 		"- Use the available coding tools adaptively based on the current evidence, not as a rigid SDLC checklist.",
 	}
-	switch runtimeMode {
-	case "implementation":
+	switch phase {
+	case "execution":
 		lines = append(lines,
 			"- Implementation contract: inspect or plan only as much as needed, then make the change, validate it, and continue until the user-visible task is complete.",
 			"- Approval contract: ask for approval before destructive actions or applying patches that need explicit user confirmation.",
 			"- Validation contract: run focused verification after each meaningful code change.",
+		)
+	case "planning":
+		lines = append(lines,
+			"- Planning contract: convert evidence into a concrete plan artifact with ordered steps, dependencies, and focused validation guidance.",
+			"- Continuation contract: once the plan is captured and ready for execution, the next turn should move directly into execution.",
 		)
 	default:
 		lines = append(lines,

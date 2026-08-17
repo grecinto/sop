@@ -55,22 +55,25 @@ func buildTaskGuidanceSynthesis(query string, taskClassification TaskContextClas
 	}
 
 	if isCodingWorkflowTaskClassification(taskClassification) {
-		runtimeMode := inferCodingRuntimeMode(taskClassification, trimmedQuery)
-		if runtimeMode == "" {
-			runtimeMode = "discovery"
+		phase := inferCodingPhase(taskClassification, trimmedQuery)
+		if phase == "" {
+			phase = "investigation"
 		}
 
 		lines := []string{
 			"Task Guidance Synthesis",
-			fmt.Sprintf("- Selected Runtime Mode: %s", runtimeMode),
+			fmt.Sprintf("- Selected Phase: %s", phase),
 			fmt.Sprintf("- Selected Domain: %s", strings.TrimSpace(taskClassification.Domain)),
 			"- Runtime contract: phase semantics are internal continuity metadata for coding tasks; do not wait for explicit phase handoffs inside this Ask/ReAct turn.",
 		}
 
-		switch runtimeMode {
-		case "implementation":
+		switch phase {
+		case "execution":
 			lines = append(lines, "- Primary directive: use the available coding tools adaptively to inspect, patch, validate, and complete the task in one continuous Ask/ReAct turn unless blocked by clarification or approval requirements.")
 			lines = append(lines, "- Discovery inside implementation is allowed: if details are missing, inspect or plan just enough, then continue directly to the code/test change in the same turn.")
+		case "planning":
+			lines = append(lines, "- Primary directive: turn the gathered evidence into a concrete, ordered implementation plan with focused validation steps.")
+			lines = append(lines, "- Do not stop at vague planning notes; produce a detailed plan artifact that can drive the next execution turn.")
 		default:
 			lines = append(lines, "- Primary directive: gather the evidence or design clarity needed to act safely, then continue directly into implementation in the same Ask/ReAct turn when the next step becomes obvious.")
 			lines = append(lines, "- Do not stop after a plan unless the user asked for design-only work, explicit review, or approval before implementation.")
@@ -159,26 +162,40 @@ func isCodingWorkflowTaskClassification(taskClassification TaskContextClassifica
 	}
 }
 
-func inferCodingRuntimeMode(taskClassification TaskContextClassification, query string) string {
+func inferCodingPhase(taskClassification TaskContextClassification, query string) string {
 	if !isCodingWorkflowTaskClassification(taskClassification) {
 		return ""
 	}
 	hint := strings.TrimSpace(strings.ToLower(taskClassification.CapabilityHint))
 	switch hint {
-	case codingRuntimeModeImplementation, codingRuntimeModeDiscovery:
-		return hint
 	case "execution", "review", "delivery":
-		return codingRuntimeModeImplementation
+		return "execution"
 	case "investigation", "planning", "intake":
-		return codingRuntimeModeDiscovery
+		return hint
+	}
+	if taskClassification.AskClassification != nil {
+		phase := resolveActiveCodingRuntimePhase(taskClassification.AskClassification, taskClassification.AskClassification.Phase)
+		if phase != "" {
+			return phase
+		}
 	}
 	q := strings.ToLower(strings.TrimSpace(query))
 	for _, marker := range []string{"fix", "patch", "implement", "update", "modify", "change", "write", "failing test", "tests fail", "bug"} {
 		if strings.Contains(q, marker) {
-			return codingRuntimeModeImplementation
+			return "execution"
 		}
 	}
-	return codingRuntimeModeDiscovery
+	return "investigation"
+}
+
+func shouldUseLeanStoresAssembly(taskClassification TaskContextClassification) bool {
+	if !strings.EqualFold(taskClassification.Domain, StoresDomain) {
+		return false
+	}
+	if taskClassification.RoutingGate == RoutingGateContinuity {
+		return false
+	}
+	return len(taskClassification.DBArtifacts) > 0 || len(taskClassification.StoresArtifacts) > 0
 }
 
 func (a *CopilotAgent) buildSpacesToolDescriptionContext() string {
@@ -356,26 +373,12 @@ func (a *CopilotAgent) buildSystemPrompt(ctx context.Context, query string, task
 	return fullPrompt
 }
 
-func shouldUseLeanStoresAssembly(taskClassification TaskContextClassification) bool {
-	if !strings.EqualFold(taskClassification.Domain, StoresDomain) {
-		return false
-	}
-	if taskClassification.RoutingGate == RoutingGateContinuity {
-		return false
-	}
-	if isCrossDomain(taskClassification.Layers) || taskClassification.ScriptAuthoring {
-		return false
-	}
-	return len(taskClassification.DBArtifacts) > 0 || len(taskClassification.StoresArtifacts) > 0
-}
-
 func (a *CopilotAgent) promptBudgetProfile(taskClassification TaskContextClassification) PromptBudgetProfile {
 	profile := PromptBudgetProfile{
 		TotalChars: 14000,
 		ComponentCharBudgets: map[PromptComponent]int{
 			ComponentPersona:        2800,
 			ComponentSemanticMemory: 1400,
-			ComponentSystemTools:    2600,
 			ComponentRecipes:        3200,
 			ComponentPlaybooks:      1600,
 			ComponentFocusedContext: 2600,

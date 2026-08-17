@@ -1117,11 +1117,11 @@ func TestApplyQueuedPhaseActorContext_CanonicalizesNonActiveCodingQueuedActor(t 
 		PhasePlan: []string{"investigation", "planning", "execution"},
 	}
 	taskCtx := ag.applyQueuedPhaseActorContext(ctx, &TaskContextClassification{}, persisted)
-	if taskCtx.CapabilityHint != codingRuntimeModeImplementation {
-		t.Fatalf("expected non-active coding queued actor review to canonicalize to implementation runtime, got %q", taskCtx.CapabilityHint)
+	if taskCtx.CapabilityHint != "execution" {
+		t.Fatalf("expected non-active coding queued actor review to canonicalize to execution phase, got %q", taskCtx.CapabilityHint)
 	}
-	if taskCtx.AskClassification == nil || taskCtx.AskClassification.Phase != "execution" {
-		t.Fatalf("expected persisted classification phase to normalize to execution, got %+v", taskCtx.AskClassification)
+	if taskCtx.AskClassification == nil || taskCtx.AskClassification.Phase != "investigation" {
+		t.Fatalf("expected persisted classification phase to remain investigation until execution is ready, got %+v", taskCtx.AskClassification)
 	}
 }
 
@@ -1152,15 +1152,15 @@ func TestApplyQueuedPhaseActorContext_PromotesExecutionReadyFromPlanningArtifact
 	if taskCtx.AskClassification.Phase != "execution" {
 		t.Fatalf("expected queued actor classification phase to resolve to execution, got %+v", taskCtx.AskClassification)
 	}
-	if taskCtx.CapabilityHint != codingRuntimeModeImplementation {
-		t.Fatalf("expected queued execution actor to keep implementation runtime surface, got %q", taskCtx.CapabilityHint)
+	if taskCtx.CapabilityHint != "execution" {
+		t.Fatalf("expected queued execution actor to keep execution phase surface, got %q", taskCtx.CapabilityHint)
 	}
 }
 
-func TestNormalizeCodingRuntimeRouting_UsesImplementationSurfaceForActionOrientedCodingAsk(t *testing.T) {
+func TestNormalizeCodingRuntimeRouting_UsesCanonicalPlanningPhaseForActionOrientedCodingAsk(t *testing.T) {
 	taskCtx := normalizeCodingRuntimeRouting(&TaskContextClassification{
 		Domain:         "coding_workflow",
-		CapabilityHint: codingRuntimeModeDiscovery,
+		CapabilityHint: "investigation",
 		AskClassification: &AskTaskContext{
 			Domains:       []string{"coding_workflow"},
 			Phase:         "planning",
@@ -1170,8 +1170,8 @@ func TestNormalizeCodingRuntimeRouting_UsesImplementationSurfaceForActionOriente
 			OriginalQuery: "fix failing tests in the repository",
 		},
 	})
-	if taskCtx.CapabilityHint != codingRuntimeModeImplementation {
-		t.Fatalf("expected action-oriented coding ask to select implementation runtime surface, got %q", taskCtx.CapabilityHint)
+	if taskCtx.CapabilityHint != "planning" {
+		t.Fatalf("expected action-oriented coding ask to preserve the canonical planning phase, got %q", taskCtx.CapabilityHint)
 	}
 	if taskCtx.AskClassification == nil || taskCtx.AskClassification.Phase != "planning" {
 		t.Fatalf("expected Ask classification to preserve entry-phase semantics, got %+v", taskCtx.AskClassification)
@@ -1204,5 +1204,143 @@ func TestResolvePhasePlan_UsesImplementationSurfaceWhenPersistedCodingPlanIsStil
 	}
 	if currentPhase != "execution" {
 		t.Fatalf("expected persisted planning cursor for action-oriented coding ask to expose implementation surface, got %q", currentPhase)
+	}
+}
+
+func TestEvaluatePhaseTransaction_QueuesPlanningAfterFailingTestInvestigation(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "investigation",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+	toolCalls := []ai.ToolCall{{Name: "run_repo_tests"}}
+	outcomeFacts := []string{"--- FAIL: TestAuthenticateUser_ValidCredentials"}
+
+	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, toolCalls, outcomeFacts, "", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected failing-test investigation to enqueue planning")
+	}
+	if decision.NextPhase != "planning" {
+		t.Fatalf("expected next phase planning, got %q", decision.NextPhase)
+	}
+	queue := ag.getOrCreateSessionQueue()
+	ag.enqueuePhaseTransactionDecision(classification.OriginalQuery, decision)
+	snapshot := queue.Snapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("expected exactly one queued continuation, got %d", len(snapshot))
+	}
+	if snapshot[0].Actor != "phase:planning" {
+		t.Fatalf("expected queued actor phase:planning, got %q", snapshot[0].Actor)
+	}
+	if got, _ := snapshot[0].Context["controller_guidance"].(string); !strings.Contains(got, "continue in planning") {
+		t.Fatalf("expected controller guidance to describe the missing planning work, got %q", got)
+	}
+}
+
+func TestEvaluatePhaseTransaction_DoesNotQueuePlanningWithoutFailingEvidence(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "investigation",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, []ai.ToolCall{{Name: "run_repo_tests"}}, []string{"tests passed"}, "All tests passed.", nil)
+	if decision.EnqueueNextPhase {
+		t.Fatalf("expected no planning continuation when failing evidence is absent, got %+v", decision)
+	}
+}
+
+func TestEvaluatePhaseTransaction_QueuesPlanningWhenExecutionLacksReadyArtifact(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, nil, nil, "", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected execution without a ready planning artifact to enqueue planning")
+	}
+	if decision.NextPhase != "planning" {
+		t.Fatalf("expected next phase planning, got %q", decision.NextPhase)
+	}
+}
+
+func TestEvaluatePhaseTransaction_RequeuesExecutionWhenValidationEvidenceIsMissing(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		ExecutionReady:     true,
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, []ai.ToolCall{{Name: "execution_apply_patch"}}, []string{"Patch applied"}, "", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected execution without validation evidence to continue execution")
+	}
+	if decision.NextPhase != "execution" {
+		t.Fatalf("expected next phase execution, got %q", decision.NextPhase)
+	}
+}
+
+func TestEvaluatePhaseTransaction_UsesCapabilityCompletionForNonCodingDomain(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	classification := &AskTaskContext{
+		Domains:       []string{"stores"},
+		TaskShape:     "read_data",
+		Phase:         "execution",
+		PhasePlan:     []string{"investigation", "execution"},
+		Intent:        "read_data",
+		OriginalQuery: "list inventory for the active store",
+	}
+
+	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, []ai.ToolCall{{Name: "list_stores"}}, nil, "", nil)
+	if !decision.EnqueueNextPhase {
+		t.Fatal("expected non-coding execution to continue until the capability confirms completion")
+	}
+	if decision.NextPhase != "execution" {
+		t.Fatalf("expected next phase execution, got %q", decision.NextPhase)
+	}
+	if !strings.Contains(strings.ToLower(decision.Reason), "incomplete") && !strings.Contains(strings.ToLower(decision.Reason), "continue") {
+		t.Fatalf("expected generic continuation reason for incomplete non-coding step, got %q", decision.Reason)
+	}
+}
+
+func TestEvaluatePhaseTransaction_AllowsExecutionCompletionWhenValidationEvidenceExists(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "execution",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		ExecutionReady:     true,
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+
+	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, []ai.ToolCall{{Name: "execution_apply_patch"}, {Name: "execution_run_tests"}}, []string{"Patch applied", "tests passed"}, "All tests passed.", nil)
+	if decision.EnqueueNextPhase {
+		t.Fatalf("expected validation evidence to allow execution completion, got %+v", decision)
 	}
 }

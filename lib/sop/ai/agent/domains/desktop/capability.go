@@ -275,6 +275,21 @@ func (c *Capability) GetHandledPrefixes() []string {
 }
 
 // HandlePrefix executes a command that starts with a registered prefix
+func updateSessionWorkingDirFromContext(ctx context.Context, workingDir string) {
+	workingDir = strings.TrimSpace(workingDir)
+	if workingDir == "" {
+		return
+	}
+	if payload, ok := ctx.Value("session_payload").(*ai.SessionPayload); ok && payload != nil {
+		if payload.Variables == nil {
+			payload.Variables = map[string]any{}
+		}
+		payload.Variables["working_dir"] = workingDir
+		payload.Variables["workspace_root"] = workingDir
+		payload.ActiveRepo = workingDir
+	}
+}
+
 func (c *Capability) HandlePrefix(ctx context.Context, query string, normalizedCommand string) (string, error) {
 	if normalizedCommand == "" {
 		return "", fmt.Errorf("empty command: provide a command to execute")
@@ -299,8 +314,10 @@ func (c *Capability) HandlePrefix(ctx context.Context, query string, normalizedC
 			// Get current directory by running pwd in the same session
 			pwdOutput, _, pwdErr := c.shellSessionManager.Run(sessionID, "pwd", 5*time.Second)
 			if pwdErr == nil && strings.TrimSpace(pwdOutput) != "" {
+				updateSessionWorkingDirFromContext(ctx, strings.TrimSpace(pwdOutput))
 				return fmt.Sprintf("📁 Changed directory to: %s", strings.TrimSpace(pwdOutput)), nil
 			}
+			updateSessionWorkingDirFromContext(ctx, strings.TrimSpace(output))
 			return "📁 Directory changed", nil
 		}
 

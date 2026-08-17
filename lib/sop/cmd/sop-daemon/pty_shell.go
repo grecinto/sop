@@ -369,6 +369,18 @@ func (m *ptyShellSessionManager) Run(sessionID, command string, timeout time.Dur
 	return m.RunWithStreaming(sessionID, command, timeout, nil)
 }
 
+// GetWorkingDirectory returns the live working directory for a persistent shell session.
+func (m *ptyShellSessionManager) GetWorkingDirectory(sessionID string) (string, error) {
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	output, _, err := m.Run(sessionID, "pwd", 2*time.Second)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
 // RunWithStreaming executes a command with optional real-time output streaming
 // PHASE 2: Now routes through worker process for crash isolation
 func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, timeout time.Duration, streamCallback StreamCallback) (string, bool, error) {

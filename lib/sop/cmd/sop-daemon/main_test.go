@@ -3790,6 +3790,23 @@ func TestRunLocalCommandUsesSessionStateForFollowUpCommands(t *testing.T) {
 	}
 }
 
+func TestPTYShellSessionManagerGetsCanonicalWorkingDirectory(t *testing.T) {
+	mgr := newPTYShellSessionManager()
+	const sessionID = "canonical-cwd-session"
+
+	if _, _, err := mgr.Run(sessionID, "cd /tmp", 10*time.Second); err != nil {
+		t.Fatalf("cd /tmp in PTY session: %v", err)
+	}
+
+	cwd, err := mgr.GetWorkingDirectory(sessionID)
+	if err != nil {
+		t.Fatalf("GetWorkingDirectory(): %v", err)
+	}
+	if !strings.Contains(cwd, "/tmp") {
+		t.Fatalf("expected PTY session CWD to resolve to /tmp, got %q", cwd)
+	}
+}
+
 func TestRunLocalCommandExecutesRunnableScriptFromWorkingDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "hello.sh")

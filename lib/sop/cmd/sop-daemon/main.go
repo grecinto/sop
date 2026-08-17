@@ -1641,9 +1641,20 @@ func runLocalCommandWithWorkingDir(ctx context.Context, req sharedagent.LocalCom
 					payload, _ := json.Marshal(resp)
 					return string(payload), nil
 				}
+				currDir := strings.TrimSpace(output)
+				if currDir != "" {
+					localCommandSessionState.mu.Lock()
+					sessionState := localCommandSessionState.sessions[sessionID]
+					if sessionState == nil {
+						sessionState = &localCommandSession{}
+						localCommandSessionState.sessions[sessionID] = sessionState
+					}
+					sessionState.workingDir = currDir
+					localCommandSessionState.mu.Unlock()
+				}
 				// The output is the new directory from pwd
 				resp := ExecuteResponse{
-					Stdout:   strings.TrimSpace(output),
+					Stdout:   currDir,
 					ExitCode: 0,
 				}
 				payload, _ := json.Marshal(resp)
