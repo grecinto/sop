@@ -96,11 +96,11 @@ func buildCodingExecutionBriefSteps(query, workflowShape string) []ExecutionBrie
 	switch workflowShape {
 	case "checkpointed_fix":
 		return []ExecutionBriefStep{
-			{Title: "Step 1", Phase: "investigation", Description: "Identify the exact failing tests and capture the current failure output.", ContextInstructions: []string{"Prefer the narrowest failing test command or test name before reading broader code.", "Capture the concrete failure text so the next step works from observed behavior instead of memory."}, Validation: []string{"failing test names or commands are explicit"}},
-			{Title: "Step 2", Phase: "investigation", Description: "Trace the failing code path and form one falsifiable local hypothesis for the failure.", ContextInstructions: []string{"Read the failing test and the nearest implementation path together.", "Name the specific file, function, or invariant most likely responsible before proposing a fix."}, Validation: []string{"suspect file, behavior, or invariant is named"}},
+			{Title: "Step 1", Phase: "investigation", Description: "Identify the first failing package or folder cluster and capture its current failure output.", ContextInstructions: []string{"Prefer the narrowest failing package or test command before reading broader code.", "Capture the concrete failure text for only the active cluster so the next step works from observed behavior instead of memory.", "Do not move to another failing package or folder until this cluster is repaired or explicitly blocked."}, Validation: []string{"active failing package, folder, or test command is explicit"}},
+			{Title: "Step 2", Phase: "investigation", Description: "Trace the failing code path for the active cluster and form one falsifiable local hypothesis for the failure.", ContextInstructions: []string{"Read the failing test and the nearest implementation path together.", "Name the specific file, function, or invariant most likely responsible before proposing a fix.", "Keep the investigation inside the current package or folder cluster unless the evidence proves the defect crosses boundaries."}, Validation: []string{"suspect file, behavior, or invariant is named"}},
 			{Title: "Step 3", Phase: "planning", Description: "Choose the smallest repair and the narrowest validation target before editing files.", ContextInstructions: []string{"Keep the repair boundary local unless the evidence proves a broader defect.", "State the exact validation target that could falsify the chosen repair."}, Validation: []string{"repair scope and validation command are concrete"}},
-			{Title: "Step 4", Phase: "execution", Description: "Implement the smallest plausible fix that explains the observed failure.", ContextInstructions: []string{"Touch only the files needed to test the current hypothesis.", "Avoid opportunistic cleanup or refactors unless the plan explicitly requires them."}, Validation: []string{"change stays within the observed repair boundary"}},
-			{Title: "Step 5", Phase: "execution", Description: "Rerun the narrowest relevant tests, then widen validation only if the local fix passes.", ContextInstructions: []string{"Run the original failing check first.", "Only widen to adjacent tests or package tests after the local failing path passes."}, Validation: []string{"original failing check rerun", "broader validation widened only when justified"}},
+			{Title: "Step 4", Phase: "execution", Description: "Implement the smallest plausible fix that explains the observed failure in the active package or folder cluster.", ContextInstructions: []string{"Touch only the files needed to test the current hypothesis.", "Avoid opportunistic cleanup or refactors unless the plan explicitly requires them.", "Finish the repair attempt for the current package or folder cluster before moving to another cluster."}, Validation: []string{"change stays within the observed repair boundary"}},
+			{Title: "Step 5", Phase: "execution", Description: "Rerun the narrowest relevant tests for the active cluster, then widen validation only if the local fix passes.", ContextInstructions: []string{"Run the original failing check first.", "If the first failure came from a broad suite run, convert it into a targeted package or test rerun before doing anything broader.", "Only move to the next failing package or folder after the current cluster passes or is explicitly blocked."}, Validation: []string{"original failing check rerun", "broader validation widened only when justified"}},
 			{Title: "Step 6", Phase: "execution", Description: "Summarize the root cause, the fix, and any residual risk or follow-up work.", ContextInstructions: []string{"State whether the failure was local, architectural, or still partially uncertain.", "Surface remaining validation gaps instead of implying broader confidence than the evidence supports."}, Validation: []string{"result status is explicit"}},
 		}
 	case "feature_plan":
@@ -160,6 +160,7 @@ func (a *CopilotAgent) attachExecutionBriefToCurrentWorkStream(classification *A
 	if thread == nil || thread.StreamContext == nil || thread.StreamContext.PhasePlan == nil {
 		return
 	}
+	a.attachStructuredPlanToCurrentWorkStream(classification, plannedPhases, query)
 	plan := thread.StreamContext.PhasePlan
 	if authored := a.loadAuthoredExecutionBrief(classification, plannedPhases, query); authored != nil {
 		plan.ExecutionBrief = authored
@@ -195,16 +196,38 @@ func (a *CopilotAgent) currentExecutionBrief(classification *AskTaskContext, que
 	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
 		return a.executionBriefFromStructuredPlan(classification, query)
 	}
-	if authored := a.loadAuthoredExecutionBrief(classification, classification.PhasePlan, query); authored != nil {
-		return authored
-	}
 	if fromPlan := a.executionBriefFromStructuredPlan(classification, query); fromPlan != nil {
 		return fromPlan
+	}
+	if authored := a.loadAuthoredExecutionBrief(classification, classification.PhasePlan, query); authored != nil {
+		return authored
 	}
 	if thread := a.currentConversationThread(); thread != nil && thread.StreamContext != nil && thread.StreamContext.PhasePlan != nil && thread.StreamContext.PhasePlan.ExecutionBrief != nil {
 		return thread.StreamContext.PhasePlan.ExecutionBrief
 	}
 	return buildCodingExecutionBrief(query, classification, classification.PhasePlan)
+}
+
+func (a *CopilotAgent) attachStructuredPlanToCurrentWorkStream(classification *AskTaskContext, plannedPhases []string, query string) {
+	thread := a.currentConversationThread()
+	if thread == nil || thread.StreamContext == nil {
+		return
+	}
+	if thread.StreamContext.StructuredPlan != nil && len(thread.StreamContext.StructuredPlan.Steps) > 0 {
+		return
+	}
+	artifact, ok := a.loadStoredPlanningArtifact()
+	if !ok {
+		return
+	}
+	plan := structuredPlanFromStoredPlanningArtifact(artifact, classification, plannedPhases, query)
+	if plan == nil || len(plan.Steps) == 0 {
+		return
+	}
+	thread.StreamContext.StructuredPlan = plan
+	if plan.CurrentStep >= 0 && plan.CurrentStep < len(plan.Steps) {
+		thread.StreamContext.CurrentPhase = stepPhaseForStructuredPlanStep(plan.Steps[plan.CurrentStep], plan.CurrentStep)
+	}
 }
 
 func (a *CopilotAgent) executionBriefFromStructuredPlan(classification *AskTaskContext, query string) *ExecutionBrief {
@@ -278,7 +301,7 @@ func executionBriefStepsFromStructuredPlan(plan *cw.StructuredPlan) []ExecutionB
 		}
 		steps = append(steps, ExecutionBriefStep{
 			Title:               fallbackTitle(step.StepID, idx+1),
-			Phase:               stepPhaseForStructuredPlanStep(step, idx),
+			Phase:               structuredPlanStepPhaseForDomain(plan.Domain, step, idx),
 			Description:         description,
 			ContextInstructions: context,
 			Validation:          append([]string(nil), step.Validation...),
@@ -308,6 +331,16 @@ func stepPhaseForStructuredPlanStep(step cw.StructuredPlanStep, idx int) string 
 	default:
 		return "execution"
 	}
+}
+
+func structuredPlanStepPhaseForDomain(domain string, step cw.StructuredPlanStep, idx int) string {
+	phase := stepPhaseForStructuredPlanStep(step, idx)
+	if strings.EqualFold(strings.TrimSpace(domain), "coding_workflow") || strings.EqualFold(strings.TrimSpace(domain), "coding") {
+		if phase == "review" || phase == "delivery" || phase == "testing" {
+			return "execution"
+		}
+	}
+	return phase
 }
 
 func inferWorkflowShapeForDomain(domain, query string, plannedPhases []string) string {
@@ -648,6 +681,178 @@ func executionBriefFromStoredPlanningArtifact(artifact storedPlanningArtifact, c
 	return brief
 }
 
+func structuredPlanFromStoredPlanningArtifact(artifact storedPlanningArtifact, classification *AskTaskContext, plannedPhases []string, query string) *cw.StructuredPlan {
+	if classification == nil {
+		return nil
+	}
+	if plan := structuredPlanFromStructuredPlanArtifact(artifact.StructuredData, classification, query); plan != nil {
+		return plan
+	}
+	steps := structuredPlanStepsFromStructuredData(artifact.StructuredData)
+	if len(steps) == 0 {
+		steps = structuredPlanStepsFromPlanStrings(artifact.Plan, plannedPhases)
+	}
+	if len(steps) == 0 {
+		return nil
+	}
+	objective := firstNonEmptyBriefValue(strings.TrimSpace(query), strings.TrimSpace(artifact.Summary), strings.TrimSpace(classification.OriginalQuery), "Complete the active coding task")
+	workflowShape := inferCodingWorkflowShape(objective, plannedPhases)
+	if miniPlan, ok := artifact.StructuredData["phase_mini_plan"].(map[string]any); ok {
+		if features, ok := miniPlan["functional_features"].([]any); ok && len(features) >= 3 {
+			workflowShape = "feature_plan"
+		}
+	}
+	now := time.Now().UnixMilli()
+	steps[0].Status = "active"
+	steps[0].UpdatedAt = now
+	return &cw.StructuredPlan{
+		Objective:      objective,
+		WorkflowShape:  workflowShape,
+		Domain:         "coding_workflow",
+		Steps:          steps,
+		CurrentStep:    0,
+		CompletionGate: cw.StructuredCompletionGate{Requirements: buildCodingCompletionCriteria(workflowShape)},
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+}
+
+func structuredPlanFromStructuredPlanArtifact(data map[string]any, classification *AskTaskContext, query string) *cw.StructuredPlan {
+	if len(data) == 0 {
+		return nil
+	}
+	raw, ok := data["structured_plan"]
+	if !ok || raw == nil {
+		return nil
+	}
+	planMap, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	bytes, err := json.Marshal(planMap)
+	if err != nil {
+		return nil
+	}
+	var plan cw.StructuredPlan
+	if err := json.Unmarshal(bytes, &plan); err != nil {
+		return nil
+	}
+	if len(plan.Steps) == 0 {
+		return nil
+	}
+	now := time.Now().UnixMilli()
+	plan.Objective = firstNonEmptyBriefValue(strings.TrimSpace(plan.Objective), strings.TrimSpace(query), strings.TrimSpace(classification.OriginalQuery))
+	if strings.TrimSpace(plan.WorkflowShape) == "" {
+		plan.WorkflowShape = inferCodingWorkflowShape(query, classification.PhasePlan)
+	}
+	if strings.TrimSpace(plan.Domain) == "" {
+		plan.Domain = "coding_workflow"
+	}
+	if plan.CurrentStep < 0 || plan.CurrentStep >= len(plan.Steps) {
+		plan.CurrentStep = 0
+	}
+	if len(plan.CompletionGate.Requirements) == 0 {
+		plan.CompletionGate = cw.StructuredCompletionGate{Requirements: buildCodingCompletionCriteria(plan.WorkflowShape)}
+	}
+	for idx := range plan.Steps {
+		if idx == plan.CurrentStep {
+			if strings.TrimSpace(plan.Steps[idx].Status) == "" || plan.Steps[idx].Status == "pending" {
+				plan.Steps[idx].Status = "active"
+			}
+		} else if strings.TrimSpace(plan.Steps[idx].Status) == "" {
+			plan.Steps[idx].Status = "pending"
+		}
+		if plan.Steps[idx].UpdatedAt == 0 {
+			plan.Steps[idx].UpdatedAt = now
+		}
+	}
+	if plan.CreatedAt == 0 {
+		plan.CreatedAt = now
+	}
+	plan.UpdatedAt = now
+	return &plan
+}
+
+func structuredPlanStepsFromStructuredData(data map[string]any) []cw.StructuredPlanStep {
+	if len(data) == 0 {
+		return nil
+	}
+	raw, ok := data["detailed_execution_plan"]
+	if !ok || raw == nil {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		if typed, ok := raw.([]map[string]any); ok {
+			items = make([]any, 0, len(typed))
+			for _, item := range typed {
+				items = append(items, item)
+			}
+		} else {
+			return nil
+		}
+	}
+	steps := make([]cw.StructuredPlanStep, 0, len(items))
+	for idx, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		description, _ := entry["description"].(string)
+		description = strings.TrimSpace(description)
+		if description == "" {
+			continue
+		}
+		phase := inferStepPhaseForText(description, idx, len(items))
+		steps = append(steps, cw.StructuredPlanStep{
+			StepID:            fmt.Sprintf("authored_step_%d", idx+1),
+			StepDomain:        phase,
+			Goal:              fallbackTitle(stringValueFromMap(entry, "title"), idx+1),
+			Files:             stringSliceFromAny(entry["files"]),
+			EvidenceToCollect: stringSliceFromAny(entry["evidence"]),
+			ActionInstruction: description,
+			Validation:        stringSliceFromAny(entry["validation"]),
+			ExitCriteria:      stringSliceFromAny(entry["exit_criteria"]),
+			EscalateIf:        stringSliceFromAny(entry["escalate_if"]),
+			Status:            "pending",
+		})
+	}
+	return steps
+}
+
+func structuredPlanStepsFromPlanStrings(plan []string, plannedPhases []string) []cw.StructuredPlanStep {
+	if len(plan) == 0 {
+		return nil
+	}
+	steps := make([]cw.StructuredPlanStep, 0, len(plan))
+	for idx, description := range plan {
+		description = strings.TrimSpace(description)
+		if description == "" {
+			continue
+		}
+		phase := inferStepPhaseForText(description, idx, len(plan))
+		if idx < len(plannedPhases) {
+			phase = plannedPhases[minInt(idx, len(plannedPhases)-1)]
+		}
+		steps = append(steps, cw.StructuredPlanStep{
+			StepID:            fmt.Sprintf("authored_step_%d", idx+1),
+			StepDomain:        phase,
+			Goal:              fmt.Sprintf("Step %d", idx+1),
+			ActionInstruction: description,
+			Status:            "pending",
+		})
+	}
+	return steps
+}
+
+func stringValueFromMap(entry map[string]any, key string) string {
+	if entry == nil {
+		return ""
+	}
+	value, _ := entry[key].(string)
+	return strings.TrimSpace(value)
+}
+
 func executionBriefFromStructuredPlanArtifact(data map[string]any, classification *AskTaskContext, query string) *ExecutionBrief {
 	if len(data) == 0 {
 		return nil
@@ -808,6 +1013,22 @@ func inferStepPhase(idx, total int) string {
 		return "planning"
 	}
 	return "execution"
+}
+
+func inferStepPhaseForText(description string, idx, total int) string {
+	text := strings.ToLower(strings.TrimSpace(description))
+	switch {
+	case actionLooksLikePatch(text):
+		return "execution"
+	case actionLooksLikeValidation(text):
+		return "execution"
+	case actionLooksLikePlanning(text):
+		return "planning"
+	case actionLooksLikeInvestigation(text):
+		return "investigation"
+	default:
+		return inferStepPhase(idx, total)
+	}
 }
 
 func fallbackTitle(title string, stepNum int) string {

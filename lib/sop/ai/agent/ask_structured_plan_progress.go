@@ -39,7 +39,7 @@ func (a *CopilotAgent) updateStructuredPlanProgressAfterTurn(classification *Ask
 		current.Status = "refining"
 		current.UpdatedAt = now
 		if phase := stepPhaseForStructuredPlanStep(*current, plan.CurrentStep); phase != "" {
-			thread.StreamContext.CurrentPhase = phase
+			thread.StreamContext.CurrentPhase = structuredContinuationPhase(classification, phase)
 		}
 		return
 	}
@@ -61,8 +61,18 @@ func (a *CopilotAgent) updateStructuredPlanProgressAfterTurn(classification *Ask
 		}
 	}
 	if plan.CurrentStep >= 0 && plan.CurrentStep < len(plan.Steps) {
-		thread.StreamContext.CurrentPhase = stepPhaseForStructuredPlanStep(plan.Steps[plan.CurrentStep], plan.CurrentStep)
+		thread.StreamContext.CurrentPhase = structuredContinuationPhase(classification, stepPhaseForStructuredPlanStep(plan.Steps[plan.CurrentStep], plan.CurrentStep))
 	}
+}
+func structuredContinuationPhase(classification *AskTaskContext, phase string) string {
+	phase = strings.TrimSpace(phase)
+	if classification == nil {
+		return phase
+	}
+	if len(classification.Domains) > 0 && strings.EqualFold(strings.TrimSpace(classification.Domains[0]), "coding_workflow") {
+		return canonicalizeCodingRuntimePhase(classification, phase)
+	}
+	return phase
 }
 
 func (a *CopilotAgent) enqueueStructuredPlanContinuationAfterTurn(query string, classification *AskTaskContext, previousStep int, clarificationRequest *ai.ClarificationRequest) {

@@ -259,6 +259,57 @@ func TestListTools_StoresRoutingExposesStoresProtocolTools(t *testing.T) {
 	}
 }
 
+func TestListTools_CodingWorkflowRouting_HidesStoresSpacesPostgresAndSplunkTools(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, AllowPostgresRead: true, AllowPostgresWrite: true, AllowSplunkRead: true, AllowSplunkWrite: true, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetLocalDesktopAutomationEnabled(false)
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	agent := NewCopilotAgent(Config{}, nil, nil)
+	ctx := context.Background()
+	payload := &ai.SessionPayload{
+		CurrentDB: "system",
+		Variables: map[string]any{
+			"RoutingState": &TaskContextClassification{
+				Domain:         "coding_workflow",
+				RoutingGate:    RoutingGateDiscovery,
+				CapabilityHint: "investigation",
+				AskClassification: &AskTaskContext{
+					Domains:       []string{"coding_workflow"},
+					Phase:         "investigation",
+					PhasePlan:     []string{"investigation", "planning", "execution"},
+					Intent:        "generate_code",
+					CRUD:          []string{"R", "U"},
+					OriginalQuery: "fix failing tests",
+				},
+			},
+		},
+	}
+	ctx = context.WithValue(ctx, "session_payload", payload)
+
+	agent.registerTools(ctx)
+	tools, err := agent.ListTools(ctx)
+	if err != nil {
+		t.Fatalf("ListTools failed: %v", err)
+	}
+
+	names := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		names[tool.Name] = true
+	}
+
+	for _, forbidden := range []string{"postgres_query", "postgres_list_tables", "postgres_execute", "splunk_search", "splunk_list_saved_searches", "splunk_create_saved_search", "splunk_update_saved_search", "splunk_delete_saved_search", "list_stores", "execute_script", "mint_to_space", "read_space_config"} {
+		if names[forbidden] {
+			t.Fatalf("did not expect coding workflow routing to expose %s, got %#v", forbidden, names)
+		}
+	}
+	for _, required := range []string{"execute_local_command", "search_repo_files", "grep_repo_text", "run_repo_tests", "git_status", "read_tool_result", "grep_tool_result"} {
+		if !names[required] {
+			t.Fatalf("expected coding workflow routing to expose %s, got %#v", required, names)
+		}
+	}
+}
+
 func TestListTools_SpacesRoutingHidesStoresProtocolTools(t *testing.T) {
 	agent := NewCopilotAgent(Config{}, nil, nil)
 	ctx := context.Background()

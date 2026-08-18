@@ -173,6 +173,15 @@ func buildNativeToolExposure(routingState *TaskContextClassification) nativeTool
 	// did not surface explicit artifacts but still set a domain.
 	if len(exposedDomains) == 0 {
 		switch routingState.Domain {
+		case "coding_workflow", "codingworkflow", "coding":
+			for name := range gitToolNames {
+				allowed[name] = true
+			}
+			for name := range commandLineToolNames {
+				allowed[name] = true
+			}
+			exposedDomains = append(exposedDomains, "CodingWorkflow")
+
 		case GitDomain:
 			for name := range gitToolNames {
 				allowed[name] = true

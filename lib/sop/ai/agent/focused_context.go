@@ -132,7 +132,7 @@ func (a *CopilotAgent) buildCodingFocusedExecutionContext(query string, taskClas
 	lower := strings.ToLower(strings.TrimSpace(query))
 	if strings.Contains(lower, "test") || strings.Contains(lower, "failing") {
 		lines = append(lines,
-			"- Failing-test policy: identify the exact failing tests, trace the failing path, make the smallest justified fix, rerun the narrowest relevant tests, and widen validation only when the local fix holds.",
+			"- Failing-test policy: on a broad suite failure, isolate the failing package or test from the output, inspect the test and implementation, patch minimally, rerun that targeted check, and widen only after it passes.",
 		)
 	}
 

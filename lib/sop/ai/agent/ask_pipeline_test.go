@@ -723,6 +723,72 @@ func TestResolvePhasePlan_PrefersAuthoredPlanningArtifactForExecutionBrief(t *te
 	if brief.WorkflowShape != "feature_plan" {
 		t.Fatalf("expected feature_plan workflow shape from authored plan, got %q", brief.WorkflowShape)
 	}
+	if thread.StreamContext.StructuredPlan == nil {
+		t.Fatal("expected authored planning artifact to be promoted to a live structured plan")
+	}
+	if len(thread.StreamContext.StructuredPlan.Steps) != 3 {
+		t.Fatalf("expected promoted structured plan to keep 3 steps, got %#v", thread.StreamContext.StructuredPlan)
+	}
+	if thread.StreamContext.StructuredPlan.CurrentStep != 0 || thread.StreamContext.StructuredPlan.Steps[0].Status != "active" {
+		t.Fatalf("expected promoted structured plan to start at active step 0, got %#v", thread.StreamContext.StructuredPlan)
+	}
+}
+
+func TestAuthoredPlanningArtifactStructuredPlan_AdvancesAndQueuesNextStep(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix parser validation"}
+	ag.service.session.Memory.AddThread(thread)
+	ag.service.session.Memory.SetRoutingState(&TaskContextClassification{AskClassification: &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", PhasePlan: []string{"investigation", "planning", "execution"}, OriginalQuery: "implement parser validation for malformed input"}})
+	artifact := `{"summary":"Execution plan for add parser validation","status":"ready_for_execution","plan":["inspect parser","add validation","run parser tests"],"structured_data":{"detailed_execution_plan":[{"title":"Step 1","description":"Inspect parser error handling and malformed-input path.","validation":["affected code path identified"]},{"title":"Step 2","description":"Implement parser validation for malformed input.","validation":["change remains localized"]},{"title":"Step 3","description":"Run parser tests and confirm malformed input behavior.","validation":["targeted parser tests pass"]}]}}`
+	if err := ag.service.session.Memory.SaveWorkflowMemory("phase-artifact:planning", map[string]string{"artifact_json": artifact}); err != nil {
+		t.Fatalf("failed to seed planning artifact: %v", err)
+	}
+	classification := &AskTaskContext{
+		Domains:       []string{"coding_workflow"},
+		Phase:         "execution",
+		PhasePlan:     []string{"investigation", "planning", "execution"},
+		Intent:        "generate_code",
+		CRUD:          []string{"R", "U"},
+		Confidence:    "high",
+		Reasoning:     "feature implementation",
+		OriginalQuery: "implement parser validation for malformed input",
+	}
+
+	_, _ = ag.resolvePhasePlan(context.Background(), classification)
+	plan := thread.StreamContext.StructuredPlan
+	if plan == nil || len(plan.Steps) != 3 {
+		t.Fatalf("expected structured plan promotion, got %#v", plan)
+	}
+
+	ag.updateStructuredPlanProgressAfterTurn(classification, []ai.ToolCall{{Name: "investigation_inspect_repo"}}, []string{"affected code path identified"}, nil)
+	if plan.CurrentStep != 1 {
+		t.Fatalf("expected current step to advance to 1, got %#v", plan)
+	}
+	if plan.Steps[0].Status != "complete" || plan.Steps[1].Status != "active" {
+		t.Fatalf("expected first step complete and second active, got %#v", plan.Steps)
+	}
+
+	ag.enqueueStructuredPlanContinuationAfterTurn(classification.OriginalQuery, classification, 0, nil)
+	snapshot := ag.getOrCreateSessionQueue().Snapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("expected one queued continuation, got %#v", snapshot)
+	}
+	if snapshot[0].Actor != "phase:execution" {
+		t.Fatalf("expected next authored step to queue execution phase for the repair step, got %#v", snapshot[0])
+	}
+	if step, _ := snapshot[0].Context["structured_plan_step"].(int); step != 1 {
+		t.Fatalf("expected queued continuation to point at step 1, got %#v", snapshot[0].Context)
+	}
+}
+
+func TestInferStepPhaseForText_PrefersRepairAndValidationOverIndexHeuristics(t *testing.T) {
+	if got := inferStepPhaseForText("Implement parser validation for malformed input.", 1, 3); got != "execution" {
+		t.Fatalf("expected repair step to map to execution, got %q", got)
+	}
+	if got := inferStepPhaseForText("Run parser tests and confirm malformed input behavior.", 2, 3); got != "execution" {
+		t.Fatalf("expected validation step to stay in execution for coding workflow runtime, got %q", got)
+	}
 }
 
 func TestCurrentExecutionBrief_UsesPersistedStructuredPlan(t *testing.T) {

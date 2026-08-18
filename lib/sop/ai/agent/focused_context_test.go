@@ -326,6 +326,9 @@ func TestBuildSystemPrompt_CodingWorkflowUsesAuthoredPlanStepsWhenAvailable(t *t
 	if !strings.Contains(prompt, "Execution contract: use the active execution brief") {
 		t.Fatalf("expected authored plan prompt to use execution contract, got: %s", prompt)
 	}
+	if !strings.Contains(prompt, "on a broad suite failure, isolate the failing package or test from the output") {
+		t.Fatalf("expected authored plan prompt to require broad-to-targeted test isolation, got: %s", prompt)
+	}
 	if !strings.Contains(prompt, "Focus files: lib/parser.go") {
 		t.Fatalf("expected authored plan prompt to include context instructions from files, got: %s", prompt)
 	}

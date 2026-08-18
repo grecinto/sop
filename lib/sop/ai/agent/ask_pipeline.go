@@ -99,13 +99,14 @@ func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai
 			"actor", item.Actor,
 			"priority", item.Priority,
 			"query_preview", truncateString(item.Query, 80))
+		effectiveQuery := buildEffectiveQueueQuery(item)
 
 		// Execute ask (LLM orchestrates WorkStream management via tools)
 		itemCtx := context.WithValue(ctx, ctxKeyAskWorkItemActor, item.Actor)
 		if preferredModel, ok := item.Context["preferred_model"].(string); ok && strings.TrimSpace(preferredModel) != "" {
 			itemCtx = context.WithValue(itemCtx, ai.CtxKeyProvider, preferredModel)
 		}
-		response, err := a.askCore(itemCtx, item.Query, cfg)
+		response, err := a.askCore(itemCtx, effectiveQuery, cfg)
 		if err != nil {
 			return response, err
 		}
