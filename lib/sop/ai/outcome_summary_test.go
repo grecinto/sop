@@ -1,6 +1,9 @@
 package ai
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExtractListStoresFacts_FromStructuredPayload(t *testing.T) {
 	raw := `{"database":"sales","stores":[{"name":"users","schema":{"key":"string","first_name":"string"},"relations":[{"source_fields":["key"],"target_store":"users_orders","target_fields":["user_id"]}]},{"name":"orders","schema":{"total_amount":"number"}}]}`
@@ -34,7 +37,6 @@ func TestSummarizeSuccessfulToolResult_CommandLineToolsSkipSummarization(t *test
 		"execute_local_command",
 		"search_repo_files",
 		"grep_repo_text",
-		"run_repo_tests",
 		"git_status",
 		"git_diff",
 		"read_file",
@@ -53,6 +55,39 @@ func TestSummarizeSuccessfulToolResult_CommandLineToolsSkipSummarization(t *test
 		if facts != nil {
 			t.Fatalf("expected %s to skip summarization (return nil), got %+v", toolName, facts)
 		}
+	}
+}
+
+func TestSummarizeSuccessfulToolResult_RunRepoTestsReturnsFailureFacts(t *testing.T) {
+	result := ReActToolResult{
+		Name: "run_repo_tests",
+		Result: strings.Join([]string{
+			"Command: go test -v ./tools/sopbackend",
+			"",
+			"--- FAIL: TestAuthenticateUser_ValidCredentials (0.04s)",
+			"--- FAIL: TestAuthenticateUser_TrimsWhitespaceInStoredPassword (0.04s)",
+			"FAIL\tgithub.com/sharedcode/sop/tools/sopbackend\t4.442s",
+		}, "\n"),
+	}
+	facts := SummarizeSuccessfulToolResult(result)
+	if len(facts) < 2 {
+		t.Fatalf("expected run_repo_tests to return grounded failure facts, got %+v", facts)
+	}
+	if facts[0] != "--- FAIL: TestAuthenticateUser_ValidCredentials" {
+		t.Fatalf("expected first failing test fact, got %+v", facts)
+	}
+	if facts[1] != "--- FAIL: TestAuthenticateUser_TrimsWhitespaceInStoredPassword" {
+		t.Fatalf("expected second failing test fact, got %+v", facts)
+	}
+	foundTarget := false
+	for _, fact := range facts {
+		if fact == "run_repo_tests first failing target: TestAuthenticateUser_ValidCredentials in github.com/sharedcode/sop/tools/sopbackend" {
+			foundTarget = true
+			break
+		}
+	}
+	if !foundTarget {
+		t.Fatalf("expected failing package fact, got %+v", facts)
 	}
 }
 

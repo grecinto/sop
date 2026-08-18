@@ -1430,6 +1430,7 @@ type SessionCognitiveState struct {
 	CurrentActor         string
 	CurrentPhase         string
 	CurrentQuery         string
+	RecentQueries        []string
 	PendingClarification bool
 	ClarificationStatus  string
 	QueuePaused          bool
@@ -1500,6 +1501,7 @@ type SessionCognitiveObservation struct {
 	CurrentActor         string            `json:"current_actor,omitempty"`
 	CurrentPhase         string            `json:"current_phase,omitempty"`
 	CurrentQuery         string            `json:"current_query,omitempty"`
+	RecentQueries        []string          `json:"recent_queries,omitempty"`
 	PendingClarification bool              `json:"pending_clarification,omitempty"`
 	ClarificationStatus  string            `json:"clarification_status,omitempty"`
 	QueuePaused          bool              `json:"queue_paused,omitempty"`

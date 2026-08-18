@@ -2107,6 +2107,81 @@
         return normalized;
     }
 
+    function splitPlainTextIntoCollapsibleSections(text) {
+        const normalized = String(text ?? '').replace(/\r\n/g, '\n');
+        if (!normalized.trim()) {
+            return [];
+        }
+
+        const blocks = normalized.split(/\n{2,}/);
+        return blocks.map(block => block.trim()).filter(Boolean).map((block) => {
+            const lines = block.split('\n');
+            const firstLine = (lines[0] || '').trim();
+            const longBlock = lines.length >= 6 || block.length >= 420;
+            const looksLikeJSON = /^[\[{]/.test(firstLine) && /[\]}]$/.test((lines[lines.length - 1] || '').trim());
+            const looksLikeCommandTranscript = lines.filter(line => line.trim().startsWith('$ ')).length >= 2;
+            const looksLikeToolPayload = /^(🛠️|Suggested next step:|Focused execution guidance|Execution-ready plan|Execution-ready plan artifact|\{\s*"args"\s*:)/i.test(firstLine);
+
+            return {
+                text: block,
+                collapsible: longBlock && (looksLikeJSON || looksLikeCommandTranscript || looksLikeToolPayload),
+                kind: looksLikeJSON ? 'json' : (looksLikeCommandTranscript ? 'command' : 'tool')
+            };
+        });
+    }
+
+    function summarizeCollapsedSection(section) {
+        const text = String(section && section.text ? section.text : '').trim();
+        const firstLine = (text.split('\n')[0] || '').trim();
+        if (section.kind === 'json') {
+            try {
+                const parsed = JSON.parse(text);
+                const toolName = parsed && typeof parsed.tool === 'string' ? parsed.tool : '';
+                const iteration = parsed && parsed.iteration !== undefined ? String(parsed.iteration) : '';
+                if (toolName && iteration) {
+                    return `Tool payload: ${toolName} (iteration ${iteration})`;
+                }
+                if (toolName) {
+                    return `Tool payload: ${toolName}`;
+                }
+            } catch (err) {
+                // Fall back to the first line summary.
+            }
+            return 'Structured tool payload';
+        }
+        if (section.kind === 'command') {
+            return 'Command transcript';
+        }
+        if (firstLine.startsWith('🛠️')) {
+            return firstLine.replace(/^🛠️\s*/, '');
+        }
+        if (firstLine.length > 96) {
+            return firstLine.slice(0, 93) + '...';
+        }
+        return firstLine || 'Details';
+    }
+
+    function buildPlainTextHtml(text) {
+        const sections = splitPlainTextIntoCollapsibleSections(text);
+        if (!sections.length) {
+            return '';
+        }
+
+        return sections.map((section) => {
+            const escaped = escapeHtml(section.text);
+            if (!section.collapsible) {
+                return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: var(--chat-font-family); line-height: 1.2; margin: 0 0 0.5rem 0;">${escaped}</div>`;
+            }
+            const summary = escapeHtml(summarizeCollapsedSection(section));
+            return `
+                <details class="chat-collapsible-block">
+                    <summary>${summary}</summary>
+                    <pre class="chat-collapsible-content">${escaped}</pre>
+                </details>
+            `;
+        }).join('');
+    }
+
     function renderStreamContent(text) {
         const normalized = String(text ?? '');
         if (!normalized) {
@@ -2117,7 +2192,7 @@
         const shouldPreserveWhitespace = displayText.includes('\n') || displayText.includes('\r');
 
         if (isToolInventoryContent(displayText) || shouldPreserveWhitespace) {
-            return `<div class="chat-plain-text" style="white-space: pre-wrap; font-family: var(--chat-font-family); line-height: 1.2; margin: 0;">${escapeHtml(displayText)}</div>`;
+            return buildPlainTextHtml(displayText);
         }
 
         const html = marked.parse(displayText);

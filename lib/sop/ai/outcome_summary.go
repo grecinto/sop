@@ -18,6 +18,12 @@ const (
 )
 
 func SummarizeSuccessfulToolResult(result ReActToolResult) []string {
+	if result.Name == "run_repo_tests" {
+		if facts := extractRunRepoTestsFacts(result.Result); len(facts) > 0 {
+			return facts
+		}
+	}
+
 	// Skip semantic summarization for command-line/automation tools.
 	// These tools output raw command results that should be preserved intact.
 	// Large results go to temp files with grep/awk/tail recommendations.
@@ -312,6 +318,62 @@ func extractPrimaryConditionOperator(rawCondition any) string {
 	}
 	sort.Strings(operators)
 	return strings.TrimSpace(operators[0])
+}
+
+func extractRunRepoTestsFacts(resultText string) []string {
+	trimmed := strings.TrimSpace(resultText)
+	if trimmed == "" {
+		return nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	facts := make([]string, 0, outcomeFactsLimit)
+	seen := make(map[string]bool, outcomeFactsLimit)
+	appendFact := func(fact string) {
+		fact = strings.TrimSpace(fact)
+		if fact == "" || seen[fact] || len(facts) >= outcomeFactsLimit {
+			return
+		}
+		seen[fact] = true
+		facts = append(facts, fact)
+	}
+
+	firstFailTest := ""
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, "--- FAIL:") {
+			name := strings.TrimSpace(strings.TrimPrefix(trimmedLine, "--- FAIL:"))
+			if idx := strings.Index(name, "("); idx > 0 {
+				name = strings.TrimSpace(name[:idx])
+			}
+			if name != "" {
+				appendFact("--- FAIL: " + name)
+				if firstFailTest == "" {
+					firstFailTest = name
+				}
+			}
+		}
+	}
+
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, "FAIL\t") {
+			parts := strings.Split(trimmedLine, "\t")
+			if len(parts) >= 2 {
+				pkg := strings.TrimSpace(parts[1])
+				if pkg != "" {
+					if firstFailTest != "" {
+						appendFact(fmt.Sprintf("run_repo_tests first failing target: %s in %s", firstFailTest, pkg))
+					} else {
+						appendFact(fmt.Sprintf("run_repo_tests failing package: %s", pkg))
+					}
+				}
+			}
+			break
+		}
+	}
+
+	return facts
 }
 
 func extractListStoresFacts(resultText string) []string {

@@ -14,6 +14,35 @@ import (
 	"github.com/sharedcode/sop/ai/agent/domains/stores"
 )
 
+type runtimeIDEWorkerBackendStub struct{}
+
+func (runtimeIDEWorkerBackendStub) InspectSession(ctx context.Context, sessionID string) (ideworker.SessionState, error) {
+	_ = ctx
+	return ideworker.SessionState{SessionID: sessionID, Connected: true, IDE: "continue"}, nil
+}
+
+func (runtimeIDEWorkerBackendStub) ExecuteTask(ctx context.Context, req ideworker.TaskRequest) (string, error) {
+	_ = ctx
+	_ = req
+	return "", nil
+}
+
+func (runtimeIDEWorkerBackendStub) StartTask(ctx context.Context, req ideworker.TaskRequest) (ideworker.DelegationHandle, error) {
+	_ = ctx
+	_ = req
+	return ideworker.DelegationHandle{ID: "delegation-1", Status: "running"}, nil
+}
+
+func (runtimeIDEWorkerBackendStub) GetTaskStatus(ctx context.Context, delegationID string) (ideworker.DelegationStatus, error) {
+	_ = ctx
+	return ideworker.DelegationStatus{ID: delegationID, Status: "running"}, nil
+}
+
+func (runtimeIDEWorkerBackendStub) CancelTask(ctx context.Context, delegationID string) (ideworker.DelegationStatus, error) {
+	_ = ctx
+	return ideworker.DelegationStatus{ID: delegationID, Status: "cancelled", Cancelled: true}, nil
+}
+
 func TestBuildFocusedToolContextUsesCapabilityRegistry(t *testing.T) {
 	ag := &CopilotAgent{}
 	reg := capabilities.NewRegistry()
@@ -191,11 +220,45 @@ func TestRegisterTools_ScopesCapabilityToolRegistrationForCodingWorkflowRouting(
 	if found["investigation_capture"] || found["planning_capture"] || found["execution_capture"] {
 		t.Fatalf("did not expect phase capability tools to be globally registered; phase factory should own them for the turn")
 	}
-	if !found["delegate_continue_task"] {
-		t.Fatalf("expected scoped supporting capability tool delegate_continue_task to remain available")
+	if found["delegate_continue_task"] {
+		t.Fatalf("did not expect delegate_continue_task without an injected IDE worker backend")
 	}
 	if !found["list_workstreams"] {
 		t.Fatalf("expected workstream management tool to remain available")
+	}
+}
+
+func TestRegisterTools_RegistersDelegateContinueTaskWhenBackendInjected(t *testing.T) {
+	SetLocalDesktopAutomationEnabled(true)
+	defer SetLocalDesktopAutomationEnabled(false)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.InjectIDEWorkerBackend(runtimeIDEWorkerBackendStub{})
+	payload := &ai.SessionPayload{CurrentDB: "system", Variables: map[string]any{}}
+	payload.Variables["RoutingState"] = &TaskContextClassification{
+		Domain:         "coding_workflow",
+		RoutingGate:    RoutingGateDiscovery,
+		CapabilityHint: "execution",
+		AskClassification: &AskTaskContext{
+			Domains:       []string{"coding_workflow"},
+			Phase:         "execution",
+			PhasePlan:     []string{"investigation", "execution"},
+			Intent:        "generate_code",
+			CRUD:          []string{"R", "U"},
+			OriginalQuery: "fix failing tests",
+		},
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	ag.registerTools(ctx)
+
+	found := map[string]bool{}
+	for _, tool := range ag.registry.List() {
+		found[tool.Name] = true
+	}
+
+	if !found["delegate_continue_task"] {
+		t.Fatalf("expected delegate_continue_task when an IDE worker backend is injected")
 	}
 }
 

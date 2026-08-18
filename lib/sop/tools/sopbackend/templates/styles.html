@@ -640,7 +640,7 @@
             word-wrap: break-word; 
             overflow-wrap: anywhere; 
         }
-        .chat-message.user { background-color: #007bff; color: white; align-self: flex-end; margin-left: auto; margin-right:7px; text-align: left; border: 1px solid #0056b3; }
+        .chat-message.user { background-color: #3f3f46; color: var(--text-color); align-self: flex-end; margin-left: auto; margin-right:7px; text-align: left; border: 1px solid #52525b; }
         .chat-message.ai { background: var(--pre-bg); color: var(--text-color); align-self: flex-start; margin-right: auto; border: none; padding: 0 6px; }
         .chat-command-preview {
             display: block;
@@ -686,6 +686,53 @@
             font-family: var(--chat-font-family);
             line-height: 1.2;
             margin: 0;
+        }
+        .chat-collapsible-block {
+            margin: 0 0 0.5rem 0;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: rgba(99, 102, 241, 0.05);
+            overflow: hidden;
+        }
+        .chat-collapsible-block summary {
+            cursor: pointer;
+            list-style: none;
+            padding: 0.45rem 0.7rem;
+            font-family: var(--chat-font-family);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-color);
+            background: rgba(99, 102, 241, 0.08);
+            border-bottom: 1px solid transparent;
+            user-select: none;
+        }
+        .chat-collapsible-block summary::-webkit-details-marker {
+            display: none;
+        }
+        .chat-collapsible-block summary::before {
+            content: '▶';
+            display: inline-block;
+            margin-right: 0.45rem;
+            font-size: 10px;
+            transform-origin: center;
+            transition: transform 0.15s ease;
+        }
+        .chat-collapsible-block[open] summary {
+            border-bottom-color: var(--border-color);
+        }
+        .chat-collapsible-block[open] summary::before {
+            transform: rotate(90deg);
+        }
+        .chat-collapsible-content {
+            margin: 0;
+            padding: 0.7rem;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            font-family: var(--chat-font-family);
+            font-size: 12px;
+            line-height: 1.35;
+            background: transparent;
+            color: var(--text-color);
         }
         .chat-message.ai p,
         .chat-message.ai ul,

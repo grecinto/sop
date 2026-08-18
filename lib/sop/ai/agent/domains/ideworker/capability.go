@@ -115,6 +115,10 @@ type Capability struct {
 
 func NewCapability() *Capability { return &Capability{} }
 
+func (c *Capability) HasBackend() bool {
+	return c != nil && c.backend != nil
+}
+
 func (c *Capability) SetBackend(backend Backend) {
 	c.backend = backend
 }

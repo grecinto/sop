@@ -114,6 +114,54 @@ func TestTryAskContinuationBasedRouting_SimplifiesCodingRefinementToExecution(t 
 	}
 }
 
+func TestTryAskContinuationBasedRouting_PreservesActiveCodingWorkstreamForProceed(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{MRU: []MRUItem{}, Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "fix failing tests"}
+	thread.InitializeWorkStream("planning")
+	thread.StreamContext.CurrentPhase = "planning"
+	thread.StreamContext.PhasePlan = &PhasePlan{
+		PlannedPhases: []string{"investigation", "planning", "execution"},
+		CurrentIndex:  1,
+		ExecutionBrief: &ExecutionBrief{
+			WorkflowShape: "checkpointed_fix",
+		},
+	}
+	ag.service.session.Memory.AddThread(thread)
+	ag.service.session.Memory.SetRoutingState(&TaskContextClassification{
+		Domain:         GeneralDomain,
+		RoutingGate:    RoutingGateContinuity,
+		CapabilityHint: capabilityHintGeneral,
+		GeneralContext: true,
+	})
+
+	taskCtx, err := ag.tryAskContinuationBasedRouting(context.Background(), "proceed", nil, false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if taskCtx == nil {
+		t.Fatal("expected continuity routing result")
+	}
+	if taskCtx.Domain != "coding_workflow" {
+		t.Fatalf("expected active coding workstream to override general continuity routing, got %q", taskCtx.Domain)
+	}
+	if taskCtx.CapabilityHint != "execution" {
+		t.Fatalf("expected continuity routing to keep the implementation surface hint before ask-phase normalization, got %q", taskCtx.CapabilityHint)
+	}
+	if taskCtx.AskClassification == nil {
+		t.Fatal("expected ask classification to be synthesized from active workstream")
+	}
+	if taskCtx.AskClassification.Phase != "execution" {
+		t.Fatalf("expected proceed to promote an execution-ready planning workstream into execution, got %q", taskCtx.AskClassification.Phase)
+	}
+	if !taskCtx.AskClassification.ExecutionReady {
+		t.Fatal("expected synthesized ask classification to mark execution ready when an execution brief already exists")
+	}
+	if taskCtx.IntentFamily != intentFamilyRepoEdit {
+		t.Fatalf("expected synthesized continuity routing to use repo_edit intent family, got %q", taskCtx.IntentFamily)
+	}
+}
+
 func TestEvaluateAskRoutingGates_ClassifiesSummaryQueriesAsDiscovery(t *testing.T) {
 	ctx := context.Background()
 	sysDBOptions := sop.DatabaseOptions{Type: sop.Standalone, StoresFolders: []string{t.TempDir()}}

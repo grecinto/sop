@@ -140,6 +140,9 @@ func TestDefaultCognitivePolicySurface_ShouldEvaluateOnRetryOrClarificationSigna
 	if !policy.ShouldEvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{RetryTier: 1}}) {
 		t.Fatal("expected retry tier to trigger cognitive evaluation")
 	}
+	if !policy.ShouldEvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{Metadata: map[string]any{"repeated_continuation_prompt": true}}}) {
+		t.Fatal("expected repeated continuation prompt metadata to trigger cognitive evaluation")
+	}
 	if policy.ShouldEvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{CurrentPhase: "planning"}}) {
 		t.Fatal("expected quiet state not to trigger cognitive evaluation")
 	}
@@ -171,5 +174,19 @@ func TestDefaultCognitivePolicySurface_EvaluateSessionCognition(t *testing.T) {
 	}
 	if assessment.FailureClass != CognitiveFailureClassMissingFact {
 		t.Fatalf("expected missing-fact failure class, got %#v", assessment)
+	}
+
+	assessment = policy.EvaluateSessionCognition(SessionCognitiveInput{Observation: SessionCognitiveObservation{
+		CurrentPhase: "planning",
+		Metadata: map[string]any{
+			"repeated_continuation_prompt": true,
+			"continuation_prompt_pattern":  "advance_request",
+		},
+	}})
+	if assessment.FailureClass != CognitiveFailureClassLooping {
+		t.Fatalf("expected looping failure class for repeated continuation prompts, got %#v", assessment)
+	}
+	if assessment.RetryAction != CognitiveRetryActionAskClarification {
+		t.Fatalf("expected clarify retry action for repeated continuation prompts, got %#v", assessment)
 	}
 }

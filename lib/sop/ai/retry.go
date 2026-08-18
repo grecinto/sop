@@ -225,6 +225,11 @@ func (p *DefaultCognitivePolicySurface) ShouldEvaluateSessionCognition(input Ses
 	if obs.PendingClarification || strings.TrimSpace(obs.TerminalReason) != "" {
 		return true
 	}
+	if obs.Metadata != nil {
+		if repeated, ok := obs.Metadata["repeated_continuation_prompt"].(bool); ok && repeated {
+			return true
+		}
+	}
 	if obs.EscalationTier > 0 || obs.RetryTier > 0 {
 		return true
 	}
@@ -280,6 +285,20 @@ func (p *DefaultCognitivePolicySurface) EvaluateSessionCognition(input SessionCo
 		assessment.Confidence = "high"
 		assessment.Rationale = "retry/escalation tier reached a looping threshold and should trigger reassessment"
 		return assessment
+	}
+
+	if obs.Metadata != nil {
+		if repeated, ok := obs.Metadata["repeated_continuation_prompt"].(bool); ok && repeated {
+			assessment.FailureClass = CognitiveFailureClassLooping
+			assessment.ProgressState = CognitiveProgressStateLooping
+			assessment.PhaseAction = CognitivePhaseActionStayCurrent
+			assessment.RetryAction = CognitiveRetryActionAskClarification
+			assessment.ClarificationNeeded = true
+			assessment.LoopRisk = "medium"
+			assessment.Confidence = "medium"
+			assessment.Rationale = "repeated continuation prompts without progress should trigger a blocker explanation or plan reassessment"
+			return assessment
+		}
 	}
 
 	if obs.LatestHint != nil {

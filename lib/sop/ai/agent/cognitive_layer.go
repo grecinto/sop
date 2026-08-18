@@ -40,7 +40,7 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 	}
 	if currentPhase == "execution" && classification.ExecutionReady {
 		if phaseTransactionMutatedCode(toolCalls) && !phaseTransactionHasValidationEvidence(toolCalls, outcomeFacts, finalText) {
-			reason := firstNonEmpty(strings.TrimSpace(query), strings.TrimSpace(classification.OriginalQuery), "managed coding execution requires focused validation evidence after code changes before completion")
+			reason := "managed coding execution requires focused validation evidence after code changes before completion"
 			a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
 			return phaseTransactionDecision{
 				EnqueueNextPhase: true,
@@ -51,7 +51,7 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 		return phaseTransactionDecision{}
 	}
 	if currentPhase == "execution" && !a.hasExecutionReadyPlanningArtifact() {
-		reason := firstNonEmpty(strings.TrimSpace(query), strings.TrimSpace(classification.OriginalQuery), "managed coding execution requires a ready_for_execution planning artifact before implementation can proceed")
+		reason := "managed coding execution requires a ready_for_execution planning artifact before implementation can proceed"
 		a.recordPhaseTransactionCognitiveState(ctx, "planning", reason)
 		return phaseTransactionDecision{
 			EnqueueNextPhase: true,
@@ -80,7 +80,7 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 	if !phaseTransactionFoundFailingTests(toolCalls, outcomeFacts, finalText) {
 		return phaseTransactionDecision{}
 	}
-	reason := firstNonEmpty(strings.TrimSpace(query), strings.TrimSpace(classification.OriginalQuery), "managed coding issue workflow requires planning after failing-test investigation")
+	reason := "managed coding issue workflow requires planning after failing-test investigation"
 	a.recordPhaseTransactionCognitiveState(ctx, "planning", reason)
 	return phaseTransactionDecision{
 		EnqueueNextPhase: true,
@@ -127,6 +127,7 @@ func (a *CopilotAgent) buildSessionCognitiveState(ctx context.Context, query str
 	state.CurrentActor = strings.TrimSpace(actor)
 	state.CurrentPhase = strings.TrimSpace(phase)
 	state.CurrentQuery = strings.TrimSpace(query)
+	state.RecentQueries = appendTrimmedWindow(state.RecentQueries, state.CurrentQuery, 5)
 	if payload.ClarificationState != nil {
 		state.PendingClarification = strings.EqualFold(strings.TrimSpace(payload.ClarificationState.Status), "pending") || strings.EqualFold(strings.TrimSpace(payload.ClarificationState.Status), "clarifying")
 		state.ClarificationStatus = strings.TrimSpace(payload.ClarificationState.Status)
@@ -167,10 +168,17 @@ func (a *CopilotAgent) buildSessionCognitiveObservation(
 		observation.QueuePaused = state.QueuePaused
 		observation.RetryTier = state.RetryTier
 		observation.EscalationTier = state.EscalationTier
+		observation.RecentQueries = append([]string(nil), state.RecentQueries...)
 		observation.MemorySignals = append([]string(nil), state.MemorySignals...)
 		observation.RecentToolNames = append([]string(nil), state.RecentToolNames...)
 		observation.RecentProgressDeltas = append([]float64(nil), state.RecentProgressDeltas...)
 		observation.RecentFailureClasses = append([]string(nil), state.RecentFailureClasses...)
+		if repeated, repeatCount, descriptor := repeatedContinuationPrompt(state.RecentQueries); repeated {
+			observation.Metadata["repeated_continuation_prompt"] = true
+			observation.Metadata["continuation_prompt_repeat_count"] = repeatCount
+			observation.Metadata["continuation_prompt_pattern"] = descriptor.Pattern
+			observation.Metadata["continuation_prompt_examples"] = append([]string(nil), descriptor.Examples...)
+		}
 	}
 	if clarificationRequest != nil {
 		observation.PendingClarification = true
@@ -537,6 +545,13 @@ func (a *CopilotAgent) evaluateSessionCognitivePolicy(ctx context.Context, query
 		}
 	}
 
+	if repeated, repeatCount, descriptor := repeatedContinuationPrompt(state.RecentQueries); repeated && !state.PendingClarification {
+		state.LastDecision = "escalate_retry"
+		state.LastDecisionReason = fmt.Sprintf("repeated unresolved continuation prompt pattern %q observed %d times without progress; use cognitive escalation to choose whether to clarify, change phase, refine the plan, or stop looping", descriptor.Pattern, repeatCount)
+		state.RetryTier = maxInt(state.RetryTier, 2)
+		return sessionCognitiveDecision{Action: "escalate_retry", Reason: state.LastDecisionReason, SuggestedPhase: strings.TrimSpace(state.CurrentPhase)}
+	}
+
 	if state.PendingClarification {
 		state.QueuePaused = true
 		state.LastDecision = "pause_for_clarification"
@@ -557,4 +572,123 @@ func (a *CopilotAgent) evaluateSessionCognitivePolicy(ctx context.Context, query
 	state.LastDecision = "continue"
 	state.LastDecisionReason = "no blocking clarification or escalation state"
 	return sessionCognitiveDecision{Action: "continue", Reason: state.LastDecisionReason}
+}
+
+type continuationPromptDescriptor struct {
+	Pattern  string
+	Examples []string
+}
+
+func repeatedContinuationPrompt(queries []string) (bool, int, continuationPromptDescriptor) {
+	if len(queries) < 2 {
+		return false, 0, continuationPromptDescriptor{}
+	}
+	lastPattern, lastExample, ok := classifyContinuationPrompt(queries[len(queries)-1])
+	if !ok {
+		return false, 0, continuationPromptDescriptor{}
+	}
+	count := 1
+	examples := []string{lastExample}
+	for i := len(queries) - 2; i >= 0; i-- {
+		candidatePattern, candidateExample, ok := classifyContinuationPrompt(queries[i])
+		if !ok || candidatePattern != lastPattern {
+			break
+		}
+		count++
+		examples = append([]string{candidateExample}, examples...)
+	}
+	if count < 2 {
+		return false, count, continuationPromptDescriptor{}
+	}
+	return true, count, continuationPromptDescriptor{Pattern: lastPattern, Examples: examples}
+}
+
+func classifyContinuationPrompt(query string) (string, string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(query))
+	if normalized == "" {
+		return "", "", false
+	}
+	example := normalized
+	normalized = strings.Trim(normalized, ".!? ")
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	if normalized == "" {
+		return "", "", false
+	}
+	tokens := strings.Fields(normalized)
+	if len(tokens) > 8 || len(normalized) > 64 {
+		return "", "", false
+	}
+
+	filler := map[string]bool{"please": true, "just": true, "okay": true, "ok": true, "well": true, "then": true, "now": true, "so": true, "alright": true}
+	for len(tokens) > 0 && filler[tokens[0]] {
+		tokens = tokens[1:]
+	}
+	for len(tokens) > 0 && filler[tokens[len(tokens)-1]] {
+		tokens = tokens[:len(tokens)-1]
+	}
+	if len(tokens) == 0 {
+		return "", "", false
+	}
+	normalized = strings.Join(tokens, " ")
+
+	advancePairs := map[string]bool{
+		"go ahead":   true,
+		"go on":      true,
+		"keep going": true,
+		"move on":    true,
+		"carry on":   true,
+		"do it":      true,
+		"next step":  true,
+	}
+	advanceSingles := map[string]bool{
+		"proceed":  true,
+		"continue": true,
+		"resume":   true,
+		"advance":  true,
+		"next":     true,
+	}
+	statusAnchors := map[string]bool{
+		"done":     true,
+		"fixed":    true,
+		"fix":      true,
+		"resolved": true,
+		"working":  true,
+		"ready":    true,
+		"finished": true,
+	}
+	questionOpeners := map[string]bool{
+		"did":    true,
+		"are":    true,
+		"is":     true,
+		"has":    true,
+		"have":   true,
+		"can":    true,
+		"could":  true,
+		"should": true,
+	}
+
+	if advanceSingles[normalized] || advancePairs[normalized] {
+		return "advance_request", example, true
+	}
+	if len(tokens) >= 2 {
+		pair := tokens[0] + " " + tokens[1]
+		if advancePairs[pair] {
+			return "advance_request", example, true
+		}
+	}
+	if questionOpeners[tokens[0]] {
+		for _, token := range tokens[1:] {
+			if statusAnchors[token] {
+				return "status_check", example, true
+			}
+		}
+	}
+	if len(tokens) <= 3 {
+		for _, token := range tokens {
+			if statusAnchors[token] {
+				return "status_check", example, true
+			}
+		}
+	}
+	return "", "", false
 }

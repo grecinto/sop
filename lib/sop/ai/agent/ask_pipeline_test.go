@@ -529,6 +529,40 @@ func TestResolvePhasePlan_CanonicalizesCodingWorkStreamPlanOnResume(t *testing.T
 	}
 }
 
+func TestResolvePhasePlan_SyncsCurrentIndexFromQueuedPhaseActor(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.InitializeWorkStream("investigation")
+	thread.StreamContext.PhasePlan = &PhasePlan{
+		PlannedPhases:   []string{"investigation", "planning", "execution"},
+		CurrentIndex:    0,
+		CompletedPhases: []string{},
+		RemainingPhases: []string{"investigation", "planning", "execution"},
+		Checkpoints:     map[string]bool{"after_investigation": true, "after_planning": true},
+	}
+	ag.service.session.Memory.AddThread(thread)
+
+	ctx := context.WithValue(context.Background(), ctxKeyAskWorkItemActor, "phase:planning")
+	plan, currentPhase := ag.resolvePhasePlan(ctx, &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		Phase:              "planning",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		OriginalQuery:      "fix failing tests",
+	})
+
+	if strings.Join(plan, ",") != "investigation,planning,execution" {
+		t.Fatalf("expected canonical coding plan, got %v", plan)
+	}
+	if currentPhase != "planning" {
+		t.Fatalf("expected queued planning actor to resume planning, got %q", currentPhase)
+	}
+	if thread.StreamContext.PhasePlan.CurrentIndex != 1 {
+		t.Fatalf("expected queued planning actor to sync current index to 1, got %d", thread.StreamContext.PhasePlan.CurrentIndex)
+	}
+}
+
 func TestResolvePhasePlan_AttachesExecutionBriefForFailingTests(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
@@ -1282,6 +1316,9 @@ func TestEvaluatePhaseTransaction_QueuesPlanningAfterFailingTestInvestigation(t 
 	if got, _ := snapshot[0].Context["controller_guidance"].(string); !strings.Contains(got, "continue in planning") {
 		t.Fatalf("expected controller guidance to describe the missing planning work, got %q", got)
 	}
+	if got, _ := snapshot[0].Context["reason"].(string); !strings.Contains(strings.ToLower(got), "failing-test investigation") {
+		t.Fatalf("expected reason to describe the investigation-to-planning handoff, got %q", got)
+	}
 }
 
 func TestEvaluatePhaseTransaction_DoesNotQueuePlanningWithoutFailingEvidence(t *testing.T) {
@@ -1364,6 +1401,36 @@ func TestEvaluatePhaseTransaction_QueuesExecutionWhenPlanningArtifactIsReady(t *
 	}
 }
 
+func TestMaybePersistPlanningArtifactFromFinalText_EnablesExecutionTransition(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "planning",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests in the repository",
+	}
+	finalText := strings.Join([]string{
+		"Execution-ready plan to fix the current repo's failing tests:",
+		"1. Reproduce and isolate the failure",
+		"2. Inspect the implicated source and tests",
+		"3. Apply the smallest correct fix",
+	}, "\n")
+
+	ag.maybePersistPlanningArtifactFromFinalText(classification, finalText, nil)
+	if !ag.hasExecutionReadyPlanningArtifact() {
+		t.Fatal("expected plain-text execution-ready plan to persist a ready_for_execution planning artifact")
+	}
+
+	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, nil, nil, finalText, nil)
+	if !decision.EnqueueNextPhase || decision.NextPhase != "execution" {
+		t.Fatalf("expected persisted planning artifact inferred from final text to enqueue execution, got %+v", decision)
+	}
+}
+
 func TestEvaluatePhaseTransaction_RequeuesExecutionWhenValidationEvidenceIsMissing(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	classification := &AskTaskContext{
@@ -1425,5 +1492,37 @@ func TestEvaluatePhaseTransaction_AllowsExecutionCompletionWhenValidationEvidenc
 	decision := ag.evaluatePhaseTransaction(context.Background(), classification.OriginalQuery, classification, []ai.ToolCall{{Name: "execution_apply_patch"}, {Name: "execution_run_tests"}}, []string{"Patch applied", "tests passed"}, "All tests passed.", nil)
 	if decision.EnqueueNextPhase {
 		t.Fatalf("expected validation evidence to allow execution completion, got %+v", decision)
+	}
+}
+
+func TestEvaluatePhaseTransaction_DoesNotUseClarificationReplyAsContinuationReason(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	classification := &AskTaskContext{
+		Domains:            []string{"coding_workflow"},
+		TaskShape:          taskShapeIssueInvestigation,
+		OrchestrationLevel: orchestrationManagedWorkflow,
+		Phase:              "investigation",
+		PhasePlan:          []string{"investigation", "planning", "execution"},
+		Intent:             "generate_code",
+		OriginalQuery:      "fix failing tests",
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{
+		ClarificationState: &ai.ClarificationState{
+			TargetQuery:       "fix failing tests",
+			AssistantQuestion: "Which repository or working directory should I inspect for the failing tests?",
+			UserClarification: "current repo",
+			Status:            "resolved",
+		},
+	})
+
+	decision := ag.evaluatePhaseTransaction(ctx, "current repo", classification, []ai.ToolCall{{Name: "run_repo_tests"}}, []string{"--- FAIL: TestAuthenticateUser_ValidCredentials"}, "", nil)
+	if !decision.EnqueueNextPhase || decision.NextPhase != "planning" {
+		t.Fatalf("expected failing-test investigation to enqueue planning, got %+v", decision)
+	}
+	if strings.Contains(strings.ToLower(decision.Reason), "current repo") {
+		t.Fatalf("expected continuation reason to describe the phase handoff, got %q", decision.Reason)
+	}
+	if !strings.Contains(strings.ToLower(decision.Reason), "failing-test investigation") {
+		t.Fatalf("expected explanatory continuation reason, got %q", decision.Reason)
 	}
 }

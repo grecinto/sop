@@ -178,6 +178,9 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 	if taskCtx == nil {
 		taskCtx = &TaskContextClassification{}
 	}
+	if synthesized := a.activeCodingWorkstreamContinuationTaskContext(query, taskCtx); synthesized != nil {
+		taskCtx = synthesized
+	}
 	if strings.TrimSpace(taskCtx.RoutingGate) == "" {
 		taskCtx.RoutingGate = RoutingGateContinuity
 	}
@@ -198,6 +201,85 @@ func (a *CopilotAgent) tryAskContinuationBasedRouting(ctx context.Context, query
 	simplifyCodingWorkflowContinuation(taskCtx, query)
 	a.applyCapabilityRoutingHints(ctx, taskCtx, query)
 	return taskCtx, nil
+}
+
+func (a *CopilotAgent) activeCodingWorkstreamContinuationTaskContext(query string, fallback *TaskContextClassification) *TaskContextClassification {
+	if a == nil || a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return nil
+	}
+	if !isLikelyMetaConversationFollowUp(query) && !isRetryMetaAsk(query) && !isShortWorkstreamContinuationPrompt(query) {
+		return nil
+	}
+	if fallback != nil && strings.EqualFold(strings.TrimSpace(fallback.Domain), "coding_workflow") {
+		return nil
+	}
+
+	thread := a.service.session.Memory.GetCurrentThread()
+	if thread == nil || thread.StreamContext == nil || thread.StreamContext.PhasePlan == nil {
+		return nil
+	}
+	plan := thread.StreamContext.PhasePlan
+	if plan.ExecutionBrief == nil {
+		return nil
+	}
+
+	plannedPhases := canonicalizeCodingRuntimePlan(&AskTaskContext{Domains: []string{"coding_workflow"}}, append([]string(nil), plan.PlannedPhases...))
+	if len(plannedPhases) == 0 {
+		plannedPhases = []string{"investigation", "planning", "execution"}
+	}
+	currentPhase := normalizePhase(strings.TrimSpace(thread.StreamContext.CurrentPhase))
+	if currentPhase == "" {
+		idx := plan.CurrentIndex
+		if idx >= 0 && idx < len(plan.PlannedPhases) {
+			currentPhase = normalizePhase(plan.PlannedPhases[idx])
+		}
+	}
+	currentPhase = canonicalizeCodingRuntimePhase(&AskTaskContext{Domains: []string{"coding_workflow"}}, currentPhase)
+	if currentPhase == "" {
+		currentPhase = "investigation"
+	}
+	if pattern, _, ok := classifyContinuationPrompt(query); ok && pattern == "advance_request" && currentPhase == "planning" && plan.ExecutionBrief != nil {
+		currentPhase = "execution"
+	}
+
+	taskCtx := cloneTaskContextClassification(fallback)
+	if taskCtx == nil {
+		taskCtx = &TaskContextClassification{}
+	}
+	taskCtx.Domain = "coding_workflow"
+	taskCtx.RoutingGate = RoutingGateContinuity
+	taskCtx.CapabilityHint = currentPhase
+	taskCtx.GeneralContext = false
+	taskCtx.IntentFamily = intentFamilyRepoEdit
+
+	askCtx := cloneAskTaskContext(taskCtx.AskClassification)
+	if askCtx == nil {
+		askCtx = &AskTaskContext{}
+	}
+	askCtx.Domains = []string{"coding_workflow"}
+	askCtx.TaskShape = taskShapeIssueInvestigation
+	askCtx.OrchestrationLevel = orchestrationManagedWorkflow
+	askCtx.Phase = currentPhase
+	askCtx.PhasePlan = plannedPhases
+	askCtx.Intent = "generate_code"
+	askCtx.CRUD = []string{"R", "U"}
+	askCtx.ExecutionReady = currentPhase == "execution" && plan.ExecutionBrief != nil
+	askCtx.Confidence = firstNonEmpty(strings.TrimSpace(askCtx.Confidence), "high")
+	askCtx.Reasoning = "Continuity preserved the active coding workstream for a short follow-up while the persisted routing state had drifted."
+	askCtx.OriginalQuery = firstNonEmpty(strings.TrimSpace(askCtx.OriginalQuery), strings.TrimSpace(thread.RootPrompt), strings.TrimSpace(query))
+	a.promoteExecutionReadinessFromPlanningArtifact(askCtx)
+	taskCtx.AskClassification = askCtx
+	return taskCtx
+}
+
+func isShortWorkstreamContinuationPrompt(query string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(query))
+	switch normalized {
+	case "proceed", "continue", "go on", "keep going", "did you fix it", "did you fix it?":
+		return true
+	default:
+		return false
+	}
 }
 
 func simplifyCodingWorkflowContinuation(taskCtx *TaskContextClassification, query string) {

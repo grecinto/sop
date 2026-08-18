@@ -124,6 +124,65 @@ func TestEvaluateSessionCognitivePolicy_UsesAssessmentToMoveBackwardToSuggestedP
 	}
 }
 
+func TestEvaluateSessionCognitivePolicy_EscalatesRepeatedContinuationPromptPattern(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any)}
+	payload.CognitiveState = &ai.SessionCognitiveState{
+		CurrentPhase:  "planning",
+		RecentQueries: []string{"proceed"},
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+
+	decision := ag.evaluateSessionCognitivePolicy(ctx, "go ahead", "phase:planning", 4, "planning", "", "")
+	if decision.Action != "escalate_retry" {
+		t.Fatalf("expected repeated continuation prompt pattern to trigger cognitive escalation, got %q", decision.Action)
+	}
+	if !strings.Contains(decision.Reason, "repeated unresolved continuation prompt") {
+		t.Fatalf("expected escalation reason to explain repeated continuation prompt, got %q", decision.Reason)
+	}
+	if !strings.Contains(decision.Reason, "advance_request") {
+		t.Fatalf("expected escalation reason to include continuation pattern class, got %q", decision.Reason)
+	}
+	if decision.SuggestedPhase != "planning" {
+		t.Fatalf("expected current phase to be preserved as suggested phase, got %q", decision.SuggestedPhase)
+	}
+}
+
+func TestRefreshSessionCognitiveAssessment_AnnotatesRepeatedContinuationPromptPattern(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	payload := &ai.SessionPayload{Variables: make(map[string]any), CognitiveState: &ai.SessionCognitiveState{RecentQueries: []string{"proceed"}}}
+	ctx := context.WithValue(context.Background(), "session_payload", payload)
+	ctx = context.WithValue(ctx, ctxKeyAskWorkItemActor, "phase:planning")
+	gen := &cognitiveAssessmentMockGenerator{response: `{"failure_class":"looping","progress_state":"looping","phase_action":"stay_current","retry_action":"ask_clarification","suggested_phase":"planning","clarification_needed":true,"loop_risk":"high","confidence":"high","rationale":"Repeated continuation nudges without progress indicate the workflow should explain the blocker before continuing."}`}
+
+	assessment := ag.refreshSessionCognitiveAssessment(ctx, "go ahead", "planning", "", nil, nil, nil, gen)
+	if assessment == nil {
+		t.Fatal("expected cognitive assessment")
+	}
+	if !strings.Contains(gen.prompt, "repeated_continuation_prompt") {
+		t.Fatalf("expected cognitive prompt to include repeated continuation metadata, got %q", gen.prompt)
+	}
+	if !strings.Contains(gen.prompt, "advance_request") {
+		t.Fatalf("expected cognitive prompt to include continuation pattern class, got %q", gen.prompt)
+	}
+}
+
+func TestRepeatedContinuationPrompt_GroupsDifferentAdvancePhrases(t *testing.T) {
+	repeated, count, descriptor := repeatedContinuationPrompt([]string{"proceed", "go ahead"})
+	if !repeated {
+		t.Fatal("expected semantically equivalent advance prompts to count as repeated continuation pattern")
+	}
+	if count != 2 {
+		t.Fatalf("expected repeat count 2, got %d", count)
+	}
+	if descriptor.Pattern != "advance_request" {
+		t.Fatalf("expected advance_request pattern, got %#v", descriptor)
+	}
+	if len(descriptor.Examples) != 2 {
+		t.Fatalf("expected examples to be preserved, got %#v", descriptor)
+	}
+}
+
 func TestBuildSessionCognitiveState_UsesMemorySignals(t *testing.T) {
 	ag := NewCopilotAgent(Config{}, nil, nil)
 	ag.service = &Service{session: NewRunnerSession()}

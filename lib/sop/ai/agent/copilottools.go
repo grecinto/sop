@@ -14,6 +14,7 @@ import (
 	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 	"github.com/sharedcode/sop/ai/agent/capabilities"
+	"github.com/sharedcode/sop/ai/agent/domains/ideworker"
 	"github.com/sharedcode/sop/ai/database"
 	"github.com/sharedcode/sop/ai/memory"
 	"github.com/sharedcode/sop/jsondb"
@@ -198,6 +199,16 @@ func shouldDeferCapabilityToolRegistration(cap capabilities.Capability, taskCtx 
 	}
 }
 
+func capabilityRuntimeAvailable(cap capabilities.Capability) bool {
+	if cap == nil {
+		return false
+	}
+	if ideCap, ok := cap.(*ideworker.Capability); ok {
+		return ideCap.HasBackend()
+	}
+	return true
+}
+
 func (a *CopilotAgent) relevantCapabilitiesForToolRegistration(ctx context.Context) []capabilities.Capability {
 	a.ensureCapabilityRegistry()
 	if a.capabilityRegistry == nil {
@@ -235,6 +246,9 @@ func (a *CopilotAgent) relevantCapabilitiesForToolRegistration(ctx context.Conte
 		if cap == nil || shouldDeferCapabilityToolRegistration(cap, taskCtx) {
 			continue
 		}
+		if !capabilityRuntimeAvailable(cap) {
+			continue
+		}
 		if _, exists := seen[cap.ID()]; exists {
 			continue
 		}
@@ -269,6 +283,9 @@ func (a *CopilotAgent) registerCapabilityTools(ctx context.Context) {
 
 	caps := a.relevantCapabilitiesForToolRegistration(ctx)
 	for _, cap := range caps {
+		if !capabilityRuntimeAvailable(cap) {
+			continue
+		}
 		tools := cap.ExposeTools()
 		for _, toolDef := range tools {
 			// Capture variables for closure

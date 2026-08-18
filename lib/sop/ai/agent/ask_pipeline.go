@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	log "log/slog"
 
@@ -399,6 +401,7 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		}
 		a.notifySupportingPostTurnObservers(ctx, query, routingState, selectedCap, capResult)
 	}
+	a.maybePersistPlanningArtifactFromFinalText(taskContext.AskClassification, finalText, toolCalls)
 	transactionDecision := a.evaluatePhaseTransaction(ctx, rawQuery, taskContext.AskClassification, toolCalls, outcomeFacts, finalText, clarificationRequest)
 	a.persistPhaseTransactionHandoff(rawQuery, taskContext.AskClassification, transactionDecision, toolCalls, outcomeFacts, finalText)
 	a.enqueuePhaseTransactionDecision(rawQuery, transactionDecision)
@@ -536,6 +539,15 @@ func (a *CopilotAgent) applyQueuedPhaseActorContext(ctx context.Context, taskCon
 	return taskContext
 }
 
+func queuedPhaseActor(ctx context.Context) string {
+	actor, _ := ctx.Value(ctxKeyAskWorkItemActor).(string)
+	phaseName, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(actor)), "phase:")
+	if !ok {
+		return ""
+	}
+	return normalizePhase(phaseName)
+}
+
 func normalizeCodingRuntimeRouting(taskContext *TaskContextClassification) *TaskContextClassification {
 	if taskContext == nil || taskContext.AskClassification == nil {
 		return taskContext
@@ -602,9 +614,30 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 				rawPlannedPhases := existingPlan.GetPlannedPhases()
 				plannedPhases := canonicalizeCodingRuntimePlan(classification, rawPlannedPhases)
 				currentIndex := existingPlan.GetCurrentIndex()
+				if actorPhase := queuedPhaseActor(ctx); actorPhase != "" {
+					for idx, plannedPhase := range rawPlannedPhases {
+						if normalizePhase(plannedPhase) == actorPhase {
+							if currentIndex != idx {
+								existingPlan.SetCurrentIndex(idx)
+								currentIndex = idx
+							}
+							break
+						}
+					}
+				}
 
 				if currentIndex < len(rawPlannedPhases) {
 					currentPhase = resolveActiveCodingRuntimePhase(classification, rawPlannedPhases[currentIndex])
+					if queuedPhaseActor(ctx) == "" && currentPhase == "planning" && shouldPromotePersistedCodingPlanningToExecution(classification) {
+						for idx, plannedPhase := range rawPlannedPhases {
+							if normalizePhase(plannedPhase) == "execution" {
+								existingPlan.SetCurrentIndex(idx)
+								currentIndex = idx
+								currentPhase = "execution"
+								break
+							}
+						}
+					}
 					a.attachExecutionBriefToCurrentWorkStream(classification, plannedPhases, classification.OriginalQuery)
 					log.Info("Resuming WorkStream from existing PhasePlan",
 						"plan", plannedPhases,
@@ -656,6 +689,114 @@ func (a *CopilotAgent) resolvePhasePlan(ctx context.Context, classification *Ask
 	}
 
 	return plan, currentPhase
+}
+
+func shouldPromotePersistedCodingPlanningToExecution(classification *AskTaskContext) bool {
+	if classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		return false
+	}
+	if classification.ExecutionReady {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(classification.Phase), "execution") {
+		return true
+	}
+	return useCodingImplementationBundle(classification, "planning")
+}
+
+func (a *CopilotAgent) maybePersistPlanningArtifactFromFinalText(classification *AskTaskContext, finalText string, toolCalls []ai.ToolCall) {
+	if a == nil || classification == nil || !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(classification.Phase), "planning") {
+		return
+	}
+	if a.hasStoredPlanningArtifact() {
+		return
+	}
+	for _, toolCall := range toolCalls {
+		if strings.EqualFold(strings.TrimSpace(toolCall.Name), "planning_capture") {
+			return
+		}
+	}
+	artifact, ok := inferStoredPlanningArtifactFromText(finalText)
+	if !ok {
+		return
+	}
+	if a.service == nil || a.service.session == nil || a.service.session.Memory == nil {
+		return
+	}
+	payload, err := json.Marshal(artifact)
+	if err != nil {
+		return
+	}
+	_ = a.service.session.Memory.SaveWorkflowMemory("phase-artifact:planning", map[string]string{
+		"artifact_json": string(payload),
+		"phase":         "planning",
+		"status":        artifact.Status,
+		"summary":       artifact.Summary,
+	})
+	a.attachExecutionBriefToCurrentWorkStream(classification, classification.PhasePlan, classification.OriginalQuery)
+}
+
+func inferStoredPlanningArtifactFromText(finalText string) (storedPlanningArtifact, bool) {
+	trimmed := strings.TrimSpace(finalText)
+	if trimmed == "" {
+		return storedPlanningArtifact{}, false
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.Contains(lower, "execution-ready plan") {
+		return storedPlanningArtifact{}, false
+	}
+	lines := strings.Split(trimmed, "\n")
+	summary := ""
+	plan := make([]string, 0)
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		if summary == "" && strings.Contains(strings.ToLower(line), "execution-ready plan") {
+			summary = line
+		}
+		if step, ok := parseNumberedPlanLine(line); ok {
+			plan = append(plan, step)
+		}
+	}
+	if summary == "" {
+		summary = "Execution-ready plan captured from planning response"
+	}
+	if len(plan) == 0 {
+		return storedPlanningArtifact{}, false
+	}
+	return storedPlanningArtifact{
+		Summary: summary,
+		Status:  "ready_for_execution",
+		Plan:    plan,
+	}, true
+}
+
+func parseNumberedPlanLine(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false
+	}
+	idx := 0
+	for idx < len(trimmed) {
+		r := rune(trimmed[idx])
+		if !unicode.IsDigit(r) {
+			break
+		}
+		idx++
+	}
+	if idx == 0 || idx >= len(trimmed) || trimmed[idx] != '.' {
+		return "", false
+	}
+	step := strings.TrimSpace(trimmed[idx+1:])
+	if step == "" {
+		return "", false
+	}
+	return step, true
 }
 
 // canonicalizeCodingRuntimePhase enforces the active coding runtime contract.
