@@ -437,6 +437,8 @@ func (a *CopilotAgent) registerAutomationTools(ctx context.Context) {
 		return
 	}
 
+	// Legacy registration path for tests and slash commands.
+	// Ask pipeline uses Phase Factory for classification-driven tool registration.
 	a.registry.Register("list_folder_store_files", "Lists files inside a folder-backed source store so the agent can inspect them before curating into a Space.", listFolderStoreFilesArgsSchema, wrapStringTool(a.toolListFolderStoreFiles))
 	a.registry.Register("read_folder_store_file", "Reads a file from a folder-backed source store so the agent can inspect its contents before curating into a Space.", readFolderStoreFileArgsSchema, wrapStringTool(a.toolReadFolderStoreFile))
 	a.registry.Register("list_repo_store_files", "Lists files inside a repository-backed source store so the agent can inspect them before curating into a Space.", listRepoStoreFilesArgsSchema, wrapStringTool(a.toolListRepoStoreFiles))
@@ -556,6 +558,9 @@ func (a *CopilotAgent) toolExecuteLocalCommand(ctx context.Context, args map[str
 	command, ok := commandRaw.(string)
 	if !ok {
 		return "", fmt.Errorf("'command' must be a string")
+	}
+	if message, blocked := a.maybeBlockRawGoTestCommand(command); blocked {
+		return message, nil
 	}
 	return a.runLocalAutomationCommand(ctx, args, command, "", "", 600)
 }
@@ -708,11 +713,50 @@ func (a *CopilotAgent) toolRunRepoTests(ctx context.Context, args map[string]any
 	if strings.TrimSpace(result) == "" {
 		final := fmt.Sprintf("Command: %s", command)
 		a.updateRepoTestFailureState(path, pkg, pattern, final)
-		return final, nil
+		return a.wrapRunRepoTestsFailureGuidance(ctx, final, pkg, pattern), nil
 	}
 	final := fmt.Sprintf("Command: %s\n\n%s", command, result)
 	a.updateRepoTestFailureState(path, pkg, pattern, final)
-	return final, nil
+	return a.wrapRunRepoTestsFailureGuidance(ctx, final, pkg, pattern), nil
+}
+
+func (a *CopilotAgent) wrapRunRepoTestsFailureGuidance(ctx context.Context, result, pkg, pattern string) string {
+	if !nativeToolHintsEnabled(ctx) {
+		return result
+	}
+	status, _ := analyzeTestStatus("go test "+firstNonEmpty(pkg, "./..."), result)
+	if status != "FAIL" {
+		return result
+	}
+	tips := []string{
+		"Use the saved run_repo_tests output to inspect the exact failure block before any rerun.",
+		"After reading the failure output, inspect the failing test and implementation with grep_repo_text/read_file before patching.",
+		"Do not retry the same test via execute_local_command; use run_repo_tests for targeted validation after code changes.",
+	}
+	suggested := []string{"read_tool_result", "grep_repo_text", "read_file", "execution_apply_patch", "run_repo_tests"}
+	return wrapNativeToolResultEnvelope(result, &ai.ToolProgressHint{
+		Status:             "progressing",
+		CompletionDelta:    0.2,
+		Tips:               tips,
+		SuggestedAction:    "research_before_retry",
+		SuggestedNextTools: suggested,
+	})
+}
+
+func (a *CopilotAgent) maybeBlockRawGoTestCommand(command string) (string, bool) {
+	trimmed := strings.ToLower(strings.TrimSpace(command))
+	if !strings.HasPrefix(trimmed, "go test") {
+		return "", false
+	}
+	thread := a.currentConversationThread()
+	if thread == nil || thread.StreamContext == nil {
+		return "", false
+	}
+	stream := thread.StreamContext
+	if !stream.FailureInventoryCaptured || strings.TrimSpace(stream.ActiveFailureCluster) == "" {
+		return "", false
+	}
+	return fmt.Sprintf("Raw go test retry blocked while active failure cluster %q is open. Inspect the existing run_repo_tests output with read_tool_result, then inspect source with grep_repo_text/read_file, patch the code, and only use run_repo_tests for the next targeted validation.", strings.TrimSpace(stream.ActiveFailureCluster)), true
 }
 
 func (a *CopilotAgent) maybeBlockBroadRepoTestRerun(path, pkg, pattern string) (string, bool) {

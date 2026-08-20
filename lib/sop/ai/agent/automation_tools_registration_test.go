@@ -156,6 +156,11 @@ func TestAutomationToolsRegisterPostgresAndSplunkAdapters(t *testing.T) {
 	}
 }
 
+// NOTE: Removed TestRegisterTools_CodingWorkflowRouting_DoesNotGloballyRegisterUnrelatedAutomationFamilies
+// This test was validating registerTools() behavior that should not exist in production.
+// Production Ask flow uses Phase Factory for classification-driven tool registration.
+// registerTools() is legacy path for tests and slash commands only.
+
 func TestAutomationToolResultsStreamToEventStreamer(t *testing.T) {
 	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
 	defer SetAutomationPolicy(DefaultAutomationPolicy())
@@ -707,6 +712,35 @@ func TestRunRepoTests_BlocksRepeatedBroadSuiteWhenActiveClusterExists(t *testing
 	}
 	if !strings.Contains(out, "Broad recursive test rerun blocked") {
 		t.Fatalf("expected broad rerun guard message, got %q", out)
+	}
+}
+
+func TestExecuteLocalCommand_BlocksRawGoTestWhenActiveFailureClusterExists(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	called := false
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		called = true
+		return "ok", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.StreamContext = &WorkStreamContext{FailureInventoryCaptured: true, FailureClusters: []string{"package:github.com/sharedcode/sop/tools/sopbackend"}, ActiveFailureCluster: "package:github.com/sharedcode/sop/tools/sopbackend"}
+	ag.service.session.Memory.AddThread(thread)
+
+	out, err := ag.toolExecuteLocalCommand(context.Background(), map[string]any{"command": "go test -v ./tools/sopbackend -run TestAuthenticateUser_ValidCredentials"})
+	if err != nil {
+		t.Fatalf("toolExecuteLocalCommand() error = %v", err)
+	}
+	if called {
+		t.Fatal("expected raw go test retry to be blocked before invoking the local executor")
+	}
+	if !strings.Contains(out, "Raw go test retry blocked") {
+		t.Fatalf("expected raw go test guard message, got %q", out)
 	}
 }
 

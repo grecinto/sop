@@ -138,12 +138,27 @@ func (a *CopilotAgent) hasRegisteredCapability(domains ...string) bool {
 	return false
 }
 
-// registerTools registers all available tools for the CopilotAgent.
+// registerTools is a DEPRECATED legacy function kept only for backward compatibility with tests.
+//
+// PRODUCTION PATH (ONLY valid path):
+//
+//	askCore() → evaluateAskRoutingGates() (classification)
+//	        → createPhaseProxies() → aggregatePhaseTools()
+//	        → registerPhaseTools() (classification-driven)
+//
+// This function exists ONLY because old tests call Execute()/ListTools() directly.
+// New code should NEVER call this. Use Phase Factory via askCore() instead.
+//
+// TODO: Migrate tests to use Phase Factory, then delete this function.
 func (a *CopilotAgent) registerTools(ctx context.Context) {
-	log.Info("CopilotAgent.registerTools: starting")
+	log.Warn("registerTools called - this is deprecated legacy path, use Phase Factory instead")
 	a.registry = NewRegistry()
 
+	// Minimal registration for backward compatibility with old tests
 	a.registerSystemTools(ctx)
+
+	// Feature-flag-based registration for backward compatibility
+	// This is NOT classification-driven and should NOT be used in production
 	if a.hasRegisteredCapability(StoresDomain) && StoresFeatureEnabled() {
 		a.registerStoresTools(ctx)
 	}
@@ -161,12 +176,9 @@ func (a *CopilotAgent) registerTools(ctx context.Context) {
 	if a.hasRegisteredCapability("Desktop", "Desktop Automation", "desktop") {
 		a.registerAutomationTools(ctx)
 	}
-
-	// Register tools exposed by all capabilities
 	a.registerCapabilityTools(ctx)
 
-	registered := a.registry.List()
-	log.Info("CopilotAgent.registerTools: completed", "tool_count", len(registered))
+	log.Warn("registerTools completed with feature-flag-driven registration", "tool_count", len(a.registry.List()))
 }
 
 // registerCapabilityTools iterates through all registered capabilities and registers

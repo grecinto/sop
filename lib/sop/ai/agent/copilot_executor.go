@@ -287,8 +287,8 @@ func (a *CopilotAgent) Open(ctx context.Context) error {
 		}
 	}
 
-	// Register tools now that we have a context (and potentially transactions)
-	a.registerTools(ctx)
+	// Tools are registered per-turn by Phase Factory after classification.
+	// No global registration at initialization.
 
 	// Gap 3: Enable all registered capabilities
 	if a.lifecycleManager != nil && a.capabilityRegistry != nil {

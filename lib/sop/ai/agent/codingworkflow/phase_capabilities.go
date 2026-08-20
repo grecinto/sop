@@ -1992,7 +1992,7 @@ func (c *PhaseCapability) runInspectRepo(ctx context.Context, args map[string]an
 }
 
 func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any) (string, error) {
-	task := c.buildTask(ctx, args)
+	task, candidates := resolveRepoWorkingDir(c.buildTask(ctx, args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2004,7 +2004,7 @@ func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any
 	}
 	results, err := repoOps.SearchRepo(task, task.State, searchQuery)
 	if err != nil {
-		return "", fmt.Errorf("search repo: %w", err)
+		return formatRepoResolutionFallback("Search Repo", task, candidates, err), nil
 	}
 	if len(results) == 0 {
 		return "Search Results: none", nil

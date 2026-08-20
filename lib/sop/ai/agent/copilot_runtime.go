@@ -908,8 +908,8 @@ func (a *CopilotAgent) handleDirectToolInvocation(ctx context.Context, query str
 	}
 
 	if strings.HasPrefix(trimmed, "/") {
-		// Register tools for local command parsing
-		a.registerTools(ctx)
+		// Slash commands use direct tool invocation, bypassing classification.
+		// Phase Factory handles normal ask flow tool registration.
 		handled, res, err := a.handleSlashCommand(ctx, query, gen)
 		if handled {
 			if err != nil {
@@ -2445,11 +2445,17 @@ func (b *BaselineReActEngine) Run(ctx context.Context, req ai.ReasoningRequest) 
 }
 
 // ListTools returns the list of available tools.
+// For production Ask flow, tools are registered by Phase Factory after classification.
+// For tests and direct Execute() calls, tools are registered on-demand via registerTools().
 func (a *CopilotAgent) ListTools(ctx context.Context) ([]ai.ToolDefinition, error) {
 	if a == nil {
 		return nil, nil
 	}
-	a.registerTools(ctx)
+
+	// Legacy path: register tools if registry is empty (tests, direct Execute calls)
+	if len(a.registry.List()) == 0 {
+		a.registerTools(ctx)
+	}
 
 	exposure := buildNativeToolExposure(activeRoutingState(ctx))
 	tools := a.listRegisteredTools(exposure)
@@ -2460,7 +2466,11 @@ func (a *CopilotAgent) Execute(ctx context.Context, toolName string, args map[st
 	if a == nil {
 		return "", fmt.Errorf("agent not initialized")
 	}
-	a.registerTools(ctx)
+
+	// Legacy path: register tools if registry is empty (tests, direct Execute calls)
+	if len(a.registry.List()) == 0 {
+		a.registerTools(ctx)
+	}
 
 	if args == nil {
 		args = make(map[string]any)
