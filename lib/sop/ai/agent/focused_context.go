@@ -844,6 +844,7 @@ func buildCodingRuntimeFocusedContext(query string, taskCtx TaskContextClassific
 		fmt.Sprintf("- Active Phase: %s", phase),
 		"- Phase semantics are internal continuity metadata only; do not wait for explicit investigation/planning/execution transitions inside this Ask/ReAct turn.",
 		"- Use the available coding tools adaptively based on the current evidence, not as a rigid SDLC checklist.",
+		"- Structural analysis policy: stay text-first when ownership is clear; escalate to AST/tree-sitter only for ambiguous symbols, wrappers/generated code, or multi-file precision, and skip it for local obvious fixes.",
 	}
 	switch phase {
 	case "execution":

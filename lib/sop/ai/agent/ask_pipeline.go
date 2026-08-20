@@ -262,7 +262,7 @@ func (a *CopilotAgent) enqueuePhaseTransactionDecision(query string, decision ph
 		Priority: PriorityPhaseSuccession,
 		Context: map[string]any{
 			"phase_transaction_continuation": true,
-			"original_query":                 strings.TrimSpace(query),
+			"original_query":                 extractOriginalRequestQuery(query),
 			"controller_guidance":            strings.TrimSpace(buildPhaseTransactionContinuationGuidance(decision)),
 			"reason":                         strings.TrimSpace(decision.Reason),
 		},

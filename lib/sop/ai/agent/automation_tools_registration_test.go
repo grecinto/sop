@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sharedcode/sop"
 	"github.com/sharedcode/sop/ai"
 )
 
@@ -651,6 +652,61 @@ func TestRunRepoTestsUsesLocalCommandExecutor(t *testing.T) {
 	}
 	if !strings.Contains(out, "go test") || !strings.Contains(out, "./...") {
 		t.Fatalf("expected tool result to include go test with ./... package, got %q", out)
+	}
+}
+
+func TestRunRepoTests_BroadRunSeedsActiveFailureCluster(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		return `{"stdout":"--- FAIL: TestAuthenticateUser_ValidCredentials (0.04s)\nFAIL\tgithub.com/sharedcode/sop/tools/sopbackend\t0.123s\n","stderr":"","exit_code":1}`, nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	ag.service.session.Memory.AddThread(thread)
+
+	_, err := ag.toolRunRepoTests(context.Background(), map[string]any{"path": "/tmp/repo", "package": "./..."})
+	if err != nil {
+		t.Fatalf("toolRunRepoTests() error = %v", err)
+	}
+	if thread.StreamContext == nil || !thread.StreamContext.FailureInventoryCaptured {
+		t.Fatalf("expected failure inventory to be captured, got %#v", thread.StreamContext)
+	}
+	if got := thread.StreamContext.ActiveFailureCluster; got != "package:github.com/sharedcode/sop/tools/sopbackend" {
+		t.Fatalf("expected active failure cluster to be seeded from first broad run, got %q", got)
+	}
+}
+
+func TestRunRepoTests_BlocksRepeatedBroadSuiteWhenActiveClusterExists(t *testing.T) {
+	SetAutomationPolicy(AutomationPolicy{Enabled: true, AllowShellCommands: true, AllowEmail: false, RequireApproval: false, DefaultTimeoutSeconds: 60, MaxTimeoutSeconds: 120})
+	defer SetAutomationPolicy(DefaultAutomationPolicy())
+
+	called := false
+	SetLocalCommandExecutor(func(ctx context.Context, req LocalCommandRequest) (string, error) {
+		called = true
+		return "ok", nil
+	})
+	defer SetLocalCommandExecutor(nil)
+
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.StreamContext = &WorkStreamContext{FailureInventoryCaptured: true, FailureClusters: []string{"package:github.com/sharedcode/sop/tools/sopbackend"}, ActiveFailureCluster: "package:github.com/sharedcode/sop/tools/sopbackend"}
+	ag.service.session.Memory.AddThread(thread)
+
+	out, err := ag.toolRunRepoTests(context.Background(), map[string]any{"path": "/tmp/repo", "package": "./..."})
+	if err != nil {
+		t.Fatalf("toolRunRepoTests() error = %v", err)
+	}
+	if called {
+		t.Fatal("expected repeated broad suite run to be blocked before invoking the local executor")
+	}
+	if !strings.Contains(out, "Broad recursive test rerun blocked") {
+		t.Fatalf("expected broad rerun guard message, got %q", out)
 	}
 }
 

@@ -140,6 +140,27 @@ func TestBuildEffectiveQueueQueryIncludesControllerGuidance(t *testing.T) {
 	}
 }
 
+func TestBuildEffectiveQueueQuery_DoesNotCompoundOriginalRequestOrGuidance(t *testing.T) {
+	item := WorkItem{
+		Query: "Controller guidance: continue in execution and work directly from the persisted execution-ready plan artifact before concluding.",
+		Context: map[string]any{
+			"original_query":      "Original request: current repo\nCurrent step: Controller guidance: continue in planning and produce or refine the execution-ready plan artifact.",
+			"controller_guidance": "Controller guidance: continue in execution and work directly from the persisted execution-ready plan artifact before concluding.",
+		},
+	}
+
+	effective := buildEffectiveQueueQuery(item)
+	if strings.Count(effective, "Original request:") != 1 {
+		t.Fatalf("expected exactly one original request header, got %q", effective)
+	}
+	if strings.Count(effective, "Controller guidance: continue in execution") != 1 {
+		t.Fatalf("expected controller guidance to appear once, got %q", effective)
+	}
+	if !strings.Contains(effective, "Original request: current repo") {
+		t.Fatalf("expected extracted original request to be current repo, got %q", effective)
+	}
+}
+
 func TestConditionalWorkItemExecution(t *testing.T) {
 	queue := NewWorkQueue()
 

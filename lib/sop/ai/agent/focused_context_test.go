@@ -228,6 +228,9 @@ func TestBuildSystemPrompt_IncludesTaskGuidanceSynthesis(t *testing.T) {
 			t.Fatalf("expected prompt to contain %q, got: %s", expected, prompt)
 		}
 	}
+	if !strings.Contains(prompt, "Structural analysis policy: stay text-first when ownership is clear") {
+		t.Fatalf("expected general prompt to include structural-analysis escalation guidance, got: %s", prompt)
+	}
 }
 
 func TestBuildSystemPrompt_CodingWorkflowUsesPhaseWording(t *testing.T) {
@@ -245,6 +248,9 @@ func TestBuildSystemPrompt_CodingWorkflowUsesPhaseWording(t *testing.T) {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("expected coding prompt to contain %q, got: %s", expected, prompt)
 		}
+	}
+	if !strings.Contains(prompt, "skip it for local obvious fixes") {
+		t.Fatalf("expected coding prompt to include AST/tree-sitter escalation policy, got: %s", prompt)
 	}
 	if strings.Contains(prompt, "Selected Runtime Mode:") {
 		t.Fatalf("expected coding prompt to retire runtime-mode wording, got: %s", prompt)

@@ -151,27 +151,48 @@ func buildEffectiveQueueQuery(item WorkItem) string {
 
 	var originalQuery string
 	if parentQuery, ok := item.Context["parent_query"].(string); ok && strings.TrimSpace(parentQuery) != "" {
-		originalQuery = parentQuery
+		originalQuery = extractOriginalRequestQuery(parentQuery)
 	} else if parentQuery, ok := item.Context["original_query"].(string); ok && strings.TrimSpace(parentQuery) != "" {
-		originalQuery = parentQuery
+		originalQuery = extractOriginalRequestQuery(parentQuery)
 	}
 
 	if strings.TrimSpace(originalQuery) != "" {
 		guidance, _ := item.Context["controller_guidance"].(string)
 		guidance = strings.TrimSpace(guidance)
+		currentStep := strings.TrimSpace(item.Query)
+		if strings.HasPrefix(strings.ToLower(currentStep), "original request:") {
+			currentStep = strings.TrimSpace(extractOriginalRequestQuery(currentStep))
+		}
 		if strings.TrimSpace(item.Query) == "" {
 			if guidance != "" {
 				return fmt.Sprintf("Original request: %s\n%s", originalQuery, guidance)
 			}
 			return fmt.Sprintf("Original request: %s", originalQuery)
 		}
-		if guidance != "" {
-			return fmt.Sprintf("Original request: %s\nCurrent step: %s\n%s", originalQuery, item.Query, guidance)
+		if guidance != "" && strings.EqualFold(currentStep, guidance) {
+			return fmt.Sprintf("Original request: %s\n%s", originalQuery, guidance)
 		}
-		return fmt.Sprintf("Original request: %s\nCurrent step: %s", originalQuery, item.Query)
+		if guidance != "" {
+			return fmt.Sprintf("Original request: %s\nCurrent step: %s\n%s", originalQuery, currentStep, guidance)
+		}
+		return fmt.Sprintf("Original request: %s\nCurrent step: %s", originalQuery, currentStep)
 	}
 
 	return item.Query
+}
+
+func extractOriginalRequestQuery(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(strings.ToLower(trimmed), "original request:") {
+		return trimmed
+	}
+	remainder := strings.TrimSpace(trimmed[len("Original request:"):])
+	for _, marker := range []string{"\nCurrent step:", "\nController guidance:"} {
+		if idx := strings.Index(remainder, marker); idx >= 0 {
+			remainder = remainder[:idx]
+		}
+	}
+	return strings.TrimSpace(remainder)
 }
 
 func (a *CopilotAgent) processQueueLoop(ctx context.Context, queue *WorkQueue, cfg *ai.ConfigMap, maxTurns int) []TurnResult {

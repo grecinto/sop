@@ -96,11 +96,11 @@ func buildCodingExecutionBriefSteps(query, workflowShape string) []ExecutionBrie
 	switch workflowShape {
 	case "checkpointed_fix":
 		return []ExecutionBriefStep{
-			{Title: "Step 1", Phase: "investigation", Description: "Identify the first failing package or folder cluster and capture its current failure output.", ContextInstructions: []string{"Prefer the narrowest failing package or test command before reading broader code.", "Capture the concrete failure text for only the active cluster so the next step works from observed behavior instead of memory.", "Do not move to another failing package or folder until this cluster is repaired or explicitly blocked."}, Validation: []string{"active failing package, folder, or test command is explicit"}},
+			{Title: "Step 1", Phase: "investigation", Description: "Run one broad suite pass only to compile the full initial failure inventory, then choose the first failing package or folder cluster and capture that cluster's current failure output.", ContextInstructions: []string{"Use the broad recursive test command only for the initial failure inventory, not as the default validation loop.", "From that first broad pass, compile the full set of failing packages, folders, or named tests before choosing the active cluster.", "After the initial inventory, prefer the narrowest failing package or test command before reading broader code.", "Capture the concrete failure text for only the active cluster so the next step works from observed behavior instead of memory.", "Do not move to another failing package or folder until this cluster is repaired or explicitly blocked."}, Validation: []string{"initial failure inventory is compiled", "active failing package, folder, or test command is explicit"}},
 			{Title: "Step 2", Phase: "investigation", Description: "Trace the failing code path for the active cluster and form one falsifiable local hypothesis for the failure.", ContextInstructions: []string{"Read the failing test and the nearest implementation path together.", "Name the specific file, function, or invariant most likely responsible before proposing a fix.", "Keep the investigation inside the current package or folder cluster unless the evidence proves the defect crosses boundaries."}, Validation: []string{"suspect file, behavior, or invariant is named"}},
 			{Title: "Step 3", Phase: "planning", Description: "Choose the smallest repair and the narrowest validation target before editing files.", ContextInstructions: []string{"Keep the repair boundary local unless the evidence proves a broader defect.", "State the exact validation target that could falsify the chosen repair."}, Validation: []string{"repair scope and validation command are concrete"}},
 			{Title: "Step 4", Phase: "execution", Description: "Implement the smallest plausible fix that explains the observed failure in the active package or folder cluster.", ContextInstructions: []string{"Touch only the files needed to test the current hypothesis.", "Avoid opportunistic cleanup or refactors unless the plan explicitly requires them.", "Finish the repair attempt for the current package or folder cluster before moving to another cluster."}, Validation: []string{"change stays within the observed repair boundary"}},
-			{Title: "Step 5", Phase: "execution", Description: "Rerun the narrowest relevant tests for the active cluster, then widen validation only if the local fix passes.", ContextInstructions: []string{"Run the original failing check first.", "If the first failure came from a broad suite run, convert it into a targeted package or test rerun before doing anything broader.", "Only move to the next failing package or folder after the current cluster passes or is explicitly blocked."}, Validation: []string{"original failing check rerun", "broader validation widened only when justified"}},
+			{Title: "Step 5", Phase: "execution", Description: "Rerun the narrowest relevant tests for the active cluster, then widen validation only if the local fix passes.", ContextInstructions: []string{"Run the original failing check first.", "If the first failure came from a broad suite run, convert it into a targeted package or test rerun before doing anything broader.", "Do not rerun the full recursive suite until the current cluster is fixed and you are ready to confirm broader progress.", "Only move to the next failing package or folder after the current cluster passes or is explicitly blocked."}, Validation: []string{"original failing check rerun", "broader validation widened only when justified"}},
 			{Title: "Step 6", Phase: "execution", Description: "Summarize the root cause, the fix, and any residual risk or follow-up work.", ContextInstructions: []string{"State whether the failure was local, architectural, or still partially uncertain.", "Surface remaining validation gaps instead of implying broader confidence than the evidence supports."}, Validation: []string{"result status is explicit"}},
 		}
 	case "feature_plan":
@@ -194,18 +194,62 @@ func (a *CopilotAgent) currentExecutionBrief(classification *AskTaskContext, que
 		return nil
 	}
 	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
-		return a.executionBriefFromStructuredPlan(classification, query)
+		brief := a.executionBriefFromStructuredPlan(classification, query)
+		return a.withFailureInventoryContext(brief)
 	}
 	if fromPlan := a.executionBriefFromStructuredPlan(classification, query); fromPlan != nil {
-		return fromPlan
+		return a.withFailureInventoryContext(fromPlan)
 	}
 	if authored := a.loadAuthoredExecutionBrief(classification, classification.PhasePlan, query); authored != nil {
-		return authored
+		return a.withFailureInventoryContext(authored)
 	}
 	if thread := a.currentConversationThread(); thread != nil && thread.StreamContext != nil && thread.StreamContext.PhasePlan != nil && thread.StreamContext.PhasePlan.ExecutionBrief != nil {
-		return thread.StreamContext.PhasePlan.ExecutionBrief
+		return a.withFailureInventoryContext(thread.StreamContext.PhasePlan.ExecutionBrief)
 	}
-	return buildCodingExecutionBrief(query, classification, classification.PhasePlan)
+	return a.withFailureInventoryContext(buildCodingExecutionBrief(query, classification, classification.PhasePlan))
+}
+
+func (a *CopilotAgent) withFailureInventoryContext(brief *ExecutionBrief) *ExecutionBrief {
+	if brief == nil || a == nil {
+		return brief
+	}
+	thread := a.currentConversationThread()
+	if thread == nil || thread.StreamContext == nil || !thread.StreamContext.FailureInventoryCaptured || len(thread.StreamContext.FailureClusters) == 0 {
+		return brief
+	}
+	active := strings.TrimSpace(thread.StreamContext.ActiveFailureCluster)
+	if active == "" {
+		active = strings.TrimSpace(thread.StreamContext.FailureClusters[0])
+	}
+	if active == "" {
+		return brief
+	}
+	activeLine := "Active failure cluster: " + active
+	if strings.TrimSpace(brief.CurrentFocus) == "" {
+		brief.CurrentFocus = activeLine
+	} else if !strings.Contains(brief.CurrentFocus, activeLine) {
+		brief.CurrentFocus = brief.CurrentFocus + " " + activeLine
+	}
+	inventoryLine := "Compiled failure inventory: " + strings.Join(thread.StreamContext.FailureClusters, "; ")
+	for idx := range brief.Steps {
+		step := &brief.Steps[idx]
+		if idx == 0 && !containsExactString(step.ContextInstructions, inventoryLine) {
+			step.ContextInstructions = append(step.ContextInstructions, inventoryLine)
+		}
+		if (step.Phase == "investigation" || step.Phase == "planning" || step.Phase == "execution") && !containsExactString(step.ContextInstructions, activeLine) {
+			step.ContextInstructions = append(step.ContextInstructions, activeLine)
+		}
+	}
+	return brief
+}
+
+func containsExactString(values []string, want string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == strings.TrimSpace(want) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *CopilotAgent) attachStructuredPlanToCurrentWorkStream(classification *AskTaskContext, plannedPhases []string, query string) {

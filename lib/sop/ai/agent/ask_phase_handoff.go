@@ -39,7 +39,7 @@ func (a *CopilotAgent) persistPhaseTransactionHandoff(query string, classificati
 	handoff := phaseTransactionHandoff{
 		Version:            1,
 		CapturedAt:         time.Now().UnixMilli(),
-		OriginalQuery:      firstNonEmpty(strings.TrimSpace(classification.OriginalQuery), strings.TrimSpace(query)),
+		OriginalQuery:      firstNonEmpty(strings.TrimSpace(classification.OriginalQuery), extractOriginalRequestQuery(query)),
 		SourcePhase:        strings.TrimSpace(classification.Phase),
 		TargetPhase:        strings.TrimSpace(decision.NextPhase),
 		Reason:             strings.TrimSpace(decision.Reason),

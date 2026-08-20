@@ -211,6 +211,11 @@ type WorkStreamContext struct {
 	// pause/resume and be restored even if the final response text is discarded.
 	CompletionSummary string   `json:"completion_summary,omitempty"`
 	UpdatedFiles      []string `json:"updated_files,omitempty"`
+
+	// Failing-test workflow state
+	FailureClusters          []string `json:"failure_clusters,omitempty"`
+	ActiveFailureCluster     string   `json:"active_failure_cluster,omitempty"`
+	FailureInventoryCaptured bool     `json:"failure_inventory_captured,omitempty"`
 }
 
 // ConversationThread represents a single conversational thread.

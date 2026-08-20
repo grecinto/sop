@@ -599,6 +599,59 @@ func TestResolvePhasePlan_AttachesExecutionBriefForFailingTests(t *testing.T) {
 	if !strings.Contains(strings.ToLower(brief.Steps[0].Description), "failing tests") {
 		t.Fatalf("expected first step to target failing tests, got %#v", brief.Steps[0])
 	}
+	if !strings.Contains(strings.ToLower(brief.Steps[0].Description), "compile the full initial failure inventory") {
+		t.Fatalf("expected first step to require compiling the full initial failure inventory, got %#v", brief.Steps[0])
+	}
+	if got := strings.Join(brief.Steps[0].ContextInstructions, " "); !strings.Contains(got, "broad recursive test command only for the initial failure inventory") {
+		t.Fatalf("expected first step to limit broad suite runs to initial discovery, got %#v", brief.Steps[0].ContextInstructions)
+	}
+	if got := strings.Join(brief.Steps[0].ContextInstructions, " "); !strings.Contains(got, "compile the full set of failing packages, folders, or named tests") {
+		t.Fatalf("expected first step to require compiling the full failure inventory before selecting a cluster, got %#v", brief.Steps[0].ContextInstructions)
+	}
+}
+
+func TestBuildCodingExecutionBriefSteps_CheckpointedFixStartsWithFullFailureInventory(t *testing.T) {
+	steps := buildCodingExecutionBriefSteps("fix failing tests in the parser package", "checkpointed_fix")
+	if len(steps) == 0 {
+		t.Fatal("expected checkpointed_fix steps")
+	}
+	if !strings.Contains(strings.ToLower(steps[0].Description), "compile the full initial failure inventory") {
+		t.Fatalf("expected first checkpointed_fix step to compile the full initial failure inventory, got %#v", steps[0])
+	}
+	contextText := strings.Join(steps[0].ContextInstructions, " ")
+	if !strings.Contains(contextText, "compile the full set of failing packages, folders, or named tests") {
+		t.Fatalf("expected first checkpointed_fix step to require compiling the full failure inventory before cluster selection, got %#v", steps[0].ContextInstructions)
+	}
+}
+
+func TestCurrentExecutionBrief_IncludesStoredFailureInventoryContext(t *testing.T) {
+	ag := NewCopilotAgent(Config{}, nil, nil)
+	ag.service = &Service{session: &RunnerSession{Memory: NewShortTermMemory()}}
+	thread := &ConversationThread{ID: sop.NewUUID(), RootPrompt: "Fix failing tests"}
+	thread.InitializeWorkStream("execution")
+	thread.StreamContext.FailureInventoryCaptured = true
+	thread.StreamContext.FailureClusters = []string{"package:github.com/sharedcode/sop/tools/sopbackend", "package:github.com/sharedcode/sop/src/backend/site"}
+	thread.StreamContext.ActiveFailureCluster = "package:github.com/sharedcode/sop/tools/sopbackend"
+	ag.service.session.Memory.AddThread(thread)
+	classification := &AskTaskContext{Domains: []string{"coding_workflow"}, Phase: "execution", PhasePlan: []string{"investigation", "planning", "execution"}, OriginalQuery: "fix failing tests in the parser package"}
+
+	brief := ag.currentExecutionBrief(classification, classification.OriginalQuery)
+	if brief == nil {
+		t.Fatal("expected execution brief")
+	}
+	if !strings.Contains(brief.CurrentFocus, "Active failure cluster: package:github.com/sharedcode/sop/tools/sopbackend") {
+		t.Fatalf("expected current focus to include active failure cluster, got %#v", brief.CurrentFocus)
+	}
+	if len(brief.Steps) == 0 {
+		t.Fatal("expected execution brief steps")
+	}
+	joined := strings.Join(brief.Steps[0].ContextInstructions, " ")
+	if !strings.Contains(joined, "Compiled failure inventory: package:github.com/sharedcode/sop/tools/sopbackend; package:github.com/sharedcode/sop/src/backend/site") {
+		t.Fatalf("expected first step to include compiled failure inventory, got %#v", brief.Steps[0].ContextInstructions)
+	}
+	if !strings.Contains(joined, "Active failure cluster: package:github.com/sharedcode/sop/tools/sopbackend") {
+		t.Fatalf("expected first step to include active failure cluster, got %#v", brief.Steps[0].ContextInstructions)
+	}
 }
 
 func TestBuildPhasePrompt_IncludesExecutionBrief(t *testing.T) {

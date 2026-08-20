@@ -690,6 +690,9 @@ func (a *CopilotAgent) toolRunRepoTests(ctx context.Context, args map[string]any
 
 	patternRaw, _ := args["pattern"]
 	pattern, _ := patternRaw.(string)
+	if message, blocked := a.maybeBlockBroadRepoTestRerun(path, pkg, pattern); blocked {
+		return message, nil
+	}
 
 	// Phase 1: Always use -v flag for test debugging
 	command := "go test -v " + pkg
@@ -703,9 +706,155 @@ func (a *CopilotAgent) toolRunRepoTests(ctx context.Context, args map[string]any
 	}
 
 	if strings.TrimSpace(result) == "" {
-		return fmt.Sprintf("Command: %s", command), nil
+		final := fmt.Sprintf("Command: %s", command)
+		a.updateRepoTestFailureState(path, pkg, pattern, final)
+		return final, nil
 	}
-	return fmt.Sprintf("Command: %s\n\n%s", command, result), nil
+	final := fmt.Sprintf("Command: %s\n\n%s", command, result)
+	a.updateRepoTestFailureState(path, pkg, pattern, final)
+	return final, nil
+}
+
+func (a *CopilotAgent) maybeBlockBroadRepoTestRerun(path, pkg, pattern string) (string, bool) {
+	if a == nil {
+		return "", false
+	}
+	thread := a.currentConversationThread()
+	if thread == nil || thread.StreamContext == nil {
+		return "", false
+	}
+	stream := thread.StreamContext
+	if !isBroadRepoTestSelection(pkg, pattern) {
+		return "", false
+	}
+	if !stream.FailureInventoryCaptured || len(stream.FailureClusters) == 0 {
+		return "", false
+	}
+	active := strings.TrimSpace(stream.ActiveFailureCluster)
+	if active == "" {
+		active = strings.TrimSpace(stream.FailureClusters[0])
+	}
+	if active == "" {
+		return "", false
+	}
+	return fmt.Sprintf("Broad recursive test rerun blocked. The initial failure inventory is already captured. Focus on the active failure cluster %q with a targeted package or test rerun before running the full recursive suite again.", active), true
+}
+
+func (a *CopilotAgent) updateRepoTestFailureState(path, pkg, pattern, output string) {
+	if a == nil {
+		return
+	}
+	thread := a.currentConversationThread()
+	if thread == nil {
+		return
+	}
+	if thread.StreamContext == nil {
+		thread.InitializeWorkStream("investigation")
+	}
+	stream := thread.StreamContext
+	status, _ := analyzeTestStatus("go test "+firstNonEmpty(pkg, "./..."), output)
+	if isBroadRepoTestSelection(pkg, pattern) {
+		if status == "PASS" {
+			stream.FailureInventoryCaptured = false
+			stream.FailureClusters = nil
+			stream.ActiveFailureCluster = ""
+			return
+		}
+		clusters := parseFailureClustersFromTestOutput(output)
+		if len(clusters) == 0 {
+			return
+		}
+		stream.FailureInventoryCaptured = true
+		stream.FailureClusters = uniqueFailureClusters(clusters)
+		stream.ActiveFailureCluster = stream.FailureClusters[0]
+		return
+	}
+	active := targetedFailureCluster(path, pkg, pattern)
+	if active == "" {
+		return
+	}
+	if stream.ActiveFailureCluster == "" {
+		stream.ActiveFailureCluster = active
+	}
+	if status == "PASS" {
+		remaining := make([]string, 0, len(stream.FailureClusters))
+		for _, cluster := range stream.FailureClusters {
+			if cluster != active {
+				remaining = append(remaining, cluster)
+			}
+		}
+		stream.FailureClusters = remaining
+		if len(remaining) > 0 {
+			stream.ActiveFailureCluster = remaining[0]
+		} else {
+			stream.ActiveFailureCluster = ""
+		}
+		return
+	}
+	if len(stream.FailureClusters) == 0 {
+		stream.FailureClusters = []string{active}
+	}
+	stream.ActiveFailureCluster = active
+}
+
+func isBroadRepoTestSelection(pkg, pattern string) bool {
+	return strings.TrimSpace(pattern) == "" && (strings.TrimSpace(pkg) == "" || strings.TrimSpace(pkg) == "./...")
+}
+
+func parseFailureClustersFromTestOutput(output string) []string {
+	lines := strings.Split(output, "\n")
+	packages := make([]string, 0)
+	tests := make([]string, 0)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "FAIL\t") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 2 && strings.TrimSpace(parts[1]) != "" {
+				packages = append(packages, "package:"+strings.TrimSpace(parts[1]))
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "--- FAIL:") {
+			name := strings.TrimSpace(strings.TrimPrefix(trimmed, "--- FAIL:"))
+			if name != "" {
+				tests = append(tests, "test:"+strings.Fields(name)[0])
+			}
+		}
+	}
+	return uniqueFailureClusters(append(packages, tests...))
+}
+
+func targetedFailureCluster(path, pkg, pattern string) string {
+	if strings.TrimSpace(pattern) != "" {
+		return "test:" + strings.TrimSpace(pattern)
+	}
+	if strings.TrimSpace(pkg) != "" && strings.TrimSpace(pkg) != "./..." {
+		return "package:" + strings.TrimSpace(pkg)
+	}
+	if strings.TrimSpace(path) != "" && strings.TrimSpace(path) != "." {
+		return "path:" + strings.TrimSpace(path)
+	}
+	return ""
+}
+
+func uniqueFailureClusters(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func (a *CopilotAgent) toolListFolderStoreFiles(ctx context.Context, args map[string]any) (string, error) {
@@ -1034,6 +1183,7 @@ func (a *CopilotAgent) toolListDirectory(ctx context.Context, args map[string]an
 	if path == "" {
 		path = "."
 	}
+	path = resolveFilesystemPath(ctx, path)
 
 	// Note: Directory listing output is NOT streamed to chat history
 	// It's returned as the tool result only
@@ -1078,6 +1228,7 @@ func (a *CopilotAgent) toolPathExists(ctx context.Context, args map[string]any) 
 	if path == "" {
 		return "", fmt.Errorf("'path' must not be empty")
 	}
+	path = resolveFilesystemPath(ctx, path)
 
 	command := fmt.Sprintf("test -e %s", shellQuote(path))
 	return a.runLocalAutomationCommand(ctx, args, command, "Check whether the requested path exists in the local workspace.", "", 60)
@@ -1095,13 +1246,14 @@ func (a *CopilotAgent) toolStatPath(ctx context.Context, args map[string]any) (s
 	if path == "" {
 		return "", fmt.Errorf("'path' must not be empty")
 	}
+	path = resolveFilesystemPath(ctx, path)
 
 	command := fmt.Sprintf("stat %s", shellQuote(path))
 	return a.runLocalAutomationCommand(ctx, args, command, "Inspect the requested path metadata in the local workspace.", "", 60)
 }
 
 func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (string, error) {
-	path := repoPathFromArgs(args)
+	path := repoPathFromContext(ctx, args)
 	short := boolFlagFromArgs(args, "short")
 	if client, err := repo.NewClientForPath(path); err == nil {
 		changes, err := client.Status(path, repo.StatusOptions{Short: short})
@@ -1125,7 +1277,7 @@ func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (
 }
 
 func (a *CopilotAgent) toolGitDiff(ctx context.Context, args map[string]any) (string, error) {
-	path := repoPathFromArgs(args)
+	path := repoPathFromContext(ctx, args)
 	staged := boolFlagFromArgs(args, "staged")
 	if client, err := repo.NewClientForPath(path); err == nil {
 		diffText, err := client.Diff(path, repo.DiffOptions{Staged: staged})
@@ -1145,7 +1297,7 @@ func (a *CopilotAgent) toolGitDiff(ctx context.Context, args map[string]any) (st
 }
 
 func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (string, error) {
-	path := repoPathFromArgs(args)
+	path := repoPathFromContext(ctx, args)
 	count := 10
 	if countRaw, ok := args["max_count"]; ok {
 		switch v := countRaw.(type) {
@@ -1181,7 +1333,7 @@ func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (str
 }
 
 func (a *CopilotAgent) toolGitBranch(ctx context.Context, args map[string]any) (string, error) {
-	path := repoPathFromArgs(args)
+	path := repoPathFromContext(ctx, args)
 	if client, err := repo.NewClientForPath(path); err == nil {
 		branches, err := client.Branches(path)
 		if err != nil {
@@ -1201,7 +1353,7 @@ func (a *CopilotAgent) toolGitBranch(ctx context.Context, args map[string]any) (
 }
 
 func (a *CopilotAgent) toolGitCheckout(ctx context.Context, args map[string]any) (string, error) {
-	path := repoPathFromArgs(args)
+	path := repoPathFromContext(ctx, args)
 	refRaw, ok := args["ref"]
 	if !ok {
 		return "", fmt.Errorf("missing required argument 'ref'")
@@ -1221,7 +1373,7 @@ func (a *CopilotAgent) toolGitCheckout(ctx context.Context, args map[string]any)
 }
 
 func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (string, error) {
-	path := repoPathFromArgs(args)
+	path := repoPathFromContext(ctx, args)
 	messageRaw, ok := args["message"]
 	if !ok {
 		return "", fmt.Errorf("missing required argument 'message'")
@@ -1288,7 +1440,7 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 }
 
 func (a *CopilotAgent) toolGitPull(ctx context.Context, args map[string]any) (string, error) {
-	path := repoPathFromArgs(args)
+	path := repoPathFromContext(ctx, args)
 	if client, err := newRepoClientForPath(path); err == nil {
 		if err := client.Pull(path, repo.PullOptions{Rebase: boolFlagFromArgs(args, "rebase")}); err != nil {
 			return "", err
@@ -1303,7 +1455,7 @@ func (a *CopilotAgent) toolGitPull(ctx context.Context, args map[string]any) (st
 }
 
 func (a *CopilotAgent) toolGitPush(ctx context.Context, args map[string]any) (string, error) {
-	path := repoPathFromArgs(args)
+	path := repoPathFromContext(ctx, args)
 	remote := "origin"
 	if remoteRaw, ok := args["remote"]; ok {
 		if value, ok := remoteRaw.(string); ok && strings.TrimSpace(value) != "" {
@@ -2266,6 +2418,74 @@ func repoPathFromArgs(args map[string]any) string {
 		return "."
 	}
 	return path
+}
+
+func repoPathFromContext(ctx context.Context, args map[string]any) string {
+	path := normalizeRepoHint(repoPathFromArgs(args))
+	base := contextualBaseDir(ctx)
+	if path == "." {
+		if base != "" {
+			path = base
+		}
+	} else if !filepath.IsAbs(path) && base != "" {
+		path = filepath.Join(base, path)
+	}
+	if candidates := discoverWorkingDirCandidates(path); len(candidates) > 0 {
+		return candidates[0]
+	}
+	if strings.TrimSpace(path) == "" {
+		return "."
+	}
+	return path
+}
+
+func normalizeRepoHint(path string) string {
+	switch strings.ToLower(strings.TrimSpace(path)) {
+	case "", ".", "repo", "current repo", "current repository", "workspace", "current workspace", "current working directory":
+		return "."
+	default:
+		return strings.TrimSpace(path)
+	}
+}
+
+func contextualBaseDir(ctx context.Context) string {
+	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		if payload.Variables != nil {
+			for _, key := range []string{"working_dir", "workspace_root"} {
+				if raw, ok := payload.Variables[key].(string); ok {
+					candidate := strings.TrimSpace(raw)
+					if candidate != "" {
+						return candidate
+					}
+				}
+			}
+		}
+		if candidate := strings.TrimSpace(payload.ActiveRepo); candidate != "" {
+			return candidate
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return ""
+}
+
+func resolveFilesystemPath(ctx context.Context, path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return trimmed
+	}
+	if filepath.IsAbs(trimmed) {
+		return trimmed
+	}
+	base := contextualBaseDir(ctx)
+	if base == "" {
+		return trimmed
+	}
+	if trimmed == "." {
+		return base
+	}
+	return filepath.Join(base, trimmed)
 }
 
 func firstNonEmptyString(values ...interface{}) string {

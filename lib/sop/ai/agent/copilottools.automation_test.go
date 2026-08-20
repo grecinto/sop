@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/sharedcode/sop/ai"
 )
 
 func TestDiscoverWorkingDirCandidatesPrefersCurrentRepoAndNearbySiblings(t *testing.T) {
@@ -47,6 +51,40 @@ func TestDiscoverWorkingDirCandidatesPrefersCurrentRepoAndNearbySiblings(t *test
 	}
 	if !containsStringValue(candidates, repoTwo) {
 		t.Fatalf("expected sibling repo %q in candidates, got %v", repoTwo, candidates)
+	}
+}
+
+func TestRepoPathFromContext_UsesWorkingDirForCurrentRepoAlias(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{Variables: map[string]any{"working_dir": repoRoot}})
+
+	resolved := repoPathFromContext(ctx, map[string]any{"path": "current repo"})
+	if resolved != repoRoot {
+		t.Fatalf("expected current repo alias to resolve to %q, got %q", repoRoot, resolved)
+	}
+}
+
+func TestListDirectory_ResolvesRelativePathAgainstWorkingDir(t *testing.T) {
+	repoRoot := t.TempDir()
+	targetDir := filepath.Join(repoRoot, "ai", "agent")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "sample.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write sample: %v", err)
+	}
+	ctx := context.WithValue(context.Background(), "session_payload", &ai.SessionPayload{Variables: map[string]any{"working_dir": repoRoot}})
+	ag := &CopilotAgent{}
+
+	out, err := ag.toolListDirectory(ctx, map[string]any{"path": "ai/agent"})
+	if err != nil {
+		t.Fatalf("toolListDirectory() error = %v", err)
+	}
+	if !strings.Contains(out, "sample.txt") {
+		t.Fatalf("expected resolved directory listing to include sample.txt, got %q", out)
 	}
 }
 

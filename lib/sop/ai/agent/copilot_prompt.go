@@ -142,6 +142,7 @@ func buildTaskGuidanceSynthesis(query string, taskClassification TaskContextClas
 	if strings.Contains(lower, "test") || strings.Contains(lower, "failing") || strings.Contains(lower, "error") {
 		lines = append(lines, "- Validation note: prefer targeted verification and rerun the relevant checks after changes.")
 	}
+	lines = append(lines, structuralAnalysisPolicyLines(strings.TrimSpace(taskClassification.Domain))...)
 	if shouldAskForMoreContextForVagueRepoTask(trimmedQuery) {
 		lines = append(lines, "- Clarification directive: the repository or working directory is still missing.")
 		lines = append(lines, "- Stay in the current Ask/ReAct continuation. Ask one short clarification question using the clarification action instead of returning a standalone answer.")
@@ -150,6 +151,18 @@ func buildTaskGuidanceSynthesis(query string, taskClassification TaskContextClas
 
 	lines = append(lines, "- Guardrail: avoid broad or speculative changes and stay grounded in the available evidence.")
 	return strings.Join(lines, "\n")
+}
+
+func structuralAnalysisPolicyLines(domain string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(domain))
+	if normalized == "coding" || normalized == "codingworkflow" {
+		normalized = "coding_workflow"
+	}
+	line := "- Structural analysis policy: stay text-first when ownership is clear; escalate to AST/tree-sitter only for ambiguous symbols, wrappers/generated code, or multi-file precision, and skip it for local obvious fixes."
+	if normalized != "coding_workflow" && normalized != "" && normalized != "general" {
+		line = "- Structural analysis policy: stay text-first when ownership is clear; use AST/tree-sitter only when structural ambiguity or multi-file precision makes text-only repair unreliable."
+	}
+	return []string{line}
 }
 
 func isCodingWorkflowTaskClassification(taskClassification TaskContextClassification) bool {
