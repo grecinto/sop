@@ -509,14 +509,35 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 func (m *ptyShellSessionManager) SpawnBackgroundSession(workingDir string) (string, error) {
 	// Generate unique session ID for background work
 	sessionID := fmt.Sprintf("bg-%d-%d", time.Now().Unix(), len(m.sessions))
+	return m.spawnSessionWithID(sessionID, workingDir, true)
+}
 
+// EnsureSession ensures a PTY session exists for the given session ID
+// If it doesn't exist, spawns one at the specified working directory
+// Returns the session ID (same as input) and any error
+func (m *ptyShellSessionManager) EnsureSession(sessionID string, workingDir string) (string, error) {
+	// Check if session already exists
+	m.mu.Lock()
+	_, exists := m.sessions[sessionID]
+	m.mu.Unlock()
+
+	if exists {
+		return sessionID, nil
+	}
+
+	// Session doesn't exist - spawn it with the provided ID
+	return m.spawnSessionWithID(sessionID, workingDir, false)
+}
+
+// spawnSessionWithID creates a PTY session with the specified session ID
+func (m *ptyShellSessionManager) spawnSessionWithID(sessionID string, workingDir string, isBackground bool) (string, error) {
 	// Get worker manager
 	workerMgr := getGlobalWorkerManager()
 
 	// Spawn the worker (it will be ready for commands)
 	_, err := workerMgr.spawnWorker(sessionID)
 	if err != nil {
-		return "", fmt.Errorf("failed to spawn background worker: %w", err)
+		return "", fmt.Errorf("failed to spawn worker: %w", err)
 	}
 
 	// Change to working directory if specified
@@ -532,7 +553,7 @@ func (m *ptyShellSessionManager) SpawnBackgroundSession(workingDir string) (stri
 	m.mu.Lock()
 	m.sessions[sessionID] = &ptyShellSession{
 		sessionID:    sessionID,
-		isBackground: true,
+		isBackground: isBackground,
 		lastUsed:     time.Now(),
 	}
 	m.mu.Unlock()

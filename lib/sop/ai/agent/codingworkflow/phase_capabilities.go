@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	log "log/slog"
+	"log"
+	log_slog "log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1228,7 +1229,7 @@ func (c *PhaseCapability) handleClarificationRequest(query string, request *ai.C
 	if err := c.persistArtifact(artifact); err != nil {
 		return err
 	}
-	log.Info("Phase succession: Clarification requested, phase marked as clarifying",
+	log_slog.Info("Phase succession: Clarification requested, phase marked as clarifying",
 		"phase", c.phaseID,
 		"missing_fact", request.MissingFact,
 		"source", request.Source)
@@ -1275,7 +1276,7 @@ func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, es
 	phaseAction, _ := escalation["phase_action"].(string)
 	assessmentExplanation, _ := escalation["explanation"].(string)
 
-	log.Info("Phase succession: Handling Tier 3 escalation",
+	log_slog.Info("Phase succession: Handling Tier 3 escalation",
 		"current_phase", c.phaseID,
 		"failed_tool", failedTool,
 		"failure_count", failureCount,
@@ -1284,13 +1285,13 @@ func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, es
 		"phase_action", phaseAction)
 
 	if strings.EqualFold(strings.TrimSpace(phaseAction), "stay_current") || strings.EqualFold(strings.TrimSpace(suggestedPhase), c.phaseID) {
-		log.Info("Phase succession: Cognitive assessment recommended staying in the current phase",
+		log_slog.Info("Phase succession: Cognitive assessment recommended staying in the current phase",
 			"phase", c.phaseID,
 			"reason", assessmentExplanation)
 		return nil
 	}
 	if strings.EqualFold(strings.TrimSpace(phaseAction), "exit") {
-		log.Info("Phase succession: Cognitive assessment recommended exit",
+		log_slog.Info("Phase succession: Cognitive assessment recommended exit",
 			"phase", c.phaseID,
 			"reason", assessmentExplanation)
 		return nil
@@ -1315,13 +1316,13 @@ func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, es
 		transitionReason = "Delivery phase encountered repeated failures - returning to review to verify outputs"
 	case "investigation":
 		// Investigation is the first phase - stay in phase and let LLM clarify with user
-		log.Info("Phase succession: Tier 3 escalation in investigation phase, no backward transition available",
+		log_slog.Info("Phase succession: Tier 3 escalation in investigation phase, no backward transition available",
 			"phase", c.phaseID,
 			"action", "staying_in_phase")
 		return nil
 	default:
 		// Unknown phase or no backward transition available
-		log.Warn("Phase succession: No backward transition available for phase",
+		log_slog.Warn("Phase succession: No backward transition available for phase",
 			"phase", c.phaseID)
 		return nil
 	}
@@ -1337,7 +1338,7 @@ func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, es
 
 	// Get queue accessor
 	if c.sharedInfra == nil || c.sharedInfra.GetSessionQueue == nil {
-		log.Warn("Phase succession: No queue accessor available for escalation handling",
+		log_slog.Warn("Phase succession: No queue accessor available for escalation handling",
 			"phase", c.phaseID,
 			"target_phase", targetPhase)
 		return nil
@@ -1345,7 +1346,7 @@ func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, es
 
 	queue := c.sharedInfra.GetSessionQueue()
 	if queue == nil {
-		log.Warn("Phase succession: Queue accessor returned nil for escalation handling",
+		log_slog.Warn("Phase succession: Queue accessor returned nil for escalation handling",
 			"phase", c.phaseID,
 			"target_phase", targetPhase)
 		return nil
@@ -1374,14 +1375,14 @@ func (c *PhaseCapability) handleEscalation(ctx context.Context, query string, es
 	}
 
 	if err := queue.Enqueue(workItem); err != nil {
-		log.Error("Phase succession: Failed to enqueue backward transition",
+		log_slog.Error("Phase succession: Failed to enqueue backward transition",
 			"phase", c.phaseID,
 			"target_phase", targetPhase,
 			"error", err)
 		return fmt.Errorf("failed to enqueue backward transition to %s: %w", targetPhase, err)
 	}
 
-	log.Info("Phase succession: Enqueued backward phase transition due to Tier 3 escalation",
+	log_slog.Info("Phase succession: Enqueued backward phase transition due to Tier 3 escalation",
 		"from_phase", c.phaseID,
 		"to_phase", targetPhase,
 		"failed_tool", failedTool,
@@ -1527,6 +1528,7 @@ func (c *PhaseCapability) loadArtifactForPhase(phaseID string) phaseArtifact {
 func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args map[string]any, state capabilities.RoutingState) (string, error) {
 	_ = ctx
 	_ = state
+	log.Printf("[ExecuteTool] Called: tool=%s, args=%+v", toolName, args)
 	name := strings.TrimSpace(strings.ToLower(toolName))
 	if name == "" {
 		return "", fmt.Errorf("empty tool name")
@@ -1583,7 +1585,8 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
   "required": ["query"],
   "properties": {
     "query": {"type": "string", "description": "Task description"},
-    "search": {"type": "string", "description": "Search query for patterns or code (optional)"}
+    "search": {"type": "string", "description": "Search query for patterns or code (optional)"},
+    "working_dir": {"type": "string", "description": "Repository root path (optional, inferred if omitted)"}
   }
 }`
 
@@ -1816,34 +1819,85 @@ func formatPhaseClarificationContext(artifact phaseArtifact) string {
 
 func resolveContextWorkingDir(ctx context.Context, workingDir string) string {
 	trimmed := strings.TrimSpace(workingDir)
-	cleaned := filepath.Clean(trimmed)
-	if trimmed != "" && cleaned != "." && cleaned != string(filepath.Separator) {
-		return trimmed
+	log.Printf("[resolveContextWorkingDir] Input: workingDir=%q", trimmed)
+
+	// Normalize "current repo" and similar aliases to "."
+	normalized := normalizeRepoAlias(trimmed)
+	log.Printf("[resolveContextWorkingDir] After normalizeRepoAlias: %q", normalized)
+
+	cleaned := filepath.Clean(normalized)
+
+	// If explicit non-dot path provided, use it
+	if normalized != "" && cleaned != "." && cleaned != string(filepath.Separator) {
+		log.Printf("[resolveContextWorkingDir] Using explicit path: %q", normalized)
+		return normalized
 	}
+
+	// For "." or empty, resolve to contextual base directory
+	base := contextualBaseDir(ctx)
+	log.Printf("[resolveContextWorkingDir] contextualBaseDir returned: %q", base)
+	if base != "" {
+		return base
+	}
+
+	// Legacy fallback to context value
 	if ctx != nil {
 		if ctxWorkingDir, ok := ctx.Value("working_dir").(string); ok {
 			candidate := strings.TrimSpace(ctxWorkingDir)
 			if candidate != "" && filepath.Clean(candidate) != "." {
+				log.Printf("[resolveContextWorkingDir] Using context value: %q", candidate)
 				return candidate
 			}
 		}
 	}
+
+	// Final fallback: use current working directory instead of returning empty
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		log.Printf("[resolveContextWorkingDir] Final fallback to os.Getwd(): %q", cwd)
+		return cwd
+	}
+
+	// Only return empty if all fallbacks failed
+	log.Printf("[resolveContextWorkingDir] All fallbacks failed, returning empty")
+	return ""
+}
+
+func contextualBaseDir(ctx context.Context) string {
 	if payload := ai.GetSessionPayload(ctx); payload != nil {
+		log.Printf("[contextualBaseDir] SessionPayload found: Variables=%+v, ActiveRepo=%q", payload.Variables, payload.ActiveRepo)
 		if payload.Variables != nil {
 			for _, key := range []string{"working_dir", "workspace_root"} {
 				if raw, ok := payload.Variables[key].(string); ok {
 					candidate := strings.TrimSpace(raw)
-					if candidate != "" && filepath.Clean(candidate) != "." {
+					log.Printf("[contextualBaseDir] Found %s=%q", key, candidate)
+					if candidate != "" {
 						return candidate
 					}
 				}
 			}
 		}
-		if repoHint := strings.TrimSpace(payload.ActiveRepo); repoHint != "" && filepath.IsAbs(repoHint) && filepath.Clean(repoHint) != "." {
-			return repoHint
+		if candidate := strings.TrimSpace(payload.ActiveRepo); candidate != "" {
+			log.Printf("[contextualBaseDir] Using ActiveRepo=%q", candidate)
+			return candidate
 		}
+	} else {
+		log.Printf("[contextualBaseDir] No SessionPayload in context")
 	}
-	return trimmed
+	if cwd, err := os.Getwd(); err == nil {
+		log.Printf("[contextualBaseDir] Falling back to os.Getwd()=%q", cwd)
+		return cwd
+	}
+	log.Printf("[contextualBaseDir] No working directory found, returning empty")
+	return ""
+}
+
+func normalizeRepoAlias(path string) string {
+	switch strings.ToLower(strings.TrimSpace(path)) {
+	case "repo", "current repo", "current repository", "workspace", "current workspace", "current working directory":
+		return "."
+	default:
+		return strings.TrimSpace(path)
+	}
 }
 
 func (c *PhaseCapability) buildTask(ctx context.Context, args map[string]any) Task {
@@ -2004,7 +2058,7 @@ func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any
 	}
 	results, err := repoOps.SearchRepo(task, task.State, searchQuery)
 	if err != nil {
-		return formatRepoResolutionFallback("Search Repo", task, candidates, err), nil
+		return formatRepoResolutionFallback("Repository Search", task, candidates, err), nil
 	}
 	if len(results) == 0 {
 		return "Search Results: none", nil

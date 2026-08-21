@@ -1217,10 +1217,10 @@
         const height = 555;
         widget.style.width = width + 'px';
         widget.style.height = height + 'px';
-        widget.style.left = '57px';
-        widget.style.top = (viewportHeight - height + 2) + 'px';
-        widget.style.right = 'auto';
-        widget.style.bottom = 'auto';
+        widget.style.right = '20px';
+        widget.style.bottom = '20px';
+        widget.style.left = 'auto';
+        widget.style.top = 'auto';
         widget.style.borderRadius = '8px';
         widget.style.margin = '';
     }
@@ -1427,6 +1427,9 @@
             
             widget.classList.add('active');
             hideChatToggleButton(); // Hide button when chat is opened
+            
+            // Auto-open terminal for easy STDIO log observation
+            openAITerminal();
 
             // Mobile-specific input optimization
             if (window.innerWidth <= 768) {

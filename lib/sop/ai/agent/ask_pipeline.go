@@ -1065,6 +1065,13 @@ func (a *CopilotAgent) registerPhaseTools(ctx context.Context, allTools []capabi
 		// ✅ PARTICIPANT PATTERN: Handler calls phase.ExecuteTool(), phase returns result
 		// ❌ NEVER: Phase controls flow or enqueues multiple work items
 		handler := func(ctx context.Context, args map[string]any) (string, error) {
+			log.Info("[TOOL HANDLER] Called", "tool", toolName, "args", args, "phase", func() string {
+				if owningPhase != nil {
+					return owningPhase.ID()
+				}
+				return "unknown"
+			}())
+
 			if owningPhase == nil {
 				return "", fmt.Errorf("no owning phase found for tool: %s", toolName)
 			}
@@ -1072,7 +1079,9 @@ func (a *CopilotAgent) registerPhaseTools(ctx context.Context, allTools []capabi
 			// Route to phase's ExecuteTool
 			// Phase executes ONE tool, returns result - that's it
 			if executor, ok := owningPhase.(capabilities.ToolExecutor); ok {
-				return executor.ExecuteTool(ctx, toolName, args, routingState)
+				result, err := executor.ExecuteTool(ctx, toolName, args, routingState)
+				log.Info("[TOOL HANDLER] ExecuteTool returned", "tool", toolName, "result_len", len(result), "err", err)
+				return result, err
 			}
 
 			return "", fmt.Errorf("phase %s does not implement ToolExecutor", owningPhase.ID())

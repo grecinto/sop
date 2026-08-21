@@ -1368,6 +1368,76 @@ func (s *localRAGService) handleAsk(w http.ResponseWriter, r *http.Request) {
 	if sessionID == "" {
 		sessionID = payload.SessionID
 	}
+	log.Printf("[RAG] Resolving working directory for session %q", sessionID)
+
+	// Resolve workspace context from shell session PWD if available
+	// Try the current session ID first, then fall back to any active shell session
+	workspaceRoot, wdErr := s.shellSessions.GetWorkingDirectory(sessionID)
+	log.Printf("[RAG] GetWorkingDirectory(%q) returned: workspaceRoot=%q, err=%v", sessionID, workspaceRoot, wdErr)
+	if wdErr != nil || workspaceRoot == "" || workspaceRoot == "." {
+		// Fallback: try any active shell session
+		s.shellSessions.mu.Lock()
+		sessionCount := len(s.shellSessions.sessions)
+		if sessionCount > 0 {
+			logVerbose("No working directory for session %q, trying %d active shell sessions", sessionID, sessionCount)
+		}
+		for sid := range s.shellSessions.sessions {
+			s.shellSessions.mu.Unlock()
+			wd, wdErr2 := s.shellSessions.GetWorkingDirectory(sid)
+			if wdErr2 == nil && wd != "" && wd != "." {
+				workspaceRoot = wd
+				logVerbose("Using working directory from shell session %q: %s", sid, workspaceRoot)
+				break
+			}
+			s.shellSessions.mu.Lock()
+		}
+		if len(s.shellSessions.sessions) > 0 {
+			s.shellSessions.mu.Unlock()
+		}
+		if workspaceRoot == "" || workspaceRoot == "." {
+			logVerbose("No working directory found from %d shell sessions", sessionCount)
+		}
+	} else {
+		logVerbose("Using working directory for session %q: %s", sessionID, workspaceRoot)
+	}
+
+	// Ensure PTY session exists for this chat session
+	// This allows the user to navigate directories in the terminal, and we'll pick up their CWD
+	if (workspaceRoot == "" || workspaceRoot == ".") && sessionID != "" {
+		// Get daemon's CWD to spawn session there
+		daemonCwd, _ := os.Getwd()
+		if daemonCwd == "" {
+			daemonCwd = "."
+		}
+
+		// Ensure a PTY session exists with the chat session ID
+		log.Printf("[RAG] Ensuring PTY session %q exists at %s", sessionID, daemonCwd)
+		ensuredID, spawnErr := s.shellSessions.EnsureSession(sessionID, daemonCwd)
+		log.Printf("[RAG] EnsureSession returned: ensuredID=%q, err=%v", ensuredID, spawnErr)
+		if spawnErr == nil && ensuredID != "" {
+			// Session exists or was spawned - get its CWD
+			if wd, err := s.shellSessions.GetWorkingDirectory(ensuredID); err == nil && wd != "" && wd != "." {
+				workspaceRoot = wd
+				log.Printf("[RAG] Using working directory from PTY session %q: %s", ensuredID, workspaceRoot)
+			}
+		} else {
+			log.Printf("[RAG] Failed to ensure PTY session: %v", spawnErr)
+			// Final fallback: use daemon's CWD
+			if daemonCwd != "" && daemonCwd != "." {
+				workspaceRoot = daemonCwd
+				logVerbose("Using daemon CWD as final fallback: %s", workspaceRoot)
+			}
+		}
+	}
+
+	if workspaceRoot != "" && workspaceRoot != "." {
+		payload.Variables["working_dir"] = workspaceRoot
+		payload.Variables["workspace_root"] = workspaceRoot
+		payload.ActiveRepo = workspaceRoot
+		log.Printf("[RAG] ✓ Set SessionPayload working_dir=%s for session %s", workspaceRoot, sessionID)
+	} else {
+		log.Printf("[RAG] ✗ Could not determine working directory, workspaceRoot=%q sessionID=%q", workspaceRoot, sessionID)
+	}
 
 	// Update session store with latest tokens from this request
 	// This ensures daemon always has fresh tokens for renewal

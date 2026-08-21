@@ -2694,6 +2694,14 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 				workingDir = ctxWorkingDir
 			}
 		}
+		// Resolve from SessionPayload if available (PTY CWD)
+		if strings.TrimSpace(workingDir) == "" {
+			if payload := ai.GetSessionPayload(ctx); payload != nil && payload.Variables != nil {
+				if wd, ok := payload.Variables["working_dir"].(string); ok && strings.TrimSpace(wd) != "" {
+					workingDir = wd
+				}
+			}
+		}
 		if strings.TrimSpace(workingDir) == "" && strings.TrimSpace(defaultWorkingDir) != "" {
 			workingDir = defaultWorkingDir
 		}

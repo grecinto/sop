@@ -4563,6 +4563,62 @@ func TestPTYShellSessionManagerSpawnsBackgroundSessions(t *testing.T) {
 	}
 }
 
+func TestPTYShellSessionManagerEnsureSession(t *testing.T) {
+	mgr := newPTYShellSessionManager()
+	defer func() {
+		mgr.mu.Lock()
+		for _, sess := range mgr.sessions {
+			sess.Close()
+		}
+		mgr.mu.Unlock()
+	}()
+
+	sessionID := "test-chat-session"
+
+	// First call should create the session
+	resultID1, err := mgr.EnsureSession(sessionID, "")
+	if err != nil {
+		t.Fatalf("EnsureSession() failed on first call: %v", err)
+	}
+	if resultID1 != sessionID {
+		t.Errorf("EnsureSession() returned %q, want %q", resultID1, sessionID)
+	}
+
+	// Verify session was created
+	mgr.mu.Lock()
+	session1 := mgr.sessions[sessionID]
+	mgr.mu.Unlock()
+	if session1 == nil {
+		t.Fatal("session not found after EnsureSession")
+	}
+
+	// Second call with same ID should reuse existing session
+	resultID2, err := mgr.EnsureSession(sessionID, "")
+	if err != nil {
+		t.Fatalf("EnsureSession() failed on second call: %v", err)
+	}
+	if resultID2 != sessionID {
+		t.Errorf("EnsureSession() returned %q, want %q", resultID2, sessionID)
+	}
+
+	// Should be the same session object
+	mgr.mu.Lock()
+	session2 := mgr.sessions[sessionID]
+	mgr.mu.Unlock()
+	if session1 != session2 {
+		t.Error("EnsureSession reused different session object instead of existing one")
+	}
+
+	// Verify we can run commands in the ensured session
+	output, _, err := mgr.Run(sessionID, "echo 'ensured'", 5*time.Second)
+	if err != nil {
+		t.Fatalf("Run() in ensured session failed: %v", err)
+	}
+	if !strings.Contains(output, "ensured") {
+		t.Errorf("expected output to contain 'ensured', got %q", output)
+	}
+}
+
 func TestPTYShellSessionManagerCleansUpIdleSessions(t *testing.T) {
 	mgr := newPTYShellSessionManager()
 	defer mgr.StopCleanup()
