@@ -389,8 +389,6 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 		sessionID = "default"
 	}
 
-	log.Printf("[DEBUG-TEMP] RunWithStreaming called: sessionID=%q, command=%q", sessionID, command)
-
 	// Get worker manager
 	workerMgr := getGlobalWorkerManager()
 
@@ -417,6 +415,16 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 
 	// Determine if we should use streaming mode
 	useStreaming := streamCallback != nil
+
+	// In streaming mode, add command to history BEFORE execution starts
+	if useStreaming {
+		session.mu.Lock()
+		session.outputHistory.WriteString("$ ")
+		session.outputHistory.WriteString(strings.TrimSpace(command))
+		session.outputHistory.WriteString("\n")
+		session.historyLines += strings.Count(command, "\n") + 1
+		session.mu.Unlock()
+	}
 
 	// Create chunk handler that updates session history and calls user callback
 	var chunkHandler func(string)
@@ -460,14 +468,12 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 		session.outputHistory.WriteString("$ ")
 		session.outputHistory.WriteString(strings.TrimSpace(command))
 		session.outputHistory.WriteString("\n")
-		log.Printf("[DEBUG-TEMP] Added command to history: %q", strings.TrimSpace(command))
 		if resp.Output != "" {
 			session.outputHistory.WriteString(resp.Output)
 			if !strings.HasSuffix(resp.Output, "\n") {
 				session.outputHistory.WriteString("\n")
 			}
 		}
-		log.Printf("[DEBUG-TEMP] History now has %d bytes", session.outputHistory.Len())
 		session.historyLines += strings.Count(command, "\n") + 1 + strings.Count(resp.Output, "\n")
 
 		// Keep last 1000 lines to prevent memory issues
@@ -482,18 +488,8 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 			}
 		}
 		session.mu.Unlock()
-	} else if useStreaming { // In streaming mode, just add command prefix (output already added via chunks)
-		session.mu.Lock()
-		// Note: We need to prepend the command, but output chunks were already added
-		// This is a bit tricky - we'll reconstruct the history with command prefix
-		currentHistory := session.outputHistory.String()
-		session.outputHistory.Reset()
-		session.outputHistory.WriteString("$ ")
-		session.outputHistory.WriteString(strings.TrimSpace(command))
-		session.outputHistory.WriteString("\n")
-		session.outputHistory.WriteString(currentHistory)
-		session.mu.Unlock()
 	}
+	// Note: In streaming mode, command was already added to history before execution started
 
 	// Update running status in session
 	session.mu.Lock()
@@ -710,7 +706,6 @@ func (m *ptyShellSessionManager) GetSessionStatus(sessionID string) (output stri
 	session.mu.Unlock()
 
 	output = session.GetOutputHistory()
-	log.Printf("[DEBUG-TEMP] GetSessionStatus: sessionID=%q, outputLen=%d, running=%v", sessionID, len(output), running)
 	return output, true, running
 }
 

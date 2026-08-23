@@ -107,17 +107,13 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, rawResult string) 
 	// PHASE 3: Try capability-specific preprocessing before standard storage
 	// This allows coding capability to convert test failures to structured JSON
 	// Use explicit preprocessor from storage, not context (follows explicit parameter passing principle)
-	fmt.Printf("[wrapToolResultWithStorage] About to try preprocessing for tool=%s\n", toolName)
 	preprocessed := tryPreprocessing(storage, toolName, resultText, "", 0)
 	if preprocessed != "" {
-		fmt.Printf("[wrapToolResultWithStorage] Preprocessing SUCCESS - got %d bytes of structured data\n", len(preprocessed))
 		// Capability provided structured result - still store to file but return structured
 		_, filePath, size, err := storage.StoreResult(toolName, resultText)
 		if err != nil {
 			return "", err
 		}
-
-		fmt.Printf("[wrapToolResultWithStorage] Stored raw result to file=%s, returning structured JSON to LLM\n", filePath)
 
 		// Return the preprocessed structured result
 		envelope := ai.ToolResultEnvelope{
@@ -134,10 +130,7 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, rawResult string) 
 		if err != nil {
 			return preprocessed, nil
 		}
-		fmt.Printf("[wrapToolResultWithStorage] Final envelope to LLM: %d bytes\n", len(wrapped))
 		return string(wrapped), nil
-	} else {
-		fmt.Printf("[wrapToolResultWithStorage] Preprocessing returned empty - using standard flow\n")
 	}
 
 	// FALLBACK: Standard storage flow for unknown formats
@@ -369,23 +362,14 @@ func sanitizeToolName(name string) string {
 // This follows the explicit parameter passing principle: never use context for application state
 func tryPreprocessing(storage *ToolResultStorage, toolName, rawOutput, filePath string, size int) string {
 	if storage == nil {
-		fmt.Printf("[tryPreprocessing] Storage is nil for tool=%s\n", toolName)
 		return ""
 	}
 	if storage.Preprocessor == nil {
-		fmt.Printf("[tryPreprocessing] Preprocessor is nil for tool=%s (storage exists but no preprocessor set)\n", toolName)
 		return ""
 	}
 
-	fmt.Printf("[tryPreprocessing] Calling preprocessor for tool=%s, output_size=%d\n", toolName, len(rawOutput))
 	// Call the explicit preprocessor
-	result := storage.Preprocessor.PreprocessResult(toolName, rawOutput, filePath, toolResultThreshold)
-	if result == "" {
-		fmt.Printf("[tryPreprocessing] Preprocessor returned empty string for tool=%s\n", toolName)
-	} else {
-		fmt.Printf("[tryPreprocessing] Preprocessor returned %d bytes for tool=%s\n", len(result), toolName)
-	}
-	return result
+	return storage.Preprocessor.PreprocessResult(toolName, rawOutput, filePath, toolResultThreshold)
 }
 
 func isTestCommand(toolName string) bool {

@@ -1579,31 +1579,15 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 // PreprocessToolResult is a standalone function that preprocessing logic for tool results.
 // This allows both PhaseCapability and CodingPhase to use the same preprocessing.
 func PreprocessToolResult(toolName string, rawOutput string, filePath string, maxInlineSize int) string {
-	log_slog.Info("[PreprocessToolResult] Called",
-		"tool_name", toolName,
-		"raw_output_size", len(rawOutput),
-		"file_path", filePath,
-		"max_inline_size", maxInlineSize)
-
 	// Try to parse into structured format
 	structured := ParseTestResult(toolName, rawOutput)
 	if structured == nil {
-		log_slog.Info("[PreprocessToolResult] ParseTestResult returned nil - no structured parsing available")
 		// Not a recognized format, return empty to use standard text flow
 		return ""
 	}
 
-	log_slog.Info("[PreprocessToolResult] Structured result created",
-		"type", structured.Type,
-		"summary", structured.Summary,
-		"error_count", len(structured.ErrorDetails))
-
 	// Convert to enriched JSON result
-	enriched := CreateEnrichedTestResult(structured, rawOutput, filePath, maxInlineSize)
-	log_slog.Info("[PreprocessToolResult] Enriched JSON created",
-		"json_size", len(enriched),
-		"first_200_chars", truncateString(enriched, 200))
-	return enriched
+	return CreateEnrichedTestResult(structured, rawOutput, filePath, maxInlineSize)
 }
 
 // PreprocessResult implements capabilities.ResultPreprocessor for coding domain

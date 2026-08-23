@@ -36,22 +36,12 @@ func ParseTestResult(toolName, rawOutput string) *StructuredToolResult {
 	// Determine output type and apply appropriate parser
 	switch {
 	case isTestCommand(toolName):
-		fmt.Printf("[ParseTestResult] Detected test command: %s (output size: %d bytes)\n", toolName, len(rawOutput))
-		result := parseTestOutput(rawOutput)
-		if result != nil {
-			fmt.Printf("[ParseTestResult] parseTestOutput SUCCESS - type=%s, errors=%d\n", result.Type, len(result.ErrorDetails))
-		} else {
-			fmt.Printf("[ParseTestResult] parseTestOutput returned nil\n")
-		}
-		return result
+		return parseTestOutput(rawOutput)
 	case isBuildCommand(toolName):
-		fmt.Printf("[ParseTestResult] Detected build command: %s\n", toolName)
 		return parseBuildOutput(rawOutput)
 	case isLintCommand(toolName):
-		fmt.Printf("[ParseTestResult] Detected lint command: %s\n", toolName)
 		return parseLintOutput(rawOutput)
 	default:
-		fmt.Printf("[ParseTestResult] Unknown command type: %s\n", toolName)
 		return nil // No structured parsing available
 	}
 }
@@ -59,7 +49,6 @@ func ParseTestResult(toolName, rawOutput string) *StructuredToolResult {
 // parseTestOutput extracts structured data from test failures
 func parseTestOutput(rawOutput string) *StructuredToolResult {
 	if !containsFailureIndicators(rawOutput) {
-		fmt.Println("[parseTestOutput] No failure indicators - tests passed")
 		// Tests passed - simple success result
 		return &StructuredToolResult{
 			Type:    "test_success",
@@ -70,35 +59,26 @@ func parseTestOutput(rawOutput string) *StructuredToolResult {
 		}
 	}
 
-	fmt.Println("[parseTestOutput] Failure indicators detected, analyzing format...")
-
 	// Detect language and route to appropriate parser
 	// Each language has unique output patterns we can detect
 	var failures []ErrorDetail
 
 	switch {
 	case detectGoTest(rawOutput):
-		fmt.Println("[parseTestOutput] Detected Go test format")
 		failures = extractGoTestFailures(rawOutput)
-		fmt.Printf("[parseTestOutput] Extracted %d Go test failures\n", len(failures))
 	case detectPytest(rawOutput):
-		fmt.Println("[parseTestOutput] Detected pytest format")
 		failures = extractPytestFailures(rawOutput)
 	case detectJest(rawOutput):
-		fmt.Println("[parseTestOutput] Detected Jest format")
 		failures = extractJestFailures(rawOutput)
 	case detectRustTest(rawOutput):
-		fmt.Println("[parseTestOutput] Detected Rust test format")
 		failures = extractRustTestFailures(rawOutput)
 	default:
 		// Unknown format - return nil to use text fallback
-		fmt.Println("[parseTestOutput] Unknown test format - returning nil")
 		return nil
 	}
 
 	if len(failures) == 0 {
 		// Has failure indicators but couldn't parse - return nil to use text fallback
-		fmt.Println("[parseTestOutput] No failures extracted despite indicators - returning nil")
 		return nil
 	}
 
