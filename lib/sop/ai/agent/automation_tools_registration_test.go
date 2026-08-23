@@ -243,7 +243,7 @@ func TestExecute_WrapsLargeCommandResultsWithStoredEnvelope(t *testing.T) {
 	ag := &CopilotAgent{registry: NewRegistry()}
 	ag.registerTools(context.Background())
 
-	storage, err := NewToolResultStorage("execute-large-command")
+	storage, err := NewToolResultStorage("execute-large-command", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

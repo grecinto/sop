@@ -139,6 +139,10 @@ func (c *PhaseCapability) BuildGuidanceProfile(query string, state capabilities.
 		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "bug_fix_focus", Category: "situation", Priority: "high", Description: "Treat the task as a bug-fix investigation and trace the failing path before changing behavior", AppliesTo: []string{"bug_fix"}})
 		guardrails = append(guardrails, capabilities.GuidanceRule{ID: "bug_fix_guardrail", Category: "guardrail", Priority: "high", Description: "Do not patch the symptom without identifying the root cause", AppliesTo: []string{"bug_fix"}})
 	}
+	if strings.Contains(lower, "test") && (strings.Contains(lower, "fail") || strings.Contains(lower, "failing") || strings.Contains(lower, "error") || strings.Contains(lower, "broken")) {
+		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "test_failure_investigation", Category: "situation", Priority: "high", Description: "For test failures: run investigation_run_tests FIRST to capture failure output, then extract root cause from error messages before planning fixes", AppliesTo: []string{"test_failure"}})
+		guardrails = append(guardrails, capabilities.GuidanceRule{ID: "test_failure_evidence", Category: "guardrail", Priority: "high", Description: "Do not plan test fixes without concrete test failure evidence - must run tests during investigation phase", AppliesTo: []string{"test_failure"}})
+	}
 	if strings.Contains(lower, "design") || strings.Contains(lower, "architecture") || strings.Contains(lower, "api") || strings.Contains(lower, "contract") {
 		phaseRules = append(phaseRules, capabilities.GuidanceRule{ID: "design_focus", Category: "situation", Priority: "high", Description: "Frame the requested capability with constraints, trade-offs, and recommended approach before implementation", AppliesTo: []string{"design"}})
 	}
@@ -1019,7 +1023,7 @@ func (c *PhaseCapability) ExposeTools() []capabilities.ToolDefinition {
 
 	tools := []capabilities.ToolDefinition{{
 		Name:        c.captureTool,
-		Description: fmt.Sprintf("Captures %s phase artifact to memory for cross-turn continuity. Call this to save progress, signal transitions, or mark completion. WHEN TO CALL: After gathering context, completing analysis, finalizing plans, applying changes, or delivering results.", c.name),
+		Description: fmt.Sprintf("Captures %s phase artifact to memory for cross-turn continuity. Call this to save progress, signal transitions, or mark completion. WHEN TO CALL: After gathering context, completing analysis, finalizing plans, applying changes, or delivering results. ISSUE-ORIENTED WORK (bugs, test failures, errors): Before marking status=ready_for_execution, you MUST include: 1) The text 'root cause' in summary, notes, or evidence explaining WHY the issue occurs (e.g., 'Root cause: TestFoo fails because Bar() returns nil'), 2) A 'causal trace' or 'execution path' showing how the failure happens. Without these, marking ready_for_execution will fail validation.", c.name),
 		Schema:      captureSchema,
 		Tags:        []string{"C", "U"}, // Creates new or updates existing phase artifacts
 	}, {
@@ -1039,7 +1043,7 @@ func (c *PhaseCapability) BuildInstructions(query string, state capabilities.Rou
 	case "intake":
 		return "Use Intake capability to: 1) Ask clarifying questions, 2) Gather requirements, 3) Define scope and constraints, 4) Capture requirements artifact, 5) Transition to investigation when clear."
 	case "investigation":
-		return "Use Investigation capability as discovery mode to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) Run targeted validation when it helps reproduce or understand the issue, 6) Document evidence, 7) Continue directly into implementation when the next step is obvious."
+		return "Use Investigation capability as discovery mode to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) For issue-oriented tasks (bugs, test failures, errors): ALWAYS run investigation_run_tests FIRST to capture concrete failure output - this provides the root cause evidence needed for planning validation, 6) Identify the specific root cause from test output (e.g., 'Root cause: TestFoo fails because function Bar returns nil instead of expected value'), 7) Document evidence including root cause statement and causal trace when fixing issues, 8) Capture investigation artifact with evidence before transitioning to planning, 9) Continue directly into implementation when the next step is obvious."
 	case "planning":
 		return "Use Planning capability as part of discovery mode to: 1) Use Continue bridge context when available to understand the editor-backed coding environment, 2) Build context, 3) Research patterns and confirm assumptions, 4) Generate a concrete plan with file/function references when a plan adds value, 5) Check relevant Team Practice guidance from the Core Playbook (CP) before finalizing design or implementation choices, 6) Use tests or validation cases as a design aid when they clarify contracts, interfaces, or expected behavior, 7) Emit a user-visible plan message only when approval or explicit design review is needed, 8) Capture planning evidence for continuity, 9) Continue directly into implementation when the task is action-oriented. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
 	case "testing":
@@ -1526,9 +1530,12 @@ func (c *PhaseCapability) loadArtifactForPhase(phaseID string) phaseArtifact {
 }
 
 func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args map[string]any, state capabilities.RoutingState) (string, error) {
-	_ = ctx
-	_ = state
-	log.Printf("[ExecuteTool] Called: tool=%s, args=%+v", toolName, args)
+	// CRITICAL: Preserve incoming context - contains ai.CtxKeyEventStreamer for chat display
+	// Store sessionID in context for terminal logging
+	if state.SessionID != "" {
+		ctx = context.WithValue(ctx, "terminal_session_id", state.SessionID)
+	}
+	log.Printf("[ExecuteTool] Called: tool=%s, args=%+v, sessionID=%s", toolName, args, state.SessionID)
 	name := strings.TrimSpace(strings.ToLower(toolName))
 	if name == "" {
 		return "", fmt.Errorf("empty tool name")
@@ -1569,6 +1576,43 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 	}
 }
 
+// PreprocessToolResult is a standalone function that preprocessing logic for tool results.
+// This allows both PhaseCapability and CodingPhase to use the same preprocessing.
+func PreprocessToolResult(toolName string, rawOutput string, filePath string, maxInlineSize int) string {
+	log_slog.Info("[PreprocessToolResult] Called",
+		"tool_name", toolName,
+		"raw_output_size", len(rawOutput),
+		"file_path", filePath,
+		"max_inline_size", maxInlineSize)
+
+	// Try to parse into structured format
+	structured := ParseTestResult(toolName, rawOutput)
+	if structured == nil {
+		log_slog.Info("[PreprocessToolResult] ParseTestResult returned nil - no structured parsing available")
+		// Not a recognized format, return empty to use standard text flow
+		return ""
+	}
+
+	log_slog.Info("[PreprocessToolResult] Structured result created",
+		"type", structured.Type,
+		"summary", structured.Summary,
+		"error_count", len(structured.ErrorDetails))
+
+	// Convert to enriched JSON result
+	enriched := CreateEnrichedTestResult(structured, rawOutput, filePath, maxInlineSize)
+	log_slog.Info("[PreprocessToolResult] Enriched JSON created",
+		"json_size", len(enriched),
+		"first_200_chars", truncateString(enriched, 200))
+	return enriched
+}
+
+// PreprocessResult implements capabilities.ResultPreprocessor for coding domain
+// This allows the coding capability to transform test/build/lint outputs into
+// structured JSON before they reach the LLM
+func (c *PhaseCapability) PreprocessResult(toolName string, rawOutput string, filePath string, maxInlineSize int) string {
+	return PreprocessToolResult(toolName, rawOutput, filePath, maxInlineSize)
+}
+
 func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 	taskSchema := `{
   "type": "object",
@@ -1582,11 +1626,11 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 
 	searchSchema := `{
   "type": "object",
-  "required": ["query"],
+  "required": ["query", "working_dir"],
   "properties": {
     "query": {"type": "string", "description": "Task description"},
     "search": {"type": "string", "description": "Search query for patterns or code (optional)"},
-    "working_dir": {"type": "string", "description": "Repository root path (optional, inferred if omitted)"}
+    "working_dir": {"type": "string", "description": "Repository root path (use '.' for current directory)"}
   }
 }`
 
@@ -1622,7 +1666,7 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 			Tags:        []string{"R"}, // Read-only inspection
 		}, {
 			Name:        c.phaseToolName("search_repo"),
-			Description: "Searches repository for patterns, implementations, or code. WHEN TO CALL: To find similar code, error patterns, or existing implementations before concluding something is novel. Returns matching code locations.",
+			Description: "Searches repository file content using ripgrep (regex pattern matching). REQUIRED PARAMETERS: query (task description) and working_dir (use 'current' or '.' for current directory). OPTIONAL: search parameter for the actual pattern to find. SEARCH PATTERNS: Use simple regex (e.g., 'func TestFoo', 'import.*database', 'type.*Handler'). DO NOT use boolean operators like OR - ripgrep doesn't support them. For multiple patterns, call this tool multiple times. WHEN TO CALL: To find function definitions, test cases, error patterns, imports, type definitions. Returns file paths with line numbers and surrounding context. EXAMPLE: To find test functions, use search='func Test'.",
 			Schema:      searchSchema,
 			Tags:        []string{"R"}, // Read-only search
 		}, {
@@ -1662,6 +1706,11 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
   "properties": {}
 }`,
 			Tags: []string{"U"}, // Updates/indexes pattern embeddings
+		}, {
+			Name:        c.phaseToolName("run_tests"),
+			Description: "Runs tests to gather failure evidence for issue investigation. WHEN TO CALL: When investigating bug reports, test failures, or errors - run tests FIRST to capture root cause evidence before planning fixes. For 'fix failing tests' tasks, this is REQUIRED during investigation to identify which tests fail and why. Returns test results with failure output, which provides the root cause statement needed for planning phase. Use this to build the evidence base before transitioning to planning.",
+			Schema:      taskSchema,
+			Tags:        []string{"R"}, // Read-only test execution for evidence gathering
 		}}
 	case "planning":
 		return []capabilities.ToolDefinition{{
@@ -1695,7 +1744,7 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 			Tags:        []string{"R"}, // Read-only inspection
 		}, {
 			Name:        c.phaseToolName("search_repo"),
-			Description: "Searches repository for implementation patterns. WHEN TO CALL: Before designing, to find similar implementations and follow established patterns rather than inventing new approaches. Returns matching patterns and code locations.",
+			Description: "Searches repository file content using ripgrep (regex pattern matching). WHEN TO CALL: Before designing, to find similar implementations and follow established patterns. SEARCH PATTERNS: Use simple regex like 'func.*Handler', 'type.*Config', 'import.*grpc'. DO NOT use boolean 'OR' - make separate calls instead. Returns file paths with line numbers and code context.",
 			Schema:      searchSchema,
 			Tags:        []string{"R"}, // Read-only search
 		}, {
@@ -1817,25 +1866,37 @@ func formatPhaseClarificationContext(artifact phaseArtifact) string {
 	return strings.Join(parts, "\n")
 }
 
-func resolveContextWorkingDir(ctx context.Context, workingDir string) string {
+// ResolveContextWorkingDir resolves working directory using session context.
+// Normalizes aliases, resolves relative paths, and falls back to session's working_dir.
+// Exported for use by phase implementations.
+func ResolveContextWorkingDir(ctx context.Context, workingDir string) string {
 	trimmed := strings.TrimSpace(workingDir)
-	log.Printf("[resolveContextWorkingDir] Input: workingDir=%q", trimmed)
+	log.Printf("[ResolveContextWorkingDir] Input: workingDir=%q", trimmed)
 
 	// Normalize "current repo" and similar aliases to "."
-	normalized := normalizeRepoAlias(trimmed)
-	log.Printf("[resolveContextWorkingDir] After normalizeRepoAlias: %q", normalized)
+	normalized := NormalizeRepoAlias(trimmed)
+	log.Printf("[ResolveContextWorkingDir] After NormalizeRepoAlias: %q", normalized)
 
 	cleaned := filepath.Clean(normalized)
 
-	// If explicit non-dot path provided, use it
+	// If explicit non-dot path provided, resolve it
 	if normalized != "" && cleaned != "." && cleaned != string(filepath.Separator) {
-		log.Printf("[resolveContextWorkingDir] Using explicit path: %q", normalized)
+		// If it's a relative path, join it with the session's base directory
+		if !filepath.IsAbs(cleaned) {
+			base := contextualBaseDir(ctx)
+			if base != "" {
+				resolved := filepath.Join(base, cleaned)
+				log.Printf("[ResolveContextWorkingDir] Resolved relative path %q to %q", normalized, resolved)
+				return resolved
+			}
+		}
+		log.Printf("[ResolveContextWorkingDir] Using explicit path: %q", normalized)
 		return normalized
 	}
 
 	// For "." or empty, resolve to contextual base directory
 	base := contextualBaseDir(ctx)
-	log.Printf("[resolveContextWorkingDir] contextualBaseDir returned: %q", base)
+	log.Printf("[ResolveContextWorkingDir] contextualBaseDir returned: %q", base)
 	if base != "" {
 		return base
 	}
@@ -1845,7 +1906,7 @@ func resolveContextWorkingDir(ctx context.Context, workingDir string) string {
 		if ctxWorkingDir, ok := ctx.Value("working_dir").(string); ok {
 			candidate := strings.TrimSpace(ctxWorkingDir)
 			if candidate != "" && filepath.Clean(candidate) != "." {
-				log.Printf("[resolveContextWorkingDir] Using context value: %q", candidate)
+				log.Printf("[ResolveContextWorkingDir] Using context value: %q", candidate)
 				return candidate
 			}
 		}
@@ -1853,12 +1914,12 @@ func resolveContextWorkingDir(ctx context.Context, workingDir string) string {
 
 	// Final fallback: use current working directory instead of returning empty
 	if cwd, err := os.Getwd(); err == nil && cwd != "" {
-		log.Printf("[resolveContextWorkingDir] Final fallback to os.Getwd(): %q", cwd)
+		log.Printf("[ResolveContextWorkingDir] Final fallback to os.Getwd(): %q", cwd)
 		return cwd
 	}
 
 	// Only return empty if all fallbacks failed
-	log.Printf("[resolveContextWorkingDir] All fallbacks failed, returning empty")
+	log.Printf("[ResolveContextWorkingDir] All fallbacks failed, returning empty")
 	return ""
 }
 
@@ -1891,12 +1952,22 @@ func contextualBaseDir(ctx context.Context) string {
 	return ""
 }
 
-func normalizeRepoAlias(path string) string {
-	switch strings.ToLower(strings.TrimSpace(path)) {
-	case "repo", "current repo", "current repository", "workspace", "current workspace", "current working directory":
+// NormalizeRepoAlias converts common repository aliases to ".", but preserves actual paths.
+// Exported for use by phase implementations.
+func NormalizeRepoAlias(path string) string {
+	trimmed := strings.TrimSpace(path)
+
+	// If path contains separators (/, \) or relative indicators (..), treat as actual path
+	if strings.Contains(trimmed, "/") || strings.Contains(trimmed, "\\") || strings.Contains(trimmed, "..") {
+		return trimmed
+	}
+
+	// Only normalize bare aliases
+	switch strings.ToLower(trimmed) {
+	case "current", "current folder", "current directory", "repo", "current repo", "current repository", "workspace", "current workspace", "current working directory":
 		return "."
 	default:
-		return strings.TrimSpace(path)
+		return trimmed
 	}
 }
 
@@ -1909,7 +1980,7 @@ func (c *PhaseCapability) buildTask(ctx context.Context, args map[string]any) Ta
 		query = readPhaseString(args, "description", "")
 	}
 
-	workingDir := resolveContextWorkingDir(ctx, readPhaseString(args, "working_dir", ""))
+	workingDir := ResolveContextWorkingDir(ctx, readPhaseString(args, "working_dir", ""))
 	activeFile := readPhaseString(args, "active_file", "")
 	if cleanedActiveFile := filepath.Clean(strings.TrimSpace(activeFile)); cleanedActiveFile == "." || cleanedActiveFile == string(filepath.Separator) {
 		activeFile = ""
@@ -1943,7 +2014,9 @@ func (c *PhaseCapability) sharedInfrastructure() *SharedInfrastructure {
 	return c.ensureSharedInfrastructure()
 }
 
-func isGitRepositoryDir(dir string) bool {
+// IsGitRepositoryDir checks if the given directory contains a .git folder.
+// Exported for use by phase implementations.
+func IsGitRepositoryDir(dir string) bool {
 	trimmed := strings.TrimSpace(dir)
 	if trimmed == "" {
 		return false
@@ -1955,18 +2028,62 @@ func isGitRepositoryDir(dir string) bool {
 	return info.IsDir()
 }
 
-func resolveRepoWorkingDir(task Task) (Task, []string) {
+// DiscoverWorkingDirCandidates finds git repositories starting from baseDir.
+// Exported for use by phase implementations.
+func DiscoverWorkingDirCandidates(baseDir string) []string {
+	absBase := baseDir
+	if !filepath.IsAbs(absBase) {
+		if cwd, err := os.Getwd(); err == nil {
+			absBase = filepath.Join(cwd, baseDir)
+		}
+	}
+	absBase = filepath.Clean(absBase)
+
+	if IsGitRepositoryDir(absBase) {
+		return []string{absBase}
+	}
+	current := absBase
+	for i := 0; i < 10; i++ {
+		parent := filepath.Dir(current)
+		if parent == current || parent == "" {
+			break
+		}
+		if IsGitRepositoryDir(parent) {
+			return []string{parent}
+		}
+		current = parent
+	}
+	return nil
+}
+
+// ResolveRepoWorkingDir ensures the task's WorkingDir points to a git repository.
+// Returns the modified task and list of candidate repositories.
+// Exported for use by phase implementations.
+//
+// IMPORTANT: If the working directory is already absolute and explicit (not "." or empty),
+// we preserve it even if it's not the git root. This respects the user's intent to work
+// in a subdirectory. Only discover git root for relative/empty paths.
+func ResolveRepoWorkingDir(task Task) (Task, []string) {
 	resolved := task
 	baseDir := strings.TrimSpace(task.WorkingDir)
 	if baseDir == "" {
 		baseDir = "."
 	}
 	baseDir = filepath.Clean(baseDir)
-	if isGitRepositoryDir(baseDir) {
+
+	// If working directory is already absolute and explicit, preserve it
+	// Only discover git root for relative paths or "."
+	if filepath.IsAbs(baseDir) && baseDir != "/" {
+		// Already have explicit absolute path, keep it
 		resolved.WorkingDir = baseDir
 		return resolved, []string{baseDir}
 	}
-	candidates := discoverWorkingDirCandidates(baseDir)
+
+	if IsGitRepositoryDir(baseDir) {
+		resolved.WorkingDir = baseDir
+		return resolved, []string{baseDir}
+	}
+	candidates := DiscoverWorkingDirCandidates(baseDir)
 	if len(candidates) > 0 {
 		resolved.WorkingDir = candidates[0]
 		return resolved, candidates
@@ -1997,8 +2114,8 @@ func formatRepoResolutionFallback(toolLabel string, task Task, candidates []stri
 }
 
 func (c *PhaseCapability) runBuildContext(ctx context.Context, args map[string]any) (string, error) {
-	task, candidates := resolveRepoWorkingDir(c.buildTask(ctx, args))
-	if task.ActiveFile == "" && len(candidates) == 0 && !isGitRepositoryDir(task.WorkingDir) {
+	task, candidates := ResolveRepoWorkingDir(c.buildTask(ctx, args))
+	if task.ActiveFile == "" && len(candidates) == 0 && !IsGitRepositoryDir(task.WorkingDir) {
 		return formatRepoResolutionFallback("Repository Context", task, candidates, fmt.Errorf("no git repository found for %q", task.WorkingDir)), nil
 	}
 	infra := c.sharedInfrastructure()
@@ -2023,7 +2140,7 @@ func (c *PhaseCapability) runBuildContext(ctx context.Context, args map[string]a
 }
 
 func (c *PhaseCapability) runInspectRepo(ctx context.Context, args map[string]any) (string, error) {
-	task, candidates := resolveRepoWorkingDir(c.buildTask(ctx, args))
+	task, candidates := ResolveRepoWorkingDir(c.buildTask(ctx, args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2035,18 +2152,34 @@ func (c *PhaseCapability) runInspectRepo(ctx context.Context, args map[string]an
 	}
 	parts := []string{"Repository Inspection"}
 	if len(summary.ChangedFiles) > 0 {
-		parts = append(parts, fmt.Sprintf("Changed Files: %s", strings.Join(summary.ChangedFiles, ", ")))
+		// Truncate file list if too many files to prevent huge responses
+		fileList := strings.Join(summary.ChangedFiles, ", ")
+		if len(fileList) > 2000 {
+			fileList = fileList[:2000] + fmt.Sprintf("... (%d files total, showing first ~2KB)", len(summary.ChangedFiles))
+		}
+		parts = append(parts, fmt.Sprintf("Changed Files: %s", fileList))
 	} else {
 		parts = append(parts, "Changed Files: none")
 	}
 	if strings.TrimSpace(summary.DiffPreview) != "" {
-		parts = append(parts, fmt.Sprintf("Diff Preview: %s", summary.DiffPreview))
+		// Truncate diff preview if too large
+		diffPreview := summary.DiffPreview
+		if len(diffPreview) > 2000 {
+			diffPreview = diffPreview[:2000] + fmt.Sprintf("... (%d bytes total, showing first 2KB)", len(summary.DiffPreview))
+		}
+		parts = append(parts, fmt.Sprintf("Diff Preview: %s", diffPreview))
 	}
 	return strings.Join(parts, "\n"), nil
 }
 
 func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any) (string, error) {
-	task, candidates := resolveRepoWorkingDir(c.buildTask(ctx, args))
+	task := c.buildTask(ctx, args)
+	log.Printf("[runSearchRepo] buildTask returned workingDir=%q", task.WorkingDir)
+
+	// Resolve repo working directory to ensure absolute path
+	task, candidates := ResolveRepoWorkingDir(task)
+	log.Printf("[runSearchRepo] After ResolveRepoWorkingDir: workingDir=%q, candidates=%v", task.WorkingDir, candidates)
+
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2056,9 +2189,9 @@ func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any
 	if searchQuery == "" {
 		searchQuery = task.Description
 	}
-	results, err := repoOps.SearchRepo(task, task.State, searchQuery)
+	results, err := repoOps.SearchRepoWithContext(ctx, task, task.State, searchQuery)
 	if err != nil {
-		return formatRepoResolutionFallback("Repository Search", task, candidates, err), nil
+		return "", err
 	}
 	if len(results) == 0 {
 		return "Search Results: none", nil
@@ -2067,7 +2200,7 @@ func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any
 }
 
 func (c *PhaseCapability) runListChangedFiles(ctx context.Context, args map[string]any) (string, error) {
-	task, candidates := resolveRepoWorkingDir(c.buildTask(ctx, args))
+	task, candidates := ResolveRepoWorkingDir(c.buildTask(ctx, args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2229,7 +2362,7 @@ func isSupportedRepoIndexExtension(ext string) bool {
 
 func (c *PhaseCapability) runIndexRepoStructure(ctx context.Context, args map[string]any) (string, error) {
 	task := c.buildTask(ctx, args)
-	resolvedTask, candidates := resolveRepoWorkingDir(task)
+	resolvedTask, candidates := ResolveRepoWorkingDir(task)
 	if resolvedTask.WorkingDir == "" {
 		resolvedTask.WorkingDir = task.WorkingDir
 	}
@@ -2437,12 +2570,26 @@ func (c *PhaseCapability) runApplyPatch(args map[string]any) (string, error) {
 
 func (c *PhaseCapability) runTests(ctx context.Context, args map[string]any) (string, error) {
 	task := c.buildTask(ctx, args)
+	log.Printf("[runTests] buildTask returned workingDir=%q", task.WorkingDir)
+
+	// Resolve repo working directory to ensure absolute path
+	task, candidates := ResolveRepoWorkingDir(task)
+	log.Printf("[runTests] After ResolveRepoWorkingDir: workingDir=%q, candidates=%v", task.WorkingDir, candidates)
+
+	// Extract SessionID from context and store in task.State.Metadata for PTY routing
+	if sessionID, ok := ctx.Value("terminal_session_id").(string); ok && sessionID != "" {
+		if task.State.Metadata == nil {
+			task.State.Metadata = make(map[string]string)
+		}
+		task.State.Metadata["terminal_session_id"] = sessionID
+	}
+
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
 	}
 	testOps := infra.NewTestOperations()
-	result, err := testOps.RunTests(task, task.State)
+	result, err := testOps.RunTests(ctx, task, task.State)
 	if err != nil {
 		return "", fmt.Errorf("run tests: %w", err)
 	}
@@ -2872,6 +3019,24 @@ func requireRootCauseEvidenceForPhase(artifact phaseArtifact) error {
 	evidenceText := strings.ToLower(strings.Join(artifact.Evidence, " "))
 	planText := strings.ToLower(strings.Join(artifact.Plan, " "))
 
+	// Check for test failure-specific evidence if this is a test fixing task
+	isTestFailureTask := (strings.Contains(summaryText, "test") || strings.Contains(summaryText, "failing tests")) &&
+		(strings.Contains(summaryText, "fail") || strings.Contains(summaryText, "error") || strings.Contains(summaryText, "broken"))
+
+	if isTestFailureTask {
+		// For test failures, require actual test output evidence
+		hasTestOutput := strings.Contains(evidenceText, "fail") ||
+			strings.Contains(evidenceText, "error") ||
+			strings.Contains(evidenceText, "panic") ||
+			strings.Contains(evidenceText, "expected") ||
+			strings.Contains(notesText, "test output") ||
+			strings.Contains(notesText, "test result")
+
+		if !hasTestOutput {
+			return fmt.Errorf("test failure investigation requires actual test output in evidence - call investigation_run_tests first to capture failure details, then document findings before marking ready_for_execution")
+		}
+	}
+
 	rootCauseSeen := strings.Contains(summaryText, "root cause") || strings.Contains(notesText, "root cause") || strings.Contains(evidenceText, "root cause") || strings.Contains(planText, "root cause")
 	causalTraceSeen := strings.Contains(summaryText, "causal trace") || strings.Contains(summaryText, "cause-and-effect") || strings.Contains(summaryText, "dependency path") || strings.Contains(summaryText, "execution path") || strings.Contains(notesText, "causal trace") || strings.Contains(notesText, "cause-and-effect") || strings.Contains(notesText, "dependency path") || strings.Contains(notesText, "execution path") || strings.Contains(evidenceText, "causal trace") || strings.Contains(evidenceText, "cause-and-effect") || strings.Contains(evidenceText, "dependency path") || strings.Contains(evidenceText, "execution path") || strings.Contains(planText, "causal trace") || strings.Contains(planText, "cause-and-effect") || strings.Contains(planText, "dependency path") || strings.Contains(planText, "execution path")
 
@@ -3169,6 +3334,13 @@ func readPhaseBool(args map[string]any, key string) bool {
 		}
 	}
 	return false
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 type phaseArtifact struct {

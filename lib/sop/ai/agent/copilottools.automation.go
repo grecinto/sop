@@ -1299,19 +1299,23 @@ func (a *CopilotAgent) toolStatPath(ctx context.Context, args map[string]any) (s
 func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromContext(ctx, args)
 	short := boolFlagFromArgs(args, "short")
-	if client, err := repo.NewClientForPath(path); err == nil {
-		changes, err := client.Status(path, repo.StatusOptions{Short: short})
-		if err != nil {
-			return "", err
+	// When LocalCommandExecutor is available (daemon mode), always route through PTY for isolation and STDIO capture
+	// Skip native client optimization to ensure consistent Terminal UI output
+	if localCommandExecutor == nil {
+		if client, err := repo.NewClientForPath(path); err == nil {
+			changes, err := client.Status(path, repo.StatusOptions{Short: short})
+			if err != nil {
+				return "", err
+			}
+			if len(changes) == 0 {
+				return "No changes.", nil
+			}
+			var lines []string
+			for _, change := range changes {
+				lines = append(lines, fmt.Sprintf("%s\t%s", change.Status, change.Path))
+			}
+			return strings.Join(lines, "\n"), nil
 		}
-		if len(changes) == 0 {
-			return "No changes.", nil
-		}
-		var lines []string
-		for _, change := range changes {
-			lines = append(lines, fmt.Sprintf("%s\t%s", change.Status, change.Path))
-		}
-		return strings.Join(lines, "\n"), nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s status", shellQuote(path))
 	if short {
@@ -1323,15 +1327,18 @@ func (a *CopilotAgent) toolGitStatus(ctx context.Context, args map[string]any) (
 func (a *CopilotAgent) toolGitDiff(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromContext(ctx, args)
 	staged := boolFlagFromArgs(args, "staged")
-	if client, err := repo.NewClientForPath(path); err == nil {
-		diffText, err := client.Diff(path, repo.DiffOptions{Staged: staged})
-		if err != nil {
-			return "", err
+	// When LocalCommandExecutor is available (daemon mode), always route through PTY
+	if localCommandExecutor == nil {
+		if client, err := repo.NewClientForPath(path); err == nil {
+			diffText, err := client.Diff(path, repo.DiffOptions{Staged: staged})
+			if err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(diffText) == "" {
+				return "No diff output.", nil
+			}
+			return diffText, nil
 		}
-		if strings.TrimSpace(diffText) == "" {
-			return "No diff output.", nil
-		}
-		return diffText, nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s diff", shellQuote(path))
 	if staged {
@@ -1358,19 +1365,22 @@ func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (str
 	if count <= 0 {
 		count = 10
 	}
-	if client, err := repo.NewClientForPath(path); err == nil {
-		commits, err := client.Log(path, repo.LogOptions{MaxCount: count})
-		if err != nil {
-			return "", err
+	// When LocalCommandExecutor is available (daemon mode), always route through PTY
+	if localCommandExecutor == nil {
+		if client, err := repo.NewClientForPath(path); err == nil {
+			commits, err := client.Log(path, repo.LogOptions{MaxCount: count})
+			if err != nil {
+				return "", err
+			}
+			if len(commits) == 0 {
+				return "No commits found.", nil
+			}
+			var lines []string
+			for _, commit := range commits {
+				lines = append(lines, fmt.Sprintf("%s %s", commit.Hash, commit.Message))
+			}
+			return strings.Join(lines, "\n"), nil
 		}
-		if len(commits) == 0 {
-			return "No commits found.", nil
-		}
-		var lines []string
-		for _, commit := range commits {
-			lines = append(lines, fmt.Sprintf("%s %s", commit.Hash, commit.Message))
-		}
-		return strings.Join(lines, "\n"), nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s log --oneline -n %d", shellQuote(path), count)
 	return a.runLocalAutomationCommand(ctx, args, command, "Inspect recent repository history.", path, 60)
@@ -1378,19 +1388,22 @@ func (a *CopilotAgent) toolGitLog(ctx context.Context, args map[string]any) (str
 
 func (a *CopilotAgent) toolGitBranch(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromContext(ctx, args)
-	if client, err := repo.NewClientForPath(path); err == nil {
-		branches, err := client.Branches(path)
-		if err != nil {
-			return "", err
+	// When LocalCommandExecutor is available (daemon mode), always route through PTY
+	if localCommandExecutor == nil {
+		if client, err := repo.NewClientForPath(path); err == nil {
+			branches, err := client.Branches(path)
+			if err != nil {
+				return "", err
+			}
+			if len(branches) == 0 {
+				return "No branches found.", nil
+			}
+			var lines []string
+			for _, branch := range branches {
+				lines = append(lines, branch.Name)
+			}
+			return strings.Join(lines, "\n"), nil
 		}
-		if len(branches) == 0 {
-			return "No branches found.", nil
-		}
-		var lines []string
-		for _, branch := range branches {
-			lines = append(lines, branch.Name)
-		}
-		return strings.Join(lines, "\n"), nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s branch --all", shellQuote(path))
 	return a.runLocalAutomationCommand(ctx, args, command, "Inspect repository branches.", path, 60)
@@ -1406,11 +1419,14 @@ func (a *CopilotAgent) toolGitCheckout(ctx context.Context, args map[string]any)
 	if !ok || strings.TrimSpace(ref) == "" {
 		return "", fmt.Errorf("'ref' must be a non-empty string")
 	}
-	if client, err := repo.NewClientForPath(path); err == nil {
-		if err := client.Checkout(path, ref); err != nil {
-			return "", err
+	// When LocalCommandExecutor is available (daemon mode), always route through PTY
+	if localCommandExecutor == nil {
+		if client, err := repo.NewClientForPath(path); err == nil {
+			if err := client.Checkout(path, ref); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Checked out %s", ref), nil
 		}
-		return fmt.Sprintf("Checked out %s", ref), nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s checkout %s", shellQuote(path), shellQuote(ref))
 	return a.runLocalAutomationCommand(ctx, args, command, "Switch the repository to another branch or revision.", path, 60)
@@ -1427,29 +1443,32 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 		return "", fmt.Errorf("'message' must be a non-empty string")
 	}
 
-	if client, err := newRepoClientForPath(path); err == nil {
-		files := []string{}
-		if filesRaw, ok := args["files"]; ok {
-			if filesArray, ok := filesRaw.([]any); ok {
-				for _, f := range filesArray {
-					if fileStr, ok := f.(string); ok && strings.TrimSpace(fileStr) != "" {
-						files = append(files, strings.TrimSpace(fileStr))
+	// When LocalCommandExecutor is available (daemon mode), always route through PTY
+	if localCommandExecutor == nil {
+		if client, err := newRepoClientForPath(path); err == nil {
+			files := []string{}
+			if filesRaw, ok := args["files"]; ok {
+				if filesArray, ok := filesRaw.([]any); ok {
+					for _, f := range filesArray {
+						if fileStr, ok := f.(string); ok && strings.TrimSpace(fileStr) != "" {
+							files = append(files, strings.TrimSpace(fileStr))
+						}
 					}
+				} else {
+					return "", fmt.Errorf("'files' must be an array of strings")
 				}
-			} else {
-				return "", fmt.Errorf("'files' must be an array of strings")
 			}
-		}
-		all := true
-		if allRaw, ok := args["all"]; ok {
-			if value, ok := allRaw.(bool); ok {
-				all = value
+			all := true
+			if allRaw, ok := args["all"]; ok {
+				if value, ok := allRaw.(bool); ok {
+					all = value
+				}
 			}
+			if err := client.Commit(path, message, repo.CommitOptions{Files: files, All: all}); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Committed changes to %s", path), nil
 		}
-		if err := client.Commit(path, message, repo.CommitOptions{Files: files, All: all}); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Committed changes to %s", path), nil
 	}
 
 	var command string
@@ -1485,11 +1504,14 @@ func (a *CopilotAgent) toolGitCommit(ctx context.Context, args map[string]any) (
 
 func (a *CopilotAgent) toolGitPull(ctx context.Context, args map[string]any) (string, error) {
 	path := repoPathFromContext(ctx, args)
-	if client, err := newRepoClientForPath(path); err == nil {
-		if err := client.Pull(path, repo.PullOptions{Rebase: boolFlagFromArgs(args, "rebase")}); err != nil {
-			return "", err
+	// When LocalCommandExecutor is available (daemon mode), always route through PTY
+	if localCommandExecutor == nil {
+		if client, err := newRepoClientForPath(path); err == nil {
+			if err := client.Pull(path, repo.PullOptions{Rebase: boolFlagFromArgs(args, "rebase")}); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Pulled latest changes for %s", path), nil
 		}
-		return fmt.Sprintf("Pulled latest changes for %s", path), nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s pull", shellQuote(path))
 	if rebase := boolFlagFromArgs(args, "rebase"); rebase {
@@ -1512,11 +1534,14 @@ func (a *CopilotAgent) toolGitPush(ctx context.Context, args map[string]any) (st
 			branch = value
 		}
 	}
-	if client, err := repo.NewClientForPath(path); err == nil {
-		if err := client.Push(path, repo.PushOptions{Remote: remote, Branch: branch}); err != nil {
-			return "", err
+	// When LocalCommandExecutor is available (daemon mode), always route through PTY
+	if localCommandExecutor == nil {
+		if client, err := repo.NewClientForPath(path); err == nil {
+			if err := client.Push(path, repo.PushOptions{Remote: remote, Branch: branch}); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Pushed changes for %s", path), nil
 		}
-		return fmt.Sprintf("Pushed changes for %s", path), nil
 	}
 	command := fmt.Sprintf("git --no-pager -C %s push %s", shellQuote(path), remote)
 	if branch != "" {
@@ -2743,7 +2768,16 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 
 	// Phase 4: Enable background execution for parallel threads
 	// Each parallel thread gets its own PTY worker via unique session ID
-	sessionID := sessionIDFromContext(ctx)
+	// Check args["session_id"] first (for test runners), fallback to context
+	sessionID := ""
+	if sessionIDRaw, ok := args["session_id"]; ok {
+		if sessionIDStr, ok := sessionIDRaw.(string); ok {
+			sessionID = sessionIDStr
+		}
+	}
+	if sessionID == "" {
+		sessionID = sessionIDFromContext(ctx)
+	}
 	if isParallelExecution(ctx) {
 		background = true
 		// DO NOT strip sessionID - parallel threads use PTY too!
@@ -2774,8 +2808,9 @@ func (a *CopilotAgent) runLocalAutomationCommand(ctx context.Context, args map[s
 		return "", err
 	}
 
-	// Emit the concrete shell command as a structured terminal event before execution.
-	// The UI will unwrap this event and style it as the active command line.
+	// Emit terminal command to chat history for visibility
+	// NOTE: This may appear before LLM's reasoning prose finishes streaming,
+	// but command visibility is more important than perfect ordering
 	emitTerminalCommand(ctx, fmt.Sprintf("$ %s", command))
 
 	if shouldEmitAutomationProgressCommentary(command, workingDir) {

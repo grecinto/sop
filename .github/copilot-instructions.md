@@ -25,6 +25,26 @@ func ExecuteTool(ctx context.Context, workstream *WorkStreamContext, queue *Work
 - Cancellation signals (`ctx.Done()`)
 - Request-scoped values (trace IDs, request IDs)
 - Deadlines/timeouts
+- **Infrastructure context** (event streamers, session payloads)
+
+**⚠️ CRITICAL: NEVER create `context.Background()` in function implementations**
+```go
+// ❌ WRONG - loses event streamer and session context
+func executeCommand(ctx context.Context, cmd string) {
+    ctx = context.Background()  // ❌ Strips ai.CtxKeyEventStreamer!
+    result, _ := localCommandExecutor(ctx, request)  // Command won't show in chat
+}
+
+// ✅ CORRECT - preserve the context chain
+func executeCommand(ctx context.Context, cmd string) {
+    result, _ := localCommandExecutor(ctx, request)  // Preserves event streamer
+}
+```
+
+**Why this matters:**
+- `ai.CtxKeyEventStreamer` carries the chat display streamer
+- `emitTerminalCommand()` needs this to show commands to users
+- Creating `context.Background()` breaks Terminal UI and chat history display
 
 ### 2. Ask Domain: Participant Pattern Only
 

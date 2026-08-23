@@ -31,7 +31,7 @@ func TestNewToolResultStorage(t *testing.T) {
 }
 
 func TestStoreResult_SmallInline(t *testing.T) {
-	storage, err := NewToolResultStorage("test-inline")
+	storage, err := NewToolResultStorage("test-inline", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestStoreResult_SmallInline(t *testing.T) {
 }
 
 func TestWrapToolResultWithStorage_SmallResultReturnsRawInlineContent(t *testing.T) {
-	storage, err := NewToolResultStorage("test-inline-envelope")
+	storage, err := NewToolResultStorage("test-inline-envelope", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestWrapToolResultWithStorage_SmallResultReturnsRawInlineContent(t *testing
 }
 
 func TestWrapToolResultWithStorage_BypassesAnalysisTools(t *testing.T) {
-	storage, err := NewToolResultStorage("test-analysis-bypass")
+	storage, err := NewToolResultStorage("test-analysis-bypass", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestWrapToolResultWithStorage_BypassesAnalysisTools(t *testing.T) {
 }
 
 func TestStoreResult_LargeFileBacked(t *testing.T) {
-	storage, err := NewToolResultStorage("test-large")
+	storage, err := NewToolResultStorage("test-large", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestStoreResult_LargeFileBacked(t *testing.T) {
 }
 
 func TestStoreResult_TestToolRecommendations(t *testing.T) {
-	storage, err := NewToolResultStorage("test-recommendations")
+	storage, err := NewToolResultStorage("test-recommendations", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestStoreResult_TestToolRecommendations(t *testing.T) {
 }
 
 func TestStoreResult_BuildToolRecommendations(t *testing.T) {
-	storage, err := NewToolResultStorage("test-build")
+	storage, err := NewToolResultStorage("test-build", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestStoreResult_BuildToolRecommendations(t *testing.T) {
 }
 
 func TestStoreResult_TestFailureSummarySurfacesLateFailingTestBlock(t *testing.T) {
-	storage, err := NewToolResultStorage("test-late-failure")
+	storage, err := NewToolResultStorage("test-late-failure", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestStoreResult_TestFailureSummarySurfacesLateFailingTestBlock(t *testing.T
 }
 
 func TestStoreResult_HeadAndTail(t *testing.T) {
-	storage, err := NewToolResultStorage("test-head-tail")
+	storage, err := NewToolResultStorage("test-head-tail", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestSanitizeToolName(t *testing.T) {
 }
 
 func TestReadResultLines_MissingFileReturnsEmpty(t *testing.T) {
-	storage, err := NewToolResultStorage("test-missing-file")
+	storage, err := NewToolResultStorage("test-missing-file", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestReadResultLines_MissingFileReturnsEmpty(t *testing.T) {
 }
 
 func TestGrepResult_MissingFileReturnsEmpty(t *testing.T) {
-	storage, err := NewToolResultStorage("test-missing-grep")
+	storage, err := NewToolResultStorage("test-missing-grep", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestGrepResult_MissingFileReturnsEmpty(t *testing.T) {
 }
 
 func TestGrepResult_SupportsCaseInsensitiveAlternation(t *testing.T) {
-	storage, err := NewToolResultStorage("test-grep-regex")
+	storage, err := NewToolResultStorage("test-grep-regex", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestGrepResult_SupportsCaseInsensitiveAlternation(t *testing.T) {
 }
 
 func TestReadResultLines_ResolvesWildcardAndBasenamePaths(t *testing.T) {
-	storage, err := NewToolResultStorage("test-path-resolution")
+	storage, err := NewToolResultStorage("test-path-resolution", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -534,7 +534,7 @@ func TestIsBuildCommand(t *testing.T) {
 // Phase 2 Tests: Auto-inline critical error portions
 
 func TestPhase2_TestFailureAutoInline(t *testing.T) {
-	storage, err := NewToolResultStorage("test-failure-inline")
+	storage, err := NewToolResultStorage("test-failure-inline", nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

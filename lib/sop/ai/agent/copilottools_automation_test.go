@@ -182,7 +182,7 @@ func TestRunLocalAutomationCommand_WrapsPassingTestsWithTerminalSuccessHintInNat
 
 func TestWrapToolResultWithStorage_PreservesTerminalSuccessHintForLargePassingTestOutput(t *testing.T) {
 	sessionID := "test-session-pass-large"
-	storage, err := NewToolResultStorage(sessionID)
+	storage, err := NewToolResultStorage(sessionID, nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

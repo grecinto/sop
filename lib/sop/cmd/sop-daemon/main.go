@@ -290,6 +290,7 @@ type ExecuteRequest struct {
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	ExecutionMode  string `json:"execution_mode,omitempty"` // "background" or "terminal"
 	Stdin          string `json:"stdin,omitempty"`
+	SessionID      string `json:"session_id,omitempty"` // Terminal session ID for output display
 }
 
 type ExecuteResponse struct {
@@ -2173,6 +2174,20 @@ func nextHQSyncDelay(baseInterval, jitter time.Duration, seed int64) time.Durati
 	return baseInterval + time.Duration(rng.Int63n(int64(jitter)))
 }
 
+// logCommandToTerminal appends command and output to terminal session history for UI display
+func logCommandToTerminal(sessionID, command, stdout, stderr string) {
+	shellMgr := GetGlobalShellSessionManager()
+	if shellMgr == nil {
+		return
+	}
+
+	// Get or create session to ensure output history exists
+	shellMgr.GetOrCreateSession(sessionID)
+
+	// Append formatted output to session history
+	shellMgr.AppendToSessionHistory(sessionID, command, stdout, stderr)
+}
+
 func handleTerminalStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -2184,11 +2199,9 @@ func handleTerminalStatus(w http.ResponseWriter, r *http.Request) {
 	if sessionID == "" {
 		sessionID = "default"
 	}
-
 	// Get the shell session manager
 	shellMgr := GetGlobalShellSessionManager()
-	if shellMgr == nil {
-		respondJSON(w, http.StatusOK, map[string]any{
+	if shellMgr == nil {		respondJSON(w, http.StatusOK, map[string]any{
 			"session_id": sessionID,
 			"output":     "",
 			"available":  false,
@@ -2198,7 +2211,6 @@ func handleTerminalStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Get accumulated output and running status from the session
 	output, exists, isRunning := shellMgr.GetSessionStatus(sessionID)
-
 	respondJSON(w, http.StatusOK, map[string]any{
 		"session_id": sessionID,
 		"output":     output,
@@ -2757,6 +2769,12 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 	}
 
+	// Default session ID for terminal display
+	sessionID := req.SessionID
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "cmd", "/C", req.Command)
@@ -2818,6 +2836,10 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 			Error:     "Command cancelled by user",
 		}
 		log.Printf("Command cancelled by user")
+
+		// Log cancelled command to terminal session
+		logCommandToTerminal(sessionID, req.Command, stdout.String(), stderr.String()+"\n[Command cancelled]")
+
 		respondJSON(w, http.StatusOK, resp)
 		return
 
@@ -2845,6 +2867,9 @@ func executeHandler(w http.ResponseWriter, r *http.Request) {
 			resp.ExitCode = 0
 			log.Printf("Command executed successfully")
 		}
+
+		// Log command and output to terminal session for UI display
+		logCommandToTerminal(sessionID, req.Command, stdout.String(), stderr.String())
 
 		respondJSON(w, http.StatusOK, resp)
 	}

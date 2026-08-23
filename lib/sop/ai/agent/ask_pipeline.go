@@ -349,6 +349,15 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	if askCtx := taskContext.AskClassification; askCtx != nil {
 		log.Info("Using Ask Phase Factory for WorkStream + tool registration")
 
+		// Initialize ToolResultStorage BEFORE creating phases (so preprocessor can be set)
+		if _, hasStorage := ctx.Value(ctxKeyToolResultStorage).(*ToolResultStorage); !hasStorage {
+			storage := getOrCreateToolResultStorage(ctx)
+			if storage != nil {
+				ctx = context.WithValue(ctx, ctxKeyToolResultStorage, storage)
+				log.Info("ToolResultStorage initialized before phase creation", "session_id", storage.sessionID)
+			}
+		}
+
 		// Resolve phase plan from WorkStream or classification
 		plan, currentPhase := a.resolvePhasePlan(ctx, askCtx)
 		log.Info("Phase plan resolved", "plan", plan, "current_phase", currentPhase)
@@ -356,6 +365,26 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		// Create domain-specific phase proxies
 		phases := a.createPhaseProxies(askCtx.Domains, currentPhase, askCtx)
 		log.Info("Phase proxies created", "count", len(phases), "domains", askCtx.Domains)
+
+		// Update ToolResultStorage with preprocessor (explicit parameter passing, not context)
+		// Find first phase that implements ResultPreprocessor
+		if storage, ok := ctx.Value(ctxKeyToolResultStorage).(*ToolResultStorage); ok && storage != nil {
+			log.Info("ToolResultStorage found in context, looking for preprocessor in phases", "phase_count", len(phases))
+			for _, phase := range phases {
+				if preprocessor, ok := phase.(interface {
+					PreprocessResult(toolName, rawOutput, filePath string, maxInlineSize int) string
+				}); ok {
+					storage.Preprocessor = preprocessor
+					log.Info("ToolResultStorage preprocessor set", "phase", phase.ID())
+					break
+				}
+			}
+			if storage.Preprocessor == nil {
+				log.Warn("No phase implements ResultPreprocessor interface - preprocessing disabled")
+			}
+		} else {
+			log.Warn("ToolResultStorage not found in context - preprocessing unavailable")
+		}
 
 		// Aggregate tools from all phases with CRUD filtering
 		tools := a.aggregatePhaseTools(phases, askCtx)
@@ -931,9 +960,10 @@ func resolveDomainToolPhases(domain, currentPhase string, classification *AskTas
 	if domain == "coding_workflow" && classification != nil && strings.TrimSpace(strings.ToLower(classification.OrchestrationLevel)) == orchestrationManagedWorkflow {
 		switch currentPhase {
 		case "planning":
-			return []string{"investigation", "planning"}
+			return []string{"investigation", "planning", "execution"}
 		case "investigation":
-			return []string{"investigation", "planning"}
+			// Expose investigation, planning, AND execution so LLM can run tests during investigation
+			return []string{"investigation", "planning", "execution"}
 		}
 	}
 	return []string{currentPhase}
@@ -1050,6 +1080,7 @@ func (a *CopilotAgent) registerPhaseTools(ctx context.Context, allTools []capabi
 		Gate:           "v2_phase_factory",
 		CapabilityHint: classification.Phase,
 		CRUDFlags:      crudFlags,
+		SessionID:      getSessionIDFromContext(ctx),
 	}
 
 	// Register each tool

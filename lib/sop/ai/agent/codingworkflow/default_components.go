@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1074,32 +1075,39 @@ const (
 
 // DefaultTestRunner runs package tests from the task working directory and reports pass/fail.
 // Supports multiple languages: Go, Python, Java, Rust, C#, Node.js
-type DefaultTestRunner struct{}
+type DefaultTestRunner struct {
+	infra *SharedInfrastructure // For accessing LocalCommandExecutor to route through PTY
+}
 
-func (d *DefaultTestRunner) Run(task Task, state RunState) (TestResult, error) {
-	_ = state
+func (d *DefaultTestRunner) Run(ctx context.Context, task Task, state RunState) (TestResult, error) {
 	workingDir := task.WorkingDir
 	if workingDir == "" {
 		workingDir = "."
 	}
 
+	// Log for debugging
+	log.Printf("[DefaultTestRunner] Run called with workingDir=%q", workingDir)
+
 	// Detect project type
 	projectType := d.detectProjectType(workingDir)
+
+	// Log detection result
+	log.Printf("[DefaultTestRunner] Detected project type: %v for workingDir=%q", projectType, workingDir)
 
 	// Dispatch to language-specific test runner
 	switch projectType {
 	case ProjectTypeGo:
-		return d.runGoTests(workingDir, task.ActiveFile)
+		return d.runGoTests(ctx, workingDir, task.ActiveFile, state)
 	case ProjectTypePython:
-		return d.runPythonTests(workingDir, task.ActiveFile)
+		return d.runPythonTests(ctx, workingDir, task.ActiveFile, state)
 	case ProjectTypeJava:
-		return d.runJavaTests(workingDir)
+		return d.runJavaTests(ctx, workingDir, state)
 	case ProjectTypeRust:
-		return d.runRustTests(workingDir)
+		return d.runRustTests(ctx, workingDir, state)
 	case ProjectTypeCSharp:
-		return d.runCSharpTests(workingDir)
+		return d.runCSharpTests(ctx, workingDir, state)
 	case ProjectTypeNode:
-		return d.runNodeTests(workingDir)
+		return d.runNodeTests(ctx, workingDir, state)
 	default:
 		return TestResult{
 			Passed: false,
@@ -1110,10 +1118,16 @@ func (d *DefaultTestRunner) Run(task Task, state RunState) (TestResult, error) {
 
 // detectProjectType identifies the project language based on marker files
 func (d *DefaultTestRunner) detectProjectType(workingDir string) ProjectType {
+	// Log marker file checks
+	log.Printf("[detectProjectType] Checking workingDir=%q", workingDir)
+
 	// Go: go.mod
-	if fileExists(filepath.Join(workingDir, "go.mod")) {
+	goModPath := filepath.Join(workingDir, "go.mod")
+	if fileExists(goModPath) {
+		log.Printf("[detectProjectType] Found go.mod at %q - returning ProjectTypeGo", goModPath)
 		return ProjectTypeGo
 	}
+	log.Printf("[detectProjectType] go.mod not found at %q", goModPath)
 
 	// Python: requirements.txt, setup.py, pyproject.toml, pytest.ini
 	pythonMarkers := []string{"requirements.txt", "setup.py", "pyproject.toml", "pytest.ini", "setup.cfg"}
@@ -1153,7 +1167,7 @@ func (d *DefaultTestRunner) detectProjectType(workingDir string) ProjectType {
 }
 
 // runGoTests executes Go tests
-func (d *DefaultTestRunner) runGoTests(workingDir, activeFile string) (TestResult, error) {
+func (d *DefaultTestRunner) runGoTests(ctx context.Context, workingDir, activeFile string, state RunState) (TestResult, error) {
 	args := []string{"test"}
 	selectedTests := d.selectRelevantGoTestFiles(workingDir, activeFile)
 	if len(selectedTests) > 0 {
@@ -1162,47 +1176,42 @@ func (d *DefaultTestRunner) runGoTests(workingDir, activeFile string) (TestResul
 		args = append(args, "./...")
 	}
 
-	cmd := exec.Command("go", args...)
-	cmd.Dir = workingDir
-	output, err := cmd.CombinedOutput()
-
-	passed := err == nil
-	return TestResult{Passed: passed, Output: string(output)}, nil
+	// Route through LocalCommandExecutor to use PTY for stdout/stderr capture
+	cmdStr := "go " + strings.Join(args, " ")
+	output, passed := d.executeCommandThroughPTY(ctx, cmdStr, workingDir, state)
+	return TestResult{Passed: passed, Output: output}, nil
 }
 
 // runPythonTests executes Python tests (pytest or unittest)
-func (d *DefaultTestRunner) runPythonTests(workingDir, activeFile string) (TestResult, error) {
-	var cmd *exec.Cmd
+func (d *DefaultTestRunner) runPythonTests(ctx context.Context, workingDir, activeFile string, state RunState) (TestResult, error) {
+	var cmdStr string
 
 	// Try pytest first (more common in modern Python projects)
 	if d.commandExists("pytest") {
-		args := []string{"-v"}
+		args := "-v"
 		if activeFile != "" && strings.HasSuffix(activeFile, "_test.py") {
-			args = append(args, activeFile)
+			args += " " + activeFile
 		}
-		cmd = exec.Command("pytest", args...)
+		cmdStr = "pytest " + args
 	} else {
 		// Fallback to unittest
-		cmd = exec.Command("python", "-m", "unittest", "discover", "-v")
+		cmdStr = "python -m unittest discover -v"
 	}
 
-	cmd.Dir = workingDir
-	output, err := cmd.CombinedOutput()
-
-	// pytest returns 0 for success, non-zero for failures
-	passed := err == nil
-	return TestResult{Passed: passed, Output: string(output)}, nil
+	// Route through LocalCommandExecutor to use PTY
+	output, passed := d.executeCommandThroughPTY(ctx, cmdStr, workingDir, state)
+	return TestResult{Passed: passed, Output: output}, nil
 }
 
 // runJavaTests executes Java tests (Maven or Gradle)
-func (d *DefaultTestRunner) runJavaTests(workingDir string) (TestResult, error) {
-	var cmd *exec.Cmd
+func (d *DefaultTestRunner) runJavaTests(ctx context.Context, workingDir string, state RunState) (TestResult, error) {
+	var cmdStr string
 
 	// Check if Maven or Gradle
 	if fileExists(filepath.Join(workingDir, "pom.xml")) {
-		cmd = exec.Command("mvn", "test")
+		cmdStr = "mvn test"
 	} else if fileExists(filepath.Join(workingDir, "build.gradle")) {
-		cmd = exec.Command("gradle", "test")
+		cmdStr = "gradle test"
 	} else {
 		return TestResult{
 			Passed: false,
@@ -1210,62 +1219,50 @@ func (d *DefaultTestRunner) runJavaTests(workingDir string) (TestResult, error) 
 		}, nil
 	}
 
-	cmd.Dir = workingDir
-	output, err := cmd.CombinedOutput()
+	// Route through LocalCommandExecutor to use PTY
+	output, _ := d.executeCommandThroughPTY(ctx, cmdStr, workingDir, state)
 
 	// Check output for success indicators
-	outputStr := string(output)
-	passed := err == nil && (strings.Contains(outputStr, "BUILD SUCCESS") || strings.Contains(outputStr, "BUILD SUCCESSFUL"))
-
-	return TestResult{Passed: passed, Output: outputStr}, nil
+	passed := strings.Contains(output, "BUILD SUCCESS") || strings.Contains(output, "BUILD SUCCESSFUL")
+	return TestResult{Passed: passed, Output: output}, nil
 }
 
 // runRustTests executes Rust tests
-func (d *DefaultTestRunner) runRustTests(workingDir string) (TestResult, error) {
-	cmd := exec.Command("cargo", "test")
-	cmd.Dir = workingDir
-	output, err := cmd.CombinedOutput()
-
-	// cargo test returns 0 for success
-	passed := err == nil
-	return TestResult{Passed: passed, Output: string(output)}, nil
+func (d *DefaultTestRunner) runRustTests(ctx context.Context, workingDir string, state RunState) (TestResult, error) {
+	// Route through LocalCommandExecutor to use PTY
+	output, passed := d.executeCommandThroughPTY(ctx, "cargo test", workingDir, state)
+	return TestResult{Passed: passed, Output: output}, nil
 }
 
 // runCSharpTests executes C# tests
-func (d *DefaultTestRunner) runCSharpTests(workingDir string) (TestResult, error) {
-	cmd := exec.Command("dotnet", "test")
-	cmd.Dir = workingDir
-	output, err := cmd.CombinedOutput()
+func (d *DefaultTestRunner) runCSharpTests(ctx context.Context, workingDir string, state RunState) (TestResult, error) {
+	// Route through LocalCommandExecutor to use PTY
+	output, _ := d.executeCommandThroughPTY(ctx, "dotnet test", workingDir, state)
 
 	// Check output for success indicators
-	outputStr := string(output)
-	passed := err == nil && !strings.Contains(outputStr, "Failed!")
-
-	return TestResult{Passed: passed, Output: outputStr}, nil
+	passed := !strings.Contains(output, "Failed!")
+	return TestResult{Passed: passed, Output: output}, nil
 }
 
-// runNodeTests executes Node.js tests (via npm test or yarn test)
-func (d *DefaultTestRunner) runNodeTests(workingDir string) (TestResult, error) {
-	var cmd *exec.Cmd
+// runNodeTests executes Node.js tests (npm or yarn)
+func (d *DefaultTestRunner) runNodeTests(ctx context.Context, workingDir string, state RunState) (TestResult, error) {
+	var cmdStr string
 
-	// Try npm first, then yarn
-	if d.commandExists("npm") {
-		cmd = exec.Command("npm", "test")
-	} else if d.commandExists("yarn") {
-		cmd = exec.Command("yarn", "test")
+	// Check if npm or yarn
+	if fileExists(filepath.Join(workingDir, "package-lock.json")) {
+		cmdStr = "npm test"
+	} else if fileExists(filepath.Join(workingDir, "yarn.lock")) {
+		cmdStr = "yarn test"
 	} else {
 		return TestResult{
 			Passed: false,
-			Output: "Neither npm nor yarn found. Cannot run Node.js tests.",
+			Output: "No package-lock.json or yarn.lock found",
 		}, nil
 	}
 
-	cmd.Dir = workingDir
-	output, err := cmd.CombinedOutput()
-
-	// npm/yarn test returns 0 for success
-	passed := err == nil
-	return TestResult{Passed: passed, Output: string(output)}, nil
+	// Route through LocalCommandExecutor to use PTY
+	output, passed := d.executeCommandThroughPTY(ctx, cmdStr, workingDir, state)
+	return TestResult{Passed: passed, Output: output}, nil
 }
 
 // selectRelevantGoTestFiles selects relevant Go test files based on active file
@@ -1301,6 +1298,65 @@ func (d *DefaultTestRunner) selectRelevantGoTestFiles(workingDir, activeFile str
 		}
 	}
 	return files
+}
+
+// executeCommandThroughPTY routes command execution through LocalCommandExecutor
+// which uses the daemon's PTY system for stdout/stderr capture and Terminal UI display
+// CRITICAL: NEVER create context.Background() here - it strips ai.CtxKeyEventStreamer
+// which breaks emitTerminalCommand() display in chat history.
+func (d *DefaultTestRunner) executeCommandThroughPTY(ctx context.Context, command, workingDir string, state RunState) (output string, passed bool) {
+	if d.infra == nil || d.infra.LocalCommandExecutor == nil {
+		// Fallback to direct exec if infrastructure not available
+		return d.executeCommandDirect(command, workingDir)
+	}
+
+	// IMPORTANT: Use the provided context - it contains the event streamer for chat display.
+	// Creating context.Background() here would lose the streamer and break command visibility.
+	args := map[string]any{
+		"command":     command,
+		"working_dir": workingDir,
+	}
+
+	// Extract SessionID from RunState.Metadata if available
+	if state.Metadata != nil {
+		if sessionID, ok := state.Metadata["terminal_session_id"]; ok && sessionID != "" {
+			args["session_id"] = sessionID
+		}
+	}
+
+	result, err := d.infra.LocalCommandExecutor(ctx, args)
+	if err != nil {
+		return err.Error(), false
+	}
+
+	// LocalCommandExecutor returns JSON {"stdout":"...", "stderr":"...", "exit_code":0}
+	// Parse to extract actual output
+	var response struct {
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if jsonErr := json.Unmarshal([]byte(result), &response); jsonErr == nil {
+		combined := response.Stdout
+		if response.Stderr != "" {
+			if combined != "" {
+				combined += "\n"
+			}
+			combined += response.Stderr
+		}
+		return combined, response.ExitCode == 0
+	}
+
+	// If not JSON, return raw result
+	return result, !strings.Contains(strings.ToLower(result), "error")
+}
+
+// executeCommandDirect is fallback for when PTY routing is unavailable
+func (d *DefaultTestRunner) executeCommandDirect(command, workingDir string) (output string, passed bool) {
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Dir = workingDir
+	out, err := cmd.CombinedOutput()
+	return string(out), err == nil
 }
 
 // commandExists checks if a command is available in PATH

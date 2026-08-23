@@ -371,6 +371,7 @@
     let aiTerminalPollInterval = null;
     let aiTerminalHeight = 250;
     let isTerminalPolling = false; // Track polling state to avoid loops
+    let hasActiveCommand = false; // Track if command execution is in progress
     
     // Cross-window communication for terminal polling (main window ↔ floating AI window)
     let terminalBroadcast = null;
@@ -461,6 +462,7 @@
         if (!pane) return;
         
         pane.style.display = 'none';
+        hasActiveCommand = false; // Reset flag when terminal closes
         stopAITerminalPollingInternal(); // Direct call, no broadcast needed
     }
 
@@ -486,6 +488,11 @@
     async function refreshAITerminal() {
         const output = document.getElementById('ai-terminal-output');
         if (!output) return;
+
+        // Skip polling if no command is active
+        if (!hasActiveCommand) {
+            return;
+        }
 
         try {
             // Use the same session ID that AI commands use
@@ -555,6 +562,7 @@
         if (isTerminalPolling) return; // Already polling
         isTerminalPolling = true;
         
+        console.log('[Terminal] Starting polling every 2 seconds');
         if (aiTerminalPollInterval) {
             clearInterval(aiTerminalPollInterval);
         }
@@ -1421,6 +1429,7 @@
         if (widget.classList.contains('active') && !forceOpen) {
             widget.classList.remove('active');
             showChatToggleButton(); // Show button when chat is closed
+            closeAITerminal(); // Auto-close terminal when closing chat
         } else {
             // Always reset position when opening to ensure it is visible and accessible
             resetChatPosition();
@@ -2622,19 +2631,16 @@
             streamState.currentContentSpan = null;
         } else if (normalizedEvent.type === 'tool_call') {
             handled = true;
-            console.log('[DEBUG] tool_call event received:', normalizedEvent);
-            // Start terminal polling when local command tools are called (no auto-open)
             const toolName = normalizedEvent.payload && normalizedEvent.payload.tool;
-            console.log('[DEBUG] tool name:', toolName);
-            if (toolName === 'local_command' || toolName === 'execute_local_command') {
-                console.log('[DEBUG] Command tool started');
+            if (toolName === 'local_command' || toolName === 'execute_local_command' || 
+                toolName === 'execution_run_tests' || toolName === 'execution_run_command') {
+                hasActiveCommand = true; // Mark command as active
                 const terminalOutput = document.getElementById('ai-terminal-output');
                 if (terminalOutput) {
                     terminalOutput.textContent = 'Thinking...';
-                    terminalOutput.dataset.hasOutput = ''; // Clear flag so we know we're waiting
+                    terminalOutput.dataset.hasOutput = '';
                     terminalOutput.classList.remove('terminal-processing');
                 }
-                setTimeout(() => startAITerminalPolling(), 200);
             }
         } else if (normalizedEvent.type === 'terminal_command') {
             handled = true;
@@ -3153,8 +3159,6 @@
              if (currentAiMsgId) {
                  updateHeaderFeedbackVisibility(true);
              }
-             // Stop terminal polling when AI response completes
-             stopAITerminalPolling();
         }
     }
 

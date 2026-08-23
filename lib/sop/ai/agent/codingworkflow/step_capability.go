@@ -364,7 +364,7 @@ func (s *RunTestsStep) OnAfterToolResult(
 		},
 	}
 
-	testResult, err := testOps.RunTests(task, runState)
+	testResult, err := testOps.RunTests(ctx, task, runState)
 	if err != nil {
 		s.SetStepState("error", err.Error())
 		return state, false, err
@@ -594,7 +594,7 @@ func (s *VerifyFixStep) OnAfterToolResult(
 	}
 	runState := RunState{}
 
-	testResult, err := testOps.RunTests(task, runState)
+	testResult, err := testOps.RunTests(ctx, task, runState)
 	if err != nil {
 		s.SetStepState("error", err.Error())
 		return state, false, err

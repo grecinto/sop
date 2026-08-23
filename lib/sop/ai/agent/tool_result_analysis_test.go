@@ -93,7 +93,7 @@ func TestToolResultStorage_ListReadGrep(t *testing.T) {
 }
 
 func TestToolResultAnalysis_AnalyzeToolResultOperations(t *testing.T) {
-	storage, err := NewToolResultStorage("test-analysis-ops")
+	storage, err := NewToolResultStorage("test-analysis-ops", nil)
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestToolResultAnalysis_AgentTools(t *testing.T) {
 	// Create agent with storage
 	agent := &CopilotAgent{}
 
-	storage, err := NewToolResultStorage("test-session-123")
+	storage, err := NewToolResultStorage("test-session-123", nil)
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestToolResultAnalysis_AgentTools(t *testing.T) {
 
 func TestToolResultAnalysis_GrepToolResultSuggestsSourceLookupForFailingTests(t *testing.T) {
 	agent := &CopilotAgent{}
-	storage, err := NewToolResultStorage("test-session-fail-block")
+	storage, err := NewToolResultStorage("test-session-fail-block", nil)
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestToolResultAnalysis_GrepToolResultSuggestsSourceLookupForFailingTests(t 
 
 func TestToolResultAnalysis_ReadAndAnalyzeSuggestSourceLookupForFailingTests(t *testing.T) {
 	agent := &CopilotAgent{}
-	storage, err := NewToolResultStorage("test-session-read-fail-block")
+	storage, err := NewToolResultStorage("test-session-read-fail-block", nil)
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}

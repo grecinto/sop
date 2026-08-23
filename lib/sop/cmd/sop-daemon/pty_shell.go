@@ -250,7 +250,8 @@ func (s *ptyShellSession) GetWorkingDirectory() (string, error) {
 func (s *ptyShellSession) GetOutputHistory() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.outputHistory.String()
+	output := s.outputHistory.String()
+	return output
 }
 
 // ClearOutputHistory clears the accumulated terminal output
@@ -388,6 +389,8 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 		sessionID = "default"
 	}
 
+	log.Printf("[DEBUG-TEMP] RunWithStreaming called: sessionID=%q, command=%q", sessionID, command)
+
 	// Get worker manager
 	workerMgr := getGlobalWorkerManager()
 
@@ -451,16 +454,20 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 	}
 
 	// In non-streaming mode, accumulate output in session history
-	if !useStreaming && resp.Output != "" {
+	if !useStreaming {
 		session.mu.Lock()
 		// Prefix with command for context
 		session.outputHistory.WriteString("$ ")
 		session.outputHistory.WriteString(strings.TrimSpace(command))
 		session.outputHistory.WriteString("\n")
-		session.outputHistory.WriteString(resp.Output)
-		if !strings.HasSuffix(resp.Output, "\n") {
-			session.outputHistory.WriteString("\n")
+		log.Printf("[DEBUG-TEMP] Added command to history: %q", strings.TrimSpace(command))
+		if resp.Output != "" {
+			session.outputHistory.WriteString(resp.Output)
+			if !strings.HasSuffix(resp.Output, "\n") {
+				session.outputHistory.WriteString("\n")
+			}
 		}
+		log.Printf("[DEBUG-TEMP] History now has %d bytes", session.outputHistory.Len())
 		session.historyLines += strings.Count(command, "\n") + 1 + strings.Count(resp.Output, "\n")
 
 		// Keep last 1000 lines to prevent memory issues
@@ -475,8 +482,7 @@ func (m *ptyShellSessionManager) RunWithStreaming(sessionID, command string, tim
 			}
 		}
 		session.mu.Unlock()
-	} else if useStreaming {
-		// In streaming mode, just add command prefix (output already added via chunks)
+	} else if useStreaming { // In streaming mode, just add command prefix (output already added via chunks)
 		session.mu.Lock()
 		// Note: We need to prepend the command, but output chunks were already added
 		// This is a bit tricky - we'll reconstruct the history with command prefix
@@ -695,7 +701,6 @@ func (m *ptyShellSessionManager) GetSessionStatus(sessionID string) (output stri
 	m.mu.Lock()
 	session, ok := m.sessions[sessionID]
 	m.mu.Unlock()
-
 	if !ok {
 		return "", false, false
 	}
@@ -704,7 +709,9 @@ func (m *ptyShellSessionManager) GetSessionStatus(sessionID string) (output stri
 	running := session.stillRunning
 	session.mu.Unlock()
 
-	return session.GetOutputHistory(), true, running
+	output = session.GetOutputHistory()
+	log.Printf("[DEBUG-TEMP] GetSessionStatus: sessionID=%q, outputLen=%d, running=%v", sessionID, len(output), running)
+	return output, true, running
 }
 
 // ClearSessionOutput clears the accumulated output for a session
@@ -719,6 +726,79 @@ func (m *ptyShellSessionManager) ClearSessionOutput(sessionID string) bool {
 
 	session.ClearOutputHistory()
 	return true
+}
+
+// GetOrCreateSession ensures a session exists and returns it
+func (m *ptyShellSessionManager) GetOrCreateSession(sessionID string) *ptyShellSession {
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists {
+		session = &ptyShellSession{
+			sessionID:     sessionID,
+			lastUsed:      time.Now(),
+			isBackground:  false,
+			outputHistory: strings.Builder{},
+		}
+		m.sessions[sessionID] = session
+	}
+	session.lastUsed = time.Now()
+	return session
+}
+
+// AppendToSessionHistory appends formatted command output to session history for UI display
+func (m *ptyShellSessionManager) AppendToSessionHistory(sessionID, command, stdout, stderr string) {
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	session := m.GetOrCreateSession(sessionID)
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	// Format: $ command
+	session.outputHistory.WriteString("$ ")
+	session.outputHistory.WriteString(command)
+	session.outputHistory.WriteString("\n")
+
+	// Add stdout
+	if stdout != "" {
+		session.outputHistory.WriteString(stdout)
+		if !strings.HasSuffix(stdout, "\n") {
+			session.outputHistory.WriteString("\n")
+		}
+	}
+
+	// Add stderr
+	if stderr != "" {
+		session.outputHistory.WriteString(stderr)
+		if !strings.HasSuffix(stderr, "\n") {
+			session.outputHistory.WriteString("\n")
+		}
+	}
+
+	// Update line count
+	session.historyLines += strings.Count(command, "\n") + 1
+	session.historyLines += strings.Count(stdout, "\n")
+	session.historyLines += strings.Count(stderr, "\n")
+
+	// Keep last 1000 lines to prevent memory issues
+	if session.historyLines > 1000 {
+		history := session.outputHistory.String()
+		lines := strings.Split(history, "\n")
+		if len(lines) > 500 {
+			keptLines := lines[len(lines)-500:]
+			session.outputHistory.Reset()
+			session.outputHistory.WriteString(strings.Join(keptLines, "\n"))
+			session.historyLines = len(keptLines)
+		}
+	}
 }
 
 // SendSessionInterrupt sends Ctrl+C to stop the currently running command in a session

@@ -17,6 +17,7 @@ type RoutingState struct {
 	Gate           string
 	CapabilityHint string
 	CRUDFlags      map[string]bool // C/R/U/D flags from classification (Phase 3 optimization)
+	SessionID      string          // PTY session ID for terminal output logging
 }
 
 // Entitlement describes whether a capability is available under the current plan.
@@ -177,6 +178,24 @@ type StepCompletionProvider interface {
 type ToolExecutor interface {
 	Capability
 	ExecuteTool(ctx context.Context, toolName string, args map[string]any, state RoutingState) (string, error)
+}
+
+// ResultPreprocessor allows a capability to provide domain-specific preprocessing
+// for tool results before they reach the LLM. This enables capabilities to:
+//   - Parse test failures into structured JSON
+//   - Extract compilation errors from build output
+//   - Convert lint warnings into actionable data
+//   - Transform raw output into LLM-friendly formats
+//
+// The general infrastructure calls this when storing tool results, allowing each
+// capability to handle its own domain-specific output formats without hardcoding
+// parsers into shared infrastructure.
+//
+// Returns nil if the capability doesn't recognize the format, falling back to
+// standard text-based summarization.
+type ResultPreprocessor interface {
+	Capability
+	PreprocessResult(toolName string, rawOutput string, filePath string, maxInlineSize int) string
 }
 
 // CapabilityMode describes how a capability should participate in a request.

@@ -316,7 +316,6 @@ func (p *CodingPhase) BuildInstructions(query string, state capabilities.Routing
 }
 
 func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map[string]any, state capabilities.RoutingState) (string, error) {
-	_ = ctx
 	_ = state
 
 	name := strings.ToLower(strings.TrimSpace(toolName))
@@ -337,25 +336,23 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 	case strings.ToLower(p.phaseToolName("create_succession_path")):
 		return p.runCreateSuccessionPath(args)
 	case strings.ToLower(p.phaseToolName("build_context")):
-		return p.runBuildContext(args)
+		return p.runBuildContext(ctx, args)
 	case strings.ToLower(p.phaseToolName("inspect_repo")):
-		return p.runInspectRepo(args)
+		return p.runInspectRepo(ctx, args)
 	case strings.ToLower(p.phaseToolName("search_repo")):
-		return p.runSearchRepo(args)
+		return p.runSearchRepo(ctx, args)
 	case strings.ToLower(p.phaseToolName("list_changed_files")):
-		return p.runListChangedFiles(args)
+		return p.runListChangedFiles(ctx, args)
 	case strings.ToLower(p.phaseToolName("plan_changes")):
-		return p.runPlanChanges(args)
+		return p.runPlanChanges(ctx, args)
 	case strings.ToLower(p.phaseToolName("run_tests")):
-		return p.runTests(args)
+		return p.runTests(ctx, args)
 	case strings.ToLower(p.phaseToolName("preview_patch")):
-		return p.runPreviewPatch(args)
+		return p.runPreviewPatch(ctx, args)
 	case strings.ToLower(p.phaseToolName("apply_patch")):
-		return p.runApplyPatch(args)
+		return p.runApplyPatch(ctx, args)
 	case strings.ToLower(p.phaseToolName("apply_multi_file_patch")):
-		return p.runApplyMultiFilePatch(args)
-	case strings.ToLower(p.phaseToolName("run_tests")):
-		return p.runTests(args)
+		return p.runApplyMultiFilePatch(ctx, args)
 	default:
 		return "", fmt.Errorf("unsupported tool %q in coding workflow", toolName)
 	}
@@ -363,10 +360,16 @@ func (p *CodingPhase) ExecuteTool(ctx context.Context, toolName string, args map
 
 // Tool execution methods
 
-func (p *CodingPhase) buildTask(args map[string]any) Task {
+func (p *CodingPhase) buildTask(ctx context.Context, args map[string]any) Task {
 	query := readPhaseString(args, "query", "")
 	workingDir := readPhaseString(args, "working_dir", "")
 	activeFile := readPhaseString(args, "active_file", "")
+
+	// Normalize and resolve working directory using session context
+	workingDir = cw.NormalizeRepoAlias(workingDir)
+	if ctx != nil {
+		workingDir = cw.ResolveContextWorkingDir(ctx, workingDir)
+	}
 
 	state := RunState{
 		Args:     map[string]string{},
@@ -399,8 +402,8 @@ func (p *CodingPhase) loadPhaseContinuationSummary() string {
 	return strings.TrimSpace(values["continuation_summary"])
 }
 
-func (p *CodingPhase) runBuildContext(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runBuildContext(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
 
 	packOps := infra.NewContextPackOperations()
@@ -416,8 +419,8 @@ func (p *CodingPhase) runBuildContext(args map[string]any) (string, error) {
 	return formatContextPack(pack), nil
 }
 
-func (p *CodingPhase) runInspectRepo(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runInspectRepo(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
 
 	repoOps := infra.NewRepoOperations()
@@ -438,9 +441,12 @@ func (p *CodingPhase) runInspectRepo(args map[string]any) (string, error) {
 	return strings.Join(parts, "\n"), nil
 }
 
-func (p *CodingPhase) runSearchRepo(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runSearchRepo(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
+
+	// Resolve repo working directory using exported helper
+	task, _ = cw.ResolveRepoWorkingDir(task)
 
 	repoOps := infra.NewRepoOperations()
 	searchQuery := readPhaseString(args, "search", "")
@@ -459,8 +465,8 @@ func (p *CodingPhase) runSearchRepo(args map[string]any) (string, error) {
 	return fmt.Sprintf("Search Results:\n%s", strings.Join(results, "\n")), nil
 }
 
-func (p *CodingPhase) runListChangedFiles(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runListChangedFiles(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
 
 	repoOps := infra.NewRepoOperations()
@@ -475,8 +481,8 @@ func (p *CodingPhase) runListChangedFiles(args map[string]any) (string, error) {
 	return fmt.Sprintf("Changed Files:\n%s", strings.Join(files, "\n")), nil
 }
 
-func (p *CodingPhase) runPlanChanges(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runPlanChanges(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
 
 	packOps := infra.NewContextPackOperations()
@@ -591,8 +597,8 @@ func collectTargetFiles(task cw.Task, pack cw.ContextPack) []string {
 	return files
 }
 
-func (p *CodingPhase) runPreviewPatch(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runPreviewPatch(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
 
 	patch := readPatch(args)
@@ -608,8 +614,8 @@ func (p *CodingPhase) runPreviewPatch(args map[string]any) (string, error) {
 	return preview, nil
 }
 
-func (p *CodingPhase) runApplyPatch(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runApplyPatch(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
 
 	patch := readPatch(args)
@@ -630,8 +636,8 @@ func (p *CodingPhase) runApplyPatch(args map[string]any) (string, error) {
 	return fmt.Sprintf("Applied patch to %s", patch.FilePath), nil
 }
 
-func (p *CodingPhase) runApplyMultiFilePatch(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runApplyMultiFilePatch(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
 
 	patches := readMultiFilePatch(args)
@@ -685,12 +691,15 @@ func (p *CodingPhase) runApplyMultiFilePatch(args map[string]any) (string, error
 	return strings.Join(resultParts, "\n"), nil
 }
 
-func (p *CodingPhase) runTests(args map[string]any) (string, error) {
-	task := p.buildTask(args)
+func (p *CodingPhase) runTests(ctx context.Context, args map[string]any) (string, error) {
+	task := p.buildTask(ctx, args)
 	infra := p.ensureSharedInfrastructure()
 
+	// Resolve repo working directory using exported helper
+	task, _ = cw.ResolveRepoWorkingDir(task)
+
 	testOps := infra.NewTestOperations()
-	result, err := testOps.RunTests(task, task.State)
+	result, err := testOps.RunTests(ctx, task, task.State)
 	if err != nil {
 		return "", fmt.Errorf("run tests: %w", err)
 	}
@@ -846,4 +855,10 @@ func readMultiFilePatch(args map[string]any) []*Patch {
 	}
 
 	return patches
+}
+
+// PreprocessResult implements result preprocessing for coding workflow.
+// Delegates to codingworkflow test result parser for structured test output.
+func (p *CodingPhase) PreprocessResult(toolName string, rawOutput string, filePath string, maxInlineSize int) string {
+	return cw.PreprocessToolResult(toolName, rawOutput, filePath, maxInlineSize)
 }

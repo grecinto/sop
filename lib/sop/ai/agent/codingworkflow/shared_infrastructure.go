@@ -166,8 +166,10 @@ type SafetyPolicy interface {
 }
 
 // TestRunner executes repository tests and returns a concise result for the workflow loop.
+// CRITICAL: Must accept context.Context to preserve event streamer for chat display.
+// NEVER create context.Background() - it strips the event streamer needed for emitTerminalCommand().
 type TestRunner interface {
-	Run(Task, RunState) (TestResult, error)
+	Run(ctx context.Context, task Task, state RunState) (TestResult, error)
 }
 
 // TestResult captures the outcome of a test run.
@@ -306,7 +308,7 @@ func (s *SharedInfrastructure) ensureDefaults() *SharedInfrastructure {
 		s.RepoInspector = &GitRepoInspector{}
 	}
 	if s.TestRunner == nil {
-		s.TestRunner = &DefaultTestRunner{}
+		s.TestRunner = &DefaultTestRunner{infra: s}
 	}
 	if s.Planner == nil {
 		if s.LLMAccessor != nil {
@@ -701,11 +703,11 @@ func (s *SharedInfrastructure) NewTestOperations() *TestOperations {
 }
 
 // RunTests executes tests for a task and returns results.
-func (t *TestOperations) RunTests(task Task, state RunState) (TestResult, error) {
+func (t *TestOperations) RunTests(ctx context.Context, task Task, state RunState) (TestResult, error) {
 	if t.infra.TestRunner == nil {
 		return TestResult{}, fmt.Errorf("test runner not initialized")
 	}
-	return t.infra.TestRunner.Run(task, state)
+	return t.infra.TestRunner.Run(ctx, task, state)
 }
 
 // RepoOperations provides helper methods for repository operations.
@@ -722,6 +724,18 @@ func (s *SharedInfrastructure) NewRepoOperations() *RepoOperations {
 func (r *RepoOperations) SearchRepo(task Task, state RunState, query string) ([]string, error) {
 	if r.infra.RepoSearcher == nil {
 		return nil, fmt.Errorf("repo searcher not initialized")
+	}
+	return r.infra.RepoSearcher.Search(task, state, query)
+}
+
+func (r *RepoOperations) SearchRepoWithContext(ctx context.Context, task Task, state RunState, query string) ([]string, error) {
+	if r.infra.RepoSearcher == nil {
+		return nil, fmt.Errorf("repo searcher not initialized")
+	}
+	if searcher, ok := r.infra.RepoSearcher.(interface {
+		SearchWithContext(context.Context, Task, RunState, string) ([]string, error)
+	}); ok {
+		return searcher.SearchWithContext(ctx, task, state, query)
 	}
 	return r.infra.RepoSearcher.Search(task, state, query)
 }

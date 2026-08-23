@@ -424,7 +424,8 @@ func getOrCreateToolResultStorage(ctx context.Context) *ToolResultStorage {
 	// Create new storage (best effort)
 	// Note: Storage is added to context by the engine's runDefaultLoop.
 	// This function creates but doesn't add to context to avoid context mutation.
-	storage, err := NewToolResultStorage(sessionID)
+	// Preprocessor will be set later by ask pipeline after phases are created
+	storage, err := NewToolResultStorage(sessionID, nil)
 	if err != nil {
 		log.Warn("Failed to create tool result storage", "error", err, "session_id", sessionID)
 		return nil

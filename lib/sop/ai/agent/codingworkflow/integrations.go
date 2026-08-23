@@ -32,11 +32,17 @@ func resolveRepoPath(start string) (string, error) {
 		return "", fmt.Errorf("working directory is required")
 	}
 	current := filepath.Clean(strings.TrimSpace(start))
-	if current == "." {
+
+	// Convert relative paths to absolute paths based on current working directory
+	// This ensures paths like ".continue-repo" get resolved properly
+	if !filepath.IsAbs(current) {
 		if cwd, err := os.Getwd(); err == nil {
-			current = cwd
+			current = filepath.Join(cwd, current)
+		} else {
+			return "", fmt.Errorf("resolve working directory: %w", err)
 		}
 	}
+
 	if info, err := os.Stat(current); err == nil && !info.IsDir() {
 		current = filepath.Dir(current)
 	}
@@ -129,7 +135,13 @@ func (g *GitRepoInspector) Inspect(task Task, state RunState) (RepoInspectionSum
 	}
 	preview := ""
 	if len(changedFiles) > 0 {
-		preview = fmt.Sprintf("changed files: %s", strings.Join(changedFiles, ", "))
+		// Truncate changed files list to prevent massive output
+		fileList := strings.Join(changedFiles, ", ")
+		const maxPreviewSize = 2000
+		if len(fileList) > maxPreviewSize {
+			fileList = fileList[:maxPreviewSize] + fmt.Sprintf("... (%d files total, showing first %d chars)", len(changedFiles), maxPreviewSize)
+		}
+		preview = fmt.Sprintf("changed files: %s", fileList)
 	}
 	return RepoInspectionSummary{ChangedFiles: changedFiles, DiffPreview: preview}, nil
 }

@@ -27,13 +27,19 @@ const (
 // ToolResultStorage manages temporary file storage for large tool outputs
 // Results are stored in session-scoped directories for isolation and cleanup
 type ToolResultStorage struct {
-	sessionID string
-	baseDir   string // e.g., /tmp/sop-tool-results/{sessionID}/
+	sessionID    string
+	baseDir      string // e.g., /tmp/sop-tool-results/{sessionID}/
+	Preprocessor interface {
+		PreprocessResult(toolName, rawOutput, filePath string, maxInlineSize int) string
+	} // Explicit preprocessor, not from context
 }
 
 // NewToolResultStorage creates a new storage manager for a session
 // Creates the session directory if it doesn't exist
-func NewToolResultStorage(sessionID string) (*ToolResultStorage, error) {
+// preprocessor is optional - pass nil if no domain-specific preprocessing needed
+func NewToolResultStorage(sessionID string, preprocessor interface {
+	PreprocessResult(toolName, rawOutput, filePath string, maxInlineSize int) string
+}) (*ToolResultStorage, error) {
 	if sessionID == "" {
 		sessionID = "default"
 	}
@@ -44,8 +50,9 @@ func NewToolResultStorage(sessionID string) (*ToolResultStorage, error) {
 	}
 
 	return &ToolResultStorage{
-		sessionID: sessionID,
-		baseDir:   baseDir,
+		sessionID:    sessionID,
+		baseDir:      baseDir,
+		Preprocessor: preprocessor,
 	}, nil
 }
 
@@ -71,7 +78,10 @@ func (s *ToolResultStorage) StoreResult(toolName, result string) (inline string,
 		return "", "", 0, fmt.Errorf("failed to write tool result to file: %w", err)
 	}
 
-	// THEN apply 5KB rule: return full result if small, summary if large
+	// Apply 4KB rule: return full result if small, summary if large
+	// Note: Capability-specific preprocessing happens in wrapToolResultWithStorage
+	// which has access to context and capabilities
+	// Apply 4KB rule: return full result if small, summary if large
 	if size <= toolResultThreshold {
 		// Small - return full result inline
 		return displayResult, filePath, size, nil
@@ -93,6 +103,44 @@ func wrapToolResultWithStorage(ctx context.Context, toolName, rawResult string) 
 
 	hadEnvelope := isToolResultEnvelope(rawResult)
 	resultText, hint, _, _ := unwrapToolResultEnvelopeFull(rawResult)
+
+	// PHASE 3: Try capability-specific preprocessing before standard storage
+	// This allows coding capability to convert test failures to structured JSON
+	// Use explicit preprocessor from storage, not context (follows explicit parameter passing principle)
+	fmt.Printf("[wrapToolResultWithStorage] About to try preprocessing for tool=%s\n", toolName)
+	preprocessed := tryPreprocessing(storage, toolName, resultText, "", 0)
+	if preprocessed != "" {
+		fmt.Printf("[wrapToolResultWithStorage] Preprocessing SUCCESS - got %d bytes of structured data\n", len(preprocessed))
+		// Capability provided structured result - still store to file but return structured
+		_, filePath, size, err := storage.StoreResult(toolName, resultText)
+		if err != nil {
+			return "", err
+		}
+
+		fmt.Printf("[wrapToolResultWithStorage] Stored raw result to file=%s, returning structured JSON to LLM\n", filePath)
+
+		// Return the preprocessed structured result
+		envelope := ai.ToolResultEnvelope{
+			ToolResult:   json.RawMessage(preprocessed), // Structured result as raw JSON
+			ProgressHint: hint,
+		}
+		if filePath != "" {
+			envelope.FileMetadata = &ai.ToolFileMetadata{
+				FilePath: filePath,
+				FileSize: int64(size),
+			}
+		}
+		wrapped, err := json.Marshal(envelope)
+		if err != nil {
+			return preprocessed, nil
+		}
+		fmt.Printf("[wrapToolResultWithStorage] Final envelope to LLM: %d bytes\n", len(wrapped))
+		return string(wrapped), nil
+	} else {
+		fmt.Printf("[wrapToolResultWithStorage] Preprocessing returned empty - using standard flow\n")
+	}
+
+	// FALLBACK: Standard storage flow for unknown formats
 	inline, filePath, size, err := storage.StoreResult(toolName, resultText)
 	if err != nil {
 		return "", err
@@ -314,6 +362,29 @@ func sanitizeToolName(name string) string {
 		result = result[:50]
 	}
 
+	return result
+}
+
+// tryPreprocessing uses the storage's explicit preprocessor (not context)
+// This follows the explicit parameter passing principle: never use context for application state
+func tryPreprocessing(storage *ToolResultStorage, toolName, rawOutput, filePath string, size int) string {
+	if storage == nil {
+		fmt.Printf("[tryPreprocessing] Storage is nil for tool=%s\n", toolName)
+		return ""
+	}
+	if storage.Preprocessor == nil {
+		fmt.Printf("[tryPreprocessing] Preprocessor is nil for tool=%s (storage exists but no preprocessor set)\n", toolName)
+		return ""
+	}
+
+	fmt.Printf("[tryPreprocessing] Calling preprocessor for tool=%s, output_size=%d\n", toolName, len(rawOutput))
+	// Call the explicit preprocessor
+	result := storage.Preprocessor.PreprocessResult(toolName, rawOutput, filePath, toolResultThreshold)
+	if result == "" {
+		fmt.Printf("[tryPreprocessing] Preprocessor returned empty string for tool=%s\n", toolName)
+	} else {
+		fmt.Printf("[tryPreprocessing] Preprocessor returned %d bytes for tool=%s\n", len(result), toolName)
+	}
 	return result
 }
 
