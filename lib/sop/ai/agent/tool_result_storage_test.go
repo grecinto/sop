@@ -13,7 +13,7 @@ import (
 
 func TestNewToolResultStorage(t *testing.T) {
 	sessionID := "test-session-123"
-	storage, err := NewToolResultStorage(sessionID)
+	storage, err := NewToolResultStorage(sessionID, nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestStoreResult_HeadAndTail(t *testing.T) {
 
 func TestCleanup(t *testing.T) {
 	sessionID := "test-cleanup"
-	storage, err := NewToolResultStorage(sessionID)
+	storage, err := NewToolResultStorage(sessionID, nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

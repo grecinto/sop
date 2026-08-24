@@ -738,19 +738,48 @@ CONTROL RULE:
 - This is bounded IDE execution: state the immediate objective, expected scope, and validation path in one sentence before any edit.
 - Delegate only one bounded subtask to Continue or another bridge worker; do not hand over the broader workflow.
 - Keep the change to the smallest valid scope; do not broaden or refactor the surrounding system unless the plan explicitly requires it.
+
+⚠️ MANDATORY SEARCH-TO-PATCH WORKFLOW (DO NOT SKIP):
+
+When fixing code or tests, follow this EXACT sequence:
+
+STEP 1: Search for test/code
+→ Use investigation_search_repo to find the failing test
+
+STEP 2: Analyze search results (CRITICAL)
+→ Did you find the IMPLEMENTATION function/method? (Not just test references)
+→ YES: Proceed to STEP 4
+→ NO: Proceed to STEP 3
+
+STEP 3: ESCALATE to AST analysis (MANDATORY when implementation not found)
+→ Call investigation_index_repo_structure 
+→ This gives you: function signatures, file locations, imports, call graphs
+→ Then search again for the implementation with AST guidance
+→ Proceed to STEP 4
+
+STEP 4: GENERATE THE PATCH (you have enough context now)
+→ YOU write the fix code yourself (this is code generation, not search)
+→ Extract old_content from search results (exact text with whitespace)
+→ Write new_content with your corrected code
+→ Call execution_preview_patch with: {file_path, old_content, new_content, description}
+→ Get user approval
+→ Call execution_apply_patch
+→ Call execution_run_tests to validate
+
+DO NOT:
+❌ Stop after searching without generating a patch
+❌ Ask user for clarification when you have test failure + search results
+❌ Keep searching endlessly - 2-3 searches max, then GENERATE
+❌ Skip AST analysis when you can't find implementation code
+
+WORKFLOW:
 1. Review plan from planning phase artifact
 2. Use the right tool family for the domain and phase: for coding, prefer code-editing and AST-backed inspection tools; for stores, prefer the store/query tooling over ad hoc scripting; for testing, use the relevant test execution and inspection tools; for other domains, rely on the phase-specific toolset rather than generic shell commands
 3. If editor-native execution would help and Continue context is available, consider whether this step should be delegated as one bounded Continue coding objective; prefer Continue only for bounded edits scoped to the active file, and prefer daemon-native editing for broader multi-file or cross-cutting changes
-4. For each step in plan:
-	a. Before any implementation or shell command is run, show a user-visible plan message in the chat history that includes the generated plan details and asks for approval from the user before running commands
-	b. Call execution_preview_patch to preview changes
-	c. Get user approval for preview (MANDATORY for safety)
-	d. If a Continue worker is connected and the task is a bounded editor-native subtask scoped to the active file, call delegate_continue_task to execute that single coding step through Continue
-	e. Otherwise call execution_apply_patch to apply changes directly
-	f. Call execution_run_tests to validate
-4. Capture artifact with results
-	5. If tests pass: summarize the result and either continue implementation or conclude the workflow
-	6. If tests fail: inspect the failure, adjust the patch, and rerun the same targeted tests before expanding scope or returning to planning
+4. For each step in plan, follow the MANDATORY SEARCH-TO-PATCH WORKFLOW above
+5. Capture artifact with results
+	6. If tests pass: summarize the result and either continue implementation or conclude the workflow
+	7. If tests fail: inspect the failure, adjust the patch, and rerun the same targeted tests before expanding scope or returning to planning
 
 COMPLETION CRITERIA:
 □ All planned changes applied
@@ -1043,13 +1072,13 @@ func (c *PhaseCapability) BuildInstructions(query string, state capabilities.Rou
 	case "intake":
 		return "Use Intake capability to: 1) Ask clarifying questions, 2) Gather requirements, 3) Define scope and constraints, 4) Capture requirements artifact, 5) Transition to investigation when clear."
 	case "investigation":
-		return "Use Investigation capability as discovery mode to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns, 4) List changed files, 5) For issue-oriented tasks (bugs, test failures, errors): ALWAYS run investigation_run_tests FIRST to capture concrete failure output - this provides the root cause evidence needed for planning validation, 6) Identify the specific root cause from test output (e.g., 'Root cause: TestFoo fails because function Bar returns nil instead of expected value'), 7) Document evidence including root cause statement and causal trace when fixing issues, 8) Capture investigation artifact with evidence before transitioning to planning, 9) Continue directly into implementation when the next step is obvious."
+		return "Use Investigation capability as discovery mode to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns using search_repo (regex), 4) ESCALATE to index_repo_structure (AST analysis) if regex search doesn't find implementation details or you need semantic code understanding, 5) List changed files, 6) For issue-oriented tasks (bugs, test failures, errors): ALWAYS run investigation_run_tests FIRST to capture concrete failure output - this provides the root cause evidence needed for planning validation, 7) Identify the specific root cause from test output (e.g., 'Root cause: TestFoo fails because function Bar returns nil instead of expected value'), 8) Document evidence including root cause statement and causal trace when fixing issues, 9) Once you have SUFFICIENT context (test output + 2-3 targeted searches OR AST analysis), move forward to patch generation rather than exhaustive searching - you can refine during execution if needed, 10) Capture investigation artifact with evidence before transitioning to planning, 11) Continue directly into implementation when the next step is obvious."
 	case "planning":
 		return "Use Planning capability as part of discovery mode to: 1) Use Continue bridge context when available to understand the editor-backed coding environment, 2) Build context, 3) Research patterns and confirm assumptions, 4) Generate a concrete plan with file/function references when a plan adds value, 5) Check relevant Team Practice guidance from the Core Playbook (CP) before finalizing design or implementation choices, 6) Use tests or validation cases as a design aid when they clarify contracts, interfaces, or expected behavior, 7) Emit a user-visible plan message only when approval or explicit design review is needed, 8) Capture planning evidence for continuity, 9) Continue directly into implementation when the task is action-oriented. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
 	case "testing":
 		return "Use Testing capability as legacy validation metadata only: 1) Add or refine tests or validation cases when they clarify the intended behavior, 2) Use tests as a tool for design clarity and regression confidence, 3) Run the relevant test or validation command, 4) Capture the results. In the current coding runtime, testing is usually performed from discovery or implementation instead of a separate testing phase."
 	case "execution":
-		return "Use Execution capability as implementation mode to: 1) Show a user-visible plan message only when approval is required before running commands, 2) Ask for approval from the user before destructive actions, 3) Preview patches, 4) Get user approval, 5) If the task is under-specified, pause and do additional discovery before changing code, 6) Decide whether the current step should be delegated to Continue as one bounded coding objective, 7) Use delegate_continue_task only when the edit is bounded to the active file and the task is editor-native; if the task is broader multi-file or better handled as direct daemon-native editing, apply patches directly instead, 8) Run relevant validation after each change, 9) Capture results, 10) Summarize or continue implementation when complete. SAFETY: Always preview before applying and keep Ask as the controller."
+		return "Use Execution capability as implementation mode to: 1) After 2-3 searches, STOP searching and START generating: YOU write the fix code (don't search for patches - generate them yourself), structure as {file_path, old_content, new_content, description}, 2) Show a user-visible plan message only when approval is required before running commands, 3) Preview the generated patches using execution_preview_patch, 4) Get user approval, 5) Apply patches using execution_apply_patch with the same structure, 6) If the task is under-specified, pause and do additional discovery before changing code, 7) Decide whether the current step should be delegated to Continue as one bounded coding objective, 8) Use delegate_continue_task only when the edit is bounded to the active file and the task is editor-native; if the task is broader multi-file or better handled as direct daemon-native editing, apply patches directly instead, 9) Run relevant validation after each change, 10) Capture results, 11) Summarize or continue implementation when complete. CRITICAL: Don't endlessly search - generate code after sufficient context. SAFETY: Always preview before applying and keep Ask as the controller."
 	case "review":
 		return "Use Review capability only when resuming an older review artifact: 1) Build context, 2) Inspect changes, 3) Run relevant validation, 4) Validate against requirements, 5) Capture validation results. In the current coding runtime, this work usually happens inside implementation mode instead of a separate review phase."
 	case "delivery":
@@ -1645,6 +1674,11 @@ func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition 
 		Description: "Runs tests for validation or evidence gathering. Available in ALL phases. WHEN TO CALL: In investigation to capture failure evidence, in execution to validate changes, in review for comprehensive validation. Returns test results (pass/fail) with output.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
+	}, {
+		Name:        c.phaseToolName("index_repo_structure"),
+		Description: "ESCALATION TOOL: Indexes repository structure using AST/tree-sitter to extract functions, imports, and call relationships. Available in ALL phases. WHEN TO CALL: When regex search (search_repo) doesn't find what you need, or when you need deeper semantic understanding of code structure. ESCALATION PATH: (1) Try search_repo first for simple patterns, (2) If insufficient, use this for AST-level semantic analysis. Returns indexed entries with function names, imports, and structural paths.",
+		Schema:      taskSchema,
+		Tags:        []string{"R"},
 	}}
 }
 
@@ -1737,13 +1771,8 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 }`,
 			Tags: []string{"C"},
 		}, capabilities.ToolDefinition{
-			Name:        c.phaseToolName("index_repo_structure"),
-			Description: "Indexes repository structure using AST/tree-sitter extraction so planning can reason over symbols, imports, and structural paths. WHEN TO CALL: Before designing changes in unfamiliar repositories or when repo structure is needed for planning memory. Returns indexed file entries with functions/imports/structural paths.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"},
-		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("plan_changes"),
-			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After gathering context with universal tools (build_context, search_repo, inspect_repo). This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
+			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After gathering context with universal tools (build_context, search_repo, inspect_repo, index_repo_structure). This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
 			Schema:      taskSchema,
 			Tags:        []string{"C"},
 		})
@@ -1752,12 +1781,12 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 		// Execution-specific tools (universal context tools already included)
 		tools = append(tools, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("preview_patch"),
-			Description: "SAFETY REQUIRED: Previews patch before applying. WHEN TO CALL: Before every apply_patch call. Shows user what will change. Returns patch preview with old/new content comparison.",
+			Description: "Previews patch before applying. HOW TO USE: (1) STOP searching after you have test failure + found code location, (2) YOU generate the fix code yourself (don't search for it), (3) Structure as {file_path, old_content, new_content, description}, (4) Call this tool with your generated patch. The old_content should be the exact text from search results, new_content is YOUR corrected code. Example: {file_path:'auth.go', old_content:'return nil', new_content:'return &User{ID:1}', description:'Fix nil return'}. WHEN TO CALL: After 2-3 searches when you have enough context to write the fix. Returns preview for user approval.",
 			Schema:      patchSchema,
 			Tags:        []string{"R"},
 		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("apply_patch"),
-			Description: "Applies patch to codebase. SAFETY RULE: Must call preview_patch and get user approval BEFORE calling this. WHEN TO CALL: Only after preview shown and approved. Returns confirmation of applied changes.",
+			Description: "Applies patch to codebase. SAFETY RULE: Must call preview_patch and get user approval BEFORE calling this. WHEN TO CALL: Only after preview shown and approved. Pass the SAME patch structure you used in preview_patch: {file_path, old_content, new_content, description}. Returns confirmation of applied changes.",
 			Schema:      patchSchema,
 			Tags:        []string{"U"},
 		})

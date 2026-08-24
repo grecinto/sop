@@ -28,7 +28,7 @@ func TestListDirectoryAppliesStorageForLargeResults(t *testing.T) {
 	ag := &CopilotAgent{}
 
 	sessionID := "test-session-large-dir"
-	storage, err := NewToolResultStorage(sessionID)
+	storage, err := NewToolResultStorage(sessionID, nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestListDirectoryReturnsInlineForSmallResults(t *testing.T) {
 	ag := &CopilotAgent{}
 
 	sessionID := "test-session-small-dir"
-	storage, err := NewToolResultStorage(sessionID)
+	storage, err := NewToolResultStorage(sessionID, nil)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

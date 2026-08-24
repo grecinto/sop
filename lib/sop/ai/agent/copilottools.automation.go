@@ -2446,7 +2446,7 @@ func analyzeTestStatus(command, output string) (string, string) {
 		// This prevents LLM from looping - it sees clear PASS/FAIL status
 		llmSummary := fmt.Sprintf("TEST STATUS: %s\n", status)
 		if status == "FAIL" {
-			llmSummary += "The test suite failed. Stop and report the outcome to the user. Do not retry unless the user explicitly asks for another pass.\n"
+			llmSummary += "The test suite failed.\n"
 			if len(keyLines) > 0 {
 				llmSummary += "\nRelevant output:\n"
 				for _, line := range keyLines {
@@ -2454,7 +2454,7 @@ func analyzeTestStatus(command, output string) (string, string) {
 				}
 			}
 		} else if status == "PASS" {
-			llmSummary += "All tests passed successfully. Stop and report the outcome to the user.\n"
+			llmSummary += "All tests passed successfully.\n"
 			if len(keyLines) > 0 {
 				llmSummary += "\nObserved result:\n"
 				for _, line := range keyLines {

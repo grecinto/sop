@@ -51,8 +51,11 @@ FAIL
 `
 
 	summary := parseAndEmitTestStatus(context.Background(), "go test ./...", output)
-	if !strings.Contains(summary, "Stop and report the outcome") {
-		t.Fatalf("expected stop-and-report guidance in summary, got %q", summary)
+	if !strings.Contains(summary, "TEST STATUS: FAIL") {
+		t.Fatalf("expected TEST STATUS: FAIL in summary, got %q", summary)
+	}
+	if !strings.Contains(summary, "The test suite failed") {
+		t.Fatalf("expected failure message in summary, got %q", summary)
 	}
 }
 
@@ -192,7 +195,7 @@ func TestWrapToolResultWithStorage_PreservesTerminalSuccessHintForLargePassingTe
 	ctx = context.WithValue(ctx, SessionPayloadKey, &ai.SessionPayload{SessionID: sessionID})
 
 	var sb strings.Builder
-	sb.WriteString("TEST STATUS: PASS\nAll tests passed successfully. Stop and report the outcome to the user.\n\n")
+	sb.WriteString("TEST STATUS: PASS\nAll tests passed successfully.\n\n")
 	for i := 0; i < 300; i++ {
 		sb.WriteString("ok   github.com/sharedcode/sop/agent  0.123s\n")
 	}
