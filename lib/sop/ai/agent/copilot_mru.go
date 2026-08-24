@@ -657,12 +657,35 @@ func summarizeAskOutcomeToolPattern(toolCalls []ai.ToolCall) string {
 		if name == "" {
 			continue
 		}
+		// Normalize tool names: strip phase prefixes for STM recording
+		// Tools are capabilities, not phase-specific - record canonical names
+		name = normalizeToolNameForSTM(name)
 		pattern = append(pattern, name)
 	}
 	if len(pattern) == 0 {
 		return ""
 	}
 	return strings.Join(pattern, " -> ")
+}
+
+// normalizeToolNameForSTM strips phase prefixes from tool names before recording to STM.
+// This ensures LLM learns canonical tool names (build_context) not prefixed variants (investigation_build_context).
+func normalizeToolNameForSTM(toolName string) string {
+	// Strip known phase prefixes
+	prefixes := []string{
+		"investigation_",
+		"planning_",
+		"execution_",
+		"review_",
+		"delivery_",
+		"intake_",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(toolName, prefix) {
+			return strings.TrimPrefix(toolName, prefix)
+		}
+	}
+	return toolName
 }
 
 func compactMRUText(text string, maxLen int) string {

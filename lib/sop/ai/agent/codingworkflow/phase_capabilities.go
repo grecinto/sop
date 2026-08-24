@@ -1068,24 +1068,9 @@ func (c *PhaseCapability) ExposeTools() []capabilities.ToolDefinition {
 }
 
 func (c *PhaseCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	switch c.phaseID {
-	case "intake":
-		return "Use Intake capability to: 1) Ask clarifying questions, 2) Gather requirements, 3) Define scope and constraints, 4) Capture requirements artifact, 5) Transition to investigation when clear."
-	case "investigation":
-		return "Use Investigation capability as discovery mode to: 1) Build context, 2) Inspect the request and gather evidence, 3) Search for patterns using search_repo (regex), 4) ESCALATE to index_repo_structure (AST analysis) if regex search doesn't find implementation details or you need semantic code understanding, 5) List changed files, 6) For issue-oriented tasks (bugs, test failures, errors): ALWAYS run investigation_run_tests FIRST to capture concrete failure output - this provides the root cause evidence needed for planning validation, 7) Identify the specific root cause from test output (e.g., 'Root cause: TestFoo fails because function Bar returns nil instead of expected value'), 8) Document evidence including root cause statement and causal trace when fixing issues, 9) Once you have SUFFICIENT context (test output + 2-3 targeted searches OR AST analysis), move forward to patch generation rather than exhaustive searching - you can refine during execution if needed, 10) Capture investigation artifact with evidence before transitioning to planning, 11) Continue directly into implementation when the next step is obvious."
-	case "planning":
-		return "Use Planning capability as part of discovery mode to: 1) Use Continue bridge context when available to understand the editor-backed coding environment, 2) Build context, 3) Research patterns and confirm assumptions, 4) Generate a concrete plan with file/function references when a plan adds value, 5) Check relevant Team Practice guidance from the Core Playbook (CP) before finalizing design or implementation choices, 6) Use tests or validation cases as a design aid when they clarify contracts, interfaces, or expected behavior, 7) Emit a user-visible plan message only when approval or explicit design review is needed, 8) Capture planning evidence for continuity, 9) Continue directly into implementation when the task is action-oriented. SAFETY: Do not call delegate_continue_task during planning; keep Ask as the controller."
-	case "testing":
-		return "Use Testing capability as legacy validation metadata only: 1) Add or refine tests or validation cases when they clarify the intended behavior, 2) Use tests as a tool for design clarity and regression confidence, 3) Run the relevant test or validation command, 4) Capture the results. In the current coding runtime, testing is usually performed from discovery or implementation instead of a separate testing phase."
-	case "execution":
-		return "Use Execution capability as implementation mode to: 1) After 2-3 searches, STOP searching and START generating: YOU write the fix code (don't search for patches - generate them yourself), structure as {file_path, old_content, new_content, description}, 2) Show a user-visible plan message only when approval is required before running commands, 3) Preview the generated patches using execution_preview_patch, 4) Get user approval, 5) Apply patches using execution_apply_patch with the same structure, 6) If the task is under-specified, pause and do additional discovery before changing code, 7) Decide whether the current step should be delegated to Continue as one bounded coding objective, 8) Use delegate_continue_task only when the edit is bounded to the active file and the task is editor-native; if the task is broader multi-file or better handled as direct daemon-native editing, apply patches directly instead, 9) Run relevant validation after each change, 10) Capture results, 11) Summarize or continue implementation when complete. CRITICAL: Don't endlessly search - generate code after sufficient context. SAFETY: Always preview before applying and keep Ask as the controller."
-	case "review":
-		return "Use Review capability only when resuming an older review artifact: 1) Build context, 2) Inspect changes, 3) Run relevant validation, 4) Validate against requirements, 5) Capture validation results. In the current coding runtime, this work usually happens inside implementation mode instead of a separate review phase."
-	case "delivery":
-		return "Use Delivery capability only when resuming an older delivery artifact: 1) Review the stored artifacts, 2) Summarize changes made, 3) Document decisions, 4) Capture the handoff summary, 5) Signal exit to complete workflow. In the current coding runtime, final summarization usually happens directly from implementation mode instead of a separate delivery phase."
-	default:
-		return fmt.Sprintf("Use the %s capability to gather or record the current phase state, preserve a meaningful artifact in memory, and hand the conversation forward with a clear summary for the next phase when the user chooses to move on.", c.name)
-	}
+	// Tools have descriptions - let them guide the LLM
+	// No need to duplicate guidance here
+	return ""
 }
 
 func (c *PhaseCapability) Handoff(ctx context.Context, query string, state capabilities.RoutingState) *capabilities.Handoff {
@@ -1578,16 +1563,19 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 		return c.runAssessAndRoute(args)
 	case strings.ToLower(c.phaseToolName("create_succession_path")):
 		return c.runCreateSuccessionPath(args)
-	case strings.ToLower(c.phaseToolName("build_context")):
+	// Universal tools: Accept both prefixed (legacy) and unprefixed (new) names
+	case "build_context", strings.ToLower(c.phaseToolName("build_context")):
 		return c.runBuildContext(ctx, args)
-	case strings.ToLower(c.phaseToolName("inspect_repo")):
+	case "inspect_repo", strings.ToLower(c.phaseToolName("inspect_repo")):
 		return c.runInspectRepo(ctx, args)
-	case strings.ToLower(c.phaseToolName("search_repo")):
+	case "search_repo", strings.ToLower(c.phaseToolName("search_repo")):
 		return c.runSearchRepo(ctx, args)
-	case strings.ToLower(c.phaseToolName("list_changed_files")):
+	case "list_changed_files", strings.ToLower(c.phaseToolName("list_changed_files")):
 		return c.runListChangedFiles(ctx, args)
-	case strings.ToLower(c.phaseToolName("index_repo_structure")):
+	case "index_repo_structure", strings.ToLower(c.phaseToolName("index_repo_structure")):
 		return c.runIndexRepoStructure(ctx, args)
+	case "run_tests", strings.ToLower(c.phaseToolName("run_tests")):
+		return c.runTests(ctx, args)
 	case strings.ToLower(c.phaseToolName("search_team_patterns")):
 		return c.runSearchTeamPatterns(ctx, args)
 	case strings.ToLower(c.phaseToolName("vectorize_team_patterns")):
@@ -1628,6 +1616,7 @@ func (c *PhaseCapability) PreprocessResult(toolName string, rawOutput string, fi
 
 // universalContextTools returns context-gathering tools available to ALL phases.
 // These are read-only tools (R) that help the LLM gather information needed for any phase.
+// IMPORTANT: These tools use unprefixed names since they're universal across all phases.
 func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition {
 	taskSchema := `{
   "type": "object",
@@ -1650,32 +1639,32 @@ func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition 
 }`
 
 	return []capabilities.ToolDefinition{{
-		Name:        c.phaseToolName("build_context"),
+		Name:        "build_context",
 		Description: "Builds repository context (structure, files, dependencies). Available in ALL phases. Call when you need to understand repository organization. Returns ContextPack with working directory, active file, and repository summary.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
 	}, {
-		Name:        c.phaseToolName("inspect_repo"),
+		Name:        "inspect_repo",
 		Description: "Inspects current repository state and changed files. Available in ALL phases. Call to understand current state, see diffs, or check for conflicts. Returns changed files list and diff preview.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
 	}, {
-		Name:        c.phaseToolName("search_repo"),
+		Name:        "search_repo",
 		Description: "Searches repository file content using ripgrep (regex pattern matching). Available in ALL phases. SEARCH PATTERNS: Use simple regex (e.g., 'func TestFoo', 'import.*database', 'type.*Config'). DO NOT use boolean 'OR' - make separate calls instead. Returns file paths with line numbers and surrounding context.",
 		Schema:      searchSchema,
 		Tags:        []string{"R"},
 	}, {
-		Name:        c.phaseToolName("list_changed_files"),
+		Name:        "list_changed_files",
 		Description: "Lists files with uncommitted changes. Available in ALL phases. Call to identify in-progress work and avoid conflicts. Returns list of changed file paths.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
 	}, {
-		Name:        c.phaseToolName("run_tests"),
+		Name:        "run_tests",
 		Description: "Runs tests for validation or evidence gathering. Available in ALL phases. WHEN TO CALL: In investigation to capture failure evidence, in execution to validate changes, in review for comprehensive validation. Returns test results (pass/fail) with output.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
 	}, {
-		Name:        c.phaseToolName("index_repo_structure"),
+		Name:        "index_repo_structure",
 		Description: "ESCALATION TOOL: Indexes repository structure using AST/tree-sitter to extract functions, imports, and call relationships. Available in ALL phases. WHEN TO CALL: When regex search (search_repo) doesn't find what you need, or when you need deeper semantic understanding of code structure. ESCALATION PATH: (1) Try search_repo first for simple patterns, (2) If insufficient, use this for AST-level semantic analysis. Returns indexed entries with function names, imports, and structural paths.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
@@ -1803,10 +1792,9 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 }
 
 func (c *PhaseCapability) phaseToolName(suffix string) string {
-	if c == nil {
-		return suffix
-	}
-	return c.phaseID + "_" + suffix
+	// Tools are capabilities, not phase-specific entities
+	// Return clean names without phase prefix
+	return suffix
 }
 
 func (c *PhaseCapability) ensureSharedInfrastructure() *SharedInfrastructure {

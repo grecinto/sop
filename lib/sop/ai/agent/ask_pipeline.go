@@ -121,6 +121,13 @@ func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai
 			log.Info("Pausing queue after pending clarification state", "actor", item.Actor)
 			break
 		}
+
+		// Log queue state after each turn
+		queueDepth := queue.Depth()
+		log.Info("Queue item completed",
+			"actor", item.Actor,
+			"remaining_items", queueDepth,
+			"continuing", queueDepth > 0)
 	}
 
 	return lastResponse, nil
@@ -213,6 +220,21 @@ func phaseTransactionMutatedCode(toolCalls []ai.ToolCall) bool {
 	return false
 }
 
+func phaseTransactionIsStillInvestigating(toolCalls []ai.ToolCall) bool {
+	// Detect if execution phase is still in investigation/search mode
+	// (hasn't generated patches yet, just searching/building context)
+	for _, toolCall := range toolCalls {
+		name := strings.TrimSpace(strings.ToLower(toolCall.Name))
+		// Context-gathering tools
+		if strings.Contains(name, "search_repo") || strings.Contains(name, "build_context") ||
+			strings.Contains(name, "inspect_repo") || strings.Contains(name, "index_repo") ||
+			strings.Contains(name, "list_changed") || strings.Contains(name, "run_tests") {
+			return true
+		}
+	}
+	return false
+}
+
 func phaseTransactionHasValidationEvidence(toolCalls []ai.ToolCall, outcomeFacts []string, finalText string) bool {
 	for _, toolCall := range toolCalls {
 		name := strings.TrimSpace(strings.ToLower(toolCall.Name))
@@ -247,12 +269,18 @@ func phaseTransactionHasGenericCompletionEvidence(toolCalls []ai.ToolCall, outco
 
 func (a *CopilotAgent) enqueuePhaseTransactionDecision(query string, decision phaseTransactionDecision) {
 	if a == nil || !decision.EnqueueNextPhase || strings.TrimSpace(decision.NextPhase) == "" {
+		log.Info("Not enqueueing next phase",
+			"decision_enqueue", decision.EnqueueNextPhase,
+			"next_phase", decision.NextPhase,
+			"reason", "no next phase or enqueue=false")
 		return
 	}
 	queue := a.getOrCreateSessionQueue()
 	targetActor := "phase:" + strings.TrimSpace(decision.NextPhase)
 	for _, item := range queue.Snapshot() {
 		if item.Actor == targetActor {
+			log.Info("Phase already enqueued, skipping duplicate",
+				"target_actor", targetActor)
 			return
 		}
 	}
@@ -267,6 +295,10 @@ func (a *CopilotAgent) enqueuePhaseTransactionDecision(query string, decision ph
 			"reason":                         strings.TrimSpace(decision.Reason),
 		},
 	})
+	log.Info("Enqueued next phase",
+		"target_actor", targetActor,
+		"priority", PriorityPhaseSuccession,
+		"reason", decision.Reason)
 }
 
 func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.ConfigMap) (string, error) {
@@ -433,10 +465,23 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 	}
 	a.maybePersistPlanningArtifactFromFinalText(taskContext.AskClassification, finalText, toolCalls)
 	transactionDecision := a.evaluatePhaseTransaction(ctx, rawQuery, taskContext.AskClassification, toolCalls, outcomeFacts, finalText, clarificationRequest)
+	log.Info("Phase transaction decision",
+		"enqueue_next", transactionDecision.EnqueueNextPhase,
+		"next_phase", transactionDecision.NextPhase,
+		"reason", transactionDecision.Reason)
 	a.persistPhaseTransactionHandoff(rawQuery, taskContext.AskClassification, transactionDecision, toolCalls, outcomeFacts, finalText)
 	a.enqueuePhaseTransactionDecision(rawQuery, transactionDecision)
 
-	log.Info("Copilot Ask Complete", "session_id", sessionID, "response_chars", len(finalText))
+	// Truncate finalText for logging
+	finalTextPreview := finalText
+	if len(finalTextPreview) > 200 {
+		finalTextPreview = finalTextPreview[:200] + "..."
+	}
+	log.Info("Copilot Ask Complete",
+		"session_id", sessionID,
+		"response_chars", len(finalText),
+		"response_preview", finalTextPreview,
+		"tool_calls_count", len(toolCalls))
 
 	// 10. Epilogue and cleanup (same as V1)
 	a.epilogueAndCleanup(ctx, rawQuery, intent, finalText, toolCalls, outcomeFacts, outcomeRecipes, carryoverState, clarificationRequest)
@@ -1131,7 +1176,10 @@ func (a *CopilotAgent) registerPhaseTools(ctx context.Context, allTools []capabi
 			}())
 	}
 
-	log.Info("All phase tools registered", "tool_count", len(allTools))
+	log.Info("Phase tools registration complete",
+		"aggregated_tool_count", len(allTools),
+		"registered_unique_count", len(a.registry.List()),
+		"deduplication_savings", len(allTools)-len(a.registry.List()))
 }
 
 // findOwningPhase determines which phase capability owns a given tool.

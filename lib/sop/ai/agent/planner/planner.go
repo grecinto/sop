@@ -72,11 +72,12 @@ func (c *PlannerCapability) Classify(query string, state capabilities.RoutingSta
 }
 
 func (c *PlannerCapability) BuildContext(query string, state capabilities.RoutingState) string {
-	return "Universal phase planner context:\n- Use this planner for tasks that benefit from structured workflow (coding, stores, spaces, desktop automation, etc.).\n- For coding tasks, prefer the simplest runtime shape that lets the LLM complete the job in one continuous Ask/ReAct transaction.\n- Coding runtime modes are usually [discovery, implementation], where discovery means investigation plus planning, and implementation means mutation plus validation.\n- Persist planning metadata only when it improves continuity; do not introduce extra workflow turns unless the task or user requires them.\n- The domain determines which tools are available in each runtime mode."
+	return "Available workflow support:\n- Plan tasks that benefit from structured approach\n- For coding: understand problem → design if needed → implement\n- Keep workflow simple unless task complexity requires explicit planning\n- Tools available vary based on what you're doing (reading vs writing code)"
 }
 
 func (c *PlannerCapability) BuildInstructions(query string, state capabilities.RoutingState) string {
-	return "For coding tasks, do not force a full SDLC phase plan by default. Prefer a two-mode runtime: discovery when more evidence or design clarity is needed, implementation when the task is action-oriented and can proceed in one continuous Ask/ReAct transaction. Use create_phase_plan only when persistent workflow structure genuinely improves the task.\n\n" + cw.CodeFormatInstructions
+	// Tools describe themselves - no need for duplicate guidance
+	return ""
 }
 
 func (c *PlannerCapability) BuildGuidanceProfile(query string, state capabilities.RoutingState) capabilities.GuidanceProfile {
@@ -96,8 +97,8 @@ func (c *PlannerCapability) BuildGuidanceProfile(query string, state capabilitie
 func (c *PlannerCapability) ExposeTools() []capabilities.ToolDefinition {
 	return []capabilities.ToolDefinition{{
 		Name:        "create_phase_plan",
-		Description: "Creates a phase-based plan for a coding task and stores it in the current work stream.",
-		Schema:      `{"type":"object","properties":{"query":{"type":"string","description":"The user request or task to plan"},"reasoning":{"type":"string","description":"Why this phase sequence was chosen"},"confidence":{"type":"string","description":"Confidence level for the plan"},"checkpoints":{"type":"array","items":{"type":"string"},"description":"Optional checkpoint names such as after_investigation"}},"required":["query"]}`,
+		Description: "Creates a structured plan for a coding task and stores it in the current work stream for tracking progress.",
+		Schema:      `{"type":"object","properties":{"query":{"type":"string","description":"The user request or task to plan"},"reasoning":{"type":"string","description":"Why this approach was chosen"},"confidence":{"type":"string","description":"Confidence level for the plan"},"checkpoints":{"type":"array","items":{"type":"string"},"description":"Optional checkpoint names for progress tracking"}},"required":["query"]}`,
 	}}
 }
 

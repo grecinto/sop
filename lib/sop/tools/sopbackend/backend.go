@@ -85,6 +85,27 @@ func registerBuiltinRBACBlueprints() {
 				}
 				return action == sop.ActionRead
 			}
+
+			// STM and LTM stores are read-only for regular users (prevent accidents)
+			// SystemAdmin can write/delete for maintenance
+			if strings.HasSuffix(entCtx.AssetID, "_stm") || strings.HasSuffix(entCtx.AssetID, "_ltm") {
+				if action == sop.ActionWrite || action == sop.ActionDelete {
+					// Only SystemAdmin can write/delete memory stores
+					auth := sop.GetAuthFromContext(ctx)
+					for _, role := range auth.Roles {
+						if strings.EqualFold(role, sop.RoleSystemAdmin) {
+							return true
+						}
+					}
+					return false
+				}
+				// Regular users can read their own STM/LTM
+				if !shouldExposeStoreInRBAC(ctx, entCtx.AssetID) {
+					return false
+				}
+				return action == sop.ActionRead
+			}
+
 			if entCtx.IsSystemDB && (action == sop.ActionWrite || action == sop.ActionDelete) {
 				return false
 			}

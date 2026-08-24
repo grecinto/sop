@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	log "log/slog"
+
 	"github.com/sharedcode/sop/ai"
 )
 
@@ -17,14 +19,23 @@ type sessionCognitiveDecision struct {
 
 func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Context, query string, classification *AskTaskContext, toolCalls []ai.ToolCall, outcomeFacts []string, finalText string, clarificationRequest *ai.ClarificationRequest) phaseTransactionDecision {
 	if a == nil || classification == nil {
+		log.Info("Transaction evaluation: nil agent or classification")
 		return phaseTransactionDecision{}
 	}
 	if clarificationRequest != nil {
+		log.Info("Transaction evaluation: clarification pending")
 		return phaseTransactionDecision{}
 	}
 	currentPhase := strings.TrimSpace(strings.ToLower(classification.Phase))
+	log.Info("Transaction evaluation start",
+		"current_phase", currentPhase,
+		"orchestration_level", classification.OrchestrationLevel,
+		"execution_ready", classification.ExecutionReady,
+		"domains", classification.Domains,
+		"tool_count", len(toolCalls))
 
 	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
+		log.Info("Transaction evaluation: not coding_workflow domain", "domains", classification.Domains)
 		if currentPhase == "execution" && !phaseTransactionHasGenericCompletionEvidence(toolCalls, outcomeFacts, finalText) {
 			reason := "current execution step is still incomplete; continue in the active phase until the capability confirms completion"
 			return phaseTransactionDecision{
@@ -36,9 +47,15 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 		return phaseTransactionDecision{}
 	}
 	if strings.TrimSpace(strings.ToLower(classification.OrchestrationLevel)) != orchestrationManagedWorkflow {
+		log.Info("Transaction evaluation: not managed_workflow",
+			"orchestration_level", classification.OrchestrationLevel,
+			"expected", orchestrationManagedWorkflow)
 		return phaseTransactionDecision{}
 	}
-	if currentPhase == "execution" && classification.ExecutionReady {
+
+	// Execution phase continuation logic - check actual phase, not static classification flag
+	if currentPhase == "execution" {
+		// Check if code was mutated but needs validation
 		if phaseTransactionMutatedCode(toolCalls) && !phaseTransactionHasValidationEvidence(toolCalls, outcomeFacts, finalText) {
 			reason := "managed coding execution requires focused validation evidence after code changes before completion"
 			a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
@@ -48,15 +65,44 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 				Reason:           reason,
 			}
 		}
+
+		// Check if execution is still investigating/searching without generating patches yet
+		if phaseTransactionIsStillInvestigating(toolCalls) && !phaseTransactionMutatedCode(toolCalls) {
+			// Execution phase is searching/investigating but hasn't generated patches yet
+			// This is the SEARCH → PATCH → APPLY workflow - continue until patch is generated
+			reason := "managed coding execution is investigating but has not generated patches yet; continue search-to-patch workflow"
+			a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
+			return phaseTransactionDecision{
+				EnqueueNextPhase: true,
+				NextPhase:        "execution",
+				Reason:           reason,
+			}
+		}
+
 		return phaseTransactionDecision{}
 	}
+
+	// Planning phase to execution transition
 	if currentPhase == "execution" && !a.hasExecutionReadyPlanningArtifact() {
-		reason := "managed coding execution requires a ready_for_execution planning artifact before implementation can proceed"
-		a.recordPhaseTransactionCognitiveState(ctx, "planning", reason)
-		return phaseTransactionDecision{
-			EnqueueNextPhase: true,
-			NextPhase:        "planning",
-			Reason:           reason,
+		// Only require planning artifact for NEW execution phases that haven't done work yet
+		// If execution came from investigation with test failures, let it proceed without planning
+		hasTestEvidence := false
+		for _, toolCall := range toolCalls {
+			name := strings.TrimSpace(strings.ToLower(toolCall.Name))
+			if strings.Contains(name, "run_tests") || strings.Contains(name, "run_repo_tests") {
+				hasTestEvidence = true
+				break
+			}
+		}
+		// If this execution turn did actual work, don't require planning artifact
+		if len(toolCalls) == 0 && !hasTestEvidence {
+			reason := "managed coding execution requires a ready_for_execution planning artifact before implementation can proceed"
+			a.recordPhaseTransactionCognitiveState(ctx, "planning", reason)
+			return phaseTransactionDecision{
+				EnqueueNextPhase: true,
+				NextPhase:        "planning",
+				Reason:           reason,
+			}
 		}
 	}
 	if currentPhase == "planning" && a.hasExecutionReadyPlanningArtifact() {
@@ -74,6 +120,33 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 	if currentPhase != "investigation" {
 		return phaseTransactionDecision{}
 	}
+
+	// If investigation ran tests or did sufficient context gathering, enqueue execution
+	// Don't rely on string matching for failures (test results are file-backed)
+	ranTests := false
+	didSearch := false
+	for _, toolCall := range toolCalls {
+		name := strings.TrimSpace(strings.ToLower(toolCall.Name))
+		if strings.Contains(name, "run_tests") || strings.Contains(name, "run_repo_tests") {
+			ranTests = true
+		}
+		if strings.Contains(name, "search_repo") || strings.Contains(name, "inspect_repo") || strings.Contains(name, "build_context") {
+			didSearch = true
+		}
+	}
+
+	// If investigation gathered evidence (tests + searches), move to execution
+	if ranTests && didSearch {
+		reason := "investigation gathered test results and context; ready for execution"
+		a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
+		return phaseTransactionDecision{
+			EnqueueNextPhase: true,
+			NextPhase:        "execution",
+			Reason:           reason,
+		}
+	}
+
+	// Legacy: Check for explicit failure strings (won't work with file-backed results)
 	if a.hasExecutionReadyPlanningArtifact() || a.isPhaseComplete(ctx, currentPhase, toolCalls, finalText) {
 		return phaseTransactionDecision{}
 	}
