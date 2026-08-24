@@ -195,7 +195,7 @@ func TestCodingPhaseRunPlanChanges_UsesStoredPhaseContinuationSummary(t *testing
 	}
 	phase := newCodingPhase("planning", infra)
 
-	output, err := phase.runPlanChanges(map[string]any{"query": "plan parser validation improvements", "working_dir": "/tmp/demo"})
+	output, err := phase.runPlanChanges(context.Background(), map[string]any{"query": "plan parser validation improvements", "working_dir": "/tmp/demo"})
 	if err != nil {
 		t.Fatalf("expected planning to succeed, got %v", err)
 	}

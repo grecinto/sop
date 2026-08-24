@@ -267,10 +267,10 @@ func TestPhaseCapture_RequiresRootCauseAndCausalTraceForIssuePlans(t *testing.T)
 		},
 	})
 	if err == nil {
-		t.Fatal("expected planning capture to require root cause and causal trace for an issue-oriented plan")
+		t.Fatal("expected planning capture to require investigation evidence for an issue-oriented plan")
 	}
-	if !strings.Contains(err.Error(), "root cause") && !strings.Contains(err.Error(), "causal trace") {
-		t.Fatalf("expected a root cause/causal-trace enforcement error, got: %v", err)
+	if !strings.Contains(err.Error(), "requires investigation") && !strings.Contains(err.Error(), "investigation tools") {
+		t.Fatalf("expected an investigation requirement error, got: %v", err)
 	}
 }
 

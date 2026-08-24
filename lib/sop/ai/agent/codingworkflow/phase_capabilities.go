@@ -1597,7 +1597,9 @@ func (c *PhaseCapability) PreprocessResult(toolName string, rawOutput string, fi
 	return PreprocessToolResult(toolName, rawOutput, filePath, maxInlineSize)
 }
 
-func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
+// universalContextTools returns context-gathering tools available to ALL phases.
+// These are read-only tools (R) that help the LLM gather information needed for any phase.
+func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition {
 	taskSchema := `{
   "type": "object",
   "required": ["query"],
@@ -1618,6 +1620,45 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
   }
 }`
 
+	return []capabilities.ToolDefinition{{
+		Name:        c.phaseToolName("build_context"),
+		Description: "Builds repository context (structure, files, dependencies). Available in ALL phases. Call when you need to understand repository organization. Returns ContextPack with working directory, active file, and repository summary.",
+		Schema:      taskSchema,
+		Tags:        []string{"R"},
+	}, {
+		Name:        c.phaseToolName("inspect_repo"),
+		Description: "Inspects current repository state and changed files. Available in ALL phases. Call to understand current state, see diffs, or check for conflicts. Returns changed files list and diff preview.",
+		Schema:      taskSchema,
+		Tags:        []string{"R"},
+	}, {
+		Name:        c.phaseToolName("search_repo"),
+		Description: "Searches repository file content using ripgrep (regex pattern matching). Available in ALL phases. SEARCH PATTERNS: Use simple regex (e.g., 'func TestFoo', 'import.*database', 'type.*Config'). DO NOT use boolean 'OR' - make separate calls instead. Returns file paths with line numbers and surrounding context.",
+		Schema:      searchSchema,
+		Tags:        []string{"R"},
+	}, {
+		Name:        c.phaseToolName("list_changed_files"),
+		Description: "Lists files with uncommitted changes. Available in ALL phases. Call to identify in-progress work and avoid conflicts. Returns list of changed file paths.",
+		Schema:      taskSchema,
+		Tags:        []string{"R"},
+	}, {
+		Name:        c.phaseToolName("run_tests"),
+		Description: "Runs tests for validation or evidence gathering. Available in ALL phases. WHEN TO CALL: In investigation to capture failure evidence, in execution to validate changes, in review for comprehensive validation. Returns test results (pass/fail) with output.",
+		Schema:      taskSchema,
+		Tags:        []string{"R"},
+	}}
+}
+
+func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
+	taskSchema := `{
+  "type": "object",
+  "required": ["query"],
+  "properties": {
+    "query": {"type": "string", "description": "Task description or query"},
+    "working_dir": {"type": "string", "description": "Repository root path (optional, inferred if omitted)"},
+    "active_file": {"type": "string", "description": "Primary file for changes (optional, inferred if omitted)"}
+  }
+}`
+
 	patchSchema := `{
   "type": "object",
   "required": ["file_path", "old_content", "new_content"],
@@ -1629,36 +1670,18 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
   }
 }`
 
+	// Start with universal context tools available to all phases
+	tools := c.universalContextTools()
+
+	// Add phase-specific tools
 	switch c.phaseID {
 	case "intake":
-		return []capabilities.ToolDefinition{{
-			Name:        c.phaseToolName("build_context"),
-			Description: "OPTIONAL: Builds repository context if task involves code. Call when user mentions files, repos, or code locations. Returns repository structure, files, dependencies.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only context building
-		}}
+		// Intake only gets universal tools (no phase-specific actions)
+		// Universal tools already included above
+
 	case "investigation":
-		return []capabilities.ToolDefinition{{
-			Name:        c.phaseToolName("build_context"),
-			Description: "REQUIRED FIRST STEP: Builds repository context (structure, files, dependencies). Must call before other investigation tools. Returns ContextPack with working directory, active file, repository summary.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only context building
-		}, {
-			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects current repository state and changed files. WHEN TO CALL: After build_context, to understand current state before analysis. Returns changed files list and diff preview.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only inspection
-		}, {
-			Name:        c.phaseToolName("search_repo"),
-			Description: "Searches repository file content using ripgrep (regex pattern matching). REQUIRED PARAMETERS: query (task description) and working_dir (use 'current' or '.' for current directory). OPTIONAL: search parameter for the actual pattern to find. SEARCH PATTERNS: Use simple regex (e.g., 'func TestFoo', 'import.*database', 'type.*Handler'). DO NOT use boolean operators like OR - ripgrep doesn't support them. For multiple patterns, call this tool multiple times. WHEN TO CALL: To find function definitions, test cases, error patterns, imports, type definitions. Returns file paths with line numbers and surrounding context. EXAMPLE: To find test functions, use search='func Test'.",
-			Schema:      searchSchema,
-			Tags:        []string{"R"}, // Read-only search
-		}, {
-			Name:        c.phaseToolName("list_changed_files"),
-			Description: "Lists files with uncommitted changes. WHEN TO CALL: To identify in-progress work and avoid conflicts. Returns list of changed file paths.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only list
-		}, {
+		// Investigation-specific tools
+		tools = append(tools, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("search_team_patterns"),
 			Description: "Searches team-specific coding conventions and patterns in Long-Term Memory. Use when planning code generation to find team's preferred helpers, anti-patterns, and conventions. Returns pattern details including convention, anti-pattern, examples, and file references. WHEN TO CALL: Before designing or implementing features to ensure code follows team standards.",
 			Schema: `{
@@ -1681,28 +1704,25 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
     }
   }
 }`,
-			Tags: []string{"R"}, // Read-only search
-		}, {
+			Tags: []string{"R"},
+		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("vectorize_team_patterns"),
 			Description: "Vectorizes all team patterns for semantic search. WORKFLOW: After user adds/updates patterns, ASK THE USER DIRECTLY: 'Are you done specifying all your team's patterns?' Wait for user confirmation (yes/done/that's all). Once confirmed, call this tool to index patterns. Do NOT call without asking first. Performance: ~1-2 seconds.",
 			Schema: `{
   "type": "object",
   "properties": {}
 }`,
-			Tags: []string{"U"}, // Updates/indexes pattern embeddings
-		}, {
-			Name:        c.phaseToolName("run_tests"),
-			Description: "Runs tests to gather failure evidence for issue investigation. WHEN TO CALL: When investigating bug reports, test failures, or errors - run tests FIRST to capture root cause evidence before planning fixes. For 'fix failing tests' tasks, this is REQUIRED during investigation to identify which tests fail and why. Returns test results with failure output, which provides the root cause statement needed for planning phase. Use this to build the evidence base before transitioning to planning.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only test execution for evidence gathering
-		}}
+			Tags: []string{"U"},
+		})
+
 	case "planning":
-		return []capabilities.ToolDefinition{{
+		// Planning-specific tools
+		tools = append(tools, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("assess_and_route"),
 			Description: "PLANNING-FIRST ARCHITECTURE: Assesses the user query and determines the appropriate starting phase. Always call this FIRST in planning phase to understand what needs to be done. Analyzes query semantics and creates execution strategy. Returns assessment with recommended starting phase and reasoning.",
 			Schema:      taskSchema,
-			Tags:        []string{"C"}, // Creates assessment/strategy
-		}, {
+			Tags:        []string{"C"},
+		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("create_succession_path"),
 			Description: "Creates a phase succession path with checkpoints. Call after assess_and_route to define the full sequence of phases needed to complete the task. Returns planned path: [investigation, planning, execution, review, delivery] with checkpoints for re-assessment.",
 			Schema: `{
@@ -1715,75 +1735,42 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
     "confidence": {"type": "string", "description": "Confidence level: high|medium|low"}
   }
 }`,
-			Tags: []string{"C"}, // Creates phase succession path
-		}, {
-			Name:        c.phaseToolName("build_context"),
-			Description: "REQUIRED FIRST STEP: Builds repository context for planning. Must call before planning_plan_changes. Returns ContextPack with repository structure needed for concrete plan generation.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only context building
-		}, {
-			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects current repository state. WHEN TO CALL: Before planning, to understand existing code structure and patterns. Returns changed files and current state.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only inspection
-		}, {
-			Name:        c.phaseToolName("search_repo"),
-			Description: "Searches repository file content using ripgrep (regex pattern matching). WHEN TO CALL: Before designing, to find similar implementations and follow established patterns. SEARCH PATTERNS: Use simple regex like 'func.*Handler', 'type.*Config', 'import.*grpc'. DO NOT use boolean 'OR' - make separate calls instead. Returns file paths with line numbers and code context.",
-			Schema:      searchSchema,
-			Tags:        []string{"R"}, // Read-only search
-		}, {
-			Name:        c.phaseToolName("list_changed_files"),
-			Description: "Lists changed files to avoid conflicts. WHEN TO CALL: Before finalizing plan, to ensure plan doesn't conflict with in-progress work. Returns list of changed files.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only list
-		}, {
+			Tags: []string{"C"},
+		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("index_repo_structure"),
 			Description: "Indexes repository structure using AST/tree-sitter extraction so planning can reason over symbols, imports, and structural paths. WHEN TO CALL: Before designing changes in unfamiliar repositories or when repo structure is needed for planning memory. Returns indexed file entries with functions/imports/structural paths.",
 			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only repo indexing
-		}, {
+			Tags:        []string{"R"},
+		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("plan_changes"),
-			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After build_context, search_repo, and inspect_repo complete. This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
+			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After gathering context with universal tools (build_context, search_repo, inspect_repo). This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
 			Schema:      taskSchema,
-			Tags:        []string{"C"}, // Creates execution plan
-		}}
+			Tags:        []string{"C"},
+		})
+
 	case "execution":
-		return []capabilities.ToolDefinition{{
+		// Execution-specific tools (universal context tools already included)
+		tools = append(tools, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("preview_patch"),
 			Description: "SAFETY REQUIRED: Previews patch before applying. WHEN TO CALL: Before every apply_patch call. Shows user what will change. Returns patch preview with old/new content comparison.",
 			Schema:      patchSchema,
-			Tags:        []string{"R"}, // Read-only preview
-		}, {
+			Tags:        []string{"R"},
+		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("apply_patch"),
 			Description: "Applies patch to codebase. SAFETY RULE: Must call preview_patch and get user approval BEFORE calling this. WHEN TO CALL: Only after preview shown and approved. Returns confirmation of applied changes.",
 			Schema:      patchSchema,
-			Tags:        []string{"U"}, // Updates code files
-		}, {
-			Name:        c.phaseToolName("run_tests"),
-			Description: "Runs tests to validate changes. WHEN TO CALL: After each apply_patch call, to ensure changes work correctly and don't introduce regressions. Returns test results (pass/fail) and output.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only test execution
-		}}
+			Tags:        []string{"U"},
+		})
+
 	case "review":
-		return []capabilities.ToolDefinition{{
-			Name:        c.phaseToolName("build_context"),
-			Description: "Builds repository context for review. WHEN TO CALL: At review start, to understand current state after execution. Returns repository structure and current state.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only context building
-		}, {
-			Name:        c.phaseToolName("inspect_repo"),
-			Description: "Inspects repository state to see applied changes. WHEN TO CALL: To review what was changed during execution phase. Returns changed files and diff.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only inspection
-		}, {
-			Name:        c.phaseToolName("run_tests"),
-			Description: "Runs comprehensive tests for validation. WHEN TO CALL: To validate all requirements are met and no regressions introduced. Returns test results and coverage.",
-			Schema:      taskSchema,
-			Tags:        []string{"R"}, // Read-only test execution
-		}}
+		// Review only uses universal context tools (no phase-specific actions)
+		// Universal tools already included above
+
 	default:
-		return nil
+		// Unknown phases get universal tools only
 	}
+
+	return tools
 }
 
 func (c *PhaseCapability) phaseToolName(suffix string) string {
@@ -2856,7 +2843,7 @@ func (c *PhaseCapability) runCapture(args map[string]any) (string, error) {
 		}
 	}
 
-	if err := validatePhaseArtifactForStatus(artifact); err != nil {
+	if err := c.validatePhaseArtifactForStatus(artifact); err != nil {
 		return "", err
 	}
 
@@ -2961,7 +2948,7 @@ func (c *PhaseCapability) loadExistingArtifact() (phaseArtifact, error) {
 	return artifact, nil
 }
 
-func validatePhaseArtifactForStatus(artifact phaseArtifact) error {
+func (c *PhaseCapability) validatePhaseArtifactForStatus(artifact phaseArtifact) error {
 	status := strings.ToLower(strings.TrimSpace(artifact.Status))
 	if status != "ready_for_execution" && status != "complete" && status != "approved" && status != "delivered" {
 		return nil
@@ -2969,7 +2956,18 @@ func validatePhaseArtifactForStatus(artifact phaseArtifact) error {
 	if !shouldRequireRootCauseEvidenceForPhase(artifact) {
 		return nil
 	}
-	if err := requireRootCauseEvidenceForPhase(artifact); err != nil {
+
+	// Get workstream context for state-based validation
+	var workstream WorkStreamContextReader
+	if c.sharedInfra != nil && c.sharedInfra.STMAccessor != nil {
+		if stm := c.sharedInfra.STMAccessor(); stm != nil {
+			if thread := stm.GetCurrentThread(); thread != nil {
+				workstream = thread.GetStreamContext()
+			}
+		}
+	}
+
+	if err := requireRootCauseEvidenceForPhase(artifact, workstream); err != nil {
 		return err
 	}
 	return nil
@@ -2997,39 +2995,75 @@ func shouldRequireRootCauseEvidenceForPhase(artifact phaseArtifact) bool {
 	return false
 }
 
-func requireRootCauseEvidenceForPhase(artifact phaseArtifact) error {
+func requireRootCauseEvidenceForPhase(artifact phaseArtifact, workstream WorkStreamContextReader) error {
+	// Check workstream state first - this is the source of truth
+	if workstream != nil {
+		phaseArtifacts := workstream.GetPhaseArtifacts()
+
+		// Check if investigation phase has captured findings
+		if invArtifacts, hasInv := phaseArtifacts["investigation"]; hasInv && len(invArtifacts) > 0 {
+			// Investigation phase has run and captured artifacts - that's sufficient
+			return nil
+		}
+
+		// Check if any phase has captured test results or error evidence
+		for _, artifacts := range phaseArtifacts {
+			if testResults, hasTest := artifacts["test_results"]; hasTest && testResults != nil {
+				return nil
+			}
+			if evidence, hasEvidence := artifacts["evidence"]; hasEvidence {
+				if evidenceSlice, ok := evidence.([]string); ok && len(evidenceSlice) > 0 {
+					return nil
+				}
+			}
+		}
+	}
+
 	summaryText := strings.ToLower(strings.TrimSpace(artifact.Summary))
-	notesText := strings.ToLower(strings.Join(artifact.Notes, " "))
 	evidenceText := strings.ToLower(strings.Join(artifact.Evidence, " "))
-	planText := strings.ToLower(strings.Join(artifact.Plan, " "))
 
 	// Check for test failure-specific evidence if this is a test fixing task
 	isTestFailureTask := (strings.Contains(summaryText, "test") || strings.Contains(summaryText, "failing tests")) &&
 		(strings.Contains(summaryText, "fail") || strings.Contains(summaryText, "error") || strings.Contains(summaryText, "broken"))
 
-	if isTestFailureTask {
-		// For test failures, require actual test output evidence
-		hasTestOutput := strings.Contains(evidenceText, "fail") ||
-			strings.Contains(evidenceText, "error") ||
-			strings.Contains(evidenceText, "panic") ||
-			strings.Contains(evidenceText, "expected") ||
-			strings.Contains(notesText, "test output") ||
-			strings.Contains(notesText, "test result")
+	// For test failures, require actual test output evidence
+	hasTestOutput := strings.Contains(evidenceText, "fail") ||
+		strings.Contains(evidenceText, "error") ||
+		strings.Contains(evidenceText, "panic") ||
+		strings.Contains(evidenceText, "expected") ||
+		strings.Contains(evidenceText, "actual")
 
-		if !hasTestOutput {
-			return fmt.Errorf("test failure investigation requires actual test output in evidence - call investigation_run_tests first to capture failure details, then document findings before marking ready_for_execution")
+	// ADVISORY MODE: Warn about missing test output but don't block
+	// For feature implementation, we need flexibility - LLM will call investigation tools if needed
+	if isTestFailureTask && !hasTestOutput {
+		log_slog.Info("Planning test fix without test output - LLM should call investigation_run_tests if needed",
+			"summary", summaryText)
+	}
+
+	// Accept any substantive error evidence (more lenient than before)
+	hasErrorEvidence := len(artifact.Evidence) > 0 && (strings.Contains(evidenceText, "error") ||
+		strings.Contains(evidenceText, "fail") ||
+		strings.Contains(evidenceText, "stack trace") ||
+		strings.Contains(evidenceText, "exception"))
+
+	// Accept investigation artifacts (structured_data with investigation details)
+	hasInvestigationData := false
+	if artifact.StructuredData != nil {
+		if _, hasInv := artifact.StructuredData["investigation_summary"]; hasInv {
+			hasInvestigationData = true
+		}
+		if _, hasTest := artifact.StructuredData["test_results"]; hasTest {
+			hasInvestigationData = true
 		}
 	}
 
-	rootCauseSeen := strings.Contains(summaryText, "root cause") || strings.Contains(notesText, "root cause") || strings.Contains(evidenceText, "root cause") || strings.Contains(planText, "root cause")
-	causalTraceSeen := strings.Contains(summaryText, "causal trace") || strings.Contains(summaryText, "cause-and-effect") || strings.Contains(summaryText, "dependency path") || strings.Contains(summaryText, "execution path") || strings.Contains(notesText, "causal trace") || strings.Contains(notesText, "cause-and-effect") || strings.Contains(notesText, "dependency path") || strings.Contains(notesText, "execution path") || strings.Contains(evidenceText, "causal trace") || strings.Contains(evidenceText, "cause-and-effect") || strings.Contains(evidenceText, "dependency path") || strings.Contains(evidenceText, "execution path") || strings.Contains(planText, "causal trace") || strings.Contains(planText, "cause-and-effect") || strings.Contains(planText, "dependency path") || strings.Contains(planText, "execution path")
+	// ADVISORY MODE: Log but don't block - allow LLM to self-correct
+	if !hasTestOutput && !hasErrorEvidence && !hasInvestigationData {
+		log_slog.Info("Planning without investigation evidence - LLM can call investigation tools if needed",
+			"has_workstream_artifacts", workstream != nil && len(workstream.GetPhaseArtifacts()) > 0)
+	}
 
-	if !rootCauseSeen {
-		return fmt.Errorf("issue-oriented planning requires a root cause statement before ready_for_execution")
-	}
-	if !causalTraceSeen {
-		return fmt.Errorf("issue-oriented planning requires a causal trace before ready_for_execution")
-	}
+	// Always allow progression
 	return nil
 }
 

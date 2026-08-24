@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	log_slog "log/slog"
 	"strings"
 	"time"
 
@@ -478,21 +479,76 @@ func shouldRequireRootCauseEvidence(artifact phaseArtifact) bool {
 	return false
 }
 
-func requireRootCauseEvidence(artifact phaseArtifact) error {
-	summaryText := strings.ToLower(strings.TrimSpace(artifact.Summary))
-	notesText := strings.ToLower(strings.Join(artifact.Notes, " "))
+func requireRootCauseEvidence(artifact phaseArtifact, workstream WorkStreamContextReader) error {
+	// Check workstream state first - this is the source of truth
+	if workstream != nil {
+		phaseArtifacts := workstream.GetPhaseArtifacts()
+
+		// Check if investigation phase has captured findings
+		if invArtifacts, hasInv := phaseArtifacts["investigation"]; hasInv && len(invArtifacts) > 0 {
+			// Investigation phase has run and captured artifacts - that's sufficient
+			return nil
+		}
+
+		// Check if any phase has captured test results or error evidence
+		for _, artifacts := range phaseArtifacts {
+			if testResults, hasTest := artifacts["test_results"]; hasTest && testResults != nil {
+				return nil
+			}
+			if evidence, hasEvidence := artifacts["evidence"]; hasEvidence {
+				if evidenceSlice, ok := evidence.([]string); ok && len(evidenceSlice) > 0 {
+					return nil
+				}
+			}
+		}
+	}
+
+	// Fall back to artifact content checking (more lenient than before)
 	evidenceText := strings.ToLower(strings.Join(artifact.Evidence, " "))
-	planText := strings.ToLower(strings.Join(artifact.Plan, " "))
 
-	rootCauseSeen := strings.Contains(summaryText, "root cause") || strings.Contains(notesText, "root cause") || strings.Contains(evidenceText, "root cause") || strings.Contains(planText, "root cause")
-	causalTraceSeen := strings.Contains(summaryText, "causal trace") || strings.Contains(summaryText, "cause-and-effect") || strings.Contains(summaryText, "dependency path") || strings.Contains(summaryText, "execution path") || strings.Contains(notesText, "causal trace") || strings.Contains(notesText, "cause-and-effect") || strings.Contains(notesText, "dependency path") || strings.Contains(notesText, "execution path") || strings.Contains(evidenceText, "causal trace") || strings.Contains(evidenceText, "cause-and-effect") || strings.Contains(evidenceText, "dependency path") || strings.Contains(evidenceText, "execution path") || strings.Contains(planText, "causal trace") || strings.Contains(planText, "cause-and-effect") || strings.Contains(planText, "dependency path") || strings.Contains(planText, "execution path")
+	// Accept test failure evidence
+	hasTestEvidence := (strings.Contains(evidenceText, "test") || strings.Contains(evidenceText, "fail")) &&
+		(strings.Contains(evidenceText, "error") ||
+			strings.Contains(evidenceText, "panic") ||
+			strings.Contains(evidenceText, "expected"))
 
-	if !rootCauseSeen {
-		return fmt.Errorf("issue-oriented planning requires a root cause statement before ready_for_execution")
+	// Accept any substantive error evidence
+	hasErrorEvidence := len(artifact.Evidence) > 0 && (strings.Contains(evidenceText, "error") ||
+		strings.Contains(evidenceText, "fail") ||
+		strings.Contains(evidenceText, "stack trace") ||
+		strings.Contains(evidenceText, "exception"))
+
+	// Accept investigation structured data
+	hasInvestigationData := false
+	if artifact.StructuredData != nil {
+		if _, hasInv := artifact.StructuredData["investigation_summary"]; hasInv {
+			hasInvestigationData = true
+		}
+		if _, hasTest := artifact.StructuredData["test_results"]; hasTest {
+			hasInvestigationData = true
+		}
+		// Accept any plan with structured execution details (shows work was done)
+		if _, hasPlan := artifact.StructuredData["detailed_execution_plan"]; hasPlan {
+			hasInvestigationData = true
+		}
 	}
-	if !causalTraceSeen {
-		return fmt.Errorf("issue-oriented planning requires a causal trace before ready_for_execution")
+
+	// If there's ANY evidence at all, accept it (be lenient)
+	if len(artifact.Evidence) > 0 || hasTestEvidence || hasErrorEvidence || hasInvestigationData {
+		return nil
 	}
+
+	// ADVISORY MODE: Log warning but allow progression
+	// The LLM can self-correct by calling investigation tools if it needs more context
+	// Blocking here creates loops where LLM searches randomly to satisfy validation
+	summaryText := strings.ToLower(strings.TrimSpace(artifact.Summary))
+	if shouldRequireRootCauseEvidence(artifact) {
+		log_slog.Info("Planning without investigation evidence - LLM may need to call investigation tools for context",
+			"summary", summaryText,
+			"has_workstream_artifacts", workstream != nil && len(workstream.GetPhaseArtifacts()) > 0)
+	}
+
+	// Always allow progression - trust the LLM to orchestrate
 	return nil
 }
 
@@ -506,8 +562,18 @@ func (b *BasePhase) validateCompletionCriteria(artifact phaseArtifact) error {
 		return nil // In-progress statuses don't need validation
 	}
 
+	// Get workstream context for state-based validation
+	var workstream WorkStreamContextReader
+	if b.sharedInfra != nil && b.sharedInfra.STMAccessor != nil {
+		if stm := b.sharedInfra.STMAccessor(); stm != nil {
+			if thread := stm.GetCurrentThread(); thread != nil {
+				workstream = thread.GetStreamContext()
+			}
+		}
+	}
+
 	if shouldRequireRootCauseEvidence(artifact) {
-		if err := requireRootCauseEvidence(artifact); err != nil {
+		if err := requireRootCauseEvidence(artifact, workstream); err != nil {
 			return err
 		}
 	}
