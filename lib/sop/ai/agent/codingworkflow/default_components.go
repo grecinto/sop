@@ -78,9 +78,13 @@ func (d *DefaultContextManager) BuildContext(task Task, state RunState) (Context
 		// Normalize active file path - strip working directory components if duplicated
 		// Example: workingDir="/a/b/lib/sop", file="lib/sop/tools/file.go" → "tools/file.go"
 		normalizedFile := resolvedActiveFile
-		if !filepath.IsAbs(normalizedFile) && filepath.IsAbs(workingDir) {
-			// Get the suffix of working directory (e.g., "lib/sop" from "/Volumes/T7/sop-cloud/lib/sop")
-			// Check if file path starts with this suffix
+		var activePath string
+
+		if filepath.IsAbs(normalizedFile) {
+			// File is already absolute - use it as-is, don't join with workingDir
+			activePath = normalizedFile
+		} else if filepath.IsAbs(workingDir) {
+			// File is relative - check if it duplicates working directory components
 			workDirSlash := filepath.ToSlash(workingDir)
 			fileSlash := filepath.ToSlash(normalizedFile)
 
@@ -95,9 +99,11 @@ func (d *DefaultContextManager) BuildContext(task Task, state RunState) (Context
 					break
 				}
 			}
+			activePath = filepath.Join(workingDir, normalizedFile)
+		} else {
+			// Both relative - just join them
+			activePath = filepath.Join(workingDir, normalizedFile)
 		}
-
-		activePath := filepath.Join(workingDir, normalizedFile)
 		rawContent, readErr := os.ReadFile(activePath)
 		if readErr != nil {
 			return ContextPack{}, fmt.Errorf("read active file %s: %w", activePath, readErr)

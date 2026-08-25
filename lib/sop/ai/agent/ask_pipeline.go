@@ -113,6 +113,22 @@ func (a *CopilotAgent) runAskPipeline(ctx context.Context, query string, cfg *ai
 
 		lastResponse = response
 
+		// Increment phase iteration counter after each phase turn
+		if strings.HasPrefix(item.Actor, "phase:") {
+			phaseName := strings.TrimPrefix(item.Actor, "phase:")
+			if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+				if thread := a.service.session.Memory.GetCurrentThread(); thread != nil && thread.StreamContext != nil {
+					if thread.StreamContext.PhaseIterations == nil {
+						thread.StreamContext.PhaseIterations = make(map[string]int)
+					}
+					thread.StreamContext.PhaseIterations[phaseName]++
+					log.Info("Phase iteration incremented",
+						"phase", phaseName,
+						"iteration", thread.StreamContext.PhaseIterations[phaseName])
+				}
+			}
+		}
+
 		// ReAct returns either:
 		// - Completed answer: continue to next queue item
 		// - Clarification question: pause queue, return to user
@@ -400,6 +416,13 @@ func (a *CopilotAgent) askCore(ctx context.Context, query string, cfg *ai.Config
 		// Resolve phase plan from WorkStream or classification
 		plan, currentPhase := a.resolvePhasePlan(ctx, askCtx)
 		log.Info("Phase plan resolved", "plan", plan, "current_phase", currentPhase)
+
+		// Track phase execution for iteration counting (prevents infinite loops)
+		if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+			if thread := a.service.session.Memory.GetCurrentThread(); thread != nil && thread.StreamContext != nil {
+				thread.StreamContext.RecordPhaseExecution(currentPhase)
+			}
+		}
 
 		// Create domain-specific phase proxies
 		phases := a.createPhaseProxies(askCtx.Domains, currentPhase, askCtx)

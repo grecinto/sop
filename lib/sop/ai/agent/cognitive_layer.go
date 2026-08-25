@@ -63,6 +63,33 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 		return phaseTransactionDecision{}
 	}
 
+	// GENERAL COGNITIVE GATE: LLM-driven assessment for all phases
+	// If significant work was done (3+ tool calls), ask LLM what to do next
+	if len(toolCalls) >= 3 {
+		iterationCount := getPhaseIterationCount(workStreamCtx, currentPhase)
+		if iterationCount < 2 { // Prevent infinite loops
+			directQuery, nextPhase, reason := a.buildDirectActionFromToolResults(ctx, toolCalls)
+			if directQuery != "" {
+				// LLM recommended specific action
+				log.Info("Cognitive gate: direct action detected",
+					"current_phase", currentPhase,
+					"next_phase", nextPhase,
+					"query_preview", truncateString(directQuery, 100),
+					"reason", reason)
+
+				a.recordPhaseTransactionCognitiveState(ctx, nextPhase, reason)
+				return phaseTransactionDecision{
+					EnqueueNextPhase: true,
+					NextPhase:        nextPhase,
+					Reason:           reason,
+					DirectQuery:      directQuery,
+				}
+			}
+		}
+	}
+
+	// PHASE-SPECIFIC CHECKS (fallback heuristics)
+
 	// Execution phase continuation logic - check actual phase, not static classification flag
 	if currentPhase == "execution" {
 		// Check if code was mutated but needs validation
@@ -89,16 +116,17 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 			}
 
 			// Try to build a direct, actionable query from accumulated tool results
-			directQuery, reason := a.buildDirectActionFromToolResults(ctx, toolCalls)
+			directQuery, nextPhase, reason := a.buildDirectActionFromToolResults(ctx, toolCalls)
 			if directQuery != "" {
 				// Found specific action - enqueue direct query
-				log.Info("Cognitive gate: direct action detected",
+				log.Info("Cognitive gate: direct action detected (execution fallback)",
+					"next_phase", nextPhase,
 					"query_preview", truncateString(directQuery, 100),
 					"reason", reason)
-				a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
+				a.recordPhaseTransactionCognitiveState(ctx, nextPhase, reason)
 				return phaseTransactionDecision{
 					EnqueueNextPhase: true,
-					NextPhase:        "execution",
+					NextPhase:        nextPhase,
 					Reason:           reason,
 					DirectQuery:      directQuery,
 				}
@@ -815,11 +843,11 @@ func getPhaseIterationCount(workStreamCtx *WorkStreamContext, phase string) int 
 }
 
 // buildDirectActionFromToolResults uses LLM to assess accumulated tool results and recommend a direct action.
-// Returns (directQuery, reason) if LLM recommends specific action, or ("", "") to continue naturally.
+// Returns (directQuery, nextPhase, reason) if LLM recommends specific action, or ("", "", "") to continue naturally.
 // This is domain-neutral: works for coding, testing, research, etc.
-func (a *CopilotAgent) buildDirectActionFromToolResults(ctx context.Context, toolCalls []ai.ToolCall) (string, string) {
+func (a *CopilotAgent) buildDirectActionFromToolResults(ctx context.Context, toolCalls []ai.ToolCall) (string, string, string) {
 	if a == nil || a.brain == nil || len(toolCalls) == 0 {
-		return "", ""
+		return "", "", ""
 	}
 
 	// Build tool call summary for LLM
@@ -849,23 +877,26 @@ func (a *CopilotAgent) buildDirectActionFromToolResults(ctx context.Context, too
 Based on what has been collected, determine if there is a specific, actionable next step that should be taken directly, or if the phase should continue naturally.
 
 Examples of direct actions:
-- Coding domain: "Generate patches to fix these 15 failing tests in auth/user.go and db/query.go"
-- Testing domain: "Analyze why test_login fails: expected token but got null"
-- Research domain: "Synthesize findings from 3 papers into a comparison summary"
-- General: Any specific action that can be stated clearly based on accumulated data
+- Test results obtained → "READ and FIX the failing test files: auth/user_test.go, db/query_test.go" (phase: execution)
+- Investigation searched files → "READ the identified source files and generate patches" (phase: execution)
+- Planning complete → "Execute step 1: fix authentication in auth/user.go" (phase: execution)  
+- Context gathered → "Create detailed fix plan for the 3 test failures" (phase: planning)
+
+CRITICAL RULES:
+- If test results with file paths were obtained: return "direct_query" to READ those files and generate patches
+- If searches found files: return "direct_query" to READ (not search) those files
+- If more investigation needed: return "continue_naturally"
+- DO NOT search repeatedly - transition to reading/fixing after gathering file paths
 
 Return strict JSON:
 {
   "action": "direct_query|continue_naturally",
   "query": "specific actionable statement if action=direct_query, empty otherwise",
+  "next_phase": "investigation|planning|execution (only if action=direct_query)",
   "reason": "one sentence explaining the decision"
 }
 
-Rules:
-- If accumulated data suggests a clear next step, return "direct_query" with specific query
-- If more investigation needed or unclear, return "continue_naturally"
-- Query should be concrete and actionable, not generic guidance
-- Focus on WHAT to do, not HOW (LLM will figure out how)`, toolSummary.String())
+Focus on WHAT to do, not HOW (LLM will figure out how).`, toolSummary.String())
 
 	providerOverride := extractProviderOverrideFromContext(ctx)
 	provider := ""
@@ -884,27 +915,32 @@ Rules:
 
 	if err != nil {
 		log.Info("LLM cognitive assessment failed", "error", err)
-		return "", ""
+		return "", "", ""
 	}
 
 	// Parse JSON response
 	type cognitiveRecommendation struct {
-		Action string `json:"action"`
-		Query  string `json:"query"`
-		Reason string `json:"reason"`
+		Action    string `json:"action"`
+		Query     string `json:"query"`
+		NextPhase string `json:"next_phase"`
+		Reason    string `json:"reason"`
 	}
 
 	var rec cognitiveRecommendation
 	if err := json.Unmarshal([]byte(resp.Text), &rec); err != nil {
 		log.Info("Failed to parse cognitive recommendation", "error", err, "response", resp.Text)
-		return "", ""
+		return "", "", ""
 	}
 
 	if rec.Action == "direct_query" && strings.TrimSpace(rec.Query) != "" {
-		return strings.TrimSpace(rec.Query), strings.TrimSpace(rec.Reason)
+		nextPhase := strings.TrimSpace(strings.ToLower(rec.NextPhase))
+		if nextPhase == "" {
+			nextPhase = "execution" // Default to execution if not specified
+		}
+		return strings.TrimSpace(rec.Query), nextPhase, strings.TrimSpace(rec.Reason)
 	}
 
-	return "", ""
+	return "", "", ""
 }
 
 // buildExecutionGuidanceFromState analyzes WorkStreamContext artifacts and builds specific guidance
