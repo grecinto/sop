@@ -446,7 +446,7 @@ func (p *CodingPhase) runSearchRepo(ctx context.Context, args map[string]any) (s
 	infra := p.ensureSharedInfrastructure()
 
 	// Resolve repo working directory using exported helper
-	task, _ = cw.ResolveRepoWorkingDir(task)
+	task, _ = cw.ResolveRepoWorkingDir(ctx, task)
 
 	repoOps := infra.NewRepoOperations()
 	searchQuery := readPhaseString(args, "search", "")
@@ -696,7 +696,7 @@ func (p *CodingPhase) runTests(ctx context.Context, args map[string]any) (string
 	infra := p.ensureSharedInfrastructure()
 
 	// Resolve repo working directory using exported helper
-	task, _ = cw.ResolveRepoWorkingDir(task)
+	task, _ = cw.ResolveRepoWorkingDir(ctx, task)
 
 	testOps := infra.NewTestOperations()
 	result, err := testOps.RunTests(ctx, task, task.State)

@@ -30,8 +30,8 @@ func TestShouldExposeStoreInUI_HidesInternalStores(t *testing.T) {
 		{name: "users hidden for regular user", store: "users", userID: "alice", exposed: false},
 		{name: "users visible for admin", store: "users", userID: "root", isAdmin: true, exposed: true},
 		{name: "users visible for system admin", store: "users", userID: "root", isSystemAdmin: true, exposed: true},
-		{name: "admin own stm hidden", store: "stm_root", userID: "root", isAdmin: true, exposed: false},
-		{name: "system admin own stm visible", store: "stm_root", userID: "root", isSystemAdmin: true, exposed: true},
+		{name: "admin own stm visible", store: "root_stm", userID: "root", isAdmin: true, exposed: true},
+		{name: "system admin own stm visible", store: "root_stm", userID: "root", isSystemAdmin: true, exposed: true},
 	}
 
 	for _, tc := range cases {

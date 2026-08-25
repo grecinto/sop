@@ -3,6 +3,7 @@ package codingworkflow
 import (
 	"encoding/json"
 	"fmt"
+	log_slog "log/slog"
 	"regexp"
 	"strings"
 )
@@ -36,20 +37,32 @@ func ParseTestResult(toolName, rawOutput string) *StructuredToolResult {
 	// Determine output type and apply appropriate parser
 	switch {
 	case isTestCommand(toolName):
+		log_slog.Info("[ParseTestResult] Detected test command", "tool", toolName, "output_len", len(rawOutput))
 		return parseTestOutput(rawOutput)
 	case isBuildCommand(toolName):
+		log_slog.Info("[ParseTestResult] Detected build command", "tool", toolName)
 		return parseBuildOutput(rawOutput)
 	case isLintCommand(toolName):
+		log_slog.Info("[ParseTestResult] Detected lint command", "tool", toolName)
 		return parseLintOutput(rawOutput)
 	default:
+		log_slog.Info("[ParseTestResult] No parser for tool", "tool", toolName)
 		return nil // No structured parsing available
 	}
 }
 
 // parseTestOutput extracts structured data from test failures
 func parseTestOutput(rawOutput string) *StructuredToolResult {
-	if !containsFailureIndicators(rawOutput) {
+	hasFailures := containsFailureIndicators(rawOutput)
+	preview := rawOutput
+	if len(preview) > 100 {
+		preview = preview[:100]
+	}
+	log_slog.Info("[parseTestOutput] Checking for failures", "has_failures", hasFailures, "output_preview", preview)
+
+	if !hasFailures {
 		// Tests passed - simple success result
+		log_slog.Info("[parseTestOutput] No failures detected - returning success")
 		return &StructuredToolResult{
 			Type:    "test_success",
 			Summary: "All tests passed",
@@ -62,23 +75,32 @@ func parseTestOutput(rawOutput string) *StructuredToolResult {
 	// Detect language and route to appropriate parser
 	// Each language has unique output patterns we can detect
 	var failures []ErrorDetail
+	var detectedFormat string
 
 	switch {
 	case detectGoTest(rawOutput):
+		detectedFormat = "go"
 		failures = extractGoTestFailures(rawOutput)
 	case detectPytest(rawOutput):
+		detectedFormat = "pytest"
 		failures = extractPytestFailures(rawOutput)
 	case detectJest(rawOutput):
+		detectedFormat = "jest"
 		failures = extractJestFailures(rawOutput)
 	case detectRustTest(rawOutput):
+		detectedFormat = "rust"
 		failures = extractRustTestFailures(rawOutput)
 	default:
 		// Unknown format - return nil to use text fallback
+		log_slog.Info("[parseTestOutput] Unknown test format - using text fallback")
 		return nil
 	}
 
+	log_slog.Info("[parseTestOutput] Detected test format", "format", detectedFormat, "failures_found", len(failures))
+
 	if len(failures) == 0 {
 		// Has failure indicators but couldn't parse - return nil to use text fallback
+		log_slog.Info("[parseTestOutput] Could not extract failures from output - using text fallback")
 		return nil
 	}
 
@@ -87,11 +109,11 @@ func parseTestOutput(rawOutput string) *StructuredToolResult {
 		Summary:      formatTestFailureSummary(failures),
 		ErrorDetails: failures,
 		NextActions: []string{
-			"Read the first failing test source code",
-			"Inspect the implementation being tested",
-			"Identify root cause from error message",
-			"Apply fix with patch_file",
-			"Re-run tests to verify",
+			"READ the test file and implementation files using the file paths in error_details",
+			"Analyze the error messages to understand what's failing",
+			"Identify the root cause in the implementation code",
+			"Generate a patch to fix the issue",
+			"Apply the patch and re-run tests to verify",
 		},
 	}
 
@@ -117,6 +139,7 @@ func extractGoTestFailures(output string) []ErrorDetail {
 
 	var currentTest string
 	var currentPackage string
+	var currentFilePath string
 	var currentError strings.Builder
 	var currentLine int
 
@@ -129,10 +152,14 @@ func extractGoTestFailures(output string) []ErrorDetail {
 				if errorMsg == "" {
 					errorMsg = "Test failed (no detailed error message captured)"
 				}
+				location := currentFilePath
+				if location == "" {
+					location = currentPackage // Fallback to package if no file found
+				}
 				failures = append(failures, ErrorDetail{
 					Type:     "test_failure",
 					Name:     currentTest,
-					Location: currentPackage,
+					Location: location,
 					Line:     currentLine,
 					Message:  errorMsg,
 				})
@@ -141,6 +168,7 @@ func extractGoTestFailures(output string) []ErrorDetail {
 			// Start new failure
 			currentTest = matches[1]
 			currentError.Reset()
+			currentFilePath = ""
 			currentLine = 0
 			continue
 		}
@@ -154,6 +182,7 @@ func extractGoTestFailures(output string) []ErrorDetail {
 		// Detect error location "    file.go:123:"
 		if currentTest != "" {
 			if matches := errorLinePattern.FindStringSubmatch(line); matches != nil {
+				currentFilePath = matches[1] // Capture file path
 				currentLine, _ = parseInt(matches[2])
 			}
 
@@ -174,10 +203,14 @@ func extractGoTestFailures(output string) []ErrorDetail {
 						if errorMsg == "" {
 							errorMsg = "Test failed (no detailed error message captured)"
 						}
+						location := currentFilePath
+						if location == "" {
+							location = currentPackage // Fallback to package if no file found
+						}
 						failures = append(failures, ErrorDetail{
 							Type:     "test_failure",
 							Name:     currentTest,
-							Location: currentPackage,
+							Location: location,
 							Line:     currentLine,
 							Message:  errorMsg,
 						})
@@ -195,10 +228,14 @@ func extractGoTestFailures(output string) []ErrorDetail {
 		if errorMsg == "" {
 			errorMsg = "Test failed (no detailed error message captured)"
 		}
+		location := currentFilePath
+		if location == "" {
+			location = currentPackage // Fallback to package if no file found
+		}
 		failures = append(failures, ErrorDetail{
 			Type:     "test_failure",
 			Name:     currentTest,
-			Location: currentPackage,
+			Location: location,
 			Line:     currentLine,
 			Message:  errorMsg,
 		})
@@ -411,6 +448,13 @@ func extractRustTestFailures(output string) []ErrorDetail {
 
 // CreateEnrichedTestResult combines structured data with raw output
 func CreateEnrichedTestResult(structured *StructuredToolResult, rawOutput, filePath string, maxInlineSize int) string {
+	log_slog.Info("[CreateEnrichedTestResult] Called",
+		"structured_type", structured.Type,
+		"error_count", len(structured.ErrorDetails),
+		"file_path", filePath,
+		"raw_len", len(rawOutput),
+		"max_inline", maxInlineSize)
+
 	// Add file path and raw output to structured result
 	structured.FilePath = filePath
 	if len(rawOutput) <= maxInlineSize {
@@ -424,8 +468,11 @@ func CreateEnrichedTestResult(structured *StructuredToolResult, rawOutput, fileP
 	jsonBytes, err := json.MarshalIndent(structured, "", "  ")
 	if err != nil {
 		// Fallback to raw output if JSON serialization fails
+		log_slog.Info("[CreateEnrichedTestResult] JSON marshal failed", "error", err)
 		return rawOutput
 	}
 
-	return string(jsonBytes)
+	jsonStr := string(jsonBytes)
+	log_slog.Info("[CreateEnrichedTestResult] JSON created", "json_len", len(jsonStr))
+	return jsonStr
 }

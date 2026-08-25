@@ -75,7 +75,29 @@ func (d *DefaultContextManager) BuildContext(task Task, state RunState) (Context
 	taskType := classifyTaskType(task, state, resolvedActiveFile)
 	var content string
 	if resolvedActiveFile != "" {
-		activePath := filepath.Join(workingDir, resolvedActiveFile)
+		// Normalize active file path - strip working directory components if duplicated
+		// Example: workingDir="/a/b/lib/sop", file="lib/sop/tools/file.go" → "tools/file.go"
+		normalizedFile := resolvedActiveFile
+		if !filepath.IsAbs(normalizedFile) && filepath.IsAbs(workingDir) {
+			// Get the suffix of working directory (e.g., "lib/sop" from "/Volumes/T7/sop-cloud/lib/sop")
+			// Check if file path starts with this suffix
+			workDirSlash := filepath.ToSlash(workingDir)
+			fileSlash := filepath.ToSlash(normalizedFile)
+
+			// Extract last N components of working directory and check if file starts with them
+			parts := strings.Split(strings.Trim(workDirSlash, "/"), "/")
+			for n := len(parts); n >= 1; n-- {
+				suffix := strings.Join(parts[len(parts)-n:], "/")
+				prefix := suffix + "/"
+				if strings.HasPrefix(fileSlash, prefix) {
+					// Strip the redundant prefix
+					normalizedFile = strings.TrimPrefix(fileSlash, prefix)
+					break
+				}
+			}
+		}
+
+		activePath := filepath.Join(workingDir, normalizedFile)
 		rawContent, readErr := os.ReadFile(activePath)
 		if readErr != nil {
 			return ContextPack{}, fmt.Errorf("read active file %s: %w", activePath, readErr)
@@ -1399,11 +1421,13 @@ func (d *DefaultSafetyPolicy) Allow(task Task, state RunState) error {
 
 	workingDirCandidates := []string{}
 	if task.WorkingDir != "" {
-		workingDirCandidates = discoverWorkingDirCandidates(task.WorkingDir)
+		workingDirCandidates = []string{task.WorkingDir}
 	} else {
-		workingDirCandidates = discoverWorkingDirCandidates(".")
+		if cwd, err := os.Getwd(); err == nil {
+			workingDirCandidates = []string{cwd}
+		}
 	}
-	promptRequired := task.WorkingDir == "" && len(workingDirCandidates) > 1
+	promptRequired := false // No longer prompt for working directory - use session context
 	return &ApprovalRequiredError{
 		ActionType:               "coding_workflow_patch",
 		Reasoning:                "This coding task will modify files in your repository. Please review and approve the changes.",

@@ -1596,22 +1596,45 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 // PreprocessToolResult is a standalone function that preprocessing logic for tool results.
 // This allows both PhaseCapability and CodingPhase to use the same preprocessing.
 func PreprocessToolResult(toolName string, rawOutput string, filePath string, maxInlineSize int) string {
+	log_slog.Info("[PreprocessToolResult] Called",
+		"tool", toolName,
+		"raw_len", len(rawOutput),
+		"file_path", filePath,
+		"max_inline", maxInlineSize)
+
 	// Try to parse into structured format
 	structured := ParseTestResult(toolName, rawOutput)
 	if structured == nil {
 		// Not a recognized format, return empty to use standard text flow
+		log_slog.Info("[PreprocessToolResult] ParseTestResult returned nil - no structured format")
 		return ""
 	}
 
+	log_slog.Info("[PreprocessToolResult] ParseTestResult succeeded", "type", structured.Type, "error_count", len(structured.ErrorDetails))
+
 	// Convert to enriched JSON result
-	return CreateEnrichedTestResult(structured, rawOutput, filePath, maxInlineSize)
+	result := CreateEnrichedTestResult(structured, rawOutput, filePath, maxInlineSize)
+	log_slog.Info("[PreprocessToolResult] Returning", "result_len", len(result))
+	return result
 }
 
 // PreprocessResult implements capabilities.ResultPreprocessor for coding domain
 // This allows the coding capability to transform test/build/lint outputs into
 // structured JSON before they reach the LLM
 func (c *PhaseCapability) PreprocessResult(toolName string, rawOutput string, filePath string, maxInlineSize int) string {
-	return PreprocessToolResult(toolName, rawOutput, filePath, maxInlineSize)
+	result := PreprocessToolResult(toolName, rawOutput, filePath, maxInlineSize)
+	if result != "" {
+		log_slog.Info("Test result preprocessed to structured format",
+			"tool", toolName,
+			"raw_size", len(rawOutput),
+			"structured_size", len(result),
+			"has_error_details", strings.Contains(result, "error_details"))
+	} else {
+		log_slog.Info("Test result preprocessing skipped (not recognized format)",
+			"tool", toolName,
+			"raw_size", len(rawOutput))
+	}
+	return result
 }
 
 // universalContextTools returns context-gathering tools available to ALL phases.
@@ -1623,7 +1646,7 @@ func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition 
   "required": ["query"],
   "properties": {
     "query": {"type": "string", "description": "Task description or query"},
-    "working_dir": {"type": "string", "description": "Repository root path (optional, inferred if omitted)"},
+    "working_dir": {"type": "string", "description": "Use 'current' for session working directory (default if omitted). Never pass absolute paths."},
     "active_file": {"type": "string", "description": "Primary file for changes (optional, inferred if omitted)"}
   }
 }`
@@ -1634,7 +1657,7 @@ func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition 
   "properties": {
     "query": {"type": "string", "description": "Task description"},
     "search": {"type": "string", "description": "Search query for patterns or code (optional)"},
-    "working_dir": {"type": "string", "description": "Repository root path (use '.' for current directory)"}
+    "working_dir": {"type": "string", "description": "Use 'current' or '.' for session working directory. Never pass absolute paths."}
   }
 }`
 
@@ -1660,7 +1683,7 @@ func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition 
 		Tags:        []string{"R"},
 	}, {
 		Name:        "run_tests",
-		Description: "Runs tests for validation or evidence gathering. Available in ALL phases. WHEN TO CALL: In investigation to capture failure evidence, in execution to validate changes, in review for comprehensive validation. Returns test results (pass/fail) with output.",
+		Description: "Runs tests for validation or evidence gathering. Available in ALL phases. WHEN TO CALL: In investigation to capture failure evidence, in execution to validate changes, in review for comprehensive validation. RETURN FORMAT: Structured JSON with 'error_details' array containing test failures. Each error_details entry has: 'name' (test name), 'location' (file path), 'line' (line number), 'message' (error). HOW TO USE RESULTS: (1) Look at error_details array, (2) For each failure, read the 'location' file to see the code, (3) Analyze the 'message' to understand what's wrong, (4) Generate patches to fix the failures. DO NOT search for test names - the structured result already tells you which files to read.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
 	}, {
@@ -1672,12 +1695,13 @@ func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition 
 }
 
 func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
+	log_slog.Info("[phaseWorkflowTools] Called", "phase_id", c.phaseID)
 	taskSchema := `{
   "type": "object",
   "required": ["query"],
   "properties": {
     "query": {"type": "string", "description": "Task description or query"},
-    "working_dir": {"type": "string", "description": "Repository root path (optional, inferred if omitted)"},
+    "working_dir": {"type": "string", "description": "Use 'current' for session working directory (default if omitted). Never pass absolute paths."},
     "active_file": {"type": "string", "description": "Primary file for changes (optional, inferred if omitted)"}
   }
 }`
@@ -1768,6 +1792,9 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 
 	case "execution":
 		// Execution-specific tools (universal context tools already included)
+		log_slog.Info("[phaseWorkflowTools] Building execution tools",
+			"phase_id", c.phaseID,
+			"universal_tool_count", len(tools))
 		tools = append(tools, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("preview_patch"),
 			Description: "Previews patch before applying. HOW TO USE: (1) STOP searching after you have test failure + found code location, (2) YOU generate the fix code yourself (don't search for it), (3) Structure as {file_path, old_content, new_content, description}, (4) Call this tool with your generated patch. The old_content should be the exact text from search results, new_content is YOUR corrected code. Example: {file_path:'auth.go', old_content:'return nil', new_content:'return &User{ID:1}', description:'Fix nil return'}. WHEN TO CALL: After 2-3 searches when you have enough context to write the fix. Returns preview for user approval.",
@@ -1779,6 +1806,16 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 			Schema:      patchSchema,
 			Tags:        []string{"U"},
 		})
+		log_slog.Info("[phaseWorkflowTools] After adding execution tools",
+			"phase_id", c.phaseID,
+			"total_tool_count", len(tools),
+			"tool_names", func() []string {
+				names := make([]string, len(tools))
+				for i, t := range tools {
+					names[i] = t.Name
+				}
+				return names
+			}())
 
 	case "review":
 		// Review only uses universal context tools (no phase-specific actions)
@@ -1869,14 +1906,42 @@ func ResolveContextWorkingDir(ctx context.Context, workingDir string) string {
 
 	// If explicit non-dot path provided, resolve it
 	if normalized != "" && cleaned != "." && cleaned != string(filepath.Separator) {
-		// If it's a relative path, join it with the session's base directory
-		if !filepath.IsAbs(cleaned) {
-			base := contextualBaseDir(ctx)
-			if base != "" {
-				resolved := filepath.Join(base, cleaned)
-				log.Printf("[ResolveContextWorkingDir] Resolved relative path %q to %q", normalized, resolved)
-				return resolved
+		// Get session's base directory for validation
+		base := contextualBaseDir(ctx)
+
+		// If it's an absolute path, validate it against session context
+		if filepath.IsAbs(cleaned) {
+			// CRITICAL: Reject absolute paths if we have no session context
+			// This prevents LLM from bypassing session working directory
+			if base == "" {
+				log.Printf("[ResolveContextWorkingDir] REJECTED absolute path %q - no session context available, using current directory", cleaned)
+				// Fall back to current working directory
+				if cwd, err := os.Getwd(); err == nil {
+					return cwd
+				}
+				return "."
 			}
+
+			// Normalize both paths for comparison
+			cleanBase := filepath.Clean(base)
+			cleanPath := filepath.Clean(cleaned)
+
+			// Reject if the path is OUTSIDE or ABOVE the session working directory
+			// This prevents LLM from escaping to parent directories
+			if !strings.HasPrefix(cleanPath, cleanBase) && cleanPath != cleanBase {
+				log.Printf("[ResolveContextWorkingDir] REJECTED absolute path %q - outside session working_dir %q, using session context instead", cleanPath, cleanBase)
+				return base
+			}
+
+			log.Printf("[ResolveContextWorkingDir] Using validated absolute path: %q", normalized)
+			return normalized
+		}
+
+		// If it's a relative path, join it with the session's base directory
+		if base != "" {
+			resolved := filepath.Join(base, cleaned)
+			log.Printf("[ResolveContextWorkingDir] Resolved relative path %q to %q", normalized, resolved)
+			return resolved
 		}
 		log.Printf("[ResolveContextWorkingDir] Using explicit path: %q", normalized)
 		return normalized
@@ -2048,10 +2113,9 @@ func DiscoverWorkingDirCandidates(baseDir string) []string {
 // Returns the modified task and list of candidate repositories.
 // Exported for use by phase implementations.
 //
-// IMPORTANT: If the working directory is already absolute and explicit (not "." or empty),
-// we preserve it even if it's not the git root. This respects the user's intent to work
-// in a subdirectory. Only discover git root for relative/empty paths.
-func ResolveRepoWorkingDir(task Task) (Task, []string) {
+// IMPORTANT: Validates absolute paths against session context to prevent escaping
+// to parent directories. Only subdirectories or exact matches are allowed.
+func ResolveRepoWorkingDir(ctx context.Context, task Task) (Task, []string) {
 	resolved := task
 	baseDir := strings.TrimSpace(task.WorkingDir)
 	if baseDir == "" {
@@ -2059,25 +2123,29 @@ func ResolveRepoWorkingDir(task Task) (Task, []string) {
 	}
 	baseDir = filepath.Clean(baseDir)
 
-	// If working directory is already absolute and explicit, preserve it
-	// Only discover git root for relative paths or "."
+	// If working directory is absolute, validate against session context
 	if filepath.IsAbs(baseDir) && baseDir != "/" {
-		// Already have explicit absolute path, keep it
+		// Get session working directory for validation
+		sessionBase := contextualBaseDir(ctx)
+		if sessionBase != "" {
+			cleanBase := filepath.Clean(sessionBase)
+			cleanPath := filepath.Clean(baseDir)
+
+			// Only allow if path is session directory or a subdirectory
+			// REJECT if path is a parent directory (escaping session context)
+			if !strings.HasPrefix(cleanPath, cleanBase) && cleanPath != cleanBase {
+				log.Printf("[ResolveRepoWorkingDir] REJECTED absolute path %q - parent of session working_dir %q, using session context instead", cleanPath, cleanBase)
+				baseDir = cleanBase
+			}
+		}
 		resolved.WorkingDir = baseDir
 		return resolved, []string{baseDir}
 	}
 
-	if IsGitRepositoryDir(baseDir) {
-		resolved.WorkingDir = baseDir
-		return resolved, []string{baseDir}
-	}
-	candidates := DiscoverWorkingDirCandidates(baseDir)
-	if len(candidates) > 0 {
-		resolved.WorkingDir = candidates[0]
-		return resolved, candidates
-	}
+	// Always use the resolved baseDir (session working_dir or explicit path)
+	// Do NOT climb up to discover git roots - respect user's working directory
 	resolved.WorkingDir = baseDir
-	return resolved, nil
+	return resolved, []string{baseDir}
 }
 
 func formatRepoResolutionFallback(toolLabel string, task Task, candidates []string, err error) string {
@@ -2102,7 +2170,7 @@ func formatRepoResolutionFallback(toolLabel string, task Task, candidates []stri
 }
 
 func (c *PhaseCapability) runBuildContext(ctx context.Context, args map[string]any) (string, error) {
-	task, candidates := ResolveRepoWorkingDir(c.buildTask(ctx, args))
+	task, candidates := ResolveRepoWorkingDir(ctx, c.buildTask(ctx, args))
 	if task.ActiveFile == "" && len(candidates) == 0 && !IsGitRepositoryDir(task.WorkingDir) {
 		return formatRepoResolutionFallback("Repository Context", task, candidates, fmt.Errorf("no git repository found for %q", task.WorkingDir)), nil
 	}
@@ -2128,7 +2196,7 @@ func (c *PhaseCapability) runBuildContext(ctx context.Context, args map[string]a
 }
 
 func (c *PhaseCapability) runInspectRepo(ctx context.Context, args map[string]any) (string, error) {
-	task, candidates := ResolveRepoWorkingDir(c.buildTask(ctx, args))
+	task, candidates := ResolveRepoWorkingDir(ctx, c.buildTask(ctx, args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2165,7 +2233,7 @@ func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any
 	log.Printf("[runSearchRepo] buildTask returned workingDir=%q", task.WorkingDir)
 
 	// Resolve repo working directory to ensure absolute path
-	task, candidates := ResolveRepoWorkingDir(task)
+	task, candidates := ResolveRepoWorkingDir(ctx, task)
 	log.Printf("[runSearchRepo] After ResolveRepoWorkingDir: workingDir=%q, candidates=%v", task.WorkingDir, candidates)
 
 	infra := c.sharedInfrastructure()
@@ -2188,7 +2256,7 @@ func (c *PhaseCapability) runSearchRepo(ctx context.Context, args map[string]any
 }
 
 func (c *PhaseCapability) runListChangedFiles(ctx context.Context, args map[string]any) (string, error) {
-	task, candidates := ResolveRepoWorkingDir(c.buildTask(ctx, args))
+	task, candidates := ResolveRepoWorkingDir(ctx, c.buildTask(ctx, args))
 	infra := c.sharedInfrastructure()
 	if infra == nil {
 		return "", fmt.Errorf("shared infrastructure not configured")
@@ -2350,7 +2418,7 @@ func isSupportedRepoIndexExtension(ext string) bool {
 
 func (c *PhaseCapability) runIndexRepoStructure(ctx context.Context, args map[string]any) (string, error) {
 	task := c.buildTask(ctx, args)
-	resolvedTask, candidates := ResolveRepoWorkingDir(task)
+	resolvedTask, candidates := ResolveRepoWorkingDir(ctx, task)
 	if resolvedTask.WorkingDir == "" {
 		resolvedTask.WorkingDir = task.WorkingDir
 	}
@@ -2561,7 +2629,7 @@ func (c *PhaseCapability) runTests(ctx context.Context, args map[string]any) (st
 	log.Printf("[runTests] buildTask returned workingDir=%q", task.WorkingDir)
 
 	// Resolve repo working directory to ensure absolute path
-	task, candidates := ResolveRepoWorkingDir(task)
+	task, candidates := ResolveRepoWorkingDir(ctx, task)
 	log.Printf("[runTests] After ResolveRepoWorkingDir: workingDir=%q, candidates=%v", task.WorkingDir, candidates)
 
 	// Extract SessionID from context and store in task.State.Metadata for PTY routing

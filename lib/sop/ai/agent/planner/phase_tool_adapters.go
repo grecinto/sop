@@ -23,7 +23,7 @@ func (a *CodingPhaseToolAdapter) GetTools(phaseID string) []capabilities.ToolDef
   "required": ["query"],
   "properties": {
     "query": {"type": "string", "description": "Task description or query"},
-    "working_dir": {"type": "string", "description": "Repository root path (optional, inferred if omitted)"},
+    "working_dir": {"type": "string", "description": "Use 'current' for session working directory (default if omitted). Never pass absolute paths."},
     "active_file": {"type": "string", "description": "Primary file for changes (optional, inferred if omitted)"}
   }
 }`
@@ -313,7 +313,7 @@ func (a *DesktopPhaseToolAdapter) GetTools(phaseID string) []capabilities.ToolDe
   "required": ["command"],
   "properties": {
     "command": {"type": "string", "description": "Shell command to execute"},
-    "working_dir": {"type": "string", "description": "Working directory (optional)"}
+    "working_dir": {"type": "string", "description": "Use 'current' for session working directory (default if omitted)"}
   }
 }`
 

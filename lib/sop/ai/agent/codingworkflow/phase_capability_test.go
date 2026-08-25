@@ -90,13 +90,13 @@ func TestPhaseCapabilityToolSchemasUseObjectLevelRequiredFields(t *testing.T) {
 		}
 	}
 
-	contextSchema, ok := toolMap["planning_build_context"]
+	contextSchema, ok := toolMap["build_context"]
 	if !ok {
-		t.Fatalf("expected planning build_context tool to be exposed")
+		t.Fatalf("expected build_context tool to be exposed (universal tool available to all phases)")
 	}
 	var context map[string]any
 	if err := json.Unmarshal([]byte(contextSchema), &context); err != nil {
-		t.Fatalf("expected planning build_context schema to be valid JSON: %v", err)
+		t.Fatalf("expected build_context schema to be valid JSON: %v", err)
 	}
 	contextRequired, ok := context["required"].([]any)
 	if !ok {

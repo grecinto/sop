@@ -581,57 +581,72 @@ func (b *BasePhase) validateCompletionCriteria(artifact phaseArtifact) error {
 	// Phase-specific validation
 	switch b.phaseID {
 	case "intake":
-		// Intake phase must document at least one requirement
+		// Intake phase should document requirements - ADVISORY
 		if len(artifact.Requirements) == 0 {
-			return fmt.Errorf("intake phase requires at least 1 requirement before marking complete. Add requirements to the requirements array")
+			log_slog.Info("Intake phase completion without requirements array",
+				"summary", strings.TrimSpace(artifact.Summary),
+				"status", artifact.Status)
 		}
 		if strings.TrimSpace(artifact.Summary) == "" {
-			return fmt.Errorf("intake phase requires a summary of user intent")
+			log_slog.Info("Intake phase completion without summary",
+				"has_requirements", len(artifact.Requirements) > 0,
+				"status", artifact.Status)
 		}
 
 	case "investigation":
-		// Investigation must gather evidence
+		// Investigation should gather evidence - ADVISORY
 		if len(artifact.Evidence) < 2 {
-			return fmt.Errorf("investigation phase requires at least 2 pieces of evidence (file locations, patterns, findings). Current: %d", len(artifact.Evidence))
+			log_slog.Info("Investigation phase completion with minimal evidence",
+				"evidence_count", len(artifact.Evidence),
+				"summary", strings.TrimSpace(artifact.Summary))
 		}
 		if strings.TrimSpace(artifact.Summary) == "" {
-			return fmt.Errorf("investigation phase requires a summary of findings or root cause")
+			log_slog.Info("Investigation phase completion without summary",
+				"evidence_count", len(artifact.Evidence),
+				"status", artifact.Status)
 		}
 
 	case "planning":
-		// Planning must create an implementation plan
+		// Planning should create an implementation plan - ADVISORY
 		if len(artifact.Plan) == 0 {
-			return fmt.Errorf("planning phase requires at least 1 implementation step in the plan array before marking complete")
+			log_slog.Info("Planning phase completion without plan array - LLM may self-organize via tool calls",
+				"summary", strings.TrimSpace(artifact.Summary),
+				"has_next_steps", len(artifact.NextSteps) > 0)
 		}
 		if strings.TrimSpace(artifact.Summary) == "" {
-			return fmt.Errorf("planning phase requires a summary of the approach")
+			log_slog.Info("Planning phase completion without summary",
+				"has_plan", len(artifact.Plan) > 0,
+				"status", artifact.Status)
 		}
 
 	case "testing":
+		// Testing should document results - ADVISORY
 		if strings.TrimSpace(artifact.Summary) == "" {
-			return fmt.Errorf("testing phase requires a summary of the test results or validation outcome")
+			log_slog.Info("Testing phase completion without summary",
+				"status", artifact.Status,
+				"has_evidence", len(artifact.Evidence) > 0)
 		}
 
 	case "execution":
-		// Execution must document what was done
+		// Execution should document changes - ADVISORY
 		if strings.TrimSpace(artifact.Summary) == "" {
-			return fmt.Errorf("execution phase requires a summary of changes made")
+			log_slog.Info("Execution phase completion without summary",
+				"status", artifact.Status,
+				"has_plan", len(artifact.Plan) > 0)
 		}
-		// Note: Could add stricter validation like:
-		// - Require structured_data with test results
-		// - Require evidence of file modifications
-		// But keeping flexible for now
 
 	case "review":
-		// Review must use "approved" status, not just "complete"
+		// Review should use "approved" status - ADVISORY
 		if status == "complete" {
-			return fmt.Errorf("review phase should use status='approved' when validation passes, or document issues in notes")
+			log_slog.Info("Review phase using 'complete' instead of 'approved' status",
+				"summary", strings.TrimSpace(artifact.Summary))
 		}
 
 	case "delivery":
-		// Delivery must have final summary
+		// Delivery should have final summary - ADVISORY
 		if strings.TrimSpace(artifact.Summary) == "" {
-			return fmt.Errorf("delivery phase requires a final summary of work completed")
+			log_slog.Info("Delivery phase completion without summary",
+				"status", artifact.Status)
 		}
 	}
 

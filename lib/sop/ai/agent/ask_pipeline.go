@@ -152,6 +152,8 @@ type phaseTransactionDecision struct {
 	EnqueueNextPhase bool
 	NextPhase        string
 	Reason           string
+	// DirectQuery bypasses phase guidance templating and enqueues this exact query
+	DirectQuery string
 }
 
 func buildPhaseTransactionContinuationGuidance(decision phaseTransactionDecision) string {
@@ -284,14 +286,19 @@ func (a *CopilotAgent) enqueuePhaseTransactionDecision(query string, decision ph
 			return
 		}
 	}
+	// Use DirectQuery if provided, otherwise use templated guidance
+	workQuery := strings.TrimSpace(decision.DirectQuery)
+	if workQuery == "" {
+		workQuery = strings.TrimSpace(buildPhaseTransactionContinuationGuidance(decision))
+	}
 	_ = queue.Enqueue(WorkItem{
-		Query:    strings.TrimSpace(buildPhaseTransactionContinuationGuidance(decision)),
+		Query:    workQuery,
 		Actor:    targetActor,
 		Priority: PriorityPhaseSuccession,
 		Context: map[string]any{
 			"phase_transaction_continuation": true,
 			"original_query":                 extractOriginalRequestQuery(query),
-			"controller_guidance":            strings.TrimSpace(buildPhaseTransactionContinuationGuidance(decision)),
+			"controller_guidance":            workQuery,
 			"reason":                         strings.TrimSpace(decision.Reason),
 		},
 	})

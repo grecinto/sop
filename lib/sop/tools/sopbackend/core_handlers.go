@@ -1025,11 +1025,7 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 		if isSystemAdminRoleInContext(ctx) {
 			return true
 		}
-		// Regular admins cannot see STM stores
-		if isRegularAdminRoleInContext(ctx) {
-			return false
-		}
-		// Users can only see their own STM
+		// Regular users and admins can only see their own STM
 		currentUserID := strings.TrimSpace(sop.GetAuthFromContext(ctx).UserID)
 		if currentUserID == "" {
 			return false
@@ -1045,7 +1041,7 @@ func shouldExposeStoreInRBAC(ctx context.Context, storeName string) bool {
 		if isSystemAdminRoleInContext(ctx) {
 			return true
 		}
-		// Users can only see their own LTM
+		// Regular users and admins can only see their own LTM
 		currentUserID := strings.TrimSpace(sop.GetAuthFromContext(ctx).UserID)
 		if currentUserID == "" {
 			return false

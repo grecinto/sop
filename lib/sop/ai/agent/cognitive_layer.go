@@ -27,12 +27,22 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 		return phaseTransactionDecision{}
 	}
 	currentPhase := strings.TrimSpace(strings.ToLower(classification.Phase))
+
+	// Get WorkStreamContext to check accumulated state
+	var workStreamCtx *WorkStreamContext
+	if a.service != nil && a.service.session != nil && a.service.session.Memory != nil {
+		if thread := a.service.session.Memory.GetCurrentThread(); thread != nil {
+			workStreamCtx = thread.StreamContext
+		}
+	}
+
 	log.Info("Transaction evaluation start",
 		"current_phase", currentPhase,
 		"orchestration_level", classification.OrchestrationLevel,
 		"execution_ready", classification.ExecutionReady,
 		"domains", classification.Domains,
-		"tool_count", len(toolCalls))
+		"tool_count", len(toolCalls),
+		"phase_iteration", getPhaseIterationCount(workStreamCtx, currentPhase))
 
 	if !askClassificationHasDomain(classification.Domains, "coding_workflow") {
 		log.Info("Transaction evaluation: not coding_workflow domain", "domains", classification.Domains)
@@ -68,9 +78,39 @@ func (a *CopilotAgent) evaluatePhaseTransactionCognitiveDecision(ctx context.Con
 
 		// Check if execution is still investigating/searching without generating patches yet
 		if phaseTransactionIsStillInvestigating(toolCalls) && !phaseTransactionMutatedCode(toolCalls) {
-			// Execution phase is searching/investigating but hasn't generated patches yet
-			// This is the SEARCH → PATCH → APPLY workflow - continue until patch is generated
-			reason := "managed coding execution is investigating but has not generated patches yet; continue search-to-patch workflow"
+			// Check phase iteration count to prevent infinite loops
+			iterationCount := getPhaseIterationCount(workStreamCtx, currentPhase)
+			if iterationCount >= 2 {
+				// Already ran execution 2+ times - let it complete naturally
+				log.Info("Execution phase iteration limit reached - allowing natural completion",
+					"iteration_count", iterationCount,
+					"phase", currentPhase)
+				return phaseTransactionDecision{}
+			}
+
+			// Try to build a direct, actionable query from accumulated tool results
+			directQuery, reason := a.buildDirectActionFromToolResults(ctx, toolCalls)
+			if directQuery != "" {
+				// Found specific action - enqueue direct query
+				log.Info("Cognitive gate: direct action detected",
+					"query_preview", truncateString(directQuery, 100),
+					"reason", reason)
+				a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
+				return phaseTransactionDecision{
+					EnqueueNextPhase: true,
+					NextPhase:        "execution",
+					Reason:           reason,
+					DirectQuery:      directQuery,
+				}
+			}
+
+			// Fallback to generic guidance
+			reason = a.buildExecutionGuidanceFromState(workStreamCtx, toolCalls)
+			if reason == "" {
+				// No specific guidance - let it complete naturally
+				return phaseTransactionDecision{}
+			}
+
 			a.recordPhaseTransactionCognitiveState(ctx, "execution", reason)
 			return phaseTransactionDecision{
 				EnqueueNextPhase: true,
@@ -764,4 +804,160 @@ func classifyContinuationPrompt(query string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+// getPhaseIterationCount returns how many times a phase has been executed
+func getPhaseIterationCount(workStreamCtx *WorkStreamContext, phase string) int {
+	if workStreamCtx == nil || workStreamCtx.PhaseIterations == nil {
+		return 0
+	}
+	return workStreamCtx.PhaseIterations[phase]
+}
+
+// buildDirectActionFromToolResults uses LLM to assess accumulated tool results and recommend a direct action.
+// Returns (directQuery, reason) if LLM recommends specific action, or ("", "") to continue naturally.
+// This is domain-neutral: works for coding, testing, research, etc.
+func (a *CopilotAgent) buildDirectActionFromToolResults(ctx context.Context, toolCalls []ai.ToolCall) (string, string) {
+	if a == nil || a.brain == nil || len(toolCalls) == 0 {
+		return "", ""
+	}
+
+	// Build tool call summary for LLM
+	var toolSummary strings.Builder
+	toolSummary.WriteString("Recent tool executions in this phase:\n\n")
+
+	for i, tc := range toolCalls {
+		if i >= 10 { // Limit to last 10 tool calls
+			break
+		}
+		toolSummary.WriteString(fmt.Sprintf("%d. Tool: %s\n", i+1, tc.Name))
+		if len(tc.Args) > 0 {
+			argsJSON, _ := json.Marshal(tc.Args)
+			argsSummary := string(argsJSON)
+			if len(argsSummary) > 200 {
+				argsSummary = argsSummary[:200] + "..."
+			}
+			toolSummary.WriteString(fmt.Sprintf("   Args: %s\n", argsSummary))
+		}
+		toolSummary.WriteString("\n")
+	}
+
+	prompt := fmt.Sprintf(`You are evaluating a work phase that has collected information via tool calls.
+
+%s
+
+Based on what has been collected, determine if there is a specific, actionable next step that should be taken directly, or if the phase should continue naturally.
+
+Examples of direct actions:
+- Coding domain: "Generate patches to fix these 15 failing tests in auth/user.go and db/query.go"
+- Testing domain: "Analyze why test_login fails: expected token but got null"
+- Research domain: "Synthesize findings from 3 papers into a comparison summary"
+- General: Any specific action that can be stated clearly based on accumulated data
+
+Return strict JSON:
+{
+  "action": "direct_query|continue_naturally",
+  "query": "specific actionable statement if action=direct_query, empty otherwise",
+  "reason": "one sentence explaining the decision"
+}
+
+Rules:
+- If accumulated data suggests a clear next step, return "direct_query" with specific query
+- If more investigation needed or unclear, return "continue_naturally"
+- Query should be concrete and actionable, not generic guidance
+- Focus on WHAT to do, not HOW (LLM will figure out how)`, toolSummary.String())
+
+	providerOverride := extractProviderOverrideFromContext(ctx)
+	provider := ""
+	model := ""
+	if providerOverride != nil {
+		provider = providerOverride.Provider
+		model = providerOverride.Model
+	}
+
+	resp, err := a.brain.Generate(ctx, prompt, ai.GenOptions{
+		SystemPrompt:  "Return strict JSON only.",
+		Temperature:   0.0,
+		MaxTokens:     500,
+		ThinkingLevel: NormalizeThinkingLevelForGenerator(a.brain, provider, model, "low"),
+	})
+
+	if err != nil {
+		log.Info("LLM cognitive assessment failed", "error", err)
+		return "", ""
+	}
+
+	// Parse JSON response
+	type cognitiveRecommendation struct {
+		Action string `json:"action"`
+		Query  string `json:"query"`
+		Reason string `json:"reason"`
+	}
+
+	var rec cognitiveRecommendation
+	if err := json.Unmarshal([]byte(resp.Text), &rec); err != nil {
+		log.Info("Failed to parse cognitive recommendation", "error", err, "response", resp.Text)
+		return "", ""
+	}
+
+	if rec.Action == "direct_query" && strings.TrimSpace(rec.Query) != "" {
+		return strings.TrimSpace(rec.Query), strings.TrimSpace(rec.Reason)
+	}
+
+	return "", ""
+}
+
+// buildExecutionGuidanceFromState analyzes WorkStreamContext artifacts and builds specific guidance
+// This is a fallback heuristic when LLM assessment doesn't provide direct action
+func (a *CopilotAgent) buildExecutionGuidanceFromState(workStreamCtx *WorkStreamContext, currentToolCalls []ai.ToolCall) string {
+	if workStreamCtx == nil {
+		return "managed coding execution is investigating but has not generated patches yet; continue search-to-patch workflow"
+	}
+
+	// Check what's been accumulated in artifacts
+	hasTestFailures := false
+	hasFileReads := false
+	hasSearchResults := false
+
+	// Check artifacts for evidence
+	if artifacts, ok := workStreamCtx.PhaseArtifacts["execution"]; ok {
+		if evidence, ok := artifacts["evidence"]; ok {
+			evidenceStr := fmt.Sprintf("%v", evidence)
+			if strings.Contains(strings.ToLower(evidenceStr), "test") || strings.Contains(strings.ToLower(evidenceStr), "fail") {
+				hasTestFailures = true
+			}
+		}
+		if structuredData, ok := artifacts["structured_data"].(map[string]any); ok {
+			if testResults, ok := structuredData["test_results"]; ok && testResults != nil {
+				hasTestFailures = true
+			}
+		}
+	}
+
+	// Check current tool calls for file operations
+	for _, toolCall := range currentToolCalls {
+		name := strings.TrimSpace(strings.ToLower(toolCall.Name))
+		if strings.Contains(name, "read_file") || strings.Contains(name, "view_file") {
+			hasFileReads = true
+		}
+		if strings.Contains(name, "search") {
+			hasSearchResults = true
+		}
+	}
+
+	// Build specific guidance based on state
+	if hasTestFailures && !hasFileReads && !hasSearchResults {
+		return "test failures identified but source files not yet examined; READ the specific files mentioned in test failures to understand the root cause, then generate patches"
+	}
+
+	if hasTestFailures && hasSearchResults && !hasFileReads {
+		return "test failures and search results available but source code not read; READ the complete source files (not just search snippets) to understand context, then generate patches"
+	}
+
+	if hasTestFailures && hasFileReads {
+		return "test failures identified and source files examined; GENERATE specific patches to fix the identified issues based on the test failures and source code"
+	}
+
+	// Default: generic guidance for first iteration
+	return "managed coding execution is investigating but has not generated patches yet; run tests to identify failures, then read source files and generate patches"
 }
