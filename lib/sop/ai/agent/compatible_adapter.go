@@ -94,13 +94,39 @@ func (a *CompatibleReActAdapter) PrepareLLMRequest(ctx context.Context, state Re
 	// Build generation options
 	var tools []ai.ToolDefinition
 	if state.Request.Executor != nil {
-		var err error
-		tools, err = state.Request.Executor.ListTools(ctx)
-		if err != nil {
-			return "", ai.GenOptions{}, fmt.Errorf("failed to list tools: %w", err)
+		// OPTIMIZATION: With native continuation support, tools persist server-side after first turn
+		// Only send tools on iteration 1, skip on subsequent turns to save tokens
+		shouldSendTools := state.Iteration == 1
+		if state.Iteration > 1 {
+			if capability, ok := state.Request.Generator.(ai.ProviderRuntimeCapabilityProvider); ok {
+				providerCap := capability.ProviderRuntimeCapability()
+				if !providerCap.SupportsNativeContinuation {
+					// Provider doesn't maintain conversation context - must resend tools every turn
+					shouldSendTools = true
+				}
+			} else {
+				// No capability info - conservative: resend tools
+				shouldSendTools = true
+			}
+		}
+
+		if shouldSendTools {
+			var err error
+			tools, err = state.Request.Executor.ListTools(ctx)
+			if err != nil {
+				return "", ai.GenOptions{}, fmt.Errorf("failed to list tools: %w", err)
+			}
+			tools = appendCompatibleMetaTools(tools)
+			log.Info("Compatible Adapter Sending Tools",
+				"iteration", state.Iteration,
+				"tool_count", len(tools),
+				"reason", "first_turn_or_no_continuation_support")
+		} else {
+			log.Info("Compatible Adapter Skipping Tools",
+				"iteration", state.Iteration,
+				"reason", "native_continuation_active")
 		}
 	}
-	tools = appendCompatibleMetaTools(tools)
 
 	opts := ai.GenOptions{
 		SystemPrompt:          state.Request.SystemPrompt,

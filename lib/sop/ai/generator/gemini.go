@@ -175,6 +175,19 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 			"continuations", len(continuations),
 			"repair_directive", strings.TrimSpace(latestGeminiRepairDirective(toolResults)) != "",
 		)
+
+		// OPTIMIZATION: With native continuation support, tools persist server-side after first turn
+		// Only send tools on iteration 1, skip on subsequent turns to save tokens
+		toolsToSend := tools
+		if iteration > 1 {
+			toolsToSend = nil
+			log.Debug("Gemini skipping tools on continuation turn",
+				"iteration", iteration,
+				"reason", "native_continuation_support",
+				"original_tool_count", len(tools),
+			)
+		}
+
 		turn := ai.ReActTurn{
 			Iteration:       iteration,
 			UserQuery:       req.UserQuery,
@@ -182,7 +195,7 @@ func (l geminiOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningRequest) 
 			Prompt:          geminiOwnedLoopPrompt(req),
 			Options: ai.GenOptions{
 				SystemPrompt:          req.SystemPrompt,
-				Tools:                 tools,
+				Tools:                 toolsToSend,
 				Temperature:           0.0,
 				ForceTemperature:      true,
 				ToolCallContinuations: append([]ai.ToolCallContinuation(nil), continuations...),

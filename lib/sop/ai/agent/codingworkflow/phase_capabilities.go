@@ -481,17 +481,41 @@ This phase supports TWO interaction modes - choose based on task complexity and 
   - Capture intermediate artifact with status="exploring" after each batch of findings
 
 WORKFLOW:
+
+For TEST-FIXING workflows (when request mentions "fix tests", "failing tests", or test errors):
+1. Call investigation_run_tests FIRST to capture structured error_details (contains test names, locations, line numbers, error messages)
+2. For each failing test in error_details:
+   a. Call read_file(error_details[i].location, start_line=error_details[i].line-20, end_line=error_details[i].line+20) to see test code
+   b. Call search_repo to find the implementation function being tested
+   c. Call read_file(implementation_file) to see the buggy code
+3. Document findings with evidence linking test failures to code locations
+4. Transition to execution when you have file paths and understand the bugs
+
+For GENERAL investigation workflows:
 1. Call investigation_build_context to understand repository structure
-2. Inspect the request, the current evidence, and any relevant failure or error signals before proposing a fix.
-3. Gather evidence from the repository, tests, and surrounding code before moving to planning.
-4. Call investigation_inspect_repo to see current state and changes
-5. Call investigation_search_repo to find relevant code, patterns, or similar implementations
-6. Call investigation_list_changed_files to avoid conflicts with in-progress work
-7. Document findings in evidence list
-8. Capture artifact with evidence and analysis
-9. Transition to planning when investigation is complete
+2. Inspect the request, the current evidence, and any relevant failure or error signals before proposing a fix
+3. Call investigation_inspect_repo to see current state and changes
+4. Call investigation_search_repo to find relevant code, patterns, or similar implementations
+5. Call investigation_list_changed_files to avoid conflicts with in-progress work
+6. Document findings in evidence list
+7. Capture artifact with evidence and analysis
+8. Transition to planning when investigation is complete
+
+CRITICAL RULES:
+- For test fixing: run_tests → read_file → search_repo (in that order)
+- DO NOT call build_context/inspect_repo first for test fixing - they waste tokens and delay fixes
+- Use read_file (NOT search_repo) to read complete source code for bug fixes
 
 COMPLETION CRITERIA:
+
+For TEST-FIXING workflows:
+□ run_tests called and error_details captured
+□ Failing test file paths identified (from error_details.location)
+□ Implementation file paths identified (via search_repo)
+□ Buggy code read with read_file (understand the bug)
+□ Ready to transition to execution for patching
+
+For GENERAL workflows:
 □ Repository context gathered (structure understood)
 □ Relevant files/functions identified
 □ Similar patterns or implementations found (or documented as novel)
@@ -503,8 +527,14 @@ COMPLETION CRITERIA:
 PHASE TRANSITIONS:
 You can move FORWARD or BACKWARD. Capture transition intent when ready:
 
+• FORWARD to Execution (test-fixing fast path):
+  - Workflow is test fixing (ran run_tests, identified bug locations with read_file)
+  - Bug is simple and fix is obvious (no complex planning needed)
+  - Capture: status="complete", transition_to="execution", transition_direction="forward"
+
 • FORWARD to Planning (typical path):
   - Evidence gathered, ready to design solution
+  - Complex changes requiring structured plan
   - Capture: status="complete", transition_to="planning", transition_from="intake", transition_direction="forward"
 
 • BACKWARD to Intake (rare, but valid):
@@ -525,9 +555,11 @@ ARTIFACT FIELDS:
 - next_steps: Recommendations for planning
 
 TOOL USAGE:
-- ALWAYS call investigation_build_context first
-- SEARCH before assuming patterns don't exist
-- INSPECT to understand current state
+- TEST FIXING: Call run_tests FIRST (not build_context) to get structured error_details
+- TEST FIXING: Use read_file (with error_details.location) to see source code, NOT search_repo  
+- GENERAL: Call build_context first for exploratory tasks
+- ALWAYS: Use search_repo to find WHERE code exists, then read_file to see WHAT the code does
+- INSPECT to understand current state and changes
 - LIST changed files to avoid conflicts
 
 QUALITY STANDARDS:
@@ -1572,6 +1604,8 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 		return c.runSearchRepo(ctx, args)
 	case "list_changed_files", strings.ToLower(c.phaseToolName("list_changed_files")):
 		return c.runListChangedFiles(ctx, args)
+	case "read_file", strings.ToLower(c.phaseToolName("read_file")):
+		return c.runReadFile(ctx, args)
 	case "index_repo_structure", strings.ToLower(c.phaseToolName("index_repo_structure")):
 		return c.runIndexRepoStructure(ctx, args)
 	case "run_tests", strings.ToLower(c.phaseToolName("run_tests")):
@@ -1586,6 +1620,8 @@ func (c *PhaseCapability) ExecuteTool(ctx context.Context, toolName string, args
 		return c.runPreviewPatch(args)
 	case strings.ToLower(c.phaseToolName("apply_patch")):
 		return c.runApplyPatch(args)
+	case strings.ToLower(c.phaseToolName("write_file")):
+		return c.runWriteFile(ctx, args)
 	case strings.ToLower(c.phaseToolName("run_tests")):
 		return c.runTests(ctx, args)
 	default:
@@ -1661,34 +1697,54 @@ func (c *PhaseCapability) universalContextTools() []capabilities.ToolDefinition 
   }
 }`
 
+	// TOOL ORDERING: For test-fixing workflows, tools are ordered by priority:
+	// 1. run_tests (PRIMARY) - Get structured failure data FIRST
+	// 2. read_file (SECONDARY) - Read complete source files
+	// 3. search_repo (TERTIARY) - Find code locations when paths unknown
+	// 4. Context tools (FALLBACK) - Use only when above tools insufficient
 	return []capabilities.ToolDefinition{{
+		Name:        "run_tests",
+		Description: "🔴 PRIMARY: Call FIRST for test-fixing. Returns JSON with error_details[{name, location, line, message}]. Use error_details.location with read_file.",
+		Schema:      taskSchema,
+		Tags:        []string{"R"},
+	}, {
+		Name:        "read_file",
+		Description: "🟡 SECONDARY: Read complete file content. Use error_details.location from run_tests as file_path. Params: file_path, start_line (default 1), end_line (default 200).",
+		Schema: `{
+  "type": "object",
+  "required": ["file_path"],
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to file to read (use error_details.location from run_tests for test files)"},
+    "start_line": {"type": "integer", "minimum": 1, "description": "First line to read (default 1)"},
+    "end_line": {"type": "integer", "minimum": 1, "description": "Last line to read (default 200)"},
+    "working_dir": {"type": "string", "description": "Use 'current' or '.' for session working directory (default if omitted)"},
+    "query": {"type": "string", "description": "Optional context about why you're reading this file"}
+  }
+}`,
+		Tags: []string{"R"},
+	}, {
+		Name:        "search_repo",
+		Description: "⚪ TERTIARY: Find WHERE code exists (2-3 line snippets). Use read_file after to see complete code. Simple regex only.",
+		Schema:      searchSchema,
+		Tags:        []string{"R"},
+	}, {
 		Name:        "build_context",
-		Description: "Builds repository context (structure, files, dependencies). Available in ALL phases. Call when you need to understand repository organization. Returns ContextPack with working directory, active file, and repository summary.",
+		Description: "⚫ EXPLORATION: Repository structure overview (500KB+). For test-fixing use run_tests instead.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
 	}, {
 		Name:        "inspect_repo",
-		Description: "Inspects current repository state and changed files. Available in ALL phases. Call to understand current state, see diffs, or check for conflicts. Returns changed files list and diff preview.",
+		Description: "⚫ EXPLORATION: Git status and diffs (200KB+). For test-fixing use run_tests instead.",
 		Schema:      taskSchema,
-		Tags:        []string{"R"},
-	}, {
-		Name:        "search_repo",
-		Description: "Searches repository file content using ripgrep (regex pattern matching). Available in ALL phases. SEARCH PATTERNS: Use simple regex (e.g., 'func TestFoo', 'import.*database', 'type.*Config'). DO NOT use boolean 'OR' - make separate calls instead. Returns file paths with line numbers and surrounding context.",
-		Schema:      searchSchema,
 		Tags:        []string{"R"},
 	}, {
 		Name:        "list_changed_files",
-		Description: "Lists files with uncommitted changes. Available in ALL phases. Call to identify in-progress work and avoid conflicts. Returns list of changed file paths.",
-		Schema:      taskSchema,
-		Tags:        []string{"R"},
-	}, {
-		Name:        "run_tests",
-		Description: "Runs tests for validation or evidence gathering. Available in ALL phases. WHEN TO CALL: In investigation to capture failure evidence, in execution to validate changes, in review for comprehensive validation. RETURN FORMAT: Structured JSON with 'error_details' array containing test failures. Each error_details entry has: 'name' (test name), 'location' (file path), 'line' (line number), 'message' (error). HOW TO USE RESULTS: (1) Look at error_details array, (2) For each failure, read the 'location' file to see the code, (3) Analyze the 'message' to understand what's wrong, (4) Generate patches to fix the failures. DO NOT search for test names - the structured result already tells you which files to read.",
+		Description: "⚫ EXPLORATION: List uncommitted changes (200KB+). For test-fixing use run_tests instead.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
 	}, {
 		Name:        "index_repo_structure",
-		Description: "ESCALATION TOOL: Indexes repository structure using AST/tree-sitter to extract functions, imports, and call relationships. Available in ALL phases. WHEN TO CALL: When regex search (search_repo) doesn't find what you need, or when you need deeper semantic understanding of code structure. ESCALATION PATH: (1) Try search_repo first for simple patterns, (2) If insufficient, use this for AST-level semantic analysis. Returns indexed entries with function names, imports, and structural paths.",
+		Description: "AST/semantic indexing. Use when search_repo insufficient. Returns function names, imports, call relationships.",
 		Schema:      taskSchema,
 		Tags:        []string{"R"},
 	}}
@@ -1730,7 +1786,7 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 		// Investigation-specific tools
 		tools = append(tools, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("search_team_patterns"),
-			Description: "Searches team-specific coding conventions and patterns in Long-Term Memory. Use when planning code generation to find team's preferred helpers, anti-patterns, and conventions. Returns pattern details including convention, anti-pattern, examples, and file references. WHEN TO CALL: Before designing or implementing features to ensure code follows team standards.",
+			Description: "Search team coding conventions in LTM. Use before implementing to follow team standards. Returns pattern details with examples.",
 			Schema: `{
   "type": "object",
   "required": ["query"],
@@ -1754,7 +1810,7 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 			Tags: []string{"R"},
 		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("vectorize_team_patterns"),
-			Description: "Vectorizes all team patterns for semantic search. WORKFLOW: After user adds/updates patterns, ASK THE USER DIRECTLY: 'Are you done specifying all your team's patterns?' Wait for user confirmation (yes/done/that's all). Once confirmed, call this tool to index patterns. Do NOT call without asking first. Performance: ~1-2 seconds.",
+			Description: "Index team patterns for search. Ask user if done adding patterns before calling. ~1-2 seconds.",
 			Schema: `{
   "type": "object",
   "properties": {}
@@ -1766,12 +1822,12 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 		// Planning-specific tools
 		tools = append(tools, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("assess_and_route"),
-			Description: "PLANNING-FIRST ARCHITECTURE: Assesses the user query and determines the appropriate starting phase. Always call this FIRST in planning phase to understand what needs to be done. Analyzes query semantics and creates execution strategy. Returns assessment with recommended starting phase and reasoning.",
+			Description: "Assess query and determine starting phase. Call FIRST in planning. Returns recommended phase and reasoning.",
 			Schema:      taskSchema,
 			Tags:        []string{"C"},
 		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("create_succession_path"),
-			Description: "Creates a phase succession path with checkpoints. Call after assess_and_route to define the full sequence of phases needed to complete the task. Returns planned path: [investigation, planning, execution, review, delivery] with checkpoints for re-assessment.",
+			Description: "Create phase sequence. Call after assess_and_route. Returns ordered phases with checkpoints.",
 			Schema: `{
   "type": "object",
   "required": ["phases"],
@@ -1785,7 +1841,7 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 			Tags: []string{"C"},
 		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("plan_changes"),
-			Description: "Generates concrete execution plan from gathered context. WHEN TO CALL: After gathering context with universal tools (build_context, search_repo, inspect_repo, index_repo_structure). This is the core planning step. Returns ordered list of implementation steps with file/function specifics. IF EMPTY: Requirements may be unclear - ask clarifying question.",
+			Description: "Generate execution plan from context. Call after gathering context. Returns ordered implementation steps.",
 			Schema:      taskSchema,
 			Tags:        []string{"C"},
 		})
@@ -1795,15 +1851,32 @@ func (c *PhaseCapability) phaseWorkflowTools() []capabilities.ToolDefinition {
 		log_slog.Info("[phaseWorkflowTools] Building execution tools",
 			"phase_id", c.phaseID,
 			"universal_tool_count", len(tools))
+
+		writeFileSchema := `{
+  "type": "object",
+  "required": ["file_path", "content"],
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to file to create or write"},
+    "content": {"type": "string", "description": "Full content to write to the file"},
+    "allow_overwrite": {"type": "boolean", "description": "Allow overwriting existing files (default: false)", "default": false},
+    "description": {"type": "string", "description": "Why you're creating or overwriting this file"}
+  }
+}`
+
 		tools = append(tools, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("preview_patch"),
-			Description: "Previews patch before applying. HOW TO USE: (1) STOP searching after you have test failure + found code location, (2) YOU generate the fix code yourself (don't search for it), (3) Structure as {file_path, old_content, new_content, description}, (4) Call this tool with your generated patch. The old_content should be the exact text from search results, new_content is YOUR corrected code. Example: {file_path:'auth.go', old_content:'return nil', new_content:'return &User{ID:1}', description:'Fix nil return'}. WHEN TO CALL: After 2-3 searches when you have enough context to write the fix. Returns preview for user approval.",
+			Description: "Preview patch before applying. Generate fix code and structure as {file_path, old_content, new_content, description}. Returns preview for approval.",
 			Schema:      patchSchema,
 			Tags:        []string{"R"},
 		}, capabilities.ToolDefinition{
 			Name:        c.phaseToolName("apply_patch"),
-			Description: "Applies patch to codebase. SAFETY RULE: Must call preview_patch and get user approval BEFORE calling this. WHEN TO CALL: Only after preview shown and approved. Pass the SAME patch structure you used in preview_patch: {file_path, old_content, new_content, description}. Returns confirmation of applied changes.",
+			Description: "Apply patch to codebase. Must call preview_patch first for approval. Pass same patch structure. Returns confirmation.",
 			Schema:      patchSchema,
+			Tags:        []string{"U"},
+		}, capabilities.ToolDefinition{
+			Name:        c.phaseToolName("write_file"),
+			Description: "Create new file or overwrite existing. For NEW files only. For edits use apply_patch (safer). Set allow_overwrite=true to replace entire file.",
+			Schema:      writeFileSchema,
 			Tags:        []string{"U"},
 		})
 		log_slog.Info("[phaseWorkflowTools] After adding execution tools",
@@ -2272,6 +2345,83 @@ func (c *PhaseCapability) runListChangedFiles(ctx context.Context, args map[stri
 	return fmt.Sprintf("Changed Files:\n%s", strings.Join(files, "\n")), nil
 }
 
+func (c *PhaseCapability) runReadFile(ctx context.Context, args map[string]any) (string, error) {
+	task, candidates := ResolveRepoWorkingDir(ctx, c.buildTask(ctx, args))
+
+	// Extract file_path
+	filePath := readPhaseString(args, "file_path", "")
+	if filePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+
+	// Build absolute path
+	var absPath string
+	if filepath.IsAbs(filePath) {
+		absPath = filePath
+	} else {
+		absPath = filepath.Join(task.WorkingDir, filePath)
+	}
+
+	// Read entire file
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return formatRepoResolutionFallback("Read File", task, candidates, fmt.Errorf("read %s: %w", filePath, err)), nil
+	}
+
+	// Parse line range
+	startLine := 1
+	if start, ok := args["start_line"]; ok {
+		switch v := start.(type) {
+		case int:
+			startLine = v
+		case float64:
+			startLine = int(v)
+		}
+	}
+	if startLine < 1 {
+		startLine = 1
+	}
+
+	endLine := 200
+	if end, ok := args["end_line"]; ok {
+		switch v := end.(type) {
+		case int:
+			endLine = v
+		case float64:
+			endLine = int(v)
+		}
+	}
+
+	// Split into lines
+	lines := strings.Split(string(content), "\n")
+	totalLines := len(lines)
+
+	// Adjust end_line if not specified or exceeds file
+	if endLine == 200 && totalLines < 200 {
+		endLine = totalLines
+	} else if endLine > totalLines {
+		endLine = totalLines
+	}
+
+	if endLine < startLine {
+		endLine = startLine
+	}
+
+	// Build output with line numbers
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("File: %s (lines %d-%d of %d)\n", filePath, startLine, endLine, totalLines))
+
+	for i := startLine - 1; i < endLine && i < len(lines); i++ {
+		result.WriteString(fmt.Sprintf("%d: %s\n", i+1, lines[i]))
+	}
+
+	if endLine < totalLines {
+		result.WriteString(fmt.Sprintf("\n(File continues to line %d. Use read_file with end_line=%d to see more)\n", totalLines, totalLines))
+	}
+
+	return result.String(), nil
+}
+
 // RepositoryStructureIndexEntry captures lightweight repo-structure metadata for planning and memory indexing.
 type RepositoryStructureIndexEntry struct {
 	Path           string
@@ -2600,6 +2750,70 @@ func (c *PhaseCapability) runPreviewPatch(args map[string]any) (string, error) {
 		return "", fmt.Errorf("preview patch: %w", err)
 	}
 	return preview, nil
+}
+
+func (c *PhaseCapability) runWriteFile(ctx context.Context, args map[string]any) (string, error) {
+	log := log_slog.With("component", "PhaseCapability", "method", "runWriteFile", "phase", c.phaseID)
+	log.Info("[runWriteFile] Starting", "args", args)
+
+	// Build task for working directory resolution
+	task := c.buildTask(ctx, args)
+	log.Info("[runWriteFile] buildTask returned", "workingDir", task.WorkingDir)
+
+	// Resolve repo working directory to ensure absolute path
+	task, candidates := ResolveRepoWorkingDir(ctx, task)
+	log.Info("[runWriteFile] After ResolveRepoWorkingDir", "workingDir", task.WorkingDir, "candidates", candidates)
+
+	if task.WorkingDir == "" {
+		return "", fmt.Errorf("working directory could not be determined")
+	}
+
+	// Extract parameters
+	filePath := readPhaseString(args, "file_path", "")
+	if filePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+
+	content := readPhaseString(args, "content", "")
+	description := readPhaseString(args, "description", "")
+	allowOverwrite := readPhaseBool(args, "allow_overwrite")
+
+	// Resolve to absolute path
+	absPath := filepath.Join(task.WorkingDir, filePath)
+	log.Info("[runWriteFile] Resolved path", "file_path", filePath, "abs_path", absPath, "allow_overwrite", allowOverwrite)
+
+	// Check if file exists
+	_, statErr := os.Stat(absPath)
+	fileExists := statErr == nil
+
+	if fileExists && !allowOverwrite {
+		return "", fmt.Errorf("file %s already exists. Use apply_patch to modify existing files (safer, shows diffs), or set allow_overwrite=true to replace the entire file", filePath)
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create directory %s: %w", dir, err)
+	}
+
+	// Write the file
+	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write file %s: %w", filePath, err)
+	}
+
+	action := "Created"
+	if fileExists {
+		action = "Overwrote"
+	}
+
+	lines := strings.Count(content, "\n") + 1
+	result := fmt.Sprintf("%s file: %s (%d lines)", action, filePath, lines)
+	if description != "" {
+		result += fmt.Sprintf("\nReason: %s", description)
+	}
+
+	log.Info("[runWriteFile] Success", "file_path", filePath, "action", action, "lines", lines)
+	return result, nil
 }
 
 func (c *PhaseCapability) runApplyPatch(args map[string]any) (string, error) {

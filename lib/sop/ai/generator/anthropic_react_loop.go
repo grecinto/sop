@@ -92,10 +92,22 @@ func (l anthropicOwnedReActLoop) Run(ctx context.Context, req ai.ReasoningReques
 			"repair_directive", strings.TrimSpace(latestAnthropicRepairDirective(toolResults)) != "",
 		)
 
+		// OPTIMIZATION: With native continuation support, tools persist server-side after first turn
+		// Only send tools on iteration 1, skip on subsequent turns to save tokens
+		toolsToSend := tools
+		if iteration > 1 {
+			toolsToSend = nil
+			log.Debug("Anthropic skipping tools on continuation turn",
+				"iteration", iteration,
+				"reason", "native_continuation_support",
+				"original_tool_count", len(tools),
+			)
+		}
+
 		prompt := anthropicContinuationPrompt(req, toolResults, false)
 		opts := ai.GenOptions{
 			SystemPrompt:          req.SystemPrompt,
-			Tools:                 tools,
+			Tools:                 toolsToSend,
 			Temperature:           0.0,
 			ForceTemperature:      true,
 			ToolCallContinuations: anthropicToolCallContinuations(req.UserQuery, toolResults, continuations, iteration, false),

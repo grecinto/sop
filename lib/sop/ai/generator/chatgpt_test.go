@@ -1025,8 +1025,12 @@ func TestChatGPTOwnedReActLoop_RunExecutesFunctionCallsViaResponsesAPI(t *testin
 	if len(requests[1].Input) != 1 || requests[1].Input[0].Type != "function_call_output" || requests[1].Input[0].CallID != "call_1" || requests[1].Input[0].Output != "John is in the users store." {
 		t.Fatalf("expected function_call_output continuation, got %#v", requests[1].Input)
 	}
-	if !reflect.DeepEqual(requests[1].Tools, requests[0].Tools) {
-		t.Fatalf("expected tool definitions to persist across turns, got %#v then %#v", requests[0].Tools, requests[1].Tools)
+	// Tool optimization: continuation requests skip tools (server remembers via previous_response_id)
+	if len(requests[0].Tools) == 0 {
+		t.Fatalf("expected initial request to include tools, got %#v", requests[0].Tools)
+	}
+	if requests[1].Tools != nil {
+		t.Fatalf("expected continuation request to skip tools (native continuation), got %#v", requests[1].Tools)
 	}
 	if !strings.Contains(requests[1].Instructions, "Use tools when needed.") || !strings.Contains(requests[1].Instructions, "emit a native function_call instead of assistant text") || !strings.Contains(requests[1].Instructions, "never display the script body in assistant text") {
 		t.Fatalf("expected instructions to carry across turns, got %#v", requests[1])

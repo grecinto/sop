@@ -369,11 +369,15 @@ func buildContinuationRequest(model string, req ai.ReasoningRequest, prev openAI
 		profile = req.ModelProfile
 	}
 
+	// OPTIMIZATION: With native continuation support, tools persist server-side after first turn
+	// Skip tools on continuation requests (server remembers from initial request via previous_response_id)
+	var toolsToSend []openAIResponsesTool = nil
+
 	request := openAIResponsesRequest{
 		Model:              model,
 		Instructions:       chatGPTSystemInstructions(req.SystemPrompt, len(prev.Tools) > 0),
 		Input:              buildChatGPTContinuationInput(response, toolOutputs),
-		Tools:              prev.Tools,
+		Tools:              toolsToSend,
 		PreviousResponseID: response.ID,
 		Include:            []string{"reasoning.encrypted_content"},
 		Reasoning:          &openAIResponsesReasoning{Effort: chatGPTReasoningEffort(model)},
