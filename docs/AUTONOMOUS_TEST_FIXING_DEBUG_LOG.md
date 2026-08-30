@@ -1,8 +1,79 @@
 # Autonomous Test Fixing - Debug Log & Solutions
 
 **Created**: 2026-08-29  
-**Status**: ✅ Production - All Critical Bugs Fixed  
-**Related**: [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](./CLI_CODING_WORKFLOW_IMPLEMENTATION.md), [DOMAIN_AGNOSTIC_PHASE_SYSTEM.md](./DOMAIN_AGNOSTIC_PHASE_SYSTEM.md)
+**Status**: ⚠️ Workaround Applied - Context Trimming Issue Discovered  
+**Related**: [CONTEXT_GENERATION_AUDIT.md](./CONTEXT_GENERATION_AUDIT.md), [CONTEXT_GENERATION_REFORM.md](./CONTEXT_GENERATION_REFORM.md), [CLI_CODING_WORKFLOW_IMPLEMENTATION.md](./CLI_CODING_WORKFLOW_IMPLEMENTATION.md)
+
+---
+
+## Latest Discovery: Context Budget Trimming (2026-08-29 23:45)
+
+### Problem
+LLM completes all investigation correctly but **never generates patches** in execution phase:
+- ✅ Runs tests successfully (38 failures detected)
+- ✅ Reads test files completely  
+- ✅ Reads implementation files completely
+- ✅ Searches for patterns correctly
+- ❌ Never calls `preview_patch` or `apply_patch` tools
+- ❌ Stays in investigation mode for all 3 execution iterations
+
+### Root Cause: Aggressive Context Trimming
+
+**Log Evidence**:
+```
+INFO LLM Context Budget
+  routing_gate=discovery
+  original_chars=14288
+  final_chars=7184
+  trimmed_components=focused_execution_context:9704->2600
+```
+
+**Analysis**:
+- Execution phase `BuildContext()` returns ~650 chars with "CRITICAL: IMMEDIATELY generate patches"
+- But that gets concatenated with 8+ other context sources → 9704 total chars
+- Budget trimmer cuts to 2600 chars (73% loss)
+- **Critical directive likely removed**, LLM never sees it
+- LLM sees tools (not trimmed) but not phase instructions (trimmed)
+
+**Why 9704 chars generated?** Blind concatenation of:
+1. askOutcome (~500 chars)
+2. taskGuidance (~300 chars)  
+3. **plannerContext (~1200 chars)** ← Not needed in execution!
+4. caveatContext (~800 chars)
+5. generalContext (0 - has domain)
+6. spaceGuidance (0 - not spaces)
+7. **researchGuidance (~2000 chars)** ← Not needed for "fix tests"!
+8. memoryRecall (~1500 chars)
+9. **phase.BuildContext() (~650 chars)** ← THIS MATTERS!
+10. Others (~2754 chars)
+
+**Waste**: ~70% of generated context irrelevant to execution phase
+
+### Workaround Applied
+
+**Changed tool descriptions** (not trimmed) to include directives:
+```go
+// lib/sop/ai/agent/planner/phase_coding.go:320-330
+preview_patch: "**REQUIRED FIRST STEP**: When you have test failures AND source 
+context, generate a patch immediately. Use this NOW if you've read test files 
+and implementation files."
+```
+
+Tool descriptions live in `system_tools` component (not aggressively trimmed), so LLM sees them.
+
+### Proper Fix Required
+
+**Documentation Created**:
+- [CONTEXT_GENERATION_AUDIT.md](CONTEXT_GENERATION_AUDIT.md) - Current state analysis
+- [CONTEXT_GENERATION_REFORM.md](CONTEXT_GENERATION_REFORM.md) - Refactoring plan
+
+**Key Principles**:
+1. **Generate only relevant context** - Don't concatenate everything
+2. **No trimming needed** - Stay under budget naturally  
+3. **Conditional generation** - Phase-aware context inclusion
+4. **No duplication** - Single source of truth per concept
+
+**Timeline**: 3-4 weeks for proper refactoring
 
 ---
 

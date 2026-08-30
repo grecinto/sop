@@ -1,47 +1,65 @@
 # Phase System Status - August 2026
 
 **Date**: 2026-08-29  
-**Summary**: Infrastructure fixed, execution phase prompt needs strengthening
+**Summary**: Infrastructure fixed, context trimming blocking patch generation
 
 ---
 
 ## ✅ What's Working
 
 ### Infrastructure (Production Ready)
-- **Path Resolution**: No doubling (`lib/sop/lib/sop/...` bug fixed)
+- **Path Resolution**: No doubling (`lib/sop/lib/sop/...` bug fixed with smart prefix stripping)
 - **Query Parsing**: Conservative regex prevents false positives
 - **Phase Synchronization**: Transaction evaluator sees correct phase
 - **Tool Registration**: Clean names without phase prefixes
 - **Test Result Structuring**: Proper error detection and guidance
 
 ### Investigation Phase (Working)
-- Autonomous test discovery
-- Context gathering from multiple sources
-- File reading and searching
-- No infinite loops
+- ✅ Autonomous test discovery
+- ✅ Context gathering from multiple sources
+- ✅ File reading and searching
+- ✅ No infinite loops
+- ✅ Proper phase transition to execution
 
 ---
 
 ## ❌ What's NOT Working
 
-### Execution Phase - BLOCKED
-**Problem**: LLM gathers context but never generates patches
+### Execution Phase - CONTEXT TRIMMING ISSUE
+
+**Problem**: LLM gathers context perfectly but never generates patches
+- Investigation completes successfully (finds 38 test failures)
+- Reads test files completely ✅
+- Reads implementation files completely ✅
+- Searches for patterns correctly ✅
+- **Never calls preview_patch or apply_patch** ❌
 - Stays in investigation mode within execution phase
-- Hits iteration limit (3) without calling `preview_patch` or `apply_patch`
-- Cognitive layer guidance insufficient to trigger action
+- Hits iteration limit (3) without generating patches
 
-**Root Cause**: Execution phase prompt too passive
-- Says `WORKFLOW: Preview → Apply → Test` (assumes LLM knows when)
-- Doesn't **command** patch generation explicitly
-- LLM interprets as "gather more context first"
+**Root Cause**: Budget trimmer cuts execution phase instructions
 
-**Fix Applied** (2026-08-29, untested):
-```go
-CRITICAL: If you have test failures and source context, 
-IMMEDIATELY generate patches. DO NOT continue investigating.
+```
+Log Evidence:
+focused_execution_context: 9704 chars generated → 2600 chars kept (73% cut)
 ```
 
-**Status**: Needs validation - cannot call "production ready" until patches actually generate
+**Why**: Blind concatenation of irrelevant context:
+- plannerContext (~1200 chars) ← Not needed in execution!
+- researchGuidance (~2000 chars) ← Not needed for "fix tests"!  
+- memoryRecall, askOutcome, caveats, etc (~6000+ chars)
+- **phase.BuildContext() (~650 chars)** ← Critical instructions, likely trimmed!
+
+**Workaround Applied** (2026-08-29):
+- Moved directive into tool descriptions (not trimmed)
+- `preview_patch: "**REQUIRED FIRST STEP**: When you have test failures AND source context, generate patches immediately"`
+- Status: **Needs validation**
+
+**Proper Fix Required**:
+- Refactor context generation to be phase-aware
+- Only generate relevant context per phase
+- Eliminate need for trimming entirely
+- Timeline: 3-4 weeks
+- See: [CONTEXT_GENERATION_AUDIT.md](CONTEXT_GENERATION_AUDIT.md), [CONTEXT_GENERATION_REFORM.md](CONTEXT_GENERATION_REFORM.md)
 
 ---
 
